@@ -6,11 +6,14 @@
  *   2. vat claude plugin build (Claude plugin tree, skipped if no claude config)
  */
 
-import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 
-import { type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import {
+  calculateValidationStatus,
+  countBySeverity,
+  type ValidationIssue,
+} from '@vibe-agent-toolkit/agent-schema';
 import { checkBrokenPackagedLinks } from '@vibe-agent-toolkit/agent-skills';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
@@ -20,7 +23,13 @@ import { loadConfig } from '../utils/config-loader.js';
 import { writeYamlOutput } from '../utils/output.js';
 import { requireProjectRoot } from '../utils/project-root-policy.js';
 
-import { createPhaseContext, type Phase } from './phase-utils.js';
+import {
+  createPhaseContext,
+  exitCodeForPhases,
+  runPhase,
+  type Phase,
+  type PhaseResult,
+} from './phase-utils.js';
 
 export interface BuildCommandOptions {
   only?: string;
@@ -47,12 +56,17 @@ Description:
 
 Output:
   YAML summary for each phase → stdout
+    status (success | warning | error | system-error) plus issueCounts
+    {errors, warnings, info} for the shipped-plugin-tree link check, and the
+    findings themselves when there are any — a warning-only build reports
+    'warning' with counts, not a bare 'success'.
   Build progress → stderr
 
 Exit Codes:
-  0 - All phases completed successfully
+  0 - All phases completed successfully (warnings do not fail a build)
   1 - Build error
-  2 - System error
+  2 - System error (this command's own, or propagated from a phase that could
+      not run: exited 2, was killed by a signal, or never spawned)
 
 Requirements:
   projectRoot: required (errors if no vibe-agent-toolkit.config.yaml or .git/ ancestor)
@@ -189,33 +203,44 @@ async function buildTopLevelCommand(options: BuildCommandOptions): Promise<void>
   try {
     logger.info(`🔨 vat build (phases: ${phases.map((p) => p.name).join(' → ')})`);
 
+    const phaseResults: PhaseResult[] = [];
+    // Shipped-link findings survive the loop so the final payload can publish
+    // their distribution. They used to be filtered to errors and the rest
+    // dropped on the floor: a build that emitted warnings said `success` with
+    // nothing beside it.
+    let shippedLinkIssues: ValidationIssue[] = [];
+
     for (const phase of phases) {
       logger.info(`\n▶ Phase: ${phase.name}`);
-      const result = spawnSync(process.execPath, [binPath, ...phase.args], {
-        stdio: ['inherit', 'inherit', 'inherit'],
-      });
+      const result = runPhase(binPath, phase);
+      phaseResults.push(result);
 
-      if (result.status !== 0) {
+      if (result.status !== 'success') {
         const duration = Date.now() - startTime;
+        // `error` vs `system-error` is the difference between "the build failed"
+        // and "the build never ran" — exit 1 vs the documented exit 2.
         writeYamlOutput({
-          status: 'error',
-          error: `Phase '${phase.name}' failed with exit code ${result.status ?? 'unknown'}`,
+          status: result.status,
+          error: result.error ?? `Phase '${phase.name}' failed with exit code ${result.exitCode ?? 'unknown'}`,
           phase: phase.name,
+          phases: phaseResults,
+          issueCounts: countBySeverity(shippedLinkIssues),
           duration: `${duration}ms`,
         });
-        process.exit(result.status ?? 1);
+        process.exit(exitCodeForPhases(phaseResults));
       }
 
       if (phase.name === 'claude') {
-        const shippedLinkIssues = await validateShippedPluginSkillLinks(cwd);
-        const brokenLinkErrors = shippedLinkIssues.filter((issue) => issue.severity === 'error');
-        if (brokenLinkErrors.length > 0) {
+        shippedLinkIssues = await validateShippedPluginSkillLinks(cwd);
+        const issueCounts = countBySeverity(shippedLinkIssues);
+        if (issueCounts.errors > 0) {
           const duration = Date.now() - startTime;
           writeYamlOutput({
             status: 'error',
-            error: `Shipped plugin skill tree has ${brokenLinkErrors.length} broken link(s)`,
+            error: `Shipped plugin skill tree has ${issueCounts.errors} broken link(s)`,
             phase: phase.name,
-            issues: brokenLinkErrors,
+            issueCounts,
+            issues: shippedLinkIssues,
             duration: `${duration}ms`,
           });
           process.exit(1);
@@ -224,10 +249,25 @@ async function buildTopLevelCommand(options: BuildCommandOptions): Promise<void>
     }
 
     const duration = Date.now() - startTime;
-    logger.info(`\n✅ Build complete`);
+    const issueCounts = countBySeverity(shippedLinkIssues);
+    if (shippedLinkIssues.length === 0) {
+      logger.info(`\n✅ Build complete`);
+    } else {
+      logger.info(
+        `\n✅ Build complete — ${issueCounts.warnings} warning(s), ${issueCounts.info} info in the shipped plugin tree`,
+      );
+      for (const issue of shippedLinkIssues) {
+        logger.error(`  ${issue.severity.toUpperCase()} [${issue.code}] ${issue.message}`);
+      }
+    }
+    // Warnings and info findings do not fail a build, but they are published:
+    // `success` must mean "nothing you must act on", never "there was nothing
+    // to see".
     writeYamlOutput({
-      status: 'success',
+      status: calculateValidationStatus(shippedLinkIssues),
       phasesCompleted: phases.map((p) => p.name),
+      issueCounts,
+      ...(shippedLinkIssues.length === 0 ? {} : { issues: shippedLinkIssues }),
       duration: `${duration}ms`,
     });
 

@@ -11,6 +11,11 @@ import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 
 import {
+  calculateValidationStatus,
+  countBySeverity,
+  type SeverityCounts,
+} from '@vibe-agent-toolkit/agent-schema';
+import {
   packageSkills,
   packagingConfigToPackageOptions,
   skillNameToFsPath,
@@ -23,10 +28,16 @@ import {
 import type { Target } from '@vibe-agent-toolkit/claude-marketplace';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
+import * as yaml from 'yaml';
 
 import { handleCommandError } from '../../utils/command-error.js';
 import { loadConfig } from '../../utils/config-loader.js';
-import { formatIssueAnchor } from '../../utils/issue-anchor.js';
+import {
+  collectPostBuildIssues,
+  formatIssueLines,
+  formatIssueSetHeading,
+  sumSeverityCounts,
+} from '../../utils/issue-rendering.js';
 import { type createLogger } from '../../utils/logger.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
 import { mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
@@ -115,66 +126,60 @@ Example:
 }
 
 /**
- * Display active validation errors
- */
-function displayActiveErrors(
-  validationResult: PackagingValidationResult,
-  logger: ReturnType<typeof createLogger>
-): void {
-  if (validationResult.activeErrors.length > 0) {
-    logger.error(`\n   Active errors (${validationResult.activeErrors.length}):`);
-    for (const error of validationResult.activeErrors) {
-      logger.error(`     [${String(error.code)}] ${String(error.message)}`);
-      const anchor = formatIssueAnchor(error);
-      if (anchor !== undefined) {
-        logger.error(`       Location: ${anchor}`);
-      }
-      if (error.fix) {
-        logger.error(`       Fix: ${String(error.fix)}`);
-      }
-    }
-  }
-}
-
-/**
- * Display expired allow warnings
- */
-function displayExpiredAllowEntries(
-  validationResult: PackagingValidationResult,
-  logger: ReturnType<typeof createLogger>
-): void {
-  const expiredWarnings = validationResult.activeWarnings.filter(w => w.code === 'ALLOW_EXPIRED');
-  if (expiredWarnings.length > 0) {
-    logger.error(`\n   Expired allow entries (${expiredWarnings.length}):`);
-    for (const warn of expiredWarnings) {
-      logger.error(`     ${String(warn.message)}`);
-    }
-  }
-}
-
-/**
- * Log post-build integrity issues, prefixed by resolved severity.
+ * Render every emitted pre-build finding, each labelled with its own severity.
  *
- * Errors are emitted to stderr; warnings and info to stderr as well so they
- * appear in the human-readable stream (not the YAML stdout stream).
+ * `allErrors` is the full emitted set INCLUDING info (its name lies — see the
+ * doc comment on `PackagingValidationResult`). Walking `activeErrors` plus only
+ * the `ALLOW_EXPIRED` subset of `activeWarnings`, which is what this used to do,
+ * dropped every other warning and every info finding from a report that had
+ * already decided to abort the build.
+ *
+ * Pure so the whole set is assertable, not a chosen subset of it.
+ */
+export function formatPreBuildIssueReport(
+  validationResult: PackagingValidationResult,
+): string[] {
+  const lines: string[] = [];
+  if (validationResult.allErrors.length > 0) {
+    lines.push(`\n   ${formatIssueSetHeading(validationResult.allErrors)}:`);
+    for (const issue of validationResult.allErrors) {
+      lines.push(...formatIssueLines(issue, '     '));
+    }
+  }
+  return lines;
+}
+
+/**
+ * Render post-build integrity issues, each prefixed by its OWN resolved severity.
+ *
+ * Reads BOTH post-build channels (see `collectPostBuildIssues`) so a build that
+ * failed purely on the built-output validation still shows the findings that
+ * failed it, and the heading names the set's actual severity mix rather than
+ * calling every set by its worst member.
+ *
+ * Pure: returns the lines instead of writing them, so the whole rendered set is
+ * assertable without capturing a stream.
+ */
+export function formatPostBuildIssueReport(result: PackageSkillResult): string[] {
+  const issues = collectPostBuildIssues(result);
+  if (issues.length === 0) return [];
+  const lines = [`   ${formatIssueSetHeading(issues, 'post-build')}:`];
+  for (const issue of issues) {
+    lines.push(...formatIssueLines(issue, '     '));
+  }
+  return lines;
+}
+
+/**
+ * Log post-build integrity issues to stderr (the human stream; stdout is
+ * reserved for the YAML summary).
  */
 function logPostBuildIssues(
   result: PackageSkillResult,
   logger: ReturnType<typeof createLogger>,
 ): void {
-  if (!result.postBuildIssues || result.postBuildIssues.length === 0) return;
-  const label = result.hasErrors ? 'post-build error(s)' : 'post-build warning(s)';
-  logger.info(`   ${result.postBuildIssues.length} ${label}:`);
-  for (const issue of result.postBuildIssues) {
-    const prefix = issue.severity === 'error' ? 'ERROR' : 'WARNING';
-    logger.info(`     [${prefix}] [${String(issue.code)}] ${String(issue.message)}`);
-    const anchor = formatIssueAnchor(issue);
-    if (anchor !== undefined) {
-      logger.info(`       Location: ${anchor}`);
-    }
-    if (issue.fix) {
-      logger.info(`       Fix: ${String(issue.fix)}`);
-    }
+  for (const line of formatPostBuildIssueReport(result)) {
+    logger.info(line);
   }
 }
 
@@ -220,12 +225,13 @@ async function validateSkillOrExit(
     return;
   }
 
-  // Validation failed - display all errors and exit
+  // Validation failed - display every emitted finding and exit
   logger.error(`\nSkill validation failed: ${skillName}`);
   logger.error(`   Source: ${sourcePath}`);
 
-  displayActiveErrors(validationResult, logger);
-  displayExpiredAllowEntries(validationResult, logger);
+  for (const line of formatPreBuildIssueReport(validationResult)) {
+    logger.error(line);
+  }
   displayIgnoredErrors(validationResult, logger);
 
   logger.error(`\n   Build aborted due to validation errors`);
@@ -242,6 +248,11 @@ function outputDryRunYaml(
   writeYamlHeader({
     status: 'success',
     dryRun: true,
+    // A dry run validates NOTHING, so it has no severity distribution to
+    // publish. Saying so is the point: an absent `issueCounts` next to
+    // `status: success` otherwise reads as "clean", which is the reassuring
+    // misreading. This field makes the absence explicit instead.
+    validated: false,
     skillsFound: skills.length,
   });
   process.stdout.write(`skills:\n`);
@@ -278,23 +289,70 @@ function performDryRun(
 }
 
 /**
+ * The archived summary of a build, as YAML fields.
+ *
+ * `status` used to be the literal `success` — printed even for a build that then
+ * exited 1 on post-build errors, so the machine-readable half of the output
+ * contradicted the exit code, in the reassuring direction. It is now derived
+ * from the same issues the human stream renders, and the per-severity counts
+ * ride beside it because a status cannot express a three-valued distribution:
+ * `success` here means "nothing you must act on", not "there was nothing to see".
+ */
+export function buildYamlSummary(
+  results: Array<{ name: string; result: PackageSkillResult }>,
+  duration: number,
+): {
+  status: 'success' | 'warning' | 'error';
+  issueCounts: SeverityCounts;
+  skillsBuilt: number;
+  skills: Array<{
+    name: string;
+    outputPath: string;
+    filesPackaged: number;
+    issueCounts: SeverityCounts;
+  }>;
+  duration: string;
+} {
+  const perSkill = results.map(({ name, result }) => {
+    const issues = collectPostBuildIssues(result);
+    return {
+      name,
+      outputPath: result.outputPath,
+      filesPackaged: result.files.dependencies.length + 1,
+      issueCounts: countBySeverity(issues),
+      issues,
+    };
+  });
+  const allIssues = perSkill.flatMap((s) => s.issues);
+
+  return {
+    status: calculateValidationStatus(allIssues),
+    issueCounts: sumSeverityCounts(perSkill.map((s) => s.issueCounts)),
+    skillsBuilt: results.length,
+    skills: perSkill.map(({ name, outputPath, filesPackaged, issueCounts }) => ({
+      name,
+      outputPath,
+      filesPackaged,
+      issueCounts,
+    })),
+    duration: `${duration}ms`,
+  };
+}
+
+/**
  * Output build results
  */
 function outputBuildYaml(
   results: Array<{ name: string; result: PackageSkillResult }>,
   duration: number
 ): void {
-  writeYamlHeader({
-    status: 'success',
-    skillsBuilt: results.length,
-  });
-  process.stdout.write(`skills:\n`);
-  for (const { name, result } of results) {
-    process.stdout.write(`  - name: ${name}\n`);
-    process.stdout.write(`    outputPath: ${result.outputPath}\n`);
-    process.stdout.write(`    filesPackaged: ${result.files.dependencies.length + 1}\n`);
-  }
-  process.stdout.write(`duration: ${duration}ms\n`);
+  const { status, skillsBuilt, issueCounts, skills, duration: durationText } =
+    buildYamlSummary(results, duration);
+  writeYamlHeader({ status, skillsBuilt });
+  process.stdout.write(
+    yaml.stringify({ issueCounts, skills }, { indent: 2, lineWidth: 0, aliasDuplicateObjects: false }),
+  );
+  process.stdout.write(`duration: ${durationText}\n`);
 }
 
 /**

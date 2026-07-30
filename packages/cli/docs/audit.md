@@ -183,9 +183,9 @@ detection strategy doc, workstream B).
 status: success
 summary:
   filesScanned: 42
-  success: 40
-  warnings: 2
-  errors: 0
+  filesPassed: 40
+  filesWithWarnings: 2
+  filesWithErrors: 0
   marketplaces: 2
   standalonePlugins: 3
   standaloneSkills: 5
@@ -317,13 +317,13 @@ root: /abs/path/to/scan/root   # The ONE absolute path in the document
 status: success | warning | error
 summary:
   filesScanned: number
-  success: number      # Files with no issues
-  warnings: number     # Files with warnings only
-  errors: number       # Files with errors
-issues:
-  errors: number       # Total error count across all files
-  warnings: number     # Total warning count across all files
-  info: number         # Total info count across all files
+  filesPassed: number         # Files with no ACTIONABLE issues (info-only counts as passed)
+  filesWithWarnings: number   # Files whose worst actionable severity is warning
+  filesWithErrors: number     # Files carrying at least one error
+issueCounts:                  # FINDINGS, not files — same field name and meaning
+  errors: number              #   as the `issueCounts` on each entry below
+  warnings: number
+  info: number
 duration: "123ms"
 files:
   - path: plugins/my-plugin            # relative to `root`

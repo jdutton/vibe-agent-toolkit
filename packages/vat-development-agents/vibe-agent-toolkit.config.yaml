@@ -19,7 +19,10 @@ resources:
     - "**/test/golden/**"
 
 skills:
-  include: ["resources/skills/SKILL.md", "resources/skills/vat-*.md", "resources/skills/markdown-rewriting.md"]
+  # `coherence-audit` and `markdown-rewriting` are named individually because the
+  # method each teaches is generic — neither carries the `vat-` prefix, since the
+  # prefix is reserved for genuinely VAT-domain skills.
+  include: ["resources/skills/SKILL.md", "resources/skills/vat-*.md", "resources/skills/markdown-rewriting.md", "resources/skills/coherence-audit.md"]
   defaults:
     linkFollowDepth: 2
     excludeNavigationFiles: true
@@ -53,15 +56,15 @@ skills:
         # the check still fires for every other skill in this package.
         NON_PORTABLE_ASSET_REFERENCE:
           - paths:
-              - "**/vat-skill-authoring.md:*"
-              - "**/vat-skill-review.md:*"
+              - "**/vat-skill-authoring.md"
+              - "**/vat-skill-review.md"
             reason: "Intentional CLAUDE_PLUGIN_ROOT mentions: these skills document the anti-pattern they enforce"
         # vat-skill-review's checklist deliberately names `grep -P` (and other
         # non-portable utilities) to TEACH the NON_PORTABLE_COMMAND rule. Scoped
         # to that file so the check still fires for every other skill.
         NON_PORTABLE_COMMAND:
           - paths:
-              - "**/vat-skill-review.md:*"
+              - "**/vat-skill-review.md"
             reason: "Intentional non-portable-command mentions: this skill documents the anti-pattern it enforces"
   config:
     vibe-agent-toolkit:
@@ -133,6 +136,10 @@ skills:
     markdown-rewriting:
       test:
         evals: evals/markdown-rewriting/evals.json
+        model: claude-sonnet-5
+    coherence-audit:
+      test:
+        evals: evals/coherence-audit/evals.json
         model: claude-sonnet-5
 
 claude:

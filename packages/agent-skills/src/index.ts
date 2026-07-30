@@ -6,6 +6,7 @@
 export { buildAgentSkill, type BuildOptions, type BuildResult } from './builder.js';
 
 export {
+  createProjectRegistry,
   extractH1Title,
   packageSkill,
   packageSkills,
@@ -51,8 +52,6 @@ export {
 
 export { MarketplaceManifestJsonSchema, MarketplaceManifestSchema, type MarketplaceManifest } from './schemas/marketplace-manifest.js';
 
-export { PluginJsonSchema, type PluginJson } from './schemas/plugin-json.js';
-
 export {
   parseFrontmatter,
   type FrontmatterResult,
@@ -76,6 +75,7 @@ export { validate, type UnifiedValidateOptions } from './validators/unified-vali
 export { detectResourceFormat, enumerateSurfaces } from './validators/format-detection.js';
 export {
   crawlAndResolveRegistry,
+  resetPackagingRegistryCache,
   validateSkillForPackaging,
   type ExcludedReferenceDetail,
   type PackagingValidationResult,

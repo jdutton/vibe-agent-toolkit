@@ -10,8 +10,6 @@ export {
   type VATAgentSkillFrontmatter,
 } from './agent-skill-frontmatter.js';
 
-export { PluginJsonSchema, type PluginJson } from './plugin-json.js';
-
 export {
   InstalledPluginsRegistryJsonSchema,
   InstalledPluginsRegistrySchema,

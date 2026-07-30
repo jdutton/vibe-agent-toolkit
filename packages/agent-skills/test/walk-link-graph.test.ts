@@ -460,6 +460,38 @@ describe('walkLinkGraph', () => {
       expect(result.excludedReferences).toHaveLength(1);
       expect(result.excludedReferences[0]?.excludeReason).toBe('outside-project');
     });
+
+    // An absolute-path reference (RFC 3986 §4.2 — a leading `/`) resolves against
+    // the PROJECT ROOT, which is what `resolveLocalHref` has always done for the
+    // resources lane. The walker used to resolve every href with
+    // `resolve(dirname(source), href)`, and `path.resolve` DISCARDS its base when
+    // the second argument is absolute: `/docs/guide.md` came back as the
+    // filesystem-root path `/docs/guide.md`, which is outside every project root
+    // that is not `/`. Every root-absolute link in a walked file therefore became
+    // a `LINK_OUTSIDE_PROJECT` error against a target that exists and is in the
+    // registry. Measured on a real monorepo: 81 such errors, all false.
+    it('resolves a root-absolute link against the project root, not the filesystem root', () => {
+      const skill = createMockResource(SKILL_ID, SKILL_PATH, [
+        createLocalLink('guide', '/docs/guide.md', GUIDE_ID),
+      ]);
+      const guide = createMockResource(GUIDE_ID, GUIDE_PATH);
+      const registry = createMockRegistry([skill, guide]);
+
+      const result = walkLinkGraph(SKILL_ID, registry, defaultOptions());
+
+      expect(result.excludedReferences).toHaveLength(0);
+      expectBundledIds(result, [GUIDE_ID]);
+    });
+
+    // The boundary must still hold for a root-absolute href: `/../escape.md`
+    // resolves ABOVE the project root and must not be bundled just because the
+    // resolver now honours the leading slash.
+    it('still excludes a root-absolute link that escapes the project root', () => {
+      const result = walkSingleSkill([createLocalLink('escape', '/../outside/doc.md')]);
+
+      expect(result.excludedReferences).toHaveLength(1);
+      expect(result.excludedReferences[0]?.excludeReason).toBe('outside-project');
+    });
   });
 
   describe('maxBundledDepth tracking', () => {

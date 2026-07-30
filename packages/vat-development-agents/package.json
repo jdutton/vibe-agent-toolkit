@@ -23,7 +23,8 @@
       "vat-skill-review",
       "vat-skill-testing",
       "vat-enterprise-org",
-      "markdown-rewriting"
+      "markdown-rewriting",
+      "coherence-audit"
     ],
     "replaces": {
       "plugins": [

@@ -29,9 +29,9 @@ skills:
         severity:
           LINK_DROPPED_BY_DEPTH: error
         allow:
-          PACKAGED_UNREFERENCED_FILE:
+          LINK_TO_GITIGNORED_FILE:
             - paths: ["internal/*.json"]
-              reason: "consumed programmatically at runtime"
+              reason: "generated at install time, deliberately untracked"
               expires: "2026-09-30"
           SKILL_LENGTH_EXCEEDS_RECOMMENDED:
             - reason: "whole-skill concern; paths defaults to ['**/*']"
@@ -108,7 +108,7 @@ once in each code's section below (linked from the `Code` cell).
 | [`LINK_DEFERRED_ARTIFACT`](#link_deferred_artifact) | info | Link targets a deferred build artifact declared in the skill files: config; it will exist after the build materializes it. | No action needed if the files: entry is correct. To silence, set validation.severity.LINK_DEFERRED_ARTIFACT: ignore. |
 | [`LINK_TO_SKILL_DEFINITION`](#link_to_skill_definition) | error | Markdown link targets another skill's SKILL.md; bundling it creates duplicate skill definitions. | Link to a specific resource inside the other skill, or reference the other skill by name. |
 | [`LINK_DROPPED_BY_DEPTH`](#link_dropped_by_depth) | warning | Walker stopped following links at the configured linkFollowDepth; this link was not bundled. | Raise linkFollowDepth, bundle the file via files config, declare the drop intentional with validation.allow, or exclude via excludeReferencesFromBundle.rules. |
-| [`PACKAGED_UNREFERENCED_FILE`](#packaged_unreferenced_file) | error | File in the packaged output is not referenced from any packaged markdown. | Add a markdown link or code-block mention in SKILL.md or a linked resource. Allow via validation.allow if the file is consumed programmatically. |
+| [`PACKAGED_UNREFERENCED_FILE`](#packaged_unreferenced_file) | error | File in the packaged output is not referenced from any packaged markdown. | Add a markdown link or code-block mention in SKILL.md or a linked resource. A file consumed programmatically belongs in skills.config.<name>.files as a source/dest pair — a declared dest is exempt, so do NOT restate it in validation.allow. |
 | [`PACKAGED_TEST_INPUT`](#packaged_test_input) | warning | A link or files: entry pointed into the skill's declared test input (its test.evals path) and was NOT packaged; test input — including the expected_output answer key — never ships to consumers. | No action needed — the build already excluded it. Remove the link or files: entry to silence this, or move the target out of the test.evals directory if it is genuinely a shipped resource. |
 | [`PACKAGED_BROKEN_LINK`](#packaged_broken_link) | error | Link in the packaged output resolves to a file that is not present in the output (likely a link-rewriter bug). | Report the issue — this indicates a VAT bug. As a temporary workaround, set severity.PACKAGED_BROKEN_LINK to ignore while the underlying bug is fixed. |
 
@@ -126,8 +126,9 @@ and shows the `files:` edge as the resolving state once `DeferredArtifacts` is w
 | Broken link | Typo / wrong path at source | `LINK_MISSING_TARGET` |
 | Broken link | `files:` **dest** VAT declined to package (its source is declared test input) | `LINK_MISSING_TARGET` + a `PACKAGED_TEST_INPUT` receipt — never deferred, because nothing will materialize it |
 | Broken link | Present in source but missing in **built** output | `PACKAGED_BROKEN_LINK` (link-rewriter bug) |
-| Orphan file | Runtime asset loaded by a script | Declare in `files:` → no code (declaration is the resolution) |
+| Orphan file | Runtime asset loaded by a script | Declare in `files:` → no code (declaration is the resolution; the build's orphan check is given the dests it copied and exempts them) |
 | Orphan file | Forgotten / undocumented doc | `PACKAGED_UNREFERENCED_FILE` (link it or remove it) |
+| Orphan file | Copied by the packager, then orphaned by link rewriting | `PACKAGED_UNREFERENCED_FILE` + `PACKAGED_BROKEN_LINK` (a VAT inconsistency, not an author mistake) |
 | Leaves the bundle | Links a file inside the skill's declared `test.evals` dir | `PACKAGED_TEST_INPUT` (warning — target not packaged, link rewritten away) |
 | Leaves the bundle | Links a gitignored file | `LINK_TO_GITIGNORED_FILE` |
 | Leaves the bundle | Links a gitignored file that IS a materialized `files:` build artifact | `LINK_DEFERRED_ARTIFACT` (info — expected post-build state, not a leak) |
@@ -378,9 +379,10 @@ Only meaningful when actually bundling a skill; fire from `vat skills build` (an
 ### `PACKAGED_UNREFERENCED_FILE`
 
 - **Default:** `error`
-- **What:** File in the packaged output is not referenced from any packaged markdown.
-- **Why it matters:** Unreferenced files bloat the bundle and indicate that content was added to the `files` config without wiring it into the skill's narrative. Agents never discover content that isn't linked.
-- **Fix:** Add a markdown link or code-block mention in `SKILL.md` or a linked resource. Allow via `validation.allow` if the file is consumed programmatically.
+- **What:** File in the packaged output is not referenced from any packaged markdown **and** not declared as a `files:` dest.
+- **Why it matters:** An orphan in the bundle is content an agent can never discover. The population left after the three exemptions below is narrow and real: a file the packager *itself* copied and then orphaned — the link rewriter left the referring href pointing somewhere else — which is why it stays an `error` and normally arrives paired with a [`PACKAGED_BROKEN_LINK`](#packaged_broken_link).
+- **Three peer ways to not be an orphan:** reachable by a markdown link from `SKILL.md`; mentioned by path anywhere in packaged content (a code-block invocation is documentation); or **declared under `skills.config.<name>.files` as a `source`/`dest` pair**. Declaration is proof of intent on equal footing with documentation — you cannot forget a file you named twice in config — so a `files:` dest never fires this code, glob-expanded dests included.
+- **Fix:** Add a markdown link or code-block mention in `SKILL.md` or a linked resource. A file consumed programmatically — a vendored engine, a generated schema, a data pack — belongs in `skills.config.<name>.files`; a declared dest is already exempt, so **do not restate it in `validation.allow`**. A hand-maintained waiver list that duplicates the `files:` map is a symptom, not a fix.
 
 ### `PACKAGED_TEST_INPUT`
 

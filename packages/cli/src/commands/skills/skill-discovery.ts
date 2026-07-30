@@ -103,6 +103,15 @@ async function crawlOneBase(base: string, globs: string[]): Promise<string[]> {
     baseDir: base,
     include: globs,
     exclude: DISCOVERY_EXCLUDE,
+    // A skill the author has written but not yet committed MUST be discoverable.
+    // Without this, `crawlDirectory`'s `git ls-files` fast path sees only tracked
+    // files, so a brand-new SKILL.md is invisible: `vat skills validate` reports
+    // one fewer skill and exits 0, and `vat skills build` silently does not ship
+    // it. Nothing warns — the count is the only tell, and you have to know what
+    // it should have been. `includeUntracked` is the documented knob for exactly
+    // this and keeps the fast path (unlike `respectGitignore: false`, which costs
+    // a full walk); the inventory lane already used it for the same reason.
+    includeUntracked: true,
   });
 }
 

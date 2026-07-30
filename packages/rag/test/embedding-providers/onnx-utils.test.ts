@@ -13,6 +13,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
   BertTokenizer,
+  CasedVocabError,
   IncompatibleVocabError,
   l2Normalize,
   meanPooling,
@@ -89,6 +90,35 @@ function buildRobertaStyleVocab(): string {
   return ['<s>', '<pad>', '</s>', '<unk>', 'hello', 'world'].join('\n');
 }
 
+/** The four BERT special-token literals, which every vocab below needs. */
+const BERT_SPECIALS = ['[CLS]', '[SEP]', '[UNK]', '[PAD]'] as const;
+
+/**
+ * A CASED BERT WordPiece vocab: the special tokens are all present, so it is
+ * structurally usable — but the entries are capitalized, and this tokenizer's
+ * unconditional lowercasing would miss every one of them.
+ */
+function buildCasedBertVocab(): string {
+  return [...BERT_SPECIALS, 'Hello', 'World', 'The', 'Paris', 'hello'].join('\n');
+}
+
+/**
+ * An uncased vocab whose only uppercase tokens are BRACKETED reserved literals.
+ * Present in every real uncased vocab, so these must never read as casing.
+ */
+function buildUncasedVocabWithReservedTokens(): string {
+  return [...BERT_SPECIALS, '[MASK]', '[unused0]', '[unused1]', 'hello', 'world'].join('\n');
+}
+
+/**
+ * An uncased vocab with exactly ONE stray uppercase token out of many — below
+ * the ratio, so it must still load.
+ */
+function buildUncasedVocabWithStrayUppercase(): string {
+  const words = Array.from({ length: 200 }, (_, index) => `tok${index.toString()}`);
+  return [...BERT_SPECIALS, 'Stray', ...words].join('\n');
+}
+
 // ---------------------------------------------------------------------------
 // Test Setup
 // ---------------------------------------------------------------------------
@@ -140,6 +170,9 @@ const UNK_TOKEN = 100;
 
 /** Synthetic model id used to assert the load error names the configured model */
 const incompatibleModelId = 'test-org/xlm-r-embedder';
+
+/** Synthetic model id for the cased-vocab refusal */
+const casedModelId = 'test-org/bert-base-cased-embedder';
 
 /** Common test phrases */
 const helloWorld = 'hello world';
@@ -216,6 +249,46 @@ describe('BertTokenizer', () => {
       expect(message).toContain('[UNK]');
       expect(message).toContain('[PAD]');
       expect(message).toContain('<s>');
+    });
+
+    it('should reject a CASED WordPiece vocabulary rather than silently degrading', async () => {
+      const casedPath = await writeVocab('cased-vocab.txt', buildCasedBertVocab());
+
+      await expect(
+        BertTokenizer.fromVocabFile(casedPath, casedModelId),
+      ).rejects.toThrow(CasedVocabError);
+    });
+
+    it('should name the model and the cased entries it found', async () => {
+      const casedPath = await writeVocab('cased-message-vocab.txt', buildCasedBertVocab());
+
+      const error: unknown = await BertTokenizer.fromVocabFile(casedPath, casedModelId).then(
+        () => undefined,
+        (cause: unknown) => cause,
+      );
+
+      expect(error).toBeInstanceOf(CasedVocabError);
+      const message = error instanceof Error ? error.message : '';
+
+      expect(message).toContain(casedModelId);
+      expect(message).toContain('cased-message-vocab.txt');
+      expect(message).toContain('Hello');
+    });
+
+    it('should still accept an uncased vocab whose ONLY uppercase tokens are bracketed', async () => {
+      // `[CLS]`/`[UNK]`/`[MASK]`/`[unused0]` are uppercase in EVERY uncased
+      // vocab. If they counted as casing evidence, no vocab would ever load.
+      const path = await writeVocab('bracketed-only-vocab.txt', buildUncasedVocabWithReservedTokens());
+
+      await expect(BertTokenizer.fromVocabFile(path)).resolves.toBeInstanceOf(BertTokenizer);
+    });
+
+    it('should still accept an uncased vocab carrying one stray uppercase token', async () => {
+      // The negative case for the ratio: a lone artifact in an otherwise
+      // lowercased vocab must not refuse a usable model.
+      const path = await writeVocab('stray-uppercase-vocab.txt', buildUncasedVocabWithStrayUppercase());
+
+      await expect(BertTokenizer.fromVocabFile(path)).resolves.toBeInstanceOf(BertTokenizer);
     });
   });
 

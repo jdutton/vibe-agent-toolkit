@@ -13,7 +13,11 @@
 import { existsSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import { type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import {
+  calculateValidationStatus,
+  countBySeverity,
+  type ValidationIssue,
+} from '@vibe-agent-toolkit/agent-schema';
 import {
   resolveAnchorRoot,
   validateSkillForPackaging,
@@ -124,14 +128,16 @@ function renderHumanReport(
   grouped: Map<ChecklistSection, ValidationIssue[]>,
   logger: Logger,
 ): void {
-  const errorCount = result.activeErrors.length;
-  const warningCount = result.activeWarnings.length;
-  const infoCount = result.allErrors.filter(i => i.severity === 'info').length;
+  // One collapse, from agent-schema: `allErrors` carries info issues despite the
+  // name, and there is no `activeInfo` bucket to read them from.
+  const counts = countBySeverity(result.allErrors);
 
   logger.info('');
   logger.info(`Reviewing skill: ${result.skillName}`);
   logger.info(`Source: ${skillPath}`);
-  logger.info(`Summary: ${errorCount} error(s), ${warningCount} warning(s), ${infoCount} info`);
+  logger.info(
+    `Summary: ${counts.errors} error(s), ${counts.warnings} warning(s), ${counts.info} info`,
+  );
   logger.info(
     `Metadata: ${result.metadata.skillLines} SKILL.md lines, ${result.metadata.totalLines} total lines across ${result.metadata.fileCount} file(s)`,
   );
@@ -210,18 +216,16 @@ function outputYaml(
     }
   }
 
-  const errorCount = result.activeErrors.length;
-  const warningCount = result.activeWarnings.length;
-
   const payload = {
     skill: result.skillName,
     source: skillPath,
-    status: result.status,
-    summary: {
-      errors: errorCount,
-      warnings: warningCount,
-      info: result.allErrors.filter(i => i.severity === 'info').length,
-    },
+    // NOT `result.status`: that is the packaging GATE verdict, two-valued by
+    // design, so a review holding only warnings published `status: success`
+    // while the very same run exited 1. Review treats a warning as a finding
+    // you must look at (that is its documented exit-code contract), so the
+    // status channel has to be able to say so.
+    status: calculateValidationStatus(result.allErrors),
+    issueCounts: countBySeverity(result.allErrors),
     metadata: result.metadata,
     automated,
     manual,
@@ -285,9 +289,10 @@ export async function reviewCommand(
 
     renderFooter(result, logger);
 
-    const hasWarningsOrErrors =
-      result.activeErrors.length > 0 || result.activeWarnings.length > 0;
-    process.exit(hasWarningsOrErrors ? 1 : 0);
+    // Same counts the status channel is derived from, so the two agree by
+    // construction: exit 1 ⟺ status is `warning` or `error`.
+    const counts = countBySeverity(result.allErrors);
+    process.exit(counts.errors > 0 || counts.warnings > 0 ? 1 : 0);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'SkillReview');
   }
@@ -318,10 +323,13 @@ Description:
   Output:
     Default: human-readable report to stderr (automated findings grouped by
              checklist section, then the manual walkthrough).
-    --yaml:  structured YAML to stdout with automated + manual sections.
+    --yaml:  structured YAML to stdout with automated + manual sections, plus
+             status (success | warning | error) and issueCounts
+             {errors, warnings, info}. The status agrees with the exit code by
+             construction: exit 1 iff status is 'warning' or 'error'.
 
 Exit Codes:
-  0 - No errors and no warnings emitted
+  0 - No errors and no warnings emitted (an info-only review is 'success')
   1 - At least one error or warning present (errors and warnings treated equally — this is a review, not a gate)
   2 - System error (path missing, internal failure)
 

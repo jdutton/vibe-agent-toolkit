@@ -116,10 +116,15 @@ export type {
   RuleConflictKind,
   SettingProvenance,
   SettingsAuditResult,
+  SettingsFileField,
+  SettingsFinding,
   SettingsLayer,
   SettingsLevel,
+  SettingsPathCandidate,
+  SettingsPathCandidatesResult,
   SettingsPathEntry,
   SettingsPathsResult,
+  SettingsTypeConfidence,
   SettingsValidateResult,
 } from './settings/index.js';
 export {
@@ -133,9 +138,11 @@ export {
   matchesPathRule,
   matchesPermissionRule,
   mergeSettingsLayers,
+  probePathAccess,
   readEffectiveSettings,
   readSettingsLayers,
   resolveSettingsPaths,
+  summarizeSettingsFindings,
   validateSettingsFile,
 } from './settings/index.js';
 

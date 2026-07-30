@@ -184,4 +184,4 @@ A plugin-local `files:` deferred surface was deliberately **not** introduced her
 
 - [`docs/validation-codes.md`](../validation-codes.md) — every validation code by name, default severity, and applicable shapes.
 - [`docs/skill-quality-and-compatibility.md`](../skill-quality-and-compatibility.md) — VAT's stance on structure, packaging, and compatibility.
-- [`docs/research/2026-05-03-claude-plugin-loader-semantics.md`](../research/2026-05-03-claude-plugin-loader-semantics.md) — empirical Claude Code loader behavior behind the tri-state declared-vs-discovered model.
+- [`docs/research/2026-05-03-claude-plugin-loader-semantics.md`](../research/2026-05-03-claude-plugin-loader-semantics.md) — the Claude Code loader behavior behind the tri-state declared-vs-discovered model. Derived from **source review** of a shipped Claude Code build, not from observation: that document is `status: partially-conclusive` and its "Runbook for Empirical Verification" has never been executed.

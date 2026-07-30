@@ -762,28 +762,39 @@ const SEVERITY_COUNTS_CONFORMING = new Set<string>([
   'packages/agent-skills/src/validators/marketplace-validator.ts',
   'packages/agent-skills/src/validators/registry-validator.ts',
   'packages/claude-marketplace/src/validators/plugin-validator.ts',
+  'packages/cli/src/commands/verify.ts',
+  'packages/cli/src/commands/build.ts',
+  // Newly ENTERED the lane population by migrating onto the shared collapse: its
+  // `status` used to be the two-valued packaging gate verdict, which structurally
+  // could not say `warning` while the command exited 1 for one.
+  'packages/cli/src/commands/skill/review.ts',
+  // File counts and finding counts are now named apart (`summary.filesWith*` vs
+  // `issueCounts`), so the two denominators can no longer be read as one.
+  'packages/cli/src/commands/audit/hierarchical-output.ts',
+  'packages/cli/src/commands/skills/validate.ts',
+  'packages/cli/src/commands/skills/build.ts',
+  'packages/cli/src/commands/claude/plugin/build.ts',
+  // Publishes `ValidationResult.issueCounts` and never calls the shared counter,
+  // so it conforms only because the block is built from a real object
+  // (`{ issueCounts: counts }` → `yaml.stringify`) rather than hand-spelled
+  // `process.stdout.write` lines. Written that way ON PURPOSE: a hand-spelled
+  // line is invisible to this gate's source scan.
+  'packages/cli/src/commands/skills/package.ts',
+  'packages/cli/src/commands/audit-settings.ts',
+  'packages/claude-marketplace/src/settings/settings-auditor.ts',
 ]);
 
 /**
- * Lanes that publish a status WITHOUT per-severity counts. This is Wave 2/3's
- * checklist. Remove an entry in the same change that fixes it — a fixed lane
- * left on this list fails the build.
+ * Lanes that publish a status WITHOUT per-severity counts. Remove an entry in the
+ * same change that fixes it — a fixed lane left on this list fails the build.
+ *
+ * Started at 19. Both survivors are deliberate rather than pending: one collapses
+ * a boolean, and one is a two-valued BUILD GATE whose result is mutated in place
+ * after construction, so a stored count would go stale rather than help.
  */
-/** The plain case: a status is published and the severity distribution simply is not. */
-const NO_COUNTS_BLOCK = 'status published without a per-severity counts block';
-
 const SEVERITY_COUNTS_RATCHET = new Map<string, string>([
-  ['packages/cli/src/commands/verify.ts', 'consistency phase reports `passed` even with warnings; findings go to stderr only and never into the archived YAML'],
-  ['packages/cli/src/commands/build.ts', NO_COUNTS_BLOCK],
-  ['packages/cli/src/commands/audit-settings.ts', 'drops the `overrode` provenance chain, the one question the override chain exists to answer'],
-  ['packages/cli/src/commands/audit/hierarchical-output.ts', '`summary.warnings` counts FILES while `issues.warnings` counts FINDINGS — same word, two units, adjacent keys'],
-  ['packages/cli/src/commands/claude/plugin/build.ts', 'renders info-severity findings with a `[WARNING]` prefix; no counts published'],
-  ['packages/cli/src/commands/skills/validate.ts', 'prints "All validations passed" over active warnings; no counts published'],
-  ['packages/cli/src/commands/skills/build.ts', 'labels the whole issue set "post-build error(s)" regardless of severity'],
-  ['packages/cli/src/commands/skills/package.ts', 'validation display lane; status published without a per-severity counts block'],
   ['packages/cli/src/commands/agent/validate.ts', 'collapses a boolean `valid` into a status; no counts published'],
   ['packages/agent-skills/src/validators/packaging-validator.ts', 'two-valued gate status with no counts field; `allErrors` carries info issues that no `activeInfo` bucket exposes, and the result is mutated in place by `applyConfigVerdicts`, so a stored count would go stale'],
-  ['packages/claude-marketplace/src/settings/settings-auditor.ts', NO_COUNTS_BLOCK],
 ]);
 
 /**

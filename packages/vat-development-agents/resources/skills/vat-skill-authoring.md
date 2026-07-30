@@ -172,9 +172,9 @@ skills:
           LINK_DROPPED_BY_DEPTH: error           # upgrade: block on depth-dropped links
           LINK_TO_NAVIGATION_FILE: ignore        # silence: this skill intentionally links to READMEs
         allow:
-          PACKAGED_UNREFERENCED_FILE:
-            - paths: ["templates/runtime.json"]
-              reason: "consumed programmatically at runtime"
+          LINK_TO_GITIGNORED_FILE:
+            - paths: ["references/generated-index.md"]
+              reason: "build artifact, reviewed"
               expires: "2026-09-30"
           SKILL_LENGTH_EXCEEDS_RECOMMENDED:
             - reason: "whole-skill concern; paths defaults to ['**/*']"
@@ -188,7 +188,7 @@ Two sub-keys, each covering a different override granularity:
 Common adjustments:
 
 - Downgrade `LINK_DROPPED_BY_DEPTH` to `ignore` when intentionally linking out to external docs.
-- Allow specific files under `PACKAGED_UNREFERENCED_FILE` when they're consumed programmatically by CLI scripts at runtime.
+- Do **not** waive `PACKAGED_UNREFERENCED_FILE` for a file consumed programmatically — declare it under `files:` instead. A declared `dest` is exempt from the orphan check, so a waiver list here is just a hand-maintained duplicate of the `files:` map.
 - Raise `ALLOW_EXPIRED` to `error` for zero-tolerance expiry policies.
 
 Expired `allow` entries still apply — VAT emits `ALLOW_EXPIRED` as a reminder rather than silently re-surfacing the underlying issue (no surprise build breaks when a date passes). Unused `allow` entries surface as `ALLOW_UNUSED` (analogous to ESLint's unused-disable).

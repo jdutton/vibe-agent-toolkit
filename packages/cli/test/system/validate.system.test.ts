@@ -141,7 +141,7 @@ describe('vat validate command (system test)', () => {
     expect(result.stderr).toContain('Unknown surface');
   });
 
-  it('exits non-zero when a configured validator fails', async () => {
+  it('exits exactly 1 — not 2 — when a configured validator reports validation errors', async () => {
     const tempDir = suite.createTempDir();
     // resources configured with a markdown file containing a broken internal link
     suite.writeConfig(tempDir, RESOURCES_CONFIG);
@@ -149,6 +149,12 @@ describe('vat validate command (system test)', () => {
 
     const result = await suite.runValidate(tempDir);
 
-    expect(result.status).not.toBe(0);
+    // `not.toBe(0)` cannot express this: exit 1 (a validator found problems) and
+    // exit 2 (a validator could not run) are different facts for a CI gate, and
+    // the surface status must say which one happened.
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('status: error');
+    expect(result.stdout).toContain('exitCode: 1');
+    expect(result.stdout).not.toContain('system-error');
   });
 });

@@ -14,11 +14,17 @@ import {
   checkGitRepository,
   checkNodeVersion,
   checkVatVersion,
+  countByOutcome,
+  formatDoctorSummary,
+  selectDisplayChecks,
+  type DoctorCheckResult,
 } from '../../src/commands/doctor.js';
 import {
   assertCheck,
   assertCheckFailed,
   assertCheckPassed,
+  assertCheckSkipped,
+  assertCheckUndetermined,
   mockDoctorConfig,
   mockDoctorEnvironment,
   mockDoctorFileSystem,
@@ -47,6 +53,10 @@ vi.mock('../../src/utils/config-loader.js', () => ({
 const CHECK_NODE_VERSION = 'Node.js version';
 const CHECK_CONFIG_VALID = 'Configuration valid';
 const CHECK_VAT_VERSION = 'vat version';
+const CHECK_CLI_BUILD = 'CLI build status';
+const CLI_PACKAGE_NAME = '@vibe-agent-toolkit/cli';
+const UNREADABLE = 'EACCES: permission denied';
+const ADVISORY_CHECK = 'p3-advisory';
 
 describe('doctor command - unit tests', () => {
   beforeEach(() => {
@@ -229,7 +239,7 @@ describe('doctor command - unit tests', () => {
       const result = await checkVatVersion(versionChecker);
 
       assertCheck(result, CHECK_VAT_VERSION, {
-        passed: true, // Advisory only
+        outcome: 'pass', // Advisory only
         messageContains: ['0.1.0', '0.2.0', 'available'],
         suggestionContains: 'npm install -g',
       });
@@ -244,12 +254,12 @@ describe('doctor command - unit tests', () => {
       const result = await checkVatVersion(versionChecker);
 
       assertCheck(result, CHECK_VAT_VERSION, {
-        passed: true,
+        outcome: 'pass',
         messageContains: ['0.3.0', 'ahead'],
       });
     });
 
-    it('handles network errors gracefully', async () => {
+    it('reports UNDETERMINED (not pass) when npm is unreachable', async () => {
       await mockDoctorFileSystem({ packageVersion: '0.1.0' });
       const versionChecker = {
         fetchLatestVersion: vi.fn().mockRejectedValue(new Error('Network error')),
@@ -257,10 +267,20 @@ describe('doctor command - unit tests', () => {
 
       const result = await checkVatVersion(versionChecker);
 
-      assertCheck(result, CHECK_VAT_VERSION, {
-        passed: true,
-        messageContains: 'Unable to check',
+      assertCheckUndetermined(result, CHECK_VAT_VERSION, 'Unable to check');
+    });
+
+    it('reports UNDETERMINED when the local version cannot be read', async () => {
+      vi.mocked(readFileSync).mockImplementation((): string => {
+        throw new Error(UNREADABLE);
       });
+      const versionChecker = {
+        fetchLatestVersion: vi.fn().mockResolvedValue('0.2.0'),
+      };
+
+      const result = await checkVatVersion(versionChecker);
+
+      assertCheckUndetermined(result, CHECK_VAT_VERSION, 'Unable to determine version');
     });
   });
 
@@ -275,7 +295,7 @@ describe('doctor command - unit tests', () => {
 
       const result = checkCliBuildSync(FAKE_PROJECT_ROOT);
 
-      assertCheckPassed(result, 'CLI build status', 'up to date');
+      assertCheckPassed(result, CHECK_CLI_BUILD, 'up to date');
     });
 
     it('fails when CLI is stale', async () => {
@@ -293,13 +313,13 @@ describe('doctor command - unit tests', () => {
         if (readCallCount === 1 || locationStr.startsWith('file://')) {
           // Running CLI has old version
           return JSON.stringify({
-            name: '@vibe-agent-toolkit/cli',
+            name: CLI_PACKAGE_NAME,
             version: '0.1.0'
           });
         }
         // Source has newer version
         return JSON.stringify({
-          name: '@vibe-agent-toolkit/cli',
+          name: CLI_PACKAGE_NAME,
           version: '0.2.0'
         });
       });
@@ -309,7 +329,7 @@ describe('doctor command - unit tests', () => {
 
       assertCheckFailed(
         result,
-        'CLI build status',
+        CHECK_CLI_BUILD,
         'stale',
         'bun run build'
       );
@@ -320,15 +340,148 @@ describe('doctor command - unit tests', () => {
 
       const result = checkCliBuildSync(FAKE_PROJECT_ROOT);
 
-      expect(result.passed).toBe(true);
-      expect(result.message).toContain('Skipped');
+      assertCheckSkipped(result, CHECK_CLI_BUILD, 'not in VAT source tree');
     });
 
     it('skips when projectRoot is null', () => {
       const result = checkCliBuildSync(null);
 
-      expect(result.passed).toBe(true);
-      expect(result.message).toContain('Skipped');
+      assertCheckSkipped(result, CHECK_CLI_BUILD, 'no project root');
+    });
+
+    it('reports UNDETERMINED (not pass) when the version files cannot be read', async () => {
+      // In the VAT source tree, but reading package.json blows up: the build
+      // may or may not be stale and we cannot tell. "Could not tell" must not
+      // render as a passing check.
+      vi.mocked(existsSync).mockReturnValue(true);
+      let call = 0;
+      vi.mocked(readFileSync).mockImplementation((): string => {
+        call++;
+        // First read is isVatSourceTree's probe — let it confirm the source tree.
+        if (call === 1) {
+          return JSON.stringify({ name: CLI_PACKAGE_NAME, version: '0.1.0' });
+        }
+        throw new Error(UNREADABLE);
+      });
+
+      const result = checkCliBuildSync(FAKE_PROJECT_ROOT);
+
+      assertCheckUndetermined(result, CHECK_CLI_BUILD, 'Could not determine build status');
+    });
+
+    it('reports UNDETERMINED when source-tree membership itself cannot be determined', async () => {
+      // The `.../packages/cli/package.json` probe exists but is unreadable:
+      // we cannot tell whether this is the VAT source tree, which is NOT the
+      // same answer as "it is not the VAT source tree".
+      vi.mocked(existsSync).mockReturnValue(true);
+      vi.mocked(readFileSync).mockImplementation((): string => {
+        throw new Error(UNREADABLE);
+      });
+
+      const result = checkCliBuildSync(FAKE_PROJECT_ROOT);
+
+      assertCheckUndetermined(result, CHECK_CLI_BUILD, 'Could not determine');
+    });
+  });
+
+  describe('outcome accounting (the rendered list must match the count)', () => {
+    const check = (
+      name: string,
+      outcome: DoctorCheckResult['outcome'],
+      suggestion?: string,
+    ): DoctorCheckResult => ({
+      name,
+      outcome,
+      message: `${name} message`,
+      ...(suggestion === undefined ? {} : { suggestion }),
+    });
+
+    const MIXED: DoctorCheckResult[] = [
+      check('p1', 'pass'),
+      check('p2', 'pass'),
+      check(ADVISORY_CHECK, 'pass', 'upgrade something'),
+      check('f1', 'fail', 'fix it'),
+      check('u1', 'undetermined'),
+      check('s1', 'skipped'),
+    ];
+
+    it('counts every outcome bucket', () => {
+      expect(countByOutcome(MIXED)).toEqual({
+        pass: 3,
+        fail: 1,
+        undetermined: 1,
+        skipped: 1,
+      });
+    });
+
+    it('counts sum to the number of checks', () => {
+      const counts = countByOutcome(MIXED);
+      const sum = counts.pass + counts.fail + counts.undetermined + counts.skipped;
+      expect(sum).toBe(MIXED.length);
+    });
+
+    it('verbose display shows every check', () => {
+      expect(selectDisplayChecks(MIXED, true).map(c => c.name)).toEqual([
+        'p1',
+        'p2',
+        ADVISORY_CHECK,
+        'f1',
+        'u1',
+        's1',
+      ]);
+    });
+
+    it('concise display keeps failures, undetermined, and advisories', () => {
+      expect(selectDisplayChecks(MIXED, false).map(c => c.name)).toEqual([
+        ADVISORY_CHECK,
+        'f1',
+        'u1',
+      ]);
+    });
+
+    it('summary states how many checks it hid, so the count cannot contradict the list', () => {
+      const displayed = selectDisplayChecks(MIXED, false);
+      const summary = formatDoctorSummary(countByOutcome(MIXED), displayed.length).join('\n');
+
+      expect(summary).toContain('6 checks');
+      expect(summary).toContain('3 passed');
+      expect(summary).toContain('1 failed');
+      expect(summary).toContain('1 undetermined');
+      expect(summary).toContain('1 skipped');
+      // 6 checks, 3 rendered → the reader is told about the other 3.
+      expect(summary).toContain('3 not shown');
+    });
+
+    it('does not claim hidden checks when every check is rendered', () => {
+      const displayed = selectDisplayChecks(MIXED, true);
+      const summary = formatDoctorSummary(countByOutcome(MIXED), displayed.length).join('\n');
+
+      expect(summary).not.toContain('not shown');
+    });
+
+    it('an all-passing concise run says every check is hidden rather than showing none silently', () => {
+      const allPass = [check('a', 'pass'), check('b', 'pass')];
+      const displayed = selectDisplayChecks(allPass, false);
+      const summary = formatDoctorSummary(countByOutcome(allPass), displayed.length).join('\n');
+
+      expect(displayed).toEqual([]);
+      expect(summary).toContain('2 checks');
+      expect(summary).toContain('2 not shown');
+    });
+
+    it('never reports an undetermined check as healthy', () => {
+      const counts = countByOutcome([check('u', 'undetermined'), check('p', 'pass')]);
+      const summary = formatDoctorSummary(counts, 2).join('\n');
+
+      expect(summary).not.toContain('All checks passed');
+      expect(summary).toContain('could not be determined');
+    });
+
+    it('says all checks passed only when they all actually passed', () => {
+      const counts = countByOutcome([check('a', 'pass'), check('b', 'pass')]);
+      const summary = formatDoctorSummary(counts, 2).join('\n');
+
+      expect(summary).toContain('All checks passed');
     });
   });
 });

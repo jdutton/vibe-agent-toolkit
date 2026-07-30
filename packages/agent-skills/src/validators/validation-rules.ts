@@ -155,7 +155,10 @@ export const VALIDATION_RULES: Record<ValidationRuleCode, ValidationRule> = {
     code: 'PACKAGED_UNREFERENCED_FILE',
     category: 'best_practice',
     message: (ctx) => `Packaged file not referenced from any markdown: ${(ctx['relativePath'] as string) ?? 'unknown'}`,
-    fix: 'Add a markdown link from SKILL.md or a linked resource, or allow via validation.allow',
+    // Kept in step with CODE_REGISTRY's remedy: a file consumed programmatically is
+    // declared in `files:` (a declared dest is exempt), NOT waived — a waiver list
+    // that restates the `files:` map is the symptom this text used to cause.
+    fix: 'Add a markdown link from SKILL.md or a linked resource, or declare it under skills.config.<name>.files as a source/dest pair',
   },
   PACKAGED_TEST_INPUT: {
     code: 'PACKAGED_TEST_INPUT',

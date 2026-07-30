@@ -130,10 +130,19 @@ describe('createIssue', () => {
 });
 
 describe('fix hints are framework-aware', () => {
-	it('PACKAGED_UNREFERENCED_FILE fix references validation.allow, not the removed ignoreValidationErrors field', () => {
+	it('PACKAGED_UNREFERENCED_FILE fix names the removed ignoreValidationErrors field nowhere', () => {
 		const rule = VALIDATION_RULES.PACKAGED_UNREFERENCED_FILE;
 		expect(rule.fix).not.toMatch(/ignoreValidationErrors/);
-		expect(rule.fix).toMatch(/validation\.allow/);
+	});
+
+	// The remedy used to read "Allow via validation.allow if the file is consumed
+	// programmatically" — which sent readers to hand-maintain a waiver list that
+	// duplicates their own `files:` map, since a declared dest is exempt outright.
+	// The text must point at `files:` and must not prescribe a waiver.
+	it('PACKAGED_UNREFERENCED_FILE fix prescribes files:, not a validation.allow waiver', () => {
+		const rule = VALIDATION_RULES.PACKAGED_UNREFERENCED_FILE;
+		expect(rule.fix).toMatch(/\.files\b/);
+		expect(rule.fix).not.toMatch(/Allow via validation\.allow/i);
 	});
 });
 

@@ -102,8 +102,6 @@ export function getConfigDir(configPath: string): string {
  *
  * Tests that mutate fixtures between runs must call
  * {@link resetLoadedConfigCache} to invalidate this cache.
- *
- * See spec docs/superpowers/specs/2026-05-17-root-model-and-leading-slash-design.md §8.
  */
 const loadedConfigCache: Map<string, ProjectConfig | null> = new Map();
 

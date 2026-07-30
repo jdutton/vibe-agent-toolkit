@@ -121,7 +121,7 @@ function readVersion(packageJsonPath: string): string | null {
 function main(): void {
   // VAT_TEST_ROOT: legacy test override that pins the project root to a
   // specific directory. Applied at the bin boundary so library code stays
-  // pure. See docs/superpowers/specs/2026-05-17-root-model-and-leading-slash-design.md §7.
+  // pure — no library function reads this variable.
   const testRoot = process.env['VAT_TEST_ROOT'];
   const cwd = testRoot ? safePath.resolve(testRoot) : process.cwd();
   const args = process.argv.slice(2);

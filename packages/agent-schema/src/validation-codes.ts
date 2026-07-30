@@ -83,7 +83,7 @@ export const CODE_REGISTRY = {
   PACKAGED_UNREFERENCED_FILE: entry(
     'error',
     'File in the packaged output is not referenced from any packaged markdown.',
-    'Add a markdown link or code-block mention in SKILL.md or a linked resource. Allow via validation.allow if the file is consumed programmatically.',
+    'Add a markdown link or code-block mention in SKILL.md or a linked resource. A file consumed programmatically belongs in skills.config.<name>.files as a source/dest pair — a declared dest is exempt, so do NOT restate it in validation.allow.',
     'packaged_unreferenced_file',
   ),
   PACKAGED_TEST_INPUT: entry(

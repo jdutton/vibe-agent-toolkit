@@ -6,7 +6,22 @@
 import * as yaml from 'yaml';
 
 /**
- * Write YAML output to stdout with document markers
+ * Write a single YAML document to stdout, opened with `---`.
+ *
+ * There is deliberately NO trailing marker. `---` OPENS a document in YAML; the
+ * end-of-document marker is `...`. Emitting `---` at the end therefore opened a
+ * second, empty document, so every command's stdout was a two-document stream and
+ * a plain `YAML.parse()` threw `Source contains multiple documents` — on output
+ * this CLI documents as "YAML summary → stdout (for programmatic parsing)".
+ *
+ * The repo's own test helper had already been written around it: `executeCli…`
+ * calls `parseAllDocuments(...)` and takes `docs[0]`, with a comment saying "to
+ * handle document markers". That workaround is what kept the defect invisible —
+ * every consumer that did the obvious thing instead got an exception.
+ *
+ * Dropping the trailer also makes this agree with the seven hand-rolled emit
+ * sites elsewhere in the CLI, none of which ever wrote one.
+ *
  * @param data - Data to serialize as YAML
  */
 export function writeYamlOutput(data: unknown): void {
@@ -16,7 +31,6 @@ export function writeYamlOutput(data: unknown): void {
     lineWidth: 120,
     aliasDuplicateObjects: false,
   }));
-  process.stdout.write('---\n');
 }
 
 /**

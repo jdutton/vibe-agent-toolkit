@@ -22,9 +22,9 @@ skills:
           LINK_TO_NAVIGATION_FILE: ignore   # this skill links to READMEs on purpose
           ALLOW_EXPIRED: error              # zero-tolerance expiry
         allow:
-          PACKAGED_UNREFERENCED_FILE:
+          LINK_TO_GITIGNORED_FILE:
             - paths: ["templates/runtime.json"]
-              reason: "consumed programmatically at runtime"
+              reason: "generated at install time, deliberately untracked"
               expires: "2026-09-30"
           SKILL_LENGTH_EXCEEDS_RECOMMENDED:
             - reason: "whole-skill concern; paths defaults to ['**/*']"

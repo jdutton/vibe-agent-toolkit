@@ -3,11 +3,17 @@
 import fs from 'node:fs';
 import { dirname } from 'node:path';
 
+import { countBySeverity } from '@vibe-agent-toolkit/agent-schema';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { AuditCommandOptions } from '../../src/commands/audit.js';
-import { deriveScanRoot, getValidationResults, resetAuditCaches } from '../../src/commands/audit.js';
+import {
+  buildAuditReport,
+  deriveScanRoot,
+  getValidationResults,
+  resetAuditCaches,
+} from '../../src/commands/audit.js';
 
 // Constants for test fixtures
 const CLAUDE_PLUGIN_DIRNAME = '.claude-plugin';
@@ -20,6 +26,7 @@ const MY_MARKETPLACE_NAME = 'my-marketplace';
 const TEST_MARKETPLACE_NAME = 'test-marketplace';
 const TEST_PLUGIN_NAME = 'test-plugin';
 const TEST_PLUGIN_DESCRIPTION = 'Test plugin';
+const TEST_AUTHOR_NAME = 'VAT Test Suite';
 
 // Silent logger for tests (no stderr output)
 const silentLogger = {
@@ -53,6 +60,55 @@ function writePluginManifest(parentDir: string, dirName: string, manifest: objec
   return pluginDir;
 }
 
+/** A plugin manifest with every field the validators recommend. */
+function validPluginManifest(extra: object = {}): object {
+  return {
+    name: TEST_PLUGIN_NAME,
+    version: '1.0.0',
+    description: TEST_PLUGIN_DESCRIPTION,
+    author: { name: TEST_AUTHOR_NAME },
+    license: 'MIT',
+    ...extra,
+  };
+}
+
+/**
+ * A plugin whose manifest declares one skill that is absent (warning) while a
+ * different skill IS on disk but omitted from the explicit list (info). Both
+ * findings come from the inventory detectors, which run AFTER the primary plugin
+ * validation has already produced a status, a counts block and a summary line.
+ */
+function writeInventoryFindingsPlugin(parentDir: string, dirName: string): string {
+  const pluginDir = writePluginManifest(
+    parentDir,
+    dirName,
+    validPluginManifest({ skills: ['skills/declared-but-absent'] }),
+  );
+  const onDisk = safePath.join(pluginDir, 'skills', 'present-but-undeclared');
+  fs.mkdirSync(onDisk, { recursive: true });
+  fs.writeFileSync(
+    safePath.join(onDisk, 'SKILL.md'),
+    '---\nname: present-but-undeclared\ndescription: A bundled test skill, long enough to clear any minimum-description thresholds the validator may enforce.\n---\n\n# present-but-undeclared\n\nBody.\n',
+  );
+  return pluginDir;
+}
+
+/** A marketplace declaring one path-source plugin. */
+function writeMarketplace(parentDir: string, dirName: string): string {
+  const marketplaceDir = safePath.join(parentDir, dirName);
+  const claudePluginDir = safePath.join(marketplaceDir, CLAUDE_PLUGIN_DIRNAME);
+  fs.mkdirSync(claudePluginDir, { recursive: true });
+  fs.writeFileSync(
+    safePath.join(claudePluginDir, MARKETPLACE_JSON_FILENAME),
+    JSON.stringify({
+      name: TEST_MARKETPLACE_NAME,
+      owner: { name: TEST_OWNER_NAME },
+      plugins: [{ name: TEST_PLUGIN_NAME, source: `./${TEST_PLUGIN_NAME}` }],
+    })
+  );
+  return marketplaceDir;
+}
+
 describe('audit command (integration)', () => {
   let tempDir: string;
 
@@ -70,7 +126,7 @@ describe('audit command (integration)', () => {
         name: TEST_PLUGIN_NAME,
         version: '1.0.0',
         description: TEST_PLUGIN_DESCRIPTION,
-        author: { name: 'VAT Test Suite' },
+        author: { name: TEST_AUTHOR_NAME },
         license: 'MIT',
       });
 
@@ -119,7 +175,7 @@ describe('audit command (integration)', () => {
         name: TEST_PLUGIN_NAME,
         version: '1.0.0',
         description: TEST_PLUGIN_DESCRIPTION,
-        author: { name: 'VAT Test Suite' },
+        author: { name: TEST_AUTHOR_NAME },
         license: 'MIT',
       });
       const skillAlpha = safePath.join(pluginDir, 'skills', 'alpha');
@@ -143,26 +199,79 @@ describe('audit command (integration)', () => {
     });
   });
 
+  describe('inventory findings appended after primary validation', () => {
+    it('recomputes the status and the counts from the appended issues', async () => {
+      const pluginDir = writeInventoryFindingsPlugin(tempDir, 'inventory-findings-plugin');
+
+      const results = await runAudit(pluginDir);
+      const plugin = results.find((r) => r.type === 'claude-plugin');
+
+      expect(plugin).toBeDefined();
+      const codes = plugin?.issues.map((i) => i.code) ?? [];
+      expect(codes).toContain('COMPONENT_DECLARED_BUT_MISSING');
+      expect(codes).toContain('COMPONENT_PRESENT_BUT_UNDECLARED');
+
+      // The findings are there, so the verdict beside them must follow them.
+      // Pushing into `issues` without recomputing left `status: success` and an
+      // all-zero `issueCounts` sitting next to a warning in the same document.
+      expect(plugin?.status).toBe('warning');
+      expect(plugin?.issueCounts).toEqual(countBySeverity(plugin?.issues ?? []));
+      expect(plugin?.issueCounts?.warnings).toBeGreaterThanOrEqual(1);
+      expect(plugin?.issueCounts?.info).toBeGreaterThanOrEqual(1);
+      // "Valid plugin" is not a summary of a document that carries a warning.
+      expect(plugin?.summary).not.toBe('Valid plugin');
+    });
+
+    it('names file counts and finding counts differently in the report document', async () => {
+      const pluginDir = writeInventoryFindingsPlugin(tempDir, 'summary-denominator-plugin');
+
+      const { document } = await buildAuditReport(pluginDir, {}, Date.now(), silentLogger);
+
+      // Files, by their own status.
+      expect(document.summary.filesScanned).toBeGreaterThanOrEqual(1);
+      expect(document.summary.filesWithWarnings).toBe(1);
+      // Findings, by their own severity — a different denominator, so a
+      // different name. `summary.warnings: 0` beside `issues.warnings: 1` was
+      // the same word measuring two things in adjacent keys.
+      expect(document.issueCounts.warnings).toBe(1);
+      expect(document.issueCounts.info).toBeGreaterThanOrEqual(1);
+      expect(document.summary).not.toHaveProperty('warnings');
+      expect(document.summary).not.toHaveProperty('errors');
+      expect(document.summary).not.toHaveProperty('success');
+      expect(document).not.toHaveProperty('issues');
+    });
+  });
+
   describe('marketplace validation', () => {
     it('should validate marketplace directory successfully', async () => {
-      const marketplaceDir = safePath.join(tempDir, 'valid-marketplace');
-      const claudePluginDir = safePath.join(marketplaceDir, CLAUDE_PLUGIN_DIRNAME);
-      fs.mkdirSync(claudePluginDir, { recursive: true });
-      fs.writeFileSync(
-        safePath.join(claudePluginDir, MARKETPLACE_JSON_FILENAME),
-        JSON.stringify({
-          name: TEST_MARKETPLACE_NAME,
-          owner: { name: TEST_OWNER_NAME },
-          plugins: [{ name: TEST_PLUGIN_NAME, source: `./${TEST_PLUGIN_NAME}` }],
-        })
-      );
+      const marketplaceDir = writeMarketplace(tempDir, 'valid-marketplace');
+      // The declared path source must actually exist. It did not, so this
+      // fixture had a MARKETPLACE_PLUGIN_SOURCE_MISSING error all along — the
+      // test only read as passing because the marketplace result's status was
+      // never recomputed after the inventory detectors appended to `issues`.
+      writePluginManifest(marketplaceDir, TEST_PLUGIN_NAME, validPluginManifest());
+
+      const results = await runAudit(marketplaceDir);
+
+      const marketplaceResult = results.find((r) => r.type === 'marketplace');
+      expect(marketplaceResult?.status).toBe('success');
+      expect(marketplaceResult?.issues).toHaveLength(0);
+      expect(marketplaceResult?.metadata?.name).toBe(TEST_MARKETPLACE_NAME);
+    });
+
+    it('should report error status when a declared path source is missing', async () => {
+      const marketplaceDir = writeMarketplace(tempDir, 'marketplace-missing-source');
 
       const results = await runAudit(marketplaceDir);
 
       expect(results).toHaveLength(1);
-      expect(results[0].status).toBe('success');
-      expect(results[0].type).toBe('marketplace');
-      expect(results[0].metadata?.name).toBe(TEST_MARKETPLACE_NAME);
+      const codes = results[0].issues.map((i) => i.code);
+      expect(codes).toContain('MARKETPLACE_PLUGIN_SOURCE_MISSING');
+      // The verdict follows the findings: an error-severity finding cannot sit
+      // under `status: success` with an all-zero counts block beside it.
+      expect(results[0].status).toBe('error');
+      expect(results[0].issueCounts).toEqual(countBySeverity(results[0].issues));
+      expect(results[0].issueCounts?.errors).toBeGreaterThanOrEqual(1);
     });
   });
 

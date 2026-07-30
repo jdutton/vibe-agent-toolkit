@@ -249,12 +249,55 @@ function registryIssueAt(
  * once and pass it down rather than re-crawling per skill.
  */
 export async function crawlAndResolveRegistry(projectRoot: string): Promise<ResourceRegistry> {
-  const registry = await ResourceRegistry.fromCrawl({
-    baseDir: projectRoot,
-    include: ['**/*.md', '**/*.html', '**/*.htm'],
-  });
-  registry.resolveLinks();
-  return registry;
+  const key = toForwardSlash(safePath.resolve(projectRoot));
+  const cached = registryCache.get(key);
+  if (cached !== undefined) {
+    return cached;
+  }
+  // The PROMISE is cached, not the resolved value, so two overlapping requests
+  // for one root can never start two crawls.
+  const pending = (async (): Promise<ResourceRegistry> => {
+    const registry = await ResourceRegistry.fromCrawl({
+      baseDir: projectRoot,
+      include: ['**/*.md', '**/*.html', '**/*.htm'],
+    });
+    registry.resolveLinks();
+    return registry;
+  })();
+  registryCache.set(key, pending);
+  return pending;
+}
+
+/**
+ * Cache of (resolved project root → registry), so the crawl above is paid ONCE
+ * per root per process rather than once per skill.
+ *
+ * It lives beside the crawl because every caller wants the same thing and the
+ * cost is a property of the crawl, not of any one lane. `vat audit` had already
+ * built this cache privately — and its own comment flagged the trap: the key
+ * "must be the SAME value `validateSkillForPackaging` derives", or a mismatch
+ * "silently degrades back to a per-skill crawl". Keying on the resolved path in
+ * one place removes the duplicate and the trap. The lane that never had a cache —
+ * the packager's post-build validation, called once per skill from both build
+ * phases — gets the sharing without threading a registry through.
+ *
+ * Safe to hold for a process lifetime: every VAT entry point is a short-lived
+ * CLI invocation. Note the crawl excludes build output (`BUILD_OUTPUT_GLOBS` via
+ * the crawler's defaults), so packaging a skill mid-run cannot invalidate it.
+ */
+const registryCache = new Map<string, Promise<ResourceRegistry>>();
+
+/**
+ * Drop every memoized registry.
+ *
+ * Required by any in-process caller that starts an INDEPENDENT run against a
+ * tree it may have changed since the last one — the CLI entrypoint, and
+ * integration tests sharing a vitest worker. Without it a second run reuses the
+ * first run's parse of files that have since moved, and reports a stale answer
+ * as a fresh one. `resetAuditCaches` calls this alongside its own caches.
+ */
+export function resetPackagingRegistryCache(): void {
+  registryCache.clear();
 }
 
 /**

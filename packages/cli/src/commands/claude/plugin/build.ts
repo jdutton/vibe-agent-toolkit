@@ -11,14 +11,21 @@ import { cpSync, existsSync, readFileSync } from 'node:fs';
 import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 
-import { getPluginOutputDir, getPluginSourceDir, listPluginSourceSkillDirs, listUntrackedPluginSkillDirs, packageSkill, packagingConfigToPackageOptions, skillNameToFsPath, type PackageSkillResult } from '@vibe-agent-toolkit/agent-skills';
-import type { ClaudeMarketplaceConfig, ClaudeMarketplacePluginEntry, SkillsConfig } from '@vibe-agent-toolkit/resources';
+import { countBySeverity, type SeverityCounts } from '@vibe-agent-toolkit/agent-schema';
+import { createProjectRegistry, getPluginOutputDir, getPluginSourceDir, listPluginSourceSkillDirs, listUntrackedPluginSkillDirs, packageSkill, packagingConfigToPackageOptions, skillNameToFsPath, type PackageSkillResult } from '@vibe-agent-toolkit/agent-skills';
+import type { ClaudeMarketplaceConfig, ClaudeMarketplacePluginEntry, ResourceRegistry, SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { readSkillName } from '../../../commands/skills/skill-discovery.js';
 import { handleCommandError } from '../../../utils/command-error.js';
 import { loadConfig } from '../../../utils/config-loader.js';
+import {
+  collectPostBuildIssues,
+  formatIssueLines,
+  formatIssueSetHeading,
+  sumSeverityCounts,
+} from '../../../utils/issue-rendering.js';
 import { createLogger } from '../../../utils/logger.js';
 import { writeYamlOutput } from '../../../utils/output.js';
 import { mergeSkillPackagingConfig } from '../../../utils/skill-packaging-config.js';
@@ -61,6 +68,15 @@ interface PluginBuildResult {
   treeFilesCopied: number;
   explicitFilesCopied: number;
   localSkillsPackaged: number;
+  /**
+   * Per-severity post-build findings across this plugin's plugin-local skills.
+   *
+   * Published rather than folded into the plugin's success/failure: the build
+   * gate is two-valued (a warning does not fail it), so a bare `status` cannot
+   * say whether a "built" plugin shipped warnings or info findings — and the
+   * reading a consumer takes from silence is the reassuring one.
+   */
+  localSkillIssueCounts: SeverityCounts;
 }
 
 export interface MarketplaceBuildResult {
@@ -190,6 +206,14 @@ export async function runClaudePluginBuild(
   logger.info(`   Config: ${safePath.join(configDir, 'vibe-agent-toolkit.config.yaml')}`);
   logger.info(`   Skills available: ${availableSkills.length}`);
 
+  // THE registry for this build: one crawl+parse of the project's markdown,
+  // shared by every plugin-local skill in every marketplace. `packageSkill`
+  // builds this itself when it is not given one, so omitting it does not fail —
+  // it just re-reads the whole project once per skill, which is how a 46-skill
+  // build came to take longer than a 30-minute CI budget.
+  const sharedRegistry = await createProjectRegistry(configDir);
+  logger.debug(`Project registry: ${sharedRegistry.getAllResources().length} markdown resources (built once)`);
+
   const results: MarketplaceBuildResult[] = [];
 
   const allPluginNames: string[] = [];
@@ -207,15 +231,16 @@ export async function runClaudePluginBuild(
     const mpConfig = marketplaces[name] as ClaudeMarketplaceConfig;
 
     logger.info(`\n   Building marketplace: ${name}`);
-    const result = await buildMarketplace(
+    const result = await buildMarketplace({
       name,
-      mpConfig,
+      config: mpConfig,
       availableSkills,
       configDir,
       skillsConfig,
       rootVersion,
+      registry: sharedRegistry,
       logger,
-    );
+    });
     results.push(result);
 
     if (result.status === 'error') {
@@ -253,8 +278,13 @@ async function pluginBuildCommand(options: PluginBuildCommandOptions): Promise<v
     const totalPlugins = results.flatMap((r) => r.plugins).length;
     const totalSkills = results.flatMap((r) => r.plugins).flatMap((p) => p.skillsCopied).length;
 
+    const allPlugins = results.flatMap((r) => r.plugins);
+
     writeYamlOutput({
       status: 'success',
+      // The build gate is two-valued and a warning does not fail it, so the
+      // distribution has to travel next to the status rather than inside it.
+      issueCounts: sumSeverityCounts(allPlugins.map((p) => p.localSkillIssueCounts)),
       marketplacesBuilt: results.filter((r) => r.status === 'built').length,
       pluginsBuilt: totalPlugins,
       skillsPackaged: totalSkills,
@@ -273,6 +303,7 @@ async function pluginBuildCommand(options: PluginBuildCommandOptions): Promise<v
           treeFilesCopied: p.treeFilesCopied,
           explicitFilesCopied: p.explicitFilesCopied,
           localSkillsPackaged: p.localSkillsPackaged,
+          issueCounts: p.localSkillIssueCounts,
         })),
       })),
       duration: `${duration}ms`,
@@ -314,15 +345,26 @@ async function copyDistributionFiles(
   }
 }
 
-async function buildMarketplace(
-  name: string,
-  config: ClaudeMarketplaceConfig,
-  availableSkills: string[],
-  configDir: string,
-  skillsConfig: SkillsConfig | undefined,
-  rootVersion: string | undefined,
-  logger: ReturnType<typeof createLogger>,
-): Promise<MarketplaceBuildResult> {
+/**
+ * Inputs for one marketplace build. An object rather than a positional list:
+ * every field is threaded straight through to {@link buildPlugin}, which already
+ * takes an object, and two of them (`skillsConfig`, `rootVersion`) are optional
+ * strings/undefined that a positional call site can transpose in silence.
+ */
+interface BuildMarketplaceInput {
+  name: string;
+  config: ClaudeMarketplaceConfig;
+  availableSkills: string[];
+  configDir: string;
+  skillsConfig: SkillsConfig | undefined;
+  rootVersion: string | undefined;
+  /** THE project registry, built once per run (see runClaudePluginBuild). */
+  registry: ResourceRegistry;
+  logger: ReturnType<typeof createLogger>;
+}
+
+async function buildMarketplace(input: BuildMarketplaceInput): Promise<MarketplaceBuildResult> {
+  const { name, config, availableSkills, configDir, skillsConfig, rootVersion, registry, logger } = input;
   const plugins: PluginBuildResult[] = [];
 
   // Clean stale marketplace directory before rebuilding — removes orphaned plugins
@@ -351,6 +393,7 @@ async function buildMarketplace(
       skillsConfig,
       owner: config.owner,
       rootVersion,
+      registry,
       logger,
     });
     plugins.push(pluginResult);
@@ -631,10 +674,19 @@ function lastPathSegment(dirPath: string): string {
  * Phase 2b in {@link buildPlugin}), so a directory absent from it is a directory
  * the tree-copy still ships.
  */
-async function packagePluginLocalSkills(input: {
+export async function packagePluginLocalSkills(input: {
   skills: readonly PluginLocalSkill[];
   pluginDir: string;
   skillsConfig: SkillsConfig | undefined;
+  /**
+   * THE project registry for this build, built once by {@link runClaudePluginBuild}.
+   *
+   * Not optional, and not defaulted: `packageSkill` silently falls back to
+   * crawling and parsing every markdown file in the project when it gets no
+   * registry, so an omission here costs one whole-project scan PER SKILL rather
+   * than failing. That is exactly what this lane used to do.
+   */
+  registry: ResourceRegistry;
   logger: ReturnType<typeof createLogger>;
 }): Promise<Array<{ skillDirPath: string; result: PackageSkillResult }>> {
   const packaged: Array<{ skillDirPath: string; result: PackageSkillResult }> = [];
@@ -653,10 +705,10 @@ async function packagePluginLocalSkills(input: {
     );
 
     const skillOutputDir = safePath.join(input.pluginDir, 'skills', skillDirPath);
-    const result = await packageSkill(
-      skillPath,
-      packagingConfigToPackageOptions(packagingConfig, { skillPath, outputPath: skillOutputDir }),
-    );
+    const result = await packageSkill(skillPath, {
+      ...packagingConfigToPackageOptions(packagingConfig, { skillPath, outputPath: skillOutputDir }),
+      registry: input.registry,
+    });
     input.logger.info(
       `         ${skillName} -> skills/${skillDirPath} (${result.files.dependencies.length + 1} files)`,
     );
@@ -666,25 +718,50 @@ async function packagePluginLocalSkills(input: {
 }
 
 /**
- * Report post-build issues for the plugin-local skills and return the names that
- * emitted errors. Mirrors `vat skills build`: a skill whose packaged output fails
- * validation fails the build, so the two lanes hold the same bar. This is new
- * enforcement for plugin-local skills — the verbatim tree-copy never validated
- * anything it shipped.
+ * Summarize post-build issues for the plugin-local skills: the lines to print,
+ * the dirs that emitted errors, and the per-severity distribution.
+ *
+ * Mirrors `vat skills build`: a skill whose packaged output fails validation
+ * fails the build, so the two lanes hold the same bar, and they now render
+ * findings through the same helper — this lane used to label every non-error
+ * severity `[WARNING]`, so `info` findings were reported as warnings, and it
+ * read only `postBuildIssues`, so a skill failing purely on the built-output
+ * validation aborted the plugin build with no issue text at all.
+ *
+ * Pure so the whole rendered set is assertable.
  */
-function reportPackagedSkillIssues(
+export function summarizePackagedSkillIssues(
   packaged: Array<{ skillDirPath: string; result: PackageSkillResult }>,
-  logger: ReturnType<typeof createLogger>,
-): string[] {
+): { lines: string[]; withErrors: string[]; issueCounts: SeverityCounts } {
+  const lines: string[] = [];
   const withErrors: string[] = [];
+  const perSkillCounts: SeverityCounts[] = [];
+
   for (const { skillDirPath, result } of packaged) {
-    for (const issue of result.postBuildIssues ?? []) {
-      const prefix = issue.severity === 'error' ? 'ERROR' : 'WARNING';
-      logger.info(`         [${prefix}] [${String(issue.code)}] ${String(issue.message)}`);
+    const issues = collectPostBuildIssues(result);
+    perSkillCounts.push(countBySeverity(issues));
+    if (issues.length > 0) {
+      lines.push(`         ${skillDirPath}: ${formatIssueSetHeading(issues, 'post-build')}`);
+      for (const issue of issues) {
+        lines.push(...formatIssueLines(issue, '         '));
+      }
     }
     if (result.hasErrors) withErrors.push(skillDirPath);
   }
-  return withErrors;
+
+  return { lines, withErrors, issueCounts: sumSeverityCounts(perSkillCounts) };
+}
+
+/** Print the summary to stderr and return what the caller gates on. */
+function reportPackagedSkillIssues(
+  packaged: Array<{ skillDirPath: string; result: PackageSkillResult }>,
+  logger: ReturnType<typeof createLogger>,
+): { withErrors: string[]; issueCounts: SeverityCounts } {
+  const { lines, withErrors, issueCounts } = summarizePackagedSkillIssues(packaged);
+  for (const line of lines) {
+    logger.info(line);
+  }
+  return { withErrors, issueCounts };
 }
 
 /** A plugin-local skill and the pool skill whose output directory it would overwrite. */
@@ -752,11 +829,13 @@ interface BuildPluginInput {
   skillsConfig: SkillsConfig | undefined;
   owner: ClaudeMarketplaceConfig['owner'];
   rootVersion: string | undefined;
+  /** THE project registry, built once per run (see runClaudePluginBuild). */
+  registry: ResourceRegistry;
   logger: ReturnType<typeof createLogger>;
 }
 
 async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildResult> {
-  const { marketplaceName, pluginDef, marketplaceAvailable, configDir, skillsConfig, owner, rootVersion, logger } =
+  const { marketplaceName, pluginDef, marketplaceAvailable, configDir, skillsConfig, owner, rootVersion, registry, logger } =
     input;
   const pluginDir = getPluginOutputDir(configDir, marketplaceName, pluginDef.name);
   const pluginSourceDir = getPluginSourceDir(configDir, pluginDef);
@@ -845,9 +924,11 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildResult> 
     skills: packageable,
     pluginDir,
     skillsConfig,
+    registry,
     logger,
   });
-  const skillsWithErrors = reportPackagedSkillIssues(packagedLocalSkills, logger);
+  const { withErrors: skillsWithErrors, issueCounts: localSkillIssueCounts } =
+    reportPackagedSkillIssues(packagedLocalSkills, logger);
   if (skillsWithErrors.length > 0) {
     throw new Error(
       `Plugin '${pluginDef.name}': ${skillsWithErrors.length} plugin-local skill(s) emitted ` +
@@ -952,5 +1033,6 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildResult> 
     treeFilesCopied: treeResult.filesCopied,
     explicitFilesCopied,
     localSkillsPackaged,
+    localSkillIssueCounts,
   };
 }

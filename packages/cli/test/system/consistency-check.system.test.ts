@@ -14,6 +14,8 @@ import {
 } from './test-common.js';
 
 const VAT_CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
+/** The per-severity counts block the verify YAML must carry beside its status. */
+const ISSUE_COUNTS_KEY = 'issueCounts:';
 
 function setupConsistencyTestSuite() {
   const binPath = getBinPath(import.meta.url);
@@ -90,6 +92,12 @@ describe('vat verify consistency checks (system test)', () => {
     expect(result.stderr).toContain('skill-b');
     expect(result.stderr).toContain('PUBLISHED_SKILL_NOT_IN_PACKAGE_JSON');
     expect(result.stderr).toContain('publish: false');
+    // ...and the archived YAML carries the finding and its distribution, not
+    // just a phase status that stderr alone could explain.
+    expect(result.stdout).toContain('status: error');
+    expect(result.stdout).toContain(ISSUE_COUNTS_KEY);
+    expect(result.stdout).toMatch(/errors: [1-9]/);
+    expect(result.stdout).toContain('PUBLISHED_SKILL_NOT_IN_PACKAGE_JSON');
   });
 
   it('should error when package.json vat.skills lists undiscovered skill', async () => {
@@ -138,6 +146,24 @@ describe('vat verify consistency checks (system test)', () => {
     const result = await suite.runVerify(tempDir);
     expect(result.status).toBe(0);
     expect(result.stderr).toContain('UNPUBLISHED_SKILL_IN_PACKAGE_JSON');
+    // The archived YAML is the artifact of record. It used to say
+    // `status: passed` with nothing beside it, so a warning that stderr had
+    // already scrolled past left no trace at all.
+    expect(result.stdout).toContain('status: warning');
+    expect(result.stdout).toContain(ISSUE_COUNTS_KEY);
+    expect(result.stdout).toMatch(/warnings: [1-9]/);
+    expect(result.stdout).toContain('UNPUBLISHED_SKILL_IN_PACKAGE_JSON');
+  });
+
+  it('publishes zero counts for a clean consistency phase, so `success` is quantified', async () => {
+    const tempDir = suite.setupTwoSkillsWithMarketplace(['skill-a', 'skill-b'], 'skills: "*"');
+
+    const result = await suite.runVerify(tempDir);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('status: success');
+    expect(result.stdout).toContain(ISSUE_COUNTS_KEY);
+    expect(result.stdout).toContain('errors: 0');
   });
 
   it('should error when skills.config references unknown skill name', async () => {
@@ -171,6 +197,20 @@ describe('vat verify consistency checks (system test)', () => {
 
     const result = await suite.runVerify(tempDir);
     expect(result.status).toBe(0);
+  });
+
+  it('fails an explicit --only consistency when the project has no skills block', async () => {
+    // An explicit request for a phase that cannot run must not answer with an
+    // empty phase list and `status: success` — that is indistinguishable from
+    // "checked everything, all good" to anyone reading the exit code.
+    const tempDir = suite.createTempDir();
+    suite.writeConfig(tempDir, 'version: 1\nresources:\n  exclude:\n    - "node_modules/**"\n');
+
+    const result = await suite.runVerify(tempDir);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('status: error');
+    expect(result.stderr).toContain("Phase 'consistency' needs a skills: block");
   });
 
   it('should skip plugin assignment checks when no claude.marketplaces configured', async () => {

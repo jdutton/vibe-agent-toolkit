@@ -8,6 +8,7 @@ import { existsSync, statSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
 
+import type { SeverityCounts } from '@vibe-agent-toolkit/agent-schema';
 import {
   packageSkill,
   validateSkill,
@@ -19,9 +20,10 @@ import {
 import { parseMarkdown, type ParseResult } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
+import * as yaml from 'yaml';
 
 import { handleCommandError } from '../../utils/command-error.js';
-import { formatIssueAnchor } from '../../utils/issue-anchor.js';
+import { formatIssueLines, formatIssueSetHeading } from '../../utils/issue-rendering.js';
 import { createLogger } from '../../utils/logger.js';
 import { writeYamlOutput } from '../../utils/output.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
@@ -105,79 +107,67 @@ Examples:
 }
 
 /**
- * Validate skill and exit if errors found
+ * Validate skill, render every finding, and exit if any is an error.
+ *
+ * Returns the result so the caller can publish its per-severity counts beside
+ * the packaging status.
  */
 async function validateSkillOrExit(
   skillPath: string,
   basePath: string,
   logger: ReturnType<typeof createLogger>
-): Promise<void> {
+): Promise<ValidationResult> {
   logger.info(`\n🔍 Validating skill...`);
   const validationResult = await validateSkill({
     skillPath,
     rootDir: basePath,
   });
 
+  for (const line of formatSkillValidationLines(validationResult)) {
+    logger.info(line);
+  }
+
   if (validationResult.status === 'error') {
-    displayValidationErrors(validationResult, logger);
     process.exit(1);
   }
 
-  logger.info(`✅ Validation passed`);
+  return validationResult;
 }
 
 /**
- * Display a single validation issue
+ * Render the validation report: a headline that names what was found, then every
+ * issue labelled with its own severity.
+ *
+ * Two silent drops used to live here. The renderer filtered to `error` and
+ * `warning` only, so every `info` finding vanished; and the caller only invoked
+ * it for `status === 'error'`, so a warning-severity result printed a bare
+ * `✅ Validation passed` — the shared collapse resolves warnings to a
+ * non-blocking status, which is exactly the case that got swallowed.
  */
-function displayIssue(
-  issue: ValidationResult['issues'][0],
-  logger: ReturnType<typeof createLogger>,
-  useErrorLevel: boolean
-): void {
-  const logFn = useErrorLevel ? logger.error : logger.info;
+/** One glyph per status value — total, so a new status cannot fall through to a nicer one. */
+const SKILL_VALIDATION_GLYPHS: Record<ValidationResult['status'], string> = {
+  error: '❌',
+  warning: '⚠️ ',
+  success: 'ℹ️ ',
+};
 
-  logFn(`  [${issue.code}] ${issue.message}`);
-  const anchor = formatIssueAnchor(issue);
-  if (anchor !== undefined) {
-    logFn(`    Location: ${anchor}`);
-  }
-  if (issue.fix) {
-    logFn(`    Fix: ${issue.fix}`);
-  }
-}
-
-/**
- * Format and display validation errors
- */
-function displayValidationErrors(
-  validationResult: ValidationResult,
-  logger: ReturnType<typeof createLogger>
-): void {
-  logger.error(`\n❌ Skill validation failed`);
-  logger.error(`   Status: ${validationResult.status}`);
-  logger.error(`   Summary: ${validationResult.summary}\n`);
-
-  // Group issues by severity
-  const errors = validationResult.issues.filter(i => i.severity === 'error');
-  const warnings = validationResult.issues.filter(i => i.severity === 'warning');
-
-  // Display errors
-  if (errors.length > 0) {
-    logger.error(`Errors:`);
-    for (const issue of errors) {
-      displayIssue(issue, logger, true);
-    }
-    logger.error('');
+export function formatSkillValidationLines(validationResult: ValidationResult): string[] {
+  const { issues, status } = validationResult;
+  if (issues.length === 0) {
+    return ['✅ Validation passed — no findings'];
   }
 
-  // Display warnings
-  if (warnings.length > 0) {
-    logger.info(`Warnings:`);
-    for (const issue of warnings) {
-      displayIssue(issue, logger, false);
-    }
-    logger.info('');
+  const glyph = SKILL_VALIDATION_GLYPHS[status];
+  const headline = status === 'error'
+    ? `\n${glyph} Skill validation failed — ${formatIssueSetHeading(issues)}`
+    : `\n${glyph} Validation passed with findings — ${formatIssueSetHeading(issues)}`;
+
+  const lines = [headline, `   Summary: ${validationResult.summary}\n`];
+  for (const issue of issues) {
+    lines.push(...formatIssueLines(issue, '  '));
   }
+  lines.push('');
+  return lines;
 }
 
 /**
@@ -264,6 +254,25 @@ function calculateZipSize(skillPath: string, linkedFiles: string[]): number {
 }
 
 /**
+ * Write the per-severity counts block that rides beside a published status.
+ *
+ * `status: success` here means the packaging step succeeded and nothing
+ * BLOCKED it — not that validation was silent. Without the distribution beside
+ * it, a consumer cannot tell those two apart, and the reassuring reading is the
+ * one they will take.
+ */
+function writeIssueCounts(counts: SeverityCounts): void {
+  // Serialized from a real object rather than hand-spelled lines: the property
+  // has to be visible as a property (to a reader and to the repo's severity-counts
+  // ratchet, which scans source for a counts block), and yaml.stringify cannot
+  // get the indentation wrong.
+  const block = {
+    issueCounts: counts,
+  };
+  process.stdout.write(yaml.stringify(block, { indent: 2, lineWidth: 0 }));
+}
+
+/**
  * Output dry-run results as YAML
  */
 function outputDryRunYaml(
@@ -271,10 +280,12 @@ function outputDryRunYaml(
   outputPath: string,
   fileCount: number,
   formats: string[],
-  duration: number
+  duration: number,
+  issueCounts: SeverityCounts
 ): void {
   process.stdout.write('---\n');
   process.stdout.write(`status: success\n`);
+  writeIssueCounts(issueCounts);
   process.stdout.write(`dryRun: true\n`);
   process.stdout.write(`skill: ${skillName}\n`);
   process.stdout.write(`outputPath: ${outputPath}\n`);
@@ -307,7 +318,11 @@ async function performDryRun(
   logger.info(`   Output: ${options.output}`);
 
   // VALIDATE FIRST - shift left to catch errors early
-  await validateSkillOrExit(skillPath, options['base-path'] ?? dirname(skillPath), logger);
+  const validationResult = await validateSkillOrExit(
+    skillPath,
+    options['base-path'] ?? dirname(skillPath),
+    logger,
+  );
 
   // Parse SKILL.md and extract metadata
   const parseResult = await parseMarkdown(skillPath);
@@ -342,7 +357,14 @@ async function performDryRun(
   const duration = Date.now() - startTime;
 
   // Output YAML results
-  outputDryRunYaml(skillName, options.output, linkedFiles.length + 1, formats, duration);
+  outputDryRunYaml(
+    skillName,
+    options.output,
+    linkedFiles.length + 1,
+    formats,
+    duration,
+    validationResult.issueCounts,
+  );
 
   logger.info(`\n✅ Dry-run complete (no files created)`);
   logger.info(`   Run without --dry-run to create the package`);
@@ -395,7 +417,11 @@ async function packageCommand(
     }
 
     // VALIDATE FIRST - shift left to catch errors early
-    await validateSkillOrExit(skillPath, options['base-path'] ?? dirname(skillPath), logger);
+    const validationResult = await validateSkillOrExit(
+      skillPath,
+      options['base-path'] ?? dirname(skillPath),
+      logger,
+    );
     logger.info('');
 
     // Package the skill
@@ -406,6 +432,7 @@ async function packageCommand(
     // Output YAML to stdout
     process.stdout.write('---\n');
     process.stdout.write(`status: success\n`);
+    writeIssueCounts(validationResult.issueCounts);
     process.stdout.write(`skill: ${result.skill.name}\n`);
     process.stdout.write(`version: ${result.skill.version ?? 'unspecified'}\n`);
     process.stdout.write(`outputPath: ${result.outputPath}\n`);

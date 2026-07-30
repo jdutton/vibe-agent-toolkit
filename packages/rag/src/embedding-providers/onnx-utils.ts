@@ -129,6 +129,94 @@ export class IncompatibleVocabError extends Error {
 }
 
 /**
+ * Thrown at load time when a vocabulary is CASED but this tokenizer only
+ * implements the uncased preprocessing pipeline.
+ *
+ * Separate from {@link IncompatibleVocabError} because the vocab IS WordPiece —
+ * it is the *preprocessing* that does not match. Failing loudly for the same
+ * reason: {@link BertTokenizer.tokenize} unconditionally lowercases and strips
+ * accents, so on a cased model every capitalized word misses its vocab entry and
+ * degrades to `[UNK]` or a wrong subword split. The embeddings stay
+ * structurally valid — right shape, right norm — so nothing downstream can tell,
+ * and the index quietly gets worse. There is no bypass flag by design.
+ */
+export class CasedVocabError extends Error {
+  readonly vocabPath: string;
+  readonly casedSamples: readonly string[];
+  readonly modelId: string | undefined;
+
+  constructor(details: {
+    vocabPath: string;
+    casedSamples: readonly string[];
+    modelId: string | undefined;
+  }) {
+    const subject =
+      details.modelId === undefined
+        ? 'The configured ONNX embedding model'
+        : `ONNX embedding model '${details.modelId}'`;
+    super(
+      [
+        `${subject} ships a CASED WordPiece vocabulary, which this tokenizer cannot use.`,
+        `Vocab file: ${details.vocabPath}`,
+        `Cased entries found: ${details.casedSamples.join(', ')}`,
+        'This tokenizer implements only the uncased pipeline (lowercase + strip accents). ' +
+          'Applied to a cased vocab, every capitalized word misses its entry and becomes [UNK] ' +
+          'or a wrong subword — embeddings that look valid and are worse.',
+        "Use an uncased BERT-family model (the default 'Xenova/all-MiniLM-L6-v2' is one).",
+      ].join('\n'),
+    );
+    this.name = 'CasedVocabError';
+    this.vocabPath = details.vocabPath;
+    this.casedSamples = details.casedSamples;
+    this.modelId = details.modelId;
+  }
+}
+
+/**
+ * Tokens that carry no casing evidence: the bracketed special/reserved literals
+ * (`[CLS]`, `[UNK]`, `[MASK]`, `[unused0]`), which are uppercase in every
+ * uncased vocab and so would make each one look cased.
+ */
+const BRACKETED_TOKEN = /^\[.*\]$/;
+/** An uppercase letter in any script, not just ASCII — `É` is cased evidence too. */
+const HAS_UPPERCASE = /\p{Lu}/u;
+
+/**
+ * Minimum share of a vocab's tokens that must carry an uppercase letter before
+ * the vocab is called cased.
+ *
+ * An uncased WordPiece vocab is lowercased BY CONSTRUCTION, so in principle one
+ * uppercase token is proof. A ratio is used anyway so a single stray artifact in
+ * a 30k-token file cannot refuse a perfectly good model; a genuinely cased vocab
+ * is far above this (roughly a third of `bert-base-cased` carries an uppercase
+ * letter), so there is no realistic middle ground for the threshold to land in.
+ */
+const CASED_VOCAB_MIN_RATIO = 0.01;
+
+/**
+ * Reject a cased vocabulary, since the tokenizer only implements the uncased
+ * preprocessing pipeline.
+ *
+ * @throws CasedVocabError when the vocab carries uppercase letters beyond noise.
+ */
+function rejectIfCased(
+  vocab: ReadonlyMap<string, number>,
+  vocabPath: string,
+  modelId: string | undefined,
+): void {
+  const cased: string[] = [];
+  for (const token of vocab.keys()) {
+    if (!BRACKETED_TOKEN.test(token) && HAS_UPPERCASE.test(token)) {
+      cased.push(token);
+    }
+  }
+
+  if (vocab.size > 0 && cased.length / vocab.size >= CASED_VOCAB_MIN_RATIO) {
+    throw new CasedVocabError({ vocabPath, casedSamples: cased.slice(0, 5), modelId });
+  }
+}
+
+/**
  * Resolve the BERT special token ids from a loaded vocabulary.
  *
  * @throws IncompatibleVocabError if any special token literal is absent — the
@@ -282,6 +370,10 @@ function parseVocab(content: string): Map<string, number> {
  * Loads vocabulary from a vocab.txt file and performs basic BERT
  * preprocessing: lowercase, strip accents, split on whitespace
  * and punctuation, then apply the WordPiece algorithm.
+ *
+ * UNCASED ONLY. The preprocessing above is unconditional, which is correct for a
+ * `do_lower_case: true` model and wrong for a cased one — so a cased vocab is
+ * REFUSED at load rather than silently degraded (see {@link CasedVocabError}).
  */
 export class BertTokenizer {
   private readonly vocab: ReadonlyMap<string, number>;
@@ -303,12 +395,16 @@ export class BertTokenizer {
    * @param modelId - Configured model id, used only to make load errors actionable
    * @returns Initialized BertTokenizer
    * @throws IncompatibleVocabError if the vocab is not BERT-style WordPiece
+   * @throws CasedVocabError if the vocab is WordPiece but CASED — see the error
+   *   for why that cannot be tolerated silently
    */
   static async fromVocabFile(vocabPath: string, modelId?: string): Promise<BertTokenizer> {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- vocabPath is from model cache, not user input
     const content = await readFile(vocabPath, 'utf8');
     const vocab = parseVocab(content);
-    return new BertTokenizer(vocab, resolveSpecialTokens(vocab, vocabPath, modelId));
+    const specialTokens = resolveSpecialTokens(vocab, vocabPath, modelId);
+    rejectIfCased(vocab, vocabPath, modelId);
+    return new BertTokenizer(vocab, specialTokens);
   }
 
   /**

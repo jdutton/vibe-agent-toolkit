@@ -1,8 +1,8 @@
 /**
  * CLI-boundary policy helpers for projectRoot resolution.
  *
- * Per docs/superpowers/specs/2026-05-17-root-model-and-leading-slash-design.md §7,
- * each command picks one of these to fulfill its declared policy:
+ * Root discovery belongs at the CLI boundary, not inside libraries. Each command
+ * picks exactly one of these to fulfill its declared policy:
  *
  *  - `required`     → {@link requireProjectRoot}     — fails fast with a clear message.
  *  - `loud-cwd`     → {@link projectRootOrLoudCwd}   — falls back to cwd with a stderr warning.

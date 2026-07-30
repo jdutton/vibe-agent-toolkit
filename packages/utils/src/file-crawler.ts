@@ -61,9 +61,43 @@ export interface CrawlOptions {
 const PICOMATCH_OPTIONS = { dot: true } as const;
 
 /**
- * Default exclude patterns that are almost always unwanted
+ * Directories no VAT crawl should ever walk into. THE canonical list — any lane
+ * that needs its own additions should spread this rather than restate it.
+ *
+ * There were three of these and they disagreed: this one omitted worktrees
+ * entirely, the discovery scanner had both worktree paths but not `dist`, and
+ * the repo-structure gate used bare basenames. A worktree is a FULL COPY of the
+ * repository, so omitting it does not just cost time — it makes a crawl report
+ * the same file two or three times under different paths, and this repo keeps its
+ * worktrees at `.claude/worktrees/`, inside a dot-directory that `dot: true`
+ * (see {@link PICOMATCH_OPTIONS}) deliberately makes reachable.
+ *
+ * Note these patterns only bite when `respectGitignore` is false; the fast
+ * `git ls-files` path never sees ignored directories in the first place.
  */
-const DEFAULT_EXCLUDE = ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/coverage/**'];
+export const NEVER_CRAWL_GLOBS = [
+  '**/node_modules/**',      // Dependencies (40K+ files), never user content
+  '**/.git/**',              // Git objects, never user content
+  '**/coverage/**',          // Test coverage reports
+  '**/.test-output/**',      // Test artifacts
+  '**/.worktrees/**',        // Git worktrees are full repo copies — never traverse
+  '**/.claude/worktrees/**', // Claude Code worktrees, same reason
+] as const;
+
+/**
+ * Build output — excluded by DEFAULT, but deliberately NOT part of
+ * {@link NEVER_CRAWL_GLOBS}.
+ *
+ * The distinction is real, and collapsing it is a bug: everything in
+ * `NEVER_CRAWL_GLOBS` is "never user content, no lane wants it", while `dist/` is
+ * content VAT itself produced and some lanes exist precisely to look at. Skill
+ * discovery CLASSIFIES what it finds as source or build output, so it must walk
+ * `dist/`; a crawl for authored markdown must not. Two different questions, so
+ * two lists — a lane spreads whichever ones apply.
+ */
+export const BUILD_OUTPUT_GLOBS = ['**/dist/**'] as const;
+
+const DEFAULT_EXCLUDE: string[] = [...NEVER_CRAWL_GLOBS, ...BUILD_OUTPUT_GLOBS];
 
 /**
  * Crawl a directory tree and return matching files (async)

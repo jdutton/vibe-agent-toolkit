@@ -179,6 +179,10 @@ describe('vat build command (system test)', () => {
 
     expect(result.status).toBe(0);
     expect(existsSync(safePath.join(tempDir, DIST_SKILLS_DIR, TEST_SKILL_NAME, 'SKILL.md'))).toBe(true);
+    // A status with no distribution beside it cannot say whether `success`
+    // means "clean" or "we did not look".
+    expect(result.stdout).toContain('issueCounts:');
+    expect(result.stdout).toContain('errors: 0');
   });
 
   it('should sanitize colon-namespaced skill names to fs-safe directory names', async () => {
@@ -226,7 +230,7 @@ describe('vat build command (system test)', () => {
     }
   });
 
-  it('should fail build when skill source missing', async () => {
+  it('should fail build with exit 2 when skill source missing', async () => {
     const tempDir = suite.createTempDir();
     // Config references skills but no SKILL.md files exist
     writeTestFile(
@@ -237,7 +241,12 @@ describe('vat build command (system test)', () => {
 
     const result = await suite.runBuild(tempDir);
 
-    expect(result.status).not.toBe(0);
+    // `vat skills build` treats "the include patterns match nothing" as a
+    // config-level system error (exit 2), and `vat build` must report it as
+    // one — `not.toBe(0)` could not tell that from a build failure.
+    expect(result.status).toBe(2);
+    expect(result.stdout).toContain('status: system-error');
+    expect(result.stdout).toContain('exitCode: 2');
   });
 });
 
@@ -317,6 +326,23 @@ describe('vat verify command (system test)', () => {
     expect(result.stdout).toContain(VERIFY_SUCCESS_MARKER);
     // Marketplace phase should NOT appear
     expect(result.stdout).not.toContain('marketplace:');
+  });
+
+  it('propagates a phase that could not run as exit 2, not as a validation failure', async () => {
+    // The child (`vat resources validate`) exits 2 on an unparseable config.
+    // Collapsing that into 1 made the documented exit code 2 unreachable and a
+    // broken config indistinguishable from a broken link in CI.
+    const tempDir = suite.createTempDir();
+    writeTestFile(
+      safePath.join(tempDir, VAT_CONFIG_FILENAME),
+      'version: 1\nresources:\n  include: [unclosed\n',
+    );
+
+    const result = await suite.runVerify(tempDir, ['--only', 'resources']);
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toContain('status: system-error');
+    expect(result.stdout).toContain('exitCode: 2');
   });
 
 });

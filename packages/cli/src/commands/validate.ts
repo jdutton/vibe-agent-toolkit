@@ -31,7 +31,14 @@ import { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
 import { requireProjectRoot } from '../utils/project-root-policy.js';
 
-import { resolveBinPath, runPhase, type Phase, type PhaseResult } from './phase-utils.js';
+import {
+  aggregatePhaseStatus,
+  exitCodeForPhases,
+  resolveBinPath,
+  runPhase,
+  type Phase,
+  type PhaseResult,
+} from './phase-utils.js';
 
 /** Surfaces `vat validate` knows how to run, in stable execution order. */
 const VALID_SURFACES = ['resources', 'skills'] as const;
@@ -69,12 +76,16 @@ Description:
 
 Output:
   YAML summary for each surface → stdout
+    per surface: status (success | error | system-error) plus the child's
+    exitCode, signal, or spawn error — a surface that could not run is never
+    reported as a surface that failed validation.
   Validation errors → stderr
 
 Exit Codes:
   0 - All configured validators passed (or nothing configured to validate)
   1 - Validation errors found, or --only named a surface that is unrecognized or unconfigured
-  2 - System error
+  2 - System error (this command's own, or propagated from a validator that
+      could not run: exited 2, was killed by a signal, or never spawned)
 
 Requirements:
   projectRoot: required (errors if no vibe-agent-toolkit.config.yaml or .git/ ancestor)
@@ -179,15 +190,16 @@ async function validateTopLevelCommand(options: ValidateCommandOptions): Promise
       phaseResults.push(runPhase(binPath, phase));
     }
 
-    const hasErrors = phaseResults.some((r) => r.status === 'failed');
-
+    // A surface whose validator could not RUN (exit 2, killed, never spawned)
+    // is not a surface that failed validation: it exits 2, so a CI gate can
+    // tell a broken config from a broken link.
     writeYamlOutput({
-      status: hasErrors ? 'error' : 'success',
+      status: aggregatePhaseStatus(phaseResults),
       phases: phaseResults,
       duration: `${Date.now() - startTime}ms`,
     });
 
-    process.exit(hasErrors ? 1 : 0);
+    process.exit(exitCodeForPhases(phaseResults));
   } catch (error) {
     handleCommandError(error, logger, startTime, 'Validate');
   }

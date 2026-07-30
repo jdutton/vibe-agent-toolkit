@@ -388,12 +388,11 @@ export async function packageSkills(
   skills: SkillBuildSpec[],
   projectRoot: string,
 ): Promise<PackageSkillResult[]> {
-  // 1. Create one registry for the entire project
-  const registry = await ResourceRegistry.fromCrawl({
-    baseDir: projectRoot,
-    include: ['**/*.md'],
-  });
-  registry.resolveLinks();
+  // 1. Create one registry for the entire project. Through the shared builder:
+  // this used to call `fromCrawl` directly and omit the config, so skills built
+  // here belonged to no collection while a skill built through the single-skill
+  // fallback did.
+  const registry = await createProjectRegistry(projectRoot);
 
   // 2. Package each skill against the shared registry
   const results: PackageSkillResult[] = [];
@@ -442,12 +441,15 @@ export async function packageSkill(
   // Library callers fall back to the skill directory when canonical
   // findProjectRoot returns null. The CLI command boundary is responsible
   // for any user-facing warning about missing project roots.
-  // See docs/superpowers/specs/2026-05-17-root-model-and-leading-slash-design.md.
   const projectRoot = findProjectRoot(dirname(skillPath)) ?? dirname(skillPath);
   const skillRoot = dirname(skillPath);
 
-  // 3. Get or create the resource registry
-  const registry = options.registry ?? await createStandaloneRegistry(projectRoot);
+  // 3. Get or create the resource registry.
+  // The fallback crawls and parses EVERY markdown file in the project, so any
+  // caller packaging more than one skill must build the registry once itself
+  // (see createProjectRegistry) and pass it — otherwise the whole-project scan
+  // is paid once PER SKILL.
+  const registry = options.registry ?? await createProjectRegistry(projectRoot);
 
   // 3b. Load per-collection frontmatter schemas (Gap 3: packager rewrites frontmatter URI-refs
   // against the same schemas the validator uses, with body parity).
@@ -614,7 +616,12 @@ export async function packageSkill(
   });
 
   // 12b. Copy files config entries that were not auto-discovered via link traversal.
-  await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir: outputPath, bundledFiles });
+  // Keep the dests it reports: they are what makes the orphan check below able to
+  // tell "the author forgot to document this" from "VAT put this here because the
+  // config said to." Discarding them makes the build fail on its own payload.
+  const filesConfigDests = await applyFilesConfig({
+    filesConfig, projectRoot, skillOutputDir: outputPath, bundledFiles,
+  });
 
   // 13. Post-build integrity check: no SKILL.md in subdirectories
   // A SKILL.md is a skill definition marker — it must only exist at the root.
@@ -630,7 +637,7 @@ export async function packageSkill(
   // Walker-exclusion issues (depth drops, missing targets, outside-project, etc.)
   // are combined with post-build checks and run through the validation framework.
   const rawPostBuildIssues = [
-    ...await checkUnreferencedFiles(outputPath),
+    ...await checkUnreferencedFiles(outputPath, filesConfigDests),
     ...await checkBrokenPackagedLinks(outputPath),
     // A receipt for each `files:` entry that was dropped for pointing into declared
     // test input — the build already produced the right artifact; this just says so.
@@ -746,12 +753,24 @@ function assemblePackageResult(input: AssembleResultInput): PackageSkillResult {
 // ============================================================================
 
 /**
- * Create a standalone registry for a single skill (when no shared registry is provided).
+ * Build THE project registry: every markdown file under `projectRoot`, parsed,
+ * with links resolved and the project config attached.
+ *
+ * This is the one builder for "the registry a packaging run works against", and
+ * every lane that packages skills must call it EXACTLY ONCE per run and pass the
+ * result into each {@link packageSkill}. It crawls and parses the entire project
+ * — on a large monorepo that is thousands of files and tens of seconds — so a
+ * caller that lets `packageSkill` fall back to it per skill turns a fixed
+ * project-sized cost into a per-skill one.
+ *
+ * It also carries the config, which decides collection membership: the packager
+ * rewrites frontmatter URI-references per collection schema, mirroring the
+ * validator. A registry built without config silently belongs to no collection,
+ * so a lane that built its own config-less registry rewrote frontmatter
+ * differently from the lane that used this one — which is why there is now only
+ * one builder rather than two that happened to differ in one argument.
  */
-async function createStandaloneRegistry(projectRoot: string): Promise<ResourceRegistry> {
-  // Load the project config so the registry knows which collections each
-  // resource belongs to (Gap 3: packager rewrites frontmatter URI-refs per
-  // collection schema, mirroring validator).
+export async function createProjectRegistry(projectRoot: string): Promise<ResourceRegistry> {
   const config = await loadConfig(projectRoot);
   const registry = await ResourceRegistry.fromCrawl(
     {

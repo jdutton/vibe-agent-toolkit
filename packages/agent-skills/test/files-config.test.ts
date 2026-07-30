@@ -195,15 +195,19 @@ describe('applyFilesConfig', () => {
     expect(readFileSync(destPath, 'utf-8')).toBe(DATA_BYTES);
   });
 
-  it('skips entries whose source is already bundled', async () => {
+  it('skips the COPY for entries whose source is already bundled, but still reports the dest', async () => {
     const { projectRoot, skillOutputDir } = makeApplySandbox();
     const filesConfig: SkillFileEntry[] = [{ source: DATA_SOURCE, dest: DATA_DEST }];
     const bundledFiles = [safePath.resolve(safePath.join(projectRoot, DATA_SOURCE))];
 
-    const copied = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir, bundledFiles });
+    const dests = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir, bundledFiles });
 
-    expect(copied).toEqual([]);
+    // No second copy — link traversal already placed the file at entry.dest.
     expect(existsSync(safePath.join(skillOutputDir, 'data', DATA_FILE))).toBe(false);
+    // The dest is still declared, so it is still reported: whether traversal or
+    // this copy materialized it is an ordering accident, and the post-build orphan
+    // check must not get a different answer about whether `files:` declared it.
+    expect(dests).toEqual([DATA_DEST]);
   });
 
   it('still runs the integrity byte check on a bundled-skip entry (dest matches source → pass)', async () => {
@@ -216,10 +220,10 @@ describe('applyFilesConfig', () => {
     mkdirSyncReal(safePath.join(skillOutputDir, 'data'), { recursive: true });
     writeFileSync(destPath, DATA_BYTES);
 
-    const copied = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir, bundledFiles });
+    const dests = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir, bundledFiles });
 
     // The copy is still skipped (bundled), but the requested integrity check ran.
-    expect(copied).toEqual([]);
+    expect(dests).toEqual([DATA_DEST]);
     expect(existsSync(destPath)).toBe(true);
   });
 

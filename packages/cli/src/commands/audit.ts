@@ -6,11 +6,17 @@
 import * as fs from 'node:fs';
 import { existsSync as fsExistsSync } from 'node:fs';
 
-import { calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import {
+  calculateValidationStatus,
+  countBySeverity,
+  type SeverityCounts,
+  type ValidationIssue,
+} from '@vibe-agent-toolkit/agent-schema';
 import {
   crawlAndResolveRegistry,
   detectDeclaredButMissing,
   detectMarketplacePluginSourceMissing,
+  resetPackagingRegistryCache,
   detectPresentButUndeclared,
   detectReferenceTargetMissing,
   detectResourceFormat,
@@ -186,6 +192,39 @@ async function buildVATProjectContext(
  * Compat verdicts (COMPAT_TARGET_*) are computed from the result's observations
  * and the config-level targets, then merged into the issue list.
  */
+/**
+ * The one-line human summary of a severity distribution.
+ *
+ * Every result that carries findings renders its counts the same way, so a reader
+ * comparing two entries is comparing the same sentence.
+ */
+function formatCountsSummary(counts: SeverityCounts): string {
+  return `${counts.errors} errors, ${counts.warnings} warnings, ${counts.info} info`;
+}
+
+/**
+ * Append findings to a result and re-derive everything that describes them.
+ *
+ * The audit pipeline appends detector findings AFTER the primary validator has
+ * already published a status, a counts block and a summary line. Pushing into
+ * `issues` alone left all three describing the pre-append issue list — a plugin
+ * with a warning reported `status: success`, `issueCounts: {0,0,0}` and
+ * `summary: Valid plugin` in the very document that listed the warning.
+ *
+ * Mutates in place, because the audit pipeline hands these results around by
+ * reference and there is no single place a rebuilt copy could be swapped in.
+ */
+function appendIssues(result: ValidationResult, issues: readonly ValidationIssue[]): void {
+  if (issues.length === 0) {
+    return;
+  }
+  result.issues.push(...issues);
+  const counts = countBySeverity(result.issues);
+  result.status = calculateValidationStatus(result.issues);
+  result.issueCounts = counts;
+  result.summary = formatCountsSummary(counts);
+}
+
 function packagingResultToValidationResult(
   skillPath: string,
   result: PackagingValidationResult,
@@ -210,7 +249,7 @@ function packagingResultToValidationResult(
     path: skillPath,
     type: RESOURCE_TYPE_AGENT_SKILL,
     status: calculateValidationStatus(issues),
-    summary: `${issueCounts.errors} errors, ${issueCounts.warnings} warnings, ${issueCounts.info} info`,
+    summary: formatCountsSummary(issueCounts),
     issues,
     issueCounts,
     metadata: {
@@ -257,7 +296,7 @@ async function validateSingleSkill(
     const skillDir = safePath.resolve(skillPath, '..');
     const projectRoot = findProjectRoot(skillDir) ?? skillDir;
     const sharedCtx: SkillValidationSharedContext = {
-      registry: await getOrCreateSkillRegistry(projectRoot),
+      registry: await crawlAndResolveRegistry(projectRoot),
       locationRoot,
     };
     if (gitTracker !== null) {
@@ -491,7 +530,7 @@ async function auditUserDirectories(
   if (verbose) {
     renderVerboseEvidence(results, scanRoot, logger);
   }
-  logHierarchicalSummary(results, hierarchical, logger);
+  logHierarchicalSummary(results, logger);
 }
 
 /**
@@ -561,23 +600,16 @@ function buildFilteredResult(
   result: ValidationResult,
   filteredIssues: ValidationResult['issues']
 ): ValidationResult {
-  const errorCount = filteredIssues.filter(i => i.severity === 'error').length;
-  const warningCount = filteredIssues.filter(i => i.severity === 'warning').length;
-  const infoCount = filteredIssues.filter(i => i.severity === 'info').length;
-
-  let status: ValidationResult['status'];
-  if (errorCount > 0) {
-    status = 'error';
-  } else if (warningCount > 0) {
-    status = 'warning';
-  } else {
-    status = 'success';
-  }
+  const counts = countBySeverity(filteredIssues);
 
   return {
     ...result,
-    status,
-    summary: `${errorCount} errors, ${warningCount} warnings, ${infoCount} info`,
+    status: calculateValidationStatus(filteredIssues),
+    // Spreading `result` carried the PRE-filter `issueCounts` forward, so a
+    // `severity: ignore` config left the counts describing findings the report
+    // no longer contained. The counts are re-derived, never inherited.
+    issueCounts: counts,
+    summary: formatCountsSummary(counts),
     issues: filteredIssues,
   };
 }
@@ -926,7 +958,7 @@ async function appendPluginInventoryToSurfaceResults(
   logger.debug(`Inventory detectors emitted ${inventoryIssues.length.toString()} issues for plugin (multi-surface) at ${scanPath}`);
   for (const r of surfaceResults) {
     if (r.type === RESOURCE_TYPE_CLAUDE_PLUGIN) {
-      r.issues.push(...inventoryIssues);
+      appendIssues(r, inventoryIssues);
       break;
     }
   }
@@ -944,16 +976,19 @@ function appendInventoryParseErrors(
 	locationRoot: string,
 ): void {
 	const pluginJsonSuffix = safePath.join('.claude-plugin', 'plugin.json');
+	const parseIssues: ValidationIssue[] = [];
 	for (const err of inv.parseErrors) {
 		if (err.path.endsWith(pluginJsonSuffix)) continue;
-		result.issues.push({
+		parseIssues.push({
 			severity: 'error',
 			code: 'PLUGIN_INVALID_JSON',
 			message: err.message,
 			location: issueLocation(err.path, locationRoot),
 		});
-		result.status = 'error';
 	}
+	// Status was hand-set to 'error' here while `issueCounts` and `summary` kept
+	// describing the pre-append list. One appender derives all three.
+	appendIssues(result, parseIssues);
 }
 
 /**
@@ -1022,7 +1057,7 @@ export async function getValidationResults(
 			const inv = await pluginInventoryAt(scanPath);
 			appendInventoryParseErrors(result, inv, locationRoot);
 			const pluginInventoryIssues = await runInventoryDetectors(scanPath, RESOURCE_TYPE_CLAUDE_PLUGIN, locationRoot, inv);
-			result.issues.push(...pluginInventoryIssues);
+			appendIssues(result, pluginInventoryIssues);
 			logger.debug(`Inventory detectors emitted ${pluginInventoryIssues.length.toString()} issues for plugin at ${scanPath}`);
 			// Also validate every skill the plugin ships via the inventory walker.
 			const skillResults = await validatePluginSkillsViaInventory(scanPath, options, logger, locationRoot);
@@ -1035,7 +1070,7 @@ export async function getValidationResults(
 			// sources are declarations only and stay out of scope).
 			const marketplaceInv = await extractClaudeMarketplaceInventory(scanPath);
 			const marketplaceInventoryIssues = await runInventoryDetectors(scanPath, 'marketplace', locationRoot, marketplaceInv);
-			result.issues.push(...marketplaceInventoryIssues);
+			appendIssues(result, marketplaceInventoryIssues);
 			logger.debug(`Inventory detectors emitted ${marketplaceInventoryIssues.length.toString()} issues for marketplace at ${scanPath}`);
 			const pluginResults = await recurseIntoMarketplacePlugins(marketplaceInv, recursive, options, logger, locationRoot);
 			return [result, ...pluginResults];
@@ -1390,10 +1425,14 @@ function renderVerboseEvidence(
 
 function handleAuditResults(
   results: ValidationResult[],
-  summary: { root: string; summary: { errors: number; warnings: number; success: number }; files?: Array<{ compatibility?: CompatibilityResult }> },
+  summary: { root: string; summary: FileStatusCounts; files?: Array<{ compatibility?: CompatibilityResult }> },
   logger: ReturnType<typeof createLogger>
 ): void {
-  const { errors: errorCount, warnings: warningCount, success: successCount } = summary.summary;
+  const {
+    filesWithErrors: errorCount,
+    filesWithWarnings: warningCount,
+    filesPassed: successCount,
+  } = summary.summary;
 
   // Report settings conflicts (advisory, non-blocking)
   const totalSettingsConflicts = (summary.files ?? []).reduce((sum, f) => {
@@ -1410,7 +1449,14 @@ function handleAuditResults(
   } else if (warningCount > 0) {
     logWarnings(results, warningCount, summary.root, logger);
   } else {
-    logger.info(`Audit successful: ${successCount} file(s) passed`);
+    // `success` means "nothing actionable", NOT "nothing to see" — name the
+    // informational findings or the YAML and the stderr line disagree.
+    const withFindings = countResultsWithFindings(results);
+    logger.info(
+      withFindings > 0
+        ? `Audit successful: ${successCount} file(s) passed (${withFindings} with informational findings)`
+        : `Audit successful: ${successCount} file(s) passed`,
+    );
   }
 
   renderAuditFooter(results, logger);
@@ -1619,51 +1665,15 @@ interface ScanContext {
 const gitTrackerCache: Map<string, GitTracker> = new Map();
 
 /**
- * Cache of (projectRoot → crawled + link-resolved ResourceRegistry) for one
- * audit run.
- *
- * Building a registry means parsing every markdown and HTML document under
- * the project root — ~20 s on a 1,200-document monorepo. Without this cache
- * each skill paid for its own, so a directory holding 46 skills re-parsed the
- * same corpus 46 times and the audit never finished. `vat skills validate`
- * has always shared one registry across its batch
- * (`buildSharedValidationContext`); this is the same sharing for the audit
- * lane, which is what `crawlAndResolveRegistry` was exported for.
- *
- * The promise (not the resolved value) is cached so overlapping requests for
- * one root can never start two crawls.
- */
-const skillRegistryCache: Map<string, Promise<Awaited<ReturnType<typeof crawlAndResolveRegistry>>>> = new Map();
-
-/**
- * Get the shared registry for `projectRoot`, crawling on first request.
- *
- * The key must be the SAME value `validateSkillForPackaging` derives for the
- * skill (`findProjectRoot(skillDir) ?? skillDir`) — it rejects a registry
- * whose baseDir does not cover the skill, so a mismatched key silently
- * degrades back to a per-skill crawl.
- */
-export async function getOrCreateSkillRegistry(
-  projectRoot: string,
-): Promise<Awaited<ReturnType<typeof crawlAndResolveRegistry>>> {
-  const cached = skillRegistryCache.get(projectRoot);
-  if (cached !== undefined) {
-    return cached;
-  }
-  const pending = crawlAndResolveRegistry(projectRoot);
-  skillRegistryCache.set(projectRoot, pending);
-  return pending;
-}
-
-/**
  * Cache of (projectRoot → registry for the *inventory* link walk).
  *
- * Deliberately separate from {@link skillRegistryCache}: the validator's
- * registry crawls markdown AND HTML, while the inventory walk has always been
- * markdown-only. Sharing one registry between them would quietly widen the
- * link graph `files.linked` is computed from, which is a behaviour change and
- * not this fix's business. Two crawls per project root is still two, not two
- * per skill.
+ * Deliberately separate from the validator's own registry memo (which now lives
+ * beside `crawlAndResolveRegistry`, so this lane no longer keeps a second copy of
+ * that cache): the validator's registry crawls markdown AND HTML, while the
+ * inventory walk has always been markdown-only. Sharing one registry between them
+ * would quietly widen the link graph `files.linked` is computed from, which is a
+ * behaviour change and not this fix's business. Two crawls per project root is
+ * still two, not two per skill.
  */
 const inventoryRegistryCache: Map<string, Promise<Awaited<ReturnType<typeof crawlSkillLinkRegistry>>>> = new Map();
 
@@ -1697,7 +1707,7 @@ async function pluginInventoryAt(dir: string): Promise<Awaited<ReturnType<typeof
  */
 export function resetAuditCaches(): void {
   gitTrackerCache.clear();
-  skillRegistryCache.clear();
+  resetPackagingRegistryCache();
   inventoryRegistryCache.clear();
   resetProjectRootCaches();
   resetLoadedConfigCache();
@@ -1884,90 +1894,61 @@ function calculateOverallStatus(results: ValidationResult[]): 'success' | 'warni
 }
 
 /**
- * Count all skills in hierarchical output
+ * How many results carry at least one finding.
+ *
+ * Counted from the results, not from the rendered hierarchy. The hierarchy is a
+ * PROJECTION of the results — in `--verbose` it contains every scanned skill,
+ * findings or not, so counting its entries reported "N with issues" equal to the
+ * number scanned. The predicate itself is the only thing that answers this.
  */
-function countAllSkills(hierarchical: ReturnType<typeof buildHierarchicalOutput>): number {
-  let total = 0;
-
-  // Count marketplace skills
-  for (const marketplace of hierarchical.marketplaces) {
-    for (const plugin of marketplace.plugins) {
-      total += plugin.skills.length;
-    }
-  }
-
-  // Count cached plugin skills
-  for (const plugin of hierarchical.cachedPlugins) {
-    total += plugin.skills.length;
-  }
-
-  // Count standalone plugin skills
-  for (const plugin of hierarchical.standalonePlugins) {
-    total += plugin.skills.length;
-  }
-
-  // Count standalone skills
-  total += hierarchical.standaloneSkills.length;
-
-  return total;
+function countResultsWithFindings(results: ValidationResult[]): number {
+  return results.filter((r: ValidationResult) => r.issues.length > 0).length;
 }
 
 /**
- * Calculate issue counts from validation results
+ * How many FILES ended in each status. A different denominator from
+ * {@link SeverityCounts}, which counts FINDINGS — hence the `files` prefix on
+ * every field. `summary.warnings: 0` used to sit one line above
+ * `issues.warnings: 1` in the same document: the same word, two units, and no
+ * way for a reader to tell which one they were looking at.
  */
-function calculateIssueCounts(results: ValidationResult[]) {
-  const successCount = results.filter((r: ValidationResult) => r.status === 'success').length;
-  const warningCount = results.filter((r: ValidationResult) => r.status === 'warning').length;
-  const errorCount = results.filter((r: ValidationResult) => r.status === 'error').length;
+interface FileStatusCounts {
+  filesScanned: number;
+  filesPassed: number;
+  filesWithWarnings: number;
+  filesWithErrors: number;
+}
 
-  const totalErrors = results.reduce((sum: number, r: ValidationResult) =>
-    sum + r.issues.filter(i => i.severity === 'error').length, 0
-  );
-  const totalWarnings = results.reduce((sum: number, r: ValidationResult) =>
-    sum + r.issues.filter(i => i.severity === 'warning').length, 0
-  );
-  const totalInfo = results.reduce((sum: number, r: ValidationResult) =>
-    sum + r.issues.filter(i => i.severity === 'info').length, 0
-  );
-
+/** Count files by their own status. */
+function countFilesByStatus(results: ValidationResult[]): FileStatusCounts {
   return {
-    successCount,
-    warningCount,
-    errorCount,
-    totalErrors,
-    totalWarnings,
-    totalInfo,
+    filesScanned: results.length,
+    filesPassed: results.filter((r: ValidationResult) => r.status === 'success').length,
+    filesWithWarnings: results.filter((r: ValidationResult) => r.status === 'warning').length,
+    filesWithErrors: results.filter((r: ValidationResult) => r.status === 'error').length,
   };
 }
 
 /**
  * Build base summary structure (used by both flat and hierarchical)
+ *
+ * `issueCounts` is named exactly as it is on every individual file entry, and
+ * means the same thing at both levels: findings, by severity. `summary` only ever
+ * counts files.
  */
 function buildBaseSummary(
   results: ValidationResult[],
   startTime: number
 ): {
   status: string;
-  summary: { filesScanned: number; success: number; warnings: number; errors: number };
-  issues: { errors: number; warnings: number; info: number };
+  summary: FileStatusCounts;
+  issueCounts: SeverityCounts;
   duration: string;
 } {
-  const counts = calculateIssueCounts(results);
-  const status = calculateOverallStatus(results);
-
   return {
-    status,
-    summary: {
-      filesScanned: results.length,
-      success: counts.successCount,
-      warnings: counts.warningCount,
-      errors: counts.errorCount,
-    },
-    issues: {
-      errors: counts.totalErrors,
-      warnings: counts.totalWarnings,
-      info: counts.totalInfo,
-    },
+    status: calculateOverallStatus(results),
+    summary: countFilesByStatus(results),
+    issueCounts: countBySeverity(results.flatMap((r: ValidationResult) => r.issues)),
     duration: `${Date.now() - startTime}ms`,
   };
 }
@@ -2006,11 +1987,10 @@ function calculateHierarchicalSummary(
  */
 function logHierarchicalSummary(
   results: ValidationResult[],
-  hierarchical: ReturnType<typeof buildHierarchicalOutput>,
   logger: ReturnType<typeof createLogger>
 ): void {
   const status = calculateOverallStatus(results);
-  const skillsWithIssues = countAllSkills(hierarchical);
+  const skillsWithIssues = countResultsWithFindings(results);
   const totalSkills = results.length;
 
   // Audit is advisory only — always exit 0 for validation results.
@@ -2021,6 +2001,10 @@ function logHierarchicalSummary(
   } else if (status === 'warning') {
     const warningCount = results.filter((r: ValidationResult) => r.status === 'warning').length;
     logger.info(`Audit passed with warnings: ${warningCount} skill(s) (${totalSkills} scanned, ${skillsWithIssues} with issues)`);
+  } else if (skillsWithIssues > 0) {
+    // `success` means "nothing actionable", NOT "nothing to see". Saying only
+    // "N passed" over a pile of info findings is how they stayed invisible.
+    logger.info(`Audit successful: ${totalSkills} skill(s) passed (${skillsWithIssues} with informational findings)`);
   } else {
     logger.info(`Audit successful: ${totalSkills} skill(s) passed`);
   }

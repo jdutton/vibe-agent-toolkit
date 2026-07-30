@@ -58,9 +58,17 @@ export interface FilesMatchResult {
 }
 
 /**
- * Normalize a path for comparison: strip leading ./ and normalize slashes.
+ * Normalize a relative path for comparison: forward slashes, no leading `./`.
+ * The path's ROOT is the caller's business; this only fixes the spelling.
+ *
+ * Exported because it is the spelling every `files:` dest returned by
+ * {@link applyFilesConfig} is normalized to, and that spelling must equal the one
+ * `checkUnreferencedFiles` computes for a packaged file
+ * (`toForwardSlash(safePath.relative(outputDir, file))`) — both are
+ * skill-output-relative. A silent mismatch there reads as "not declared in
+ * `files:` config" about a copy VAT performed itself.
  */
-function normalizePath(p: string): string {
+export function normalizeRelPath(p: string): string {
   let normalized = toForwardSlash(p);
   if (normalized.startsWith('./')) {
     normalized = normalized.slice(2);
@@ -84,7 +92,7 @@ export function mergeFilesConfig(
   if (perSkill) {
     const destSet = new Set<string>();
     for (const entry of perSkill) {
-      const normalized = normalizePath(entry.dest);
+      const normalized = normalizeRelPath(entry.dest);
       if (destSet.has(normalized)) {
         throw new Error(
           `Duplicate dest in per-skill files config: '${entry.dest}'. ` +
@@ -108,13 +116,13 @@ export function mergeFilesConfig(
   // Build a map of dest → entry from per-skill (these win)
   const perSkillByDest = new Map<string, SkillFileEntry>();
   for (const entry of perSkill) {
-    perSkillByDest.set(normalizePath(entry.dest), entry);
+    perSkillByDest.set(normalizeRelPath(entry.dest), entry);
   }
 
   // Start with defaults that aren't overridden
   const merged: SkillFileEntry[] = [];
   for (const defaultEntry of defaults) {
-    const normalizedDest = normalizePath(defaultEntry.dest);
+    const normalizedDest = normalizeRelPath(defaultEntry.dest);
     if (!perSkillByDest.has(normalizedDest)) {
       merged.push(defaultEntry);
     }
@@ -146,7 +154,7 @@ export function matchLinkToFiles(
   linkTarget: string,
   files: SkillFileEntry[],
 ): FilesMatchResult | null {
-  const normalized = normalizePath(linkTarget);
+  const normalized = normalizeRelPath(linkTarget);
 
   /** True when `candidate` equals `normalized` or is a path-prefix of it. */
   function isPrefixMatch(candidate: string): boolean {
@@ -156,11 +164,11 @@ export function matchLinkToFiles(
   // Source match has priority (checked before dest across all entries)
   for (const entry of files) {
     if (isGlob(entry.source)) {
-      const base = normalizePath(staticGlobBase(entry.source));
+      const base = normalizeRelPath(staticGlobBase(entry.source));
       if (isPrefixMatch(base)) {
         return { match: 'source', entry };
       }
-    } else if (normalizePath(entry.source) === normalized) {
+    } else if (normalizeRelPath(entry.source) === normalized) {
       return { match: 'source', entry };
     }
   }
@@ -168,11 +176,11 @@ export function matchLinkToFiles(
   // Then check dest match
   for (const entry of files) {
     if (isGlob(entry.source)) {
-      const destBase = normalizePath(entry.dest);
+      const destBase = normalizeRelPath(entry.dest);
       if (isPrefixMatch(destBase)) {
         return { match: 'dest', entry };
       }
-    } else if (normalizePath(entry.dest) === normalized) {
+    } else if (normalizeRelPath(entry.dest) === normalized) {
       return { match: 'dest', entry };
     }
   }
@@ -308,7 +316,7 @@ async function copyNonGlobEntry(
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- dest path from validated config
   await mkdir(dirname(absoluteDest), { recursive: true });
   await copyFile(absoluteSource, absoluteDest);
-  return { relDest: entry.dest, absSource: absoluteSource, absDest: absoluteDest };
+  return { relDest: normalizeRelPath(entry.dest), absSource: absoluteSource, absDest: absoluteDest };
 }
 
 /**
@@ -359,7 +367,7 @@ async function copyGlobEntry(
     const absSource = safePath.joinUnderRoot(absoluteBase, rel);
     if (bundledFileSet.has(toForwardSlash(absSource))) continue;
 
-    const relDest = toForwardSlash(safePath.join(entry.dest, rel));
+    const relDest = normalizeRelPath(safePath.join(entry.dest, rel));
     const absDest = safePath.joinUnderRoot(skillOutputDir, entry.dest, rel);
 
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- dest path from validated config
@@ -383,7 +391,16 @@ async function copyGlobEntry(
  * Claude plugin marketplace build both call it, instead of the latter relying on
  * an external inject script VAT can't see. `source` is resolved the same way the
  * packager does (`resolve(join(projectRoot, source))`, so an absolute-looking
- * source roots UNDER the project). Returns the dest paths actually copied.
+ * source roots UNDER the project).
+ *
+ * Returns every skill-output-relative dest path this config accounts for, one per
+ * FILE (glob entries expanded), normalized via {@link normalizeRelPath} so each
+ * value compares equal to the path `checkUnreferencedFiles` computes for the
+ * packaged file. Callers must pass this to the post-build orphan check: a dest
+ * declared in `files:` is proof of intent, and a lane that doesn't know the list
+ * flags VAT's own copies as files the author forgot to document. An entry whose
+ * source was already materialized by link traversal is reported too — it is
+ * declared either way.
  *
  * Glob entries (`source` containing `*`, `?`, or `[`) expand late-bound at
  * copy time: all matched files are rebased under `dest` preserving their
@@ -398,7 +415,7 @@ async function copyGlobEntry(
  * @throws if a declared `source` does not exist — a declared build artifact must
  * be present at copy time (callers that defer existence validate it upstream).
  */
-/** Copy + optionally integrity-check one GLOB `files:` entry; returns the copied rel-dests. */
+/** Copy + optionally integrity-check one GLOB `files:` entry; returns its declared rel-dests. */
 async function applyGlobFileEntry(
   fileEntry: SkillFileEntry,
   opts: ApplyFilesConfigOptions,
@@ -420,7 +437,7 @@ async function applyGlobFileEntry(
   return copied;
 }
 
-/** Copy + optionally integrity-check one NON-GLOB `files:` entry; returns the copied rel-dests. */
+/** Copy + optionally integrity-check one NON-GLOB `files:` entry; returns its declared rel-dests. */
 async function applyNonGlobFileEntry(
   fileEntry: SkillFileEntry,
   opts: ApplyFilesConfigOptions,
@@ -438,7 +455,11 @@ async function applyNonGlobFileEntry(
       const absDest = safePath.joinUnderRoot(opts.skillOutputDir, fileEntry.dest);
       verifyFilesIntegrity([{ absSource: absoluteSource, absDest }]);
     }
-    return [];
+    // The dest is still reported: this function answers "which output paths does
+    // `files:` account for," not "which bytes did I move." Whether link traversal
+    // or this copy put the file there is an ordering accident, and callers that
+    // ask "is this packaged file declared?" must not get a different answer for it.
+    return [normalizeRelPath(fileEntry.dest)];
   }
 
   const { relDest, absSource, absDest } = await copyNonGlobEntry(fileEntry, absoluteSource, opts.skillOutputDir);

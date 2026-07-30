@@ -13,7 +13,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
-import { isLocalFileLink } from '@vibe-agent-toolkit/resources';
+import { isLocalFileLink, resolveLocalHref } from '@vibe-agent-toolkit/resources';
 import type { DeferredArtifacts, ResourceLink, ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import { type GitTracker, isGitIgnored, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
@@ -143,11 +143,33 @@ export interface WalkLinkGraphOptions {
 // Internal Helpers
 // ============================================================================
 
-/** Resolve a link's href to an absolute file path, stripping any anchor */
-function resolveHrefToPath(href: string, sourceFilePath: string): string {
-  const anchorIndex = href.indexOf('#');
-  const hrefWithoutAnchor = anchorIndex === -1 ? href : href.slice(0, anchorIndex);
-  return safePath.resolve(dirname(sourceFilePath), hrefWithoutAnchor);
+/**
+ * Resolve an anchor-free link href to an absolute file path.
+ *
+ * Delegates to `resolveLocalHref` — the ONE resolver for "what file does this
+ * href name", already used by the resources lane — rather than restating the
+ * rule. This used to be `resolve(dirname(sourceFilePath), href)`, which is
+ * correct only for relative references: `path.resolve` DISCARDS its base when
+ * the second argument is absolute, so an RFC 3986 §4.2 absolute-path reference
+ * (`/docs/guide.md`, which means project-root-relative) came back as the
+ * FILESYSTEM-root path `/docs/guide.md` and was then classified outside every
+ * project root but `/`. The two lanes gave two answers for one link: the
+ * resources lane resolved it and found the file, this lane reported
+ * `LINK_OUTSIDE_PROJECT` at error severity against a target that exists and is
+ * in the registry.
+ *
+ * A root-absolute href that genuinely escapes the project root is still
+ * resolved against the project root here, so the boundary decision stays in the
+ * single `isOutsideProject` check below instead of being made twice.
+ */
+function resolveHrefToPath(hrefWithoutAnchor: string, sourceFilePath: string, projectRoot: string): string {
+  const resolution = resolveLocalHref(hrefWithoutAnchor, sourceFilePath, projectRoot);
+  if (resolution.kind === 'resolved') {
+    return resolution.resolvedPath;
+  }
+  return hrefWithoutAnchor.startsWith('/')
+    ? safePath.resolve(projectRoot, hrefWithoutAnchor.slice(1))
+    : safePath.resolve(dirname(sourceFilePath), hrefWithoutAnchor);
 }
 
 /** Check if a link targets a file outside the project boundary */
@@ -369,14 +391,16 @@ function processLink(
   excludeMatchers: ExcludeMatcher[],
   state: WalkState,
 ): void {
-  // Resolve the target path from the link href
-  const targetPath = resolveHrefToPath(link.href, currentResource.filePath);
   const hrefWithoutAnchor = link.href.split('#')[0] ?? link.href;
 
   // Skip empty hrefs (pure anchor links that slipped through type classification)
+  // BEFORE resolving: a bare `#anchor` names no file, so there is nothing to resolve.
   if (hrefWithoutAnchor === '') {
     return;
   }
+
+  // Resolve the target path from the link href
+  const targetPath = resolveHrefToPath(hrefWithoutAnchor, currentResource.filePath, options.projectRoot);
 
   // Check structural exclusions (deferred, directory, boundary, navigation, pattern, gitignore)
   if (checkExclusions(targetPath, currentResource.filePath, link, options, excludeMatchers, state.excludedReferences, state.deferredAssetSet)) {

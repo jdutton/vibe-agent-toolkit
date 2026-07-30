@@ -102,7 +102,7 @@ Diagnose vat setup and environment health
 
 **Exit codes:**
 
-- `0` - All checks passed
+- `0` - No check failed (a check that could not be determined is reported as ❓, not fatal)
 - `1` - One or more checks failed
 
 **Creates/modifies:** None (read-only diagnostics)

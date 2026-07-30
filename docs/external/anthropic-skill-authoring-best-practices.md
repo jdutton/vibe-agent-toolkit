@@ -4,11 +4,11 @@
 > **Fetched:** 2026-04-18
 > **License:** © Anthropic — reproduced here under fair-use for reference. Authoritative copy is the source URL; this cache exists so VAT's tooling stays diffable against Anthropic's guidance and we can catch divergence when Anthropic updates their doc.
 >
-> @vendor-claim reviewed=2026-04-18 verify=Re-fetch the Source URL above and diff it against this cache, then update this file, VALIDATION_THRESHOLDS, and skill-quality-checklist.md together
+> @vendor-claim reviewed=2026-04-18 verify=Re-fetch the Source URL above and diff it against this cache, then update this file, VALIDATION_THRESHOLDS, and packages/vat-development-agents/resources/skills/vat-skill-review.md together
 >
-> **Refresh policy:** Re-fetch when adopting a new Claude Code release that adds or changes Skills behavior, or every ~90 days, whichever is sooner. Preserve the "Fetched" date above, diff against the current live page, and update the VAT checklist (`packages/vat-development-agents/resources/skills/skill-quality-checklist.md`) and this cache together so they stay aligned.
+> **Refresh policy:** Re-fetch when adopting a new Claude Code release that adds or changes Skills behavior, or every ~90 days, whichever is sooner. Preserve the "Fetched" date above, diff against the current live page, and update VAT's review rubric (`packages/vat-development-agents/resources/skills/vat-skill-review.md`) and this cache together so they stay aligned.
 
-This cache captures the *load-bearing* portions of Anthropic's Skill authoring guidance — the parts VAT's `skill-quality-checklist.md` either directly mirrors or takes an opinionated position against. See the source URL for the complete best-practices document and the [Skills overview](https://platform.claude.com/docs/en/docs/agents-and-tools/agent-skills/overview) for the architecture context.
+This cache captures the *load-bearing* portions of Anthropic's Skill authoring guidance — the parts VAT's `vat-skill-review` rubric either directly mirrors or takes an opinionated position against. See the source URL for the complete best-practices document and the [Skills overview](https://platform.claude.com/docs/en/docs/agents-and-tools/agent-skills/overview) for the architecture context.
 
 ## Frontmatter schema (required fields)
 

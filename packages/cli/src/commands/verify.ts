@@ -11,6 +11,12 @@
 import { existsSync } from 'node:fs';
 import { basename } from 'node:path';
 
+import {
+  calculateValidationStatus,
+  countBySeverity,
+  type SeverityCounts,
+  type ValidationIssue,
+} from '@vibe-agent-toolkit/agent-schema';
 import { computeTreeCopiedSkillLocations, mergeFilesConfig } from '@vibe-agent-toolkit/agent-skills';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
@@ -21,8 +27,19 @@ import { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
 import { requireProjectRoot } from '../utils/project-root-policy.js';
 
-import { runConsistencyChecks, type ConsistencyIssue } from './consistency-check.js';
-import { resolveBinPath, runPhase, type Phase, type PhaseResult } from './phase-utils.js';
+import {
+  runConsistencyChecks,
+  type ConsistencyIssue,
+  type ConsistencyIssueSeverity,
+} from './consistency-check.js';
+import {
+  aggregatePhaseStatus,
+  exitCodeForPhases,
+  resolveBinPath,
+  runPhase,
+  type Phase,
+  type PhaseResult,
+} from './phase-utils.js';
 import { discoverSkillsFromConfig } from './skills/skill-discovery.js';
 
 export interface VerifyCommandOptions {
@@ -56,12 +73,18 @@ Description:
 
 Output:
   YAML summary for each phase → stdout
+    per phase: status (success | warning | error | system-error). In-process
+    phases (consistency, files-config-dests) also publish issueCounts
+    {errors, warnings, info} and the findings themselves, so the archived YAML
+    is the artifact of record rather than a summary of what stderr said.
   Validation errors → stderr
 
 Exit Codes:
-  0 - All phases passed
-  1 - Validation errors found
-  2 - System error
+  0 - All phases passed (a warning does not fail the run — read status/issueCounts)
+  1 - Validation errors found, or '--only consistency' in a project with no
+      skills: block (an explicit request for a phase that cannot run)
+  2 - System error (this command's own, or propagated from a phase that could
+      not run: exited 2, was killed by a signal, or never spawned)
 
 Requirements:
   projectRoot: required (errors if no vibe-agent-toolkit.config.yaml or .git/ ancestor)
@@ -274,32 +297,90 @@ function buildPhaseList(options: VerifyCommandOptions): Phase[] {
   return phases;
 }
 
+/** A consistency finding as it appears in the archived YAML. */
+interface PublishedConsistencyIssue {
+  severity: ConsistencyIssueSeverity;
+  code: string;
+  message: string;
+  fix: string;
+}
+
 /**
- * Run the consistency check phase and return whether errors were found.
+ * A phase result that carries its own findings into the archived YAML.
+ *
+ * Extends {@link PhaseResult} rather than widening it: only in-process phases
+ * hold findings — a subprocess phase's findings belong to (and are printed by)
+ * the child.
+ */
+interface FindingsPhaseResult extends PhaseResult {
+  issueCounts: SeverityCounts;
+  issues: PublishedConsistencyIssue[];
+}
+
+/**
+ * `ConsistencyIssue` speaks the same severity vocabulary as `ValidationIssue`
+ * but carries a free-form `code`, so it is counted through this projection —
+ * there must be exactly ONE issues→status/counts collapse in the codebase, and
+ * it lives in `@vibe-agent-toolkit/agent-schema`.
+ */
+function asValidationIssues(issues: readonly ConsistencyIssue[]): ValidationIssue[] {
+  return issues.map((issue) => ({
+    code: issue.code as ValidationIssue['code'],
+    severity: issue.severity,
+    message: issue.message,
+    fix: issue.fix,
+  }));
+}
+
+/**
+ * Run the in-process consistency check phase and record its outcome.
+ *
+ * The findings are published INTO the phase result, not merely logged: they used
+ * to go to stderr only, so the archived YAML — the artifact of record — said
+ * nothing happened. And a warning-only run reported `passed`, which is the
+ * reassuring answer to a question it could not represent.
  */
 async function runConsistencyPhase(
   logger: ReturnType<typeof createLogger>,
-  phaseResults: PhaseResult[]
-): Promise<boolean> {
+  phaseResults: PhaseResult[],
+  explicitlyRequested: boolean
+): Promise<void> {
   const config = loadConfig(process.cwd());
   if (!config?.skills) {
-    return false;
+    // Nothing to cross-reference. Inside a full `vat verify` that is a genuine
+    // no-op; but `--only consistency` asked for THIS phase specifically, and
+    // answering an explicit request with an empty phase list and `success` is
+    // the same silent pass `vat validate --only <unconfigured surface>`
+    // deliberately refuses to give.
+    if (explicitlyRequested) {
+      logger.error(
+        "Phase 'consistency' needs a skills: block in vibe-agent-toolkit.config.yaml — there is nothing to cross-reference.",
+      );
+      phaseResults.push({
+        name: 'consistency',
+        status: 'error',
+        error: "No skills: block in vibe-agent-toolkit.config.yaml — 'consistency' has nothing to check.",
+      });
+    }
+    return;
   }
 
   const discoveredSkills = await discoverSkillsFromConfig(config.skills, process.cwd());
   const consistencyResult = runConsistencyChecks(discoveredSkills, config, process.cwd());
+  const issues = consistencyResult.issues;
 
-  if (consistencyResult.summary.errors > 0) {
-    reportConsistencyIssues(consistencyResult.issues, logger);
-    phaseResults.push({ name: 'consistency', status: 'failed' });
-    return true;
+  if (issues.length > 0) {
+    reportConsistencyIssues(issues, logger);
   }
 
-  if (consistencyResult.summary.warnings > 0 || consistencyResult.summary.infos > 0) {
-    reportConsistencyIssues(consistencyResult.issues, logger);
-  }
-  phaseResults.push({ name: 'consistency', status: 'passed' });
-  return false;
+  const asValidation = asValidationIssues(issues);
+  const result: FindingsPhaseResult = {
+    name: 'consistency',
+    status: calculateValidationStatus(asValidation),
+    issueCounts: countBySeverity(asValidation),
+    issues: issues.map(({ severity, code, message, fix }) => ({ severity, code, message, fix })),
+  };
+  phaseResults.push(result);
 }
 
 async function verifyTopLevelCommand(options: VerifyCommandOptions): Promise<void> {
@@ -327,35 +408,36 @@ async function verifyTopLevelCommand(options: VerifyCommandOptions): Promise<voi
       phaseResults.push(runPhase(binPath, phase));
     }
 
-    let hasErrors = phaseResults.some((r) => r.status === 'failed');
-
     // Post-build files config check: verify all dest paths exist in built output
     if (!options.only || options.only === 'skills') {
       const filesDestResults = checkFilesConfigDests(process.cwd());
       if (filesDestResults.length > 0) {
-        hasErrors = true;
         reportFilesDestErrors(filesDestResults, logger);
-        phaseResults.push({ name: 'files-config-dests', status: 'failed' });
+        phaseResults.push({
+          name: 'files-config-dests',
+          status: 'error',
+          issueCounts: { errors: filesDestResults.length, warnings: 0, info: 0 },
+        });
       }
     }
 
     // Consistency check: cross-reference discovered skills vs package.json and plugin assignments
     if (!options.only || options.only === 'consistency' || options.only === 'skills') {
-      const consistencyHasErrors = await runConsistencyPhase(logger, phaseResults);
-      if (consistencyHasErrors) {
-        hasErrors = true;
-      }
+      await runConsistencyPhase(logger, phaseResults, options.only === 'consistency');
     }
 
     const duration = Date.now() - startTime;
 
+    // Worst-wins across phases, with `system-error` outranking `error`: a phase
+    // that could not run exits 2, so a CI script can tell a broken config from
+    // a broken artifact.
     writeYamlOutput({
-      status: hasErrors ? 'error' : 'success',
+      status: aggregatePhaseStatus(phaseResults),
       phases: phaseResults,
       duration: `${duration}ms`,
     });
 
-    process.exit(hasErrors ? 1 : 0);
+    process.exit(exitCodeForPhases(phaseResults));
   } catch (error) {
     handleCommandError(error, logger, startTime, 'Verify');
   }
