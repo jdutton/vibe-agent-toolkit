@@ -8,11 +8,28 @@
  * shape; a runtime gaining a browser or losing a preinstalled binary makes the
  * verdict engine wrong while every check stays green.
  *
- * @vendor-claim reviewed=2026-04-18 verify=Run the empirical harness in packages/dev-tools/src/compat-empirical/ against each target, then diff its observations against this table
+ * @vendor-claim reviewed=2026-04-18 verify=Per target, run a capability-probe skill that attempts a shell command, a network fetch, a custom script, and `which python3 node npm`, and record which succeeded — one probe per field below. Needs a human operator for claude-chat and claude-cowork.
  *
  * The date above is when the table was written (commit 838e1a51); it has not been
- * re-confirmed since. The harness named above exists but is not wired into CI, so
- * re-verification is a manual run.
+ * re-confirmed since.
+ *
+ * The `verify=` instruction above was CORRECTED on 2026-07-30 without refreshing
+ * `reviewed=`, because the procedure it used to name could not produce the
+ * evidence it claimed. It pointed at the empirical harness in
+ * `packages/dev-tools/src/compat-empirical/` and said to "diff its observations
+ * against this table" — but a `RuntimeObservation` carries only
+ * `invocationDetected`, `outputText`, `toolUseEvents`, `exitStatus` and
+ * `installResult`. None of those is a capability inventory, so no field below
+ * (`localShell`, `browser`, `network`, `customScripts`, `preinstalledBinaries`)
+ * has a counterpart to diff against. That harness answers a different question —
+ * whether VAT's static verdict matches how a runtime actually behaved on a
+ * corpus skill — and is worth running for that, but it cannot falsify this table.
+ * Two of its three drivers are human-in-the-loop besides (claude-chat is
+ * `manual`, claude-cowork is `scripted-assisted`), so the "just run the harness"
+ * reading was never agent-executable either.
+ *
+ * Nothing here is wired into CI; re-verification is a manual run whichever
+ * procedure is used.
  */
 
 import type { Target } from './types.js';
