@@ -20,8 +20,12 @@ function isCodeBlockEvidence(record: EvidenceRecord): boolean {
  * browser-auth invocations they may contain. Returns an EvidenceRecord
  * for each detected pattern.
  */
-export function scanCodeBlocks(content: string, filePath: string): EvidenceRecord[] {
-  const { evidence } = runCompatDetectors(content, filePath);
+export function scanCodeBlocks(
+  content: string,
+  filePath: string,
+  locationRoot: string,
+): EvidenceRecord[] {
+  const { evidence } = runCompatDetectors(content, filePath, locationRoot);
   // Filter to evidence types this scanner is responsible for: shell-block /
   // external-CLI / browser-auth. Frontmatter-scoped evidence is emitted by
   // scanFrontmatter.

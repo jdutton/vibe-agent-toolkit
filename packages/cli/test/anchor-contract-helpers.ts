@@ -15,7 +15,7 @@ import { hasParentTraversalSegment, isAbsoluteAnyPlatform, safePath, toForwardSl
 const ANCHOR_KEYS = new Set(['path', 'location']);
 
 export interface AnchorSighting {
-  /** The key the value appeared under (`path` or `location`). */
+  /** The key the value appeared under (`path`, `location`, or a `location.file`). */
   key: string;
   /** Dotted trail to the value, so a failure names the finding, not just a count. */
   trail: string;
@@ -23,8 +23,29 @@ export interface AnchorSighting {
 }
 
 /**
- * Collect EVERY `path` / `location` string in an audit document, remembering
- * where each came from.
+ * A `location` is not always a bare string: an `EvidenceRecord.location` is the
+ * object `{ file, line }`. A collector that only looks at string values recurses
+ * straight past it, and the inner `file` — not itself an anchor key — is never
+ * checked. That blind spot is exactly how an absolute evidence `location.file`
+ * shipped under a gate written to forbid absolute anchors, so the object form is
+ * unwrapped here rather than walked through.
+ *
+ * Returns the sighting for an object-valued anchor, or `undefined` when `value`
+ * is not one.
+ */
+function unwrapObjectAnchor(key: string, childTrail: string, value: unknown): AnchorSighting | undefined {
+  if (!ANCHOR_KEYS.has(key)) return undefined;
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const file = (value as Record<string, unknown>)['file'];
+  // A non-string `file` cannot be resolved by any consumer; report it as an
+  // empty anchor so the failure names the finding rather than silently passing.
+  return { key: 'file', trail: `${childTrail}.file`, value: typeof file === 'string' ? file : '' };
+}
+
+/**
+ * Collect EVERY `path` / `location` anchor in an audit document, remembering
+ * where each came from. Both anchor shapes count: a bare string, and the
+ * `{ file, line }` object an evidence record carries.
  *
  * Exhaustive on purpose: a suite that checks one named property per test is
  * structurally blind to producers added later.
@@ -43,6 +64,8 @@ export function collectAnchors(node: unknown, trail: string, out: AnchorSighting
       if (ANCHOR_KEYS.has(key)) out.push({ key, trail: childTrail, value });
       continue;
     }
+    const objectAnchor = unwrapObjectAnchor(key, childTrail, value);
+    if (objectAnchor !== undefined) out.push(objectAnchor);
     collectAnchors(value, childTrail, out);
   }
 }

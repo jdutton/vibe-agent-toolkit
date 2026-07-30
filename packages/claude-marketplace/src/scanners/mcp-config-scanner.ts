@@ -1,13 +1,15 @@
-import type { EvidenceRecord } from '@vibe-agent-toolkit/agent-skills';
-
-import { buildEvidence } from './evidence-helpers.js';
+import { buildEvidence, type EvidenceRecord } from '@vibe-agent-toolkit/agent-skills';
 
 /**
  * Scan an MCP config object for server runtime requirements.
  * Each server with a `command` field yields an MCP_SERVER_COMMAND record;
  * each server with a `url` field yields an MCP_SERVER_URL record.
  */
-export function scanMcpConfig(config: Record<string, unknown>, filePath: string): EvidenceRecord[] {
+export function scanMcpConfig(
+  config: Record<string, unknown>,
+  filePath: string,
+  locationRoot: string,
+): EvidenceRecord[] {
   const evidence: EvidenceRecord[] = [];
 
   const servers = config['mcpServers'];
@@ -23,6 +25,7 @@ export function scanMcpConfig(config: Record<string, unknown>, filePath: string)
         buildEvidence(
           'MCP_SERVER_COMMAND',
           filePath,
+          locationRoot,
           `MCP server "${serverName}" command: ${command}`,
         ),
       );
@@ -34,6 +37,7 @@ export function scanMcpConfig(config: Record<string, unknown>, filePath: string)
         buildEvidence(
           'MCP_SERVER_URL',
           filePath,
+          locationRoot,
           `MCP server "${serverName}" url: ${url}`,
         ),
       );

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { scanFrontmatter } from '../../src/scanners/frontmatter-scanner.js';
+import { TEST_LOCATION_ROOT } from '../test-helpers.js';
 
 describe('scanFrontmatter', () => {
   it('returns empty array for skill with no compatibility-relevant frontmatter', () => {
@@ -12,7 +13,7 @@ describe('scanFrontmatter', () => {
       '# Simple Skill',
     ].join('\n');
 
-    const result = scanFrontmatter(content, 'skills/simple/SKILL.md');
+    const result = scanFrontmatter(content, 'skills/simple/SKILL.md', TEST_LOCATION_ROOT);
     expect(result).toEqual([]);
   });
 
@@ -25,7 +26,7 @@ describe('scanFrontmatter', () => {
       '---',
     ].join('\n');
 
-    const result = scanFrontmatter(content, 'SKILL.md');
+    const result = scanFrontmatter(content, 'SKILL.md', TEST_LOCATION_ROOT);
     const evidence = result.find(e => e.patternId === 'ALLOWED_TOOLS_LOCAL_SHELL');
     expect(evidence).toBeDefined();
     expect(evidence?.location.file).toBe('SKILL.md');
@@ -40,7 +41,7 @@ describe('scanFrontmatter', () => {
       '---',
     ].join('\n');
 
-    const result = scanFrontmatter(content, 'SKILL.md');
+    const result = scanFrontmatter(content, 'SKILL.md', TEST_LOCATION_ROOT);
     expect(result.some(e => e.patternId === 'ALLOWED_TOOLS_LOCAL_SHELL')).toBe(true);
   });
 
@@ -53,7 +54,7 @@ describe('scanFrontmatter', () => {
       '---',
     ].join('\n');
 
-    const result = scanFrontmatter(content, 'SKILL.md');
+    const result = scanFrontmatter(content, 'SKILL.md', TEST_LOCATION_ROOT);
     expect(result.some(e => e.patternId === 'ALLOWED_TOOLS_LOCAL_SHELL')).toBe(true);
   });
 
@@ -66,7 +67,7 @@ describe('scanFrontmatter', () => {
       '---',
     ].join('\n');
 
-    const result = scanFrontmatter(content, 'SKILL.md');
+    const result = scanFrontmatter(content, 'SKILL.md', TEST_LOCATION_ROOT);
     expect(result).toEqual([]);
   });
 
@@ -79,13 +80,13 @@ describe('scanFrontmatter', () => {
       '---',
     ].join('\n');
 
-    const result = scanFrontmatter(content, 'SKILL.md');
+    const result = scanFrontmatter(content, 'SKILL.md', TEST_LOCATION_ROOT);
     expect(result).toEqual([]);
   });
 
   it('handles malformed frontmatter gracefully', () => {
     const content = '---\ninvalid yaml: [[[bad\n---\n# Content';
-    const result = scanFrontmatter(content, 'SKILL.md');
+    const result = scanFrontmatter(content, 'SKILL.md', TEST_LOCATION_ROOT);
     expect(Array.isArray(result)).toBe(true);
   });
 });

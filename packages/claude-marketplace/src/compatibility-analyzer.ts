@@ -98,13 +98,13 @@ async function collectFiles(rootDir: string): Promise<string[]> {
  */
 async function scanMarkdownFile(
   fullPath: string,
-  relativePath: string,
+  locationRoot: string,
 ): Promise<EvidenceRecord[]> {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- path from collectFiles walk
   const content = await readFile(fullPath, 'utf8');
   return [
-    ...scanCodeBlocks(content, relativePath),
-    ...scanFrontmatter(content, relativePath),
+    ...scanCodeBlocks(content, fullPath, locationRoot),
+    ...scanFrontmatter(content, fullPath, locationRoot),
   ];
 }
 
@@ -114,19 +114,19 @@ async function scanMarkdownFile(
  */
 async function scanScriptFile(
   fullPath: string,
-  relativePath: string,
+  locationRoot: string,
 ): Promise<EvidenceRecord[]> {
   const evidence: EvidenceRecord[] = [];
 
-  const classification = classifyScriptFile(relativePath);
+  const classification = classifyScriptFile(fullPath, locationRoot);
   if (classification) {
     evidence.push(classification);
   }
 
-  if (extname(relativePath).toLowerCase() === '.py') {
+  if (extname(fullPath).toLowerCase() === '.py') {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- path from collectFiles walk
     const content = await readFile(fullPath, 'utf8');
-    evidence.push(...scanPythonImports(content, relativePath));
+    evidence.push(...scanPythonImports(content, fullPath, locationRoot));
   }
 
   return evidence;
@@ -137,12 +137,12 @@ async function scanScriptFile(
  */
 async function scanHooksFile(
   fullPath: string,
-  relativePath: string,
+  locationRoot: string,
 ): Promise<EvidenceRecord[]> {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- path from collectFiles walk
   const raw = await readFile(fullPath, 'utf8');
   const config = JSON.parse(raw) as Record<string, unknown>;
-  return scanHooksConfig(config, relativePath);
+  return scanHooksConfig(config, fullPath, locationRoot);
 }
 
 /**
@@ -150,12 +150,12 @@ async function scanHooksFile(
  */
 async function scanMcpFile(
   fullPath: string,
-  relativePath: string,
+  locationRoot: string,
 ): Promise<EvidenceRecord[]> {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- path from collectFiles walk
   const raw = await readFile(fullPath, 'utf8');
   const config = JSON.parse(raw) as Record<string, unknown>;
-  return scanMcpConfig(config, relativePath);
+  return scanMcpConfig(config, fullPath, locationRoot);
 }
 
 /**
@@ -201,6 +201,11 @@ export interface AnalyzeCompatibilityOptions {
  * declared targets (plugin.json → marketplace.json → config layer).
  *
  * @param pluginDir - Absolute path to the plugin root directory
+ * @param locationRoot - The ONE base every emitted evidence `location.file` is
+ *   expressed relative to. A caller analysing several plugins in one run (e.g.
+ *   `vat audit`) MUST pass its invocation scan root, not each plugin directory,
+ *   or the report mixes coordinate systems. Required: "relative to what?" has no
+ *   safe default.
  * @param options - Optional analysis options; see {@link AnalyzeCompatibilityOptions}.
  *   `options.configTargets` lets callers thread a config-layer target declaration
  *   through to the verdict engine — plugin.json / marketplace.json targets still
@@ -210,6 +215,7 @@ export interface AnalyzeCompatibilityOptions {
  */
 export async function analyzeCompatibility(
   pluginDir: string,
+  locationRoot: string,
   options?: AnalyzeCompatibilityOptions,
 ): Promise<CompatibilityResult> {
   const manifest = await readPluginManifest(pluginDir);
@@ -230,16 +236,16 @@ export async function analyzeCompatibility(
 
     if (MARKDOWN_EXTENSIONS.has(ext)) {
       counts.skillFiles++;
-      allEvidence.push(...await scanMarkdownFile(fullPath, relativePath));
+      allEvidence.push(...await scanMarkdownFile(fullPath, locationRoot));
     } else if (SCRIPT_EXTENSIONS.has(ext)) {
       counts.scriptFiles++;
-      allEvidence.push(...await scanScriptFile(fullPath, relativePath));
+      allEvidence.push(...await scanScriptFile(fullPath, locationRoot));
     } else if (isHooksFile(relativePath)) {
       counts.hookFiles++;
-      allEvidence.push(...await scanHooksFile(fullPath, relativePath));
+      allEvidence.push(...await scanHooksFile(fullPath, locationRoot));
     } else if (isMcpConfigFile(relativePath)) {
       counts.mcpConfigs++;
-      allEvidence.push(...await scanMcpFile(fullPath, relativePath));
+      allEvidence.push(...await scanMcpFile(fullPath, locationRoot));
     }
   }
 

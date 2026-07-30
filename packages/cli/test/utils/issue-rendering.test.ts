@@ -261,7 +261,7 @@ describe('sumSeverityCounts', () => {
 describe('vat skills validate — buildValidateSummary', () => {
   it('says `warning` for a warning-only batch instead of `success`', () => {
     const results = [packagingResult('a', [issue('warning', 'W1'), issue('warning', 'W2')])];
-    const summary = buildValidateSummary(results, 25, false);
+    const summary = buildValidateSummary(results, 25, false, []);
 
     // The defect: `results.some(r => r.status === 'error') ? 'error' : 'success'`
     // could never say `warning`, so 33 active warnings reported as `success`.
@@ -270,7 +270,7 @@ describe('vat skills validate — buildValidateSummary', () => {
   });
 
   it('says `success` for an info-only batch but still publishes the info count', () => {
-    const summary = buildValidateSummary([packagingResult('a', [issue('info', 'I1')])], 1, false);
+    const summary = buildValidateSummary([packagingResult('a', [issue('info', 'I1')])], 1, false, []);
     expect(summary.status).toBe('success');
     expect(summary.issueCounts).toEqual({ errors: 0, warnings: 0, info: 1 });
   });
@@ -283,6 +283,7 @@ describe('vat skills validate — buildValidateSummary', () => {
       ],
       1,
       false,
+      [],
     );
     expect(summary.status).toBe('error');
     expect(summary.issueCounts).toEqual({ errors: 1, warnings: 1, info: 1 });
@@ -293,6 +294,7 @@ describe('vat skills validate — buildValidateSummary', () => {
       [packagingResult('a', [issue('warning', 'W1'), issue('info', 'I1')])],
       1,
       false,
+      [],
     );
     const first = summary.results[0] as { status: string; issueCounts: unknown };
     expect(first.status).toBe('success');
@@ -301,10 +303,10 @@ describe('vat skills validate — buildValidateSummary', () => {
 
   it('strips excludedReferences unless verbose', () => {
     const results = [packagingResult('a', [], [{ path: 'x.md', reason: 'gitignored' }])];
-    const terse = buildValidateSummary(results, 1, false).results[0] as {
+    const terse = buildValidateSummary(results, 1, false, []).results[0] as {
       metadata: Record<string, unknown>;
     };
-    const verbose = buildValidateSummary(results, 1, true).results[0] as {
+    const verbose = buildValidateSummary(results, 1, true, []).results[0] as {
       metadata: Record<string, unknown>;
     };
     expect(terse.metadata).not.toHaveProperty('excludedReferences');
@@ -317,7 +319,7 @@ describe('vat skills validate — formatValidationReportLines', () => {
   it('does not print the all-clear banner over active warnings', () => {
     const lines = formatValidationReportLines([
       packagingResult('a', [issue('warning', 'W1'), issue('warning', 'W2')]),
-    ]);
+    ], []);
     // The literal defect: "✅ All validations passed" above N warnings.
     expect(lines.some((l) => l.includes('All validations passed'))).toBe(false);
     expect(lines[0]).toContain('2 warnings');
@@ -326,18 +328,18 @@ describe('vat skills validate — formatValidationReportLines', () => {
   it('renders EVERY emitted severity in a mixed batch, not just the errors', () => {
     const lines = formatValidationReportLines([
       packagingResult('a', [issue('error', 'E1'), issue('warning', 'W1'), issue('info', 'I1')]),
-    ]);
+    ], []);
     expect(renderedLabels(lines)).toEqual(['ERROR', 'WARNING', 'INFO']);
   });
 
   it('renders an info-only batch rather than reporting nothing at all', () => {
-    const lines = formatValidationReportLines([packagingResult('a', [issue('info', 'I1')])]);
+    const lines = formatValidationReportLines([packagingResult('a', [issue('info', 'I1')])], []);
     expect(renderedLabels(lines)).toEqual(['INFO']);
     expect(lines[0]).toContain('1 info');
   });
 
   it('keeps the plain all-clear banner for a genuinely clean batch', () => {
-    expect(formatValidationReportLines([packagingResult('a', [])])).toEqual([
+    expect(formatValidationReportLines([packagingResult('a', [])], [])).toEqual([
       '\n✅ All validations passed',
     ]);
   });

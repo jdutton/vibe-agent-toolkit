@@ -19,7 +19,9 @@ import { basename, dirname } from 'node:path';
 
 import {
   CODE_REGISTRY,
+  runSingleUnitValidation,
   runValidationFramework,
+  type AllowUsageLedger,
   type AllowRecord,
   type IssueCode,
   type ValidationConfig,
@@ -353,6 +355,22 @@ export interface SkillValidationSharedContext {
    * project (`vat skills validate`, `vat skills build`, `vat skill review`).
    */
   locationRoot?: string;
+  /**
+   * The RUN's allow-entry usage ledger.
+   *
+   * `validation.allow` is declared once per package but validated once per
+   * skill, so "this entry matched nothing" is a question only the whole run can
+   * answer — a batching caller MUST supply one ledger for the batch and drain it
+   * with `allowUnusedIssues()` after the last skill. Without it, an entry scoped
+   * to one skill's files is reported unused by every OTHER skill in the package
+   * (measured: 78 ALLOW_UNUSED warnings from 3 legitimate entries).
+   *
+   * Omitting it is a positive claim that THIS call is the whole run — correct for
+   * the single-skill callers (`vat skill review`, `vat skills build`'s pre-build
+   * check, `vat audit`, whose shared context is built per skill), where the
+   * per-skill and run-level answers coincide.
+   */
+  allowLedger?: AllowUsageLedger;
 }
 
 /**
@@ -408,7 +426,7 @@ export async function validateSkillForPackaging(
   // surface each as a CAPABILITY_* issue. Observations are also returned
   // on the result so downstream verdict computation (CLI layer) can recover
   // payloads such as EXTERNAL_CLI binary names.
-  const { evidence, observations } = runCompatDetectors(skillContent, skillPath);
+  const { evidence, observations } = runCompatDetectors(skillContent, skillPath, locationRoot);
   for (const obs of observations) {
     rawIssues.push(observationToIssue(obs, skillLocation));
   }
@@ -528,9 +546,17 @@ export async function validateSkillForPackaging(
     ? rawIssues.filter(issue => !SOURCE_ONLY_CODES.has(issue.code))
     : rawIssues;
 
-  // Run through the unified validation framework
+  // Run through the unified validation framework.
+  //
+  // Two lanes, one question: a batching caller supplies the RUN's ledger and
+  // owns the drain (ALLOW_UNUSED belongs to the run, not to whichever skill
+  // happened to be validated when the entry went unmatched); a caller that
+  // supplied none is claiming its run is this one skill, and gets the run-level
+  // answer folded in here.
   const validationConfig = packagingConfig?.validation ?? {};
-  const framework = runValidationFramework(filteredIssues, validationConfig);
+  const framework = shared?.allowLedger === undefined
+    ? runSingleUnitValidation(filteredIssues, validationConfig)
+    : runValidationFramework(filteredIssues, validationConfig, shared.allowLedger);
 
   const skillName = extractSkillName(parseResult, skillPath);
 

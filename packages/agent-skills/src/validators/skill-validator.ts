@@ -114,7 +114,7 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
   // Compat capability detection: collect raw evidence, derive observations,
   // surface each observation as an issue (severity comes from CODE_REGISTRY).
   const { evidence: rootEvidence, observations: rootObservations } =
-    runCompatDetectors(content, skillPath);
+    runCompatDetectors(content, skillPath, locationRoot);
   allEvidence.push(...rootEvidence);
   for (const obs of rootObservations) {
     issues.push(observationToIssue(obs, skillLocation));
@@ -326,7 +326,7 @@ async function traverseLinks(
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- currentPath verified existent by BFS predecessor
       const linkedContent = fs.readFileSync(currentPath, 'utf-8');
       const { evidence: linkedEvidence, observations: linkedObservations } =
-        runCompatDetectors(linkedContent, currentPath);
+        runCompatDetectors(linkedContent, currentPath, locationRoot);
       allEvidence.push(...linkedEvidence);
       const linkedCompatIssues = linkedObservations.map(obs => observationToIssue(obs, issueLocation(currentPath, locationRoot)));
       processed.fileIssues.push(...linkedCompatIssues);

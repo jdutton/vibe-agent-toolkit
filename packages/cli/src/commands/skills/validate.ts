@@ -6,8 +6,10 @@
  */
 
 import {
+  allowUnusedIssues,
   calculateValidationStatus,
   countBySeverity,
+  createAllowUsageLedger,
   type SeverityCounts,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/agent-schema';
@@ -74,6 +76,17 @@ function batchIssues(results: readonly PackagingValidationResult[]): ValidationI
 }
 
 /**
+ * Findings about the RUN rather than about any one skill — currently the
+ * `validation.allow` entries no skill in the batch matched (ALLOW_UNUSED).
+ *
+ * They are a separate parameter, not folded into a skill's result, because
+ * that is what they are: `validation.allow` is declared once per package, so
+ * attributing "nothing matched this entry" to whichever skill happened to be
+ * validated at the time is what produced 78 warnings from 3 real entries.
+ */
+type RunIssues = readonly ValidationIssue[];
+
+/**
  * One skill's YAML entry: the result plus the per-severity counts its two-valued
  * `status` cannot express.
  *
@@ -106,19 +119,22 @@ export function buildValidateSummary(
   results: PackagingValidationResult[],
   duration: number,
   verbose: boolean,
+  runIssues: RunIssues,
 ): {
   status: ValidationStatus;
   issueCounts: SeverityCounts;
   skillsValidated: number;
   results: unknown[];
+  runIssues: ValidationIssue[];
   durationSecs: number;
 } {
-  const issues = batchIssues(results);
+  const issues = [...batchIssues(results), ...runIssues];
   return {
     status: calculateValidationStatus(issues),
     issueCounts: countBySeverity(issues),
     skillsValidated: results.length,
     results: results.map((r) => toYamlResult(r, verbose)),
+    runIssues: [...runIssues],
     durationSecs: formatDurationSecs(duration),
   };
 }
@@ -129,9 +145,10 @@ export function buildValidateSummary(
 function outputYamlSummary(
   results: PackagingValidationResult[],
   duration: number,
-  verbose: boolean
+  verbose: boolean,
+  runIssues: RunIssues,
 ): void {
-  const output = buildValidateSummary(results, duration, verbose);
+  const output = buildValidateSummary(results, duration, verbose, runIssues);
   console.log(yaml.stringify(output, { indent: 2, lineWidth: 0, aliasDuplicateObjects: false }));
 }
 
@@ -189,8 +206,11 @@ function reportBanner(status: ValidationStatus, counts: SeverityCounts): string 
  * the gate: a warning-only or info-only run used to print the success banner and
  * nothing else, so the findings existed only in the YAML on stdout.
  */
-export function formatValidationReportLines(results: PackagingValidationResult[]): string[] {
-  const issues = batchIssues(results);
+export function formatValidationReportLines(
+  results: PackagingValidationResult[],
+  runIssues: RunIssues,
+): string[] {
+  const issues = [...batchIssues(results), ...runIssues];
   const counts = countBySeverity(issues);
   const status = calculateValidationStatus(issues);
   const lines = [reportBanner(status, counts)];
@@ -198,6 +218,14 @@ export function formatValidationReportLines(results: PackagingValidationResult[]
   for (const result of results) {
     if (result.allErrors.length === 0 && result.ignoredErrors.length === 0) continue;
     lines.push(...skillFindingLines(result));
+  }
+  if (runIssues.length > 0) {
+    lines.push(`Run-level (project config, not any one skill):`);
+    lines.push(`  ${formatIssueSetHeading(runIssues)}:`);
+    for (const issue of runIssues) {
+      lines.push(...formatIssueLines(issue, '    '));
+    }
+    lines.push('');
   }
   return lines;
 }
@@ -209,9 +237,10 @@ function outputValidationReport(
   results: PackagingValidationResult[],
   duration: number,
   logger: ReturnType<typeof createLogger>,
-  verbose: boolean
+  verbose: boolean,
+  runIssues: RunIssues,
 ): void {
-  outputYamlSummary(results, duration, verbose);
+  outputYamlSummary(results, duration, verbose, runIssues);
 
   // Collect all emitted codes across skills (both errors and warnings) to drive the footer
   const emittedCodes = new Set<string>();
@@ -220,11 +249,14 @@ function outputValidationReport(
       emittedCodes.add(issue.code);
     }
   }
+  for (const issue of runIssues) {
+    emittedCodes.add(issue.code);
+  }
   const hasSkillFindings = results.some(
     (r) => r.activeErrors.length > 0 || r.activeWarnings.length > 0,
   );
 
-  for (const line of formatValidationReportLines(results)) {
+  for (const line of formatValidationReportLines(results, runIssues)) {
     logger.info(line);
   }
   renderSkillQualityFooter(logger, hasSkillFindings, emittedCodes);
@@ -286,8 +318,14 @@ async function buildSharedValidationContext(
   skills: ValidatableSkill[],
   logger: ReturnType<typeof createLogger>,
 ): Promise<SkillValidationSharedContext> {
+  // The allow-entry ledger is not an optimization like the two below — it is
+  // what makes ALLOW_UNUSED true. `validation.allow` is declared once for the
+  // package and matched per skill, so only the batch can say an entry matched
+  // nothing. Always present, so no early return can drop it.
+  const allowLedger = createAllowUsageLedger();
+
   if (skills.length === 0) {
-    return {};
+    return { allowLedger };
   }
 
   const projectRoots = new Set<string>();
@@ -307,7 +345,7 @@ async function buildSharedValidationContext(
     }
   }
 
-  const context: SkillValidationSharedContext = {};
+  const context: SkillValidationSharedContext = { allowLedger };
 
   // Only reuse a single registry when every skill shares the same project
   // root. Otherwise the per-skill fallback path is correct and the cost is
@@ -421,12 +459,20 @@ export async function validateCommand(
       results.push(result);
     }
 
+    // Drain the run's allow ledger AFTER the last skill — an entry matched by
+    // any skill in the batch is used, so this is the first point at which
+    // "matched nothing" is answerable.
+    const runIssues = sharedContext.allowLedger === undefined
+      ? []
+      : allowUnusedIssues(sharedContext.allowLedger);
+
     // Output report and exit
     const duration = Date.now() - startTime;
     const verbose = options.verbose === true;
-    outputValidationReport(results, duration, logger, verbose);
+    outputValidationReport(results, duration, logger, verbose, runIssues);
 
-    const hasErrors = results.some(r => r.status === 'error');
+    const hasErrors = results.some(r => r.status === 'error')
+      || runIssues.some(i => i.severity === 'error');
     process.exit(hasErrors ? 1 : 0);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'SkillsValidate');

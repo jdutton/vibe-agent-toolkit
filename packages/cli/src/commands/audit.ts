@@ -519,7 +519,7 @@ async function auditUserDirectories(
 
   // Run compatibility analysis if --compat flag is set
   const compatMap = options.compat
-    ? await runCompatAnalysis(results, logger)  // --settings not supported in --user mode
+    ? await runCompatAnalysis(results, logger, scanRoot)  // --settings not supported in --user mode
     : undefined;
 
   const verbose = options.verbose ?? false;
@@ -734,7 +734,7 @@ export async function buildAuditReport(
 
   // Run compatibility analysis if --compat flag is set
   const compatMap = options.compat
-    ? await runCompatAnalysis(results, logger, effectiveSettings, vatContextForCompat)
+    ? await runCompatAnalysis(results, logger, scanRoot, effectiveSettings, vatContextForCompat)
     : undefined;
 
   const verbose = options.verbose ?? false;
@@ -1188,6 +1188,11 @@ function resolveConfigTargetsForPlugin(
  * Non-plugin results are skipped silently.
  * When effectiveSettings is provided, also runs settings conflict detection.
  *
+ * `locationRoot` is the invocation scan root: the ONE base every emitted
+ * evidence `location.file` is relative to. One audit run spans many plugin
+ * directories, so anchoring evidence at each plugin would mix coordinate
+ * systems in a single document.
+ *
  * When vatContext is provided, config-layer `targets` declarations are
  * threaded through to the analyzer so `vat audit .` inside a VAT project
  * matches `vat skills validate` verdicts. See
@@ -1198,6 +1203,7 @@ function resolveConfigTargetsForPlugin(
 export async function runCompatAnalysis(
   results: ValidationResult[],
   logger: ReturnType<typeof createLogger>,
+  locationRoot: string,
   effectiveSettings?: EffectiveSettings,
   vatContext: VATProjectContext | null = null,
 ): Promise<Map<string, CompatibilityResult>> {
@@ -1212,7 +1218,7 @@ export async function runCompatAnalysis(
       const analyzeOptions = configTargets === undefined
         ? undefined
         : { configTargets };
-      const compat = await analyzeCompatibility(result.path, analyzeOptions);
+      const compat = await analyzeCompatibility(result.path, locationRoot, analyzeOptions);
 
       // Settings conflict detection (when --settings flag is used)
       if (effectiveSettings === undefined) {

@@ -1,8 +1,7 @@
 import { extname } from 'node:path';
 
-import type { EvidenceRecord } from '@vibe-agent-toolkit/agent-skills';
+import { anchorEvidencePath, buildEvidence, type EvidenceRecord } from '@vibe-agent-toolkit/agent-skills';
 
-import { buildEvidence } from './evidence-helpers.js';
 import { PYTHON_STDLIB_MODULE_NAMES } from './python-stdlib-modules.generated.js';
 
 /**
@@ -35,13 +34,16 @@ const FROM_IMPORT_RE = /^from\s+(\w+)/;
  * Classify a script file by its extension. Returns a single SCRIPT_FILE_*
  * evidence record when the extension matches a known script type.
  */
-export function classifyScriptFile(relativePath: string): EvidenceRecord | undefined {
-  const ext = extname(relativePath).toLowerCase();
+export function classifyScriptFile(filePath: string, locationRoot: string): EvidenceRecord | undefined {
+  const ext = extname(filePath).toLowerCase();
   const patternId = SCRIPT_EXTENSION_PATTERNS[ext];
   if (patternId === undefined) {
     return undefined;
   }
-  return buildEvidence(patternId, relativePath, `script file: ${relativePath}`);
+  // The message names the file, so it must be spelled the same anchored way the
+  // location is — otherwise an absolute path leaks via `matchText` instead.
+  const anchored = anchorEvidencePath(filePath, locationRoot);
+  return buildEvidence(patternId, filePath, locationRoot, `script file: ${anchored}`);
 }
 
 /**
@@ -49,7 +51,11 @@ export function classifyScriptFile(relativePath: string): EvidenceRecord | undef
  * for any third-party (non-stdlib) imports found, one record per distinct
  * module.
  */
-export function scanPythonImports(content: string, filePath: string): EvidenceRecord[] {
+export function scanPythonImports(
+  content: string,
+  filePath: string,
+  locationRoot: string,
+): EvidenceRecord[] {
   const thirdPartyModules = new Set<string>();
 
   for (const line of content.split('\n')) {
@@ -79,6 +85,7 @@ export function scanPythonImports(content: string, filePath: string): EvidenceRe
       buildEvidence(
         'PYTHON_IMPORT_THIRD_PARTY',
         filePath,
+        locationRoot,
         `third-party import: ${moduleName}`,
       ),
     );

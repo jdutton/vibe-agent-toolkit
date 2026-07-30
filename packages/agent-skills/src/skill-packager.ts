@@ -20,7 +20,7 @@ import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
 import {
-  runValidationFramework,
+  runSingleUnitValidation,
   type FrameworkResult,
   type ValidationConfig,
   type ValidationIssue,
@@ -655,7 +655,13 @@ export async function packageSkill(
     ...deferredAssetsToIssues(deferredAssets, projectRoot),
   ];
 
-  const framework = runValidationFramework(
+  // Single-unit: these issues are the post-build receipt for THIS skill's build.
+  // `packageSkill` is the unit a caller invokes per skill, and it owns no run —
+  // so an allow entry no post-build issue here matched is reported here. A
+  // build-run-level ledger (so a package-scoped entry used by skill A is not
+  // called unused while building skill B) is the same fix as the validate lane,
+  // and wants the run seam `packageSkill` does not yet have.
+  const framework = runSingleUnitValidation(
     [...rawLinkIssues, ...rawPostBuildIssues],
     options.validation ?? {},
   );

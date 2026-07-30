@@ -18,6 +18,7 @@ import {
   PYTHON_STDLIB_SOURCE_VERSIONS,
 } from '../../src/scanners/python-stdlib-modules.generated.js';
 import { PYTHON_STDLIB_MODULES, scanPythonImports } from '../../src/scanners/script-file-scanner.js';
+import { TEST_LOCATION_ROOT } from '../test-helpers.js';
 
 /**
  * Packages that must never appear in the stdlib list. If one does, the scanner
@@ -124,19 +125,19 @@ describe('PYTHON_STDLIB_MODULES ↔ committed artifact', () => {
 
   it('reports no third-party evidence for any stdlib module (import form)', () => {
     const source = PYTHON_STDLIB_MODULE_NAMES.map(m => `import ${m}`).join('\n');
-    const flagged = scanPythonImports(source, 'scripts/stdlib.py').map(e => e.matchText);
+    const flagged = scanPythonImports(source, 'scripts/stdlib.py', TEST_LOCATION_ROOT).map(e => e.matchText);
     expect(flagged).toEqual([]);
   });
 
   it('reports no third-party evidence for any stdlib module (from-import form)', () => {
     const source = PYTHON_STDLIB_MODULE_NAMES.map(m => `from ${m} import thing`).join('\n');
-    const flagged = scanPythonImports(source, 'scripts/stdlib.py').map(e => e.matchText);
+    const flagged = scanPythonImports(source, 'scripts/stdlib.py', TEST_LOCATION_ROOT).map(e => e.matchText);
     expect(flagged).toEqual([]);
   });
 
   it('still reports third-party packages as third-party', () => {
     const source = THIRD_PARTY_IMPORT_NAMES.map(p => `import ${p}`).join('\n');
-    const flagged = scanPythonImports(source, 'scripts/deps.py');
+    const flagged = scanPythonImports(source, 'scripts/deps.py', TEST_LOCATION_ROOT);
     expect(flagged.map(e => e.patternId)).toEqual(
       THIRD_PARTY_IMPORT_NAMES.map(() => 'PYTHON_IMPORT_THIRD_PARTY'),
     );

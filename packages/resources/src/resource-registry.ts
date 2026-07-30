@@ -11,7 +11,7 @@
 import type fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { createRegistryIssue, type IssueCode, runValidationFramework, type ValidationConfig, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { createRegistryIssue, type IssueCode, runSingleUnitValidation, type ValidationConfig, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, type GitTracker, issueLocation, normalizedTmpdir, resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { calculateChecksum } from './checksum.js';
@@ -108,7 +108,7 @@ export interface ValidateOptions {
   deferredArtifacts?: DeferredArtifacts;
   /**
    * Validation framework config (severity overrides + per-code allow entries).
-   * Applied INSIDE validate() via runValidationFramework — the library, not the
+   * Applied INSIDE validate() via runSingleUnitValidation — the library, not the
    * CLI, resolves severity and drops ignored issues. Defaults to `{}` (no
    * overrides: every issue keeps its registry default severity).
    */
@@ -881,7 +881,11 @@ export class ResourceRegistry implements ResourceCollectionInterface {
 
     // Resolve severity + apply allow-filter INSIDE the library (not the CLI).
     // `emitted` = post-allow-filter, severity-resolved, with `ignore`d dropped.
-    const framework = runValidationFramework(issues, options?.validationConfig ?? {});
+    //
+    // Single-unit: one `validate()` covers the WHOLE registry, so this call is
+    // the entire run and "no issue matched this allow entry" is answerable here.
+    // (Unlike the per-skill lanes, which need a run-level ledger.)
+    const framework = runSingleUnitValidation(issues, options?.validationConfig ?? {});
     const emitted = framework.emitted;
     const errorCount = emitted.length;
 

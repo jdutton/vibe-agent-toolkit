@@ -60,14 +60,26 @@ function buildScanRoot(root: string): void {
         '---',
         'name: example',
         'description: An example skill that exists only to emit findings anchored at its own SKILL.md.',
+        'allowed-tools: [Bash]',
         '---',
         '',
         '# Example',
         '',
         'See [the missing reference](./missing-reference.md) for details.',
         '',
+        // A fenced shell block invoking an external CLI makes the compat
+        // detectors emit EvidenceRecords, whose `location` is an OBJECT and so
+        // needs the same anchor base as every string location in the document.
+        '```bash',
+        'az login',
+        '```',
+        '',
       ].join('\n'),
     );
+    // A script file and a third-party import make the plugin-level scanners
+    // (script-file / python-import) emit evidence too, so the compat lane is
+    // represented alongside the per-skill lane.
+    writeFileAt(safePath.join(pluginDir, 'scripts', 'setup.py'), 'import requests\n');
   }
 }
 
@@ -131,6 +143,23 @@ describe('vat audit — one run, one anchor base', () => {
 
     const anchors = anchorsBelowRoot(document);
     expect(anchors.map((a) => a.value)).toContain('.');
+    expect(anchorContractViolations(anchors, document.root)).toEqual([]);
+  });
+
+  it('anchors evidence `location.file` at the same root as every string location', async () => {
+    // Evidence is omitted from terse output, so the anchor contract can only be
+    // observed with --verbose; --compat additionally attaches the plugin-level
+    // scanner evidence. Both lanes must answer "relative to what?" identically.
+    const { document } = await buildAuditReport(
+      scanRoot,
+      { verbose: true, compat: true },
+      Date.now(),
+      silentAuditLogger,
+    );
+
+    const anchors = anchorsBelowRoot(document);
+    const evidenceAnchors = anchors.filter((a) => a.key === 'file');
+    expect(evidenceAnchors.length).toBeGreaterThan(0);
     expect(anchorContractViolations(anchors, document.root)).toEqual([]);
   });
 

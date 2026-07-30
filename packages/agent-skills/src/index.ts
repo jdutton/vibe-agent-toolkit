@@ -126,6 +126,8 @@ export type {
 } from './evidence/index.js';
 export {
   PATTERN_REGISTRY,
+  anchorEvidencePath,
+  buildEvidence,
   getPatternDefinition,
   assertPatternRegistered,
   deriveObservationsFromEvidence,

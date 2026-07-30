@@ -8,6 +8,16 @@ import { describe, expect, it } from 'vitest';
 import { analyzeCompatibility } from '../src/compatibility-analyzer.js';
 
 const fixtureDir = (name: string) => safePath.resolve(import.meta.dirname, 'fixtures', name);
+
+/**
+ * `analyzeCompatibility` takes a REQUIRED anchor root — the base every emitted
+ * evidence `location.file` is relative to. These single-plugin cases anchor at
+ * the plugin itself; `vat audit` passes its invocation scan root instead.
+ */
+const atFixture = (name: string): [string, string] => {
+  const dir = fixtureDir(name);
+  return [dir, dir];
+};
 const PYTHON_SCRIPT_PLUGIN = 'python-script-plugin';
 const DESKTOP_INCOMPATIBLE_PLUGIN = 'desktop-incompatible-plugin';
 const TARGET_CLAUDE_CODE = 'claude-code' as const;
@@ -15,7 +25,7 @@ const TARGET_CLAUDE_CHAT = 'claude-chat' as const;
 
 describe('analyzeCompatibility', () => {
   it('produces no observations for a pure instruction plugin', async () => {
-    const result = await analyzeCompatibility(fixtureDir('pure-instruction-plugin'));
+    const result = await analyzeCompatibility(...atFixture('pure-instruction-plugin'));
     expect(result.plugin).toBe('pure-instruction');
     expect(result.observations).toEqual([]);
     expect(result.evidence).toEqual([]);
@@ -23,25 +33,25 @@ describe('analyzeCompatibility', () => {
   });
 
   it('detects local-shell capability for python script plugin', async () => {
-    const result = await analyzeCompatibility(fixtureDir(PYTHON_SCRIPT_PLUGIN));
+    const result = await analyzeCompatibility(...atFixture(PYTHON_SCRIPT_PLUGIN));
     expect(result.evidence.length).toBeGreaterThan(0);
     expect(result.observations.some(o => o.code === 'CAPABILITY_LOCAL_SHELL')).toBe(true);
   });
 
   it('detects local-shell capability for desktop-incompatible plugin (Bash in allowed-tools)', async () => {
-    const result = await analyzeCompatibility(fixtureDir(DESKTOP_INCOMPATIBLE_PLUGIN));
+    const result = await analyzeCompatibility(...atFixture(DESKTOP_INCOMPATIBLE_PLUGIN));
     expect(result.evidence.some(e => e.patternId === 'ALLOWED_TOOLS_LOCAL_SHELL')).toBe(true);
     expect(result.observations.some(o => o.code === 'CAPABILITY_LOCAL_SHELL')).toBe(true);
   });
 
   it('detects HOOK_COMMAND_INVOKES_BINARY for hook-heavy plugin', async () => {
-    const result = await analyzeCompatibility(fixtureDir('hook-heavy-plugin'));
+    const result = await analyzeCompatibility(...atFixture('hook-heavy-plugin'));
     expect(result.evidence.some(e => e.patternId === 'HOOK_COMMAND_INVOKES_BINARY')).toBe(true);
     expect(result.observations.some(o => o.code === 'CAPABILITY_LOCAL_SHELL')).toBe(true);
   });
 
   it('detects MCP_SERVER_COMMAND for an MCP plugin without surfacing local-shell capability', async () => {
-    const result = await analyzeCompatibility(fixtureDir('mcp-plugin'));
+    const result = await analyzeCompatibility(...atFixture('mcp-plugin'));
     expect(result.evidence.some(e => e.patternId === 'MCP_SERVER_COMMAND')).toBe(true);
     // MCP-only plugins shouldn't roll up to CAPABILITY_LOCAL_SHELL.
     expect(result.observations.some(o => o.code === 'CAPABILITY_LOCAL_SHELL')).toBe(false);
@@ -53,12 +63,12 @@ describe('analyzeCompatibility', () => {
   });
 
   it('detects SCRIPT_FILE_NODE for a node-bundled plugin', async () => {
-    const result = await analyzeCompatibility(fixtureDir('node-bundled-plugin'));
+    const result = await analyzeCompatibility(...atFixture('node-bundled-plugin'));
     expect(result.evidence.some(e => e.patternId === 'SCRIPT_FILE_NODE')).toBe(true);
   });
 
   it('includes summary counts', async () => {
-    const result = await analyzeCompatibility(fixtureDir(PYTHON_SCRIPT_PLUGIN));
+    const result = await analyzeCompatibility(...atFixture(PYTHON_SCRIPT_PLUGIN));
     expect(result.summary.totalFiles).toBeGreaterThan(0);
     expect(result.summary.scriptFiles).toBeGreaterThan(0);
     expect(result.summary.skillFiles).toBeGreaterThan(0);
@@ -66,7 +76,7 @@ describe('analyzeCompatibility', () => {
 
   it('throws for directory without plugin.json', async () => {
     const nonexistent = safePath.resolve(import.meta.dirname, 'fixtures', 'nonexistent');
-    await expect(analyzeCompatibility(nonexistent))
+    await expect(analyzeCompatibility(nonexistent, nonexistent))
       .rejects.toThrow();
   });
 
@@ -75,7 +85,7 @@ describe('analyzeCompatibility', () => {
       // python-script-plugin's plugin.json has no `targets` field and no marketplace.json,
       // so configTargets become the effective declared targets.
       const result = await analyzeCompatibility(
-        fixtureDir(PYTHON_SCRIPT_PLUGIN),
+        ...atFixture(PYTHON_SCRIPT_PLUGIN),
         { configTargets: [TARGET_CLAUDE_CODE] },
       );
       expect(result.declaredTargets).toEqual([TARGET_CLAUDE_CODE]);
@@ -89,7 +99,7 @@ describe('analyzeCompatibility', () => {
     it('fires COMPAT_TARGET_INCOMPATIBLE when configTargets do not cover observed capability', async () => {
       // python-script-plugin uses local shell; claude-chat does not provide it.
       const result = await analyzeCompatibility(
-        fixtureDir(PYTHON_SCRIPT_PLUGIN),
+        ...atFixture(PYTHON_SCRIPT_PLUGIN),
         { configTargets: [TARGET_CLAUDE_CHAT] },
       );
       expect(result.declaredTargets).toEqual([TARGET_CLAUDE_CHAT]);
@@ -108,8 +118,8 @@ describe('analyzeCompatibility', () => {
       );
 
       try {
-        const withConfig = await analyzeCompatibility(pluginDir, { configTargets: [TARGET_CLAUDE_CHAT] });
-        const withoutConfig = await analyzeCompatibility(pluginDir);
+        const withConfig = await analyzeCompatibility(pluginDir, pluginDir, { configTargets: [TARGET_CLAUDE_CHAT] });
+        const withoutConfig = await analyzeCompatibility(pluginDir, pluginDir);
         // plugin.json targets win; configTargets is ignored.
         expect(withConfig.declaredTargets).toEqual(['claude-code']);
         expect(withConfig.declaredTargets).toEqual(withoutConfig.declaredTargets);
@@ -120,10 +130,10 @@ describe('analyzeCompatibility', () => {
 
     it('is identity-equivalent to omitting options when no configTargets are passed', async () => {
       const withOpts = await analyzeCompatibility(
-        fixtureDir(PYTHON_SCRIPT_PLUGIN),
+        ...atFixture(PYTHON_SCRIPT_PLUGIN),
         {},
       );
-      const withoutOpts = await analyzeCompatibility(fixtureDir(PYTHON_SCRIPT_PLUGIN));
+      const withoutOpts = await analyzeCompatibility(...atFixture(PYTHON_SCRIPT_PLUGIN));
       expect(withOpts.declaredTargets).toEqual(withoutOpts.declaredTargets);
       const cmp = (a: string, b: string) => a.localeCompare(b);
       expect(withOpts.verdicts.map(v => v.code).sort(cmp)).toEqual(
