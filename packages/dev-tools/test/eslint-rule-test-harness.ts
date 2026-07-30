@@ -25,8 +25,10 @@ export function loadLocalRule(filename: string): Rule.RuleModule {
  * inside an already-running Vitest test silently drops them: `ruleTester.run()`
  * returned without throwing no matter what the rule did, so the assertions below
  * were structurally blind — a rule could be gutted and this suite stayed green.
- * (Verified: removing one entry from require-justified-skip's disabling-members
- * set left all 12 tests passing until this override was added.)
+ * (Verified twice. Gutting a rule under test left every case passing until this
+ * override was added; afterwards the same mutation fails with RuleTester's own
+ * "Should have 1 error but had 0". The mutation was performed on a scratch COPY
+ * of a rule, never on a shipped one.)
  *
  * Forcing both hooks to invoke their callback immediately makes a failing case
  * throw synchronously into the enclosing `it`, which is what the `.not.toThrow()`
