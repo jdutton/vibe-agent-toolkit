@@ -87,9 +87,10 @@ export function computeConfigVerdicts(
  * Mutate a PackagingValidationResult in place to include compat verdicts
  * derived from the result's observations and the configured targets.
  *
- * Verdict issues land in `allErrors` and the appropriate active bucket
- * based on resolved severity (warning → activeWarnings; info stays only
- * in allErrors). Verdicts are not allow-filterable.
+ * Verdict issues land in `allErrors`, which is the sole container for every
+ * emitted issue regardless of severity — callers derive the active partition
+ * with `activeErrorsOf` / `activeWarningsOf` rather than reading a second
+ * pre-filtered copy. Verdicts are not allow-filterable.
  */
 export function applyConfigVerdicts(
   result: PackagingValidationResult,
@@ -106,15 +107,8 @@ export function applyConfigVerdicts(
   if (verdictIssues.length === 0) {
     return;
   }
-  for (const issue of verdictIssues) {
-    result.allErrors.push(issue);
-    if (issue.severity === 'error') {
-      result.activeErrors.push(issue);
-    } else if (issue.severity === 'warning') {
-      result.activeWarnings.push(issue);
-    }
-  }
-  if (result.activeErrors.length > 0) {
+  result.allErrors.push(...verdictIssues);
+  if (result.allErrors.some(issue => issue.severity === 'error')) {
     result.status = 'error';
   }
 }

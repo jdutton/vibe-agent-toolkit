@@ -568,8 +568,8 @@ export async function setupNavigationValidationTest(
 
 	return {
 		result,
-		findNavWarn: () => (result as { activeWarnings: Array<{ code: string }> }).activeWarnings.find(
-			(e) => e.code === 'LINK_TO_NAVIGATION_FILE'
+		findNavWarn: () => (result as { allErrors: Array<{ code: string; severity: string }> }).allErrors.find(
+			(e) => e.code === 'LINK_TO_NAVIGATION_FILE' && e.severity === 'warning'
 		),
 	};
 }

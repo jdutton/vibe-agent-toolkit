@@ -35,7 +35,6 @@ interface PackagingValidationOutput {
     status: string;
     issueCounts: SeverityCountsOutput;
     allErrors: Array<unknown>;
-    activeErrors: Array<unknown>;
     ignoredErrors: Array<unknown>;
     metadata: {
       skillLines: number;
@@ -100,7 +99,7 @@ describe('skills validate command (system test)', () => {
       expect(firstResult).toHaveProperty('skillName');
       expect(firstResult).toHaveProperty('status');
       expect(firstResult).toHaveProperty('issueCounts');
-      expect(firstResult).toHaveProperty('activeErrors');
+      expect(firstResult).toHaveProperty('allErrors');
       expect(firstResult).toHaveProperty('metadata');
       expect(firstResult.metadata).toHaveProperty('skillLines');
       expect(firstResult.metadata).toHaveProperty('totalLines');
@@ -143,8 +142,11 @@ describe('skills validate command (system test)', () => {
       // Verify packaging validation structure
       expect(skillResult).toHaveProperty('skillName');
       expect(skillResult).toHaveProperty('allErrors');
-      expect(skillResult).toHaveProperty('activeErrors');
       expect(skillResult).toHaveProperty('ignoredErrors');
+      // `allErrors` is the sole issue container — the emitted set is written to
+      // the document once, not again under an `active*` partition.
+      expect(skillResult).not.toHaveProperty('activeErrors');
+      expect(skillResult).not.toHaveProperty('activeWarnings');
       expect(skillResult).toHaveProperty('metadata');
 
       // Verify metadata structure (including new fields)
@@ -395,13 +397,14 @@ describe('skills validate — framework exit codes (system test)', () => {
     expect((parsed.issueCounts as { warnings: number }).warnings).toBeGreaterThan(0);
     expect(result.stderr).not.toContain('All validations passed');
 
-    // The code should appear in warnings in the YAML output. Asserted
+    // The code should appear in the emitted set in the YAML output. Asserted
     // unconditionally: the old `if (activeWarnings.length > 0)` guard made the
     // whole check vanish exactly when the renderer stopped reporting warnings.
     const results = parsed.results as Array<Record<string, unknown>>;
     const firstResult = results[0] ?? {};
-    const activeWarnings = firstResult['activeWarnings'] as Array<Record<string, unknown>>;
-    expect(activeWarnings.map((w) => w['code'])).toContain('LINK_TO_NAVIGATION_FILE');
+    const allErrors = firstResult['allErrors'] as Array<Record<string, unknown>>;
+    const navWarnings = allErrors.filter((w) => w['severity'] === 'warning');
+    expect(navWarnings.map((w) => w['code'])).toContain('LINK_TO_NAVIGATION_FILE');
     // Per-skill counts ride beside the per-skill two-valued gate status.
     expect(firstResult['issueCounts']).toMatchObject({ errors: 0 });
   });

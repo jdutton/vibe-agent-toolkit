@@ -737,7 +737,7 @@ function assemblePackageResult(input: AssembleResultInput): PackageSkillResult {
     },
     artifacts: input.artifacts,
     postBuildValidation: input.postBuildValidation,
-    hasErrors: input.framework.hasErrors || input.postBuildValidation.activeErrors.length > 0,
+    hasErrors: input.framework.hasErrors || input.postBuildValidation.status === 'error',
   };
 
   if (input.framework.emitted.length > 0) {

@@ -14,7 +14,7 @@
 
 import fs from 'node:fs';
 
-import { validateSkillForPackaging, type SkillPackagingConfig } from '@vibe-agent-toolkit/agent-skills';
+import { activeWarningsOf, validateSkillForPackaging, type SkillPackagingConfig } from '@vibe-agent-toolkit/agent-skills';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -90,8 +90,8 @@ describe('config-level targets → compat verdicts (integration)', () => {
     expect(incompatible.length).toBeGreaterThanOrEqual(1);
     expect(incompatible[0]?.severity).toBe('warning');
 
-    // Warning verdicts also land in activeWarnings.
-    const activeIncompatible = result.activeWarnings.filter(
+    // Warning verdicts show up in the derived active-warning partition.
+    const activeIncompatible = activeWarningsOf(result).filter(
       i => i.code === 'COMPAT_TARGET_INCOMPATIBLE',
     );
     expect(activeIncompatible.length).toBeGreaterThanOrEqual(1);

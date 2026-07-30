@@ -120,20 +120,21 @@ export interface PackagingValidationResult {
   status: 'success' | 'error';
 
   /**
-   * All emitted issues after severity resolution.
+   * THE container: every emitted issue after severity resolution, stored once.
    *
    * This includes `info`, despite the name: severity resolution keeps info
-   * issues in the framework's `emitted` set, and there is no `activeInfo`
-   * bucket. A renderer that only walks `activeErrors` and `activeWarnings`
-   * silently drops every info finding — see `countBySeverity` for the counts.
+   * issues in the framework's `emitted` set. Issues suppressed by `allow` are
+   * NOT here — they live in {@link PackagingValidationResult.ignoredErrors}.
+   *
+   * There are deliberately no `activeErrors` / `activeWarnings` sibling arrays.
+   * They were filtered views over this same array, and because every consumer
+   * that serializes a result spreads the whole object, each issue record —
+   * including its paragraph-length `fix` and `reference` prose — was written to
+   * the output document twice. Derive the partition instead:
+   * {@link activeErrorsOf} / {@link activeWarningsOf}, or `countBySeverity` /
+   * `calculateValidationStatus` from `@vibe-agent-toolkit/agent-schema`.
    */
   allErrors: ValidationIssue[];
-
-  /** Active errors (severity === 'error', not suppressed by allow) */
-  activeErrors: ValidationIssue[];
-
-  /** Active warnings (severity === 'warning', not suppressed by allow) */
-  activeWarnings: ValidationIssue[];
 
   /** Issues suppressed by allow entries */
   ignoredErrors: AllowRecord[];
@@ -163,6 +164,25 @@ export interface PackagingValidationResult {
     excludedReferenceCount: number;
     excludedReferences: ExcludedReferenceDetail[];
   };
+}
+
+/** Anything carrying the emitted-issue container — a result, or a partial of one. */
+type WithAllErrors = Pick<PackagingValidationResult, 'allErrors'>;
+
+/**
+ * The active errors: emitted, resolved-severity `error`.
+ *
+ * Derived on read, never stored on the result — see the `allErrors` doc comment
+ * for why. Equivalent to `result.status === 'error'` when all you need is the
+ * gate bit; use this only when you need the issues themselves.
+ */
+export function activeErrorsOf(result: WithAllErrors): ValidationIssue[] {
+  return result.allErrors.filter(i => i.severity === 'error');
+}
+
+/** The active warnings: emitted, resolved-severity `warning`. Derived on read. */
+export function activeWarningsOf(result: WithAllErrors): ValidationIssue[] {
+  return result.allErrors.filter(i => i.severity === 'warning');
 }
 
 /**
@@ -560,15 +580,10 @@ export async function validateSkillForPackaging(
 
   const skillName = extractSkillName(parseResult, skillPath);
 
-  const activeErrors = framework.emitted.filter(i => i.severity === 'error');
-  const activeWarnings = framework.emitted.filter(i => i.severity === 'warning');
-
   return {
     skillName,
     status: framework.hasErrors ? 'error' : 'success',
     allErrors: framework.emitted,
-    activeErrors,
-    activeWarnings,
     ignoredErrors: framework.allowed,
     observations,
     evidence,

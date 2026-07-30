@@ -71,8 +71,6 @@ function packagingResult(
     // The real two-valued gate verdict: `error` iff there is an active error.
     status: issues.some((i) => i.severity === 'error') ? 'error' : 'success',
     allErrors: issues,
-    activeErrors: issues.filter((i) => i.severity === 'error'),
-    activeWarnings: issues.filter((i) => i.severity === 'warning'),
     ignoredErrors: [],
     observations: [],
     evidence: [],

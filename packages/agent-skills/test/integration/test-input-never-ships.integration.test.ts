@@ -24,7 +24,7 @@ import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/u
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { packageSkill } from '../../src/skill-packager.js';
-import { validateSkillForPackaging } from '../../src/validators/packaging-validator.js';
+import { activeErrorsOf, activeWarningsOf, validateSkillForPackaging } from '../../src/validators/packaging-validator.js';
 
 const ANSWER_KEY = 'the model must output exactly forty-two';
 /** Basename of the declared eval suite, used as both a source leaf and a dest. */
@@ -148,7 +148,7 @@ describe('declared test input never ships (integration)', () => {
 
     // SKILL.md + guide.md only — the suite is not counted.
     expect(validated.metadata.fileCount).toBe(2);
-    expect(codesOf(validated.activeWarnings)).toContain('PACKAGED_TEST_INPUT');
+    expect(codesOf(activeWarningsOf(validated))).toContain('PACKAGED_TEST_INPUT');
     expect(validated.status).not.toBe('error');
   });
 
@@ -199,7 +199,7 @@ describe('declared test input never ships (integration)', () => {
       files,
       test: { evals: EVALS_SUBPATH },
     });
-    expect(codesOf(validated.activeErrors)).toContain(BROKEN_LINK_CODE);
+    expect(codesOf(activeErrorsOf(validated))).toContain(BROKEN_LINK_CODE);
     expect(codesOf(validated.allErrors)).not.toContain('LINK_DEFERRED_ARTIFACT');
     expect(validated.status).toBe('error');
   });

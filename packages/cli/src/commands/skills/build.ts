@@ -129,8 +129,8 @@ Example:
  * Render every emitted pre-build finding, each labelled with its own severity.
  *
  * `allErrors` is the full emitted set INCLUDING info (its name lies — see the
- * doc comment on `PackagingValidationResult`). Walking `activeErrors` plus only
- * the `ALLOW_EXPIRED` subset of `activeWarnings`, which is what this used to do,
+ * doc comment on `PackagingValidationResult`). Walking only the errors plus the
+ * `ALLOW_EXPIRED` subset of the warnings, which is what this used to do,
  * dropped every other warning and every info finding from a report that had
  * already decided to abort the build.
  *

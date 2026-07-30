@@ -33,7 +33,7 @@ describe('skills validate command - fixture tests (system test)', () => {
       results: Array<{
         skillName: string;
         status: string;
-        activeErrors: Array<unknown>;
+        allErrors: Array<unknown>;
         metadata: {
           skillLines: number;
           totalLines: number;
@@ -52,7 +52,11 @@ describe('skills validate command - fixture tests (system test)', () => {
     // All skills should be valid
     for (const skillResult of parsed.results) {
       expect(skillResult.status).toBe('success');
-      expect(skillResult.activeErrors).toHaveLength(0);
+      // `allErrors` is the sole issue container: the emitted set is serialized
+      // once, with no `activeErrors` / `activeWarnings` second full copy.
+      expect(skillResult.allErrors).toHaveLength(0);
+      expect(skillResult).not.toHaveProperty('activeErrors');
+      expect(skillResult).not.toHaveProperty('activeWarnings');
       expect(skillResult.metadata).toHaveProperty('skillLines');
       expect(skillResult.metadata).toHaveProperty('totalLines');
       expect(skillResult.metadata).toHaveProperty('directFileCount');

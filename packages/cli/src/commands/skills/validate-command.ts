@@ -76,7 +76,7 @@ Output:
   Output includes:
     - status: success/error
     - skillsValidated: number of skills validated
-    - results: per-skill validation details (activeErrors, activeWarnings, ignoredErrors)
+    - results: per-skill validation details (allErrors, ignoredErrors)
     - durationSecs: validation time
 
 Exit Codes:

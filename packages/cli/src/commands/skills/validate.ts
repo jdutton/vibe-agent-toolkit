@@ -253,7 +253,7 @@ function outputValidationReport(
     emittedCodes.add(issue.code);
   }
   const hasSkillFindings = results.some(
-    (r) => r.activeErrors.length > 0 || r.activeWarnings.length > 0,
+    (r) => calculateValidationStatus(r.allErrors) !== 'success',
   );
 
   for (const line of formatValidationReportLines(results, runIssues)) {
@@ -283,7 +283,7 @@ export function formatSkillProgressLine(
   if (result.ignoredErrors.length > 0) {
     lines.push(`      (${result.ignoredErrors.length} allowed by config)`);
   }
-  const expiredCount = result.activeWarnings.filter(w => w.code === 'ALLOW_EXPIRED').length;
+  const expiredCount = result.allErrors.filter(w => w.code === 'ALLOW_EXPIRED').length;
   if (expiredCount > 0) {
     lines.push(`      (${expiredCount} expired allow entr${expiredCount === 1 ? 'y' : 'ies'})`);
   }

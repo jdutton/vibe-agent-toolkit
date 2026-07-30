@@ -241,8 +241,7 @@ function renderFooter(result: PackagingValidationResult, logger: Logger): void {
   for (const issue of result.allErrors) {
     emittedCodes.add(issue.code);
   }
-  const hasSkillFindings =
-    result.activeErrors.length > 0 || result.activeWarnings.length > 0;
+  const hasSkillFindings = calculateValidationStatus(result.allErrors) !== 'success';
   renderSkillQualityFooter(logger, hasSkillFindings, emittedCodes);
 }
 
