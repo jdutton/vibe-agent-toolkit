@@ -40,7 +40,7 @@ Tooling enforcement: items marked with a bracketed code (e.g., `[SKILL_DESCRIPTI
 
 ### Description
 
-- **[A] Trigger keywords first**: lead with the concepts that should trigger this skill. Claude truncates descriptions aggressively — the most important words must come first. `Sprint analysis, velocity tracking, work item queries. Use when ...` beats `This skill is used for when you need to analyze sprints`.
+- **[A] Trigger keywords first**: lead with the concepts that should trigger this skill. Anthropic's stated reason is selection pressure, not truncation — "The description is critical for skill selection: Claude uses it to choose the right Skill from potentially 100+ available Skills." Front-loaded trigger terms are what let it pick yours out of that field. `Sprint analysis, velocity tracking, work item queries. Use when ...` beats `This skill is used for when you need to analyze sprints`. (Anthropic never claims Claude truncates descriptions; the 250-char truncation argument is VAT's own and lives in the `[VAT]` item below.)
 - **[A] Third-person voice**: Anthropic guidance is unambiguous — "**Always write in third person**. The description is injected into the system prompt, and inconsistent point-of-view can cause discovery problems." Avoid first/second person: `I can help...`, `You can use...`. `[SKILL_DESCRIPTION_WRONG_PERSON]` flags these.
 - **[A] `Use when <concrete trigger>` is the recommended pattern** — every Anthropic example uses it after a verb phrase. What's banned is vague variants like `Use when you want to...` / `Use when you need to...` that don't name a concrete trigger.
 - **[VAT] Prefer a verb phrase or `Use when ...` opener** — not a meta-description of the skill-as-object. `[SKILL_DESCRIPTION_FILLER_OPENER]` warns on `This skill...`, `A skill that...`, `Used to...` — these waste the first tokens describing the wrapper rather than the behavior. Anthropic doesn't ban these explicitly, but their own examples never use them; VAT is stricter here.
@@ -52,18 +52,19 @@ Tooling enforcement: items marked with a bracketed code (e.g., `[SKILL_DESCRIPTI
 ### Body structure
 
 - **[A] SKILL.md body ≤500 lines**: Anthropic recommends keeping SKILL.md under 500 lines. `[SKILL_LENGTH_EXCEEDS_RECOMMENDED]` warns as you approach the limit. Split detailed content into reference files.
-- **[A] Purpose statement in first 3 lines**: an agent skimming the top of SKILL.md should understand what it does and when to use it without reading further.
-- **[A] Single responsibility**: the skill does one thing well. If it has multiple unrelated sections, consider splitting into separate skills.
+- **[VAT] Purpose statement in first 3 lines**: an agent skimming the top of SKILL.md should understand what it does and when to use it without reading further. Anthropic requires this of the *description*, not of the body's opening lines — the first-3-lines rule is VAT's.
+- **[VAT] Single responsibility**: the skill does one thing well. If it has multiple unrelated sections, consider splitting into separate skills. Anthropic's closest guidance is organizing content by domain for progressive disclosure; splitting the *skill* is VAT's reading.
 - **[A] Consistent terminology**: pick one term per concept and use it throughout. Mixing `artifact` / `bundle` / `package` confuses agents.
 - **[A] No time-sensitive content**: `[SKILL_TIME_SENSITIVE_CONTENT]` flags patterns like `as of November 2025` or `after July 2026`. Route deprecated guidance into a clearly labeled `Old patterns` section so agents skip it.
 
 ### References and bundled files
 
-- **[A] Every bundled file is referenced**: if a file is in the package, some markdown file should link to it or explain what it is. `[PACKAGED_UNREFERENCED_FILE]` enforces this at build time. Dead files confuse agents and waste context.
-- **[A] References one level deep**: link reference files directly from SKILL.md, not via intermediate hubs. Claude does partial reads on nested references and may miss content several hops down. `[REFERENCE_TOO_DEEP]` enforces.
+- **[A] Every bundled file is referenced**: if a file is in the package, some markdown file should link to it or explain what it is. `[PACKAGED_UNREFERENCED_FILE]` enforces this at build time. Anthropic's grounding, from "Observe how Claude navigates Skills": "**Ignored content:** If Claude never accesses a bundled file, it might be unnecessary **or poorly signaled in the main instructions**." Note that second clause — the remedy is usually to signal the file better, not to delete it. (Anthropic does *not* consider bundle size itself a problem: "Bundle comprehensive resources … no context penalty until accessed." VAT's `[SKILL_TOTAL_SIZE_LARGE]` and `[SKILL_TOO_MANY_FILES]` are maintainability heuristics against that vendor grain — both `[VAT]`, both overridable.)
+- **[A] References one level deep**: link reference files directly from SKILL.md, not via intermediate hubs. Anthropic is explicit — "Keep references one level deep from SKILL.md" — because "Claude may partially read files when they're referenced from other referenced files," using `head -100`-style previews and getting incomplete information. **VAT's tooling is one hop laxer than the vendor here:** `[REFERENCE_TOO_DEEP]` fires only above 2 hops (`MAX_REFERENCE_DEPTH: 2`), so the chain `SKILL.md → advanced.md → details.md` passes validation even though it is Anthropic's own "Bad example: Too deep". A clean `vat audit` therefore does *not* mean you satisfied this item — check depth by hand if you care about the vendor's rule.
 - **[A] TOC on reference files >100 lines**: long reference files should include a table of contents at the top. Claude often previews with partial reads — a TOC ensures the full scope of available content is visible.
 - **[A] All links resolve**: every `[text](path)` link points to a file that exists. `[LINK_MISSING_TARGET]` and siblings enforce.
-- **[A] Build clean**: `vat skills build` succeeds and `vat verify` passes with zero errors.
+- **[A] Name files descriptively**: Anthropic — "Use names that indicate content: `form_validation_rules.md`, not `doc2.md`", and "Organize for discovery" (good: `reference/finance.md`, `reference/sales.md`; bad: `docs/file1.md`, `docs/file2.md`). Not enforced by any validation code; a shift-left candidate awaiting corpus evidence per `docs/validation-rule-design.md`.
+- **[VAT] Build clean**: `vat skills build` succeeds and `vat verify` passes with zero errors. This is VAT's own gate — Anthropic has no build step.
 - **[A] Test the trigger**: ask "if an agent sees only this name and description, will it know when to load this skill?" If understanding the description requires reading the SKILL.md, the description is wrong.
 - **[VAT] Body avoids duplicating reference content** — when the skill bundles `references/`, does SKILL.md teach the agent *when to load each reference*, without repeating the reference's own content? Information should live in either SKILL.md or `references/`, not both. Semantic duplication is judgment, not regex.
 
@@ -84,6 +85,7 @@ Tooling enforcement: items marked with a bracketed code (e.g., `[SKILL_DESCRIPTI
 
 These apply to skills that bundle executable scripts and instruct agents to run commands.
 
+- **[A] MCP tool names are fully qualified**: if the skill tells an agent to call an MCP tool, write `ServerName:tool_name` (`BigQuery:bigquery_schema`, `GitHub:create_issue`), never the bare tool name. Anthropic: "Without the server prefix, Claude may fail to locate the tool, especially when multiple MCP servers are available." Not enforced by any validation code; a shift-left candidate awaiting corpus evidence per `docs/validation-rule-design.md`, since a bare identifier in prose is only a defect when the skill actually drives MCP.
 - **[NON_PORTABLE_ASSET_REFERENCE] Portable script paths (relative to the skill root)**: bundled scripts/assets are referenced by a skill-relative path (`scripts/run.mjs`), never via `CLAUDE_PLUGIN_ROOT`, an absolute path, or any env-var anchor. `CLAUDE_PLUGIN_ROOT` is Claude-Code-plugin-only and points at the plugin (not the skill), so a `${CLAUDE_PLUGIN_ROOT}/skills/<name>/…` path breaks the moment the skill is mounted standalone (claude.ai upload, API container) — on the user's first invocation. The `NON_PORTABLE_ASSET_REFERENCE` code (warning) flags `CLAUDE_PLUGIN_ROOT` in a SKILL.md body automatically; see `vibe-agent-toolkit:vat-skill-authoring` → "Referencing bundled scripts and assets". If an occurrence is an intentional teaching example, allow it with a reason via `validation.allow`.
 - **[VAT] Environment guard**: the skill checks that the CLI binary exists before running commands (e.g., verify `scripts/cli.mjs` is present). Agents should get a clear error, not a cryptic Node.js stack trace.
 - **[VAT] Pre-flight auth check**: if the CLI requires credentials or tokens, the skill verifies them before operations. Fail fast with clear guidance on how to authenticate.
@@ -104,4 +106,7 @@ When a VAT validation code fires, its `fix:` field will suggest a concrete remed
 
 **Source of truth**: [Anthropic's skill-authoring best practices](https://platform.claude.com/docs/en/docs/agents-and-tools/agent-skills/best-practices). See `docs/external/anthropic-skill-authoring-best-practices.md` for a cached copy of the load-bearing portions with the VAT-vs-Anthropic delta called out.
 
-Reviewed against external best practices (Anthropic skill-authoring docs, anthropics/skills repository, Claude Code release notes through 2026-04-18).
+Reviewed against external best practices (Anthropic skill-authoring docs, anthropics/skills repository, Claude Code release notes through 2026-07-30).
+
+<!-- @vendor-claim reviewed=2026-07-30 verify=Re-fetch https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices, diff it against docs/external/anthropic-skill-authoring-best-practices.md, and re-check every [A] label below against what that page actually says -->
+

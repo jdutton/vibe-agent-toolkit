@@ -1,14 +1,19 @@
 /**
  * Validation rules for Claude Code skills
  *
- * Based on Anthropic's official guidance and research findings:
- * - SKILL.md recommended: ≤500 lines
- * - Total skill size: ≤2000 lines
- * - File count: ≤6 files
- * - Reference depth: ≤2 levels
+ * Thresholds and their provenance — do not read this list as "Anthropic says so".
+ * Only the first is Anthropic's; the rest are VAT's, and two of them Anthropic
+ * actively contradicts. The full audit is in the comment above
+ * VALIDATION_THRESHOLDS below; read it before tuning any number here.
+ *
+ * - SKILL.md recommended: ≤500 lines  (Anthropic's, verbatim)
+ * - Total skill size: ≤2000 lines     (VAT's; Anthropic counter-signals it)
+ * - File count: ≤6 files              (VAT's; Anthropic counter-signals it)
+ * - Reference depth: ≤2 levels        (VAT's; Anthropic's rule is ONE level)
  *
  * References:
  * - https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices
+ * - docs/external/anthropic-skill-authoring-best-practices.md (dated cache of the above)
  * - https://github.com/anthropics/skills (official examples)
  */
 
@@ -120,7 +125,12 @@ export const VALIDATION_RULES: Record<ValidationRuleCode, ValidationRule> = {
     category: 'best_practice',
     message: (ctx) => `Skill includes ${Number(ctx['fileCount'] ?? 0)} files (recommended ≤6)`,
     fix: 'Split into focused sub-skills or use progressive disclosure',
-    example: 'Official skills use 1-5 files',
+    // This used to read "Official skills use 1-5 files", which is false: Anthropic's
+    // own pdf/ example in the best-practices doc ships 7 (SKILL.md, FORMS.md,
+    // reference.md, examples.md + 3 scripts). 6 is a VAT maintainability heuristic,
+    // not a vendor limit — and Anthropic explicitly says to "Bundle comprehensive
+    // resources … no context penalty until accessed".
+    example: 'VAT heuristic, not an Anthropic limit — Anthropic\'s own pdf/ example ships 7 files',
   },
   REFERENCE_TOO_DEEP: {
     code: 'REFERENCE_TOO_DEEP',
@@ -175,17 +185,40 @@ export const VALIDATION_RULES: Record<ValidationRuleCode, ValidationRule> = {
 };
 
 /**
- * Validation thresholds (based on Anthropic guidance)
+ * Validation thresholds — mostly VAT's, not Anthropic's (see the audit below)
  *
- * @vendor-claim reviewed=2026-04-18 verify=Re-fetch https://platform.claude.com/docs/en/docs/agents-and-tools/agent-skills/best-practices and diff it against docs/external/anthropic-skill-authoring-best-practices.md
+ * @vendor-claim reviewed=2026-07-30 verify=Re-fetch https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices and diff it against docs/external/anthropic-skill-authoring-best-practices.md
  *
- * The header above overstates the provenance. Of the six numbers here, the repo's
- * own cached copy of Anthropic's guidance supports only RECOMMENDED_SKILL_LINES
- * (500), and it explicitly *disclaims* MAX_DESCRIPTION_CHARS_CLAUDE_CODE (250) —
- * Anthropic documents a 1024-character maximum, while 250 is VAT's own reading of
- * where the Claude Code `/skills` listing truncates. MAX_TOTAL_LINES,
- * MAX_FILE_COUNT, MAX_REFERENCE_DEPTH and MIN_DESCRIPTION_LENGTH are
- * VAT-originated. The date above is the cache's Fetched date, not a later review.
+ * The original header ("based on Anthropic guidance") overstated the provenance.
+ * Of the six numbers here, the repo's own cached copy of Anthropic's guidance
+ * supports only RECOMMENDED_SKILL_LINES (500), and it explicitly *disclaims*
+ * MAX_DESCRIPTION_CHARS_CLAUDE_CODE (250) — Anthropic documents a 1024-character
+ * maximum, while 250 is VAT's own reading of where the Claude Code `/skills`
+ * listing truncates. MAX_TOTAL_LINES, MAX_FILE_COUNT, MAX_REFERENCE_DEPTH and
+ * MIN_DESCRIPTION_LENGTH are VAT-originated.
+ *
+ * Re-verified against the live page on 2026-07-30. That pass sharpened two of
+ * those verdicts from "unsupported" to "contradicted", which is a stronger claim:
+ *
+ * - MAX_REFERENCE_DEPTH (2) is CONTRADICTED, not merely VAT-originated. Anthropic:
+ *   "Keep references one level deep from SKILL.md", and their "Bad example: Too
+ *   deep" is literally `SKILL.md → advanced.md → details.md` — the exact chain
+ *   REFERENCE_TOO_DEEP's own `example` string above blesses as "2 hops, OK". VAT
+ *   is deliberately one hop laxer than the vendor here; that is a product
+ *   decision, not an oversight, but nothing in this file may imply Anthropic
+ *   endorses 2.
+ * - MAX_TOTAL_LINES (2000) and MAX_FILE_COUNT (6) are COUNTER-SIGNALLED, not just
+ *   silent. Anthropic's runtime-environment guidance says "Bundle comprehensive
+ *   resources: Include complete API docs, extensive examples, large datasets; no
+ *   context penalty until accessed", and "No context penalty for large files".
+ *   Their own pdf/ example ships 7 files, one past MAX_FILE_COUNT. VAT flags large
+ *   bundles as a maintainability/reviewability signal, which the vendor does not.
+ * - MIN_DESCRIPTION_LENGTH (50) stays SILENT-not-contradicted: Anthropic rejects
+ *   vague descriptions ("Helps with documents") on specificity, never on length.
+ *
+ * The `reviewed=` date above is now a real review date, not the cache's Fetched
+ * date. Do not resolve any of these divergences by editing a number here — the
+ * values decide what fires on adopter trees and are the repo owner's call.
  */
 export const VALIDATION_THRESHOLDS = {
   /** Recommended maximum lines for SKILL.md */
