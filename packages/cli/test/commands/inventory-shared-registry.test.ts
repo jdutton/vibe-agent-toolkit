@@ -5,8 +5,17 @@ import type * as UtilsModule from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 /**
- * `vat inventory` must crawl the surrounding project's markdown corpus ONCE per
- * invocation, not once per skill.
+ * `vat inventory` and `vat audit` must each crawl the surrounding project's markdown
+ * corpus ONCE per invocation, not once per skill — and neither may let a failed crawl
+ * abort the command.
+ *
+ * Both lanes reach the same extractor (`extractClaudePluginInventory`) through their own
+ * shared-registry plumbing (`linkRegistryProviderFor` in inventory.ts,
+ * `pluginInventoryAt` in audit.ts), so both can get the same two things wrong: resolving
+ * the registry OUTSIDE the extractor's try/catch (turning a degradable failure into a
+ * fatal one), and building a registry at a root no skill will match (pure wasted crawl).
+ * The two lanes are exercised here from one set of fixtures — the mock and the plugin
+ * trees below are the expensive part, and this repo does not tolerate duplicating them.
  *
  * `extractClaudeSkillInventory` falls back to `crawlSkillLinkRegistry(projectRoot)`
  * whenever the caller hands it no registry rooted at exactly that project root —
@@ -52,6 +61,8 @@ vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) => {
 });
 
 const { routeInventory } = await import('../../src/commands/inventory.js');
+const { buildAuditReport, resetAuditCaches } = await import('../../src/commands/audit.js');
+const { silentAuditLogger } = await import('../test-helpers.js');
 
 const SKILL_NAMES = ['alpha', 'beta', 'gamma'];
 
@@ -92,7 +103,21 @@ function messagesOf(parseErrors: { message: string }[]): string {
   return parseErrors.map((e) => e.message).join('\n');
 }
 
-describe('routeInventory — one corpus crawl per invocation', () => {
+/**
+ * Audit `dir` in-process from a clean slate, returning the validation results.
+ *
+ * `buildAuditReport` is exported `@internal` for exactly this. The cache reset is not
+ * optional: audit memoizes inventory registries (and git trackers) at module scope, so
+ * a leftover registry from a sibling test would make the crawl counts below lie.
+ */
+async function auditPlugin(dir: string): Promise<unknown[]> {
+  resetAuditCaches();
+  crawlBaseDirs.length = 0;
+  const { results } = await buildAuditReport(dir, {}, Date.now(), silentAuditLogger as never);
+  return results;
+}
+
+describe('shared link registry — one corpus crawl per invocation', () => {
   let projectRoot: string;
   let pluginDir: string;
   let skilllessPluginDir: string;
@@ -255,5 +280,69 @@ describe('routeInventory — one corpus crawl per invocation', () => {
       SKILL_NAMES.map((name) => safePath.join(rootlessPluginDir, 'skills', name)).sort(byPath),
     );
     expect(crawlBaseDirs).toHaveLength(SKILL_NAMES.length);
+  });
+
+  /**
+   * `vat audit` reaches the same extractor through `pluginInventoryAt`. Its plumbing is
+   * separate from `routeInventory`'s, so it needs its own proof of the same two properties.
+   */
+  describe('buildAuditReport — the audit lane', () => {
+    it('crawls the project corpus once for a plugin with N skills, not N times', async () => {
+      const results = await auditPlugin(pluginDir);
+
+      // The plugin and each of its skills are really audited.
+      expect(results.length).toBeGreaterThanOrEqual(SKILL_NAMES.length + 1);
+
+      const rootCrawls = crawlBaseDirs.filter((dir) => safePath.resolve(dir) === projectRoot);
+      expect(rootCrawls).toHaveLength(1);
+    });
+
+    describe('a failed corpus crawl degrades to findings, it does not abort the audit', () => {
+      // The bug: `pluginInventoryAt` awaited the shared registry OUTSIDE
+      // `walkLinkedFiles`'s try/catch, so one unreadable markdown file anywhere under
+      // the root turned a full audit into `status: error` / exit code 2 with a bare
+      // EACCES message and not a single finding.
+      beforeAll(() => {
+        failingCrawlRoots.push(projectRoot);
+      });
+      afterAll(() => {
+        failingCrawlRoots.length = 0;
+      });
+
+      it('resolves with the plugin report instead of rejecting', async () => {
+        const results = await auditPlugin(pluginDir);
+
+        // Everything that does not depend on the corpus is still reported: the plugin
+        // result plus one per skill. A crawl failure costs `files.linked`, not the audit.
+        expect(results.length).toBeGreaterThanOrEqual(SKILL_NAMES.length + 1);
+      });
+
+      it('attempts the failing crawl once, not once per skill', async () => {
+        await auditPlugin(pluginDir);
+
+        // Reported per skill, ATTEMPTED once — the memoized provider hands every skill
+        // the same rejected promise instead of re-crawling a corpus that just failed.
+        const rootCrawls = crawlBaseDirs.filter((dir) => safePath.resolve(dir) === projectRoot);
+        expect(rootCrawls).toHaveLength(1);
+        expect(crawlBaseDirs).toHaveLength(1);
+      });
+    });
+
+    it('never crawls at the plugin dir when there is no project root', async () => {
+      // The premise: no config and no .git at or above the plugin.
+      expect(findProjectRoot(rootlessPluginDir)).toBeNull();
+
+      await auditPlugin(rootlessPluginDir);
+
+      // `findProjectRoot(dir) ?? dir` would root the shared registry at the PLUGIN, a
+      // root `walkLinkedFiles` never derives (it falls back to `dirname(SKILL.md)`), so
+      // the `baseDir === projectRoot` gate discards it and every skill re-crawls anyway.
+      // The crawl is therefore pure waste — it must not happen at all.
+      const crawled = crawlBaseDirs.map((dir) => safePath.resolve(dir));
+      expect(crawled.filter((dir) => dir === safePath.resolve(rootlessPluginDir))).toHaveLength(0);
+      expect(new Set(crawled)).toEqual(
+        new Set(SKILL_NAMES.map((name) => safePath.join(rootlessPluginDir, 'skills', name))),
+      );
+    });
   });
 });

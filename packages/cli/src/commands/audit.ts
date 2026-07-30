@@ -1759,10 +1759,30 @@ async function getOrCreateInventoryRegistry(
 /**
  * `extractClaudePluginInventory` for a plugin directory, handing it the shared
  * inventory registry so each skill it walks does not re-parse the corpus.
+ *
+ * A PROVIDER, not an awaited registry, and only when there is a project root — the same
+ * two rules `vat inventory`'s `linkRegistryProviderFor` follows, for the same two reasons:
+ *
+ * 1. **Unresolved.** `extractClaudePluginInventory` promises "never throws — all failures
+ *    surface via parseErrors[]", and that promise holds only while the crawl runs inside
+ *    `walkLinkedFiles`'s try/catch. Awaiting it here moved the crawl outside that catch,
+ *    so one unreadable markdown file anywhere under the root aborted the WHOLE audit with
+ *    `status: error` and exit code 2 instead of degrading three link walks. The extractor
+ *    memoizes the provider and caches even a rejection, so the failed crawl is still
+ *    attempted once, not once per skill.
+ * 2. **Only a project root.** Reuse is gated on exact `registry.baseDir === projectRoot`
+ *    equality against the root `walkLinkedFiles` derives per skill
+ *    (`findProjectRoot(dirname(skillMd)) ?? dirname(skillMd)`). With no project root that
+ *    per-skill fallback is each skill's OWN directory, so a registry rooted at the plugin
+ *    matches nothing: it would be crawled, compared, discarded, and re-crawled per skill.
+ *    No root, no provider.
  */
 async function pluginInventoryAt(dir: string): Promise<Awaited<ReturnType<typeof extractClaudePluginInventory>>> {
-  const root = findProjectRoot(dir) ?? dir;
-  return extractClaudePluginInventory(dir, await getOrCreateInventoryRegistry(root));
+  const projectRoot = findProjectRoot(dir);
+  return extractClaudePluginInventory(
+    dir,
+    projectRoot === null ? undefined : () => getOrCreateInventoryRegistry(projectRoot),
+  );
 }
 
 /**
