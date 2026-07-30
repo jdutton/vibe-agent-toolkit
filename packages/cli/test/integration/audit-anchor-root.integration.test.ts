@@ -67,6 +67,12 @@ function buildScanRoot(root: string): void {
         '',
         'See [the missing reference](./missing-reference.md) for details.',
         '',
+        // A link that RESOLVES is what populates `linkedFiles[]`. Without one,
+        // every path-walking assertion below is vacuous on that branch of the
+        // document — which is exactly how 532 absolute `linkedFiles[].path`
+        // values survived a gate that already forbade absolute paths.
+        'See [the resolvable guide](./references/guide.md) for the rest.',
+        '',
         // A fenced shell block invoking an external CLI makes the compat
         // detectors emit EvidenceRecords, whose `location` is an OBJECT and so
         // needs the same anchor base as every string location in the document.
@@ -75,6 +81,12 @@ function buildScanRoot(root: string): void {
         '```',
         '',
       ].join('\n'),
+    );
+    // The target of the resolvable link above. Its presence is what gives the
+    // audit document a populated `linkedFiles[]` to walk.
+    writeFileAt(
+      safePath.join(pluginDir, 'skills', 'example', 'references', 'guide.md'),
+      '# Guide\n\nReference content reachable by link traversal.\n',
     );
     // A script file and a third-party import make the plugin-level scanners
     // (script-file / python-import) emit evidence too, so the compat lane is
@@ -132,6 +144,19 @@ describe('vat audit — one run, one anchor base', () => {
     const anchors = anchorsBelowRoot(document);
     expect(anchors.length).toBeGreaterThan(0);
     expect(anchorContractViolations(anchors, document.root)).toEqual([]);
+  });
+
+  // This gate already walked every path in the document and forbade absolutes,
+  // yet 532 absolute `linkedFiles[].path` values passed it — because the fixture
+  // had no resolvable link, so that branch of the document was always empty.
+  // Assert the distinguishing power itself, or the coverage silently rots away
+  // again the next time the fixture is simplified.
+  it('actually has linked files to walk, so the absolute-path contract is not vacuous', async () => {
+    const { document } = await buildAuditReport(scanRoot, {}, Date.now(), silentAuditLogger);
+
+    const linkedAnchors = anchorsBelowRoot(document).filter((a) => a.trail.includes('linkedFiles'));
+    expect(linkedAnchors.length).toBeGreaterThan(0);
+    expect(anchorContractViolations(linkedAnchors, document.root)).toEqual([]);
   });
 
   it('spells the resource that IS the scan root as `.`, never as a blank path', async () => {

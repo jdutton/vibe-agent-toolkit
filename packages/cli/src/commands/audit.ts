@@ -78,6 +78,7 @@ import {
 import { formatIssueAnchor } from '../utils/issue-anchor.js';
 import { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
+import { relativizePathEntries } from '../utils/relativize-paths.js';
 import { mergeSkillPackagingConfig } from '../utils/skill-packaging-config.js';
 import { renderSkillQualityFooter } from '../utils/skill-quality-footer.js';
 import { computeConfigVerdicts } from '../utils/verdict-helpers.js';
@@ -289,7 +290,7 @@ async function validateSingleSkill(
   const skillConfig = fullConfig === null ? null : stripValidationAllowForDisplay(fullConfig);
   if (skillConfig !== null) {
     logger.debug(`  Using config-aware validation for: ${skillPath}`);
-    const { gitTracker } = await resolveScanContext(safePath.resolve(skillPath), locationRoot);
+    const { gitTracker } = await resolveScanContext(safePath.resolve(skillPath), locationRoot, logger);
     // Key the shared registry on the same project root the validator derives,
     // so every skill under one root parses the corpus once for the whole run
     // instead of once each.
@@ -1085,21 +1086,16 @@ export async function getValidationResults(
 		if (stat.isDirectory()) {
 			logger.debug('Scanning directory for resources');
 
-			// Merge resources.exclude from config with --exclude CLI flag patterns.
-			// Both use the same picomatch semantics. Do NOT mutate options.
-			const config = loadConfig(deriveConfigRoot(scanPath));
-			const configExcludes = config?.resources?.exclude ?? [];
-			const mergedOptions: AuditCommandOptions =
-				configExcludes.length > 0
-					? { ...options, exclude: [...(options.exclude ?? []), ...configExcludes] }
-					: options;
-
+			// The project's `resources.exclude` is applied by the scan context,
+			// on the project-root basis its globs were written against — NOT
+			// merged into `options.exclude`, whose patterns are relative to the
+			// directory the operator named. See resolveProjectExcludes.
 			return scanDirectory(
 				scanPath,
 				recursive,
-				mergedOptions,
+				options,
 				logger,
-				await resolveScanContext(scanPath, locationRoot),
+				await resolveScanContext(scanPath, locationRoot, logger),
 			);
 		}
 	} catch {
@@ -1313,26 +1309,14 @@ function applyVerboseFilter<T extends ValidationResult & { compatibility?: Compa
 }
 
 /**
- * Re-base each emitted file entry's `path` onto the run root.
+ * Nested carriers inside a file entry that publish their own `path`.
  *
- * `ValidationResult.path` stays ABSOLUTE inside the pipeline on purpose: it is
- * the identity every internal map keys on (compat results, visited-path
- * de-duplication, registry caches), and unlike `location` it is trivially
- * recoverable — an absolute path plus the known root yields the relative form.
- * `location` is the opposite: it cannot be re-based here because a relative
- * string whose base was never stated is not recoverable, which is exactly why
- * the base is threaded down to the producers instead.
+ * `linkedFiles[].path` sat absolute in every document while every sibling
+ * `path` and `location` beside it was root-relative — 532 of them in a single
+ * `vat audit --user` run. Naming the carrier here is what re-bases it; a new
+ * carrier that is not named keeps shipping absolute paths.
  */
-function relativizeFileEntries<T extends { path: string }>(entries: T[], root: string): T[] {
-  return entries.map((entry) => {
-    const relative = issueLocation(entry.path, root);
-    // Pointing audit AT a single resource makes that resource the root, which
-    // relativizes to the empty string. Spell it `.` — the POSIX name for "the
-    // root itself" — so no consumer has to special-case an empty path, and
-    // `join(root, path)` still resolves.
-    return { ...entry, path: relative === '' ? '.' : relative };
-  });
-}
+const NESTED_PATH_CARRIERS = ['linkedFiles'] as const;
 
 function calculateSummary(
   results: ValidationResult[],
@@ -1341,13 +1325,13 @@ function calculateSummary(
   verbose: boolean,
   root: string,
 ) {
-  const base = buildBaseSummary(results, startTime);
-  const withCompat = applyCompatMap(results, compatMap);
+  const { entries, ...base } = buildBaseSummary(results, startTime);
+  const withCompat = applyCompatMap(entries, compatMap);
   return {
     // Stated once, first, and the only absolute path in the document.
     root,
     ...base,
-    files: relativizeFileEntries(applyVerboseFilter(withCompat, verbose), root),
+    files: relativizePathEntries(applyVerboseFilter(withCompat, verbose), root, NESTED_PATH_CARRIERS),
   };
 }
 
@@ -1665,6 +1649,82 @@ interface ScanContext {
    * one branch and an anchor base down another.
    */
   locationRoot: string;
+  /**
+   * The governing project's `resources.exclude`, compiled against the project
+   * root. `null` when there is no governing config, it declares no excludes, or
+   * the operator pointed the scan AT an excluded tree.
+   */
+  projectExcludes: ExcludeMatcher | null;
+}
+
+/**
+ * A compiled exclude rule plus the base its patterns are relative to.
+ *
+ * Audit applies two exclude sources with DIFFERENT bases, which is why the base
+ * travels with the matcher instead of being assumed. `--exclude` is typed at the
+ * command line about the directory the operator named, so it is relative to the
+ * scan base. `resources.exclude` is written in a config file about that config's
+ * own project, so it is relative to the project root — matching it against
+ * scan-relative paths makes one config mean different things depending on which
+ * subdirectory you happened to name.
+ */
+interface ExcludeMatcher {
+  isMatch: ReturnType<typeof picomatch>;
+  base: string;
+  /** Prefix for the debug breadcrumb, so the two sources stay distinguishable. */
+  label: string;
+}
+
+/**
+ * Compile the governing project's `resources.exclude` for a scan.
+ *
+ * The config is found by walking UP from the scan directory ({@link findProjectRoot}),
+ * not by looking in it. Looking only in the scan directory is how a path argument
+ * silently voided every exclude the project had declared: `vat audit
+ * packages/x/resources/skills/` found no config there, so a package that excludes
+ * its deliberately-broken eval fixtures had them audited as production skills the
+ * moment anyone named a subdirectory. Commit 8a466b0c fixed the same defect for
+ * `vat resources validate|scan` and `vat rag index`; this is the lane it missed.
+ * The rule is the same one that commit established: a path argument says WHICH
+ * tree to audit, and `exclude` applies either way.
+ *
+ * With one deliberate exception, mirroring the gitignore rule in
+ * {@link resolveScanContext}: when the operator points the scan AT an excluded
+ * tree, their explicit intent wins and the excludes are dropped for that run.
+ * Otherwise naming an excluded directory would report `filesScanned: 0,
+ * status: success` — a green run that scanned nothing.
+ */
+function resolveProjectExcludes(
+  scanDir: string,
+  logger: ReturnType<typeof createLogger>,
+): ExcludeMatcher | null {
+  const projectRoot = findProjectRoot(scanDir);
+  if (projectRoot === null) return null;
+
+  let patterns: readonly string[];
+  try {
+    patterns = loadConfig(projectRoot)?.resources?.exclude ?? [];
+  } catch (err) {
+    // Audit is a bulk linter over trees it does not own; a broken governing
+    // config must not abort the scan. Say so rather than dropping it silently.
+    logger.debug(`Ignoring unreadable config at ${projectRoot}: ${String(err)}`);
+    return null;
+  }
+  if (patterns.length === 0) return null;
+
+  // dot:true so excludes like `**/.cache/*` match through dotfile dirs;
+  // without it the exclude silently never fires.
+  const isMatch = picomatch([...patterns], { dot: true });
+  const scanRelToProject = safePath.relative(projectRoot, safePath.resolve(scanDir)).replaceAll('\\', '/');
+  if (scanRelToProject !== '' && isExcludedPath(isMatch, scanRelToProject, true)) {
+    logger.debug(
+      `Scan root ${scanRelToProject} is excluded by the config at ${projectRoot}; ` +
+        'auditing it anyway because it was named explicitly',
+    );
+    return null;
+  }
+
+  return { isMatch, base: projectRoot, label: 'excluded by config' };
 }
 
 /** Cache of (gitRoot → initialized GitTracker) to avoid re-spawning ls-files. */
@@ -1741,10 +1801,15 @@ async function getOrCreateGitTracker(gitRoot: string): Promise<GitTracker> {
  * `dist/`), returns `{ gitRoot: null, gitTracker: null }` to disable gitignore
  * filtering — the user's explicit intent takes precedence over .gitignore.
  */
-async function resolveScanContext(dirPath: string, locationRoot: string): Promise<ScanContext> {
+async function resolveScanContext(
+  dirPath: string,
+  locationRoot: string,
+  logger: ReturnType<typeof createLogger>,
+): Promise<ScanContext> {
+  const projectExcludes = resolveProjectExcludes(dirPath, logger);
   const detectedRoot = gitFindRoot(dirPath);
   if (detectedRoot === null) {
-    return { gitRoot: null, gitTracker: null, locationRoot };
+    return { gitRoot: null, gitTracker: null, locationRoot, projectExcludes };
   }
 
   const tracker = await getOrCreateGitTracker(detectedRoot);
@@ -1752,10 +1817,10 @@ async function resolveScanContext(dirPath: string, locationRoot: string): Promis
   // If the scan root itself is gitignored (e.g. user targeted `dist/`), disable
   // gitignore filtering so the user's explicit intent wins.
   if (tracker.isIgnoredByActiveSet(dirPath)) {
-    return { gitRoot: null, gitTracker: null, locationRoot };
+    return { gitRoot: null, gitTracker: null, locationRoot, projectExcludes };
   }
 
-  return { gitRoot: detectedRoot, gitTracker: tracker, locationRoot };
+  return { gitRoot: detectedRoot, gitTracker: tracker, locationRoot, projectExcludes };
 }
 
 /**
@@ -1785,9 +1850,8 @@ function buildGitIgnoreMap(
 function getSkipReason(
   entry: { name: string; isDirectory: () => boolean },
   fullPath: string,
-  resolvedBaseDir: string,
   gitIgnoredMap: Map<string, boolean> | null,
-  isMatch: ReturnType<typeof picomatch> | null
+  excludeMatchers: readonly ExcludeMatcher[]
 ): string | null {
   // Always skip .git directory (not reported by git check-ignore)
   if (entry.isDirectory() && entry.name === '.git') {
@@ -1799,11 +1863,11 @@ function getSkipReason(
     return `gitignored: ${entry.name}`;
   }
 
-  // Check user-supplied --exclude patterns
-  if (isMatch !== null) {
-    const relativePath = safePath.relative(resolvedBaseDir, fullPath).replaceAll('\\', '/');
-    if (isExcludedPath(isMatch, relativePath, entry.isDirectory())) {
-      return `excluded: ${relativePath}`;
+  // Each matcher answers against ITS OWN base — see {@link ExcludeMatcher}.
+  for (const matcher of excludeMatchers) {
+    const relativePath = safePath.relative(matcher.base, fullPath).replaceAll('\\', '/');
+    if (isExcludedPath(matcher.isMatch, relativePath, entry.isDirectory())) {
+      return `${matcher.label}: ${relativePath}`;
     }
   }
 
@@ -1852,7 +1916,19 @@ async function scanDirectory(
   // Compile picomatch for user-supplied --exclude patterns.
   // dot:true so excludes like `**/private/*` match through dotfile dirs
   // (`.claude/.../private/x`); without it the exclude silently never fires.
-  const isMatch = userExcludes.length > 0 ? picomatch(userExcludes, { dot: true }) : null;
+  // These are relative to the scan base; the config's excludes carry their own
+  // (project-root) base on the matcher — see {@link ExcludeMatcher}.
+  const excludeMatchers: ExcludeMatcher[] = [];
+  if (userExcludes.length > 0) {
+    excludeMatchers.push({
+      isMatch: picomatch(userExcludes, { dot: true }),
+      base: resolvedBaseDir,
+      label: 'excluded',
+    });
+  }
+  if (resolvedScanCtx.projectExcludes !== null) {
+    excludeMatchers.push(resolvedScanCtx.projectExcludes);
+  }
 
   const entries = await fs.readdir(dirPath, { withFileTypes: true });
 
@@ -1863,7 +1939,7 @@ async function scanDirectory(
   for (const entry of entries) {
     const fullPath = safePath.join(dirPath, entry.name);
 
-    const skipReason = getSkipReason(entry, fullPath, resolvedBaseDir, gitIgnoredMap, isMatch);
+    const skipReason = getSkipReason(entry, fullPath, gitIgnoredMap, excludeMatchers);
     if (skipReason !== null) {
       logger.debug(`Excluding path: ${skipReason}`);
       continue;
@@ -1936,25 +2012,55 @@ function countFilesByStatus(results: ValidationResult[]): FileStatusCounts {
 }
 
 /**
- * Build base summary structure (used by both flat and hierarchical)
+ * Build base summary structure (used by both flat and hierarchical), together
+ * with the entries the document will publish.
  *
  * `issueCounts` is named exactly as it is on every individual file entry, and
  * means the same thing at both levels: findings, by severity. `summary` only ever
  * counts files.
+ *
+ * The header total and every per-file total come from ONE traversal of the
+ * final issue set, and the entries carrying those per-file totals are returned
+ * from the same pass. Before that, the header was derived from the issue
+ * records while each file's `issueCounts` was whatever its producer had
+ * published — and a producer that appends findings after publishing (or never
+ * sets the counts at all: `validatePlugin` writes `status` and `summary` but
+ * not `issueCounts`) left the two disagreeing inside one document. A real
+ * `vat audit --user` run said 55/422/504 in the header over per-file counts
+ * summing to 55/360/405, with 91 of 614 entries declaring `{0,0,0}` above the
+ * findings they listed. Re-deriving here means the header and the sum are the
+ * same arithmetic on the same array, so they cannot drift again no matter what
+ * a producer forgets.
+ *
+ * `linkedFiles[].issues` are deliberately NOT added: every linked finding is
+ * also present in its owner's `issues`, so the nested list is a VIEW of records
+ * already counted, not extra records. `audit-report-coherence.integration.test.ts`
+ * pins that subset relation, because counting once is only correct while it holds.
  */
-function buildBaseSummary(
-  results: ValidationResult[],
+function buildBaseSummary<T extends ValidationResult>(
+  results: T[],
   startTime: number
 ): {
+  entries: T[];
   status: string;
   summary: FileStatusCounts;
   issueCounts: SeverityCounts;
   duration: string;
 } {
+  const issueCounts: SeverityCounts = { errors: 0, warnings: 0, info: 0 };
+  const entries = results.map((result) => {
+    const counts = countBySeverity(result.issues);
+    issueCounts.errors += counts.errors;
+    issueCounts.warnings += counts.warnings;
+    issueCounts.info += counts.info;
+    return { ...result, issueCounts: counts };
+  });
+
   return {
-    status: calculateOverallStatus(results),
-    summary: countFilesByStatus(results),
-    issueCounts: countBySeverity(results.flatMap((r: ValidationResult) => r.issues)),
+    entries,
+    status: calculateOverallStatus(entries),
+    summary: countFilesByStatus(entries),
+    issueCounts,
     duration: `${Date.now() - startTime}ms`,
   };
 }
@@ -1970,8 +2076,8 @@ function calculateHierarchicalSummary(
   verbose: boolean,
   root: string,
 ) {
-  const base = buildBaseSummary(results, startTime);
-  const withCompat = applyCompatMap(results, compatMap);
+  const { entries, ...base } = buildBaseSummary(results, startTime);
+  const withCompat = applyCompatMap(entries, compatMap);
 
   return {
     root,
@@ -1983,7 +2089,7 @@ function calculateHierarchicalSummary(
       standalonePlugins: hierarchical.standalonePlugins.length,
       standaloneSkills: hierarchical.standaloneSkills.length,
     },
-    files: relativizeFileEntries(applyVerboseFilter(withCompat, verbose), root),
+    files: relativizePathEntries(applyVerboseFilter(withCompat, verbose), root, NESTED_PATH_CARRIERS),
     hierarchical,
   };
 }

@@ -28,6 +28,7 @@ export function runCliCommand(command: string, ...args: string[]): SpawnSyncRetu
  */
 export const silentAuditLogger = {
   info: (_msg: string): void => {},
+  warn: (_msg: string): void => {},
   error: (_msg: string): void => {},
   debug: (_msg: string): void => {},
 };
