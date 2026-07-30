@@ -254,7 +254,7 @@ describe('loadResourcesWithConfig', () => {
 
     await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
 
-    expect(debugCalls).toContain('Loaded config from /project');
+    expect(debugCalls).toContain(`Loaded config from ${PROJECT_ROOT}`);
     expect(debugCalls).toContain('GitTracker initialized with 42 tracked files');
   });
 });
