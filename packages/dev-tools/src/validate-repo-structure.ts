@@ -680,12 +680,32 @@ async function validateNoCitationsToNeverCommittedDirs(): Promise<void> {
  * missing from all three buckets fails (so a new lane must be classified at
  * birth). The list can therefore only shrink.
  *
- * HONEST LIMITATIONS: conformance is judged from SOURCE — whether the file
- * declares or assigns an object property named `issueCounts`/`severityCounts`/
- * `counts`, or calls the shared `countBySeverity`. Specifically:
- *   - It cannot tell whether that block is actually reached at runtime.
- *   - It cannot see counts published under a name outside that set, unless the
- *     lane got them from the shared counter.
+ * HONEST LIMITATIONS: both questions — "is this a lane?" and "does it publish the
+ * distribution?" — are answered from SOURCE TEXT, by the recognisers below. Every
+ * limitation is therefore a way that text can be right while the recogniser is
+ * wrong. Split by which question it damages, because the two fail in opposite
+ * directions: a missed LANE is silent, a missed COUNTS block is loud.
+ *
+ * Limits on seeing a lane at all — these fail SILENTLY, the direction that matters:
+ *   - A status typed by a named alias declared in ANOTHER file is invisible. The
+ *     alias recogniser reads a `type <X>Status = '…'` declaration, so it only sees
+ *     the file that OWNS the vocabulary. A lane doing `import type { RunStatus }`
+ *     and never spelling a literal is seen only if it calls the shared collapse.
+ *     Nothing in this repo does that today; the day one does, it joins silently.
+ *   - The alias name must contain `Status`. `type Verdict = 'ok' | 'error'` is not
+ *     matched. Widening to any string-literal union would sweep in every unrelated
+ *     enum in three package roots, and an over-inclusive scan gets its escape hatch
+ *     used until the escape hatch is where lanes go to disappear.
+ *   - A status computed rather than declared — assembled from a variable, or
+ *     returned by a local helper with an inferred type — is invisible unless the
+ *     helper is the shared one.
+ *
+ * Limits on judging conformance — these fail LOUDLY (a fixed lane stays listed):
+ *   - It cannot tell whether the counts block is actually reached at runtime.
+ *   - Counts published under a name outside `issueCounts`/`severityCounts`/`counts`
+ *     are seen only when they carry the `errors`+`warnings`+`info` SHAPE, or came
+ *     from the shared counter. Two of three severity names, or three different
+ *     names, still reads as nonconforming.
  *   - The property must start a line. That is deliberate — matching the bare word
  *     anywhere is what made an earlier keyword scan call `packaging-validator.ts`
  *     conforming, because the word "counts" appeared in one of its comments — but
@@ -698,6 +718,12 @@ async function validateNoCitationsToNeverCommittedDirs(): Promise<void> {
  *     read as the fix. A comment-only false positive fails in the *reassuring*
  *     direction (a lane silently leaves the checklist), which is the one direction
  *     this ratchet exists to prevent, so it is worth the crude stripper below.
+ *
+ * And one limitation that is neither: the unit of judgement is the FILE. A file
+ * declaring two verdicts — as `corpus/report.ts` does — is classified once, so a
+ * bucket entry can be true of one of them and say nothing about the other. That is
+ * why the bucket notes name each verdict separately.
+ *
  * It is a checklist that cannot rot, not a proof of correct output. That coarseness
  * is why the bucket notes below are hand-verified rather than inferred.
  * ──────────────────────────────────────────────────────────────────────────── */
@@ -723,8 +749,38 @@ const SEVERITY_COUNTS_SCAN_ROOTS = [
   'packages/claude-marketplace/src/',
 ] as const;
 
+/**
+ * The verdict vocabulary, as ONE alternation shared by every recogniser below.
+ *
+ * Written once on purpose. It used to live inline in the status-value regex alone,
+ * and it omitted `ok` — which is exactly the success value `corpus/report.ts`'s
+ * `ReviewStatus` uses. A vocabulary that exists in one place cannot drift out of
+ * step with a second copy that a later recogniser would have needed.
+ */
+const STATUS_VOCABULARY = String.raw`success|error|warning|failed|ok`;
+
 /** A status drawn from the validation vocabulary, as an emitted or declared value. */
-const VALIDATION_STATUS_VALUE = /status\??:[^'\n]*'(?:success|error|warning|failed)'/;
+// eslint-disable-next-line security/detect-non-literal-regexp -- composed from module constants, never from input
+const VALIDATION_STATUS_VALUE = new RegExp(String.raw`status\??:[^'\n]*'(?:${STATUS_VOCABULARY})'`);
+/**
+ * A DECLARED status vocabulary: `type <Something>Status = 'ok' | 'error' | …`.
+ *
+ * Independent evidence of a lane, like {@link SHARED_COLLAPSE_CALL} and for the
+ * same reason: a TypeScript type-alias declaration is a structural fact about the
+ * file, not a keyword shape that a refactor can rename away. It exists because
+ * {@link VALIDATION_STATUS_VALUE} requires a string LITERAL on the `status:` line,
+ * so the moment a lane hoists its vocabulary into a named type — `status:
+ * ReviewStatus` — the lane became invisible to the ratchet entirely. Invisible is
+ * the worst failure this gate has: it is silent, so nothing ever notices.
+ *
+ * `[^;]{0,200}?` spans the line breaks of a multi-line union while stopping at the
+ * statement terminator, so a later unrelated string cannot be read as a member.
+ */
+// eslint-disable-next-line security/detect-non-literal-regexp -- composed from module constants, never from input
+const DECLARED_STATUS_VOCABULARY = new RegExp(
+  String.raw`^[ \t]*(?:export[ \t]+)?type[ \t]+\w*Status\b[^;]{0,200}?'(?:${STATUS_VOCABULARY})'`,
+  'm',
+);
 /** A collection of findings, which is what makes a status a *validation* verdict. */
 const FINDINGS_COLLECTION = /\b(?:issues|allErrors|activeErrors|activeWarnings|errors|warnings|findings)\b\s*[:.]/;
 /**
@@ -746,6 +802,48 @@ const SHARED_COLLAPSE_CALL = /\b(?:calculateValidationStatus|countBySeverity)\s*
  * colon made a genuinely fixed lane read as nonconforming.
  */
 const SEVERITY_COUNTS_PROPERTY = /^[ \t]*(?:issueCounts|severityCounts|counts)\??[ \t]*[:,]/m;
+/**
+ * The per-severity counts SHAPE — `errors`, `warnings` AND `info` all declared as
+ * properties — whatever the block containing them is called.
+ *
+ * Name-independent on purpose: `corpus/report.ts` publishes exactly the
+ * `SeverityCounts` fields under the name `summary`, built by spreading
+ * `countBySeverity` in its runner. Judging that block by its name alone called a
+ * conforming lane nonconforming. All three are required together because `errors`
+ * alone is just a findings array, and `info` is the bucket every collapse in this
+ * repo loses — a shape that names `info` is a distribution, not a pass/fail pair.
+ *
+ * Three independent line-anchored tests rather than one regex spanning the block:
+ * adjacency would have to be expressed as a nested quantifier, and a nested
+ * quantifier here buys strictness this gate does not need at a cost the linter
+ * correctly refuses. Not requiring adjacency can only over-accept, and
+ * over-accepting fails LOUDLY — a lane listed as conforming that is not will be
+ * caught by the reader of the bucket note, which is hand-verified anyway.
+ */
+const SEVERITY_COUNTS_SHAPE_PARTS = [
+  /^[ \t]*errors\??[ \t]*[:,]/m,
+  /^[ \t]*warnings\??[ \t]*[:,]/m,
+  /^[ \t]*info\??[ \t]*[:,]/m,
+] as const;
+/**
+ * Derivation from the shared `SeverityCounts` type, which is STRONGER evidence
+ * than {@link SEVERITY_COUNTS_SHAPE_PARTS}: three hand-declared properties are a
+ * shape someone re-verifies by eye, whereas `interface X extends SeverityCounts`
+ * is enforced by the compiler and gains any bucket the shared type gains.
+ *
+ * This arm exists because the refactor that STRENGTHENED a lane broke the gate.
+ * `corpus/report.ts` hand-declared `errors`/`warnings`/`info` on `AuditSummary`
+ * even though `corpus/runner.ts` builds it by spreading `countBySeverity()`;
+ * making it `extends SeverityCounts` deleted all three declarations and this
+ * gate reported the improved file as a REGRESSION. Same failure mode that
+ * `SHARED_COLLAPSE_CALL` was added for, one level up in the type system: a
+ * population defined by a keyword is emptied by the refactor that fixes it.
+ *
+ * A bare mention is enough. Comments are stripped before this runs, and naming
+ * the type at all requires importing it, which means the distribution is in this
+ * file's types. Over-accepting fails LOUDLY — the bucket notes are hand-verified.
+ */
+const SHARED_COUNTS_TYPE = /\bSeverityCounts\b/;
 
 /** Lanes that publish a per-severity counts block beside their status. */
 const SEVERITY_COUNTS_CONFORMING = new Set<string>([
@@ -790,6 +888,17 @@ const SEVERITY_COUNTS_CONFORMING = new Set<string>([
   // a second, weaker answer. Listed here rather than NOT_APPLICABLE on purpose:
   // this keeps a live assertion that the counts field cannot silently vanish.
   'packages/cli/src/commands/phase-utils.ts',
+  // Was INVISIBLE to this gate, not merely unclassified: it declares `status:
+  // AuditStatus` / `status: ReviewStatus`, and the old status recogniser demanded a
+  // string literal on the `status:` line. Conforms on the audit side — `AuditSummary`
+  // now `extends SeverityCounts` and is built as `{...countBySeverity(allIssues),
+  // files_scanned}` by `corpus/runner.ts`, so the distribution is the shared counter's
+  // own output, published under the name `summary` and type-checked against it. `ReviewOutcome` deliberately carries no severity counts: its status is
+  // a lane-EXECUTION outcome (`'ok'` iff every `vat skill review` subprocess ran), and
+  // `ReviewSummary` publishes that distribution — reviewed/failed/skills_scanned. The
+  // review findings themselves live in the sibling review.md rather than being
+  // recomputed here into a second, weaker answer.
+  'packages/cli/src/commands/corpus/report.ts',
 ]);
 
 /**
@@ -814,6 +923,43 @@ const SEVERITY_COUNTS_NOT_APPLICABLE = new Map<string, string>([
   ['packages/cli/src/commands/rag/index-command.ts', 'indexing failures are plain strings, not severity-classified findings; status is a generic success envelope'],
 ]);
 
+/** What the ratchet believes about one scanned file, from its source alone. */
+interface LaneClassification {
+  /** The file emits a validation verdict, so the ratchet has an opinion about it. */
+  isLane: boolean;
+  /** The per-severity distribution travels beside that verdict. */
+  publishesCounts: boolean;
+}
+
+/**
+ * Classify one file's source. Pure, and exported so the blind spots of these
+ * recognisers can be tested directly instead of only through a whole-repo run —
+ * a repo-wide scan that happens to be green cannot tell you WHICH lanes it saw.
+ */
+export function classifySeverityCountsLane(contents: string): LaneClassification {
+  const source = stripTsComments(contents);
+  // Calling the shared collapse is sufficient on its own: it is what makes a
+  // file a findings-reporting lane. Requiring a literal status value AND a
+  // findings-shaped keyword hid `audit.ts` the moment its status became
+  // `calculateValidationStatus(issues)` instead of `status: 'error'` — the
+  // migration that fixed the lane is what erased it from the checklist.
+  const usesSharedCollapse = SHARED_COLLAPSE_CALL.test(source);
+  return {
+    isLane:
+      usesSharedCollapse ||
+      DECLARED_STATUS_VOCABULARY.test(source) ||
+      (VALIDATION_STATUS_VALUE.test(source) && FINDINGS_COLLECTION.test(source)),
+    // Calling the shared counter IS publishing the distribution, even when the
+    // lane's own field is named something else (`corpus/runner.ts` spreads it
+    // into an `AuditSummary`).
+    publishesCounts:
+      usesSharedCollapse ||
+      SHARED_COUNTS_TYPE.test(source) ||
+      SEVERITY_COUNTS_PROPERTY.test(source) ||
+      SEVERITY_COUNTS_SHAPE_PARTS.every((part) => part.test(source)),
+  };
+}
+
 /**
  * Report every findings-reporting lane that is misclassified, newly conforming,
  * or newly appeared.
@@ -825,22 +971,10 @@ async function validateSeverityCountsRatchet(): Promise<void> {
     if (!relPath.endsWith('.ts')) return;
     if (!SEVERITY_COUNTS_SCAN_ROOTS.some((root) => toForwardSlash(relPath).startsWith(root))) return;
 
-    const source = stripTsComments(contents.toString('utf8'));
-    // Calling the shared collapse is sufficient on its own: it is what makes a
-    // file a findings-reporting lane. Requiring a literal status value AND a
-    // findings-shaped keyword hid `audit.ts` the moment its status became
-    // `calculateValidationStatus(issues)` instead of `status: 'error'` — the
-    // migration that fixed the lane is what erased it from the checklist.
-    const usesSharedCollapse = SHARED_COLLAPSE_CALL.test(source);
-    const looksLikeLane =
-      usesSharedCollapse || (VALIDATION_STATUS_VALUE.test(source) && FINDINGS_COLLECTION.test(source));
-    if (!looksLikeLane) return;
+    const { isLane, publishesCounts: conforms } = classifySeverityCountsLane(contents.toString('utf8'));
+    if (!isLane) return;
 
     seen.add(relPath);
-    // Calling the shared counter IS publishing the distribution, even when the
-    // lane's own field is named something else (`corpus/runner.ts` spreads it
-    // into an `AuditSummary`).
-    const conforms = SEVERITY_COUNTS_PROPERTY.test(source) || usesSharedCollapse;
 
     if (SEVERITY_COUNTS_NOT_APPLICABLE.has(relPath)) {
       return;
@@ -879,7 +1013,8 @@ async function validateSeverityCountsRatchet(): Promise<void> {
       path: relPath,
       message:
         'Unclassified findings-reporting lane: it publishes a validation status ' +
-        'alongside a findings collection, or calls the shared issues→status ' +
+        'alongside a findings collection, declares a status vocabulary ' +
+        "(`type …Status = 'ok' | …`), or calls the shared issues→status " +
         'collapse. A status alone cannot express a ' +
         'three-valued severity distribution, and every existing collapse resolves ' +
         'the ambiguous case to the reassuring one. Publish a per-severity counts ' +

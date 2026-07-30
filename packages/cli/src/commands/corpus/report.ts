@@ -10,16 +10,21 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 
+import type { SeverityCounts } from '@vibe-agent-toolkit/agent-schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';
 
 export type AuditStatus = 'success' | 'warning' | 'error' | 'unloadable';
 export type ReviewStatus = 'ok' | 'error' | 'skipped';
 
-export interface AuditSummary {
-  errors: number;
-  warnings: number;
-  info: number;
+/**
+ * Extends `SeverityCounts` rather than re-declaring `errors`/`warnings`/`info`:
+ * `runner.ts` builds this by spreading `countBySeverity()`, so the two are
+ * already the same shape by construction. Deriving makes the compiler enforce
+ * that, instead of leaving it as a fact someone has to re-verify by hand every
+ * time a severity bucket is added.
+ */
+export interface AuditSummary extends SeverityCounts {
   files_scanned: number;
 }
 
