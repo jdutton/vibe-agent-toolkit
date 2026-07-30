@@ -705,6 +705,29 @@ export async function packagePluginLocalSkills(input: {
     );
 
     const skillOutputDir = safePath.join(input.pluginDir, 'skills', skillDirPath);
+    // KNOWN GAP — false ALLOW_UNUSED for plugin-local skills. If you are here, please
+    // consider fixing it while the hood is open.
+    //
+    // This loop omits `allowLedger`, and omitting it is a positive claim that THIS
+    // call is the whole run (see PackageSkillOptions.allowLedger). That claim is FALSE
+    // here: we are looping. `validation.allow` is declared once per package but matched
+    // once per skill, so an entry matched while packaging skill A is reported unused
+    // while packaging skill B. `vat skills build` had exactly this bug and fixed it by
+    // creating one ledger for the invocation, threading it through, and draining it
+    // once after the last skill — see `runSkillBuild` in ../../skills/build.ts, which
+    // is the model to copy.
+    //
+    // Why it is not fixed here: this lane has no channel for RUN-level issues in its
+    // YAML output (every issue it reports is attributed to a skill dir), and inventing
+    // a second reporting shape was worse than leaving one honest comment. Fixing this
+    // properly means adding that channel first.
+    //
+    // Why it measures zero today: VAT's own plugins are assembled from the shared skill
+    // pool by copy-in, so this loop packages nothing. A project with plugin-local
+    // `skills/` directories AND package-scoped `validation.allow` entries still sees the
+    // false warnings. This is also the last thing blocking a promotion of ALLOW_UNUSED
+    // from `warning` to `error`, which would turn those false positives into hard build
+    // failures.
     const result = await packageSkill(skillPath, {
       ...packagingConfigToPackageOptions(packagingConfig, { skillPath, outputPath: skillOutputDir }),
       registry: input.registry,

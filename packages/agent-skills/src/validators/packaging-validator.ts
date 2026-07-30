@@ -392,6 +392,12 @@ export interface SkillValidationSharedContext {
    * ONLY lane in that run that can match an entry scoped to a source filename
    * (packaging renames the file to `SKILL.md`), so withholding its matches
    * reported live entries as dead on every skill in the package.
+   *
+   * KNOWN GAP, worth fixing if you are already in this area: the plugin-local
+   * skill loop in `packages/cli/src/commands/claude/plugin/build.ts` still omits
+   * a ledger while looping, so it makes that positive claim falsely. It measures
+   * zero on VAT only because VAT's plugins are assembled by copy-in. See the
+   * comment at that call site for why it was left and what fixing it needs.
    */
   allowLedger?: AllowUsageLedger;
 }
