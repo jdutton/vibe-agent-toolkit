@@ -138,6 +138,32 @@ describe('CODE_REGISTRY — link-auth codes (#113 slice 2)', () => {
   });
 });
 
+describe('CODE_REGISTRY — remedies must not send authors to validation.allow for packaged assets', () => {
+  // An adopter read this shape of remedy literally and hand-wrote ~130 lines of
+  // `validation.allow` waivers that merely duplicated their own `files:` map.
+  // PACKAGED_UNREFERENCED_FILE was corrected; these codes must not regress to it.
+  for (const code of ['PACKAGED_UNREFERENCED_FILE', 'SKILL_REFERENCES_BUT_NO_LINKS'] as const) {
+    it(`${code}: points at skills.config.<name>.files, not at a waiver`, () => {
+      const { fix } = CODE_REGISTRY[code];
+      expect(fix).toContain('skills.config.<name>.files');
+      expect(fix).not.toMatch(/Allow via `?validation\.allow`? if/i);
+    });
+  }
+});
+
+describe('CODE_REGISTRY — installed-plugins registry drift', () => {
+  // The registry schemas read Claude Code's own files (external data), so they
+  // parse liberally per Postel's Law. This code is what keeps that liberality
+  // honest: passthrough absorbs the unknown, and the code makes it visible.
+  it('registers REGISTRY_SHAPE_DRIFT as an info-severity overridable code', () => {
+    expect(CODE_REGISTRY.REGISTRY_SHAPE_DRIFT).toBeDefined();
+    expect(CODE_REGISTRY.REGISTRY_SHAPE_DRIFT.defaultSeverity).toBe('info');
+    expect(CODE_REGISTRY.REGISTRY_SHAPE_DRIFT.description.length).toBeGreaterThan(10);
+    expect(CODE_REGISTRY.REGISTRY_SHAPE_DRIFT.fix.length).toBeGreaterThan(10);
+    expect(CODE_REGISTRY.REGISTRY_SHAPE_DRIFT.reference).toBe('#registry_shape_drift');
+  });
+});
+
 describe('IssueCodeSchema', () => {
   it('IssueCodeSchema enumerates exactly the registry keys', () => {
     expect(new Set(IssueCodeSchema.options)).toEqual(new Set(Object.keys(CODE_REGISTRY)));

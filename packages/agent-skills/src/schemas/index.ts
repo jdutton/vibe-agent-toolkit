@@ -11,10 +11,13 @@ export {
 } from './agent-skill-frontmatter.js';
 
 export {
+  detectInstalledPluginsRegistryDrift,
   InstalledPluginsRegistryJsonSchema,
   InstalledPluginsRegistrySchema,
+  KNOWN_INSTALLATION_SCOPES,
   type InstalledPluginsRegistry,
   type PluginInstallation,
+  type RegistryShapeDrift,
 } from './installed-plugins-registry.js';
 
 export {

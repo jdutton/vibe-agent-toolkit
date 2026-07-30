@@ -2,11 +2,15 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import { calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { CODE_REGISTRY, calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { issueLocation } from '@vibe-agent-toolkit/utils';
 import type { z } from 'zod';
 
-import { InstalledPluginsRegistrySchema } from '../schemas/installed-plugins-registry.js';
+import {
+	detectInstalledPluginsRegistryDrift,
+	InstalledPluginsRegistrySchema,
+	type RegistryShapeDrift,
+} from '../schemas/installed-plugins-registry.js';
 import { KnownMarketplacesRegistrySchema } from '../schemas/known-marketplaces-registry.js';
 
 import { type AnchorRootOptions, resolveAnchorRoot } from './anchor-root.js';
@@ -24,6 +28,12 @@ function validateRegistryFile(
 	schema: z.ZodType,
 	successMessage: string,
 	locationRoot: string | undefined,
+	/**
+	 * Reports what the schema's `.passthrough()` absorbed. Registries VAT does not
+	 * own are parsed liberally; this is what keeps that liberality visible instead
+	 * of silently blind to Claude Code evolving the file.
+	 */
+	detectDrift?: (data: unknown) => RegistryShapeDrift[],
 ): ValidationResult {
 	const issues: ValidationIssue[] = [];
 	// Anchor contract: `location` is relative to the run's ONE stated root. When
@@ -77,7 +87,21 @@ function validateRegistryFile(
 
 	// Validate against schema
 	const result = schema.safeParse(data);
-	if (!result.success) {
+	if (result.success) {
+		// Only meaningful once the file is structurally sound — drift observations
+		// on a malformed registry would be noise on top of real errors.
+		for (const drift of detectDrift?.(data) ?? []) {
+			issues.push({
+				severity: CODE_REGISTRY.REGISTRY_SHAPE_DRIFT.defaultSeverity,
+				code: 'REGISTRY_SHAPE_DRIFT',
+				message: drift.message,
+				location,
+				field: drift.field,
+				fix: CODE_REGISTRY.REGISTRY_SHAPE_DRIFT.fix,
+				reference: CODE_REGISTRY.REGISTRY_SHAPE_DRIFT.reference,
+			});
+		}
+	} else {
 		for (const zodIssue of result.error.issues) {
 			issues.push({
 				severity: 'error',
@@ -119,6 +143,7 @@ export async function validateInstalledPluginsRegistry(
 		InstalledPluginsRegistrySchema,
 		'Valid installed plugins registry',
 		options?.locationRoot,
+		detectInstalledPluginsRegistryDrift,
 	);
 }
 

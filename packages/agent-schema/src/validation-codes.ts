@@ -245,7 +245,7 @@ export const CODE_REGISTRY = {
   SKILL_REFERENCES_BUT_NO_LINKS: entry(
     'info',
     'Skill directory contains scripts/, references/, or assets/ subdirectories but the SKILL.md body has zero markdown links into them.',
-    'Add explicit markdown links from SKILL.md (or a linked file) into the bundled subdirectories, or remove the unreferenced directory. Allow via validation.allow if the assets are consumed programmatically.',
+    'Add explicit markdown links from SKILL.md (or a linked file) into the bundled subdirectories, or remove the unreferenced directory. Assets consumed programmatically belong in skills.config.<name>.files as source/dest pairs — a declared dest is exempt, so do NOT restate them in validation.allow.',
     'skill_references_but_no_links',
   ),
   SKILL_BODY_NOT_IMPERATIVE: entry(
@@ -325,6 +325,12 @@ export const CODE_REGISTRY = {
     'A marketplace declares a plugin with a path-based source that does not exist.',
     'Correct the source path or remove the entry from marketplace.plugins[].',
     'marketplace_plugin_source_missing',
+  ),
+  REGISTRY_SHAPE_DRIFT: entry(
+    'info',
+    "An installed-plugins registry written by Claude Code carries a field or scope value VAT's model does not recognize; the registry shape is newer than the model reading it. The value was preserved, not rejected.",
+    "No action needed — VAT reads registries it does not own liberally, so the unknown value passed through untouched. Report the field so VAT's model can catch up, or set severity.REGISTRY_SHAPE_DRIFT to ignore.",
+    'registry_shape_drift',
   ),
 
   // Resources path — link / frontmatter / external-URL codes

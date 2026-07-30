@@ -601,7 +601,7 @@ Best-practice checks about skill shape and content.
 - **Default:** `info`
 - **What:** A skill directory contains `scripts/`, `references/`, or `assets/` subdirectories, but the SKILL.md body has zero markdown links pointing into any of them.
 - **Why it matters:** Plugin-dev's "Mistake 4: Missing Resource References" — bundled assets the body never links to are dead weight in the install. They ship but never load. This pattern often signals an author who intended progressive disclosure but didn't wire up the references.
-- **Fix:** Add explicit markdown links from SKILL.md (or a linked file) into the bundled subdirectories, or remove the unreferenced directory. Allow via `validation.allow` if the assets are consumed programmatically.
+- **Fix:** Add explicit markdown links from SKILL.md (or a linked file) into the bundled subdirectories, or remove the unreferenced directory. Assets consumed programmatically belong in `skills.config.<name>.files` as source/dest pairs — a declared dest is exempt, so do NOT restate them in `validation.allow`.
 
 ### `SKILL_BODY_NOT_IMPERATIVE`
 
@@ -641,6 +641,19 @@ Structural checks derived from the plugin inventory layer. These codes fire when
 - **What:** A marketplace manifest declares a plugin with a `path`-based source that does not exist on disk.
 - **Why it matters:** Path sources in a marketplace are filesystem-relative installation targets. A missing source means the marketplace cannot install the plugin — the path is either a typo, a relative path that drifted after a directory move, or a build artifact that was never generated. Git/npm/unknown sources are out of scope (they resolve at install time from remote sources).
 - **Fix:** Correct the source path or remove the entry from `marketplace.plugins[]`.
+
+## Plugin Registry Codes
+
+*Fire when validating the plugin registries Claude Code writes and owns — `installed_plugins.json` and `known_marketplaces.json` — during `vat audit`.*
+
+These files are external data: VAT reads them, Claude Code writes them. Per VAT's Postel's Law rule (be liberal in what you accept from files you do not control) the schemas parse them **liberally** — unknown fields and unknown scope values pass through untouched instead of failing the run. Structural breakage (a missing `version`, a malformed plugin key, a non-array entry list) is still `REGISTRY_INVALID_SCHEMA` at `error`.
+
+### `REGISTRY_SHAPE_DRIFT`
+
+- **Default:** `info`
+- **What:** An installed-plugins registry carries a field or a `scope` value that VAT's model does not recognize — the file Claude Code writes is newer than the model VAT reads it with. One observation per distinct unknown, not per entry.
+- **Why it matters:** Liberal parsing alone would trade false errors for total blindness: Claude Code could add three new fields and a new install scope and VAT would report a clean run forever. This code is the visible half of the trade — VAT accepts the shape it does not understand *and says so*. It is the signal that VAT's registry model has fallen behind, and the input for updating it.
+- **Fix:** No action needed — the unknown value was preserved, not rejected. Report the field so VAT's model can catch up, or set `severity.REGISTRY_SHAPE_DRIFT` to `ignore`.
 
 ## Compat Codes
 
