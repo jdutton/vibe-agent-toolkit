@@ -49,6 +49,9 @@ const MOCK_CHECKSUM = 'a'.repeat(64) as ResourceMetadata['checksum'];
 const REASON_SKILL_DEFINITION = 'skill-definition';
 const REASON_MISSING_TARGET = 'missing-target';
 
+/** Href whose target is never created on disk — the broken-link subject. */
+const MISSING_HREF = './docs/gone.md';
+
 // Deferred paths constants — used in "deferred files support" tests
 const DEFERRED_DEST_REL = 'scripts/cli.mjs';
 const DEFERRED_SRC_REL = 'dist/bin/cli.mjs';
@@ -120,6 +123,38 @@ function walkOnDiskDeferred(opts: {
       projectRoot: opts.tmpDir,
     }),
   });
+}
+
+/**
+ * skill → docs/guide.md → docs/ref.md, with every file REALLY on disk under a
+ * fresh temp root.
+ *
+ * The gitignore fixtures must be real. A `gitignored` exclusion is only
+ * meaningful for a target that EXISTS — a path that isn't there is a broken
+ * link, whatever the ignore oracle says about it. Fictional paths used to work
+ * here only because the walker consulted the oracle before checking existence,
+ * i.e. because of the very defect these tests now pin.
+ */
+function createOnDiskChain(): {
+  root: string;
+  skillPath: string;
+  guidePath: string;
+  refPath: string;
+  registry: WalkableRegistry;
+} {
+  const root = getTempDir();
+  const skillPath = safePath.resolve(root, 'SKILL.md');
+  const guidePath = safePath.resolve(root, 'docs/guide.md');
+  const refPath = safePath.resolve(root, 'docs/ref.md');
+  mkdirSyncReal(dirname(guidePath), { recursive: true });
+  writeFileSync(skillPath, '# Skill\n');
+  writeFileSync(guidePath, '# Guide\n');
+  writeFileSync(refPath, '# Ref\n');
+
+  const skill = createMockResource(SKILL_ID, skillPath, [createLocalLink('guide', GUIDE_HREF, GUIDE_ID)]);
+  const guide = createMockResource(GUIDE_ID, guidePath, [createLocalLink('ref', './ref.md', REF_ID)]);
+  const ref = createMockResource(REF_ID, refPath);
+  return { root, skillPath, guidePath, refPath, registry: createMockRegistry([skill, guide, ref]) };
 }
 
 /**
@@ -616,19 +651,23 @@ describe('walkLinkGraph', () => {
 
   describe('gitignored file exclusion', () => {
     it('should exclude gitignored markdown files with gitignored reason', () => {
-      vi.mocked(isGitIgnored).mockImplementation((filePath: string) =>
-        filePath === GUIDE_PATH,
-      );
+      const { root, skillPath, guidePath, registry } = createOnDiskChain();
+      vi.mocked(isGitIgnored).mockImplementation((filePath: string) => filePath === guidePath);
 
-      const registry = createSkillGuideRegistry();
-      const result = walkLinkGraph(SKILL_ID, registry, defaultOptions());
+      const result = walkLinkGraph(SKILL_ID, registry, defaultOptions({
+        projectRoot: root,
+        skillRootPath: skillPath,
+      }));
 
       expect(result.bundledResources).toHaveLength(0);
       expect(result.excludedReferences).toHaveLength(1);
       expect(result.excludedReferences[0]?.excludeReason).toBe('gitignored');
-      expect(result.excludedReferences[0]?.path).toBe(GUIDE_PATH);
+      expect(result.excludedReferences[0]?.path).toBe(guidePath);
+      // The record carries the evidence the verdict engine gates on, so a
+      // downstream front-end never has to assume existence.
+      expect(result.excludedReferences[0]?.targetExists).toBe(true);
       // Verify projectRoot is passed as cwd so git checks ignore rules in the right directory
-      expect(vi.mocked(isGitIgnored)).toHaveBeenCalledWith(GUIDE_PATH, PROJECT_ROOT);
+      expect(vi.mocked(isGitIgnored)).toHaveBeenCalledWith(guidePath, root);
     });
 
     it('should NOT exclude files that are not gitignored', () => {
@@ -642,18 +681,71 @@ describe('walkLinkGraph', () => {
 
     it('should exclude gitignored file found via transitive link', () => {
       // skill -> guide -> ref, where ref is gitignored
-      vi.mocked(isGitIgnored).mockImplementation((filePath: string) =>
-        filePath === REF_PATH,
-      );
+      const { root, skillPath, refPath, registry } = createOnDiskChain();
+      vi.mocked(isGitIgnored).mockImplementation((filePath: string) => filePath === refPath);
 
-      const registry = createSkillGuideRefRegistry();
-      const result = walkLinkGraph(SKILL_ID, registry, defaultOptions());
+      const result = walkLinkGraph(SKILL_ID, registry, defaultOptions({
+        projectRoot: root,
+        skillRootPath: skillPath,
+      }));
 
       // Guide should be bundled, but ref should be excluded as gitignored
       expectBundledIds(result, [GUIDE_ID]);
       expect(result.excludedReferences).toHaveLength(1);
       expect(result.excludedReferences[0]?.excludeReason).toBe('gitignored');
-      expect(result.excludedReferences[0]?.path).toBe(REF_PATH);
+      expect(result.excludedReferences[0]?.path).toBe(refPath);
+    });
+
+    // ------------------------------------------------------------------
+    // The ordering defect: ignore-before-existence names the wrong cause.
+    // ------------------------------------------------------------------
+
+    it('reports a MISSING target as missing-target even when the ignore oracle calls it ignored', () => {
+      // Neither oracle can be trusted about a path that is not there.
+      // GitTracker's active set holds only paths that DO exist, so a typo'd
+      // link is trivially absent and therefore "ignored"; `git check-ignore`
+      // answers from patterns, so a never-built `dist/out.js` is "ignored"
+      // too. Asked before existence, either one renames every broken link to
+      // LINK_TO_GITIGNORED_FILE — an accusation about a file that is not there.
+      vi.mocked(isGitIgnored).mockReturnValue(true);
+
+      const result = walkSingleSkill([createLocalLink('gone', MISSING_HREF)]);
+
+      expect(result.excludedReferences).toHaveLength(1);
+      expect(result.excludedReferences[0]?.excludeReason).toBe(REASON_MISSING_TARGET);
+      expect(result.excludedReferences[0]?.targetExists).toBe(false);
+    });
+
+    it('does not consult the ignore oracle at all for a missing target', () => {
+      // Stronger than the verdict: the oracle is not even asked. Keeps a future
+      // refactor from reintroducing the question and papering over the answer.
+      // (No clearMocks in the vitest config — call history is per-file, so
+      // clear it explicitly rather than inheriting earlier tests' calls.)
+      vi.mocked(isGitIgnored).mockClear().mockReturnValue(true);
+
+      walkSingleSkill([createLocalLink('gone', MISSING_HREF)]);
+
+      expect(vi.mocked(isGitIgnored)).not.toHaveBeenCalled();
+    });
+
+    it('never asks a GitTracker about a target that does not exist', () => {
+      // The real-repo oracle. `vat audit` plumbs a pre-populated GitTracker
+      // through, and its active set answers "ignored" for anything absent.
+      const asked: string[] = [];
+      const tracker = {
+        isIgnoredByActiveSet: (p: string) => {
+          asked.push(p);
+          return true;
+        },
+      } as unknown as NonNullable<WalkLinkGraphOptions['gitTracker']>;
+
+      const result = walkSingleSkill(
+        [createLocalLink('gone', MISSING_HREF)],
+        { gitTracker: tracker },
+      );
+
+      expect(asked).toEqual([]);
+      expect(result.excludedReferences[0]?.excludeReason).toBe(REASON_MISSING_TARGET);
     });
   });
 

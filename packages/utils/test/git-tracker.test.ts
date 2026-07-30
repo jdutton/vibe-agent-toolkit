@@ -1,11 +1,15 @@
+/* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
 /**
  * Tests for GitTracker - git-ignore checking with caching
  */
+
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { GitTracker } from '../src/git-tracker.js';
 import * as gitUtils from '../src/git-utils.js';
+import { mkdirSyncReal, normalizedTmpdir, safePath } from '../src/path-utils.js';
 
 describe('GitTracker', () => {
   const projectRoot = '/project';
@@ -287,15 +291,58 @@ describe('GitTracker', () => {
       expect(tracker.isIgnoredByActiveSet('/project/docs')).toBe(false);
     });
 
-    it('should return true for paths inside projectRoot that are not in the active set', async () => {
+    it('should return true for EXISTING paths inside projectRoot that are not in the active set', async () => {
+      // Real files on disk, because the active set's authority is now scoped
+      // to paths that exist — see the non-existent cases below.
+      const root = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-git-tracker-'));
+      try {
+        mkdirSyncReal(safePath.join(root, 'node_modules'), { recursive: true });
+        mkdirSyncReal(safePath.join(root, 'dist'), { recursive: true });
+        writeFileSync(safePath.join(root, 'README.md'), '# readme\n');
+        writeFileSync(safePath.join(root, 'node_modules', 'foo.js'), 'x\n');
+        writeFileSync(safePath.join(root, 'dist', 'foo.js'), 'x\n');
+        vi.mocked(gitUtils.gitLsFiles).mockReturnValue(['README.md']);
+
+        const tracker = new GitTracker(root);
+        await tracker.initialize();
+
+        expect(tracker.isIgnoredByActiveSet(safePath.join(root, 'node_modules/foo.js'))).toBe(true);
+        expect(tracker.isIgnoredByActiveSet(safePath.join(root, 'dist/foo.js'))).toBe(true);
+
+        // Still no git check-ignore spawn for existing in-project paths
+        expect(gitUtils.isGitIgnored).not.toHaveBeenCalled();
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it('should NOT call a non-existent in-project path ignored just because the active set lacks it', async () => {
+      // The active set is built from `git ls-files`, so it can only ever
+      // contain paths that EXIST. A path that does not exist is trivially
+      // absent, and a bare set lookup called every typo'd or never-built path
+      // "ignored". Callers acted on that: a broken markdown link was reported
+      // as a gitignored-data leak instead of a broken link. Such paths must
+      // fall through to `git check-ignore`, which answers from the PATTERNS.
+      vi.mocked(gitUtils.isGitIgnored).mockReturnValue(false);
+
+      const tracker = new GitTracker(projectRoot);
+      await tracker.initialize();
+
+      const typo = '/project/docs/typo.md';
+      expect(tracker.isIgnoredByActiveSet(typo)).toBe(false);
+      expect(gitUtils.isGitIgnored).toHaveBeenCalledWith(typo, projectRoot);
+    });
+
+    it('should still report a non-existent path that matches an ignore PATTERN as ignored', async () => {
+      // The other half: `dist/never-built.js` under an ignored `dist/` is
+      // genuinely ignored even though nothing is there yet. Delegating to
+      // check-ignore preserves that answer instead of guessing either way.
+      vi.mocked(gitUtils.isGitIgnored).mockReturnValue(true);
+
       const tracker = new GitTracker(projectRoot);
       await tracker.initialize();
 
       expect(tracker.isIgnoredByActiveSet(NODE_MODULES_PATH)).toBe(true);
-      expect(tracker.isIgnoredByActiveSet('/project/dist/foo.js')).toBe(true);
-
-      // Still no git check-ignore spawn for in-project paths
-      expect(gitUtils.isGitIgnored).not.toHaveBeenCalled();
     });
 
     it('should fall back to isGitIgnored for paths outside the project root', async () => {

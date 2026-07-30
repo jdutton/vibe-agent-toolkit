@@ -37,6 +37,15 @@ export interface LinkResolution {
   sourcePath: string;
   /** 1-based line of the link within {@link LinkResolution.sourcePath}, when known */
   sourceLine?: number | undefined;
+  /**
+   * Whether the link TARGET existed on disk when the walker classified it.
+   *
+   * Recorded rather than re-derived downstream. The verdict engine gates
+   * `LINK_TO_GITIGNORED_FILE` on "gitignored AND exists at source"; a
+   * translation front-end that hardcodes existence turns that guard into dead
+   * code, so the one place that actually stat'ed the path carries the answer.
+   */
+  targetExists: boolean;
   /** Whether the file will be bundled */
   bundled: boolean;
   /** Reason it was excluded (only set when bundled is false) */
@@ -186,6 +195,7 @@ function isNavigationFile(filename: string): boolean {
 function makeExclusion(
   targetPath: string,
   sourcePath: string,
+  targetExists: boolean,
   reason: LinkResolution['excludeReason'],
   link: ResourceLink,
   matchedRule?: ExcludeRule,
@@ -194,6 +204,7 @@ function makeExclusion(
     path: targetPath,
     sourcePath,
     ...(link.line !== undefined && { sourceLine: link.line }),
+    targetExists,
     bundled: false,
     excludeReason: reason,
     ...(matchedRule ? { matchedRule } : {}),
@@ -240,17 +251,18 @@ interface ExcludeMatcher {
  * existing-and-NOT-gitignored covered path (or an uncovered path) reaches
  * normal handling. {@link DeferredArtifacts.covers} does the exact-OR-
  * directory-prefix membership test (pure, no filesystem access); the
- * existence gate stays here at the call site.
+ * existence answer is supplied by the caller, which probes the target once
+ * for the whole classifier.
  *
  * @returns true if the path was classified as deferred
  */
 function checkDeferred(
   targetPath: string,
+  targetExists: boolean,
   deferredArtifacts: DeferredArtifacts,
   deferredAssetSet: Set<string>,
 ): boolean {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path from parsed markdown
-  if (deferredArtifacts.covers(targetPath) && !existsSync(targetPath)) {
+  if (deferredArtifacts.covers(targetPath) && !targetExists) {
     deferredAssetSet.add(toForwardSlash(targetPath));
     return true;
   }
@@ -290,7 +302,53 @@ function recordGitignoredTarget(
     deferredAssetSet.add(toForwardSlash(targetPath));
     return;
   }
-  excludedReferences.push(makeExclusion(targetPath, sourcePath, 'gitignored', link));
+  // `targetExists: true` is not an assumption here — the caller only reaches
+  // this function for a target it has already stat'ed and found present.
+  excludedReferences.push(makeExclusion(targetPath, sourcePath, true, 'gitignored', link));
+}
+
+/**
+ * The gitignore branch of {@link checkExclusions}, extracted to keep that
+ * classifier within its cognitive-complexity budget.
+ *
+ * GATED ON EXISTENCE, and the gate is the point. A path that is not there
+ * cannot leak anything, and neither ignore oracle can be trusted to say so:
+ * {@link GitTracker}'s active set contains only paths that DO exist, so every
+ * typo'd link was trivially "absent" and therefore "ignored", and every broken
+ * link in a real git repo was reported as `LINK_TO_GITIGNORED_FILE` instead of
+ * `LINK_MISSING_TARGET`. `git check-ignore` answers from the ignore PATTERNS
+ * and so mislabels a different set — a never-built `dist/out.js` under an
+ * ignored `dist/`. Non-existence is classified further down, by
+ * {@link processLink}, as `missing-target`.
+ *
+ * Prefer the pre-populated GitTracker when the caller plumbed one through: it
+ * answers in O(1) against the active set, no `git check-ignore` spawn.
+ *
+ * @returns true if the target was recorded (as a leak, or as an exempted
+ *          `files:` build artifact) and the caller should stop classifying
+ */
+function checkGitignored(
+  targetPath: string,
+  sourcePath: string,
+  targetExists: boolean,
+  link: ResourceLink,
+  options: WalkLinkGraphOptions,
+  excludedReferences: LinkResolution[],
+  deferredAssetSet: Set<string>,
+): boolean {
+  if (!targetExists) {
+    return false;
+  }
+
+  const isIgnored = options.gitTracker === undefined
+    ? isGitIgnored(targetPath, options.projectRoot)
+    : options.gitTracker.isIgnoredByActiveSet(targetPath);
+  if (!isIgnored) {
+    return false;
+  }
+
+  recordGitignoredTarget(targetPath, sourcePath, link, options.deferredArtifacts, excludedReferences, deferredAssetSet);
+  return true;
 }
 
 /**
@@ -309,33 +367,41 @@ function checkExclusions(
   excludedReferences: LinkResolution[],
   deferredAssetSet: Set<string>,
 ): boolean {
+  // ONE existence probe for the whole classifier. Several branches below are
+  // meaningful only for a target that is actually there, and one of them
+  // (gitignore) is actively WRONG without it — see the comment on that branch.
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path from parsed markdown
+  const targetExists = existsSync(targetPath);
+
   // The deferred check is the FIRST discriminator: a not-yet-materialized target
   // must be classified before any check that would read it off disk.
-  if (options.deferredArtifacts && checkDeferred(targetPath, options.deferredArtifacts, deferredAssetSet)) {
+  if (options.deferredArtifacts && checkDeferred(targetPath, targetExists, options.deferredArtifacts, deferredAssetSet)) {
     return true;
   }
 
   // Check if target is a directory
-  try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path from parsed markdown
-    if (existsSync(targetPath) && statSync(targetPath).isDirectory()) {
-      excludedReferences.push(makeExclusion(targetPath, sourcePath, 'directory-target', link));
+  if (targetExists) {
+    try {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path from parsed markdown
+      if (statSync(targetPath).isDirectory()) {
+        excludedReferences.push(makeExclusion(targetPath, sourcePath, targetExists, 'directory-target', link));
+        return true;
+      }
+    } catch {
+      // statSync failure = skip
       return true;
     }
-  } catch {
-    // statSync failure = skip
-    return true;
   }
 
   // Check project boundary
   if (isOutsideProject(targetPath, options.projectRoot)) {
-    excludedReferences.push(makeExclusion(targetPath, sourcePath, 'outside-project', link));
+    excludedReferences.push(makeExclusion(targetPath, sourcePath, targetExists, 'outside-project', link));
     return true;
   }
 
   // Check navigation file exclusion
   if (options.excludeNavigationFiles && isNavigationFile(basename(targetPath))) {
-    excludedReferences.push(makeExclusion(targetPath, sourcePath, 'navigation-file', link));
+    excludedReferences.push(makeExclusion(targetPath, sourcePath, targetExists, 'navigation-file', link));
     return true;
   }
 
@@ -349,7 +415,7 @@ function checkExclusions(
   // current skill itself.
   if (basename(targetPath) === 'SKILL.md') {
     if (safePath.resolve(targetPath) !== safePath.resolve(options.skillRootPath)) {
-      excludedReferences.push(makeExclusion(targetPath, sourcePath, 'skill-definition', link));
+      excludedReferences.push(makeExclusion(targetPath, sourcePath, targetExists, 'skill-definition', link));
     }
     return true;
   }
@@ -358,22 +424,13 @@ function checkExclusions(
   const relativePath = toForwardSlash(safePath.relative(options.projectRoot, targetPath));
   const matchedExclude = excludeMatchers.find((m) => m.isMatch(relativePath));
   if (matchedExclude) {
-    excludedReferences.push(makeExclusion(targetPath, sourcePath, 'pattern-matched', link, matchedExclude.rule));
+    excludedReferences.push(makeExclusion(targetPath, sourcePath, targetExists, 'pattern-matched', link, matchedExclude.rule));
     return true;
   }
 
-  // Check if the file is gitignored (prevents leaking data from ignored directories).
-  // Prefer the pre-populated GitTracker when the caller plumbed one through: it
-  // answers in O(1) against the active set, no `git check-ignore` spawn.
-  const isIgnored = options.gitTracker === undefined
-    ? isGitIgnored(targetPath, options.projectRoot)
-    : options.gitTracker.isIgnoredByActiveSet(targetPath);
-  if (isIgnored) {
-    recordGitignoredTarget(targetPath, sourcePath, link, options.deferredArtifacts, excludedReferences, deferredAssetSet);
-    return true;
-  }
-
-  return false;
+  // Check if the file is gitignored (prevents leaking data from ignored
+  // directories) — existence-gated; see {@link checkGitignored}.
+  return checkGitignored(targetPath, sourcePath, targetExists, link, options, excludedReferences, deferredAssetSet);
 }
 
 /**
@@ -421,7 +478,7 @@ function processLink(
   } else {
     // File doesn't exist and not in registry, and not deferred (handled above).
     // Record as missing-target so downstream emits LINK_MISSING_TARGET.
-    state.excludedReferences.push(makeExclusion(targetPath, currentResource.filePath, 'missing-target', link));
+    state.excludedReferences.push(makeExclusion(targetPath, currentResource.filePath, false, 'missing-target', link));
   }
 }
 
@@ -437,9 +494,10 @@ function processRegistryResource(
   options: WalkLinkGraphOptions,
   state: WalkState,
 ): void {
-  // Check depth limit
+  // Check depth limit. A registry resource came from a disk crawl, so it
+  // exists by construction — `targetExists: true` is a fact here, not a guess.
   if (currentDepth >= options.maxDepth) {
-    state.excludedReferences.push(makeExclusion(targetPath, sourcePath, 'depth-exceeded', link));
+    state.excludedReferences.push(makeExclusion(targetPath, sourcePath, true, 'depth-exceeded', link));
     return;
   }
 

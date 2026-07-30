@@ -5,6 +5,7 @@
  * Solution: Cache results and pre-populate with git ls-files (tracked + untracked non-ignored).
  */
 
+import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import { gitLsFiles, isGitIgnored } from './git-utils.js';
@@ -163,9 +164,21 @@ export class GitTracker {
   /**
    * Fast O(1) ignore check against the pre-populated active set.
    *
-   * For paths INSIDE the project root, membership in the active set is
-   * authoritative: a path is ignored iff it is not in the active set AND not
-   * an ancestor of any active-set path. No `git check-ignore` spawn.
+   * For paths INSIDE the project root **that exist on disk**, membership in the
+   * active set is authoritative: such a path is ignored iff it is not in the
+   * active set AND not an ancestor of any active-set path. No `git
+   * check-ignore` spawn.
+   *
+   * The existence qualifier is load-bearing, not a caveat. The active set is
+   * built from `git ls-files`, so it can only ever contain paths that EXIST — a
+   * path that does not exist is trivially absent from it, and a bare set lookup
+   * would call every typo'd or never-built path "ignored". Callers acted on
+   * that: a broken markdown link was reported as a gitignored-data leak rather
+   * than a broken link. Such paths therefore fall back to {@link isIgnored},
+   * i.e. `git check-ignore`, which answers from the ignore PATTERNS and is
+   * correct for a path that is merely named (`dist/out.js` under an ignored
+   * `dist/` is ignored; `docs/typo.md` is not). The fallback result is cached,
+   * so a repeated miss on the same path stays O(1).
    *
    * For paths OUTSIDE the project root, falls back to {@link isIgnored} so
    * legacy behavior is preserved.
@@ -189,7 +202,18 @@ export class GitTracker {
       return this.isIgnored(absolutePath);
     }
 
-    return !(this.activeSet.has(normalized) || this.activeAncestors.has(normalized));
+    if (this.activeSet.has(normalized) || this.activeAncestors.has(normalized)) {
+      return false;
+    }
+
+    // Absent from the active set. That means "ignored" only for a path that is
+    // actually there; otherwise the set has no opinion and git must be asked.
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied path, read-only existence probe
+    if (!existsSync(normalized)) {
+      return this.isIgnored(absolutePath);
+    }
+
+    return true;
   }
 
   private isWithinProjectRoot(normalizedAbsolutePath: string): boolean {
