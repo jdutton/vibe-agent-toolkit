@@ -36,6 +36,21 @@ function simulateDead(statusCode = 0, err?: string | Error | object): void {
 }
 
 /**
+ * Helper: simulate markdown-link-check the way it actually behaves — derive
+ * alive/dead from the `aliveStatusCodes` allowlist the validator passes in,
+ * exactly as link-check's LinkCheckResult does (an exact-membership test, not
+ * a range; the library's own default is `[200]`). Using the real coupling here
+ * means the mock cannot drift from the allowlist under test.
+ */
+function simulateStatusViaAllowlist(statusCode: number): void {
+	mockedLinkCheck.mockImplementation((_markdown, options, callback) => {
+		const allowlist = options.aliveStatusCodes ?? [200];
+		const alive = allowlist.includes(statusCode);
+		callback(null, [{ link: '', status: alive ? 'alive' : 'dead', statusCode }]);
+	});
+}
+
+/**
  * Helper: simulate markdown-link-check calling its callback with a top-level error
  */
 function simulateError(message: string): void {
@@ -304,4 +319,55 @@ describe('ExternalLinkValidator', () => {
 		// Should use fallback message format
 		expect(result.error).toBe('Link status: dead');
 	});
+
+	// Regression: "is this link alive?" must be ONE predicate. The fresh-fetch
+	// path decided it via the `aliveStatusCodes` allowlist while the cache-read
+	// path used a `>= 200 && < 400` range, so every status inside [200,400) but
+	// outside the allowlist flipped verdict between run 1 (error) and run 2
+	// (ok) — and then stayed wrong for the cache's whole 24h TTL, i.e. it
+	// self-healed on exactly the retry you'd run to reproduce it.
+	const CROSS_RUN_CASES: ReadonlyArray<readonly [number, 'error' | 'ok']> = [
+		// Allowlisted — alive on both sides.
+		[200, 'ok'],
+		[206, 'ok'],
+		[301, 'ok'],
+		[302, 'ok'],
+		[307, 'ok'],
+		[308, 'ok'],
+		// In [200,400) but NOT allowlisted — the old cache-read range called
+		// these 'ok' while the fresh fetch called them 'error'.
+		[201, 'error'],
+		[202, 'error'],
+		[204, 'error'],
+		[205, 'error'],
+		[207, 'error'],
+		[208, 'error'],
+		[226, 'error'],
+		[300, 'error'],
+		[303, 'error'],
+		[304, 'error'],
+		[305, 'error'],
+		[306, 'error'],
+	];
+
+	it.each(CROSS_RUN_CASES)(
+		'HTTP %i yields "%s" on the fresh fetch and on the next run reading cache',
+		async (statusCode, verdict) => {
+			simulateStatusViaAllowlist(statusCode);
+
+			const freshRun = await suite.validator.validateLink(EXAMPLE_URL);
+			expect(freshRun.cached).toBe(false);
+			expect(freshRun.status).toBe(verdict);
+
+			// A second `vat` invocation: fresh validator instance, same on-disk
+			// cache directory — this is the cache-read path, not the in-memory one.
+			const nextRun = await new ExternalLinkValidator(suite.tempDir, {
+				cacheTtlHours: 24,
+			}).validateLink(EXAMPLE_URL);
+			expect(nextRun.cached).toBe(true);
+			expect(nextRun.status).toBe(verdict);
+			// markdown-link-check must not have been re-invoked on the cached run.
+			expect(mockedLinkCheck).toHaveBeenCalledTimes(1);
+		},
+	);
 });
