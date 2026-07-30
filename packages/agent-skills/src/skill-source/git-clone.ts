@@ -1,7 +1,11 @@
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
 
-import { safePath, type ParsedGitUrl } from '@vibe-agent-toolkit/utils';
+import {
+  nonInteractiveGitOverrides,
+  safePath,
+  type ParsedGitUrl,
+} from '@vibe-agent-toolkit/utils';
 
 /** Hard wall-clock cap on any single git invocation (clone or rev-parse). */
 const GIT_TIMEOUT_MS = 60_000;
@@ -22,11 +26,20 @@ export interface GitCloneResult {
  * Run git with a wall-clock timeout and a generous output buffer. On timeout,
  * spawnSync sets `.error` (code `ETIMEDOUT`) and kills the process — surface a
  * clear error instead of letting a generic non-zero-status message swallow it.
+ *
+ * `envOverlay` is merged over the inherited environment. It is empty for every
+ * invocation except the clone of a shorthand-inferred URL — see
+ * `nonInteractiveGitOverrides`.
  */
-function runGit(args: string[], cwd?: string): SpawnSyncReturns<string> {
+function runGit(
+  args: string[],
+  envOverlay: Record<string, string>,
+  cwd?: string,
+): SpawnSyncReturns<string> {
   // eslint-disable-next-line sonarjs/no-os-command-from-path -- git is a standard system command
   const result = spawnSync('git', args, {
     ...(cwd === undefined ? {} : { cwd }),
+    env: { ...process.env, ...envOverlay },
     encoding: 'utf-8',
     stdio: ['pipe', 'pipe', 'pipe'],
     timeout: GIT_TIMEOUT_MS,
@@ -83,30 +96,49 @@ export function cloneGitSource(parsed: ParsedGitUrl, targetTempdir: string): Git
 }
 
 function cloneShallow(parsed: ParsedGitUrl, tempdir: string): string {
-  const args = ['clone', '--depth', '1', '--single-branch'];
+  // A shorthand-inferred URL clones non-interactively so a typo'd `owner/repo`
+  // fails immediately instead of blocking on a credential prompt; an explicitly
+  // typed URL keeps interactive auth, which may be exactly what the user wants.
+  const { env, configArgs } = nonInteractiveGitOverrides(parsed);
+  // `-c` overrides must precede the subcommand.
+  const args = [...configArgs, 'clone', '--depth', '1', '--single-branch'];
   if (parsed.ref !== undefined) args.push('--branch', parsed.ref);
   // `--` ends option parsing so a cloneUrl/tempdir that begins with `-` can never
   // be read as a git option (defense in depth — parseGitUrl already rejects such
   // URLs, but the separator makes the guarantee local to the spawn).
   args.push('--', parsed.cloneUrl, tempdir);
 
-  const result = runGit(args);
+  const result = runGit(args, env);
   const status = result.status ?? 1;
   if (status !== 0) {
-    const stderr = (result.stderr ?? '').trim();
-    if (parsed.ref !== undefined && /not found|did not match/i.test(stderr)) {
-      throw new Error(
-        `Reference not found in ${parsed.cloneUrl}: ${parsed.ref}. ` +
-          `Hint: --depth 1 cloning cannot resolve arbitrary deep commit SHAs; try a branch or tag name.`,
-      );
-    }
-    throw new Error(`Clone failed:\n${stderr}`);
+    throw cloneFailure(parsed, (result.stderr ?? '').trim());
   }
   return parsed.ref ?? 'HEAD';
 }
 
+/** Turn a non-zero `git clone` into the most specific error we can justify. */
+function cloneFailure(parsed: ParsedGitUrl, stderr: string): Error {
+  if (parsed.ref !== undefined && /not found|did not match/i.test(stderr)) {
+    return new Error(
+      `Reference not found in ${parsed.cloneUrl}: ${parsed.ref}. ` +
+        `Hint: --depth 1 cloning cannot resolve arbitrary deep commit SHAs; try a branch or tag name.`,
+    );
+  }
+  if (parsed.inferredFromShorthand) {
+    // With prompts disabled, a nonexistent-or-private repo surfaces as an
+    // authentication failure. Name the expansion, because the user never typed it.
+    return new Error(
+      `Clone failed:\n${stderr}\n` +
+        `Hint: shorthand was expanded to ${parsed.cloneUrl}. Check the owner/repo spelling; ` +
+        `if the repository is private, pass the full URL to authenticate interactively.`,
+    );
+  }
+  return new Error(`Clone failed:\n${stderr}`);
+}
+
 function revParseHead(tempdir: string): string {
-  const result = runGit(['rev-parse', 'HEAD'], tempdir);
+  // No overlay: this runs inside the finished clone and never touches a remote.
+  const result = runGit(['rev-parse', 'HEAD'], {}, tempdir);
   const status = result.status ?? 1;
   if (status !== 0) {
     throw new Error(`Failed to resolve HEAD commit in cloned repo: ${(result.stderr ?? '').trim()}`);

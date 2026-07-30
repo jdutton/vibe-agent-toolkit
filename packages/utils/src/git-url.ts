@@ -6,11 +6,35 @@
  * - `ref` is an optional branch or tag name (deep commit SHAs are not
  *   guaranteed to work with shallow clone — see design spec for details).
  * - `subpath` is an optional subdirectory within the cloned repo to audit.
+ * - `inferredFromShorthand` records whether `cloneUrl` was *inferred* from bare
+ *   `owner/repo` shorthand rather than supplied verbatim by the user.
  */
 export interface ParsedGitUrl {
   cloneUrl: string;
   ref?: string;
   subpath?: string;
+  /**
+   * True when `cloneUrl` was synthesized from bare GitHub shorthand
+   * (`owner/repo`), false when the user typed a URL we pass through.
+   *
+   * This has to travel with the value: an expanded shorthand URL is
+   * byte-identical to a hand-typed one, so a consumer cannot recover the
+   * distinction by inspecting `cloneUrl`. Consumers need it because the two
+   * cases warrant opposite credential policies — see
+   * {@link nonInteractiveGitOverrides}.
+   */
+  inferredFromShorthand: boolean;
+}
+
+/**
+ * Environment and `git -c` overrides that make a clone non-interactive.
+ * Both collections are empty when no override is warranted.
+ */
+export interface NonInteractiveGitOverrides {
+  /** Overlay to merge over `process.env` when spawning git. */
+  env: Record<string, string>;
+  /** `git -c <name>=<value>` arguments to place *before* the subcommand. */
+  configArgs: string[];
 }
 
 /**
@@ -61,14 +85,14 @@ export function parseGitUrl(input: string): ParsedGitUrl {
   // file:// natively.
   if (trimmed.startsWith('file://')) {
     const { base, ref, subpath } = splitFragment(trimmed);
-    return buildParsed(base, ref, subpath);
+    return buildParsed(base, ref, subpath, false);
   }
 
   // HTTPS .git form: https://host/path.git[#ref[:subpath]]
   if (/^https?:\/\//.test(trimmed)) {
     const { base, ref, subpath } = splitFragment(trimmed);
     if (base.endsWith('.git')) {
-      return buildParsed(base, ref, subpath);
+      return buildParsed(base, ref, subpath, false);
     }
 
     // GitHub web URL: https://github.com/owner/repo/tree/<ref>[/<subpath>]
@@ -82,30 +106,37 @@ export function parseGitUrl(input: string): ParsedGitUrl {
       const repo = ghWeb[2] ?? '';
       const webRef = ghWeb[3];
       const webSubpath = ghWeb[4];
-      return buildParsed(`https://github.com/${owner}/${repo}.git`, webRef, webSubpath);
+      // A GitHub web URL is still something the user typed in full — only bare
+      // `owner/repo` counts as inferred.
+      return buildParsed(`https://github.com/${owner}/${repo}.git`, webRef, webSubpath, false);
     }
   }
 
   // SSH ssh:// form: ssh://git@host/path[#ref[:subpath]]
   if (trimmed.startsWith('ssh://')) {
     const { base, ref, subpath } = splitFragment(trimmed);
-    return buildParsed(base, ref, subpath);
+    return buildParsed(base, ref, subpath, false);
   }
 
   // SSH scp-like form: git@host:owner/repo.git[#ref[:subpath]]
   // Anchored, no alternation with nested quantifiers — safe from ReDoS.
   if (/^[^@\s]+@[^:\s]+:[^#\s]+/.test(trimmed)) {
     const { base, ref, subpath } = splitFragment(trimmed);
-    return buildParsed(base, ref, subpath);
+    return buildParsed(base, ref, subpath, false);
   }
 
-  // GitHub shorthand: owner/repo[#ref[:subpath]] (single slash in base)
+  // GitHub shorthand: owner/repo[#ref[:subpath]] (single slash in base).
+  // NOTE: this pattern is deliberately a superset of the stricter one in
+  // `isGitUrl` (it also admits `.` inside a segment). `isGitUrl` gates every
+  // call site, so it is the effective definition of "shorthand" in practice;
+  // the two must stay in the isGitUrl ⊆ parseGitUrl direction, or an input
+  // routed here as a URL would fall through to the "Invalid git URL" throw.
   const { base, ref, subpath } = splitFragment(trimmed);
   const shorthand = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/.exec(base);
   if (shorthand) {
     const owner = shorthand[1] ?? '';
     const repo = shorthand[2] ?? '';
-    return buildParsed(`https://github.com/${owner}/${repo}.git`, ref, subpath);
+    return buildParsed(`https://github.com/${owner}/${repo}.git`, ref, subpath, true);
   }
 
   throw new Error(
@@ -116,11 +147,67 @@ export function parseGitUrl(input: string): ParsedGitUrl {
   );
 }
 
-function buildParsed(cloneUrl: string, ref?: string, subpath?: string): ParsedGitUrl {
-  const result: ParsedGitUrl = { cloneUrl };
+function buildParsed(
+  cloneUrl: string,
+  ref: string | undefined,
+  subpath: string | undefined,
+  inferredFromShorthand: boolean
+): ParsedGitUrl {
+  const result: ParsedGitUrl = { cloneUrl, inferredFromShorthand };
   if (ref !== undefined && ref !== '') result.ref = ref;
   if (subpath !== undefined && subpath !== '') result.subpath = subpath;
   return result;
+}
+
+/**
+ * Credential-prompt overrides for cloning `parsed`.
+ *
+ * **Only inferred shorthand gets them.** A user who typed a full
+ * `https://…` URL for a private repo may legitimately intend to authenticate
+ * interactively, and silently disabling that would break a real workflow. A
+ * user who typed `owner/repo` and got it wrong should fail in milliseconds
+ * instead of sitting on a credential prompt for a minute.
+ *
+ * Why this exact set (verified against git 2.50.1 with `git credential fill`):
+ *
+ * - `GIT_TERMINAL_PROMPT=0` — suppresses git's own TTY prompt. On its own it is
+ *   **not** sufficient: `gitcredentials(7)` consults `GIT_ASKPASS`, then
+ *   `core.askPass`, then `SSH_ASKPASS`, and only prompts on the terminal if all
+ *   three are unset. Each askpass hook therefore bypasses this flag entirely —
+ *   which is exactly the case inside VS Code's integrated terminal, where
+ *   `GIT_ASKPASS` points at a GUI prompt.
+ * - `GIT_ASKPASS=''` — `getenv()` returns a non-NULL empty string, so git stops
+ *   walking the askpass chain *and* runs nothing, masking `core.askPass` and
+ *   `SSH_ASKPASS` in one move.
+ * - `SSH_ASKPASS=''` and `-c core.askPass=` — belt and braces for the same
+ *   chain, because an empty-valued environment variable is not reliably
+ *   distinguishable from an unset one on Windows. `-c` is used rather than
+ *   `GIT_CONFIG_*` precisely because `-c` is additive: writing
+ *   `GIT_CONFIG_COUNT` would silently clobber an overlay the caller supplied
+ *   (VAT's own tests use `GIT_CONFIG_*` to rewrite remotes via `insteadOf`).
+ * - `GCM_INTERACTIVE=never` — git's flags cannot reach a credential *helper*
+ *   that opens its own UI. Git Credential Manager (the default on Git for
+ *   Windows) is the common one; `never` still lets it serve a cached
+ *   credential, it only forbids escalating to a prompt.
+ *
+ * What is deliberately **not** here: nothing resets `credential.helper` and
+ * nothing sets `GIT_CONFIG_NOSYSTEM`. A helper holding a valid token is how a
+ * private repo typed as shorthand still clones successfully; the goal is to
+ * forbid *interaction*, not authentication.
+ */
+export function nonInteractiveGitOverrides(parsed: ParsedGitUrl): NonInteractiveGitOverrides {
+  if (!parsed.inferredFromShorthand) {
+    return { env: {}, configArgs: [] };
+  }
+  return {
+    env: {
+      GIT_TERMINAL_PROMPT: '0',
+      GIT_ASKPASS: '',
+      SSH_ASKPASS: '',
+      GCM_INTERACTIVE: 'never',
+    },
+    configArgs: ['-c', 'core.askPass='],
+  };
 }
 
 /**
