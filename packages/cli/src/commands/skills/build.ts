@@ -30,7 +30,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 import * as yaml from 'yaml';
 
-import { handleCommandError } from '../../utils/command-error.js';
+import { handleCommandError, handleValidationGateFailure } from '../../utils/command-error.js';
 import { loadConfig } from '../../utils/config-loader.js';
 import {
   collectPostBuildIssues,
@@ -235,7 +235,10 @@ async function validateSkillOrExit(
   displayIgnoredErrors(validationResult, logger);
 
   logger.error(`\n   Build aborted due to validation errors`);
-  process.exit(1);
+  // Every finding above went to STDERR. Exiting here without the stdout summary
+  // is what made `vat skills build | jq .status` return an empty document
+  // alongside exit 1 — the one case the help text documents exit 1 for.
+  handleValidationGateFailure(skillName, validationResult.allErrors);
 }
 
 /**

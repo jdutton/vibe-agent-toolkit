@@ -24,12 +24,14 @@ import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
 import { findProjectRoot, gitFindRoot, GitTracker, safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';
 
+import { handleCommandError } from '../../utils/command-error.js';
 import { loadConfig } from '../../utils/config-loader.js';
 import { formatDurationSecs } from '../../utils/duration.js';
 import {
   formatIssueLines,
   formatIssueSetHeading,
   formatSeverityBreakdown,
+  sumSeverityCounts,
 } from '../../utils/issue-rendering.js';
 import { type createLogger } from '../../utils/logger.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
@@ -39,7 +41,6 @@ import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
 
 import {
   filterSkillsByName,
-  handleCommandError,
   setupCommandContext,
   type DiscoveredSkill,
 } from './command-helpers.js';
@@ -114,6 +115,16 @@ function toYamlResult(result: PackagingValidationResult, verbose: boolean): unkn
  * `results.some(r => r.status === 'error') ? 'error' : 'success'` — a two-value
  * collapse that could never report the warning case, and so reported 33 active
  * warnings as `success`.
+ *
+ * The header total counts BOTH the per-skill findings and the run-level ones,
+ * because the exit code does too — dropping run issues from the header would
+ * divorce the published verdict from the code the process actually returns.
+ * That is why `runIssueCounts` exists beside them: on a large real repo the
+ * header read 1814 warnings against a per-skill sum of 1800, and the missing 14
+ * were run-level ALLOW_UNUSED entries published only as a bare LIST. The
+ * identity `issueCounts === Σ results[].issueCounts + runIssueCounts` now holds
+ * by construction, so a consumer can reconcile the two numbers instead of
+ * hand-counting a list to find out whether anything went missing.
  */
 export function buildValidateSummary(
   results: PackagingValidationResult[],
@@ -123,15 +134,18 @@ export function buildValidateSummary(
 ): {
   status: ValidationStatus;
   issueCounts: SeverityCounts;
+  runIssueCounts: SeverityCounts;
   skillsValidated: number;
   results: unknown[];
   runIssues: ValidationIssue[];
   durationSecs: number;
 } {
-  const issues = [...batchIssues(results), ...runIssues];
+  const skillIssues = batchIssues(results);
+  const runIssueCounts = countBySeverity(runIssues);
   return {
-    status: calculateValidationStatus(issues),
-    issueCounts: countBySeverity(issues),
+    status: calculateValidationStatus([...skillIssues, ...runIssues]),
+    issueCounts: sumSeverityCounts([countBySeverity(skillIssues), runIssueCounts]),
+    runIssueCounts,
     skillsValidated: results.length,
     results: results.map((r) => toYamlResult(r, verbose)),
     runIssues: [...runIssues],

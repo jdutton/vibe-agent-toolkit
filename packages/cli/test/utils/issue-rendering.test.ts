@@ -14,7 +14,7 @@
  * extracted to fix.
  */
 
-import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import type { SeverityCounts, ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import type {
   PackageSkillResult,
   PackagingValidationResult,
@@ -28,7 +28,10 @@ import {
   formatPostBuildIssueReport,
   formatPreBuildIssueReport,
 } from '../../src/commands/skills/build.js';
-import { formatSkillValidationLines } from '../../src/commands/skills/package.js';
+import {
+  buildPackageHeader,
+  formatSkillValidationLines,
+} from '../../src/commands/skills/package.js';
 import {
   buildValidateSummary,
   formatSkillProgressLine,
@@ -65,13 +68,14 @@ function packagingResult(
   skillName: string,
   issues: ValidationIssue[],
   excludedReferences: Array<{ path: string; reason: 'gitignored' }> = [],
+  ignoredErrors: PackagingValidationResult['ignoredErrors'] = [],
 ): PackagingValidationResult {
   return {
     skillName,
     // The real two-valued gate verdict: `error` iff there is an active error.
     status: issues.some((i) => i.severity === 'error') ? 'error' : 'success',
     allErrors: issues,
-    ignoredErrors: [],
+    ignoredErrors,
     observations: [],
     evidence: [],
     metadata: {
@@ -120,6 +124,15 @@ function validationResult(issues: ValidationIssue[], status: ValidationResult['s
       warnings: issues.filter((i) => i.severity === 'warning').length,
       info: issues.filter((i) => i.severity === 'info').length,
     },
+  };
+}
+
+/** One `validation.allow` suppression record. */
+function allowRecord(code: string): PackagingValidationResult['ignoredErrors'][number] {
+  return {
+    code: code as ValidationIssue['code'],
+    location: 'a/SKILL.md:3',
+    reason: 'known and accepted',
   };
 }
 
@@ -299,6 +312,49 @@ describe('vat skills validate — buildValidateSummary', () => {
     expect(first.issueCounts).toEqual({ errors: 0, warnings: 1, info: 1 });
   });
 
+  it('closes the accounting: the header equals the per-skill sum plus the run-level counts', () => {
+    // The observed symptom on a large real repo: the header said 1814 warnings
+    // while the per-skill counts summed to 1800. The 14 missing ones are
+    // run-level ALLOW_UNUSED warnings — legitimately in the header (the exit
+    // code is derived from them too), but published only as a bare LIST, with
+    // no counts block, so no consumer could reconcile the two numbers without
+    // hand-counting the list. The invariant below is what makes the header
+    // accountable; dropping run issues from the header instead would have
+    // divorced it from the exit code, which is the worse of the two failures.
+    const summary = buildValidateSummary(
+      [
+        packagingResult('a', [issue('warning', 'W1'), issue('info', 'I1')], [], [
+          allowRecord('LINK_BROKEN'),
+        ]),
+        packagingResult('b', [issue('error', 'E1')]),
+      ],
+      1,
+      false,
+      [issue('warning', 'ALLOW_UNUSED'), issue('warning', 'ALLOW_UNUSED')],
+    );
+
+    const perSkill = sumSeverityCounts(
+      summary.results.map((r) => (r as { issueCounts: SeverityCounts }).issueCounts),
+    );
+    // Guards against a vacuous pass: all three buckets have to be non-trivial
+    // and the run bucket has to be non-empty, or the identity proves nothing.
+    expect(perSkill).toEqual({ errors: 1, warnings: 1, info: 1 });
+    expect(summary.runIssueCounts).toEqual({ errors: 0, warnings: 2, info: 0 });
+
+    expect(summary.issueCounts).toEqual(sumSeverityCounts([perSkill, summary.runIssueCounts]));
+  });
+
+  it('counts an allow-suppressed issue in neither the per-skill nor the run total', () => {
+    const summary = buildValidateSummary(
+      [packagingResult('a', [issue('warning', 'W1')], [], [allowRecord('LINK_BROKEN')])],
+      1,
+      false,
+      [],
+    );
+    expect(summary.issueCounts).toEqual({ errors: 0, warnings: 1, info: 0 });
+    expect(summary.runIssueCounts).toEqual({ errors: 0, warnings: 0, info: 0 });
+  });
+
   it('strips excludedReferences unless verbose', () => {
     const results = [packagingResult('a', [], [{ path: 'x.md', reason: 'gitignored' }])];
     const terse = buildValidateSummary(results, 1, false, []).results[0] as {
@@ -453,6 +509,33 @@ describe('vat skills build — buildYamlSummary', () => {
 // ---------------------------------------------------------------------------
 // `vat skills package`
 // ---------------------------------------------------------------------------
+
+describe('vat skills package — buildPackageHeader', () => {
+  it('publishes the verdict of the validation it ran, not a hardcoded success', () => {
+    // The defect: `status: success` was written as a LITERAL beside counts drawn
+    // from the validation whose verdict it contradicted, so a skill that
+    // `vat skills build` reports as `warning` was reported here as `success`.
+    // Two lanes, one skill, two answers.
+    expect(buildPackageHeader(validationResult([issue('warning', 'W1')], 'warning'))).toEqual({
+      status: 'warning',
+      issueCounts: { errors: 0, warnings: 1, info: 0 },
+    });
+  });
+
+  it('still says success for a genuinely clean run', () => {
+    expect(buildPackageHeader(validationResult([], 'success'))).toEqual({
+      status: 'success',
+      issueCounts: { errors: 0, warnings: 0, info: 0 },
+    });
+  });
+
+  it('publishes the info distribution behind a success verdict', () => {
+    expect(buildPackageHeader(validationResult([issue('info', 'I1')], 'success'))).toEqual({
+      status: 'success',
+      issueCounts: { errors: 0, warnings: 0, info: 1 },
+    });
+  });
+});
 
 describe('vat skills package — formatSkillValidationLines', () => {
   it('does not drop info findings from the report', () => {

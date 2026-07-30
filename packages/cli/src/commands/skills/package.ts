@@ -22,7 +22,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 import * as yaml from 'yaml';
 
-import { handleCommandError } from '../../utils/command-error.js';
+import { handleCommandError, handleValidationGateFailure } from '../../utils/command-error.js';
 import { formatIssueLines, formatIssueSetHeading } from '../../utils/issue-rendering.js';
 import { createLogger } from '../../utils/logger.js';
 import { writeYamlOutput } from '../../utils/output.js';
@@ -109,8 +109,8 @@ Examples:
 /**
  * Validate skill, render every finding, and exit if any is an error.
  *
- * Returns the result so the caller can publish its per-severity counts beside
- * the packaging status.
+ * Returns the result so the caller can publish its verdict and per-severity
+ * counts — the verdict of the validation actually run, not a literal.
  */
 async function validateSkillOrExit(
   skillPath: string,
@@ -128,10 +128,29 @@ async function validateSkillOrExit(
   }
 
   if (validationResult.status === 'error') {
-    process.exit(1);
+    // The findings above went to stderr only; without this the command exited 1
+    // having written zero bytes of the documented stdout summary.
+    handleValidationGateFailure(skillPath, validationResult.issues);
   }
 
   return validationResult;
+}
+
+/**
+ * The header a `skills package` run publishes: the verdict of the validation it
+ * actually ran, with that validation's distribution beside it.
+ *
+ * `status` used to be the literal `success`, printed next to counts drawn from
+ * the very validation whose verdict it contradicted — so a skill `vat skills
+ * build` reports as `warning` was reported here as `success`. Two lanes, one
+ * skill, two answers. The counts alone did not close it: a consumer reading
+ * `status` (the field the docs tell them to read) never saw the disagreement.
+ */
+export function buildPackageHeader(validation: ValidationResult): {
+  status: 'success' | 'warning' | 'error';
+  issueCounts: SeverityCounts;
+} {
+  return { status: validation.status, issueCounts: validation.issueCounts };
 }
 
 /**
@@ -254,22 +273,21 @@ function calculateZipSize(skillPath: string, linkedFiles: string[]): number {
 }
 
 /**
- * Write the per-severity counts block that rides beside a published status.
+ * Write the status + per-severity counts block that opens the summary.
  *
- * `status: success` here means the packaging step succeeded and nothing
- * BLOCKED it — not that validation was silent. Without the distribution beside
- * it, a consumer cannot tell those two apart, and the reassuring reading is the
- * one they will take.
+ * `success` here means the packaging step succeeded and nothing BLOCKED it —
+ * not that validation was silent. Without the distribution beside it, a
+ * consumer cannot tell those two apart, and the reassuring reading is the one
+ * they will take.
  */
-function writeIssueCounts(counts: SeverityCounts): void {
+function writePackageHeader(validation: ValidationResult): void {
   // Serialized from a real object rather than hand-spelled lines: the property
   // has to be visible as a property (to a reader and to the repo's severity-counts
   // ratchet, which scans source for a counts block), and yaml.stringify cannot
   // get the indentation wrong.
-  const block = {
-    issueCounts: counts,
-  };
-  process.stdout.write(yaml.stringify(block, { indent: 2, lineWidth: 0 }));
+  process.stdout.write(
+    yaml.stringify(buildPackageHeader(validation), { indent: 2, lineWidth: 0 }),
+  );
 }
 
 /**
@@ -281,11 +299,10 @@ function outputDryRunYaml(
   fileCount: number,
   formats: string[],
   duration: number,
-  issueCounts: SeverityCounts
+  validation: ValidationResult
 ): void {
   process.stdout.write('---\n');
-  process.stdout.write(`status: success\n`);
-  writeIssueCounts(issueCounts);
+  writePackageHeader(validation);
   process.stdout.write(`dryRun: true\n`);
   process.stdout.write(`skill: ${skillName}\n`);
   process.stdout.write(`outputPath: ${outputPath}\n`);
@@ -363,7 +380,7 @@ async function performDryRun(
     linkedFiles.length + 1,
     formats,
     duration,
-    validationResult.issueCounts,
+    validationResult,
   );
 
   logger.info(`\n✅ Dry-run complete (no files created)`);
@@ -431,8 +448,7 @@ async function packageCommand(
 
     // Output YAML to stdout
     process.stdout.write('---\n');
-    process.stdout.write(`status: success\n`);
-    writeIssueCounts(validationResult.issueCounts);
+    writePackageHeader(validationResult);
     process.stdout.write(`skill: ${result.skill.name}\n`);
     process.stdout.write(`version: ${result.skill.version ?? 'unspecified'}\n`);
     process.stdout.write(`outputPath: ${result.outputPath}\n`);
