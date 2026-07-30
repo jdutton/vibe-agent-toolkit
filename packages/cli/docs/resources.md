@@ -18,10 +18,13 @@ including link integrity checking and anchor validation.
 4. Exits 0 always (informational only)
 
 **Path Argument:**
-- `[path]` specifies the **base directory** to start crawling from
-- Recursively finds all `*.md` files under that directory (default pattern: `**/*.md`)
-- When path is specified, **config patterns are ignored** (to avoid pattern conflicts)
-- To use config patterns, run without path argument: `vat resources scan`
+- `[path]` restricts the scan to that subtree of the project
+- Recursively finds all `*.md` / `*.html` files under that directory
+- The path **replaces** the config's `resources.include` patterns
+- The config's `resources.exclude` patterns **still apply** — a path run never
+  scans build output, vendored trees, or test fixtures the project excluded
+- To scan the project's full configured set, run without a path argument:
+  `vat resources scan`
 
 **Options:**
 - `[path]` - Base directory to crawl (defaults to current directory)
@@ -78,10 +81,13 @@ for the loud-cwd fallback policy and the projectRoot discovery ladder.
 4. Exits 0 if valid, 1 if errors found
 
 **Path Argument:**
-- `[path]` specifies the **base directory** to start crawling from
-- Recursively finds all `*.md` files under that directory (default pattern: `**/*.md`)
-- When path is specified, **config patterns are ignored** (to avoid pattern conflicts)
-- To use config patterns, run without path argument: `vat resources validate`
+- `[path]` restricts the scan to that subtree of the project
+- Recursively finds all `*.md` / `*.html` files under that directory
+- The path **replaces** the config's `resources.include` patterns
+- The config's `resources.exclude` patterns **still apply** — a path run never
+  scans build output, vendored trees, or test fixtures the project excluded
+- To scan the project's full configured set, run without a path argument:
+  `vat resources validate`
 
 **Options:**
 - `[path]` - Base directory to crawl (defaults to current directory)

@@ -29,6 +29,7 @@
 // Export main ResourceRegistry class and ID generation utility
 export {
   ResourceRegistry,
+  DEFAULT_RESOURCE_INCLUDE,
   generateIdFromPath,
   type CrawlOptions,
   type ResourceRegistryOptions,

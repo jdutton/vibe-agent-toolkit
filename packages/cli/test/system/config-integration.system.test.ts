@@ -120,9 +120,18 @@ resources:
     );
 
     expect(result.status).toBe(0);
-    // When path argument is provided, config is ignored (uses defaults)
-    // Finds all *.md files recursively: docs/guides/test.md + excluded/test.md
-    expect(parsed.filesScanned).toBe(2);
+    // The config is discovered by walking UP from cwd (docs/guides), which is the
+    // property this test is named for — and its `exclude` still applies even though
+    // a path argument was given. So `excluded/test.md` is not scanned and only
+    // `docs/guides/test.md` is: 1 file, not 2.
+    //
+    // This assertion used to read `toBe(2)` under the comment "when a path argument
+    // is provided, config is ignored (uses defaults)". That was the fixture pinning
+    // a bug as expected behaviour: a path argument re-based the crawl and voided
+    // every root-relative include AND exclude, so naming a directory scanned trees
+    // the project had deliberately excluded. A path argument now narrows `include`
+    // only; `exclude` is never discarded.
+    expect(parsed.filesScanned).toBe(1);
   });
 
   it('should respect config exclude patterns when no path argument provided', () => {

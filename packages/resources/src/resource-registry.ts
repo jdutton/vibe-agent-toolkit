@@ -56,12 +56,24 @@ export class DuplicateResourceIdError extends Error {
 }
 
 /**
+ * The file kinds a resource crawl treats as resources when the caller supplies
+ * no `include` patterns of its own.
+ *
+ * ONE home, deliberately exported: a caller that needs to NARROW the default
+ * scan (the CLI scopes these to a subtree when `vat resources validate <path>`
+ * is given a path argument) must derive its patterns from this list rather than
+ * restate it — two copies would silently disagree the moment a new extension is
+ * recognized here.
+ */
+export const DEFAULT_RESOURCE_INCLUDE: readonly string[] = ['**/*.md', '**/*.html', '**/*.htm'];
+
+/**
  * Options for crawling directories to add resources.
  */
 export interface CrawlOptions {
   /** Base directory to crawl */
   baseDir: string;
-  /** Include patterns (default: all .md files) */
+  /** Include patterns (default: {@link DEFAULT_RESOURCE_INCLUDE}) */
   include?: string[];
   /** Exclude patterns (default: node_modules, .git, dist) */
   exclude?: string[];
@@ -467,7 +479,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   async crawl(options: CrawlOptions): Promise<ResourceMetadata[]> {
     const {
       baseDir,
-      include = ['**/*.md', '**/*.html', '**/*.htm'],
+      include = [...DEFAULT_RESOURCE_INCLUDE],
       exclude = ['**/node_modules/**', '**/.git/**', '**/dist/**'],
       followSymlinks = false,
     } = options;

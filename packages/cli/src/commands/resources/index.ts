@@ -38,8 +38,9 @@ Description:
   Scans for markdown files and reports statistics. Outputs YAML to stdout.
 
 Path Argument Behavior:
-  WITH path: Scans all *.md recursively under path (ignores config)
-  WITHOUT path: Uses vibe-agent-toolkit.config.yaml patterns
+  WITH path: Scans all *.md/*.html recursively under path, still applying the
+             config's resources.exclude patterns
+  WITHOUT path: Uses vibe-agent-toolkit.config.yaml include + exclude patterns
 
 Filtering:
   --collection <id>: Only scan files in specified collection
@@ -86,19 +87,21 @@ Path Argument Behavior:
 
   WITH path argument (e.g., "vat resources validate docs/"):
     • Scans all *.md files recursively under the specified directory
-    • IGNORES vibe-agent-toolkit.config.yaml (collections, includes, excludes)
-    • DOES NOT show collection statistics in output
+    • The path REPLACES the config's resources.include patterns...
+    • ...but resources.exclude STILL APPLIES, so a path run never scans
+      build output, vendored trees, or test fixtures the project excluded
     • Use for: Quick validation of a specific directory tree
 
   WITHOUT path argument (e.g., "vat resources validate"):
     • Uses vibe-agent-toolkit.config.yaml to determine files to scan
-    • Applies include/exclude patterns from config
+    • Applies include AND exclude patterns from config
     • SHOWS collection statistics and per-collection validation rules
     • Validates frontmatter against collection-specific schemas (if configured)
     • Use for: Full project validation with collection-aware rules
 
-  ⚠️  To see collection statistics and use collection-specific validation,
-      run WITHOUT a path argument and configure collections in config file.
+  Collections apply in both modes — membership is decided per file against the
+  collection's own patterns, so a path run still gets collection-specific
+  schemas for whatever it scanned.
 
 Filtering:
   --collection <id>: Only validate files in specified collection

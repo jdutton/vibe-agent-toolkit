@@ -100,11 +100,16 @@ describe('loadResourcesWithConfig (integration test)', () => {
   });
 
   describe('with pathArg provided', () => {
-    it('should use pathArg as baseDir and ignore config patterns', async () => {
-      // Create config with patterns
+    it('should scope the scan to pathArg while still honoring config exclude patterns', async () => {
+      // A file INSIDE the requested subtree that the project excludes. This is
+      // the file that distinguishes the two behaviors: re-basing the crawl onto
+      // pathArg (the old behavior) voids the root-relative exclude and scans it.
+      await mkdir(safePath.join(projectDir, 'docs', 'drafts'), { recursive: true });
+      await writeFile(safePath.join(projectDir, 'docs', 'drafts', 'wip.md'), '# WIP\n');
+
       await writeFile(
         safePath.join(projectDir, CONFIG_FILE),
-        'version: 1\nresources:\n  include:\n    - "docs/**/*.md"\n  exclude:\n    - "other/**"\n'
+        'version: 1\nresources:\n  exclude:\n    - "docs/drafts/**"\n'
       );
 
       await inProjectDir(projectDir, async () => {
@@ -114,10 +119,18 @@ describe('loadResourcesWithConfig (integration test)', () => {
         expect(normalizePath(result.scanPath)).toBe(normalizePath(docsPath));
         expect(normalizePath(result.projectRoot)).toBe(normalizePath(projectDir));
         expect(result.config).toBeDefined();
-        expect(result.registry).toBeDefined();
 
-        // Should only find docs/guide.md (baseDir is docs/)
+        // Scoped to docs/ (so README.md and other/notes.md are out) AND the
+        // excluded docs/drafts/wip.md stayed out.
         expectSingleResource(result.registry.getAllResources(), 'Guide');
+      });
+    });
+
+    it('should fail loudly when pathArg does not exist', async () => {
+      await inProjectDir(projectDir, async () => {
+        await expect(
+          loadResourcesWithConfig(safePath.join(projectDir, 'nope'), projectDir, logger)
+        ).rejects.toThrow(/does not exist/);
       });
     });
 
