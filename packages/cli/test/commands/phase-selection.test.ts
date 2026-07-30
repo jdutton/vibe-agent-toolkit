@@ -20,13 +20,20 @@
  * rather than through a subprocess.
  */
 
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+
 import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { selectBuildPhases } from '../../src/commands/build.js';
 import { type PhaseSelection } from '../../src/commands/phase-utils.js';
 import { selectValidateSurfaces } from '../../src/commands/validate.js';
-import { selectVerifyPhases } from '../../src/commands/verify.js';
+import {
+  checkFilesConfigDests,
+  formatVerifyAnnouncement,
+  selectVerifyPhases,
+} from '../../src/commands/verify.js';
 
 /** Narrow to the `run` arm, failing loudly (not silently passing) otherwise. */
 function phaseNames(selection: PhaseSelection): string[] {
@@ -121,6 +128,93 @@ describe('selectVerifyPhases', () => {
     expect(failMessage(selectVerifyPhases('marketplace', undefined, 'Failed to load config: bad yaml'))).toContain(
       'Failed to load config',
     );
+  });
+});
+
+describe('formatVerifyAnnouncement', () => {
+  /** The announcement for a given `--only`, built from that run's own selection. */
+  const announce = (only: string | undefined, config: ProjectConfig): string =>
+    formatVerifyAnnouncement(phaseNames(selectVerifyPhases(only, config)), only, config);
+
+  it('names the in-process phases a bare run also executes', () => {
+    // The announcement used to list the SUBPROCESS phases only, so a bare run
+    // printed 'resources → skills' and then ran two more phases, one of which
+    // (consistency) contributed its own entry to the emitted document.
+    expect(announce(undefined, CONFIG_BOTH)).toBe(
+      '🔍 vat verify (phases: resources → skills → files-config-dests → consistency)',
+    );
+  });
+
+  it('names consistency for --only skills, which runs it too', () => {
+    // `--only skills` asks for one phase and gets three. Whether that coupling
+    // is right is a separate question; the announcement must not deny it.
+    expect(announce('skills', CONFIG_SKILLS_ONLY)).toBe(
+      '🔍 vat verify (phases: skills → files-config-dests → consistency)',
+    );
+  });
+
+  it('names consistency for --only consistency, whose subprocess list is empty', () => {
+    // Previously printed a phase list of literally nothing: '(phases: )'.
+    expect(announce('consistency', CONFIG_SKILLS_ONLY)).toBe('🔍 vat verify (phases: consistency)');
+  });
+
+  it('names no in-process phase for a --only that runs none', () => {
+    expect(announce('resources', CONFIG_BOTH)).toBe('🔍 vat verify (phases: resources)');
+    expect(announce('marketplace', CONFIG_MARKETPLACE)).toBe(
+      '🔍 vat verify (phases: marketplace:test-tools)',
+    );
+  });
+
+  it('names no in-process phase when the project declares no skills:', () => {
+    // The first fix traded under-reporting for OVER-reporting. Both in-process
+    // phases read the same input — the `skills:` block. Without one,
+    // `checkFilesConfigDests` has no `files:` entry to resolve and
+    // `runConsistencyPhase` returns before its first lookup, so a bare run on a
+    // resources-only project announced 'resources → files-config-dests →
+    // consistency' and emitted a document containing `resources` and nothing
+    // else. An operator reading that line believed distribution consistency had
+    // been checked. It had not, and nothing said so.
+    expect(announce(undefined, CONFIG_RESOURCES_ONLY)).toBe('🔍 vat verify (phases: resources)');
+  });
+
+  it('names no in-process phase when the config could not be read', () => {
+    // An unreadable config still runs the requested subprocess phases so the
+    // CHILD reports the real error. The in-process phases cannot even look:
+    // `checkFilesConfigDests` re-reads the same broken file and yields nothing.
+    expect(formatVerifyAnnouncement(['resources', 'skills'], undefined, undefined)).toBe(
+      '🔍 vat verify (phases: resources → skills)',
+    );
+  });
+
+  it('still names consistency for --only consistency with no skills: block', () => {
+    // The one case where an unconfigured in-process phase is NOT vacuous: an
+    // explicit request is answered with an ERROR result rather than the silent
+    // pass `vat validate --only <unconfigured surface>` refuses to give. It
+    // produces output, so it belongs in the line.
+    expect(announce('consistency', CONFIG_RESOURCES_ONLY)).toBe('🔍 vat verify (phases: consistency)');
+  });
+});
+
+describe('checkFilesConfigDests', () => {
+  it('reports nothing for a project with no skills: block', () => {
+    // Load-bearing for the announcement above. Dropping `files-config-dests`
+    // from a no-`skills:` run changes the announced phase list and never the
+    // findings: both `defaults.files` and `config.<skill>.files` live under
+    // `skills:`, so the merged files config is empty for every candidate and
+    // the scan has nothing to resolve. Without this, "the executed set is
+    // unchanged" would be an argument rather than a check.
+    const dir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-verify-no-skills-'));
+    try {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is this test's own mkdtemp dir
+      writeFileSync(
+        safePath.join(dir, 'vibe-agent-toolkit.config.yaml'),
+        'version: 1\nresources:\n  include: ["docs/**/*.md"]\n',
+      );
+
+      expect(checkFilesConfigDests(dir)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

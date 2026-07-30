@@ -5,7 +5,12 @@
  *   1. vat resources validate  (link integrity, collection schemas)
  *   2. vat skills validate     (SKILL.md frontmatter validation)
  *   3. vat claude marketplace validate  (strict marketplace validation, when configured)
- *   4. consistency check  (skill distribution integrity — package.json, plugin assignment)
+ *   4. files-config-dests  (in-process; every `files:` dest exists in the built output)
+ *   5. consistency check  (in-process; skill distribution integrity — package.json, plugin assignment)
+ *
+ * 1–3 are subprocess phases chosen by {@link selectVerifyPhases}; 4–5 run here and
+ * are chosen by `selectInProcessVerifyPhases`. Both sets are config-gated, and both
+ * are announced on startup.
  */
 
 import { existsSync } from 'node:fs';
@@ -57,7 +62,10 @@ export function createVerifyTopLevelCommand(): Command {
 
   command
     .description('Verify built artifacts (resources + skills + marketplace + consistency); marketplace/consistency read dist/ — run after vat build')
-    .option('--only <phase>', 'Verify only a specific phase: resources, skills, marketplace, consistency')
+    .option(
+      '--only <phase>',
+      "Verify only a specific phase: resources, skills, marketplace, consistency ('skills' also runs the in-process phases)"
+    )
     .option('--debug', 'Enable debug logging')
     .action(verifyTopLevelCommand)
     .addHelpText(
@@ -75,11 +83,26 @@ Description:
   that is unrecognized or unconfigured, so a CI gate cannot silently lose
   coverage when a config key is renamed.
 
-  Phases:
+  Phases (subprocess):
     resources    → link integrity, collection frontmatter schemas (when 'resources:' configured)
     skills       → SKILL.md frontmatter and packaging validation (when 'skills:' configured)
     marketplace  → strict marketplace validation (when 'claude.marketplaces:' configured)
-    consistency  → skill distribution integrity (package.json, plugin assignment)
+
+  Phases (in-process, run after the above, when 'skills:' is configured):
+    files-config-dests → every 'files:' dest exists in the built output. Not selectable
+                         by '--only'; runs with 'skills'. Appears in the document only
+                         when a dest is missing.
+    consistency        → skill distribution integrity (package.json, plugin assignment)
+
+  '--only skills' runs all three of skills, files-config-dests and consistency:
+  they read the same 'skills:' config. Without a 'skills:' block neither
+  in-process phase has anything to read, so neither runs. The exception is an
+  explicit '--only consistency', which reports the missing block as an error
+  rather than passing silently.
+
+  The startup line on stderr names, in order, the phases that will inspect
+  something. A phase that would consult nothing is not listed; a phase that does
+  inspect its inputs is listed even when it finds nothing to report.
 
 Output:
   ONE YAML document → stdout
@@ -88,8 +111,9 @@ Output:
     is a single parseable document (a phase's stdout is never streamed
     through). A phase's status comes from the child's REPORTED status, not
     from its exit code — an exit code cannot express 'warning'. In-process
-    phases (consistency, files-config-dests) also publish issueCounts
-    {errors, warnings, info} and the findings themselves.
+    phases also publish issueCounts {errors, warnings, info}; 'consistency'
+    carries its findings into the document too, while 'files-config-dests'
+    publishes counts only and lists the missing dests on stderr.
   Progress and validation errors → stderr (streamed live)
 
 Exit Codes:
@@ -241,6 +265,9 @@ function loadConfigTolerant(cwd: string): { config: ProjectConfig | undefined; e
   }
 }
 
+/** The in-process phase that checks `files:` dests against the built output. */
+const FILES_CONFIG_DESTS = 'files-config-dests';
+
 /**
  * Log files-config-dests errors to stderr.
  */
@@ -248,7 +275,7 @@ function reportFilesDestErrors(
   results: FilesDestCheckResult[],
   logger: ReturnType<typeof createLogger>
 ): void {
-  logger.error('\n▶ Phase: files-config-dests');
+  logger.error(`\n▶ Phase: ${FILES_CONFIG_DESTS}`);
   for (const { skillName, outputDir, missing } of results) {
     logger.error(`  Skill '${skillName}': missing dest file(s) in ${outputDir}/:`);
     for (const dest of missing) {
@@ -342,6 +369,73 @@ export function selectVerifyPhases(
     emptyIsValid: only === 'consistency',
     unreadableConfig: configError,
   });
+}
+
+/** Phases that run in this process, after the subprocess phases, in execution order. */
+type InProcessPhaseName = typeof FILES_CONFIG_DESTS | 'consistency';
+
+/**
+ * Which in-process phases this run performs, given `--only` and the config.
+ *
+ * The SINGLE source for that question: {@link verifyTopLevelCommand} gates
+ * execution on this list and {@link formatVerifyAnnouncement} announces the same
+ * list, so the printed phase list cannot drift from the phases that run. It used
+ * to be announced from the subprocess phases alone while these two were gated by
+ * hand-written conditions further down, so `vat verify --only skills` printed
+ * '(phases: skills)' and then also ran `consistency`, which put a second entry in
+ * the emitted document. A status that under-reports what it did is the same
+ * defect class as {@link selectVerifyPhases}' silent exit-0 pass.
+ *
+ * The contract is **the phases that will inspect something** — not "code paths
+ * this run enters". Making it a function of `--only` alone fixed the
+ * under-reporting by over-reporting instead: on a project with `resources:` and
+ * no `skills:`, a bare run announced 'resources → files-config-dests →
+ * consistency' and emitted a document holding `resources` and nothing else, so
+ * an operator read a claim that distribution consistency had been checked. Both
+ * in-process phases read the same input, the `skills:` block — without it
+ * {@link checkFilesConfigDests} has no `files:` entry to resolve (both
+ * `defaults.files` and `config.<skill>.files` live under `skills:`, so every
+ * merge is empty) and {@link runConsistencyPhase} returns before its first
+ * lookup. Neither can produce a finding, so neither is named.
+ *
+ * This is a truthfulness change, not a behaviour change: the conditions here are
+ * the ones the phases already applied internally, hoisted so the announcement
+ * can see them. `--only consistency` is the one case where an unconfigured phase
+ * is not vacuous — it answers the explicit request with an ERROR result rather
+ * than a silent pass — so it stays selected and {@link runConsistencyPhase}
+ * keeps its own `explicitlyRequested` guard.
+ *
+ * Note "will inspect something" is not a prediction of the findings:
+ * `files-config-dests` is named whenever a `skills:` block engages it, even
+ * though a clean run reports nothing.
+ */
+function selectInProcessVerifyPhases(
+  only: string | undefined,
+  config: ProjectConfig | undefined,
+): InProcessPhaseName[] {
+  const names: InProcessPhaseName[] = [];
+  const engaged = config?.skills !== undefined && (!only || only === 'skills');
+
+  if (engaged) {
+    names.push(FILES_CONFIG_DESTS);
+  }
+  if (engaged || only === 'consistency') {
+    names.push('consistency');
+  }
+  return names;
+}
+
+/**
+ * The startup announcement: every phase this run will inspect something with,
+ * in order. A phase that would consult nothing is not named.
+ */
+export function formatVerifyAnnouncement(
+  subprocessPhaseNames: readonly string[],
+  only: string | undefined,
+  config: ProjectConfig | undefined,
+): string {
+  const all = [...subprocessPhaseNames, ...selectInProcessVerifyPhases(only, config)];
+  return `🔍 vat verify (phases: ${all.join(' → ')})`;
 }
 
 /** A consistency finding as it appears in the archived YAML. */
@@ -448,7 +542,10 @@ async function verifyTopLevelCommand(options: VerifyCommandOptions): Promise<voi
       startTime,
     );
 
-    logger.info(`🔍 vat verify (phases: ${phases.map((p) => p.name).join(' → ')})`);
+    // Announced from the same list the in-process gates below read, so the
+    // printed phases and the executed phases cannot disagree.
+    const inProcess = selectInProcessVerifyPhases(options.only, config);
+    logger.info(formatVerifyAnnouncement(phases.map((p) => p.name), options.only, config));
 
     const phaseResults: PhaseResult[] = [];
     for (const phase of phases) {
@@ -457,12 +554,12 @@ async function verifyTopLevelCommand(options: VerifyCommandOptions): Promise<voi
     }
 
     // Post-build files config check: verify all dest paths exist in built output
-    if (!options.only || options.only === 'skills') {
+    if (inProcess.includes(FILES_CONFIG_DESTS)) {
       const filesDestResults = checkFilesConfigDests(projectRoot);
       if (filesDestResults.length > 0) {
         reportFilesDestErrors(filesDestResults, logger);
         phaseResults.push({
-          name: 'files-config-dests',
+          name: FILES_CONFIG_DESTS,
           status: 'error',
           issueCounts: { errors: filesDestResults.length, warnings: 0, info: 0 },
         });
@@ -470,7 +567,7 @@ async function verifyTopLevelCommand(options: VerifyCommandOptions): Promise<voi
     }
 
     // Consistency check: cross-reference discovered skills vs package.json and plugin assignments
-    if (!options.only || options.only === 'consistency' || options.only === 'skills') {
+    if (inProcess.includes('consistency')) {
       await runConsistencyPhase(
         logger,
         phaseResults,
