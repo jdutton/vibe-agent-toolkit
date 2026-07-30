@@ -24,11 +24,18 @@ import { writeYamlOutput } from '../utils/output.js';
 import { requireProjectRoot } from '../utils/project-root-policy.js';
 
 import {
+  aggregatePhaseStatus,
+  applyPhaseSelection,
   createPhaseContext,
+  decidePhaseSelection,
   exitCodeForPhases,
   runPhase,
+  SYSTEM_ERROR,
+  worseOf,
   type Phase,
   type PhaseResult,
+  type PhaseSelection,
+  type PhaseVocabulary,
 } from './phase-utils.js';
 
 export interface BuildCommandOptions {
@@ -54,19 +61,24 @@ Description:
     skills  → builds dist/skills/ from vibe-agent-toolkit.config.yaml (platform-agnostic)
     claude  → builds dist/.claude/plugins/ from dist/skills/ + config (skipped if no claude config)
 
+  '--only claude' in a project with no claude.marketplaces config fails with
+  exit 1: the phase is recognized, it is simply not configured.
+
 Output:
-  YAML summary for each phase → stdout
+  ONE YAML document → stdout
     status (success | warning | error | system-error) plus issueCounts
     {errors, warnings, info} for the shipped-plugin-tree link check, and the
     findings themselves when there are any — a warning-only build reports
-    'warning' with counts, not a bare 'success'.
-  Build progress → stderr
+    'warning' with counts, not a bare 'success'. Each phase's own report is
+    captured and nested under 'report' rather than streamed through.
+  Build progress → stderr (streamed live)
 
 Exit Codes:
   0 - All phases completed successfully (warnings do not fail a build)
-  1 - Build error
+  1 - Build error, or '--only' named a phase that is unrecognized or unconfigured
   2 - System error (this command's own, or propagated from a phase that could
-      not run: exited 2, was killed by a signal, or never spawned)
+      not run: exited 2, was killed by a signal, was never spawned, or wrote
+      output that could not be parsed)
 
 Requirements:
   projectRoot: required (errors if no vibe-agent-toolkit.config.yaml or .git/ ancestor)
@@ -174,22 +186,41 @@ export async function validateShippedPluginSkillLinks(cwd: string): Promise<Vali
   return issues;
 }
 
-function buildPhaseList(options: BuildCommandOptions, cwd: string): Phase[] {
-  const { only } = options;
+/** Phases `vat build` knows how to run, in dependency order. */
+const VALID_PHASES = ['skills', 'claude'] as const;
+
+const BUILD_VOCABULARY: PhaseVocabulary = {
+  noun: 'Phase',
+  verb: 'build',
+  validNames: VALID_PHASES,
+};
+
+/**
+ * Decide which build phases to run.
+ *
+ * `--only claude` in a project with no `claude.marketplaces` used to produce an
+ * empty phase list, which the old `createPhaseContext` reported by THROWING
+ * "Unknown phase: claude. Valid phases: skills, claude." — a message that
+ * refutes itself in its own second sentence, thrown from outside the try block
+ * so it reached the user as a Node stack trace with no structured output at all.
+ * The phase is recognized; it is simply not configured, which is a different
+ * fact and now says so.
+ */
+export function selectBuildPhases(
+  only: string | undefined,
+  hasClaudeMarketplaces: boolean,
+): PhaseSelection {
   const phases: Phase[] = [];
 
   if (!only || only === 'skills') {
     phases.push({ name: 'skills', args: ['skills', 'build'] });
   }
 
-  if (!only || only === 'claude') {
-    // Only include the claude phase when a marketplace config is present
-    if (hasClaudeMarketplacesConfig(cwd)) {
-      phases.push({ name: 'claude', args: ['claude', 'plugin', 'build'] });
-    }
+  if ((!only || only === 'claude') && hasClaudeMarketplaces) {
+    phases.push({ name: 'claude', args: ['claude', 'plugin', 'build'] });
   }
 
-  return phases;
+  return decidePhaseSelection(only, phases, BUILD_VOCABULARY);
 }
 
 async function buildTopLevelCommand(options: BuildCommandOptions): Promise<void> {
@@ -197,10 +228,17 @@ async function buildTopLevelCommand(options: BuildCommandOptions): Promise<void>
   // Spec §7: `vat build` requires a projectRoot.
   requireProjectRoot(cwd, 'vat build');
 
-  const phases = buildPhaseList(options, cwd);
-  const { logger, startTime, binPath } = createPhaseContext(options.debug, phases, options.only, 'skills, claude');
+  const { logger, startTime, binPath } = createPhaseContext(options.debug);
 
   try {
+    // Inside the try, deliberately: this used to throw from outside it, so an
+    // unroutable `--only` produced a raw stack trace and zero bytes of stdout.
+    const phases = applyPhaseSelection(
+      selectBuildPhases(options.only, hasClaudeMarketplacesConfig(cwd)),
+      logger,
+      startTime,
+    );
+
     logger.info(`🔨 vat build (phases: ${phases.map((p) => p.name).join(' → ')})`);
 
     const phaseResults: PhaseResult[] = [];
@@ -215,7 +253,14 @@ async function buildTopLevelCommand(options: BuildCommandOptions): Promise<void>
       const result = runPhase(binPath, phase);
       phaseResults.push(result);
 
-      if (result.status !== 'success') {
+      // Only a real failure stops the build. A `warning` phase must NOT abort:
+      // warnings are non-blocking everywhere else in VAT, and phase status only
+      // became able to say `warning` when it started being read from the child's
+      // report instead of its exit code — so treating "not success" as fatal
+      // silently turned every warning into a halt. It halted *and* claimed
+      // "Phase 'skills' failed with exit code 0" while exiting 0, so a caller
+      // checking the exit code saw a pass with the later phases never run.
+      if (result.status === 'error' || result.status === SYSTEM_ERROR) {
         const duration = Date.now() - startTime;
         // `error` vs `system-error` is the difference between "the build failed"
         // and "the build never ran" — exit 1 vs the documented exit 2.
@@ -263,9 +308,17 @@ async function buildTopLevelCommand(options: BuildCommandOptions): Promise<void>
     // Warnings and info findings do not fail a build, but they are published:
     // `success` must mean "nothing you must act on", never "there was nothing
     // to see".
+    // Worst-wins across BOTH sources. Reading only the shipped-link issues made
+    // a run whose child phase reported `warning` publish `success`, which is the
+    // same blindness `vat verify` had: a status that cannot see what the child
+    // already said.
     writeYamlOutput({
-      status: calculateValidationStatus(shippedLinkIssues),
+      status: worseOf(
+        aggregatePhaseStatus(phaseResults),
+        calculateValidationStatus(shippedLinkIssues),
+      ),
       phasesCompleted: phases.map((p) => p.name),
+      phases: phaseResults,
       issueCounts,
       ...(shippedLinkIssues.length === 0 ? {} : { issues: shippedLinkIssues }),
       duration: `${duration}ms`,

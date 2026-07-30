@@ -782,6 +782,14 @@ const SEVERITY_COUNTS_CONFORMING = new Set<string>([
   'packages/cli/src/commands/skills/package.ts',
   'packages/cli/src/commands/audit-settings.ts',
   'packages/claude-marketplace/src/settings/settings-auditor.ts',
+  // Entered the lane population when child stdout stopped being inherited and
+  // started being folded into `phases[]`. It declares the `issueCounts` field of
+  // `PhaseResult` — the in-process phases in `verify.ts`/`build.ts` populate it,
+  // and subprocess phases deliberately leave it absent because the child's own
+  // counts ride along verbatim under `report` rather than being recomputed into
+  // a second, weaker answer. Listed here rather than NOT_APPLICABLE on purpose:
+  // this keeps a live assertion that the counts field cannot silently vanish.
+  'packages/cli/src/commands/phase-utils.ts',
 ]);
 
 /**

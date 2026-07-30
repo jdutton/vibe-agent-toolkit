@@ -18,12 +18,13 @@ import {
   type ValidationIssue,
 } from '@vibe-agent-toolkit/agent-schema';
 import { computeTreeCopiedSkillLocations, mergeFilesConfig } from '@vibe-agent-toolkit/agent-skills';
+import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { handleCommandError } from '../utils/command-error.js';
 import { loadConfig } from '../utils/config-loader.js';
-import { createLogger } from '../utils/logger.js';
+import type { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
 import { requireProjectRoot } from '../utils/project-root-policy.js';
 
@@ -34,11 +35,15 @@ import {
 } from './consistency-check.js';
 import {
   aggregatePhaseStatus,
+  applyPhaseSelection,
+  createPhaseContext,
+  decidePhaseSelection,
   exitCodeForPhases,
-  resolveBinPath,
   runPhase,
   type Phase,
   type PhaseResult,
+  type PhaseSelection,
+  type PhaseVocabulary,
 } from './phase-utils.js';
 import { discoverSkillsFromConfig } from './skills/skill-discovery.js';
 
@@ -65,26 +70,35 @@ Description:
   For source-only validation that needs no build (resources + skills,
   suitable for pre-commit and CI-before-build), use 'vat validate'.
 
+  Config-driven, exactly like 'vat validate': a phase runs only when its
+  config block is present. An explicit '--only <phase>' fails for a phase
+  that is unrecognized or unconfigured, so a CI gate cannot silently lose
+  coverage when a config key is renamed.
+
   Phases:
-    resources    → link integrity, collection frontmatter schemas
-    skills       → SKILL.md frontmatter and packaging validation
-    marketplace  → strict marketplace validation (when configured)
+    resources    → link integrity, collection frontmatter schemas (when 'resources:' configured)
+    skills       → SKILL.md frontmatter and packaging validation (when 'skills:' configured)
+    marketplace  → strict marketplace validation (when 'claude.marketplaces:' configured)
     consistency  → skill distribution integrity (package.json, plugin assignment)
 
 Output:
-  YAML summary for each phase → stdout
-    per phase: status (success | warning | error | system-error). In-process
+  ONE YAML document → stdout
+    per phase: status (success | warning | error | system-error). A subprocess
+    phase's own report is captured and nested under 'report', so the whole run
+    is a single parseable document (a phase's stdout is never streamed
+    through). A phase's status comes from the child's REPORTED status, not
+    from its exit code — an exit code cannot express 'warning'. In-process
     phases (consistency, files-config-dests) also publish issueCounts
-    {errors, warnings, info} and the findings themselves, so the archived YAML
-    is the artifact of record rather than a summary of what stderr said.
-  Validation errors → stderr
+    {errors, warnings, info} and the findings themselves.
+  Progress and validation errors → stderr (streamed live)
 
 Exit Codes:
   0 - All phases passed (a warning does not fail the run — read status/issueCounts)
-  1 - Validation errors found, or '--only consistency' in a project with no
-      skills: block (an explicit request for a phase that cannot run)
+  1 - Validation errors found, or '--only' named a phase that is unrecognized
+      or unconfigured (an explicit request for a phase that cannot run)
   2 - System error (this command's own, or propagated from a phase that could
-      not run: exited 2, was killed by a signal, or never spawned)
+      not run: exited 2, was killed by a signal, was never spawned, or wrote
+      output that could not be parsed)
 
 Requirements:
   projectRoot: required (errors if no vibe-agent-toolkit.config.yaml or .git/ ancestor)
@@ -213,18 +227,17 @@ export function checkFilesConfigDests(cwd: string): FilesDestCheckResult[] {
 }
 
 /**
- * Check whether the current project has claude.marketplaces configured.
- * Returns the marketplace names if present, empty array otherwise.
+ * Load the project config without letting a broken one abort the command.
+ *
+ * A config that exists but does not parse is reported as `error` rather than
+ * swallowed as "no config": `vat verify` must not answer "that phase is not
+ * configured" when it could not read the configuration at all.
  */
-function getClaudeMarketplaceNames(): string[] {
+function loadConfigTolerant(cwd: string): { config: ProjectConfig | undefined; error?: string } {
   try {
-    const config = loadConfig(process.cwd());
-    if (config?.claude?.marketplaces) {
-      return Object.keys(config.claude.marketplaces);
-    }
-    return [];
-  } catch {
-    return [];
+    return { config: loadConfig(cwd) };
+  } catch (error) {
+    return { config: undefined, error: error instanceof Error ? error.message : String(error) };
   }
 }
 
@@ -270,31 +283,65 @@ function reportConsistencyIssues(
   }
 }
 
-function buildPhaseList(options: VerifyCommandOptions): Phase[] {
-  const { only } = options;
-  const phases: Phase[] = [];
+/** Phases `vat verify` knows how to run, in stable execution order. */
+const VALID_PHASES = ['resources', 'skills', 'marketplace', 'consistency'] as const;
 
-  if (!only || only === 'resources') {
+const VERIFY_VOCABULARY: PhaseVocabulary = {
+  noun: 'Phase',
+  verb: 'verify',
+  validNames: VALID_PHASES,
+  noop: {
+    warning:
+      'No resources:, skills: or claude.marketplaces: block found in vibe-agent-toolkit.config.yaml — nothing to verify. If this is unexpected, check your config.',
+    note: 'No configured phases (no resources, skills or claude.marketplaces block in vibe-agent-toolkit.config.yaml).',
+  },
+};
+
+/**
+ * Decide which verification phases to run.
+ *
+ * Config-gated, exactly as `vat validate` is. It used to push `resources` and
+ * `skills` unconditionally, so `vat verify --only skills` in a project with no
+ * `skills:` block exited 0 while `vat validate --only skills` on the same
+ * project exited 1 — same question, opposite verdicts, and a CI gate pinned to
+ * the verify form stayed green forever the moment the config key was renamed.
+ *
+ * `consistency` runs in-process (see {@link runConsistencyPhase}), so an empty
+ * subprocess list is a legitimate outcome for `--only consistency` only.
+ *
+ * @param configError - The config-load failure, when the config could not be
+ *   read. The requested subprocess phases still run so the CHILD reports the
+ *   real config error (exit 2) instead of this command guessing.
+ */
+export function selectVerifyPhases(
+  only: string | undefined,
+  config: ProjectConfig | undefined,
+  configError?: string,
+): PhaseSelection {
+  const phases: Phase[] = [];
+  const unreadable = configError !== undefined;
+
+  if ((!only || only === 'resources') && (unreadable || config?.resources)) {
     phases.push({ name: 'resources', args: ['resources', 'validate'] });
   }
 
-  if (!only || only === 'skills') {
+  if ((!only || only === 'skills') && (unreadable || config?.skills)) {
     phases.push({ name: 'skills', args: ['skills', 'validate'] });
   }
 
   if (!only || only === 'marketplace') {
-    // Only add marketplace phase(s) when config exists and has marketplaces
-    const marketplaceNames = getClaudeMarketplaceNames();
-    for (const name of marketplaceNames) {
-      const marketplaceBuildPath = `dist/.claude/plugins/marketplaces/${name}`;
+    for (const name of Object.keys(config?.claude?.marketplaces ?? {})) {
       phases.push({
         name: `marketplace:${name}`,
-        args: ['claude', 'marketplace', 'validate', marketplaceBuildPath],
+        args: ['claude', 'marketplace', 'validate', `dist/.claude/plugins/marketplaces/${name}`],
       });
     }
   }
 
-  return phases;
+  return decidePhaseSelection(only, phases, VERIFY_VOCABULARY, {
+    emptyIsValid: only === 'consistency',
+    unreadableConfig: configError,
+  });
 }
 
 /** A consistency finding as it appears in the archived YAML. */
@@ -343,9 +390,10 @@ function asValidationIssues(issues: readonly ConsistencyIssue[]): ValidationIssu
 async function runConsistencyPhase(
   logger: ReturnType<typeof createLogger>,
   phaseResults: PhaseResult[],
-  explicitlyRequested: boolean
+  explicitlyRequested: boolean,
+  config: ProjectConfig | undefined,
+  projectRoot: string,
 ): Promise<void> {
-  const config = loadConfig(process.cwd());
   if (!config?.skills) {
     // Nothing to cross-reference. Inside a full `vat verify` that is a genuine
     // no-op; but `--only consistency` asked for THIS phase specifically, and
@@ -365,8 +413,8 @@ async function runConsistencyPhase(
     return;
   }
 
-  const discoveredSkills = await discoverSkillsFromConfig(config.skills, process.cwd());
-  const consistencyResult = runConsistencyChecks(discoveredSkills, config, process.cwd());
+  const discoveredSkills = await discoverSkillsFromConfig(config.skills, projectRoot);
+  const consistencyResult = runConsistencyChecks(discoveredSkills, config, projectRoot);
   const issues = consistencyResult.issues;
 
   if (issues.length > 0) {
@@ -385,21 +433,21 @@ async function runConsistencyPhase(
 
 async function verifyTopLevelCommand(options: VerifyCommandOptions): Promise<void> {
   // Spec §7: `vat verify` requires a projectRoot.
-  requireProjectRoot(process.cwd(), 'vat verify');
+  const projectRoot = requireProjectRoot(process.cwd(), 'vat verify');
 
-  const phases = buildPhaseList(options);
-
-  // Consistency is an in-process phase, not a subprocess. Allow --only consistency
-  // to produce an empty subprocess phase list without throwing.
-  if (phases.length === 0 && options.only !== 'consistency') {
-    throw new Error(`Unknown phase: ${options.only ?? ''}. Valid phases: resources, skills, marketplace, consistency`);
-  }
-
-  const logger = createLogger(options.debug ? { debug: true } : {});
-  const startTime = Date.now();
-  const binPath = resolveBinPath();
+  const { logger, startTime, binPath } = createPhaseContext(options.debug);
 
   try {
+    // Inside the try, deliberately: an unroutable `--only` used to throw from
+    // out here, so the user got a raw Node stack trace and zero bytes of the
+    // structured document a scripted caller parses.
+    const { config, error: configError } = loadConfigTolerant(projectRoot);
+    const phases = applyPhaseSelection(
+      selectVerifyPhases(options.only, config, configError),
+      logger,
+      startTime,
+    );
+
     logger.info(`🔍 vat verify (phases: ${phases.map((p) => p.name).join(' → ')})`);
 
     const phaseResults: PhaseResult[] = [];
@@ -410,7 +458,7 @@ async function verifyTopLevelCommand(options: VerifyCommandOptions): Promise<voi
 
     // Post-build files config check: verify all dest paths exist in built output
     if (!options.only || options.only === 'skills') {
-      const filesDestResults = checkFilesConfigDests(process.cwd());
+      const filesDestResults = checkFilesConfigDests(projectRoot);
       if (filesDestResults.length > 0) {
         reportFilesDestErrors(filesDestResults, logger);
         phaseResults.push({
@@ -423,7 +471,13 @@ async function verifyTopLevelCommand(options: VerifyCommandOptions): Promise<voi
 
     // Consistency check: cross-reference discovered skills vs package.json and plugin assignments
     if (!options.only || options.only === 'consistency' || options.only === 'skills') {
-      await runConsistencyPhase(logger, phaseResults, options.only === 'consistency');
+      await runConsistencyPhase(
+        logger,
+        phaseResults,
+        options.only === 'consistency',
+        config,
+        projectRoot,
+      );
     }
 
     const duration = Date.now() - startTime;
