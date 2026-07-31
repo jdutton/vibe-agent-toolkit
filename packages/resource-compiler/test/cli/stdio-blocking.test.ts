@@ -20,7 +20,8 @@
  * the truncation".
  */
 
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
 
 import { describe, it, expect, vi } from 'vitest';
 
@@ -151,43 +152,117 @@ const PIPE_BUFFER_BYTES = 65_536;
 const LARGE_PAYLOAD_BYTES = 300_000;
 
 /**
- * Reproduce this CLI's exact write shape in a child process: one `console.log`
- * of the whole payload, then an immediate `process.exit(0)` — `printOperationSummary`
- * followed by `exitWithResults`.
+ * How long the reader stops reading after its first chunk. Long enough that a
+ * child which is NOT blocking has exited by the time reading resumes, on any
+ * runner; short enough to stay a unit test.
+ */
+const READER_STALL_MS = 300;
+
+/** The fix itself, guarded the way a real platform check must be. */
+const APPLY_FIX =
+  'process.stdout._handle && process.stdout._handle.setBlocking && process.stdout._handle.setBlocking(true);';
+
+/**
+ * This CLI's exact write shape: one `console.log` of the whole payload, then an
+ * immediate `process.exit(0)` — `printOperationSummary` followed by
+ * `exitWithResults`.
+ *
+ * @param bytes - Payload size to emit.
+ * @param blocking - Whether the child applies the fix before writing.
+ * @returns Source for a `node -e` child.
+ */
+function childSource(bytes: number, blocking: boolean): string {
+  return `${blocking ? APPLY_FIX : ''}console.log('x'.repeat(${bytes}));process.exit(0);`;
+}
+
+/**
+ * Run the child with a reader that drains as fast as it possibly can.
  *
  * @param bytes - Payload size to emit.
  * @param blocking - Whether the child applies the fix before writing.
  * @returns The child's stdout, read through a real pipe.
  */
 function writeThroughPipe(bytes: number, blocking: boolean): string {
-  const applyFix = blocking
-    ? 'process.stdout._handle && process.stdout._handle.setBlocking && process.stdout._handle.setBlocking(true);'
-    : '';
-  const child = spawnSync(
-    process.execPath,
-    ['-e', `${applyFix}console.log('x'.repeat(${bytes}));process.exit(0);`],
-    { encoding: 'utf8', maxBuffer: LARGE_PAYLOAD_BYTES * 4 },
-  );
+  const child = spawnSync(process.execPath, ['-e', childSource(bytes, blocking)], {
+    encoding: 'utf8',
+    maxBuffer: LARGE_PAYLOAD_BYTES * 4,
+  });
   expect(child.status).toBe(0);
   return child.stdout;
 }
 
+/**
+ * Run the child against a reader that STALLS after its first chunk.
+ *
+ * The stall is the whole point, and removing it is what previously made this
+ * suite flaky. libuv loops `writev` until the pipe returns EAGAIN, so a reader
+ * that drains continuously can keep the pipe from ever filling — and then an
+ * unfixed child loses nothing at all. `spawnSync` polls in exactly such a tight
+ * loop: macOS happened to deliver one 64 KB buffer, one ubuntu-latest runner
+ * delivered 219,264 bytes, and another delivered the entire 300,001 — failing a
+ * suite that had already been re-pinned once, from a byte count to the missing
+ * trailing newline. Neither is invariant, because the drain race is not.
+ *
+ * Refusing to read for {@link READER_STALL_MS} removes the race instead of
+ * re-pinning to whichever side of it a runner lands on: the OS pipe holds at most
+ * ~64 KB, so an unfixed child provably hits EAGAIN and exits, discarding the rest,
+ * while a blocking child provably waits and delivers all of it. Same harness,
+ * opposite `blocking` flag, opposite outcome — which is what makes this pair able
+ * to tell a working fix from a no-op one.
+ *
+ * @param bytes - Payload size to emit.
+ * @param blocking - Whether the child applies the fix before writing.
+ * @returns The child's stdout and exit code.
+ */
+async function writeThroughStallingPipe(
+  bytes: number,
+  blocking: boolean,
+): Promise<{ received: string; status: number | null }> {
+  const child = spawn(process.execPath, ['-e', childSource(bytes, blocking)], {
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  child.stdout.setEncoding('utf8');
+
+  let received = '';
+  let stalled = false;
+  child.stdout.on('data', (chunk: string) => {
+    received += chunk;
+    if (!stalled) {
+      stalled = true;
+      child.stdout.pause();
+      setTimeout(() => child.stdout.resume(), READER_STALL_MS);
+    }
+  });
+
+  // `close`, not `exit`: it waits for the stdio streams to drain and end, which
+  // is precisely the window the unfixed child abandons.
+  const [status] = (await once(child, 'close')) as [number | null];
+  return { received, status };
+}
+
 describe('stdout truncation through a real pipe', () => {
   // Windows pipes do not present the POSIX handle shape, so the LOSS is not
-  // reproducible there; the two positive cases below still assert on every OS.
+  // reproducible there; the two spawnSync cases below still assert on every OS.
   it.skipIf(process.platform === 'win32')(
     'loses everything past one pipe buffer without the fix',
-    () => {
-      const received = writeThroughPipe(LARGE_PAYLOAD_BYTES, false);
+    async () => {
+      const { received, status } = await writeThroughStallingPipe(LARGE_PAYLOAD_BYTES, false);
 
+      expect(status).toBe(0);
       expect(received.length).toBeLessThan(LARGE_PAYLOAD_BYTES);
-      // The payload is cut mid-token, so the terminating newline `console.log`
-      // appends never arrives. That — not a byte count — is the signature of the
-      // defect: libuv loops `writev` until EAGAIN, so HOW MUCH survives depends on
-      // how fast the reader happens to drain the pipe. macOS delivers exactly one
-      // 64 KB buffer; an ubuntu-latest runner delivered 219,264 bytes and failed an
-      // assertion pinned to `PIPE_BUFFER_BYTES`. The missing newline is invariant.
+      // Cut mid-token, so the terminating newline `console.log` appends never
+      // arrives — the signature of the defect, on top of the byte count.
       expect(received.endsWith('\n')).toBe(false);
+    },
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'delivers that same payload intact WITH the fix, against the same stalling reader',
+    async () => {
+      const { received, status } = await writeThroughStallingPipe(LARGE_PAYLOAD_BYTES, true);
+
+      expect(status).toBe(0);
+      expect(received).toBe(`${'x'.repeat(LARGE_PAYLOAD_BYTES)}\n`);
     },
   );
 
