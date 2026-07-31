@@ -388,6 +388,37 @@ describe('ResourceRegistry - Integration Tests', () => {
       expect(unresolvedLinks.length).toBeGreaterThan(0);
     });
 
+    it('should resolve root-relative (RFC 3986 §4.2) hrefs against baseDir', async () => {
+      // A leading-`/` href is a project-root-relative reference, NOT a filesystem
+      // absolute path. The link-graph walker already resolves it that way (via
+      // resolveLocalHref), so the target gets bundled — but if resolveLinks()
+      // resolves it against the OS root instead, the link never gets a resolvedId
+      // and the packager's bundled-link template strips the href, shipping a
+      // bundled file that nothing references (PACKAGED_UNREFERENCED_FILE).
+      const rootRelativeDir = await mkdtemp(safePath.join(normalizedTmpdir(), 'root-relative-href-'));
+      try {
+        await mkdir(safePath.join(rootRelativeDir, 'docs/adrs'), { recursive: true });
+        await mkdir(safePath.join(rootRelativeDir, 'docs/specs'), { recursive: true });
+
+        const adrPath = safePath.join(rootRelativeDir, 'docs/adrs/boundary.md');
+        const specPath = safePath.join(rootRelativeDir, 'docs/specs/design.md');
+        await writeFile(adrPath, '# Boundary ADR\n', 'utf-8');
+        await writeFile(specPath, 'See [the ADR](/docs/adrs/boundary.md).\n', 'utf-8');
+
+        const rootRelativeRegistry = new ResourceRegistry({ baseDir: rootRelativeDir });
+        await rootRelativeRegistry.addResources([adrPath, specPath]);
+        rootRelativeRegistry.resolveLinks();
+
+        const spec = rootRelativeRegistry.getResource(specPath);
+        const adrLink = spec?.links.find((link) => link.href.includes('boundary.md'));
+
+        expect(adrLink).toBeDefined();
+        expect(adrLink?.resolvedId).toBe('docs-adrs-boundary-md');
+      } finally {
+        await rm(rootRelativeDir, { recursive: true, force: true });
+      }
+    });
+
     it('should mutate links in place', async () => {
       await registry.addResource(safePath.join(fixturesDir, 'valid.md'));
       await registry.addResource(safePath.join(fixturesDir, 'target.md'));

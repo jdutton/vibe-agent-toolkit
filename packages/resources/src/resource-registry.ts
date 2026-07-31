@@ -32,7 +32,7 @@ import type { SHA256 } from './schemas/checksum.js';
 import type { ProjectConfig } from './schemas/project-config.js';
 import type { HeadingNode, ResourceMetadata } from './schemas/resource-metadata.js';
 import type { ValidationResult } from './schemas/validation-result.js';
-import { locationRoot, matchesGlobPattern, splitHrefAnchor } from './utils.js';
+import { locationRoot, matchesGlobPattern, resolveLocalHref } from './utils.js';
 
 /**
  * Typed error thrown when two resources produce the same ID.
@@ -1096,6 +1096,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         if (link.type === 'local_file') {
           // Resolve the target file path
           const targetPath = this.resolveRelativeLinkPath(link.href, resource.filePath);
+          if (targetPath === undefined) continue;
 
           // Look up resource by path
           const targetResource = this.resourcesByPath.get(targetPath);
@@ -1501,19 +1502,33 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
-   * Resolve a relative link href to an absolute file path.
+   * Resolve a link href to an absolute file path.
    *
-   * @param linkHref - The href from the link (e.g., './file.md', '../dir/file.md#anchor')
+   * Delegates to the canonical {@link resolveLocalHref} so this registry agrees
+   * with every other lane on what an href means — in particular that a leading
+   * `/` is an RFC 3986 §4.2 project-root-relative reference (resolved against
+   * `baseDir`), NOT a filesystem-absolute path, and that `%20`-style escapes are
+   * decoded before resolution.
+   *
+   * A private path-only resolver used to live here, and the divergence was not
+   * theoretical: the skill packager's link-graph walker resolves root-relative
+   * hrefs correctly (so it bundles the target), while this resolver sent them to
+   * the OS root and found nothing. The link then got no `resolvedId`, the
+   * bundled-link template rendered an empty path and STRIPPED the href, and the
+   * bundled file shipped with nothing pointing at it — surfacing as an
+   * error-severity `PACKAGED_UNREFERENCED_FILE` that failed the build, plus
+   * silently de-linked prose in every packaged doc that used the root-relative
+   * form.
+   *
+   * @param linkHref - The href from the link (e.g., './file.md', '/docs/file.md#anchor')
    * @param sourceFilePath - Absolute path to the source file
-   * @returns Absolute path to the target file
+   * @returns Absolute path to the target file, or undefined when the href is
+   *   anchor-only or is a root-relative reference that cannot be resolved
+   *   (no `baseDir`, or it escapes the project).
    */
-  private resolveRelativeLinkPath(linkHref: string, sourceFilePath: string): string {
-    // Strip anchor if present
-    const [filePath] = splitHrefAnchor(linkHref);
-
-    // Resolve relative to source file's directory
-    const sourceDir = path.dirname(sourceFilePath);
-    return safePath.resolve(sourceDir, filePath);
+  private resolveRelativeLinkPath(linkHref: string, sourceFilePath: string): string | undefined {
+    const resolution = resolveLocalHref(linkHref, sourceFilePath, this.baseDir);
+    return resolution.kind === 'resolved' ? resolution.resolvedPath : undefined;
   }
 }
 
