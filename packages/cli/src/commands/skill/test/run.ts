@@ -173,7 +173,7 @@ type DeclaredExecutable = NonNullable<HarnessOpts['declaredExecutables']>[number
 /**
  * Map a resolved skill's packaging-config `executables` (SkillExecutableEntry[]) to
  * the grader's recognition-aid shape (issue #145 Phase T): each entry's stable NAME
- * is its `path` basename with the extension stripped (`scripts/dxa.py` → `dxa`),
+ * is its `path` basename with the extension stripped (`scripts/csvsum.py` → `csvsum`),
  * carried alongside its `howInvoked` + `kind`. Returns undefined for absent/empty
  * input so the harness omits the aid entirely (the grader still matches tools by the
  * commands in the transcript). Pure + unit-testable.

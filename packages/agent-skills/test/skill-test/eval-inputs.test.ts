@@ -59,7 +59,7 @@ describe('parseEvalSuite', () => {
     expect(() => parseEvalSuite(missingExpectations)).toThrow(EvalInputError);
   });
 
-  it('accepts an eval with no expected_output (graded on expectations alone — real dxa-consumption shape)', () => {
+  it('accepts an eval with no expected_output (graded on expectations alone — real adopter-suite shape)', () => {
     const noExpectedOutput = JSON.stringify({ skill_name: 'demo', evals: [
       { id: 'anti-re-parse', prompt: 'p', expectations: ['e'] },
     ] });
@@ -68,7 +68,7 @@ describe('parseEvalSuite', () => {
     expect(suite.evals[0]?.expectations).toEqual(['e']);
   });
 
-  it('accepts a suite that mixes numeric and descriptive string ids (real dxa shape)', () => {
+  it('accepts a suite that mixes numeric and descriptive string ids (real adopter-suite shape)', () => {
     const mixed = JSON.stringify({ skill_name: 'demo', evals: [
       { id: 1, prompt: 'p', expected_output: 'o', expectations: ['e'] },
       { id: DESCRIPTIVE_ID, prompt: 'p2', expected_output: 'o2', expectations: ['e2'] },
@@ -148,11 +148,11 @@ describe('parseEvalSuite', () => {
         id: 1,
         prompt: 'p',
         expectations: ['e'],
-        toolExpectations: { mustRun: ['dxa'], mustSucceed: ['dxa'] },
+        toolExpectations: { mustRun: ['csvsum'], mustSucceed: ['csvsum'] },
       },
     ] });
     const suite = parseEvalSuite(withMustSucceed);
-    expect(suite.evals[0]?.toolExpectations).toEqual({ mustRun: ['dxa'], mustSucceed: ['dxa'] });
+    expect(suite.evals[0]?.toolExpectations).toEqual({ mustRun: ['csvsum'], mustSucceed: ['csvsum'] });
   });
 
   it('rejects an empty mustSucceed executable name (each must be a non-empty name)', () => {

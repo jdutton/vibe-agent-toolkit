@@ -161,10 +161,10 @@ export type SkillFileEntry = z.infer<typeof SkillFileEntrySchema>;
  * A single declared executable a skill ships.
  *
  * Populates two downstream consumers (issue #145 Phase T/L):
- * - `toolExpectations.mustRun: ["dxa"]` (eval grading) references an executable
+ * - `toolExpectations.mustRun: ["csvsum"]` (eval grading) references an executable
  *   by a stable NAME. Name resolution (defined here, implemented in a later
  *   task): the referenced name matches either (a) this entry's `path` basename
- *   with its extension stripped (e.g. `path: "scripts/dxa.py"` → name `"dxa"`),
+ *   with its extension stripped (e.g. `path: "scripts/csvsum.py"` → name `"csvsum"`),
  *   or (b) the exact `path` string. Callers should try (a) then fall back to (b).
  * - Phase L launch-guidance linting uses `kind` + `howInvoked` to statically
  *   check that a skill's documented invocation matches its declared executable
@@ -175,7 +175,7 @@ export const SkillExecutableEntrySchema = z.object({
   kind: z.enum(['node', 'python', 'shell', 'pwsh', 'binary'])
     .describe('Executable kind (informs launch-guidance linting)'),
   howInvoked: z.string().min(1)
-    .describe('Canonical human invocation, e.g. "uv run dxa.py" or "node dist/dxa.mjs"'),
+    .describe('Canonical human invocation, e.g. "uv run csvsum.py" or "node dist/csvsum.mjs"'),
 }).strict();
 
 export type SkillExecutableEntry = z.infer<typeof SkillExecutableEntrySchema>;

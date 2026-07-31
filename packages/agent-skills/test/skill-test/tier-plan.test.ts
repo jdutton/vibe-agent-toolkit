@@ -31,7 +31,7 @@ function fragment(evalId: string, over: { outputPassed?: boolean; toolPassed?: b
     expectations: [{ text: 'e', passed: outputPassed }],
     ...(over.toolPassed === undefined
       ? {}
-      : { tool: { mustRun: [{ name: 'dxa', ran: over.toolPassed }], passed: over.toolPassed } }),
+      : { tool: { mustRun: [{ name: 'csvsum', ran: over.toolPassed }], passed: over.toolPassed } }),
   };
 }
 

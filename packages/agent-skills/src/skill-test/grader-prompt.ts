@@ -70,8 +70,8 @@ function buildToolExpectationsLines(
   const lines: string[] = [
     'This eval also declares tool expectations that you must judge FROM THE TRANSCRIPT — prefer the',
     'structured tool_use `command`s and tool_result `is_error` entries as your evidence over free-form',
-    'prose. Recognize varied launch forms of the SAME executable (e.g. `uv run dxa.py`, `python3 dxa.py`,',
-    '`./dxa`, `node dist/dxa.mjs`) as all having run that executable — do not require an exact string',
+    'prose. Recognize varied launch forms of the SAME executable (e.g. `uv run csvsum.py`, `python3 csvsum.py`,',
+    '`./csvsum`, `node dist/csvsum.mjs`) as all having run that executable — do not require an exact string',
     'match. Zero tool_use entries at all in the transcript CORROBORATES that nothing ran, but is never',
     'the sole basis for a verdict on its own — always judge from what the transcript actually shows.',
     '',

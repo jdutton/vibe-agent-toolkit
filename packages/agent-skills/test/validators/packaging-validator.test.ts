@@ -601,7 +601,7 @@ describe('validateSkillForPackaging - Non-portable asset references', () => {
 		const tempDir = getTempDir();
 		// SKILL.md body is clean; the anti-pattern lives in a linked reference file.
 		const files = {
-			'toolbox.md': '# Toolbox\n\nRun `node "${CLAUDE_PLUGIN_ROOT}/skills/x/scripts/dxa.mjs" go`\n',
+			'toolbox.md': '# Toolbox\n\nRun `node "${CLAUDE_PLUGIN_ROOT}/skills/x/scripts/csvsum.mjs" go`\n',
 		};
 		const skillContent = createSkillContent(
 			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },

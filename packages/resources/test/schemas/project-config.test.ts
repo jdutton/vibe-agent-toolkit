@@ -20,8 +20,8 @@ import type { SkillExecutableEntry, SkillFileEntry } from '../../src/schemas/pro
 
 const SKILL_GLOB_INCLUDE = 'skills/**/SKILL.md';
 const GRADER_MODEL = 'claude-sonnet-5';
-const DXA_PATH = 'scripts/dxa.py';
-const DXA_HOW_INVOKED = 'uv run dxa.py';
+const CSVSUM_PATH = 'scripts/csvsum.py';
+const CSVSUM_HOW_INVOKED = 'uv run csvsum.py';
 
 const VAT_DEV_AGENTS_CONFIG = fileURLToPath(
   new URL('../../../vat-development-agents/vibe-agent-toolkit.config.yaml', import.meta.url),
@@ -145,15 +145,15 @@ describe('SkillPackagingConfigSchema', () => {
   it('parses executables[] with path, kind, and howInvoked', () => {
     const result = SkillPackagingConfigSchema.safeParse({
       executables: [
-        { path: DXA_PATH, kind: 'python', howInvoked: DXA_HOW_INVOKED },
+        { path: CSVSUM_PATH, kind: 'python', howInvoked: CSVSUM_HOW_INVOKED },
       ],
     });
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.executables?.[0]).toEqual({
-        path: DXA_PATH,
+        path: CSVSUM_PATH,
         kind: 'python',
-        howInvoked: DXA_HOW_INVOKED,
+        howInvoked: CSVSUM_HOW_INVOKED,
       });
     }
   });
@@ -169,7 +169,7 @@ describe('SkillPackagingConfigSchema', () => {
   it('rejects an executables entry with an unknown key (strict)', () => {
     const result = SkillPackagingConfigSchema.safeParse({
       executables: [
-        { path: DXA_PATH, kind: 'python', howInvoked: DXA_HOW_INVOKED, bogus: true },
+        { path: CSVSUM_PATH, kind: 'python', howInvoked: CSVSUM_HOW_INVOKED, bogus: true },
       ],
     });
     expect(result.success).toBe(false);
@@ -178,7 +178,7 @@ describe('SkillPackagingConfigSchema', () => {
   it('rejects an executables entry with a bad kind enum value', () => {
     const result = SkillPackagingConfigSchema.safeParse({
       executables: [
-        { path: DXA_PATH, kind: 'ruby', howInvoked: 'ruby dxa.rb' },
+        { path: CSVSUM_PATH, kind: 'ruby', howInvoked: 'ruby csvsum.rb' },
       ],
     });
     expect(result.success).toBe(false);
@@ -227,9 +227,9 @@ describe('SkillExecutableEntrySchema', () => {
   it('type-level: SkillExecutableEntry has path/kind/howInvoked', () => {
     // compile-time check — if the type is wrong this file will not typecheck
     const entry: SkillExecutableEntry = {
-      path: 'scripts/dxa.py',
+      path: 'scripts/csvsum.py',
       kind: 'python',
-      howInvoked: 'uv run dxa.py',
+      howInvoked: 'uv run csvsum.py',
     };
     expect(entry.kind).toBe('python');
   });

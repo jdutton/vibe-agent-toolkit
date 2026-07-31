@@ -91,26 +91,26 @@ describe('buildGraderPrompt — toolExpectations (issue #145 Phase T)', () => {
   const toolOpts: BuildGraderPromptOptions = {
     ...opts,
     toolExpectations: {
-      mustRun: ['dxa'],
+      mustRun: ['csvsum'],
       mustNotRun: ['rm'],
-      sequence: ['dxa parses the file', 'dxa writes the report'],
+      sequence: ['csvsum parses the file', 'csvsum writes the report'],
     },
     declaredExecutables: [
-      { name: 'dxa', howInvoked: 'uv run dxa.py', kind: 'python' },
+      { name: 'csvsum', howInvoked: 'uv run csvsum.py', kind: 'python' },
     ],
   };
 
   it('names each declared mustRun/mustNotRun/sequence entry', () => {
     const prompt = buildGraderPrompt(toolOpts);
-    expect(prompt).toContain('dxa');
+    expect(prompt).toContain('csvsum');
     expect(prompt).toContain('rm');
-    expect(prompt).toContain('dxa parses the file');
-    expect(prompt).toContain('dxa writes the report');
+    expect(prompt).toContain('csvsum parses the file');
+    expect(prompt).toContain('csvsum writes the report');
   });
 
   it('references the declared-executable howInvoked hints', () => {
     const prompt = buildGraderPrompt(toolOpts);
-    expect(prompt).toContain('uv run dxa.py');
+    expect(prompt).toContain('uv run csvsum.py');
   });
 
   it('instructs emitting a "tool" object with the ToolVerdictBody fields, including "passed"', () => {
@@ -150,7 +150,7 @@ describe('buildGraderPrompt — toolExpectations (issue #145 Phase T)', () => {
   it('emits a mustSucceed section naming each executable and the tool_result is_error basis (feature #148)', () => {
     const prompt = buildGraderPrompt({
       ...opts,
-      toolExpectations: { mustRun: ['dxa'], mustSucceed: ['dxa', 'ruff'] },
+      toolExpectations: { mustRun: ['csvsum'], mustSucceed: ['csvsum', 'ruff'] },
     });
     expect(prompt).toMatch(/MUST have run AND succeeded/);
     expect(prompt).toMatch(/is_error/);
@@ -171,7 +171,7 @@ describe('buildGraderPrompt — toolExpectations (issue #145 Phase T)', () => {
   });
 
   it('omits the manifest fence when no declaredExecutables are supplied', () => {
-    const prompt = buildGraderPrompt({ ...opts, toolExpectations: { mustRun: ['dxa'] } });
+    const prompt = buildGraderPrompt({ ...opts, toolExpectations: { mustRun: ['csvsum'] } });
     expect(prompt).not.toMatch(/SUBJECT MANIFEST/);
   });
 });
@@ -234,7 +234,7 @@ describe('assertGraderPromptInvariants', () => {
   it('does NOT fire the manifest invariant when no manifest block is present (toolExpectations, no declaredExecutables)', () => {
     // A real prompt with tool expectations but NO declaredExecutables has no
     // manifest block, so the conditional fence invariant must not fire.
-    const noManifest = buildGraderPrompt({ ...opts, toolExpectations: { mustRun: ['dxa'] } });
+    const noManifest = buildGraderPrompt({ ...opts, toolExpectations: { mustRun: ['csvsum'] } });
     expect(noManifest).not.toMatch(/SUBJECT MANIFEST/);
     expect(() => assertGraderPromptInvariants(noManifest, opts.transcript)).not.toThrow();
   });

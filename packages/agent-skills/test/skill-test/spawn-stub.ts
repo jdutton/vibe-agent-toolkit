@@ -136,7 +136,7 @@ export function makeHarnessFakeSpawn(cfg: HarnessFakeSpawnConfig = {}): HarnessF
             evalId,
             expectations: [{ text: 'graded', passed }],
             ...(emitTool
-              ? { tool: { mustRun: [{ name: 'dxa', ran: toolPassed }], passed: toolPassed } }
+              ? { tool: { mustRun: [{ name: 'csvsum', ran: toolPassed }], passed: toolPassed } }
               : {}),
           }),
           'utf8',

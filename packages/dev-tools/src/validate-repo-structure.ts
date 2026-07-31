@@ -5,8 +5,9 @@
  * Validates that the monorepo structure follows conventions to prevent
  * structural sprawl from agentic development (AI code generation).
  *
- * CRITICAL - Security:
+ * CRITICAL - Security & Confidentiality:
  * - No credential/secret files (.env, credentials.json, certificate files, etc.)
+ * - No proprietary adopter names in any tracked file (see contraband-scan.ts)
  *
  * HIGH PRIORITY - File Location Sprawl:
  * - No nested package.json files (only root and packages directories)
@@ -28,10 +29,17 @@
 // This utility script needs to read dynamic file paths for validation
 
 import { existsSync } from 'node:fs';
-import { readdir, stat } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safeExecSync, safePath } from '@vibe-agent-toolkit/utils';
+
+import {
+  loadTokens,
+  scanTextForContraband,
+  TOKENS_DEFAULT_FILE,
+  TOKENS_ENV,
+} from './contraband-scan.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const REPO_ROOT = safePath.join(__dirname, '../../..');
@@ -433,6 +441,59 @@ async function validateTestFileNaming(): Promise<void> {
 }
 
 /**
+ * Fail on any proprietary adopter name that has entered a git-tracked file.
+ *
+ * The population is `git ls-files` — every tracked text file, defined independently of
+ * the tokens being searched for — so this asserts ABSENCE rather than classifying files.
+ * See {@link file://./contraband-scan.ts} for why that distinction matters, why the token
+ * list is stored hashed, and how to add an entry.
+ *
+ * Severity is `error`, not `warning`: unlike the other rules here, a violation that
+ * reaches `main` is unfixable — it lands in public git history, GitHub release bodies,
+ * and npm tarballs, none of which a later commit can retract.
+ */
+async function validateNoContrabandTokens(): Promise<void> {
+  const { tokens, path: tokensPath } = loadTokens(REPO_ROOT);
+  if (tokens.length === 0) {
+    errors.push({
+      type: ERROR_TYPES.STRUCTURAL_VIOLATION,
+      path: TOKENS_DEFAULT_FILE,
+      message: `No contraband token list found, so the adopter-name gate did not run. Set $${TOKENS_ENV} to a token file, or create a gitignored ${TOKENS_DEFAULT_FILE} in the repo root (one token per line). CI must supply this — a confidentiality gate that finds nothing because it has nothing to look for reads as a clean bill of health.`,
+      severity: 'warning',
+    });
+    return;
+  }
+  console.log(`   contraband scan: ${tokens.length} token(s) from ${tokensPath ?? 'an unnamed source'}`);
+
+  const lsFiles = String(safeExecSync('git', ['ls-files', '-z'], { cwd: REPO_ROOT, encoding: 'utf8' }));
+  const tracked = lsFiles
+    .split('\0')
+    .filter((p: string) => p.length > 0)
+    .filter((p: string) => !BINARY_EXTENSION.test(p));
+
+  for (const relPath of tracked) {
+    let text: string;
+    try {
+      text = await readFile(safePath.join(REPO_ROOT, relPath), 'utf8');
+    } catch {
+      continue; // unreadable or deleted-but-tracked; other rules cover structure
+    }
+    for (const hit of scanTextForContraband(text, tokens)) {
+      errors.push({
+        type: ERROR_TYPES.STRUCTURAL_VIOLATION,
+        path: `${relPath}:${hit.line}`,
+        // Never echo the matched text — that would reintroduce the name into CI logs.
+        message: `Proprietary adopter name (${hit.form} form) detected. These must never enter this public repo: a leak here cannot be retracted from git history, releases, or npm. Replace it with an abstract description ("an adopter", "a 90-skill adopter") or a synthetic example.`,
+        severity: 'error',
+      });
+    }
+  }
+}
+
+/** Extensions this scan does not open — archives, images, fonts, and lockfiles. */
+const BINARY_EXTENSION = /\.(?:zip|tgz|gz|tar|png|jpe?g|gif|webp|ico|pdf|woff2?|ttf|lock)$/i;
+
+/**
  * Print validation results
  */
 function printResults(): void {
@@ -475,6 +536,9 @@ async function validate(): Promise<void> {
 
   // NOTE: Secret file protection is handled by .gitignore + vibe-validate pre-commit hooks
   // which scan for secrets anywhere in code content
+
+  // Critical - Confidentiality (unfixable once merged; see contraband-scan.ts)
+  await validateNoContrabandTokens();
 
   // High Priority - File Location Sprawl
   await validateNoNestedPackageJson();

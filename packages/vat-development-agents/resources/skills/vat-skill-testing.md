@@ -142,24 +142,24 @@ The suite lives at `<skill>/evals/evals.json` (override with `skills.config.<ski
 
 ```json
 {
-  "skill_name": "data-extract-analysis",
+  "skill_name": "csv-summarizer",
   "evals": [
     {
-      "id": "incurred-reconciles",
+      "id": "line-totals-reconcile",
       "category": "recognition-accuracy",
-      "prompt": "Can you take a look at this loss run and tell me whether it adds up? I just need to know if paid plus reserves ties to incurred before I send it on.",
-      "files": ["fixtures/wc-loss-run-clean.csv"],
-      "expected_output": "Recognizes the file as a workers'-comp loss run (8 claims), runs the reconciliation, and reports in plain English that paid + reserves ties to incurred for every row.",
+      "prompt": "Can you take a look at this orders export and tell me whether it adds up? I just need to know if unit price times quantity ties to the line total before I send it on.",
+      "files": ["fixtures/orders-clean.csv"],
+      "expected_output": "Recognizes the file as a monthly orders export (8 rows), runs the reconciliation, and reports in plain English that unit_price x quantity ties to line_total for every row.",
       "expectations": [
-        "The output identifies the file as a workers'-comp loss run with 8 rows.",
-        "The output states paid + reserve reconciles to incurred for every row.",
+        "The output identifies the file as a monthly orders export with 8 rows.",
+        "The output states unit_price x quantity reconciles to line_total for every row.",
         "The output does NOT claim any row fails to add up."
       ],
       "tier": 0,
       "toolExpectations": {
-        "mustRun": ["dxa"],
+        "mustRun": ["csvsum"],
         "mustNotRun": ["rm"],
-        "sequence": ["dxa parses the loss run", "dxa reports the reconciliation"]
+        "sequence": ["csvsum parses the orders export", "csvsum reports the reconciliation"]
       }
     }
   ]
@@ -176,34 +176,34 @@ The suite lives at `<skill>/evals/evals.json` (override with `skills.config.<ski
 
 ### Write blind, realistic prompts
 
-The executor is never told it's being tested — and it shouldn't be able to tell. Phrase prompts exactly the way a real user would ("Reserve review on this WC loss run, please."), never "Test that the skill computes reserves." This is not cosmetic: models behave measurably differently when they sense an eval, so a benchmark-flavored prompt measures the wrong thing.
+The executor is never told it's being tested — and it shouldn't be able to tell. Phrase prompts exactly the way a real user would ("Quick sanity check on this month's orders export, please."), never "Test that the skill computes line totals." This is not cosmetic: models behave measurably differently when they sense an eval, so a benchmark-flavored prompt measures the wrong thing.
 
 ### Write *discriminating* expectations
 
-Every expectation must **fail for a wrong output**. The classic trap — which the grader is explicitly told to flag — is checking mere presence: `"the output mentions John Smith"` also passes for a hallucinated document. Check *correctness*, tied to the input, not presence. And pair positive assertions with **negative** ones (`"does NOT claim every row reconciles"`): one-sided evals create one-sided optimization. If an assertion would pass for an obviously broken result, it's not pulling its weight.
+Every expectation must **fail for a wrong output**. The classic trap — which the grader is explicitly told to flag — is checking mere presence: `"the output mentions Acme Freight"` also passes for a hallucinated document. Check *correctness*, tied to the input, not presence. And pair positive assertions with **negative** ones (`"does NOT claim every row reconciles"`): one-sided evals create one-sided optimization. If an assertion would pass for an obviously broken result, it's not pulling its weight.
 
-The harness itself is only as sharp as the evals you write — a passing `toolExpectations`/`expectations` grade tells you nothing if the assertion couldn't have failed. **Antipattern: a presence-only check with no negative counterpart.** `"the output mentions the claim number"` or `"the output includes a reconciliation summary"`, on its own, passes for a hallucinated claim number or a summary that reaches the wrong conclusion — it can't distinguish "did the right thing" from "said the right *words*." `vat skill test` emits an advisory lint warning when **every** expectation in an eval is presence-only ("mentions/includes/contains/references/appears/states…") with no discriminating or negative cue and no `toolExpectations` declared. It's a nudge, not a gate — it never blocks a run or changes the exit code — so treat it as a prompt to strengthen the eval, not a substitute for writing discriminating expectations in the first place.
+The harness itself is only as sharp as the evals you write — a passing `toolExpectations`/`expectations` grade tells you nothing if the assertion couldn't have failed. **Antipattern: a presence-only check with no negative counterpart.** `"the output mentions the order id"` or `"the output includes a reconciliation summary"`, on its own, passes for a hallucinated order id or a summary that reaches the wrong conclusion — it can't distinguish "did the right thing" from "said the right *words*." `vat skill test` emits an advisory lint warning when **every** expectation in an eval is presence-only ("mentions/includes/contains/references/appears/states…") with no discriminating or negative cue and no `toolExpectations` declared. It's a nudge, not a gate — it never blocks a run or changes the exit code — so treat it as a prompt to strengthen the eval, not a substitute for writing discriminating expectations in the first place.
 
-A second advisory in the same family catches a quieter footgun: when a `toolExpectations` entry names an executable that looks like a **typo** of one of the skill's `declaredExecutables` (e.g. `dxa-py` when the skill declares `dxa`), the harness warns before any spend. A misspelled tool name never matches the transcript, so `mustRun`/`mustSucceed`/`sequence` fail for the wrong reason and `mustNotRun` passes vacuously — the assertion *looks* like it checks a tool but can't. This lint is conservative (it fires only when there's a specific declared name the reference is probably a typo of, so a deliberate `Bash`/`git` reference is never flagged) and, like the presence-only lint, surfaces under `--dry-run` — so a zero-token dry run catches the typo before you spend.
+A second advisory in the same family catches a quieter footgun: when a `toolExpectations` entry names an executable that looks like a **typo** of one of the skill's `declaredExecutables` (e.g. `csvsum-py` when the skill declares `csvsum`), the harness warns before any spend. A misspelled tool name never matches the transcript, so `mustRun`/`mustSucceed`/`sequence` fail for the wrong reason and `mustNotRun` passes vacuously — the assertion *looks* like it checks a tool but can't. This lint is conservative (it fires only when there's a specific declared name the reference is probably a typo of, so a deliberate `Bash`/`git` reference is never flagged) and, like the presence-only lint, surfaces under `--dry-run` — so a zero-token dry run catches the typo before you spend.
 
 Before/after, same eval:
 
 ```json
-// Before — antipattern: also passes for a hallucinated claimant
+// Before — antipattern: also passes for a hallucinated customer
 "expectations": [
-  "The output mentions John Smith as the claimant."
+  "The output mentions Acme Freight as the top customer."
 ]
 
 // After — discriminating: fails a wrong or invented result
 "expectations": [
-  "The output identifies John Smith as the claimant, matching claimant_name in the input file.",
-  "The output does NOT invent a claimant not present in the input file."
+  "The output identifies Acme Freight as the top customer by revenue, matching customer_name in the input file.",
+  "The output does NOT invent a customer not present in the input file."
 ]
 ```
 
 ### Cover real scenarios; aim for ≥3 evals
 
-Anthropic's bar is *at least three evaluations, drawn from real usage and past failures, tested across models*. Group evals by what they exercise — dxa, the reference adopter, uses three categories:
+Anthropic's bar is *at least three evaluations, drawn from real usage and past failures, tested across models*. Group evals by what they exercise — the `csv-summarizer` example above uses three categories:
 
 | Category | Tests |
 |---|---|
@@ -232,30 +232,30 @@ Output correctness is not the whole story: a skill can produce the right answer 
 | `mustSucceed` | each named executable was invoked **and** did not fail (its invoking `tool_result` was not an error) |
 | `sequence` | the described steps happened in order |
 
-Names are matched leniently — the grader recognizes varied launch forms of the *same* executable (`uv run dxa.py`, `python3 dxa.py`, `./dxa`, `node dist/dxa.mjs`) as all "running `dxa`", so you assert the tool, not an exact command string.
+Names are matched leniently — the grader recognizes varied launch forms of the *same* executable (`uv run csvsum.py`, `python3 csvsum.py`, `./csvsum`, `node dist/csvsum.mjs`) as all "running `csvsum`", so you assert the tool, not an exact command string.
 
 > **`mustRun` means *invoked*, not *succeeded*.** The verdict is judged from the transcript, which records that a tool was *called* and how — it cannot see a script's exit code through a shell wrapper (a Bash `tool_result.is_error` is `false` even for a command that exits non-zero). So a skill that invokes a **broken** executable and works around the failure still satisfies `mustRun`. Use `mustSucceed` (below) when you need "ran *and* succeeded."
 
-**`mustSucceed`** closes most of that gap — it asserts the tool ran and its invoking `tool_result` was not an error — but it is still **transcript-judged**, not a captured real exit code. Be honest with yourself about the limit: a skill that swallows a non-zero exit (`cmd || true`, catching and silently ignoring a subprocess failure) can still read as succeeded, because the grader is judging what the transcript shows, not re-executing anything. For a hard guarantee, pair `mustSucceed` with a discriminating output `expectations` entry (e.g. *"the output reflects a successful dxa run, not an error fallback"*). Where it applies, prefer `mustSucceed` over the older workaround of asserting "ran and succeeded" purely in prose — it gives you a structured verdict in `tool-eval.json` instead of one entangled with the output grade:
+**`mustSucceed`** closes most of that gap — it asserts the tool ran and its invoking `tool_result` was not an error — but it is still **transcript-judged**, not a captured real exit code. Be honest with yourself about the limit: a skill that swallows a non-zero exit (`cmd || true`, catching and silently ignoring a subprocess failure) can still read as succeeded, because the grader is judging what the transcript shows, not re-executing anything. For a hard guarantee, pair `mustSucceed` with a discriminating output `expectations` entry (e.g. *"the output reflects a successful csvsum run, not an error fallback"*). Where it applies, prefer `mustSucceed` over the older workaround of asserting "ran and succeeded" purely in prose — it gives you a structured verdict in `tool-eval.json` instead of one entangled with the output grade:
 
 ```json
 "toolExpectations": {
-  "mustRun": ["dxa"],
-  "mustSucceed": ["dxa"],
+  "mustRun": ["csvsum"],
+  "mustSucceed": ["csvsum"],
   "mustNotRun": ["rm"]
 }
 ```
 
-**Declare your executables so the grader knows their names.** A `mustRun: ["dxa"]` resolves against the skill's declared executables in `skills.config.<skill>.executables` — each entry is `{ path, kind, howInvoked }` (`kind` ∈ `node|python|shell|pwsh|binary`). The referenced name matches the `path` basename with its extension stripped (`scripts/dxa.py` → `dxa`) or the exact `path`. These flow into the grader prompt as recognition hints:
+**Declare your executables so the grader knows their names.** A `mustRun: ["csvsum"]` resolves against the skill's declared executables in `skills.config.<skill>.executables` — each entry is `{ path, kind, howInvoked }` (`kind` ∈ `node|python|shell|pwsh|binary`). The referenced name matches the `path` basename with its extension stripped (`scripts/csvsum.py` → `csvsum`) or the exact `path`. These flow into the grader prompt as recognition hints:
 
 ```yaml
 skills:
   config:
     my-skill:
       executables:
-        - path: scripts/dxa.py
+        - path: scripts/csvsum.py
           kind: python
-          howInvoked: uv run dxa.py
+          howInvoked: uv run csvsum.py
 ```
 
 Tool verdicts land in their own **`tool-eval.json`** channel and never leak into `grading.json`. They ride the **WITH-arm only** in a `--baseline` run (the skill-absent arm has no tools to judge). `toolExpectations` is only meaningful for a **declared** skill subject (name, or a path that maps back to a declared skill) — a plain path/source subject has no `executables` manifest to resolve names against.

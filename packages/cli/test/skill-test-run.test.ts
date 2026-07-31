@@ -418,14 +418,14 @@ describe('deriveDeclaredExecutableNames (Phase T grader recognition aid)', () =>
 
   it('maps each executable to { name: basename-without-ext, howInvoked, kind }', () => {
     const out = deriveDeclaredExecutableNames([
-      { path: 'scripts/dxa.py', kind: 'python', howInvoked: 'uv run dxa.py' },
-      { path: 'dist/dxa.mjs', kind: 'node', howInvoked: 'node dist/dxa.mjs' },
-      { path: 'bin/dxa', kind: 'binary', howInvoked: './dxa' },
+      { path: 'scripts/csvsum.py', kind: 'python', howInvoked: 'uv run csvsum.py' },
+      { path: 'dist/csvsum.mjs', kind: 'node', howInvoked: 'node dist/csvsum.mjs' },
+      { path: 'bin/csvsum', kind: 'binary', howInvoked: './csvsum' },
     ]);
     expect(out).toEqual([
-      { name: 'dxa', howInvoked: 'uv run dxa.py', kind: 'python' },
-      { name: 'dxa', howInvoked: 'node dist/dxa.mjs', kind: 'node' },
-      { name: 'dxa', howInvoked: './dxa', kind: 'binary' },
+      { name: 'csvsum', howInvoked: 'uv run csvsum.py', kind: 'python' },
+      { name: 'csvsum', howInvoked: 'node dist/csvsum.mjs', kind: 'node' },
+      { name: 'csvsum', howInvoked: './csvsum', kind: 'binary' },
     ]);
   });
 });

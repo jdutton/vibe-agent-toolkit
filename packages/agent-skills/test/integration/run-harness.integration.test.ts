@@ -149,7 +149,7 @@ describe('runSkillTestHarness — executor→grader pipeline (integration)', () 
     // expectation but emits a FAILING tool verdict → output all-green but the
     // COMPOSITE verdict FAILs → exit 4, with the verdict living in tool-eval.json.
     const skillDir = writeFixtureSkillWithEvals([
-      { id: 'gamma', prompt: 'do gamma', expectations: ['gamma works'], toolExpectations: { mustRun: ['dxa'] } },
+      { id: 'gamma', prompt: 'do gamma', expectations: ['gamma works'], toolExpectations: { mustRun: ['csvsum'] } },
     ]);
     const fake = makeHarnessFakeSpawn({ graderPassed: true, graderToolPassed: false });
     const result = await runToExit(harnessOpts(skillDir, fake.spawn));

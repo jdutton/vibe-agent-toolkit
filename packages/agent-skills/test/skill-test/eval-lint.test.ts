@@ -85,34 +85,34 @@ describe('lintEvalExpectations', () => {
 });
 
 describe('lintToolExpectationExecutables', () => {
-  const DECLARED = ['dxa'];
+  const DECLARED = ['csvsum'];
 
   it('flags a separator-decorated typo of a declared executable and suggests it', () => {
     const warnings = lintToolExpectationExecutables(
-      [makeEval({ id: 'typo', toolExpectations: { mustRun: ['dxa-py'] } })],
+      [makeEval({ id: 'typo', toolExpectations: { mustRun: ['csvsum-py'] } })],
       DECLARED,
     );
     expect(warnings).toHaveLength(1);
     expect(warnings[0]?.evalId).toBe('typo');
-    expect(warnings[0]?.message).toContain('dxa-py');
-    expect(warnings[0]?.message).toContain('did you mean "dxa"');
+    expect(warnings[0]?.message).toContain('csvsum-py');
+    expect(warnings[0]?.message).toContain('did you mean "csvsum"');
   });
 
   it('flags a single-edit typo of a declared executable', () => {
     const warnings = lintToolExpectationExecutables(
-      [makeEval({ id: 'edit', toolExpectations: { mustSucceed: ['dxaa'] } })],
+      [makeEval({ id: 'edit', toolExpectations: { mustSucceed: ['csvsumm'] } })],
       DECLARED,
     );
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]?.message).toContain('did you mean "dxa"');
+    expect(warnings[0]?.message).toContain('did you mean "csvsum"');
   });
 
   it('does not flag an exact declared name or a recognized launch form', () => {
     const warnings = lintToolExpectationExecutables(
       [
-        makeEval({ id: 'exact', toolExpectations: { mustRun: ['dxa'] } }),
-        makeEval({ id: 'ext', toolExpectations: { mustRun: ['dxa.py'] } }),
-        makeEval({ id: 'dotslash', toolExpectations: { mustNotRun: ['./dxa'] } }),
+        makeEval({ id: 'exact', toolExpectations: { mustRun: ['csvsum'] } }),
+        makeEval({ id: 'ext', toolExpectations: { mustRun: ['csvsum.py'] } }),
+        makeEval({ id: 'dotslash', toolExpectations: { mustNotRun: ['./csvsum'] } }),
       ],
       DECLARED,
     );
@@ -137,7 +137,7 @@ describe('lintToolExpectationExecutables', () => {
 
   it('returns no warnings when the skill declares no executables', () => {
     const warnings = lintToolExpectationExecutables(
-      [makeEval({ id: 'no-manifest', toolExpectations: { mustRun: ['dxa-py'] } })],
+      [makeEval({ id: 'no-manifest', toolExpectations: { mustRun: ['csvsum-py'] } })],
       [],
     );
     expect(warnings).toHaveLength(0);
@@ -145,7 +145,7 @@ describe('lintToolExpectationExecutables', () => {
 
   it('flags a typo across any toolExpectations channel and dedupes repeats', () => {
     const warnings = lintToolExpectationExecutables(
-      [makeEval({ id: 'seq', toolExpectations: { mustRun: ['dxa-py'], sequence: ['dxa-py'] } })],
+      [makeEval({ id: 'seq', toolExpectations: { mustRun: ['csvsum-py'], sequence: ['csvsum-py'] } })],
       DECLARED,
     );
     expect(warnings).toHaveLength(1);
