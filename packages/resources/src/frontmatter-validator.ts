@@ -75,7 +75,9 @@ export function validateFrontmatter(
   // - strict: false so non-strict schemas compile (older JSON Schema drafts).
   // - allErrors: true so we report all issues, not just the first.
   // - allowUnionTypes: true for draft-2019-09+ union type support.
-  const ajv = createAjvWithUriFormats({
+  // The effective schema (not the original) picks the build — permissive mode
+  // clones it, and the clone must be compiled by the same dialect it declares.
+  const ajv = createAjvWithUriFormats(effectiveSchema, {
     strict: false,
     allErrors: true,
     allowUnionTypes: true,
