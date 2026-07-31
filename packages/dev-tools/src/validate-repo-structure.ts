@@ -505,7 +505,13 @@ function printResults(): void {
   const errorCount = errors.filter((e) => e.severity === 'error').length;
   const warningCount = errors.filter((e) => e.severity === 'warning').length;
 
-  console.log(`\n❌ Repository structure validation failed:`);
+  // Only errors fail the run (see `validate`), so a warnings-only result must not claim
+  // failure — a banner that contradicts the exit code trains readers to ignore both.
+  console.log(
+    errorCount > 0
+      ? `\n❌ Repository structure validation failed:`
+      : `\n⚠️  Repository structure validation passed with warnings:`,
+  );
   console.log(`   ${errorCount} errors, ${warningCount} warnings\n`);
 
   // Group by type
