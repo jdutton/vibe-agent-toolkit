@@ -73,7 +73,7 @@ function sanitizeOsUser(user: string): string {
  * alive — a 304 or a 300 is not evidence the target exists in the form the
  * link claims.
  */
-const ALIVE_STATUS_CODES: readonly number[] = [200, 206, 301, 302, 307, 308];
+const ALIVE_STATUS_CODES: ReadonlySet<number> = new Set([200, 206, 301, 302, 307, 308]);
 
 /**
  * Is this status "alive" on the anonymous path?
@@ -85,7 +85,7 @@ const ALIVE_STATUS_CODES: readonly number[] = [200, 206, 301, 302, 307, 308];
  * disappears on exactly the retry you would run to reproduce it.
  */
 export function isAliveStatus(statusCode: number): boolean {
-	return ALIVE_STATUS_CODES.includes(statusCode);
+	return ALIVE_STATUS_CODES.has(statusCode);
 }
 
 type VerifiedPlan = Extract<ResolveOutcome, { fetchUrl: string }>;

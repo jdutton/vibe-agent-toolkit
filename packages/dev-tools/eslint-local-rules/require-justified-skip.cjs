@@ -225,11 +225,11 @@ function hasEmptyBody(callback) {
 function resolveInvocation(node) {
   let current = node;
   let parent = current.parent;
-  while (parent && parent.type === 'MemberExpression' && parent.object === current) {
+  while (parent?.type === 'MemberExpression' && parent.object === current) {
     current = parent;
     parent = current.parent;
   }
-  if (parent && parent.type === 'CallExpression' && parent.callee === current) {
+  if (parent?.type === 'CallExpression' && parent.callee === current) {
     return parent;
   }
   return null;
@@ -341,7 +341,7 @@ module.exports = {
           return;
         }
         const matcherCall = resolveInvocation(node);
-        if (matcherCall && matcherCall.arguments.every((argument) => isLiteralValue(argument))) {
+        if (matcherCall?.arguments.every((argument) => isLiteralValue(argument))) {
           report(matcherCall, 'tautologicalAssertion');
         }
       },

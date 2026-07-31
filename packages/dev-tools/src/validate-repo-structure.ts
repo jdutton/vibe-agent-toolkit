@@ -815,7 +815,7 @@ const SEVERITY_COUNTS_SCAN_ROOTS = [
  * `ReviewStatus` uses. A vocabulary that exists in one place cannot drift out of
  * step with a second copy that a later recogniser would have needed.
  */
-const STATUS_VOCABULARY = String.raw`success|error|warning|failed|ok`;
+const STATUS_VOCABULARY = 'success|error|warning|failed|ok';
 
 /** A status drawn from the validation vocabulary, as an emitted or declared value. */
 // eslint-disable-next-line security/detect-non-literal-regexp -- composed from module constants, never from input
