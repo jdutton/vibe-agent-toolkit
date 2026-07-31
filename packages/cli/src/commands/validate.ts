@@ -34,6 +34,7 @@ import { requireProjectRoot } from '../utils/project-root-policy.js';
 
 import {
   addRetiredOnlyOption,
+  aggregatePhaseIssueCounts,
   aggregatePhaseStatus,
   applyPhaseSelection,
   decidePhaseSelection,
@@ -70,6 +71,7 @@ export interface ValidateCommandOptions {
   /** Retired; declared only so {@link rejectRetiredOnly} can explain the removal. */
   only?: string;
   debug?: boolean;
+  verbose?: boolean;
 }
 
 /**
@@ -84,6 +86,7 @@ export function createValidateTopLevelCommand(): Command {
   addRetiredOnlyOption(command)
     .description('Validate configured surfaces from source (resources + skills) — no build required')
     .option('--debug', 'Enable debug logging')
+    .option('-v, --verbose', 'Show every finding, not just the collapsed counts')
     .action(validateTopLevelCommand)
     .addHelpText(
       'after',
@@ -150,15 +153,23 @@ Example:
  * `only` is still passed to {@link decidePhaseSelection} as `undefined`: that
  * helper is shared with `vat build`, which keeps its own `--only`.
  */
-export function selectValidateSurfaces(config: ProjectConfig | undefined): PhaseSelection {
+export function selectValidateSurfaces(
+  config: ProjectConfig | undefined,
+  verbose = false,
+): PhaseSelection {
+  // Forwarded to every surface, exactly as `vat verify` forwards its own. Both
+  // child validators already accept `-v, --verbose`; only this command lacked
+  // the flag, which made the collapsed warning/info detail unreachable HERE
+  // while the same findings were one `vat skills validate` away.
+  const detail = verbose ? ['--verbose'] : [];
   const phases: Phase[] = [];
 
   if (config?.resources) {
-    phases.push({ name: 'resources', args: ['resources', 'validate'] });
+    phases.push({ name: 'resources', args: ['resources', 'validate', ...detail] });
   }
 
   if (config?.skills) {
-    phases.push({ name: 'skills', args: ['skills', 'validate'] });
+    phases.push({ name: 'skills', args: ['skills', 'validate', ...detail] });
   }
 
   return decidePhaseSelection(undefined, phases, VALIDATE_VOCABULARY);
@@ -179,7 +190,7 @@ async function validateTopLevelCommand(options: ValidateCommandOptions): Promise
 
   try {
     const phases = applyPhaseSelection(
-      selectValidateSurfaces(loadConfig(projectRoot)),
+      selectValidateSurfaces(loadConfig(projectRoot), options.verbose === true),
       logger,
       startTime,
     );
@@ -196,8 +207,16 @@ async function validateTopLevelCommand(options: ValidateCommandOptions): Promise
     // A surface whose validator could not RUN (exit 2, killed, never spawned)
     // is not a surface that failed validation: it exits 2, so a CI gate can
     // tell a broken config from a broken link.
+    // `issueCounts` beside `status` because a status alone cannot express a
+    // three-valued distribution, and this document published none at all: a
+    // consumer that wanted "did anything need acting on" had to either trust a
+    // bare `status` or hand-sum the phases. `status: warning` on a warnings-only
+    // repo is correct and deliberate — `success` means "nothing to act on", not
+    // "nothing to see" — so gate on `issueCounts.errors` or the exit code, both
+    // of which stay 0 through any number of warnings.
     writeYamlOutput({
       status: aggregatePhaseStatus(phaseResults),
+      issueCounts: aggregatePhaseIssueCounts(phaseResults),
       phases: phaseResults,
       duration: `${Date.now() - startTime}ms`,
     });

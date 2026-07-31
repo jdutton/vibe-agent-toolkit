@@ -126,6 +126,11 @@ Output:
   failedSkills:   one row per skill that could not be packaged AT ALL (no
                   bundle exists for it); each carries name, error and an
                   issueCounts of one error
+  skillsWithErrors / skillsWithErrorNames:
+                  the OTHER failure mode — skills that packaged fine and then
+                  emitted post-build validation errors. They are counted in
+                  skillsBuilt, not skillsFailed, so read BOTH before concluding
+                  a run was clean: the exit code follows this one too.
   runIssueCounts: findings that belong to the run rather than to any one
                   skill (ALLOW_UNUSED)
   issueCounts:    the run total, which reconciles against the rows above:
@@ -406,12 +411,14 @@ export function buildYamlSummary(
   failures: readonly SkillBuildFailure[],
   duration: number,
   runIssues: readonly ValidationIssue[],
+  skillsWithErrors: readonly string[],
 ): {
   status: 'success' | 'warning' | 'error';
   issueCounts: SeverityCounts;
   runIssueCounts: SeverityCounts;
   skillsBuilt: number;
   skillsFailed: number;
+  skillsWithErrors: string[];
   skills: Array<{
     name: string;
     outputPath: string;
@@ -472,6 +479,14 @@ export function buildYamlSummary(
     runIssueCounts,
     skillsBuilt: results.length,
     skillsFailed: failures.length,
+    // The OTHER meaning of "failed", published because the exit code follows
+    // THIS one and nothing in the document did. `skillsFailed` counts skills
+    // that could not be packaged at all; a skill that packaged fine and then
+    // emitted post-build validation errors is a `skillsBuilt`, so a real run
+    // printed "Build failed: 3 skill(s) emitted post-build validation errors"
+    // over `skillsFailed: 0` and `failedSkills: []`, and exited 1. A CI job
+    // reading either field saw a clean build. Both categories are now named.
+    skillsWithErrors: [...skillsWithErrors],
     // `skills` lists what exists on disk. A failed skill is published in its own
     // list rather than here, because every field of this shape (outputPath,
     // filesPackaged) would have to be invented for a bundle that was not written.
@@ -495,16 +510,31 @@ function outputBuildYaml(
   failures: readonly SkillBuildFailure[],
   duration: number,
   runIssues: readonly ValidationIssue[],
+  skillsWithErrors: readonly string[],
 ): void {
-  const summary = buildYamlSummary(results, failures, duration, runIssues);
+  const summary = buildYamlSummary(results, failures, duration, runIssues, skillsWithErrors);
   const {
     status, skillsBuilt, skillsFailed, issueCounts, runIssueCounts, skills, failedSkills,
     duration: durationText,
   } = summary;
-  writeYamlHeader({ status, skillsBuilt, skillsFailed });
+  // In the header, beside the other two counts: this is the number the exit code
+  // actually follows, so a reader who stops at the header is not misled by it.
+  writeYamlHeader({
+    status,
+    skillsBuilt,
+    skillsFailed,
+    skillsWithErrors: summary.skillsWithErrors.length,
+  });
   process.stdout.write(
     yaml.stringify(
-      { issueCounts, runIssueCounts, skills, failedSkills, runIssues: summary.runIssues },
+      {
+        issueCounts,
+        runIssueCounts,
+        skills,
+        failedSkills,
+        skillsWithErrorNames: summary.skillsWithErrors,
+        runIssues: summary.runIssues,
+      },
       { indent: 2, lineWidth: 0, aliasDuplicateObjects: false },
     ),
   );
@@ -737,7 +767,7 @@ async function buildCommand(
     const duration = Date.now() - startTime;
 
     // Output YAML results
-    outputBuildYaml(results, failures, duration, runIssues);
+    outputBuildYaml(results, failures, duration, runIssues, skillsWithErrors);
     for (const line of formatRunIssueLines(runIssues)) {
       logger.info(line);
     }

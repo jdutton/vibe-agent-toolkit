@@ -20,10 +20,12 @@ import { Command } from 'commander';
 
 import { handleCommandError } from '../utils/command-error.js';
 import { loadConfig } from '../utils/config-loader.js';
+import { sumSeverityCounts } from '../utils/issue-rendering.js';
 import { writeYamlOutput } from '../utils/output.js';
 import { requireProjectRoot } from '../utils/project-root-policy.js';
 
 import {
+  aggregatePhaseIssueCounts,
   aggregatePhaseStatus,
   applyPhaseSelection,
   createPhaseContext,
@@ -66,13 +68,23 @@ Description:
   '--only claude' in a project with no claude.marketplaces config fails with
   exit 1: the phase is recognized, it is simply not configured.
 
+  A phase that ERRORS stops the run: later phases do not execute. So a skills
+  phase that exits 1 (e.g. on FILENAME_COLLISION) leaves dist/skills/ written
+  but NO dist/.claude/ at all — a per-skill finding is reported rather than
+  thrown, but the phase's non-zero exit still gates the marketplace artifact
+  behind a skill tree that built cleanly. Use '--only claude' to rebuild just
+  the marketplace from an existing dist/skills/. Warnings never stop a run.
+
 Output:
   ONE YAML document → stdout
     status (success | warning | error | system-error) plus issueCounts
-    {errors, warnings, info} for the shipped-plugin-tree link check, and the
-    findings themselves when there are any — a warning-only build reports
-    'warning' with counts, not a bare 'success'. Each phase's own report is
-    captured and nested under 'report' rather than streamed through.
+    {errors, warnings, info} summed across EVERY phase and the shipped-plugin-
+    tree link check, and the findings themselves when there are any — a
+    warning-only build reports 'warning' with counts, not a bare 'success'.
+    The total reconciles against the phases printed beneath it; a header that
+    counted only the link check reported {0,0,0} over children that had just
+    reported 12 warnings. Each phase's own report is captured and nested under
+    'report' rather than streamed through.
   Build progress → stderr (streamed live)
 
 Exit Codes:
@@ -276,7 +288,13 @@ async function buildTopLevelCommand(options: BuildCommandOptions): Promise<void>
           error: result.error ?? `Phase '${phase.name}' failed with exit code ${result.exitCode ?? 'unknown'}`,
           phase: phase.name,
           phases: phaseResults,
-          issueCounts: countBySeverity(shippedLinkIssues),
+          // The failing phase's OWN counts are the point of this document — a
+          // header of `{0, 0, 0}` on the abort path told a reader the build had
+          // nothing to act on, on the one path where it certainly did.
+          issueCounts: sumSeverityCounts([
+            aggregatePhaseIssueCounts(phaseResults),
+            countBySeverity(shippedLinkIssues),
+          ]),
           duration: `${duration}ms`,
         });
         process.exit(exitCodeForPhases(phaseResults));
@@ -301,12 +319,22 @@ async function buildTopLevelCommand(options: BuildCommandOptions): Promise<void>
     }
 
     const duration = Date.now() - startTime;
-    const issueCounts = countBySeverity(shippedLinkIssues);
+    // Both sources, for the same reason `status` below reads both: a header that
+    // counts only the shipped-link pass reported `{0, 0, 0}` over phases that had
+    // just published 12 warnings, so a CI job reading the machine total saw a
+    // clean build while `status` beside it said `warning`.
+    const issueCounts = sumSeverityCounts([
+      aggregatePhaseIssueCounts(phaseResults),
+      countBySeverity(shippedLinkIssues),
+    ]);
+    // The shipped-link tally alone drives the human line below — it names what is
+    // wrong with THIS tree, and the phases already printed their own.
+    const shippedCounts = countBySeverity(shippedLinkIssues);
     if (shippedLinkIssues.length === 0) {
       logger.info(`\n✅ Build complete`);
     } else {
       logger.info(
-        `\n✅ Build complete — ${issueCounts.warnings} warning(s), ${issueCounts.info} info in the shipped plugin tree`,
+        `\n✅ Build complete — ${shippedCounts.warnings} warning(s), ${shippedCounts.info} info in the shipped plugin tree`,
       );
       for (const issue of shippedLinkIssues) {
         logger.error(`  ${issue.severity.toUpperCase()} [${issue.code}] ${issue.message}`);

@@ -469,6 +469,52 @@ export function aggregatePhaseStatus(results: readonly PhaseResult[]): PhaseStat
 }
 
 /**
+ * One phase's per-severity distribution, wherever that phase keeps it.
+ *
+ * An in-process phase holds its own findings and publishes {@link
+ * PhaseResult.issueCounts}. A subprocess phase deliberately does not — the child
+ * owns its findings, and its document rides verbatim in {@link
+ * PhaseResult.report}. Reading only the former is why an orchestrator's header
+ * could report `{0, 0, 0}` over children that had just reported 12 warnings.
+ *
+ * Absent or malformed counts read as zero rather than throwing: a phase that
+ * published no distribution contributes nothing to the total, which is the same
+ * answer as before this function existed — just no longer the answer for phases
+ * that DID publish one.
+ */
+export function phaseIssueCounts(result: PhaseResult): SeverityCounts {
+  if (result.issueCounts) return result.issueCounts;
+  const counts = (result.report as { issueCounts?: unknown } | undefined)?.issueCounts;
+  if (typeof counts !== 'object' || counts === null) return { errors: 0, warnings: 0, info: 0 };
+  const { errors, warnings, info } = counts as Record<string, unknown>;
+  return {
+    errors: typeof errors === 'number' ? errors : 0,
+    warnings: typeof warnings === 'number' ? warnings : 0,
+    info: typeof info === 'number' ? info : 0,
+  };
+}
+
+/**
+ * Sum every phase's distribution, so an orchestrator's header total reconciles
+ * against the phases printed beneath it.
+ *
+ * The companion to {@link aggregatePhaseStatus}: status has always been
+ * worst-wins ACROSS phases, and a header whose `status` can see the children
+ * while its `issueCounts` cannot is the same contradiction in one document —
+ * `status: warning` beside `warnings: 0`.
+ */
+export function aggregatePhaseIssueCounts(results: readonly PhaseResult[]): SeverityCounts {
+  const total: SeverityCounts = { errors: 0, warnings: 0, info: 0 };
+  for (const result of results) {
+    const { errors, warnings, info } = phaseIssueCounts(result);
+    total.errors += errors;
+    total.warnings += warnings;
+    total.info += info;
+  }
+  return total;
+}
+
+/**
  * The process exit code for a set of phase outcomes, per the exit-code contract
  * every orchestrator's help text documents: 0 pass, 1 validation failure,
  * 2 system error. Warnings do not fail a run — they are published in the status

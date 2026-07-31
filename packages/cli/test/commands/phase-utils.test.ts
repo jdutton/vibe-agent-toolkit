@@ -18,6 +18,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as YAML from 'yaml';
 
 import {
+  aggregatePhaseIssueCounts,
   aggregatePhaseStatus,
   applyPhaseSelection,
   exitCodeForPhases,
@@ -101,6 +102,60 @@ describe('aggregatePhaseStatus', () => {
   it('ranks system-error above error — could-not-determine is not a verdict', () => {
     expect(aggregatePhaseStatus([phase('a', 'error'), phase('b', SYSTEM_ERROR)])).toBe(SYSTEM_ERROR);
     expect(aggregatePhaseStatus([phase('a', SYSTEM_ERROR), phase('b', 'error')])).toBe(SYSTEM_ERROR);
+  });
+});
+
+describe('aggregatePhaseIssueCounts', () => {
+  /** A subprocess phase: its findings live in the child's document, not on the row. */
+  const child = (name: string, counts: unknown): PhaseResult => ({
+    name,
+    status: 'warning',
+    exitCode: 0,
+    report: { issueCounts: counts },
+  });
+
+  it('reads a SUBPROCESS phase’s counts out of the child report', () => {
+    // The defect, measured on a real adopter: `vat build --only claude` published
+    // a top-level `issueCounts: {0, 0, 0}` over a nested phase reporting 12
+    // warnings, because the parent read only `PhaseResult.issueCounts` — which a
+    // subprocess phase deliberately never sets.
+    expect(aggregatePhaseIssueCounts([child('claude', { errors: 0, warnings: 12, info: 3 })]))
+      .toEqual({ errors: 0, warnings: 12, info: 3 });
+  });
+
+  it('sums across phases and across both storage shapes', () => {
+    const inProcess: PhaseResult = {
+      name: 'consistency',
+      status: 'error',
+      issueCounts: { errors: 2, warnings: 0, info: 0 },
+    };
+    expect(aggregatePhaseIssueCounts([child('skills', { errors: 1, warnings: 5, info: 0 }), inProcess]))
+      .toEqual({ errors: 3, warnings: 5, info: 0 });
+  });
+
+  it('prefers the row’s own counts when a phase carries both', () => {
+    const both: PhaseResult = {
+      name: 'skills',
+      status: 'warning',
+      issueCounts: { errors: 0, warnings: 1, info: 0 },
+      report: { issueCounts: { errors: 99, warnings: 99, info: 99 } },
+    };
+    expect(aggregatePhaseIssueCounts([both])).toEqual({ errors: 0, warnings: 1, info: 0 });
+  });
+
+  it('treats absent, malformed and non-numeric counts as zero rather than throwing', () => {
+    // A phase that published no distribution must contribute nothing — the same
+    // answer as before this aggregation existed. Throwing here would turn a
+    // report-shape surprise into a failed build.
+    expect(aggregatePhaseIssueCounts([])).toEqual({ errors: 0, warnings: 0, info: 0 });
+    expect(
+      aggregatePhaseIssueCounts([
+        { name: 'a', status: 'success' },
+        child('b', undefined),
+        child('c', 'not-an-object'),
+        child('d', { errors: '4', warnings: null, info: 2 }),
+      ]),
+    ).toEqual({ errors: 0, warnings: 0, info: 2 });
   });
 });
 

@@ -795,6 +795,7 @@ describe('vat skills build — buildYamlSummary', () => {
       [],
       12,
       [],
+      [],
     );
     // The defect: `status: success` was a literal, printed alongside exit code 1.
     expect(summary.status).toBe('error');
@@ -807,6 +808,7 @@ describe('vat skills build — buildYamlSummary', () => {
       [],
       1,
       [],
+      [],
     );
     expect(summary.status).toBe('warning');
   });
@@ -816,6 +818,7 @@ describe('vat skills build — buildYamlSummary', () => {
       [{ name: 'a', result: packageResult([issue('info', 'I1')], undefined) }],
       [],
       1,
+      [],
       [],
     );
     expect(summary.status).toBe('success');
@@ -830,6 +833,7 @@ describe('vat skills build — buildYamlSummary', () => {
       ],
       [],
       1,
+      [],
       [],
     );
     expect(summary.skills.map((s) => s.issueCounts)).toEqual([
@@ -852,6 +856,7 @@ describe('vat skills build — buildYamlSummary', () => {
       [],
       1,
       [issue('warning', 'ALLOW_UNUSED'), issue('warning', 'ALLOW_UNUSED')],
+      [],
     );
 
     const perSkill = sumSeverityCounts(summary.skills.map((s) => s.issueCounts));
@@ -869,6 +874,7 @@ describe('vat skills build — buildYamlSummary', () => {
       [],
       1,
       [issue('error', 'ALLOW_UNUSED')],
+      [],
     );
     expect(summary.status).toBe('error');
   });
@@ -884,6 +890,7 @@ describe('vat skills build — buildYamlSummary', () => {
       [{ name: 'boom', message: THREW }],
       1,
       [],
+      [],
     );
     expect(summary.status).toBe('error');
     expect(summary.issueCounts).toEqual({ errors: 1, warnings: 0, info: 0 });
@@ -894,6 +901,7 @@ describe('vat skills build — buildYamlSummary', () => {
       [{ name: 'ok', result: packageResult(undefined, undefined) }],
       [{ name: 'boom', message: THREW }],
       1,
+      [],
       [],
     );
     expect(summary.skillsBuilt).toBe(1);
@@ -916,9 +924,69 @@ describe('vat skills build — buildYamlSummary', () => {
       [{ name: 'boom', message: THREW }],
       1,
       [issue('warning', 'ALLOW_UNUSED')],
+      [],
     );
     expect(summary.issueCounts).toEqual({ errors: 1, warnings: 2, info: 1 });
     expect(countsFromPublishedRows(summary)).toEqual(summary.issueCounts);
+  });
+
+  /** A skill that produced a bundle and then failed its own post-build validation. */
+  const BUILT_BUT_INVALID = 'built-but-invalid';
+
+  it('names the skills that BUILT and then emitted post-build errors', () => {
+    // The defect, measured on a 90-skill adopter: the human stream said "Build
+    // failed: 3 skill(s) emitted post-build validation errors" and the command
+    // exited 1, while the document said `skillsFailed: 0` and `failedSkills: []`.
+    // Two definitions of "failed" — could-not-package vs packaged-then-invalid —
+    // and only the first had a machine field. A CI job reading either one saw a
+    // clean build.
+    const summary = buildYamlSummary(
+      [{ name: BUILT_BUT_INVALID, result: packageResult(undefined, [issue('error', 'E1')]) }],
+      [],
+      1,
+      [],
+      [BUILT_BUT_INVALID],
+    );
+
+    // It IS built — it produced a bundle — so the pre-existing fields keep their
+    // documented meaning rather than being redefined to paper over the gap.
+    expect(summary.skillsBuilt).toBe(1);
+    expect(summary.skillsFailed).toBe(0);
+    expect(summary.failedSkills).toEqual([]);
+    // ...and the category the exit code actually follows is now named.
+    expect(summary.skillsWithErrors).toEqual([BUILT_BUT_INVALID]);
+    expect(summary.status).toBe('error');
+  });
+
+  it('keeps the two failure categories separate rather than merging them', () => {
+    // A guard against the tempting "fix": folding both into `skillsFailed` would
+    // make `skillsBuilt + skillsFailed` exceed the number of skills, and would
+    // put a row in `failedSkills` for a bundle that exists on disk.
+    const summary = buildYamlSummary(
+      [{ name: 'invalid', result: packageResult(undefined, [issue('error', 'E1')]) }],
+      [{ name: 'threw', message: 'Filename collision detected' }],
+      1,
+      [],
+      ['invalid'],
+    );
+
+    expect(summary.skillsFailed).toBe(1);
+    expect(summary.failedSkills.map((s) => s.name)).toEqual(['threw']);
+    expect(summary.skillsWithErrors).toEqual(['invalid']);
+    // The header identity still closes with both categories present.
+    expect(countsFromPublishedRows(summary)).toEqual(summary.issueCounts);
+  });
+
+  it('publishes an empty list, not a missing field, on a clean build', () => {
+    const summary = buildYamlSummary(
+      [{ name: 'a', result: packageResult(undefined, undefined) }],
+      [],
+      1,
+      [],
+      [],
+    );
+    expect(summary.skillsWithErrors).toEqual([]);
+    expect(summary.status).toBe('success');
   });
 });
 
