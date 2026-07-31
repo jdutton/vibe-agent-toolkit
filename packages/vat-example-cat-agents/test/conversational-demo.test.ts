@@ -1,50 +1,20 @@
-/* eslint-disable local/no-path-join -- standalone test, no utils dependency */
 /**
- * Test: Conversational demo startup verification
+ * Test: Conversational demo wiring
  *
- * Verifies that the conversational demo can start without errors
- * and shows appropriate messages when API key is missing.
+ * Verifies that the pieces the conversational demo depends on — the breed
+ * advisor agent and the CLI transport — import and expose what the demo needs.
+ *
+ * NOT covered: actually starting the demo as a subprocess and asserting its
+ * stdout. A `bun run <demo>` case used to sit here permanently disabled, because
+ * the demo script's vitest imports break under `bun run`. A registered-but-never-
+ * run case reads as a listed test in the suite output, so it was removed rather
+ * than left claiming coverage it never provided. Re-add it — as a running test —
+ * if the demo script is ever made subprocess-safe.
  */
-
-import { exec } from 'node:child_process';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { promisify } from 'node:util';
 
 import { describe, expect, it } from 'vitest';
 
-const execAsync = promisify(exec);
-
-// Get the path to the examples directory
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const demoPath = join(__dirname, '..', 'examples', 'conversational-demo.ts');
-
 describe('Conversational Demo Startup', () => {
-  // NOTE: This test is skipped - vitest imports in demo script cause issues when executed via bun run
-  it.skip('should start without errors and show API key warning when key is missing', async () => {
-    // Remove API key to test startup without it
-    const env = { ...process.env };
-    delete env.OPENAI_API_KEY;
-
-    // Run the demo with a short timeout (it should exit quickly without API key)
-    const { stdout, stderr } = await execAsync(
-      `bun run ${demoPath}`,
-      {
-        env,
-        timeout: 5000, // 5 second timeout
-      }
-    );
-
-    // Verify output contains expected messages
-    expect(stdout).toContain('Conversational Demo: Breed Selection Advisor');
-    expect(stdout).toContain('No OPENAI_API_KEY found');
-    expect(stdout).toContain('Set environment variable');
-
-    // Should not have any errors
-    expect(stderr).toBe('');
-  }, 10000); // 10 second test timeout
-
   it('should import and reference agent correctly', async () => {
     // Verify the agent can be imported (TypeScript compilation check)
     const { breedAdvisorAgent } = await import('../src/conversational-assistant/breed-advisor.js');

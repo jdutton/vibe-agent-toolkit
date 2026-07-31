@@ -5,7 +5,7 @@
  * globs to discover SKILL.md files, instead of reading package.json vat.skills objects.
  */
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
@@ -76,7 +76,20 @@ function setupSkillsBuildTestSuite() {
     parsed: Awaited<ReturnType<typeof runBuildCommand>>['parsed']
   ) => {
     expect(result.status).toBe(0);
-    expect(parsed).toHaveProperty('status', 'success');
+    // "Successful" means the build gate passed: exit 0 and ZERO errors. The
+    // published status is the shared issues→status collapse, so it legitimately
+    // reads `warning` for a build that shipped non-blocking findings (this
+    // fixture's frontmatter carries a `version` field → one warning). Pinning it
+    // to 'success' asserted that the status could not tell the truth — which is
+    // the defect, not the contract. The invariant is the error count.
+    expect(['success', 'warning']).toContain(parsed['status']);
+    if (parsed['validated'] === false) {
+      // A dry run publishes no distribution because it validated nothing, and
+      // says so explicitly rather than letting the absence read as "clean".
+      expect(parsed['issueCounts']).toBeUndefined();
+    } else {
+      expect(parsed['issueCounts']).toMatchObject({ errors: 0 });
+    }
     expect(parsed).toHaveProperty('skills');
 
     const skills = parsed['skills'] as Array<Record<string, unknown>>;
@@ -196,16 +209,12 @@ describe('skills build command (system test)', () => {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output verification
     expect(readFileSync(safePath.join(outputPathB, 'SKILL.md'), 'utf-8')).toContain(SKILL_B_NAME);
 
-    // Skill A should not exist (only skill-b was built)
+    // Skill A should not exist (only skill-b was built). Asserted directly rather
+    // than via a try/catch whose `catch` block ended in `expect(true).toBe(true)` —
+    // that shape passed on ANY throw, including a bug in the path construction.
     const outputPathA = safePath.join(tempDir, 'dist', 'skills', SKILL_A_NAME);
-    try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output verification
-      readFileSync(safePath.join(outputPathA, 'SKILL.md'), 'utf-8');
-      expect.fail('skill-a should not have been built');
-    } catch {
-      // Expected - file should not exist
-      expect(true).toBe(true);
-    }
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output verification
+    expect(existsSync(safePath.join(outputPathA, 'SKILL.md'))).toBe(false);
   });
 
   it('should fail when specified skill not found', async () => {
@@ -237,8 +246,11 @@ describe('skills build command (system test)', () => {
     writeTestFile(safePath.join(tempDir, 'dist', 'bin', 'tool.mjs'), 'console.log("tool");\n');
 
     // Config with files entry declaring source → dest mapping.
-    // Allow PACKAGED_UNREFERENCED_FILE since this test focuses on file copying,
-    // not link-reference coverage. The injected artifact is intentionally unreferenced.
+    //
+    // No `validation.allow` for PACKAGED_UNREFERENCED_FILE: a declared `files:`
+    // dest is VAT's own copy and is exempt from that check by construction, so
+    // the allow entry it used to carry is dead — and a dead allow entry would now
+    // itself emit ALLOW_UNUSED.
     const configContent = [
       CONFIG_VERSION_LINE,
       'skills:',
@@ -249,11 +261,6 @@ describe('skills build command (system test)', () => {
       '      files:',
       '        - source: dist/bin/tool.mjs',
       '          dest: scripts/tool.mjs',
-      CONFIG_VALIDATION_INDENT,
-      '        allow:',
-      '          PACKAGED_UNREFERENCED_FILE:',
-      '            - paths: ["**"]',
-      '              reason: artifact injected via files config, not linked from markdown',
       '',
     ].join('\n');
     writeTestFile(safePath.join(tempDir, VAT_CONFIG_FILENAME), configContent);
@@ -271,45 +278,45 @@ describe('skills build command (system test)', () => {
 });
 
 /**
- * Helper: create a project with a SKILL.md that has an unreferenced packaged file
- * (using the files config to inject a file not mentioned in any markdown).
- * PACKAGED_UNREFERENCED_FILE has default severity=error, so this should cause exit 1.
+ * Helper: create a project whose SKILL.md links to a file that does not exist and
+ * is not declared as a build artifact → LINK_MISSING_TARGET (default
+ * severity=error), so the build must exit 1.
+ *
+ * This fixture used to express "an error-severity code fails the build" by
+ * injecting a file via `files:` with no markdown link, expecting
+ * PACKAGED_UNREFERENCED_FILE. That was the fixture encoding a BUG as expected
+ * behaviour: a declared `files:` dest is VAT's own copy, and the rule engine
+ * always intended to exempt it (`ctx.inFilesConfig`) — the post-build check just
+ * never received the list. Now that the exemption works, `files:` can no longer
+ * produce that code, so the intent needed a different, config-reachable error.
  */
-function setupProjectWithUnreferencedFile(
+function setupProjectWithMissingLinkTarget(
   tempDir: string,
   skillName: string,
 ): string {
-  const projectDir = safePath.join(tempDir, 'unreferenced-file');
+  const projectDir = safePath.join(tempDir, 'missing-link-target');
   mkdirSyncReal(projectDir, { recursive: true });
 
   // package.json to establish project root
   writeTestFile(
     safePath.join(projectDir, PACKAGE_JSON_FILENAME),
-    JSON.stringify({ name: 'unreferenced-test', workspaces: [] }),
+    JSON.stringify({ name: 'missing-link-target-test', workspaces: [] }),
   );
 
-  // Skill with minimal SKILL.md (no link to the injected file)
+  // SKILL.md links to bin/runner.mjs, which is never created and never declared.
   mkdirSyncReal(safePath.join(projectDir, 'skills'), { recursive: true });
   writeTestFile(
     safePath.join(projectDir, 'skills', 'SKILL.md'),
-    SKILL_FRONTMATTER_TEMPLATE(skillName),
+    `${SKILL_FRONTMATTER_TEMPLATE(skillName)}\nSee [the runner](bin/runner.mjs).\n`,
   );
 
-  // An artifact that will be injected via files config but NOT mentioned in SKILL.md
-  mkdirSyncReal(safePath.join(projectDir, 'dist', 'bin'), { recursive: true });
-  writeTestFile(safePath.join(projectDir, 'dist', 'bin', 'runner.mjs'), 'console.log("runner");\n');
-
-  // Config: inject the artifact via files but no markdown link → PACKAGED_UNREFERENCED_FILE
+  // Config: no files: entry for that path, so the link is a genuine dangling link
+  // rather than a deferred build artifact (which would be info LINK_DEFERRED_ARTIFACT).
   const configContent = [
     CONFIG_VERSION_LINE,
     'skills:',
     '  include:',
     '    - "skills/SKILL.md"',
-    '  config:',
-    `    ${skillName}:`,
-    '      files:',
-    '        - source: dist/bin/runner.mjs',
-    '          dest: bin/runner.mjs',
     '',
   ].join('\n');
   writeTestFile(safePath.join(projectDir, VAT_CONFIG_FILENAME), configContent);
@@ -423,7 +430,7 @@ function setupProjectWithDepthDropAndAllow(
 
 describe('skills build — framework exit codes (system test)', () => {
   const DEPTH_DROP_SKILL = 'depth-drop-skill';
-  const UNREFERENCED_SKILL = 'unreferenced-skill';
+  const MISSING_TARGET_SKILL = 'missing-target-skill';
 
   let suite: ReturnType<typeof setupSkillsBuildTestSuite>;
 
@@ -454,14 +461,17 @@ describe('skills build — framework exit codes (system test)', () => {
     expect(cmdResult.status).toBe(0);
   });
 
-  it('exits non-zero when PACKAGED_UNREFERENCED_FILE fires (default severity=error)', async () => {
+  it('exits non-zero when LINK_MISSING_TARGET fires (default severity=error)', async () => {
     const tempDir = suite.createTempDir();
-    const projectDir = setupProjectWithUnreferencedFile(tempDir, UNREFERENCED_SKILL);
+    const projectDir = setupProjectWithMissingLinkTarget(tempDir, MISSING_TARGET_SKILL);
 
     const { result: cmdResult } = await suite.runBuildCommand(projectDir);
 
     expect(cmdResult.status).toBe(1);
-    expect(cmdResult.stderr + cmdResult.stdout).toContain('PACKAGED_UNREFERENCED_FILE');
+    expect(cmdResult.stderr + cmdResult.stdout).toContain('LINK_MISSING_TARGET');
+    // The severity is rendered as itself, so a reader can tell WHICH finding
+    // failed the build rather than inferring it from the exit code.
+    expect(cmdResult.stderr + cmdResult.stdout).toContain('[ERROR] [LINK_MISSING_TARGET]');
   });
 });
 

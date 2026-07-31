@@ -4,11 +4,13 @@
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import {   basename } from 'node:path';
 
+import { evalSuiteUnitPath, readDeclaredSkillName } from '@vibe-agent-toolkit/agent-skills';
 import { buildMultipartFormData } from '@vibe-agent-toolkit/claude-marketplace';
 import type { MultipartFile, OrgApiClient } from '@vibe-agent-toolkit/claude-marketplace';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
+import { resolveSkillPackagingConfig } from '../../../skill-resolution/packaging-config.js';
 import { downloadNpmPackage } from '../plugin/helpers.js';
 
 import { autopaginateSkills, executeOrgCommand } from './helpers.js';
@@ -51,46 +53,130 @@ async function sendSkillUpload(
 }
 
 /**
- * Extract display_title from SKILL.md frontmatter.
- * Parses the `name` field from YAML frontmatter between --- delimiters.
+ * The name a SKILL.md declares, which is both the uploaded skill's display
+ * title and the top-level directory the API keys it by.
  */
-function extractDisplayTitle(skillMdPath: string): string {
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- path from CLI arg, validated before call
-	const content = readFileSync(skillMdPath, 'utf-8');
-	// eslint-disable-next-line sonarjs/slow-regex -- bounded by small frontmatter block, not user-controlled input
-	const match = /^---\s*\n([\s\S]*?)\n---/.exec(content);
-	if (!match?.[1]) {
-		throw new Error(`SKILL.md has no frontmatter: ${skillMdPath}`);
+function requireDeclaredName(skillMdPath: string): string {
+	const declared = readDeclaredSkillName(skillMdPath);
+	if (declared === undefined) {
+		throw new Error(
+			`SKILL.md has no usable frontmatter "name" field: ${skillMdPath}`,
+		);
 	}
-	// eslint-disable-next-line sonarjs/slow-regex -- single-line match on small YAML block
-	const nameMatch = /^name:\s*(.+)$/m.exec(match[1]);
-	if (!nameMatch?.[1]) {
-		throw new Error(`SKILL.md frontmatter missing "name" field: ${skillMdPath}`);
-	}
-	return nameMatch[1].trim();
+	return declared;
 }
 
 /**
- * Collect all files in a directory recursively, returning relative paths.
+ * Directories never uploaded to the organization, at any depth, by NAME.
+ *
+ * `evals/` is the conventional home of a skill's eval suite — its answer key.
+ * A correctly built skill directory (what this command documents as its input)
+ * never contains one, because the packager excludes declared test input; this
+ * is the backstop for the easy mistake of pointing the uploader at the *source*
+ * tree instead, where the suite does live. The invariant is "a published skill
+ * carries no answer key", not "…none when the operator remembered to build".
+ *
+ * The name match alone cannot uphold that invariant, because the suite's
+ * location is the ADOPTER's to declare (`skills.config.<name>.test.evals`;
+ * `evals/evals.json` is only the default). It stays as the unconditional
+ * fail-safe for the case where no config is discoverable at all — a fetched
+ * artifact, an extracted tarball, a tree outside any VAT project — where there
+ * is no declaration to read and the convention is the only thing left to honor.
+ * The declared location is resolved separately, in
+ * {@link declaredTestInputPaths}, and the two are unioned.
+ *
+ * This lane is deliberately BROADER than the packager, which excludes exactly
+ * `<skill-root>/evals` and never guesses from a name (see test-input.ts). Here
+ * a mistaken input is the entire scenario and the blast radius is an org-wide
+ * publish, so over-withholding a directory literally named `evals` is the cheap
+ * error and it is reported rather than silent.
+ *
+ * `node_modules`/`.git` are development detritus that has no meaning inside a
+ * published skill and would silently bloat the multipart payload.
  */
-function collectFiles(dir: string, baseDir?: string): Array<{ relativePath: string; absolutePath: string }> {
-	const base = baseDir ?? dir;
-	const results: Array<{ relativePath: string; absolutePath: string }> = [];
+const NEVER_UPLOADED_DIR_NAMES = new Set(['evals', 'node_modules', '.git']);
 
+interface CollectedUploadFiles {
+	files: Array<{ relativePath: string; absolutePath: string }>;
+	/**
+	 * Relative paths of everything deliberately withheld — a directory, or the
+	 * single file of a suite declared at the skill root — so the skip is never
+	 * silent. Under-reporting here is worse than the leak itself: it would
+	 * affirmatively tell the operator nothing was held back.
+	 */
+	excluded: string[];
+}
+
+/**
+ * The absolute path of this skill's DECLARED eval suite, when its governing VAT
+ * config declares one, as a set of paths to withhold.
+ *
+ * Resolution is anchored on the DIRECTORY ARGUMENT, not on a governing config
+ * being present: `resolveSkillPackagingConfig` walks up from the given skill dir
+ * to its nearest-ancestor `vibe-agent-toolkit.config.yaml` — the same walk-up
+ * `vat audit`, `vat skill review`, and skill-reference resolution use — and
+ * returns `null` when there is none or the skill is not declared there. That is
+ * exactly what this backstop needs: the scenario it exists for is an operator
+ * pointing at a source tree by mistake, and a source tree sits inside its own
+ * project, so the declaration is right there to be read. Requiring a governing
+ * config instead would refuse to protect the fetched-artifact case at all, and
+ * `null` here is not a failure — it falls through to the name-based fail-safe.
+ *
+ * `evalSuiteUnitPath` is the shared definition of the suite UNIT (the directory
+ * holding `evals.json` and its `fixtures/`, or the single file for a suite at
+ * the skill root) and yields `undefined` for a suite that lives outside the
+ * skill dir — nothing inside the tree to withhold.
+ */
+async function declaredTestInputPaths(skillDir: string): Promise<ReadonlySet<string>> {
+	const config = await resolveSkillPackagingConfig(safePath.join(skillDir, 'SKILL.md'));
+	const declared = config?.test?.evals;
+	if (declared === undefined) return new Set();
+	const unit = evalSuiteUnitPath(safePath.resolve(skillDir), declared);
+	return unit === undefined ? new Set() : new Set([unit]);
+}
+
+/**
+ * Collect the files under a skill directory that should be uploaded,
+ * recursively, returning relative paths alongside what was deliberately left
+ * out.
+ */
+function collectFiles(
+	dir: string,
+	base: string,
+	testInput: ReadonlySet<string>,
+	collected: CollectedUploadFiles,
+): void {
 	// eslint-disable-next-line security/detect-non-literal-fs-filename -- dir from CLI arg
 	for (const entry of readdirSync(dir, { withFileTypes: true })) {
 		const fullPath = safePath.join(dir, entry.name);
+		const relativePath = safePath.relative(base, fullPath);
+
+		if (
+			testInput.has(safePath.resolve(fullPath))
+			|| (entry.isDirectory() && NEVER_UPLOADED_DIR_NAMES.has(entry.name))
+		) {
+			collected.excluded.push(relativePath);
+			continue;
+		}
+
 		if (entry.isDirectory()) {
-			results.push(...collectFiles(fullPath, base));
+			collectFiles(fullPath, base, testInput, collected);
 		} else {
-			results.push({
-				relativePath: safePath.relative(base, fullPath),
-				absolutePath: fullPath,
-			});
+			collected.files.push({ relativePath, absolutePath: fullPath });
 		}
 	}
+}
 
-	return results;
+/**
+ * Collect the upload payload for a skill directory. Exported for testing.
+ *
+ * Resolves the declared test-input paths itself rather than accepting them, so
+ * no caller can obtain an upload set with the exclusion skipped.
+ */
+export async function collectSkillUploadFiles(skillDir: string): Promise<CollectedUploadFiles> {
+	const collected: CollectedUploadFiles = { files: [], excluded: [] };
+	collectFiles(skillDir, skillDir, await declaredTestInputPaths(skillDir), collected);
+	return collected;
 }
 
 /**
@@ -108,14 +194,17 @@ async function uploadSkillDir(
 		throw new Error(`SKILL.md not found in ${skillDir}. Is this a built skill directory?`);
 	}
 
-	const displayTitle = titleOverride ?? extractDisplayTitle(skillMdPath);
+	// The skill's own declared name — not the directory it happens to sit in,
+	// which for a built or extracted tree carries no reliable identity.
+	const declaredName = requireDeclaredName(skillMdPath);
+	const displayTitle = titleOverride ?? declaredName;
 
 	// API requires files inside a top-level directory (e.g. skill_name/SKILL.md)
-	const dirName = basename(skillDir);
-	const allFiles = collectFiles(skillDir);
+	const dirName = declaredName;
+	const collected = await collectSkillUploadFiles(skillDir);
 	const files: MultipartFile[] = [];
 
-	for (const file of allFiles) {
+	for (const file of collected.files) {
 		// eslint-disable-next-line security/detect-non-literal-fs-filename -- collected from dir walk
 		const content = readFileSync(file.absolutePath);
 		files.push({
@@ -127,6 +216,9 @@ async function uploadSkillDir(
 
 	const totalSize = files.reduce((sum, f) => sum + f.content.length, 0);
 	logger.info(`   ${dirName}: ${files.length} files, ${(totalSize / 1024).toFixed(1)}KB, title="${displayTitle}"`);
+	for (const excluded of collected.excluded) {
+		logger.info(`   Excluded from upload: ${excluded} (never published with a skill)`);
+	}
 
 	return sendSkillUpload(client, displayTitle, files);
 }
@@ -341,7 +433,14 @@ Description:
   Accepts a built skill directory, a ZIP file, or an npm package.
   Requires ANTHROPIC_API_KEY (regular key, not admin key).
 
-  The display_title defaults to the "name" field from SKILL.md frontmatter.
+  The skill uploads under the "name" its SKILL.md frontmatter declares, which
+  is also the default display_title.
+
+  A skill's eval suite is its answer key and is never uploaded: whatever the
+  governing vibe-agent-toolkit.config.yaml declares as this skill's test input
+  (skills.config.<name>.test.evals) is withheld, and so is any evals/ directory
+  when no config is discoverable. node_modules/ and .git/ are never uploaded
+  either. Each exclusion is reported in the output.
 
 Examples:
   $ vat claude org skills install dist/skills/org-admin

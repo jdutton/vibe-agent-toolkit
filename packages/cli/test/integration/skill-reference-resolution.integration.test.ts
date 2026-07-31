@@ -90,7 +90,7 @@ describe('resolveSkillReference (integration, synthetic temp projects)', () => {
     if (r.kind !== 'buildable') throw new Error('unreachable');
     expect(r.distribution.kind).toBe('plugin-local');
     if (r.distribution.kind !== 'plugin-local') throw new Error('unreachable');
-    expect(r.distribution.skillDirName).toBe(PLUGIN_SKILL);
+    expect(r.distribution.skillDirPath).toBe(PLUGIN_SKILL);
     expect(r.distribution.marketplaceName).toBe('fixture-mp');
     expect(r.distribution.pluginName).toBe('fixture-plug');
     // expectedDistDir is exactly the computeTreeCopiedSkillLocations skillOutputDir.

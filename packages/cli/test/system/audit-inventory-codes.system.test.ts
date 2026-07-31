@@ -104,7 +104,12 @@ describe('vat audit — inventory detector codes (system test)', () => {
 	});
 
 	// -------------------------------------------------------------------------
-	// REFERENCE_TARGET_MISSING — deferred (references[] not yet populated by extractor)
+	// REFERENCE_TARGET_MISSING — NOT COVERED by this inventory.
+	//
+	// The extractor does not populate references[] yet, so there is no fixture
+	// that can make this code fire. Recorded as a comment rather than as a
+	// registered-but-never-run case: such a case reads as a listed test in the
+	// suite output, which is a coverage claim this file cannot back. Add a real
+	// case here when the extractor starts populating references[].
 	// -------------------------------------------------------------------------
-	it.todo('REFERENCE_TARGET_MISSING — references[] not yet populated by extractor (Task 2.5)');
 });

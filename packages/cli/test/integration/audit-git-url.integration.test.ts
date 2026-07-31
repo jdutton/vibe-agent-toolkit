@@ -19,6 +19,12 @@ let bareRepo: string;
 let bareRepoUrl: string;
 let workTree: string;
 
+/**
+ * Distinctive path segment the shorthand test rewrites github.com to. Nothing
+ * of this name exists, so the clone fails immediately and offline.
+ */
+const OFFLINE_REMOTE_PREFIX = 'vat-offline-no-such-remote';
+
 function git(args: string[], cwd: string): void {
   // eslint-disable-next-line sonarjs/no-os-command-from-path -- git is a standard system command
   const result = spawnSync('git', args, { cwd, encoding: 'utf-8' });
@@ -166,5 +172,57 @@ describe('vat audit <git-url> — cleanup', () => {
     if (match) {
       fs.rmSync(match[1], { recursive: true, force: true });
     }
+  });
+});
+
+describe('vat audit <path> vs <git-url> — a local path always wins', () => {
+  // `isGitUrl` accepts bare `owner/repo` GitHub shorthand, and the audit
+  // command used to consult it BEFORE asking whether the argument names a
+  // directory on disk. Every two-segment relative path (`plugins/foo`,
+  // `docs/guides`, `packages/cli`) therefore resolved to
+  // https://github.com/<that>.git — the audit never ran, and the command
+  // reached out to github.com with a name derived from the user's local
+  // directory layout. Shorthand is only a fallback for arguments that name
+  // nothing locally.
+  it('audits a two-segment relative path locally instead of cloning it as owner/repo', () => {
+    const result = runAuditCli('plugins/foo', [], { cwd: workTree });
+
+    expect(result.stderr).not.toContain('Clone failed');
+    expect(`${result.stdout}${result.stderr}`).not.toContain('github.com');
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('SKILL.md');
+  });
+
+  it('still treats owner/repo shorthand as a URL when nothing of that name exists locally', () => {
+    // Shorthand always parses to https://github.com/<owner>/<repo>.git, so a
+    // naive version of this test contacts github.com — which this suite's
+    // header promises it never does. Worse, github.com answers a nonexistent
+    // repo with a credential challenge, and a Windows runner's credential
+    // manager sits on that until VAT's own 60s wall-clock cap fires.
+    //
+    // Rewrite the github.com prefix to a path that cannot exist, so the clone
+    // fails locally and instantly. `GIT_CONFIG_*` is git's env-only config
+    // channel (git >= 2.31): it reaches the CLI's spawned git without writing
+    // to any real config file.
+    const result = runAuditCli('no-such-owner/no-such-repo-xyz', [], {
+      cwd: workTree,
+      env: {
+        ...process.env,
+        GIT_CONFIG_COUNT: '1',
+        GIT_CONFIG_KEY_0: `url.file:///${OFFLINE_REMOTE_PREFIX}/.insteadOf`,
+        GIT_CONFIG_VALUE_0: 'https://github.com/',
+      },
+    });
+
+    // Reaches the clone path (and fails there) rather than being resolved as a
+    // local directory. Asserted via VAT's own wrapper message, NOT git's error
+    // text, which varies by platform and git version.
+    expect(result.status).not.toBe(0);
+    const output = `${result.stdout}${result.stderr}`;
+    expect(output).toContain('Clone failed');
+    // The rewritten prefix appearing in git's message proves two things at
+    // once: the argument really was routed down the URL branch, and the
+    // rewrite fired (so nothing left the machine).
+    expect(output).toContain(OFFLINE_REMOTE_PREFIX);
   });
 });

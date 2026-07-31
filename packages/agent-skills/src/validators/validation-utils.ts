@@ -1,23 +1,4 @@
-import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import type { z } from 'zod';
-
-/**
- * Calculate validation status from issues
- *
- * @param issues - Array of validation issues
- * @returns Status based on issue severity
- */
-export function calculateValidationStatus(
-	issues: ValidationIssue[],
-): 'success' | 'warning' | 'error' {
-	if (issues.length === 0) {
-		return 'success';
-	}
-	if (issues.some((i) => i.severity === 'error')) {
-		return 'error';
-	}
-	return 'warning';
-}
 
 /**
  * Generate fix suggestion from Zod error

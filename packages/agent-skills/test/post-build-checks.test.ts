@@ -2,9 +2,10 @@
 /* eslint-disable @typescript-eslint/no-non-null-assertion -- Tests use non-null assertions after explicit length checks */
 import { mkdir, writeFile } from 'node:fs/promises';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
+import { applyFilesConfig } from '../src/files-config.js';
 import { checkBrokenPackagedLinks, checkUnreferencedFiles } from '../src/post-build-checks.js';
 
 import { setupTempDir } from './test-helpers.js';
@@ -18,6 +19,8 @@ const SCRIPTS = 'scripts';
 const SCRIPTS_CLI = 'scripts/cli.mjs';
 const CLI_SCRIPT_BODY = 'console.log("hi");\n';
 const GUIDE_LINK_BODY = ['# Skill', '', 'See [guide](resources/guide.md).'].join('\n');
+const NO_LINKS_BODY = '# Skill\n\nNo links here.\n';
+const BUILD_ARTIFACTS = 'build-artifacts';
 
 /**
  * Create a skill-output directory inside the test tmp dir, along with any
@@ -73,7 +76,7 @@ describe('checkUnreferencedFiles', () => {
 
   it('should report unreferenced non-markdown file', async () => {
     const outputDir = await setupOutputDir([SCRIPTS]);
-    await writeSkillMd(outputDir, '# Skill\n\nNo links here.\n');
+    await writeSkillMd(outputDir, NO_LINKS_BODY);
     await writeResource(outputDir, SCRIPTS_CLI, CLI_SCRIPT_BODY);
 
     const issues = await checkUnreferencedFiles(outputDir);
@@ -151,17 +154,95 @@ describe('checkUnreferencedFiles', () => {
   });
 });
 
+/**
+ * A `files:` dest is a declaration of intent, on equal footing with a link or a
+ * prose mention — you cannot "forget" a file you named twice in config. The rule
+ * engine has always modeled this (`ctx.inFilesConfig`); this lane is where the
+ * fact reaches it.
+ *
+ * The shape under test is the ordinary one: a skill shipping a vendored wasm
+ * engine and generated schemas via `files:`, consumed by code doing runtime path
+ * math, referenced by no markdown.
+ */
+describe('checkUnreferencedFiles - files: config dests', () => {
+  const VENDOR_WASM = 'vendor/engine.wasm';
+
+  it('does NOT flag a files:-declared dest that no packaged markdown references', async () => {
+    const outputDir = await setupOutputDir(['vendor']);
+    await writeSkillMd(outputDir, NO_LINKS_BODY);
+    await writeResource(outputDir, VENDOR_WASM, '\0asm');
+
+    const issues = await checkUnreferencedFiles(outputDir, [VENDOR_WASM]);
+    expect(issues).toHaveLength(0);
+  });
+
+  it('still flags an orphan that is NOT a files:-declared dest (the fix is not a blanket mute)', async () => {
+    const outputDir = await setupOutputDir(['vendor', SCRIPTS]);
+    await writeSkillMd(outputDir, NO_LINKS_BODY);
+    await writeResource(outputDir, VENDOR_WASM, '\0asm');
+    await writeResource(outputDir, SCRIPTS_CLI, CLI_SCRIPT_BODY);
+
+    // Only the wasm is declared; the stray script must still fail the build.
+    const issues = await checkUnreferencedFiles(outputDir, [VENDOR_WASM]);
+    expectSingleIssue(issues, 'PACKAGED_UNREFERENCED_FILE', SCRIPTS_CLI);
+    expect(issues[0]!.location).toBe(SCRIPTS_CLI);
+  });
+
+  /**
+   * Basis proof, not an assumption: the dests come from `applyFilesConfig` itself
+   * (the producer the packager calls), and the `before` locations are the exact
+   * `relativePath` strings this check computes. If the two normalizations ever
+   * diverge — a leading `./`, a backslash, a different root — `before` and `after`
+   * cannot both hold.
+   */
+  it('exempts exactly the dests applyFilesConfig returns, nested glob dests included', async () => {
+    const projectRoot = safePath.join(getTempDir(), 'project');
+    const genDir = safePath.join(projectRoot, BUILD_ARTIFACTS, 'schemas');
+    await mkdir(genDir, { recursive: true });
+    await writeFile(safePath.join(projectRoot, BUILD_ARTIFACTS, 'engine.wasm'), '\0asm');
+    await writeFile(safePath.join(genDir, 'thing.schema.json'), '{}');
+
+    const outputDir = await setupOutputDir();
+    await writeSkillMd(outputDir, NO_LINKS_BODY);
+
+    const dests = await applyFilesConfig({
+      filesConfig: [
+        { source: toForwardSlash(safePath.join(BUILD_ARTIFACTS, 'engine.wasm')), dest: VENDOR_WASM },
+        { source: toForwardSlash(safePath.join(BUILD_ARTIFACTS, 'schemas', '*.json')), dest: 'schemas' },
+      ],
+      projectRoot,
+      skillOutputDir: outputDir,
+    });
+
+    const expectedSchemaDest = toForwardSlash(safePath.join('schemas', 'thing.schema.json'));
+    const sortFn = (a: string, b: string) => a.localeCompare(b);
+
+    // Both land in the output and, uninformed, both are reported as orphans —
+    // these locations ARE the relativePath basis.
+    const before = await checkUnreferencedFiles(outputDir);
+    expect(before.map(i => i.location).sort(sortFn)).toEqual([expectedSchemaDest, VENDOR_WASM].sort(sortFn));
+
+    // Told what it copied, the check reports nothing.
+    expect([...dests].sort(sortFn)).toEqual([expectedSchemaDest, VENDOR_WASM].sort(sortFn));
+    const after = await checkUnreferencedFiles(outputDir, dests);
+    expect(after).toEqual([]);
+  });
+});
+
 describe('fix hints and reference anchors', () => {
-  it('PACKAGED_UNREFERENCED_FILE fix references validation.allow, not ignoreValidationErrors', async () => {
+  it('PACKAGED_UNREFERENCED_FILE fix points at files:, never at a waiver or the removed ignoreValidationErrors', async () => {
     const outputDir = await setupOutputDir([RESOURCES]);
-    await writeSkillMd(outputDir, '# Skill\n\nNo links here.\n');
+    await writeSkillMd(outputDir, NO_LINKS_BODY);
     await writeResource(outputDir, `${RESOURCES}/orphan.json`, '{}');
 
     const issues = await checkUnreferencedFiles(outputDir);
     const unref = issues.find(i => i.code === 'PACKAGED_UNREFERENCED_FILE');
     expect(unref).toBeDefined();
     expect(unref?.fix).not.toMatch(/ignoreValidationErrors/);
-    expect(unref?.fix).toMatch(/validation\.allow/);
+    // A declared dest is exempt, so the remedy must not send readers to duplicate
+    // their `files:` map into validation.allow — that was the old text's failure.
+    expect(unref?.fix).toMatch(/\.files\b/);
+    expect(unref?.fix).not.toMatch(/Allow via validation\.allow/i);
     expect(unref?.reference).toMatch(/^#packaged_unreferenced_file/);
   });
 

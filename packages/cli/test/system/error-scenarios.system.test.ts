@@ -106,7 +106,7 @@ describe('Error scenarios (system test)', () => {
     );
 
     expect(result.status).toBe(1); // Validation error, not system error
-    expect(parsed.status).toBe('failed');
+    expect(parsed.status).toBe('error');
     expect(parsed.errorsFound).toBeGreaterThan(0);
   });
 
@@ -124,11 +124,20 @@ describe('Error scenarios (system test)', () => {
     });
 
     expect(result.status).toBe(0);
-    // Debug flag should at minimum not cause errors
-    // If config is found, debug output will appear
-    if (result.stderr.includes('[DEBUG]')) {
-      expect(result.stderr).toContain('Scanning path');
-    }
+    // Unguarded, and paired with a negative control on the same fixture.
+    // This was `if (stderr.includes('[DEBUG]')) { … }` asserting 'Scanning
+    // path' — a string that exists nowhere in this codebase. With no debug
+    // output the guard never fired, so an assertion that could never have
+    // matched sat green. A conditional whose condition is always false is not
+    // a test; the run WITHOUT --debug is what makes this one able to fail.
+    expect(result.stderr).toContain('[DEBUG]');
+
+    const withoutDebug = spawnSync('node', [binPath, 'resources', 'scan', projectDir], {
+      encoding: 'utf-8',
+    });
+
+    expect(withoutDebug.status).toBe(0);
+    expect(withoutDebug.stderr).not.toContain('[DEBUG]');
   });
 
   it('should handle multiple validation errors', () => {

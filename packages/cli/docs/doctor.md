@@ -21,13 +21,24 @@ providing actionable suggestions for any problems found.
 7. CLI build status (when running from VAT source tree)
 
 **Options:**
-- `--verbose` - Show all checks (including passing ones)
+- `--verbose` - Show all checks (including passing and skipped ones)
+
+**Check outcomes:**
+
+| Icon | Outcome | Meaning |
+|------|---------|---------|
+| ✅ | `pass` | The check ran and the thing is fine |
+| ❌ | `fail` | The check ran and the thing is wrong — the only outcome that affects the exit code |
+| ❓ | `undetermined` | The check could not reach an answer (registry unreachable, file unreadable). **Nothing was verified** — this is not a pass |
+| ⏭️ | `skipped` | The check does not apply here (e.g. a VAT-source-tree-only check outside the source tree) |
 
 **Exit Codes:**
-- `0` - All checks passed
+- `0` - No check failed (an undetermined check is reported in the output, not fatal)
 - `1` - One or more checks failed
 
-**Output:** Human-friendly formatted text with emojis
+**Output:** Human-friendly formatted text with emojis. The summary always prints the
+full outcome distribution and, when the concise view hides checks, how many it hid —
+so the counts can never contradict the list above them.
 
 ## Usage Examples
 
@@ -39,16 +50,33 @@ Check all diagnostic items and show only failures:
 vat doctor
 ```
 
-Output when all checks pass:
+Output when all checks pass (the concise view prints no check blocks, and says so):
 ```
 🩺 vat doctor
 
 Running diagnostic checks...
 
-📊 Results: 7/7 checks passed
+📊 Results: 7 checks — 7 passed, 0 failed, 0 undetermined, 0 skipped
+   7 not shown (nothing to report) — re-run with --verbose to see every check.
 
 ✨ All checks passed! Your vat setup looks healthy.
 ```
+
+Output when a check could not be determined (here: the npm registry was unreachable):
+```
+🩺 vat doctor
+
+Running diagnostic checks...
+
+❓ vat version
+   Unable to check for updates: not found: npm
+
+📊 Results: 7 checks — 6 passed, 0 failed, 1 undetermined, 0 skipped
+   6 not shown (nothing to report) — re-run with --verbose to see every check.
+
+❓ Nothing failed, but 1 check(s) could not be determined — that is not the same as healthy.
+```
+Exit code is still `0` — nothing failed — but the run is *not* reported as healthy.
 
 ### Verbose Mode
 
@@ -85,7 +113,7 @@ Running diagnostic checks...
 ✅ CLI build status
    Build is up to date (v0.1.0)
 
-📊 Results: 7/7 checks passed
+📊 Results: 7 checks — 7 passed, 0 failed, 0 undetermined, 0 skipped
 
 ✨ All checks passed! Your vat setup looks healthy.
 ```
@@ -110,7 +138,8 @@ Output:
 
 Running diagnostic checks...
 
-📊 Results: 7/7 checks passed
+📊 Results: 7 checks — 7 passed, 0 failed, 0 undetermined, 0 skipped
+   7 not shown (nothing to report) — re-run with --verbose to see every check.
 
 ✨ All checks passed! Your vat setup looks healthy.
 ```
@@ -250,14 +279,20 @@ fi
 ### VAT Version Check
 
 - **Purpose:** Inform about available updates (advisory only)
-- **Always passes:** This check never fails
+- **Never fails:** an available update is a `pass` with a suggestion
+- **Undetermined:** if the npm registry cannot be reached, the outcome is
+  `undetermined` (❓), not `pass` — doctor did not verify that you are current
 - **Suggestion:** Shows upgrade command if update available
 
 ### CLI Build Status Check
 
 - **When:** Only runs when in VAT source tree
 - **Purpose:** Ensure CLI build matches source version (for VAT developers)
-- **Skipped:** When running installed VAT globally
+- **Skipped (⏭️):** When running installed VAT globally, or when no project root
+  was detected — the check does not apply
+- **Undetermined (❓):** When the version files exist but cannot be read or
+  parsed. Doctor cannot tell whether the build is stale, which is different from
+  the check not applying
 - **Fix:** Run `bun run build` in VAT source directory
 
 ## Requirements
@@ -278,4 +313,5 @@ for terminology.
 - Run `vat doctor` before reporting issues to verify environment
 - Use `--verbose` flag when debugging to see all check details
 - Doctor checks can be run from any subdirectory in your project
-- Exit code 0 means all checks passed (useful for scripts)
+- Exit code 0 means no check *failed*; read the counts line to see whether any
+  check was undetermined (useful for scripts)

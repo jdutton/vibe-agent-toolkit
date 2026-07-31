@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { crawlDirectory, gitFindRoot, GitTracker, safePath } from '@vibe-agent-toolkit/utils';
+import { crawlDirectory, gitFindRoot, GitTracker, NEVER_CRAWL_GLOBS, safePath } from '@vibe-agent-toolkit/utils';
 
 import { detectFormat } from '../detectors/format-detector.js';
 import { createPatternFilter } from '../filters/pattern-filter.js';
@@ -10,15 +10,19 @@ import type { DetectedFormat, ScanOptions, ScanResult, ScanSummary } from '../ty
 /**
  * Directories that should ALWAYS be excluded from scanning to prevent catastrophic performance.
  * These contain tens of thousands of files and are never useful for discovery.
+ *
+ * Taken from `NEVER_CRAWL_GLOBS` rather than restated: this list and the crawler's
+ * disagreed for as long as both existed (this one had both worktree paths, the
+ * crawler's had neither), which meant "which directories does VAT refuse to walk"
+ * had two answers depending on the entry point.
+ *
+ * `dist/` is NOT in it, and that omission is load-bearing: this scanner's whole
+ * job is to find agents and skills and CLASSIFY each as source or build output
+ * (`ScanResult.buildOutputs`), so a scanner that cannot walk `dist/` reports zero
+ * build outputs and calls it a clean scan. It lives in `BUILD_OUTPUT_GLOBS`, which
+ * the crawler's default excludes and this lane deliberately does not spread.
  */
-const PERFORMANCE_POISON = [
-  '**/.git/**',              // Git objects (1000s of files), never useful for discovery
-  '**/node_modules/**',      // Dependencies (40K+ files), never user content
-  '**/coverage/**',          // Test coverage reports, never useful for discovery
-  '**/.test-output/**',      // Test artifacts, never useful for discovery
-  '**/.worktrees/**',        // Git worktrees (full repo copies), must not traverse into
-  '**/.claude/worktrees/**', // Claude Code worktrees, same reason
-];
+const PERFORMANCE_POISON: readonly string[] = NEVER_CRAWL_GLOBS;
 
 /**
  * Scan local filesystem for VAT agents and Agent Skills

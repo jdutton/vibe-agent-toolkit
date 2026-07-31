@@ -40,6 +40,7 @@ Poor fits:
 | Behaviorally testing a packaged skill in isolation — `vat skill test run`/`configure`, friction triage, auth modes, security caveats | `vibe-agent-toolkit:vat-skill-testing` |
 | Anthropic Admin API: org users, cost/usage, workspace skills, `ANTHROPIC_ADMIN_API_KEY` | `vibe-agent-toolkit:vat-enterprise-org` |
 | Programmatic markdown/frontmatter edits — moving files, updating references, schema-evolution migrations; comment-preserving FrontmatterEditor + rewriteBodyLinks | `vibe-agent-toolkit:markdown-rewriting` |
+| Auditing a codebase for COHERENCE rather than bugs — does every lane implement one contract, does a status tell the truth, is a passing test suite blind | `vibe-agent-toolkit:coherence-audit` |
 
 ## CLI Surface at a Glance
 

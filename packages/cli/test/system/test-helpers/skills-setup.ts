@@ -68,10 +68,11 @@ export function setupInstallTestSuite(testPrefix: string, testFileUrl: string): 
 export function executeSkillsCommandAndExpectYaml(
   binPath: string,
   command: string,
-  targetPath: string
+  targetPath: string,
+  extraArgs: readonly string[] = []
 ): { result: CliResult; parsed: Record<string, unknown> } {
   // eslint-disable-next-line sonarjs/no-os-command-from-path -- Test helper
-  const result = spawnSync('node', [binPath, 'skills', command, targetPath], {
+  const result = spawnSync('node', [binPath, 'skills', command, targetPath, ...extraArgs], {
     encoding: 'utf-8',
   });
 

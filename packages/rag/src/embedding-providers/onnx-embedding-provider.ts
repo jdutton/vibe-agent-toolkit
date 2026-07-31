@@ -26,6 +26,7 @@ import type { EmbeddingProvider } from '../interfaces/embedding.js';
 
 import {
   BertTokenizer,
+  IncompatibleVocabError,
   ensureModelFiles,
   l2Normalize,
   meanPooling,
@@ -242,10 +243,15 @@ export class OnnxEmbeddingProvider implements EmbeddingProvider {
 
     try {
       const session = await ort.InferenceSession.create(modelPath);
-      const tokenizer = await BertTokenizer.fromVocabFile(vocabPath);
+      const tokenizer = await BertTokenizer.fromVocabFile(vocabPath, this.model);
 
       return { session, tokenizer };
     } catch (cause) {
+      // An incompatible vocabulary already explains itself in full — rewrapping
+      // would only bury the diagnosis inside a generic load failure.
+      if (cause instanceof IncompatibleVocabError) {
+        throw cause;
+      }
       throw new Error(`Failed to load ONNX model '${this.model}': ${String(cause)}`, {
         cause,
       });

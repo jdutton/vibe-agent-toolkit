@@ -21,6 +21,11 @@ const SECOND_PERSON_OPENER_RE = /^You\s+(should|can|need|must|will|may)\b/i;
 const FENCE_RE = /^\s*```/;
 const QUOTE_RE = /^\s*>/;
 
+/**
+ * @param body - SKILL.md body (frontmatter stripped).
+ * @param location - Project-relative POSIX path of the file, per the
+ *   `ValidationIssue` anchor contract. Build it with `issueLocation()`.
+ */
 export function detectNonImperativeBody(
   body: string,
   location: string,
@@ -46,7 +51,8 @@ export function detectNonImperativeBody(
         severity: entry.defaultSeverity,
         code: 'SKILL_BODY_NOT_IMPERATIVE',
         message: `Second-person opener "${sample.trim()}" — prefer imperative form (e.g. "Configure…").`,
-        location: `${location}:${lineNumber}`,
+        location,
+        line: lineNumber,
         fix: entry.fix,
         reference: entry.reference,
       });

@@ -11,11 +11,12 @@
 import type fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { createRegistryIssue, type IssueCode, runValidationFramework, type ValidationConfig, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
-import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, type GitTracker, normalizedTmpdir, resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { createRegistryIssue, type IssueCode, runSingleUnitValidation, type ValidationConfig, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, type GitTracker, issueLocation, normalizedTmpdir, resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { calculateChecksum } from './checksum.js';
 import { getCollectionsForFile } from './collection-matcher.js';
+import type { DeferredArtifacts } from './deferred-artifacts.js';
 import { ExternalLinkValidator } from './external-link-validator.js';
 import {
   validateFrontmatterLinks,
@@ -31,7 +32,7 @@ import type { SHA256 } from './schemas/checksum.js';
 import type { ProjectConfig } from './schemas/project-config.js';
 import type { HeadingNode, ResourceMetadata } from './schemas/resource-metadata.js';
 import type { ValidationResult } from './schemas/validation-result.js';
-import { issueLocation, matchesGlobPattern, splitHrefAnchor } from './utils.js';
+import { locationRoot, matchesGlobPattern, splitHrefAnchor } from './utils.js';
 
 /**
  * Typed error thrown when two resources produce the same ID.
@@ -55,12 +56,24 @@ export class DuplicateResourceIdError extends Error {
 }
 
 /**
+ * The file kinds a resource crawl treats as resources when the caller supplies
+ * no `include` patterns of its own.
+ *
+ * ONE home, deliberately exported: a caller that needs to NARROW the default
+ * scan (the CLI scopes these to a subtree when `vat resources validate <path>`
+ * is given a path argument) must derive its patterns from this list rather than
+ * restate it — two copies would silently disagree the moment a new extension is
+ * recognized here.
+ */
+export const DEFAULT_RESOURCE_INCLUDE: readonly string[] = ['**/*.md', '**/*.html', '**/*.htm'];
+
+/**
  * Options for crawling directories to add resources.
  */
 export interface CrawlOptions {
   /** Base directory to crawl */
   baseDir: string;
-  /** Include patterns (default: all .md files) */
+  /** Include patterns (default: {@link DEFAULT_RESOURCE_INCLUDE}) */
   include?: string[];
   /** Exclude patterns (default: node_modules, .git, dist) */
   exclude?: string[];
@@ -99,8 +112,15 @@ export interface ValidateOptions {
   /** Disable cache for external URL checks (default: false) */
   noCache?: boolean;
   /**
+   * Deferred build-artifact model (a project's skills' `files:` config). Threaded
+   * into every `local_file` link validation so a missing-but-declared target is
+   * reported as info-severity `LINK_DEFERRED_ARTIFACT` instead of error-severity
+   * `LINK_BROKEN_FILE` — see `deferred-artifacts.ts` and `link-validator.ts`.
+   */
+  deferredArtifacts?: DeferredArtifacts;
+  /**
    * Validation framework config (severity overrides + per-code allow entries).
-   * Applied INSIDE validate() via runValidationFramework — the library, not the
+   * Applied INSIDE validate() via runSingleUnitValidation — the library, not the
    * CLI, resolves severity and drops ignored issues. Defaults to `{}` (no
    * overrides: every issue keeps its registry default severity).
    */
@@ -138,6 +158,20 @@ export interface CollectionStats {
   resourcesInCollections: number;
   /** Statistics per collection ID */
   collections: Record<string, CollectionStat>;
+}
+
+/**
+ * True when the file HAS a frontmatter block that failed to parse.
+ *
+ * The distinction matters because a failed parse and an absent block both leave
+ * `resource.frontmatter` undefined, and the schema validator sees only that.
+ * Reading `undefined` as "absent" made VAT report `FRONTMATTER_MISSING` — "No
+ * frontmatter found in file" — about files whose frontmatter is plainly present,
+ * alongside the `FRONTMATTER_INVALID_YAML` that correctly described it: two
+ * error-severity findings with contradictory remediations, one of them false.
+ */
+function hasUnparseableFrontmatter(resource: ResourceMetadata): boolean {
+  return resource.frontmatterError !== undefined;
 }
 
 /**
@@ -369,6 +403,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       headings: parseResult.headings,
       ...(parseResult.anchors !== undefined && { anchors: parseResult.anchors }),
       ...(parseResult.parseErrors !== undefined && { parseErrors: parseResult.parseErrors }),
+      ...(parseResult.unresolvedReferences !== undefined && {
+        unresolvedReferences: parseResult.unresolvedReferences,
+      }),
       ...(parseResult.frontmatter !== undefined && { frontmatter: parseResult.frontmatter }),
       ...(parseResult.frontmatterError !== undefined && { frontmatterError: parseResult.frontmatterError }),
       sizeBytes: parseResult.sizeBytes,
@@ -442,7 +479,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   async crawl(options: CrawlOptions): Promise<ResourceMetadata[]> {
     const {
       baseDir,
-      include = ['**/*.md', '**/*.html', '**/*.htm'],
+      include = [...DEFAULT_RESOURCE_INCLUDE],
       exclude = ['**/node_modules/**', '**/.git/**', '**/dist/**'],
       followSymlinks = false,
     } = options;
@@ -480,7 +517,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
           createRegistryIssue(
             'FRONTMATTER_INVALID_YAML',
             `Invalid YAML syntax in frontmatter: ${resource.frontmatterError}`,
-            { location: issueLocation(resource.filePath, this.baseDir), line: 1 },
+            { location: issueLocation(resource.filePath, locationRoot(this.baseDir)), line: 1 },
           ),
         );
       }
@@ -501,8 +538,39 @@ export class ResourceRegistry implements ResourceCollectionInterface {
             'MALFORMED_HTML',
             `Malformed HTML: ${parseError.message}`,
             {
-              location: issueLocation(resource.filePath, this.baseDir),
+              location: issueLocation(resource.filePath, locationRoot(this.baseDir)),
               ...(parseError.line !== undefined && { line: parseError.line }),
+            },
+          ),
+        );
+      }
+    }
+    return issues;
+  }
+
+  /**
+   * Emit `LINK_UNRESOLVED_REFERENCE` warnings for dangling reference-style
+   * links (full `[text][label]` / collapsed `[label][]` forms with no
+   * matching `[label]: url` definition) found by the raw-source scan in
+   * `link-parser.ts`'s `findUnresolvedReferences`. These never become
+   * `linkReference` AST nodes, so they cannot flow through `validateAllLinks`
+   * like every other link code — they are collected here instead, the same
+   * way `collectHtmlParseErrors` surfaces another parser-produced diagnostic
+   * that isn't itself a `ResourceLink`.
+   * @private
+   */
+  private collectUnresolvedReferenceIssues(): ValidationIssue[] {
+    const issues: ValidationIssue[] = [];
+    for (const resource of this.resourcesByPath.values()) {
+      for (const unresolved of resource.unresolvedReferences ?? []) {
+        issues.push(
+          createRegistryIssue(
+            'LINK_UNRESOLVED_REFERENCE',
+            `Reference-style link "[${unresolved.label}]" has no matching definition. ` +
+              `Add "[${unresolved.label}]: <url>" or rewrite as an inline link.`,
+            {
+              location: issueLocation(resource.filePath, locationRoot(this.baseDir)),
+              line: unresolved.line,
             },
           ),
         );
@@ -519,7 +587,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     return this.duplicateIdCollisions.map(({ id, existingPath, conflictingPath }) =>
       createRegistryIssue(
         'DUPLICATE_RESOURCE_ID',
-        `Two files resolve to the same resource id '${id}': '${issueLocation(existingPath, this.baseDir)}' and '${issueLocation(conflictingPath, this.baseDir)}'. Rename one of the files so they produce distinct resource ids.`,
+        `Two files resolve to the same resource id '${id}': '${issueLocation(existingPath, locationRoot(this.baseDir))}' and '${issueLocation(conflictingPath, locationRoot(this.baseDir))}'. Rename one of the files so they produce distinct resource ids.`,
       ),
     );
   }
@@ -531,7 +599,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   private async validateAllLinks(
     fragmentsByFile: FragmentIndex,
     skipGitIgnoreCheck: boolean,
-    checkHtmlAnchors: boolean
+    checkHtmlAnchors: boolean,
+    deferredArtifacts: DeferredArtifacts | undefined,
   ): Promise<ValidationIssue[]> {
     const issues: ValidationIssue[] = [];
 
@@ -544,7 +613,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
               projectRoot: this.baseDir,
               skipGitIgnoreCheck,
               checkHtmlAnchors,
-              ...(this.gitTracker !== undefined && { gitTracker: this.gitTracker })
+              ...(this.gitTracker !== undefined && { gitTracker: this.gitTracker }),
+              ...(deferredArtifacts !== undefined && { deferredArtifacts }),
             };
 
         const issue = await validateLink(link, resource.filePath, fragmentsByFile, validateOptions);
@@ -567,6 +637,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   ): ValidationIssue[] {
     const issues: ValidationIssue[] = [];
     for (const resource of this.resourcesByPath.values()) {
+      if (hasUnparseableFrontmatter(resource)) {
+        continue;
+      }
       const frontmatterIssues = validateFrontmatter(
         resource.frontmatter,
         schema,
@@ -668,6 +741,14 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       return [];
     }
 
+    // A document whose frontmatter did not parse is not a document with no
+    // frontmatter. `collectYamlErrors` already reported the parse failure, which
+    // is the actionable finding; saying anything further about fields we could
+    // not read would contradict it.
+    if (hasUnparseableFrontmatter(resource)) {
+      return [];
+    }
+
     const schemaPath = resolveAssetReference(
       validation.frontmatterSchema,
       this.baseDir ?? process.cwd(),
@@ -723,7 +804,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         createRegistryIssue(
           'FRONTMATTER_SCHEMA_ERROR',
           `Failed to load or parse frontmatter schema '${validation.frontmatterSchema}': ${errorMessage}`,
-          { location: issueLocation(resource.filePath, this.baseDir), line: 1 },
+          { location: issueLocation(resource.filePath, locationRoot(this.baseDir)), line: 1 },
         ),
       ];
     }
@@ -773,15 +854,21 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     const issues: ValidationIssue[] = [];
 
     // Surface parse-time diagnostics: YAML frontmatter errors first, then HTML
-    // well-formedness, then duplicate-id collisions. Combined into one push() call
-    // (SonarCloud S7778).
-    issues.push(...this.collectYamlErrors(), ...this.collectHtmlParseErrors(), ...this.collectDuplicateIdErrors());
+    // well-formedness, then dangling reference-style links, then duplicate-id
+    // collisions. Combined into one push() call (SonarCloud S7778).
+    issues.push(
+      ...this.collectYamlErrors(),
+      ...this.collectHtmlParseErrors(),
+      ...this.collectUnresolvedReferenceIssues(),
+      ...this.collectDuplicateIdErrors(),
+    );
 
     // Validate each link in each resource
     const linkIssues = await this.validateAllLinks(
       fragmentsByFile,
       options?.skipGitIgnoreCheck ?? false,
-      options?.checkHtmlAnchors ?? false
+      options?.checkHtmlAnchors ?? false,
+      options?.deferredArtifacts,
     );
     issues.push(...linkIssues);
 
@@ -806,7 +893,11 @@ export class ResourceRegistry implements ResourceCollectionInterface {
 
     // Resolve severity + apply allow-filter INSIDE the library (not the CLI).
     // `emitted` = post-allow-filter, severity-resolved, with `ignore`d dropped.
-    const framework = runValidationFramework(issues, options?.validationConfig ?? {});
+    //
+    // Single-unit: one `validate()` covers the WHOLE registry, so this call is
+    // the entire run and "no issue matched this allow entry" is answerable here.
+    // (Unlike the per-skill lanes, which need a run-level ledger.)
+    const framework = runSingleUnitValidation(issues, options?.validationConfig ?? {});
     const emitted = framework.emitted;
     const errorCount = emitted.length;
 
@@ -952,7 +1043,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       for (const location of locations) {
         issues.push(
           createRegistryIssue(issueCode, `External URL failed: ${errorMessage}`, {
-            location: issueLocation(location.resourcePath, this.baseDir),
+            location: issueLocation(location.resourcePath, locationRoot(this.baseDir)),
             link: result.url,
             ...(location.line !== undefined && { line: location.line }),
           }),

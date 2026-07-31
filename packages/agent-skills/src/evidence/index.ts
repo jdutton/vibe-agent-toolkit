@@ -11,6 +11,7 @@ export {
   getPatternDefinition,
   assertPatternRegistered,
 } from './pattern-registry.js';
+export { anchorEvidencePath, buildEvidence } from './build-evidence.js';
 export {
   deriveObservationsFromEvidence,
   EXTERNAL_CLI_BINARIES,

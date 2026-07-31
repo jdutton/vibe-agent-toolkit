@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 
-import { runValidationFramework } from '@vibe-agent-toolkit/agent-schema';
+import { runSingleUnitValidation } from '@vibe-agent-toolkit/agent-schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
@@ -35,7 +35,7 @@ describe('compat detectors in validateSkill (integration)', () => {
   it('suppresses CAPABILITY_EXTERNAL_CLI and CAPABILITY_LOCAL_SHELL when validation.allow matches', async () => {
     const skillPath = safePath.join(FIXTURES, 'external-cli-skill-with-allow', 'SKILL.md');
     const result = await validateSkill({ skillPath });
-    const framework = runValidationFramework(result.issues, {
+    const framework = runSingleUnitValidation(result.issues, {
       allow: {
         CAPABILITY_EXTERNAL_CLI: [{
           paths: ['**/*'],

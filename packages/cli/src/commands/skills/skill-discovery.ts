@@ -27,10 +27,12 @@ const DISCOVERY_EXCLUDE = [
 ];
 
 /**
- * Read skill name from SKILL.md frontmatter.
- * Falls back to H1 title, then filename.
+ * Read a skill's name from SKILL.md frontmatter, falling back to its H1 title and
+ * then its filename. Exported so the Claude plugin build resolves a plugin-local
+ * skill's name through the SAME definition `vat skills build` uses — per-skill
+ * config is keyed by name, so two answers would mean two effective configs.
  */
-async function readSkillName(skillPath: string): Promise<string | undefined> {
+export async function readSkillName(skillPath: string): Promise<string | undefined> {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillPath from glob discovery
   const content = await readFile(skillPath, 'utf-8');
   const parsed = await parseMarkdown(skillPath);
@@ -101,7 +103,15 @@ async function crawlOneBase(base: string, globs: string[]): Promise<string[]> {
     baseDir: base,
     include: globs,
     exclude: DISCOVERY_EXCLUDE,
-    dot: true,
+    // A skill the author has written but not yet committed MUST be discoverable.
+    // Without this, `crawlDirectory`'s `git ls-files` fast path sees only tracked
+    // files, so a brand-new SKILL.md is invisible: `vat skills validate` reports
+    // one fewer skill and exits 0, and `vat skills build` silently does not ship
+    // it. Nothing warns — the count is the only tell, and you have to know what
+    // it should have been. `includeUntracked` is the documented knob for exactly
+    // this and keeps the fast path (unlike `respectGitignore: false`, which costs
+    // a full walk); the inventory lane already used it for the same reason.
+    includeUntracked: true,
   });
 }
 

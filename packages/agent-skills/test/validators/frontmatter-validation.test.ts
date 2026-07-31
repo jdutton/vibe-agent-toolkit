@@ -13,19 +13,60 @@ import { describe, expect, it } from 'vitest';
 
 import {
 	detectExtraFrontmatterFields,
-	validateFrontmatterRules,
-	validateFrontmatterSchema,
+	validateFrontmatterRules as validateFrontmatterRulesIn,
+	validateFrontmatterSchema as validateFrontmatterSchemaIn,
 } from '../../src/validators/frontmatter-validation.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-const LOC_FRONTMATTER_NAME = 'frontmatter.name';
-const LOC_FRONTMATTER_DESC = 'frontmatter.description';
+/**
+ * Dotted document-internal pointers live in `ValidationIssue.field`; the file
+ * they point INTO lives in `location`. Both entry points now take that file, so
+ * these thin wrappers supply one fixture location for every case below.
+ */
+const FIELD_FRONTMATTER = 'frontmatter';
+const FIELD_FRONTMATTER_NAME = 'frontmatter.name';
+const FIELD_FRONTMATTER_DESC = 'frontmatter.description';
+const SKILL_LOCATION = 'skills/demo/SKILL.md';
+
+function validateFrontmatterSchema(
+	frontmatter: Record<string, unknown>,
+	isVATGenerated: boolean,
+): ValidationIssue[] {
+	return validateFrontmatterSchemaIn(frontmatter, isVATGenerated, SKILL_LOCATION);
+}
+
+function validateFrontmatterRules(frontmatter: Record<string, unknown>): ValidationIssue[] {
+	return validateFrontmatterRulesIn(frontmatter, SKILL_LOCATION);
+}
 
 function findIssueByCode(issues: ValidationIssue[], code: string): ValidationIssue | undefined {
 	return issues.find((i) => i.code === code);
+}
+
+/**
+ * Assert one issue was emitted for `code` with the given severity and anchored
+ * at `field` INSIDE {@link SKILL_LOCATION}, and return it for any further
+ * case-specific assertions.
+ *
+ * Every case below checks the same four things, so they live here rather than
+ * as a four-line block repeated thirty times (which the duplication gate
+ * rightly rejects — and which made the anchor split invisible in the diff).
+ */
+function expectIssueAt(
+	issues: ValidationIssue[],
+	code: string,
+	severity: ValidationIssue['severity'],
+	field: string,
+): ValidationIssue | undefined {
+	const issue = findIssueByCode(issues, code);
+	expect(issue).toBeDefined();
+	expect(issue?.severity).toBe(severity);
+	expect(issue?.field).toBe(field);
+	expect(issue?.location).toBe(SKILL_LOCATION);
+	return issue;
 }
 
 function validFrontmatter(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -89,10 +130,7 @@ describe('validateFrontmatterSchema', () => {
 				true,
 			);
 
-			const issue = findIssueByCode(issues, 'SKILL_MISSING_NAME');
-			expect(issue).toBeDefined();
-			expect(issue?.severity).toBe('error');
-			expect(issue?.location).toBe('frontmatter');
+			expectIssueAt(issues, 'SKILL_MISSING_NAME', 'error', FIELD_FRONTMATTER);
 		});
 
 		it('should report SKILL_MISSING_DESCRIPTION when description is absent in VAT mode', () => {
@@ -101,10 +139,7 @@ describe('validateFrontmatterSchema', () => {
 				true,
 			);
 
-			const issue = findIssueByCode(issues, 'SKILL_MISSING_DESCRIPTION');
-			expect(issue).toBeDefined();
-			expect(issue?.severity).toBe('error');
-			expect(issue?.location).toBe('frontmatter');
+			expectIssueAt(issues, 'SKILL_MISSING_DESCRIPTION', 'error', FIELD_FRONTMATTER);
 		});
 	});
 
@@ -112,10 +147,7 @@ describe('validateFrontmatterSchema', () => {
 		it('should report SKILL_NAME_INVALID for uppercase name', () => {
 			const issues = validateFrontmatterSchema(validFrontmatter({ name: 'MySkill' }), false);
 
-			const issue = findIssueByCode(issues, 'SKILL_NAME_INVALID');
-			expect(issue).toBeDefined();
-			expect(issue?.severity).toBe('error');
-			expect(issue?.location).toBe(LOC_FRONTMATTER_NAME);
+			const issue = expectIssueAt(issues, 'SKILL_NAME_INVALID', 'error', FIELD_FRONTMATTER_NAME);
 			expect(issue?.fix).toContain('lowercase');
 		});
 
@@ -141,10 +173,7 @@ describe('validateFrontmatterSchema', () => {
 				false,
 			);
 
-			const issue = findIssueByCode(issues, 'SKILL_DESCRIPTION_TOO_LONG');
-			expect(issue).toBeDefined();
-			expect(issue?.severity).toBe('error');
-			expect(issue?.location).toBe(LOC_FRONTMATTER_DESC);
+			const issue = expectIssueAt(issues, 'SKILL_DESCRIPTION_TOO_LONG', 'error', FIELD_FRONTMATTER_DESC);
 			expect(issue?.message).toContain('1025');
 		});
 	});
@@ -185,10 +214,7 @@ describe('validateFrontmatterRules', () => {
 		it('should report RESERVED_WORD_IN_NAME for name containing "claude"', () => {
 			const issues = validateFrontmatterRules(validFrontmatter({ name: 'claude-helper' }));
 
-			const issue = findIssueByCode(issues, 'RESERVED_WORD_IN_NAME');
-			expect(issue).toBeDefined();
-			expect(issue?.severity).toBe('warning');
-			expect(issue?.location).toBe(LOC_FRONTMATTER_NAME);
+			expectIssueAt(issues, 'RESERVED_WORD_IN_NAME', 'warning', FIELD_FRONTMATTER_NAME);
 		});
 
 		it('should report RESERVED_WORD_IN_NAME for name containing "anthropic"', () => {
@@ -210,10 +236,7 @@ describe('validateFrontmatterRules', () => {
 		it('should report SKILL_NAME_XML_TAGS when name contains angle brackets', () => {
 			const issues = validateFrontmatterRules(validFrontmatter({ name: '<my-skill>' }));
 
-			const issue = findIssueByCode(issues, 'SKILL_NAME_XML_TAGS');
-			expect(issue).toBeDefined();
-			expect(issue?.severity).toBe('error');
-			expect(issue?.location).toBe(LOC_FRONTMATTER_NAME);
+			const issue = expectIssueAt(issues, 'SKILL_NAME_XML_TAGS', 'error', FIELD_FRONTMATTER_NAME);
 			expect(issue?.fix).toContain('Remove');
 		});
 
@@ -245,10 +268,7 @@ describe('validateFrontmatterRules', () => {
 				validFrontmatter({ description: '<b>bold</b> text' }),
 			);
 
-			const issue = findIssueByCode(issues, 'SKILL_DESCRIPTION_XML_TAGS');
-			expect(issue).toBeDefined();
-			expect(issue?.severity).toBe('error');
-			expect(issue?.location).toBe(LOC_FRONTMATTER_DESC);
+			expectIssueAt(issues, 'SKILL_DESCRIPTION_XML_TAGS', 'error', FIELD_FRONTMATTER_DESC);
 		});
 	});
 
@@ -256,10 +276,7 @@ describe('validateFrontmatterRules', () => {
 		it('should report SKILL_DESCRIPTION_EMPTY for whitespace-only description', () => {
 			const issues = validateFrontmatterRules(validFrontmatter({ description: '   ' }));
 
-			const issue = findIssueByCode(issues, 'SKILL_DESCRIPTION_EMPTY');
-			expect(issue).toBeDefined();
-			expect(issue?.severity).toBe('error');
-			expect(issue?.location).toBe(LOC_FRONTMATTER_DESC);
+			const issue = expectIssueAt(issues, 'SKILL_DESCRIPTION_EMPTY', 'error', FIELD_FRONTMATTER_DESC);
 			expect(issue?.fix).toContain('Add description');
 		});
 
@@ -349,10 +366,7 @@ describe('validateFrontmatterRules', () => {
 				validFrontmatter({ description: 'x'.repeat(260) }),
 			);
 
-			const issue = findIssueByCode(issues, 'SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT');
-			expect(issue).toBeDefined();
-			expect(issue?.severity).toBe('warning');
-			expect(issue?.location).toBe(LOC_FRONTMATTER_DESC);
+			const issue = expectIssueAt(issues, 'SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT', 'warning', FIELD_FRONTMATTER_DESC);
 			expect(issue?.message).toContain('260');
 		});
 

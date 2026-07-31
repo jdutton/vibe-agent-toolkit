@@ -5,7 +5,7 @@
     {
       "id": "draft-frontmatter-reserved-word-and-tracking-fields",
       "category": "produce-correct-frontmatter",
-      "prompt": "Can you draft me a SKILL.md to get started on a new skill? It takes a plain-English description of a workflow and turns it into a Claude Code slash-command file. We track ownership on everything we build, so stamp our team name (platform-tooling) and a version (1.0.0) into the file up top. Just the frontmatter plus a short starter body is fine.",
+      "prompt": "Can you draft me a SKILL.md to get started on a new skill? It takes a plain-English description of a workflow and turns it into a Claude Code slash-command file — we were going to call it `claude-command-builder`. We track ownership on everything we build, so stamp our team name (platform-tooling) and a version (1.0.0) into the file up top. Just the frontmatter plus a short starter body is fine.",
       "files": [],
       "expected_output": "Produces a SKILL.md whose name is kebab-case (gerund or an acceptable noun/verb-phrase form) and contains NEITHER 'claude' NOR 'anthropic' — flagging that Claude Code refuses to install non-certified skills whose name contains those reserved words even though the skill generates Claude Code commands. The description is third-person, under ~250 chars, and leads with the action/trigger. The requested team and version are nested under a metadata: mapping (an allowed key) rather than added as top-level frontmatter keys, or the agent explains those tracking fields belong in metadata or vibe-agent-toolkit.config.yaml, not as standard frontmatter keys.",
       "expectations": [
@@ -19,7 +19,7 @@
     {
       "id": "draft-portable-bundled-script-section",
       "category": "produce-correct-frontmatter",
-      "prompt": "I'm writing the SKILL.md body for a skill that ships a bundled converter script at scripts/convert.mjs. Can you write the part of the body that tells the agent how to run it on an input file? It'll be installed as a Claude Code plugin in our marketplace.",
+      "prompt": "I'm writing the SKILL.md body for a skill that ships a bundled converter script at scripts/convert.mjs, alongside SKILL.md. It takes the input file as its first positional argument: `node scripts/convert.mjs <input-file>`. Write the part of the body that tells the agent how to run it on an input file — give me the actual prose and command, not questions. It'll be installed as a Claude Code plugin in our marketplace.",
       "files": [],
       "expected_output": "Writes a 'run the script' section that invokes the bundled script by a skill-relative path (e.g. `node scripts/convert.mjs <input>`), NOT via ${CLAUDE_PLUGIN_ROOT}, an absolute path, or any environment variable — despite the prompt saying it ships as a Claude Code plugin. Addresses the working-directory caveat: states that the path is relative to the skill's own directory (the folder containing SKILL.md) or has the skill cd into that directory first, because the agent's cwd is not guaranteed to be the skill dir. May note skill-relative paths are the only form portable across every mount surface (plugin, claude.ai upload, API container, ~/.claude/skills).",
       "expectations": [
@@ -60,7 +60,9 @@
       "id": "catch-config-and-keys-in-frontmatter",
       "category": "catch-authoring-mistake",
       "prompt": "Here's a draft SKILL.md I put together. I tried to wire up the packaging behavior and a couple of tracking fields right in the file. Before I wire it into our config, does this look like it'll build and package the way I expect, or did I put something in the wrong place?",
-      "files": ["fixtures/misplaced-config-skill.md"],
+      "files": [
+        "fixtures/misplaced-config-skill.md"
+      ],
       "expected_output": "Identifies the placement mistakes: linkFollowDepth and excludeReferencesFromBundle are packaging options that belong in vibe-agent-toolkit.config.yaml under skills.config.<name>, not in SKILL.md frontmatter; the version and category keys are non-standard frontmatter fields (would fire SKILL_FRONTMATTER_EXTRA_FIELDS) and should move under a metadata: mapping or into config; and the markdown link to the sibling skill ([the audit skill](./vat-audit.md)) should be a prose reference (vibe-agent-toolkit:vat-audit) because linking another skill's SKILL.md transcludes/duplicates that skill (LINK_TO_SKILL_DEFINITION). Concludes it will NOT package as the author expects.",
       "expectations": [
         "The review flags that `linkFollowDepth` and `excludeReferencesFromBundle` do NOT belong in SKILL.md frontmatter — they are packaging config set in vibe-agent-toolkit.config.yaml under `skills.config.<name>`.",

@@ -60,14 +60,20 @@ ${validationConfig}`;
  * return the first EXTERNAL_URL_DEAD finding (or undefined). Shared by the
  * default-warning and promoted-error severity cases so the flatten/find logic
  * lives in exactly one place.
+ *
+ * Reads the VERBOSE document: the default publishes per-file COUNTS plus a
+ * `codes` tally, and both callers assert on an individual finding's `severity`
+ * — the very thing under test here is which severity a given CODE resolved to,
+ * a pairing only the verbose form states. Hence the `--verbose` on both
+ * invocations below.
  */
 function findExternalUrlDeadFinding(
   parsed: Record<string, unknown>
 ): { code: string; severity: string } | undefined {
-  const errors = parsed['errors'] as
-    | Array<{ errors: Array<{ code: string; severity: string }> }>
+  const files = parsed['issues'] as
+    | Array<{ issues: Array<{ code: string; severity: string }> }>
     | undefined;
-  return (errors ?? []).flatMap(e => e.errors).find(e => e.code === 'EXTERNAL_URL_DEAD');
+  return (files ?? []).flatMap(f => f.issues).find(e => e.code === 'EXTERNAL_URL_DEAD');
 }
 
 const binPath = getBinPath(import.meta.url);
@@ -126,7 +132,7 @@ resources:
     const { result, parsed } = executeValidateAndParse(binPath, projectDir);
 
     expect(result.status).toBe(1); // Validation failed
-    expect(parsed.status).toBe('failed');
+    expect(parsed.status).toBe('error');
     expect(parsed.errorsFound).toBe(2); // missing.md + #nonexistent
 
     // Check test-format errors on stderr (use text format)
@@ -168,7 +174,24 @@ resources:
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('# vat - Vibe Agent Toolkit CLI');
     expect(result.stdout).toContain('resources');
+    // Near the END of docs/index.md: the verbose-help paths write and then
+    // process.exit(0) immediately, so an ASYNC stdout write to a pipe used to be
+    // truncated at the first pipe buffer (~8 KB on macOS) and lose the tail.
+    // See writeHelpSync in src/utils/help-loader.ts.
     expect(result.stdout).toContain('Exit Code Summary');
+  });
+
+  it('should not truncate a section verbose-help document larger than one pipe buffer', () => {
+    // docs/rag.md is ~13 KB and section help goes through a DIFFERENT writer than
+    // root help, so it needs its own guard against the same truncation.
+    const result = spawnSync('node', [binPath, 'rag', '--verbose'], {
+      encoding: 'utf-8',
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('# vat rag');
+    expect(result.stdout).toContain('## More Information');
+    expect(result.stdout).toContain('https://lancedb.com');
   });
 
   it('should show resources verbose help', () => {
@@ -224,7 +247,7 @@ describe('Dead external URL severity → exit code (system test)', () => {
 
     const { result, parsed } = await executeCliAndParseYaml(
       binPath,
-      ['resources', 'validate', '--check-external-urls', '--no-cache'],
+      ['resources', 'validate', '--check-external-urls', '--no-cache', '--verbose'],
       { cwd: projectDir }
     );
 
@@ -250,13 +273,13 @@ describe('Dead external URL severity → exit code (system test)', () => {
 
     const { result, parsed } = await executeCliAndParseYaml(
       binPath,
-      ['resources', 'validate', '--check-external-urls', '--no-cache'],
+      ['resources', 'validate', '--check-external-urls', '--no-cache', '--verbose'],
       { cwd: projectDir }
     );
 
     // Promoted to error → fatal exit.
     expect(result.status).toBe(1);
-    expect(parsed.status).toBe('failed');
+    expect(parsed.status).toBe('error');
 
     const dead = findExternalUrlDeadFinding(parsed);
     expect(dead).toBeDefined();

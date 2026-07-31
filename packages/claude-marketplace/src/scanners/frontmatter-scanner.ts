@@ -18,7 +18,11 @@ const FRONTMATTER_PATTERN_IDS: ReadonlySet<string> = new Set([
  * Scan SKILL.md frontmatter (and prose tool references) for compatibility
  * signals. Returns evidence records for each matched pattern.
  */
-export function scanFrontmatter(content: string, filePath: string): EvidenceRecord[] {
-  const { evidence } = runCompatDetectors(content, filePath);
+export function scanFrontmatter(
+  content: string,
+  filePath: string,
+  locationRoot: string,
+): EvidenceRecord[] {
+  const { evidence } = runCompatDetectors(content, filePath, locationRoot);
   return evidence.filter(e => FRONTMATTER_PATTERN_IDS.has(e.patternId));
 }

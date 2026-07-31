@@ -7,6 +7,13 @@ import * as yaml from 'yaml';
 import { writeRunReport, type RunReport, type PluginRow } from '../../../src/commands/corpus/report.js';
 
 const FROZEN_TIMESTAMP = '2026-05-01T18:34:56Z';
+const SUMMARY_FILE = 'summary.yaml';
+
+/** Read the summary index written into `runDir`. */
+function readSummary(runDir: string): Record<string, unknown> {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled path
+  return yaml.parse(readFileSync(safePath.join(runDir, SUMMARY_FILE), 'utf-8')) as Record<string, unknown>;
+}
 
 function makeTempOutDir(): string {
   return mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-corpus-report-'));
@@ -63,12 +70,11 @@ describe('writeRunReport', () => {
 
     const runDir = await writeRunReport(report, outDir);
 
-    const summaryPath = safePath.join(runDir, 'summary.yaml');
+    const summaryPath = safePath.join(runDir, SUMMARY_FILE);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled path
     expect(statSync(summaryPath).isFile()).toBe(true);
 
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled path
-    const written = yaml.parse(readFileSync(summaryPath, 'utf-8')) as Record<string, unknown>;
+    const written = readSummary(runDir);
 
     expect(written.schema_version).toBe(1);
     expect(written.totals).toEqual({
@@ -88,9 +94,35 @@ describe('writeRunReport', () => {
     report.flags.with_review = true;
 
     const runDir = await writeRunReport(report, outDir);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled path
-    const written = yaml.parse(readFileSync(safePath.join(runDir, 'summary.yaml'), 'utf-8')) as Record<string, unknown>;
-    expect((written.totals as Record<string, number>).reviewed).toBe(1);
+    const totals = readSummary(runDir).totals as Record<string, number>;
+    expect(totals.reviewed).toBe(1);
+    expect(totals.review_error).toBe(0);
+  });
+
+  it('counts rows whose review lane failed in review_error', async () => {
+    const outDir = makeTempOutDir();
+    const okRow = cleanRow('a');
+    okRow.review = {
+      status: 'ok',
+      duration_ms: 100,
+      summary: { skills_scanned: 2, reviewed: 2, failed: 0 },
+      output_path: 'a-review.md',
+    };
+    const partialRow = cleanRow('b');
+    partialRow.review = {
+      status: 'error',
+      duration_ms: 100,
+      summary: { skills_scanned: 10, reviewed: 1, failed: 9 },
+      error: '9 of 10 skill reviews failed.',
+      output_path: 'b-review.md',
+    };
+    const report = makeReport([okRow, partialRow]);
+    report.flags.with_review = true;
+
+    const runDir = await writeRunReport(report, outDir);
+    const totals = readSummary(runDir).totals as Record<string, number>;
+    expect(totals.reviewed).toBe(2);
+    expect(totals.review_error).toBe(1);
   });
 
   it('creates a date-sha-named subdirectory under outDir', async () => {

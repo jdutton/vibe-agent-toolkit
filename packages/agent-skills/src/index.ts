@@ -6,6 +6,7 @@
 export { buildAgentSkill, type BuildOptions, type BuildResult } from './builder.js';
 
 export {
+  createProjectRegistry,
   extractH1Title,
   packageSkill,
   packageSkills,
@@ -16,6 +17,7 @@ export {
   type PackagingTarget,
   type SkillBuildSpec,
   type SkillMetadata,
+  type SkillPackageOutcome,
 } from './skill-packager.js';
 
 export {
@@ -37,10 +39,7 @@ export {
   applyFilesConfig,
   mergeFilesConfig,
   matchLinkToFiles,
-  computeDeferredPaths,
   type ApplyFilesConfigOptions,
-  type ComputeDeferredPathsOpts,
-  type DeferredPaths,
   type FilesMatchResult,
 } from './files-config.js';
 
@@ -54,14 +53,15 @@ export {
 
 export { MarketplaceManifestJsonSchema, MarketplaceManifestSchema, type MarketplaceManifest } from './schemas/marketplace-manifest.js';
 
-export { PluginJsonSchema, type PluginJson } from './schemas/plugin-json.js';
-
 export {
   parseFrontmatter,
   type FrontmatterResult,
 } from './parsers/frontmatter-parser.js';
 
-export { calculateValidationStatus, generateFixSuggestion } from './validators/validation-utils.js';
+export { readDeclaredSkillName } from './skill-identity.js';
+
+export { type AnchorRootOptions, resolveAnchorRoot } from './validators/anchor-root.js';
+export { generateFixSuggestion } from './validators/validation-utils.js';
 export { detectKebabCaseViolation, type KebabCaseSurface } from './validators/kebab-case-detection.js';
 export { detectMissingRecommendedFields } from './validators/plugin-recommended-fields.js';
 export {
@@ -75,7 +75,10 @@ export { validateSkill } from './validators/skill-validator.js';
 export { validate, type UnifiedValidateOptions } from './validators/unified-validator.js';
 export { detectResourceFormat, enumerateSurfaces } from './validators/format-detection.js';
 export {
+  activeErrorsOf,
+  activeWarningsOf,
   crawlAndResolveRegistry,
+  resetPackagingRegistryCache,
   validateSkillForPackaging,
   type ExcludedReferenceDetail,
   type PackagingValidationResult,
@@ -126,6 +129,8 @@ export type {
 } from './evidence/index.js';
 export {
   PATTERN_REGISTRY,
+  anchorEvidencePath,
+  buildEvidence,
   getPatternDefinition,
   assertPatternRegistered,
   deriveObservationsFromEvidence,
@@ -166,6 +171,14 @@ export {
 export * from './skill-test/index.js';
 
 export { checkBrokenPackagedLinks } from './post-build-checks.js';
+export {
+  checkPackagedTestInput,
+  packagedFileEntries,
+  resolveTestInputDirs,
+  testInputExcludeRules,
+  type CheckPackagedTestInputInput,
+  type DeclaredEvalSuite,
+} from './test-input.js';
 
 export {
   computeTreeCopiedSkillLocations,
@@ -173,6 +186,7 @@ export {
   getPluginOutputDir,
   getPluginSourceDir,
   listPluginSourceSkillDirs,
+  listUntrackedPluginSkillDirs,
   skillNameToFsPath,
   type DistributedSkillLocation,
 } from './plugin-distribution-layout.js';

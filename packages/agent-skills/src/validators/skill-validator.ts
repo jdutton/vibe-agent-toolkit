@@ -1,9 +1,9 @@
 import * as fs from 'node:fs';
 import { basename, dirname } from 'node:path';
 
-import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { isLocalFileLink, parseMarkdown, resolveLocalHref, type LinkType } from '@vibe-agent-toolkit/resources';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
 
 import type { EvidenceRecord } from '../evidence/index.js';
@@ -31,23 +31,33 @@ import { NAVIGATION_FILE_PATTERNS } from './validation-rules.js';
 export async function validateSkill(options: ValidateOptions): Promise<ValidationResult> {
   const { skillPath, isVATGenerated = false } = options;
 
+  // Root every emitted location is relative to. A batching caller supplies its
+  // scan root; otherwise fall back to the same chain
+  // `validateSkillForPackaging` uses (config root -> git root -> skill dir) so
+  // the two skills-lane entry points cannot disagree about the coordinate
+  // system their issues are expressed in.
+  const locationRoot = options.locationRoot ?? findProjectRoot(dirname(skillPath)) ?? dirname(skillPath);
+  const skillLocation = issueLocation(skillPath, locationRoot);
+
   const issues: ValidationIssue[] = [];
   const allEvidence: EvidenceRecord[] = [];
 
   // Validate file exists
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillPath is user-provided but validated
   if (!fs.existsSync(skillPath)) {
+    const missingFileIssues: ValidationIssue[] = [{
+      severity: 'error',
+      code: 'SKILL_MISSING_FRONTMATTER',
+      message: 'File does not exist',
+      location: skillLocation,
+    }];
     return {
       path: skillPath,
       type: isVATGenerated ? 'vat-agent' : 'agent-skill',
       status: 'error',
       summary: '1 error',
-      issues: [{
-        severity: 'error',
-        code: 'SKILL_MISSING_FRONTMATTER',
-        message: 'File does not exist',
-        location: skillPath,
-      }],
+      issues: missingFileIssues,
+      issueCounts: countBySeverity(missingFileIssues),
     };
   }
 
@@ -64,7 +74,8 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
       severity: 'error',
       code: 'SKILL_MISSING_FRONTMATTER',
       message: parseResult.error,
-      location: `${skillPath}:1`,
+      location: skillLocation,
+      line: 1,
       fix: 'Add YAML frontmatter with name and description fields',
     });
 
@@ -79,7 +90,7 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
     const kebabIssue = detectKebabCaseViolation(
       'skill',
       frontmatter['name'],
-      `${skillPath}:1`,
+      skillLocation,
     );
     if (kebabIssue) {
       issues.push(kebabIssue);
@@ -91,27 +102,27 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
   // and the gray-zone second-person-opener heuristic from the plugin-dev
   // cross-walk (info severity).
   issues.push(
-    ...validateFrontmatterSchema(frontmatter, isVATGenerated),
-    ...validateFrontmatterRules(frontmatter),
-    ...detectUndeclaredCrossSkillAuth(frontmatter, parseResult.body),
-    ...detectNonImperativeBody(parseResult.body, skillPath),
+    ...validateFrontmatterSchema(frontmatter, isVATGenerated, skillLocation),
+    ...validateFrontmatterRules(frontmatter, skillLocation),
+    ...detectUndeclaredCrossSkillAuth(frontmatter, parseResult.body, skillLocation),
+    ...detectNonImperativeBody(parseResult.body, skillLocation),
   );
 
   // Validate warning-level rules (skill-specific)
-  validateWarningRules(content, lineCount, skillPath, issues);
+  validateWarningRules(content, lineCount, skillLocation, issues);
 
   // Compat capability detection: collect raw evidence, derive observations,
   // surface each observation as an issue (severity comes from CODE_REGISTRY).
   const { evidence: rootEvidence, observations: rootObservations } =
-    runCompatDetectors(content, skillPath);
+    runCompatDetectors(content, skillPath, locationRoot);
   allEvidence.push(...rootEvidence);
   for (const obs of rootObservations) {
-    issues.push(observationToIssue(obs, skillPath));
+    issues.push(observationToIssue(obs, skillLocation));
   }
 
   // Transitive link traversal (BFS)
   const skillDir = options.rootDir ?? dirname(skillPath);
-  const linkedFiles = await traverseLinks(skillPath, skillDir, issues, allEvidence);
+  const linkedFiles = await traverseLinks(skillPath, skillDir, locationRoot, issues, allEvidence);
 
   // Bundled-resource link detection — fires after link traversal so the
   // linkedFiles set reflects everything reachable from SKILL.md.
@@ -119,12 +130,13 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
     skillPath,
     skillDir,
     linkedFiles.map((lf) => lf.path),
+    locationRoot,
   );
   issues.push(...bundledResourceIssues);
 
   // Unreferenced file detection
   if (options.checkUnreferencedFiles) {
-    detectUnreferencedFiles(skillPath, skillDir, linkedFiles, issues);
+    detectUnreferencedFiles(skillPath, skillDir, locationRoot, linkedFiles, issues);
   }
 
   // Build metadata
@@ -164,13 +176,14 @@ function validateLocalLink(
   link: { href: string; line?: number | undefined },
   currentPath: string,
   skillDir: string,
+  locationRoot: string,
   fileIssues: ValidationIssue[],
   issues: ValidationIssue[],
 ): { status: 'skip' | 'boundary' | 'broken' | 'valid'; resolvedPath: string } {
   // Resolve href to filesystem path (strips anchor, decodes percent-encoding).
   // Skill validation is a single-skill bounded walk — leading-/ links are
   // treated as unresolved (skipped) here. The resources-validate / audit paths
-  // surface the projectRoot-aware cases as LINK_BROKEN_FILE (resources-validate)
+  // surface the project-boundary-aware cases as LINK_BROKEN_FILE (resources-validate)
   // or LINK_MISSING_TARGET (audit/packaging) issues.
   const resolved = resolveLocalHref(link.href, currentPath);
   if (resolved.kind !== 'resolved') {
@@ -192,7 +205,9 @@ function validateLocalLink(
       severity: 'error',
       code: 'LINK_INTEGRITY_BROKEN',
       message: `Link target not found: ${link.href}`,
-      location: `${currentPath}:${link.line ?? 0}`,
+      location: issueLocation(currentPath, locationRoot),
+      ...(link.line !== undefined && { line: link.line }),
+      link: link.href,
       fix: 'Fix link path or restore missing file',
     };
     fileIssues.push(issue);
@@ -205,7 +220,9 @@ function validateLocalLink(
       severity: 'warning',
       code: 'LINK_OUTSIDE_PROJECT',
       message: `Link points outside skill directory: ${link.href}`,
-      location: `${currentPath}:${link.line ?? 0}`,
+      location: issueLocation(currentPath, locationRoot),
+      ...(link.line !== undefined && { line: link.line }),
+      link: link.href,
       fix: 'Keep skills self-contained — move referenced files into the skill directory',
     };
     fileIssues.push(issue);
@@ -233,6 +250,7 @@ function processFileLinks(
   parseResult: { links: Array<{ type: string; href: string; line?: number | undefined }>; content: string },
   currentPath: string,
   skillDir: string,
+  locationRoot: string,
   issues: ValidationIssue[],
   visited: Set<string>,
 ): FileProcessResult {
@@ -242,7 +260,7 @@ function processFileLinks(
   let linksValidated = 0;
 
   for (const link of localLinks) {
-    const { status, resolvedPath } = validateLocalLink(link, currentPath, skillDir, fileIssues, issues);
+    const { status, resolvedPath } = validateLocalLink(link, currentPath, skillDir, locationRoot, fileIssues, issues);
 
     if (status === 'skip') {
       continue;
@@ -270,6 +288,7 @@ function processFileLinks(
 async function traverseLinks(
   skillPath: string,
   skillDir: string,
+  locationRoot: string,
   issues: ValidationIssue[],
   allEvidence: EvidenceRecord[],
 ): Promise<LinkedFileValidationResult[]> {
@@ -291,13 +310,13 @@ async function traverseLinks(
       issues.push({
         severity: 'warning',
         code: 'LINK_INTEGRITY_BROKEN',
-        message: `File exists but could not be parsed: ${currentPath}`,
-        location: currentPath,
+        message: `File exists but could not be parsed: ${issueLocation(currentPath, locationRoot)}`,
+        location: issueLocation(currentPath, locationRoot),
       });
       continue;
     }
 
-    const processed = processFileLinks(parseResult, currentPath, skillDir, issues, visited);
+    const processed = processFileLinks(parseResult, currentPath, skillDir, locationRoot, issues, visited);
     queue.push(...processed.newPaths);
 
     // Compat capability detection for linked files (root SKILL.md handled by
@@ -307,9 +326,9 @@ async function traverseLinks(
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- currentPath verified existent by BFS predecessor
       const linkedContent = fs.readFileSync(currentPath, 'utf-8');
       const { evidence: linkedEvidence, observations: linkedObservations } =
-        runCompatDetectors(linkedContent, currentPath);
+        runCompatDetectors(linkedContent, currentPath, locationRoot);
       allEvidence.push(...linkedEvidence);
-      const linkedCompatIssues = linkedObservations.map(obs => observationToIssue(obs, currentPath));
+      const linkedCompatIssues = linkedObservations.map(obs => observationToIssue(obs, issueLocation(currentPath, locationRoot)));
       processed.fileIssues.push(...linkedCompatIssues);
       issues.push(...linkedCompatIssues);
     }
@@ -337,6 +356,7 @@ async function traverseLinks(
 function detectUnreferencedFiles(
   skillPath: string,
   skillDir: string,
+  locationRoot: string,
   linkedFiles: LinkedFileValidationResult[],
   issues: ValidationIssue[],
 ): void {
@@ -380,7 +400,7 @@ function detectUnreferencedFiles(
         severity: 'info',
         code: 'SKILL_IMPLICIT_REFERENCE',
         message: `File implicitly referenced (not via markdown link) in ${basename(ref.foundIn)}: ${ref.matchedText}`,
-        location: absPath,
+        location: issueLocation(absPath, locationRoot),
         fix: 'Consider using a standard markdown link [text](path) for better tooling support',
       });
     } else {
@@ -388,7 +408,7 @@ function detectUnreferencedFiles(
         severity: 'info',
         code: 'SKILL_UNREFERENCED_FILE',
         message: `Markdown file not referenced from SKILL.md link graph: ${relPath}`,
-        location: absPath,
+        location: issueLocation(absPath, locationRoot),
         fix: 'Add a link to this file from SKILL.md or a linked document, or remove the file',
       });
     }
@@ -576,7 +596,7 @@ export function extractImplicitReferences(
 function validateWarningRules(
   _content: string,
   lineCount: number,
-  skillPath: string,
+  skillLocation: string,
   issues: ValidationIssue[]
 ): void {
   // Check if skill is too long (>5000 lines)
@@ -586,7 +606,7 @@ function validateWarningRules(
       severity: 'warning',
       code: 'SKILL_TOO_LONG',
       message: `Skill exceeds recommended length (${lineCount} > ${MAX_SKILL_LINES} lines)`,
-      location: skillPath,
+      location: skillLocation,
       fix: 'Consider breaking skill into multiple smaller skills or using reference files',
     });
   }
@@ -615,27 +635,17 @@ function buildResult(
   issues: ValidationIssue[],
   metadata?: ValidationResult['metadata']
 ): ValidationResult {
-  const errorCount = issues.filter(i => i.severity === 'error').length;
-  const warningCount = issues.filter(i => i.severity === 'warning').length;
-  const infoCount = issues.filter(i => i.severity === 'info').length;
+  const issueCounts = countBySeverity(issues);
 
-  let status: ValidationResult['status'];
-  if (errorCount > 0) {
-    status = 'error';
-  } else if (warningCount > 0) {
-    status = 'warning';
-  } else {
-    status = 'success';
-  }
-
-  const summary = `${errorCount} errors, ${warningCount} warnings, ${infoCount} info`;
+  const summary = `${issueCounts.errors} errors, ${issueCounts.warnings} warnings, ${issueCounts.info} info`;
 
   const result: ValidationResult = {
     path: skillPath,
     type: isVATGenerated ? 'vat-agent' : 'agent-skill',
-    status,
+    status: calculateValidationStatus(issues),
     summary,
     issues,
+    issueCounts,
   };
 
   if (metadata) {

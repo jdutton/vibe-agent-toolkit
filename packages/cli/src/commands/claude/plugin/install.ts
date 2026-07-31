@@ -17,6 +17,7 @@ import { existsSync, lstatSync, readdirSync, readFileSync, cpSync } from 'node:f
 import {  mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { basename } from 'node:path';
 
+import { readDeclaredSkillName } from '@vibe-agent-toolkit/agent-skills';
 import { getClaudeUserPaths, installPlugin, uninstallPlugin } from '@vibe-agent-toolkit/claude-marketplace';
 import { normalizedTmpdir, safeExecSync, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import AdmZip from 'adm-zip';
@@ -384,8 +385,13 @@ async function handleLocalInstall(
 
     installed = skillNames.map(name => ({ name, installPath: safePath.join(skillsDir, name) }));
   } else {
-    // Plain directory - use directory name
-    const skillName = options.name ?? basename(sourcePath);
+    // Plain skill directory. The package.json branch above installs each skill
+    // under its declared name; do the same here rather than under whatever the
+    // source directory happens to be called.
+    const skillName =
+      options.name ??
+      readDeclaredSkillName(safePath.join(sourcePath, 'SKILL.md')) ??
+      basename(sourcePath);
     await installSkillFromPath(sourcePath, skillName, options, logger);
     installed = [{ name: skillName, installPath: safePath.join(skillsDir, skillName) }];
   }

@@ -4,11 +4,30 @@ import { detectPresentButUndeclared } from '../../../src/inventory/detectors/pre
 import type { ComponentRef } from '../../../src/inventory/index.js';
 import { makePluginInventory, makeSkillInventory } from '../plugin-inventory-fixtures.js';
 
+/** Root every emitted `location` is relative to — the fixture plugin's parent. */
+const PROJECT_ROOT = '/home/user/plugins';
+
 const PRESENT_BUT_UNDECLARED_CODE = 'COMPONENT_PRESENT_BUT_UNDECLARED';
 const SKILL_PATH = '/abs/skills/foo/SKILL.md';
 
 function makeRef(resolvedPath: string): ComponentRef {
 	return { manifestPath: resolvedPath, resolvedPath, exists: true };
+}
+
+/**
+ * Run the detector and assert exactly one info-severity issue naming
+ * `messageFragment`. Shared by the skills case and the parameterized
+ * commands/agents cases, which otherwise assert the same four things.
+ */
+function expectSingleUndeclared(
+	inv: Parameters<typeof detectPresentButUndeclared>[0],
+	messageFragment: string,
+): void {
+	const issues = detectPresentButUndeclared(inv, PROJECT_ROOT);
+	expect(issues).toHaveLength(1);
+	expect(issues[0]?.code).toBe(PRESENT_BUT_UNDECLARED_CODE);
+	expect(issues[0]?.severity).toBe('info');
+	expect(issues[0]?.message).toContain(messageFragment);
 }
 
 describe('detectPresentButUndeclared', () => {
@@ -18,7 +37,7 @@ describe('detectPresentButUndeclared', () => {
 				{ skills: null },
 				{ skills: [makeSkillInventory(SKILL_PATH)] },
 			);
-			expect(detectPresentButUndeclared(inv)).toEqual([]);
+			expect(detectPresentButUndeclared(inv, PROJECT_ROOT)).toEqual([]);
 		});
 
 		it('returns one issue when discovered skill is absent from explicit empty list', () => {
@@ -26,11 +45,7 @@ describe('detectPresentButUndeclared', () => {
 				{ skills: [] },
 				{ skills: [makeSkillInventory(SKILL_PATH)] },
 			);
-			const issues = detectPresentButUndeclared(inv);
-			expect(issues).toHaveLength(1);
-			expect(issues[0]?.code).toBe(PRESENT_BUT_UNDECLARED_CODE);
-			expect(issues[0]?.severity).toBe('info');
-			expect(issues[0]?.message).toContain('skills');
+			expectSingleUndeclared(inv, 'skills');
 		});
 
 		it('returns no issues when discovered skill is in the declared list', () => {
@@ -38,7 +53,7 @@ describe('detectPresentButUndeclared', () => {
 				{ skills: [{ manifestPath: SKILL_PATH, resolvedPath: SKILL_PATH, exists: true }] },
 				{ skills: [makeSkillInventory(SKILL_PATH)] },
 			);
-			expect(detectPresentButUndeclared(inv)).toEqual([]);
+			expect(detectPresentButUndeclared(inv, PROJECT_ROOT)).toEqual([]);
 		});
 	});
 
@@ -58,7 +73,7 @@ describe('detectPresentButUndeclared', () => {
 				{ [field]: null },
 				{ [discoveredField]: [makeRef(path)] },
 			);
-			expect(detectPresentButUndeclared(inv)).toEqual([]);
+			expect(detectPresentButUndeclared(inv, PROJECT_ROOT)).toEqual([]);
 		},
 	);
 
@@ -69,10 +84,7 @@ describe('detectPresentButUndeclared', () => {
 				{ [field]: [] },
 				{ [discoveredField]: [makeRef(path)] },
 			);
-			const issues = detectPresentButUndeclared(inv);
-			expect(issues).toHaveLength(1);
-			expect(issues[0]?.code).toBe(PRESENT_BUT_UNDECLARED_CODE);
-			expect(issues[0]?.message).toContain(field);
+			expectSingleUndeclared(inv, field);
 		},
 	);
 
@@ -81,7 +93,7 @@ describe('detectPresentButUndeclared', () => {
 		(field, discoveredField, path) => {
 			const ref = makeRef(path);
 			const inv = makePluginInventory({ [field]: [ref] }, { [discoveredField]: [ref] });
-			expect(detectPresentButUndeclared(inv)).toEqual([]);
+			expect(detectPresentButUndeclared(inv, PROJECT_ROOT)).toEqual([]);
 		},
 	);
 });

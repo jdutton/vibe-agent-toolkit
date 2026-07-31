@@ -6,7 +6,7 @@
  */
 
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { describeStdioBlocking, makeStdioBlocking, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { createAgentCommand, showAgentVerboseHelp } from './commands/agent/index.js';
@@ -23,9 +23,22 @@ import { createSkillCommand } from './commands/skill/index.js';
 import { createSkillsCommand } from './commands/skills/index.js';
 import { createValidateTopLevelCommand } from './commands/validate.js';
 import { createVerifyTopLevelCommand } from './commands/verify.js';
-import { loadVerboseHelp } from './utils/help-loader.js';
+import { loadVerboseHelp, writeHelpSync } from './utils/help-loader.js';
 import { createLogger } from './utils/logger.js';
 import { version, getVersionString, type VersionContext } from './version.js';
+
+// Before ANY output: a piped stdio is non-blocking, and every command here exits
+// the moment it finishes, so unflushed bytes would be discarded. See output.ts.
+const stdioBlocking = makeStdioBlocking();
+
+// Reported by hand rather than through the parsed `--debug` option because this
+// has to run before Commander parses anything — the same reason the verbose-help
+// checks below read process.argv directly. Reaching through an internal Node
+// handle can fail silently, and a truncated report with no explanation is the
+// exact failure this reporting exists to make diagnosable.
+if (process.argv.includes('--debug')) {
+  process.stderr.write(`[DEBUG] ${describeStdioBlocking(stdioBlocking)}\n`);
+}
 
 const program = new Command();
 
@@ -159,7 +172,5 @@ program.on('command:*', (operands) => {
 program.parse();
 
 function showVerboseHelp(): void {
-  const helpContent = loadVerboseHelp(); // Loads from docs/cli/index.md
-  process.stdout.write(helpContent);
-  process.stdout.write('\n');
+  writeHelpSync(loadVerboseHelp()); // Loads from docs/cli/index.md
 }

@@ -138,23 +138,23 @@ interface InjectedFile {
 
 /**
  * YAML lines for one `skills.config.<name>` entry that injects `files:` into the
- * skill's built dist. Injected files are not link-walked from markdown, so the
- * block also allows PACKAGED_UNREFERENCED_FILE (otherwise an error).
+ * skill's built dist.
+ *
+ * Deliberately carries NO `validation.allow` for PACKAGED_UNREFERENCED_FILE. A
+ * declared `files:` dest is VAT's own copy and the rule engine exempts it by
+ * construction (`ctx.inFilesConfig`), so such an entry matches nothing — and a
+ * matchless allow entry now emits ALLOW_UNUSED. The block this helper used to
+ * write was a workaround for the exemption not being wired up; keeping it would
+ * re-encode that fixed bug as expected setup.
  */
 function skillFilesConfigLines(
   skillName: string,
   files: InjectedFile[],
-  reason: string,
 ): string[] {
   return [
     `    ${skillName}:`,
     '      files:',
     ...files.flatMap(f => [`        - source: ${f.source}`, `          dest: ${f.dest}`]),
-    '      validation:',
-    '        allow:',
-    '          PACKAGED_UNREFERENCED_FILE:',
-    '            - paths: ["**"]',
-    `              reason: ${reason}`,
   ];
 }
 
@@ -185,15 +185,17 @@ function writeDeclaredProjectConfig(projectRoot: string, perSkillLines: string[]
  * The skill source lands at `<root>/skills/<name>/SKILL.md` (+ evals/evals.json
  * inside). A declared pool skill builds to `<root>/dist/skills/<name>`.
  *
- * When `injectEvals` is true the config also injects the skill's evals/evals.json
- * INTO the built dist via a `files:` mapping — because `packageSkill` copies only
- * link-walked resources, not the whole source tree, so the harness-staged dist
- * would lack evals/ without this. Needed for a full build -> stage -> grade run.
+ * NO `files:` mapping ships evals/ into the built dist, and none can: evals/ is
+ * declared test input, so the packager DROPS a `files:` entry pointing into it
+ * (emitting PACKAGED_TEST_INPUT) rather than shipping the expected_output answer
+ * key to consumers. That is the whole point of the test-input exclusion. The
+ * config this helper used to write claimed to inject evals and, since that
+ * exclusion landed, silently injected nothing — the harness reads the authored
+ * evals from SOURCE, which is why the dry runs below pass without it.
  */
 function buildDeclaredPoolProject(
   parentDir: string,
   skillName = 'poc-skill',
-  injectEvals = true,
 ): { projectRoot: string; skillName: string } {
   const projectRoot = safePath.join(parentDir, 'project');
   const skillsDir = safePath.join(projectRoot, 'skills');
@@ -201,19 +203,7 @@ function buildDeclaredPoolProject(
   // Writes skills/<name>/SKILL.md (+ evals/evals.json) with valid frontmatter.
   buildFixtureSkillDir(skillsDir, skillName);
 
-  writeDeclaredProjectConfig(
-    projectRoot,
-    injectEvals
-      ? [
-          '  config:',
-          ...skillFilesConfigLines(
-            skillName,
-            [{ source: `skills/${skillName}/evals/evals.json`, dest: 'evals/evals.json' }],
-            'evals injected for skill-test staging, not linked from markdown',
-          ),
-        ]
-      : [],
-  );
+  writeDeclaredProjectConfig(projectRoot, []);
   return { projectRoot, skillName };
 }
 
@@ -280,12 +270,11 @@ function buildCompanionArtifactProject(parentDir: string): {
   mkdirSyncReal(artifactDir, { recursive: true });
   writeTestFile(safePath.join(artifactDir, 'tool.mjs'), COMPANION_ARTIFACT_BODY);
 
-  const injectReason = 'build artifact injected at package time; not linked from markdown';
   const injected = [{ source: artifactSource, dest: COMPANION_ARTIFACT_DEST }];
   writeDeclaredProjectConfig(projectRoot, [
     '  config:',
-    ...skillFilesConfigLines('helper-skill', injected, injectReason),
-    ...skillFilesConfigLines('helper-optional-skill', injected, injectReason),
+    ...skillFilesConfigLines('helper-skill', injected),
+    ...skillFilesConfigLines('helper-optional-skill', injected),
   ]);
 
   return {
@@ -353,12 +342,15 @@ function readProvenance(outDir: string): Record<string, unknown> {
  * and returns the CLI result + outDir path for per-test assertions.
  *
  * @param outDirName       - Name for the output dir (nested inside the temp dir).
- * @param withPreBuiltDist - When true, pre-creates a stale dist dir so dry-run
- *   stages it rather than falling back to the source dir.
+ * @param withPreBuiltDist - When true, pre-creates a stale dist dir so a NON-building
+ *   dry run stages it rather than falling back to the source dir.
+ * @param noBuild - Add `--no-build`. `--dry-run` alone BUILDS once acknowledged, so
+ *   this is the only way to reach the stale/fallback branches now.
  */
 async function runDeclaredDryRun(
   outDirName: string,
   withPreBuiltDist = false,
+  noBuild = false,
 ): Promise<{ result: Awaited<ReturnType<typeof executeCli>>; outDir: string }> {
   const tempDir = ctx.createTempDir();
   const { projectRoot, skillName } = buildDeclaredPoolProject(tempDir, 'poc-skill');
@@ -373,6 +365,7 @@ async function runDeclaredDryRun(
     [
       'skill', 'test', 'run', skillName,
       '--dry-run',
+      ...(noBuild ? ['--no-build'] : []),
       '--i-understand-this-runs-skill-code',
       '--out', outDir,
     ],
@@ -503,7 +496,7 @@ describe('vat skill test run (system)', () => {
     // built dist fails in resolveSubjectForTest (SkillBuildError -> exit 2) BEFORE
     // any spawn, so this case needs neither claude nor auth and runs in normal CI.
     const tempDir = ctx.createTempDir();
-    const { projectRoot, skillName } = buildDeclaredPoolProject(tempDir, 'poc-skill', false);
+    const { projectRoot, skillName } = buildDeclaredPoolProject(tempDir, 'poc-skill');
 
     // cwd MUST be the synthetic project root so the bare name resolves against its
     // config (not an ancestor's). No dist/ exists, so --no-build cannot stage.
@@ -633,13 +626,13 @@ describe('vat skill test run (system)', () => {
       expect(fs.existsSync(gradingPath)).toBe(false);
     });
 
-    it('--dry-run for a declared pool skill (no dist): states it would build + stage, flags no dist fallback', async () => {
+    it('--no-build --dry-run for a declared pool skill (no dist): says it did NOT build, flags the source fallback', async () => {
       // Synthetic declared project; the bare name resolves to `buildable`.
-      // No dist pre-built → dry-run falls back to source (dryRunStagedExistingDist=false).
-      const { result, outDir } = await runDeclaredDryRun('harness-dry-declared-nodist');
+      // --no-build + no dist → falls back to source (dryRunStagedExistingDist=false).
+      const { result, outDir } = await runDeclaredDryRun('harness-dry-declared-nodist', false, true);
 
-      // Must declare it WOULD build + stage (not just spawn as-is)
-      expect(result.stdout).toContain('build + stage the declared skill');
+      // Must be explicit that nothing was built
+      expect(result.stdout).toContain('Staged the declared skill WITHOUT building');
       // Must say it fell back to source since no dist exists yet
       expect(result.stdout).toContain('fell back to the source dir');
       // grading.json must NOT be written
@@ -652,14 +645,14 @@ describe('vat skill test run (system)', () => {
       expect(result.stdout).toContain('provenance.json');
     });
 
-    it('--dry-run for a declared pool skill (existing dist): states would build + stage, flags stale', async () => {
-      // Pre-create the expected dist dir (no evals/) so dry-run stages it instead
-      // of falling back. The harness overlays the authored evals from source onto
-      // the staged dist so the bootstrap check passes. (dryRunStagedExistingDist=true)
-      const { result } = await runDeclaredDryRun('harness-dry-declared-stale', true);
+    it('--no-build --dry-run for a declared pool skill (existing dist): says it did NOT build, flags stale', async () => {
+      // Pre-create the expected dist dir (no evals/) so the non-building dry run
+      // stages it instead of falling back. The harness reads the authored evals from
+      // source so the bootstrap check passes. (dryRunStagedExistingDist=true)
+      const { result } = await runDeclaredDryRun('harness-dry-declared-stale', true, true);
 
-      // Must declare it WOULD build + stage
-      expect(result.stdout).toContain('build + stage the declared skill');
+      // Must be explicit that nothing was built
+      expect(result.stdout).toContain('Staged the declared skill WITHOUT building');
       // Must warn that the preview used an unbuilt (possibly stale) dist
       expect(result.stdout).toContain('STALE');
       // Must point users at `vat build`
@@ -733,11 +726,12 @@ describe('vat skill test run (system)', () => {
       const tempDir = ctx.createTempDir();
       // Synthetic project declaring one pool skill; the bare name resolves to
       // `buildable`, so run.ts builds it (packageSkill) and stages the dist.
-      // injectEvals=false: NO `files:` mapping ships evals into the dist, so the
-      // built dist lacks evals/. The harness must overlay the authored eval suite
-      // from the source scaffold dir onto the staged dist — otherwise a declared
-      // skill would bootstrap forever (regression guard for the dist-vs-source bug).
-      const { projectRoot, skillName } = buildDeclaredPoolProject(tempDir, 'poc-skill', false);
+      // The built dist lacks evals/ — and no `files:` mapping could put it there,
+      // since evals/ is declared test input the packager drops by design. The
+      // harness must therefore overlay the authored eval suite from the source
+      // scaffold dir onto the staged dist — otherwise a declared skill would
+      // bootstrap forever (regression guard for the dist-vs-source bug).
+      const { projectRoot, skillName } = buildDeclaredPoolProject(tempDir, 'poc-skill');
       const outDir = safePath.join(tempDir, 'harness-build');
       prepareOutDir(outDir);
 

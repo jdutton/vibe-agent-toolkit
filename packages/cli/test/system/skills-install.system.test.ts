@@ -9,6 +9,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import AdmZip from 'adm-zip';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -189,20 +190,27 @@ describe('claude plugin install command (system test)', () => {
   });
 
   describe('ZIP installation', () => {
-    it('should install from ZIP file', async () => {
-      // Note: Would need adm-zip to create real ZIP, testing with mock
-      // For now, test dry-run mode
-      const zipPath = safePath.join(suite.tempDir, 'skill.zip');
-      await writeFile(zipPath, 'fake zip');
+    it('should extract a real ZIP file into the skills directory', async () => {
+      // A real ZIP, not a mock: dry-run ZIP *detection* is already covered by the
+      // 'source detection' suite above, so this test must prove extraction happens.
+      const skillDir = await createSimpleSkill(suite.tempDir, 'zip-contents');
+      const zipPath = safePath.join(suite.tempDir, 'zipped-skill.zip');
+      const zip = new AdmZip();
+      zip.addLocalFolder(skillDir);
+      zip.writeZip(zipPath);
 
-      const { parsed } = executeInstallAndExpectSuccess(
+      executeInstallAndExpectSuccess(
         suite.binPath,
-        ['claude', 'plugin', 'install', zipPath, '-s', suite.skillsDir, '--dry-run'],
+        ['claude', 'plugin', 'install', zipPath, '-s', suite.skillsDir],
         suite.projectDir,
-        'skill',
+        'zipped-skill',
         'zip'
       );
-      expect(parsed.dryRun).toBe(true);
+
+      // The archive contents must actually land on disk.
+      expect(
+        existsSync(safePath.join(suite.skillsDir, 'zipped-skill', 'SKILL.md'))
+      ).toBe(true);
     });
   });
 

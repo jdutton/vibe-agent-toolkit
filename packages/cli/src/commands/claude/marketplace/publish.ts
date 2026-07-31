@@ -20,7 +20,7 @@ import { redactUrlCredentials } from '../../../utils/url-redact.js';
 import { loadClaudeProjectConfig } from '../claude-config.js';
 
 import { createCommitMessage, publishToGitBranch } from './git-publish.js';
-import { isFilePath, isSpdxIdentifier } from './license-utils.js';
+import { explainUnusableLicense, isFilePath } from './license-utils.js';
 import { composePublishTree, type ComposeOptions, type LicenseOptions } from './publish-tree.js';
 
 export interface MarketplacePublishOptions {
@@ -114,12 +114,11 @@ function resolveLicenseOptions(
   if (isFilePath(licenseValue)) {
     return { type: 'file', filePath: licenseValue };
   }
-  if (isSpdxIdentifier(licenseValue)) {
-    return { type: 'spdx', value: licenseValue, ownerName };
+  const problem = explainUnusableLicense(licenseValue);
+  if (problem !== undefined) {
+    throw new Error(problem);
   }
-  throw new Error(
-    `License "${licenseValue}" is neither a known SPDX identifier nor a file path.`,
-  );
+  return { type: 'spdx', value: licenseValue, ownerName };
 }
 
 /**

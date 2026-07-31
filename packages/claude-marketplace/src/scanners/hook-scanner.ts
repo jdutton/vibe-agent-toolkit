@@ -1,14 +1,17 @@
-import type { EvidenceRecord } from '@vibe-agent-toolkit/agent-skills';
+import { buildEvidence, type EvidenceRecord } from '@vibe-agent-toolkit/agent-skills';
 
 import { classifyCommand } from './command-classifier.js';
-import { buildEvidence } from './evidence-helpers.js';
 
 /**
  * Scan a hooks config object for command handlers that indicate runtime
  * requirements. Each command handler that matches a known shell binary
  * yields a HOOK_COMMAND_INVOKES_BINARY evidence record.
  */
-export function scanHooksConfig(config: Record<string, unknown>, filePath: string): EvidenceRecord[] {
+export function scanHooksConfig(
+  config: Record<string, unknown>,
+  filePath: string,
+  locationRoot: string,
+): EvidenceRecord[] {
   const evidence: EvidenceRecord[] = [];
 
   const hooks = config['hooks'];
@@ -29,6 +32,7 @@ export function scanHooksConfig(config: Record<string, unknown>, filePath: strin
           buildEvidence(
             'HOOK_COMMAND_INVOKES_BINARY',
             filePath,
+            locationRoot,
             `${eventName} → ${classification.signal}: ${command}`,
           ),
         );

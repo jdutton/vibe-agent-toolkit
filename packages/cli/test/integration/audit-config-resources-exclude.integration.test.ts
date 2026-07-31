@@ -200,3 +200,85 @@ describe('audit honors resources.exclude from config (integration)', () => {
     }
   });
 });
+
+/**
+ * A path argument names WHICH tree to audit. It does not license auditing
+ * files the project has declared out of bounds.
+ *
+ * Commit 8a466b0c established this for `vat resources validate|scan` and
+ * `vat rag index` and stopped one lane short: audit discovered its config by
+ * looking in the scan directory ONLY, so naming a subdirectory found no config
+ * at all and every `resources.exclude` silently evaporated. Measured on VAT's
+ * own tree, `vat audit packages/vat-development-agents/` reported 2 files while
+ * `vat audit packages/vat-development-agents/resources/skills/` reported 7 —
+ * the extra 5 being deliberately-broken eval fixtures the package excludes on
+ * purpose, audited as if they were production skills.
+ *
+ * The two cases below fail for DIFFERENT reasons before the fix, so neither
+ * subsumes the other: the first needs the config to be discovered by walking
+ * up at all; the second additionally needs its globs matched on the basis they
+ * were written against (the project root), not on the scan directory.
+ */
+/**
+ * One project root holding the config, with the auditable skills one level
+ * down — so the scan target and the config root are different directories.
+ * Returns the subtree to point the audit at.
+ */
+function buildSubtreeFixture(root: string, excludePatterns: string[]): string {
+  initGitRepo(root);
+  writeConfigWithResourcesExclude(root, excludePatterns);
+  writeSkillWithBrokenLink(safePath.join(root, 'skills', 'tool-y', 'SKILL.md'), 'tool-y');
+  writeSkillWithBrokenLink(safePath.join(root, 'skills', 'evals', 'tool-x', 'SKILL.md'), 'tool-x');
+  gitAddAll(root);
+  return safePath.join(root, 'skills');
+}
+
+/** Audit the subtree of a fresh fixture and return the paths that were scanned. */
+async function auditSubtreeWithExclude(excludePatterns: string[]): Promise<string[]> {
+  const dir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-audit-subtree-'));
+  try {
+    const results = await runAudit(buildSubtreeFixture(dir, excludePatterns), { recursive: true });
+    return results.map(r => r.path);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+describe('audit path argument does not void the project resources.exclude (integration)', () => {
+  // Two spellings, same expectation, DIFFERENT questions — neither subsumes the
+  // other, so both stay:
+  //   `**/evals/**`     matches on either basis, so it isolates one question —
+  //                     is the governing config found at all when the scan
+  //                     target is not it?
+  //   `skills/evals/**` is written against the config's OWN directory. Matched
+  //                     against scan-directory-relative paths it would read as
+  //                     `evals/tool-x/SKILL.md` and never fire — a config that
+  //                     silently means something different depending on which
+  //                     directory you named.
+  it.each([
+    ['discovers the config by walking up from the path argument', '**/evals/**'],
+    ['matches the config globs on the project-root basis, not the scan directory', 'skills/evals/**'],
+  ])('%s', async (_case, pattern) => {
+    const paths = await auditSubtreeWithExclude([pattern]);
+
+    expect(paths.find(p => p.includes('tool-x'))).toBeUndefined();
+    expect(paths.find(p => p.includes('tool-y'))).toBeDefined();
+  });
+
+  it('auditing an excluded directory directly still scans it', async () => {
+    // The gitignore precedent one function away in audit.ts: when the operator
+    // names the excluded tree ITSELF, their explicit intent wins. The
+    // alternative — applying the exclude to the scan root — reports
+    // `filesScanned: 0, status: success`, and a green run that scanned nothing
+    // is the disease, not the cure.
+    const dir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-audit-excluded-target-'));
+    try {
+      buildSubtreeFixture(dir, ['**/evals/**']);
+      const results = await runAudit(safePath.join(dir, 'skills', 'evals'), { recursive: true });
+
+      expect(results.find(r => r.path.includes('tool-x'))).toBeDefined();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

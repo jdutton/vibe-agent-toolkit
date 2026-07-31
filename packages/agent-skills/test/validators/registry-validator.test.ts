@@ -80,7 +80,9 @@ describe('validateInstalledPluginsRegistry', () => {
 
 		assertSingleError(result, 'REGISTRY_MISSING_FILE');
 		expect(result.summary).toBe('Registry file not found');
-		expect(result.issues[0]?.location).toBe(nonExistentPath);
+		// `location` is project-relative (anchor contract) — the temp dir has no
+		// enclosing config or git root, so the file's own directory is the root.
+		expect(result.issues[0]?.location).toBe('nonexistent.json');
 		expect(result.issues[0]?.fix).toContain('Create the registry file');
 	});
 
@@ -92,7 +94,7 @@ describe('validateInstalledPluginsRegistry', () => {
 
 		assertSingleError(result, 'REGISTRY_INVALID_JSON');
 		expect(result.summary).toBe('Registry file is invalid JSON');
-		expect(result.issues[0]?.location).toBe(registryPath);
+		expect(result.issues[0]?.location).toBe('invalid.json');
 		expect(result.issues[0]?.message).toContain('Failed to parse');
 	});
 
@@ -166,6 +168,77 @@ describe('validateInstalledPluginsRegistry', () => {
 		assertSchemaError(result);
 		expect((result as { issues: unknown[] }).issues.length).toBeGreaterThan(1);
 	});
+
+	// Regression: the registry is Claude Code's own file. Modelling it strictly
+	// turned every shape Claude Code added into a wall of false errors.
+	describe('liberal reading of a registry VAT does not own', () => {
+		const CURRENT_CLAUDE_CODE_ENTRY = {
+			scope: 'project',
+			projectPath: '/Users/someone/Workspaces/some-project',
+			installPath: '/path/to/plugin',
+			version: '1.0.0',
+			installedAt: '2025-01-01T00:00:00.000Z',
+			lastUpdated: '2025-01-01T00:00:00.000Z',
+			gitCommitSha: 'abc123',
+		};
+
+		it("accepts scope 'project' with projectPath and no isLocal", async () => {
+			const result = await createAndValidateRegistry(
+				getTempDir(),
+				'project-scope.json',
+				{ version: 2, plugins: { 'test@marketplace': [CURRENT_CLAUDE_CODE_ENTRY] } },
+				validateInstalledPluginsRegistry,
+			);
+
+			assertValidationSuccess(result as Parameters<typeof assertValidationSuccess>[0]);
+		});
+
+		it('absorbs an unknown field and reports it as REGISTRY_SHAPE_DRIFT instead of an error', async () => {
+			const result = (await createAndValidateRegistry(
+				getTempDir(),
+				'drifted.json',
+				{
+					version: 2,
+					plugins: {
+						'test@marketplace': [{ ...CURRENT_CLAUDE_CODE_ENTRY, futureField: 'unknown' }],
+					},
+				},
+				validateInstalledPluginsRegistry,
+			)) as { status: string; issues: Array<{ code: string; severity: string; field?: string }> };
+
+			expect(result.issues.some((i) => i.code === 'REGISTRY_INVALID_SCHEMA')).toBe(false);
+
+			const drift = result.issues.filter((i) => i.code === 'REGISTRY_SHAPE_DRIFT');
+			expect(drift).toHaveLength(1);
+			expect(drift[0]?.severity).toBe('info');
+			expect(drift[0]?.field).toBe('plugins.test@marketplace.0.futureField');
+			// info-only findings must not fail the run
+			expect(result.status).not.toBe('error');
+		});
+
+		it('emits no drift issue when the registry uses only recognized shapes', async () => {
+			const result = (await createAndValidateRegistry(
+				getTempDir(),
+				'no-drift.json',
+				{ version: 2, plugins: { 'test@marketplace': [CURRENT_CLAUDE_CODE_ENTRY] } },
+				validateInstalledPluginsRegistry,
+			)) as { issues: Array<{ code: string }> };
+
+			expect(result.issues.some((i) => i.code === 'REGISTRY_SHAPE_DRIFT')).toBe(false);
+		});
+
+		it('still errors on a genuinely malformed registry, and does not add drift noise', async () => {
+			const result = (await createAndValidateRegistry(
+				getTempDir(),
+				'malformed.json',
+				{ version: 7, plugins: { 'no-at-sign': 'not-an-array' } },
+				validateInstalledPluginsRegistry,
+			)) as { status: string; issues: Array<{ code: string }> };
+
+			assertSchemaError(result);
+			expect(result.issues.some((i) => i.code === 'REGISTRY_SHAPE_DRIFT')).toBe(false);
+		});
+	});
 });
 
 describe('validateKnownMarketplacesRegistry', () => {
@@ -209,7 +282,9 @@ describe('validateKnownMarketplacesRegistry', () => {
 
 		assertSingleError(result, 'REGISTRY_MISSING_FILE');
 		expect(result.summary).toBe('Registry file not found');
-		expect(result.issues[0]?.location).toBe(nonExistentPath);
+		// `location` is project-relative (anchor contract) — the temp dir has no
+		// enclosing config or git root, so the file's own directory is the root.
+		expect(result.issues[0]?.location).toBe('nonexistent.json');
 	});
 
 	it('should fail when registry file has invalid JSON', async () => {
@@ -254,34 +329,50 @@ describe('validateKnownMarketplacesRegistry', () => {
 		assertSchemaError(result);
 	});
 
-	it('should fail when file source is missing path', async () => {
-		const result = await createAndValidateRegistry(
+	// known_marketplaces.json is Claude Code's file, not VAT's. Both shapes below used
+	// to be hard errors and both occur in the wild: a `file` source with no `path`, and
+	// a `directory` source kind. Per Postel's Law (CLAUDE.md) they are absorbed.
+	//
+	// The unrecognized *kind* additionally carries an info-severity REGISTRY_SHAPE_DRIFT
+	// issue, now that detectKnownMarketplacesRegistryDrift is wired into
+	// validateKnownMarketplacesRegistry. That is why these assert on status and on the
+	// absence of REGISTRY_INVALID_SCHEMA, rather than on an issue count — an absorbed
+	// shape is allowed to be *observed*, it is just not allowed to be an error.
+	it.each([
+		{
+			label: 'a source with no path',
+			file: 'missing-path.json',
+			source: { source: 'file' },
+		},
+		{
+			label: 'an unrecognized source kind',
+			file: 'invalid-source.json',
+			source: { source: 'directory', path: '/path' },
+		},
+	])('should absorb $label rather than erroring', async ({ file, source }) => {
+		const result = (await createAndValidateRegistry(
 			getTempDir(),
-			'missing-path.json',
+			file,
 			{
 				'test-marketplace': {
-					source: { source: 'file' },
+					source,
 					installLocation: '/path',
 					lastUpdated: '2025-01-01T00:00:00.000Z',
 				},
 			},
 			validateKnownMarketplacesRegistry,
-		);
+		)) as { status: string; issues: Array<{ code: string }> };
 
-		assertSchemaError(result);
+		expect(result.issues.some((i) => i.code === 'REGISTRY_INVALID_SCHEMA')).toBe(false);
+		expect(result.status).not.toBe('error');
 	});
 
-	it('should fail when source type is invalid', async () => {
+	// Positive control: liberal must not mean blind. The structural spine is still enforced.
+	it('should still fail when an entry is not an object at all', async () => {
 		const result = await createAndValidateRegistry(
 			getTempDir(),
-			'invalid-source.json',
-			{
-				'test-marketplace': {
-					source: { source: 'invalid', repo: 'owner/repo' },
-					installLocation: '/path',
-					lastUpdated: '2025-01-01T00:00:00.000Z',
-				},
-			},
+			'not-an-object.json',
+			{ 'test-marketplace': 'https://example.com/marketplace' },
 			validateKnownMarketplacesRegistry,
 		);
 

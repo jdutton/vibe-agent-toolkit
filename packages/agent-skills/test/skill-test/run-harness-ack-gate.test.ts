@@ -22,15 +22,9 @@ import { runSkillTestHarness } from '../../src/skill-test/run-harness.js';
 import { stageHarness } from '../../src/skill-test/staging.js';
 import { setupStubbedHarnessSubject } from '../test-helpers.js';
 
-// Force preflight to PASS without a real `claude` binary. resolvedAuth is null:
-// the ack gate (Step 6) returns before any auth-dependent step, so it is unused.
-vi.mock('../../src/skill-test/preflight.js', async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  return {
-    ...actual,
-    runPreflight: vi.fn(() => ({ passed: true, checks: [], resolvedAuth: null })),
-  };
-});
+// resolvedAuth is null: the ack gate (Step 6) returns before any auth-dependent
+// step, so this run must not depend on one being resolved.
+vi.mock('../../src/skill-test/preflight.js', async (io) => (await import('./preflight-stub.js')).passingPreflight(io, { resolvedAuth: null }));
 
 // Stub staging so the orchestrator reaches the ack gate without real resolution.
 // subjectStagedDir is filled per-test with a real temp dir that carries an eval
@@ -47,9 +41,10 @@ vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) => {
 });
 
 describe('runSkillTestHarness — security ack gate', () => {
-  // Shared lifecycle: fresh temp dir + staged subject (with evals) so bootstrap
+  // Shared lifecycle: fresh temp dir + an AUTHORED subject dir carrying evals (the
+  // harness reads the suite from there, never from the staged tree) so bootstrap
   // (exit 3) does not fire before the ack gate (exit 2), and stageHarness stubbed.
-  const { getTempDir, getSubjectStagedDir } = setupStubbedHarnessSubject('vat-ack-gate-', vi.mocked(stageHarness));
+  const { getTempDir, getAuthoredDir } = setupStubbedHarnessSubject('vat-ack-gate-', vi.mocked(stageHarness));
 
   beforeEach(() => {
     vi.mocked(spawnHeadlessClaude).mockClear();
@@ -61,7 +56,8 @@ describe('runSkillTestHarness — security ack gate', () => {
       subject: 'my-skill',
       repoRoot: tempDir,
       workdir: tempDir,
-      subjectSource: { path: getSubjectStagedDir() },
+      subjectSource: { path: getAuthoredDir() },
+      subjectScaffoldDir: getAuthoredDir(),
       // acknowledgedRunsSkillCode intentionally absent; dryRun absent.
     });
 

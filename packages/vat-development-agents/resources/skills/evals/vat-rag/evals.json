@@ -10,7 +10,8 @@
       "expected_output": "Walks through the two-step vat rag workflow: build the index with `vat rag index docs/`, then ask questions with `vat rag query \"...\"`, which returns the most relevant chunks with their file paths and heading context. Notes the default embedding provider (transformers-js, Xenova/all-MiniLM-L6-v2) runs locally on CPU with no API key, so it works out of the box; an API key is only needed if you opt into the OpenAI provider.",
       "expectations": [
         "The answer recommends building the index first with `vat rag index` pointed at the docs directory (e.g. `vat rag index docs/`).",
-        "The answer recommends searching with `vat rag query` passing a natural-language question, and notes results come back as chunks with file paths / heading context.",
+        "The answer recommends searching with `vat rag query` passing a natural-language question.",
+        "The answer notes results come back as chunks with file paths / heading context.",
         "The answer states the default embedding path (transformers-js / all-MiniLM, local CPU) requires NO API key, so it works without external credentials.",
         "The answer does NOT claim an OpenAI or other external API key is required for the default/out-of-the-box setup.",
         "The answer does NOT just suggest continuing to grep or invent a command outside the `vat rag` surface (e.g. a made-up `vat search` or `vat rag ask`)."

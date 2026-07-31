@@ -5,11 +5,12 @@
     {
       "id": "build-vs-verify-before-publish",
       "category": "build-verify-guidance",
-      "prompt": "I'm cutting a release of our Claude skills package this afternoon. I keep mixing up `vat build` and `vat verify` — which one actually produces the files that end up in the npm tarball, and is running verify enough before I `npm publish`?",
+      "prompt": "I'm cutting a release of our Claude skills package this afternoon. I keep mixing up `vat build` and `vat verify` — which one actually produces the files that end up in the npm tarball, and is running verify enough before I `npm publish`? Walk me through what `vat build` actually does, step by step.",
       "files": [],
       "expected_output": "Explains that `vat build` is the command that produces the publishable artifacts (it runs two phases: `vat skills build` -> dist/skills/, then `vat claude plugin build` -> dist/.claude/plugins/marketplaces/...), while `vat verify` only validates resources/skills/claude artifacts and does NOT produce them. Concludes that verify alone is not enough: you must run `vat build` before `npm publish`, otherwise the package ships with no dist plugin tree and the postinstall hook finds nothing to install (emits a guidance message and exits 0), so the plugin never registers.",
       "expectations": [
-        "States that `vat build` is the step that produces the publishable artifacts (the dist tree the package ships), and describes it running two phases in order: skills build then the claude plugin build.",
+        "States that `vat build` is the step that produces the publishable artifacts (the dist tree the package ships).",
+        "Describes `vat build` running two phases in order: the skills build (-> dist/skills/) then the claude plugin build (-> dist/.claude/plugins/marketplaces/...).",
         "States that `vat verify` only validates artifacts and does NOT itself build/produce the publishable dist tree.",
         "Concludes that `vat build` must be run before `npm publish` (verify alone is not sufficient to produce a publishable package).",
         "Notes that if the build is skipped, a consumer's postinstall finds no dist plugin/marketplace tree and exits 0 with a guidance message rather than installing anything — OR otherwise warns that an unbuilt package installs nothing.",
@@ -33,7 +34,9 @@
       "id": "runtime-dep-placement-for-postinstall",
       "category": "publish-correctness",
       "prompt": "Here's the package.json for the skills package we're about to publish to our internal registry. Before I ship it, does anything here look like it'll bite users when they run `npm install -g @acme/claude-skills`?",
-      "files": ["fixtures/package-devdep.json"],
+      "files": [
+        "fixtures/package-devdep.json"
+      ],
       "expected_output": "Flags that `vibe-agent-toolkit` is in devDependencies but the postinstall hook calls `vat` — and npm does NOT install devDependencies when a user installs the package, so `vat` will not be on PATH and the postinstall fails (command not found). The fix is to move `vibe-agent-toolkit` into `dependencies`; npm adds a runtime dependency's bin entries to node_modules/.bin and onto PATH during lifecycle scripts, which is how `vat` becomes available during postinstall.",
       "expectations": [
         "Identifies that `vibe-agent-toolkit` is placed in devDependencies and that this is the problem (it must be a regular runtime dependency).",
@@ -72,7 +75,9 @@
       "id": "files-omits-dist-nothing-installs",
       "category": "catch-distribution-mistake",
       "prompt": "We ran `vat build` and `npm publish` succeeded, but after teammates `npm install -g @acme/claude-skills` nothing shows up in Claude Code — no error, just no skills. The dist/ folder builds fine locally. Here's our package.json — can you see why?",
-      "files": ["fixtures/package-missing-dist.json"],
+      "files": [
+        "fixtures/package-missing-dist.json"
+      ],
       "expected_output": "Identifies that the `files` array only lists README.md and omits `dist`, so the built plugin tree (dist/.claude/plugins/marketplaces/...) is never included in the published npm tarball. When the consumer's postinstall runs, VAT finds no dist/.claude/plugins/marketplaces directory in the installed package, emits a guidance message, and exits 0 — which exactly matches the silent 'nothing shows up, no error' symptom. Fix: add `dist` to the `files` array and re-publish.",
       "expectations": [
         "Identifies that the `files` array omits `dist`, so the built plugin/marketplace tree is not included in the published package even though it builds locally.",

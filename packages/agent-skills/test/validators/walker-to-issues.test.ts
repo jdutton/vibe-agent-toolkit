@@ -3,8 +3,21 @@ import { describe, expect, it } from 'vitest';
 import { deferredAssetsToIssues, walkerExclusionsToIssues } from '../../src/validators/walker-to-issues.js';
 import type { LinkResolution } from '../../src/walk-link-graph.js';
 
-const resolution = (reason: LinkResolution['excludeReason'], path: string): LinkResolution => ({
+const SOURCE = '/root/skills/demo/SKILL.md';
+
+/**
+ * `targetExists` defaults to true because every reason EXCEPT `missing-target`
+ * is only ever recorded by the walker for a target it found on disk.
+ */
+const resolution = (
+  reason: LinkResolution['excludeReason'],
+  path: string,
+  targetExists = true,
+): LinkResolution => ({
   path,
+  sourcePath: SOURCE,
+  sourceLine: 7,
+  targetExists,
   bundled: false,
   excludeReason: reason,
   linkHref: path,
@@ -19,7 +32,7 @@ describe('walkerExclusionsToIssues', () => {
       resolution('skill-definition', '/root/other/SKILL.md'),
       resolution('directory-target', '/root/dir'),
       resolution('navigation-file', '/root/README.md'),
-      resolution('missing-target', '/root/nope.md'),
+      resolution('missing-target', '/root/nope.md', false),
       resolution('pattern-matched', '/root/docs/x.md'),
     ];
     const issues = walkerExclusionsToIssues(input, '/root');
@@ -39,12 +52,29 @@ describe('walkerExclusionsToIssues', () => {
     ]);
   });
 
-  it('records project-relative paths in location', () => {
+  it('anchors the issue at the file CONTAINING the link, not the target', () => {
+    // The target of a `missing-target` exclusion does not exist, so a location
+    // naming it points at nothing. `link` carries the target instead.
     const issues = walkerExclusionsToIssues(
-      [resolution('missing-target', '/root/docs/nope.md')],
+      [resolution('missing-target', '/root/docs/nope.md', false)],
       '/root',
     );
-    expect(issues[0]?.location).toBe('docs/nope.md');
+    expect(issues[0]?.location).toBe('skills/demo/SKILL.md');
+    expect(issues[0]?.line).toBe(7);
+    expect(issues[0]?.link).toBe('/root/docs/nope.md');
+  });
+
+  it('reads existence from the walker record instead of asserting it', () => {
+    // The engine gates LINK_TO_GITIGNORED_FILE on "gitignored AND exists at
+    // source". Hardcoding `existsAtSource: true` here made that guard dead
+    // code and rubber-stamped a walker mislabel into a leak accusation about a
+    // file that is not there. With the record consulted, a `gitignored` record
+    // that says the target is absent falls through to the broken-link verdict.
+    const issues = walkerExclusionsToIssues(
+      [resolution('gitignored', '/root/dist/vanished.md', false)],
+      '/root',
+    );
+    expect(issues.map(i => i.code)).toEqual(['LINK_MISSING_TARGET']);
   });
 });
 

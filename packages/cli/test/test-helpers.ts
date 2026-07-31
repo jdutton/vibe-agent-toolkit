@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 import type { AuditCommandOptions } from '../src/commands/audit.js';
-import { getValidationResults, resetAuditCaches } from '../src/commands/audit.js';
+import { deriveScanRoot, getValidationResults, resetAuditCaches } from '../src/commands/audit.js';
 
 import { type CliResult, executeCli } from './system/test-helpers/cli-runner.js';
 
@@ -28,6 +28,7 @@ export function runCliCommand(command: string, ...args: string[]): SpawnSyncRetu
  */
 export const silentAuditLogger = {
   info: (_msg: string): void => {},
+  warn: (_msg: string): void => {},
   error: (_msg: string): void => {},
   debug: (_msg: string): void => {},
 };
@@ -44,7 +45,13 @@ export async function runAudit(
   // worker (e.g. Windows fork pool with maxForks: 2) don't observe stale
   // GitTrackers / governing-config / skill-discovery caches.
   resetAuditCaches();
-  return getValidationResults(targetPath, options.recursive !== false, options, silentAuditLogger);
+  return getValidationResults(
+    targetPath,
+    options.recursive !== false,
+    options,
+    silentAuditLogger,
+    deriveScanRoot(targetPath),
+  );
 }
 
 /**

@@ -58,9 +58,17 @@ export interface FilesMatchResult {
 }
 
 /**
- * Normalize a path for comparison: strip leading ./ and normalize slashes.
+ * Normalize a relative path for comparison: forward slashes, no leading `./`.
+ * The path's ROOT is the caller's business; this only fixes the spelling.
+ *
+ * Exported because it is the spelling every `files:` dest returned by
+ * {@link applyFilesConfig} is normalized to, and that spelling must equal the one
+ * `checkUnreferencedFiles` computes for a packaged file
+ * (`toForwardSlash(safePath.relative(outputDir, file))`) — both are
+ * skill-output-relative. A silent mismatch there reads as "not declared in
+ * `files:` config" about a copy VAT performed itself.
  */
-function normalizePath(p: string): string {
+export function normalizeRelPath(p: string): string {
   let normalized = toForwardSlash(p);
   if (normalized.startsWith('./')) {
     normalized = normalized.slice(2);
@@ -84,7 +92,7 @@ export function mergeFilesConfig(
   if (perSkill) {
     const destSet = new Set<string>();
     for (const entry of perSkill) {
-      const normalized = normalizePath(entry.dest);
+      const normalized = normalizeRelPath(entry.dest);
       if (destSet.has(normalized)) {
         throw new Error(
           `Duplicate dest in per-skill files config: '${entry.dest}'. ` +
@@ -108,13 +116,13 @@ export function mergeFilesConfig(
   // Build a map of dest → entry from per-skill (these win)
   const perSkillByDest = new Map<string, SkillFileEntry>();
   for (const entry of perSkill) {
-    perSkillByDest.set(normalizePath(entry.dest), entry);
+    perSkillByDest.set(normalizeRelPath(entry.dest), entry);
   }
 
   // Start with defaults that aren't overridden
   const merged: SkillFileEntry[] = [];
   for (const defaultEntry of defaults) {
-    const normalizedDest = normalizePath(defaultEntry.dest);
+    const normalizedDest = normalizeRelPath(defaultEntry.dest);
     if (!perSkillByDest.has(normalizedDest)) {
       merged.push(defaultEntry);
     }
@@ -146,7 +154,7 @@ export function matchLinkToFiles(
   linkTarget: string,
   files: SkillFileEntry[],
 ): FilesMatchResult | null {
-  const normalized = normalizePath(linkTarget);
+  const normalized = normalizeRelPath(linkTarget);
 
   /** True when `candidate` equals `normalized` or is a path-prefix of it. */
   function isPrefixMatch(candidate: string): boolean {
@@ -156,11 +164,11 @@ export function matchLinkToFiles(
   // Source match has priority (checked before dest across all entries)
   for (const entry of files) {
     if (isGlob(entry.source)) {
-      const base = normalizePath(staticGlobBase(entry.source));
+      const base = normalizeRelPath(staticGlobBase(entry.source));
       if (isPrefixMatch(base)) {
         return { match: 'source', entry };
       }
-    } else if (normalizePath(entry.source) === normalized) {
+    } else if (normalizeRelPath(entry.source) === normalized) {
       return { match: 'source', entry };
     }
   }
@@ -168,99 +176,16 @@ export function matchLinkToFiles(
   // Then check dest match
   for (const entry of files) {
     if (isGlob(entry.source)) {
-      const destBase = normalizePath(entry.dest);
+      const destBase = normalizeRelPath(entry.dest);
       if (isPrefixMatch(destBase)) {
         return { match: 'dest', entry };
       }
-    } else if (normalizePath(entry.dest) === normalized) {
+    } else if (normalizeRelPath(entry.dest) === normalized) {
       return { match: 'dest', entry };
     }
   }
 
   return null;
-}
-
-/**
- * Structured deferred path sets returned by {@link computeDeferredPaths}.
- *
- * - `destPaths` — files: dest paths that are always deferred (the target
- *   location won't exist until build time).
- * - `sourcePaths` — files: source paths that are deferred ONLY when the
- *   target does not yet exist on disk (i.e. genuine build artifacts). A
- *   source that already exists on disk and is gitignored is a leak and must
- *   NOT be deferred — let it fall through to the gitignore branch.
- */
-export interface DeferredPaths {
-  /** files: dest paths — always deferred (won't exist until build). */
-  destPaths: Set<string>;
-  /** files: source paths — deferred ONLY when the target does not yet exist (build artifact). */
-  sourcePaths: Set<string>;
-}
-
-/**
- * Options for {@link computeDeferredPaths}.
- *
- * - `skillDir`    — absolute path to the directory containing SKILL.md.
- *                   `files:` dest values are authored relative to this dir.
- * - `projectRoot` — absolute path to the project root (git / config root).
- *                   `files:` source values are authored relative to this dir.
- */
-export interface ComputeDeferredPathsOpts {
-  skillDir: string;
-  projectRoot: string;
-}
-
-/**
- * Compute the structured sets of paths that should be treated as "deferred"
- * during source-time validation. These are paths from files config entries
- * where the file may not exist yet (build artifacts).
- *
- * Both sets contain **project-root-relative, forward-slash** paths so they
- * match the `rel` value computed in `checkDeferred()` inside walk-link-graph:
- *
- * ```ts
- * const rel = toForwardSlash(safePath.relative(projectRoot, targetPath));
- * ```
- *
- * - `dest` is authored relative to `skillDir` (mirroring `skill-packager.ts`
- *   `resolve(skillDir, entry.dest)`). We resolve it to an absolute path and
- *   then make it relative to `projectRoot`.
- * - `source` is authored relative to `projectRoot`. We resolve it with the
- *   exact expression `skill-packager.ts` uses —
- *   `resolve(join(projectRoot, entry.source))` — so an absolute-looking source
- *   is rooted UNDER `projectRoot` identically to what the packager copies.
- *   (A bare `resolve(projectRoot, source)` would let a leading slash escape the
- *   root, yielding a `../`-prefixed path that never matches the walker's `rel`.)
- *   Resolving then re-relativising is a no-op for clean relative paths but
- *   correctly strips any leading `./`.
- *
- * - dest paths are always deferred (target won't exist until build)
- * - source paths are deferred only when the target does not yet exist on disk
- */
-export function computeDeferredPaths(
-  files: SkillFileEntry[],
-  opts: ComputeDeferredPathsOpts,
-): DeferredPaths {
-  const destPaths = new Set<string>();
-  const sourcePaths = new Set<string>();
-  for (const entry of files) {
-    // dest is authored relative to skillDir (skill-packager: resolve(skillDir, dest))
-    destPaths.add(
-      toForwardSlash(safePath.relative(opts.projectRoot, safePath.resolve(opts.skillDir, entry.dest))),
-    );
-    // source is authored relative to projectRoot. For GLOB entries, register the
-    // static base (e.g. 'dist/packs' for 'dist/packs/**/*') so that prefix
-    // matching in checkDeferred() can defer links under the glob's expansion tree
-    // without executing the glob at validate time (late-bound, pattern-derived).
-    // For single-file entries, mirror skill-packager exactly:
-    // resolve(join(projectRoot, source)) so absolute-looking sources root under
-    // projectRoot rather than escaping it.
-    const effectiveSource = isGlob(entry.source) ? staticGlobBase(entry.source) : entry.source;
-    sourcePaths.add(
-      toForwardSlash(safePath.relative(opts.projectRoot, safePath.resolve(safePath.join(opts.projectRoot, effectiveSource)))),
-    );
-  }
-  return { destPaths, sourcePaths };
 }
 
 /** Options for {@link applyFilesConfig}. */
@@ -272,8 +197,12 @@ export interface ApplyFilesConfigOptions {
   /** Absolute skill output dir; each `dest` resolves relative to it. */
   skillOutputDir: string;
   /**
-   * Absolute source paths already materialized by link traversal — skipped so
-   * a linked-and-copied asset isn't copied twice. Defaults to none (copy all).
+   * Absolute source paths already materialized by link traversal.
+   *
+   * Used only by NON-GLOB entries, where the packager's path map guarantees the
+   * bundled copy already sits at `entry.dest`, so re-copying is pure duplication.
+   * Glob entries carry no such guarantee and copy unconditionally — see
+   * {@link copyGlobEntry}. Defaults to none (copy all).
    */
   bundledFiles?: string[];
 }
@@ -391,18 +320,31 @@ async function copyNonGlobEntry(
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- dest path from validated config
   await mkdir(dirname(absoluteDest), { recursive: true });
   await copyFile(absoluteSource, absoluteDest);
-  return { relDest: entry.dest, absSource: absoluteSource, absDest: absoluteDest };
+  return { relDest: normalizeRelPath(entry.dest), absSource: absoluteSource, absDest: absoluteDest };
 }
 
 /**
  * Expand a glob entry, copy all matched files, and return copied rel-dest paths
  * plus source/dest pairs for optional integrity verification.
+ *
+ * There is deliberately NO bundled-file skip here, unlike {@link applyNonGlobFileEntry}.
+ * Both spellings obey one invariant — *after this function runs, every file the
+ * entry matches exists at its declared dest and is reported* — but only the
+ * non-glob path can satisfy it by skipping: `applyNonGlobEntriesToPathMap`
+ * (skill-packager.ts) re-points the path map so link traversal's copy lands AT
+ * `entry.dest`, making the skip a pure de-duplication. Glob entries are
+ * deliberately absent from that path map (late binding owns their expansion), so
+ * traversal drops a link-bundled match at its own resource-named location instead.
+ * Skipping the copy here would leave the declared dest subtree short a declared
+ * file — silently, and with `integrity: true` silently defeated too, because the
+ * skipped file lands in neither `rels` nor the on-disk subtree `verifyDestSet`
+ * diffs against. Copying it unconditionally keeps `copied`, `pairs`, and `rels`
+ * complete and makes integrity mean what it says.
  */
 async function copyGlobEntry(
   entry: SkillFileEntry,
   projectRoot: string,
   skillOutputDir: string,
-  bundledFileSet: Set<string>,
 ): Promise<{ copied: string[]; pairs: { absSource: string; absDest: string }[]; rels: string[] }> {
   const base = staticGlobBase(entry.source);
   const remainder = globMagicRemainder(entry.source);
@@ -440,9 +382,7 @@ async function copyGlobEntry(
     // that the rebased dest stays under the skill output dir (write) — H1/H2
     // defense-in-depth against a traversal that slipped past earlier guards.
     const absSource = safePath.joinUnderRoot(absoluteBase, rel);
-    if (bundledFileSet.has(toForwardSlash(absSource))) continue;
-
-    const relDest = toForwardSlash(safePath.join(entry.dest, rel));
+    const relDest = normalizeRelPath(safePath.join(entry.dest, rel));
     const absDest = safePath.joinUnderRoot(skillOutputDir, entry.dest, rel);
 
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- dest path from validated config
@@ -466,7 +406,23 @@ async function copyGlobEntry(
  * Claude plugin marketplace build both call it, instead of the latter relying on
  * an external inject script VAT can't see. `source` is resolved the same way the
  * packager does (`resolve(join(projectRoot, source))`, so an absolute-looking
- * source roots UNDER the project). Returns the dest paths actually copied.
+ * source roots UNDER the project).
+ *
+ * Returns every skill-output-relative dest path this config accounts for, one per
+ * FILE (glob entries expanded), normalized via {@link normalizeRelPath} so each
+ * value compares equal to the path `checkUnreferencedFiles` computes for the
+ * packaged file. Callers must pass this to the post-build orphan check: a dest
+ * declared in `files:` is proof of intent, and a lane that doesn't know the list
+ * flags VAT's own copies as files the author forgot to document.
+ *
+ * ONE invariant, both spellings: when this returns, every file the config matched
+ * exists at its declared dest and is reported. A source already materialized by
+ * link traversal changes nothing about that answer — it is declared either way,
+ * and whether traversal or this copy put the bytes there is an ordering accident.
+ * Only the mechanism differs: a non-glob entry's bundled copy already sits AT
+ * `entry.dest` (the packager re-points the path map for it), so its copy is
+ * skipped as redundant; a glob entry's does not, so it is copied regardless — see
+ * {@link copyGlobEntry}.
  *
  * Glob entries (`source` containing `*`, `?`, or `[`) expand late-bound at
  * copy time: all matched files are rebased under `dest` preserving their
@@ -481,17 +437,15 @@ async function copyGlobEntry(
  * @throws if a declared `source` does not exist — a declared build artifact must
  * be present at copy time (callers that defer existence validate it upstream).
  */
-/** Copy + optionally integrity-check one GLOB `files:` entry; returns the copied rel-dests. */
+/** Copy + optionally integrity-check one GLOB `files:` entry; returns its declared rel-dests. */
 async function applyGlobFileEntry(
   fileEntry: SkillFileEntry,
   opts: ApplyFilesConfigOptions,
-  bundledFileSet: Set<string>,
 ): Promise<string[]> {
   const { copied, pairs, rels } = await copyGlobEntry(
     fileEntry,
     opts.projectRoot,
     opts.skillOutputDir,
-    bundledFileSet,
   );
   if (fileEntry.integrity === true) {
     verifyFilesIntegrity(pairs);
@@ -503,7 +457,7 @@ async function applyGlobFileEntry(
   return copied;
 }
 
-/** Copy + optionally integrity-check one NON-GLOB `files:` entry; returns the copied rel-dests. */
+/** Copy + optionally integrity-check one NON-GLOB `files:` entry; returns its declared rel-dests. */
 async function applyNonGlobFileEntry(
   fileEntry: SkillFileEntry,
   opts: ApplyFilesConfigOptions,
@@ -521,7 +475,11 @@ async function applyNonGlobFileEntry(
       const absDest = safePath.joinUnderRoot(opts.skillOutputDir, fileEntry.dest);
       verifyFilesIntegrity([{ absSource: absoluteSource, absDest }]);
     }
-    return [];
+    // The dest is still reported: this function answers "which output paths does
+    // `files:` account for," not "which bytes did I move." Whether link traversal
+    // or this copy put the file there is an ordering accident, and callers that
+    // ask "is this packaged file declared?" must not get a different answer for it.
+    return [normalizeRelPath(fileEntry.dest)];
   }
 
   const { relDest, absSource, absDest } = await copyNonGlobEntry(fileEntry, absoluteSource, opts.skillOutputDir);
@@ -537,7 +495,7 @@ export async function applyFilesConfig(opts: ApplyFilesConfigOptions): Promise<s
 
   for (const fileEntry of opts.filesConfig) {
     const entryCopied = isGlob(fileEntry.source)
-      ? await applyGlobFileEntry(fileEntry, opts, bundledFileSet)
+      ? await applyGlobFileEntry(fileEntry, opts)
       : await applyNonGlobFileEntry(fileEntry, opts, bundledFileSet);
     copied.push(...entryCopied);
   }

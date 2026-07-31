@@ -10,6 +10,28 @@ import {
   toForwardSlash,
 } from '../src/index.js';
 
+/**
+ * These tests deliberately do NOT restate the fourteen literal paths in
+ * SKILL_TARGETS. An earlier version did, and that pinned the table to a copy of
+ * itself: a wrong path still passed, and a *corrected* path broke the suite until
+ * someone updated the copy too — a change-detector masquerading as verification.
+ *
+ * Whether a path is where a platform actually looks is not testable here at all.
+ * That claim is watched by the 90-day `@vendor-claim` review clock on the table
+ * itself (packages/utils/src/skill-targets.ts), which is the only mechanism that
+ * can watch it.
+ *
+ * What IS testable, and is asserted below: the table's structural invariants (an
+ * entry per declared target; every path relative and forward-slash, so it can be
+ * joined onto a home dir or a cwd) and that resolveSkillTarget picks the right
+ * base and joins the table's entry onto it.
+ */
+
+/** True for POSIX-absolute, UNC, and Windows drive-letter paths alike. */
+function looksAbsolute(rel: string): boolean {
+  return rel.startsWith('/') || rel.startsWith('\\') || /^[A-Za-z]:/.test(rel);
+}
+
 describe('SKILL_TARGETS constant', () => {
   it('contains all 7 expected target names', () => {
     expect(SKILL_TARGET_NAMES).toEqual([
@@ -23,14 +45,21 @@ describe('SKILL_TARGETS constant', () => {
     ]);
   });
 
-  it('defines both user and project paths for every target', () => {
-    for (const name of SKILL_TARGET_NAMES) {
-      const entry = SKILL_TARGETS[name];
-      expect(entry).toBeDefined();
-      expect(entry.userRel).toBeTruthy();
-      expect(entry.projectRel).toBeTruthy();
-    }
+  it('defines an entry for every declared target and no extras', () => {
+    expect(new Set(Object.keys(SKILL_TARGETS))).toEqual(new Set(SKILL_TARGET_NAMES));
   });
+
+  for (const name of SKILL_TARGET_NAMES) {
+    it(`holds joinable relative forward-slash paths for ${name}`, () => {
+      const entry = SKILL_TARGETS[name];
+      for (const rel of [entry.userRel, entry.projectRel]) {
+        expect(rel).toBeTruthy();
+        expect(rel).not.toContain('\\');
+        expect(rel.startsWith('~')).toBe(false);
+        expect(looksAbsolute(rel)).toBe(false);
+      }
+    });
+  }
 });
 
 describe('resolveSkillTarget', () => {
@@ -38,37 +67,15 @@ describe('resolveSkillTarget', () => {
   // Use a deterministic fake path; homedir is not publicly writable
   const cwd = `${home}/fake-project`;
 
-  const USER_CASES: ReadonlyArray<{ target: string; expected: string }> = [
-    { target: 'claude', expected: `${home}/.claude/skills` },
-    { target: 'codex', expected: `${home}/.agents/skills` },
-    { target: 'copilot', expected: `${home}/.copilot/skills` },
-    { target: 'gemini', expected: `${home}/.gemini/skills` },
-    { target: 'cursor', expected: `${home}/.cursor/skills` },
-    { target: 'windsurf', expected: `${home}/.codeium/windsurf/skills` },
-    { target: 'agents', expected: `${home}/.agents/skills` },
-  ];
-
-  const PROJECT_CASES: ReadonlyArray<{ target: string; expected: string }> = [
-    { target: 'claude', expected: `${cwd}/.claude/skills` },
-    { target: 'codex', expected: `${cwd}/.agents/skills` },
-    { target: 'copilot', expected: `${cwd}/.github/skills` },
-    { target: 'gemini', expected: `${cwd}/.gemini/skills` },
-    { target: 'cursor', expected: `${cwd}/.cursor/skills` },
-    { target: 'windsurf', expected: `${cwd}/.windsurf/skills` },
-    { target: 'agents', expected: `${cwd}/.agents/skills` },
-  ];
-
-  for (const { target, expected } of USER_CASES) {
-    it(`resolves user scope for ${target} to ${expected}`, () => {
-      const result = resolveSkillTarget(target as never, 'user', cwd);
-      expect(result).toBe(expected);
+  for (const name of SKILL_TARGET_NAMES) {
+    it(`joins the user-scope entry for ${name} onto the home directory`, () => {
+      const result = resolveSkillTarget(name, 'user', cwd);
+      expect(result).toBe(`${home}/${SKILL_TARGETS[name].userRel}`);
     });
-  }
 
-  for (const { target, expected } of PROJECT_CASES) {
-    it(`resolves project scope for ${target} using provided cwd`, () => {
-      const result = resolveSkillTarget(target as never, 'project', cwd);
-      expect(result).toBe(expected);
+    it(`joins the project-scope entry for ${name} onto the given cwd`, () => {
+      const result = resolveSkillTarget(name, 'project', cwd);
+      expect(result).toBe(`${cwd}/${SKILL_TARGETS[name].projectRel}`);
     });
   }
 

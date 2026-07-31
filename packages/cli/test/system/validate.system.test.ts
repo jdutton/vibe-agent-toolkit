@@ -9,6 +9,7 @@
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
+import * as YAML from 'yaml';
 
 import {
   createSkillMarkdown,
@@ -24,6 +25,8 @@ const VAT_CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
 const SKILL_INCLUDE_GLOB = 'resources/skills/**/SKILL.md';
 const SKILL_SOURCE_PATH = safePath.join('resources', 'skills', 'SKILL.md');
 const SUCCESS_MARKER = 'status: success';
+/** A markdown file with nothing for the resources validator to complain about. */
+const CLEAN_MARKDOWN = '# Title\n\nNo links here.\n';
 
 /** A minimal resources config block (presence is what enables the surface). */
 const RESOURCES_CONFIG = `version: 1
@@ -60,7 +63,7 @@ describe('vat validate command (system test)', () => {
   it('runs the resources surface when only resources is configured', async () => {
     const tempDir = suite.createTempDir();
     suite.writeConfig(tempDir, RESOURCES_CONFIG);
-    writeTestFile(safePath.join(tempDir, 'README.md'), '# Title\n\nNo links here.\n');
+    writeTestFile(safePath.join(tempDir, 'README.md'), CLEAN_MARKDOWN);
 
     const result = await suite.runValidate(tempDir);
 
@@ -89,7 +92,7 @@ describe('vat validate command (system test)', () => {
     // passes with "No configured validators".
     const tempDir = suite.createTempDir();
     suite.writeConfig(tempDir, RESOURCES_CONFIG);
-    writeTestFile(safePath.join(tempDir, 'README.md'), '# Title\n\nNo links here.\n');
+    writeTestFile(safePath.join(tempDir, 'README.md'), CLEAN_MARKDOWN);
     const subDir = safePath.join(tempDir, 'packages', 'foo');
     mkdirSyncReal(subDir, { recursive: true });
 
@@ -116,32 +119,62 @@ describe('vat validate command (system test)', () => {
     expect(result.stderr).toContain('nothing to validate');
   });
 
-  it('fails with exit code 1 when --only names a valid surface that is not configured', async () => {
+  it('fails the retired --only with an explanation, not Commander\'s unknown-option error', async () => {
     const tempDir = suite.createTempDir();
     suite.writeConfig(tempDir, RESOURCES_CONFIG);
 
+    // End-to-end because the contract is a WIRING one and no unit can see it:
+    // the flag has to still be declared on the command for our message to be
+    // the one that prints. Delete the hidden Option and every unit test here
+    // still passes while the real CLI regresses to `unknown option '--only'`.
     const result = await suite.runValidate(tempDir, ['--only', 'skills']);
 
-    // Explicit request for an unconfigured surface must not pass silently, and
-    // must land on the same exit code as an unrecognized --only value (below) —
-    // both are "you asked for a surface that can't run," not a system error.
     expect(result.status).toBe(1);
-    expect(`${result.stdout}${result.stderr}`).toContain("Surface 'skills' is not configured");
+    expect(result.stderr).not.toContain('unknown option');
+    expect(result.stderr).toContain("'--only' was removed");
+    expect(result.stderr).toContain('vat build --only');
   });
 
-  it('fails with exit code 1 for an unknown --only surface', async () => {
+  it('does not advertise the retired --only in help', async () => {
+    // Hidden on purpose: a retired flag is not a feature to discover, and
+    // listing it would imply it still selects something.
+    const result = await suite.runValidate(suite.createTempDir(), ['--help']);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain('--only <');
+  });
+
+  it('emits ONE parseable YAML document even when several surfaces run', async () => {
+    // The defect: each child's document was streamed straight onto this
+    // command's stdout with no `---` between them, so two surfaces produced a
+    // single map carrying `status:` and `durationSecs:` twice over and
+    // `YAML.parse()` threw "Map keys must be unique at line 7".
+    // `vat validate | jq` — which this command's own help recommends — had
+    // never worked. A bare `toContain('status: success')` could not see it:
+    // that substring was present the whole time.
     const tempDir = suite.createTempDir();
-    suite.writeConfig(tempDir, RESOURCES_CONFIG);
+    suite.writeConfig(
+      tempDir,
+      `${RESOURCES_CONFIG}skills:\n  include:\n    - "${SKILL_INCLUDE_GLOB}"\n`,
+    );
+    writeTestFile(safePath.join(tempDir, 'README.md'), CLEAN_MARKDOWN);
+    suite.writeSkillSource(tempDir, 'test-skill');
 
-    const result = await suite.runValidate(tempDir, ['--only', 'bogus']);
+    const result = await suite.runValidate(tempDir);
 
-    // Same exit code as a recognized-but-unconfigured surface (above) — both
-    // are usage-level "--only" failures, not exit-2 system errors.
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain('Unknown surface');
+    const parsed = YAML.parse(result.stdout) as {
+      status: string;
+      phases: Array<{ name: string; report?: { status?: string } }>;
+    };
+
+    expect(parsed.phases.map((p) => p.name)).toEqual(['resources', 'skills']);
+    // Each validator's own report survives as data under its own surface —
+    // which is exactly what a flat concatenation could not represent.
+    expect(parsed.phases[0]?.report?.status).toBeDefined();
+    expect(parsed.phases[1]?.report?.status).toBeDefined();
   });
 
-  it('exits non-zero when a configured validator fails', async () => {
+  it('exits exactly 1 — not 2 — when a configured validator reports validation errors', async () => {
     const tempDir = suite.createTempDir();
     // resources configured with a markdown file containing a broken internal link
     suite.writeConfig(tempDir, RESOURCES_CONFIG);
@@ -149,6 +182,12 @@ describe('vat validate command (system test)', () => {
 
     const result = await suite.runValidate(tempDir);
 
-    expect(result.status).not.toBe(0);
+    // `not.toBe(0)` cannot express this: exit 1 (a validator found problems) and
+    // exit 2 (a validator could not run) are different facts for a CI gate, and
+    // the surface status must say which one happened.
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('status: error');
+    expect(result.stdout).toContain('exitCode: 1');
+    expect(result.stdout).not.toContain('system-error');
   });
 });

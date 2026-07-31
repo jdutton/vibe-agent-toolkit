@@ -29,15 +29,52 @@ skills:
         severity:
           LINK_DROPPED_BY_DEPTH: error
         allow:
-          PACKAGED_UNREFERENCED_FILE:
+          LINK_TO_GITIGNORED_FILE:
             - paths: ["internal/*.json"]
-              reason: "consumed programmatically at runtime"
+              reason: "generated at install time, deliberately untracked"
               expires: "2026-09-30"
           SKILL_LENGTH_EXCEEDS_RECOMMENDED:
             - reason: "whole-skill concern; paths defaults to ['**/*']"
 ```
 
 `validation.severity` sets class-level behavior; `validation.allow` suppresses specific `(code, path)` instances with an audit trail. `paths` is optional on allow entries and defaults to `["**/*"]` (the whole skill). Full docs at the VAT agent-authoring skill.
+
+## Where an issue points — the four anchors
+
+Every issue names up to four independent things, and each has its own field. None
+is ever packed into another with a separator:
+
+| Field | Means | Example |
+|---|---|---|
+| `location` | **The file you would open to fix this**, as a project-relative POSIX path | `packages/cli/SKILL.md` |
+| `line` | 1-based line within `location` | `24` |
+| `field` | Dotted pointer *inside* that document | `frontmatter.description` |
+| `link` | A link href or target the issue is about — never the file to open | `./refs/missing.md` |
+
+`location` is **always relative** and always forward-slashed, so a consumer can
+resolve every finding against one known root, and a CI log never carries a
+developer's home directory. Human output renders these as
+`path:line (field)`.
+
+A **link** finding is anchored to the file that *contains* the link, with the
+target in `link`. Anchoring to the target would, for a missing target, name a
+path that does not exist.
+
+### What `validation.allow` globs match
+
+`paths` entries are matched against an issue's **`location`** or its **`link`**.
+For link codes, prefer naming the containing files:
+
+```yaml
+allow:
+  LINK_OUTSIDE_PROJECT:
+    - paths: ["resources/skills/**"]
+      reason: "cross-repo text pointers, intentionally not bundled"
+```
+
+Globs written against a link's resolved *target* are depth-fragile — picomatch's
+`**` does not cross a leading `../`, so each extra level of nesting needs its own
+`../../../…` pattern.
 
 ## Command Scope
 
@@ -71,7 +108,8 @@ once in each code's section below (linked from the `Code` cell).
 | [`LINK_DEFERRED_ARTIFACT`](#link_deferred_artifact) | info | Link targets a deferred build artifact declared in the skill files: config; it will exist after the build materializes it. | No action needed if the files: entry is correct. To silence, set validation.severity.LINK_DEFERRED_ARTIFACT: ignore. |
 | [`LINK_TO_SKILL_DEFINITION`](#link_to_skill_definition) | error | Markdown link targets another skill's SKILL.md; bundling it creates duplicate skill definitions. | Link to a specific resource inside the other skill, or reference the other skill by name. |
 | [`LINK_DROPPED_BY_DEPTH`](#link_dropped_by_depth) | warning | Walker stopped following links at the configured linkFollowDepth; this link was not bundled. | Raise linkFollowDepth, bundle the file via files config, declare the drop intentional with validation.allow, or exclude via excludeReferencesFromBundle.rules. |
-| [`PACKAGED_UNREFERENCED_FILE`](#packaged_unreferenced_file) | error | File in the packaged output is not referenced from any packaged markdown. | Add a markdown link or code-block mention in SKILL.md or a linked resource. Allow via validation.allow if the file is consumed programmatically. |
+| [`PACKAGED_UNREFERENCED_FILE`](#packaged_unreferenced_file) | error | File in the packaged output is not referenced from any packaged markdown. | Add a markdown link or code-block mention in SKILL.md or a linked resource. A file consumed programmatically belongs in skills.config.<name>.files as a source/dest pair — a declared dest is exempt, so do NOT restate it in validation.allow. |
+| [`PACKAGED_TEST_INPUT`](#packaged_test_input) | warning | A link or files: entry pointed into the skill's declared test input (its test.evals path) and was NOT packaged; test input — including the expected_output answer key — never ships to consumers. | No action needed — the build already excluded it. Remove the link or files: entry to silence this, or move the target out of the test.evals directory if it is genuinely a shipped resource. |
 | [`PACKAGED_BROKEN_LINK`](#packaged_broken_link) | error | Link in the packaged output resolves to a file that is not present in the output (likely a link-rewriter bug). | Report the issue — this indicates a VAT bug. As a temporary workaround, set severity.PACKAGED_BROKEN_LINK to ignore while the underlying bug is fixed. |
 
 <!-- END:rule-catalog -->
@@ -80,18 +118,22 @@ once in each code's section below (linked from the `Code` cell).
 
 The same surface symptom (a "broken" link or an "orphan" file) means different
 things depending on **intent**. This view names the broken⇄orphan oscillation
-and shows the `files:` edge as the resolving state once `deferredPaths` is wired.
+and shows the `files:` edge as the resolving state once `DeferredArtifacts` is wired.
 
 | Symptom | Intent behind the file | Resolves to |
 |---|---|---|
 | Broken link | Build artifact declared in `files:` (not yet materialized) | `LINK_DEFERRED_ARTIFACT` (info — resolves after build) |
 | Broken link | Typo / wrong path at source | `LINK_MISSING_TARGET` |
+| Broken link | `files:` **dest** VAT declined to package (its source is declared test input) | `LINK_MISSING_TARGET` + a `PACKAGED_TEST_INPUT` receipt — never deferred, because nothing will materialize it |
 | Broken link | Present in source but missing in **built** output | `PACKAGED_BROKEN_LINK` (link-rewriter bug) |
-| Orphan file | Runtime asset loaded by a script | Declare in `files:` → no code (declaration is the resolution) |
+| Orphan file | Runtime asset loaded by a script | Declare in `files:` → no code (declaration is the resolution; the build's orphan check is given the dests it copied and exempts them) |
 | Orphan file | Forgotten / undocumented doc | `PACKAGED_UNREFERENCED_FILE` (link it or remove it) |
+| Orphan file | Copied by the packager, then orphaned by link rewriting | `PACKAGED_UNREFERENCED_FILE` + `PACKAGED_BROKEN_LINK` (a VAT inconsistency, not an author mistake) |
+| Leaves the bundle | Links a file inside the skill's declared `test.evals` dir | `PACKAGED_TEST_INPUT` (warning — target not packaged, link rewritten away) |
 | Leaves the bundle | Links a gitignored file | `LINK_TO_GITIGNORED_FILE` |
+| Leaves the bundle | Links a gitignored file that IS a materialized `files:` build artifact | `LINK_DEFERRED_ARTIFACT` (info — expected post-build state, not a leak) |
 | Leaves the bundle | Target outside the project root | `LINK_OUTSIDE_PROJECT` |
-| Directory target | Navigational prose link | *valid — no code* |
+| Directory target | Navigational prose link | *valid at source — no code. The packaged output strips it to plain text: bundled resources are flattened into `resources/`, so no authored directory survives to point at.* |
 | Directory target | Typed single-file slot (`files:` source) | `LINK_TARGETS_DIRECTORY` |
 
 **Known limit (not faked):** an asset loaded by a packaged script but neither
@@ -131,9 +173,9 @@ Static-analysis codes that fire anywhere markdown is analyzed — `vat resources
 ### `LINK_TO_GITIGNORED_FILE`
 
 - **Default:** `error`
-- **What:** Markdown link targets a gitignored file; risks leaking ignored data into the bundle.
-- **Why it matters:** Gitignored files are typically excluded for a reason — generated artifacts, secrets, or local-only state. Bundling them could expose sensitive data or break portability for anyone cloning the repo.
-- **Fix:** Link to a non-ignored file or adjust `.gitignore`. Allow the specific path via `validation.allow` if the risk has been reviewed.
+- **What:** Markdown link targets a gitignored file; risks leaking ignored data into the bundle. Exempt when the target is declared under `skills.config.<name>.files` — a materialized, gitignored build artifact (e.g. a `dist/` output copied by a `files:` entry) is the expected post-build state, not a leak, and is downgraded to [`LINK_DEFERRED_ARTIFACT`](#link_deferred_artifact) instead.
+- **Why it matters:** Gitignored files are typically excluded for a reason — generated artifacts, secrets, or local-only state. Bundling them could expose sensitive data or break portability for anyone cloning the repo. Building the project must not turn a passing `vat skills validate` run red on artifacts whose gitignored-ness is by design.
+- **Fix:** Link to a non-ignored file or adjust `.gitignore`. Allow the specific path via `validation.allow` if the risk has been reviewed. If the target is a build artifact, declare it under `skills.config.<name>.files` instead.
 
 ### `LINK_MISSING_TARGET`
 
@@ -145,9 +187,9 @@ Static-analysis codes that fire anywhere markdown is analyzed — `vat resources
 ### `LINK_DEFERRED_ARTIFACT`
 
 - **Default:** `info`
-- **What:** Markdown link in `SKILL.md` targets a path that does not exist on disk but is declared as a build artifact under `skills.config.<name>.files`. VAT downgrades the [`LINK_MISSING_TARGET`](#link_missing_target) finding to this info notice and skips the [`LINK_TO_GITIGNORED_FILE`](#link_to_gitignored_file) check because the artifact has not been materialized yet at source time.
-- **Why it matters:** Deferred artifacts are intentional: the file is generated by a build step declared in the `files:` config, so a broken-link error would be a false positive. The info notice keeps the situation visible without blocking the build.
-- **Fix:** No action needed if the `files:` entry is correct and the artifact will be produced before distribution. To silence the notice, set `validation.severity.LINK_DEFERRED_ARTIFACT: ignore`.
+- **What:** Markdown link in `SKILL.md` targets a path declared as a build artifact under `skills.config.<name>.files`, in either of two states: (1) the path does not exist on disk yet — VAT downgrades the [`LINK_MISSING_TARGET`](#link_missing_target) finding (`vat skills validate`) or the [`LINK_BROKEN_FILE`](#link_broken_file) finding (`vat resources validate`) to this info notice, because the artifact has not been materialized yet at source time; or (2) the path exists and is gitignored — VAT downgrades the [`LINK_TO_GITIGNORED_FILE`](#link_to_gitignored_file) / [`LINK_TO_GITIGNORED`](#link_to_gitignored) finding instead, because a gitignored build artifact is the expected state *after* a build has run, not a leak. Both lanes compute the same deferred-artifact set (same skill discovery + `files:` config merge), so they never disagree about the same link.
+- **Why it matters:** Deferred artifacts are intentional: the file is generated by a build step declared in the `files:` config, so a broken-link error (before the build) or a gitignored-leak error (after the build) would both be false positives. The info notice keeps the situation visible without blocking the build — critically, **building the project must not turn a passing validate/audit run red** on artifacts whose gitignored-ness is by design.
+- **Fix:** No action needed if the `files:` entry is correct. To silence the notice, set `validation.severity.LINK_DEFERRED_ARTIFACT: ignore`.
 
 ### `LINK_TO_SKILL_DEFINITION`
 
@@ -160,7 +202,7 @@ Static-analysis codes that fire anywhere markdown is analyzed — `vat resources
 
 - **Default:** `error`
 - **What:** A local file link points to a non-existent file.
-- **Why it matters:** A broken local link is a dead reference — an agent or human following it lands on nothing. In a resources-path document this almost always means a typo, a renamed file, or a target that was deleted without updating the link. Distinct from the packaging-oriented [`LINK_MISSING_TARGET`](#link_missing_target): this fires in the `vat resources validate` path where build-artifact declarations do not apply.
+- **Why it matters:** A broken local link is a dead reference — an agent or human following it lands on nothing. In a resources-path document this almost always means a typo, a renamed file, or a target that was deleted without updating the link. Fires in the `vat resources validate` path (the packaging-oriented equivalent is [`LINK_MISSING_TARGET`](#link_missing_target)). A missing target declared under `skills.config.<name>.files` is downgraded to [`LINK_DEFERRED_ARTIFACT`](#link_deferred_artifact) instead — `vat resources validate` reuses the same skill discovery and `files:` config merge as `vat skills validate`, so the two lanes agree on a given link's verdict.
 - **Fix:** Fix the path or create the target file.
 
 ### `LINK_BROKEN_ANCHOR`
@@ -169,6 +211,7 @@ Static-analysis codes that fire anywhere markdown is analyzed — `vat resources
 - **What:** An anchor link (`file.md#section` or in-page `#section`) points to a heading or id that does not exist in the target.
 - **Why it matters:** Anchor drift silently breaks deep-links. The file resolves, so the link looks valid, but the reader lands at the top of the document instead of the cited section — the worst kind of broken link because it is invisible until followed.
 - **Fix:** Fix the fragment to match an existing heading slug, or fix the target heading.
+- **Explicit ids count, not just heading slugs.** A markdown document that declares `<a id="short"></a>` (or a legacy `<a name="short">`, or an `id` on any raw-HTML element) contributes that id as a fragment target, exactly as GitHub does — so a short hand-written anchor above a long heading resolves instead of being reported broken. Only raw-HTML nodes are read: an `id=` shown inside a fenced block, an indented block, or a backticked span is being *documented*, not declared, and is never indexed. Markdown ids are matched case-insensitively (markdown's fragment policy is case-folded), which is marginally more permissive than a browser. This is unconditional for markdown — the `--check-html-anchors` opt-in governs `.html` *targets*, whose fragments are frequently defined at runtime by JS and so are not statically authoritative.
 
 ### `LINK_UNKNOWN`
 
@@ -180,9 +223,17 @@ Static-analysis codes that fire anywhere markdown is analyzed — `vat resources
 ### `LINK_TO_GITIGNORED`
 
 - **Default:** `error`
-- **What:** A tracked file links to a gitignored file.
+- **What:** A tracked file links to a gitignored file. Exempt when the target is declared under `skills.config.<name>.files` — a materialized, gitignored build artifact is the expected post-build state, not a leak, and is downgraded to [`LINK_DEFERRED_ARTIFACT`](#link_deferred_artifact) instead.
 - **Why it matters:** A committed document declaring a dependency on a gitignored target breaks portability — anyone cloning the repo gets the document but not the target. It also risks treating local-only or generated content as if it were part of the published artifact. Distinct from the skills-packaging code [`LINK_TO_GITIGNORED_FILE`](#link_to_gitignored_file), which guards against leaking ignored data into a *bundle*; this code fires in the `vat resources validate` path and the two coexist intentionally.
-- **Fix:** Link a tracked target, or un-ignore the file in `.gitignore` if it should be committed.
+- **Fix:** Link a tracked target, or un-ignore the file in `.gitignore` if it should be committed. If the target is a build artifact, declare it under `skills.config.<name>.files` instead.
+
+### `LINK_UNRESOLVED_REFERENCE`
+
+- **Default:** `warning`
+- **What:** A reference-style link (`[text][label]`, or the collapsed `[label][]` form) has no matching `[label]: url` definition anywhere in the document. Only the full and collapsed forms are detected; a bare shortcut reference (`[label]` alone, no second bracket pair) is an explicit non-goal — bracketed prose is ubiquitous in ordinary writing and would be a false-positive firehose. Detection is **single-line only**: a reference whose text or label spans a line break is not detected, since the raw-source scan works line by line.
+- **Why it matters:** CommonMark resolves link references at *parse time*. Without a matching definition, the construct is never a link at all — it degrades to literal bracketed text, rendered verbatim to the reader. An AST-based checker is structurally blind to this: no `linkReference` node is ever produced for the dangling case, so nothing downstream of the parser can catch it without a dedicated raw-source scan. `warning`, not `error`, because the document still renders and the skill still functions — only the reference silently fails to become a link.
+- **Fix:** Add the missing `[label]: url` definition, or rewrite as an inline link `[text](url)`.
+- **Deliberately heuristic — tuned for precision:** `needle.get(url[, options][, callback])` and `the host application[3][4][8].` are *syntactically* full reference links; they render literally for exactly the same reason a typo does, so no CommonMark rule separates them from a genuine mistake. The detector therefore rejects occurrences whose label does not look like a label a human would define, and **trades recall for precision** — labels that are purely numeric (`[text][1]`), single-character (`matrix[i][j]`), punctuation-edged (`, options`), or alphanumeric-free are never reported, and neither is link text beginning with punctuation other than `!`. Code spans, fenced blocks, raw HTML (including HTML comments), YAML frontmatter, and the destination (url/title) of links, images, and definitions are masked out. Measured on a 1,822-document real-world markdown corpus (npm package READMEs plus this repo's own tracked markdown): **30 hits before tuning (5 genuine, 25 false) → 5 hits after (5 genuine, 0 false) on that corpus.** This is a property of the corpus, not a general guarantee — an unbackticked multi-char bracket subscript in prose (`config[section][option]`, `Dict[str][int]`) still satisfies every plausibility heuristic and will still be reported. Implementation and per-heuristic rationale: `packages/resources/src/unresolved-references.ts`.
 
 ## HTML Well-Formedness Codes
 
@@ -328,9 +379,20 @@ Only meaningful when actually bundling a skill; fire from `vat skills build` (an
 ### `PACKAGED_UNREFERENCED_FILE`
 
 - **Default:** `error`
-- **What:** File in the packaged output is not referenced from any packaged markdown.
-- **Why it matters:** Unreferenced files bloat the bundle and indicate that content was added to the `files` config without wiring it into the skill's narrative. Agents never discover content that isn't linked.
-- **Fix:** Add a markdown link or code-block mention in `SKILL.md` or a linked resource. Allow via `validation.allow` if the file is consumed programmatically.
+- **What:** File in the packaged output is not referenced from any packaged markdown **and** not declared as a `files:` dest.
+- **Why it matters:** An orphan in the bundle is content an agent can never discover. The population left after the three exemptions below is narrow and real: a file the packager *itself* copied and then orphaned — the link rewriter left the referring href pointing somewhere else — which is why it stays an `error` and normally arrives paired with a [`PACKAGED_BROKEN_LINK`](#packaged_broken_link).
+- **Three peer ways to not be an orphan:** reachable by a markdown link from `SKILL.md`; mentioned by path anywhere in packaged content (a code-block invocation is documentation); or **declared under `skills.config.<name>.files` as a `source`/`dest` pair**. Declaration is proof of intent on equal footing with documentation — you cannot forget a file you named twice in config — so a `files:` dest never fires this code, glob-expanded dests included.
+- **Fix:** Add a markdown link or code-block mention in `SKILL.md` or a linked resource. A file consumed programmatically — a vendored engine, a generated schema, a data pack — belongs in `skills.config.<name>.files`; a declared dest is already exempt, so **do not restate it in `validation.allow`**. A hand-maintained waiver list that duplicates the `files:` map is a symptom, not a fix.
+
+### `PACKAGED_TEST_INPUT`
+
+- **Default:** `warning`
+- **What:** A **link** (from `SKILL.md` or any bundled resource) or a **`files:` entry** pointed into the skill's declared test input (`skills.config.<name>.test.evals`) and its target was **not** packaged. One receipt per dropped target, from every lane that models the bundle — `vat skills validate`, `vat skills build`, and the plugin build all emit it for the same target at the same location.
+- **Why it matters:** An eval suite holds the `expected_output` / `expectations` **answer key** for the tasks the skill is graded on. Shipping it harms twice: plugin consumers download test input they have no use for, and — because `vat skill test` stages the built artifact — an executor under test can read its own answer key and grade as a PASS while demonstrating nothing. That failure is silent and it makes evals pass *more*, so it improves the report while destroying the signal.
+- **Why this is a `warning`, not an `error`:** declaring a path under `test.evals` **is** the instruction not to package it, so VAT excludes it automatically — links into it are dropped from the bundle, and matching `files:` entries are skipped. Nothing is broken and no config edit is required; the build produces the correct artifact either way. This code exists only so a dropped link or a `files:` entry that silently did nothing is not mistaken for one that worked.
+- **What happens to the link:** the target is not packaged, so the link is **rewritten away** — `[the suite](evals/evals.json)` ships as the bare text `the suite`. That is deliberate (a dead relative link in a published skill is worse), and this receipt is what makes it visible. VAT does not report it through the ordinary pattern-exclusion channel, which is silent by design: an `excludeReferencesFromBundle` rule is intent the author declared, whereas this exclusion is VAT's own policy applied to an author who declared an *eval suite*, not a link-stripping rule.
+- **Fix:** None required. Remove the link or the `files:` entry to silence the warning, or move the target out of the `test.evals` directory if it is genuinely a shipped resource.
+- **But a link TO the dropped `dest` is a separate, real error.** This code is a *receipt* for one skipped copy; it is not a blanket "everything about this entry is fine." If `SKILL.md` (or any bundled resource) links the `dest` that entry would have produced, that link points at a file the build will never write — so it is reported as a broken link (`LINK_MISSING_TARGET` in the skills lanes, `LINK_BROKEN_FILE` in `vat resources validate`) alongside this receipt, and the build fails. It is **not** downgraded to [`LINK_DEFERRED_ARTIFACT`](#link_deferred_artifact): that downgrade means "a build step will materialize this," and here VAT has already decided not to. All three lanes (`vat skills validate`, `vat resources validate`, `vat skills build` / the plugin build) agree on this. **Fix:** stop linking the dest, or move the source out of the `test.evals` directory so the entry is actually packaged.
 
 ### `PACKAGED_BROKEN_LINK`
 
@@ -338,6 +400,15 @@ Only meaningful when actually bundling a skill; fire from `vat skills build` (an
 - **What:** Link in the packaged output resolves to a file that is not present in the output (likely a link-rewriter bug).
 - **Why it matters:** This code indicates VAT's own link rewriter produced an inconsistent bundle — a file was expected but wasn't written to the output. Unlike `LINK_MISSING_TARGET`, which flags source issues, this flags a post-build integrity failure.
 - **Fix:** Report the issue — this indicates a VAT bug. As a temporary workaround, set `severity.PACKAGED_BROKEN_LINK` to `ignore` while the underlying bug is fixed.
+
+### `FILENAME_COLLISION`
+
+- **Default:** `error`
+- **What:** Two source files package to the same destination path in the bundle; one would overwrite the other. Most often two same-basename files in different directories under the default `basename` resource naming.
+- **Why it matters:** The build cannot produce a correct artifact: one file's content is simply lost, and every link to either source resolves to whichever file was written last. It is an `error` for that reason, not as a style opinion — overriding it to `ignore` does not make the bundle correct, it only stops VAT from saying so.
+- **Fix:** Rename one of the files, or switch `resourceNaming` to a path-based strategy (`resource-id` or `preserve-path`) so the sources map to distinct destinations.
+
+Reported like every other packaging finding — a located, coded issue on the build's issue channel, naming the owning skill and both colliding paths in project-relative coordinates. A collision in one skill fails that skill; the rest of the batch still builds.
 
 ## Resource Registry Codes
 
@@ -468,11 +539,12 @@ Best-practice checks about skill shape and content.
   - `timeout` — `timeout <arg>` (not installed on macOS by default)
   - `grep-pcre` — `grep -P` / `grep --perl-regexp` (PCRE unsupported by BSD/macOS grep)
   - `sed-i-no-backup` — `sed -i` with no attached suffix (GNU `sed -i` vs BSD `sed -i ''` differ; `sed -i.bak` is portable and not flagged)
-  - `readlink-f` — `readlink -f` (not on macOS by default)
+  - `readlink-f` — `readlink -f` (on macOS, fails when the final path component does not exist, where GNU canonicalizes it; `-f` was absent from macOS entirely for years)
   - `date-d` — GNU `date -d` (BSD uses `-v` / `-j -f`)
 
   Patterns match commands in **command position** only — start of line, or after a pipe/semicolon/ampersand or a backtick/code fence — so bare prose nouns ("the request will timeout", "grep the logs") are not flagged. Scans the `SKILL.md` body **and every markdown doc reachable through it** (the bundled link graph), since agents copy invocations from reference files too. One issue fires per matched line, located at the offending file.
-- **Why it matters:** Agents copy bundled commands verbatim. A command that only works on GNU/Linux fails the moment the skill runs on macOS/BSD — `timeout` is absent, `grep -P` errors, `sed -i` mangles its arguments, `readlink -f` is unrecognized, and `date -d` is rejected. The skill that "works on my machine" breaks on the user's first invocation elsewhere.
+- **Why it matters:** Agents copy bundled commands verbatim. A command that only works on GNU/Linux fails the moment the skill runs on macOS/BSD — `timeout` is absent, `grep -P` errors, `sed -i` mangles its arguments, `readlink -f` fails on a not-yet-existing path, and `date -d` is rejected. The skill that "works on my machine" breaks on the user's first invocation elsewhere.
+- **Maintaining the variants:** every variant asserts macOS/BSD behaviour that CI (Ubuntu + Windows only) cannot contradict, so the table is annotated `@vendor-claim` in `packaging-validator.ts` and comes due for re-verification on a clock. When a variant's macOS behaviour converges with GNU, **delete the variant** rather than rewording it — a detector that fires on portable code teaches adopters to ignore the code.
 - **Fix:** Use a portable equivalent: `grep -E` for PCRE; `sed -i.bak`/an explicit suffix (or a temp file) instead of bare `sed -i`; a portable resolve instead of `readlink -f`; `date -v`/`-j -f` instead of `date -d`; gate `timeout` on availability (`command -v timeout`) or drop it. See the `vibe-agent-toolkit:vat-skill-review` skill.
 - **Overriding:** because every variant emits this one code, a single `validation.allow` entry (or severity override) silences the **whole family** for a file — adding an esoteric variant never multiplies the override surface. Allow `paths` match the offending file's location, so an intentional mention (e.g. a doc teaching the anti-pattern) can be scoped to that doc.
 - **Extending:** add a variant by appending a `{ label, pattern, fix }` row to `NON_PORTABLE_COMMAND_VARIANTS` in `packaging-validator.ts` — no new top-level code.
@@ -538,7 +610,7 @@ Best-practice checks about skill shape and content.
 - **Default:** `info`
 - **What:** A skill directory contains `scripts/`, `references/`, or `assets/` subdirectories, but the SKILL.md body has zero markdown links pointing into any of them.
 - **Why it matters:** Plugin-dev's "Mistake 4: Missing Resource References" — bundled assets the body never links to are dead weight in the install. They ship but never load. This pattern often signals an author who intended progressive disclosure but didn't wire up the references.
-- **Fix:** Add explicit markdown links from SKILL.md (or a linked file) into the bundled subdirectories, or remove the unreferenced directory. Allow via `validation.allow` if the assets are consumed programmatically.
+- **Fix:** Add explicit markdown links from SKILL.md (or a linked file) into the bundled subdirectories, or remove the unreferenced directory. Assets consumed programmatically belong in `skills.config.<name>.files` as source/dest pairs — a declared dest is exempt, so do NOT restate them in `validation.allow`.
 
 ### `SKILL_BODY_NOT_IMPERATIVE`
 
@@ -578,6 +650,19 @@ Structural checks derived from the plugin inventory layer. These codes fire when
 - **What:** A marketplace manifest declares a plugin with a `path`-based source that does not exist on disk.
 - **Why it matters:** Path sources in a marketplace are filesystem-relative installation targets. A missing source means the marketplace cannot install the plugin — the path is either a typo, a relative path that drifted after a directory move, or a build artifact that was never generated. Git/npm/unknown sources are out of scope (they resolve at install time from remote sources).
 - **Fix:** Correct the source path or remove the entry from `marketplace.plugins[]`.
+
+## Plugin Registry Codes
+
+*Fire when validating the plugin registries Claude Code writes and owns — `installed_plugins.json` and `known_marketplaces.json` — during `vat audit`.*
+
+These files are external data: VAT reads them, Claude Code writes them. Per VAT's Postel's Law rule (be liberal in what you accept from files you do not control) the schemas parse them **liberally** — unknown fields and unknown scope values pass through untouched instead of failing the run. Structural breakage (a missing `version`, a malformed plugin key, a non-array entry list) is still `REGISTRY_INVALID_SCHEMA` at `error`.
+
+### `REGISTRY_SHAPE_DRIFT`
+
+- **Default:** `info`
+- **What:** An installed-plugins registry carries a field or a `scope` value that VAT's model does not recognize — the file Claude Code writes is newer than the model VAT reads it with. One observation per distinct unknown, not per entry.
+- **Why it matters:** Liberal parsing alone would trade false errors for total blindness: Claude Code could add three new fields and a new install scope and VAT would report a clean run forever. This code is the visible half of the trade — VAT accepts the shape it does not understand *and says so*. It is the signal that VAT's registry model has fallen behind, and the input for updating it.
+- **Fix:** No action needed — the unknown value was preserved, not rejected. Report the field so VAT's model can catch up, or set `severity.REGISTRY_SHAPE_DRIFT` to `ignore`.
 
 ## Compat Codes
 

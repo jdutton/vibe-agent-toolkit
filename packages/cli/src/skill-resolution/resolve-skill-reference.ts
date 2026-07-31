@@ -19,10 +19,15 @@
  * Callers should support the FULL surface, not narrow to paths.
  *
  * Disambiguation ladder:
- *   1. kind-prefixed / `vendored`         → { kind: 'source', source }
- *   2. absolute / has `/` / starts `.`    → { kind: 'source', source: { path } }  (as-is; the `./<name>` escape lands here)
+ *   1. kind-prefixed / `vendored`                          → { kind: 'source', source }
+ *      EXCEPT `path:<dir>`, which is a spelling of a definite path (the prefix only
+ *      disambiguates path-vs-name) and so continues at rung 2 below.
+ *   2a. definite path AT a declared skill's SOURCE dir      → buildable (same contract as a bare name; #159/#158)
+ *   2b. definite path, otherwise                            → { kind: 'source', source: { path } }  (as-is; the `./<name>` escape lands here)
  *   3. bare name, no governing config     → existing dir ? source : not-found
- *   4. bare name matching a declared skill → buildable (preferred even on a dir collision; note the `./` escape)
+ *   4. bare name matching a declared skill → buildable (preferred even on a dir collision; note the `./` escape —
+ *      which only escapes to `source` when the colliding local dir is NOT the skill's own declared source dir; if it
+ *      IS, rung 2a resolves `./<name>` to `buildable` too, so there is no escape from your own source)
  *   5. bare name, undeclared, existing dir → { kind: 'source', source: { path } }
  *   6. bare name, undeclared, not a dir   → name-miss
  *
@@ -73,7 +78,7 @@ function computeSkillDistribution(
       kind: 'plugin-local',
       marketplaceName: location.marketplaceName,
       pluginName: location.pluginName,
-      skillDirName: location.skillDirName,
+      skillDirPath: location.skillDirPath,
     },
     expectedDistDir: location.skillOutputDir,
   };
@@ -138,14 +143,16 @@ export async function findDeclaredSkillForPath(
 /**
  * Forward-lookup companion of {@link findDeclaredSkillForPath} (which matches a
  * DIST path): does this SOURCE path point at a declared skill's authored directory
- * (dirname of its SKILL.md)? A `--with`/`--with-optional` companion given as
- * `path:<source-dir>` has no bare-name grammar to trigger the `buildable` rung of
- * the disambiguation ladder — this is the reverse mapping that lets a companion
- * get the SAME build treatment as the subject (its `files:` injection runs before
- * staging) without inventing new `--with` syntax. Pure classification; no build.
- * Returns undefined when the path matches no declared skill (a companion outside
- * this project's config — npm-packaged, workspace, or an undeclared local dir —
- * is unaffected and stays a plain source).
+ * (dirname of its SKILL.md)? A definite-path reference — subject OR a
+ * `--with`/`--with-optional` companion given as `path:<source-dir>` — has no
+ * bare-name grammar to trigger the `buildable` rung of the disambiguation ladder —
+ * this is the reverse mapping that lets it get the SAME build treatment as a
+ * bare-name reference (its `files:` injection runs before staging) without
+ * inventing new syntax. Used directly by {@link resolveSkillReference} (the
+ * subject rung) and by `resolveCompanionSpec` in run.ts (the companion rung).
+ * Pure classification; no build. Returns undefined when the path matches no
+ * declared skill (a reference outside this project's config — npm-packaged,
+ * workspace, or an undeclared local dir — is unaffected and stays a plain source).
  */
 export async function findDeclaredSkillForSourceDir(
   pathRef: string,
@@ -157,17 +164,32 @@ export async function findDeclaredSkillForSourceDir(
   );
 }
 
-export async function resolveSkillReference(ref: string, cwd: string): Promise<SkillReference> {
-  const shape = classifyToken(ref);
-  if (shape.shape === 'source-spec') return { kind: 'source', source: shape.source };
-  if (shape.shape === 'definite-path') {
-    // A path is staged AS-IS (never rebuilt), but if it points at a declared skill's
-    // built dist, link it back so the harness still honors that skill's test: config.
-    const declaredSkill = await findDeclaredSkillForPath(ref, cwd);
-    return { kind: 'source', source: { path: ref }, ...(declaredSkill ? { declaredSkill } : {}) };
-  }
+/**
+ * Rung 2 of the disambiguation ladder: a definite path (absolute, has `/`, or
+ * starts `.` — or the `path:<dir>` spelling of one, which routes here from
+ * {@link resolveSkillReference}). A path AT a declared skill's SOURCE dir resolves to `buildable`,
+ * exactly like the bare-name form (#159's contract, extended from the companion
+ * side to the subject side: source != dist for every declared skill, so a real
+ * run must build it, not tree-copy raw source). `--no-build` remains the escape
+ * hatch. Otherwise the path is staged AS-IS (never rebuilt), but if it points at
+ * a declared skill's built dist, link it back so the harness still honors that
+ * skill's test: config. Extracted from {@link resolveSkillReference} to keep its
+ * cognitive complexity within budget.
+ */
+async function resolveDefinitePath(ref: string, cwd: string): Promise<SkillReference> {
+  const declaredSource = await findDeclaredSkillForSourceDir(ref, cwd);
+  if (declaredSource !== undefined) return declaredSource;
 
-  // bare-name: needs config + fs.
+  const declaredSkill = await findDeclaredSkillForPath(ref, cwd);
+  return { kind: 'source', source: { path: ref }, ...(declaredSkill ? { declaredSkill } : {}) };
+}
+
+/**
+ * Rungs 3-6 of the disambiguation ladder: a bare name, resolved against the
+ * governing project config (or its absence). Extracted from
+ * {@link resolveSkillReference} to keep its cognitive complexity within budget.
+ */
+async function resolveBareName(ref: string, cwd: string): Promise<SkillReference> {
   const configRoot = findProjectRoot(cwd);
   const dirCandidate = safePath.resolve(cwd, ref);
 
@@ -209,6 +231,23 @@ export async function resolveSkillReference(ref: string, cwd: string): Promise<S
     configRoot,
     knownSkills: [...byName.keys()].sort((a, b) => a.localeCompare(b)),
   };
+}
+
+export async function resolveSkillReference(ref: string, cwd: string): Promise<SkillReference> {
+  const shape = classifyToken(ref);
+  if (shape.shape === 'source-spec') {
+    // `path:<dir>` is a DISAMBIGUATOR — it says "read this token as a path, not a
+    // bare name" — not a build directive. So it takes the same rung-2 walk a bare
+    // definite path takes: at a declared skill's source dir it is `buildable`,
+    // anywhere else it is `source`. Spelling the same directory two ways must not
+    // change whether VAT tests the dist or raw source; `--no-build` is the one
+    // build directive. Scoped to `path:` alone: `workspace:`, `npm:`, `url:` and
+    // `vendored` are not paths into this project tree and stay untouched.
+    if ('path' in shape.source) return resolveDefinitePath(shape.source.path, cwd);
+    return { kind: 'source', source: shape.source };
+  }
+  if (shape.shape === 'definite-path') return resolveDefinitePath(ref, cwd);
+  return resolveBareName(ref, cwd);
 }
 
 async function buildBuildable(

@@ -10,18 +10,17 @@ import { toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 
 /**
- * Compute a `ValidationIssue.location`: the (absolute) source file path made
- * relative to the project root. When no project root is known, fall back to the
- * source path forward-slashed so the location is still useful and stable.
+ * The root a `ValidationIssue.location` is expressed against when the caller
+ * did not supply one.
  *
- * @param sourceFilePath - Absolute path to the file the issue was found in.
- * @param projectRoot - Project root, or undefined when none could be determined.
- * @returns Forward-slashed relative location (or the forward-slashed absolute path).
+ * `location` is contractually project-relative, so "no root" is not an option —
+ * something has to be chosen. The process CWD is the honest default for a
+ * library entry point invoked without a project: it is the directory the paths
+ * a user would type are relative to. Every VAT-internal caller passes a real
+ * root, so this only ever applies to direct library consumers.
  */
-export function issueLocation(sourceFilePath: string, projectRoot: string | undefined): string {
-  return projectRoot === undefined
-    ? toForwardSlash(sourceFilePath)
-    : safePath.relative(projectRoot, sourceFilePath);
+export function locationRoot(projectRoot: string | undefined): string {
+  return projectRoot ?? process.cwd();
 }
 
 /**

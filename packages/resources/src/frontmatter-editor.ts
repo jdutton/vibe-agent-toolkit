@@ -6,10 +6,9 @@
  *
  * Round-trip identity contract: openFrontmatter(x).toString() === x for any
  * well-formed input, byte-for-byte. Mutations preserve comments, blank lines,
- * key ordering, quoting style, and detected EOL.
- *
- * See docs/superpowers/specs/2026-05-17-frontmatter-editor-and-yaml-consolidation-design.md
- * §5 for the full contract.
+ * key ordering, quoting style, and detected EOL. Those five properties ARE the
+ * contract — a mutation that reflows the document violates it even when the
+ * parsed value is identical.
  */
 
 import { Document, parseDocument } from 'yaml';

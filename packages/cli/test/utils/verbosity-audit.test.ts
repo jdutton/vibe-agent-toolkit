@@ -1,0 +1,169 @@
+/**
+ * Unit tests for `vat audit`'s HUMAN findings report — the stderr stream, not
+ * the YAML document on stdout.
+ *
+ * Audit's two output channels answer different questions and must not be
+ * conflated. The YAML is parsed by CI and tooling and carries every finding at
+ * every verbosity; the stderr report is read by a person, and on a 90-skill
+ * corpus it printed 26,480 lines, 3,480 of them occurrences of one
+ * high-cardinality warning code. These tests pin the split: the human report
+ * collapses, the array the YAML is serialized from does not.
+ *
+ * Every assertion is over the WHOLE rendered set, never a named subset — a test
+ * that checks one finding cannot catch a renderer that drops a severity class,
+ * and dropping a severity class silently is the failure direction the shared
+ * `issuesToRenderAtVerbosity` policy exists to prevent.
+ */
+
+import { countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import type { ValidationResult } from '@vibe-agent-toolkit/agent-skills';
+import { describe, expect, it } from 'vitest';
+
+import { formatAuditFindingsLines } from '../../src/commands/audit.js';
+
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
+
+const ROOT = '/repo';
+
+function issue(
+  severity: ValidationIssue['severity'],
+  code: string,
+  extra: Partial<ValidationIssue> = {},
+): ValidationIssue {
+  return { severity, code, message: `${code} fired`, ...extra };
+}
+
+function statusFor(counts: { errors: number; warnings: number }): ValidationResult['status'] {
+  if (counts.errors > 0) return 'error';
+  return counts.warnings > 0 ? 'warning' : 'success';
+}
+
+function skillResult(name: string, issues: ValidationIssue[]): ValidationResult {
+  const counts = countBySeverity(issues);
+  const status = statusFor(counts);
+  return {
+    path: `${ROOT}/skills/${name}/SKILL.md`,
+    type: 'agent-skill',
+    status,
+    summary: `${counts.errors} errors, ${counts.warnings} warnings, ${counts.info} info`,
+    issues,
+    issueCounts: counts,
+    metadata: { name },
+  };
+}
+
+/** Every severity label the report rendered, in order — the shape of the set. */
+function renderedLabels(lines: string[]): string[] {
+  return lines.flatMap((line) => /^\s*\[(ERROR|WARNING|INFO|IGNORED)]/.exec(line)?.slice(1, 2) ?? []);
+}
+
+/** One skill: the error that failed it plus the high-cardinality noise beside it. */
+function mixedFixture(): ValidationResult[] {
+  return [
+    skillResult('csv-summarizer', [
+      issue('error', 'SKILL_MISSING_DESCRIPTION', { fix: 'add a description' }),
+      issue('warning', 'LINK_DROPPED_BY_DEPTH'),
+      issue('warning', 'LINK_DROPPED_BY_DEPTH'),
+      issue('warning', 'LINK_DROPPED_BY_DEPTH'),
+      issue('info', 'NON_PORTABLE_ASSET_REFERENCE'),
+    ]),
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe('vat audit — formatAuditFindingsLines', () => {
+  it('renders the error in full at DEFAULT verbosity and collapses the warning/info bodies', () => {
+    const lines = formatAuditFindingsLines(mixedFixture(), ROOT, false);
+    const text = lines.join('\n');
+
+    // The error is the only thing that failed the file; collapsing it into a
+    // count would force a re-run with a flag to learn what broke.
+    expect(renderedLabels(lines)).toEqual(['ERROR']);
+    expect(text).toContain('SKILL_MISSING_DESCRIPTION');
+    expect(text).toContain('add a description');
+
+    // The three near-identical warning blocks are exactly what this collapse exists
+    // to not print. Their bodies are gone...
+    expect(text).not.toContain('LINK_DROPPED_BY_DEPTH fired');
+    expect(text).not.toContain('NON_PORTABLE_ASSET_REFERENCE fired');
+
+    // ...but the heading still says they exist, or the collapse is silence.
+    expect(lines[0]).toContain('skills/csv-summarizer/SKILL.md');
+    expect(lines[0]).toContain('1 error, 3 warnings, 1 info');
+  });
+
+  it('names the collapsed count and points at both the flag and the unfiltered YAML', () => {
+    const text = formatAuditFindingsLines(mixedFixture(), ROOT, false).join('\n');
+    expect(text).toContain('4 warning/info');
+    expect(text).toContain('--verbose');
+    expect(text).toContain('YAML');
+  });
+
+  it('renders EVERY emitted severity under --verbose, not just the errors', () => {
+    const lines = formatAuditFindingsLines(mixedFixture(), ROOT, true);
+    expect(renderedLabels(lines)).toEqual(['ERROR', 'WARNING', 'WARNING', 'WARNING', 'INFO']);
+    // Nothing was collapsed, so there is nothing to advertise.
+    expect(lines.join('\n')).not.toContain('--verbose');
+  });
+
+  it('still heads a warning-only file at default verbosity, with nothing rendered beneath it', () => {
+    const lines = formatAuditFindingsLines(
+      [skillResult('csvsum', [issue('warning', 'LINK_DROPPED_BY_DEPTH'), issue('info', 'CODE_B')])],
+      ROOT,
+      false,
+    );
+    expect(renderedLabels(lines)).toEqual([]);
+    expect(lines[0]).toContain('skills/csvsum/SKILL.md');
+    expect(lines[0]).toContain('1 warning, 1 info');
+  });
+
+  it('never renders an allow-listed finding, at any verbosity', () => {
+    for (const verbose of [false, true]) {
+      const lines = formatAuditFindingsLines(
+        [skillResult('example-skill', [issue('ignore', 'LINK_BROKEN')])],
+        ROOT,
+        verbose,
+      );
+      expect(renderedLabels(lines)).toEqual([]);
+      expect(lines.join('\n')).not.toContain('LINK_BROKEN fired');
+    }
+  });
+
+  it('leaves the issue arrays the YAML document is serialized from untouched', () => {
+    // The human collapse is a PROJECTION. `runAuditAtPath` builds the YAML
+    // document and this report from the same `results` array, so a renderer that
+    // filtered in place would silently strip findings out of the machine-readable
+    // document that CI parses.
+    const results = mixedFixture();
+    formatAuditFindingsLines(results, ROOT, false);
+    formatAuditFindingsLines(results, ROOT, true);
+
+    expect(results[0]?.issues).toHaveLength(5);
+    expect(results[0]?.issues.map((i) => i.code)).toEqual([
+      'SKILL_MISSING_DESCRIPTION',
+      'LINK_DROPPED_BY_DEPTH',
+      'LINK_DROPPED_BY_DEPTH',
+      'LINK_DROPPED_BY_DEPTH',
+      'NON_PORTABLE_ASSET_REFERENCE',
+    ]);
+    expect(results[0]?.issueCounts).toEqual({ errors: 1, warnings: 3, info: 1 });
+  });
+
+  it('renders one block per result, so a multi-file report stays attributable', () => {
+    const lines = formatAuditFindingsLines(
+      [
+        skillResult('csv-summarizer', [issue('error', 'E1')]),
+        skillResult('csvsum', [issue('error', 'E2')]),
+      ],
+      ROOT,
+      false,
+    );
+    expect(lines.filter((l) => l.includes('SKILL.md'))).toHaveLength(2);
+    expect(renderedLabels(lines)).toEqual(['ERROR', 'ERROR']);
+  });
+});

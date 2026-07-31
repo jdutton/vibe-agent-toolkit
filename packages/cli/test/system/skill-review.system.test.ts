@@ -103,6 +103,29 @@ describe('vat skill review (system test)', () => {
     expect(result.stdout.startsWith('---\n')).toBe(true);
     expect(result.stdout).toContain('skill: clean-skill');
     expect(result.stdout).toContain('manual:');
+    // A clean skill publishes `success` WITH the distribution beside it, so
+    // `success` reads as "nothing to act on" rather than "nothing was looked at".
+    expect(result.stdout).toContain('status: success');
+    expect(result.stdout).toContain('issueCounts:');
+    expect(result.stdout).toContain('errors: 0');
+    expect(result.stdout).toContain('warnings: 0');
+  });
+
+  it('--yaml status agrees with the exit code — a warning-bearing review is not `success`', async () => {
+    // Two channels, one run: `status: success` alongside exit 1 meant a CI job
+    // parsing the YAML and a CI job reading `$?` disagreed about the same skill.
+    const tempDir = ctx.createTempDir();
+    const skillDir = setupProblemSkillDir(tempDir);
+
+    const result = await executeCli(ctx.binPath, ['skill', 'review', skillDir, '--yaml']);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('status: warning');
+    expect(result.stdout).not.toContain('status: success');
+    // The distribution rides beside the status, so `warning` is readable as
+    // "N warnings" rather than an unquantified mood.
+    expect(result.stdout).toContain('issueCounts:');
+    expect(result.stdout).toMatch(/warnings: [1-9]/);
   });
 
   it('exits 2 when the path does not exist', async () => {

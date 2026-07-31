@@ -39,6 +39,7 @@ const localRulesConfig = {
   'local/no-bare-dynamic-import-path': 'error',
   'local/no-file-url-string-concat': 'error',
   'local/prefer-startswith-over-regex': 'error',
+  'local/require-justified-skip': 'error',
 };
 
 // Import organization. Apply to both TS and JS source.

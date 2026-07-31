@@ -38,8 +38,9 @@ Description:
   Scans for markdown files and reports statistics. Outputs YAML to stdout.
 
 Path Argument Behavior:
-  WITH path: Scans all *.md recursively under path (ignores config)
-  WITHOUT path: Uses vibe-agent-toolkit.config.yaml patterns
+  WITH path: Scans all *.md/*.html recursively under path, still applying the
+             config's resources.exclude patterns
+  WITHOUT path: Uses vibe-agent-toolkit.config.yaml include + exclude patterns
 
 Filtering:
   --collection <id>: Only scan files in specified collection
@@ -67,6 +68,7 @@ Examples:
     .command('validate [path]')
     .description('Validate markdown resources (link integrity, anchors)')
     .option('--debug', 'Enable debug logging')
+    .option('-v, --verbose', 'Show all scanned resources, including those without issues')
     .option('--frontmatter-schema <path>', 'Validate frontmatter against JSON Schema file (.json or .yaml)')
     .option('--validation-mode <mode>', 'Validation mode for schemas: strict (default) or permissive', 'strict')
     .option('--format <format>', 'Output format: yaml (default), json, or text', 'yaml')
@@ -86,19 +88,21 @@ Path Argument Behavior:
 
   WITH path argument (e.g., "vat resources validate docs/"):
     • Scans all *.md files recursively under the specified directory
-    • IGNORES vibe-agent-toolkit.config.yaml (collections, includes, excludes)
-    • DOES NOT show collection statistics in output
+    • The path REPLACES the config's resources.include patterns...
+    • ...but resources.exclude STILL APPLIES, so a path run never scans
+      build output, vendored trees, or test fixtures the project excluded
     • Use for: Quick validation of a specific directory tree
 
   WITHOUT path argument (e.g., "vat resources validate"):
     • Uses vibe-agent-toolkit.config.yaml to determine files to scan
-    • Applies include/exclude patterns from config
+    • Applies include AND exclude patterns from config
     • SHOWS collection statistics and per-collection validation rules
     • Validates frontmatter against collection-specific schemas (if configured)
     • Use for: Full project validation with collection-aware rules
 
-  ⚠️  To see collection statistics and use collection-specific validation,
-      run WITHOUT a path argument and configure collections in config file.
+  Collections apply in both modes — membership is decided per file against the
+  collection's own patterns, so a path run still gets collection-specific
+  schemas for whatever it scanned.
 
 Filtering:
   --collection <id>: Only validate files in specified collection
@@ -109,20 +113,41 @@ Output Formats:
     Structured YAML output to stdout. Errors grouped by file.
 
   --format json
-    Structured JSON output to stdout. Errors grouped by file.
+    Structured JSON output to stdout. Issues grouped by file.
 
   --format text
-    Human-readable format. Errors to stderr (test-format style).
+    Human-readable format. Issues to stderr as
+    file:line:column: severity: message
 
 Output Fields (success):
   status, filesScanned, linksChecked, durationSecs, validationMode
   collections: Per-collection stats (resourceCount, hasSchema, validationMode)
 
-Output Fields (failure):
-  status, filesScanned, filesWithErrors, errorsFound, durationSecs
-  errorSummary: Count of each issue code (LINK_BROKEN_FILE, LINK_BROKEN_ANCHOR, etc.)
+Output Fields (issues found):
+  A field named error* counts ERROR-severity issues only — the ones that fail
+  the run. A field named issue* counts issues of every severity.
+
+  status: success | warning | error — the worst ACTIONABLE severity found, the
+          same vocabulary every other vat validation lane reports. An info-only
+          run is success; issueCounts below says what was actually seen.
+  filesScanned, durationSecs
+  errorsFound: Count of error-severity issues (drives the exit code)
+  filesWithErrors: Files carrying at least one error-severity issue
+  issueCounts: {errors, warnings, info} — every issue, split by severity
+  issueSummary: Count of each issue code, ALL severities
   collections: Per-collection stats including filesWithErrors, errorCount
-  errors: Detailed errors grouped by file
+  issues: One row per file with findings, carrying only that file's counts
+          ({file, errors?, warnings?, info?, codes}). A zero bucket is omitted,
+          and a file that emitted nothing has no row — filesScanned above stays
+          the true denominator.
+
+Verbosity:
+  -v, --verbose
+    Replaces each file's counts row with its per-issue detail (line, column,
+    code, severity, message) — the pre-summary shape. That form is for
+    '> file' then grep, not for reading. Every other field above is a total
+    about the run and is identical in both modes.
+    --format text is unaffected: it already prints one line per issue.
 
 Validation Checks:
   - Internal file links (relative paths)

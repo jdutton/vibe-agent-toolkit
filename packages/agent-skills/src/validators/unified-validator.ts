@@ -1,3 +1,7 @@
+import { countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { issueLocation } from '@vibe-agent-toolkit/utils';
+
+import { type AnchorRootOptions, resolveAnchorRoot } from './anchor-root.js';
 import { detectResourceFormat } from './format-detection.js';
 import { validateMarketplace } from './marketplace-validator.js';
 import {
@@ -6,9 +10,36 @@ import {
 } from './registry-validator.js';
 import type { ValidationResult } from './types.js';
 
-export interface UnifiedValidateOptions {
-	/** Validator for claude-plugin directories. Required when validating plugin paths. */
-	validatePlugin?: (path: string) => Promise<ValidationResult>;
+/**
+ * A single-error `unknown`-format result.
+ *
+ * Both call sites go through here so `issueCounts` is DERIVED from the issue
+ * rather than hand-written beside it — a literal `{ errors: 1, ... }` is a
+ * second copy of the same fact and can drift from the array it describes.
+ */
+function unknownFormatResult(
+	path: string,
+	summary: string,
+	issue: ValidationIssue,
+): ValidationResult {
+	const issues = [issue];
+	return {
+		path,
+		type: 'unknown',
+		status: 'error',
+		summary,
+		issues,
+		issueCounts: countBySeverity(issues),
+	};
+}
+
+export interface UnifiedValidateOptions extends AnchorRootOptions {
+	/**
+	 * Validator for claude-plugin directories. Required when validating plugin
+	 * paths. Receives the run's anchor base so the plugin lane reports in the
+	 * same coordinate system as every other lane in the run.
+	 */
+	validatePlugin?: (path: string, options: AnchorRootOptions) => Promise<ValidationResult>;
 }
 
 class ProgrammerError extends Error {
@@ -39,6 +70,16 @@ class ProgrammerError extends Error {
  * ```
  */
 export async function validate(resourcePath: string, opts?: UnifiedValidateOptions): Promise<ValidationResult> {
+	// One anchor base for every lane this dispatcher can route to, so a single
+	// run never reports two resources in two coordinate systems.
+	const anchor: AnchorRootOptions = opts?.locationRoot === undefined
+		? {}
+		: { locationRoot: opts.locationRoot };
+	const unknownLocation = issueLocation(
+		resourcePath,
+		resolveAnchorRoot(opts?.locationRoot, resourcePath),
+	);
+
 	try {
 		// Detect resource format
 		const format = await detectResourceFormat(resourcePath);
@@ -52,34 +93,30 @@ export async function validate(resourcePath: string, opts?: UnifiedValidateOptio
 						'Pass validatePlugin from @vibe-agent-toolkit/claude-marketplace to validate().',
 					);
 				}
-				return await opts.validatePlugin(format.path);
+				return await opts.validatePlugin(format.path, anchor);
 
 			case 'marketplace':
-				return await validateMarketplace(format.path);
+				return await validateMarketplace(format.path, anchor);
 
 			case 'installed-plugins-registry':
-				return await validateInstalledPluginsRegistry(format.path);
+				return await validateInstalledPluginsRegistry(format.path, anchor);
 
 			case 'known-marketplaces-registry':
-				return await validateKnownMarketplacesRegistry(format.path);
+				return await validateKnownMarketplacesRegistry(format.path, anchor);
 
 			case 'unknown':
 				// Create ValidationResult for unknown format
-				return {
-					path: format.path,
-					type: 'unknown',
-					status: 'error',
-					summary: format.reason ?? 'Unknown resource format',
-					issues: [
-						{
-							severity: 'error',
-							code: 'UNKNOWN_FORMAT',
-							message: format.reason ?? 'Unknown resource format',
-							location: format.path,
-							fix: 'Ensure the path points to a valid plugin directory, marketplace directory, or registry file',
-						},
-					],
-				};
+				return unknownFormatResult(
+					format.path,
+					format.reason ?? 'Unknown resource format',
+					{
+						severity: 'error',
+						code: 'UNKNOWN_FORMAT',
+						message: format.reason ?? 'Unknown resource format',
+						location: unknownLocation,
+						fix: 'Ensure the path points to a valid plugin directory, marketplace directory, or registry file',
+					},
+				);
 
 			default: {
 				// TypeScript exhaustiveness check
@@ -96,19 +133,15 @@ export async function validate(resourcePath: string, opts?: UnifiedValidateOptio
 		const errorMessage =
 			error instanceof Error ? error.message : 'Unknown error occurred';
 
-		return {
-			path: resourcePath,
-			type: 'unknown',
-			status: 'error',
-			summary: `Validation failed: ${errorMessage}`,
-			issues: [
-				{
-					severity: 'error',
-					code: 'UNKNOWN_FORMAT',
-					message: errorMessage,
-					location: resourcePath,
-				},
-			],
-		};
+		return unknownFormatResult(
+			resourcePath,
+			`Validation failed: ${errorMessage}`,
+			{
+				severity: 'error',
+				code: 'UNKNOWN_FORMAT',
+				message: errorMessage,
+				location: unknownLocation,
+			},
+		);
 	}
 }

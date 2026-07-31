@@ -22,9 +22,9 @@ skills:
           LINK_TO_NAVIGATION_FILE: ignore   # this skill links to READMEs on purpose
           ALLOW_EXPIRED: error              # zero-tolerance expiry
         allow:
-          PACKAGED_UNREFERENCED_FILE:
+          LINK_TO_GITIGNORED_FILE:
             - paths: ["templates/runtime.json"]
-              reason: "consumed programmatically at runtime"
+              reason: "generated at install time, deliberately untracked"
               expires: "2026-09-30"
           SKILL_LENGTH_EXCEEDS_RECOMMENDED:
             - reason: "whole-skill concern; paths defaults to ['**/*']"
@@ -315,13 +315,21 @@ for terminology.
 
 **What it does:**
 1. Resolves the source (local directory, ZIP, .tgz, or npm package)
-2. Discovers one or more skills inside the source
+2. Discovers one or more skill directories inside the source
 3. Pre-validates every skill with `validateSkill()` — zero files written if validation fails
-4. Builds an install plan, detecting conflicts before touching the filesystem
-5. Copies skill(s) to the resolved platform directory (all-or-nothing semantics)
-6. Emits a YAML summary on stdout
+4. Reads each skill's declared name, which is the name it installs under
+5. Builds an install plan, detecting conflicts before touching the filesystem
+6. Copies skill(s) to the resolved platform directory (all-or-nothing semantics)
+7. Emits a YAML summary on stdout
 
 Both `--target` and `--scope` are **required** — there are no defaults.
+
+**Installed name:** a skill installs under the `name` its `SKILL.md` frontmatter
+declares — the same identity `vat skills build` and the plugin build key on — not
+the name of the directory it came from. A ZIP or npm source has no meaningful
+directory name to use. If two skills in one source declare the same name, the
+whole install fails rather than one silently overwriting the other. Use `--name`
+to override (single-skill sources only).
 
 **Supported Sources:**
 - **Local directory:** `./path/to/skill-dir` — must contain `SKILL.md` at root or in subdirectories
@@ -353,6 +361,19 @@ Both `--target` and `--scope` are **required** — there are no defaults.
 | `cursor` | `~/.cursor/skills/` | `.cursor/skills/` |
 | `windsurf` | `~/.codeium/windsurf/skills/` | `.windsurf/skills/` |
 | `agents` | `~/.agents/skills/` | `.agents/skills/` |
+
+These paths were last reviewed against each platform's own published docs on
+2026-07-30 (all fourteen unchanged) and are not verified at build or test time.
+The tests derive their expectations from the table and assert invariants of it —
+every target present, both scopes relative and forward-slash only, and that the
+resolver composes base + relative path. No test can check that a path is where a
+platform actually looks. If a vendor moves its convention, installs land
+somewhere unread and every VAT check still passes. Re-check the vendor's
+documentation before relying on a non-`claude` target.
+
+**Visibility:** VAT's own inspection commands are Claude-scoped — `vat skills
+list --user` and `vat audit --user` read `~/.claude` only. A skill installed to
+any other target lands correctly but is invisible to them.
 
 **Exit Codes:**
 - `0` - Install successful (or dry-run complete)
@@ -438,6 +459,10 @@ for terminology.
 2. Reports validation status for each skill
 3. Shows skill metadata (name, description, path)
 
+The reported `name` is the one the skill's frontmatter declares — matching what
+`vat skills install` would install it as — falling back to the directory name
+only when the `SKILL.md` declares none.
+
 **Modes:**
 
 **Project mode (default):**
@@ -473,6 +498,7 @@ for terminology.
 **Output Format:**
 ```yaml
 status: success
+root: /abs/path/to/project
 context: project | user
 skillsFound: 3
 skills:

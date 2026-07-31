@@ -21,16 +21,83 @@ export interface CrawlOptions {
   absolute?: boolean;
   /** Only return files (not directories) - default: true */
   filesOnly?: boolean;
-  /** Respect .gitignore files (default: true) */
+  /**
+   * Respect .gitignore files (default: true).
+   *
+   * When true (and the baseDir is inside a git repository) the crawl is
+   * answered by `git ls-files`, which is orders of magnitude cheaper than
+   * walking the tree. Setting this to false forces a full recursive walk of
+   * every non-excluded directory — including build caches, nested worktrees
+   * and generated output — so only pass it when you genuinely need files git
+   * has been told to ignore. To pick up files git simply does not track yet,
+   * use {@link CrawlOptions.includeUntracked} instead and keep the fast path.
+   */
   respectGitignore?: boolean;
-  /** Match through dot-directories like .claude/ (default: false) */
-  dot?: boolean;
+  /**
+   * Include untracked (but not ignored) files (default: false).
+   *
+   * Only meaningful alongside `respectGitignore: true`, where it widens the
+   * `git ls-files` query from tracked files to tracked + untracked-not-ignored.
+   * This is the right knob for "the author is editing something they have not
+   * committed yet"; `respectGitignore: false` is not, and costs the whole walk.
+   */
+  includeUntracked?: boolean;
 }
 
 /**
- * Default exclude patterns that are almost always unwanted
+ * Glob options shared by every pattern this module compiles.
+ *
+ * `dot: true` is not optional. picomatch's default refuses to let `*` or `**`
+ * traverse a segment beginning with a dot, so `**\/*.md` — the include pattern
+ * every VAT lane defaults to — cannot see inside `.claude/`, which is Claude's
+ * own home for the rules, skills, commands and agents VAT exists to validate.
+ * It applies to excludes for the same reason: without it, an exclude aimed at a
+ * dot-directory silently never fires. Every other picomatch call site in VAT
+ * already compiles this way.
+ *
+ * Visibility is decided by git (or by the exclude patterns), never by whether a
+ * path component happens to start with a dot.
  */
-const DEFAULT_EXCLUDE = ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/coverage/**'];
+const PICOMATCH_OPTIONS = { dot: true } as const;
+
+/**
+ * Directories no VAT crawl should ever walk into. THE canonical list — any lane
+ * that needs its own additions should spread this rather than restate it.
+ *
+ * There were three of these and they disagreed: this one omitted worktrees
+ * entirely, the discovery scanner had both worktree paths but not `dist`, and
+ * the repo-structure gate used bare basenames. A worktree is a FULL COPY of the
+ * repository, so omitting it does not just cost time — it makes a crawl report
+ * the same file two or three times under different paths, and this repo keeps its
+ * worktrees at `.claude/worktrees/`, inside a dot-directory that `dot: true`
+ * (see {@link PICOMATCH_OPTIONS}) deliberately makes reachable.
+ *
+ * Note these patterns only bite when `respectGitignore` is false; the fast
+ * `git ls-files` path never sees ignored directories in the first place.
+ */
+export const NEVER_CRAWL_GLOBS = [
+  '**/node_modules/**',      // Dependencies (40K+ files), never user content
+  '**/.git/**',              // Git objects, never user content
+  '**/coverage/**',          // Test coverage reports
+  '**/.test-output/**',      // Test artifacts
+  '**/.worktrees/**',        // Git worktrees are full repo copies — never traverse
+  '**/.claude/worktrees/**', // Claude Code worktrees, same reason
+] as const;
+
+/**
+ * Build output — excluded by DEFAULT, but deliberately NOT part of
+ * {@link NEVER_CRAWL_GLOBS}.
+ *
+ * The distinction is real, and collapsing it is a bug: everything in
+ * `NEVER_CRAWL_GLOBS` is "never user content, no lane wants it", while `dist/` is
+ * content VAT itself produced and some lanes exist precisely to look at. Skill
+ * discovery CLASSIFIES what it finds as source or build output, so it must walk
+ * `dist/`; a crawl for authored markdown must not. Two different questions, so
+ * two lists — a lane spreads whichever ones apply.
+ */
+export const BUILD_OUTPUT_GLOBS = ['**/dist/**'] as const;
+
+const DEFAULT_EXCLUDE: string[] = [...NEVER_CRAWL_GLOBS, ...BUILD_OUTPUT_GLOBS];
 
 /**
  * Crawl a directory tree and return matching files (async)
@@ -77,10 +144,10 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
     absolute = true,
     filesOnly = true,
     respectGitignore = true,
-    dot = false,
+    includeUntracked = false,
   } = options;
 
-  const picoOptions = dot ? { dot: true } : undefined;
+  const picoOptions = PICOMATCH_OPTIONS;
 
   // Resolve base directory to absolute path
   const resolvedBaseDir = safePath.resolve(baseDir);
@@ -107,7 +174,7 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
       // Get all tracked files, then filter using glob patterns below
       const gitFiles = gitLsFiles({
         cwd: resolvedBaseDir,
-        includeUntracked: false, // Only tracked files
+        includeUntracked,
       });
 
       if (gitFiles !== null) {

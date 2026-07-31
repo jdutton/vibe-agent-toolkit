@@ -1,163 +1,18 @@
 import { extname } from 'node:path';
 
-import type { EvidenceRecord } from '@vibe-agent-toolkit/agent-skills';
+import { anchorEvidencePath, buildEvidence, type EvidenceRecord } from '@vibe-agent-toolkit/agent-skills';
 
-import { buildEvidence } from './evidence-helpers.js';
+import { PYTHON_STDLIB_MODULE_NAMES } from './python-stdlib-modules.generated.js';
 
-/** Python 3.10+ standard library modules */
-export const PYTHON_STDLIB_MODULES: ReadonlySet<string> = new Set([
-  '_thread',
-  'abc',
-  'argparse',
-  'ast',
-  'asyncio',
-  'base64',
-  'bisect',
-  'builtins',
-  'calendar',
-  'cmath',
-  'cmd',
-  'codecs',
-  'collections',
-  'colorsys',
-  'compileall',
-  'concurrent',
-  'configparser',
-  'contextlib',
-  'contextvars',
-  'copy',
-  'copyreg',
-  'cProfile',
-  'csv',
-  'ctypes',
-  'curses',
-  'dataclasses',
-  'datetime',
-  'decimal',
-  'difflib',
-  'dis',
-  'email',
-  'enum',
-  'errno',
-  'faulthandler',
-  'filecmp',
-  'fileinput',
-  'fnmatch',
-  'fractions',
-  'ftplib',
-  'functools',
-  'gc',
-  'getopt',
-  'getpass',
-  'gettext',
-  'glob',
-  'graphlib',
-  'gzip',
-  'hashlib',
-  'heapq',
-  'hmac',
-  'html',
-  'http',
-  'idlelib',
-  'imaplib',
-  'importlib',
-  'inspect',
-  'io',
-  'ipaddress',
-  'itertools',
-  'json',
-  'keyword',
-  'linecache',
-  'locale',
-  'logging',
-  'lzma',
-  'mailbox',
-  'math',
-  'mimetypes',
-  'modulefinder',
-  'multiprocessing',
-  'netrc',
-  'numbers',
-  'operator',
-  'os',
-  'pathlib',
-  'pdb',
-  'pickle',
-  'pickletools',
-  'platform',
-  'plistlib',
-  'poplib',
-  'posixpath',
-  'pprint',
-  'profile',
-  'pstats',
-  'py_compile',
-  'pyclbr',
-  'pydoc',
-  'queue',
-  'quopri',
-  'random',
-  're',
-  'readline',
-  'reprlib',
-  'runpy',
-  'sched',
-  'secrets',
-  'select',
-  'selectors',
-  'shelve',
-  'shlex',
-  'shutil',
-  'signal',
-  'site',
-  'smtplib',
-  'socket',
-  'socketserver',
-  'sqlite3',
-  'ssl',
-  'stat',
-  'statistics',
-  'string',
-  'stringprep',
-  'struct',
-  'subprocess',
-  'sys',
-  'sysconfig',
-  'syslog',
-  'tabnanny',
-  'tarfile',
-  'tempfile',
-  'test',
-  'textwrap',
-  'threading',
-  'time',
-  'timeit',
-  'tkinter',
-  'token',
-  'tokenize',
-  'tomllib',
-  'trace',
-  'traceback',
-  'tracemalloc',
-  'turtle',
-  'types',
-  'typing',
-  'unicodedata',
-  'unittest',
-  'urllib',
-  'uuid',
-  'venv',
-  'warnings',
-  'wave',
-  'weakref',
-  'webbrowser',
-  'xml',
-  'xmlrpc',
-  'zipapp',
-  'zipfile',
-  'zipimport',
-  'zlib',
-]);
+/**
+ * Python standard-library module names, used to tell a stdlib import from a
+ * genuine third-party dependency.
+ *
+ * Generated from CPython's own `sys.stdlib_module_names` across every supported
+ * Python version — never hand-edited. See
+ * `scripts/generate-python-stdlib.ts`.
+ */
+export const PYTHON_STDLIB_MODULES: ReadonlySet<string> = new Set(PYTHON_STDLIB_MODULE_NAMES);
 
 /** Map script extensions to the pattern ID that records their presence. */
 const SCRIPT_EXTENSION_PATTERNS: Record<string, string> = {
@@ -179,13 +34,16 @@ const FROM_IMPORT_RE = /^from\s+(\w+)/;
  * Classify a script file by its extension. Returns a single SCRIPT_FILE_*
  * evidence record when the extension matches a known script type.
  */
-export function classifyScriptFile(relativePath: string): EvidenceRecord | undefined {
-  const ext = extname(relativePath).toLowerCase();
+export function classifyScriptFile(filePath: string, locationRoot: string): EvidenceRecord | undefined {
+  const ext = extname(filePath).toLowerCase();
   const patternId = SCRIPT_EXTENSION_PATTERNS[ext];
   if (patternId === undefined) {
     return undefined;
   }
-  return buildEvidence(patternId, relativePath, `script file: ${relativePath}`);
+  // The message names the file, so it must be spelled the same anchored way the
+  // location is — otherwise an absolute path leaks via `matchText` instead.
+  const anchored = anchorEvidencePath(filePath, locationRoot);
+  return buildEvidence(patternId, filePath, locationRoot, `script file: ${anchored}`);
 }
 
 /**
@@ -193,7 +51,11 @@ export function classifyScriptFile(relativePath: string): EvidenceRecord | undef
  * for any third-party (non-stdlib) imports found, one record per distinct
  * module.
  */
-export function scanPythonImports(content: string, filePath: string): EvidenceRecord[] {
+export function scanPythonImports(
+  content: string,
+  filePath: string,
+  locationRoot: string,
+): EvidenceRecord[] {
   const thirdPartyModules = new Set<string>();
 
   for (const line of content.split('\n')) {
@@ -223,6 +85,7 @@ export function scanPythonImports(content: string, filePath: string): EvidenceRe
       buildEvidence(
         'PYTHON_IMPORT_THIRD_PARTY',
         filePath,
+        locationRoot,
         `third-party import: ${moduleName}`,
       ),
     );

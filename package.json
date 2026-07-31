@@ -1,6 +1,6 @@
 {
   "name": "vibe-agent-toolkit",
-  "version": "0.1.41-rc.5",
+  "version": "0.1.41-rc.7",
   "type": "module",
   "private": true,
   "description": "Toolkit for testing and packaging portable AI agents across various LLMs, frameworks, and deployment targets",
@@ -70,6 +70,7 @@
     "dependency-check": "bunx knip --config packages/dev-tools/knip.config.ts",
     "duplication-check": "tsx packages/dev-tools/src/duplication-check.ts",
     "duplication-update-baseline": "tsx packages/dev-tools/src/jscpd-update-baseline.ts",
+    "generate:python-stdlib": "tsx packages/dev-tools/src/generate-python-stdlib.ts",
     "guard:test-heap": "tsx packages/dev-tools/src/check-test-heap-budget.ts",
     "validate": "vibe-validate validate",
     "validate-structure": "tsx packages/dev-tools/src/validate-repo-structure.ts",

@@ -23,15 +23,26 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
 /**
- * Parse YAML output from CLI command (between --- markers)
+ * Parse the CLI's YAML output.
+ *
+ * The CLI emits ONE YAML document — an optional `---` opener followed by the
+ * body, to the end of stdout. This helper used to require a CLOSING `---` too,
+ * which encoded a real defect: emitting both markers made stdout two YAML
+ * documents, so a consumer calling plain `YAML.parse()` on it threw. When the
+ * trailing marker was removed, this pattern stopped matching and reported
+ * `expected null to be truthy` — the test failing because the product was fixed.
+ *
+ * Everything after the opener is taken as the document; the field assertions in
+ * each test are what verify the content.
+ *
  * @param result - Spawn sync result from CLI command
  * @returns Parsed YAML output
  */
 function parseYamlOutput(result: SpawnSyncReturns<string>): unknown {
-  const yamlMatch = /---\n([\S\s]*?)\n---/.exec(result.stdout);
-  expect(yamlMatch).toBeTruthy();
-  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- yamlMatch checked by expect above
-  return parse(yamlMatch![1]!);
+  const opener = /^---\n/m.exec(result.stdout);
+  const body = opener ? result.stdout.slice(opener.index + opener[0].length) : result.stdout;
+  expect(body.trim()).not.toBe('');
+  return parse(body);
 }
 
 /**

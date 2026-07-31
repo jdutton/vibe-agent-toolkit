@@ -198,7 +198,9 @@ export function stageEvalWorkspaces(input: StageEvalWorkspacesInput): string {
       // Copy failures (permissions, illegal filename on the host, disk) are
       // reported accurately rather than mislabeled as a containment escape.
       try {
-        mkdirSyncReal(safePath.join(dest, '..'), { recursive: true });
+        // 0700 like the workspaces root above it: with an out-of-tree suite these
+        // hold data that may never have been in the repo.
+        mkdirSyncReal(safePath.join(dest, '..'), { recursive: true, mode: 0o700 });
         cpSync(src, dest, { recursive: true });
       } catch (err) {
         throw new EvalInputError(

@@ -2,7 +2,6 @@
 title: "Claude Code Plugin Loader Semantics"
 date: 2026-05-04
 status: partially-conclusive
-related-spec: docs/superpowers/specs/2026-05-03-plugin-inventory-architecture-design.md
 ---
 
 # Claude Code Plugin Loader Semantics

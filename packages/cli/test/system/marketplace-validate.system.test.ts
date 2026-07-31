@@ -66,6 +66,12 @@ function createValidMarketplace(tempDir: string): void {
 
 /**
  * Run marketplace validate and assert a specific issue is present with expected severity.
+ *
+ * Runs with `--verbose`: the default publishes per-location COUNTS plus a
+ * `codes` tally, and this helper asserts the SEVERITY a given code resolved to
+ * — a code↔severity pairing only the flat per-issue form states. The two tests
+ * above that assert only run-level totals (`status`, exit code) stay on the
+ * default path, so both listing modes remain covered here.
  */
 async function validateAndExpectIssue(
   tempDir: string,
@@ -73,7 +79,7 @@ async function validateAndExpectIssue(
   expectedSeverity: string,
   expectedExitCode: number,
 ): Promise<void> {
-  const { result, parsed } = await executeCliAndParseYaml(binPath, [...VALIDATE_ARGS, tempDir]);
+  const { result, parsed } = await executeCliAndParseYaml(binPath, [...VALIDATE_ARGS, tempDir, '--verbose']);
 
   expect(result.status).toBe(expectedExitCode);
   const issues = parsed['issues'] as Array<{ code: string; severity: string }>;

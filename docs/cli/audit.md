@@ -54,10 +54,10 @@ The command outputs YAML to stdout with this structure:
 status: success|warning|error
 summary:
   filesScanned: 1
-  success: 1
-  warnings: 0
-  errors: 0
-issues:
+  filesPassed: 1
+  filesWithWarnings: 0
+  filesWithErrors: 0
+issueCounts:
   errors: 0
   warnings: 0
   info: 0

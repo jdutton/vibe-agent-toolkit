@@ -17,15 +17,22 @@ export { readEffectiveSettings, readSettingsLayers } from './settings-reader.js'
 
 export type {
   SettingsAuditResult,
+  SettingsFileField,
+  SettingsFinding,
+  SettingsPathCandidate,
+  SettingsPathCandidatesResult,
   SettingsPathEntry,
   SettingsPathsResult,
+  SettingsTypeConfidence,
   SettingsValidateResult,
 } from './settings-auditor.js';
 export {
   auditSettings,
   getSettingsPaths,
   getSettingsFileFields,
+  probePathAccess,
   resolveSettingsPaths,
+  summarizeSettingsFindings,
   validateSettingsFile,
 } from './settings-auditor.js';
 

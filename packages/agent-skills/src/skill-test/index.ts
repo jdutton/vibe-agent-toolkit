@@ -132,11 +132,17 @@ export {
   type StageHarnessResult,
   type StageItem,
 } from './staging.js';
+export {
+  evalSuiteUnitPath,
+  isolateEvalSuite,
+  type IsolateEvalSuiteInput,
+} from './eval-suite-isolation.js';
 export { regenerateVendoredManifest, verifyVendoredManifest, VendoredManifestSchema } from './vendor-manifest.js';
 export { upsertTestConfig } from './configure-writer.js';
 export { buildEvalsTemplate, writeEvalsTemplate } from './evals-template.js';
 export {
   buildDryRunSummary,
+  buildStaleDistWarningLines,
   formatFrictionReport,
   isAcknowledged,
   runSkillTestHarness,

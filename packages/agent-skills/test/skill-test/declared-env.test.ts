@@ -21,6 +21,7 @@ import {
   interpolateEnvValue,
   resolveInjectEnv,
   UnknownEnvTokenError,
+  UnresolvableEnvTokenError,
   type EnvInterpolationTokens,
 } from '../../src/skill-test/declared-env.js';
 
@@ -43,16 +44,50 @@ function makeTokens(): { inputs: TokenInputs; tokens: EnvInterpolationTokens } {
     resultsDir: safePath.join(base, 'results'),
     evalsSubpath: 'evals/evals.json',
   };
-  return { inputs, tokens: computeEnvTokens(inputs) };
+  return { inputs, tokens: computeEnvTokens({ ...inputs, workspaceDir: safePath.join(base, 'workspaces', 'e1') }) };
 }
 
 describe('computeEnvTokens', () => {
-  it('derives fixturesDir from the eval suite directory and passes the rest through', () => {
+  it('passes the non-fixture tokens through unchanged', () => {
     const { inputs, tokens } = makeTokens();
-    expect(tokens.fixturesDir).toBe(safePath.join(inputs.subjectStagedDir, 'evals', 'fixtures'));
     expect(tokens.stagedSkillDir).toBe(inputs.subjectStagedDir);
     expect(tokens.harnessRoot).toBe(inputs.harnessRoot);
     expect(tokens.resultsDir).toBe(inputs.resultsDir);
+  });
+
+  /**
+   * Eval-suite isolation removes `<staged>/evals/` (the answer key AND the
+   * `fixtures/` beneath it) from the staged subject, and each eval's declared
+   * input `files` are staged into its own per-eval workspace instead. So
+   * `${fixturesDir}` must name THAT workspace's `fixtures/`, which is also the
+   * executor's working directory — pointing it back at the staged suite dir would
+   * hand the executor a sibling path to `evals.json` and reopen the leak.
+   */
+  it('resolves fixturesDir under the per-eval workspace when one exists', () => {
+    const workspaceDir = safePath.join(HARNESS_BASE, 'workspaces', 'my-eval');
+    const { inputs } = makeTokens();
+    const tokens = computeEnvTokens({ ...inputs, workspaceDir });
+    expect(tokens.fixturesDir).toBe(safePath.join(workspaceDir, 'fixtures'));
+  });
+
+  /**
+   * An eval that declares no input `files` gets no workspace, so there is no
+   * fixtures directory anywhere. The token is unresolvable rather than pointing at
+   * a path that does not exist — silence is the whole defect being fixed here.
+   */
+  it('leaves fixturesDir unresolved when the eval declares no input files', () => {
+    const { inputs } = makeTokens();
+    expect(computeEnvTokens(inputs).fixturesDir).toBeUndefined();
+  });
+});
+
+describe('${fixturesDir} with no per-eval workspace', () => {
+  it('fails loud instead of interpolating a path that does not exist', () => {
+    const { inputs } = makeTokens();
+    const tokens = computeEnvTokens(inputs);
+    expect(() => interpolateEnvValue('${fixturesDir}/snap.json', 'SNAP', tokens)).toThrow(
+      UnresolvableEnvTokenError,
+    );
   });
 });
 

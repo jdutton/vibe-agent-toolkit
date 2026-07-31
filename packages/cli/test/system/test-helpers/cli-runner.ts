@@ -134,13 +134,17 @@ export function executeScanAndParse(
 }
 
 /**
- * Execute validate and parse result
+ * Execute validate and parse result.
+ *
+ * `extraArgs` appends flags after the subcommand (e.g. `['--verbose']`) so a
+ * caller that needs a different listing mode does not fork its own spawn.
  */
 export function executeValidateAndParse(
   binPath: string,
-  cwd: string
+  cwd: string,
+  extraArgs: readonly string[] = []
 ): { result: CliResult; parsed: Record<string, unknown> } {
-  return executeAndParseYaml(binPath, ['resources', 'validate'], { cwd });
+  return executeAndParseYaml(binPath, ['resources', 'validate', ...extraArgs], { cwd });
 }
 
 /**
@@ -149,6 +153,12 @@ export function executeValidateAndParse(
  * YAML output carries the error details (file paths, field names, AJV messages)
  * that earlier versions of this helper re-checked via a second `--format text`
  * invocation.
+ *
+ * Runs with `--verbose`: the default document publishes per-file COUNTS plus a
+ * `codes` tally, and this helper's whole contract is that a finding's MESSAGE
+ * text (AJV wording, offending field name) appears in the output — which only
+ * the verbose form carries. `status`, `errorsFound` and the exit code asserted
+ * below are run-level totals and are identical in both modes.
  *
  * @param expectedInOutput  Single string or array of strings that must all
  *                          appear somewhere in the combined stdout/stderr.
@@ -159,10 +169,10 @@ export function assertValidationFailureWithError(
   projectDir: string,
   expectedInOutput: string | string[]
 ): { result: CliResult; parsed: Record<string, unknown> } {
-  const { result, parsed } = executeValidateAndParse(binPath, projectDir);
+  const { result, parsed } = executeValidateAndParse(binPath, projectDir, ['--verbose']);
 
   expect(result.status).toBe(1);
-  expect(parsed.status).toBe('failed');
+  expect(parsed.status).toBe('error');
   expect(parsed.errorsFound).toBeGreaterThan(0);
 
   const combined = result.stdout + result.stderr;

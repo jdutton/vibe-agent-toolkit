@@ -10,16 +10,21 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 
+import type { SeverityCounts } from '@vibe-agent-toolkit/agent-schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';
 
 export type AuditStatus = 'success' | 'warning' | 'error' | 'unloadable';
 export type ReviewStatus = 'ok' | 'error' | 'skipped';
 
-export interface AuditSummary {
-  errors: number;
-  warnings: number;
-  info: number;
+/**
+ * Extends `SeverityCounts` rather than re-declaring `errors`/`warnings`/`info`:
+ * `runner.ts` builds this by spreading `countBySeverity()`, so the two are
+ * already the same shape by construction. Deriving makes the compiler enforce
+ * that, instead of leaving it as a fact someone has to re-verify by hand every
+ * time a severity bucket is added.
+ */
+export interface AuditSummary extends SeverityCounts {
   files_scanned: number;
 }
 
@@ -32,9 +37,22 @@ export interface AuditOutcome {
   error?: string;                // present only on unloadable
 }
 
+/**
+ * Outcome distribution for one plugin's review lane — the review-side mirror
+ * of `AuditSummary`. `skills_scanned` counts SKILLS (the denominator, like
+ * `files_scanned`); `reviewed` and `failed` bucket those skills by whether
+ * `vat skill review` ran to completion, and always sum to `skills_scanned`.
+ */
+export interface ReviewSummary {
+  reviewed: number;              // review ran to completion (clean or with findings)
+  failed: number;                // review did not run to completion
+  skills_scanned: number;
+}
+
 export interface ReviewOutcome {
   status: ReviewStatus;
   duration_ms: number;
+  summary?: ReviewSummary;       // present when the review lane ran (status != skipped)
   output_path?: string;          // present when an aggregated review.md was written
   error?: string;                // present only when status === 'error'
 }
@@ -63,7 +81,8 @@ export interface RunTotals {
   audit_warning: number;
   audit_error: number;
   unloadable: number;
-  reviewed?: number;             // present iff flags.with_review
+  reviewed?: number;             // rows whose review lane ran; present iff flags.with_review
+  review_error?: number;         // subset of `reviewed` that failed; present iff flags.with_review
 }
 
 /**
@@ -101,7 +120,7 @@ export function computeTotals(report: RunReport): RunTotals {
 
   if (report.flags.with_review) {
     totals.reviewed = report.plugins.filter((p) => p.review.status !== 'skipped').length;
-  }
+    totals.review_error = report.plugins.filter((p) => p.review.status === 'error').length;  }
 
   return totals;
 }

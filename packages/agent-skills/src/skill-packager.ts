@@ -20,12 +20,16 @@ import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
 import {
+  allowUnusedIssues,
+  createAllowUsageLedger,
   runValidationFramework,
+  type AllowUsageLedger,
   type FrameworkResult,
   type ValidationConfig,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/agent-schema';
 import {
+  DeferredArtifacts,
   ResourceRegistry,
   loadConfig,
   openFrontmatter,
@@ -42,23 +46,95 @@ import {
 import {
   findProjectRoot,
   isGlob,
+  issueLocation,
   resolveAssetReference,
   toForwardSlash,
   safePath,
   type GitTracker,
 } from '@vibe-agent-toolkit/utils';
 
-import { getTargetSubdir } from './content-type-routing.js';
-import { applyFilesConfig, buildArtifactHint, computeDeferredPaths, type SkillFileEntry } from './files-config.js';
+import { CLAUDE_WEB_REFERENCES_SUBDIR, getTargetSubdir } from './content-type-routing.js';
+import { applyFilesConfig, buildArtifactHint, type SkillFileEntry } from './files-config.js';
 import { checkBrokenPackagedLinks, checkUnreferencedFiles } from './post-build-checks.js';
+import {
+  checkPackagedTestInput,
+  partitionTestInputFileEntries,
+  resolveTestInputDirs,
+  type DeclaredEvalSuite,
+  testInputExcludeRules,
+  testInputFileEntryIssues,
+  testInputLinkIssues,
+} from './test-input.js';
 import { validateSkillForPackaging, type PackagingValidationResult, type SkillPackagingConfig } from './validators/packaging-validator.js';
+import { materializeIssue } from './validators/rule-engine/index.js';
 import { deferredAssetsToIssues, walkerExclusionsToIssues } from './validators/walker-to-issues.js';
 import { walkLinkGraph, type WalkableRegistry } from './walk-link-graph.js';
 
 const PACKAGE_JSON_FILENAME = 'package.json';
 
-/** Default template for excluded links when no explicit template is configured — renders just the link text */
-const DEFAULT_STRIP_TEMPLATE = '{{link.text}}';
+/**
+ * Default template for excluded links when no explicit template is configured —
+ * renders just the link text.
+ *
+ * `{{link.rawText}}`, not `{{link.text}}`, for the same two reasons the rewrite
+ * branch uses it (see `bundledLinkTemplate`):
+ *
+ *  - **Correlation.** `transformContent` keys parsed links by href and lets the
+ *    FIRST occurrence win, so `link.text` on a second link sharing that href is
+ *    the first link's text. `rawText` is the regex's per-occurrence capture, so it
+ *    always belongs to the link being replaced. Stripping with `link.text` swapped
+ *    one phrase for an unrelated one in shipped prose; the rewrite branch never
+ *    exposed it because it re-emits `rawText`.
+ *  - **Formatting.** `rawText` keeps the inline markup the author wrote, so
+ *    ``[`foo.yaml`](…)`` strips to ``` `foo.yaml` ``` rather than bare `foo.yaml`.
+ *
+ * Text was the ONLY field the collision could corrupt: the map key is the full
+ * href including any `#fragment`, so two links that collide there necessarily
+ * resolve to the same resource and carry the same fragment.
+ */
+const DEFAULT_STRIP_TEMPLATE = '{{link.rawText}}';
+
+/**
+ * Template for a link the bundle is expected to carry: rewrite it to the target's
+ * packaged location, or — when there IS no packaged location — strip it to plain
+ * text with `stripTemplate`.
+ *
+ * The `else` branch is the whole point. `link.resource.relativePath` is undefined
+ * for any target the OUTPUT registry does not hold, and three ordinary link shapes
+ * land there:
+ *
+ *   - a non-markdown asset dropped from the bundle (`evals/evals.json`) — the
+ *     registry indexes markdown, so a pattern exclude rule matching `filePath`
+ *     never sees it and it falls through to here;
+ *   - a link to a DIRECTORY, in either spelling (`refs/` or `refs`);
+ *   - any other unresolved target.
+ *
+ * Rendering the rewrite branch anyway produced `[text]()` — a syntactically valid
+ * markdown link to nowhere — or, for the slash spelling of a directory (which
+ * matched no rule at all before this template took `local_directory` too), the
+ * original href pointing at a path that does not exist in the output. The latter
+ * then failed the build under `PACKAGED_BROKEN_LINK`, whose own remediation text
+ * reads "Report the issue — this indicates a VAT bug."
+ *
+ * A directory link can never survive packaging: the packager FLATTENS every
+ * bundled resource into `resources/`, so no authored directory exists in the
+ * output to point at. Stripping to plain text keeps the author's prose and drops
+ * the dead navigation — the same thing an excluded file link does.
+ *
+ * A SAME-DOCUMENT anchor (`[See below](#heading)`) is untouched by all of this: it
+ * classifies as `anchor`, not a local target, so it matches none of these rules and
+ * survives verbatim. Verified by test rather than assumed — an earlier draft carried
+ * a special case for it that could never fire.
+ */
+function bundledLinkTemplate(stripTemplate: string): string {
+  return (
+    '{{#if link.resource.relativePath}}' +
+    '[{{link.rawText}}]({{link.resource.relativePath}}{{link.fragment}})' +
+    '{{else}}' +
+    stripTemplate +
+    '{{/if}}'
+  );
+}
 
 /**
  * Resource naming strategy type
@@ -188,6 +264,31 @@ export interface PackageSkillOptions {
    * See docs/validation-codes.md for codes and defaults.
    */
   validation?: ValidationConfig | undefined;
+
+  /**
+   * Absolute directories holding this skill's DECLARED test input (its eval suite).
+   * Links into them are excluded from the bundle, and anything that still reaches
+   * the output emits `PACKAGED_TEST_INPUT`. Derived from the skill's `test.evals`
+   * by {@link resolveTestInputDirs} — see test-input.ts for why test input must
+   * never ship.
+   */
+  testInputDirs?: string[] | undefined;
+
+  /**
+   * The RUN's allow-entry usage ledger.
+   *
+   * `validation.allow` is declared once per package but evaluated once per
+   * skill AND once per lane, so "this entry matched nothing" is a question only
+   * the whole invocation can answer. A caller that builds more than one skill,
+   * or that validates the SOURCE tree before packaging (`vat build` does both),
+   * MUST supply one ledger for the whole invocation and drain it itself with
+   * `allowUnusedIssues()` after the last skill.
+   *
+   * Omitting it is a positive claim that THIS `packageSkill` call is the whole
+   * run — true for single-skill library callers, who get the run-level verdict
+   * folded into `postBuildIssues` here. It is false for anything that loops.
+   */
+  allowLedger?: AllowUsageLedger | undefined;
 }
 
 /**
@@ -196,10 +297,18 @@ export interface PackageSkillOptions {
  * The single canonical conversion used by BOTH `vat skills build` and
  * `vat skill test` (the pool build), so the dist a test exercises is byte-for-byte
  * what `vat skills build` would produce. `basePath` defaults to `dirname(skillPath)`.
+ *
+ * `projectSkills` is EVERY skill the project declares, with its effective packaging
+ * config — assembled ONCE per invocation by the calling lane and passed down, never
+ * recomputed per skill (a per-skill walk of the whole project config is an N+1 this
+ * repo has been bitten by). It is required rather than defaulted because the test-input
+ * rule is project-wide: omitting it silently packages another skill's eval answer key.
+ * A lane with genuinely no project to enumerate passes `[]` explicitly.
  */
 export function packagingConfigToPackageOptions(
   config: SkillPackagingConfig,
   anchors: { skillPath: string; outputPath: string },
+  projectSkills: readonly DeclaredEvalSuite[],
 ): PackageSkillOptions {
   return {
     outputPath: anchors.outputPath,
@@ -212,6 +321,16 @@ export function packagingConfigToPackageOptions(
     ...(config.excludeReferencesFromBundle && { excludeReferencesFromBundle: config.excludeReferencesFromBundle }),
     ...(config.files && { files: config.files }),
     ...(config.validation && { validation: config.validation }),
+    // Declared test input never ships. Derived here — the ONE conversion both
+    // `vat skills build` and the plugin build go through — so no lane can package a
+    // skill without the rule applied. PROJECT-WIDE: `projectSkills` carries every
+    // other skill's declaration too, so a link into a SIBLING skill's suite is
+    // excluded as well. Keyed to this skill alone, that sibling's answer key was
+    // ordinary content and shipped.
+    ...(() => {
+      const testInputDirs = resolveTestInputDirs(config, dirname(anchors.skillPath), projectSkills);
+      return testInputDirs.length > 0 ? { testInputDirs } : {};
+    })(),
   };
 }
 
@@ -279,15 +398,55 @@ export interface SkillBuildSpec {
 }
 
 /**
+ * What ONE skill in a `packageSkills` batch produced.
+ *
+ * A discriminated union rather than a nullable result, because a skill that
+ * threw produced no output path, no metadata and no file list — a synthetic
+ * `PackageSkillResult` for it would have to invent all three, and every
+ * consumer reading `files.dependencies.length` would then report a file count
+ * for a bundle that does not exist on disk.
+ */
+export type SkillPackageOutcome =
+  | { status: 'built'; skillPath: string; result: PackageSkillResult }
+  | { status: 'failed'; skillPath: string; error: Error };
+
+/**
  * Package multiple skills with a shared ResourceRegistry.
  *
  * Creates one registry for the entire project (crawling all .md files once),
  * then packages each skill against the shared registry. This eliminates
  * redundant I/O when building multiple skills from the same project.
  *
+ * **One skill's failure never discards the batch.** `packageSkill` reports most
+ * problems by RETURNING a result whose `hasErrors` is set, which callers already
+ * degrade gracefully on — but it also THROWS on structural packaging failures
+ * (an absent or unreadable `files:` source). Letting that throw escape the loop
+ * made the two failure paths behave in opposite ways through one contract:
+ * measured on a 90-skill project, one such failure discarded 89 completed builds
+ * and collapsed the whole report into a single string. Each iteration is
+ * therefore contained and reported as a `failed` outcome instead.
+ *
+ * A filename collision is NOT one of the throwing paths — it is a returned
+ * `FILENAME_COLLISION` finding. Do not reach for a collision as the fixture when
+ * testing this containment: the loop completes normally either way, so such a
+ * test passes whether or not the containment exists.
+ *
+ * The registry build is deliberately OUTSIDE the containment: it is the run's
+ * shared prerequisite, so its failure really does doom every skill and must
+ * still propagate. Only per-skill work is contained.
+ *
  * @param skills - Array of skill build specifications
  * @param projectRoot - Absolute path to the project root directory
- * @returns Array of package results (one per skill)
+ * @param allowLedger - The RUN's allow-usage ledger. Required, not
+ *   optional-with-a-default, for the same reason `runValidationFramework`'s is:
+ *   this function loops, so it can never honestly conclude on its own that an
+ *   allow entry matched nothing — an entry matched while building skill A is
+ *   USED for the run. It is never drained here; the caller drains it once with
+ *   `allowUnusedIssues()` after everything in the invocation has been seen
+ *   (`vat build` also validates the SOURCE tree, whose matches count too).
+ *   Containment does not change that: a skill that threw may still have matched
+ *   allow entries before it threw, and those matches count for the run.
+ * @returns One outcome per input spec, in input order
  *
  * @example
  * ```typescript
@@ -295,27 +454,39 @@ export interface SkillBuildSpec {
  *   { skillPath: '/project/skills/SKILL.md', options: { outputPath: '/out/skill-a' } },
  *   { skillPath: '/project/skills/SKILL2.md', options: { outputPath: '/out/skill-b' } },
  * ];
- * const results = await packageSkills(specs, '/project');
+ * const ledger = createAllowUsageLedger();
+ * const outcomes = await packageSkills(specs, '/project', ledger);
+ * const runIssues = allowUnusedIssues(ledger);
  * ```
  */
 export async function packageSkills(
   skills: SkillBuildSpec[],
   projectRoot: string,
-): Promise<PackageSkillResult[]> {
-  // 1. Create one registry for the entire project
-  const registry = await ResourceRegistry.fromCrawl({
-    baseDir: projectRoot,
-    include: ['**/*.md'],
-  });
-  registry.resolveLinks();
+  allowLedger: AllowUsageLedger,
+): Promise<SkillPackageOutcome[]> {
+  // 1. Create one registry for the entire project. Through the shared builder:
+  // this used to call `fromCrawl` directly and omit the config, so skills built
+  // here belonged to no collection while a skill built through the single-skill
+  // fallback did.
+  const registry = await createProjectRegistry(projectRoot);
 
   // 2. Package each skill against the shared registry
-  const results: PackageSkillResult[] = [];
+  const outcomes: SkillPackageOutcome[] = [];
   for (const { skillPath, options } of skills) {
-    const result = await packageSkill(skillPath, { ...options, registry });
-    results.push(result);
+    try {
+      const result = await packageSkill(skillPath, { ...options, registry, allowLedger });
+      outcomes.push({ status: 'built', skillPath, result });
+    } catch (error) {
+      // Not swallowed: the error is carried on the outcome so the caller reports
+      // WHICH skill failed and why, and gates the run's exit code on it.
+      outcomes.push({
+        status: 'failed',
+        skillPath,
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+    }
   }
-  return results;
+  return outcomes;
 }
 
 /**
@@ -356,12 +527,30 @@ export async function packageSkill(
   // Library callers fall back to the skill directory when canonical
   // findProjectRoot returns null. The CLI command boundary is responsible
   // for any user-facing warning about missing project roots.
-  // See docs/superpowers/specs/2026-05-17-root-model-and-leading-slash-design.md.
+  //
+  // COORDINATE-SYSTEM ASSUMPTION, not an enforced invariant. This root is the base
+  // every path this call REPORTS is stated in — `namingBasePath` at step 8, and the
+  // `projectRoot` handed to `walkerExclusionsToIssues` / `testInputLinkIssues` /
+  // `deferredAssetsToIssues` at step 13b. It is derived HERE, per skill, from the
+  // skill's own path. It is NOT the `projectRoot` argument `packageSkills` was called
+  // with (that one is used only for `createProjectRegistry`), and it is not the `cwd`
+  // that `vat skills build` treats as the root of the document it emits.
+  //
+  // UNVERIFIED that these can actually diverge: in every path exercised so far the two
+  // have coincided (`vat skills build` passes its `cwd`, and the skills it discovers
+  // live under it), and no run has been observed where they differ. Nothing enforces
+  // the equality, though — a caller packaging a skill from outside its own project
+  // root would get issue locations in one coordinate system and a report header in
+  // another, with no error anywhere.
   const projectRoot = findProjectRoot(dirname(skillPath)) ?? dirname(skillPath);
   const skillRoot = dirname(skillPath);
 
-  // 3. Get or create the resource registry
-  const registry = options.registry ?? await createStandaloneRegistry(projectRoot);
+  // 3. Get or create the resource registry.
+  // The fallback crawls and parses EVERY markdown file in the project, so any
+  // caller packaging more than one skill must build the registry once itself
+  // (see createProjectRegistry) and pass it — otherwise the whole-project scan
+  // is paid once PER SKILL.
+  const registry = options.registry ?? await createProjectRegistry(projectRoot);
 
   // 3b. Load per-collection frontmatter schemas (Gap 3: packager rewrites frontmatter URI-refs
   // against the same schemas the validator uses, with body parity).
@@ -377,16 +566,28 @@ export async function packageSkill(
   const skillResource = registry.getResource(safePath.resolve(skillPath));
   const skillResourceId = skillResource?.id ?? '';
 
-  const filesConfig = options.files ?? [];
-  const deferredPaths = computeDeferredPaths(filesConfig, { skillDir: skillRoot, projectRoot });
+  const testInputDirs = options.testInputDirs ?? [];
+  // Declaring a path under `test.evals` IS the instruction not to package it, so a
+  // `files:` entry pointing into test input is dropped here rather than copied and
+  // then complained about. The adopter never has to edit config to get the right
+  // artifact; the dropped entries are reported below as warnings.
+  const { kept: filesConfig, dropped: droppedTestInputFiles } = partitionTestInputFileEntries(
+    options.files ?? [],
+    projectRoot,
+    testInputDirs,
+  );
+  const deferredArtifacts = DeferredArtifacts.from([{ files: filesConfig, skillDir: skillRoot }], projectRoot);
 
   const packagerWalkOptions: Parameters<typeof walkLinkGraph>[2] = {
     maxDepth,
-    excludeRules: excludeConfig?.rules ?? [],
+    // Declared test input is dropped from the bundle before anything else decides
+    // to include it — a link into the eval suite is not a packaging decision the
+    // author gets to make (see test-input.ts).
+    excludeRules: [...(excludeConfig?.rules ?? []), ...testInputExcludeRules(testInputDirs, projectRoot)],
     projectRoot,
     skillRootPath: safePath.resolve(skillPath),
     excludeNavigationFiles,
-    deferredPaths,
+    deferredArtifacts,
   };
   if (options.gitTracker !== undefined) {
     packagerWalkOptions.gitTracker = options.gitTracker;
@@ -432,7 +633,10 @@ export async function packageSkill(
 
   // 8. Build path map for file copying and link rewriting
   const namingBasePath = projectRoot;
-  const pathMap = buildPathMap(skillPath, bundledFiles, outputPath, resourceNaming, namingBasePath, stripPrefix, target);
+  const { pathMap, issues: collisionIssues } = buildPathMap(
+    { path: skillPath, name: skillMetadata.name },
+    bundledFiles, outputPath, resourceNaming, namingBasePath, stripPrefix, target,
+  );
 
   // 8b. Apply files config: register single-file entries in path map.
   // GLOB entries are skipped — late binding via applyFilesConfig owns their expansion.
@@ -516,7 +720,12 @@ export async function packageSkill(
   });
 
   // 12b. Copy files config entries that were not auto-discovered via link traversal.
-  await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir: outputPath, bundledFiles });
+  // Keep the dests it reports: they are what makes the orphan check below able to
+  // tell "the author forgot to document this" from "VAT put this here because the
+  // config said to." Discarding them makes the build fail on its own payload.
+  const filesConfigDests = await applyFilesConfig({
+    filesConfig, projectRoot, skillOutputDir: outputPath, bundledFiles,
+  });
 
   // 13. Post-build integrity check: no SKILL.md in subdirectories
   // A SKILL.md is a skill definition marker — it must only exist at the root.
@@ -532,21 +741,59 @@ export async function packageSkill(
   // Walker-exclusion issues (depth drops, missing targets, outside-project, etc.)
   // are combined with post-build checks and run through the validation framework.
   const rawPostBuildIssues = [
-    ...await checkUnreferencedFiles(outputPath),
+    // Found back at step 8, reported here: the path map is decided before any
+    // file is written, but a collision is a packaging FINDING and rides the same
+    // channel as every other one rather than aborting the run from inside a
+    // helper.
+    ...collisionIssues,
+    ...await checkUnreferencedFiles(outputPath, filesConfigDests),
     ...await checkBrokenPackagedLinks(outputPath),
+    // A receipt for each `files:` entry that was dropped for pointing into declared
+    // test input — the build already produced the right artifact; this just says so.
+    ...testInputFileEntryIssues(droppedTestInputFiles),
+    // Backstop: if declared test input reached the output despite both exclusions,
+    // say so rather than shipping an answer key silently.
+    ...checkPackagedTestInput({ pathMap, outputPath, testInputDirs }),
   ];
   const rawLinkIssues = [
     ...walkerExclusionsToIssues(excludedReferences, projectRoot),
+    // The link half of the same receipt: a link INTO declared test input is dropped
+    // and rewritten away, which the generic exclusion channel reports as nothing
+    // (a pattern match is author-declared intent; this exclusion is VAT's).
+    ...testInputLinkIssues(excludedReferences, testInputDirs, projectRoot),
     ...deferredAssetsToIssues(deferredAssets, projectRoot),
   ];
+
+  // ONE ledger for BOTH lanes below. `options.validation.allow` governs the
+  // build-receipt lane AND the built-SKILL.md lane, but the two see disjoint
+  // issue populations — so a lane that drains its own ledger calls "unused" an
+  // entry the OTHER lane matched. (Measured before the fix: an entry that
+  // suppressed a real LINK_MISSING_TARGET error still emitted ALLOW_UNUSED from
+  // the built-output lane, and a genuinely dead entry was reported twice.) Same
+  // defect, same fix as the validate lane — see
+  // `SkillValidationSharedContext.allowLedger`.
+  //
+  // Whose run it is comes from the caller. Given a ledger, this call is one unit
+  // of a larger run (a batch, and/or a source-tree validation pass that matches
+  // entries this build's two lanes structurally cannot) and must NOT drain —
+  // draining here is what reported a package-scoped entry matched while building
+  // skill A as unused while building skill B. Given none, the caller has claimed
+  // this call IS the run, so the drain below is honest.
+  const ownsRun = options.allowLedger === undefined;
+  const buildRunLedger = options.allowLedger ?? createAllowUsageLedger();
 
   const framework = runValidationFramework(
     [...rawLinkIssues, ...rawPostBuildIssues],
     options.validation ?? {},
+    buildRunLedger,
   );
 
   // 13c. Run full validation suite on built output
-  const postBuildValidation = await runPostBuildValidation(outputPath, options.validation);
+  const postBuildValidation = await runPostBuildValidation(
+    outputPath,
+    options.validation,
+    buildRunLedger,
+  );
 
   // 14. Generate distribution artifacts
   const artifacts = await generatePackageArtifacts(
@@ -568,25 +815,46 @@ export async function packageSkill(
     relativeLinkedFiles,
     artifacts,
     postBuildValidation,
-    framework,
+    // Drain point — but only when this call owns the run. Both lanes have now
+    // contributed; whether anything ELSE still will is the caller's claim.
+    framework: ownsRun ? withRunAllowUnused(framework, buildRunLedger) : framework,
     excludedReferences,
     skillRoot,
   });
 }
 
 /**
+ * Fold the build run's ALLOW_UNUSED verdict into the build-issue lane.
+ *
+ * ALLOW_UNUSED belongs to the RUN, not to whichever lane happened to be looking
+ * when an entry went unmatched — so it is drained once, here, and reported on
+ * the single channel (`postBuildIssues`) rather than on both.
+ */
+function withRunAllowUnused(framework: FrameworkResult, ledger: AllowUsageLedger): FrameworkResult {
+  const unused = allowUnusedIssues(ledger);
+  if (unused.length === 0) return framework;
+  const emitted = [...framework.emitted, ...unused];
+  return { ...framework, emitted, hasErrors: emitted.some(i => i.severity === 'error') };
+}
+
+/**
  * Run full validation suite against built output (context = 'built').
  * Source-only codes are automatically filtered out by validateSkillForPackaging.
+ *
+ * `allowLedger` is required, not optional: this lane is one half of a build, so
+ * it must never conclude on its own that an allow entry matched nothing.
  */
 async function runPostBuildValidation(
   outputPath: string,
   validation: ValidationConfig | undefined,
+  allowLedger: AllowUsageLedger,
 ): Promise<PackagingValidationResult> {
   const builtSkillPath = safePath.join(outputPath, 'SKILL.md');
   return validateSkillForPackaging(
     builtSkillPath,
     validation ? { validation } : undefined,
     'built',
+    { allowLedger },
   );
 }
 
@@ -616,7 +884,7 @@ function assemblePackageResult(input: AssembleResultInput): PackageSkillResult {
     },
     artifacts: input.artifacts,
     postBuildValidation: input.postBuildValidation,
-    hasErrors: input.framework.hasErrors || input.postBuildValidation.activeErrors.length > 0,
+    hasErrors: input.framework.hasErrors || input.postBuildValidation.status === 'error',
   };
 
   if (input.framework.emitted.length > 0) {
@@ -638,12 +906,24 @@ function assemblePackageResult(input: AssembleResultInput): PackageSkillResult {
 // ============================================================================
 
 /**
- * Create a standalone registry for a single skill (when no shared registry is provided).
+ * Build THE project registry: every markdown file under `projectRoot`, parsed,
+ * with links resolved and the project config attached.
+ *
+ * This is the one builder for "the registry a packaging run works against", and
+ * every lane that packages skills must call it EXACTLY ONCE per run and pass the
+ * result into each {@link packageSkill}. It crawls and parses the entire project
+ * — on a large monorepo that is thousands of files and tens of seconds — so a
+ * caller that lets `packageSkill` fall back to it per skill turns a fixed
+ * project-sized cost into a per-skill one.
+ *
+ * It also carries the config, which decides collection membership: the packager
+ * rewrites frontmatter URI-references per collection schema, mirroring the
+ * validator. A registry built without config silently belongs to no collection,
+ * so a lane that built its own config-less registry rewrote frontmatter
+ * differently from the lane that used this one — which is why there is now only
+ * one builder rather than two that happened to differ in one argument.
  */
-async function createStandaloneRegistry(projectRoot: string): Promise<ResourceRegistry> {
-  // Load the project config so the registry knows which collections each
-  // resource belongs to (Gap 3: packager rewrites frontmatter URI-refs per
-  // collection schema, mirroring validator).
+export async function createProjectRegistry(projectRoot: string): Promise<ResourceRegistry> {
   const config = await loadConfig(projectRoot);
   const registry = await ResourceRegistry.fromCrawl(
     {
@@ -1071,26 +1351,101 @@ function stampDeferredDestResolvedId(
  */
 export function getResourceSubdirForFile(filePath: string, target: PackagingTarget): string {
   if (target === 'claude-web') {
-    return 'references';
+    return CLAUDE_WEB_REFERENCES_SUBDIR;
   }
   return getTargetSubdir(filePath);
 }
 
 /**
- * Build a map of source paths (forward-slash normalized) to output paths.
- * Checks for filename collisions.
+ * The skill a path map is being built for: where it lives, and what it is called.
+ *
+ * Both, in one parameter, because the two answer different questions and the
+ * function needs both: the PATH is the map's key (an identity, kept absolute),
+ * while the NAME is what a failure REPORTS (an identifier, safe to publish —
+ * `vat skills build` publishes packaging findings verbatim on stdout, where an
+ * absolute path would name the machine that ran the build).
+ */
+interface PathMapSkill {
+  path: string;
+  name: string;
+}
+
+/** A path map plus the collisions found while building it. */
+interface PathMapResult {
+  pathMap: Map<string, string>;
+  issues: ValidationIssue[];
+}
+
+/**
+ * The FILENAME_COLLISION finding for one pair of sources that package to one dest.
+ *
+ * Naming the skill is the whole point of the first line: neither colliding file
+ * need be referenced by SKILL.md directly (both are commonly reached by deep
+ * link traversal), so without it the only way to find the owner in a large
+ * batch is to bisect it one skill at a time.
+ *
+ * By NAME, not by absolute path: this message is published verbatim in
+ * `vat skills build`'s stdout payload, the name is what that payload's per-skill
+ * rows already key on, and a `/Users/<someone>/…` prefix answers no question the
+ * reader has while naming the machine the build ran on. The colliding files
+ * follow the same rule — stated in the project's coordinates, like every other
+ * "where" this package renders (`issueLocation`).
+ *
+ * `location` is the SECOND file: of the two, it is the one whose packaging the
+ * first pre-empted, so it is the one an author renames. The remedy that is not
+ * a rename (switch `resourceNaming`) comes from the registry `fix`.
+ */
+function filenameCollisionIssue(
+  skill: PathMapSkill,
+  existingSource: string,
+  linkedFile: string,
+  targetRelPath: string,
+  resourceNaming: ResourceNamingStrategy,
+  namingBasePath: string,
+): ValidationIssue {
+  const location = issueLocation(linkedFile, namingBasePath);
+  return materializeIssue('FILENAME_COLLISION', {
+    location,
+    message:
+      `Filename collision detected when packaging skill: ${skill.name} — ` +
+      `File 1: ${issueLocation(existingSource, namingBasePath)}, ` +
+      `File 2: ${location}; both would be packaged as ${targetRelPath} ` +
+      `(current resourceNaming strategy: ${resourceNaming})`,
+  });
+}
+
+/**
+ * Build a map of source paths (forward-slash normalized) to output paths, plus
+ * a FILENAME_COLLISION finding for every pair of sources that land on one dest.
+ *
+ * A collision is REPORTED, not thrown. It used to throw a raw `Error`, which
+ * escaped the contract every other packaging finding honours — the caller got a
+ * bare string instead of a coded, located, fixable `ValidationIssue`, and the
+ * batch lane had to special-case it. The build still fails: the finding's
+ * registry severity is `error`, so it flips `hasErrors`.
+ *
+ * The colliding source keeps its path-map entry rather than being dropped. The
+ * build is failing either way, and keeping it means the link rewriter still
+ * resolves both links to a file that exists in the output — dropping it would
+ * add a second, derived PACKAGED_BROKEN_LINK on top of the real finding and
+ * point the surviving link at an unrewritable source path.
+ *
+ * @param namingBasePath - The project root. Resource names are generated
+ *   relative to it AND every path this function REPORTS is stated in its
+ *   coordinates, so no message leaves here in machine-specific terms.
  */
 function buildPathMap(
-  skillPath: string,
+  skill: PathMapSkill,
   bundledFiles: string[],
   outputPath: string,
   resourceNaming: ResourceNamingStrategy,
   namingBasePath: string,
   stripPrefix?: string,
   target: PackagingTarget = DEFAULT_PACKAGING_TARGET,
-): Map<string, string> {
+): PathMapResult {
   const pathMap = new Map<string, string>();
-  pathMap.set(toForwardSlash(skillPath), safePath.join(outputPath, 'SKILL.md'));
+  const issues: ValidationIssue[] = [];
+  pathMap.set(toForwardSlash(skill.path), safePath.join(outputPath, 'SKILL.md'));
 
   for (const linkedFile of bundledFiles) {
     const targetRelPath = generateTargetPath(
@@ -1108,22 +1463,15 @@ function buildPathMap(
     )?.[0];
 
     if (existingSource !== undefined && existingSource !== toForwardSlash(linkedFile)) {
-      throw new Error(
-        `Filename collision detected when packaging skill:\n` +
-        `  File 1: ${existingSource}\n` +
-        `  File 2: ${linkedFile}\n` +
-        `  Both would be packaged as: ${targetRelPath}\n` +
-        `\n` +
-        `  To resolve: Use a different resourceNaming strategy or ensure unique filenames.\n` +
-        `  Current strategy: ${resourceNaming}\n` +
-        `  Try 'resource-id' or 'preserve-path' for path-based naming.`
-      );
+      issues.push(filenameCollisionIssue(
+        skill, existingSource, linkedFile, targetRelPath, resourceNaming, namingBasePath,
+      ));
     }
 
     pathMap.set(toForwardSlash(linkedFile), targetPath);
   }
 
-  return pathMap;
+  return { pathMap, issues };
 }
 
 // ============================================================================
@@ -1151,32 +1499,39 @@ function buildRewriteRules(
   defaultExcludeTemplate: string | undefined,
 ): LinkRewriteRule[] {
   const rules: LinkRewriteRule[] = [];
+  const stripTemplate = defaultExcludeTemplate ?? DEFAULT_STRIP_TEMPLATE;
+  // Both spellings of a local target. A link to a directory is `local_directory`
+  // when the href ends in `/` and `local_file` when it does not; neither has a
+  // packaged counterpart, and leaving the slash form out of every rule is what let
+  // it survive rewrite verbatim and then fail the build as a broken packaged link.
+  const LOCAL_TYPES = ['local_file', 'local_directory'] as const;
 
   // Rules 1+: Per-pattern exclude rules (if any)
   for (const rule of excludeRules) {
     rules.push({
-      match: { type: 'local_file', pattern: rule.patterns },
-      template: rule.template ?? defaultExcludeTemplate ?? DEFAULT_STRIP_TEMPLATE,
+      match: { type: [...LOCAL_TYPES], pattern: rule.patterns },
+      template: rule.template ?? stripTemplate,
     });
   }
 
-  // Rule N: Bundled links — match local_file, skip excluded IDs.
+  // Rule N: Bundled links — match local targets, skip excluded IDs.
   // Using {{link.rawText}} instead of {{link.text}} preserves inline formatting
   // the author wrote in the link text (backticks, emphasis, etc.), so a source
   // link like [`foo.yaml`](…) still reads as [`foo.yaml`](new/path) after rewrite.
+  // Targets with no packaged location strip instead — see bundledLinkTemplate.
   rules.push({
     match: {
-      type: 'local_file',
+      type: [...LOCAL_TYPES],
       ...(excludedIds.length > 0 ? { excludeResourceIds: excludedIds } : {}),
     },
-    template: '[{{link.rawText}}]({{link.resource.relativePath}}{{link.fragment}})',
+    template: bundledLinkTemplate(stripTemplate),
   });
 
-  // Final catch-all: remaining local_file links (depth-exceeded, navigation, etc.)
+  // Final catch-all: local links excluded BY ID, which the rule above skips.
   if (excludedIds.length > 0) {
     rules.push({
-      match: { type: 'local_file' },
-      template: defaultExcludeTemplate ?? DEFAULT_STRIP_TEMPLATE,
+      match: { type: [...LOCAL_TYPES] },
+      template: stripTemplate,
     });
   }
 

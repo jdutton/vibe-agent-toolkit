@@ -22,6 +22,7 @@ const GUIDE_WITH_REF = '# Guide\n\nSee [reference](./reference.md).';
 const CONFIG_JSON = 'config.json';
 const CONFIG_YAML = 'config.yaml';
 const REFERENCE_MD = 'reference.md';
+const PACKAGE_JSON = 'package.json';
 
 /**
  * Helper to package skill with default output path
@@ -658,7 +659,7 @@ describe('skill-packager: output path determination', () => {
 
     // Create package.json to establish package root
     await writeFile(
-      safePath.join(tempDir, 'package.json'),
+      safePath.join(tempDir, PACKAGE_JSON),
       JSON.stringify({ name: 'test-package' })
     );
 
@@ -956,20 +957,31 @@ describe('skill-packager: integration', () => {
   });
 });
 
-const ORPHAN_DEST = 'resources/orphan.txt';
+const ORPHANED_ASSET_DEST = 'templates/shared-data.json';
+const ORPHAN_CODES = ['PACKAGED_UNREFERENCED_FILE', 'PACKAGED_BROKEN_LINK'] as const;
+const BUILD_ARTIFACTS = 'build-artifacts';
 
 /**
  * Set up a temp project with a vibe-agent-toolkit.config.yaml (so canonical
  * findProjectRoot anchors to rootDir under the config-first ladder added in
- * plan 2026-05-17) plus a package.json with "workspaces". Then create a
- * skill and an orphan asset. Returns the skill path and output path.
+ * plan 2026-05-17) plus a package.json with "workspaces". Then create a skill
+ * that LINKS a shared asset from outside its own directory.
+ *
+ * Packaged with `rewriteLinks: false` and `resourceNaming: 'resource-id'`, the
+ * asset is copied to `templates/shared-data.json` while the packaged SKILL.md
+ * still points at the source-relative path — so the copy VAT made is reachable
+ * from nothing. That is the population `PACKAGED_UNREFERENCED_FILE` exists for:
+ * a file the packager itself orphaned, reported alongside the
+ * `PACKAGED_BROKEN_LINK` for the stale href. It is deliberately NOT built from a
+ * `files:` entry — a declared `source`/`dest` pair is proof of intent, so it is
+ * exempt (see the regression test below).
  */
 async function setupUnreferencedFixture(
   rootDir: string,
   skillName: string,
 ): Promise<{ skillPath: string; outputPath: string }> {
   await writeFile(
-    safePath.join(rootDir, 'package.json'),
+    safePath.join(rootDir, PACKAGE_JSON),
     JSON.stringify({ name: 'unref-fixture', workspaces: ['skills/*'] }),
   );
   await writeFile(
@@ -978,7 +990,7 @@ async function setupUnreferencedFixture(
   );
   const skillDir = safePath.join(rootDir, 'skills', skillName);
   await mkdir(skillDir, { recursive: true });
-  await mkdir(safePath.join(rootDir, 'extra'), { recursive: true });
+  await mkdir(safePath.join(rootDir, 'shared'), { recursive: true });
 
   const skillPath = safePath.join(skillDir, 'SKILL.md');
   await writeFile(skillPath, [
@@ -988,10 +1000,10 @@ async function setupUnreferencedFixture(
     '---',
     TEST_SKILL_CONTENT,
     '',
-    'This skill has no links.',
+    'Reads [shared data](../../shared/data.json).',
   ].join('\n'));
 
-  await writeFile(safePath.join(rootDir, 'extra', 'orphan.txt'), 'orphan content\n');
+  await writeFile(safePath.join(rootDir, 'shared', 'data.json'), '{"orphan":true}\n');
 
   return {
     skillPath,
@@ -999,31 +1011,44 @@ async function setupUnreferencedFixture(
   };
 }
 
+/** Package the orphan fixture with the link rewriter switched off. */
+async function packageOrphanFixture(
+  skillPath: string,
+  outputPath: string,
+  validation?: Parameters<typeof packageSkill>[1]['validation'],
+) {
+  const options: Parameters<typeof packageSkill>[1] = {
+    outputPath,
+    formats: ['directory'],
+    rewriteLinks: false,
+    resourceNaming: 'resource-id',
+  };
+  if (validation !== undefined) options.validation = validation;
+  return packageSkill(skillPath, options);
+}
+
 describe('skill-packager: post-build integrity', () => {
-  it('should report PACKAGED_UNREFERENCED_FILE for files not referenced from markdown', async () => {
+  it('should report PACKAGED_UNREFERENCED_FILE for a packaged file the rewriter left unreachable', async () => {
     const tempDir = getTempDir();
     const rootDir = safePath.join(tempDir, 'unreferenced-root');
     await mkdir(rootDir, { recursive: true });
     const { skillPath, outputPath } = await setupUnreferencedFixture(rootDir, 'unreferenced-test');
 
-    const result = await packageSkill(skillPath, {
-      outputPath,
-      formats: ['directory'],
-      rewriteLinks: true,
-      files: [{ source: 'extra/orphan.txt', dest: ORPHAN_DEST }],
-    });
+    const result = await packageOrphanFixture(skillPath, outputPath);
 
     // File should exist in output
-    expect(existsSync(safePath.join(result.outputPath, ORPHAN_DEST))).toBe(true);
+    expect(existsSync(safePath.join(result.outputPath, ORPHANED_ASSET_DEST))).toBe(true);
 
     // Result should include the unreferenced-file issue
     expect(result.postBuildIssues).toBeDefined();
     expect(result.postBuildIssues?.some(i =>
-      i.code === 'PACKAGED_UNREFERENCED_FILE' && i.message.includes('orphan.txt')
+      i.code === 'PACKAGED_UNREFERENCED_FILE' && i.message.includes(ORPHANED_ASSET_DEST)
     )).toBe(true);
 
-    // Also assert no broken-link issues — guards against fixture drift
-    expect(result.postBuildIssues?.filter(i => i.code === 'PACKAGED_BROKEN_LINK')).toHaveLength(0);
+    // Its companion: the stale href the rewriter left behind. Both halves of the
+    // same inconsistency are reported, which is what distinguishes this from a
+    // documented-intent file.
+    expect(result.postBuildIssues?.some(i => i.code === 'PACKAGED_BROKEN_LINK')).toBe(true);
   });
 
   it('should suppress PACKAGED_UNREFERENCED_FILE when validation.severity is set to ignore', async () => {
@@ -1032,20 +1057,72 @@ describe('skill-packager: post-build integrity', () => {
     await mkdir(rootDir, { recursive: true });
     const { skillPath, outputPath } = await setupUnreferencedFixture(rootDir, 'unreferenced-suppressed-test');
 
-    const result = await packageSkill(skillPath, {
-      outputPath,
-      formats: ['directory'],
-      rewriteLinks: true,
-      files: [{ source: 'extra/orphan.txt', dest: ORPHAN_DEST }],
-      validation: { severity: { PACKAGED_UNREFERENCED_FILE: 'ignore' } },
+    const result = await packageOrphanFixture(skillPath, outputPath, {
+      severity: { PACKAGED_UNREFERENCED_FILE: 'ignore', PACKAGED_BROKEN_LINK: 'ignore' },
     });
 
     // File should still exist in output (suppression doesn't prevent packaging)
-    expect(existsSync(safePath.join(result.outputPath, ORPHAN_DEST))).toBe(true);
+    expect(existsSync(safePath.join(result.outputPath, ORPHANED_ASSET_DEST))).toBe(true);
 
     // No active issues should be reported (suppression took effect)
     expect(result.postBuildIssues ?? []).toHaveLength(0);
     // Suppression is not an error
+    expect(result.hasErrors).toBe(false);
+  });
+
+  /**
+   * The regression this guards: `files:` copies the payload into the output, then
+   * the orphan check flags it as a file the author forgot to document — VAT
+   * failing the build over a copy VAT itself performed, one step earlier, because
+   * the config said to. The shape is the ordinary one for `files:`: a vendored
+   * wasm engine and a generated schema, both consumed by code doing runtime path
+   * math, neither meant to be opened by a human reader.
+   */
+  it('should NOT report PACKAGED_UNREFERENCED_FILE for the payload files: just injected', async () => {
+    const tempDir = getTempDir();
+    const rootDir = safePath.join(tempDir, 'files-payload-root');
+    await mkdir(safePath.join(rootDir, BUILD_ARTIFACTS, 'schemas'), { recursive: true });
+    await writeFile(
+      safePath.join(rootDir, PACKAGE_JSON),
+      JSON.stringify({ name: 'files-payload-fixture', workspaces: ['skills/*'] }),
+    );
+    await writeFile(safePath.join(rootDir, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n');
+    await writeFile(safePath.join(rootDir, BUILD_ARTIFACTS, 'engine.wasm'), '\0asm');
+    await writeFile(
+      safePath.join(rootDir, BUILD_ARTIFACTS, 'schemas', 'record.schema.json'),
+      '{"type":"object"}\n',
+    );
+
+    const skillDir = safePath.join(rootDir, 'skills', 'files-payload-test');
+    await mkdir(skillDir, { recursive: true });
+    const skillPath = safePath.join(skillDir, 'SKILL.md');
+    await writeFile(skillPath, [
+      '---',
+      'name: files-payload-test',
+      'description: Ships a vendored engine and generated schemas via files config',
+      '---',
+      TEST_SKILL_CONTENT,
+      '',
+      'This skill has no links: the payload is resolved by code at runtime.',
+    ].join('\n'));
+
+    const result = await packageSkill(skillPath, {
+      outputPath: safePath.join(rootDir, 'out', 'files-payload-test'),
+      formats: ['directory'],
+      rewriteLinks: true,
+      files: [
+        { source: `${BUILD_ARTIFACTS}/engine.wasm`, dest: 'vendor/engine.wasm' },
+        { source: `${BUILD_ARTIFACTS}/schemas/*.json`, dest: 'schemas' },
+      ],
+    });
+
+    // The payload shipped…
+    expect(existsSync(safePath.join(result.outputPath, 'vendor', 'engine.wasm'))).toBe(true);
+    expect(existsSync(safePath.join(result.outputPath, 'schemas', 'record.schema.json'))).toBe(true);
+    // …and the build did not fail over it.
+    expect((result.postBuildIssues ?? []).filter(i => ORPHAN_CODES.includes(
+      i.code as (typeof ORPHAN_CODES)[number],
+    ))).toHaveLength(0);
     expect(result.hasErrors).toBe(false);
   });
 

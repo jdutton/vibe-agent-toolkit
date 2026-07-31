@@ -8,9 +8,15 @@ import * as fs from 'node:fs';
 import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
+import * as yaml from 'yaml';
 
 import type { PackagingValidationResult } from '../../src/validators/packaging-validator.js';
-import { detectNameMismatchIssue, validateSkillForPackaging } from '../../src/validators/packaging-validator.js';
+import {
+	activeErrorsOf,
+	activeWarningsOf,
+	detectNameMismatchIssue,
+	validateSkillForPackaging,
+} from '../../src/validators/packaging-validator.js';
 import {
 	createSkillContent,
 	createTransitiveSkillStructure,
@@ -111,7 +117,7 @@ describe('validateSkillForPackaging - Size validation', () => {
 		const result = await validateSkillForPackaging(skillPath);
 
 		expect(result.status).toBe('success');
-		expect(result.activeErrors).toHaveLength(0);
+		expect(activeErrorsOf(result)).toHaveLength(0);
 	});
 
 	it('should warn for SKILL.md over 500 lines', async () => {
@@ -126,10 +132,10 @@ describe('validateSkillForPackaging - Size validation', () => {
 
 		// Size checks are warnings not errors — status is success
 		expect(result.status).toBe('success');
-		expect(result.activeErrors).toHaveLength(0);
+		expect(activeErrorsOf(result)).toHaveLength(0);
 		// SKILL_LENGTH + NO_PROGRESSIVE_DISCLOSURE are warnings
-		expect(result.activeWarnings).toHaveLength(2);
-		const lengthWarn = result.activeWarnings.find(e => e.code === 'SKILL_LENGTH_EXCEEDS_RECOMMENDED');
+		expect(activeWarningsOf(result)).toHaveLength(2);
+		const lengthWarn = activeWarningsOf(result).find(e => e.code === 'SKILL_LENGTH_EXCEEDS_RECOMMENDED');
 		expect(lengthWarn).toBeDefined();
 		expect(result.metadata.skillLines).toBeGreaterThan(500);
 	});
@@ -151,7 +157,7 @@ describe('validateSkillForPackaging - Total size validation', () => {
 		)) as PackagingValidationResult;
 
 		expect(result.metadata.totalLines).toBeLessThan(2000);
-		expect(result.activeWarnings.filter((e) => e.code === 'SKILL_TOTAL_SIZE_LARGE')).toHaveLength(0);
+		expect(activeWarningsOf(result).filter((e) => e.code === 'SKILL_TOTAL_SIZE_LARGE')).toHaveLength(0);
 	});
 
 	it('should warn for total lines over 2000', async () => {
@@ -170,7 +176,7 @@ describe('validateSkillForPackaging - Total size validation', () => {
 
 		expect(result.status).toBe('success'); // warnings don't make status error
 		expect(result.metadata.totalLines).toBeGreaterThan(2000);
-		const totalSizeWarn = result.activeWarnings.find((e) => e.code === 'SKILL_TOTAL_SIZE_LARGE');
+		const totalSizeWarn = activeWarningsOf(result).find((e) => e.code === 'SKILL_TOTAL_SIZE_LARGE');
 		expect(totalSizeWarn).toBeDefined();
 	});
 });
@@ -194,7 +200,7 @@ describe('validateSkillForPackaging - File count validation', () => {
 		const result = await validateSkillForPackaging(skillPath);
 
 		expect(result.metadata.fileCount).toBe(6); // 5 refs + SKILL.md
-		expect(result.activeWarnings.filter((e) => e.code === 'SKILL_TOO_MANY_FILES')).toHaveLength(0);
+		expect(activeWarningsOf(result).filter((e) => e.code === 'SKILL_TOO_MANY_FILES')).toHaveLength(0);
 	});
 
 	it('should warn for more than 6 files', async () => {
@@ -218,7 +224,7 @@ describe('validateSkillForPackaging - File count validation', () => {
 
 		expect(result.status).toBe('success'); // warnings don't make status error
 		expect(result.metadata.fileCount).toBe(8); // 7 refs + SKILL.md
-		const fileCountWarn = result.activeWarnings.find((e) => e.code === 'SKILL_TOO_MANY_FILES');
+		const fileCountWarn = activeWarningsOf(result).find((e) => e.code === 'SKILL_TOO_MANY_FILES');
 		expect(fileCountWarn).toBeDefined();
 	});
 });
@@ -239,7 +245,7 @@ describe('validateSkillForPackaging - Link depth validation', () => {
 		const result = await validateSkillForPackaging(skillPath);
 
 		expect(result.metadata.maxLinkDepth).toBeLessThanOrEqual(2);
-		expect(result.activeWarnings.filter((e) => e.code === 'REFERENCE_TOO_DEEP')).toHaveLength(0);
+		expect(activeWarningsOf(result).filter((e) => e.code === 'REFERENCE_TOO_DEEP')).toHaveLength(0);
 	});
 
 	it('should warn for depth > 2 when linkFollowDepth is full', async () => {
@@ -251,7 +257,7 @@ describe('validateSkillForPackaging - Link depth validation', () => {
 
 		expect(result.status).toBe('success'); // warnings don't make status error
 		expect(result.metadata.maxLinkDepth).toBeGreaterThan(2);
-		const depthWarn = result.activeWarnings.find((e) => e.code === 'REFERENCE_TOO_DEEP');
+		const depthWarn = activeWarningsOf(result).find((e) => e.code === 'REFERENCE_TOO_DEEP');
 		expect(depthWarn).toBeDefined();
 	});
 
@@ -265,7 +271,7 @@ describe('validateSkillForPackaging - Link depth validation', () => {
 		expect(result.metadata.maxLinkDepth).toBeLessThanOrEqual(2);
 		expect(result.metadata.fileCount).toBe(3); // SKILL.md + level1.md + level2.md
 		expect(result.metadata.excludedReferenceCount).toBe(1); // level3.md excluded
-		expect(result.activeWarnings.filter((e) => e.code === 'REFERENCE_TOO_DEEP')).toHaveLength(0);
+		expect(activeWarningsOf(result).filter((e) => e.code === 'REFERENCE_TOO_DEEP')).toHaveLength(0);
 	});
 
 	it('should include reason detail in excludedReferences for depth-exceeded files', async () => {
@@ -297,10 +303,12 @@ describe('validateSkillForPackaging - Navigation file detection', () => {
 
 		// Navigation file links are warnings, not errors
 		expect(result.status).toBe('success');
-		const navWarn = result.activeWarnings.find((e) => e.code === 'LINK_TO_NAVIGATION_FILE');
+		const navWarn = activeWarningsOf(result).find((e) => e.code === 'LINK_TO_NAVIGATION_FILE');
 		expect(navWarn).toBeDefined();
-		// location is relative to project root
-		expect(navWarn?.location).toContain('docs/README.md');
+		// The issue is anchored at the file CONTAINING the link; the target the
+		// link points at is its own field.
+		expect(navWarn?.location).toBe('SKILL.md');
+		expect(navWarn?.link).toContain('docs/README.md');
 	});
 
 	it('should detect links to index.md', async () => {
@@ -351,11 +359,11 @@ describe('validateSkillForPackaging - Reserved word in name', () => {
 
 		const result = await validateSkillForPackaging(skillPath);
 
-		const issue = result.activeWarnings.find((e) => e.code === 'RESERVED_WORD_IN_NAME');
+		const issue = activeWarningsOf(result).find((e) => e.code === 'RESERVED_WORD_IN_NAME');
 		expect(issue).toBeDefined();
 		expect(issue?.severity).toBe('warning');
 		// Warning does not escalate status to error
-		expect(result.activeErrors.find((e) => e.code === 'RESERVED_WORD_IN_NAME')).toBeUndefined();
+		expect(activeErrorsOf(result).find((e) => e.code === 'RESERVED_WORD_IN_NAME')).toBeUndefined();
 	});
 
 	it('should not emit RESERVED_WORD_IN_NAME for a clean name', async () => {
@@ -387,7 +395,7 @@ describe('validateSkillForPackaging - Description validation', () => {
 
 		const result = await validateSkillForPackaging(skillPath);
 
-		const descWarn = result.activeWarnings.find((e) => e.code === 'DESCRIPTION_TOO_VAGUE');
+		const descWarn = activeWarningsOf(result).find((e) => e.code === 'DESCRIPTION_TOO_VAGUE');
 		expect(descWarn).toBeUndefined();
 	});
 
@@ -403,7 +411,7 @@ describe('validateSkillForPackaging - Description validation', () => {
 
 		// Description warning — status is still success
 		expect(result.status).toBe('success');
-		const descWarn = result.activeWarnings.find((e) => e.code === 'DESCRIPTION_TOO_VAGUE');
+		const descWarn = activeWarningsOf(result).find((e) => e.code === 'DESCRIPTION_TOO_VAGUE');
 		expect(descWarn).toBeDefined();
 		expect(descWarn?.message).toContain('characters');
 	});
@@ -416,7 +424,7 @@ describe('validateSkillForPackaging - Description validation', () => {
 		const result = await validateSkillForPackaging(skillPath);
 
 		// Missing description is handled by existing validator, not packaging validator
-		const descWarn = result.activeWarnings.find((e) => e.code === 'DESCRIPTION_TOO_VAGUE');
+		const descWarn = activeWarningsOf(result).find((e) => e.code === 'DESCRIPTION_TOO_VAGUE');
 		expect(descWarn).toBeUndefined();
 	});
 });
@@ -497,7 +505,7 @@ async function findTimeSensitiveIssue(
 	);
 	const { skillPath } = createTransitiveSkillStructure(tempDir, {}, skillContent);
 	const result = await validateSkillForPackaging(skillPath);
-	const allIssues = [...result.activeErrors, ...result.activeWarnings, ...result.allErrors];
+	const allIssues = [...activeErrorsOf(result), ...activeWarningsOf(result), ...result.allErrors];
 	return allIssues.find((e) => e.code === 'SKILL_TIME_SENSITIVE_CONTENT');
 }
 
@@ -531,7 +539,7 @@ async function findNonPortableAssetIssue(
 	);
 	const { skillPath } = createTransitiveSkillStructure(tempDir, {}, skillContent);
 	const result = await validateSkillForPackaging(skillPath);
-	const allIssues = [...result.activeErrors, ...result.activeWarnings, ...result.allErrors];
+	const allIssues = [...activeErrorsOf(result), ...activeWarningsOf(result), ...result.allErrors];
 	return allIssues.find((e) => e.code === 'NON_PORTABLE_ASSET_REFERENCE');
 }
 
@@ -543,7 +551,9 @@ describe('validateSkillForPackaging - Non-portable asset references', () => {
 		);
 		expect(issue).toBeDefined();
 		expect(issue?.severity).toBe('warning');
-		expect(issue?.location).toMatch(/:\d+$/);
+		// The line lives in `line`; `location` stays a bare path.
+		expect(issue?.location).not.toMatch(/:\d+$/);
+		expect(issue?.line).toBeGreaterThan(0);
 	});
 
 	it('should also catch the bare $CLAUDE_PLUGIN_ROOT form (no braces)', async () => {
@@ -609,7 +619,7 @@ describe('validateSkillForPackaging - Non-portable asset references', () => {
 		);
 		const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
 		const result = await validateSkillForPackaging(skillPath);
-		const allIssues = [...result.activeErrors, ...result.activeWarnings, ...result.allErrors];
+		const allIssues = [...activeErrorsOf(result), ...activeWarningsOf(result), ...result.allErrors];
 		const issue = allIssues.find((e) => e.code === 'NON_PORTABLE_ASSET_REFERENCE');
 		expect(issue).toBeDefined();
 		expect(issue?.severity).toBe('warning');
@@ -629,7 +639,7 @@ async function findNonPortableCommandIssue(
 	);
 	const { skillPath } = createTransitiveSkillStructure(tempDir, {}, skillContent);
 	const result = await validateSkillForPackaging(skillPath);
-	const allIssues = [...result.activeErrors, ...result.activeWarnings, ...result.allErrors];
+	const allIssues = [...activeErrorsOf(result), ...activeWarningsOf(result), ...result.allErrors];
 	return allIssues.find((e) => e.code === 'NON_PORTABLE_COMMAND');
 }
 
@@ -641,7 +651,8 @@ describe('validateSkillForPackaging - Non-portable commands', () => {
 		);
 		expect(issue).toBeDefined();
 		expect(issue?.severity).toBe('warning');
-		expect(issue?.location).toMatch(/:\d+$/);
+		expect(issue?.location).not.toMatch(/:\d+$/);
+		expect(issue?.line).toBeGreaterThan(0);
 		expect(issue?.message).toContain('timeout');
 	});
 
@@ -724,7 +735,7 @@ describe('validateSkillForPackaging - Non-portable commands', () => {
 		);
 		const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
 		const result = await validateSkillForPackaging(skillPath);
-		const allIssues = [...result.activeErrors, ...result.activeWarnings, ...result.allErrors];
+		const allIssues = [...activeErrorsOf(result), ...activeWarningsOf(result), ...result.allErrors];
 		const issue = allIssues.find((e) => e.code === 'NON_PORTABLE_COMMAND');
 		expect(issue).toBeDefined();
 		expect(issue?.severity).toBe('warning');
@@ -747,7 +758,7 @@ describe('validateSkillForPackaging - Progressive disclosure validation', () => 
 		const result = await validateSkillForPackaging(skillPath);
 
 		// Should have SKILL_LENGTH_EXCEEDS_RECOMMENDED but not NO_PROGRESSIVE_DISCLOSURE
-		const pdWarn = result.activeWarnings.find((e) => e.code === 'NO_PROGRESSIVE_DISCLOSURE');
+		const pdWarn = activeWarningsOf(result).find((e) => e.code === 'NO_PROGRESSIVE_DISCLOSURE');
 		expect(pdWarn).toBeUndefined();
 	});
 
@@ -759,7 +770,7 @@ describe('validateSkillForPackaging - Progressive disclosure validation', () => 
 		)) as PackagingValidationResult;
 
 		expect(result.status).toBe('success'); // warnings don't make status error
-		const pdWarn = result.activeWarnings.find((e) => e.code === 'NO_PROGRESSIVE_DISCLOSURE');
+		const pdWarn = activeWarningsOf(result).find((e) => e.code === 'NO_PROGRESSIVE_DISCLOSURE');
 		expect(pdWarn).toBeDefined();
 	});
 
@@ -770,7 +781,7 @@ describe('validateSkillForPackaging - Progressive disclosure validation', () => 
 			SKILL_HEADER + LINE_CONTENT.repeat(400)
 		)) as PackagingValidationResult;
 
-		const pdWarn = result.activeWarnings.find((e) => e.code === 'NO_PROGRESSIVE_DISCLOSURE');
+		const pdWarn = activeWarningsOf(result).find((e) => e.code === 'NO_PROGRESSIVE_DISCLOSURE');
 		expect(pdWarn).toBeUndefined();
 	});
 });
@@ -783,7 +794,7 @@ describe('validateSkillForPackaging - Severity / allow config (framework)', () =
 		]);
 
 		expect(result.status).toBe('success');
-		expect(result.activeWarnings.filter(
+		expect(activeWarningsOf(result).filter(
 			e => e.code === 'SKILL_LENGTH_EXCEEDS_RECOMMENDED' || e.code === 'NO_PROGRESSIVE_DISCLOSURE'
 		)).toHaveLength(0);
 	});
@@ -793,8 +804,8 @@ describe('validateSkillForPackaging - Severity / allow config (framework)', () =
 		const result = await testIgnoreWarnings(['SKILL_LENGTH_EXCEEDS_RECOMMENDED']);
 
 		expect(result.status).toBe('success');
-		expect(result.activeWarnings.find(e => e.code === 'SKILL_LENGTH_EXCEEDS_RECOMMENDED')).toBeUndefined();
-		const pdWarn = result.activeWarnings.find(e => e.code === 'NO_PROGRESSIVE_DISCLOSURE');
+		expect(activeWarningsOf(result).find(e => e.code === 'SKILL_LENGTH_EXCEEDS_RECOMMENDED')).toBeUndefined();
+		const pdWarn = activeWarningsOf(result).find(e => e.code === 'NO_PROGRESSIVE_DISCLOSURE');
 		expect(pdWarn).toBeDefined();
 	});
 
@@ -806,7 +817,7 @@ describe('validateSkillForPackaging - Severity / allow config (framework)', () =
 
 		expect(result.status).toBe('success');
 		// Both codes are allowed (suppressed), not in warnings
-		expect(result.activeWarnings.filter(
+		expect(activeWarningsOf(result).filter(
 			e => e.code === 'SKILL_LENGTH_EXCEEDS_RECOMMENDED' || e.code === 'NO_PROGRESSIVE_DISCLOSURE'
 		)).toHaveLength(0);
 		// ignoredErrors (allowed) contains the allow records
@@ -821,7 +832,7 @@ describe('validateSkillForPackaging - Severity / allow config (framework)', () =
 		});
 
 		// Expired allow still suppresses the issue itself, but emits ALLOW_EXPIRED
-		const expiredWarn = result.activeWarnings.find(e => e.code === 'ALLOW_EXPIRED');
+		const expiredWarn = activeWarningsOf(result).find(e => e.code === 'ALLOW_EXPIRED');
 		expect(expiredWarn).toBeDefined();
 		expect(expiredWarn?.message).toContain('SKILL_LENGTH_EXCEEDS_RECOMMENDED');
 		expect(expiredWarn?.message).toContain('2020-01-01');
@@ -849,10 +860,10 @@ describe('validateSkillForPackaging - Severity / allow config (framework)', () =
 		});
 
 		expect(result.status).toBe('success');
-		expect(result.activeWarnings.filter(
+		expect(activeWarningsOf(result).filter(
 			e => e.code === 'SKILL_LENGTH_EXCEEDS_RECOMMENDED' || e.code === 'NO_PROGRESSIVE_DISCLOSURE'
 		)).toHaveLength(0);
-		expect(result.activeWarnings.find(e => e.code === 'ALLOW_EXPIRED')).toBeUndefined();
+		expect(activeWarningsOf(result).find(e => e.code === 'ALLOW_EXPIRED')).toBeUndefined();
 	});
 
 	it('emits LINK_OUTSIDE_PROJECT through the framework instead of OUTSIDE_PROJECT_BOUNDARY', async () => {
@@ -869,8 +880,8 @@ describe('validateSkillForPackaging - Severity / allow config (framework)', () =
 			validation: { severity: { LINK_OUTSIDE_PROJECT: 'error' } },
 		});
 
-		expect(result.activeErrors.map(e => e.code)).toContain('LINK_OUTSIDE_PROJECT');
-		expect(result.activeErrors.map(e => e.code)).not.toContain('OUTSIDE_PROJECT_BOUNDARY');
+		expect(activeErrorsOf(result).map(e => e.code)).toContain('LINK_OUTSIDE_PROJECT');
+		expect(activeErrorsOf(result).map(e => e.code)).not.toContain('OUTSIDE_PROJECT_BOUNDARY');
 	});
 
 	it('navigational directory link produces no error and needs no allow entry', async () => {
@@ -888,7 +899,7 @@ describe('validateSkillForPackaging - Severity / allow config (framework)', () =
 		// A navigational link to an existing directory is valid — no error, no allow needed.
 		const result = await validateSkillForPackaging(skillPath);
 
-		expect(result.activeErrors.map(e => e.code)).not.toContain('LINK_TARGETS_DIRECTORY');
+		expect(activeErrorsOf(result).map(e => e.code)).not.toContain('LINK_TARGETS_DIRECTORY');
 	});
 });
 
@@ -970,10 +981,10 @@ async function expectFilesConfigError(
 	skillPath: string,
 	files: Array<{ source: string; dest: string }>,
 	code: string,
-): Promise<Awaited<ReturnType<typeof validateSkillForPackaging>>['activeErrors'][number] | undefined> {
+): Promise<ValidationIssue | undefined> {
 	const result = await validateSkillForPackaging(skillPath, { files });
 	expect(result.status).toBe('error');
-	const issue = result.activeErrors.find(e => e.code === code);
+	const issue = activeErrorsOf(result).find(e => e.code === code);
 	expect(issue).toBeDefined();
 	return issue;
 }
@@ -1004,7 +1015,7 @@ describe('validateSkillForPackaging - Files config validation', () => {
 			],
 		});
 
-		const dupError = result.activeErrors.find(e => e.code === DUPLICATE_FILES_DEST_CODE);
+		const dupError = activeErrorsOf(result).find(e => e.code === DUPLICATE_FILES_DEST_CODE);
 		expect(dupError).toBeUndefined();
 	});
 
@@ -1013,7 +1024,7 @@ describe('validateSkillForPackaging - Files config validation', () => {
 
 		const result = await validateSkillForPackaging(skillPath, { files: [] });
 
-		const dupError = result.activeErrors.find(e => e.code === DUPLICATE_FILES_DEST_CODE);
+		const dupError = activeErrorsOf(result).find(e => e.code === DUPLICATE_FILES_DEST_CODE);
 		expect(dupError).toBeUndefined();
 	});
 
@@ -1030,7 +1041,7 @@ describe('validateSkillForPackaging - Files config validation', () => {
 		});
 
 		expect(result.status).toBe('error');
-		const dupErrors = result.activeErrors.filter(e => e.code === DUPLICATE_FILES_DEST_CODE);
+		const dupErrors = activeErrorsOf(result).filter(e => e.code === DUPLICATE_FILES_DEST_CODE);
 		expect(dupErrors).toHaveLength(2);
 	});
 
@@ -1136,7 +1147,7 @@ describe('validateSkillForPackaging - Link collection integration', () => {
 		// is emitted. Status must not be 'error' from this cause.
 		const result = await validateSkillForPackaging(skillPath);
 
-		expect(result.activeErrors.map(e => e.code)).not.toContain('LINK_TARGETS_DIRECTORY');
+		expect(activeErrorsOf(result).map(e => e.code)).not.toContain('LINK_TARGETS_DIRECTORY');
 	});
 
 	it('should report directFileCount <= fileCount when links are excluded by depth', async () => {
@@ -1204,7 +1215,7 @@ describe('validateSkillForPackaging - gitignored files: source (validate path)',
 		);
 
 		// No warning for a gitignored source — the files: entry is the declaration of intent.
-		const warnings = result.activeWarnings.filter(i => i.location === gitIgnoredSrc);
+		const warnings = activeWarningsOf(result).filter(i => i.location === gitIgnoredSrc);
 		expect(warnings).toHaveLength(0);
 	});
 });
@@ -1236,5 +1247,62 @@ describe('validateSkillForPackaging - deferred dest links (files: config)', () =
 		expect(deferredIssue).toBeDefined();
 		expect(deferredIssue?.severity).toBe('info');
 		expect(deferredIssue?.location).toBe(DEFERRED_DEST);
+	});
+});
+
+/** Count non-overlapping occurrences of `needle` in `haystack` (literal, not regex). */
+function countOccurrences(haystack: string, needle: string): number {
+	return haystack.split(needle).length - 1;
+}
+
+/**
+ * A fixture that emits at least one issue of EVERY severity, so a test can tell
+ * the difference between "the partition is gone" and "there was nothing to
+ * partition". Long body → SKILL_LENGTH_EXCEEDS_RECOMMENDED (warning), broken
+ * link → LINK_MISSING_TARGET (error), DESCRIPTION_TOO_VAGUE demoted to info.
+ */
+async function setupMixedSeverityResult(tempDir: string): Promise<PackagingValidationResult> {
+	const content = createSkillContent(
+		{ name: TEST_SKILL_NAME, description: 'Short desc' },
+		`${SKILL_HEADER}See [gone](./gone.md).\n\n${LINE_CONTENT.repeat(550)}`,
+	);
+	const { skillPath } = createTransitiveSkillStructure(tempDir, {}, content);
+	return validateSkillForPackaging(skillPath, {
+		validation: { severity: { DESCRIPTION_TOO_VAGUE: 'info' } },
+	});
+}
+
+describe('PackagingValidationResult - allErrors is the sole container of issue records', () => {
+	it('serializes every issue record exactly once (no active* partition re-serialized in full)', async () => {
+		const result = await setupMixedSeverityResult(getTempDir());
+
+		// Guard: without all three severities present the assertions below cannot
+		// distinguish "deduplicated" from "empty".
+		const bySeverity = (s: string): ValidationIssue[] => result.allErrors.filter(i => i.severity === s);
+		expect(bySeverity('error').length).toBeGreaterThan(0);
+		expect(bySeverity('warning').length).toBeGreaterThan(0);
+		expect(bySeverity('info').length).toBeGreaterThan(0);
+
+		// Same serializer options the `vat validate` YAML lane uses.
+		const serialized = yaml.stringify(result, { indent: 2, lineWidth: 0, aliasDuplicateObjects: false });
+
+		// The paragraph-length `fix:` prose is the bulk of an issue record. Each
+		// distinct fix must appear exactly as many times as issues carry it.
+		const fixes = new Map<string, number>();
+		for (const issue of result.allErrors) {
+			if (issue.fix) fixes.set(issue.fix, (fixes.get(issue.fix) ?? 0) + 1);
+		}
+		expect(fixes.size).toBeGreaterThan(0);
+		for (const [fix, expected] of fixes) {
+			expect(countOccurrences(serialized, fix), `fix prose re-serialized: ${fix}`).toBe(expected);
+		}
+
+		// Severity lines are a cheap structural proxy: 2x means a full second copy.
+		for (const severity of ['error', 'warning', 'info']) {
+			expect(
+				countOccurrences(serialized, `severity: ${severity}\n`),
+				`severity: ${severity} lines`,
+			).toBe(bySeverity(severity).length);
+		}
 	});
 });

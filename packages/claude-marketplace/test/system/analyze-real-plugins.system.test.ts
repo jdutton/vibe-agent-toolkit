@@ -51,7 +51,7 @@ describe('analyzeCompatibility against local plugins', () => {
         // eslint-disable-next-line security/detect-non-literal-fs-filename -- latestDir derived from PLUGINS_DIR + readdir entries
         if (!existsSync(safePath.resolve(latestDir, '.claude-plugin/plugin.json'))) continue;
 
-        const result = await analyzeCompatibility(latestDir);
+        const result = await analyzeCompatibility(latestDir, latestDir);
         results.push(result);
 
         expect(result.plugin).toBeTruthy();

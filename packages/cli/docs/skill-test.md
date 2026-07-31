@@ -64,14 +64,14 @@ Every field is optional; an omitted knob falls back to its default.
 | `maxBudgetUsd` | number > 0 | none | `--max-budget-usd <n>` | Hard USD budget cap passed to the CLI. |
 | `timeout` | integer, **seconds** | scales with eval count: ~`2min + 2min/eval`, floored at 5min, capped at 1h | `--timeout <s>` | Wall-clock timeout. An explicit value always overrides the scaled default. |
 | `stall` | integer, **seconds** | none | `--stall <s>` | Stall watchdog — kill the spawn after this long with no stream output. |
-| `evals` | string (path) | bootstrapped suite | `--evals <path>` | Path to `evals.json`, **relative to the skill source**. |
+| `evals` | string (path or npm specifier) | auto-detected `evals/evals.json` (see below) | `--evals <path>` | Which `evals.json` to grade against. `test.evals` resolves **relative to the skill source**; `--evals` resolves **relative to the current directory**. Either may be absolute, and either may be an npm bare specifier. An explicit value always wins over the default convention. |
 | `auth` | `inherit` \| `subscription` \| `api-key` \| `auto` | `inherit` | `--auth <mode>` | Auth mechanism for the spawned session. |
 | `requireAuth` | `subscription` \| `api-key` | none | `--require-auth <mech>` | Fail-fast guard: preflight exits `2` if the effective mechanism isn't this. |
 | `baseline` | boolean | `false` | `--baseline` | Run the opt-in with/without A/B skill-lift comparison. |
 | `skillCreator` | source descriptor | `{ vendored: true }` | — | Source for the vendored skill-creator rubric. |
 | `with` | array of source descriptors | none | `--with name=<src>` | **Required** companion skills staged alongside the subject, invocable by it. |
 | `optional` | array of source descriptors | none | `--with-optional name=<src>` | **Optional** companions — skipped with a warning if unresolvable. |
-| `env` | map string→string | none | `--env KEY=VALUE` | Env vars injected into the **executor** spawn. Values interpolate `${fixturesDir}`, `${stagedSkillDir}`, `${harnessRoot}`, `${resultsDir}`. Protected names (PATH, auth, model, admin) cannot be overridden. |
+| `env` | map string→string | none | `--env KEY=VALUE` | Env vars injected into the **executor** spawn. Values interpolate `${fixturesDir}`, `${stagedSkillDir}`, `${harnessRoot}`, `${resultsDir}`. `${fixturesDir}` is **per-eval** — it names that eval's own staged workspace (`fixtures/` under the executor's working directory), so the eval must declare input `files`; using it on an eval without them fails the run (exit 2). Protected names (PATH, auth, model, admin) cannot be overridden. |
 | `passEnv` | array of strings | none | `--pass-env KEY` | Names of host env vars to forward to the executor spawn if present. Protected names are ignored with a warning. |
 | `build` | string (shell command) | none | — | Command run **once, before staging**, to generate build artifacts. Runs with `cwd` = config root. A non-zero exit aborts the run (exit `2`). |
 
@@ -94,6 +94,50 @@ unbuilt source only when the failure is non-destructive. Each declared skill bui
 Staging the same name twice across the subject, `--with`, and `--with-optional` is a
 duplicate-name error (exit `2`).
 
+### The default eval-suite convention
+
+**You do not need a `test:` block to have an eval suite.** If a skill has a file at:
+
+```
+<skill-source-dir>/evals/evals.json
+```
+
+VAT treats that as the skill's suite — the same path `vat skill test run` has always defaulted to. Two things follow from it, and they are deliberately the same two things an explicit `test:` block would give you:
+
+1. `vat skill test run <skill>` finds and runs the suite.
+2. **The suite directory is excluded from packaged output.** It holds the `expected_output` / `expectations` answer key, so shipping it would both publish the answers and let a skill under test read its own key.
+
+This is **auto-detection, not a requirement**. It is keyed on the suite *file* existing:
+
+| On disk | Treated as a suite? |
+|---|---|
+| `<skill>/evals/evals.json` | **Yes** — run by the harness, excluded from the bundle |
+| `<skill>/evals/` with no `evals.json` | No — ordinary content, ships normally |
+| `<skill>/docs/evals/…` (any other location named `evals`) | No — ordinary content, ships normally |
+| No `evals/` directory at all | No — nothing happens, no error, no warning |
+
+A skill with no suite is completely unaffected: it packages exactly as it would have, with no error and nothing excluded. The convention never makes evals mandatory.
+
+**Set `test.evals` explicitly** when your suite lives anywhere else — a shared directory, a per-skill subdirectory (VAT's own repo uses `evals/<skill-name>/evals.json`), or outside the skill tree. An explicit path always overrides the convention.
+
+> Both lanes honor this. Before it was shared, the harness auto-detected the suite while the packager did not, so a skill relying on the default had its answer key published even though the harness was protecting it.
+
+### Testing a skill you did not author
+
+A correctly packaged skill ships **no** eval suite — the suite is the answer key, and excluding it from the bundle is the whole point of the convention above. So for any skill you install rather than write, there is nothing in its tree to grade against, and you have to supply the suite yourself:
+
+```bash
+vat skill test run npm:@vendor/their-skill \
+  --evals ./our-audit-corpus/their-skill.json \
+  --i-understand-this-runs-skill-code
+```
+
+`--evals` resolves against the directory you run it from, so the path means what you typed. It may point anywhere — including outside the skill's tree entirely, which is the normal case here. It also accepts an npm bare specifier (`--evals @acme/skill-evals/their-skill.json`), honoring that package's `exports` map, so a shared corpus can be distributed as a package.
+
+The suite is never copied into anything the executor can reach. Each eval's declared input `files` are resolved relative to the **suite's** directory and staged into that eval's own workspace, so fixtures travel with the suite rather than with the skill.
+
+> **On sensitive fixtures.** `workspaces/` and `results/` are created `0700`, so a fixture that was never in your repo is not left readable by other local users. That is necessary but **not** sufficient: `grading.json` quotes the executor transcript verbatim as evidence, so anything the skill *reads out of* a fixture is written into `results/` as text — and `results/` survives `--keep` by design. Treat the harness output as being as sensitive as the fixtures you feed it.
+
 ## Global knobs (top-level `test:`)
 
 | Config key | Type | Default | CLI flag | Purpose |
@@ -109,7 +153,7 @@ duplicate-name error (exit `2`).
 | `--no-build` | Stage existing `dist` instead of building. Errors if absent for the subject or a **required** companion; an optional companion falls back to raw source with a warning. |
 | `--refresh` | Force a full re-stage, ignoring existing staged content. |
 | `--keep` | Keep the harness directory after the run (needed to inspect `results/`). |
-| `--dry-run` | Assemble the command without spawning Claude. Note this **skips the build**, so it does not preview `files:` injection. |
+| `--dry-run` | Build and stage exactly as a real run would, then stop without spawning Claude — no session, no tokens. It **does build** (when `--i-understand-this-runs-skill-code` is passed), because the question a dry run answers is "what happens if I drop this flag", and a preview built from a stale `dist/` answers it wrongly. **Without** the acknowledgement it does not build — building runs the repo's `test.build` hook, an arbitrary shell command — so it falls back to an existing `dist/` and warns it may be stale. `--no-build` skips the build either way. |
 | `--out <dir>` / `--workdir <dir>` | Override the harness output / working directory. |
 | `--allow-eval-failure` | Opt out of fail-closed: exit `0` even when an eval fails. For interactive iteration. |
 | `--allow-unverified-skill-source` | Skip the vendored manifest integrity check. |

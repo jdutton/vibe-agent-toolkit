@@ -12,7 +12,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { cpSync, existsSync, lstatSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -34,12 +34,13 @@ import {
 import { resolveSkillSource } from '../skill-source/resolve-skill-source.js';
 import type { ResolvedSkillSource, ResolveSkillSourceContext, SkillSource } from '../skill-source/types.js';
 
-import { assembleChildEnv, computeEnvTokens, resolveInjectEnv } from './declared-env.js';
+import { assembleChildEnv, assertKnownEnvTokens, computeEnvTokens, resolveInjectEnv } from './declared-env.js';
 import { runExecutorForEval } from './eval-executor.js';
 import type { EvalFragment } from './eval-fragment.js';
 import { runGraderForEval } from './eval-grader.js';
 import { EvalInputError, parseEvalSuite, stageEvalWorkspaces, type EvalEntry, type EvalSuite } from './eval-inputs.js';
 import { lintEvalExpectations, lintToolExpectationExecutables } from './eval-lint.js';
+import { DEFAULT_EVALS_SUBPATH } from './eval-suite-isolation.js';
 import { writeEvalsTemplate } from './evals-template.js';
 import {
   BootstrapNeededError,
@@ -70,7 +71,6 @@ import { ToolEvalReportSchema, type ToolEvalReport } from './tool-eval-schema.js
 import { verifyVendoredManifest } from './vendor-manifest.js';
 
 /** Default subpath of the subject's eval suite, relative to its source dir. */
-const DEFAULT_EVALS_SUBPATH = 'evals/evals.json';
 
 /**
  * Absolute path to the committed, pinned vendored skill-creator copy that ships
@@ -582,11 +582,42 @@ export function subjectSkillName(opts: RunHarnessOptions): string {
   return basename(toForwardSlash(opts.subject)) || opts.subject;
 }
 
-export function resolveScaffoldEvalsPath(opts: RunHarnessOptions, repoRoot: string, evalsSubpath: string): string {
+/**
+ * Where this run READS its eval suite from, anchored at the subject's authored
+ * source dir.
+ *
+ * `evalsRef` is `undefined` for the built-in convention and a config/flag value
+ * otherwise, and the two are resolved differently ON PURPOSE:
+ *
+ * - The convention is VAT's OWN constant, not an adopter-supplied reference, so
+ *   it stays plain path math. Routing it through {@link resolveAssetReference}
+ *   would make `evals/evals.json` a bare specifier, and an installed package
+ *   named `evals` would then shadow every skill's own suite.
+ * - An explicit value IS a config-supplied file reference, so it goes through
+ *   {@link resolveAssetReference} — the project's canonical resolver — and
+ *   therefore accepts a relative path, an ABSOLUTE path, or an npm bare
+ *   specifier honoring the target package's `exports` map.
+ *
+ * The absolute case is why this exists. A suite is the answer key, so it is
+ * inherently repo-local; testing a skill you did not author requires supplying
+ * one from outside its tree. `safePath.join` silently folded an absolute path
+ * into `<skillDir>/<path>`, which does not exist — so the run did not fail, it
+ * bootstrapped a starter template at the bogus location and graded that.
+ */
+export function resolveScaffoldEvalsPath(
+  opts: RunHarnessOptions,
+  repoRoot: string,
+  evalsRef: string | undefined,
+): string {
+  const resolveFrom = (baseDir: string): string =>
+    evalsRef === undefined
+      ? safePath.join(baseDir, DEFAULT_EVALS_SUBPATH)
+      : resolveAssetReference(evalsRef, baseDir);
+
   // Prefer the explicit authored source dir resolved by run.ts (the staged/built
   // tree is ephemeral; this is where the user can edit the scaffolded template).
   if (opts.subjectScaffoldDir !== undefined) {
-    return safePath.join(opts.subjectScaffoldDir, evalsSubpath);
+    return resolveFrom(opts.subjectScaffoldDir);
   }
   const subjectName = opts.subject;
   const override = opts.withSources?.[subjectName];
@@ -595,27 +626,18 @@ export function resolveScaffoldEvalsPath(opts: RunHarnessOptions, repoRoot: stri
   const sourcePath = overridePath ?? subjectName;
   // eslint-disable-next-line local/no-unsafe-root-join -- the positional skill source may be an absolute path; resolving it against repoRoot (which returns an absolute sourcePath unchanged) is intentional, documented behavior, not a containment bug.
   const sourceDir = safePath.resolve(repoRoot, sourcePath);
-  return safePath.join(sourceDir, evalsSubpath);
+  return resolveFrom(sourceDir);
 }
 
 /**
- * Bootstrap (exit 3) when the eval suite is absent everywhere. A real run writes
- * a persistent template at the source scaffold location and reports it; a dry run
- * must never touch the filesystem, so it reports where a real run *would* scaffold
- * and writes nothing. Both surface the same exit-3 BootstrapNeededError. No-op when
- * `evalsPath` already exists.
+ * Bootstrap (exit 3) — called when the eval suite is absent everywhere. A real run
+ * writes a persistent template at the source scaffold location and reports it; a dry
+ * run must never touch the filesystem, so it reports where a real run *would*
+ * scaffold and writes nothing. Both surface the same exit-3 BootstrapNeededError.
+ * Always throws.
  */
-function bootstrapEvalSuiteIfMissing(
-  opts: RunHarnessOptions,
-  repoRoot: string,
-  evalsSubpath: string,
-  evalsPath: string,
-): void {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own staged-subject path
-  if (existsSync(evalsPath)) {
-    return;
-  }
-  const scaffoldPath = resolveScaffoldEvalsPath(opts, repoRoot, evalsSubpath);
+function bootstrapEvalSuite(opts: RunHarnessOptions, repoRoot: string, evalsRef: string | undefined): never {
+  const scaffoldPath = resolveScaffoldEvalsPath(opts, repoRoot, evalsRef);
   if (opts.dryRun === true) {
     throw new BootstrapNeededError(scaffoldPath, { dryRun: true });
   }
@@ -623,27 +645,47 @@ function bootstrapEvalSuiteIfMissing(
 }
 
 /**
- * The eval suite (`evals/`, incl. `fixtures/`) is authored TEST INPUT, not a
- * shipped artifact — a built/dist subject won't carry it (packageSkill bundles
- * only link-reachable resources + `files:`). Since the harness reads evals and
- * fixtures relative to the staged subject, overlay the authored suite from the
- * scaffold (source) dir onto the staged subject when it lacks it. No-op when there
- * is no scaffold dir, the suite subpath has no directory, or the staged subject
- * already carries the suite — so authored evals are never overwritten.
+ * The vat-only directory a subject's eval suite is relocated to when the resolved
+ * artifact is the only place it exists (npm/url/vendored, or a source tree that
+ * ships its own evals). Deliberately OUTSIDE the harness root — the harness root is
+ * the executor's sandbox, and the suite is the answer key to the task the executor
+ * is performing. Created 0700 and removed in the run's cleanup, exactly like
+ * {@link resolveGraderOutDir}. Pure (derives a path only).
  */
-function overlayAuthoredEvalSuite(
-  opts: RunHarnessOptions,
-  subjectStagedDir: string,
-  evalsSubpath: string,
-): void {
-  const evalsDir = dirname(evalsSubpath);
-  if (evalsDir === '.' || opts.subjectScaffoldDir === undefined) return;
-  const scaffoldEvalsDir = safePath.join(opts.subjectScaffoldDir, evalsDir);
-  const stagedEvalsDir = safePath.join(subjectStagedDir, evalsDir);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own staged/scaffold paths
-  if (!existsSync(stagedEvalsDir) && existsSync(scaffoldEvalsDir)) {
-    cpSync(scaffoldEvalsDir, stagedEvalsDir, { recursive: true });
-  }
+export function resolveEvalSuiteHoldDir(dirToken: string): string {
+  return safePath.join(normalizedTmpdir(), `vat-skill-evals-${dirToken}`);
+}
+
+/**
+ * Locate the eval suite the run will read, WITHOUT it ever being reachable by the
+ * executor. Precedence, and why:
+ *
+ * 1. **The authored source** (`subjectScaffoldDir`, else the subject path). This is
+ *    the copy a developer edits, so a re-run always reflects the edit — even under
+ *    `--no-build`, where the built dist's copy could be stale.
+ * 2. **The vat-only hold dir**, when staging harvested a suite that exists nowhere
+ *    else (a fetched artifact). Its layout mirrors an authored evals dir, so
+ *    `fixtures/` resolve relative to it unchanged.
+ * 3. Neither → `undefined`, and the caller bootstraps a template (exit 3).
+ *
+ * Returns the suite's absolute path; its `dirname` is the base for each eval's
+ * declared input `files`.
+ */
+export function resolveEvalSuitePath(input: {
+  opts: RunHarnessOptions;
+  repoRoot: string;
+  /** Explicit `test.evals` / `--evals` value, or `undefined` for the convention. */
+  evalsRef: string | undefined;
+  /** Defaulted subpath — names the suite FILE inside a held artifact. */
+  evalsSubpath: string;
+  holdDir: string;
+  subjectEvalSuiteHeld: boolean;
+}): string | undefined {
+  const authored = resolveScaffoldEvalsPath(input.opts, input.repoRoot, input.evalsRef);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- authored source path resolved from opts
+  if (existsSync(authored)) return authored;
+  if (!input.subjectEvalSuiteHeld) return undefined;
+  return safePath.join(input.holdDir, basename(input.evalsSubpath));
 }
 
 /** Parse the staged eval suite and materialize each eval's input `files` into
@@ -658,7 +700,11 @@ export function stageWorkspacesForRun(
 ): { workspacesRoot: string; declaredEvalCount: number; suite: EvalSuite } {
   const workspacesRoot = safePath.joinUnderRoot(harnessRoot, 'workspaces');
   rmSync(workspacesRoot, { recursive: true, force: true });
-  mkdirSyncReal(workspacesRoot, { recursive: true });
+  // 0700, matching the harness root. These dirs hold each eval's declared input
+  // files, which with an out-of-tree suite may be data that was never in the repo
+  // at all. Inheriting the umask (0755) left them readable by any local user the
+  // moment `--out` relocated the harness root out from under its 0700 parent.
+  mkdirSyncReal(workspacesRoot, { recursive: true, mode: 0o700 });
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- evalsPath is our staged-subject path
   const suite = parseEvalSuite(readFileSync(evalsPath, 'utf-8'));
   return {
@@ -726,6 +772,10 @@ interface ResolveDeclaredChildEnvInput {
   resultsDir: string;
   evalsSubpath: string;
   subjectPluginRoot: string | null;
+  /** The eval's staged input workspace — what `${fixturesDir}` resolves under. */
+  workspaceDir?: string;
+  /** Suppress the stderr transparency line (emitted once, by the first eval). */
+  quiet?: boolean;
 }
 
 /**
@@ -742,6 +792,7 @@ function resolveDeclaredChildEnv(input: ResolveDeclaredChildEnvInput): ReturnTyp
     harnessRoot: input.harnessRoot,
     resultsDir: input.resultsDir,
     evalsSubpath: input.evalsSubpath,
+    ...(input.workspaceDir === undefined ? {} : { workspaceDir: input.workspaceDir }),
   });
   const injectEnv = resolveInjectEnv(input.opts.env, envTokens);
   const assembled = assembleChildEnv({
@@ -751,9 +802,48 @@ function resolveDeclaredChildEnv(input: ResolveDeclaredChildEnvInput): ReturnTyp
     ...(injectEnv ? { injectEnv } : {}),
     subjectPluginRoot: input.subjectPluginRoot,
   });
-  for (const warning of assembled.warnings) process.stderr.write(`warning: ${warning}\n`);
-  process.stderr.write(assembled.line + '\n');
+  if (input.quiet !== true) {
+    for (const warning of assembled.warnings) process.stderr.write(`warning: ${warning}\n`);
+    process.stderr.write(assembled.line + '\n');
+  }
   return assembled;
+}
+
+/** Everything needed to re-assemble the executor env once an eval's workspace is known. */
+interface PerEvalEnvAssembly {
+  input: Omit<ResolveDeclaredChildEnvInput, 'workspaceDir' | 'quiet'>;
+  /** Mutable latch so exactly one eval emits the stderr transparency line. */
+  logged: { done: boolean };
+}
+
+/**
+ * Split env assembly into its run-scoped and per-eval halves.
+ *
+ * Token NAMES are validated once, before any spend, so a typo fails at preflight.
+ * Token VALUES cannot all be resolved here: `${fixturesDir}` names the staged
+ * workspace of ONE eval, so the run-scoped env deliberately omits the declared
+ * `env` injections and {@link runEvalWorker} re-assembles them once the eval's
+ * workspace is known. When there are no injections, the run-scoped env is the
+ * whole story and `perEvalEnv` is absent.
+ */
+function prepareExecutorEnv(input: Omit<ResolveDeclaredChildEnvInput, 'workspaceDir' | 'quiet'>): {
+  assembledEnv: ReturnType<typeof assembleChildEnv>;
+  perEvalEnv: PerEvalEnvAssembly | undefined;
+} {
+  const { opts, ...rest } = input;
+  assertKnownEnvTokens(opts.env);
+  const { env: declaredInjectEnv, ...optsWithoutDeclaredEnv } = opts;
+  return {
+    // Quiet when injections exist: the first eval emits the transparency line with
+    // the REAL interpolated values, so this partial view is never the one printed.
+    assembledEnv: resolveDeclaredChildEnv({
+      opts: optsWithoutDeclaredEnv,
+      ...rest,
+      quiet: declaredInjectEnv !== undefined,
+    }),
+    perEvalEnv:
+      declaredInjectEnv === undefined ? undefined : { input, logged: { done: false } },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -786,6 +876,28 @@ export interface DryRunSummaryInput {
 }
 
 /**
+ * Build the "stale dist" warning lines for a `--dry-run` preview that staged an
+ * EXISTING built dist WITHOUT rebuilding it (source may have moved on since).
+ * The ONE construction shared by {@link buildDryRunSummary} (the SUBJECT, no
+ * `roleLabel`: "This preview…") and `resolveCompanionSpec` in the CLI's run.ts
+ * (a COMPANION, `roleLabel` set to e.g. "companion 'foo' (declared skill
+ * 'bar')": "This preview of companion 'foo' (declared skill 'bar')…") — the
+ * identical fact (a stale dist previewed) must warn EITHER role, worded so two
+ * stale warnings in one run are distinguishable. Keeping it as one construction is
+ * the point: when the warning existed only inside the subject's summary, a
+ * companion previewed from a stale dist warned nobody while the subject warned
+ * loudly for the same fact. Exported so run.ts reuses this construction rather
+ * than copying the string.
+ */
+export function buildStaleDistWarningLines(roleLabel?: string): string[] {
+  const subject = roleLabel === undefined ? 'This preview' : `This preview of ${roleLabel}`;
+  return [
+    `[dry-run] WARNING: ${subject} used the EXISTING built dist WITHOUT rebuilding — it may be STALE.`,
+    '[dry-run] Run `vat build` before testing to ensure the preview reflects current source.',
+  ];
+}
+
+/**
  * Build the dry-run summary string. Pure function so it can be unit-tested
  * without running the full harness.
  *
@@ -802,14 +914,17 @@ export function buildDryRunSummary(input: DryRunSummaryInput): string {
   const lines: string[] = [];
 
   if (input.wouldBuild) {
+    // Say what actually happened. `--dry-run` builds once acknowledged, so the
+    // summary reports a completed build; under `--no-build` (or without the
+    // acknowledgement) nothing was built and claiming otherwise would be the same
+    // false assurance the PROVISIONAL fingerprint marker exists to prevent.
     lines.push(
-      '[dry-run] A real run would: build + stage the declared skill, then spawn claude.',
+      input.dryRunStagedExistingDist === undefined
+        ? '[dry-run] Built + staged the declared skill; a real run would additionally spawn claude.'
+        : '[dry-run] Staged the declared skill WITHOUT building; a real run would build + stage it, then spawn claude.',
     );
     if (input.dryRunStagedExistingDist === true) {
-      lines.push(
-        '[dry-run] WARNING: This preview used the EXISTING built dist WITHOUT rebuilding — it may be STALE.',
-        '[dry-run] Run `vat build` before testing to ensure the preview reflects current source.',
-      );
+      lines.push(...buildStaleDistWarningLines());
     } else if (input.dryRunStagedExistingDist === false) {
       lines.push(
         '[dry-run] No built dist exists yet; this preview fell back to the source dir.',
@@ -822,11 +937,20 @@ export function buildDryRunSummary(input: DryRunSummaryInput): string {
   }
 
   const count = input.provenanceEntryCount;
+  // The manifest and fingerprint describe the STAGED TREE, so they are the only
+  // build-dependent facts here — everything above (env, models, knobs, eval count)
+  // is read from config and the AUTHORED suite and is exact either way. A bare
+  // 64-hex fingerprint reads as authoritative; printing one computed from a tree
+  // that was never rebuilt is the one way this preview can be confidently wrong, so
+  // it is labelled rather than left to be taken at face value.
+  const stagedFromUnbuiltTree = input.wouldBuild && input.dryRunStagedExistingDist !== undefined;
+  const provisional = stagedFromUnbuiltTree ? ' (PROVISIONAL — not rebuilt)' : '';
   lines.push(
     `[dry-run] Would run ${input.evalCount} eval${input.evalCount === 1 ? '' : 's'} as executor→grader spawn ` +
       `pair${input.evalCount === 1 ? '' : 's'} at concurrency ${input.concurrency}.`,
     `[dry-run] Executor ${input.modelFlag}; grader model ${input.graderModel} (prompt via stdin).`,
-    `[dry-run] Staged manifest: ${count} entr${count === 1 ? 'y' : 'ies'} | fingerprint: ${input.provenanceFingerprint}`,
+    `[dry-run] Staged manifest: ${count} entr${count === 1 ? 'y' : 'ies'} | ` +
+      `fingerprint: ${input.provenanceFingerprint}${provisional}`,
     `[dry-run] Provenance: ${input.provenancePath}`,
   );
 
@@ -956,17 +1080,22 @@ export function resolvePerEvalWorkspaceDir(entry: EvalEntry, workspacesRoot: str
   return safePath.joinUnderRoot(workspacesRoot, String(entry.id));
 }
 
-/** Best-effort removal of the vat-only grader dir (never throws — runs from cleanup). */
-export function removeGraderOutDir(graderOutDir: string | undefined): void {
-  if (graderOutDir === undefined) return;
+/**
+ * Best-effort removal of a vat-only tmp dir that lives OUTSIDE the harness root —
+ * the grader fragment dir and the held eval suite. Never throws (it runs from
+ * cleanup, where masking the run's real outcome would be worse than a leftover 0700
+ * tmp dir) and refuses to follow a symlinked root.
+ */
+export function removeVatOnlyDir(dir: string | undefined): void {
+  if (dir === undefined) return;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived tmp grader dir
-    if (!existsSync(graderOutDir)) return;
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived tmp grader dir
-    if (lstatSync(graderOutDir).isSymbolicLink()) return;
-    rmSync(graderOutDir, { recursive: true, force: true });
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived vat-only tmp dir
+    if (!existsSync(dir)) return;
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived vat-only tmp dir
+    if (lstatSync(dir).isSymbolicLink()) return;
+    rmSync(dir, { recursive: true, force: true });
   } catch {
-    // Swallow: a failed grader-dir cleanup is not a run failure.
+    // Swallow: a failed cleanup is not a run failure.
   }
 }
 
@@ -983,8 +1112,18 @@ interface EvalRunContext {
   maxBudgetUsd: number;
   timeoutMs: number;
   stallMs?: number;
-  /** Full assembled env (skill secrets included) for the executor spawn. */
+  /**
+   * Full assembled env (skill secrets included) for the executor spawn, WITHOUT
+   * the declared `env` injections — those carry `${fixturesDir}`, which names the
+   * eval's own workspace and so can only be resolved per eval (see `perEvalEnv`).
+   */
   executorEnv: NodeJS.ProcessEnv;
+  /**
+   * Present only when the subject declares an `env` block. Re-assembles the child
+   * env per eval so `${fixturesDir}` resolves under THAT eval's workspace. The
+   * transparency line is emitted once, by whichever eval assembles first.
+   */
+  perEvalEnv: PerEvalEnvAssembly | undefined;
   /** AUTH-ONLY env for the grader spawn (trusted vat infra loads no skill). */
   graderEnv: NodeJS.ProcessEnv;
   /** Declared executables (WITH-arm grader recognition aid); absent when unreachable. */
@@ -1012,13 +1151,27 @@ async function runEvalWorker(item: EvalWorkItem, ctx: EvalRunContext): Promise<E
   const workspaceDir = resolvePerEvalWorkspaceDir(item.entry, ctx.workspacesRoot);
   const onProgress = (chunk: string): void => { process.stderr.write(chunk); };
 
+  // Resolve the declared `env` against THIS eval's workspace. An eval that
+  // declares no input files has no workspace, so a value using ${fixturesDir}
+  // throws UnresolvableEnvTokenError (exit 2) instead of injecting a dead path.
+  let executorEnv = ctx.executorEnv;
+  if (ctx.perEvalEnv !== undefined) {
+    const { input, logged } = ctx.perEvalEnv;
+    executorEnv = resolveDeclaredChildEnv({
+      ...input,
+      ...(workspaceDir === undefined ? {} : { workspaceDir }),
+      quiet: logged.done,
+    }).env;
+    logged.done = true;
+  }
+
   const outcome = await runExecutorForEval({
     evalId,
     task: item.entry.prompt,
     subjectStagedDir: ctx.subjectStagedDir,
     ...(workspaceDir === undefined ? {} : { workspaceDir }),
     pluginDirs: item.arm === 'without' ? [] : ctx.pluginDirs,
-    env: ctx.executorEnv,
+    env: executorEnv,
     ...(ctx.model === undefined ? {} : { model: ctx.model }),
     maxTurns: ctx.maxTurns,
     maxBudgetUsd: ctx.maxBudgetUsd,
@@ -1341,7 +1494,14 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
   // treat it like --keep and never delete it.
   const harnessCreated = opts.out === undefined && opts.workdir === undefined;
   const repoRoot = opts.repoRoot ?? harnessRoot;
-  const evalsSubpath = opts.evalsSubpath ?? DEFAULT_EVALS_SUBPATH;
+  // Two distinct questions, deliberately not one value. `evalsRef` is what the
+  // adopter ASKED FOR — a `test.evals`/`--evals` value, or `undefined` for the
+  // built-in convention — and decides where the suite is READ from, which may be
+  // outside the skill tree entirely. `evalsSubpath` is the defaulted form, used
+  // where a *location inside a skill* is meant: stripping the suite out of every
+  // staged tree, and naming the suite file inside a held artifact.
+  const evalsRef = opts.evalsSubpath;
+  const evalsSubpath = evalsRef ?? DEFAULT_EVALS_SUBPATH;
   const currentUid = typeof process.getuid === 'function' ? process.getuid() : 0;
 
   // Tighten an existing directory to 0700 (if present) BEFORE mkdir — adopter
@@ -1373,6 +1533,15 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
   // separately. Referenced via the mutable `graderOutDir` below so a signal that
   // fires mid-pipeline reaps it too, not just the normal finally.
   let graderOutDir: string | undefined;
+
+  // The vat-only dir a harvested eval suite is held in. Like the grader dir it lives
+  // OUTSIDE harnessRoot (the executor's sandbox) and is named by an unpredictable
+  // token, so a suite that exists only inside a fetched artifact can still be READ by
+  // the harness without the executor being able to read it. Created eagerly (empty
+  // when the subject carried no suite, which is the common case) so the staging call
+  // stays branch-free; removed by the same cleanup as the grader dir.
+  const evalSuiteHoldDir = resolveEvalSuiteHoldDir(randomBytes(16).toString('hex'));
+
   const cleanup = (): void => {
     // Reap any still-in-flight executor/grader children FIRST. On the concurrent
     // error path `Promise.all` rejects without cancelling its siblings, and a
@@ -1385,7 +1554,11 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     killAllActiveClaudeChildren();
     lock.release();
     cleanupHarness(harnessRoot, { keep: opts.keep === true, created: harnessCreated });
-    removeGraderOutDir(graderOutDir);
+    removeVatOnlyDir(graderOutDir);
+    // The held eval suite is the answer key: reap it on EVERY exit path (including
+    // --keep, which retains the harness dir for inspection but has no business
+    // retaining the key), and never conditionally.
+    removeVatOnlyDir(evalSuiteHoldDir);
   };
   const removeSignalCleanup = installSignalCleanup({ onSignal: cleanup });
 
@@ -1412,6 +1585,8 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
         resolveSkillSource(source, ctx),
       ctx: resolveCtx,
       currentUid,
+      evalsSubpath,
+      evalSuiteHoldDir,
     });
 
     const { pluginDirs, subjectStagedDir, subjectPluginRoot, skippedOptional } = stageResult;
@@ -1421,17 +1596,21 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
       throw new InternalHarnessError('Staging did not yield a subject directory (no item tagged role:subject).');
     }
 
-    // Step 4: Resolve the subject's eval path inside its staged dir, overlaying the
-    // authored suite onto a built/dist subject that doesn't carry it (see
-    // overlayAuthoredEvalSuite). The bootstrap below then fires — and writes a
-    // template to the source scaffold — ONLY when the suite genuinely doesn't exist
-    // anywhere, so authored evals are never overwritten.
-    overlayAuthoredEvalSuite(opts, subjectStagedDir, evalsSubpath);
-
-    // Bootstrap (exit 3) fires when the suite is absent everywhere — scaffold a
-    // persistent template at the source location the user can edit, then throw.
-    const evalsPath = safePath.join(subjectStagedDir, evalsSubpath);
-    bootstrapEvalSuiteIfMissing(opts, repoRoot, evalsSubpath, evalsPath);
+    // Step 4: Locate the eval suite. Staging has already stripped it out of every
+    // staged tree — the answer key must never be reachable by the executor — so this
+    // resolves to the AUTHORED source copy, or to the vat-only hold dir when the
+    // suite existed nowhere but inside a fetched artifact. Absent from both →
+    // bootstrap a template at the source scaffold and exit 3, so an authored suite
+    // is never overwritten.
+    const evalsPath =
+      resolveEvalSuitePath({
+        opts,
+        repoRoot,
+        evalsRef,
+        evalsSubpath,
+        holdDir: evalSuiteHoldDir,
+        subjectEvalSuiteHeld: stageResult.subjectEvalSuiteHeld,
+      }) ?? bootstrapEvalSuite(opts, repoRoot, evalsRef);
 
     // Step 5: Preflight checks.
     const knobs = resolveKnobs(opts);
@@ -1471,7 +1650,11 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     // results/ — grading.json/friction.json/baseline.json come from the merged
     // grader fragments below, never from the (untrusted) model.
     const resultsDir = safePath.joinUnderRoot(harnessRoot, 'results');
-    mkdirSyncReal(resultsDir, { recursive: true });
+    // 0700, matching the harness root. `grading.json` quotes the executor
+    // transcript verbatim in each expectation's evidence, so whatever the skill
+    // read out of its input files ends up here as text — and unlike the
+    // workspaces, results/ SURVIVES `--keep` by design.
+    mkdirSyncReal(resultsDir, { recursive: true, mode: 0o700 });
 
     // Record what was actually staged & tested (the subject identity + the
     // staged manifest fingerprint + per-entry content hashes) so a run is
@@ -1511,7 +1694,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
         'Internal: preflight passed but resolvedAuth is null — refusing to spawn with an unscrubbed environment.',
       );
     }
-    const assembledEnv = resolveDeclaredChildEnv({
+    const { assembledEnv, perEvalEnv } = prepareExecutorEnv({
       opts,
       resolvedAuth,
       subjectStagedDir,
@@ -1588,6 +1771,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
       // secrets); the grader is trusted vat infra loading no skill, so it gets
       // AUTH-ONLY env — never the skill's injected secrets.
       executorEnv: assembledEnv.env,
+      perEvalEnv,
       graderEnv: resolvedAuth.forwardedEnv,
       ...(opts.declaredExecutables === undefined ? {} : { declaredExecutables: opts.declaredExecutables }),
       ...(opts.spawn === undefined ? {} : { spawn: opts.spawn }),

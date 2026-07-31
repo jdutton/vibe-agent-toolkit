@@ -9,19 +9,61 @@
  * Does NOT compose configs across VAT projects — only the nearest-ancestor
  * `vibe-agent-toolkit.config.yaml` contributes.
  */
-import type { SkillPackagingConfig } from '@vibe-agent-toolkit/agent-skills';
+import type { DeclaredEvalSuite, SkillPackagingConfig } from '@vibe-agent-toolkit/agent-skills';
 import { findProjectRoot, safePath } from '@vibe-agent-toolkit/utils';
 
 import { discoverSkillsFromConfig } from '../commands/skills/skill-discovery.js';
 import { type loadConfig, loadConfigCached } from '../utils/config-loader.js';
-import { mergeSkillPackagingConfig } from '../utils/skill-packaging-config.js';
+import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../utils/skill-packaging-config.js';
 
 /** configRoot → (abs SKILL.md path → declared skill name). One expansion per root. */
 const skillDiscoveryCache = new Map<string, Map<string, string>>();
 
-/** Clear the per-root discovery cache (call when fixtures mutate between in-process runs). */
+/** configRoot → the project's declared eval suites. One discovery + merge per root. */
+const declaredEvalSuiteCache = new Map<string, DeclaredEvalSuite[]>();
+
+/** Clear the per-root discovery caches (call when fixtures mutate between in-process runs). */
 export function resetSkillDiscoveryCache(): void {
   skillDiscoveryCache.clear();
+  declaredEvalSuiteCache.clear();
+}
+
+/**
+ * The project's declared eval suites for the config root governing `skillPath`.
+ *
+ * The single-skill counterpart to `collectDeclaredEvalSuites`: commands that resolve one
+ * SKILL.md at a time (`vat audit`, `vat skill review`, `vat skill test`) still need the
+ * WHOLE project's declarations, because test input is a project-wide rule — another
+ * skill's eval suite is an answer key no matter whose bundle is being built.
+ *
+ * Memoized per config root so a run over N skills under one root pays for discovery
+ * once, not N times. Returns `[]` when there is no governing config or no skills
+ * section — wild mode, where there is no project to enumerate.
+ */
+export async function resolveProjectDeclaredEvalSuites(
+  skillPath: string,
+): Promise<DeclaredEvalSuite[]> {
+  const projectRoot = findProjectRoot(safePath.resolve(safePath.join(skillPath, '..')));
+  if (projectRoot === null) return [];
+  const cached = declaredEvalSuiteCache.get(projectRoot);
+  if (cached !== undefined) return cached;
+
+  let suites: DeclaredEvalSuite[] = [];
+  try {
+    const config = loadConfigCached(projectRoot);
+    if (config?.skills !== undefined) {
+      suites = collectDeclaredEvalSuites(
+        config.skills,
+        await discoverSkillsFromConfig(config.skills, projectRoot),
+      );
+    }
+  } catch {
+    // A broken or unreadable config is already reported by the caller's own config
+    // load; degrade to the subject's own declaration rather than aborting the run.
+    suites = [];
+  }
+  declaredEvalSuiteCache.set(projectRoot, suites);
+  return suites;
 }
 
 export async function getDiscoveredSkillsByPath(

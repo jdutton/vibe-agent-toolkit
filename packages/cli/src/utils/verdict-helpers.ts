@@ -24,6 +24,7 @@ import {
   type Target,
   type Verdict,
 } from '@vibe-agent-toolkit/claude-marketplace';
+import { issueLocation } from '@vibe-agent-toolkit/utils';
 
 /**
  * Convert a verdict into a ValidationIssue using CODE_REGISTRY for severity,
@@ -48,11 +49,20 @@ export function verdictToIssue(verdict: Verdict, location: string): ValidationIs
  * config-level targets only. Plugin-level and marketplace-level targets
  * are surfaced by the analyzer (`vat audit --compat`) which has its own
  * walk over plugin / marketplace manifests.
+ *
+ * Takes the skill's path plus the anchor root and re-bases internally rather
+ * than accepting a pre-rendered `location`. That is deliberate: when this took
+ * a caller-supplied location string, each of the four call sites got its own
+ * chance to answer "relative to what?" and three answered "absolute" — one
+ * `vat skill review --yaml` document ended up carrying two coordinate systems,
+ * and `vat skills validate` leaked a full home-directory path. Owning the
+ * re-base here makes that unrepresentable at every call site at once.
  */
 export function computeConfigVerdicts(
   observations: readonly Observation[],
   configTargets: ReadonlyArray<Target> | undefined,
-  location: string,
+  skillSourcePath: string,
+  locationRoot: string,
 ): ValidationIssue[] {
   if (observations.length === 0) {
     return [];
@@ -69,6 +79,7 @@ export function computeConfigVerdicts(
     targets: effectiveTargets,
   });
 
+  const location = issueLocation(skillSourcePath, locationRoot);
   return verdicts.map(v => verdictToIssue(v, location));
 }
 
@@ -76,28 +87,28 @@ export function computeConfigVerdicts(
  * Mutate a PackagingValidationResult in place to include compat verdicts
  * derived from the result's observations and the configured targets.
  *
- * Verdict issues land in `allErrors` and the appropriate active bucket
- * based on resolved severity (warning → activeWarnings; info stays only
- * in allErrors). Verdicts are not allow-filterable.
+ * Verdict issues land in `allErrors`, which is the sole container for every
+ * emitted issue regardless of severity — callers derive the active partition
+ * with `activeErrorsOf` / `activeWarningsOf` rather than reading a second
+ * pre-filtered copy. Verdicts are not allow-filterable.
  */
 export function applyConfigVerdicts(
   result: PackagingValidationResult,
   configTargets: ReadonlyArray<Target> | undefined,
   skillSourcePath: string,
+  locationRoot: string,
 ): void {
-  const verdictIssues = computeConfigVerdicts(result.observations, configTargets, skillSourcePath);
+  const verdictIssues = computeConfigVerdicts(
+    result.observations,
+    configTargets,
+    skillSourcePath,
+    locationRoot,
+  );
   if (verdictIssues.length === 0) {
     return;
   }
-  for (const issue of verdictIssues) {
-    result.allErrors.push(issue);
-    if (issue.severity === 'error') {
-      result.activeErrors.push(issue);
-    } else if (issue.severity === 'warning') {
-      result.activeWarnings.push(issue);
-    }
-  }
-  if (result.activeErrors.length > 0) {
+  result.allErrors.push(...verdictIssues);
+  if (result.allErrors.some(issue => issue.severity === 'error')) {
     result.status = 'error';
   }
 }

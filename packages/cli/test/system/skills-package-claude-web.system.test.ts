@@ -35,6 +35,21 @@ const TARGET_CLAUDE_WEB = 'claude-web';
 const TARGET_CLAUDE_CODE = 'claude-code';
 
 /**
+ * "Packaged successfully" means the gate passed: exit 0 and ZERO errors.
+ *
+ * The published `status` is now the verdict of the validation the command
+ * actually ran, so it legitimately reads `warning` for a run that shipped
+ * non-blocking findings — and this fixture's frontmatter carries a `version`
+ * field, which is exactly one such warning. Pinning it to `success` asserted
+ * that the status could not tell the truth, which is the defect rather than the
+ * contract. Mirrors `assertSuccessfulBuild` in `skills-build.system.test.ts`.
+ */
+function assertPackagedWithoutErrors(parsed: Record<string, unknown>): void {
+  expect(['success', 'warning']).toContain(parsed['status']);
+  expect(parsed['issueCounts']).toMatchObject({ errors: 0 });
+}
+
+/**
  * Setup test suite for skills package --target tests
  */
 function setupSkillsPackageClaudeWebTestSuite() {
@@ -103,7 +118,7 @@ function setupSkillsPackageClaudeWebTestSuite() {
       ['--target', target, '-f', 'zip']
     );
     expect(result.status).toBe(0);
-    expect(parsed).toHaveProperty('status', 'success');
+    assertPackagedWithoutErrors(parsed);
     return assertZipStructure(outputDir);
   };
 
@@ -267,7 +282,7 @@ See [Extra](./extra.md).
     // No --target flag at all — default should behave like claude-code
     const { result, parsed } = await suite.runPackageCommand(skillMdPath, outputDir, ['-f', 'zip']);
     expect(result.status).toBe(0);
-    expect(parsed).toHaveProperty('status', 'success');
+    assertPackagedWithoutErrors(parsed);
 
     // Default: resources/ should be present, references/ should not
     const { hasResources, hasReferences } = suite.assertZipStructure(outputDir);

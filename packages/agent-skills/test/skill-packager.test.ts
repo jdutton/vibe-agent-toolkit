@@ -3,6 +3,7 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 
 
+import { allowUnusedIssues, createAllowUsageLedger, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
@@ -12,7 +13,10 @@ import {
   generateTargetPath,
   getResourceSubdirForFile,
   packageSkill,
+  packageSkills,
   synthesizeAssetId,
+  type PackageSkillOptions,
+  type SkillBuildSpec,
 } from '../src/skill-packager.js';
 
 import { createFrontmatter, setupTempDir } from './test-helpers.js';
@@ -35,6 +39,7 @@ const PRESERVE_PATH = 'preserve-path' as const;
 const RESOURCE_ID = 'resource-id' as const;
 const SIMPLE_SKILL_BODY = '# My Skill\n\nContent.';
 const BUILD_ARTIFACT_FRAGMENT = 'build artifact';
+const COLLISION_CODE = 'FILENAME_COLLISION';
 
 // ============================================================================
 // Helpers - unique to this unit test file
@@ -185,23 +190,75 @@ describe('packageSkill - preserve-path with stripPrefix (no false collision)', (
   });
 });
 
+/**
+ * Write two same-basename files under `dir` plus a SKILL.md linking both, so
+ * `basename` naming maps them onto one output path. Returns the SKILL.md path.
+ */
+async function writeCollidingSkill(dir: string, name: string): Promise<string> {
+  for (const sub of ['alpha', 'beta']) {
+    await mkdir(safePath.join(dir, sub), { recursive: true });
+    await writeFile(safePath.join(dir, sub, 'notes.md'), `# Notes ${sub}`);
+  }
+  return writeSkillMd(dir, name, 'See [a notes](./alpha/notes.md) and [b notes](./beta/notes.md).');
+}
+
+/**
+ * Package the colliding skill and return the FILENAME_COLLISION issue it emits.
+ *
+ * Deliberately not a `.rejects` helper: a collision is a FINDING, reported on
+ * the same `postBuildIssues` channel as every other packaging finding, not a
+ * raw `Error` that escapes the contract every other failure honours.
+ */
+async function collisionIssue(dir: string): Promise<ValidationIssue | undefined> {
+  const sp = await writeCollidingSkill(dir, UNIT_SKILL_NAME);
+  const result = await packWithOutput(sp);
+  return (result.postBuildIssues ?? []).find(i => i.code === COLLISION_CODE);
+}
+
 describe('packageSkill - filename collision detection', () => {
-  it('should throw when two different source files map to the same basename', async () => {
-    const tmp = getTempDir();
-    const dirA = safePath.join(tmp, 'alpha');
-    const dirB = safePath.join(tmp, 'beta');
-    await mkdir(dirA, { recursive: true });
-    await mkdir(dirB, { recursive: true });
-    await writeFile(safePath.join(dirA, 'notes.md'), '# Notes A');
-    await writeFile(safePath.join(dirB, 'notes.md'), '# Notes B');
+  it('reports the collision as a FILENAME_COLLISION issue, not a raw throw', async () => {
+    const sp = await writeCollidingSkill(getTempDir(), UNIT_SKILL_NAME);
 
-    const sp = await writeSkillMd(
-      tmp,
-      UNIT_SKILL_NAME,
-      'See [a notes](./alpha/notes.md) and [b notes](./beta/notes.md).',
-    );
+    const result = await packWithOutput(sp);
 
-    await expect(packWithOutput(sp)).rejects.toThrow(/collision/i);
+    const collision = (result.postBuildIssues ?? []).find(i => i.code === COLLISION_CODE);
+    expect(collision, 'no FILENAME_COLLISION issue in postBuildIssues').toBeDefined();
+    expect(collision?.severity).toBe('error');
+    expect(collision?.fix).toBeTruthy();
+    // The finding anchors on the file you would rename, in project coordinates.
+    expect(collision?.location).toBe('beta/notes.md');
+  });
+
+  it('still fails the build — this changes HOW the failure reports, not WHETHER', async () => {
+    const sp = await writeCollidingSkill(getTempDir(), UNIT_SKILL_NAME);
+
+    const result = await packWithOutput(sp);
+
+    expect(result.hasErrors).toBe(true);
+  });
+
+  it('names the owner without naming the machine the build ran on', async () => {
+    // Two defects, one line. The message named File 1, File 2, the target name
+    // and the strategy — but never the SKILL, so on a 90-skill batch whose
+    // colliding files are reached by deep link traversal, brute-force bisection
+    // was the only way to find the owner. Naming it by absolute path then put
+    // three `/Users/<someone>/…` paths into the build's stdout payload, which
+    // routes this text verbatim.
+    //
+    // The declared NAME is the identifier a payload can carry across machines —
+    // it is what the report's per-skill rows already key on — and the colliding
+    // files are stated in the project's own coordinates, like every other
+    // "where" this package renders (`issueLocation`).
+    const message = (await collisionIssue(getTempDir()))?.message ?? '';
+
+    expect(message).toContain(`packaging skill: ${UNIT_SKILL_NAME}`);
+    expect(message).toContain('File 1: alpha/notes.md');
+    expect(message).toContain('File 2: beta/notes.md');
+    // Asserted on the SHAPE of every value, not on absence of the temp root:
+    // macOS resolves that root through a `/private` symlink, so a containment
+    // check alone can pass over an absolute path that simply spells the prefix
+    // differently.
+    expect(message).not.toMatch(/:\s+\//);
   });
 });
 
@@ -1025,6 +1082,211 @@ describe('packageSkill - gitignored files: source (build path)', () => {
     // No warning — the files: entry already declares full publish intent.
     const issues = (result.postBuildIssues ?? []).filter(i => i.location === gitIgnoredSource);
     expect(issues).toHaveLength(0);
+  });
+});
+
+// ============================================================================
+// ALLOW_UNUSED is a verdict about the whole BUILD RUN, not about one of its lanes
+//
+// `packageSkill` validates twice: the build-receipt lane (link exclusions +
+// post-build file checks -> `postBuildIssues`) and the built-SKILL.md lane
+// (-> `postBuildValidation.allErrors`). One `validation.allow` list governs
+// both. An entry that matched in one lane is USED for the run, so neither lane
+// may call it unused; an entry that matched in NEITHER must still be reported
+// exactly once. The control pair below is the point: absence alone would also
+// be satisfied by never emitting ALLOW_UNUSED at all.
+// ============================================================================
+
+const RECEIPT_LANE_FIELD = 'validation.allow.LINK_MISSING_TARGET';
+const BUILT_LANE_FIELD = 'validation.allow.SKILL_TIME_SENSITIVE_CONTENT';
+const DEAD_ALLOW_FIELD = 'validation.allow.SKILL_TOO_LARGE';
+
+/**
+ * Package a skill carrying three allow entries, one per case, and return every
+ * ALLOW_UNUSED the build emitted on EITHER channel:
+ *  - LINK_MISSING_TARGET — a real `error` raised ONLY by the build-receipt lane
+ *    (the link target does not exist); the entry suppresses it.
+ *  - SKILL_TIME_SENSITIVE_CONTENT — raised ONLY by the built-SKILL.md lane.
+ *  - SKILL_TOO_LARGE — matches nothing anywhere (the positive control).
+ *
+ * Covering BOTH directions is the point: a ledger shared one way only still
+ * mislabels the other lane's live entry.
+ */
+async function allowUnusedFromBothBuildLanes() {
+  const dir = getTempDir();
+  const skillPath = await writeSkillMd(
+    dir,
+    UNIT_SKILL_NAME,
+    '# My Skill\n\nAs of January 2024 this is current. See [gone](./gone.md).',
+  );
+  const result = await packWithOutput(skillPath, {
+    validation: {
+      allow: {
+        LINK_MISSING_TARGET: [{ paths: ['./gone.md'], reason: 'intentionally absent' }],
+        SKILL_TIME_SENSITIVE_CONTENT: [{ paths: ['SKILL.md'], reason: 'dated on purpose' }],
+        SKILL_TOO_LARGE: [{ paths: ['nowhere/**'], reason: 'matches nothing' }],
+      },
+    },
+  });
+  return [
+    ...(result.postBuildIssues ?? []),
+    ...result.postBuildValidation.allErrors,
+  ].filter(i => i.code === 'ALLOW_UNUSED');
+}
+
+describe('packageSkill - one allow-usage ledger across both build lanes', () => {
+  it('does not report an entry the build-receipt lane matched as unused', async () => {
+    const unused = await allowUnusedFromBothBuildLanes();
+    expect(unused.filter(i => i.field === RECEIPT_LANE_FIELD)).toEqual([]);
+  });
+
+  it('does not report an entry the built-output lane matched as unused', async () => {
+    const unused = await allowUnusedFromBothBuildLanes();
+    expect(unused.filter(i => i.field === BUILT_LANE_FIELD)).toEqual([]);
+  });
+
+  it('still reports — exactly once — an entry NO lane matched', async () => {
+    const unused = await allowUnusedFromBothBuildLanes();
+    expect(unused.filter(i => i.field === DEAD_ALLOW_FIELD)).toHaveLength(1);
+  });
+});
+
+// ============================================================================
+// ALLOW_UNUSED spans every SKILL in the batch, not just every lane of one
+//
+// `validation.allow` is declared once for the package, so an entry matched
+// while building skill A is USED for the run — reporting it unused while
+// building skill B is the same defect one level up from the lane case above.
+// `packageSkills` therefore takes the RUN's ledger and never drains it; the
+// caller does, once, after the last skill.
+// ============================================================================
+
+const BATCH_MATCHED_FIELD = 'validation.allow.LINK_MISSING_TARGET';
+const BATCH_DEAD_FIELD = 'validation.allow.SKILL_TOO_LARGE';
+
+/** Same allow list for both skills — one package-level declaration. */
+const BATCH_VALIDATION = {
+  allow: {
+    LINK_MISSING_TARGET: [{ paths: ['./gone.md'], reason: 'intentionally absent' }],
+    SKILL_TOO_LARGE: [{ paths: ['nowhere/**'], reason: 'matches nothing' }],
+  },
+} as const;
+
+/** Write `skills/<name>/SKILL.md` under `root` and return its build spec. */
+async function batchSpec(root: string, name: string, body: string): Promise<SkillBuildSpec> {
+  const dir = safePath.join(root, 'skills', name);
+  await mkdir(dir, { recursive: true });
+  const skillPath = await writeSkillMd(dir, name, body);
+  return {
+    skillPath,
+    options: {
+      outputPath: safePath.join(root, 'out', name),
+      validation: structuredClone(BATCH_VALIDATION) as PackageSkillOptions['validation'],
+    },
+  };
+}
+
+/**
+ * Build two skills in ONE run and return every ALLOW_UNUSED the run produced,
+ * on any channel — the per-skill result channels AND the run-level drain.
+ *
+ * Reading both is what makes these assertions non-vacuous: a run that still
+ * drains per skill publishes its false verdicts on the per-skill channels, so
+ * looking only at the drained ledger would report zero and pass either way.
+ */
+async function allowUnusedAcrossBatch() {
+  const root = getTempDir();
+  const specs = [
+    // Only skill `alpha` links at the missing target, so only alpha's build can
+    // match the LINK_MISSING_TARGET entry.
+    await batchSpec(root, 'alpha', '# Alpha\n\nSee [gone](./gone.md).'),
+    await batchSpec(root, 'beta', '# Beta\n\nNothing to see.'),
+  ];
+
+  const ledger = createAllowUsageLedger();
+  const outcomes = await packageSkills(specs, root, ledger);
+  // Every skill here is expected to build; a `failed` outcome would silently
+  // shrink the population these assertions read, so assert the population first.
+  expect(outcomes.map(o => o.status)).toEqual(['built', 'built']);
+  const results = outcomes.flatMap(o => (o.status === 'built' ? [o.result] : []));
+
+  return [
+    ...results.flatMap(r => [...(r.postBuildIssues ?? []), ...r.postBuildValidation.allErrors]),
+    ...allowUnusedIssues(ledger),
+  ].filter(i => i.code === 'ALLOW_UNUSED');
+}
+
+describe('packageSkills - one allow-usage ledger across every skill in the run', () => {
+  it('does not report an entry another skill in the same run matched as unused', async () => {
+    const unused = await allowUnusedAcrossBatch();
+    expect(unused.filter(i => i.field === BATCH_MATCHED_FIELD)).toEqual([]);
+  });
+
+  it('still reports an entry NO skill matched — once for the run, not once per skill', async () => {
+    const unused = await allowUnusedAcrossBatch();
+    expect(unused.filter(i => i.field === BATCH_DEAD_FIELD)).toHaveLength(1);
+  });
+});
+
+// ============================================================================
+// One skill's failure must not discard the batch
+//
+// `packageSkills` loops. A skill that fails by RETURNING a result with errors
+// already degrades gracefully — the caller reports it per skill and the rest
+// still build. A skill that failed by THROWING used to escape the loop and take
+// every other skill's work with it: two failure paths through one contract,
+// opposite behaviour. Measured on a 90-skill adopter, one filename collision
+// discarded 89 successful builds and collapsed the report to one bare string.
+//
+// A filename collision no longer throws — it is a FILENAME_COLLISION issue on
+// the ordinary channel, which is one fewer way to hit this. The containment is
+// still load-bearing for every throw that remains, so this suite keeps testing
+// it through one of those: an absent `files:` source.
+// ============================================================================
+
+/** Build three skills where the middle one throws: its `files:` source is absent. */
+async function batchWithOneThrowingSkill() {
+  const root = getTempDir();
+  const twoDir = safePath.join(root, 'skills', 'two');
+  await mkdir(twoDir, { recursive: true });
+  const specs: SkillBuildSpec[] = [
+    await batchSpec(root, 'one', '# One\n\nNothing to see.'),
+    {
+      skillPath: await writeSkillMd(twoDir, 'two', '# Two\n\nNothing to see.'),
+      options: {
+        outputPath: safePath.join(root, 'out', 'two'),
+        files: [{ source: 'skills/two/never-written.txt', dest: 'never-written.txt' }],
+      },
+    },
+    await batchSpec(root, 'three', '# Three\n\nNothing to see.'),
+  ];
+  return packageSkills(specs, root, createAllowUsageLedger());
+}
+
+describe('packageSkills - a skill that throws does not discard the batch', () => {
+  it('still builds the skills either side of the failure', async () => {
+    const outcomes = await batchWithOneThrowingSkill();
+    expect(outcomes.map((o) => o.status)).toEqual(['built', 'failed', 'built']);
+  });
+
+  it('writes the surviving skills output instead of discarding it', async () => {
+    const outcomes = await batchWithOneThrowingSkill();
+    const built = outcomes.filter((o) => o.status === 'built');
+    expect(built).toHaveLength(2);
+    for (const outcome of built) {
+      expect(existsSync(safePath.join(outcome.result.outputPath, 'SKILL.md'))).toBe(true);
+    }
+  });
+
+  it('reports WHICH skill failed and why, rather than one bare string for the run', async () => {
+    const outcomes = await batchWithOneThrowingSkill();
+    const failed = outcomes.find((o) => o.status === 'failed');
+    expect(failed?.skillPath).toContain('two');
+    expect(failed?.error.message).toMatch(/does not exist/i);
+    // The message names its owner — by declared NAME, which the outcome's
+    // absolute `skillPath` (an internal identity, not a published one)
+    // deliberately does not duplicate.
+    expect(failed?.error.message).toContain("for skill 'two'");
   });
 });
 

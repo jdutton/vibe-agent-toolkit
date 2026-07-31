@@ -3,7 +3,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import type { AuditCommandOptions } from '../../src/commands/audit.js';
-import { getValidationResults, resetAuditCaches } from '../../src/commands/audit.js';
+import { deriveScanRoot, getValidationResults, resetAuditCaches } from '../../src/commands/audit.js';
 
 const MISMATCH_CODE = 'SKILL_CLAUDE_PLUGIN_NAME_MISMATCH';
 const SURFACE_TYPE_CLAUDE_PLUGIN = 'claude-plugin';
@@ -16,7 +16,13 @@ const silentLogger = {
 
 async function runAudit(targetPath: string, options: AuditCommandOptions = {}) {
   resetAuditCaches();
-  return getValidationResults(targetPath, options.recursive !== false, options, silentLogger);
+  return getValidationResults(
+    targetPath,
+    options.recursive !== false,
+    options,
+    silentLogger,
+    deriveScanRoot(targetPath),
+  );
 }
 
 function expectNoMismatchOnPlugin(results: ValidationResult[]): void {

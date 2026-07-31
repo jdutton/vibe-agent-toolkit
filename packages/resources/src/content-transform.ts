@@ -341,11 +341,117 @@ function findMatchingRule(
  * - Group 2: Link href
  *
  * Does NOT handle nested brackets in link text — the negated character class
- * `[^\]]*` excludes `]` characters, so `[text [with] brackets](href)` would
- * not be matched as a single link.
+ * excludes BOTH `[` and `]`, so `[text [with] brackets](href)` is not matched as
+ * a single link.
+ *
+ * Excluding `[` (not just `]`) is what keeps the match ANCHORED to the real link.
+ * With `[^\]]*`, a stray unpaired `[` earlier in the line — most often one inside
+ * inline code, e.g. a sentence listing glob metacharacters ``(`*`, `**`, `?`, `[`)``
+ * — starts a match that runs forward to the NEXT link's `](`, swallowing every
+ * character between them into the link text. The rewritten replacement then stands
+ * in for that whole span, so a template that does not re-emit the text verbatim
+ * DELETES the intervening prose from the packaged file. Requiring the text to be
+ * bracket-free makes the scan resume at the genuine `[`.
  */
-// eslint-disable-next-line sonarjs/slow-regex -- negated character classes [^\]] and [^)] are inherently non-backtracking
-const MARKDOWN_LINK_REGEX = /\[([^\]]*)\]\(([^)]*)\)/g;
+const MARKDOWN_LINK_REGEX = /\[([^[\]]*)\]\(([^)]*)\)/g;
+
+/** A fence opener/closer: up to 3 spaces of indent, then 3+ backticks or tildes. */
+const FENCE_LINE_REGEX = /^ {0,3}(`{3,}|~{3,})/;
+
+/**
+ * Byte ranges of `content` that are CODE, not prose — link syntax inside them is
+ * an EXAMPLE and must survive packaging verbatim.
+ *
+ * The rewrite pass replays a raw regex over the whole document, while the parsed
+ * link list comes from mdast, which never yields a link node for fenced or inline
+ * code. Those two views agree only by accident: a fenced ``[Guide](refs/guide.md)``
+ * is skipped merely because no parsed link claims that href. Let a REAL link
+ * elsewhere in the file point at the same target and the href lookup hits, so a
+ * skill teaching authored link syntax shipped the packaged path instead of the one
+ * a reader must type — or, for a target that does not ship, stripped the example to
+ * bare text. Masking the ranges makes the skip intentional.
+ *
+ * Deliberately a LINEAR scan rather than one regex over the whole document. The
+ * obvious pattern for "fence, lazily anything, matching fence" nests quantifiers
+ * and backtracks super-linearly on unclosed or near-miss fences — and this runs
+ * over every packaged markdown file, including adopter content VAT does not
+ * control. This walks each line once and each backtick run once.
+ */
+function codeSpanRanges(content: string): Array<readonly [number, number]> {
+  const ranges: Array<readonly [number, number]> = [];
+  let offset = 0;
+  let fence: { char: string; len: number; start: number } | undefined;
+
+  for (const line of content.split('\n')) {
+    const lineStart = offset;
+    offset += line.length + 1; // +1 for the '\n' that split consumed
+    const marker = FENCE_LINE_REGEX.exec(line)?.[1];
+
+    if (fence === undefined) {
+      if (marker === undefined) {
+        collectInlineSpans(line, lineStart, ranges);
+      } else {
+        fence = { char: marker[0] as string, len: marker.length, start: lineStart };
+      }
+      continue;
+    }
+    // A closer must use the same character and be at least as long as the opener.
+    if (marker?.[0] === fence.char && marker.length >= fence.len) {
+      ranges.push([fence.start, lineStart + line.length]);
+      fence = undefined;
+    }
+  }
+  // An unclosed fence runs to end of document — CommonMark closes it implicitly.
+  if (fence !== undefined) ranges.push([fence.start, content.length]);
+  return ranges;
+}
+
+/**
+ * Append every inline code span on one line. A span is a run of N backticks closed
+ * by the next run of EXACTLY N, per CommonMark.
+ */
+function collectInlineSpans(line: string, base: number, ranges: Array<readonly [number, number]>): void {
+  let i = 0;
+  while (i < line.length) {
+    if (line[i] !== '`') {
+      i += 1;
+      continue;
+    }
+    const openStart = i;
+    i = endOfBacktickRun(line, i);
+    const closeEnd = findClosingRun(line, i, i - openStart);
+    if (closeEnd === undefined) continue; // unclosed: prose, resume after the run
+    ranges.push([base + openStart, base + closeEnd]);
+    i = closeEnd;
+  }
+}
+
+/** Index just past the backtick run starting at `from`. */
+function endOfBacktickRun(line: string, from: number): number {
+  let i = from;
+  while (i < line.length && line[i] === '`') i += 1;
+  return i;
+}
+
+/** End index of the next backtick run of EXACTLY `len`, or undefined if none. */
+function findClosingRun(line: string, from: number, len: number): number | undefined {
+  let j = from;
+  while (j < line.length) {
+    if (line[j] !== '`') {
+      j += 1;
+      continue;
+    }
+    const start = j;
+    j = endOfBacktickRun(line, j);
+    if (j - start === len) return j;
+  }
+  return undefined;
+}
+
+/** True when `offset` falls inside any masked code range. */
+function isInsideCode(offset: number, ranges: ReadonlyArray<readonly [number, number]>): boolean {
+  return ranges.some(([start, end]) => offset >= start && offset < end);
+}
 
 /**
  * Regex pattern matching reference-style link definitions: `[ref]: url`
@@ -426,8 +532,13 @@ export function transformContent(
     }
   }
 
+  // Ranges to leave alone: link syntax inside code is an example, not a link.
+  const codeRanges = codeSpanRanges(content);
+
   // Replace inline markdown links in content
-  let result = content.replaceAll(MARKDOWN_LINK_REGEX, (fullMatch, rawText: string, href: string) => {
+  let result = content.replaceAll(MARKDOWN_LINK_REGEX, (fullMatch, rawText: string, href: string, offset: number) => {
+    if (isInsideCode(offset, codeRanges)) return fullMatch;
+
     // Find the corresponding ResourceLink by href
     const link = linkByHref.get(href);
 
@@ -479,7 +590,8 @@ export function transformContent(
   if (definitionByKey.size > 0) {
     result = result.replaceAll(
       MARKDOWN_DEFINITION_REGEX,
-      (fullMatch, ref: string, href: string) => {
+      (fullMatch, ref: string, href: string, offset: number) => {
+        if (isInsideCode(offset, codeRanges)) return fullMatch;
         const trimmedHref = href.trim();
 
         // Look up the corresponding definition ResourceLink

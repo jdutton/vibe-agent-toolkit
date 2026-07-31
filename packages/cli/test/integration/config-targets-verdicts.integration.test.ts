@@ -14,7 +14,7 @@
 
 import fs from 'node:fs';
 
-import { validateSkillForPackaging, type SkillPackagingConfig } from '@vibe-agent-toolkit/agent-skills';
+import { activeWarningsOf, validateSkillForPackaging, type SkillPackagingConfig } from '@vibe-agent-toolkit/agent-skills';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -53,7 +53,7 @@ describe('config-level targets → compat verdicts (integration)', () => {
       targets: ['claude-code'],
     };
     const result = await validateSkillForPackaging(skillPath, packagingConfig);
-    applyConfigVerdicts(result, packagingConfig.targets, skillPath);
+    applyConfigVerdicts(result, packagingConfig.targets, skillPath, tempDir);
 
     const capabilityCodes = result.allErrors
       .filter(i => i.code.startsWith('CAPABILITY_'))
@@ -69,7 +69,7 @@ describe('config-level targets → compat verdicts (integration)', () => {
   it('emits COMPAT_TARGET_UNDECLARED (info) when no targets are declared', async () => {
     const packagingConfig: SkillPackagingConfig = {};
     const result = await validateSkillForPackaging(skillPath, packagingConfig);
-    applyConfigVerdicts(result, packagingConfig.targets, skillPath);
+    applyConfigVerdicts(result, packagingConfig.targets, skillPath, tempDir);
 
     const undeclared = result.allErrors.filter(i => i.code === 'COMPAT_TARGET_UNDECLARED');
     expect(undeclared.length).toBeGreaterThanOrEqual(1);
@@ -84,14 +84,14 @@ describe('config-level targets → compat verdicts (integration)', () => {
       targets: ['claude-chat'],
     };
     const result = await validateSkillForPackaging(skillPath, packagingConfig);
-    applyConfigVerdicts(result, packagingConfig.targets, skillPath);
+    applyConfigVerdicts(result, packagingConfig.targets, skillPath, tempDir);
 
     const incompatible = result.allErrors.filter(i => i.code === 'COMPAT_TARGET_INCOMPATIBLE');
     expect(incompatible.length).toBeGreaterThanOrEqual(1);
     expect(incompatible[0]?.severity).toBe('warning');
 
-    // Warning verdicts also land in activeWarnings.
-    const activeIncompatible = result.activeWarnings.filter(
+    // Warning verdicts show up in the derived active-warning partition.
+    const activeIncompatible = activeWarningsOf(result).filter(
       i => i.code === 'COMPAT_TARGET_INCOMPATIBLE',
     );
     expect(activeIncompatible.length).toBeGreaterThanOrEqual(1);

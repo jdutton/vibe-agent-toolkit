@@ -10,12 +10,13 @@ import type { SkillPackagingConfig, SkillSource } from '@vibe-agent-toolkit/agen
 export type SkillDistribution =
   /** Pool skill: built by `packageSkill` to `dist/skills/<fsSafeName>`. */
   | { kind: 'pool' }
-  /** Plugin-local tree-copy skill: shipped via `vat claude plugin build`. */
+  /** Plugin-local skill: packaged in place by `vat claude plugin build`. */
   | {
       kind: 'plugin-local';
       marketplaceName: string;
       pluginName: string;
-      skillDirName: string;
+      /** Dir path relative to the plugin's `skills/` dir — `group/nested` when nested. */
+      skillDirPath: string;
     };
 
 /**

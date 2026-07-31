@@ -13,6 +13,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
   BertTokenizer,
+  CasedVocabError,
+  IncompatibleVocabError,
   l2Normalize,
   meanPooling,
 } from '../../src/embedding-providers/onnx-utils.js';
@@ -69,6 +71,54 @@ function buildTestVocab(): string {
   return lines.join('\n');
 }
 
+/**
+ * A BERT-style WordPiece vocabulary whose special tokens sit at NON-standard
+ * ids: [CLS]=0, [SEP]=1, [UNK]=2, [PAD]=3 — none of them at the classic
+ * 101/102/100/0 positions. The WordPiece algorithm still applies, so the
+ * tokenizer must derive these ids from the file rather than assume them.
+ */
+function buildShiftedBertVocab(): string {
+  return ['[CLS]', '[SEP]', '[UNK]', '[PAD]', 'hello', 'world'].join('\n');
+}
+
+/**
+ * A RoBERTa / XLM-R style vocabulary: `<s>`/`<pad>`/`</s>`/`<unk>` rather than
+ * the BERT `[CLS]`/`[SEP]`/`[UNK]`/`[PAD]` literals. Framing such a vocab with
+ * BERT ids silently produces arbitrary wordpieces, so it must be rejected.
+ */
+function buildRobertaStyleVocab(): string {
+  return ['<s>', '<pad>', '</s>', '<unk>', 'hello', 'world'].join('\n');
+}
+
+/** The four BERT special-token literals, which every vocab below needs. */
+const BERT_SPECIALS = ['[CLS]', '[SEP]', '[UNK]', '[PAD]'] as const;
+
+/**
+ * A CASED BERT WordPiece vocab: the special tokens are all present, so it is
+ * structurally usable — but the entries are capitalized, and this tokenizer's
+ * unconditional lowercasing would miss every one of them.
+ */
+function buildCasedBertVocab(): string {
+  return [...BERT_SPECIALS, 'Hello', 'World', 'The', 'Paris', 'hello'].join('\n');
+}
+
+/**
+ * An uncased vocab whose only uppercase tokens are BRACKETED reserved literals.
+ * Present in every real uncased vocab, so these must never read as casing.
+ */
+function buildUncasedVocabWithReservedTokens(): string {
+  return [...BERT_SPECIALS, '[MASK]', '[unused0]', '[unused1]', 'hello', 'world'].join('\n');
+}
+
+/**
+ * An uncased vocab with exactly ONE stray uppercase token out of many — below
+ * the ratio, so it must still load.
+ */
+function buildUncasedVocabWithStrayUppercase(): string {
+  const words = Array.from({ length: 200 }, (_, index) => `tok${index.toString()}`);
+  return [...BERT_SPECIALS, 'Stray', ...words].join('\n');
+}
+
 // ---------------------------------------------------------------------------
 // Test Setup
 // ---------------------------------------------------------------------------
@@ -77,14 +127,21 @@ let vocabDir: string;
 let vocabPath: string;
 let tokenizer: BertTokenizer;
 
+/** Write a vocab file into the shared temp directory and return its path. */
+async function writeVocab(fileName: string, content: string): Promise<string> {
+  const filePath = safePath.join(vocabDir, fileName);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp file
+  await writeFile(filePath, content, 'utf8');
+  return filePath;
+}
+
 beforeAll(async () => {
   vocabDir = safePath.join(normalizedTmpdir(), `onnx-utils-test-${Date.now().toString()}`);
-  vocabPath = safePath.join(vocabDir, 'vocab.txt');
 
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
   await mkdir(vocabDir, { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp file
-  await writeFile(vocabPath, buildTestVocab(), 'utf8');
+
+  vocabPath = await writeVocab('vocab.txt', buildTestVocab());
 
   tokenizer = await BertTokenizer.fromVocabFile(vocabPath);
 });
@@ -111,6 +168,12 @@ const SEP_TOKEN = 102;
 /** UNK token ID */
 const UNK_TOKEN = 100;
 
+/** Synthetic model id used to assert the load error names the configured model */
+const incompatibleModelId = 'test-org/xlm-r-embedder';
+
+/** Synthetic model id for the cased-vocab refusal */
+const casedModelId = 'test-org/bert-base-cased-embedder';
+
 /** Common test phrases */
 const helloWorld = 'hello world';
 const longPhrase = 'hello world the cat sat on the mat';
@@ -123,6 +186,109 @@ describe('BertTokenizer', () => {
   describe('fromVocabFile', () => {
     it('should create a tokenizer from a vocab file', () => {
       expect(tokenizer).toBeDefined();
+    });
+
+    it('should frame sequences with the standard ids for a standard BERT vocab', () => {
+      const result = tokenizer.tokenize('hello');
+
+      expect(result.inputIds).toEqual([CLS_TOKEN, 103, SEP_TOKEN]);
+    });
+
+    it('should derive [CLS]/[SEP] ids from the vocab rather than assuming 101/102', async () => {
+      const shiftedPath = await writeVocab('shifted-vocab.txt', buildShiftedBertVocab());
+      const shifted = await BertTokenizer.fromVocabFile(shiftedPath);
+
+      // [CLS]=0, hello=4, world=5, [SEP]=1
+      expect(shifted.tokenize(helloWorld).inputIds).toEqual([0, 4, 5, 1]);
+    });
+
+    it('should derive the [UNK] id from the vocab', async () => {
+      const shiftedPath = await writeVocab('shifted-unk-vocab.txt', buildShiftedBertVocab());
+      const shifted = await BertTokenizer.fromVocabFile(shiftedPath);
+
+      // [CLS]=0, [UNK]=2, [SEP]=1
+      expect(shifted.tokenize('xyzzy').inputIds).toEqual([0, 2, 1]);
+    });
+
+    it('should derive the [PAD] id from the vocab when padding a batch', async () => {
+      const shiftedPath = await writeVocab('shifted-pad-vocab.txt', buildShiftedBertVocab());
+      const shifted = await BertTokenizer.fromVocabFile(shiftedPath);
+
+      const batch = shifted.tokenizeBatch(['hello', helloWorld]);
+
+      // Shorter sequence [0, 4, 1] padded to length 4 with [PAD]=3 (not 0)
+      expect(safeGet(batch.inputIds, 0)).toEqual([0, 4, 1, 3]);
+    });
+
+    it('should reject a vocabulary that is not BERT-style WordPiece', async () => {
+      const robertaPath = await writeVocab('roberta-vocab.txt', buildRobertaStyleVocab());
+
+      await expect(
+        BertTokenizer.fromVocabFile(robertaPath, incompatibleModelId),
+      ).rejects.toThrow(IncompatibleVocabError);
+    });
+
+    it('should name the model, the missing tokens, and the tokens found instead', async () => {
+      const robertaPath = await writeVocab('roberta-message-vocab.txt', buildRobertaStyleVocab());
+
+      const error: unknown = await BertTokenizer.fromVocabFile(
+        robertaPath,
+        incompatibleModelId,
+      ).then(
+        () => undefined,
+        (cause: unknown) => cause,
+      );
+
+      expect(error).toBeInstanceOf(IncompatibleVocabError);
+      const message = error instanceof Error ? error.message : '';
+
+      expect(message).toContain(incompatibleModelId);
+      expect(message).toContain('roberta-message-vocab.txt');
+      expect(message).toContain('[CLS]');
+      expect(message).toContain('[SEP]');
+      expect(message).toContain('[UNK]');
+      expect(message).toContain('[PAD]');
+      expect(message).toContain('<s>');
+    });
+
+    it('should reject a CASED WordPiece vocabulary rather than silently degrading', async () => {
+      const casedPath = await writeVocab('cased-vocab.txt', buildCasedBertVocab());
+
+      await expect(
+        BertTokenizer.fromVocabFile(casedPath, casedModelId),
+      ).rejects.toThrow(CasedVocabError);
+    });
+
+    it('should name the model and the cased entries it found', async () => {
+      const casedPath = await writeVocab('cased-message-vocab.txt', buildCasedBertVocab());
+
+      const error: unknown = await BertTokenizer.fromVocabFile(casedPath, casedModelId).then(
+        () => undefined,
+        (cause: unknown) => cause,
+      );
+
+      expect(error).toBeInstanceOf(CasedVocabError);
+      const message = error instanceof Error ? error.message : '';
+
+      expect(message).toContain(casedModelId);
+      expect(message).toContain('cased-message-vocab.txt');
+      expect(message).toContain('Hello');
+    });
+
+    it('should still accept an uncased vocab whose ONLY uppercase tokens are bracketed', async () => {
+      // `[CLS]`/`[UNK]`/`[MASK]`/`[unused0]` are uppercase in EVERY uncased
+      // vocab. If they counted as casing evidence, no vocab would ever load.
+      const path = await writeVocab('bracketed-only-vocab.txt', buildUncasedVocabWithReservedTokens());
+
+      await expect(BertTokenizer.fromVocabFile(path)).resolves.toBeInstanceOf(BertTokenizer);
+    });
+
+    it('should still accept an uncased vocab carrying one stray uppercase token', async () => {
+      // The negative case for the ratio: a lone artifact in an otherwise
+      // lowercased vocab must not refuse a usable model.
+      const path = await writeVocab('stray-uppercase-vocab.txt', buildUncasedVocabWithStrayUppercase());
+
+      await expect(BertTokenizer.fromVocabFile(path)).resolves.toBeInstanceOf(BertTokenizer);
     });
   });
 
