@@ -63,7 +63,7 @@ export function createCommitMessage(
  */
 function git(
   args: string[],
-  options: { cwd: string; allowFailure?: boolean; timeout?: number }
+  options: { cwd: string; allowFailure?: boolean; timeout?: number; input?: string }
 ): { stdout: string; stderr: string; status: number } {
   // eslint-disable-next-line sonarjs/no-os-command-from-path -- git is a standard system command
   const result = spawnSync('git', args, {
@@ -71,18 +71,32 @@ function git(
     encoding: 'utf-8',
     stdio: ['pipe', 'pipe', 'pipe'],
     timeout: options.timeout,
+    ...(options.input === undefined ? {} : { input: options.input }),
   });
+
+  // Name the subcommand only. The full argv is not safe to interpolate here: a
+  // commit message can be hundreds of KB, and dumping it made the real error
+  // unreadable in CI logs.
+  const label = args[0] ?? '<no args>';
+
+  // `spawnSync` reports a process that never ran (E2BIG, ENOENT, timeout kill) as
+  // `status: null` with the cause in `result.error`. Coercing that to an exit code
+  // invents a failure git never reported and discards the only diagnostic there is —
+  // the symptom is a confident "exit 1" with empty stderr. Report it as what it is.
+  if (result.error && !options.allowFailure) {
+    throw new Error(`git ${label} could not run: ${result.error.message}`);
+  }
 
   const status = result.status ?? 1;
   if (status !== 0 && !options.allowFailure) {
-    throw new Error(
-      `git ${args.join(' ')} failed (exit ${status}):\n${result.stderr ?? ''}`
-    );
+    throw new Error(`git ${label} failed (exit ${status}):\n${result.stderr ?? ''}`);
   }
 
   return {
     stdout: (result.stdout ?? '').trim(),
-    stderr: (result.stderr ?? '').trim(),
+    // Surface a spawn-level failure to `allowFailure` callers too, which would
+    // otherwise see an empty stderr beside a fabricated non-zero status.
+    stderr: (result.stderr ?? result.error?.message ?? '').trim(),
     status,
   };
 }
@@ -229,7 +243,11 @@ export async function publishToGitBranch(options: PublishGitOptions): Promise<vo
       return;
     }
 
-    git(['commit', '-m', commitMessage], { cwd: tmpRepo });
+    // `-F -` (message on stdin), never `-m`. The message embeds the release's whole
+    // changelog section, and Linux caps a SINGLE argv entry at MAX_ARG_STRLEN (131,072
+    // bytes) independently of the much larger ARG_MAX — so a long enough release note
+    // made `git commit` fail to spawn at all. stdin has no such ceiling.
+    git(['commit', '-F', '-'], { cwd: tmpRepo, input: commitMessage });
 
     const log = git(['log', '--oneline', '-1'], { cwd: tmpRepo });
     logger.info(`   Commit: ${log.stdout}`);
