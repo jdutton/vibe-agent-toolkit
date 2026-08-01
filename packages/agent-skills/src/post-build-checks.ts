@@ -13,6 +13,7 @@ import { type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { parseHtml } from '@vibe-agent-toolkit/resources';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
+import { normalizeRelPath } from './files-config.js';
 import { evaluate, makeRuleContext, materializeIssue } from './validators/rule-engine/index.js';
 
 /**
@@ -127,16 +128,16 @@ function collectBrokenLinkIssues(
   for (const href of hrefs) {
     const resolved = toForwardSlash(safePath.resolve(dirname(sourceFile), href));
     if (!allFileSet.has(resolved)) {
-      // A navigational directory link (href ending in `/`, classified `local_directory`)
-      // is a valid target if the directory itself exists on disk — walkDir populates
-      // allFileSet with FILES only, so directory paths are never in the set.
-      // Note: a NO-SLASH link (`[Concepts](concepts)`, classified `local_file`) that
-      // happens to resolve to a directory is a different case — it matches the
-      // link-rewrite bundled-link rule (skill-packager.ts buildRewriteRules) and
-      // renders with an undefined `link.resource.*`. Fixing that is the
-      // link-rewrite engine's job, tracked under #129 (slice 3, built-path
-      // unification). The slash form (`concepts/`, `local_directory`) survives
-      // rewrite verbatim and is the realistic navigational case this guard covers.
+      // A link whose target is a directory that EXISTS in the output is valid —
+      // walkDir populates allFileSet with FILES only, so directory paths are never
+      // in the set. Reached today only for a directory the packager materialized
+      // itself (a `files:` dest tree); an AUTHORED directory link never survives
+      // this far, because the packager flattens bundled resources into `resources/`
+      // and so strips any link that has no packaged counterpart (skill-packager.ts
+      // `bundledLinkTemplate`). Before that strip existed, the slash spelling
+      // (`concepts/`) survived rewrite verbatim and landed here pointing at a
+      // directory the output does not have — failing the build under
+      // PACKAGED_BROKEN_LINK, whose remediation text blames a VAT bug.
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved is a normalized path from a validated output directory
       const isExistingDirectory = statSync(resolved, { throwIfNoEntry: false })?.isDirectory() === true;
       if (isExistingDirectory) {
@@ -252,8 +253,27 @@ async function addMentionReferences(
  *    is mentioned anywhere in packaged content files (markdown or HTML).
  *    Authors often document CLI scripts via invocation examples rather than
  *    formal links, and that counts as documented.
+ *
+ * A third way to not be an orphan is to be DECLARED: `filesConfigDests` carries
+ * the `files:` dests the packager just materialized (the return value of
+ * `applyFilesConfig`). Naming a `source`/`dest` pair in config is proof of intent
+ * on equal footing with a link or a mention — the rule engine has always modeled
+ * it as a peer clause (`ctx.inFilesConfig`) — so the caller MUST pass the list.
+ * Omitting it makes every `files:`-injected file (a vendored engine, a generated
+ * schema, a data pack — none of them meant for a human reader) fail the build as
+ * a file the author forgot to document. The parameter defaults to empty only so a
+ * check against an output dir with no `files:` config reads cleanly.
+ *
+ * @param outputDir Absolute path to the packaged skill output.
+ * @param filesConfigDests Skill-output-relative dests declared in `files:`, as
+ *   returned by `applyFilesConfig`. Normalized here so a hand-built list spelled
+ *   `./x` or with backslashes still matches.
  */
-export async function checkUnreferencedFiles(outputDir: string): Promise<ValidationIssue[]> {
+export async function checkUnreferencedFiles(
+  outputDir: string,
+  filesConfigDests: readonly string[] = [],
+): Promise<ValidationIssue[]> {
+  const declaredDests = new Set(filesConfigDests.map(d => normalizeRelPath(d)));
   const allFiles = walkDir(outputDir);
   const allFileSet = new Set(allFiles.map(f => toForwardSlash(f)));
   const referenced = await collectReferencedPaths(outputDir, allFileSet);
@@ -273,13 +293,16 @@ export async function checkUnreferencedFiles(outputDir: string): Promise<Validat
       const relativePath = toForwardSlash(safePath.relative(outputDir, file));
       // Built-path file extraction: a packaged file reachable by neither link
       // nor mention nor files: declaration. The engine resolves this to
-      // PACKAGED_UNREFERENCED_FILE for a skill-bundled copy at the built phase.
+      // PACKAGED_UNREFERENCED_FILE for a skill-bundled copy at the built phase —
+      // and to nothing at all when the file is declared, which is why the
+      // declaration must be reported here rather than assumed false.
       const code = evaluate(makeRuleContext({
         subject: 'file',
         phase: 'built',
         copyRole: 'skill-bundled',
         reachableFromSkillMd: false,
         referencedHow: 'none',
+        inFilesConfig: declaredDests.has(relativePath),
       }));
       if (code !== null) {
         issues.push(materializeIssue(code, { location: relativePath, detail: relativePath }));

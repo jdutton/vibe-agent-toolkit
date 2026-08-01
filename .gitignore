@@ -100,3 +100,6 @@ docs/superpowers/
 # Misc
 .turbo/
 .rag-db/
+
+# Contraband token list for the adopter-name gate — must never be committed
+.contraband-tokens

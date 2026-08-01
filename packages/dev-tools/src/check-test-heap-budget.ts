@@ -5,7 +5,7 @@
  * later. Re-runs `vitest --logHeapUsage` for a small, explicit set of
  * currently-heavy package/suite pairs (NOT a repo-wide re-run — that would
  * duplicate the turbo-cached test:integration/test:system work and double CI
- * time for no benefit; see docs/superpowers/specs/2026-07-11-vitest-heap-budget-guard-design.md).
+ * time for no benefit).
  *
  * Runs as its own standalone CI job (.github/workflows/test-heap-guard.yml,
  * Linux only), NOT as part of `bun run validate` / the pre-commit hook —

@@ -57,7 +57,7 @@ export function isSingleEditAway(key: string, target: string): boolean {
 // Postel's Law (read the outside world liberally), we validate only the fields
 // VAT actually consumes and pass everything else through untouched. `id` accepts
 // a string OR an int: skill-creator's methodology encourages *descriptive* eval
-// identifiers, and real adopter suites (e.g. dxa) use descriptive string ids plus
+// identifiers, and real adopter suites use descriptive string ids plus
 // adopter-owned metadata like `category` / top-level `_category_note`. The
 // load-bearing fields stay required, so a typo in a REQUIRED field is caught by
 // its absence; a near-miss typo of the OPTIONAL `files` field (which would
@@ -77,7 +77,7 @@ export const EvalEntrySchema = z
     prompt: z.string().min(1),
     // Optional: a human-readable success description. The pass/fail verdict is
     // always decided per `expectations` entry, so this is not load-bearing and
-    // (per Postel's Law) is not required — real adopter suites (e.g. dxa-consumption)
+    // (per Postel's Law) is not required — real adopter suites routinely
     // grade with `expectations` alone. When present, the grader prompt feeds it
     // to the grader as prose CONTEXT informing judgment (see grader-prompt.ts).
     expected_output: z.string().min(1).optional(),
@@ -198,7 +198,9 @@ export function stageEvalWorkspaces(input: StageEvalWorkspacesInput): string {
       // Copy failures (permissions, illegal filename on the host, disk) are
       // reported accurately rather than mislabeled as a containment escape.
       try {
-        mkdirSyncReal(safePath.join(dest, '..'), { recursive: true });
+        // 0700 like the workspaces root above it: with an out-of-tree suite these
+        // hold data that may never have been in the repo.
+        mkdirSyncReal(safePath.join(dest, '..'), { recursive: true, mode: 0o700 });
         cpSync(src, dest, { recursive: true });
       } catch (err) {
         throw new EvalInputError(

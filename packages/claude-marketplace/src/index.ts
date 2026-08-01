@@ -116,10 +116,15 @@ export type {
   RuleConflictKind,
   SettingProvenance,
   SettingsAuditResult,
+  SettingsFileField,
+  SettingsFinding,
   SettingsLayer,
   SettingsLevel,
+  SettingsPathCandidate,
+  SettingsPathCandidatesResult,
   SettingsPathEntry,
   SettingsPathsResult,
+  SettingsTypeConfidence,
   SettingsValidateResult,
 } from './settings/index.js';
 export {
@@ -133,9 +138,11 @@ export {
   matchesPathRule,
   matchesPermissionRule,
   mergeSettingsLayers,
+  probePathAccess,
   readEffectiveSettings,
   readSettingsLayers,
   resolveSettingsPaths,
+  summarizeSettingsFindings,
   validateSettingsFile,
 } from './settings/index.js';
 
@@ -156,8 +163,8 @@ export {
   ClaudePluginInventory,
   ClaudeSkillInventory,
 } from './inventory/index.js';
-export { extractClaudeSkillInventory } from './inventory/index.js';
-export { extractClaudePluginInventory } from './inventory/index.js';
+export { crawlSkillLinkRegistry, extractClaudeSkillInventory } from './inventory/index.js';
+export { extractClaudePluginInventory, type SharedRegistrySource } from './inventory/index.js';
 export { extractClaudeMarketplaceInventory } from './inventory/index.js';
 export { extractClaudeInstallInventory } from './inventory/index.js';
 export { detectSkillClaudePluginNameMismatch } from './inventory/index.js';

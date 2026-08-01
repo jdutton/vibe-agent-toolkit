@@ -42,14 +42,22 @@ describe('applyAllowFilter', () => {
     expect(result.emitted.map(i => i.code)).toEqual(['LINK_TO_GITIGNORED_FILE']);
   });
 
-  it('flags allow entries that matched nothing as unused', () => {
+  it('reports allow entries this call matched nothing with as used: false', () => {
     const issues: ValidationIssue[] = [];
     const result = applyAllowFilter(issues, {
       allow: { [LINK_DROPPED]: [{ paths: ['docs/nope.md'], reason: 'stale' }] },
     });
-    expect(result.unused).toHaveLength(1);
-    const [first] = result.unused;
+    const unmatched = result.usage.filter(u => !u.used);
+    expect(unmatched).toHaveLength(1);
+    const [first] = unmatched;
     expect(first?.reason).toBe('stale');
+  });
+
+  it('reports a matched entry as used: true', () => {
+    const result = applyAllowFilter([issue(LINK_DROPPED, DOCS_FOO)], {
+      allow: { [LINK_DROPPED]: [{ paths: ['docs/**'], reason: 'intentional' }] },
+    });
+    expect(result.usage.map(u => u.used)).toEqual([true]);
   });
 
   // Regression guard: picomatch defaults exclude dotfile segments, so

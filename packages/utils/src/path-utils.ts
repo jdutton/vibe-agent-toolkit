@@ -219,6 +219,32 @@ export function hasParentTraversalSegment(p: string): boolean {
 }
 
 /**
+ * Compute a `ValidationIssue.location`: an absolute source file path made
+ * relative to the scan/project root, forward-slashed.
+ *
+ * This is the ONE relativizer every VAT validation lane uses. `location` is
+ * contractually project-relative (see `ValidationIssue` in
+ * `@vibe-agent-toolkit/agent-schema`), so producers must route through here
+ * rather than emitting `skillPath` directly — absolute locations leak the
+ * developer's home directory into CI logs and make `validation.allow` globs,
+ * which match against `location`, unwritable.
+ *
+ * `projectRoot` is required precisely because "relative to what?" has no safe
+ * default: a caller with no root must decide one (the skill directory, the
+ * scan root) rather than silently falling back to an absolute path.
+ *
+ * @param sourceFilePath - Absolute path to the file the issue was found in.
+ * @param projectRoot - Root the location is expressed relative to.
+ * @returns Forward-slashed relative location.
+ *
+ * @example
+ * issueLocation('/repo/skills/foo/SKILL.md', '/repo')  // 'skills/foo/SKILL.md'
+ */
+export function issueLocation(sourceFilePath: string, projectRoot: string): string {
+  return toForwardSlash(path.relative(projectRoot, sourceFilePath));
+}
+
+/**
  * Convert a relative path to absolute
  *
  * If path is already absolute, returns it normalized.

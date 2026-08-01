@@ -167,7 +167,7 @@ All commands output YAML on stdout (readable by humans and agents):
 ---
 status: success
 filesScanned: 12
-duration: 234ms
+durationSecs: 0.234
 ---
 ```
 
@@ -180,11 +180,15 @@ Commands that find errors produce both formats:
 #### Test Format (stderr)
 
 ```
-docs/README.md:15:25: Link target not found: ./missing.md
-docs/guide.md:42:10: Broken anchor: #non-existent-section
+docs/README.md:15:25: error: Link target not found: ./missing.md
+docs/guide.md:42:10: error: Broken anchor: #non-existent-section
+fragment.component.html:1:1: info: Malformed HTML: missing-doctype
 ```
 
-**Format:** `file:line:column: message`
+**Format:** `file:line:column: severity: message`
+
+Only `error` findings fail the run, so the severity is what tells a reader
+which lines they have to act on.
 
 **Purpose:**
 - vibe-validate can extract immediately
@@ -195,14 +199,19 @@ docs/guide.md:42:10: Broken anchor: #non-existent-section
 
 ```yaml
 ---
-status: failed
+# status is the worst ACTIONABLE severity: success | warning | error.
+# Info-only findings report `success` — read issueCounts for what was seen.
+status: error
 errorsFound: 2
-errors:
+issueCounts: { errors: 2, warnings: 0, info: 0 }
+issues:
   - file: docs/README.md
-    line: 15
-    column: 25
-    type: broken-link
-    message: Link target not found: ./missing.md
+    issues:
+      - line: 15
+        column: 25
+        code: LINK_BROKEN_FILE
+        severity: error
+        message: Link target not found: ./missing.md
   - file: docs/guide.md
     line: 42
     column: 10
@@ -323,6 +332,7 @@ Each command group exports its verbose help function.
 ```yaml
 ---
 status: success
+root: /abs/path/to/project
 filesScanned: 12
 linksFound: 47
 anchorsFound: 23
@@ -330,7 +340,8 @@ files:
   - path: docs/README.md
     links: 5
     anchors: 3
-duration: 234ms
+    checksum: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+durationSecs: 0.234
 ---
 ```
 
@@ -360,21 +371,26 @@ duration: 456ms
 
 *stderr:*
 ```
-docs/README.md:15:25: Link target not found: ./missing.md
+docs/README.md:15:25: error: Link target not found: ./missing.md
 ```
 
 *stdout:*
 ```yaml
 ---
-status: failed
+status: error
 filesScanned: 12
 errorsFound: 1
-errors:
+filesWithErrors: 1
+issueCounts: { errors: 1, warnings: 0, info: 0 }
+issueSummary: { LINK_BROKEN_FILE: 1 }
+issues:
   - file: docs/README.md
-    line: 15
-    column: 25
-    type: broken-link
-    message: Link target not found: ./missing.md
+    issues:
+      - line: 15
+        column: 25
+        code: LINK_BROKEN_FILE
+        severity: error
+        message: Link target not found: ./missing.md
 ---
 ```
 

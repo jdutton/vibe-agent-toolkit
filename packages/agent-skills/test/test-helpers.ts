@@ -44,26 +44,38 @@ export function createSymlinkedDir(baseDir: string): { target: string; link: str
 }
 
 /**
- * Write a staged-subject dir carrying `evals/evals.json` so the harness's Step-4
- * bootstrap (exit 3) does not fire. Returns the staged subject dir. Shared by the
- * run-harness ack-gate and grading-nonce tests, which both stub `stageHarness` and
- * drive the orchestrator to (or past) the experimenter spawn.
+ * Write the two dirs a stubbed-staging harness test needs, mirroring the real
+ * post-staging layout:
+ *
+ *  - `authoredDir` — the AUTHORED source, carrying `evals/evals.json`. The harness
+ *    reads the suite from HERE, so this is what keeps the Step-4 bootstrap (exit 3)
+ *    from firing.
+ *  - `stagedDir` — the staged subject, deliberately carrying NO eval suite. That is
+ *    the invariant real staging now enforces: the answer key never reaches anything
+ *    the executor can read (see eval-suite-isolation.ts).
+ *
+ * Shared by the run-harness ack-gate and grading-nonce tests, which both stub
+ * `stageHarness` and drive the orchestrator to (or past) the executor spawn.
  */
-export function writeStagedSubjectWithEvals(parentDir: string): string {
-  const subjectStagedDir = safePath.join(parentDir, 'staged-subject');
-  mkdirSyncReal(safePath.join(subjectStagedDir, 'evals'), { recursive: true });
+export function writeHarnessSubjectDirs(parentDir: string): { authoredDir: string; stagedDir: string } {
+  const stagedDir = safePath.join(parentDir, 'staged-subject');
+  mkdirSyncReal(stagedDir, { recursive: true });
+  const authoredDir = safePath.join(parentDir, 'authored-subject');
+  mkdirSyncReal(safePath.join(authoredDir, 'evals'), { recursive: true });
   fs.writeFileSync(
-    safePath.join(subjectStagedDir, 'evals', 'evals.json'),
+    safePath.join(authoredDir, 'evals', 'evals.json'),
     JSON.stringify({ skill_name: 'demo', evals: [{ id: 1, prompt: 'p', expected_output: 'o', expectations: ['e'] }] }) + '\n',
     'utf8',
   );
-  return subjectStagedDir;
+  return { authoredDir, stagedDir };
 }
 
 /**
  * A minimal successful `stageHarness` result for a single staged subject dir,
  * returned as `unknown` so callers cast at the `vi.mocked(...).mockResolvedValue`
  * boundary (the real result carries more fields than these tests exercise).
+ * `subjectEvalSuiteHeld: false` matches the fixture: the suite lives in the
+ * authored dir, so staging had nothing to harvest out of the staged tree.
  */
 export function stubStageResult(subjectStagedDir: string): unknown {
   return {
@@ -72,6 +84,7 @@ export function stubStageResult(subjectStagedDir: string): unknown {
     subjectStagedDir,
     subjectPluginRoot: null,
     skippedOptional: [],
+    subjectEvalSuiteHeld: false,
   };
 }
 
@@ -86,18 +99,22 @@ export function stubStageResult(subjectStagedDir: string): unknown {
 export function setupStubbedHarnessSubject<T>(
   prefix: string,
   stageHarnessMock: { mockResolvedValue: (value: T) => unknown },
-): { getTempDir: () => string; getSubjectStagedDir: () => string } {
+): { getTempDir: () => string; getSubjectStagedDir: () => string; getAuthoredDir: () => string } {
   let tempDir: string;
-  let subjectStagedDir: string;
+  let dirs: { authoredDir: string; stagedDir: string };
   beforeEach(() => {
     tempDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), prefix));
-    subjectStagedDir = writeStagedSubjectWithEvals(tempDir);
-    stageHarnessMock.mockResolvedValue(stubStageResult(subjectStagedDir) as T);
+    dirs = writeHarnessSubjectDirs(tempDir);
+    stageHarnessMock.mockResolvedValue(stubStageResult(dirs.stagedDir) as T);
   });
   afterEach(() => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
-  return { getTempDir: () => tempDir, getSubjectStagedDir: () => subjectStagedDir };
+  return {
+    getTempDir: () => tempDir,
+    getSubjectStagedDir: () => dirs.stagedDir,
+    getAuthoredDir: () => dirs.authoredDir,
+  };
 }
 
 /**
@@ -551,8 +568,8 @@ export async function setupNavigationValidationTest(
 
 	return {
 		result,
-		findNavWarn: () => (result as { activeWarnings: Array<{ code: string }> }).activeWarnings.find(
-			(e) => e.code === 'LINK_TO_NAVIGATION_FILE'
+		findNavWarn: () => (result as { allErrors: Array<{ code: string; severity: string }> }).allErrors.find(
+			(e) => e.code === 'LINK_TO_NAVIGATION_FILE' && e.severity === 'warning'
 		),
 	};
 }

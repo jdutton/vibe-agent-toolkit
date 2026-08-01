@@ -1,5 +1,5 @@
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import {
@@ -72,9 +72,11 @@ describe('vat resources scan (integration)', () => {
     expect(parsed.filesScanned).toBe(3);
   });
 
-  // Note: --verbose flag for scan is currently not working due to conflict
-  // with parent command's --verbose. This test is skipped until that's fixed.
-  it.skip('should include checksums in file output with --verbose flag', async () => {
+  // Previously skipped as "--verbose conflicts with the parent command's
+  // --verbose". There is no parent `--verbose`: `resources` declares none, and
+  // `scan` declares its own. The skip outlived whatever provoked it and took
+  // the ONLY coverage of the `files:` list — and of its paths — with it.
+  it('should include checksums in file output with --verbose flag', async () => {
     writeTestFile(safePath.join(tempDir, 'test.md'), '# Test');
 
     const { result, parsed } = await executeCliAndParseYaml(binPath, [
@@ -90,5 +92,27 @@ describe('vat resources scan (integration)', () => {
     expect(files.length).toBeGreaterThan(0);
     expect(files[0]).toHaveProperty('checksum');
     expect(files[0]?.checksum).toMatch(/^[a-f0-9]{64}$/); // SHA-256 format
+  });
+
+  it('states one root and reports every --verbose path relative to it', async () => {
+    // The payload is machine-readable output. An absolute path in it names the
+    // operator's home directory and makes two machines' runs undiffable, so the
+    // document states its base once and everything under it is relative — the
+    // same contract `vat audit` follows.
+    // Nested on purpose: a bare filename would also satisfy a `basename()`
+    // near-miss, so the subdirectory is what proves the path was re-based.
+    mkdirSyncReal(safePath.join(tempDir, 'nested'), { recursive: true });
+    writeTestFile(safePath.join(tempDir, 'nested', 'test.md'), '# Test');
+
+    const { parsed } = await executeCliAndParseYaml(binPath, [
+      'resources',
+      'scan',
+      tempDir,
+      '--verbose',
+    ]);
+
+    expect(parsed.root).toBeDefined();
+    const files = parsed.files as Array<{ path: string }>;
+    expect(files.map(f => f.path)).toEqual(['nested/test.md']);
   });
 });

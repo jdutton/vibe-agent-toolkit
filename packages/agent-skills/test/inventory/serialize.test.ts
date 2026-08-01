@@ -70,10 +70,45 @@ describe('serializeInventory', () => {
 		expect(parsed.declared.commands).toBeNull();
 	});
 
-	it('shallow projection drops nested skills', () => {
+	it('shallow projection marks nested skills as not-walked, not as empty', () => {
 		const out = serializeInventoryShallow(fixturePlugin, 'yaml');
-		const parsed = yaml.parse(out) as { discovered: { skills: unknown[] } };
-		expect(parsed.discovered.skills).toEqual([]);
+		const parsed = yaml.parse(out) as {
+			projection: unknown;
+			discovered: { skills: unknown };
+		};
+		expect(parsed.discovered.skills).toBeNull();
+		expect(parsed.projection).toBe('shallow');
+	});
+
+	it('a full serialization never claims a projection', () => {
+		const out = serializeInventory(fixturePlugin, 'yaml');
+		const parsed = yaml.parse(out) as Record<string, unknown>;
+		expect(parsed['projection']).toBeUndefined();
+	});
+
+	/**
+	 * The distinguishing fixture: a plugin whose scan genuinely found zero
+	 * skills. Every other fixture here has at least one discovered skill, so
+	 * no existing test could tell "I did not look" (shallow) apart from
+	 * "I looked and there is nothing" (a real scan of an empty plugin) —
+	 * both used to serialize to `discovered.skills: []`.
+	 */
+	it('distinguishes "did not look" from "looked and found nothing"', () => {
+		const genuinelyEmptyPlugin: PluginInventory = {
+			...fixturePlugin,
+			discovered: { skills: [], commands: [], agents: [] },
+		};
+
+		const realScanFoundNothing = serializeInventory(genuinelyEmptyPlugin, 'json');
+		const didNotLook = serializeInventoryShallow(genuinelyEmptyPlugin, 'json');
+
+		// The two documents must not be byte-identical — they are different answers.
+		expect(didNotLook).not.toBe(realScanFoundNothing);
+
+		const scanned = JSON.parse(realScanFoundNothing) as { discovered: { skills: unknown } };
+		const projected = JSON.parse(didNotLook) as { discovered: { skills: unknown } };
+		expect(scanned.discovered.skills).toEqual([]);
+		expect(projected.discovered.skills).toBeNull();
 	});
 
 	it('shallow projection on install preserves child marketplaces and plugins as shallow projections', () => {
@@ -175,9 +210,9 @@ describe('serializeInventory', () => {
 			marketplaces: Array<{
 				path: string;
 				declared: { plugins: unknown[] };
-				discovered: { plugins: unknown[] };
+				discovered: { plugins: unknown };
 			}>;
-			plugins: Array<{ path: string; discovered: { skills: unknown[] } }>;
+			plugins: Array<{ path: string; discovered: { skills: unknown } }>;
 		};
 
 		// Top-level child paths survive.
@@ -186,11 +221,13 @@ describe('serializeInventory', () => {
 		expect(parsed.plugins).toHaveLength(1);
 		expect(parsed.plugins[0]?.path).toBe(STANDALONE_PLUGIN_PATH);
 
-		// Marketplace child shallow-projected: discovered.plugins emptied, declared.plugins preserved.
-		expect(parsed.marketplaces[0]?.discovered.plugins).toEqual([]);
+		// Marketplace child shallow-projected: discovered.plugins not walked, declared.plugins preserved.
+		expect(parsed.marketplaces[0]?.discovered.plugins).toBeNull();
 		expect(parsed.marketplaces[0]?.declared.plugins).toHaveLength(1);
 
-		// Plugin child shallow-projected: discovered.skills emptied.
-		expect(parsed.plugins[0]?.discovered.skills).toEqual([]);
+		// Plugin child shallow-projected: discovered.skills not walked.
+		// The nested plugin genuinely had zero discovered skills, so `[]` here
+		// would be indistinguishable from the truth about it.
+		expect(parsed.plugins[0]?.discovered.skills).toBeNull();
 	});
 });

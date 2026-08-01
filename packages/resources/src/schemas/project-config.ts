@@ -161,10 +161,10 @@ export type SkillFileEntry = z.infer<typeof SkillFileEntrySchema>;
  * A single declared executable a skill ships.
  *
  * Populates two downstream consumers (issue #145 Phase T/L):
- * - `toolExpectations.mustRun: ["dxa"]` (eval grading) references an executable
+ * - `toolExpectations.mustRun: ["csvsum"]` (eval grading) references an executable
  *   by a stable NAME. Name resolution (defined here, implemented in a later
  *   task): the referenced name matches either (a) this entry's `path` basename
- *   with its extension stripped (e.g. `path: "scripts/dxa.py"` → name `"dxa"`),
+ *   with its extension stripped (e.g. `path: "scripts/csvsum.py"` → name `"csvsum"`),
  *   or (b) the exact `path` string. Callers should try (a) then fall back to (b).
  * - Phase L launch-guidance linting uses `kind` + `howInvoked` to statically
  *   check that a skill's documented invocation matches its declared executable
@@ -175,7 +175,7 @@ export const SkillExecutableEntrySchema = z.object({
   kind: z.enum(['node', 'python', 'shell', 'pwsh', 'binary'])
     .describe('Executable kind (informs launch-guidance linting)'),
   howInvoked: z.string().min(1)
-    .describe('Canonical human invocation, e.g. "uv run dxa.py" or "node dist/dxa.mjs"'),
+    .describe('Canonical human invocation, e.g. "uv run csvsum.py" or "node dist/csvsum.mjs"'),
 }).strict();
 
 export type SkillExecutableEntry = z.infer<typeof SkillExecutableEntrySchema>;
@@ -214,7 +214,7 @@ export const TestConfigSchema = z.object({
   stall: z.number().int().positive().optional()
     .describe('Stall-watchdog seconds (kill on no stream output)'),
   evals: z.string().min(1).optional()
-    .describe('Path to evals.json (relative to skill source)'),
+    .describe('Which evals.json to grade against: a path relative to the skill source, an absolute path, or an npm bare specifier (resolved via the target package\'s exports map). A suite outside the skill tree is the normal case when the skill is not the one you authored. The CLI flag --evals resolves against the current directory instead.'),
   auth: z.enum(['inherit', 'subscription', 'api-key', 'auto']).optional()
     .describe('Auth-mechanism selection (default: inherit)'),
   requireAuth: z.enum(['subscription', 'api-key']).optional()
@@ -235,7 +235,7 @@ export const TestConfigSchema = z.object({
    * A non-zero exit code aborts the run (preflight failure, exit 2).
    */
   env: z.record(z.string(), z.string()).optional()
-    .describe('Feature B: explicit env var injections for the executor spawn. Values support ${fixturesDir}, ${stagedSkillDir}, ${harnessRoot}, ${resultsDir} interpolation (resolved at stage time). Protected names (PATH, auth, model, admin) cannot be overridden.'),
+    .describe('Feature B: explicit env var injections for the executor spawn. Values support ${fixturesDir}, ${stagedSkillDir}, ${harnessRoot}, ${resultsDir} interpolation. ${fixturesDir} is PER-EVAL: it names the staged workspace for that one eval (a fixtures/ dir beneath the executor working directory), so the eval must declare input files; the other tokens are run-scoped. Protected names (PATH, auth, model, admin) cannot be overridden.'),
   passEnv: z.array(z.string().min(1)).optional()
     .describe('Feature A: names of host env vars to forward to the executor spawn if present. Protected names are ignored with a warning.'),
   build: z.string().min(1).optional()

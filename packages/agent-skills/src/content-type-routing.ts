@@ -8,8 +8,27 @@
 
 import { extname } from 'node:path';
 
+/**
+ * Target subdirectory categories for packaged skill files.
+ *
+ * Runtime value, not just a type: every consumer that needs to enumerate the
+ * bundled-subdirectory vocabulary (e.g. the bundled-resource link detector)
+ * derives it from here so the two can never drift apart.
+ */
+export const TARGET_SUBDIR_CATEGORIES = ['resources', 'scripts', 'templates', 'assets'] as const;
+
 /** Target subdirectory categories for packaged skill files */
-export type TargetSubdirCategory = 'resources' | 'scripts' | 'templates' | 'assets';
+export type TargetSubdirCategory = (typeof TARGET_SUBDIR_CATEGORIES)[number];
+
+/**
+ * Subdirectory the `claude-web` packaging target packs every resource into.
+ *
+ * Target-specific layout name rather than a content-type routing category —
+ * claude-web ignores extension routing and flattens everything into
+ * `references/`. Consumers enumerating on-disk bundled subdirectories need
+ * this alongside {@link TARGET_SUBDIR_CATEGORIES}.
+ */
+export const CLAUDE_WEB_REFERENCES_SUBDIR = 'references';
 
 /**
  * Static extension→subdirectory mapping.

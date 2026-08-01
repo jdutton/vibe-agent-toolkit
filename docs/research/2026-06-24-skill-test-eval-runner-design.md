@@ -22,7 +22,7 @@ The eval runner shipped in #132 is a v1 MVP: it stages a skill, hands the *entir
 runs every eval internally and emits one flat `grading.json`. The runner never sees an
 individual eval.
 
-Adopter feedback (the AvonRisk skill-factory consuming agent, 2026-06-24) asks for the
+Adopter feedback (an adopter's skill-factory consuming agent, 2026-06-24) asks for the
 inner-dev-loop economics of a real test runner:
 
 - **Token win (primary):** don't run the expensive matrix when the skill is fundamentally
@@ -155,7 +155,7 @@ test:
 
   checks:                        # TOP-LEVEL deterministic gate (T0) — NOT a tier field (see §5).
     - name: cli-opens-native     #   vibe-validate-phase-shaped: name + run + exit-0=pass + per-check timeout.
-      run: "dxa open ${fixturesDir}/sample.xlsx --engine native"   # zero-token, but RUNS SKILL CODE.
+      run: "csvsum open ${fixturesDir}/sample.xlsx --engine native"   # zero-token, but RUNS SKILL CODE.
                                  #   "safe to run" = isolated (own TMPDIR/HOME/cache) + protected-env
                                  #   allowlisted + time-bounded + --i-understand-this-runs-skill-code ack.
                                  #   Skill-level only in v1; eval-specific scoping is a future `evals:` field.

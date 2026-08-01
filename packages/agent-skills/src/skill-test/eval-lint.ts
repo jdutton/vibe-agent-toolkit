@@ -77,7 +77,7 @@ export function lintEvalExpectations(evals: EvalEntry[]): EvalLintWarning[] {
 // ---------------------------------------------------------------------------
 
 // A trailing script/binary extension we strip before comparing an executable
-// name to a declared one, so `dxa.py`/`./dxa`/`dxa` all normalize to `dxa` (the
+// name to a declared one, so `csvsum.py`/`./csvsum`/`csvsum` all normalize to `csvsum` (the
 // grader already recognizes those launch forms — see deriveDeclaredExecutableNames,
 // which strips the extension from a declared name too). Matches only well-known
 // script suffixes so a name that legitimately ENDS in one of these words is left
@@ -99,7 +99,7 @@ function collectToolExpectationExecutables(entry: EvalEntry): string[] {
 /**
  * True when `decorated` is `stem` plus a SEPARATOR-delimited suffix — i.e. `stem`
  * is a ≥3-char prefix of `decorated` and the next char is a non-alphanumeric
- * separator (`-`, `_`, `.`, space). Catches a declared `dxa` typo'd as `dxa-py`
+ * separator (`-`, `_`, `.`, space). Catches a declared `csvsum` typo'd as `csvsum-py`
  * (a `-py` decoration) while NOT firing on a genuinely different word that merely
  * shares a prefix (`git` vs `github` — the boundary char `h` is alphanumeric).
  */

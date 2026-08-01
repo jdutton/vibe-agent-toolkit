@@ -19,7 +19,8 @@
 import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 
 
-const DESCRIPTION_LOC = 'frontmatter.description';
+/** Document-internal pointer — belongs in `ValidationIssue.field`, not `location`. */
+const DESCRIPTION_FIELD = 'frontmatter.description';
 
 /**
  * Backtick-wrapped skill reference, e.g. `plugin:skill-name` or
@@ -147,11 +148,13 @@ function skillPartOfRef(ref: string): string {
  *
  * @param frontmatter - Parsed frontmatter (uses `description`).
  * @param bodyText - SKILL.md body text (post-frontmatter).
+ * @param location - Project-relative POSIX path of the containing SKILL.md.
  * @returns One issue per undeclared dependency (deduplicated by token).
  */
 export function detectUndeclaredCrossSkillAuth(
 	frontmatter: Record<string, unknown>,
 	bodyText: string,
+	location: string,
 ): ValidationIssue[] {
 	const description = frontmatter['description'];
 	if (typeof description !== 'string' || description.trim() === '') {
@@ -171,7 +174,8 @@ export function detectUndeclaredCrossSkillAuth(
 				severity: registryEntry.defaultSeverity,
 				code: 'SKILL_CROSS_SKILL_AUTH_UNDECLARED',
 				message: `Body declares a dependency on \`${ref}\` but the description does not mention "${skillName}".`,
-				location: DESCRIPTION_LOC,
+				location,
+				field: DESCRIPTION_FIELD,
 				fix: registryEntry.fix,
 				reference: registryEntry.reference,
 			});
@@ -185,7 +189,8 @@ export function detectUndeclaredCrossSkillAuth(
 				severity: registryEntry.defaultSeverity,
 				code: 'SKILL_CROSS_SKILL_AUTH_UNDECLARED',
 				message: `Body declares a dependency on ${envKey} but the description does not mention it.`,
-				location: DESCRIPTION_LOC,
+				location,
+				field: DESCRIPTION_FIELD,
 				fix: registryEntry.fix,
 				reference: registryEntry.reference,
 			});

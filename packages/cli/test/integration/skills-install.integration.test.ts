@@ -1,6 +1,6 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
@@ -9,15 +9,29 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { installCommand } from '../../src/commands/skills/install.js';
 import { captureStdout } from '../helpers/stdout-capture.js';
 
-function createSkillDir(parent: string, name: string, description: string): string {
-  const dir = safePath.join(parent, name);
+/**
+ * Create a skill directory whose leaf name and frontmatter `name` differ.
+ * The two are separate questions; every other fixture here makes them equal,
+ * which is exactly what hid the identity defect this suite now covers.
+ */
+function createSkillDirNamed(
+  parent: string,
+  dirName: string,
+  declaredName: string,
+  description: string,
+): string {
+  const dir = safePath.join(parent, dirName);
   mkdirSyncReal(dir, { recursive: true });
   writeFileSync(
     safePath.join(dir, 'SKILL.md'),
-    `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n\nTest skill body.\n`,
+    `---\nname: ${declaredName}\ndescription: ${description}\n---\n\n# ${declaredName}\n\nTest skill body.\n`,
     'utf-8',
   );
   return dir;
+}
+
+function createSkillDir(parent: string, name: string, description: string): string {
+  return createSkillDirNamed(parent, name, name, description);
 }
 
 /**
@@ -296,5 +310,73 @@ describe('vat skills install — local directory source', () => {
         name: 'foo/bar',
       }),
     ).rejects.toThrow(/path separators/);
+  });
+});
+
+/**
+ * Install-time identity: the frontmatter `name` is what the skill calls itself,
+ * and VAT treats it as authoritative everywhere else (see
+ * SKILL_CLAUDE_PLUGIN_NAME_MISMATCH's fix text). The directory leaf is an
+ * incidental property of wherever the bytes happen to be sitting — and for an
+ * archive source it is a random temp path.
+ */
+describe('vat skills install — installed name comes from the skill, not the path', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(safePath.join(normalizedTmpdir(), 'vat-skills-install-id-'));
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('uses the declared name when the source directory leaf disagrees', async () => {
+    const skillSrc = createSkillDirNamed(tempDir, 'checkout-wd', 'pdf-processor', 'Reads PDFs.');
+    const projectDir = safePath.join(tempDir, 'project');
+    mkdirSyncReal(projectDir, { recursive: true });
+
+    await installCommand(skillSrc, { target: 'claude', scope: 'project', cwd: projectDir });
+
+    expect(existsSync(safePath.join(projectDir, '.claude/skills/pdf-processor/SKILL.md'))).toBe(
+      true,
+    );
+    expect(existsSync(safePath.join(projectDir, '.claude/skills/checkout-wd'))).toBe(false);
+  });
+
+  it('installs a ZIP whose SKILL.md sits at the archive root under its declared name', async () => {
+    // No top-level directory inside the ZIP, so the only "directory name"
+    // available at install time is the extraction temp dir.
+    const skillSrc = createSkillDirNamed(tempDir, 'staging', 'root-zip-skill', 'From a flat zip.');
+    const zipPath = safePath.join(tempDir, 'flat.zip');
+
+    const AdmZip = (await import('adm-zip')).default;
+    const zip = new AdmZip();
+    zip.addLocalFolder(skillSrc);
+    zip.writeZip(zipPath);
+
+    const projectDir = safePath.join(tempDir, 'project');
+    mkdirSyncReal(projectDir, { recursive: true });
+
+    await installCommand(zipPath, { target: 'claude', scope: 'project', cwd: projectDir });
+
+    const installedDirs = readdirSync(safePath.join(projectDir, '.claude/skills'));
+    expect(installedDirs).toEqual(['root-zip-skill']);
+  });
+
+  it('refuses a batch in which two skills claim the same name', async () => {
+    const distSkills = safePath.join(tempDir, 'collide-src');
+    mkdirSyncReal(distSkills, { recursive: true });
+    createSkillDirNamed(distSkills, 'first', 'shared-name', 'One.');
+    createSkillDirNamed(distSkills, 'second', 'shared-name', 'Two.');
+
+    const projectDir = safePath.join(tempDir, 'project');
+    mkdirSyncReal(projectDir, { recursive: true });
+
+    await expect(
+      installCommand(distSkills, { target: 'claude', scope: 'project', cwd: projectDir }),
+    ).rejects.toThrow(/shared-name/);
+
+    expect(existsSync(safePath.join(projectDir, '.claude/skills/shared-name'))).toBe(false);
   });
 });

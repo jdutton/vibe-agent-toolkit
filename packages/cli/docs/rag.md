@@ -36,10 +36,15 @@ vat rag clear
 5. Supports incremental updates (skips files with unchanged content)
 
 **Path Argument Behavior:**
-- `[path]` specifies the **base directory** to start crawling from
-- Recursively finds all `*.md` files under that directory (default pattern: `**/*.md`)
-- When path is specified, **config patterns are ignored** (to avoid pattern conflicts)
-- To use config patterns, run without path argument: `vat rag index`
+- `[path]` restricts the crawl to that subtree of the project
+- Recursively finds all `*.md` / `*.html` files under that directory
+- The path **replaces** the config's `resources.include` patterns
+- The config's `resources.exclude` patterns **still apply**, so a path run never
+  indexes build output or vendored trees the project excluded
+- If the path lies outside the project root the config's patterns cannot apply;
+  they are dropped and a warning is printed
+- To index the project's full configured set, run without a path argument:
+  `vat rag index`
 
 **Options:**
 - `[path]` - Base directory to crawl (defaults to current directory)

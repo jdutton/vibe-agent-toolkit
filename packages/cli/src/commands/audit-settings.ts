@@ -9,9 +9,12 @@ import {
   auditSettings,
   getSettingsFileFields,
   resolveSettingsPaths,
+  summarizeSettingsFindings,
   validateSettingsFile,
   type EffectiveSettings,
+  type ProvenanceValue,
   type RuleConflict,
+  type SettingsFinding,
   type SettingsPathEntry,
 } from '@vibe-agent-toolkit/claude-marketplace';
 import { Command } from 'commander';
@@ -29,44 +32,93 @@ export interface AuditSettingsOptions {
 
 type Logger = ReturnType<typeof createLogger>;
 
+/** A formatted provenance value; `overrode` recurses down the whole chain. */
+export interface FormattedProvenanceValue {
+  value: unknown;
+  source: string;
+  level: string;
+  locked?: boolean;
+  overrode?: FormattedProvenanceValue;
+}
+
 /**
- * Format an EffectiveSettings value for YAML output.
- * Returns a simplified object with `value`, `source`, and `level`.
+ * Format an EffectiveSettings value for YAML output, INCLUDING what it overrode.
+ *
+ * The chain is the point: "what is in effect, and what did it replace?" is the
+ * question a settings-override audit exists to answer. Emitting only the winning
+ * layer made a project override look like the only value ever declared — the
+ * merger builds the linked list and this formatter used to throw it away.
  */
-function formatProvenanceValue(
-  pv: { value: unknown; provenance: { file: string; level: string }; overrode?: unknown }
-): { value: unknown; source: string; level: string; locked?: boolean } {
+export function formatProvenanceValue(
+  pv: ProvenanceValue<unknown>
+): FormattedProvenanceValue {
   return {
     value: pv.value,
     source: pv.provenance.file,
     level: pv.provenance.level,
     ...(pv.provenance.level === 'managed' ? { locked: true } : {}),
+    ...(pv.overrode ? { overrode: formatProvenanceValue(pv.overrode) } : {}),
+  };
+}
+
+/**
+ * Format a resolved settings path for YAML output.
+ *
+ * `exists`/`readable` are passed through verbatim, including the
+ * `'undetermined'` value — a probe that could not run must not be rendered as a
+ * confident `false`.
+ */
+export function formatSettingsPathEntry(p: SettingsPathEntry): Record<string, unknown> {
+  return {
+    label: p.label,
+    path: p.path,
+    exists: p.exists,
+    readable: p.readable,
+    level: p.level,
+    ...(p.accessError === undefined ? {} : { accessError: p.accessError }),
+    ...(p.status === 'error' && p.exists !== false
+      ? { status: 'error', message: p.message }
+      : {}),
   };
 }
 
 async function runShowPaths(startTime: number, logger: Logger): Promise<void> {
   const cwd = process.cwd();
   const result = await resolveSettingsPaths(cwd);
-  const hasLegacyError = result.paths.some((p: SettingsPathEntry) => p.status === 'error' && p.exists);
+
+  const findings: SettingsFinding[] = [];
+  for (const p of result.paths) {
+    if (p.status === 'error' && p.exists !== false) {
+      findings.push({
+        path: p.path,
+        message: p.message ?? 'Deprecated settings path is present',
+        severity: 'error',
+      });
+    }
+    if (p.exists === 'undetermined' || p.readable === 'undetermined') {
+      findings.push({
+        path: p.path,
+        message: `Could not determine access (${p.accessError ?? 'unknown error'}) — this path was not checked`,
+        severity: 'warning',
+      });
+    }
+  }
+
+  const { status, issueCounts } = summarizeSettingsFindings(findings);
 
   writeYamlOutput({
-    status: hasLegacyError ? 'error' : 'success',
-    paths: result.paths.map((p: SettingsPathEntry) => ({
-      label: p.label,
-      path: p.path,
-      exists: p.exists,
-      readable: p.readable,
-      level: p.level,
-      ...(p.status === 'error' && p.exists
-        ? { status: 'error', message: p.message }
-        : {}),
-    })),
+    status,
+    issueCounts,
+    paths: result.paths.map(formatSettingsPathEntry),
     duration: `${Date.now() - startTime}ms`,
   });
 
-  if (hasLegacyError) {
+  if (issueCounts.errors > 0) {
     logger.error('Legacy managed-settings.json path detected — IT admin must migrate.');
     process.exit(1);
+  }
+  if (issueCounts.warnings > 0) {
+    logger.warn(`${issueCounts.warnings} settings path(s) could not be checked.`);
   }
   process.exit(0);
 }
@@ -79,32 +131,31 @@ async function runValidateFile(
   // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- guarded by caller
   const filePath = options.file!;
   const result = await validateSettingsFile(filePath, options.type);
-  const fields = result.valid ? await getSettingsFileFields(filePath) : [];
+  // `null` means the fields could not be read — distinct from "no fields", and
+  // emitted as `fields: null` rather than as an empty list.
+  const fields = await getSettingsFileFields(filePath);
   const duration = `${Date.now() - startTime}ms`;
 
-  if (result.valid) {
-    writeYamlOutput({
-      status: 'success',
-      file: filePath,
-      detectedType: result.detectedType,
-      valid: true,
-      fields,
-      duration,
-    });
-    logger.info(`Settings file is valid (${result.detectedType})`);
-    process.exit(0);
-  } else {
-    writeYamlOutput({
-      status: 'error',
-      file: filePath,
-      detectedType: result.detectedType,
-      valid: false,
-      errors: result.errors,
-      duration,
-    });
-    logger.error(`Settings file is invalid: ${result.errors.length} error(s)`);
+  writeYamlOutput({
+    status: result.status,
+    issueCounts: result.issueCounts,
+    file: filePath,
+    detectedType: result.detectedType,
+    typeConfidence: result.typeConfidence,
+    fields,
+    ...(result.findings.length > 0 ? { findings: result.findings } : {}),
+    duration,
+  });
+
+  if (result.issueCounts.errors > 0) {
+    logger.error(`Settings file is invalid: ${result.issueCounts.errors} error(s)`);
     process.exit(1);
   }
+
+  logger.info(
+    `Settings file is valid (${result.detectedType}, type ${result.typeConfidence})`,
+  );
+  process.exit(0);
 }
 
 function buildPermissionsSummary(
@@ -140,8 +191,11 @@ function buildPermissionsSummary(
   return summary;
 }
 
-function buildMarketplacesSummary(effective: EffectiveSettings): Record<string, unknown> {
+function buildMarketplacesSummary(
+  effective: EffectiveSettings
+): { summary: Record<string, unknown>; warnings: string[] } {
   const summary: Record<string, unknown> = {};
+  const marketplaceWarnings: string[] = [];
 
   if (effective.extraKnownMarketplaces) {
     const pv = effective.extraKnownMarketplaces;
@@ -158,14 +212,13 @@ function buildMarketplacesSummary(effective: EffectiveSettings): Record<string, 
     }
 
     // Check for GitHub repos without GITHUB_TOKEN
-    const warnings: string[] = [];
     for (const [name, entry] of Object.entries(pv.value)) {
       if (entry.source.source === 'github' && !process.env['GITHUB_TOKEN']) {
-        warnings.push(`Marketplace '${name}' sources from a private GitHub repo but GITHUB_TOKEN is not set`);
+        marketplaceWarnings.push(`Marketplace '${name}' sources from a private GitHub repo but GITHUB_TOKEN is not set`);
       }
     }
-    if (warnings.length > 0) {
-      summary['warnings'] = warnings;
+    if (marketplaceWarnings.length > 0) {
+      summary['warnings'] = marketplaceWarnings;
     }
   }
 
@@ -187,7 +240,7 @@ function buildMarketplacesSummary(effective: EffectiveSettings): Record<string, 
     };
   }
 
-  return summary;
+  return { summary, warnings: marketplaceWarnings };
 }
 
 function formatConflicts(conflicts: RuleConflict[]): Record<string, unknown>[] {
@@ -216,6 +269,33 @@ function getShadowedByList(kind: RuleConflict['kind']): string {
   return 'same-bucket';
 }
 
+/**
+ * The findings an effective-settings audit produced.
+ *
+ * A shadowed rule and a marketplace that cannot authenticate are things the
+ * reader must act on, so they are warnings — the run used to publish
+ * `status: 'success'` with the conflicts listed underneath it, which is the
+ * "warnings read as passed" collapse this command is being fixed for.
+ */
+export function settingsAuditFindings(
+  conflicts: readonly RuleConflict[],
+  marketplaceWarnings: readonly string[],
+): SettingsFinding[] {
+  const findings: SettingsFinding[] = conflicts.map(c => ({
+    path: c.rule.provenance.file,
+    message:
+      `Rule "${c.rule.rule}" (${c.rule.provenance.level}, ${getRuleList(c.kind)}) is shadowed by ` +
+      `"${c.shadowedBy.rule}" (${c.shadowedBy.provenance.level}, ${getShadowedByList(c.kind)}) — ${c.kind}.`,
+    severity: 'warning',
+  }));
+
+  for (const warning of marketplaceWarnings) {
+    findings.push({ path: '', message: warning, severity: 'warning' });
+  }
+
+  return findings;
+}
+
 async function runShowEffective(startTime: number, logger: Logger): Promise<void> {
   const cwd = process.cwd();
   const { effective, layers } = await auditSettings({ projectDir: cwd });
@@ -239,14 +319,19 @@ async function runShowEffective(startTime: number, logger: Logger): Promise<void
     effectiveSummary['permissions'] = permissionsSummary;
   }
 
-  const marketplacesSummary = buildMarketplacesSummary(effective);
-  if (Object.keys(marketplacesSummary).length > 0) {
-    effectiveSummary['marketplaces'] = marketplacesSummary;
+  const marketplaces = buildMarketplacesSummary(effective);
+  if (Object.keys(marketplaces.summary).length > 0) {
+    effectiveSummary['marketplaces'] = marketplaces.summary;
   }
 
   const conflicts = analyzeRuleConflicts(effective);
+  const { status, issueCounts } = summarizeSettingsFindings(
+    settingsAuditFindings(conflicts, marketplaces.warnings),
+  );
+
   const output: Record<string, unknown> = {
-    status: 'success',
+    status,
+    issueCounts,
     layers: layersSummary,
     effectiveSettings: effectiveSummary,
     duration,
@@ -261,6 +346,11 @@ async function runShowEffective(startTime: number, logger: Logger): Promise<void
     logger.info('No settings files found');
   } else {
     logger.info(`Loaded ${layers.length} settings layer(s)`);
+  }
+  if (issueCounts.warnings > 0) {
+    logger.warn(
+      `${issueCounts.warnings} warning(s): see conflicts / marketplaces.warnings in the output.`,
+    );
   }
 
   process.exit(0);
@@ -314,13 +404,27 @@ Description:
   redundant rules within the same bucket.
 
 Output:
+  - status: worst actionable severity (success | warning | error)
+  - issueCounts: errors / warnings / info counts, published beside the status
   - layers: all loaded settings files in precedence order (highest first)
-  - effectiveSettings: merged values with source file and level for each field
+  - effectiveSettings: merged values with source file and level for each field;
+      each value carries an "overrode" chain naming every value it replaced,
+      down to the lowest-precedence layer
   - permissions: accumulated allow/deny/ask rules from all layers
   - conflicts: rules that are unreachable or redundant (omitted if none)
 
+  With --file, "typeConfidence" states how the settings type was determined:
+  declared (you passed --type), inferred (a managed-only field settled it),
+  ambiguous (user and project share one schema, so it could be either), or
+  undetermined (the file could not be read). "fields: null" means the fields
+  could not be read at all, as distinct from "fields: []" (none declared).
+
+  With --show-paths, "exists"/"readable" may be the string "undetermined" when
+  the probe itself failed (e.g. a permission error on a parent directory) —
+  that is not the same answer as false.
+
 Exit Codes:
-  0 - Success
+  0 - No errors (warnings are reported in issueCounts, not in the exit code)
   1 - Invalid settings file (--file mode) or legacy Windows path detected
   2 - System error
 

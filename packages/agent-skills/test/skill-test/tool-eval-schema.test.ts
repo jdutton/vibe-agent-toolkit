@@ -14,7 +14,7 @@ const REJECTS_UNKNOWN_TOP_LEVEL_KEYS = 'rejects unknown top-level keys (strict)'
 const validBody = {
   mustRun: [{ name: 'bash', ran: true, evidence: 'saw bash call' }],
   mustNotRun: [{ name: 'rm', ran: false }],
-  mustSucceed: [{ name: 'dxa', succeeded: true, evidence: 'no is_error on the invoking tool_result' }],
+  mustSucceed: [{ name: 'csvsum', succeeded: true, evidence: 'no is_error on the invoking tool_result' }],
   sequence: [{ steps: ['read', 'edit'], satisfied: true, evidence: 'read then edit' }],
   passed: true,
 } as const;
@@ -62,7 +62,7 @@ describe('ToolVerdictBodySchema', () => {
     expect(
       ToolVerdictBodySchema.safeParse({
         passed: true,
-        mustSucceed: [{ name: 'dxa', succeeded: true, evidence: 'no is_error' }],
+        mustSucceed: [{ name: 'csvsum', succeeded: true, evidence: 'no is_error' }],
       }).success,
     ).toBe(true);
   });
@@ -71,14 +71,14 @@ describe('ToolVerdictBodySchema', () => {
     expect(
       ToolVerdictBodySchema.safeParse({
         passed: true,
-        mustSucceed: [{ name: 'dxa', succeeded: true, oops: 1 }],
+        mustSucceed: [{ name: 'csvsum', succeeded: true, oops: 1 }],
       }).success,
     ).toBe(false);
   });
 
   it('rejects a mustSucceed entry missing `succeeded`', () => {
     expect(
-      ToolVerdictBodySchema.safeParse({ passed: true, mustSucceed: [{ name: 'dxa' }] }).success,
+      ToolVerdictBodySchema.safeParse({ passed: true, mustSucceed: [{ name: 'csvsum' }] }).success,
     ).toBe(false);
   });
 
@@ -101,14 +101,14 @@ describe('computeToolPassed', () => {
     { name: 'a mustRun that did NOT run → false', body: { mustRun: [{ name: 'a', ran: false }], passed: true }, expected: false },
     { name: 'a mustNotRun that ran → false', body: { mustNotRun: [{ name: 'rm', ran: true }], passed: true }, expected: false },
     { name: 'mustNotRun that did not run → true', body: { mustNotRun: [{ name: 'rm', ran: false }], passed: false }, expected: true },
-    { name: 'every mustSucceed succeeded → true', body: { mustSucceed: [{ name: 'dxa', succeeded: true }], passed: false }, expected: true },
-    { name: 'a mustSucceed that did NOT succeed → false', body: { mustSucceed: [{ name: 'dxa', succeeded: false }], passed: true }, expected: false },
+    { name: 'every mustSucceed succeeded → true', body: { mustSucceed: [{ name: 'csvsum', succeeded: true }], passed: false }, expected: true },
+    { name: 'a mustSucceed that did NOT succeed → false', body: { mustSucceed: [{ name: 'csvsum', succeeded: false }], passed: true }, expected: false },
     { name: 'every sequence satisfied → true', body: { sequence: [{ steps: ['a', 'b'], satisfied: true }], passed: false }, expected: true },
     { name: 'an unsatisfied sequence → false', body: { sequence: [{ steps: ['a', 'b'], satisfied: false }], passed: true }, expected: false },
     { name: 'all channels green → true', body: validBody, expected: true },
     {
       name: 'one failing mustSucceed among otherwise-green channels → false',
-      body: { ...validBody, mustSucceed: [{ name: 'dxa', succeeded: false }] },
+      body: { ...validBody, mustSucceed: [{ name: 'csvsum', succeeded: false }] },
       expected: false,
     },
   ];

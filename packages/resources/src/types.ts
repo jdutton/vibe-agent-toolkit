@@ -22,6 +22,7 @@ export type {
   HeadingNode,
   ResourceLink,
   ResourceMetadata,
+  UnresolvedReference,
 } from './schemas/resource-metadata.js';
 
 // Validation result types

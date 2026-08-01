@@ -8,12 +8,13 @@ import type {
 	LspRef,
 	McpRef,
 } from '@vibe-agent-toolkit/agent-skills';
+import type { ResourceRegistry } from '@vibe-agent-toolkit/resources';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { ClaudePluginSchema } from '../schemas/claude-plugin.js';
 
-import { extractClaudeSkillInventory } from './extract-skill.js';
-import { ClaudePluginInventory } from './types.js';
+import { extractClaudeSkillInventory, type SharedRegistrySource } from './extract-skill.js';
+import { ClaudePluginInventory, type ClaudeSkillInventory } from './types.js';
 
 type ParseErrors = ClaudePluginInventory['parseErrors'];
 
@@ -22,10 +23,30 @@ const PLUGIN_JSON = 'plugin.json';
 const SHAPE_SKILL_CLAUDE_PLUGIN = 'skill-claude-plugin' as const;
 
 /**
+ * Resolve a {@link SharedRegistrySource} on first use, then reuse that answer — including
+ * a rejection.
+ *
+ * Every skill in the plugin link-walks against the same registry, so the whole-corpus
+ * crawl behind it must happen at most once. Caching the rejected promise too means a
+ * crawl that failed is not retried once per skill: each skill still reports the failure
+ * against its own path (its `files.linked` really is degraded), but the cost is paid once.
+ */
+function memoizeSharedRegistry(
+	source: SharedRegistrySource | undefined,
+): () => Promise<ResourceRegistry | undefined> {
+	if (typeof source !== 'function') return async () => source;
+	let pending: Promise<ResourceRegistry | undefined> | undefined;
+	return async () => (pending ??= source());
+}
+
+/**
  * Build a PluginInventory for a directory containing a .claude-plugin/plugin.json manifest
  * and/or a root SKILL.md. Never throws — all failures surface via parseErrors[].
  */
-export async function extractClaudePluginInventory(pluginPath: string): Promise<ClaudePluginInventory> {
+export async function extractClaudePluginInventory(
+	pluginPath: string,
+	sharedRegistry?: SharedRegistrySource,
+): Promise<ClaudePluginInventory> {
 	const absolute = safePath.resolve(pluginPath);
 
 	// eslint-disable-next-line security/detect-non-literal-fs-filename -- absolute is resolved from caller-supplied path, safe for plugin extraction
@@ -53,7 +74,13 @@ export async function extractClaudePluginInventory(pluginPath: string): Promise<
 		rawManifest !== undefined && hasRootSkill ? SHAPE_SKILL_CLAUDE_PLUGIN : 'claude-plugin';
 
 	const declared = buildDeclared(absolute, rawManifest);
-	const discovered = await buildDiscovered(absolute, shape, rootSkillMd, parseErrors);
+	const discovered = await buildDiscovered(
+		absolute,
+		shape,
+		rootSkillMd,
+		parseErrors,
+		memoizeSharedRegistry(sharedRegistry),
+	);
 	const unexpected = await buildUnexpected(absolute, shape);
 
 	await collectAssetParseErrors(absolute, parseErrors);
@@ -201,8 +228,9 @@ async function buildDiscovered(
 	shape: ClaudePluginInventory['shape'],
 	rootSkillMd: string,
 	parseErrors: ParseErrors,
+	resolveSharedRegistry: () => Promise<ResourceRegistry | undefined>,
 ): Promise<ClaudePluginInventory['discovered']> {
-	const skills = await discoverSkills(absolute, shape, rootSkillMd, parseErrors);
+	const skills = await discoverSkills(absolute, shape, rootSkillMd, parseErrors, resolveSharedRegistry);
 	const commands = await discoverComponents(safePath.join(absolute, 'commands'));
 	const agents = await discoverComponents(safePath.join(absolute, 'agents'));
 	return { skills, commands, agents };
@@ -213,18 +241,40 @@ async function discoverSkills(
 	shape: ClaudePluginInventory['shape'],
 	rootSkillMd: string,
 	parseErrors: ParseErrors,
-) {
-	const skillInventories = [];
+	resolveSharedRegistry: () => Promise<ResourceRegistry | undefined>,
+): Promise<ClaudeSkillInventory[]> {
+	const skillInventories: ClaudeSkillInventory[] = [];
 
-	if (shape === SHAPE_SKILL_CLAUDE_PLUGIN) {
-		const rootInv = await extractClaudeSkillInventory(rootSkillMd);
-		for (const err of rootInv.parseErrors) parseErrors.push(err);
-		skillInventories.push(rootInv);
+	// The provider is handed to the skill extractor UNRESOLVED, so the crawl happens
+	// inside its link-walk try/catch and a failure degrades to parseErrors instead of
+	// escaping this function — which documents that it never throws. It is also only
+	// ever reached from inside this loop, so a plugin owning no SKILL.md never asks for
+	// a registry: discovery decides, and the caller does not have to predict what
+	// discovery will find.
+	for (const skillMd of await collectSkillMdPaths(absolute, shape, rootSkillMd)) {
+		const inv = await extractClaudeSkillInventory(skillMd, resolveSharedRegistry);
+		for (const err of inv.parseErrors) parseErrors.push(err);
+		skillInventories.push(inv);
 	}
+
+	return skillInventories;
+}
+
+/**
+ * Every SKILL.md this plugin owns, in extraction order: the root skill (skill-claude-plugin
+ * shape only) first, then each `skills/<name>/SKILL.md`.
+ */
+async function collectSkillMdPaths(
+	absolute: string,
+	shape: ClaudePluginInventory['shape'],
+	rootSkillMd: string,
+): Promise<string[]> {
+	const paths: string[] = [];
+	if (shape === SHAPE_SKILL_CLAUDE_PLUGIN) paths.push(rootSkillMd);
 
 	const skillsDir = safePath.join(absolute, 'skills');
 	// eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated absolute plugin root
-	if (!existsSync(skillsDir)) return skillInventories;
+	if (!existsSync(skillsDir)) return paths;
 
 	let entries: string[] = [];
 	try {
@@ -236,14 +286,10 @@ async function discoverSkills(
 	for (const entry of entries) {
 		const skillMd = safePath.join(skillsDir, entry, SKILL_MD);
 		// eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated skills directory
-		if (existsSync(skillMd)) {
-			const inv = await extractClaudeSkillInventory(skillMd);
-			for (const err of inv.parseErrors) parseErrors.push(err);
-			skillInventories.push(inv);
-		}
+		if (existsSync(skillMd)) paths.push(skillMd);
 	}
 
-	return skillInventories;
+	return paths;
 }
 
 /**

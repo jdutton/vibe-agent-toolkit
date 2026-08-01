@@ -2,11 +2,11 @@
 import { writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import type { ResourceLink, ResourceMetadata } from '@vibe-agent-toolkit/resources';
+import { DeferredArtifacts } from '@vibe-agent-toolkit/resources';
+import type { ResourceLink, ResourceMetadata, SkillFileEntry } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { DeferredPaths } from '../src/files-config.js';
 import { walkLinkGraph, type ExcludeRule, type WalkableRegistry, type WalkLinkGraphOptions } from '../src/walk-link-graph.js';
 
 import { setupTempDir } from './test-helpers.js';
@@ -49,6 +49,9 @@ const MOCK_CHECKSUM = 'a'.repeat(64) as ResourceMetadata['checksum'];
 const REASON_SKILL_DEFINITION = 'skill-definition';
 const REASON_MISSING_TARGET = 'missing-target';
 
+/** Href whose target is never created on disk — the broken-link subject. */
+const MISSING_HREF = './docs/gone.md';
+
 // Deferred paths constants — used in "deferred files support" tests
 const DEFERRED_DEST_REL = 'scripts/cli.mjs';
 const DEFERRED_SRC_REL = 'dist/bin/cli.mjs';
@@ -66,12 +69,30 @@ const { getTempDir } = setupTempDir('walk-link-graph-test-');
 // Module-scope helpers
 // ============================================================================
 
-function makeDeferredPaths(overrides?: Partial<DeferredPaths>): DeferredPaths {
-  return {
-    destPaths: new Set([DEFERRED_DEST_REL]),
-    sourcePaths: new Set([DEFERRED_SRC_REL]),
-    ...overrides,
-  };
+/** Default deferred artifacts: one files: entry (source dist/bin/cli.mjs → dest scripts/cli.mjs). */
+function makeDeferredArtifacts(): DeferredArtifacts {
+  return DeferredArtifacts.from(
+    [{ files: [{ source: DEFERRED_SRC_REL, dest: DEFERRED_DEST_REL }], skillDir: PROJECT_ROOT }],
+    PROJECT_ROOT,
+  );
+}
+
+/**
+ * Build a DeferredArtifacts whose destPaths/sourcePaths are exactly the given
+ * project-root-relative rel paths — used where a test wants to isolate one
+ * side (e.g. dest-only) without the other side's placeholder entry
+ * accidentally matching a real test link target.
+ */
+function makeDeferredArtifactsFromRelPaths(
+  opts: { destPaths?: string[]; sourcePaths?: string[]; skillDir?: string; projectRoot?: string } = {},
+): DeferredArtifacts {
+  const skillDir = opts.skillDir ?? PROJECT_ROOT;
+  const projectRoot = opts.projectRoot ?? PROJECT_ROOT;
+  const files: SkillFileEntry[] = [
+    ...(opts.destPaths ?? []).map((dest, i) => ({ dest, source: `__unused-source-${i}__` })),
+    ...(opts.sourcePaths ?? []).map((source, i) => ({ dest: `__unused-dest-${i}__`, source })),
+  ];
+  return DeferredArtifacts.from([{ files, skillDir }], projectRoot);
 }
 
 /**
@@ -95,11 +116,60 @@ function walkOnDiskDeferred(opts: {
     excludeRules: [],
     projectRoot: opts.tmpDir,
     skillRootPath: safePath.join(opts.tmpDir, 'SKILL.md'),
-    deferredPaths: {
-      destPaths: new Set(opts.destPaths ?? []),
-      sourcePaths: new Set(opts.sourcePaths ?? []),
-    },
+    deferredArtifacts: makeDeferredArtifactsFromRelPaths({
+      destPaths: opts.destPaths,
+      sourcePaths: opts.sourcePaths,
+      skillDir: opts.tmpDir,
+      projectRoot: opts.tmpDir,
+    }),
   });
+}
+
+/**
+ * skill → docs/guide.md → docs/ref.md, with every file REALLY on disk under a
+ * fresh temp root.
+ *
+ * The gitignore fixtures must be real. A `gitignored` exclusion is only
+ * meaningful for a target that EXISTS — a path that isn't there is a broken
+ * link, whatever the ignore oracle says about it. Fictional paths used to work
+ * here only because the walker consulted the oracle before checking existence,
+ * i.e. because of the very defect these tests now pin.
+ */
+function createOnDiskChain(): {
+  root: string;
+  skillPath: string;
+  guidePath: string;
+  refPath: string;
+  registry: WalkableRegistry;
+} {
+  const root = getTempDir();
+  const skillPath = safePath.resolve(root, 'SKILL.md');
+  const guidePath = safePath.resolve(root, 'docs/guide.md');
+  const refPath = safePath.resolve(root, 'docs/ref.md');
+  mkdirSyncReal(dirname(guidePath), { recursive: true });
+  writeFileSync(skillPath, '# Skill\n');
+  writeFileSync(guidePath, '# Guide\n');
+  writeFileSync(refPath, '# Ref\n');
+
+  const skill = createMockResource(SKILL_ID, skillPath, [createLocalLink('guide', GUIDE_HREF, GUIDE_ID)]);
+  const guide = createMockResource(GUIDE_ID, guidePath, [createLocalLink('ref', './ref.md', REF_ID)]);
+  const ref = createMockResource(REF_ID, refPath);
+  return { root, skillPath, guidePath, refPath, registry: createMockRegistry([skill, guide, ref]) };
+}
+
+/**
+ * Shared fixture for the materialized-and-gitignored dest pair: an on-disk,
+ * gitignored `data/index.json`. Only whether deferredArtifacts covers it
+ * (via destPaths) differs between the two tests that use it.
+ */
+function createGitignoredDestFixture(): { tmpDir: string; destRel: string } {
+  const tmpDir = getTempDir();
+  const destRel = 'data/index.json';
+  const destFile = safePath.resolve(tmpDir, destRel);
+  mkdirSyncReal(dirname(destFile), { recursive: true });
+  writeFileSync(destFile, '{}\n');
+  vi.mocked(isGitIgnored).mockImplementation((filePath: string) => filePath === destFile);
+  return { tmpDir, destRel };
 }
 
 // ============================================================================
@@ -425,6 +495,38 @@ describe('walkLinkGraph', () => {
       expect(result.excludedReferences).toHaveLength(1);
       expect(result.excludedReferences[0]?.excludeReason).toBe('outside-project');
     });
+
+    // An absolute-path reference (RFC 3986 §4.2 — a leading `/`) resolves against
+    // the PROJECT ROOT, which is what `resolveLocalHref` has always done for the
+    // resources lane. The walker used to resolve every href with
+    // `resolve(dirname(source), href)`, and `path.resolve` DISCARDS its base when
+    // the second argument is absolute: `/docs/guide.md` came back as the
+    // filesystem-root path `/docs/guide.md`, which is outside every project root
+    // that is not `/`. Every root-absolute link in a walked file therefore became
+    // a `LINK_OUTSIDE_PROJECT` error against a target that exists and is in the
+    // registry. Measured on a real monorepo: 81 such errors, all false.
+    it('resolves a root-absolute link against the project root, not the filesystem root', () => {
+      const skill = createMockResource(SKILL_ID, SKILL_PATH, [
+        createLocalLink('guide', '/docs/guide.md', GUIDE_ID),
+      ]);
+      const guide = createMockResource(GUIDE_ID, GUIDE_PATH);
+      const registry = createMockRegistry([skill, guide]);
+
+      const result = walkLinkGraph(SKILL_ID, registry, defaultOptions());
+
+      expect(result.excludedReferences).toHaveLength(0);
+      expectBundledIds(result, [GUIDE_ID]);
+    });
+
+    // The boundary must still hold for a root-absolute href: `/../escape.md`
+    // resolves ABOVE the project root and must not be bundled just because the
+    // resolver now honours the leading slash.
+    it('still excludes a root-absolute link that escapes the project root', () => {
+      const result = walkSingleSkill([createLocalLink('escape', '/../outside/doc.md')]);
+
+      expect(result.excludedReferences).toHaveLength(1);
+      expect(result.excludedReferences[0]?.excludeReason).toBe('outside-project');
+    });
   });
 
   describe('maxBundledDepth tracking', () => {
@@ -549,19 +651,23 @@ describe('walkLinkGraph', () => {
 
   describe('gitignored file exclusion', () => {
     it('should exclude gitignored markdown files with gitignored reason', () => {
-      vi.mocked(isGitIgnored).mockImplementation((filePath: string) =>
-        filePath === GUIDE_PATH,
-      );
+      const { root, skillPath, guidePath, registry } = createOnDiskChain();
+      vi.mocked(isGitIgnored).mockImplementation((filePath: string) => filePath === guidePath);
 
-      const registry = createSkillGuideRegistry();
-      const result = walkLinkGraph(SKILL_ID, registry, defaultOptions());
+      const result = walkLinkGraph(SKILL_ID, registry, defaultOptions({
+        projectRoot: root,
+        skillRootPath: skillPath,
+      }));
 
       expect(result.bundledResources).toHaveLength(0);
       expect(result.excludedReferences).toHaveLength(1);
       expect(result.excludedReferences[0]?.excludeReason).toBe('gitignored');
-      expect(result.excludedReferences[0]?.path).toBe(GUIDE_PATH);
+      expect(result.excludedReferences[0]?.path).toBe(guidePath);
+      // The record carries the evidence the verdict engine gates on, so a
+      // downstream front-end never has to assume existence.
+      expect(result.excludedReferences[0]?.targetExists).toBe(true);
       // Verify projectRoot is passed as cwd so git checks ignore rules in the right directory
-      expect(vi.mocked(isGitIgnored)).toHaveBeenCalledWith(GUIDE_PATH, PROJECT_ROOT);
+      expect(vi.mocked(isGitIgnored)).toHaveBeenCalledWith(guidePath, root);
     });
 
     it('should NOT exclude files that are not gitignored', () => {
@@ -575,18 +681,71 @@ describe('walkLinkGraph', () => {
 
     it('should exclude gitignored file found via transitive link', () => {
       // skill -> guide -> ref, where ref is gitignored
-      vi.mocked(isGitIgnored).mockImplementation((filePath: string) =>
-        filePath === REF_PATH,
-      );
+      const { root, skillPath, refPath, registry } = createOnDiskChain();
+      vi.mocked(isGitIgnored).mockImplementation((filePath: string) => filePath === refPath);
 
-      const registry = createSkillGuideRefRegistry();
-      const result = walkLinkGraph(SKILL_ID, registry, defaultOptions());
+      const result = walkLinkGraph(SKILL_ID, registry, defaultOptions({
+        projectRoot: root,
+        skillRootPath: skillPath,
+      }));
 
       // Guide should be bundled, but ref should be excluded as gitignored
       expectBundledIds(result, [GUIDE_ID]);
       expect(result.excludedReferences).toHaveLength(1);
       expect(result.excludedReferences[0]?.excludeReason).toBe('gitignored');
-      expect(result.excludedReferences[0]?.path).toBe(REF_PATH);
+      expect(result.excludedReferences[0]?.path).toBe(refPath);
+    });
+
+    // ------------------------------------------------------------------
+    // The ordering defect: ignore-before-existence names the wrong cause.
+    // ------------------------------------------------------------------
+
+    it('reports a MISSING target as missing-target even when the ignore oracle calls it ignored', () => {
+      // Neither oracle can be trusted about a path that is not there.
+      // GitTracker's active set holds only paths that DO exist, so a typo'd
+      // link is trivially absent and therefore "ignored"; `git check-ignore`
+      // answers from patterns, so a never-built `dist/out.js` is "ignored"
+      // too. Asked before existence, either one renames every broken link to
+      // LINK_TO_GITIGNORED_FILE — an accusation about a file that is not there.
+      vi.mocked(isGitIgnored).mockReturnValue(true);
+
+      const result = walkSingleSkill([createLocalLink('gone', MISSING_HREF)]);
+
+      expect(result.excludedReferences).toHaveLength(1);
+      expect(result.excludedReferences[0]?.excludeReason).toBe(REASON_MISSING_TARGET);
+      expect(result.excludedReferences[0]?.targetExists).toBe(false);
+    });
+
+    it('does not consult the ignore oracle at all for a missing target', () => {
+      // Stronger than the verdict: the oracle is not even asked. Keeps a future
+      // refactor from reintroducing the question and papering over the answer.
+      // (No clearMocks in the vitest config — call history is per-file, so
+      // clear it explicitly rather than inheriting earlier tests' calls.)
+      vi.mocked(isGitIgnored).mockClear().mockReturnValue(true);
+
+      walkSingleSkill([createLocalLink('gone', MISSING_HREF)]);
+
+      expect(vi.mocked(isGitIgnored)).not.toHaveBeenCalled();
+    });
+
+    it('never asks a GitTracker about a target that does not exist', () => {
+      // The real-repo oracle. `vat audit` plumbs a pre-populated GitTracker
+      // through, and its active set answers "ignored" for anything absent.
+      const asked: string[] = [];
+      const tracker = {
+        isIgnoredByActiveSet: (p: string) => {
+          asked.push(p);
+          return true;
+        },
+      } as unknown as NonNullable<WalkLinkGraphOptions['gitTracker']>;
+
+      const result = walkSingleSkill(
+        [createLocalLink('gone', MISSING_HREF)],
+        { gitTracker: tracker },
+      );
+
+      expect(asked).toEqual([]);
+      expect(result.excludedReferences[0]?.excludeReason).toBe(REASON_MISSING_TARGET);
     });
   });
 
@@ -605,7 +764,7 @@ describe('walkLinkGraph', () => {
       const registry = createMockRegistry([skill]);
 
       const result = walkLinkGraph(SKILL_ID, registry, defaultOptions({
-        deferredPaths: makeDeferredPaths(),
+        deferredArtifacts: makeDeferredArtifacts(),
       }));
 
       expect(result.deferredAssets).toHaveLength(1);
@@ -634,23 +793,48 @@ describe('walkLinkGraph', () => {
       expect(result.excludedReferences).toHaveLength(0);
     });
 
-    // Existence parity (carry-forward #1): the destPaths branch must be guarded
-    // by !existsSync just like the sourcePaths branch. An existing real file at a
-    // files: dest is NOT a deferred build artifact — it must fall through to the
-    // gitignore / directory-target checks rather than being downgraded to
-    // LINK_DEFERRED_ARTIFACT (info), which would mask a genuine leak signal.
-    it('dest that EXISTS on disk and is gitignored → NOT deferred → excluded as gitignored', () => {
-      const tmpDir = getTempDir();
-      const destRel = 'data/index.json';
-      const destFile = safePath.resolve(tmpDir, destRel);
-      mkdirSyncReal(dirname(destFile), { recursive: true });
-      writeFileSync(destFile, '{}\n');
-
-      vi.mocked(isGitIgnored).mockImplementation((filePath: string) =>
-        filePath === destFile,
-      );
+    // Existence parity for the `checkDeferred` not-yet-exists path (carry-forward
+    // #1): the destPaths branch must be guarded by !existsSync just like the
+    // sourcePaths branch, same as before. But an EXISTING gitignored files:
+    // target is the expected post-build state of a materialized artifact, not a
+    // leak — the gitignore branch in checkExclusions carries its OWN,
+    // unconditional exemption for deferredArtifacts-covered paths (existing or
+    // not). See the negative-control test below for the uncovered case, which
+    // must still report the leak.
+    it('dest that EXISTS on disk and is gitignored, covered by deferredArtifacts → deferred (no gitignored exclusion)', () => {
+      const { tmpDir, destRel } = createGitignoredDestFixture();
 
       const result = walkOnDiskDeferred({ tmpDir, linkText: 'index', linkRel: destRel, destPaths: [destRel] });
+
+      expect(result.deferredAssets).toHaveLength(1);
+      expect(result.deferredAssets[0]).toContain(destRel);
+      expect(result.excludedReferences).toHaveLength(0);
+    });
+
+    // The gitignore exemption is DEST-only (it was once broader than the defect it
+    // fixed): a files: SOURCE that EXISTS on disk and is gitignored must NOT be
+    // exempted — only a DEST gets the "expected post-build state" exemption. A
+    // source is a real file the author pointed at; the leak signal must survive.
+    it('source (not dest) that EXISTS on disk and is gitignored, covered ONLY by sourcePaths → still excluded as gitignored', () => {
+      const { tmpDir, destRel: srcRel } = createGitignoredDestFixture();
+
+      const result = walkOnDiskDeferred({ tmpDir, linkText: 'index', linkRel: srcRel, sourcePaths: [srcRel] });
+
+      expect(result.deferredAssets).toHaveLength(0);
+      expect(result.excludedReferences).toHaveLength(1);
+      expect(result.excludedReferences[0]?.excludeReason).toBe('gitignored');
+    });
+
+    // Negative control: the exemption is scoped to deferredArtifacts-covered
+    // paths only. An existing gitignored target that is NOT declared under
+    // files: (even though a deferredArtifacts model is present, from an
+    // unrelated files: entry) must still surface the leak signal.
+    it('dest that EXISTS on disk and is gitignored but NOT covered by deferredArtifacts → still excluded as gitignored', () => {
+      const { tmpDir, destRel } = createGitignoredDestFixture();
+
+      // No destPaths/sourcePaths passed — deferredArtifacts is present but empty,
+      // so it does not cover destRel.
+      const result = walkOnDiskDeferred({ tmpDir, linkText: 'index', linkRel: destRel });
 
       expect(result.deferredAssets).toHaveLength(0);
       expect(result.excludedReferences).toHaveLength(1);
@@ -669,7 +853,7 @@ describe('walkLinkGraph', () => {
       expect(result.excludedReferences[0]?.excludeReason).toBe('directory-target');
     });
 
-    it('no deferredPaths option → deferredAssets empty', () => {
+    it('no deferredArtifacts option → deferredAssets empty', () => {
       const skill = createMockResource(SKILL_ID, SKILL_PATH, [
         createLocalLink('guide', GUIDE_HREF, GUIDE_ID),
       ]);
@@ -687,9 +871,9 @@ describe('walkLinkGraph', () => {
       ]);
       const registry = createMockRegistry([skill]);
 
-      // deferredPaths provided but 'nowhere/gone.txt' is not in either set
+      // deferredArtifacts provided but 'nowhere/gone.txt' is not in either set
       const result = walkLinkGraph(SKILL_ID, registry, defaultOptions({
-        deferredPaths: makeDeferredPaths(),
+        deferredArtifacts: makeDeferredArtifacts(),
       }));
 
       expect(result.deferredAssets).toHaveLength(0);
@@ -702,7 +886,7 @@ describe('walkLinkGraph', () => {
     const GLOB_SRC_BASE = 'dist/packs';
     // Shared walk options: only the dest dir 'packs' is a deferred (glob) prefix.
     const DEST_ONLY_DEFERRED: Partial<WalkLinkGraphOptions> = {
-      deferredPaths: { destPaths: new Set([GLOB_DEST_DIR]), sourcePaths: new Set() },
+      deferredArtifacts: makeDeferredArtifactsFromRelPaths({ destPaths: [GLOB_DEST_DIR] }),
     };
 
     // Glob dest-prefix deferral: a link to 'packs/ce/x.json' under a glob entry whose
@@ -724,7 +908,7 @@ describe('walkLinkGraph', () => {
     it('glob source-base prefix: link under source static base → deferred (absent build artifact)', () => {
       const result = walkSingleSkill(
         [createLocalLink('pack src', `./${GLOB_SRC_BASE}/ce/x.json`)],
-        { deferredPaths: { destPaths: new Set(), sourcePaths: new Set([GLOB_SRC_BASE]) } },
+        { deferredArtifacts: makeDeferredArtifactsFromRelPaths({ sourcePaths: [GLOB_SRC_BASE] }) },
       );
 
       expect(result.deferredAssets).toHaveLength(1);

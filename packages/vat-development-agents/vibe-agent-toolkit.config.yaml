@@ -13,9 +13,16 @@ resources:
   # vibe-agent-toolkit.config.yaml, eslint.config.js, and validate-repo-structure.ts.
   exclude:
     - "**/resources/skills/evals/**"
+    # Golden snapshots of this package's own BUILT output — byte-for-byte copies of
+    # dist/ artifacts whose links are already rewritten for the packaged layout, so
+    # they must not be link-validated as authored docs. Mirrors the repo-root config.
+    - "**/test/golden/**"
 
 skills:
-  include: ["resources/skills/SKILL.md", "resources/skills/vat-*.md", "resources/skills/markdown-rewriting.md"]
+  # `coherence-audit` and `markdown-rewriting` are named individually because the
+  # method each teaches is generic — neither carries the `vat-` prefix, since the
+  # prefix is reserved for genuinely VAT-domain skills.
+  include: ["resources/skills/SKILL.md", "resources/skills/vat-*.md", "resources/skills/markdown-rewriting.md", "resources/skills/coherence-audit.md"]
   defaults:
     linkFollowDepth: 2
     excludeNavigationFiles: true
@@ -29,14 +36,19 @@ skills:
       # link cross-monorepo to the top-level docs/ tree. These links are
       # intentional text pointers (not bundled) — allow them globally for
       # all skills in this package.
+      #
+      # `allow` globs match an issue's `location` (the file to open) or its
+      # `link` (the href as authored). These entries name the CONTAINING files,
+      # which is what the paragraph above actually intends: "all skills in this
+      # package". They previously named the link TARGETS relative to the project
+      # root — but `location` no longer carries the target (a missing target is
+      # not a file you can open), and target globs were depth-fragile besides:
+      # picomatch's `**` does not cross a leading `../`, so every extra level of
+      # nesting needed its own `../../../…` line.
       allow:
         LINK_OUTSIDE_PROJECT:
           - paths:
-              - "../../../docs/**"
-              - "../../docs/**"
-              - "../../CHANGELOG.md"
-              - "../*/README.md"        # sibling packages/<name>/README.md
-              - "../../packages/**"      # any sibling-package reference
+              - "resources/skills/**"
             reason: "Cross-monorepo text pointers to top-level docs/, CHANGELOG.md, and sibling-package READMEs"
         # vat-skill-authoring and vat-skill-review deliberately contain
         # CLAUDE_PLUGIN_ROOT to TEACH the NON_PORTABLE_ASSET_REFERENCE rule
@@ -44,15 +56,15 @@ skills:
         # the check still fires for every other skill in this package.
         NON_PORTABLE_ASSET_REFERENCE:
           - paths:
-              - "**/vat-skill-authoring.md:*"
-              - "**/vat-skill-review.md:*"
+              - "**/vat-skill-authoring.md"
+              - "**/vat-skill-review.md"
             reason: "Intentional CLAUDE_PLUGIN_ROOT mentions: these skills document the anti-pattern they enforce"
         # vat-skill-review's checklist deliberately names `grep -P` (and other
         # non-portable utilities) to TEACH the NON_PORTABLE_COMMAND rule. Scoped
         # to that file so the check still fires for every other skill.
         NON_PORTABLE_COMMAND:
           - paths:
-              - "**/vat-skill-review.md:*"
+              - "**/vat-skill-review.md"
             reason: "Intentional non-portable-command mentions: this skill documents the anti-pattern it enforces"
   config:
     vibe-agent-toolkit:
@@ -124,6 +136,10 @@ skills:
     markdown-rewriting:
       test:
         evals: evals/markdown-rewriting/evals.json
+        model: claude-sonnet-5
+    coherence-audit:
+      test:
+        evals: evals/coherence-audit/evals.json
         model: claude-sonnet-5
 
 claude:

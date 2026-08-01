@@ -14,10 +14,9 @@ import { CODE_REGISTRY, type IssueCode, type ValidationIssue } from '@vibe-agent
 
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
 import {
-  assertPatternRegistered,
+  buildEvidence,
   deriveObservationsFromEvidence,
   EXTERNAL_CLI_BINARIES,
-  getPatternDefinition,
 } from '../evidence/index.js';
 
 
@@ -40,34 +39,9 @@ const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---/;
 const ALLOWED_TOOLS_RE = /^allowed-tools:\s*\[([^\]]*)\]/m;
 const PROSE_TOOL_RE = /\b(Bash|Edit|Write|NotebookEdit)\s+tool\b/;
 
-const SNIPPET_MAX = 120;
-
 export interface DetectorOutput {
   evidence: EvidenceRecord[];
   observations: Observation[];
-}
-
-function snippet(s: string): string {
-  const trimmed = s.trim();
-  return trimmed.length <= SNIPPET_MAX ? trimmed : `${trimmed.slice(0, SNIPPET_MAX - 1)}…`;
-}
-
-function buildEvidence(
-  patternId: string,
-  filePath: string,
-  matchText: string,
-  line?: number,
-): EvidenceRecord {
-  assertPatternRegistered(patternId);
-  const def = getPatternDefinition(patternId);
-  const record: EvidenceRecord = {
-    source: 'code',
-    patternId,
-    location: line === undefined ? { file: filePath } : { file: filePath, line },
-    matchText: snippet(matchText),
-    confidence: def?.confidence ?? 'medium',
-  };
-  return record;
 }
 
 /**
@@ -113,7 +87,11 @@ function allowedToolsList(content: string): { tools: string[]; line: number } {
   return { tools, line };
 }
 
-export function collectLocalShellEvidence(content: string, filePath: string): EvidenceRecord[] {
+export function collectLocalShellEvidence(
+  content: string,
+  filePath: string,
+  locationRoot: string,
+): EvidenceRecord[] {
   const out: EvidenceRecord[] = [];
 
   // Frontmatter allowed-tools
@@ -124,6 +102,7 @@ export function collectLocalShellEvidence(content: string, filePath: string): Ev
       buildEvidence(
         'ALLOWED_TOOLS_LOCAL_SHELL',
         filePath,
+        locationRoot,
         `allowed-tools includes ${matchedTool}`,
         atLine || undefined,
       ),
@@ -137,6 +116,7 @@ export function collectLocalShellEvidence(content: string, filePath: string): Ev
       buildEvidence(
         'PROSE_LOCAL_SHELL_TOOL_REFERENCE',
         filePath,
+        locationRoot,
         proseMatch[0],
         lineForIndex(content, proseMatch.index),
       ),
@@ -151,6 +131,7 @@ export function collectLocalShellEvidence(content: string, filePath: string): Ev
         buildEvidence(
           'FENCED_SHELL_BLOCK',
           filePath,
+          locationRoot,
           `\`\`\`${block.language} block`,
           block.line,
         ),
@@ -169,7 +150,11 @@ function binaryLineRE(binary: string): RegExp {
   return new RegExp(String.raw`(^|[\s;|&])${binary}(\s|$)`, 'm');
 }
 
-export function collectExternalCLIEvidence(content: string, filePath: string): EvidenceRecord[] {
+export function collectExternalCLIEvidence(
+  content: string,
+  filePath: string,
+  locationRoot: string,
+): EvidenceRecord[] {
   const out: EvidenceRecord[] = [];
   const seen = new Set<string>();
   for (const block of iterCodeBlocks(content)) {
@@ -190,6 +175,7 @@ export function collectExternalCLIEvidence(content: string, filePath: string): E
         buildEvidence(
           patternId,
           filePath,
+          locationRoot,
           `${binary} invocation in shell block`,
           matchedLine,
         ),
@@ -199,7 +185,11 @@ export function collectExternalCLIEvidence(content: string, filePath: string): E
   return out;
 }
 
-export function collectBrowserAuthEvidence(content: string, filePath: string): EvidenceRecord[] {
+export function collectBrowserAuthEvidence(
+  content: string,
+  filePath: string,
+  locationRoot: string,
+): EvidenceRecord[] {
   const out: EvidenceRecord[] = [];
   for (const { patternId, re, description } of BROWSER_AUTH_PATTERNS) {
     const m = re.exec(content);
@@ -208,6 +198,7 @@ export function collectBrowserAuthEvidence(content: string, filePath: string): E
       buildEvidence(
         patternId,
         filePath,
+        locationRoot,
         description,
         lineForIndex(content, m.index),
       ),
@@ -246,11 +237,20 @@ export function observationToIssue(obs: Observation, location: string): Validati
   };
 }
 
-export function runCompatDetectors(content: string, filePath: string): DetectorOutput {
+/**
+ * @param locationRoot - The ONE base every emitted evidence `location.file` is
+ *   expressed relative to. Required, so a producer cannot emit an absolute
+ *   location by omission.
+ */
+export function runCompatDetectors(
+  content: string,
+  filePath: string,
+  locationRoot: string,
+): DetectorOutput {
   const evidence: EvidenceRecord[] = [
-    ...collectLocalShellEvidence(content, filePath),
-    ...collectExternalCLIEvidence(content, filePath),
-    ...collectBrowserAuthEvidence(content, filePath),
+    ...collectLocalShellEvidence(content, filePath, locationRoot),
+    ...collectExternalCLIEvidence(content, filePath, locationRoot),
+    ...collectBrowserAuthEvidence(content, filePath, locationRoot),
   ];
   const observations = deriveObservations(evidence);
   return { evidence, observations };

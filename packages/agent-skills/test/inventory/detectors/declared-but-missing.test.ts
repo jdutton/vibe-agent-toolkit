@@ -4,6 +4,9 @@ import { detectDeclaredButMissing } from '../../../src/inventory/detectors/decla
 import type { ComponentRef, HookRef, PluginInventory } from '../../../src/inventory/index.js';
 import { makeComponentRef, makeHookRef, makePluginInventory } from '../plugin-inventory-fixtures.js';
 
+/** Root every emitted `location` is relative to — the fixture plugin's parent. */
+const PROJECT_ROOT = '/home/user/plugins';
+
 const DECLARED_BUT_MISSING_CODE = 'COMPONENT_DECLARED_BUT_MISSING';
 const SKILL_REF_PATH = 'skills/foo/SKILL.md';
 
@@ -21,17 +24,17 @@ const FIELD_CASES: Array<[keyof PluginInventory['declared'], ComponentRef | Hook
 describe('detectDeclaredButMissing', () => {
 	it('returns no issues when declared list is null (auto-discovery)', () => {
 		const inv = makePluginInventory({ skills: null });
-		expect(detectDeclaredButMissing(inv)).toEqual([]);
+		expect(detectDeclaredButMissing(inv, PROJECT_ROOT)).toEqual([]);
 	});
 
 	it('returns no issues when all declared skills exist', () => {
 		const inv = makePluginInventory({ skills: [makeComponentRef(SKILL_REF_PATH, true)] });
-		expect(detectDeclaredButMissing(inv)).toEqual([]);
+		expect(detectDeclaredButMissing(inv, PROJECT_ROOT)).toEqual([]);
 	});
 
 	it.each(FIELD_CASES)('returns one issue for missing %s entry', (field, ref, expectedFragment) => {
 		const inv = makePluginInventory({ [field]: [ref] });
-		const issues = detectDeclaredButMissing(inv);
+		const issues = detectDeclaredButMissing(inv, PROJECT_ROOT);
 		expect(issues).toHaveLength(1);
 		expect(issues[0]?.code).toBe(DECLARED_BUT_MISSING_CODE);
 		expect(issues[0]?.severity).toBe('warning');
@@ -42,12 +45,12 @@ describe('detectDeclaredButMissing', () => {
 		const inv = makePluginInventory({
 			hooks: [makeHookRef('hooks/setup.sh', false, { event: 'PostInstall' })],
 		});
-		const issues = detectDeclaredButMissing(inv);
+		const issues = detectDeclaredButMissing(inv, PROJECT_ROOT);
 		expect(issues).toHaveLength(1);
 		expect(issues[0]?.code).toBe(DECLARED_BUT_MISSING_CODE);
 	});
 
 	it('returns no issues when all field lists are null', () => {
-		expect(detectDeclaredButMissing(makePluginInventory())).toEqual([]);
+		expect(detectDeclaredButMissing(makePluginInventory(), PROJECT_ROOT)).toEqual([]);
 	});
 });

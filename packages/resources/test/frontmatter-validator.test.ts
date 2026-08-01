@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { validateFrontmatter } from '../src/frontmatter-validator.js';
 
+/** Shared so the format token and the fixture path each appear once. */
+const URI_REFERENCE = 'uri-reference';
+const SPEC_PATH = '/docs/specs/design.md';
+
 function expectNoUnknownFormatWarnings(
   warnSpy: ReturnType<typeof vi.spyOn>,
   data: Record<string, unknown>,
@@ -126,7 +130,7 @@ describe('validateFrontmatter', () => {
       const schema = {
         type: 'object',
         properties: {
-          ref: { type: 'string', format: 'uri-reference' },
+          ref: { type: 'string', format: URI_REFERENCE },
         },
       };
 
@@ -140,7 +144,7 @@ describe('validateFrontmatter', () => {
         type: 'object',
         properties: {
           url: { type: 'string', format: 'uri' },
-          ref: { type: 'string', format: 'uri-reference' },
+          ref: { type: 'string', format: URI_REFERENCE },
           when: { type: 'string', format: 'date-time' },
           day: { type: 'string', format: 'date' },
           email: { type: 'string', format: 'email' },
@@ -160,6 +164,71 @@ describe('validateFrontmatter', () => {
         },
         schema
       );
+    });
+  });
+
+  describe('JSON Schema dialects', () => {
+    // A collection's frontmatterSchema is arbitrary EXTERNAL input, and Ajv ships
+    // one class per dialect family — the default export carries only draft-07 and
+    // older meta-schemas. A schema declaring the current standard failed to compile
+    // at all, surfacing as FRONTMATTER_SCHEMA_ERROR at error severity for EVERY
+    // file in the collection ("no schema with key or ref .../draft/2020-12/schema"),
+    // whose implied remediation — fix your schema — was wrong: the schema was valid
+    // and VAT could not read it.
+    const citationSchema = (dialect?: string): Record<string, unknown> => ({
+      ...(dialect === undefined ? {} : { $schema: dialect }),
+      type: 'object',
+      properties: {
+        adrs_cited: {
+          type: 'array',
+          items: { type: 'string', format: URI_REFERENCE },
+        },
+      },
+    });
+
+    const validCitations = { adrs_cited: ['/docs/adrs/boundary.md'] };
+
+    it.each([
+      ['draft 2020-12', 'https://json-schema.org/draft/2020-12/schema'],
+      ['draft 2020-12 over http', 'http://json-schema.org/draft/2020-12/schema'],
+      ['draft 2019-09', 'https://json-schema.org/draft/2019-09/schema'],
+      ['draft-07', 'http://json-schema.org/draft-07/schema#'],
+    ])('compiles a schema declaring %s', (_label, dialect) => {
+      const issues = validateFrontmatter(
+        validCitations,
+        citationSchema(dialect),
+        SPEC_PATH,
+        'permissive',
+        '/schemas/spec-links.schema.json'
+      );
+
+      expect(issues).toEqual([]);
+    });
+
+    it('compiles a schema declaring no $schema at all', () => {
+      const issues = validateFrontmatter(
+        validCitations,
+        citationSchema(),
+        SPEC_PATH,
+        'permissive'
+      );
+
+      expect(issues).toEqual([]);
+    });
+
+    it('still reports real violations under a 2020-12 schema', () => {
+      // Guards the fix from passing by disabling validation: selecting a different
+      // Ajv build must not stop the schema's own rules from being enforced.
+      const issues = validateFrontmatter(
+        { adrs_cited: 'not-an-array' },
+        citationSchema('https://json-schema.org/draft/2020-12/schema'),
+        SPEC_PATH,
+        'permissive'
+      );
+
+      expect(issues).toHaveLength(1);
+      expect(issues[0]?.code).toBe('FRONTMATTER_SCHEMA_ERROR');
+      expect(issues[0]?.message).toContain('adrs_cited');
     });
   });
 });

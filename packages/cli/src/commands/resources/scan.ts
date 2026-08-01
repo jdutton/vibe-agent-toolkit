@@ -6,6 +6,7 @@ import { formatDurationSecs } from '../../utils/duration.js';
 import { createLogger } from '../../utils/logger.js';
 import { writeYamlOutput } from '../../utils/output.js';
 import { projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
+import { relativizePathEntries } from '../../utils/relativize-paths.js';
 import { loadResourcesWithConfig } from '../../utils/resource-loader.js';
 
 import { handleCommandError } from './command-helpers.js';
@@ -14,6 +15,75 @@ interface ScanOptions {
   debug?: boolean;
   verbose?: boolean;
   collection?: string;
+}
+
+/** A heading node, which may nest further headings beneath it. */
+type HeadingWithChildren = { children?: HeadingWithChildren[] | undefined };
+
+/**
+ * The slice of a registry resource this payload reports on.
+ *
+ * Structural rather than the full `ResourceMetadata` so the builder can be
+ * exercised with a literal, which is what keeps the payload's shape — field
+ * names included — under unit test rather than only under a CLI spawn.
+ */
+interface ScanResource {
+  filePath: string;
+  links: readonly unknown[];
+  headings: HeadingWithChildren[];
+  checksum: string;
+}
+
+export interface ScanPayloadInput {
+  resources: readonly ScanResource[];
+  /** The stated root: the ONE base every reported `path` is relative to. */
+  root: string;
+  durationMs: number;
+  collections: Record<string, { resourceCount: number }> | undefined;
+  verbose: boolean;
+}
+
+/** Total headings in a tree, counting every nested level. */
+function countHeadings(headings: readonly HeadingWithChildren[]): number {
+  let count = headings.length;
+  for (const heading of headings) {
+    if (heading.children) {
+      count += countHeadings(heading.children);
+    }
+  }
+  return count;
+}
+
+/**
+ * Build the scan payload.
+ *
+ * Pure: no file system, no clock, no `process.exit`. The registry keeps
+ * absolute `filePath`s because that is the identity it keys on; re-basing onto
+ * the stated root happens exactly once, here, at the document boundary — the
+ * same contract `vat audit` follows. A payload of `$HOME`-absolute paths names
+ * the machine it ran on and cannot be diffed across two checkouts.
+ */
+export function buildScanOutputData(input: ScanPayloadInput): Record<string, unknown> {
+  const { resources, root, durationMs, collections, verbose } = input;
+
+  const files = resources.map((resource) => ({
+    path: resource.filePath,
+    links: resource.links.length,
+    anchors: countHeadings(resource.headings),
+    checksum: resource.checksum,
+  }));
+
+  return {
+    status: 'success',
+    // Stated once, and the only absolute path in the document.
+    root,
+    filesScanned: resources.length,
+    linksFound: resources.reduce((sum, r) => sum + r.links.length, 0),
+    anchorsFound: files.reduce((sum, f) => sum + f.anchors, 0),
+    durationSecs: formatDurationSecs(durationMs),
+    ...(collections ? { collections } : {}),
+    ...(verbose ? { files: relativizePathEntries(files, root) } : {}),
+  };
 }
 
 export async function scanCommand(
@@ -39,27 +109,6 @@ export async function scanCommand(
       });
     }
 
-    // Calculate stats from filtered resources
-    const totalLinks = allResources.reduce((sum, r) => sum + r.links.length, 0);
-    const duration = Date.now() - startTime;
-
-    // Count total headings (flatten the heading tree)
-    type HeadingWithChildren = { children?: HeadingWithChildren[] | undefined };
-    const countHeadings = (headings: HeadingWithChildren[]): number => {
-      let count = headings.length;
-      for (const heading of headings) {
-        if (heading.children) {
-          count += countHeadings(heading.children);
-        }
-      }
-      return count;
-    };
-
-    const totalHeadings = allResources.reduce(
-      (sum, resource) => sum + countHeadings(resource.headings),
-      0
-    );
-
     // Build collection stats (filtered or all)
     let collectionsOutput: Record<string, { resourceCount: number }> | undefined;
     if (options.collection) {
@@ -78,27 +127,15 @@ export async function scanCommand(
         : undefined;
     }
 
-    // Output results as YAML
-    const outputData: Record<string, unknown> = {
-      status: 'success',
-      filesScanned: allResources.length,
-      linksFound: totalLinks,
-      anchorsFound: totalHeadings,
-      durationSecs: formatDurationSecs(duration),
-      ...(collectionsOutput ? { collections: collectionsOutput } : {}),
-    };
-
-    // Add verbose file details if requested
-    if (options.verbose) {
-      outputData['files'] = allResources.map(resource => ({
-        path: resource.filePath,
-        links: resource.links.length,
-        anchors: countHeadings(resource.headings),
-        checksum: resource.checksum,
-      }));
-    }
-
-    writeYamlOutput(outputData);
+    writeYamlOutput(
+      buildScanOutputData({
+        resources: allResources,
+        root: projectRoot,
+        durationMs: Date.now() - startTime,
+        collections: collectionsOutput,
+        verbose: options.verbose ?? false,
+      })
+    );
 
     process.exit(0);
   } catch (error) {

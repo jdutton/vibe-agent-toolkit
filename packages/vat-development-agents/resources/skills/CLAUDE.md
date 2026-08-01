@@ -19,6 +19,7 @@ cover VAT's user-facing surface without overlap.
 | `vat-rag` | `vat rag index`, `vat rag query`, native embedding/vector store support, extension points, "contributions welcome" callout | Markdown collection authoring (knowledge-resources owns) | `vat rag` |
 | `vat-skill-review` | Pre-publication review rubric, validation-code reference, Anthropic best-practices integration, `vat skill review` command | The validators themselves (live in code) | `vat skill review` |
 | `vat-enterprise-org` | Anthropic Admin API: org users, cost/usage, workspace skills, `ANTHROPIC_ADMIN_API_KEY` | Per-user runtime auth | `vat claude org` |
+| `coherence-audit` | The METHOD for auditing a subsystem's internal consistency: the one-contract question, the failure-direction tell, bounding a class honestly, auditing the tests themselves, vendor-claim staleness | Any VAT-specific validation rule or CLI behavior — the method is deliberately generic, which is why the name drops the `vat-` prefix | — |
 
 ## Cross-cutting: `vibe-agent-toolkit.config.yaml`
 

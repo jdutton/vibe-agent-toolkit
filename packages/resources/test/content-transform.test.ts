@@ -1311,3 +1311,23 @@ describe('transformContent', () => {
     });
   });
 });
+
+describe('stray unpaired "[" in prose', () => {
+  it('does not swallow the text between a stray "[" and the next real link', () => {
+    // A sentence listing glob metacharacters ends up with an unpaired `[` inside
+    // inline code. With a link-text class that excluded only `]`, the regex started
+    // matching AT that stray bracket and ran forward to the NEXT link's `](`,
+    // capturing every character in between as "link text". Any template that does
+    // not re-emit that text verbatim then DELETED the intervening prose from the
+    // rewritten file — silently, and only in files that happen to contain a `[`.
+    const content = 'A glob may use (`*`, `**`, `?`, `[`) — see [guide](./guide.md) for details.';
+    const links = [createTestLink({ text: 'guide', href: GUIDE_HREF })];
+
+    const result = transformContent(content, links, {
+      linkRewriteRules: [createTypeRule(LOCAL_FILE, LINK_TEXT_VAR)],
+    });
+
+    // Only the genuine link is replaced; every other character survives.
+    expect(result).toBe('A glob may use (`*`, `**`, `?`, `[`) — see guide for details.');
+  });
+});

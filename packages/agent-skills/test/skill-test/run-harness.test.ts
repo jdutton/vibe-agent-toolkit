@@ -32,6 +32,7 @@ import {
   buildRunSummary,
   buildRunSummaryWithSkips,
   buildStageItems,
+  buildStaleDistWarningLines,
   cleanupHarness,
   computeCompositeVerdict,
   detectItemPluginLayout,
@@ -357,6 +358,10 @@ describe('subjectSkillName', () => {
 describe('resolveScaffoldEvalsPath', () => {
   const repoRoot = '/repo';
   const evalsSubpath = 'evals/evals.json';
+  /** Subject under test here — a nested skill, so the anchor is visible in the tail. */
+  const SUBJECT = 'skills/foo';
+  /** The convention's tail, asserted by every case that anchors inside the skill. */
+  const CONVENTION_TAIL = '/skills/foo/evals/evals.json';
 
   // repoRoot is an absolute POSIX-style path; on Windows safePath.resolve prepends
   // a drive letter, so assertions anchor on the resolved root + relative tail
@@ -364,9 +369,9 @@ describe('resolveScaffoldEvalsPath', () => {
   const resolvedRepoRoot = toForwardSlash(safePath.resolve(repoRoot));
 
   it('resolves against repoRoot + the subject name when no override', () => {
-    const out = toForwardSlash(resolveScaffoldEvalsPath(makeOpts({ subject: 'skills/foo' }), repoRoot, evalsSubpath));
+    const out = toForwardSlash(resolveScaffoldEvalsPath(makeOpts({ subject: SUBJECT }), repoRoot, evalsSubpath));
     expect(out.startsWith(resolvedRepoRoot)).toBe(true);
-    expect(out.endsWith('/skills/foo/evals/evals.json')).toBe(true);
+    expect(out.endsWith(CONVENTION_TAIL)).toBe(true);
   });
 
   it('honors a withSources[name].path override', () => {
@@ -379,6 +384,41 @@ describe('resolveScaffoldEvalsPath', () => {
     );
     expect(out.startsWith(resolvedRepoRoot)).toBe(true);
     expect(out.endsWith('/custom/loc/evals/evals.json')).toBe(true);
+  });
+
+  // An eval suite is the answer key, so it is inherently repo-local — which means
+  // testing a skill you did not author REQUIRES pointing at a suite outside that
+  // skill's tree. These pin the three spellings that must reach the same place.
+  it('returns an ABSOLUTE suite path unchanged instead of joining it under the skill', () => {
+    // Was: safePath.join(skillDir, '/shared/evals/evals.json') silently produced
+    // `<skillDir>/shared/evals/evals.json`. That path does not exist, so the run
+    // did not fail — it BOOTSTRAPPED a starter template there, reporting success
+    // while grading nothing the operator asked for.
+    const absolute = toForwardSlash(safePath.resolve('/shared/evals/evals.json'));
+    const out = toForwardSlash(
+      resolveScaffoldEvalsPath(makeOpts({ subject: SUBJECT }), repoRoot, absolute),
+    );
+    expect(out).toBe(absolute);
+  });
+
+  it('resolves a suite path that escapes the skill dir', () => {
+    // Already worked (join normalizes `..`), pinned so the absolute-path fix does
+    // not regress the layout adopters use today to keep suites out of a bundle.
+    const out = toForwardSlash(
+      resolveScaffoldEvalsPath(makeOpts({ subject: SUBJECT }), repoRoot, '../shared/evals.json'),
+    );
+    expect(out.startsWith(resolvedRepoRoot)).toBe(true);
+    expect(out.endsWith('/skills/shared/evals.json')).toBe(true);
+  });
+
+  it('keeps the built-in convention on plain path resolution', () => {
+    // The default is VAT's own constant, not an adopter-supplied reference, so it
+    // must never be interpreted as a package specifier — an installed package
+    // named `evals` would otherwise shadow every skill's own suite.
+    const out = toForwardSlash(
+      resolveScaffoldEvalsPath(makeOpts({ subject: SUBJECT }), repoRoot, undefined),
+    );
+    expect(out.endsWith(CONVENTION_TAIL)).toBe(true);
   });
 });
 
@@ -561,7 +601,12 @@ describe('stage item construction', () => {
 // ---------------------------------------------------------------------------
 
 // Shared constants for the dry-run summary assertions (avoids sonarjs/no-duplicate-string).
-const DRY_RUN_BUILD_PHRASE = 'build + stage the declared skill';
+// `--dry-run` BUILDS now (the "dry" part is the skill testing, not the build), so
+// the summary reports what it DID rather than what a real run would do. The
+// stale/fallback branches below are reachable only via `--no-build --dry-run`.
+const DRY_RUN_BUILD_PHRASE = 'Built + staged the declared skill';
+/** What the summary says when nothing was built (--no-build, or ack absent). */
+const DRY_RUN_UNBUILT_PHRASE = 'Staged the declared skill WITHOUT building';
 const DRY_RUN_FALLBACK_PHRASE = 'fell back to the source dir';
 
 /** Build a minimal DryRunSummaryInput with the given overrides. */
@@ -586,32 +631,36 @@ describe('buildDryRunSummary', () => {
     expect(summary).not.toContain(DRY_RUN_BUILD_PHRASE);
   });
 
-  it('declared subject, no dist (dryRunStagedExistingDist=false): states build + stage, fell back to source', () => {
+  it('declared subject, no build + no dist: says it did NOT build, and fell back to source', () => {
     const summary = buildDryRunSummary(
       makeDryRunInput({ wouldBuild: true, dryRunStagedExistingDist: false }),
     );
-    expect(summary).toContain(DRY_RUN_BUILD_PHRASE);
+    expect(summary).toContain(DRY_RUN_UNBUILT_PHRASE);
+    expect(summary).not.toContain(DRY_RUN_BUILD_PHRASE);
     expect(summary).toContain(DRY_RUN_FALLBACK_PHRASE);
     expect(summary).not.toContain('STALE');
   });
 
-  it('declared subject, existing dist (dryRunStagedExistingDist=true): states build + stage and flags stale', () => {
+  it('declared subject, no build + existing dist: says it did NOT build, flags stale, marks the fingerprint provisional', () => {
     const summary = buildDryRunSummary(
       makeDryRunInput({ wouldBuild: true, dryRunStagedExistingDist: true }),
     );
-    expect(summary).toContain(DRY_RUN_BUILD_PHRASE);
+    expect(summary).toContain(DRY_RUN_UNBUILT_PHRASE);
     expect(summary).toContain('STALE');
     expect(summary).toContain('vat build');
+    // A bare fingerprint from an unbuilt tree reads as authoritative; it must not.
+    expect(summary).toContain('PROVISIONAL');
     expect(summary).not.toContain(DRY_RUN_FALLBACK_PHRASE);
   });
 
-  it('declared subject, wouldBuild=true, no dryRunStagedExistingDist: states build but no stale/fallback detail', () => {
-    // wouldBuild=true but dryRunStagedExistingDist absent (e.g. from a real build run
-    // that somehow has dryRun=true and opts set but no flag threaded — edge case).
+  it('declared subject that WAS built: states it built, with no stale/fallback/provisional caveat', () => {
+    // dryRunStagedExistingDist absent = the normal acknowledged --dry-run path,
+    // which builds. Nothing here is provisional: the staged tree is current.
     const summary = buildDryRunSummary(makeDryRunInput({ wouldBuild: true }));
     expect(summary).toContain(DRY_RUN_BUILD_PHRASE);
     expect(summary).not.toContain('STALE');
     expect(summary).not.toContain(DRY_RUN_FALLBACK_PHRASE);
+    expect(summary).not.toContain('PROVISIONAL');
   });
 
   it('describes the executor→grader pipeline with eval count, concurrency, and models', () => {
@@ -645,6 +694,36 @@ describe('buildDryRunSummary', () => {
     const customPath = '/harness/custom/results/provenance.json';
     const summary = buildDryRunSummary(makeDryRunInput({ provenancePath: customPath }));
     expect(summary).toContain(`Provenance: ${customPath}`);
+  });
+});
+
+// A companion (--with/--with-optional) previewed from a stale dist
+// under --dry-run silently warned nobody, while the byte-identical subject case
+// warned loudly. buildStaleDistWarningLines is the ONE warning-construction used
+// by both buildDryRunSummary (subject, unlabeled) and run.ts's companion
+// resolution (labeled with the companion's alias + declared skill), so the two
+// call sites never drift into two different strings for the same fact.
+const COMPANION_ROLE_LABEL = "companion 'my-helper' (declared skill 'declared-pool')";
+
+describe('buildStaleDistWarningLines', () => {
+  it('subject (no label): matches the exact wording buildDryRunSummary emits for a stale subject dist', () => {
+    const lines = buildStaleDistWarningLines();
+    const summary = buildDryRunSummary(makeDryRunInput({ wouldBuild: true, dryRunStagedExistingDist: true }));
+    for (const line of lines) expect(summary).toContain(line);
+  });
+
+  it('labeled (companion): names the companion so the two warnings are distinguishable', () => {
+    const lines = buildStaleDistWarningLines(COMPANION_ROLE_LABEL);
+    expect(lines[0]).toContain(COMPANION_ROLE_LABEL);
+    expect(lines[0]).toContain('WITHOUT rebuilding');
+    expect(lines[0]).toContain('STALE');
+    expect(lines.join(' ')).toContain('vat build');
+  });
+
+  it('subject and labeled companion warnings are textually distinct', () => {
+    const subjectLines = buildStaleDistWarningLines();
+    const companionLines = buildStaleDistWarningLines(COMPANION_ROLE_LABEL);
+    expect(subjectLines[0]).not.toEqual(companionLines[0]);
   });
 });
 

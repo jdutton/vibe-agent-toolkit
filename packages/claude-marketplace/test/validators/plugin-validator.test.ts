@@ -1,3 +1,4 @@
+import { countBySeverity } from '@vibe-agent-toolkit/agent-schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -11,6 +12,7 @@ import {
 import { validatePlugin } from '../../src/validators/plugin-validator.js';
 
 const CLAUDE_PLUGIN_DIR = '.claude-plugin';
+const TEST_AUTHOR_NAME = 'VAT Test Suite';
 
 describe('validatePlugin', () => {
 	const { getTempDir } = setupTempDir('plugin-validator-test-');
@@ -79,7 +81,7 @@ describe('validatePlugin', () => {
 			name: 'my-test-plugin',
 			description: 'A test plugin for validation',
 			version: '2.3.4',
-			author: { name: 'VAT Test Suite' },
+			author: { name: TEST_AUTHOR_NAME },
 			license: 'MIT',
 		});
 
@@ -133,7 +135,7 @@ describe('validatePlugin', () => {
 			name: 'rc-plugin',
 			description: 'A plugin with pre-release version',
 			version: '1.0.0-rc.3',
-			author: { name: 'VAT Test Suite' },
+			author: { name: TEST_AUTHOR_NAME },
 			license: 'MIT',
 		});
 
@@ -197,6 +199,70 @@ describe('validatePlugin', () => {
 			const issue = result.issues.find((i) => i.code === code);
 			expect(issue?.severity).toBe('info');
 		}
+	});
+
+	describe('issueCounts agree with the issues actually reported', () => {
+		it('counts post-schema warning + info findings (not zeros)', async () => {
+			const tempDir = getTempDir();
+			// No version -> 1 warning; no description/author/license -> 3 info.
+			const pluginPath = createTestPlugin(tempDir, { name: 'counts-plugin' });
+
+			const result = await validatePlugin(pluginPath);
+
+			expect(result.issues).toHaveLength(4);
+			expect(result.issueCounts).toEqual({ errors: 0, warnings: 1, info: 3 });
+			expect(result.issueCounts).toEqual(countBySeverity(result.issues));
+			expect(result.status).toBe('warning');
+			expect(result.summary).toBe('Found 4 issue(s)');
+		});
+
+		it('counts post-schema error + info findings under --strict', async () => {
+			const tempDir = getTempDir();
+			// strict raises the missing-version finding to error severity.
+			const pluginPath = createTestPlugin(tempDir, { name: 'counts-strict-plugin' });
+
+			const result = await validatePlugin(pluginPath, { strict: true });
+
+			expect(result.issues).toHaveLength(4);
+			expect(result.issueCounts).toEqual({ errors: 1, warnings: 0, info: 3 });
+			expect(result.issueCounts).toEqual(countBySeverity(result.issues));
+			expect(result.status).toBe('error');
+		});
+
+		// Positive control: distinguishes "correctly zero" from "never populated".
+		it('reports zeros ONLY when the findings list is genuinely empty', async () => {
+			const tempDir = getTempDir();
+			const pluginPath = createTestPlugin(tempDir, {
+				name: 'complete-plugin',
+				description: 'A plugin with every recommended field present',
+				version: '1.0.0',
+				author: { name: TEST_AUTHOR_NAME },
+				license: 'MIT',
+			});
+
+			const result = await validatePlugin(pluginPath);
+
+			expect(result.issues).toHaveLength(0);
+			expect(result.issueCounts).toEqual({ errors: 0, warnings: 0, info: 0 });
+			expect(result.status).toBe('success');
+			expect(result.summary).toBe('Valid plugin');
+		});
+
+		it('counts schema errors on the failure path', async () => {
+			const tempDir = getTempDir();
+			const pluginPath = createTestPlugin(tempDir, {
+				name: 'Invalid_Name',
+				description: 'x',
+				version: '1.0.0',
+			});
+
+			const result = await validatePlugin(pluginPath);
+
+			expect(result.issueCounts).toEqual(countBySeverity(result.issues));
+			expect(result.issueCounts.errors).toBeGreaterThan(0);
+			// The kebab-case observation rides along at info severity.
+			expect(result.issueCounts.info).toBe(1);
+		});
 	});
 
 });

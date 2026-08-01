@@ -808,6 +808,7 @@ VAT ships a plugin of skills for agents working on VAT itself. They live at `pac
 | `vat-skill-review.md` | Pre-publication review rubric, validation-code reference, `vat skill review` CLI |
 | `vat-skill-testing.md` | Running `vat skill test run`/`configure`, friction triage, isolation/auth model, security ack |
 | `vat-enterprise-org.md` | Anthropic Admin API: org users, cost/usage, workspace skills, `ANTHROPIC_ADMIN_API_KEY` |
+| `coherence-audit.md` | Auditing a subsystem for internal CONSISTENCY rather than for bugs: does every lane implement one contract, does a status/report tell the truth, is a green test suite structurally blind, is a claim about another vendor still true |
 
 **For AI assistants**: If you're asked a question about VAT skill authoring, audit output, distribution, or publishing and you haven't invoked the matching skill, you're probably about to give a shallower answer than you could. Invoke first.
 

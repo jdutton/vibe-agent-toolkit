@@ -281,7 +281,7 @@ export async function assertValidation(
     expected: ValidationIssue | null;
   },
   expectFn: (actual: unknown) => Assertion<unknown>
-): Promise<void> {
+): Promise<ValidationIssue | null> {
   const result = await validateLink(options.link, options.sourceFile);
 
   if (options.expected === null) {
@@ -291,6 +291,10 @@ export async function assertValidation(
     expectFn(result?.severity).toBe(options.expected.severity);
     expectFn(result?.type).toBe(options.expected.type);
   }
+
+  // Return what was asserted on, so the caller can assert too — see
+  // "Every assertion of absence needs a positive control" below.
+  return result;
 }
 ```
 
@@ -533,6 +537,68 @@ it('test 1', () => { /* setup */ });
 it('test 2', () => { /* same setup */ });
 // "I see a pattern" → Extract helper now
 it('test 3', () => { /* uses helper */ });
+```
+
+### ❌ Don't: Claim coverage you don't provide
+
+```typescript
+// BAD - the suite lists a case it never runs
+it.skip('validates broken links', () => { ... });
+
+// BAD - reports as PASSING while asserting nothing about the code
+it('should export all types', () => {
+  expect(true).toBe(true); // TypeScript will catch it
+});
+```
+
+Both are caught by the `local/require-justified-skip` ESLint rule. A genuine
+platform gate is a *condition*, not a skip — use `it.skipIf(...)` /
+`describe.runIf(...)`, or the ternary form `(NET ? describe : describe.skip)(...)`,
+neither of which is flagged. If a skip really must stay, annotate it with
+`// SKIP(#123): reason` (uppercase keyword, `#`-prefixed issue, non-empty reason)
+on the line above. See [custom-eslint-rules.md](custom-eslint-rules.md#require-justified-skip).
+
+### Every assertion of absence needs a positive control
+
+This is the part no linter can enforce, and it is where the real damage lives. A
+test that asserts *nothing happened* is indistinguishable from a test whose
+detector never ran:
+
+```typescript
+// BAD - passes whether suppression works or the detector is simply broken
+it('suppresses the issue when severity is ignore', async () => {
+  const result = await packageSkill(fixture, { severity: { X: 'ignore' } });
+  expect(result.postBuildIssues ?? []).toHaveLength(0);
+});
+```
+
+Pair it with a sibling that proves the detector fires **on the same fixture**:
+
+```typescript
+// GOOD - the pair is what makes the empty result meaningful
+it('reports the issue by default', async () => {
+  const result = await packageSkill(fixture, {});
+  expect(result.postBuildIssues?.some(i => i.code === 'X')).toBe(true);
+});
+
+it('suppresses the issue when severity is ignore', async () => {
+  const result = await packageSkill(fixture, { severity: { X: 'ignore' } });
+  expect(result.postBuildIssues ?? []).toHaveLength(0);
+});
+```
+
+Worked example in tree: `packages/agent-skills/test/integration/skill-packager.integration.test.ts`
+→ `skill-packager: post-build integrity`.
+
+The same rule applies to assertion helpers. A helper that asserts internally is
+invisible to both SonarJS and the reader, so **return the value it asserted on**
+and let the caller assert too — that call-site assertion is the positive control
+on the helper:
+
+```typescript
+// GOOD - helper returns its result; caller asserts independently
+const issue = await assertValidation({ ...options }, expect);
+expect(issue?.code).toBe('LINK_BROKEN_FILE');
 ```
 
 ## Summary Checklist

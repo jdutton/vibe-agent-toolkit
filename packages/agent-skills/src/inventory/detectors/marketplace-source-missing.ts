@@ -8,17 +8,18 @@
  */
 
 import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { issueLocation } from '@vibe-agent-toolkit/utils';
 
 import type { MarketplaceInventory } from '../types.js';
 
-export function detectMarketplacePluginSourceMissing(inv: MarketplaceInventory): ValidationIssue[] {
+export function detectMarketplacePluginSourceMissing(inv: MarketplaceInventory, locationRoot: string): ValidationIssue[] {
 	return inv.declared.plugins
 		.filter(p => p.source === 'path' && !p.exists)
 		.map(p => ({
 			severity: 'error' as const,
 			code: 'MARKETPLACE_PLUGIN_SOURCE_MISSING' as const,
 			message: `Marketplace declares plugin with source "${p.manifestPath}" but the path does not exist.`,
-			location: p.resolvedPath,
+			location: issueLocation(p.resolvedPath, locationRoot),
 			fix: 'Correct the source path or remove the entry from marketplace.plugins[].',
 		}));
 }

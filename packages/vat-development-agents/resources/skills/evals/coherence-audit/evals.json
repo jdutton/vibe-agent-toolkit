@@ -1,0 +1,59 @@
+{
+  "skill_name": "coherence-audit",
+  "_category_note": "Two categories. 'finds-coherence-defects': given a small, fully-compiling, fully-green subsystem containing planted coherence defects, does the agent find them by asking the one-contract question — rather than reviewing it line-by-line for bugs and reporting nothing? These are the A/B skill-lift cases: a no-skill baseline typically says the code looks fine, or nitpicks style. 'method-correctness': when asked directly about the method, does it state the failure-direction rule, the ratchet-over-warning rule, and the reverse-proof discipline correctly?",
+  "evals": [
+    {
+      "id": "status-collapse-and-blind-suite",
+      "category": "finds-coherence-defects",
+      "prompt": "Here's a small reporting module and its test suite. The suite is green and the module has no known bugs — but users keep telling us the output is confusing and that CI 'passes when it shouldn't'. Review it and tell me what's actually wrong.",
+      "files": ["fixtures/status-collapse/reporter.ts", "fixtures/status-collapse/reporter.test.ts"],
+      "expected_output": "Identifies that the module systematically maps the ambiguous case to the reassuring one, and names several instances: buildReport's status is two-valued so a warnings-only run reports `success`; renderReport then short-circuits on `status === 'success'` and prints '✅ All checks passed' over real warnings; the summary counts errors and warnings but never info, and renderReport filters info out entirely, so an info finding is counted nowhere and rendered nowhere despite the doc comment promising every finding is visible to the caller; and exitCodeFor collapses the documented exit 2 (internal error) into 1, making the documented code unreachable. Also identifies that the TEST SUITE is structurally blind: the `finding()` helper is typed 'error' | 'warning' so an info finding cannot be constructed at all, the renderReport test asserts only that one code appears rather than over every finding, and the exitCodeFor tests assert `.not.toBe(0)` which cannot distinguish 1 from 2. Recommends publishing the per-severity counts beside the status rather than only widening the status.",
+      "expectations": [
+        "Identifies that a warnings-only (or info-only) run reports status `success`, and that `renderReport` therefore prints an all-clear over real findings.",
+        "Identifies that info-severity findings are dropped in BOTH the summary counts and the rendered output, and connects this to the doc comment that promises every finding is visible.",
+        "Identifies that `exitCodeFor` collapses the documented exit code 2 into 1, making the documented 'internal error' code unreachable.",
+        "Identifies that the info-severity findings are rendered under a `[WARNING]` label rather than as their own severity.",
+        "Explicitly names the DIRECTION of these failures — each one resolves the ambiguous case to the reassuring/silent answer, which is why none was ever reported as a bug.",
+        "Identifies that the test suite cannot catch these: the `finding()` helper's type makes an info finding inexpressible, and the exit-code assertions use `.not.toBe(0)` which cannot distinguish 1 from 2.",
+        "Does NOT merely report style, naming, or formatting issues as the primary findings."
+      ]
+    },
+    {
+      "id": "vendor-claim-provenance",
+      "category": "finds-coherence-defects",
+      "prompt": "Audit this constants file. It's been stable for months and nothing about it fails CI.",
+      "files": ["fixtures/vendor-claim/install-paths.ts"],
+      "expected_output": "Identifies that every constant is attributed to 'vendor guidance' with no way to tell which numbers actually came from a vendor and which the team invented, that no test in any repo can contradict any of these claims (they are assertions about other people's software), and that they carry no record of when they were last verified or how to re-verify them. Flags the `readlink -f` claim as a specific, checkable assertion about macOS that should be verified rather than repeated, and notes that a stale caveat of this shape fails in the direction of extra work rather than breakage — so nobody reports it. Recommends annotating each claim with a greppable last-verified date plus the re-verification procedure, and splitting the attribution so vendor-sourced and self-originated numbers are distinguishable.",
+      "expectations": [
+        "Identifies that 'Based on vendor guidance' is an unverifiable blanket attribution and that vendor-sourced vs. team-originated values must be distinguishable.",
+        "Identifies that no test can contradict these claims because they are assertions about software outside this repository.",
+        "Recommends annotating the claims with a last-verified date and a concrete re-verification procedure so staleness becomes visible.",
+        "Singles out the `readlink -f` macOS claim as a specific checkable assertion that should be verified rather than repeated."
+      ]
+    },
+    {
+      "id": "method-failure-direction-and-landing",
+      "category": "method-correctness",
+      "prompt": "We're about to review a large subsystem for internal consistency. Two questions: what's the single highest-leverage thing to search for mechanically, and once we've found twenty non-conforming call sites, should we add a warning for them?",
+      "expected_output": "For the first question: search for every place a rich type narrows to a poorer one (a boolean return, a two- or three-valued status enum, a ternary over multi-valued input, a function signature that cannot see one of its inputs' dimensions) and ask where the unrepresentable case went — because it is almost always mapped to the reassuring outcome, which produces silence rather than a false alarm and is therefore never reported. For the second: not a warning — a warning on twenty existing sites is one everyone learns to scroll past. Use a ratchet that lists the known-bad sites explicitly and asserts BOTH directions: a listed site that becomes conforming fails the build until its entry is removed, and a newly-added site in no bucket fails until it is classified, so the list can only shrink. Should also mention recording why each exception is an exception, and fixing forward rather than repairing tests backward.",
+      "expectations": [
+        "Names the failure-direction tell: find every narrowing of a rich type and ask where the unrepresentable case went, because it is mapped to the reassuring outcome and therefore yields silence rather than a false alarm.",
+        "Recommends a two-directional RATCHET over a warning, and explains that a warning over twenty existing sites gets scrolled past.",
+        "States that the ratchet must fail when a listed site becomes conforming (so the list can only shrink) AND when a new unclassified site appears.",
+        "Mentions fixing forward — a test that goes red on the corrected behavior was encoding the defect and must not be narrowed back."
+      ]
+    },
+    {
+      "id": "method-verification-discipline",
+      "category": "method-correctness",
+      "prompt": "I found a coherence bug, wrote a test, fixed the code, and the test passes. I also ran the CLI against our own repo and it exited 0. Am I done?",
+      "expected_output": "No, on several counts. The test passing after the fix proves nothing on its own — revert the fix and confirm the test goes red again, and check that the revert actually mutated the file before trusting the result. Watch the test fail for the RIGHT reason, not just fail. Probing against your own healthy repo is close to worthless because it produces no findings; probe against deliberately-broken fixtures that do. And read the OUTPUT rather than the exit code, since an exit code is one bit and most defects of this class live in the other bits — a suspiciously fast command usually means it never ran at all. Should also raise whether any fixture can even distinguish the correct answer from the incorrect one.",
+      "expectations": [
+        "Says the fix must be reverse-proved: revert it and confirm the test goes red, and verify the revert actually changed the file.",
+        "Says the test must be watched failing for the RIGHT reason, not merely failing.",
+        "Says probing against a healthy/clean tree proves little and that deliberately-broken fixtures which produce findings are needed.",
+        "Says to read the actual OUTPUT rather than relying on the exit code, and treats a suspiciously fast run as evidence the command never ran."
+      ]
+    }
+  ]
+}

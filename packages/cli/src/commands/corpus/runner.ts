@@ -16,15 +16,16 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { scan } from '@vibe-agent-toolkit/discovery';
 import { isGitUrl, parseGitUrl, safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';
 
 import { createLogger } from '../../utils/logger.js';
 import { withClonedRepo } from '../audit/git-url-clone.js';
-import { getValidationResults } from '../audit.js';
+import { deriveScanRoot, getValidationResults } from '../audit.js';
 
-import type { AuditOutcome, AuditStatus, AuditSummary, PluginRow, ReviewOutcome } from './report.js';
+import type { AuditOutcome, AuditSummary, PluginRow, ReviewOutcome, ReviewSummary } from './report.js';
 import type { PluginEntry } from './seed.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -54,26 +55,14 @@ export interface RunnerOptions {
 
 const SKIPPED_REVIEW: ReviewOutcome = { status: 'skipped', duration_ms: 0 };
 
-function statusFromCounts(errors: number, warnings: number): Extract<AuditStatus, 'success' | 'warning' | 'error'> {
-  if (errors > 0) return 'error';
-  if (warnings > 0) return 'warning';
-  return 'success';
-}
-
-function summarizeResults(
-  results: { status: string; issues?: { severity: string }[] }[]
-): AuditSummary {
-  let errors = 0;
-  let warnings = 0;
-  let info = 0;
-  for (const r of results) {
-    for (const issue of r.issues ?? []) {
-      if (issue.severity === 'error') errors += 1;
-      else if (issue.severity === 'warning') warnings += 1;
-      else if (issue.severity === 'info') info += 1;
-    }
-  }
-  return { errors, warnings, info, files_scanned: results.length };
+/**
+ * Roll a run's per-file results up into one corpus row.
+ *
+ * `files_scanned` counts FILES; the severity buckets count FINDINGS — two
+ * different denominators, so they are named differently on purpose.
+ */
+function summarizeRun(allIssues: readonly ValidationIssue[], filesScanned: number): AuditSummary {
+  return { ...countBySeverity(allIssues), files_scanned: filesScanned };
 }
 
 /**
@@ -121,9 +110,11 @@ async function auditAndRecord(
 
   let audit: AuditOutcome;
   try {
-    const results = await getValidationResults(scanPath, true, {}, logger);
-    const summary = summarizeResults(results);
-    const status = statusFromCounts(summary.errors, summary.warnings);
+    // The corpus run root is the scanned plugin itself — one root per row.
+    const results = await getValidationResults(scanPath, true, {}, logger, deriveScanRoot(scanPath));
+    const allIssues = results.flatMap(r => r.issues);
+    const summary = summarizeRun(allIssues, results.length);
+    const status = calculateValidationStatus(allIssues);
     const auditYamlPath = safePath.join(opts.runDir, `${entry.name}-audit.yaml`);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- composed under run dir
     writeFileSync(auditYamlPath, yaml.stringify({ results }, { lineWidth: 0, aliasDuplicateObjects: false }), 'utf-8');
@@ -158,7 +149,7 @@ async function auditAndRecord(
   };
 }
 
-interface SkillReviewSection {
+export interface SkillReviewSection {
   relativePath: string;
   ok: boolean;
   body: string;
@@ -198,14 +189,56 @@ function reviewOneSkill(bin: string, skillDir: string, relativePath: string): Sk
 
 function renderAggregatedReview(
   entry: PluginEntry,
-  sections: SkillReviewSection[],
-  okCount: number
+  sections: readonly SkillReviewSection[],
+  summary: ReviewSummary
 ): string {
-  const header = `# Skill review: ${entry.name}\n\nReviewed ${okCount} of ${sections.length} skills (${sections.length - okCount} errors).\n`;
+  const header = `# Skill review: ${entry.name}\n\nReviewed ${summary.reviewed} of ${summary.skills_scanned} skills (${summary.failed} errors).\n`;
   const rendered = sections
     .map((s) => `\n---\n\n## ${s.relativePath}\n\n${s.body}\n`)
     .join('');
   return `${header}${rendered}`;
+}
+
+/**
+ * Bucket the per-skill sections into the outcome distribution carried on the row.
+ */
+function summarizeReview(sections: readonly SkillReviewSection[]): ReviewSummary {
+  const reviewed = sections.filter((s) => s.ok).length;
+  return { reviewed, failed: sections.length - reviewed, skills_scanned: sections.length };
+}
+
+/**
+ * Derive one plugin's `ReviewOutcome` from its per-skill sections.
+ *
+ * `status: 'ok'` requires `failed === 0` — every discovered skill reviewed to
+ * completion. A partially-failed run reports `error`, matching how the audit
+ * lane derives its status (any error finding demotes the whole row): a status
+ * must never claim more success than the counts behind it support. The counts
+ * stay on `summary` so consumers can tell 9-of-10-failed from all-failed.
+ */
+export function buildReviewOutcome(
+  sections: readonly SkillReviewSection[],
+  outputPath: string,
+  durationMs: number
+): ReviewOutcome {
+  const summary = summarizeReview(sections);
+
+  if (summary.failed === 0) {
+    return { status: 'ok', duration_ms: durationMs, summary, output_path: outputPath };
+  }
+
+  const errors = sections
+    .filter((s) => !s.ok)
+    .map((s) => `${s.relativePath}: ${s.body.replaceAll('\n', ' ').slice(0, 200)}`)
+    .join('; ');
+
+  return {
+    status: 'error',
+    duration_ms: durationMs,
+    summary,
+    error: `${summary.failed} of ${summary.skills_scanned} skill reviews failed. ${errors}`,
+    output_path: outputPath,
+  };
 }
 
 /**
@@ -216,8 +249,8 @@ function renderAggregatedReview(
  *
  * Per-skill subprocess failures become error sections; the aggregate is
  * still written so users can see which skills passed and which failed.
- * Returns `status: 'error'` only when no skills were discovered or every
- * subprocess failed.
+ * Returns `status: 'error'` when no skills were discovered or ANY subprocess
+ * failed — see `buildReviewOutcome`.
  */
 async function runSkillReview(
   entry: PluginEntry,
@@ -237,6 +270,7 @@ async function runSkillReview(
     return {
       status: 'error',
       duration_ms: Date.now() - start,
+      summary: summarizeReview([]),
       error: `No SKILL.md files found under ${scanPath}`,
     };
   }
@@ -247,28 +281,12 @@ async function runSkillReview(
     sections.push(reviewOneSkill(bin, skillDir, skill.relativePath));
   }
 
-  const okCount = sections.filter((s) => s.ok).length;
-  const aggregated = renderAggregatedReview(entry, sections, okCount);
+  const aggregated = renderAggregatedReview(entry, sections, summarizeReview(sections));
+
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- composed under run dir
   writeFileSync(reviewPath, aggregated, 'utf-8');
 
-  if (okCount === 0) {
-    const errors = sections
-      .map((s) => `${s.relativePath}: ${s.body.replaceAll('\n', ' ').slice(0, 200)}`)
-      .join('; ');
-    return {
-      status: 'error',
-      duration_ms: Date.now() - start,
-      error: `All ${sections.length} skill reviews failed. ${errors}`,
-      output_path: `${entry.name}-review.md`,
-    };
-  }
-
-  return {
-    status: 'ok',
-    duration_ms: Date.now() - start,
-    output_path: `${entry.name}-review.md`,
-  };
+  return buildReviewOutcome(sections, `${entry.name}-review.md`, Date.now() - start);
 }
 
 /**

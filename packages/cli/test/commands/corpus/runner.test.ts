@@ -6,7 +6,7 @@ import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe
 import { describe, expect, it } from 'vitest';
 import * as yaml from 'yaml';
 
-import { auditOnePlugin } from '../../../src/commands/corpus/runner.js';
+import { auditOnePlugin, buildReviewOutcome, type SkillReviewSection } from '../../../src/commands/corpus/runner.js';
 import type { PluginEntry } from '../../../src/commands/corpus/seed.js';
 
 const META = {
@@ -209,6 +209,9 @@ async function runReviewedAudit(pluginDir: string, name: string): Promise<string
   const row = await auditOnePlugin(entry, { runDir, withReview: true, debug: false });
   expect(row.review.status).toBe('ok');
   expect(row.review.output_path).toBe(`${name}-review.md`);
+  // A real (subprocess-backed) clean run carries the distribution too.
+  expect(row.review.summary?.failed).toBe(0);
+  expect(row.review.summary?.reviewed).toBe(row.review.summary?.skills_scanned);
   return safePath.join(runDir, `${name}-review.md`);
 }
 
@@ -255,6 +258,7 @@ describe('auditOnePlugin — --with-review', () => {
     expect(row.audit.status).not.toBe('unloadable');
     expect(row.review.status).toBe('error');
     expect(row.review.error).toMatch(/No SKILL\.md/i);
+    expect(row.review.summary).toEqual({ skills_scanned: 0, reviewed: 0, failed: 0 });
   });
 
   it('records review.status=skipped when audit was unloadable', async () => {
@@ -266,5 +270,56 @@ describe('auditOnePlugin — --with-review', () => {
     // Audit is unloadable so review is skipped (don't review what didn't audit)
     expect(row.audit.status).toBe('unloadable');
     expect(row.review.status).toBe('skipped');
+    // Nothing ran, so there is no distribution to report.
+    expect(row.review.summary).toBeUndefined();
+  });
+});
+
+/**
+ * One fixture builder, driven by a per-skill ok/fail pattern, so the
+ * partially-failed and fully-successful runs differ ONLY in that pattern.
+ */
+function makeSections(oks: readonly boolean[]): SkillReviewSection[] {
+  return oks.map((ok, index) => ({
+    relativePath: `plugins/skill-${index}/SKILL.md`,
+    ok,
+    body: ok ? 'Review output.' : '**[review failed]**\n\nvat skill review exited with code 2',
+  }));
+}
+
+const TEN_SKILLS = 10;
+
+describe('buildReviewOutcome', () => {
+  it('reports the failure count and a non-success status when 9 of 10 reviews failed', () => {
+    const sections = makeSections([true, ...Array.from<boolean>({ length: 9 }).fill(false)]);
+
+    const outcome = buildReviewOutcome(sections, 'partial-review.md', 42);
+
+    expect(outcome.summary).toEqual({ skills_scanned: TEN_SKILLS, reviewed: 1, failed: 9 });
+    expect(outcome.status).not.toBe('ok');
+    expect(outcome.status).toBe('error');
+    expect(outcome.error).toContain('9 of 10');
+    expect(outcome.output_path).toBe('partial-review.md');
+  });
+
+  it('reports success with zero failures when every review ran to completion', () => {
+    const sections = makeSections(Array.from<boolean>({ length: TEN_SKILLS }).fill(true));
+
+    const outcome = buildReviewOutcome(sections, 'clean-review.md', 42);
+
+    expect(outcome.summary).toEqual({ skills_scanned: TEN_SKILLS, reviewed: TEN_SKILLS, failed: 0 });
+    expect(outcome.status).toBe('ok');
+    expect(outcome.error).toBeUndefined();
+    expect(outcome.output_path).toBe('clean-review.md');
+  });
+
+  it('still reports error when every review failed', () => {
+    const sections = makeSections(Array.from<boolean>({ length: 3 }).fill(false));
+
+    const outcome = buildReviewOutcome(sections, 'dead-review.md', 7);
+
+    expect(outcome.summary).toEqual({ skills_scanned: 3, reviewed: 0, failed: 3 });
+    expect(outcome.status).toBe('error');
+    expect(outcome.error).toContain('3 of 3');
   });
 });

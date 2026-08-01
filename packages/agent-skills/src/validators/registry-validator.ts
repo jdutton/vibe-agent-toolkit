@@ -1,17 +1,24 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- File paths are validated before use */
 import { existsSync, readFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 
-import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { CODE_REGISTRY, calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { issueLocation } from '@vibe-agent-toolkit/utils';
 import type { z } from 'zod';
 
-import { InstalledPluginsRegistrySchema } from '../schemas/installed-plugins-registry.js';
-import { KnownMarketplacesRegistrySchema } from '../schemas/known-marketplaces-registry.js';
-
-import type { ValidationResult } from './types.js';
 import {
-	calculateValidationStatus,
-	generateFixSuggestion,
-} from './validation-utils.js';
+	detectInstalledPluginsRegistryDrift,
+	InstalledPluginsRegistrySchema,
+	type RegistryShapeDrift,
+} from '../schemas/installed-plugins-registry.js';
+import {
+	detectKnownMarketplacesRegistryDrift,
+	KnownMarketplacesRegistrySchema,
+} from '../schemas/known-marketplaces-registry.js';
+
+import { type AnchorRootOptions, resolveAnchorRoot } from './anchor-root.js';
+import type { ValidationResult } from './types.js';
+import { generateFixSuggestion } from './validation-utils.js';
 
 const REGISTRY_TYPE = 'registry' as const;
 const REGISTRY_FILE_NOT_FOUND_MESSAGE = 'Registry file not found';
@@ -23,8 +30,19 @@ function validateRegistryFile(
 	filePath: string,
 	schema: z.ZodType,
 	successMessage: string,
+	locationRoot: string | undefined,
+	/**
+	 * Reports what the schema's `.passthrough()` absorbed. Registries VAT does not
+	 * own are parsed liberally; this is what keeps that liberality visible instead
+	 * of silently blind to Claude Code evolving the file.
+	 */
+	detectDrift?: (data: unknown) => RegistryShapeDrift[],
 ): ValidationResult {
 	const issues: ValidationIssue[] = [];
+	// Anchor contract: `location` is relative to the run's ONE stated root. When
+	// no run root is supplied, registry files are pointed at directly, so the
+	// enclosing project is discovered the same way the skills lane discovers it.
+	const location = issueLocation(filePath, resolveAnchorRoot(locationRoot, dirname(filePath)));
 
 	// Check file exists
 	if (!existsSync(filePath)) {
@@ -32,7 +50,7 @@ function validateRegistryFile(
 			severity: 'error',
 			code: 'REGISTRY_MISSING_FILE',
 			message: REGISTRY_FILE_NOT_FOUND_MESSAGE,
-			location: filePath,
+			location,
 			fix: 'Create the registry file at the specified path',
 		});
 
@@ -42,6 +60,7 @@ function validateRegistryFile(
 			status: 'error',
 			summary: REGISTRY_FILE_NOT_FOUND_MESSAGE,
 			issues,
+			issueCounts: countBySeverity(issues),
 		};
 	}
 
@@ -55,7 +74,7 @@ function validateRegistryFile(
 			severity: 'error',
 			code: 'REGISTRY_INVALID_JSON',
 			message: `Failed to parse registry file: ${error instanceof Error ? error.message : 'Unknown error'}`,
-			location: filePath,
+			location,
 			fix: 'Fix JSON syntax errors in the registry file',
 		});
 
@@ -65,18 +84,34 @@ function validateRegistryFile(
 			status: 'error',
 			summary: 'Registry file is invalid JSON',
 			issues,
+			issueCounts: countBySeverity(issues),
 		};
 	}
 
 	// Validate against schema
 	const result = schema.safeParse(data);
-	if (!result.success) {
+	if (result.success) {
+		// Only meaningful once the file is structurally sound — drift observations
+		// on a malformed registry would be noise on top of real errors.
+		for (const drift of detectDrift?.(data) ?? []) {
+			issues.push({
+				severity: CODE_REGISTRY.REGISTRY_SHAPE_DRIFT.defaultSeverity,
+				code: 'REGISTRY_SHAPE_DRIFT',
+				message: drift.message,
+				location,
+				field: drift.field,
+				fix: CODE_REGISTRY.REGISTRY_SHAPE_DRIFT.fix,
+				reference: CODE_REGISTRY.REGISTRY_SHAPE_DRIFT.reference,
+			});
+		}
+	} else {
 		for (const zodIssue of result.error.issues) {
 			issues.push({
 				severity: 'error',
 				code: 'REGISTRY_INVALID_SCHEMA',
 				message: zodIssue.message,
-				location: `${filePath}:${zodIssue.path.join('.')}`,
+				location,
+				field: zodIssue.path.join('.'),
 				fix: generateFixSuggestion(zodIssue),
 			});
 		}
@@ -91,6 +126,7 @@ function validateRegistryFile(
 		summary:
 			status === 'success' ? successMessage : `Found ${issues.length} issue(s)`,
 		issues,
+		issueCounts: countBySeverity(issues),
 	};
 }
 
@@ -98,15 +134,19 @@ function validateRegistryFile(
  * Validate an installed plugins registry file
  *
  * @param filePath - Absolute path to installed_plugins.json file
+ * @param options - Anchor base for emitted locations (see {@link AnchorRootOptions})
  * @returns Validation result with issues
  */
 export async function validateInstalledPluginsRegistry(
 	filePath: string,
+	options?: AnchorRootOptions,
 ): Promise<ValidationResult> {
 	return validateRegistryFile(
 		filePath,
 		InstalledPluginsRegistrySchema,
 		'Valid installed plugins registry',
+		options?.locationRoot,
+		detectInstalledPluginsRegistryDrift,
 	);
 }
 
@@ -114,14 +154,18 @@ export async function validateInstalledPluginsRegistry(
  * Validate a known marketplaces registry file
  *
  * @param filePath - Absolute path to known_marketplaces.json file
+ * @param options - Anchor base for emitted locations (see {@link AnchorRootOptions})
  * @returns Validation result with issues
  */
 export async function validateKnownMarketplacesRegistry(
 	filePath: string,
+	options?: AnchorRootOptions,
 ): Promise<ValidationResult> {
 	return validateRegistryFile(
 		filePath,
 		KnownMarketplacesRegistrySchema,
 		'Valid known marketplaces registry',
+		options?.locationRoot,
+		detectKnownMarketplacesRegistryDrift,
 	);
 }

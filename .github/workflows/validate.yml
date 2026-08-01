@@ -29,6 +29,25 @@ jobs:
         run: bun install
       - name: Build packages
         run: bun run build
+      # The adopter-name gate reads its token list from outside the repo, because a
+      # contraband list committed to a public repo is itself the leak. Materialize it
+      # from a repo secret into the gitignored default path the gate already looks for.
+      #
+      # When the secret is absent (a fork, or before it is configured) no file is written
+      # and the gate reports that it did NOT run — it never silently reports success. The
+      # emptiness test is done in the shell rather than an `if:` expression because the
+      # `secrets` context is not dependable in step-level conditionals.
+      - name: Provision contraband token list
+        shell: bash
+        run: |
+          if [ -n "$CONTRABAND_TOKENS" ]; then
+            printf '%s\n' "$CONTRABAND_TOKENS" > .contraband-tokens
+            echo "Provisioned contraband token list for the adopter-name gate."
+          else
+            echo "::warning::CONTRABAND_TOKENS secret is not set - the adopter-name gate will not run."
+          fi
+        env:
+          CONTRABAND_TOKENS: ${{ secrets.CONTRABAND_TOKENS }}
       - name: Run validation
         run: bun run validate
         env:

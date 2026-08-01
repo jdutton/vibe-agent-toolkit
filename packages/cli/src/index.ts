@@ -10,7 +10,17 @@ export { version, getVersionString, type VersionContext } from './version.js';
 
 // Utilities (for programmatic use)
 export { createLogger, type Logger, type LoggerOptions } from './utils/logger.js';
-export { writeYamlOutput, flushStdout, writeTestFormatError } from './utils/output.js';
+// A consumer that embeds these output helpers inherits the same `process.exit`
+// truncation they were written to fix, and needs `makeStdioBlocking` to opt into
+// the fix — it now lives in `@vibe-agent-toolkit/utils` (also reachable via the
+// narrow `@vibe-agent-toolkit/utils/process` subpath), because the CLI sits at
+// the top of the dependency chain and VAT's second published bin could not reach
+// it here.
+export {
+  writeYamlOutput,
+  writeTestFormatError,
+  writeStdoutSync,
+} from './utils/output.js';
 export { loadConfig } from './utils/config-loader.js';
 export {
   ProjectConfigSchema,

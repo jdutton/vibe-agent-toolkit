@@ -11,8 +11,8 @@
  *   3. rewriteBodyLinks — standalone body-side counterpart. Parallel to
  *      `transformContent` but with a callback model instead of templates.
  *
- * See docs/superpowers/specs/2026-05-17-frontmatter-editor-and-yaml-consolidation-design.md
- * §6 for the design contract.
+ * All three inherit {@link FrontmatterEditor}'s round-trip identity contract:
+ * a rewrite that changes no href must leave the document byte-identical.
  */
 
 import { isNode } from 'yaml';

@@ -18,14 +18,19 @@ including link integrity checking and anchor validation.
 4. Exits 0 always (informational only)
 
 **Path Argument:**
-- `[path]` specifies the **base directory** to start crawling from
-- Recursively finds all `*.md` files under that directory (default pattern: `**/*.md`)
-- When path is specified, **config patterns are ignored** (to avoid pattern conflicts)
-- To use config patterns, run without path argument: `vat resources scan`
+- `[path]` restricts the scan to that subtree of the project
+- Recursively finds all `*.md` / `*.html` files under that directory
+- The path **replaces** the config's `resources.include` patterns
+- The config's `resources.exclude` patterns **still apply** — a path run never
+  scans build output, vendored trees, or test fixtures the project excluded
+- To scan the project's full configured set, run without a path argument:
+  `vat resources scan`
 
 **Options:**
 - `[path]` - Base directory to crawl (defaults to current directory)
 - `--debug` - Enable debug logging
+- `--verbose` - Add a `files:` list with per-file link/anchor counts and checksums
+- `--collection <id>` - Only report files in the named collection (config mode — no path argument)
 
 **Exit Codes:**
 - `0` - Always (scan is informational)
@@ -33,23 +38,28 @@ including link integrity checking and anchor validation.
 
 **Output:** YAML on stdout, logs on stderr
 
+`root` is stated once and is the only absolute path in the document; every
+`path` beneath it is relative to it.
+
 **Example:**
 ```bash
 # Recursively scan all *.md files under docs/
-vat resources scan docs/
+vat resources scan docs/ --verbose
 # Equivalent to: find all files matching docs/**/*.md pattern
 
 # Output:
 # ---
 # status: success
+# root: /home/you/my-project
 # filesScanned: 12
 # linksFound: 47
 # anchorsFound: 23
+# durationSecs: 0.234
 # files:
 #   - path: docs/README.md
 #     links: 5
 #     anchors: 3
-# duration: 234ms
+#     checksum: 47dd7b50af765df240fe2514f029fc697c907fc37a3267e22060f2f9f611975c
 # ---
 ```
 
@@ -78,14 +88,21 @@ for the loud-cwd fallback policy and the projectRoot discovery ladder.
 4. Exits 0 if valid, 1 if errors found
 
 **Path Argument:**
-- `[path]` specifies the **base directory** to start crawling from
-- Recursively finds all `*.md` files under that directory (default pattern: `**/*.md`)
-- When path is specified, **config patterns are ignored** (to avoid pattern conflicts)
-- To use config patterns, run without path argument: `vat resources validate`
+- `[path]` restricts the scan to that subtree of the project
+- Recursively finds all `*.md` / `*.html` files under that directory
+- The path **replaces** the config's `resources.include` patterns
+- The config's `resources.exclude` patterns **still apply** — a path run never
+  scans build output, vendored trees, or test fixtures the project excluded
+- To scan the project's full configured set, run without a path argument:
+  `vat resources validate`
 
 **Options:**
 - `[path]` - Base directory to crawl (defaults to current directory)
 - `--debug` - Enable debug logging
+- `-v, --verbose` - Show all scanned resources, including those without issues. By
+  default `issues` carries one counts-only row per file with findings
+  (`{file, errors?, warnings?, info?, codes}`); `--verbose` replaces each row with
+  its per-issue detail. Every other output field is identical in both modes.
 - `--no-check-frontmatter-links` - Skip frontmatter URI-reference link validation across all collections (default: enabled)
 
 **Exit Codes:**
@@ -108,8 +125,7 @@ vat resources validate docs/
 # status: success
 # filesScanned: 12
 # linksChecked: 47
-# anchorsChecked: 23
-# duration: 456ms
+# durationSecs: 0.456
 # ---
 ```
 
@@ -117,21 +133,26 @@ vat resources validate docs/
 ```bash
 vat resources validate docs/
 
-# stderr:
-# docs/README.md:15:25: Link target not found: ./missing.md
-# docs/guide.md:42:10: Broken anchor: #non-existent-section
+# stderr:  (file:line:column: severity: message — only `error` fails the run)
+# docs/README.md:15:25: error: Link target not found: ./missing.md
+# docs/guide.md:42:10: error: Broken anchor: #non-existent-section
 
 # stdout:
 # ---
-# status: failed
+# status: error
 # errorsFound: 2
-# errors:
+# filesWithErrors: 2
+# issueCounts: { errors: 2, warnings: 0, info: 0 }
+# issueSummary: { LINK_BROKEN_FILE: 1, LINK_BROKEN_ANCHOR: 1 }
+# issues:
 #   - file: docs/README.md
-#     line: 15
-#     column: 25
-#     type: broken-link
-#     message: Link target not found: ./missing.md
-# duration: 456ms
+#     issues:
+#       - line: 15
+#         column: 25
+#         code: LINK_BROKEN_FILE
+#         severity: error
+#         message: Link target not found: ./missing.md
+# durationSecs: 0.456
 # ---
 ```
 
@@ -180,6 +201,17 @@ resources:
     severity:
       EXTERNAL_URL_DEAD: ignore        # don't fail the build on dead external links
       FRONTMATTER_SCHEMA_ERROR: error
+```
+
+**Dot-directories are scanned.** `**` traverses path segments beginning with a
+dot, so the default `**/*.md` reaches `.claude/`, `.github/` and the like — as do
+your own patterns. Visibility is decided by git and by `exclude`, never by a
+leading dot. To keep a dotted tree out of the scan, exclude it by name:
+
+```yaml
+resources:
+  exclude:
+    - ".claude/worktrees/**"
 ```
 
 ## Integration with vibe-validate

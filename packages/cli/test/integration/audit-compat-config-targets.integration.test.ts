@@ -99,6 +99,7 @@ async function runAndGetVerdicts(
   const compatMap = await runCompatAnalysis(
     [makePluginResult(pluginDir)],
     silentLogger,
+    pluginDir,
     undefined,
     vatContext,
   );

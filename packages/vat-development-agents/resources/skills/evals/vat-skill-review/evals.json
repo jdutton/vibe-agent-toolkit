@@ -6,7 +6,9 @@
       "id": "catch-frontmatter-issues",
       "category": "catch-violation",
       "prompt": "I'm about to publish this skill to our internal Claude Code marketplace. Can you give it a once-over and tell me anything that would trip up Claude Code itself or our reviewers before I ship it?",
-      "files": ["fixtures/bad-frontmatter-skill.md"],
+      "files": [
+        "fixtures/bad-frontmatter-skill.md"
+      ],
       "expected_output": "Identifies the high-value problems: the name contains the reserved word 'claude' (Claude Code refuses to install non-certified skills whose name contains 'claude'/'anthropic'); the name 'claude-pdf-helper' uses the vague term 'helper'; the description opens with the filler 'This skill helps...', is written in first person ('I can...'), exceeds the ~250-char Claude Code listing limit, and contains time-sensitive phrases ('as of January 2026', 'before August 2025'). Concludes it is NOT ready to ship as-is.",
       "expectations": [
         "The review flags that the skill name contains the reserved word 'claude' and that Claude Code will refuse to install a non-certified skill whose name contains 'claude' or 'anthropic'.",
@@ -20,7 +22,9 @@
       "id": "catch-nonportable-script-refs",
       "category": "catch-violation",
       "prompt": "Here's a skill that bundles a script. Before I add it to our marketplace, does anything about the way it references the script or the shell commands it runs look like it'll break for some users?",
-      "files": ["fixtures/nonportable-cli-skill.md"],
+      "files": [
+        "fixtures/nonportable-cli-skill.md"
+      ],
       "expected_output": "Flags the CLAUDE_PLUGIN_ROOT script reference as non-portable — it is Claude-Code-plugin-only and breaks when the skill is mounted standalone (claude.ai upload / API container); the fix is a skill-relative path like scripts/extract.mjs. Also flags the non-portable shell commands: 'grep -P' (Perl regex, not on macOS/BSD — use grep -E) and bare 'timeout' (absent on macOS by default).",
       "expectations": [
         "The review flags the ${CLAUDE_PLUGIN_ROOT} reference as non-portable and explains it breaks when the skill runs outside a Claude Code plugin (e.g. claude.ai upload or API container).",
@@ -33,7 +37,9 @@
       "id": "no-false-positive-on-clean-skill",
       "category": "no-false-positive",
       "prompt": "Quick sanity check before I publish this skill — does it look good, or is something off?",
-      "files": ["fixtures/clean-skill.md"],
+      "files": [
+        "fixtures/clean-skill.md"
+      ],
       "expected_output": "Reports the skill is broadly publication-ready: gerund-form name, third-person description under the length limit with a clear 'Use when' trigger, no reserved words, no time-sensitive content, portable. Any suggestions are minor; it does not invent blocking violations that are not present.",
       "expectations": [
         "The review indicates the skill is broadly in good shape / publication-ready.",
@@ -62,7 +68,8 @@
       "expectations": [
         "The answer recommends a gerund-form, lowercase-hyphenated name (e.g. 'analyzing-spreadsheets') or an acceptable noun/verb-phrase alternative.",
         "The answer advises avoiding vague names like 'helper', 'utils', or 'tools'.",
-        "The answer warns against including 'claude' or 'anthropic' in the skill name because non-certified skills named that way are rejected at install."
+        "The answer warns against including 'claude' or 'anthropic' in the skill name because non-certified skills named that way are rejected at install.",
+        "The answer does NOT itself propose a name that violates the convention it describes — no CamelCase, snake_case, spaces, or a name containing 'claude'/'anthropic' offered as an acceptable option."
       ]
     }
   ]

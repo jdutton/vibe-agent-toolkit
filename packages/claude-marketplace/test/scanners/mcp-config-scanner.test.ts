@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import { scanMcpConfig } from '../../src/scanners/mcp-config-scanner.js';
+import { TEST_LOCATION_ROOT } from '../test-helpers.js';
 
 describe('scanMcpConfig', () => {
   it('returns empty for config with no servers', () => {
-    const result = scanMcpConfig({}, '.mcp.json');
+    const result = scanMcpConfig({}, '.mcp.json', TEST_LOCATION_ROOT);
     expect(result).toEqual([]);
   });
 
@@ -14,7 +15,7 @@ describe('scanMcpConfig', () => {
         myServer: { command: 'node', args: ['server.mjs'] },
       },
     };
-    const result = scanMcpConfig(config, '.mcp.json');
+    const result = scanMcpConfig(config, '.mcp.json', TEST_LOCATION_ROOT);
     expect(result).toHaveLength(1);
     expect(result[0]?.patternId).toBe('MCP_SERVER_COMMAND');
     expect(result[0]?.matchText).toContain('node');
@@ -26,7 +27,7 @@ describe('scanMcpConfig', () => {
         weather: { command: 'python3', args: ['-m', 'weather_server'] },
       },
     };
-    const result = scanMcpConfig(config, '.mcp.json');
+    const result = scanMcpConfig(config, '.mcp.json', TEST_LOCATION_ROOT);
     expect(result[0]?.patternId).toBe('MCP_SERVER_COMMAND');
     expect(result[0]?.matchText).toContain('python3');
   });
@@ -37,7 +38,7 @@ describe('scanMcpConfig', () => {
         weather: { command: 'uv', args: ['run', 'weather.py'] },
       },
     };
-    const result = scanMcpConfig(config, '.mcp.json');
+    const result = scanMcpConfig(config, '.mcp.json', TEST_LOCATION_ROOT);
     expect(result[0]?.patternId).toBe('MCP_SERVER_COMMAND');
     expect(result[0]?.matchText).toContain('uv');
   });
@@ -48,7 +49,7 @@ describe('scanMcpConfig', () => {
         tool: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem'] },
       },
     };
-    const result = scanMcpConfig(config, '.mcp.json');
+    const result = scanMcpConfig(config, '.mcp.json', TEST_LOCATION_ROOT);
     expect(result[0]?.patternId).toBe('MCP_SERVER_COMMAND');
   });
 
@@ -58,7 +59,7 @@ describe('scanMcpConfig', () => {
         remote: { url: 'https://example.com/mcp' },
       },
     };
-    const result = scanMcpConfig(config, '.mcp.json');
+    const result = scanMcpConfig(config, '.mcp.json', TEST_LOCATION_ROOT);
     expect(result).toHaveLength(1);
     expect(result[0]?.patternId).toBe('MCP_SERVER_URL');
     expect(result[0]?.matchText).toContain('https://example.com/mcp');
@@ -71,7 +72,7 @@ describe('scanMcpConfig', () => {
         pythonServer: { command: 'python3', args: ['b.py'] },
       },
     };
-    const result = scanMcpConfig(config, '.mcp.json');
+    const result = scanMcpConfig(config, '.mcp.json', TEST_LOCATION_ROOT);
     expect(result).toHaveLength(2);
   });
 });

@@ -22,11 +22,13 @@ import { createRegistryIssue, type ValidationIssue } from '@vibe-agent-toolkit/a
 import {
   isGitIgnored,
   type GitTracker,
+  issueLocation,
   verifyCaseSensitiveFilename,
 } from '@vibe-agent-toolkit/utils';
 
+import type { DeferredArtifacts } from './deferred-artifacts.js';
 import type { ResourceLink } from './types.js';
-import { isWithinProject, issueLocation, resolveLocalHref } from './utils.js';
+import { isWithinProject, locationRoot, resolveLocalHref } from './utils.js';
 
 type LinkIssueExtras = Partial<Pick<ValidationIssue, 'location' | 'line' | 'link' | 'suggestion'>>;
 
@@ -42,7 +44,7 @@ function linkExtras(
   suggestion?: string,
 ): LinkIssueExtras {
   return {
-    location: issueLocation(sourceFilePath, projectRoot),
+    location: issueLocation(sourceFilePath, locationRoot(projectRoot)),
     link: link.href,
     ...(link.line !== undefined && { line: link.line }),
     ...(suggestion !== undefined && { suggestion }),
@@ -61,6 +63,21 @@ export interface ValidateLinkOptions {
   gitTracker?: GitTracker;
   /** Strictly resolve HTML fragment anchors against element ids/names (default: false). HTML fragments are often runtime-defined by JS, so a static miss is not proof of breakage. */
   checkHtmlAnchors?: boolean;
+  /**
+   * Deferred build-artifact model (a skill's `files:` config). A `local_file`
+   * target covered by this model's `covers()` is reported as an info-severity
+   * `LINK_DEFERRED_ARTIFACT` instead of an error, in two cases:
+   *
+   * - The target does not exist on disk yet — instead of `LINK_BROKEN_FILE`
+   *   (see {@link deferredArtifactIssue}).
+   * - The target exists but is gitignored — instead of `LINK_TO_GITIGNORED`
+   *   (see {@link gitIgnoreSafetyIssue}); the expected state of a build
+   *   artifact once a build has run, not a leak.
+   *
+   * Both mirror the same downgrade `vat skills validate` already performs for
+   * the same declared artifact via the agent-skills walker.
+   */
+  deferredArtifacts?: DeferredArtifacts;
 }
 
 /**
@@ -188,9 +205,48 @@ export function fileExistenceIssue(
     );
   }
 
+  // Spell the missing file the same way the sibling `location` does: relative to
+  // the project root when we know one. An absolute path here leaks the
+  // developer's home directory into every CI log — the same reason `location`
+  // is required to be relative.
+  const missingPath = projectRoot
+    ? issueLocation(fileResult.resolvedPath, projectRoot)
+    : fileResult.resolvedPath;
+
   return createRegistryIssue(
     'LINK_BROKEN_FILE',
-    `File not found: ${fileResult.resolvedPath}`,
+    `File not found: ${missingPath}`,
+    linkExtras(link, sourceFilePath, projectRoot, ''),
+  );
+}
+
+/**
+ * Convert a missing-file result into a `LINK_DEFERRED_ARTIFACT` info issue when
+ * the target is a declared-but-not-yet-materialized `files:` build artifact.
+ *
+ * Returns null (defer to the normal `fileExistenceIssue` / existing-file path)
+ * when:
+ * - the file actually exists (`fileResult.exists`) — the existence gate: an
+ *   existing covered target must keep its normal anchor/gitignore treatment,
+ *   never a deferred downgrade purely from `covers()`;
+ * - the file exists under a different case (`fileResult.actualName` set) — a
+ *   real, if mis-cased, materialized file, not a not-yet-built one;
+ * - no `deferredArtifacts` model was supplied, or it doesn't cover this path.
+ */
+export function deferredArtifactIssue(
+  fileResult: { exists: boolean; resolvedPath: string; actualName?: string },
+  link: ResourceLink,
+  sourceFilePath: string,
+  deferredArtifacts: DeferredArtifacts | undefined,
+  projectRoot?: string,
+): ValidationIssue | null {
+  if (fileResult.exists || fileResult.actualName || !deferredArtifacts?.covers(fileResult.resolvedPath)) {
+    return null;
+  }
+
+  return createRegistryIssue(
+    'LINK_DEFERRED_ARTIFACT',
+    `Link targets a build artifact declared in the skill files: config, not yet materialized: ${fileResult.resolvedPath}`,
     linkExtras(link, sourceFilePath, projectRoot, ''),
   );
 }
@@ -227,6 +283,28 @@ export function gitIgnoreSafetyIssue(
 
   if (sourceIsIgnored || !targetIsIgnored) return null;
 
+  // A files:-declared DEST that already exists on disk and is gitignored is
+  // the expected post-build state of a materialized build artifact (gitignored
+  // dist/ output), not a leak. This check is deliberately unconditional on
+  // existence — the target reaching this point already implies it exists (the
+  // caller only invokes gitIgnoreSafetyIssue after fileExistenceIssue passes).
+  // Downgrade to the same info-severity code deferredArtifactIssue emits for
+  // the not-yet-materialized half of the same lifecycle, rather than
+  // escalating to LINK_TO_GITIGNORED. An uncovered target still reports the
+  // leak below.
+  //
+  // DEST-ONLY (coversDest, not covers): a files: SOURCE is a real file the
+  // author pointed at, not a build output — if it's gitignored, linking to it
+  // is exactly the leak this rule exists to catch, so source coverage must
+  // NOT exempt it here.
+  if (options.deferredArtifacts?.coversDest(resolvedTarget)) {
+    return createRegistryIssue(
+      'LINK_DEFERRED_ARTIFACT',
+      `Link targets a build artifact declared in the skill files: config, materialized and (as expected) gitignored: ${resolvedTarget}`,
+      linkExtras(link, sourceFilePath, options.projectRoot, ''),
+    );
+  }
+
   return createRegistryIssue(
     'LINK_TO_GITIGNORED',
     `Non-ignored file links to gitignored file: ${resolvedTarget}. Gitignored files are local-only and will not exist in the repository. Remove this link or unignore the target file.`,
@@ -251,6 +329,16 @@ async function validateLocalFileLink(
   }
 
   const fileResult = await validateResolvedFile(resolved.resolvedPath);
+
+  const deferred = deferredArtifactIssue(
+    fileResult,
+    link,
+    sourceFilePath,
+    options?.deferredArtifacts,
+    options?.projectRoot,
+  );
+  if (deferred) return deferred;
+
   const notFound = fileExistenceIssue(fileResult, link, sourceFilePath, options?.projectRoot);
   if (notFound) return notFound;
 

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 
 import type { SkillsConfig } from '@vibe-agent-toolkit/resources';
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safeExecSync, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { discoverSkillsFromConfig } from '../../src/commands/skills/skill-discovery.js';
@@ -16,6 +16,33 @@ import { discoverSkillsFromConfig } from '../../src/commands/skills/skill-discov
 const INSIDE = 'inside-skill';
 const OUTSIDE = 'outside-skill';
 const PRIVATE = 'private-skill';
+const COMMITTED = 'committed-skill';
+const UNCOMMITTED = 'uncommitted-skill';
+
+/** The include pattern every adopter writes; both fixtures below use it. */
+const SKILLS_GLOB = 'skills/**/SKILL.md';
+
+/** Write `<dir>/SKILL.md` with the frontmatter name discovery reads. */
+function writeSkill(dir: string, name: string, description: string): void {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- dir derives from mkdtempSync
+  fs.mkdirSync(dir, { recursive: true });
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- dir derives from mkdtempSync
+  fs.writeFileSync(
+    safePath.join(dir, 'SKILL.md'),
+    `---\nname: ${name}\ndescription: ${description}\n---\n# ${name}\n`,
+  );
+}
+
+/** Names of the discovered skills, sorted so assertions are order-independent. */
+async function discoveredNames(
+  include: string[],
+  projectRoot: string,
+  exclude?: string[],
+): Promise<string[]> {
+  const config = (exclude ? { include, exclude } : { include }) as SkillsConfig;
+  const skills = await discoverSkillsFromConfig(config, projectRoot);
+  return skills.map(s => s.name).sort((a, b) => a.localeCompare(b));
+}
 
 describe('discoverSkillsFromConfig — include patterns with `..` traversal', () => {
   let tempDir: string;
@@ -31,30 +58,16 @@ describe('discoverSkillsFromConfig — include patterns with `..` traversal', ()
     //       skills/inside/SKILL.md
     //       skills/private/SKILL.md        ← exists, excluded by tests
     packageRoot = safePath.join(tempDir, 'pkg');
-    const insideDir = safePath.join(packageRoot, 'skills', 'inside');
-    const privateDir = safePath.join(packageRoot, 'skills', 'private');
-    const outsideDir = safePath.join(tempDir, 'docs', 'skills', 'outside');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir from mkdtempSync
-    fs.mkdirSync(insideDir, { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir from mkdtempSync
-    fs.mkdirSync(privateDir, { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir from mkdtempSync
-    fs.mkdirSync(outsideDir, { recursive: true });
-
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir from mkdtempSync
-    fs.writeFileSync(
-      safePath.join(insideDir, 'SKILL.md'),
-      '---\nname: inside-skill\ndescription: lives inside the package\n---\n# Inside\n',
+    writeSkill(safePath.join(packageRoot, 'skills', 'inside'), INSIDE, 'lives inside the package');
+    writeSkill(
+      safePath.join(packageRoot, 'skills', 'private'),
+      PRIVATE,
+      'should be droppable via exclude',
     );
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir from mkdtempSync
-    fs.writeFileSync(
-      safePath.join(privateDir, 'SKILL.md'),
-      '---\nname: private-skill\ndescription: should be droppable via exclude\n---\n# Private\n',
-    );
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir from mkdtempSync
-    fs.writeFileSync(
-      safePath.join(outsideDir, 'SKILL.md'),
-      '---\nname: outside-skill\ndescription: lives above the package via ..\n---\n# Outside\n',
+    writeSkill(
+      safePath.join(tempDir, 'docs', 'skills', 'outside'),
+      OUTSIDE,
+      'lives above the package via ..',
     );
   });
 
@@ -63,57 +76,82 @@ describe('discoverSkillsFromConfig — include patterns with `..` traversal', ()
   });
 
   it('finds skills inside the package via standard include patterns', async () => {
-    const skills = await discoverSkillsFromConfig(
-      { include: ['skills/**/SKILL.md'] } as SkillsConfig,
-      packageRoot,
-    );
-    const names = skills.map(s => s.name).sort((a, b) => a.localeCompare(b));
-    expect(names).toEqual([INSIDE, PRIVATE]);
+    expect(await discoveredNames([SKILLS_GLOB], packageRoot)).toEqual([INSIDE, PRIVATE]);
   });
 
   it('finds skills above the package via `..` in include patterns', async () => {
-    const skills = await discoverSkillsFromConfig(
-      { include: ['../docs/skills/*/SKILL.md'] } as SkillsConfig,
-      packageRoot,
-    );
-    expect(skills.map(s => s.name)).toEqual([OUTSIDE]);
+    expect(await discoveredNames(['../docs/skills/*/SKILL.md'], packageRoot)).toEqual([OUTSIDE]);
   });
 
   it('combines patterns above and below the package root', async () => {
-    const skills = await discoverSkillsFromConfig(
-      {
-        include: ['skills/inside/**/SKILL.md', '../docs/skills/*/SKILL.md'],
-      } as SkillsConfig,
+    const names = await discoveredNames(
+      ['skills/inside/**/SKILL.md', '../docs/skills/*/SKILL.md'],
       packageRoot,
     );
-    const names = skills.map(s => s.name).sort((a, b) => a.localeCompare(b));
     expect(names).toEqual([INSIDE, OUTSIDE]);
   });
 
   it('finds a skill named by a literal include path (no glob metachars)', async () => {
-    const skills = await discoverSkillsFromConfig(
-      { include: ['skills/inside/SKILL.md'] } as SkillsConfig,
-      packageRoot,
-    );
-    expect(skills.map(s => s.name)).toEqual([INSIDE]);
+    expect(await discoveredNames(['skills/inside/SKILL.md'], packageRoot)).toEqual([INSIDE]);
   });
 
   it('drops skills matched by user-supplied exclude patterns', async () => {
-    const skills = await discoverSkillsFromConfig(
-      {
-        include: ['skills/**/SKILL.md'],
-        exclude: ['**/private/**'],
-      } as SkillsConfig,
-      packageRoot,
-    );
-    expect(skills.map(s => s.name)).toEqual([INSIDE]);
+    const names = await discoveredNames([SKILLS_GLOB], packageRoot, ['**/private/**']);
+    expect(names).toEqual([INSIDE]);
   });
 
   it('returns empty when an include pattern points to a nonexistent base', async () => {
-    const skills = await discoverSkillsFromConfig(
-      { include: ['../does-not-exist/*/SKILL.md'] } as SkillsConfig,
-      packageRoot,
+    expect(await discoveredNames(['../does-not-exist/*/SKILL.md'], packageRoot)).toEqual([]);
+  });
+});
+
+/**
+ * Regression coverage for skill discovery inside a git repository.
+ *
+ * `crawlDirectory` answers a crawl with `git ls-files` whenever the base is in a
+ * repo, and that query defaults to TRACKED files only. A skill the author has
+ * just written — the single most common state a skill is ever in — is therefore
+ * invisible to `vat skills validate`, `vat skills build`, and `vat verify`, and
+ * nothing says so: the count silently drops by one and the exit code stays 0.
+ *
+ * This fixture MUST `git init` its temp dir and leave one SKILL.md uncommitted.
+ * The sibling suite above lives in a bare temp dir outside any repository, which
+ * takes the manual-walk fallback — so it finds untracked files either way and
+ * cannot distinguish the two answers.
+ */
+describe('discoverSkillsFromConfig — inside a git repository', () => {
+  let repoRoot: string;
+
+  beforeAll(() => {
+    repoRoot = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-skills-git-'));
+    safeExecSync('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
+
+    writeSkill(safePath.join(repoRoot, 'skills', 'committed'), COMMITTED, 'staged, so tracked');
+    // Staging is enough to make `git ls-files` report a file as tracked; no
+    // commit (and so no user identity config) is needed to tell the two apart.
+    safeExecSync('git', ['add', 'skills/committed/SKILL.md'], { cwd: repoRoot });
+
+    // Deliberately NOT staged — this is the case the fix exists for.
+    writeSkill(
+      safePath.join(repoRoot, 'skills', 'uncommitted'),
+      UNCOMMITTED,
+      'written but never staged',
     );
-    expect(skills).toEqual([]);
+  });
+
+  afterAll(() => {
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  it('finds an uncommitted SKILL.md alongside a tracked one', async () => {
+    expect(await discoveredNames([SKILLS_GLOB], repoRoot)).toEqual([
+      COMMITTED,
+      UNCOMMITTED,
+    ]);
+  });
+
+  it('still honours excludes for untracked skills', async () => {
+    const names = await discoveredNames([SKILLS_GLOB], repoRoot, ['**/uncommitted/**']);
+    expect(names).toEqual([COMMITTED]);
   });
 });

@@ -19,14 +19,22 @@ import {
 import { executeSkillsCommandAndExpectYaml } from './test-helpers/index.js';
 
 // Type for packaging validation result
+interface SeverityCountsOutput {
+  errors: number;
+  warnings: number;
+  info: number;
+}
+
 interface PackagingValidationOutput {
   status: string;
+  /** The distribution the two/three-valued status cannot express. */
+  issueCounts: SeverityCountsOutput;
   skillsValidated: number;
   results: Array<{
     skillName: string;
     status: string;
+    issueCounts: SeverityCountsOutput;
     allErrors: Array<unknown>;
-    activeErrors: Array<unknown>;
     ignoredErrors: Array<unknown>;
     metadata: {
       skillLines: number;
@@ -69,6 +77,14 @@ describe('skills validate command (system test)', () => {
     const typedParsed = parsed as unknown as PackagingValidationOutput;
 
     expect(parsed).toHaveProperty('status');
+    // The status is a collapse; the counts are what make it readable. Required
+    // here so a future change cannot quietly drop them and leave the status alone.
+    expect(parsed).toHaveProperty('issueCounts');
+    expect(typedParsed.issueCounts).toMatchObject({
+      errors: expect.any(Number),
+      warnings: expect.any(Number),
+      info: expect.any(Number),
+    });
     expect(parsed).toHaveProperty('skillsValidated');
     expect(parsed).toHaveProperty('results');
     expect(parsed).toHaveProperty('durationSecs');
@@ -82,7 +98,8 @@ describe('skills validate command (system test)', () => {
       const firstResult = typedParsed.results[0];
       expect(firstResult).toHaveProperty('skillName');
       expect(firstResult).toHaveProperty('status');
-      expect(firstResult).toHaveProperty('activeErrors');
+      expect(firstResult).toHaveProperty('issueCounts');
+      expect(firstResult).toHaveProperty('allErrors');
       expect(firstResult).toHaveProperty('metadata');
       expect(firstResult.metadata).toHaveProperty('skillLines');
       expect(firstResult.metadata).toHaveProperty('totalLines');
@@ -95,7 +112,11 @@ describe('skills validate command (system test)', () => {
     // Should be parseable as YAML
     expect(result.status).toBeDefined();
     expect(parsed.status).toBeDefined();
-    expect(['success', 'error']).toContain(parsed.status);
+    // The full status vocabulary, not just the two this lane happens to emit
+    // today. A two-value assertion here would go red the moment `skills
+    // validate` learns to say `warning` — i.e. it would fire on the FIX, and a
+    // future reader would "repair" it by narrowing the status back.
+    expect(['success', 'warning', 'error']).toContain(parsed.status);
   });
 
   it('should exit with proper status code', () => {
@@ -103,7 +124,11 @@ describe('skills validate command (system test)', () => {
     const { parsed } = executeSkillsCommandAndExpectYaml(binPath, 'validate', fixtureDir);
 
     expect(parsed.status).toBeDefined();
-    expect(['success', 'error']).toContain(parsed.status);
+    // The full status vocabulary, not just the two this lane happens to emit
+    // today. A two-value assertion here would go red the moment `skills
+    // validate` learns to say `warning` — i.e. it would fire on the FIX, and a
+    // future reader would "repair" it by narrowing the status back.
+    expect(['success', 'warning', 'error']).toContain(parsed.status);
   });
 
   it('should report validation errors with proper structure', () => {
@@ -117,8 +142,11 @@ describe('skills validate command (system test)', () => {
       // Verify packaging validation structure
       expect(skillResult).toHaveProperty('skillName');
       expect(skillResult).toHaveProperty('allErrors');
-      expect(skillResult).toHaveProperty('activeErrors');
       expect(skillResult).toHaveProperty('ignoredErrors');
+      // `allErrors` is the sole issue container — the emitted set is written to
+      // the document once, not again under an `active*` partition.
+      expect(skillResult).not.toHaveProperty('activeErrors');
+      expect(skillResult).not.toHaveProperty('activeWarnings');
       expect(skillResult).toHaveProperty('metadata');
 
       // Verify metadata structure (including new fields)
@@ -345,28 +373,46 @@ describe('skills validate — framework exit codes (system test)', () => {
 
     const { result, parsed } = await executeCliAndParseYaml(frameworkCtx.binPath, ['skills', 'validate'], { cwd: projectDir });
 
+    // The gitignored-link ERROR is suppressed, which is what "exits 0" tests.
+    // The fixture's frontmatter still carries a `version` field, so the run is
+    // not silent — and the status now says so instead of rounding down to
+    // `success`. The invariant under test is zero errors, not a quiet status.
     expect(result.status).toBe(0);
-    expect(parsed.status).toBe('success');
+    expect(parsed.issueCounts).toMatchObject({ errors: 0 });
   });
 
-  it('exits 0 when LINK_TO_NAVIGATION_FILE fires (default severity=warning, non-blocking)', async () => {
+  it('exits 0 but reports `warning` when LINK_TO_NAVIGATION_FILE fires (default severity=warning, non-blocking)', async () => {
     const tempDir = frameworkCtx.createTempDir();
     const projectDir = setupProjectWithNavigationLink(tempDir, VALIDATE_SKILL_NAME);
 
-    const { result, parsed } = await executeCliAndParseYaml(frameworkCtx.binPath, ['skills', 'validate'], { cwd: projectDir });
+    // `--verbose`: the assertions at the bottom drill into `results[0].allErrors`
+    // for an individual finding's code AND its severity — a pairing the default
+    // per-skill row cannot state (it publishes severity counts and a `codes`
+    // tally side by side, so a row with both an error and a warning could not say
+    // which code was which). Every run-level assertion above it (`status`,
+    // `issueCounts`, exit code, banner suppression) is identical in both modes.
+    const { result, parsed } = await executeCliAndParseYaml(frameworkCtx.binPath, ['skills', 'validate', '--verbose'], { cwd: projectDir });
 
     // Warnings are non-blocking — should exit 0
     expect(result.status).toBe(0);
-    expect(parsed.status).toBe('success');
+    // ...but non-blocking is not the same as absent. This lane used to publish
+    // `success` here AND print "✅ All validations passed" over the warnings,
+    // because its status collapse had no `warning` value to reach for.
+    expect(parsed.status).toBe('warning');
+    expect(parsed.issueCounts).toMatchObject({ errors: 0 });
+    expect((parsed.issueCounts as { warnings: number }).warnings).toBeGreaterThan(0);
+    expect(result.stderr).not.toContain('All validations passed');
 
-    // But the code should appear in warnings in the YAML output
+    // The code should appear in the emitted set in the YAML output. Asserted
+    // unconditionally: the old `if (activeWarnings.length > 0)` guard made the
+    // whole check vanish exactly when the renderer stopped reporting warnings.
     const results = parsed.results as Array<Record<string, unknown>>;
     const firstResult = results[0] ?? {};
-    const activeWarnings = firstResult['activeWarnings'] as Array<Record<string, unknown>> | undefined;
-    if (activeWarnings && activeWarnings.length > 0) {
-      const warningCodes = activeWarnings.map((w) => w['code']);
-      expect(warningCodes).toContain('LINK_TO_NAVIGATION_FILE');
-    }
+    const allErrors = firstResult['allErrors'] as Array<Record<string, unknown>>;
+    const navWarnings = allErrors.filter((w) => w['severity'] === 'warning');
+    expect(navWarnings.map((w) => w['code'])).toContain('LINK_TO_NAVIGATION_FILE');
+    // Per-skill counts ride beside the per-skill two-valued gate status.
+    expect(firstResult['issueCounts']).toMatchObject({ errors: 0 });
   });
 
   it('help text uses validation framework language and not stale override language', async () => {

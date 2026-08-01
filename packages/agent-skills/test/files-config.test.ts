@@ -9,7 +9,6 @@ import {
   buildArtifactHint,
   mergeFilesConfig,
   matchLinkToFiles,
-  computeDeferredPaths,
   verifyFilesIntegrity,
   verifyDestSet,
   type SkillFileEntry,
@@ -40,6 +39,50 @@ function makeApplySandbox(): { projectRoot: string; skillOutputDir: string } {
   mkdirSyncReal(skillOutputDir, { recursive: true });
   writeFileSync(safePath.join(projectRoot, 'dist', 'gen', DATA_FILE), DATA_BYTES);
   return { projectRoot, skillOutputDir };
+}
+
+/**
+ * Shared shape for the "glob entry whose matched source is also link-bundled" cases.
+ *
+ * Source tree: `<projectRoot>/gen/packs/alpha/{GUIDE.md,data.json}`, shipped by the
+ * glob entry `gen/packs/**\/*` → dest `packs`. `GUIDE.md` stands in for a matched
+ * file that SKILL.md also links by its SOURCE path, so link traversal bundled it
+ * and its absolute source path arrives in `bundledFiles`.
+ *
+ * No `git init` here on purpose: `applyFilesConfig` never crawls a directory and
+ * never consults gitignore — it resolves the declared source/dest paths and expands
+ * the glob directly. There is no gitignore-dependent branch for a repo-less fixture
+ * to silently disable.
+ */
+const PACK_GLOB_SOURCE = 'gen/packs/**/*';
+const PACK_GLOB_DEST = 'packs';
+const PACK_GUIDE_BYTES = '# Guide\n\nPack usage guide body.\n';
+const PACK_DATA_BYTES = '{"pack":"alpha"}\n';
+
+interface PackGlobSandbox {
+  projectRoot: string;
+  skillOutputDir: string;
+  /** Absolute path of the link-bundled matched source (goes into `bundledFiles`). */
+  bundledGuideSource: string;
+  /** Skill-output-relative dest the glob entry declares for the bundled guide. */
+  guideDest: string;
+  /** Skill-output-relative dest the glob entry declares for the un-bundled sibling. */
+  dataDest: string;
+}
+
+function makePackGlobSandbox(): PackGlobSandbox {
+  const { projectRoot, skillOutputDir } = makeApplySandbox();
+  const packDir = safePath.join(projectRoot, 'gen', 'packs', 'alpha');
+  mkdirSyncReal(packDir, { recursive: true });
+  writeFileSync(safePath.join(packDir, 'GUIDE.md'), PACK_GUIDE_BYTES);
+  writeFileSync(safePath.join(packDir, 'data.json'), PACK_DATA_BYTES);
+  return {
+    projectRoot,
+    skillOutputDir,
+    bundledGuideSource: safePath.resolve(safePath.join(packDir, 'GUIDE.md')),
+    guideDest: toForwardSlash(safePath.join(PACK_GLOB_DEST, 'alpha', 'GUIDE.md')),
+    dataDest: toForwardSlash(safePath.join(PACK_GLOB_DEST, 'alpha', 'data.json')),
+  };
 }
 
 describe('mergeFilesConfig', () => {
@@ -179,118 +222,6 @@ describe('matchLinkToFiles', () => {
   });
 });
 
-describe('computeDeferredPaths', () => {
-  const PROJ_ROOT = '/proj';
-
-  it('should return empty sets when no files config', () => {
-    const result = computeDeferredPaths([], { skillDir: PROJ_ROOT, projectRoot: PROJ_ROOT });
-    expect(result.destPaths).toEqual(new Set());
-    expect(result.sourcePaths).toEqual(new Set());
-  });
-
-  it('should put dest in destPaths and source in sourcePaths (skill at project root)', () => {
-    // When skillDir === projectRoot, dest and source paths are project-root-relative as authored
-    const files: SkillFileEntry[] = [
-      { source: CLI_SOURCE, dest: CLI_DEST },
-    ];
-    const result = computeDeferredPaths(files, { skillDir: PROJ_ROOT, projectRoot: PROJ_ROOT });
-    expect(result.destPaths.has(CLI_DEST)).toBe(true);
-    expect(result.sourcePaths.has(CLI_SOURCE)).toBe(true);
-    // Each path should be in its own set, not cross-contaminated
-    expect(result.destPaths.has(CLI_SOURCE)).toBe(false);
-    expect(result.sourcePaths.has(CLI_DEST)).toBe(false);
-  });
-
-  it('should deduplicate within each set across multiple entries', () => {
-    const files: SkillFileEntry[] = [
-      { source: CLI_SOURCE, dest: CLI_DEST },
-      { source: CLI_SOURCE, dest: 'scripts/cli2.mjs' },
-    ];
-    const result = computeDeferredPaths(files, { skillDir: PROJ_ROOT, projectRoot: PROJ_ROOT });
-    // CLI_SOURCE appears once in sourcePaths (deduped)
-    expect(result.sourcePaths.size).toBe(1);
-    // CLI_DEST and 'scripts/cli2.mjs' are distinct in destPaths
-    expect(result.destPaths.size).toBe(2);
-  });
-
-  it('should normalize paths with ./ prefix (skill at project root)', () => {
-    const files: SkillFileEntry[] = [
-      { source: `./${CLI_SOURCE}`, dest: `./${CLI_DEST}` },
-    ];
-    const result = computeDeferredPaths(files, { skillDir: PROJ_ROOT, projectRoot: PROJ_ROOT });
-    expect(result.sourcePaths.has(CLI_SOURCE)).toBe(true);
-    expect(result.destPaths.has(CLI_DEST)).toBe(true);
-  });
-
-  it('resolves an absolute-looking source the same way the packager does (join, not bare resolve)', () => {
-    // Carry-forward #4: skill-packager resolves source via
-    // `safePath.resolve(safePath.join(projectRoot, source))`, which roots an
-    // absolute-looking source UNDER projectRoot. computeDeferredPaths must use
-    // the identical expression so the deferred set matches what the packager
-    // copies — a bare `resolve(projectRoot, source)` would treat the leading
-    // slash as escaping the project root and produce a '../'-prefixed path that
-    // never matches the walker's project-relative `rel`.
-    const files: SkillFileEntry[] = [
-      { source: '/dist/bin/cli.mjs', dest: CLI_DEST },
-    ];
-    const result = computeDeferredPaths(files, { skillDir: PROJ_ROOT, projectRoot: PROJ_ROOT });
-    expect(result.sourcePaths.has(CLI_SOURCE)).toBe(true);
-  });
-
-  it('should resolve dest relative to skillDir and emit project-root-relative path for skill in subdirectory', () => {
-    // Bug regression test: skill is at /proj/skills/ado/SKILL.md
-    // skillDir = /proj/skills/ado, projectRoot = /proj
-    // files: [{ source: 'dist/bin/ado-cli.mjs', dest: 'scripts/ado-cli.mjs' }]
-    // dest authored relative to skillDir → absolute: /proj/skills/ado/scripts/ado-cli.mjs
-    // expected destPath (project-root-relative): 'skills/ado/scripts/ado-cli.mjs'
-    // source authored relative to projectRoot → absolute: /proj/dist/bin/ado-cli.mjs
-    // expected sourcePath (project-root-relative): 'dist/bin/ado-cli.mjs'
-    const files: SkillFileEntry[] = [
-      { source: 'dist/bin/ado-cli.mjs', dest: 'scripts/ado-cli.mjs' },
-    ];
-    const result = computeDeferredPaths(files, {
-      skillDir: `${PROJ_ROOT}/skills/ado`,
-      projectRoot: PROJ_ROOT,
-    });
-
-    // destPath must be project-root-relative (including the skill subdir prefix)
-    expect(result.destPaths.has('skills/ado/scripts/ado-cli.mjs')).toBe(true);
-    // sourcePath must be project-root-relative (as authored, relative to projectRoot)
-    expect(result.sourcePaths.has('dist/bin/ado-cli.mjs')).toBe(true);
-
-    // Must NOT contain the raw (skill-dir-relative) dest that the bug would have stored
-    expect(result.destPaths.has('scripts/ado-cli.mjs')).toBe(false);
-  });
-
-  // ---- Glob entry: static-base registration ----
-
-  it('glob entry: sourcePaths registers the STATIC BASE, not the raw glob pattern', () => {
-    // GLOB_PACKS_SOURCE ('dist/packs/**/*') → static base is 'dist/packs'
-    // The raw magic pattern must never appear in sourcePaths — a real rel path
-    // like 'dist/packs/ce/x.json' can never equal the raw glob.
-    const files: SkillFileEntry[] = [
-      { source: GLOB_PACKS_SOURCE, dest: GLOB_PACKS_DEST },
-    ];
-    const result = computeDeferredPaths(files, { skillDir: PROJ_ROOT, projectRoot: PROJ_ROOT });
-
-    // Static base (forward-slash, project-root-relative) must be registered
-    const bases = [...result.sourcePaths].sort((a, b) => a.localeCompare(b));
-    expect(bases).toContain(toForwardSlash(safePath.join('dist', 'packs')));
-
-    // Raw glob pattern must NOT be registered
-    expect(result.sourcePaths.has(GLOB_PACKS_SOURCE)).toBe(false);
-  });
-
-  it('glob entry: destPaths registers the dest dir unchanged (same as non-glob)', () => {
-    const files: SkillFileEntry[] = [
-      { source: GLOB_PACKS_SOURCE, dest: GLOB_PACKS_DEST },
-    ];
-    const result = computeDeferredPaths(files, { skillDir: PROJ_ROOT, projectRoot: PROJ_ROOT });
-    // dest GLOB_PACKS_DEST is a directory name — registered as 'packs' (project-root-relative)
-    expect(result.destPaths.has(GLOB_PACKS_DEST)).toBe(true);
-  });
-});
-
 describe('applyFilesConfig', () => {
   afterEach(() => {
     for (const dir of APPLY_TMP_DIRS.splice(0)) rmSync(dir, { recursive: true, force: true });
@@ -308,15 +239,19 @@ describe('applyFilesConfig', () => {
     expect(readFileSync(destPath, 'utf-8')).toBe(DATA_BYTES);
   });
 
-  it('skips entries whose source is already bundled', async () => {
+  it('skips the COPY for entries whose source is already bundled, but still reports the dest', async () => {
     const { projectRoot, skillOutputDir } = makeApplySandbox();
     const filesConfig: SkillFileEntry[] = [{ source: DATA_SOURCE, dest: DATA_DEST }];
     const bundledFiles = [safePath.resolve(safePath.join(projectRoot, DATA_SOURCE))];
 
-    const copied = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir, bundledFiles });
+    const dests = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir, bundledFiles });
 
-    expect(copied).toEqual([]);
+    // No second copy — link traversal already placed the file at entry.dest.
     expect(existsSync(safePath.join(skillOutputDir, 'data', DATA_FILE))).toBe(false);
+    // The dest is still declared, so it is still reported: whether traversal or
+    // this copy materialized it is an ordering accident, and the post-build orphan
+    // check must not get a different answer about whether `files:` declared it.
+    expect(dests).toEqual([DATA_DEST]);
   });
 
   it('still runs the integrity byte check on a bundled-skip entry (dest matches source → pass)', async () => {
@@ -329,10 +264,10 @@ describe('applyFilesConfig', () => {
     mkdirSyncReal(safePath.join(skillOutputDir, 'data'), { recursive: true });
     writeFileSync(destPath, DATA_BYTES);
 
-    const copied = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir, bundledFiles });
+    const dests = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir, bundledFiles });
 
     // The copy is still skipped (bundled), but the requested integrity check ran.
-    expect(copied).toEqual([]);
+    expect(dests).toEqual([DATA_DEST]);
     expect(existsSync(destPath)).toBe(true);
   });
 
@@ -535,6 +470,87 @@ describe('applyFilesConfig', () => {
     expect(copied).toContain(toForwardSlash(safePath.join('packs', hiddenFile)));
     expect(existsSync(safePath.join(skillOutputDir, 'packs', hiddenFile))).toBe(true);
     expect(existsSync(safePath.join(skillOutputDir, 'packs', 'visible.json'))).toBe(true);
+  });
+
+  // A glob entry whose matched source is ALSO linked from SKILL.md by its source
+  // path gets that source in `bundledFiles`. Unlike a non-glob entry — whose
+  // bundled copy the packager re-routes TO `entry.dest` via the path map — glob
+  // entries are deliberately absent from that path map, so link traversal drops
+  // the file at its own resource-named location. Skipping the copy therefore
+  // leaves the DECLARED dest subtree short a declared file, silently.
+  it('glob entry: a link-bundled matched source still lands at its declared dest and is reported', async () => {
+    const s = makePackGlobSandbox();
+    const filesConfig: SkillFileEntry[] = [{ source: PACK_GLOB_SOURCE, dest: PACK_GLOB_DEST }];
+
+    const copied = await applyFilesConfig({
+      filesConfig,
+      projectRoot: s.projectRoot,
+      skillOutputDir: s.skillOutputDir,
+      bundledFiles: [s.bundledGuideSource],
+    });
+
+    // Reported: the dest is declared either way (applyFilesConfig's documented contract).
+    const sortFn = (a: string, b: string) => a.localeCompare(b);
+    expect([...copied].sort(sortFn)).toEqual([s.dataDest, s.guideDest].sort(sortFn));
+
+    // Materialized: the declared dest subtree is COMPLETE, not short the bundled file.
+    const guidePath = safePath.join(s.skillOutputDir, PACK_GLOB_DEST, 'alpha', 'GUIDE.md');
+    expect(existsSync(guidePath)).toBe(true);
+    expect(readFileSync(guidePath, 'utf-8')).toBe(PACK_GUIDE_BYTES);
+  });
+
+  // The same defect defeats an opted-in integrity check: the skipped file is in
+  // NEITHER the expected rel set NOR the on-disk dest subtree, so verifyDestSet's
+  // two sets stay consistent and it passes while the subtree is short a file.
+  // An integrity check that is silently defeated is worse than one that fires.
+  it('glob entry with integrity:true is not silently satisfied by a link-bundled matched source', async () => {
+    const s = makePackGlobSandbox();
+    const filesConfig: SkillFileEntry[] = [
+      { source: PACK_GLOB_SOURCE, dest: PACK_GLOB_DEST, integrity: true },
+    ];
+
+    await expect(
+      applyFilesConfig({
+        filesConfig,
+        projectRoot: s.projectRoot,
+        skillOutputDir: s.skillOutputDir,
+        bundledFiles: [s.bundledGuideSource],
+      }),
+    ).resolves.toBeDefined();
+
+    expect(
+      existsSync(safePath.join(s.skillOutputDir, PACK_GLOB_DEST, 'alpha', 'GUIDE.md')),
+    ).toBe(true);
+  });
+
+  // Negative polarity: reporting a link-bundled dest must NOT make the glob path
+  // permissive. A file under the dest subtree that the glob never matched is still
+  // an unexpected file, and a packaged file no entry accounts for is still absent
+  // from the returned dests (so the post-build orphan check still catches it).
+  it('glob entry: bundled-source handling stays strict about files it does not account for', async () => {
+    const s = makePackGlobSandbox();
+    const orphan = safePath.join(s.skillOutputDir, PACK_GLOB_DEST, 'alpha', 'orphan.json');
+    mkdirSyncReal(safePath.join(s.skillOutputDir, PACK_GLOB_DEST, 'alpha'), { recursive: true });
+    writeFileSync(orphan, '{"orphan":true}');
+
+    const opts = {
+      filesConfig: [{ source: PACK_GLOB_SOURCE, dest: PACK_GLOB_DEST }] as SkillFileEntry[],
+      projectRoot: s.projectRoot,
+      skillOutputDir: s.skillOutputDir,
+      bundledFiles: [s.bundledGuideSource],
+    };
+
+    // Without integrity: the undeclared file is never reported as accounted for.
+    const copied = await applyFilesConfig(opts);
+    expect(copied).not.toContain(toForwardSlash(safePath.join(PACK_GLOB_DEST, 'alpha', 'orphan.json')));
+
+    // With integrity: the dest-subtree set check still fires on it.
+    await expect(
+      applyFilesConfig({
+        ...opts,
+        filesConfig: [{ source: PACK_GLOB_SOURCE, dest: PACK_GLOB_DEST, integrity: true }],
+      }),
+    ).rejects.toThrow(/unexpected file '[^']*orphan\.json'/);
   });
 });
 

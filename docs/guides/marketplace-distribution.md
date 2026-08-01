@@ -122,7 +122,7 @@ claude:
 ### License field
 
 The `license` field accepts:
-- **SPDX identifier string** (e.g., `mit`, `apache-2.0`, `gpl-3.0`) — generates standard license text with owner name and current year
+- **SPDX identifier string** — only `mit`, whose full text VAT carries verbatim, is generated for you (with owner name and current year). Every other recognized identifier (`apache-2.0`, `gpl-3.0`, `mpl-2.0`, `isc`, the BSD and LGPL variants, `unlicense`) is **refused** with a pointer to the file-path form, because VAT has no verified copy of those texts and a subtly-wrong license is worse than none. Use a file path for those.
 - **File path** (e.g., `./LICENSE` or `docs/LICENSE-ENTERPRISE`) — copies the file as-is
 
 Strings are validated against known SPDX identifiers. Paths are distinguished by containing `/` or `.` characters.
@@ -276,7 +276,7 @@ claude:
         remote: git@github.com:acme/acme-skills-marketplace.git
         changelog: docs/marketplace-changelog.md
         readme: docs/marketplace-readme.md
-        license: apache-2.0
+        license: ./LICENSE
       plugins:
         - name: acme-tools
           description: Acme engineering tools
@@ -418,12 +418,28 @@ plugins:
 
 ### `plugin.json` merge rules
 
-VAT writes `.claude-plugin/plugin.json` last, merging the author's `.claude-plugin/plugin.json` (if present) with VAT-owned identity fields:
+VAT writes `.claude-plugin/plugin.json` last, merging the author's `.claude-plugin/plugin.json` (if present) with the identity fields the marketplace config owns:
 
-- **VAT wins** on `name`, `version`, `author` (shallow replace — mismatches produce warnings, never errors).
-- **Author wins** on all other keys (`keywords`, `repository`, `homepage`, `license`, …).
+- **Config wins** on `name` and `version` (mismatches produce warnings, never errors).
+- **Author wins** on all other top-level keys (`keywords`, `repository`, `homepage`, `license`, …).
 - **Description chain:** `config.description ?? author.description ?? "${name} plugin"`.
-- `version` falls back to the author's value when VAT has no version (no `package.json`).
+- `version` falls back to the author's value when the config has no version (no `package.json`).
+
+#### Who owns which `author` subfield
+
+`author` is merged **per subfield**, not replaced wholesale. The line is drawn by what the config can express: a marketplace's `owner` has `name` and `email`, and nothing else.
+
+| `author` subfield | Owner | Behavior |
+|---|---|---|
+| `name` | Config (`marketplaces.<mp>.owner.name`) | Always overwritten from config. |
+| `email` | Config (`marketplaces.<mp>.owner.email`) | Always overwritten from config. Omitting `owner.email` publishes an author with **no** email — that is a deliberate config statement, so an `email` in `plugin.json` is still dropped (with a warning). |
+| `url` and any other subfield | Plugin author (`plugin.json`) | Passed through untouched. |
+
+Ownership is by **schema, not by presence**: a subfield config can express is config-owned even when this project left it out, and a subfield config *cannot* express is never config-owned. Claude's plugin manifest supports `author.url` and VAT's config has no field for it, so overwriting `author` wholesale destroyed the adopter's URL with no way to restore it — data loss, not a precedence policy. The same reasoning applies to any future author subfield Claude adds: it passes through until VAT's config gains a field for it.
+
+Warnings fire only on subfields the config owns *and* the author disagreed on, so reordering keys in `plugin.json` cannot manufacture one. An `author` that is **not an object** (npm's `"Name <email> (url)"` string form, for instance) has no subfields to merge and is replaced wholesale, with a warning naming the published value.
+
+The `plugins[].author` entries in the generated `marketplace.json` publish this **same merged object**, so a plugin's manifest and its marketplace listing can never disagree about who authored it. (The marketplace-level `owner` field is a different thing and does come straight from config — it says who publishes the marketplace, not who wrote a plugin.) There is deliberately no per-plugin `author` in the marketplace config: the marketplace owner is the publisher of everything in it, and per-plugin `author.url` already reaches both manifests via passthrough.
 
 ### Ordering contract
 

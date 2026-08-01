@@ -202,7 +202,7 @@ describe('runGraderForEval', () => {
       const fragment = {
         ...validFragmentFor(EVAL_ID, NONCE),
         tool: {
-          mustRun: [{ name: 'dxa', ran: true }],
+          mustRun: [{ name: 'csvsum', ran: true }],
           mustNotRun: [{ name: 'rm', ran: false }],
           sequence: [{ steps: ['parse', 'report'], satisfied: true }],
           passed: true,
@@ -213,13 +213,13 @@ describe('runGraderForEval', () => {
       await runGraderForEval(
         baseInput(graderOutDir, {
           spawn,
-          toolExpectations: { mustRun: ['dxa'], mustNotRun: ['rm'], sequence: ['parse', 'report'] },
-          declaredExecutables: [{ name: 'dxa', howInvoked: 'uv run dxa.py', kind: 'python' }],
+          toolExpectations: { mustRun: ['csvsum'], mustNotRun: ['rm'], sequence: ['parse', 'report'] },
+          declaredExecutables: [{ name: 'csvsum', howInvoked: 'uv run csvsum.py', kind: 'python' }],
         }),
       );
 
-      expect(calls[0]?.prompt).toContain('dxa');
-      expect(calls[0]?.prompt).toContain('uv run dxa.py');
+      expect(calls[0]?.prompt).toContain('csvsum');
+      expect(calls[0]?.prompt).toContain('uv run csvsum.py');
       expect(calls[0]?.prompt).toMatch(/"tool"/);
     });
 
@@ -227,7 +227,7 @@ describe('runGraderForEval', () => {
       const fragment = {
         ...validFragmentFor(EVAL_ID, NONCE),
         tool: {
-          mustRun: [{ name: 'dxa', ran: true, evidence: 'saw uv run dxa.py in tool_use' }],
+          mustRun: [{ name: 'csvsum', ran: true, evidence: 'saw uv run csvsum.py in tool_use' }],
           mustNotRun: [{ name: 'rm', ran: false }],
           sequence: [{ steps: ['parse', 'report'], satisfied: true }],
           passed: true,
@@ -238,7 +238,7 @@ describe('runGraderForEval', () => {
       const result = await runGraderForEval(
         baseInput(graderOutDir, {
           spawn,
-          toolExpectations: { mustRun: ['dxa'], mustNotRun: ['rm'], sequence: ['parse', 'report'] },
+          toolExpectations: { mustRun: ['csvsum'], mustNotRun: ['rm'], sequence: ['parse', 'report'] },
         }),
       );
 
@@ -259,7 +259,7 @@ describe('runGraderForEval', () => {
       const { spawn } = stubWritingFragment(graderOutDir, validFragmentFor(EVAL_ID, NONCE));
 
       await expectInternalHarnessError(() =>
-        runGraderForEval(baseInput(graderOutDir, { spawn, toolExpectations: { mustRun: ['dxa'] } })),
+        runGraderForEval(baseInput(graderOutDir, { spawn, toolExpectations: { mustRun: ['csvsum'] } })),
       );
     });
 
@@ -267,24 +267,24 @@ describe('runGraderForEval', () => {
       // mustRun.ran=false recomputes to passed=false, but the grader claimed passed=true.
       const fragment = {
         ...validFragmentFor(EVAL_ID, NONCE),
-        tool: { mustRun: [{ name: 'dxa', ran: false }], passed: true },
+        tool: { mustRun: [{ name: 'csvsum', ran: false }], passed: true },
       };
       const { spawn } = stubWritingFragment(graderOutDir, fragment);
 
       await expectInternalHarnessError(() =>
-        runGraderForEval(baseInput(graderOutDir, { spawn, toolExpectations: { mustRun: ['dxa'] } })),
+        runGraderForEval(baseInput(graderOutDir, { spawn, toolExpectations: { mustRun: ['csvsum'] } })),
       );
     });
 
     it('a mustSucceed tool verdict whose `passed` agrees with its sub-checks parses through', async () => {
       const fragment = {
         ...validFragmentFor(EVAL_ID, NONCE),
-        tool: { mustSucceed: [{ name: 'dxa', succeeded: true, evidence: 'no is_error' }], passed: true },
+        tool: { mustSucceed: [{ name: 'csvsum', succeeded: true, evidence: 'no is_error' }], passed: true },
       };
       const { spawn } = stubWritingFragment(graderOutDir, fragment);
 
       const result = await runGraderForEval(
-        baseInput(graderOutDir, { spawn, toolExpectations: { mustSucceed: ['dxa'] } }),
+        baseInput(graderOutDir, { spawn, toolExpectations: { mustSucceed: ['csvsum'] } }),
       );
 
       expect(result).toEqual(fragment);

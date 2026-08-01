@@ -11,6 +11,7 @@ import { basename, dirname, extname } from 'node:path';
 
 import {
   BootstrapNeededError,
+  buildStaleDistWarningLines,
   DuplicateStagedSkillError,
   isAcknowledged,
   mapErrorToExitCode,
@@ -25,13 +26,14 @@ import {
   type SkillPackagingConfig,
 } from '@vibe-agent-toolkit/agent-skills';
 import type { ProjectConfig, SkillSourceDescriptor, TestConfig } from '@vibe-agent-toolkit/resources';
-import { findProjectRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { parseSourceSpec } from '../../../skill-resolution/classify.js';
 import {
   findDeclaredSkillForPath,
   findDeclaredSkillForSourceDir,
+  resolveProjectDeclaredEvalSuites,
   resolveSkillReference,
   type BuildableReference,
   type DeclaredSkillLink,
@@ -99,6 +101,12 @@ export interface SkillTestRunOptions {
   debug?: boolean;
   env?: string[];
   passEnv?: string[];
+  /**
+   * Path (or npm bare specifier) to the evals.json this run grades against.
+   * Resolved against the process cwd, unlike `test.evals`, which is resolved
+   * against the skill source.
+   */
+  evals?: string;
   /** Skip building a declared subject and stage its existing dist instead. */
   noBuild?: boolean;
   /** Opt out of the fail-closed default: exit Ok (0) even when an eval fails. */
@@ -173,7 +181,7 @@ type DeclaredExecutable = NonNullable<HarnessOpts['declaredExecutables']>[number
 /**
  * Map a resolved skill's packaging-config `executables` (SkillExecutableEntry[]) to
  * the grader's recognition-aid shape (issue #145 Phase T): each entry's stable NAME
- * is its `path` basename with the extension stripped (`scripts/dxa.py` → `dxa`),
+ * is its `path` basename with the extension stripped (`scripts/csvsum.py` → `csvsum`),
  * carried alongside its `howInvoked` + `kind`. Returns undefined for absent/empty
  * input so the harness omits the aid entirely (the grader still matches tools by the
  * commands in the transcript). Pure + unit-testable.
@@ -270,28 +278,45 @@ function declaredSkillTestConfig(link: { configRoot: string; name: string }): Te
 
 /**
  * Load the persisted `skills.config.<skill>.test` block for the subject skill,
- * PROJECT-AWARE (mirrors the resolver — not a parallel cwd+basename resolver).
+ * PROJECT-AWARE (mirrors the resolver's ladder ORDER — not a parallel cwd+basename
+ * resolver).
  *
- * A PATH target (`./dist/skills/my-skill/`) is mapped back to its declared skill
- * via {@link findDeclaredSkillForPath} (walks up from the path, config-first) and
- * keyed by the DECLARED name against the GOVERNING config — so a path target honors
- * the same model/evals/timeout as its name, regardless of cwd. A NAME target (or a
- * path that maps to no declared skill) falls back to the cwd-anchored governing
- * config keyed by basename. Missing config / missing file → undefined (defaults apply).
+ * A PATH target is mapped back to its declared skill through the SAME two lookups
+ * {@link resolveDefinitePath} (in resolve-skill-reference.ts) uses, tried in the SAME
+ * order: first {@link findDeclaredSkillForSourceDir} (a path AT a declared skill's
+ * SOURCE dir — rung 2a, `buildable`), then {@link findDeclaredSkillForPath} (a path AT
+ * its already-built DIST dir — the `source` + `declaredSkill` back-link rung). Either
+ * hit is keyed by the DECLARED name against ITS OWN governing config via
+ * {@link declaredSkillTestConfig} — cwd-independent, so a path target honors the same
+ * model/evals/timeout/`test.build` as its name.
+ *
+ * The basename fallback below is a LAST RESORT, reached only when `subject` carries
+ * NEITHER link — a bare name (matched by literal string), or a path outside every
+ * declared skill's source/dist dir. It must never be the path a LINKED subject's
+ * config resolves through: a directory basename that happens to differ from its
+ * declared skill's name would otherwise silently miss that skill's `test:` block
+ * (including a required `test.build` hook) with no error — the exact failure mode
+ * this ordering exists to prevent. Missing config / missing file → undefined
+ * (defaults apply).
  *
  * A broken config throws {@link ConfigLoadError}; we let it propagate to the preflight
  * guard in runSkillTestRun, which surfaces it as a clean exit-2 error rather than
  * silently applying defaults against a config the author clearly intended.
  */
 async function loadTestConfig(subject: string, cwd: string): Promise<TestConfig | undefined> {
-  // Path target → resolve the declared skill it materializes, and read its test
-  // block from that skill's own governing config root (cwd-independent).
+  // Rung 2a: a path AT a declared skill's SOURCE dir — tried FIRST, matching
+  // resolveDefinitePath's own precedence.
+  const sourceLink = await findDeclaredSkillForSourceDir(subject, cwd);
+  if (sourceLink !== undefined) return declaredSkillTestConfig(sourceLink);
+  // Reverse rung: a path AT a declared skill's already-built DIST dir.
   const link = await findDeclaredSkillForPath(subject, cwd);
   if (link !== undefined) return declaredSkillTestConfig(link);
   const projectRoot = findProjectRoot(cwd);
   if (projectRoot === null) return undefined;
   const perSkill = loadConfig(projectRoot)?.skills?.config;
   if (perSkill === undefined) return undefined;
+  // Last-resort basename fallback (see doc comment above): only reached when neither
+  // lookup above found a declared-skill link for `subject`.
   const base = lastPathSegment(subject) || subject;
   return perSkill[subject]?.test ?? perSkill[base]?.test;
 }
@@ -344,7 +369,14 @@ function applyScalarMerges(opts: HarnessOpts, options: SkillTestRunOptions, conf
   if (baseline !== undefined) opts.baseline = baseline;
   const model = options.model ?? config?.model;
   if (model !== undefined) opts.model = model;
-  if (config?.evals !== undefined) opts.evalsSubpath = config.evals;
+  // `--evals` is resolved HERE, against the process cwd, so the operator's own
+  // shell path means what they typed; `test.evals` is left alone and resolves
+  // against the skill source, because config travels with the skill. Both then
+  // reach the harness as one field, and both accept a path or an npm bare
+  // specifier (a suite published as a shared corpus).
+  const evalsRef =
+    options.evals === undefined ? config?.evals : resolveAssetReference(options.evals, process.cwd());
+  if (evalsRef !== undefined) opts.evalsSubpath = evalsRef;
 }
 
 /**
@@ -575,10 +607,24 @@ function sourceScaffoldFields(
 export interface BuildFlags {
   /** Skip the build entirely and stage the existing dist (errors if absent). */
   noBuild: boolean;
-  /** Assemble a preview only — never build, never spawn. */
+  /** Assemble a preview only — never spawn. Builds ONLY when {@link explicitAck}. */
   dryRun: boolean;
-  /** The §12 security acknowledgment: required before ANY build command runs. */
+  /**
+   * The §12 security acknowledgment as the harness computes it — a dry run counts
+   * as acknowledged, because a preview that never builds and never spawns executes
+   * nothing. Gates SecurityAckError.
+   */
   acknowledged: boolean;
+  /**
+   * Whether `--i-understand-this-runs-skill-code` was ACTUALLY passed, distinct from
+   * {@link acknowledged}, which a dry run satisfies for free.
+   *
+   * A dry run now BUILDS, and building runs the repo's committed `test.build` hook —
+   * an arbitrary shell command. Gating that on {@link acknowledged} would be no gate
+   * at all, since dry runs synthesize it. So the build decision uses this raw flag,
+   * keeping an unacknowledged dry run safe to point at an untrusted clone.
+   */
+  explicitAck: boolean;
 }
 
 /**
@@ -786,12 +832,18 @@ function runPreStageBuildOnce(
 /** Dispatch the real build for a declared skill, by how it ships. Throws the raw build error. */
 async function runDeclaredSkillBuild(ref: BuildableReference): Promise<void> {
   if (ref.distribution.kind === 'pool') {
+    // The WHOLE project's declared eval suites, not just this ref's: the dist a test
+    // stages must be byte-for-byte what `vat skills build` produces, and that bundle
+    // excludes every skill's test input. Getting this wrong would hand the executor
+    // under test another skill's answer key — the exact signal the harness exists to
+    // protect. Memoized per config root, so a multi-skill run discovers once.
     await packageSkill(
       ref.sourcePath,
-      packagingConfigToPackageOptions(ref.packagingConfig, {
-        skillPath: ref.sourcePath,
-        outputPath: ref.expectedDistDir,
-      }),
+      packagingConfigToPackageOptions(
+        ref.packagingConfig,
+        { skillPath: ref.sourcePath, outputPath: ref.expectedDistDir },
+        await resolveProjectDeclaredEvalSuites(ref.sourcePath),
+      ),
     );
     return;
   }
@@ -828,8 +880,16 @@ async function buildDeclaredSkill(
   memo: BuildMemo,
   buildCommand: string | undefined,
 ): Promise<BuildDeclaredSkillResult> {
-  // --no-build and --dry-run never build — delegate to the dedicated branch helper.
-  if (flags.noBuild || flags.dryRun) {
+  // --dry-run DOES build once acknowledged: the "dry" part is the skill TESTING (no
+  // Claude session, no tokens), and a preview assembled from a stale dist previews
+  // something a real run would not test — which is the one job a preview has.
+  //
+  // Without the acknowledgement it still does NOT build. Building runs the repo's
+  // committed `test.build` hook, an arbitrary shell command, so an unacknowledged
+  // dry run stays the one mode that is safe to point at an untrusted clone. That
+  // preview falls back to an existing dist and says so (stale warning) — the honest
+  // trade, since accuracy requires consent to execute the repo's own build.
+  if (flags.noBuild || (flags.dryRun && !flags.explicitAck)) {
     return resolveExistingDistOrThrow(ref, flags);
   }
 
@@ -930,7 +990,7 @@ function isSurvivableCompanionFailure(
   flags: BuildFlags,
 ): boolean {
   if (!optional || !(err instanceof SkillBuildError)) return false;
-  return declared.distribution.kind === 'pool' || flags.noBuild || flags.dryRun;
+  return declared.distribution.kind === 'pool' || flags.noBuild;
 }
 
 /**
@@ -980,6 +1040,13 @@ function rethrowNamingCompanion(err: unknown, alias: string, declaredName: strin
  * for the narrow, non-destructive case {@link isSurvivableCompanionFailure} allows;
  * every other failure propagates for it too. Staging's existing skip-with-warning
  * fallback still applies if the raw copy also fails to stage.
+ *
+ * DRY-RUN STALENESS: a `--dry-run` preview that staged an EXISTING
+ * companion dist WITHOUT rebuilding it warns on stderr, naming the companion +
+ * its declared skill, using {@link buildStaleDistWarningLines} — the SAME
+ * warning-construction the subject's own dry-run summary uses (never a copied
+ * string), so the identical fact ("this preview may be stale") warns for either
+ * role instead of only the subject.
  */
 export async function resolveCompanionSpec(
   name: string,
@@ -994,6 +1061,11 @@ export async function resolveCompanionSpec(
   if (declared === undefined) return spec;
   try {
     const build = await buildDeclaredSkill(declared, flags, memo, declaredSkillTestConfig(declared)?.build);
+    if (build.dryRunStagedExistingDist === true) {
+      process.stderr.write(
+        buildStaleDistWarningLines(`companion '${name}' (declared skill '${declared.name}')`).join('\n') + '\n',
+      );
+    }
     return { path: build.distDir };
   } catch (e) {
     if (!isSurvivableCompanionFailure(e, declared, optional, flags))
@@ -1150,7 +1222,12 @@ export async function runSkillTestRun(
   // dry-run/security-ack) as the subject. The `test.build` hook is deliberately NOT in
   // here: it is per-skill (see BuildFlags), so the subject's own command is passed only
   // to subject resolution and each companion resolves its own.
-  const buildFlags: BuildFlags = { noBuild, dryRun: options.dryRun === true, acknowledged };
+  const buildFlags: BuildFlags = {
+    noBuild,
+    dryRun: options.dryRun === true,
+    acknowledged,
+    explicitAck: options.iUnderstandThisRunsSkillCode === true,
+  };
   // ONE memo for the whole run, shared by subject AND companion resolution: a skill
   // that is both the subject and a companion builds exactly once, and N companions
   // in one marketplace trigger ONE marketplace build, not N.
@@ -1226,7 +1303,7 @@ export function createSkillTestRunCommand(): Command {
     )
     .option(
       '--env <pair...>',
-      'Inject an env var into the executor spawn as KEY=VALUE (repeatable). Values support ${fixturesDir}, ${stagedSkillDir}, ${harnessRoot}, ${resultsDir}. CLI overrides config for the same key.',
+      'Inject an env var into the executor spawn as KEY=VALUE (repeatable). Values support ${fixturesDir}, ${stagedSkillDir}, ${harnessRoot}, ${resultsDir}. ${fixturesDir} is per-eval and requires that eval to declare input `files`. CLI overrides config for the same key.',
     )
     .option(
       '--pass-env <key...>',
@@ -1237,7 +1314,7 @@ export function createSkillTestRunCommand(): Command {
     .option('--workdir <dir>', 'Override the harness working directory')
     .option('--out <dir>', 'Override the harness output directory')
     .option('--keep', 'Keep the harness directory after the run')
-    .option('--dry-run', 'Assemble the command without spawning Claude')
+    .option('--dry-run', 'Build and stage exactly as a real run would, then stop without spawning Claude (no tokens spent). Combine with --no-build to skip the build too.')
     .option('--auth <mode>', 'Auth mechanism: inherit | subscription | api-key | auto')
     .option('--require-auth <mech>', 'Require a specific auth mechanism: subscription | api-key')
     .option('--baseline', 'Enable A/B baseline run (with/without skill)')
@@ -1254,6 +1331,10 @@ export function createSkillTestRunCommand(): Command {
     .option(
       '--grader-model <id>',
       'Model for the fixed grader/judge, passed VERBATIM to `claude --model` (default claude-sonnet-5). GLOBAL (top-level `test:` config), independent of --model (the model UNDER TEST).',
+    )
+    .option(
+      '--evals <path>',
+      "Eval suite to grade against: a path to an evals.json (resolved against the CURRENT DIRECTORY, so it may point outside the skill's tree) or an npm bare specifier honoring that package's exports map. Overrides `test.evals`, which is resolved against the skill source instead. Use this to test a skill you did not author — a correctly packaged skill ships no evals, because the suite is the answer key.",
     )
     .option('--max-turns <n>', 'Per-spawn cap on executor/grader turns (positive integer)')
     .option('--max-budget-usd <n>', 'Hard USD budget cap (positive number)')

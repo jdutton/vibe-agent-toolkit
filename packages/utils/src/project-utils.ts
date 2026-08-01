@@ -1,9 +1,10 @@
 /**
  * Canonical root-discovery primitives for VAT.
  *
- * Per spec docs/superpowers/specs/2026-05-17-root-model-and-leading-slash-design.md §6,
- * these are CLI-boundary functions: inner libraries take roots as parameters, not these.
- * All return `string | null` with no internal fallbacks.
+ * These are CLI-BOUNDARY functions: inner libraries take a root as a parameter
+ * rather than discovering one. All return `string | null` with no internal
+ * fallbacks — a caller with no root must decide one rather than silently
+ * falling back to an absolute path.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -79,8 +80,6 @@ export function findNodeWorkspaceRoot(startDir: string): string | null {
  * Tests that mutate fixtures between runs (or in-process callers that
  * re-enter `vat audit` in the same process) must call
  * {@link resetProjectRootCaches} to invalidate this cache.
- *
- * See spec docs/superpowers/specs/2026-05-17-root-model-and-leading-slash-design.md §8.
  */
 const walkUpCache: Map<string, { configRoot: string | null }> = new Map();
 

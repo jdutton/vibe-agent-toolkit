@@ -34,14 +34,68 @@ interface SkillTargetPaths {
   readonly projectRel: string;
 }
 
-/** Shared path used by both codex and agents targets (and their user/project scopes). */
+/**
+ * Shared path used by both codex and agents targets (and their user/project scopes).
+ *
+ * Epistemic status — weaker than the other six rows, deliberately recorded here.
+ * `.agents/skills` is a cross-client *convention*, not a specified path. The Agent
+ * Skills specification defines only what goes *inside* a skill directory and
+ * explicitly declines to say where those directories live. The load-bearing
+ * citation is agentskills.io's client-implementation guide, which calls
+ * `.agents/skills/` "a widely-adopted convention for cross-client skill sharing"
+ * while stating the specification "does not mandate where skill directories live".
+ * Note also what is NOT a citation for this: agents.md says nothing about skills at
+ * all — no `.agents/skills`, no SKILL.md, no discovery paths — so anyone reaching
+ * for it to justify this row is citing a document that does not support it. Every
+ * other target below is documented by that target's own vendor for its own client;
+ * `agents` is documented convention instead.
+ */
 const AGENTS_SKILLS_PATH = '.agents/skills';
 
 /**
  * Target → {userRel, projectRel} lookup table.
  *
- * These paths are based on the 2026-04-08 ecosystem analysis. Update this table
- * when platforms change their conventions. See docs/plans/2026-04-08-agent-skills-ecosystem-analysis.md.
+ * @vendor-claim reviewed=2026-07-30 verify=Each of the seven platforms' own published docs for where it reads skills from (claude, codex, copilot, gemini, cursor, windsurf, agents)
+ *
+ * Last reviewed against vendor documentation 2026-07-30: all fourteen paths
+ * re-read from the first-party sources listed below, all fourteen unchanged.
+ * Update this table when platforms change theirs — and re-read those sources when
+ * you do, because nothing here is verified at build or test time. A stale entry
+ * installs a skill somewhere the target never reads, and every check still passes.
+ * The 90-day `@vendor-claim` clock above is the only thing watching these values.
+ *
+ * What the tests actually do: `packages/utils/test/skill-targets.test.ts` derives
+ * its expectations *from* this table and asserts invariants of it — every target
+ * present, both scopes non-empty, relative (never absolute, never a leading `~`),
+ * forward-slash only — plus that resolveSkillTarget composes base + rel. That
+ * verifies the resolver and the table's shape. It cannot verify that any path is
+ * where a platform actually looks; no test can. (An earlier version of that file
+ * restated all fourteen literals a second time. That pinned the values to a
+ * duplicate of this table rather than to vendor reality: a wrong path still
+ * passed, and a *corrected* path broke the suite until someone updated the copy —
+ * a change-detector masquerading as verification, and friction against exactly the
+ * correction the clock above exists to produce.)
+ *
+ * Sources, one per target, re-read 2026-07-30:
+ * - claude   https://code.claude.com/docs/en/skills
+ *            (docs.claude.com/en/docs/claude-code/skills now 301s here)
+ * - codex    https://developers.openai.com/codex/skills/
+ *            (308s to learn.chatgpt.com/docs/build-skills)
+ * - copilot  https://docs.github.com/en/copilot/concepts/agents/about-agent-skills
+ * - gemini   https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/skills.md
+ * - cursor   https://cursor.com/docs/skills (skills shipped in Cursor 2.4)
+ * - windsurf https://docs.windsurf.com/windsurf/cascade/skills
+ *            (307s to docs.devin.ai/desktop/cascade/skills — Devin rebrand)
+ * - agents   https://agentskills.io/client-implementation/adding-skills-support
+ *            (convention, not specification — see AGENTS_SKILLS_PATH above)
+ *
+ * Deliberately non-exhaustive: each row is the ONE directory VAT installs into for
+ * that (target, scope). Most of these targets *read* several directories, which a
+ * 1:1 struct cannot express — so do not read a row as a claim of exclusivity.
+ * Notably `.agents/skills` is read by six of the seven targets (every one except
+ * `claude`), and both `gemini` and `cursor` rank it at or above the client-native
+ * path VAT writes to. Changing where VAT installs is a product decision, not a
+ * comment fix.
  */
 export const SKILL_TARGETS: Readonly<Record<SkillTarget, SkillTargetPaths>> = {
   claude: { userRel: '.claude/skills', projectRel: '.claude/skills' },

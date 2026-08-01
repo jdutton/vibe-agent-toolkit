@@ -6,7 +6,16 @@
  */
 
 import {
+  allowUnusedIssues,
+  calculateValidationStatus,
+  countBySeverity,
+  createAllowUsageLedger,
+  type SeverityCounts,
+  type ValidationIssue,
+} from '@vibe-agent-toolkit/agent-schema';
+import {
   validateSkillForPackaging,
+  type DeclaredEvalSuite,
   type PackagingValidationResult,
   type SkillPackagingConfig,
   type SkillValidationSharedContext,
@@ -16,17 +25,25 @@ import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
 import { findProjectRoot, gitFindRoot, GitTracker, safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';
 
+import { handleCommandError } from '../../utils/command-error.js';
 import { loadConfig } from '../../utils/config-loader.js';
 import { formatDurationSecs } from '../../utils/duration.js';
+import {
+  formatIssueLines,
+  formatRunIssueLines,
+  formatSeverityBreakdown,
+  issuesToRenderAtVerbosity,
+  summarizeFindings,
+  sumSeverityCounts,
+} from '../../utils/issue-rendering.js';
 import { type createLogger } from '../../utils/logger.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
-import { mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
+import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
 import { renderSkillQualityFooter } from '../../utils/skill-quality-footer.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
 
 import {
   filterSkillsByName,
-  handleCommandError,
   setupCommandContext,
   type DiscoveredSkill,
 } from './command-helpers.js';
@@ -48,17 +65,146 @@ interface ValidatableSkill extends DiscoveredSkill {
   packagingConfig: SkillPackagingConfig;
 }
 
+/** The vocabulary of a validation verdict: worst ACTIONABLE severity. */
+type ValidationStatus = 'success' | 'warning' | 'error';
+
 /**
- * Strip excludedReferences from results metadata for non-verbose YAML output.
+ * Every issue emitted across the batch, after severity resolution.
+ *
+ * `allErrors` is the full emitted set INCLUDING info despite the name (see the
+ * doc comment on `PackagingValidationResult`), and excluding issues suppressed
+ * by `validation.allow` — those live in `ignoredErrors`.
  */
-function stripExcludedReferencePaths(results: PackagingValidationResult[]): unknown[] {
-  return results.map((result) => {
-    const { skillLines, totalLines, fileCount, directFileCount, maxLinkDepth, excludedReferenceCount } = result.metadata;
-    return {
-      ...result,
-      metadata: { skillLines, totalLines, fileCount, directFileCount, maxLinkDepth, excludedReferenceCount },
-    };
-  });
+function batchIssues(results: readonly PackagingValidationResult[]): ValidationIssue[] {
+  return results.flatMap((r) => r.allErrors);
+}
+
+/**
+ * Findings about the RUN rather than about any one skill — currently the
+ * `validation.allow` entries no skill in the batch matched (ALLOW_UNUSED).
+ *
+ * They are a separate parameter, not folded into a skill's result, because
+ * that is what they are: `validation.allow` is declared once per package, so
+ * attributing "nothing matched this entry" to whichever skill happened to be
+ * validated at the time is what produced 78 warnings from 3 real entries.
+ */
+type RunIssues = readonly ValidationIssue[];
+
+/**
+ * One skill's VERBOSE YAML entry: the whole result plus the per-severity counts
+ * its two-valued `status` cannot express.
+ *
+ * The per-skill `status` stays the gate verdict (`error` iff an active error) —
+ * that is what the exit code is derived from. `issueCounts` beside it is what
+ * makes `success` readable: "nothing you must act on", not "nothing was found".
+ *
+ * This shape is optimized for `> file` then `grep`, not for reading: on a
+ * 90-skill repo it is 17,262 of the 22,156 stdout lines `vat verify` emits.
+ */
+function toVerboseYamlResult(result: PackagingValidationResult): unknown {
+  return { ...result, issueCounts: countBySeverity(result.allErrors) };
+}
+
+/**
+ * Does this skill have anything to say? Emitted findings OR allow-suppressed
+ * ones — the same predicate the human report uses, so the two streams cannot
+ * disagree about which skills exist.
+ */
+function hasFindings(result: PackagingValidationResult): boolean {
+  return result.allErrors.length > 0 || result.ignoredErrors.length > 0;
+}
+
+/**
+ * One skill's DEFAULT YAML entry: which asset has problems, how many, of what
+ * code — and nothing else.
+ *
+ * Why the per-code tally is a summary rather than N findings: 1,728 of the 1,897
+ * findings on a real 90-skill repo are one code, LINK_DROPPED_BY_DEPTH, and the
+ * four remedies its `fix` hint proposes (`linkFollowDepth`, `files:`,
+ * `validation.allow`, `excludeReferencesFromBundle`) are all SKILL-level config
+ * edits — so 348 findings on one skill propose the same four edits 348 times.
+ * The skill is the unit the reader acts on, so the skill is the unit we publish.
+ * Aggregating at EMISSION instead would break `validation.allow`'s per-`paths:`
+ * matching and per-path severity overrides, both of which need one issue per
+ * link; the collapse therefore has to happen here, after allow-filtering.
+ * Downgrading the code to `info` was considered and rejected: it would delete
+ * the signal the code exists for (a depth-limited walk may silently omit content
+ * the author expected to ship) and would contradict PACKAGED_TEST_INPUT, which
+ * `docs/validation-codes.md` keeps at `warning` on identical "this is configured
+ * behaviour, here is your receipt" reasoning.
+ *
+ * `allowed` is a scalar, not a list: an allow-suppressed finding is a fact about
+ * the skill a reader must not lose, but it is deliberately NOT in `codes`, which
+ * summarizes the EMITTED set.
+ */
+function toSummaryYamlResult(result: PackagingValidationResult): unknown {
+  const { codes, ...counts } = summarizeFindings(result.allErrors);
+  const allowedCount = result.ignoredErrors.length;
+  return {
+    skillName: result.skillName,
+    status: result.status,
+    ...counts,
+    ...(allowedCount > 0 ? { allowed: allowedCount } : {}),
+    codes,
+  };
+}
+
+/**
+ * Build the YAML summary object.
+ *
+ * `status` is the shared `issues → status` collapse over the WHOLE batch, so it
+ * can say `warning`. It previously read
+ * `results.some(r => r.status === 'error') ? 'error' : 'success'` — a two-value
+ * collapse that could never report the warning case, and so reported 33 active
+ * warnings as `success`.
+ *
+ * The header total counts BOTH the per-skill findings and the run-level ones,
+ * because the exit code does too — dropping run issues from the header would
+ * divorce the published verdict from the code the process actually returns.
+ * That is why `runIssueCounts` exists beside them: on a large real repo the
+ * header read 1814 warnings against a per-skill sum of 1800, and the missing 14
+ * were run-level ALLOW_UNUSED entries published only as a bare LIST. The
+ * identity `issueCounts === Σ results[].issueCounts + runIssueCounts` now holds
+ * by construction, so a consumer can reconcile the two numbers instead of
+ * hand-counting a list to find out whether anything went missing.
+ *
+ * That identity survives the default mode dropping every finding-free skill from
+ * `results[]`, because a dropped row contributes exactly zero to each bucket —
+ * and it survives the default row publishing its counts flat with zero buckets
+ * omitted, because an absent bucket reads as zero. Only the per-asset ROWS omit
+ * zeros: `issueCounts` and `runIssueCounts` keep their complete
+ * `{errors, warnings, info}` shape in both modes, because they are the
+ * reconciliation identity rather than something a reader scans.
+ */
+export function buildValidateSummary(
+  results: PackagingValidationResult[],
+  duration: number,
+  verbose: boolean,
+  runIssues: RunIssues,
+): {
+  status: ValidationStatus;
+  issueCounts: SeverityCounts;
+  runIssueCounts: SeverityCounts;
+  skillsValidated: number;
+  results: unknown[];
+  runIssues: ValidationIssue[];
+  durationSecs: number;
+} {
+  const skillIssues = batchIssues(results);
+  const runIssueCounts = countBySeverity(runIssues);
+  return {
+    status: calculateValidationStatus([...skillIssues, ...runIssues]),
+    issueCounts: sumSeverityCounts([countBySeverity(skillIssues), runIssueCounts]),
+    runIssueCounts,
+    // `skillsValidated` stays the true denominator even though the default
+    // `results[]` lists only the skills with something to say.
+    skillsValidated: results.length,
+    results: verbose
+      ? results.map((r) => toVerboseYamlResult(r))
+      : results.filter((r) => hasFindings(r)).map((r) => toSummaryYamlResult(r)),
+    runIssues: [...runIssues],
+    durationSecs: formatDurationSecs(duration),
+  };
 }
 
 /**
@@ -67,69 +213,133 @@ function stripExcludedReferencePaths(results: PackagingValidationResult[]): unkn
 function outputYamlSummary(
   results: PackagingValidationResult[],
   duration: number,
-  verbose: boolean
+  verbose: boolean,
+  runIssues: RunIssues,
 ): void {
-  const outputResults = verbose ? results : stripExcludedReferencePaths(results);
-
-  const output = {
-    status: results.some((r) => r.status === 'error') ? 'error' : 'success',
-    skillsValidated: results.length,
-    results: outputResults,
-    durationSecs: formatDurationSecs(duration),
-  };
-
+  const output = buildValidateSummary(results, duration, verbose, runIssues);
   console.log(yaml.stringify(output, { indent: 2, lineWidth: 0, aliasDuplicateObjects: false }));
 }
 
 /**
- * Output a single validation error
+ * ONE line for one skill: its severity breakdown, its allowed count, and the
+ * codes behind it, dominant first.
+ *
+ * The stderr counterpart of {@link toSummaryYamlResult} — same unit (the asset),
+ * same reason (see that function's comment). The per-issue blocks below are what
+ * made this stream 6,261 lines on a 90-skill repo.
  */
-function outputSingleError(error: {
-  code: string;
-  message: string;
-  location?: string;
-  fix?: string;
-}): void {
-  console.error(`    [${String(error.code)}] ${String(error.message)}`);
-  if (error.location) {
-    console.error(`      Location: ${String(error.location)}`);
-  }
-  if (error.fix) {
-    console.error(`      Fix: ${String(error.fix)}`);
-  }
+function skillSummaryLine(result: PackagingValidationResult): string {
+  const { codes } = summarizeFindings(result.allErrors);
+  const breakdown = formatSeverityBreakdown(countBySeverity(result.allErrors));
+  const allowed = result.ignoredErrors.length > 0
+    ? ` (+${result.ignoredErrors.length} allowed by config)`
+    : '';
+  const tally = Object.entries(codes).map(([code, count]) => `${code}: ${count}`).join(', ');
+  const codeSuffix = tally === '' ? '' : ` — ${tally}`;
+  return `  ${result.skillName}: ${breakdown}${allowed}${codeSuffix}`;
 }
 
 /**
- * Output detailed errors for a skill
+ * Lines for ONE skill: its summary row, then the findings that render in full
+ * beneath it at this verbosity.
+ *
+ * The row is unconditional — it is the only place a collapsed finding is
+ * counted, so a mode that replaced it with per-issue blocks would lose the
+ * allowed count and the per-code tally. What varies is what hangs below it, and
+ * that choice belongs to {@link issuesToRenderAtVerbosity}, not to this lane:
+ * an `error` renders in full at every verbosity (the reader must never have to
+ * re-run with `-v` to learn what failed the gate), while `warning`/`info`
+ * collapse into the row unless asked for.
+ *
+ * The allow-suppressed records are listed only under `verbose`; by default the
+ * row's `(+N allowed by config)` is their receipt.
  */
-function outputSkillErrors(result: PackagingValidationResult): void {
-  console.error(`Skill: ${result.skillName}`);
+function skillReportLines(result: PackagingValidationResult, verbose: boolean): string[] {
+  const lines = [skillSummaryLine(result)];
 
-  if (result.activeErrors.length > 0) {
-    console.error(`  Active errors (${result.activeErrors.length}):`);
-    for (const error of result.activeErrors) {
-      outputSingleError(error);
-    }
+  const rendered = issuesToRenderAtVerbosity(result.allErrors, verbose);
+  for (const issue of rendered) {
+    lines.push(...formatIssueLines(issue, '    '));
   }
 
-  if (result.ignoredErrors.length > 0) {
-    console.error(`  Allowed issues (${result.ignoredErrors.length}):`);
+  const listAllowed = verbose && result.ignoredErrors.length > 0;
+  if (listAllowed) {
+    lines.push(`  Allowed issues (${result.ignoredErrors.length}):`);
     for (const record of result.ignoredErrors) {
-      console.error(
-        `    [${String(record.code)}] ${String(record.location)} (allowed: ${record.reason})`
-      );
+      lines.push(`    [${String(record.code)}] ${String(record.location)} (allowed: ${record.reason})`);
     }
   }
 
-  const expiredWarnings = result.activeWarnings.filter(w => w.code === 'ALLOW_EXPIRED');
-  if (expiredWarnings.length > 0) {
-    console.error(`  Expired allow entries (${expiredWarnings.length}):`);
-    for (const warn of expiredWarnings) {
-      console.error(`    ${String(warn.message)}`);
-    }
+  // A trailing blank line only when something was rendered beneath the row —
+  // otherwise consecutive one-line rows would be double-spaced.
+  if (rendered.length > 0 || listAllowed) {
+    lines.push('');
   }
+  return lines;
+}
 
-  console.error('');
+/**
+ * One glyph per status value — total, so a status this renderer has not thought
+ * about cannot fall through to the reassuring `✅`.
+ */
+const STATUS_GLYPHS: Record<ValidationStatus, string> = {
+  error: '❌',
+  warning: '⚠️ ',
+  success: '✅',
+};
+
+/** Banner naming what the run actually found. */
+function reportBanner(status: ValidationStatus, counts: SeverityCounts): string {
+  if (status === 'error') {
+    return `\n❌ Validation failed — ${formatSeverityBreakdown(counts)}:\n`;
+  }
+  if (status === 'warning') {
+    // Non-blocking (exit 0), which is exactly why this used to print
+    // "All validations passed" over the warnings.
+    return `\n⚠️  Validation passed with findings — ${formatSeverityBreakdown(counts)}:\n`;
+  }
+  return counts.info > 0
+    ? `\n✅ All validations passed — ${formatSeverityBreakdown(counts)}, nothing to act on:\n`
+    : '\n✅ All validations passed';
+}
+
+/**
+ * Human-readable report lines for the whole batch.
+ *
+ * Renders every skill with ANY emitted finding, not just the ones that failed
+ * the gate: a warning-only or info-only run used to print the success banner and
+ * nothing else, so the findings existed only in the YAML on stdout.
+ *
+ * Every skill with findings gets its summary row at every verbosity; `verbose`
+ * picks only which findings are ALSO rendered in full beneath that row, per
+ * {@link issuesToRenderAtVerbosity} — errors always, `warning`/`info` when
+ * asked, `ignore` never. `verbose` deliberately does NOT gate errors: a default
+ * run that collapsed the error it exited 1 on into a count line forced the reader
+ * to re-run with a flag to learn what broke.
+ *
+ * Run-level findings and the banner are printed in full either way — there are
+ * ~14 of the former, and they belong to the project config rather than to any
+ * asset, so there is no row for them to collapse into.
+ */
+export function formatValidationReportLines(
+  results: PackagingValidationResult[],
+  runIssues: RunIssues,
+  verbose: boolean,
+): string[] {
+  const issues = [...batchIssues(results), ...runIssues];
+  const counts = countBySeverity(issues);
+  const status = calculateValidationStatus(issues);
+  const lines = [reportBanner(status, counts)];
+
+  for (const result of results) {
+    if (!hasFindings(result)) continue;
+    lines.push(...skillReportLines(result, verbose));
+  }
+  const runLines = formatRunIssueLines(runIssues);
+  if (runLines.length > 0) {
+    lines.push(...runLines, '');
+  }
+  return lines;
 }
 
 /**
@@ -139,11 +349,10 @@ function outputValidationReport(
   results: PackagingValidationResult[],
   duration: number,
   logger: ReturnType<typeof createLogger>,
-  verbose: boolean
+  verbose: boolean,
+  runIssues: RunIssues,
 ): void {
-  outputYamlSummary(results, duration, verbose);
-
-  const failedSkills = results.filter((r) => r.status === 'error');
+  outputYamlSummary(results, duration, verbose, runIssues);
 
   // Collect all emitted codes across skills (both errors and warnings) to drive the footer
   const emittedCodes = new Set<string>();
@@ -152,47 +361,54 @@ function outputValidationReport(
       emittedCodes.add(issue.code);
     }
   }
+  for (const issue of runIssues) {
+    emittedCodes.add(issue.code);
+  }
   const hasSkillFindings = results.some(
-    (r) => r.activeErrors.length > 0 || r.activeWarnings.length > 0,
+    (r) => calculateValidationStatus(r.allErrors) !== 'success',
   );
 
-  if (failedSkills.length === 0) {
-    logger.info('\n✅ All validations passed');
-    renderSkillQualityFooter(logger, hasSkillFindings, emittedCodes);
-    return;
-  }
-
-  console.error('\n❌ Validation errors:\n');
-  for (const result of failedSkills) {
-    outputSkillErrors(result);
+  for (const line of formatValidationReportLines(results, runIssues, verbose)) {
+    logger.info(line);
   }
   renderSkillQualityFooter(logger, hasSkillFindings, emittedCodes);
 }
 
 /**
- * Log validation progress for a single skill
+ * Log validation progress for a single skill.
+ *
+ * The per-skill glyph follows the shared collapse (`⚠️` for a warning-only
+ * skill), and the severity breakdown is always spelled out. A skill with
+ * warnings used to print a bare `✅ <name>`, which is the same reassuring
+ * collapse as the batch banner, one line earlier.
  */
+export function formatSkillProgressLine(
+  skillName: string,
+  result: PackagingValidationResult,
+): string[] {
+  const counts = countBySeverity(result.allErrors);
+  const status = calculateValidationStatus(result.allErrors);
+  const glyph = STATUS_GLYPHS[status];
+  const detail = result.allErrors.length > 0 ? `: ${formatSeverityBreakdown(counts)}` : '';
+  const lines = [`   ${glyph} ${skillName}${detail}`];
+
+  if (result.ignoredErrors.length > 0) {
+    lines.push(`      (${result.ignoredErrors.length} allowed by config)`);
+  }
+  const expiredCount = result.allErrors.filter(w => w.code === 'ALLOW_EXPIRED').length;
+  if (expiredCount > 0) {
+    lines.push(`      (${expiredCount} expired allow entr${expiredCount === 1 ? 'y' : 'ies'})`);
+  }
+  return lines;
+}
+
 function logSkillProgress(
   skillName: string,
   result: PackagingValidationResult,
   logger: ReturnType<typeof createLogger>
 ): void {
-  if (result.status === 'error') {
-    const activeCount = result.activeErrors.length;
-    const allowedCount = result.ignoredErrors.length;
-    const expiredCount = result.activeWarnings.filter(w => w.code === 'ALLOW_EXPIRED').length;
-
-    logger.error(`   ❌ ${skillName}: ${activeCount} error${activeCount === 1 ? '' : 's'}`);
-    if (allowedCount > 0) {
-      logger.info(`      (${allowedCount} allowed by config)`);
-    }
-    if (expiredCount > 0) {
-      logger.error(`      (${expiredCount} expired allow entr${expiredCount === 1 ? 'y' : 'ies'})`);
-    }
-  } else if (result.ignoredErrors.length > 0) {
-    logger.info(`   ✅ ${skillName} (${result.ignoredErrors.length} allowed by config)`);
-  } else {
-    logger.info(`   ✅ ${skillName}`);
+  for (const line of formatSkillProgressLine(skillName, result)) {
+    logger.info(line);
   }
 }
 
@@ -212,10 +428,20 @@ function logSkillProgress(
  */
 async function buildSharedValidationContext(
   skills: ValidatableSkill[],
+  projectSkills: readonly DeclaredEvalSuite[],
   logger: ReturnType<typeof createLogger>,
 ): Promise<SkillValidationSharedContext> {
+  // The allow-entry ledger is not an optimization like the two below — it is
+  // what makes ALLOW_UNUSED true. `validation.allow` is declared once for the
+  // package and matched per skill, so only the batch can say an entry matched
+  // nothing. Always present, so no early return can drop it.
+  const allowLedger = createAllowUsageLedger();
+
+  // Likewise not an optimization: the test-input rule is project-wide, so this
+  // lane must model a bundle that excludes EVERY declared suite, not just the
+  // subject's. Present even for an empty batch, so no early return can drop it.
   if (skills.length === 0) {
-    return {};
+    return { allowLedger, projectSkills };
   }
 
   const projectRoots = new Set<string>();
@@ -235,7 +461,7 @@ async function buildSharedValidationContext(
     }
   }
 
-  const context: SkillValidationSharedContext = {};
+  const context: SkillValidationSharedContext = { allowLedger, projectSkills };
 
   // Only reuse a single registry when every skill shares the same project
   // root. Otherwise the per-skill fallback path is correct and the cost is
@@ -322,7 +548,10 @@ export async function validateCommand(
     // (for markdown parses) and the git tracker (for gitignore checks) can be
     // shared across every skill whose projectRoot + gitRoot match the derived
     // values, which is the common case for a single-repo `vat skills validate`.
-    const sharedContext = await buildSharedValidationContext(skillsToValidate, logger);
+    // Every declared skill, not just `skillsToValidate`: `--skill x` narrows what is
+    // REPORTED on, never what counts as some skill's declared test input.
+    const projectSkills = collectDeclaredEvalSuites(config.skills, discovered);
+    const sharedContext = await buildSharedValidationContext(skillsToValidate, projectSkills, logger);
 
     // Validate each skill
     const results: PackagingValidationResult[] = [];
@@ -336,17 +565,33 @@ export async function validateCommand(
         'source',
         sharedContext,
       );
-      applyConfigVerdicts(result, skill.packagingConfig.targets as readonly Target[] | undefined, skill.sourcePath);
+      // `cwd` is the anchor root: config is read from it and discovery globs
+      // resolve against it, so every other location in this report is already
+      // relative to it.
+      applyConfigVerdicts(
+        result,
+        skill.packagingConfig.targets as readonly Target[] | undefined,
+        skill.sourcePath,
+        cwd,
+      );
       logSkillProgress(skill.name, result, logger);
       results.push(result);
     }
 
+    // Drain the run's allow ledger AFTER the last skill — an entry matched by
+    // any skill in the batch is used, so this is the first point at which
+    // "matched nothing" is answerable.
+    const runIssues = sharedContext.allowLedger === undefined
+      ? []
+      : allowUnusedIssues(sharedContext.allowLedger);
+
     // Output report and exit
     const duration = Date.now() - startTime;
     const verbose = options.verbose === true;
-    outputValidationReport(results, duration, logger, verbose);
+    outputValidationReport(results, duration, logger, verbose, runIssues);
 
-    const hasErrors = results.some(r => r.status === 'error');
+    const hasErrors = results.some(r => r.status === 'error')
+      || runIssues.some(i => i.severity === 'error');
     process.exit(hasErrors ? 1 : 0);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'SkillsValidate');

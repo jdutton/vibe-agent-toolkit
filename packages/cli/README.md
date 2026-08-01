@@ -92,10 +92,11 @@ vat doctor --verbose
 - CLI build status (in VAT source tree only)
 
 **Exit codes:**
-- `0` - All checks passed
+- `0` - No check failed (an undetermined check is reported, not fatal)
 - `1` - One or more checks failed
 
-**Example output:**
+**Example output** (`--verbose`; the concise view hides checks with nothing to
+report and states how many it hid):
 ```
 🩺 vat doctor
 
@@ -119,7 +120,7 @@ Running diagnostic checks...
 ✅ vat version
    Current: 0.1.0 — up to date
 
-📊 Results: 6/6 checks passed
+📊 Results: 6 checks — 6 passed, 0 failed, 0 undetermined, 0 skipped
 
 ✨ All checks passed! Your vat setup looks healthy.
 ```

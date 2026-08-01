@@ -19,17 +19,25 @@ import { basename, dirname } from 'node:path';
 
 import {
   CODE_REGISTRY,
+  runSingleUnitValidation,
   runValidationFramework,
+  type AllowUsageLedger,
   type AllowRecord,
   type IssueCode,
   type ValidationConfig,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/agent-schema';
-import { parseMarkdown, ResourceRegistry, type SkillExecutableEntry } from '@vibe-agent-toolkit/resources';
-import { findProjectRoot, normalizedTmpdir, toForwardSlash, safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
+import { DeferredArtifacts, parseMarkdown, ResourceRegistry, type SkillExecutableEntry } from '@vibe-agent-toolkit/resources';
+import { findProjectRoot, issueLocation, normalizedTmpdir, toForwardSlash, safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
 
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
-import { computeDeferredPaths } from '../files-config.js';
+import {
+  packagedFileEntries,
+  resolveTestInputDirs,
+  testInputExcludeRules,
+  testInputLinkIssues,
+  type DeclaredEvalSuite,
+} from '../test-input.js';
 import { walkLinkGraph, type LinkResolution, type WalkableRegistry } from '../walk-link-graph.js';
 
 import { observationToIssue, runCompatDetectors } from './compat-detectors.js';
@@ -78,6 +86,13 @@ export interface SkillPackagingConfig {
    * declaring it here lets consumers (e.g. `vat skill test run`) read it typed.
    */
   executables?: SkillExecutableEntry[];
+  /**
+   * The skill's `vat skill test` config. Only `evals` is load-bearing for packaging:
+   * it declares where the skill's TEST INPUT lives, which packaging must exclude
+   * from the shipped bundle (see test-input.ts). The rest of the block is carried
+   * through generically by the config merge and read by `vat skill test`.
+   */
+  test?: { evals?: string | undefined } | undefined;
 }
 
 /** Excluded reference detail for verbose output */
@@ -94,17 +109,33 @@ export interface PackagingValidationResult {
   /** Skill name */
   skillName: string;
 
-  /** Validation status */
+  /**
+   * Gate verdict: `error` iff there is an active error. TWO-valued on purpose —
+   * this is the build/validate gate, and a warning does not fail a build.
+   *
+   * It therefore says NOTHING about warnings or info. Read {@link
+   * PackagingValidationResult.allErrors} for the distribution — via
+   * `countBySeverity(result.allErrors)` from `@vibe-agent-toolkit/agent-schema`,
+   * which is the same collapse every other lane uses.
+   */
   status: 'success' | 'error';
 
-  /** All emitted issues after severity resolution (errors + warnings) */
+  /**
+   * THE container: every emitted issue after severity resolution, stored once.
+   *
+   * This includes `info`, despite the name: severity resolution keeps info
+   * issues in the framework's `emitted` set. Issues suppressed by `allow` are
+   * NOT here — they live in {@link PackagingValidationResult.ignoredErrors}.
+   *
+   * There are deliberately no `activeErrors` / `activeWarnings` sibling arrays.
+   * They were filtered views over this same array, and because every consumer
+   * that serializes a result spreads the whole object, each issue record —
+   * including its paragraph-length `fix` and `reference` prose — was written to
+   * the output document twice. Derive the partition instead:
+   * {@link activeErrorsOf} / {@link activeWarningsOf}, or `countBySeverity` /
+   * `calculateValidationStatus` from `@vibe-agent-toolkit/agent-schema`.
+   */
   allErrors: ValidationIssue[];
-
-  /** Active errors (severity === 'error', not suppressed by allow) */
-  activeErrors: ValidationIssue[];
-
-  /** Active warnings (severity === 'warning', not suppressed by allow) */
-  activeWarnings: ValidationIssue[];
 
   /** Issues suppressed by allow entries */
   ignoredErrors: AllowRecord[];
@@ -136,6 +167,25 @@ export interface PackagingValidationResult {
   };
 }
 
+/** Anything carrying the emitted-issue container — a result, or a partial of one. */
+type WithAllErrors = Pick<PackagingValidationResult, 'allErrors'>;
+
+/**
+ * The active errors: emitted, resolved-severity `error`.
+ *
+ * Derived on read, never stored on the result — see the `allErrors` doc comment
+ * for why. Equivalent to `result.status === 'error'` when all you need is the
+ * gate bit; use this only when you need the issues themselves.
+ */
+export function activeErrorsOf(result: WithAllErrors): ValidationIssue[] {
+  return result.allErrors.filter(i => i.severity === 'error');
+}
+
+/** The active warnings: emitted, resolved-severity `warning`. Derived on read. */
+export function activeWarningsOf(result: WithAllErrors): ValidationIssue[] {
+  return result.allErrors.filter(i => i.severity === 'warning');
+}
+
 /**
  * Validate files config entries for duplicate dest values and directory sources.
  *
@@ -147,6 +197,7 @@ export interface PackagingValidationResult {
 function validateFilesConfig(
   files: Array<{ source: string; dest: string }> | undefined,
   projectRoot: string,
+  locationRoot: string,
 ): ValidationIssue[] {
   if (!files?.length) return [];
 
@@ -169,8 +220,11 @@ function validateFilesConfig(
     const resolvedSource = safePath.resolve(safePath.join(projectRoot, entry.source));
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolvedSource derived from config-supplied path
     if (existsSync(resolvedSource) && statSync(resolvedSource).isDirectory()) {
-      const location = toForwardSlash(entry.source);
-      issues.push(createRegistryIssue(
+      // Anchor at the resolved source, expressed in the run's ONE coordinate
+      // system — not the raw config value, which is project-relative and so
+      // unresolvable in a run that spans several projects.
+      const location = issueLocation(resolvedSource, locationRoot);
+      issues.push(registryIssueAt(
         'LINK_TARGETS_DIRECTORY',
         `files: source '${entry.source}' resolves to a directory; a typed single-file slot requires a file`,
         location,
@@ -182,13 +236,19 @@ function validateFilesConfig(
 }
 
 /**
- * Create a validation issue from a code-registry code with a bespoke message.
+ * Create a validation issue from a code-registry code with a bespoke message,
+ * anchored at a project-relative `location`.
  *
  * Thin wrapper over the shared {@link materializeIssue} so severity / fix /
  * reference come from the single CODE_REGISTRY source (issue #129 dedup); the
  * caller supplies a fully-formed `message`.
+ *
+ * Deliberately NOT named `createRegistryIssue`: `@vibe-agent-toolkit/agent-schema`
+ * exports a function by that name whose third parameter is an EXTRAS OBJECT, not
+ * a location string. Two same-named functions with incompatible third arguments
+ * is a trap for anyone reading a call site.
  */
-function createRegistryIssue(
+function registryIssueAt(
   code: IssueCode,
   message: string,
   location?: string,
@@ -212,12 +272,55 @@ function createRegistryIssue(
  * once and pass it down rather than re-crawling per skill.
  */
 export async function crawlAndResolveRegistry(projectRoot: string): Promise<ResourceRegistry> {
-  const registry = await ResourceRegistry.fromCrawl({
-    baseDir: projectRoot,
-    include: ['**/*.md', '**/*.html', '**/*.htm'],
-  });
-  registry.resolveLinks();
-  return registry;
+  const key = toForwardSlash(safePath.resolve(projectRoot));
+  const cached = registryCache.get(key);
+  if (cached !== undefined) {
+    return cached;
+  }
+  // The PROMISE is cached, not the resolved value, so two overlapping requests
+  // for one root can never start two crawls.
+  const pending = (async (): Promise<ResourceRegistry> => {
+    const registry = await ResourceRegistry.fromCrawl({
+      baseDir: projectRoot,
+      include: ['**/*.md', '**/*.html', '**/*.htm'],
+    });
+    registry.resolveLinks();
+    return registry;
+  })();
+  registryCache.set(key, pending);
+  return pending;
+}
+
+/**
+ * Cache of (resolved project root → registry), so the crawl above is paid ONCE
+ * per root per process rather than once per skill.
+ *
+ * It lives beside the crawl because every caller wants the same thing and the
+ * cost is a property of the crawl, not of any one lane. `vat audit` had already
+ * built this cache privately — and its own comment flagged the trap: the key
+ * "must be the SAME value `validateSkillForPackaging` derives", or a mismatch
+ * "silently degrades back to a per-skill crawl". Keying on the resolved path in
+ * one place removes the duplicate and the trap. The lane that never had a cache —
+ * the packager's post-build validation, called once per skill from both build
+ * phases — gets the sharing without threading a registry through.
+ *
+ * Safe to hold for a process lifetime: every VAT entry point is a short-lived
+ * CLI invocation. Note the crawl excludes build output (`BUILD_OUTPUT_GLOBS` via
+ * the crawler's defaults), so packaging a skill mid-run cannot invalidate it.
+ */
+const registryCache = new Map<string, Promise<ResourceRegistry>>();
+
+/**
+ * Drop every memoized registry.
+ *
+ * Required by any in-process caller that starts an INDEPENDENT run against a
+ * tree it may have changed since the last one — the CLI entrypoint, and
+ * integration tests sharing a vitest worker. Without it a second run reuses the
+ * first run's parse of files that have since moved, and reports a stale answer
+ * as a fresh one. `resetAuditCaches` calls this alongside its own caches.
+ */
+export function resetPackagingRegistryCache(): void {
+  registryCache.clear();
 }
 
 /**
@@ -257,6 +360,63 @@ export interface SkillValidationSharedContext {
   registry?: ResourceRegistry;
   /** Pre-populated tracker for the repo that contains the skill. */
   gitTracker?: GitTracker;
+  /**
+   * Root every emitted `ValidationIssue.location` is expressed relative to.
+   *
+   * This is the ANCHOR base and it is a DIFFERENT concern from the project
+   * root below: the project root is a validation-POLICY boundary (what counts
+   * as "outside the project", where `files:` sources resolve from, what the
+   * registry crawls), while the anchor base only answers "relative to what is
+   * this location written?". Conflating the two is what let `vat audit` — which
+   * spans many governing configs in a single run — emit one report in many
+   * coordinate systems, with two distinct files sharing one `location`.
+   *
+   * A batching caller MUST pass its invocation scan root. Omitted, it falls
+   * back to the project root, which is correct exactly when a run covers one
+   * project (`vat skills validate`, `vat skills build`, `vat skill review`).
+   */
+  locationRoot?: string;
+  /**
+   * The RUN's allow-entry usage ledger.
+   *
+   * `validation.allow` is declared once per package but validated once per
+   * skill, so "this entry matched nothing" is a question only the whole run can
+   * answer — a batching caller MUST supply one ledger for the batch and drain it
+   * with `allowUnusedIssues()` after the last skill. Without it, an entry scoped
+   * to one skill's files is reported unused by every OTHER skill in the package
+   * (measured: 78 ALLOW_UNUSED warnings from 3 legitimate entries).
+   *
+   * Omitting it is a positive claim that THIS call is the whole run — correct for
+   * the single-skill callers (`vat skill review`, `vat audit`, whose shared
+   * context is built per skill), where the per-skill and run-level answers
+   * coincide. `vat skills build` supplies one: its pre-build source check is the
+   * ONLY lane in that run that can match an entry scoped to a source filename
+   * (packaging renames the file to `SKILL.md`), so withholding its matches
+   * reported live entries as dead on every skill in the package.
+   *
+   * KNOWN GAP, worth fixing if you are already in this area: the plugin-local
+   * skill loop in `packages/cli/src/commands/claude/plugin/build.ts` still omits
+   * a ledger while looping, so it makes that positive claim falsely. It measures
+   * zero on VAT only because VAT's plugins are assembled by copy-in. See the
+   * comment at that call site for why it was left and what fixing it needs.
+   */
+  allowLedger?: AllowUsageLedger;
+  /**
+   * EVERY skill the project declares, with its effective packaging config.
+   *
+   * Read only for `test.evals`, and the rule it feeds is PROJECT-WIDE: a file any
+   * skill declares as its eval suite is test input, and this lane must predict a
+   * bundle without it — the same bundle `vat skills build` produces. Without this,
+   * the lane counts a sibling skill's answer key as an ordinary bundled file, and
+   * `vat skills validate` and `vat skills build` disagree about what ships.
+   *
+   * Assemble it ONCE per invocation from the lane's own skill discovery and pass the
+   * same array to every skill; do not rebuild it per skill (that is a whole-project
+   * config walk inside a per-skill loop). Omitting it is a positive claim that the
+   * caller has no project to enumerate — true for a config-free single-skill audit,
+   * false for anything that loops over discovered skills.
+   */
+  projectSkills?: readonly DeclaredEvalSuite[];
 }
 
 /**
@@ -282,6 +442,18 @@ export async function validateSkillForPackaging(
 ): Promise<PackagingValidationResult> {
   const rawIssues: ValidationIssue[] = [];
 
+  // Validation-POLICY boundary (config root -> git root -> skill dir): what is
+  // "outside the project", where `files:` sources resolve from, what the
+  // registry crawls. Library fallback to skill dir keeps callers null-safe; CLI
+  // command boundary owns any user-facing warning. See plan 2026-05-17.
+  const projectRoot = findProjectRoot(dirname(skillPath)) ?? dirname(skillPath);
+  // ANCHOR base — deliberately a separate variable from projectRoot above.
+  // Every emitted location is relative to this ONE root, computed once before
+  // the first producer runs so no collector can pick a different base. A
+  // batching caller supplies it; alone in a project the two coincide.
+  const locationRoot = shared?.locationRoot ?? projectRoot;
+  const skillLocation = issueLocation(skillPath, locationRoot);
+
   // Parse SKILL.md
   const parseResult = await parseMarkdown(skillPath);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillPath is validated function parameter
@@ -291,8 +463,8 @@ export async function validateSkillForPackaging(
   // Validate frontmatter schema (name format, required fields, etc.)
   if (parseResult.frontmatter) {
     rawIssues.push(
-      ...validateFrontmatterSchema(parseResult.frontmatter, false),
-      ...validateFrontmatterRules(parseResult.frontmatter),
+      ...validateFrontmatterSchema(parseResult.frontmatter, false, skillLocation),
+      ...validateFrontmatterRules(parseResult.frontmatter, skillLocation),
     );
   }
 
@@ -300,9 +472,9 @@ export async function validateSkillForPackaging(
   // surface each as a CAPABILITY_* issue. Observations are also returned
   // on the result so downstream verdict computation (CLI layer) can recover
   // payloads such as EXTERNAL_CLI binary names.
-  const { evidence, observations } = runCompatDetectors(skillContent, skillPath);
+  const { evidence, observations } = runCompatDetectors(skillContent, skillPath, locationRoot);
   for (const obs of observations) {
-    rawIssues.push(observationToIssue(obs, skillPath));
+    rawIssues.push(observationToIssue(obs, skillLocation));
   }
 
   // Read packaging options for depth/exclude configuration
@@ -311,14 +483,9 @@ export async function validateSkillForPackaging(
   const excludeNavigationFiles = packagingConfig?.excludeNavigationFiles ?? true;
   const maxDepth = linkFollowDepth === 'full' ? Infinity : linkFollowDepth;
 
-  // Find project boundary (config root -> git root -> skill dir).
-  // Library fallback to skill dir keeps callers null-safe; CLI command
-  // boundary owns any user-facing warning. See plan 2026-05-17.
-  const projectRoot = findProjectRoot(dirname(skillPath)) ?? dirname(skillPath);
-
   // Validate files config (requires projectRoot to resolve source paths for
   // directory-source detection — must run after projectRoot is computed).
-  rawIssues.push(...validateFilesConfig(packagingConfig?.files, projectRoot));
+  rawIssues.push(...validateFilesConfig(packagingConfig?.files, projectRoot, locationRoot));
 
   // Build resource registry and walk the link graph.
   // Prefer the caller-supplied shared registry (when `vat skills validate` or
@@ -331,18 +498,39 @@ export async function validateSkillForPackaging(
     : await crawlAndResolveRegistry(projectRoot);
 
   const skillResource = registry.getResource(safePath.resolve(skillPath));
-  const deferred = computeDeferredPaths(packagingConfig?.files ?? [], {
-    skillDir: dirname(skillPath),
+  // Only the entries the PACKAGER will actually copy defer a link: an entry pointing
+  // into declared test input is dropped at build time, so its dest never appears and
+  // a link to it is a genuine broken link — the same verdict `vat skills build`
+  // reaches. See packagedFileEntries in test-input.ts.
+  //
+  // `projectSkills` is the PROJECT's declared eval suites, assembled once by the
+  // calling lane (see SkillValidationSharedContext.projectSkills). Empty when the
+  // caller has no project to enumerate — a single-skill audit of a tree with no
+  // config — which narrows this lane to the subject's own suite and nothing else.
+  const projectSkills = shared?.projectSkills ?? [];
+  const deferred = DeferredArtifacts.from(
+    [{
+      files: packagedFileEntries(packagingConfig ?? {}, dirname(skillPath), projectRoot, projectSkills),
+      skillDir: dirname(skillPath),
+    }],
     projectRoot,
-  });
+  );
+  const testInputDirs = resolveTestInputDirs(packagingConfig ?? {}, dirname(skillPath), projectSkills);
 
   const walkOptions: Parameters<typeof walkLinkGraph>[2] = {
     maxDepth,
-    excludeRules: excludeConfig?.rules ?? [],
+    // The SAME test-input exclusion the packager applies. Without it this lane
+    // predicts a bundle containing the eval suite while the build produces one
+    // without it — same input, two answers about what ships, from the two commands
+    // that exist to agree.
+    excludeRules: [
+      ...(excludeConfig?.rules ?? []),
+      ...testInputExcludeRules(testInputDirs, projectRoot),
+    ],
     projectRoot,
     skillRootPath: safePath.resolve(skillPath),
     excludeNavigationFiles,
-    deferredPaths: deferred,
+    deferredArtifacts: deferred,
   };
   if (shared?.gitTracker !== undefined) {
     walkOptions.gitTracker = shared.gitTracker;
@@ -359,10 +547,18 @@ export async function validateSkillForPackaging(
   const bundledFileSet = new Set(bundledFiles);
   const directFileCount = directLinks.filter(p => bundledFileSet.has(p)).length;
 
-  // Emit issues from walker exclusions (LINK_OUTSIDE_PROJECT, LINK_TARGETS_DIRECTORY, etc.)
-  rawIssues.push(...walkerExclusionsToIssues(excludedReferences, projectRoot));
-  // Emit one info issue per deferred asset declared in files: config
-  rawIssues.push(...deferredAssetsToIssues(deferredAssets, projectRoot));
+  // Three producers, one append, order significant. Each is a receipt for a link
+  // the walker dropped or deferred, and all three anchor on `locationRoot`:
+  //  1. walker exclusions (LINK_OUTSIDE_PROJECT, LINK_TARGETS_DIRECTORY, etc.)
+  //  2. links dropped for pointing into declared test input — the same issue, at
+  //     the same location, the packager emits for it. `projectRoot` scopes WHICH
+  //     dirs count as declared test input; `locationRoot` only anchors.
+  //  3. one info issue per deferred asset declared in files: config
+  rawIssues.push(
+    ...walkerExclusionsToIssues(excludedReferences, locationRoot),
+    ...testInputLinkIssues(excludedReferences, testInputDirs, projectRoot, locationRoot),
+    ...deferredAssetsToIssues(deferredAssets, locationRoot),
+  );
 
   const fileCount = bundledFiles.length + 1; // +1 for SKILL.md itself
   const maxLinkDepth = maxBundledDepth;
@@ -376,26 +572,28 @@ export async function validateSkillForPackaging(
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- bundledFile resolved from markdown parser
       const content = await readFile(bundledFile, 'utf-8');
       totalLines += content.split('\n').length;
-      collectNonPortableAssetReferenceIssues(content, bundledFile, rawIssues);
-      collectNonPortableCommandIssues(content, bundledFile, rawIssues);
+      // Anchor contract: never hand a producer an absolute path as `location`.
+      const bundledLocation = issueLocation(bundledFile, locationRoot);
+      collectNonPortableAssetReferenceIssues(content, bundledLocation, rawIssues);
+      collectNonPortableCommandIssues(content, bundledLocation, rawIssues);
     }
   }
 
   const excludedDetails = deduplicateExcludedReferences(excludedReferences, skillPath);
 
   // Run quality / best-practice checks
-  collectSizeIssues(skillLines, totalLines, fileCount, maxLinkDepth, skillPath, rawIssues);
-  collectDescriptionIssue(parseResult.frontmatter, skillPath, rawIssues);
-  collectProgressiveDisclosureIssue(skillLines, bundledFiles.length, skillPath, rawIssues);
-  collectNameMismatchIssue(parseResult.frontmatter, skillPath, rawIssues);
-  collectTimeSensitiveContentIssues(parseResult.content, skillPath, rawIssues);
-  collectNonPortableAssetReferenceIssues(parseResult.content, skillPath, rawIssues);
-  collectNonPortableCommandIssues(parseResult.content, skillPath, rawIssues);
+  collectSizeIssues(skillLines, totalLines, fileCount, maxLinkDepth, skillLocation, rawIssues);
+  collectDescriptionIssue(parseResult.frontmatter, skillLocation, rawIssues);
+  collectProgressiveDisclosureIssue(skillLines, bundledFiles.length, skillLocation, rawIssues);
+  collectNameMismatchIssue(parseResult.frontmatter, skillPath, skillLocation, rawIssues);
+  collectTimeSensitiveContentIssues(parseResult.content, skillLocation, rawIssues);
+  collectNonPortableAssetReferenceIssues(parseResult.content, skillLocation, rawIssues);
+  collectNonPortableCommandIssues(parseResult.content, skillLocation, rawIssues);
 
   // Cross-skill dependency smell: body declares a requires/depends token the
   // description does not mention. Uses the post-frontmatter content slice.
   if (parseResult.frontmatter) {
-    rawIssues.push(...detectUndeclaredCrossSkillAuth(parseResult.frontmatter, parseResult.content));
+    rawIssues.push(...detectUndeclaredCrossSkillAuth(parseResult.frontmatter, parseResult.content, skillLocation));
   }
 
   // Filter out source-only codes when validating built output
@@ -403,21 +601,24 @@ export async function validateSkillForPackaging(
     ? rawIssues.filter(issue => !SOURCE_ONLY_CODES.has(issue.code))
     : rawIssues;
 
-  // Run through the unified validation framework
+  // Run through the unified validation framework.
+  //
+  // Two lanes, one question: a batching caller supplies the RUN's ledger and
+  // owns the drain (ALLOW_UNUSED belongs to the run, not to whichever skill
+  // happened to be validated when the entry went unmatched); a caller that
+  // supplied none is claiming its run is this one skill, and gets the run-level
+  // answer folded in here.
   const validationConfig = packagingConfig?.validation ?? {};
-  const framework = runValidationFramework(filteredIssues, validationConfig);
+  const framework = shared?.allowLedger === undefined
+    ? runSingleUnitValidation(filteredIssues, validationConfig)
+    : runValidationFramework(filteredIssues, validationConfig, shared.allowLedger);
 
   const skillName = extractSkillName(parseResult, skillPath);
-
-  const activeErrors = framework.emitted.filter(i => i.severity === 'error');
-  const activeWarnings = framework.emitted.filter(i => i.severity === 'warning');
 
   return {
     skillName,
     status: framework.hasErrors ? 'error' : 'success',
     allErrors: framework.emitted,
-    activeErrors,
-    activeWarnings,
     ignoredErrors: framework.allowed,
     observations,
     evidence,
@@ -441,42 +642,42 @@ function collectSizeIssues(
   totalLines: number,
   fileCount: number,
   maxLinkDepth: number,
-  skillPath: string,
+  skillLocation: string,
   issues: ValidationIssue[],
 ): void {
   if (skillLines > VALIDATION_THRESHOLDS.RECOMMENDED_SKILL_LINES) {
     const rule = VALIDATION_RULES.SKILL_LENGTH_EXCEEDS_RECOMMENDED;
-    issues.push(createRegistryIssue(
+    issues.push(registryIssueAt(
       rule.code as IssueCode,
       rule.message({ lines: skillLines }),
-      skillPath,
+      skillLocation,
     ));
   }
 
   if (totalLines > VALIDATION_THRESHOLDS.MAX_TOTAL_LINES) {
     const rule = VALIDATION_RULES.SKILL_TOTAL_SIZE_LARGE;
-    issues.push(createRegistryIssue(
+    issues.push(registryIssueAt(
       rule.code as IssueCode,
       rule.message({ totalLines }),
-      skillPath,
+      skillLocation,
     ));
   }
 
   if (fileCount > VALIDATION_THRESHOLDS.MAX_FILE_COUNT) {
     const rule = VALIDATION_RULES.SKILL_TOO_MANY_FILES;
-    issues.push(createRegistryIssue(
+    issues.push(registryIssueAt(
       rule.code as IssueCode,
       rule.message({ fileCount }),
-      skillPath,
+      skillLocation,
     ));
   }
 
   if (maxLinkDepth > VALIDATION_THRESHOLDS.MAX_REFERENCE_DEPTH) {
     const rule = VALIDATION_RULES.REFERENCE_TOO_DEEP;
-    issues.push(createRegistryIssue(
+    issues.push(registryIssueAt(
       rule.code as IssueCode,
       rule.message({ depth: maxLinkDepth }),
-      skillPath,
+      skillLocation,
     ));
   }
 }
@@ -486,7 +687,7 @@ function collectSizeIssues(
  */
 function collectDescriptionIssue(
   frontmatter: Record<string, unknown> | undefined,
-  skillPath: string,
+  skillLocation: string,
   issues: ValidationIssue[],
 ): void {
   const description = frontmatter?.['description'];
@@ -497,10 +698,10 @@ function collectDescriptionIssue(
 
   if (description.length < VALIDATION_THRESHOLDS.MIN_DESCRIPTION_LENGTH) {
     const rule = VALIDATION_RULES.DESCRIPTION_TOO_VAGUE;
-    issues.push(createRegistryIssue(
+    issues.push(registryIssueAt(
       rule.code as IssueCode,
       rule.message({ length: description.length }),
-      skillPath,
+      skillLocation,
     ));
   }
 }
@@ -530,7 +731,7 @@ const GENERIC_CONTAINER_DIRS = new Set<string>(['skills', 'resources']);
 export function detectNameMismatchIssue(
   frontmatterName: unknown,
   parentDir: string,
-  skillPath: string,
+  skillLocation: string,
 ): ValidationIssue | null {
   if (typeof frontmatterName !== 'string' || frontmatterName.trim() === '') {
     return null;
@@ -555,7 +756,7 @@ export function detectNameMismatchIssue(
     severity: registryEntry.defaultSeverity,
     code: 'SKILL_NAME_MISMATCHES_DIR',
     message: `Frontmatter name "${frontmatterName}" does not match parent directory "${parentDir}"`,
-    location: skillPath,
+    location: skillLocation,
     fix: registryEntry.fix,
     reference: registryEntry.reference,
   };
@@ -569,6 +770,7 @@ export function detectNameMismatchIssue(
 function collectNameMismatchIssue(
   frontmatter: Record<string, unknown> | undefined,
   skillPath: string,
+  skillLocation: string,
   issues: ValidationIssue[],
 ): void {
   const resolvedSkillPath = toForwardSlash(safePath.resolve(skillPath));
@@ -579,7 +781,7 @@ function collectNameMismatchIssue(
   }
 
   const parentDir = basename(dirname(skillPath));
-  const issue = detectNameMismatchIssue(frontmatter?.['name'], parentDir, skillPath);
+  const issue = detectNameMismatchIssue(frontmatter?.['name'], parentDir, skillLocation);
   if (issue !== null) {
     issues.push(issue);
   }
@@ -657,6 +859,15 @@ const NON_PORTABLE_ASSET_VARIANTS: readonly PortabilityVariant[] = [
  * pipe/semicolon/ampersand or a backtick/code fence) so bare prose nouns
  * ("the request will timeout", "grep the logs") are not flagged. See
  * COMMAND_POSITION / COMMAND_SEGMENT below.
+ *
+ * Every `fix` below asserts how a utility behaves on macOS/BSD. The CI matrix is
+ * Ubuntu + Windows only, so no test in this repo can contradict these claims —
+ * they are vendor claims and go stale silently. The `readlink-f` variant already
+ * did: `-f` was absent from macOS for years, and is present and working as of
+ * macOS 26.5.2. When a variant's macOS behaviour converges with GNU, DELETE the
+ * variant — do not reword it, or the detector trains adopters to ignore the code.
+ *
+ * @vendor-claim reviewed=2026-07-29 verify=On a current macOS, run each variant against the system binaries rather than Homebrew coreutils — `ls /usr/bin/timeout`, `echo x | /usr/bin/grep -P x`, `/usr/bin/sed -i s/a/b/ FILE`, `/usr/bin/readlink -f ./missing.txt`, `/bin/date -d 2020-01-01` — and run the GNU counterparts on Linux to confirm the difference still exists
  */
 /* eslint-disable security/detect-non-literal-regexp -- compile-time constants composed from COMMAND_POSITION/COMMAND_SEGMENT, no user input */
 // Command position: start of line, or after a pipe/semicolon/ampersand or a
@@ -690,7 +901,7 @@ const NON_PORTABLE_COMMAND_VARIANTS: readonly PortabilityVariant[] = [
   {
     label: 'readlink-f',
     pattern: new RegExp(COMMAND_POSITION + String.raw`readlink\b` + COMMAND_SEGMENT + String.raw`\s-[a-z]*f\b`),
-    fix: '`readlink -f` is not available on macOS by default. Use a portable resolve (e.g. a `cd "$(dirname …)" && pwd` shell function or a Node/Python one-liner).',
+    fix: '`readlink -f` is not portable: on macOS it fails (exit 1, no output) when the final path component does not exist, where GNU canonicalizes it, and `-f` was absent from macOS entirely for years. Use a portable resolve (e.g. a `cd "$(dirname …)" && pwd` shell function or a Node/Python one-liner).',
   },
   {
     label: 'date-d',
@@ -707,7 +918,7 @@ const NON_PORTABLE_COMMAND_VARIANTS: readonly PortabilityVariant[] = [
  */
 function collectTimeSensitiveContentIssues(
   content: string,
-  skillPath: string,
+  skillLocation: string,
   issues: ValidationIssue[],
 ): void {
   const registryEntry = CODE_REGISTRY.SKILL_TIME_SENSITIVE_CONTENT;
@@ -722,7 +933,8 @@ function collectTimeSensitiveContentIssues(
           severity: registryEntry.defaultSeverity,
           code: 'SKILL_TIME_SENSITIVE_CONTENT',
           message: `Time-sensitive phrase "${match[0]}" may become stale`,
-          location: `${skillPath}:${lineNumber}`,
+          location: skillLocation,
+          line: lineNumber,
           fix: registryEntry.fix,
           reference: registryEntry.reference,
         });
@@ -735,13 +947,13 @@ function collectTimeSensitiveContentIssues(
 
 /**
  * Scan one skill document for any member of a portability check family. One issue
- * per line (first matching variant wins), located at `docPath:line`, carrying the
+ * per line (first matching variant wins), anchored at `docLocation` + `line`, carrying the
  * variant's label and tailored fix. Shared by the NON_PORTABLE_ASSET_REFERENCE and
  * NON_PORTABLE_COMMAND families.
  */
 function collectPortabilityFamilyIssues(
   content: string,
-  docPath: string,
+  docLocation: string,
   issues: ValidationIssue[],
   family: {
     readonly code: IssueCode;
@@ -760,7 +972,8 @@ function collectPortabilityFamilyIssues(
           severity: registryEntry.defaultSeverity,
           code: family.code,
           message: family.summarize(variant.label, match[0].trim()),
-          location: `${docPath}:${index + 1}`,
+          location: docLocation,
+          line: index + 1,
           fix: variant.fix,
           reference: registryEntry.reference,
         });
@@ -777,10 +990,10 @@ function collectPortabilityFamilyIssues(
  */
 function collectNonPortableAssetReferenceIssues(
   content: string,
-  docPath: string,
+  docLocation: string,
   issues: ValidationIssue[],
 ): void {
-  collectPortabilityFamilyIssues(content, docPath, issues, {
+  collectPortabilityFamilyIssues(content, docLocation, issues, {
     code: 'NON_PORTABLE_ASSET_REFERENCE',
     variants: NON_PORTABLE_ASSET_VARIANTS,
     summarize: (label, match) =>
@@ -794,10 +1007,10 @@ function collectNonPortableAssetReferenceIssues(
  */
 function collectNonPortableCommandIssues(
   content: string,
-  docPath: string,
+  docLocation: string,
   issues: ValidationIssue[],
 ): void {
-  collectPortabilityFamilyIssues(content, docPath, issues, {
+  collectPortabilityFamilyIssues(content, docLocation, issues, {
     code: 'NON_PORTABLE_COMMAND',
     variants: NON_PORTABLE_COMMAND_VARIANTS,
     // Strip the leading command-position separator (backtick / pipe / etc.) the
@@ -813,15 +1026,15 @@ function collectNonPortableCommandIssues(
 function collectProgressiveDisclosureIssue(
   skillLines: number,
   referenceFileCount: number,
-  skillPath: string,
+  skillLocation: string,
   issues: ValidationIssue[],
 ): void {
   if (skillLines > VALIDATION_THRESHOLDS.RECOMMENDED_SKILL_LINES && referenceFileCount === 0) {
     const rule = VALIDATION_RULES.NO_PROGRESSIVE_DISCLOSURE;
-    issues.push(createRegistryIssue(
+    issues.push(registryIssueAt(
       rule.code as IssueCode,
       rule.message({ lines: skillLines }),
-      skillPath,
+      skillLocation,
     ));
   }
 }

@@ -63,3 +63,12 @@ export function buildTestPaths(base: string): ClaudeUserPaths {
 export function bashCodeBlock(command: string): string {
   return ['```bash', command, '```'].join('\n');
 }
+
+/**
+ * Anchor root for scanner unit tests.
+ *
+ * Scanners take a REQUIRED `locationRoot` and relativize every emitted evidence
+ * `location.file` against it, so a scanner test must state one. These tests pass
+ * already-root-relative file paths, which round-trip unchanged through any root.
+ */
+export const TEST_LOCATION_ROOT = safePath.resolve('/scan-root');

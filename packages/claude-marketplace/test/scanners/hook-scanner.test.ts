@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { scanHooksConfig } from '../../src/scanners/hook-scanner.js';
+import { TEST_LOCATION_ROOT } from '../test-helpers.js';
 
 const HOOKS_FILE = 'hooks/hooks.json';
 
@@ -11,7 +12,7 @@ describe('scanHooksConfig', () => {
         PreToolUse: [{ type: 'prompt', prompt: 'Check safety' }],
       },
     };
-    const result = scanHooksConfig(config, HOOKS_FILE);
+    const result = scanHooksConfig(config, HOOKS_FILE, TEST_LOCATION_ROOT);
     expect(result).toEqual([]);
   });
 
@@ -24,7 +25,7 @@ describe('scanHooksConfig', () => {
         }],
       },
     };
-    const result = scanHooksConfig(config, HOOKS_FILE);
+    const result = scanHooksConfig(config, HOOKS_FILE, TEST_LOCATION_ROOT);
     expect(result).toHaveLength(1);
     expect(result[0]?.patternId).toBe('HOOK_COMMAND_INVOKES_BINARY');
     expect(result[0]?.matchText).toContain('python3');
@@ -39,7 +40,7 @@ describe('scanHooksConfig', () => {
         }],
       },
     };
-    const result = scanHooksConfig(config, HOOKS_FILE);
+    const result = scanHooksConfig(config, HOOKS_FILE, TEST_LOCATION_ROOT);
     expect(result[0]?.patternId).toBe('HOOK_COMMAND_INVOKES_BINARY');
     expect(result[0]?.matchText).toContain('bash');
   });
@@ -53,7 +54,7 @@ describe('scanHooksConfig', () => {
         }],
       },
     };
-    const result = scanHooksConfig(config, HOOKS_FILE);
+    const result = scanHooksConfig(config, HOOKS_FILE, TEST_LOCATION_ROOT);
     expect(result[0]?.patternId).toBe('HOOK_COMMAND_INVOKES_BINARY');
   });
 
@@ -68,12 +69,12 @@ describe('scanHooksConfig', () => {
         ],
       },
     };
-    const result = scanHooksConfig(config, HOOKS_FILE);
+    const result = scanHooksConfig(config, HOOKS_FILE, TEST_LOCATION_ROOT);
     expect(result.length).toBeGreaterThanOrEqual(2);
   });
 
   it('handles malformed config gracefully', () => {
-    const result = scanHooksConfig({}, HOOKS_FILE);
+    const result = scanHooksConfig({}, HOOKS_FILE, TEST_LOCATION_ROOT);
     expect(result).toEqual([]);
   });
 });

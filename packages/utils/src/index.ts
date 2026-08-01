@@ -17,6 +17,9 @@ export * from './spawn-hardened.js';
 // Cross-platform path utilities
 export * from './path-utils.js';
 
+// Blocking stdio for published bins (process.exit must not truncate output)
+export * from './stdio-blocking.js';
+
 // Asset reference resolution (paths + npm bare specifiers)
 export * from './asset-reference.js';
 

@@ -29,6 +29,23 @@ const EXTERNAL_MD = 'external.md';
 const VALID_MD_PATTERN = '**/valid.md';
 const NESTED_FILE_ID = 'subdir-nested-md';
 
+/**
+ * Write a `toolbox.md` target and a `guide.md` source into `dir`, validate both
+ * as one registry, and return every LINK_BROKEN_ANCHOR message.
+ */
+async function validateAnchorPair(dir: string, target: string, source: string): Promise<string[]> {
+  const targetPath = safePath.join(dir, 'toolbox.md');
+  const sourcePath = safePath.join(dir, 'guide.md');
+  await writeFile(targetPath, target, 'utf-8');
+  await writeFile(sourcePath, source, 'utf-8');
+
+  const registry = new ResourceRegistry({ baseDir: dir });
+  await registry.addResources([targetPath, sourcePath]);
+  const result = await registry.validate();
+
+  return result.issues.filter((i) => i.code === 'LINK_BROKEN_ANCHOR').map((i) => i.message);
+}
+
 // Helper to extract resource IDs (avoids nested arrow functions in tests)
 function extractResourceIds(resources: ResourceMetadata[]): string[] {
   return resources.map((r) => r.id);
@@ -369,6 +386,37 @@ describe('ResourceRegistry - Integration Tests', () => {
       if (!localFileLinks) throw new Error('localFileLinks is undefined');
       const unresolvedLinks = localFileLinks.filter((link) => !link.resolvedId);
       expect(unresolvedLinks.length).toBeGreaterThan(0);
+    });
+
+    it('should resolve root-relative (RFC 3986 §4.2) hrefs against baseDir', async () => {
+      // A leading-`/` href is a project-root-relative reference, NOT a filesystem
+      // absolute path. The link-graph walker already resolves it that way (via
+      // resolveLocalHref), so the target gets bundled — but if resolveLinks()
+      // resolves it against the OS root instead, the link never gets a resolvedId
+      // and the packager's bundled-link template strips the href, shipping a
+      // bundled file that nothing references (PACKAGED_UNREFERENCED_FILE).
+      const rootRelativeDir = await mkdtemp(safePath.join(normalizedTmpdir(), 'root-relative-href-'));
+      try {
+        await mkdir(safePath.join(rootRelativeDir, 'docs/adrs'), { recursive: true });
+        await mkdir(safePath.join(rootRelativeDir, 'docs/specs'), { recursive: true });
+
+        const adrPath = safePath.join(rootRelativeDir, 'docs/adrs/boundary.md');
+        const specPath = safePath.join(rootRelativeDir, 'docs/specs/design.md');
+        await writeFile(adrPath, '# Boundary ADR\n', 'utf-8');
+        await writeFile(specPath, 'See [the ADR](/docs/adrs/boundary.md).\n', 'utf-8');
+
+        const rootRelativeRegistry = new ResourceRegistry({ baseDir: rootRelativeDir });
+        await rootRelativeRegistry.addResources([adrPath, specPath]);
+        rootRelativeRegistry.resolveLinks();
+
+        const spec = rootRelativeRegistry.getResource(specPath);
+        const adrLink = spec?.links.find((link) => link.href.includes('boundary.md'));
+
+        expect(adrLink).toBeDefined();
+        expect(adrLink?.resolvedId).toBe('docs-adrs-boundary-md');
+      } finally {
+        await rm(rootRelativeDir, { recursive: true, force: true });
+      }
     });
 
     it('should mutate links in place', async () => {
@@ -989,6 +1037,59 @@ tags: test
       // Both file names must appear — existingPath must not be '' (the pre-fix bug)
       expect(issue?.message).toMatch(/alpha\.md/);
       expect(issue?.message).toMatch(/beta\.md/);
+    });
+  });
+
+  // An adopter placed `<a id="materialize"></a>` above a long heading and
+  // linked to `#materialize` from another document. GitHub renders the id into
+  // the DOM and the fragment resolves; VAT indexed heading slugs only and
+  // reported LINK_BROKEN_ANCHOR, so they repointed a working link at the long
+  // slug to appease the tool.
+  describe('explicit HTML anchors in markdown', () => {
+    const suite = setupSubdirTestSuite('html-anchor-suite-');
+
+    beforeAll(suite.beforeAll);
+    afterAll(suite.afterAll);
+    beforeEach(suite.beforeEach);
+
+    const TARGET_WITH_ID = [
+      '<a id="materialize"></a>',
+      '',
+      '## Materialize the warehouse snapshot into a local DuckDB file',
+      '',
+      'Body.',
+      '',
+    ].join('\n');
+
+    it('resolves a cross-file link to an explicit id', async () => {
+      const broken = await validateAnchorPair(
+        suite.tempDir,
+        TARGET_WITH_ID,
+        '# Guide\n\nSee [materialize](toolbox.md#materialize).\n',
+      );
+
+      expect(broken).toEqual([]);
+    });
+
+    it('resolves a same-file link to an explicit id', async () => {
+      const broken = await validateAnchorPair(
+        suite.tempDir,
+        `${TARGET_WITH_ID}\nJump back to [the step](#materialize).\n`,
+        '# Guide\n\nNo links.\n',
+      );
+
+      expect(broken).toEqual([]);
+    });
+
+    it('still reports a fragment that matches no heading and no id', async () => {
+      const broken = await validateAnchorPair(
+        suite.tempDir,
+        TARGET_WITH_ID,
+        '# Guide\n\nSee [nope](toolbox.md#materialise).\n',
+      );
+
+      expect(broken).toHaveLength(1);
+      expect(broken[0]).toContain('materialise');
     });
   });
 });

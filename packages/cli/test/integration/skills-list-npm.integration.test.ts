@@ -39,13 +39,14 @@ async function buildFakeTarball(
   tempDir: string,
   skillName: string,
   subdirName: string,
+  declaredName: string = skillName,
 ): Promise<string> {
   const pkgDir = safePath.join(tempDir, subdirName, 'package');
   const skillDir = safePath.join(pkgDir, 'dist', 'skills', skillName);
   mkdirSyncReal(skillDir, { recursive: true });
   writeFileSync(
     safePath.join(skillDir, 'SKILL.md'),
-    `---\nname: ${skillName}\ndescription: Listed from tgz.\n---\n\n# ${skillName}\n`,
+    `---\nname: ${declaredName}\ndescription: Listed from tgz.\n---\n\n# ${declaredName}\n`,
     'utf-8',
   );
   writeFileSync(
@@ -82,6 +83,23 @@ describe('vat skills list — npm source', () => {
 
     expect(output).toContain('listed-skill');
     expect(output).toContain('context: npm');
+  });
+
+  it('reports the name the skill declares, which is the name install will use', async () => {
+    // `vat skills list <tgz>` is the preview for `vat skills install <tgz>`.
+    // Install keys on the frontmatter name, so the preview must too — otherwise
+    // it names a directory the install will never create.
+    const tarballPath = await buildFakeTarball(
+      tempDir,
+      'legacy-dir',
+      'fake-renamed',
+      'modern-name',
+    );
+
+    const output = await runListCommand(tarballPath);
+
+    expect(output).toContain('name: modern-name');
+    expect(output).not.toContain('name: legacy-dir');
   });
 
   it('reports zero skills when tgz dist/skills/ is empty', async () => {

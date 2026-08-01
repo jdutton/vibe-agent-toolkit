@@ -7,6 +7,7 @@ export { classifyToken, parseSourceSpec } from './classify.js';
 export {
   getDiscoveredSkillsByPath,
   resetSkillDiscoveryCache,
+  resolveProjectDeclaredEvalSuites,
   resolveSkillPackagingConfig,
   stripValidationAllowForDisplay,
 } from './packaging-config.js';

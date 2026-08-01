@@ -9,6 +9,8 @@ import { fileURLToPath } from 'node:url';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 
+import { writeStdoutSync } from './output.js';
+
 /**
  * Load verbose help from markdown files in packages/cli/docs/
  *
@@ -40,4 +42,27 @@ ${errorMessage}
 Please report this issue at: https://github.com/jdutton/vibe-agent-toolkit/issues
 `;
   }
+}
+
+/**
+ * Write a verbose-help document to stdout, SYNCHRONOUSLY, with a trailing newline.
+ *
+ * Every verbose-help path calls `process.exit(0)` the moment it has written. When
+ * stdout is a pipe, `process.stdout.write` is ASYNCHRONOUS, and `process.exit`
+ * does not wait for the pending write to drain — so everything past the first
+ * pipe buffer (~8 KB on macOS) was silently dropped. Most of the help documents
+ * in `packages/cli/docs/` are larger than that, so `vat --help --verbose | less`
+ * and `> file` lost their tail, while an interactive TTY (unbuffered) looked fine.
+ * That directly violates this package's own rule that help must survive piping.
+ *
+ * `writeSync` in a drain loop is the fix: it cannot return before the bytes are
+ * handed to the pipe, so `process.exit` has nothing left to lose.
+ *
+ * The loop itself now lives in `output.ts` as `writeStdoutSync`, because the very
+ * same defect was later found in `writeYamlOutput` — every command's YAML summary
+ * was being truncated at one pipe buffer. Two copies of this reasoning is exactly
+ * how the second lane went unfixed for so long, so there is one.
+ */
+export function writeHelpSync(content: string): void {
+  writeStdoutSync(content.endsWith('\n') ? content : `${content}\n`);
 }

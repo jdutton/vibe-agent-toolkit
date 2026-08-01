@@ -58,25 +58,25 @@ describe('Audit User Plugins Fixture (system test)', () => {
       // Verify flat output structure (not hierarchical)
       expect(output).toHaveProperty('status');
       expect(output).toHaveProperty('summary');
-      expect(output).toHaveProperty('issues');
+      expect(output).toHaveProperty('issueCounts');
       expect(output).toHaveProperty('duration');
       expect(output).toHaveProperty('files');
 
       const summary = output.summary as {
         filesScanned: number;
-        success: number;
-        warnings: number;
-        errors: number;
+        filesPassed: number;
+        filesWithWarnings: number;
+        filesWithErrors: number;
       };
 
       // Should have scanned files
       expect(summary.filesScanned).toBeGreaterThan(0);
 
       // Should have some errors (fixture contains skills with validation issues)
-      expect(summary.errors).toBeGreaterThan(0);
+      expect(summary.filesWithErrors).toBeGreaterThan(0);
 
       // Should have some successes too
-      expect(summary.success).toBeGreaterThan(0);
+      expect(summary.filesPassed).toBeGreaterThan(0);
     });
 
     it('should validate singleton marketplace (anthropic-agent-skills)', () => {
@@ -94,11 +94,11 @@ describe('Audit User Plugins Fixture (system test)', () => {
 
       const summary = output.summary as {
         filesScanned: number;
-        success: number;
+        filesPassed: number;
       };
 
       expect(summary.filesScanned).toBeGreaterThan(0);
-      expect(summary.success).toBeGreaterThan(0);
+      expect(summary.filesPassed).toBeGreaterThan(0);
     });
 
     it('should validate standard marketplace (claude-plugins-official)', () => {
@@ -116,11 +116,11 @@ describe('Audit User Plugins Fixture (system test)', () => {
       // Should have scanned at least the marketplace manifest
       const summary = output.summary as {
         filesScanned: number;
-        success: number;
+        filesPassed: number;
       };
 
       expect(summary.filesScanned).toBeGreaterThan(0);
-      expect(summary.success).toBeGreaterThan(0);
+      expect(summary.filesPassed).toBeGreaterThan(0);
     });
 
     it('should validate cached plugins', () => {
@@ -153,9 +153,9 @@ describe('Audit User Plugins Fixture (system test)', () => {
 
       const summary = output.summary as {
         filesScanned: number;
-        success: number;
-        warnings: number;
-        errors: number;
+        filesPassed: number;
+        filesWithWarnings: number;
+        filesWithErrors: number;
       };
 
       // Should report files scanned
@@ -163,7 +163,7 @@ describe('Audit User Plugins Fixture (system test)', () => {
 
       // Sanity check: success + warnings + errors should equal filesScanned
       expect(summary.filesScanned).toBe(
-        summary.success + summary.warnings + summary.errors
+        summary.filesPassed + summary.filesWithWarnings + summary.filesWithErrors
       );
     });
   });

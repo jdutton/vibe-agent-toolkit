@@ -1,5 +1,6 @@
 import { dirname } from 'node:path';
 
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { packagingConfigToPackageOptions } from '../src/skill-packager.js';
@@ -8,7 +9,7 @@ describe('packagingConfigToPackageOptions', () => {
   const anchors = { skillPath: '/repo/skills/x/SKILL.md', outputPath: '/repo/dist/skills/x' };
 
   it('sets the deterministic base options', () => {
-    const out = packagingConfigToPackageOptions({}, anchors);
+    const out = packagingConfigToPackageOptions({}, anchors, []);
     expect(out).toMatchObject({
       outputPath: '/repo/dist/skills/x',
       formats: ['directory'],
@@ -21,9 +22,58 @@ describe('packagingConfigToPackageOptions', () => {
     const out = packagingConfigToPackageOptions(
       { linkFollowDepth: 'full', files: [{ source: 'a', dest: 'b' }] } as never,
       anchors,
+      [],
     );
     expect(out.linkFollowDepth).toBe('full');
     expect(out.files).toEqual([{ source: 'a', dest: 'b' }]);
     expect('validation' in out).toBe(false);
+  });
+});
+
+/**
+ * The ONE conversion both `vat skills build` and the plugin build go through, so
+ * this is where the project-wide half of the test-input rule either reaches the
+ * packager or silently does not. Keyed to the packaged skill alone, `testInputDirs`
+ * named only its own suite, and another skill's answer key was ordinary content the
+ * link walker was free to bundle.
+ */
+describe('packagingConfigToPackageOptions — project-wide test input', () => {
+  const PROJECT_ROOT = toForwardSlash(safePath.resolve('/repo'));
+  const SUBJECT_DIR = `${PROJECT_ROOT}/skills/csv-summarizer`;
+  const OTHER_DIR = `${PROJECT_ROOT}/skills/example-skill`;
+  const anchors = {
+    skillPath: `${SUBJECT_DIR}/SKILL.md`,
+    outputPath: `${PROJECT_ROOT}/dist/skills/csv-summarizer`,
+  };
+  /**
+   * DISTINCT basenames on purpose: a filename collision between two suites is
+   * REPORTED, not thrown, and the copy still happens — so a colliding fixture
+   * cannot tell the cross-skill rule from its absence.
+   */
+  const SUBJECT_CONFIG = { test: { evals: 'evals/csvsum-evals.json' } };
+  const OTHER_CONFIG = { test: { evals: 'evals/example-evals.json' } };
+  const PROJECT_SKILLS = [
+    { skillDir: SUBJECT_DIR, config: SUBJECT_CONFIG },
+    { skillDir: OTHER_DIR, config: OTHER_CONFIG },
+  ];
+
+  it('carries EVERY declared suite dir into the packager, not only the subject\'s', () => {
+    const out = packagingConfigToPackageOptions(SUBJECT_CONFIG, anchors, PROJECT_SKILLS);
+
+    expect(out.testInputDirs).toEqual([`${SUBJECT_DIR}/evals`, `${OTHER_DIR}/evals`]);
+  });
+
+  it('still carries the subject\'s own suite when the project declares nothing else', () => {
+    const out = packagingConfigToPackageOptions(SUBJECT_CONFIG, anchors, []);
+
+    expect(out.testInputDirs).toEqual([`${SUBJECT_DIR}/evals`]);
+  });
+
+  it('omits testInputDirs entirely when no skill in the project declares a suite', () => {
+    const out = packagingConfigToPackageOptions({}, anchors, [
+      { skillDir: OTHER_DIR, config: {} },
+    ]);
+
+    expect('testInputDirs' in out).toBe(false);
   });
 });

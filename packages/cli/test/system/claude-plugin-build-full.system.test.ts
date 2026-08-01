@@ -182,7 +182,7 @@ describe('vat claude plugin build (full plugin support)', () => {
     // The tree-copy's files: re-application is excluded for a colliding skill
     // — its files: config was already applied by `vat skills build` and is
     // baked into the pool copy that Phase 3 copies in.
-    expect(plugins[0]?.['skillFilesCopied']).toBe(0);
+    expect(plugins[0]?.['localSkillsPackaged']).toBe(0);
 
     // A collision warning naming the skill was printed to stderr (build progress).
     expect(pb.result.stderr).toContain('local-b');

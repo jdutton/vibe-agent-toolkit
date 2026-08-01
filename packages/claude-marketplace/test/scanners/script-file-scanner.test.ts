@@ -1,41 +1,42 @@
 import { describe, expect, it } from 'vitest';
 
 import { classifyScriptFile, PYTHON_STDLIB_MODULES, scanPythonImports } from '../../src/scanners/script-file-scanner.js';
+import { TEST_LOCATION_ROOT } from '../test-helpers.js';
 
 const SCRIPT_FILE_NODE = 'SCRIPT_FILE_NODE';
 const CALC_SCRIPT_PATH = 'scripts/calc.py';
 
 describe('classifyScriptFile', () => {
   it('classifies .py file as SCRIPT_FILE_PYTHON evidence', () => {
-    const result = classifyScriptFile(CALC_SCRIPT_PATH);
+    const result = classifyScriptFile(CALC_SCRIPT_PATH, TEST_LOCATION_ROOT);
     expect(result?.patternId).toBe('SCRIPT_FILE_PYTHON');
     expect(result?.location.file).toBe(CALC_SCRIPT_PATH);
   });
 
   it('classifies .sh file as SCRIPT_FILE_SHELL evidence', () => {
-    const result = classifyScriptFile('scripts/setup.sh');
+    const result = classifyScriptFile('scripts/setup.sh', TEST_LOCATION_ROOT);
     expect(result?.patternId).toBe('SCRIPT_FILE_SHELL');
   });
 
   it('classifies .bash file as SCRIPT_FILE_SHELL evidence', () => {
-    const result = classifyScriptFile('scripts/setup.bash');
+    const result = classifyScriptFile('scripts/setup.bash', TEST_LOCATION_ROOT);
     expect(result?.patternId).toBe('SCRIPT_FILE_SHELL');
   });
 
   it('classifies .mjs file as SCRIPT_FILE_NODE evidence', () => {
-    const result = classifyScriptFile('scripts/process.mjs');
+    const result = classifyScriptFile('scripts/process.mjs', TEST_LOCATION_ROOT);
     expect(result?.patternId).toBe(SCRIPT_FILE_NODE);
   });
 
   it('classifies .js and .cjs files as SCRIPT_FILE_NODE', () => {
-    expect(classifyScriptFile('scripts/a.js')?.patternId).toBe(SCRIPT_FILE_NODE);
-    expect(classifyScriptFile('scripts/a.cjs')?.patternId).toBe(SCRIPT_FILE_NODE);
+    expect(classifyScriptFile('scripts/a.js', TEST_LOCATION_ROOT)?.patternId).toBe(SCRIPT_FILE_NODE);
+    expect(classifyScriptFile('scripts/a.cjs', TEST_LOCATION_ROOT)?.patternId).toBe(SCRIPT_FILE_NODE);
   });
 
   it('returns undefined for non-script files', () => {
-    expect(classifyScriptFile('README.md')).toBeUndefined();
-    expect(classifyScriptFile('plugin.json')).toBeUndefined();
-    expect(classifyScriptFile('SKILL.md')).toBeUndefined();
+    expect(classifyScriptFile('README.md', TEST_LOCATION_ROOT)).toBeUndefined();
+    expect(classifyScriptFile('plugin.json', TEST_LOCATION_ROOT)).toBeUndefined();
+    expect(classifyScriptFile('SKILL.md', TEST_LOCATION_ROOT)).toBeUndefined();
   });
 });
 
@@ -48,7 +49,7 @@ describe('scanPythonImports', () => {
       'import os',
     ].join('\n');
 
-    const result = scanPythonImports(content, CALC_SCRIPT_PATH);
+    const result = scanPythonImports(content, CALC_SCRIPT_PATH, TEST_LOCATION_ROOT);
     expect(result).toEqual([]);
   });
 
@@ -59,7 +60,7 @@ describe('scanPythonImports', () => {
       'import numpy as np',
     ].join('\n');
 
-    const result = scanPythonImports(content, 'scripts/analyze.py');
+    const result = scanPythonImports(content, 'scripts/analyze.py', TEST_LOCATION_ROOT);
     expect(result.length).toBeGreaterThanOrEqual(1);
     expect(result.every(e => e.patternId === 'PYTHON_IMPORT_THIRD_PARTY')).toBe(true);
     expect(result.some(e => e.matchText.includes('pandas'))).toBe(true);
@@ -67,7 +68,7 @@ describe('scanPythonImports', () => {
 
   it('detects pydantic as third-party', () => {
     const content = 'from pydantic import BaseModel';
-    const result = scanPythonImports(content, 'scripts/model.py');
+    const result = scanPythonImports(content, 'scripts/model.py', TEST_LOCATION_ROOT);
     expect(result.some(e => e.matchText.includes('pydantic'))).toBe(true);
   });
 
@@ -79,14 +80,14 @@ describe('scanPythonImports', () => {
       'from pathlib import Path',
     ].join('\n');
 
-    const result = scanPythonImports(content, 'scripts/mixed.py');
+    const result = scanPythonImports(content, 'scripts/mixed.py', TEST_LOCATION_ROOT);
     expect(result.length).toBe(1);
     expect(result[0]?.matchText).toContain('pandas');
   });
 
   it('handles from-imports correctly', () => {
     const content = 'from collections import defaultdict';
-    const result = scanPythonImports(content, 'scripts/stdlib.py');
+    const result = scanPythonImports(content, 'scripts/stdlib.py', TEST_LOCATION_ROOT);
     expect(result).toEqual([]);
   });
 });

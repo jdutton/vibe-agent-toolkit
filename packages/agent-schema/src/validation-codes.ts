@@ -83,14 +83,26 @@ export const CODE_REGISTRY = {
   PACKAGED_UNREFERENCED_FILE: entry(
     'error',
     'File in the packaged output is not referenced from any packaged markdown.',
-    'Add a markdown link or code-block mention in SKILL.md or a linked resource. Allow via validation.allow if the file is consumed programmatically.',
+    'Add a markdown link or code-block mention in SKILL.md or a linked resource. A file consumed programmatically belongs in skills.config.<name>.files as a source/dest pair — a declared dest is exempt, so do NOT restate it in validation.allow.',
     'packaged_unreferenced_file',
+  ),
+  PACKAGED_TEST_INPUT: entry(
+    'warning',
+    "A link or files: entry pointed into the skill's declared test input (its test.evals path) and was NOT packaged; test input — including the expected_output answer key — never ships to consumers.",
+    'No action needed — the build already excluded it. Remove the link or files: entry to silence this, or move the target out of the test.evals directory if it is genuinely a shipped resource.',
+    'packaged_test_input',
   ),
   PACKAGED_BROKEN_LINK: entry(
     'error',
     'Link in the packaged output resolves to a file that is not present in the output (likely a link-rewriter bug).',
     'Report the issue — this indicates a VAT bug. As a temporary workaround, set severity.PACKAGED_BROKEN_LINK to ignore while the underlying bug is fixed.',
     'packaged_broken_link',
+  ),
+  FILENAME_COLLISION: entry(
+    'error',
+    'Two source files package to the same destination path in the bundle; one would overwrite the other.',
+    "Rename one of the files, or switch resourceNaming to a path-based strategy ('resource-id' or 'preserve-path') so the sources map to distinct destinations.",
+    'filename_collision',
   ),
   DUPLICATE_RESOURCE_ID: entry(
     'error',
@@ -184,7 +196,7 @@ export const CODE_REGISTRY = {
   ),
   NON_PORTABLE_COMMAND: entry(
     'warning',
-    'A skill document (SKILL.md or a reachable bundled reference file) instructs an agent to run a shell command that hard-codes a GNU/Linux-only utility or flag (e.g. `timeout`, `grep -P`, `sed -i` with no suffix, `readlink -f`, `date -d`). These fail on macOS/BSD where the agent may execute them.',
+    'A skill document (SKILL.md or a reachable bundled reference file) instructs an agent to run a shell command that hard-codes a GNU/Linux-only utility or flag (e.g. `timeout`, `grep -P`, `sed -i` with no suffix, `readlink -f`, `date -d`). These fail, or behave differently, on macOS/BSD where the agent may execute them.',
     'Use a portable equivalent: `grep -E` for PCRE, `sed -i.bak`/an explicit suffix, a temp file instead of bare `-i`, a portable resolve instead of `readlink -f`, and `date -v`/`-j -f` instead of `date -d`. Gate or avoid `timeout` (absent on macOS by default). See the vibe-agent-toolkit:vat-skill-review skill.',
     'non_portable_command',
   ),
@@ -239,7 +251,7 @@ export const CODE_REGISTRY = {
   SKILL_REFERENCES_BUT_NO_LINKS: entry(
     'info',
     'Skill directory contains scripts/, references/, or assets/ subdirectories but the SKILL.md body has zero markdown links into them.',
-    'Add explicit markdown links from SKILL.md (or a linked file) into the bundled subdirectories, or remove the unreferenced directory. Allow via validation.allow if the assets are consumed programmatically.',
+    'Add explicit markdown links from SKILL.md (or a linked file) into the bundled subdirectories, or remove the unreferenced directory. Assets consumed programmatically belong in skills.config.<name>.files as source/dest pairs — a declared dest is exempt, so do NOT restate them in validation.allow.',
     'skill_references_but_no_links',
   ),
   SKILL_BODY_NOT_IMPERATIVE: entry(
@@ -320,6 +332,12 @@ export const CODE_REGISTRY = {
     'Correct the source path or remove the entry from marketplace.plugins[].',
     'marketplace_plugin_source_missing',
   ),
+  REGISTRY_SHAPE_DRIFT: entry(
+    'info',
+    "An installed-plugins registry written by Claude Code carries a field or scope value VAT's model does not recognize; the registry shape is newer than the model reading it. The value was preserved, not rejected.",
+    "No action needed — VAT reads registries it does not own liberally, so the unknown value passed through untouched. Report the field so VAT's model can catch up, or set severity.REGISTRY_SHAPE_DRIFT to ignore.",
+    'registry_shape_drift',
+  ),
 
   // Resources path — link / frontmatter / external-URL codes
   // Promotions of existing resources-package validator behavior (formerly free-form
@@ -349,6 +367,12 @@ export const CODE_REGISTRY = {
     'A tracked file links to a gitignored file.',
     'Link a tracked target or un-ignore it.',
     'link_to_gitignored',
+  ),
+  LINK_UNRESOLVED_REFERENCE: entry(
+    'warning',
+    'A reference-style link ([text][label] or collapsed [label][]) has no matching [label]: url definition anywhere in the document.',
+    'Add the missing [label]: url definition, or rewrite as an inline link [text](url).',
+    'link_unresolved_reference',
   ),
   MALFORMED_HTML: entry(
     'info',
@@ -475,7 +499,11 @@ export type NonOverridableCode =
   | 'SKILL_MISCONFIGURED_LOCATION'
   | 'LINK_INTEGRITY_BROKEN'
   | 'PATH_STYLE_WINDOWS'
-  | 'FILENAME_COLLISION'
+  // FILENAME_COLLISION is NOT here: it has a CODE_REGISTRY entry and is emitted
+  // through the same framework as every other packaging finding. Listing a code
+  // in both places is a contradiction, not a belt-and-braces — `finalize()` finds
+  // the registry entry and resolves severity, so the NonOverridable claim would
+  // simply be false.
   | 'DUPLICATE_FILES_DEST'
   | 'PLUGIN_MISSING_MANIFEST'
   | 'PLUGIN_INVALID_JSON'

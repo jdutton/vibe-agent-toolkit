@@ -122,6 +122,24 @@ async function collectPluginsInMarketplaceCache(
 		}
 		for (const versionDir of versionDirs) {
 			try {
+				// N+1 WHOLE-CORPUS CRAWL — known, not fixed here. No `SharedRegistrySource` is
+				// passed, so every skill in every cached plugin re-crawls and re-parses the whole
+				// surrounding markdown corpus (~11.9s per crawl on a ~1,041-document monorepo).
+				// Measured on the equivalent defect one lane over: a 19-skill plugin took 3m45s,
+				// and 12.6s once a single registry was shared. This is the hot lane for
+				// `vat inventory --user`, which walks EVERY cached plugin under
+				// ~/.claude/plugins/cache; `collectMarketplaces` above has the same gap via
+				// `extractClaudeMarketplaceInventory`.
+				//
+				// Strictly additive to fix: `memoizeSharedRegistry` in `extract-plugin.ts`
+				// resolves a thunk lazily on the first skill and caches even a rejection. Copy
+				// `linkRegistryProviderFor` (packages/cli/src/commands/inventory.ts) or
+				// `pluginInventoryAt` (packages/cli/src/commands/audit.ts), keeping their
+				// `findProjectRoot(...) === null` guard — with no project root each skill's root
+				// is its OWN directory, a shared registry matches nothing, and that was measured
+				// 1.5x SLOWER than the N+1. UNVERIFIED whether cached plugin dirs under
+				// ~/.claude typically HAVE a project root at all; if they mostly do not, the
+				// guard makes this a no-op and the win is smaller than the numbers above imply.
 				plugins.push(await extractClaudePluginInventory(versionDir));
 			} catch (e) {
 				parseErrors.push({ path: versionDir, message: (e as Error).message });

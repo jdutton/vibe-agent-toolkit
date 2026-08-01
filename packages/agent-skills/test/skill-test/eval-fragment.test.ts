@@ -148,7 +148,7 @@ describe('parseEvalFragment — lenient friction (PR #147 defense-in-depth)', ()
     runNonce: 'a1b2c3d4',
     evalId: 'eval-1',
     expectations: [{ text: 'does the thing', passed: true, evidence: 'saw it' }],
-    friction: ['answered from SKILL.md prose without ever running dxa'],
+    friction: ['answered from SKILL.md prose without ever running csvsum'],
   };
 
   it('drops bare-string friction items and STILL returns the graded fragment (adopter repro)', () => {

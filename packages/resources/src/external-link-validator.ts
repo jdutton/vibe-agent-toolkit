@@ -63,6 +63,31 @@ function sanitizeOsUser(user: string): string {
   return replaced.length > 0 ? replaced : 'default';
 }
 
+/**
+ * The single definition of "this HTTP status means the link is alive" for the
+ * anonymous (markdown-link-check) path.
+ *
+ * This is an exact-membership allowlist, not a range: link-check tests
+ * `aliveStatusCodes.some((c) => c === statusCode)`. Statuses inside [200,400)
+ * but absent here (201, 202, 204, 300, 303, 304, …) are deliberately *not*
+ * alive — a 304 or a 300 is not evidence the target exists in the form the
+ * link claims.
+ */
+const ALIVE_STATUS_CODES: ReadonlySet<number> = new Set([200, 206, 301, 302, 307, 308]);
+
+/**
+ * Is this status "alive" on the anonymous path?
+ *
+ * Used by BOTH the fresh-fetch path (fed to markdown-link-check as
+ * `aliveStatusCodes`) and the cache-read path. These must never diverge: the
+ * cache is persistent with a multi-hour TTL, so two definitions means a link
+ * fails on the first run and silently self-heals on the second — the flip
+ * disappears on exactly the retry you would run to reproduce it.
+ */
+export function isAliveStatus(statusCode: number): boolean {
+	return ALIVE_STATUS_CODES.has(statusCode);
+}
+
 type VerifiedPlan = Extract<ResolveOutcome, { fetchUrl: string }>;
 
 /**
@@ -315,7 +340,11 @@ export class ExternalLinkValidator {
 		// Check cache first
 		const cached = await this.cache.get(url);
 		if (cached) {
-			const isOk = cached.statusCode >= 200 && cached.statusCode < 400;
+			// Same predicate the fresh-fetch path hands to markdown-link-check.
+			// Cache-hit semantics must match cache-miss semantics.
+			// Same predicate the fresh-fetch path hands to markdown-link-check.
+			// Cache-hit semantics must match cache-miss semantics.
+			const isOk = isAliveStatus(cached.statusCode);
 
 			// Return success result without error property (exactOptionalPropertyTypes)
 			if (isOk) {
@@ -438,7 +467,8 @@ export class ExternalLinkValidator {
 					timeout: `${this.options.timeout}ms`,
 					retryOn429: true,
 					retryCount: this.options.retries,
-					aliveStatusCodes: [200, 206, 301, 302, 307, 308],
+					// Same allowlist `isAliveStatus` reads — one definition, two consumers.
+					aliveStatusCodes: [...ALIVE_STATUS_CODES],
 					ignorePatterns: [],
 					httpHeaders: [
 						{

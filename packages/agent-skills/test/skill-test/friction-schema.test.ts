@@ -21,7 +21,7 @@ describe('FrictionReportSchema', () => {
 
   it('accepts the tool-expectation category (Phase T)', () => {
     const r = FrictionReportSchema.parse({
-      items: [{ severity: 'medium', category: 'tool-expectation', message: 'declared mustRun `dxa` never ran' }],
+      items: [{ severity: 'medium', category: 'tool-expectation', message: 'declared mustRun `csvsum` never ran' }],
     });
     expect(r.items[0]?.category).toBe('tool-expectation');
   });

@@ -172,7 +172,9 @@ Remember: **Other agent repos won't have packages/cli/**. If an agent package ne
 
 ### Skill Reference Resolution
 
-Project-aware skill-reference resolution lives in `src/skill-resolution/` and is the shared dependency of `vat audit`, `vat skill review`, and `vat skill test`. Any command that takes a skill by name or path resolves it through `resolveSkillReference(ref, cwd)` there — so **future CLI work extends that module, not a new copy.** (This is the exception to "the CLI must be dumb": the resolver is CLI-only because its sole consumers are CLI commands.) See [`../../docs/architecture/skill-packaging.md`](../../docs/architecture/skill-packaging.md#skill-reference-resolution) — "Skill Reference Resolution".
+Project-aware skill-reference resolution lives in `src/skill-resolution/`. Any command that takes a skill by name or path resolves it through `resolveSkillReference(ref, cwd)` there — so **future CLI work extends that module, not a new copy.** (This is the exception to "the CLI must be dumb": the resolver is CLI-only because its sole consumers are CLI commands.) See [`../../docs/architecture/skill-packaging.md`](../../docs/architecture/skill-packaging.md#skill-reference-resolution) — "Skill Reference Resolution".
+
+**Current state, so you extend the right thing:** `resolveSkillReference` has exactly one caller — `commands/skill/test/run.ts`. `vat audit` and `vat skill review` are path-only and have not been converged onto it; `vat skill review` still carries its own `resolveSkillPath`. Both call `skill-resolution/packaging-config.ts` (`resolveSkillPackagingConfig`) — that answers "what packaging options apply to this skill", not "what subject does this reference name", so it is not the resolver. Do not read the rule above as a description of what the code already does.
 
 ## Writing Useful CLI Help Documentation
 

@@ -1,4 +1,4 @@
-export { calculateValidationStatus, generateFixSuggestion } from './validation-utils.js';
+export { generateFixSuggestion } from './validation-utils.js';
 export { detectKebabCaseViolation, type KebabCaseSurface } from './kebab-case-detection.js';
 export { detectMissingRecommendedFields } from './plugin-recommended-fields.js';
 export { detectResourceFormat, enumerateSurfaces } from './format-detection.js';

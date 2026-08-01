@@ -10,6 +10,8 @@ import { existsSync, readFileSync } from 'node:fs';
 
 import { vi, expect } from 'vitest';
 
+import type { DoctorCheckResult, DoctorOutcome } from '../../src/commands/doctor.js';
+
 // ============================================================================
 // Type Definitions
 // ============================================================================
@@ -53,21 +55,11 @@ export interface DoctorConfigMockConfig {
 }
 
 /**
- * Doctor check result structure
- */
-export interface DoctorCheckResult {
-  /** Name of the check */
-  name: string;
-  /** Whether the check passed */
-  passed: boolean;
-  /** Message describing the result */
-  message: string;
-  /** Optional suggestion for fixing the issue */
-  suggestion?: string;
-}
-
-/**
  * Doctor result with checks array
+ *
+ * `DoctorCheckResult` / `DoctorOutcome` are imported from the command itself —
+ * a second copy here would let the two drift, which is how an outcome the
+ * command can emit ends up with no assertion helper that can see it.
  */
 export interface DoctorResult {
   /** Array of check results */
@@ -263,7 +255,7 @@ export function findCheck(
   checkName: string,
 ): DoctorCheckResult {
   // If result is already a DoctorCheckResult, verify name matches and return it
-  if ('name' in result && 'passed' in result && 'message' in result) {
+  if ('name' in result && 'outcome' in result && 'message' in result) {
     if (result.name !== checkName) {
       throw new Error(
         `Check name mismatch: expected "${checkName}" but got "${result.name}"`,
@@ -293,8 +285,39 @@ export function assertCheckPassed(
   checkName: string,
   messageContains?: string,
 ): void {
+  assertOutcome(result, checkName, 'pass', messageContains);
+}
+
+/**
+ * Assert a check could NOT be determined — distinct from both pass and fail.
+ */
+export function assertCheckUndetermined(
+  result: DoctorResult | DoctorCheckResult,
+  checkName: string,
+  messageContains?: string,
+): void {
+  assertOutcome(result, checkName, 'undetermined', messageContains);
+}
+
+/**
+ * Assert a check did not apply — distinct from "it applied and was fine".
+ */
+export function assertCheckSkipped(
+  result: DoctorResult | DoctorCheckResult,
+  checkName: string,
+  messageContains?: string,
+): void {
+  assertOutcome(result, checkName, 'skipped', messageContains);
+}
+
+function assertOutcome(
+  result: DoctorResult | DoctorCheckResult,
+  checkName: string,
+  outcome: DoctorOutcome,
+  messageContains?: string,
+): void {
   const check = findCheck(result, checkName);
-  expect(check.passed).toBe(true);
+  expect(check.outcome).toBe(outcome);
   if (messageContains) {
     expect(check.message).toContain(messageContains);
   }
@@ -312,7 +335,7 @@ export function assertCheckFailed(
   suggestionContains: string,
 ): void {
   const check = findCheck(result, checkName);
-  expect(check.passed).toBe(false);
+  expect(check.outcome).toBe('fail');
   expect(check.message).toContain(messageContains);
   expect(check[SUGGESTION_FIELD]).toBeDefined();
   expect(check[SUGGESTION_FIELD]).toContain(suggestionContains);
@@ -327,14 +350,14 @@ export function assertCheck(
   result: DoctorResult | DoctorCheckResult,
   checkName: string,
   assertions: {
-    passed: boolean;
+    outcome: DoctorOutcome;
     messageContains?: string | string[];
     suggestionContains?: string | string[];
   },
 ): void {
   const check = findCheck(result, checkName);
 
-  expect(check.passed).toBe(assertions.passed);
+  expect(check.outcome).toBe(assertions.outcome);
 
   if (assertions.messageContains) {
     const messages = Array.isArray(assertions.messageContains)

@@ -8,6 +8,12 @@
  */
 
 export {
+  type StdioBlockingResult,
+  makeStdioBlocking,
+  describeStdioBlocking,
+} from './stdio-blocking.js';
+
+export {
   type SafeExecOptions,
   type SafeExecResult,
   CommandExecutionError,

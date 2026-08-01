@@ -8,6 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { DeferredArtifacts } from '../src/deferred-artifacts.js';
 import {
   checkAnchor,
   fileExistenceIssue,
@@ -42,6 +43,22 @@ function makeGitTrackerOptions(
 
 function makeOptions(overrides: Partial<ValidateLinkOptions> = {}): ValidateLinkOptions {
   return { projectRoot: PROJECT_ROOT, ...overrides };
+}
+
+/** A DeferredArtifacts model whose only entry's `dest` is `relPath` (project-root-relative). */
+function makeDeferredArtifactsCovering(relPath: string): DeferredArtifacts {
+  return DeferredArtifacts.from(
+    [{ files: [{ source: '__unused-source__', dest: relPath }], skillDir: PROJECT_ROOT }],
+    PROJECT_ROOT,
+  );
+}
+
+/** A DeferredArtifacts model whose only entry's `source` is `relPath` (project-root-relative). */
+function makeDeferredArtifactsCoveringAsSource(relPath: string): DeferredArtifacts {
+  return DeferredArtifacts.from(
+    [{ files: [{ source: relPath, dest: '__unused-dest__' }], skillDir: PROJECT_ROOT }],
+    PROJECT_ROOT,
+  );
 }
 
 describe('resolutionFailureIssue', () => {
@@ -111,6 +128,19 @@ describe('fileExistenceIssue', () => {
     );
     expect(issue?.code).toBe('LINK_BROKEN_FILE');
     expect(issue?.message).toBe('File not found: /project/missing.md');
+  });
+
+  it('keeps the absolute path out of the message when projectRoot is known', () => {
+    // `location` is project-relative per the issue anchor contract; a message
+    // that spells the same file absolutely leaks the developer's home directory
+    // into every CI log and contradicts its own sibling field.
+    const issue = fileExistenceIssue(
+      { exists: false, resolvedPath: '/project/docs/missing.md' },
+      makeLink('docs/missing.md'),
+      SOURCE,
+      '/project',
+    );
+    expect(issue?.message).toBe('File not found: docs/missing.md');
   });
 
   it('returns broken_file with case-mismatch hint when actualName differs', () => {
@@ -252,5 +282,49 @@ describe('gitIgnoreSafetyIssue', () => {
     expect(issue?.code).toBe('LINK_TO_GITIGNORED');
     expect(issue?.message).toContain('Non-ignored file links to gitignored file');
     expect(issue?.message).toContain(TARGET_SECRET);
+  });
+
+  // A files:-declared target that already exists on disk and is gitignored is
+  // the expected post-build state of a materialized build artifact, not a
+  // leak — same exemption as the agent-skills walker's gitignore branch.
+  it('returns LINK_DEFERRED_ARTIFACT instead of LINK_TO_GITIGNORED when target is covered by deferredArtifacts', () => {
+    const tracker = { isIgnoredByActiveSet: (p: string): boolean => p === TARGET_SECRET };
+    const issue = gitIgnoreSafetyIssue(
+      makeLink('secret.md'),
+      SOURCE,
+      TARGET_SECRET,
+      makeGitTrackerOptions(tracker, { deferredArtifacts: makeDeferredArtifactsCovering('secret.md') }),
+    );
+    expect(issue?.code).toBe('LINK_DEFERRED_ARTIFACT');
+    expect(issue?.message).toContain(TARGET_SECRET);
+  });
+
+  // The gitignore exemption is DEST-only: a files: SOURCE that is materialized and
+  // gitignored must NOT be exempted — only a dest gets the "expected
+  // post-build state" downgrade. A source is a real file the author pointed
+  // at; the leak signal must survive.
+  it('still returns LINK_TO_GITIGNORED when the target is covered only as a files: source, not a dest', () => {
+    const tracker = { isIgnoredByActiveSet: (p: string): boolean => p === TARGET_SECRET };
+    const issue = gitIgnoreSafetyIssue(
+      makeLink('secret.md'),
+      SOURCE,
+      TARGET_SECRET,
+      makeGitTrackerOptions(tracker, { deferredArtifacts: makeDeferredArtifactsCoveringAsSource('secret.md') }),
+    );
+    expect(issue?.code).toBe('LINK_TO_GITIGNORED');
+  });
+
+  // Negative control: the exemption is scoped to covered paths only. A
+  // deferredArtifacts model that covers a DIFFERENT path must not suppress the
+  // leak signal for this target.
+  it('still returns LINK_TO_GITIGNORED when deferredArtifacts is present but does not cover the target', () => {
+    const tracker = { isIgnoredByActiveSet: (p: string): boolean => p === TARGET_SECRET };
+    const issue = gitIgnoreSafetyIssue(
+      makeLink('secret.md'),
+      SOURCE,
+      TARGET_SECRET,
+      makeGitTrackerOptions(tracker, { deferredArtifacts: makeDeferredArtifactsCovering('other-file.md') }),
+    );
+    expect(issue?.code).toBe('LINK_TO_GITIGNORED');
   });
 });
