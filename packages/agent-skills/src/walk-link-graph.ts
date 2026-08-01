@@ -18,7 +18,7 @@ import type { DeferredArtifacts, ResourceLink, ResourceMetadata } from '@vibe-ag
 import { type GitTracker, isGitIgnored, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 
-import { NAVIGATION_FILE_PATTERNS } from './validators/validation-rules.js';
+import { AGENT_INSTRUCTION_FILE_PATTERNS, NAVIGATION_FILE_PATTERNS } from './validators/validation-rules.js';
 
 /**
  * Resolution result for a single link found in a bundled markdown file.
@@ -49,7 +49,7 @@ export interface LinkResolution {
   /** Whether the file will be bundled */
   bundled: boolean;
   /** Reason it was excluded (only set when bundled is false) */
-  excludeReason?: 'depth-exceeded' | 'pattern-matched' | 'directory-target' | 'outside-project' | 'navigation-file' | 'skill-definition' | 'gitignored' | 'missing-target' | undefined;
+  excludeReason?: 'depth-exceeded' | 'pattern-matched' | 'directory-target' | 'outside-project' | 'navigation-file' | 'agent-instruction-file' | 'skill-definition' | 'gitignored' | 'missing-target' | undefined;
   /** The rule that matched (only set for pattern-matched exclusions) */
   matchedRule?: ExcludeRule | undefined;
   /** Link text from the source markdown */
@@ -189,6 +189,11 @@ function isOutsideProject(targetPath: string, projectRoot: string): boolean {
 /** Check if a filename is a navigation file */
 function isNavigationFile(filename: string): boolean {
   return (NAVIGATION_FILE_PATTERNS as readonly string[]).includes(filename);
+}
+
+/** Check if a filename is a repo-internal agent-instruction file */
+function isAgentInstructionFile(filename: string): boolean {
+  return (AGENT_INSTRUCTION_FILE_PATTERNS as readonly string[]).includes(filename);
 }
 
 /** Create an exclusion record */
@@ -402,6 +407,19 @@ function checkExclusions(
   // Check navigation file exclusion
   if (options.excludeNavigationFiles && isNavigationFile(basename(targetPath))) {
     excludedReferences.push(makeExclusion(targetPath, sourcePath, targetExists, 'navigation-file', link));
+    return true;
+  }
+
+  // Repo-internal agent-instruction files (CLAUDE.md, AGENTS.md, GEMINI.md)
+  // cannot travel in a bundle: they describe the repository they live in, they
+  // collide on basename across packages, and a project-locally installed skill
+  // puts them where Claude Code will load them as instructions. Deliberately
+  // NOT gated on `excludeNavigationFiles` — that knob is about content
+  // granularity, a different question from "this file is not distributable".
+  // The escape hatch for shipping one on purpose is an explicit
+  // `skills.config.<name>.files` entry, which bypasses the walker entirely.
+  if (isAgentInstructionFile(basename(targetPath))) {
+    excludedReferences.push(makeExclusion(targetPath, sourcePath, targetExists, 'agent-instruction-file', link));
     return true;
   }
 

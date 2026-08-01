@@ -256,6 +256,35 @@ export const NAVIGATION_FILE_PATTERNS = [
 ] as const;
 
 /**
+ * Repo-internal agent-instruction files. Deliberately a SEPARATE list from
+ * {@link NAVIGATION_FILE_PATTERNS}: a README is real content at the wrong
+ * granularity, whereas these files are guidance *about the repository they live
+ * in* and are meaningless — or actively misleading — once copied into a
+ * distributed bundle.
+ *
+ * Two distinct harms, both observed:
+ *
+ * 1. **Silent mis-resolution.** Two packages' `CLAUDE.md` files bundled under
+ *    `resourceNaming: basename` collide on one destination; one wins, and every
+ *    link to either source then resolves to the winner's content.
+ * 2. **Unintended instruction loading.** Claude Code loads `CLAUDE.md` files
+ *    found in subdirectories *under the working directory* on demand, when it
+ *    reads a file in that directory. A skill installed project-locally (e.g.
+ *    `.claude/skills/<name>/`) is under the working directory, so a bundled
+ *    `CLAUDE.md` is read as instructions the moment the agent opens a reference
+ *    beside it. (Skills installed outside the cwd — `~/.claude/skills`, plugin
+ *    directories — are not affected by this second harm. `AGENTS.md` and
+ *    `GEMINI.md` are not read by Claude Code at all; they are listed here for
+ *    the portability and collision reasons.)
+ */
+export const AGENT_INSTRUCTION_FILE_PATTERNS = [
+  'CLAUDE.md',
+  'CLAUDE.local.md',
+  'AGENTS.md',
+  'GEMINI.md',
+] as const;
+
+/**
  * Create a validation issue from a rule
  */
 export function createIssue(

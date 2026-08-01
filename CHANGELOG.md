@@ -116,6 +116,36 @@ ever exhibited them.
 
 ### Changed
 
+- **BREAKING: repo-internal agent-instruction files (`CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`,
+  `GEMINI.md`) are no longer bundled into skills, and linking to one is now an `error`
+  (`LINK_TO_AGENT_INSTRUCTION_FILE`).** Previously the link walker followed and packaged them like
+  any other markdown, which produced two failures. First, silent mis-resolution: under
+  `resourceNaming: basename` two packages' `CLAUDE.md` files collapse onto one destination, one
+  wins, and every link to *either* source then resolves to the winner's content — an adopter
+  verified by checksum that 2 of 3 links in a packaged document pointed at the wrong file, with no
+  read-time error. Second, unintended instruction loading: Claude Code loads `CLAUDE.md` files found
+  in subdirectories *under the working directory* on demand, when it reads a file in that directory,
+  so a skill installed project-locally (`.claude/skills/<name>/`) turns a bundled `CLAUDE.md` into
+  live agent instructions the moment a reference beside it is opened. (Skills installed outside the
+  working directory — `~/.claude/skills`, plugin directories — are exposed only to the first
+  failure. `AGENTS.md` and `GEMINI.md` are not read by Claude Code at all and are excluded for
+  portability and collision reasons.) **What to do:** link the specific content the file describes,
+  or extract the shared part into a document meant for distribution. To ship one deliberately,
+  declare it under `skills.config.<name>.files`, which bypasses the walker and sets the destination
+  explicitly. Setting `validation.severity.LINK_TO_AGENT_INSTRUCTION_FILE: ignore` silences the
+  finding; the file stays out of the bundle either way. The check runs in the packaging lanes
+  (`vat build`, `vat validate`, `vat verify`). Auditing an installed or mounted skill tree whose
+  documents merely *contain* `CLAUDE.md` files is unaffected — the link lane is the only one that
+  changed severity.
+- **New `PACKAGED_AGENT_INSTRUCTION_FILE` (warning) — the presence-side half.** The link check above
+  cannot see a file that arrives in a bundle without any link, and a plugin's `source:` directory is
+  **tree-copied verbatim**: a `CLAUDE.md` beside `plugin.json` shipped to every consumer, and
+  `PACKAGED_UNREFERENCED_FILE` did not object because plugin artifacts are exempt from the skill
+  reachability rules by design. `vat verify` and `vat audit` now report each agent-instruction file
+  found in a distributed tree. Measured on one real install: **7 findings across 628 audited
+  skills**, one of which was an intentional scaffold template. It is a `warning`, not an `error` —
+  nothing mis-resolves and the bundle works; this is the "you have something on your shoe" check.
+  Silence an intentional one with `validation.severity.PACKAGED_AGENT_INSTRUCTION_FILE: ignore`.
 - **BREAKING: there is now ONE answer to "findings → status", and every validation result carries
   per-severity counts.** Six places independently collapsed a set of findings into a verdict, and
   they disagreed. Consequences across the CLI: `status` everywhere uses the same three-value

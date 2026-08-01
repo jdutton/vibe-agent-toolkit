@@ -6,6 +6,7 @@ import {
 	type AnchorRootOptions,
 	detectKebabCaseViolation,
 	detectMissingRecommendedFields,
+	detectPackagedAgentInstructionFiles,
 	generateFixSuggestion,
 	resolveAnchorRoot,
 	type ValidationResult,
@@ -107,7 +108,14 @@ export async function validatePlugin(
 	const issues: ValidationIssue[] = [];
 	const pluginJsonPath = safePath.join(pluginPath, '.claude-plugin', 'plugin.json');
 	// Anchor contract: relative to the run's ONE stated root, never absolute.
-	const location = issueLocation(pluginJsonPath, resolveAnchorRoot(options?.locationRoot, pluginPath));
+	const anchorRoot = resolveAnchorRoot(options?.locationRoot, pluginPath);
+	const location = issueLocation(pluginJsonPath, anchorRoot);
+
+	// A plugin's `source:` directory is tree-copied verbatim, so repo-internal
+	// agent guidance sitting beside plugin.json ships to every consumer. No link
+	// points at it and plugin artifacts are exempt from the skill orphan rules,
+	// so this scan is the only thing that sees it.
+	issues.push(...detectPackagedAgentInstructionFiles(pluginPath, anchorRoot));
 
 	// Check plugin.json exists
 	if (!existsSync(pluginJsonPath)) {

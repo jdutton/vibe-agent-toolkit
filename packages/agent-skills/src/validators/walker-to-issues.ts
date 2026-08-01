@@ -43,6 +43,8 @@ function exclusionToContext(
       return makeRuleContext({ subject: 'edge', fileKind: 'directory' });
     case 'navigation-file':
       return makeRuleContext({ subject: 'edge', fileKind: 'nav' });
+    case 'agent-instruction-file':
+      return makeRuleContext({ subject: 'edge', fileKind: 'agent-instruction' });
     case 'missing-target':
       return makeRuleContext({ subject: 'edge', phase: 'source', existsAtSource: targetExists });
     case 'pattern-matched':

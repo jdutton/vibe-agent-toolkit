@@ -50,6 +50,12 @@ export const CODE_REGISTRY = {
     'Link to the specific content instead of the navigation file, or set severity.LINK_TO_NAVIGATION_FILE to ignore if this is intentional.',
     'link_to_navigation_file',
   ),
+  LINK_TO_AGENT_INSTRUCTION_FILE: entry(
+    'error',
+    'Markdown link targets a repo-internal agent-instruction file (CLAUDE.md, AGENTS.md, GEMINI.md); it was excluded from the bundle.',
+    'Link the specific content the file describes, or extract the shared part into a document intended for distribution. To ship the file deliberately, declare it under skills.config.<name>.files.',
+    'link_to_agent_instruction_file',
+  ),
   LINK_TO_GITIGNORED_FILE: entry(
     'error',
     'Markdown link targets a gitignored file; risks leaking ignored data into the bundle.',
@@ -85,6 +91,12 @@ export const CODE_REGISTRY = {
     'File in the packaged output is not referenced from any packaged markdown.',
     'Add a markdown link or code-block mention in SKILL.md or a linked resource. A file consumed programmatically belongs in skills.config.<name>.files as a source/dest pair — a declared dest is exempt, so do NOT restate it in validation.allow.',
     'packaged_unreferenced_file',
+  ),
+  PACKAGED_AGENT_INSTRUCTION_FILE: entry(
+    'warning',
+    'A repo-internal agent-instruction file (CLAUDE.md, AGENTS.md, GEMINI.md) is present in the distributed output.',
+    'Remove it from the distributed tree, or move it outside the directory that is packaged. If it must ship, set severity.PACKAGED_AGENT_INSTRUCTION_FILE to ignore so the exception is recorded in config.',
+    'packaged_agent_instruction_file',
   ),
   PACKAGED_TEST_INPUT: entry(
     'warning',

@@ -268,6 +268,16 @@ function createReadmeRegistry(): WalkableRegistry {
   return createMockRegistry([skill, readme]);
 }
 
+/** skill → an agent-instruction file (CLAUDE.md / AGENTS.md / GEMINI.md) */
+function createAgentInstructionRegistry(basename: string): WalkableRegistry {
+  const id = `agent-instruction-${basename}`;
+  const skill = createMockResource(SKILL_ID, SKILL_PATH, [
+    createLocalLink('guidance', `./docs/${basename}`, id),
+  ]);
+  const target = createMockResource(id, safePath.resolve(`/project/docs/${basename}`));
+  return createMockRegistry([skill, target]);
+}
+
 // ============================================================================
 // Helpers — Walk & Assert
 // ============================================================================
@@ -422,6 +432,37 @@ describe('walkLinkGraph', () => {
       const result = walkLinkGraph(SKILL_ID, registry, defaultOptions({ excludeNavigationFiles: false }));
 
       expectBundledIds(result, [README_ID]);
+    });
+  });
+
+  describe('agent instruction file exclusion', () => {
+    it.each(['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', 'GEMINI.md'])(
+      'should exclude %s from the bundle',
+      (basename) => {
+        const registry = createAgentInstructionRegistry(basename);
+        const result = walkLinkGraph(SKILL_ID, registry, defaultOptions());
+
+        expect(result.bundledResources).toHaveLength(0);
+        expect(result.excludedReferences).toHaveLength(1);
+        expect(result.excludedReferences[0]?.excludeReason).toBe('agent-instruction-file');
+      },
+    );
+
+    it('should exclude agent instruction files even when excludeNavigationFiles is false', () => {
+      // These files are repo-internal guidance, not content at the wrong
+      // granularity. The navigation-file opt-out must not reopen the door.
+      const registry = createAgentInstructionRegistry('CLAUDE.md');
+      const result = walkLinkGraph(SKILL_ID, registry, defaultOptions({ excludeNavigationFiles: false }));
+
+      expect(result.bundledResources).toHaveLength(0);
+      expect(result.excludedReferences[0]?.excludeReason).toBe('agent-instruction-file');
+    });
+
+    it('should not treat an ordinary doc with a similar name as agent instructions', () => {
+      const registry = createAgentInstructionRegistry('CLAUDE-setup.md');
+      const result = walkLinkGraph(SKILL_ID, registry, defaultOptions());
+
+      expectBundledIds(result, ['agent-instruction-CLAUDE-setup.md']);
     });
   });
 

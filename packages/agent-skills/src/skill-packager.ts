@@ -65,6 +65,7 @@ import {
   testInputFileEntryIssues,
   testInputLinkIssues,
 } from './test-input.js';
+import { detectPackagedAgentInstructionFiles } from './validators/agent-instruction-presence.js';
 import { validateSkillForPackaging, type PackagingValidationResult, type SkillPackagingConfig } from './validators/packaging-validator.js';
 import { materializeIssue } from './validators/rule-engine/index.js';
 import { deferredAssetsToIssues, walkerExclusionsToIssues } from './validators/walker-to-issues.js';
@@ -756,6 +757,10 @@ export async function packageSkill(
     ...collisionIssues,
     ...await checkUnreferencedFiles(outputPath, filesConfigDests),
     ...await checkBrokenPackagedLinks(outputPath),
+    // Presence-side backstop for agent-instruction files. The walker excludes
+    // them from link-following, but a `files:` glob can still copy one in, and
+    // a file that arrives without a link is invisible to the link lane.
+    ...detectPackagedAgentInstructionFiles(outputPath, outputPath),
     // A receipt for each `files:` entry that was dropped for pointing into declared
     // test input — the build already produced the right artifact; this just says so.
     ...testInputFileEntryIssues(droppedTestInputFiles),

@@ -64,6 +64,7 @@ export { type AnchorRootOptions, resolveAnchorRoot } from './validators/anchor-r
 export { generateFixSuggestion } from './validators/validation-utils.js';
 export { detectKebabCaseViolation, type KebabCaseSurface } from './validators/kebab-case-detection.js';
 export { detectMissingRecommendedFields } from './validators/plugin-recommended-fields.js';
+export { detectPackagedAgentInstructionFiles } from './validators/agent-instruction-presence.js';
 export {
   deriveObservations,
   observationToIssue,
