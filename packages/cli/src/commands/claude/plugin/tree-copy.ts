@@ -3,6 +3,8 @@
  *
  * Copies everything under <sourceDir> to <destDir>, except:
  *   - .claude-plugin/ (owned by plugin.json merge-write)
+ *   - agent-instruction files at any depth (CLAUDE.md, AGENTS.md, …)
+ *   - anything the caller names in `exclude`
  *
  * Respects .gitignore via crawlDirectory (respectGitignore: true, the default).
  * Returns counts keyed to the spec's YAML summary extension.
@@ -12,6 +14,7 @@ import { existsSync } from 'node:fs';
 import { copyFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
+import { AGENT_INSTRUCTION_FILE_PATTERNS, toAnyDepthGlobs } from '@vibe-agent-toolkit/agent-skills';
 import { crawlDirectory, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 export interface TreeCopyOptions {
@@ -30,6 +33,14 @@ export interface TreeCopyOptions {
    * would drop it from the bundle entirely.
    */
   excludeSkillDirs?: string[];
+  /**
+   * Project-specific glob patterns (relative to `sourceDir`) to leave out of the
+   * bundle — the `exclude:` knob on the marketplace plugin entry.
+   *
+   * The escape hatch for junk the defaults below cannot know about (scratch dirs,
+   * design notes, internal fixtures). Additive to the built-in exclusions.
+   */
+  exclude?: string[];
   warn?: (message: string) => void;
 }
 
@@ -41,7 +52,20 @@ export interface TreeCopyResult {
   filesCopied: number;
 }
 
-const EXCLUDE_PATTERNS = ['.claude-plugin/**'];
+/**
+ * Built-in exclusions for the verbatim plugin copy.
+ *
+ * The agent-instruction list ONLY. `NEVER_PACKAGE_IN_SKILL_BUNDLE` also carries
+ * the navigation patterns, and importing that here would strip the front page off
+ * three in five real plugins: 57 of 94 installed plugins ship a plugin-root
+ * `README.md`, and `copyDistributionFiles` copies READMEs to the marketplace root
+ * on purpose. A README is vestigial *inside a skill bundle* and load-bearing at a
+ * plugin root — that asymmetry is why the two lists must stay separate.
+ */
+const EXCLUDE_PATTERNS = [
+  '.claude-plugin/**',
+  ...toAnyDepthGlobs(AGENT_INSTRUCTION_FILE_PATTERNS),
+];
 
 function classifyRelative(rel: string): keyof Omit<TreeCopyResult, 'filesCopied'> | undefined {
   if (rel.startsWith('commands/')) return 'commandsCopied';
@@ -52,7 +76,7 @@ function classifyRelative(rel: string): keyof Omit<TreeCopyResult, 'filesCopied'
 }
 
 export async function treeCopyPlugin(options: TreeCopyOptions): Promise<TreeCopyResult> {
-  const { sourceDir, destDir, excludeSkillDirs = [], warn } = options;
+  const { sourceDir, destDir, excludeSkillDirs = [], exclude: callerExclude = [], warn } = options;
   const result: TreeCopyResult = {
     commandsCopied: 0,
     hooksCopied: 0,
@@ -77,6 +101,7 @@ export async function treeCopyPlugin(options: TreeCopyOptions): Promise<TreeCopy
 
   const exclude = [
     ...EXCLUDE_PATTERNS,
+    ...callerExclude,
     ...excludeSkillDirs.map((name) => `skills/${name}/**`),
   ];
 

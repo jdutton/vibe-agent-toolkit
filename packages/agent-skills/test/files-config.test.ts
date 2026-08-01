@@ -554,6 +554,118 @@ describe('applyFilesConfig', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Never-package defaults: a GLOB honors the list, an EXPLICIT entry does not.
+// ---------------------------------------------------------------------------
+
+const EXTRAS_DIR = 'extras';
+const EXTRAS_GLOB = `${EXTRAS_DIR}/**/*`;
+/** Files a glob must never drag into a skill bundle (tier 1 + tier 2). */
+const NEVER_PACKAGED = ['CLAUDE.md', 'AGENTS.md', 'GEMINI.md', 'README.md', 'index.md'];
+/** Files that must survive the same glob. */
+const STILL_PACKAGED = ['data.json', 'notes.md'];
+/** A never-packaged basename OUTSIDE the glob's reach — the escape-hatch subject. */
+const DOCS_README = 'docs/README.md';
+
+/**
+ * `<projectRoot>/extras/` holding both never-packaged and ordinary files, plus
+ * (optionally) an untouched `docs/README.md` in a directory the glob does NOT
+ * cover — the escape-hatch case needs a file the glob cannot also have shipped,
+ * or the assertion passes vacuously ([[fixtures-that-cannot-distinguish]]).
+ */
+function makeNeverPackageSandbox(
+  contents: readonly string[] = [...NEVER_PACKAGED, ...STILL_PACKAGED],
+): { projectRoot: string; skillOutputDir: string } {
+  const { projectRoot, skillOutputDir } = makeApplySandbox();
+  const extras = safePath.join(projectRoot, EXTRAS_DIR);
+  mkdirSyncReal(extras, { recursive: true });
+  for (const name of contents) {
+    writeFileSync(safePath.join(extras, name), `content of ${name}\n`);
+  }
+  const docs = safePath.join(projectRoot, 'docs');
+  mkdirSyncReal(docs, { recursive: true });
+  writeFileSync(safePath.join(docs, 'README.md'), 'deliberate front page\n');
+  return { projectRoot, skillOutputDir };
+}
+
+describe('applyFilesConfig never-package defaults', () => {
+  afterEach(() => {
+    for (const dir of APPLY_TMP_DIRS.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('drops agent-instruction and navigation files a glob matched, and keeps the rest', async () => {
+    const { projectRoot, skillOutputDir } = makeNeverPackageSandbox();
+    const filesConfig: SkillFileEntry[] = [{ source: EXTRAS_GLOB, dest: EXTRAS_DIR }];
+
+    const copied = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir });
+
+    const byName = (a: string, b: string): number => a.localeCompare(b);
+    expect([...copied].sort(byName)).toEqual(
+      STILL_PACKAGED.map((n) => `${EXTRAS_DIR}/${n}`).sort(byName),
+    );
+    for (const name of NEVER_PACKAGED) {
+      expect(existsSync(safePath.join(skillOutputDir, EXTRAS_DIR, name))).toBe(false);
+    }
+    for (const name of STILL_PACKAGED) {
+      expect(existsSync(safePath.join(skillOutputDir, EXTRAS_DIR, name))).toBe(true);
+    }
+  });
+
+  it('still ships a never-packaged file named by an EXPLICIT entry (the escape hatch)', async () => {
+    const { projectRoot, skillOutputDir } = makeNeverPackageSandbox();
+    // The explicit entry names docs/README.md, which the glob does not cover — so
+    // its presence in the output can only be the explicit entry's doing.
+    const filesConfig: SkillFileEntry[] = [
+      { source: EXTRAS_GLOB, dest: EXTRAS_DIR },
+      { source: DOCS_README, dest: DOCS_README },
+    ];
+
+    const copied = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir });
+
+    expect(copied).toContain(DOCS_README);
+    expect(existsSync(safePath.join(skillOutputDir, 'docs', 'README.md'))).toBe(true);
+    // ...while the glob's own README is still dropped.
+    expect(existsSync(safePath.join(skillOutputDir, EXTRAS_DIR, 'README.md'))).toBe(false);
+  });
+
+  it('keeps integrity honest: the dest-set check sees exactly the surviving files', async () => {
+    const { projectRoot, skillOutputDir } = makeNeverPackageSandbox();
+    const filesConfig: SkillFileEntry[] = [
+      { source: EXTRAS_GLOB, dest: EXTRAS_DIR, integrity: true },
+    ];
+
+    // A dropped file must land in neither `rels` nor the on-disk subtree, or
+    // verifyDestSet reports it as missing/unexpected.
+    await expect(applyFilesConfig({ filesConfig, projectRoot, skillOutputDir })).resolves.toEqual(
+      expect.arrayContaining([`${EXTRAS_DIR}/data.json`]),
+    );
+  });
+
+  it('warns naming each file the never-package list dropped', async () => {
+    const { projectRoot, skillOutputDir } = makeNeverPackageSandbox();
+    const warnings: string[] = [];
+    const filesConfig: SkillFileEntry[] = [{ source: EXTRAS_GLOB, dest: EXTRAS_DIR }];
+
+    await applyFilesConfig({
+      filesConfig, projectRoot, skillOutputDir, warn: (m) => warnings.push(m),
+    });
+
+    const combined = warnings.join('\n');
+    for (const name of NEVER_PACKAGED) {
+      expect(combined).toContain(name);
+    }
+  });
+
+  it('reports the exclusion — not "has your build run?" — when only never-packaged files match', async () => {
+    const { projectRoot, skillOutputDir } = makeNeverPackageSandbox(NEVER_PACKAGED);
+    const filesConfig: SkillFileEntry[] = [{ source: EXTRAS_GLOB, dest: EXTRAS_DIR }];
+
+    const attempt = applyFilesConfig({ filesConfig, projectRoot, skillOutputDir });
+    await expect(attempt).rejects.toThrow(/never packaged/);
+    await expect(attempt).rejects.not.toThrow(/has your build run/);
+  });
+});
+
 const INTEGRITY_TMP_PREFIX = 'vat-integrity-';
 
 /** Create an isolated temp dir and return src + dst paths under it (dst defaults to dst.txt). */

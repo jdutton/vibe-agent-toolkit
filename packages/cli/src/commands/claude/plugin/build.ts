@@ -1083,6 +1083,7 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildResult> 
         sourceDir: pluginSourceDir,
         destDir: pluginDir,
         excludeSkillDirs: producedSkillDirs,
+        ...(pluginDef.exclude ? { exclude: pluginDef.exclude } : {}),
         warn: (m) => logger.info(`warning: ${m}`),
       })
     : { commandsCopied: 0, hooksCopied: 0, agentsCopied: 0, mcpCopied: 0, filesCopied: 0 };

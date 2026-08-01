@@ -98,6 +98,48 @@ describe('treeCopyPlugin', () => {
     });
   });
 
+  it('never copies agent-instruction files, at the root or at depth (tier 1)', async () => {
+    await writeFile(safePath.join(src, 'CLAUDE.md'), '# repo guidance');
+    await writeFile(safePath.join(src, 'AGENTS.md'), '# repo guidance');
+    await mkdir(safePath.join(src, 'docs'), { recursive: true });
+    await writeFile(safePath.join(src, 'docs', 'CLAUDE.md'), '# nested guidance');
+    await writeFile(safePath.join(src, 'docs', 'GEMINI.md'), '# nested guidance');
+
+    await treeCopyPlugin({ sourceDir: src, destDir: dest });
+
+    expect(existsSync(safePath.join(dest, 'CLAUDE.md'))).toBe(false);
+    expect(existsSync(safePath.join(dest, 'AGENTS.md'))).toBe(false);
+    expect(existsSync(safePath.join(dest, 'docs', 'CLAUDE.md'))).toBe(false);
+    expect(existsSync(safePath.join(dest, 'docs', 'GEMINI.md'))).toBe(false);
+  });
+
+  // 57 of 94 installed plugins ship a plugin-root README.md and it is their front
+  // page — the skill-bundle navigation exclusions must NEVER reach this lane. If a
+  // later "simplification" merges the two lists, this test is what fails.
+  it('DOES copy README/index navigation files — tier 2 is skill-bundle-only', async () => {
+    await writeFile(safePath.join(src, 'README.md'), '# plugin front page');
+    await writeFile(safePath.join(src, 'index.md'), '# index');
+    await mkdir(safePath.join(src, 'docs'), { recursive: true });
+    await writeFile(safePath.join(src, 'docs', 'overview.md'), '# overview');
+
+    await treeCopyPlugin({ sourceDir: src, destDir: dest });
+
+    expect(existsSync(safePath.join(dest, 'README.md'))).toBe(true);
+    expect(existsSync(safePath.join(dest, 'index.md'))).toBe(true);
+    expect(existsSync(safePath.join(dest, 'docs', 'overview.md'))).toBe(true);
+  });
+
+  it('honors caller-supplied exclude globs', async () => {
+    await mkdir(safePath.join(src, 'scratch'), { recursive: true });
+    await writeFile(safePath.join(src, 'scratch', 'notes.md'), '# scratch');
+    await writeFile(safePath.join(src, 'keep.md'), '# keep');
+
+    await treeCopyPlugin({ sourceDir: src, destDir: dest, exclude: ['scratch/**'] });
+
+    expect(existsSync(safePath.join(dest, 'scratch', 'notes.md'))).toBe(false);
+    expect(existsSync(safePath.join(dest, 'keep.md'))).toBe(true);
+  });
+
   it('warns (but does not fail) when marketplace.json is present inside author .claude-plugin/', async () => {
     await mkdir(safePath.join(src, '.claude-plugin'), { recursive: true });
     await writeFile(safePath.join(src, '.claude-plugin', 'marketplace.json'), '{}');

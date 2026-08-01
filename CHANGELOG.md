@@ -68,6 +68,17 @@ ever exhibited them.
 
 ### Added
 
+- **`exclude:` on a marketplace plugin entry.** Glob patterns, relative to the plugin source dir,
+  that the verbatim tree-copy must skip — for project-specific content the built-in exclusions
+  cannot know about (scratch dirs, internal notes). Additive to the defaults
+  (`.claude-plugin/`, gitignored files, produced skill dirs, agent-instruction files).
+
+  ```yaml
+  plugins:
+    - name: my-plugin
+      skills: "*"
+      exclude: ["scratch/**", "docs/internal/**"]
+  ```
 - **`vat skill test` — transcript-grounded evaluation with a separate executor and grader (issue
   [#145](https://github.com/jdutton/vibe-agent-toolkit/issues/145)).** Each eval now runs in two
   roles instead of one self-grading agent: a blind **executor** (the skill under test) performs the
@@ -138,14 +149,36 @@ ever exhibited them.
   documents merely *contain* `CLAUDE.md` files is unaffected — the link lane is the only one that
   changed severity.
 - **New `PACKAGED_AGENT_INSTRUCTION_FILE` (warning) — the presence-side half.** The link check above
-  cannot see a file that arrives in a bundle without any link, and a plugin's `source:` directory is
-  **tree-copied verbatim**: a `CLAUDE.md` beside `plugin.json` shipped to every consumer, and
-  `PACKAGED_UNREFERENCED_FILE` did not object because plugin artifacts are exempt from the skill
-  reachability rules by design. `vat verify` and `vat audit` now report each agent-instruction file
-  found in a distributed tree. Measured on one real install: **7 findings across 628 audited
-  skills**, one of which was an intentional scaffold template. It is a `warning`, not an `error` —
-  nothing mis-resolves and the bundle works; this is the "you have something on your shoe" check.
-  Silence an intentional one with `validation.severity.PACKAGED_AGENT_INSTRUCTION_FILE: ignore`.
+  cannot see a file that arrives in a bundle without any link. `vat verify` and `vat audit` now
+  report each agent-instruction file found in a distributed tree, whatever route put it there.
+  Measured on one real install: **7 findings across 628 audited skills**, one of which was an
+  intentional scaffold template. It is a `warning`, not an `error` — nothing mis-resolves and the
+  bundle works; this is the "you have something on your shoe" check. Silence an intentional one
+  with `validation.severity.PACKAGED_AGENT_INSTRUCTION_FILE: ignore`.
+- **BREAKING: a `files:` glob and a plugin's verbatim tree-copy no longer ship files that never
+  belong in a bundle.** Two routes reached a published bundle without any link pointing at them, and
+  neither produced a finding. A plugin's `source:` directory was tree-copied verbatim, so a
+  `CLAUDE.md` beside `plugin.json` shipped to every consumer. And a `files:` glob
+  (`source: extras/**/*`) shipped whatever it caught — including an `extras/README.md`, silently:
+  `PACKAGED_UNREFERENCED_FILE` exempts any declared `files:` dest, so the glob inherited an
+  exemption earned by *explicit* declaration. Meanwhile the link walker already refused to follow
+  links into both file classes, so the two lanes disagreed about what belongs in a bundle. Now:
+  - **Agent-instruction files** (`CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `GEMINI.md`) are never
+    packaged on any surface — skill bundle *and* plugin tree-copy, at any depth.
+  - **Navigation files** (`README.md`, `index.md`, `toc.md`, `overview.md` + case variants) are
+    never packaged into a **skill bundle**. They are still copied from a plugin source dir: a
+    plugin-root `README.md` is the plugin's front page — 57 of 94 plugins installed on one real
+    machine ship one, against 6 of 339 skills with a README beside their `SKILL.md`.
+  - **The rule is glob-vs-explicit.** A glob honors the list; `source: extras/README.md` — a file
+    you named — still ships. Naming a path is an instruction; a glob is a net that never knew what
+    it caught, so it does not launder the intent an explicit declaration carries. A deliberate
+    scaffold or skill README therefore needs **no new config**.
+
+  **What to do:** if a glob was your way of shipping one of these files, name it explicitly. A build
+  warning lists every file a glob dropped; a glob whose matches are *all* never-packaged is now a
+  hard error that says so rather than "has your build run?"; and a `SKILL.md` link to a dropped file
+  still fails the build as `PACKAGED_BROKEN_LINK`, now naming the never-package rule as the cause
+  instead of implying a link-rewriter bug.
 - **BREAKING: there is now ONE answer to "findings → status", and every validation result carries
   per-severity counts.** Six places independently collapsed a set of findings into a verdict, and
   they disagreed. Consequences across the CLI: `status` everywhere uses the same three-value

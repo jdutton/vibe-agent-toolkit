@@ -15,6 +15,7 @@ import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { normalizeRelPath } from './files-config.js';
 import { evaluate, makeRuleContext, materializeIssue } from './validators/rule-engine/index.js';
+import { NEVER_PACKAGE_IN_SKILL_BUNDLE } from './validators/validation-rules.js';
 
 /**
  * Regex matching markdown inline links: [text](href).
@@ -112,6 +113,27 @@ async function extractLocalHrefs(filePath: string): Promise<string[]> {
 }
 
 /**
+ * Extra detail (with a leading space) when a broken link's target is a file VAT
+ * never packages into a skill bundle, otherwise `''`.
+ *
+ * The generic remediation for this code blames the link rewriter. That is right
+ * for the population it was written for and wrong here: a glob `files:` entry
+ * filters these basenames out deliberately, so the link is broken by policy, not
+ * by a defect. Without this clause an author who linked a `README.md` under a glob
+ * dest goes looking for a VAT bug instead of naming the file explicitly.
+ */
+function neverPackagedClause(href: string): string {
+  const name = href.slice(href.lastIndexOf('/') + 1);
+  if (!(NEVER_PACKAGE_IN_SKILL_BUNDLE as readonly string[]).includes(name)) {
+    return '';
+  }
+  return (
+    ` — '${name}' is never packaged into a skill bundle by a glob 'files:' entry.` +
+    ` Declare it explicitly (source: <path>/${name}) to ship it, or drop the link.`
+  );
+}
+
+/**
  * Check hrefs from a content file against allFileSet and return PACKAGED_BROKEN_LINK
  * issues for any that don't resolve to a file in the packaged output.
  *
@@ -150,7 +172,7 @@ function collectBrokenLinkIssues(
       if (code !== null) {
         issues.push(materializeIssue(code, {
           location: relativeSourcePath,
-          detail: `link: ${href} from ${relativeSourcePath}`,
+          detail: `link: ${href} from ${relativeSourcePath}${neverPackagedClause(href)}`,
         }));
       }
     }

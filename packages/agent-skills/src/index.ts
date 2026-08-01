@@ -87,8 +87,11 @@ export {
   type SkillValidationSharedContext,
 } from './validators/packaging-validator.js';
 export {
+  AGENT_INSTRUCTION_FILE_PATTERNS,
   createIssue,
   NAVIGATION_FILE_PATTERNS,
+  NEVER_PACKAGE_IN_SKILL_BUNDLE,
+  toAnyDepthGlobs,
   VALIDATION_RULES,
   VALIDATION_THRESHOLDS,
   type RuleCategory,

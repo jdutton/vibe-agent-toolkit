@@ -387,6 +387,15 @@ describe('ClaudeMarketplacePluginEntrySchema (full plugin support)', () => {
     expect(result.success).toBe(true);
   });
 
+  it('accepts plugin with exclude globs for the verbatim tree-copy', () => {
+    const result = ClaudeMarketplacePluginEntrySchema.safeParse({
+      name: 'my-plugin',
+      skills: '*',
+      exclude: ['scratch/**', 'docs/internal/**'],
+    });
+    expect(result.success).toBe(true);
+  });
+
   it('requires skills field on plugin entry', () => {
     const result = ClaudeMarketplacePluginEntrySchema.safeParse({ name: 'my-plugin' });
     expect(result.success).toBe(false);

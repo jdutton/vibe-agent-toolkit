@@ -202,6 +202,41 @@ Sibling sources work: a static base like `../shared/dist` is supported; the glob
 
 The glob is **never expanded at parse or validate time** — only at build/copy time (`vat skills build`). This means a `SKILL.md` link to a file that will land under a glob `dest` (e.g. `packs/claims/large-loss.json`) is treated as a deferred build artifact at validate time — reported as [`LINK_DEFERRED_ARTIFACT`](../validation-codes.md#link_deferred_artifact) (info), never a broken-link error — whether or not a build has run. `vat skills build` preserves and rewrites the link to the materialized dest. This is what lets you drop a `LINK_TO_GITIGNORED_FILE` / broken-link allowlist once you switch to a glob entry.
 
+#### Never-packaged files (globs only)
+
+A glob's matches are filtered against a built-in never-package list before anything is copied:
+
+| Tier | Files | Never packaged into |
+|---|---|---|
+| Agent-instruction | `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `GEMINI.md` | any bundle — skill **and** plugin |
+| Navigation | `README.md`, `readme.md`, `index.md`, `INDEX.md`, `toc.md`, `TOC.md`, `overview.md`, `OVERVIEW.md` | a **skill bundle** only |
+
+Navigation files are deliberately *not* excluded from the plugin tree-copy: a plugin-root
+`README.md` is the plugin's front page, and most published plugins ship one.
+
+**The rule: a glob honors this list; an explicit entry does not.**
+
+```yaml
+files:
+  - source: extras/**/*        # a net — extras/README.md and extras/CLAUDE.md are dropped
+    dest: extras
+  - source: extras/README.md   # a declaration — this one ships
+    dest: extras/README.md
+```
+
+Naming a path is an unambiguous instruction to ship that file, so an explicit entry always wins
+and a deliberate scaffold or skill README needs no new config. A glob never named the file it
+caught, so it does not inherit the intent an explicit declaration carries. (Same principle that
+exempts a declared `files:` dest from [`PACKAGED_UNREFERENCED_FILE`](../validation-codes.md#packaged_unreferenced_file),
+and that auto-excludes a declared `test.evals` path.) Link-following already refuses to bundle
+both file classes; this keeps glob expansion from disagreeing with it.
+
+Dropped files are reported as a build warning naming each one. If `SKILL.md` links to a dropped
+file (via its glob **dest** path, which validate treats as a deferred artifact), the packaged link
+has no target and the build fails with
+[`PACKAGED_BROKEN_LINK`](../validation-codes.md#packaged_broken_link) naming the never-package rule
+as the cause — declare the file explicitly, or drop the link.
+
 #### Build-time errors
 
 A glob that matches **zero files** is a hard error at build time:
@@ -209,6 +244,15 @@ A glob that matches **zero files** is a hard error at build time:
 ```
 files entry for skill 'report-tools': glob 'dist/packs/**/*' matched no files.
 Has your build run?
+```
+
+A glob whose matches are **all** never-packaged is a distinct hard error — it names the exclusion
+rather than sending you hunting for a build failure that isn't there:
+
+```
+files: source 'extras/**/*' (glob) matched 2 file(s) under /repo/extras, but all of them are
+never packaged into a skill bundle: CLAUDE.md, README.md. Declare an explicit source: entry
+for a file you intend to ship, or widen the glob.
 ```
 
 A **non-glob** `source` that resolves to a directory is a hard error telling you to use a glob instead:

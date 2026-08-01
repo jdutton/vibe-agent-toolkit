@@ -89,3 +89,31 @@ export function gitAddAll(dir: string): void {
   // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for staging files in tests
   spawnSync('git', ['-C', dir, 'add', '.'], { stdio: 'ignore' });
 }
+
+/**
+ * Init + stage + commit a fixture repo in one call.
+ *
+ * Discovery and the plugin tree-copy are both tracked-files-only, so a fixture
+ * whose files are merely on disk tests invisibility by accident — an assertion
+ * that "X did not ship" passes because nothing shipped at all. Commit first.
+ */
+export function commitTestFixture(dir: string, message = 'fixture'): void {
+  initTestGitRepo(dir);
+  gitAddAll(dir);
+  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for fixture commit in tests
+  spawnSync('git', ['-C', dir, 'commit', '-q', '-m', message], { stdio: 'ignore' });
+}
+
+/**
+ * Where `vat claude plugin build` writes one plugin's bundle, given the project
+ * root a fixture was built in.
+ */
+export function marketplacePluginOutDir(
+  projectRoot: string,
+  marketplace: string,
+  plugin: string,
+): string {
+  return safePath.join(
+    projectRoot, 'dist', '.claude', 'plugins', 'marketplaces', marketplace, 'plugins', plugin,
+  );
+}

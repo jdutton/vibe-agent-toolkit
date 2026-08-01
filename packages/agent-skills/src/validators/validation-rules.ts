@@ -285,6 +285,38 @@ export const AGENT_INSTRUCTION_FILE_PATTERNS = [
 ] as const;
 
 /**
+ * Basenames a GLOB `files:` entry never packages into a **skill bundle**.
+ *
+ * Two tiers, deliberately composed here rather than merged at the source:
+ *
+ * - {@link AGENT_INSTRUCTION_FILE_PATTERNS} — never packaged on ANY surface.
+ * - {@link NAVIGATION_FILE_PATTERNS} — never packaged into a *skill bundle*, and
+ *   **only** there. A plugin-root `README.md` is the plugin's front page (57 of 94
+ *   installed plugins ship one), so the plugin tree-copy must import the agent-
+ *   instruction list alone. Merging the two lists would strip the front page off
+ *   three in five real plugins.
+ *
+ * Only globs consult this list. Naming `source: README.md` explicitly is an
+ * unambiguous instruction to ship that file; a glob is a net, not a declaration,
+ * and does not get to launder an exemption for a file it never named.
+ */
+export const NEVER_PACKAGE_IN_SKILL_BUNDLE = [
+  ...AGENT_INSTRUCTION_FILE_PATTERNS,
+  ...NAVIGATION_FILE_PATTERNS,
+] as const;
+
+/**
+ * Expand basenames into globs matching them at the tree root AND at any depth.
+ *
+ * `**\/name` alone is not portable across matchers for a root-level hit, so both
+ * spellings are emitted. Shared by the presence detector's include globs and the
+ * plugin tree-copy's exclude globs so the two can never drift apart.
+ */
+export function toAnyDepthGlobs(patterns: readonly string[]): string[] {
+  return patterns.flatMap((name) => [name, `**/${name}`]);
+}
+
+/**
  * Create a validation issue from a rule
  */
 export function createIssue(

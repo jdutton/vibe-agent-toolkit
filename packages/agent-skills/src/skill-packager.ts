@@ -734,6 +734,7 @@ export async function packageSkill(
   // config said to." Discarding them makes the build fail on its own payload.
   const filesConfigDests = await applyFilesConfig({
     filesConfig, projectRoot, skillOutputDir: outputPath, bundledFiles,
+    warn: (message) => process.stderr.write(`warning: ${message}\n`),
   });
 
   // 13. Post-build integrity check: no SKILL.md in subdirectories

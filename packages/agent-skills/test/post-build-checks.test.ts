@@ -276,6 +276,21 @@ describe('checkBrokenPackagedLinks', () => {
     expectSingleIssue(issues, 'PACKAGED_BROKEN_LINK', 'resources/guide.md');
   });
 
+  // The never-package filter drops a glob's `README.md`/`CLAUDE.md` matches, so a
+  // link to one is genuinely broken in the output and must still fail the build.
+  // But the generic remediation blames a link-rewriter bug, which would send the
+  // author hunting a VAT defect instead of naming the file explicitly.
+  it('names the never-package cause instead of implying a VAT bug', async () => {
+    const outputDir = await setupOutputDir([RESOURCES]);
+    await writeSkillMd(outputDir, ['# Skill', '', 'See [readme](resources/README.md).'].join('\n'));
+
+    const issues = await checkBrokenPackagedLinks(outputDir);
+    const broken = issues.find((i) => i.code === 'PACKAGED_BROKEN_LINK');
+
+    expect(broken).toBeDefined();
+    expect(broken?.message ?? broken?.fix ?? '').toMatch(/never packaged/i);
+  });
+
   it('should skip external URLs', async () => {
     const outputDir = await setupOutputDir();
     await writeSkillMd(

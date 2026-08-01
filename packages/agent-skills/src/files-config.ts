@@ -24,7 +24,33 @@ import {
 } from '@vibe-agent-toolkit/utils';
 import { glob } from 'glob';
 
+import { NEVER_PACKAGE_IN_SKILL_BUNDLE } from './validators/validation-rules.js';
+
 export type { SkillFileEntry } from '@vibe-agent-toolkit/resources';
+
+/** Basename lookup for {@link NEVER_PACKAGE_IN_SKILL_BUNDLE} (case-sensitive, as the walker is). */
+const NEVER_PACKAGE_BASENAMES = new Set<string>(NEVER_PACKAGE_IN_SKILL_BUNDLE);
+
+/**
+ * Partition a glob's matches into the files that may be packaged and the
+ * never-packaged ones it happened to catch.
+ *
+ * Only globs come through here. Naming `source: extras/README.md` explicitly is an
+ * unambiguous instruction to ship that file, and it is honored; a glob is a net,
+ * not a declaration, so it does not get to launder the exemption that an explicit
+ * declaration earns. Without this split, link-following (which already refuses
+ * these files) and `files:` expansion disagree about what belongs in a bundle —
+ * and the glob's copy wins silently.
+ */
+function partitionNeverPackaged(matches: readonly string[]): { kept: string[]; dropped: string[] } {
+  const kept: string[] = [];
+  const dropped: string[] = [];
+  for (const rel of matches) {
+    const basename = rel.slice(rel.lastIndexOf('/') + 1);
+    (NEVER_PACKAGE_BASENAMES.has(basename) ? dropped : kept).push(rel);
+  }
+  return { kept, dropped };
+}
 
 /**
  * Returns a hint clause (with a leading space) when `source` looks like a build
@@ -205,6 +231,13 @@ export interface ApplyFilesConfigOptions {
    * {@link copyGlobEntry}. Defaults to none (copy all).
    */
   bundledFiles?: string[];
+  /**
+   * Sink for non-fatal packaging notices — currently the files a GLOB entry
+   * matched and the never-package defaults dropped. Without it the drop is
+   * silent, and an author who expected their glob to ship a `README.md` has no
+   * thread to pull.
+   */
+  warn?: (message: string) => void;
 }
 
 /**
@@ -345,6 +378,7 @@ async function copyGlobEntry(
   entry: SkillFileEntry,
   projectRoot: string,
   skillOutputDir: string,
+  warn?: (message: string) => void,
 ): Promise<{ copied: string[]; pairs: { absSource: string; absDest: string }[]; rels: string[] }> {
   const base = staticGlobBase(entry.source);
   const remainder = globMagicRemainder(entry.source);
@@ -362,11 +396,29 @@ async function copyGlobEntry(
   // dot: true so hidden files under the source subtree are included — keeps the
   // package symmetric with verifyDestSet (M10: silent dot-file drop).
   const rawMatches = await glob(remainder, { cwd: absoluteBase, nodir: true, dot: true });
-  const matches = rawMatches.map((m) => toForwardSlash(m)).sort((a, b) => a.localeCompare(b));
+  const allMatches = rawMatches.map((m) => toForwardSlash(m)).sort((a, b) => a.localeCompare(b));
 
-  if (matches.length === 0) {
+  if (allMatches.length === 0) {
     throw new Error(
       `files: source '${entry.source}' (glob) matched no files under ${absoluteBase} — has your build run?`,
+    );
+  }
+
+  const { kept: matches, dropped } = partitionNeverPackaged(allMatches);
+  if (dropped.length > 0 && warn) {
+    warn(
+      `files: source '${entry.source}' (glob) skipped ${dropped.length} file(s) never packaged into ` +
+      `a skill bundle: ${dropped.join(', ')}. Declare an explicit source: entry to ship one deliberately.`,
+    );
+  }
+  // Distinct from the zero-match case above: the build DID run and the glob DID
+  // match — every match is simply a file that never ships. Saying "has your build
+  // run?" here would send the author hunting a build failure that isn't there.
+  if (matches.length === 0) {
+    throw new Error(
+      `files: source '${entry.source}' (glob) matched ${allMatches.length} file(s) under ${absoluteBase}, ` +
+      `but all of them are never packaged into a skill bundle: ${dropped.join(', ')}. ` +
+      `Declare an explicit source: entry for a file you intend to ship, or widen the glob.`,
     );
   }
 
@@ -428,6 +480,10 @@ async function copyGlobEntry(
  * copy time: all matched files are rebased under `dest` preserving their
  * path relative to the glob's static base. Zero matches → error.
  *
+ * A glob's matches are filtered through {@link NEVER_PACKAGE_IN_SKILL_BUNDLE}
+ * (agent-instruction files at any surface, navigation files in a skill bundle);
+ * an explicit entry is not. See {@link partitionNeverPackaged}.
+ *
  * When `integrity: true` is set on an entry, `verifyFilesIntegrity` is called
  * after copying to assert byte-identical content. For GLOB entries it ALSO runs
  * `verifyDestSet` to assert the dest subtree contains exactly the copied rels
@@ -446,6 +502,7 @@ async function applyGlobFileEntry(
     fileEntry,
     opts.projectRoot,
     opts.skillOutputDir,
+    opts.warn,
   );
   if (fileEntry.integrity === true) {
     verifyFilesIntegrity(pairs);

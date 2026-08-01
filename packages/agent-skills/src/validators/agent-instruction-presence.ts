@@ -21,14 +21,13 @@ import { type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { crawlDirectorySync, issueLocation } from '@vibe-agent-toolkit/utils';
 
 import { materializeIssue } from './rule-engine/index.js';
-import { AGENT_INSTRUCTION_FILE_PATTERNS } from './validation-rules.js';
+import { AGENT_INSTRUCTION_FILE_PATTERNS, toAnyDepthGlobs } from './validation-rules.js';
 
 /**
- * Match each basename at the tree root AND at any depth. `**\/x` alone is not a
- * reliable root match across glob engines, and the root is the case that
- * matters most — a `CLAUDE.md` beside `plugin.json` is the observed defect.
+ * Match each basename at the tree root AND at any depth — the root is the case
+ * that matters most (a `CLAUDE.md` beside `plugin.json` is the observed defect).
  */
-const INCLUDE_GLOBS = AGENT_INSTRUCTION_FILE_PATTERNS.flatMap(name => [name, `**/${name}`]);
+const INCLUDE_GLOBS = toAnyDepthGlobs(AGENT_INSTRUCTION_FILE_PATTERNS);
 
 /**
  * Report every repo-internal agent-instruction file present in a distributed
