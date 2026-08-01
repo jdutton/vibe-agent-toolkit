@@ -633,14 +633,22 @@ export async function packageSkill(
 
   // 8. Build path map for file copying and link rewriting
   const namingBasePath = projectRoot;
-  const { pathMap, issues: collisionIssues } = buildPathMap(
-    { path: skillPath, name: skillMetadata.name },
+  const pathMapSkill = { path: skillPath, name: skillMetadata.name };
+  const pathMap = buildPathMap(
+    pathMapSkill,
     bundledFiles, outputPath, resourceNaming, namingBasePath, stripPrefix, target,
   );
 
   // 8b. Apply files config: register single-file entries in path map.
   // GLOB entries are skipped — late binding via applyFilesConfig owns their expansion.
   applyNonGlobEntriesToPathMap(filesConfig, projectRoot, outputPath, pathMap, skillMetadata.name);
+
+  // 8c. Collisions are judged on the FINAL destination map, so a `files:` remap is
+  // a real remedy and a `files:`-created collision is still caught. See
+  // detectDestinationCollisions for why this cannot run inside buildPathMap.
+  const collisionIssues = detectDestinationCollisions(
+    pathMapSkill, pathMap, outputPath, resourceNaming, namingBasePath,
+  );
 
   // 9. Build "to" registry for link rewriting (maps same resource IDs to output paths)
   const outputResources = bundledResources.map(resource => ({
@@ -1370,12 +1378,6 @@ interface PathMapSkill {
   name: string;
 }
 
-/** A path map plus the collisions found while building it. */
-interface PathMapResult {
-  pathMap: Map<string, string>;
-  issues: ValidationIssue[];
-}
-
 /**
  * The FILENAME_COLLISION finding for one pair of sources that package to one dest.
  *
@@ -1442,9 +1444,8 @@ function buildPathMap(
   namingBasePath: string,
   stripPrefix?: string,
   target: PackagingTarget = DEFAULT_PACKAGING_TARGET,
-): PathMapResult {
+): Map<string, string> {
   const pathMap = new Map<string, string>();
-  const issues: ValidationIssue[] = [];
   pathMap.set(toForwardSlash(skill.path), safePath.join(outputPath, 'SKILL.md'));
 
   for (const linkedFile of bundledFiles) {
@@ -1455,23 +1456,55 @@ function buildPathMap(
       stripPrefix
     );
     const fileSubdir = getResourceSubdirForFile(linkedFile, target);
-    const targetPath = safePath.join(outputPath, fileSubdir, targetRelPath);
-
-    // Check for filename collisions
-    const existingSource = [...pathMap.entries()].find(
-      ([_src, target]) => target === targetPath
-    )?.[0];
-
-    if (existingSource !== undefined && existingSource !== toForwardSlash(linkedFile)) {
-      issues.push(filenameCollisionIssue(
-        skill, existingSource, linkedFile, targetRelPath, resourceNaming, namingBasePath,
-      ));
-    }
-
-    pathMap.set(toForwardSlash(linkedFile), targetPath);
+    pathMap.set(toForwardSlash(linkedFile), safePath.join(outputPath, fileSubdir, targetRelPath));
   }
 
-  return { pathMap, issues };
+  return pathMap;
+}
+
+/**
+ * Report a FILENAME_COLLISION for every destination claimed by more than one source.
+ *
+ * MUST run against the FINAL destination map — after `files:` single-file entries
+ * have overridden the naming-strategy destinations. Detecting collisions while
+ * building the map (where this logic used to live) answers the question one step
+ * too early: `files:` is a legitimate remedy for a basename collision, and an
+ * adopter who remapped both sides to distinct dests still had the build failed at
+ * `error` severity for a collision that no longer physically occurred. It also
+ * could not see the inverse — two `files:` entries pointing at ONE dest is a real
+ * collision the naming-strategy map contains no trace of.
+ *
+ * Scope: glob `files:` entries expand later (`applyFilesConfig`) and so are not in
+ * this map; their destinations are directories, which cannot collide this way.
+ */
+function detectDestinationCollisions(
+  skill: PathMapSkill,
+  pathMap: Map<string, string>,
+  outputPath: string,
+  resourceNaming: ResourceNamingStrategy,
+  namingBasePath: string,
+): ValidationIssue[] {
+  const sourcesByDest = new Map<string, string[]>();
+  for (const [source, dest] of pathMap) {
+    const existing = sourcesByDest.get(dest);
+    if (existing) existing.push(source);
+    else sourcesByDest.set(dest, [source]);
+  }
+
+  const issues: ValidationIssue[] = [];
+  for (const [dest, sources] of sourcesByDest) {
+    // Map iteration is insertion-ordered, so sources[0] is the entry that "won"
+    // the destination — the same File 1 / File 2 framing the message always used.
+    const [winner, ...losers] = sources;
+    if (winner === undefined || losers.length === 0) continue;
+    const targetRelPath = toForwardSlash(safePath.relative(outputPath, dest));
+    for (const loser of losers) {
+      issues.push(filenameCollisionIssue(
+        skill, winner, loser, targetRelPath, resourceNaming, namingBasePath,
+      ));
+    }
+  }
+  return issues;
 }
 
 // ============================================================================

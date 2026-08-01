@@ -229,6 +229,62 @@ describe('packageSkill - filename collision detection', () => {
     expect(collision?.location).toBe('beta/notes.md');
   });
 
+  it('does not report a collision that a files: remap already resolves', async () => {
+    // Reported by an adopter: `files:` with distinct dests is a legitimate remedy
+    // for a basename collision — both copies land, links rewrite correctly, and no
+    // `CLAUDE.md`-style basename is written twice. But the check ran over the
+    // walker's WOULD-BE basename map (step 8) while `files:` overrides the same
+    // entries one step later (step 8b), so it failed the build at `error` severity
+    // for a collision that does not physically occur in the output.
+    const dir = getTempDir();
+    const sp = await writeCollidingSkill(dir, UNIT_SKILL_NAME);
+
+    const result = await packWithOutput(sp, {
+      files: [
+        { source: 'alpha/notes.md', dest: 'resources/alpha-notes.md' },
+        { source: 'beta/notes.md', dest: 'resources/beta-notes.md' },
+      ],
+    });
+
+    const collision = (result.postBuildIssues ?? []).find(i => i.code === COLLISION_CODE);
+    expect(collision, 'FILENAME_COLLISION reported for a remapped, non-colliding build').toBeUndefined();
+
+    // Assert the remap actually happened — otherwise "no collision" could just mean
+    // "nothing was packaged", which would pass this test for the wrong reason.
+    expect(existsSync(safePath.join(result.outputPath, 'resources', 'alpha-notes.md'))).toBe(true);
+    expect(existsSync(safePath.join(result.outputPath, 'resources', 'beta-notes.md'))).toBe(true);
+  });
+
+  it('still reports a collision that files: dests THEMSELVES create', async () => {
+    // The check must MOVE to the final destination map, not simply be weakened.
+    // Deliberately DISTINCT basenames, so the walker's basename map holds no
+    // collision at all: this can only pass once the check reads the final dests.
+    // (With same-basename sources it would pass against the old code too, for the
+    // wrong reason — a fixture that cannot tell the two answers apart proves
+    // nothing.)
+    const dir = getTempDir();
+    await mkdir(safePath.join(dir, 'alpha'), { recursive: true });
+    await mkdir(safePath.join(dir, 'beta'), { recursive: true });
+    await writeFile(safePath.join(dir, 'alpha', 'notes-a.md'), '# A');
+    await writeFile(safePath.join(dir, 'beta', 'notes-b.md'), '# B');
+    const sp = await writeSkillMd(
+      dir,
+      UNIT_SKILL_NAME,
+      'See [a](./alpha/notes-a.md) and [b](./beta/notes-b.md).',
+    );
+
+    const result = await packWithOutput(sp, {
+      files: [
+        { source: 'alpha/notes-a.md', dest: 'resources/shared.md' },
+        { source: 'beta/notes-b.md', dest: 'resources/shared.md' },
+      ],
+    });
+
+    const collision = (result.postBuildIssues ?? []).find(i => i.code === COLLISION_CODE);
+    expect(collision, 'no FILENAME_COLLISION for two files: entries sharing one dest').toBeDefined();
+    expect(collision?.severity).toBe('error');
+  });
+
   it('still fails the build — this changes HOW the failure reports, not WHETHER', async () => {
     const sp = await writeCollidingSkill(getTempDir(), UNIT_SKILL_NAME);
 

@@ -306,6 +306,15 @@ ever exhibited them.
   vendored engine, generated schemas, data packs. The post-build check never received the list, so
   every declared dest was evaluated as "not declared". Adopters who added `validation.allow` waivers
   restating their own `files:` map can delete them.
+- **A `files:` remap is now a real remedy for a filename collision.** `FILENAME_COLLISION` was
+  judged on the naming strategy's *would-be* destination map, one step before `files:` single-file
+  entries override those destinations — so an adopter who remapped both colliding sources to
+  distinct dests still had the build failed at **error** severity for a collision that no longer
+  physically occurred (both copies landed, links rewrote correctly, nothing was written twice). The
+  check now runs against the **final** destination map. It moved rather than weakened: two `files:`
+  entries pointing at one dest is a genuine collision the old check had no trace of, and is now
+  reported. Declaring `files:` with meaningful names is therefore a self-documenting alternative to
+  `resourceNaming: resource-id` and its path-derived slugs.
 - **`resources validate` and `skills validate` agree on `files:`-declared build artifacts**, and a
   `files:` destination is exempt from the gitignore-leak rule even before the build runs — so
   building the project can no longer turn a previously-passing `vat skills validate` red on its own
