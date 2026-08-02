@@ -140,6 +140,24 @@ export function droppedGlobMatchesToIssues(
 }
 
 /**
+ * An absolute path spelled relative to the run's anchor, for a message or a
+ * location a consumer reads.
+ *
+ * `issueLocation` returns `''` when the path IS the anchor root (a
+ * project-root-wide glob such as `**\/*`); `.` is that same directory spelled
+ * as a path a reader can act on.
+ *
+ * Load-bearing for every THROWN message in this module, not only for issue
+ * locations: `applyFilesConfig`'s throws reach `vat skills build`'s stdout
+ * verbatim as `failedSkills[].message`, so an absolute path there publishes the
+ * developer's home directory into whatever issue or CI log the report is pasted
+ * into. Build-report messages are project-relative, never absolute.
+ */
+function anchoredPath(absolute: string, root: string): string {
+  return issueLocation(absolute, root) || '.';
+}
+
+/**
  * Returns a hint clause (with a leading space) when `source` looks like a build
  * artifact that hasn't been produced yet, otherwise returns `''`.
  *
@@ -415,12 +433,13 @@ export async function verifyDestSet(
 async function copyNonGlobEntry(
   entry: SkillFileEntry,
   absoluteSource: string,
+  projectRoot: string,
   skillOutputDir: string,
 ): Promise<{ relDest: string; absSource: string; absDest: string }> {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- source path from validated config
   if (!existsSync(absoluteSource)) {
     throw new Error(
-      `files: source '${entry.source}' does not exist (resolved to ${absoluteSource}).${buildArtifactHint(entry.source)}`,
+      `files: source '${entry.source}' does not exist (resolved to ${anchoredPath(absoluteSource, projectRoot)}).${buildArtifactHint(entry.source)}`,
     );
   }
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- source path from validated config
@@ -548,9 +567,13 @@ async function copyGlobEntry(
     projectRoot,
   );
 
+  // Project-relative in both throws below: these messages are published verbatim
+  // as `failedSkills[].message` (see {@link anchoredPath}).
+  const reportedBase = anchoredPath(absoluteBase, projectRoot);
+
   if (allMatches.length === 0) {
     throw new Error(
-      `files: source '${entry.source}' (glob) matched no files under ${absoluteBase} — has your build run?`,
+      `files: source '${entry.source}' (glob) matched no files under ${reportedBase} — has your build run?`,
     );
   }
 
@@ -559,7 +582,7 @@ async function copyGlobEntry(
   // run?" here would send the author hunting a build failure that isn't there.
   if (matches.length === 0) {
     throw new Error(
-      `files: source '${entry.source}' (glob) matched ${allMatches.length} file(s) under ${absoluteBase}, ` +
+      `files: source '${entry.source}' (glob) matched ${allMatches.length} file(s) under ${reportedBase}, ` +
       `but all of them are never packaged into a skill bundle: ${droppedRel.join(', ')}. ` +
       // NOT "widen the glob": the filter is on basename and applies at any width, so a
       // wider glob clears this error while still shipping none of these files — advice
@@ -738,10 +761,8 @@ export function preBuildGlobFindingsToIssues(
   locationRoot: string,
 ): ValidationIssue[] {
   // Both entry-level findings anchor at the glob's static base: they are about an
-  // ENTRY, not a file, and the base is the only path they have. `issueLocation`
-  // returns '' when the base IS the anchor root (a project-root-wide glob such as
-  // `**/*`); '.' is that same directory spelled as a path a reader can act on.
-  const anchorBase = (absBase: string): string => issueLocation(absBase, locationRoot) || '.';
+  // ENTRY, not a file, and the base is the only path they have.
+  const anchorBase = (absBase: string): string => anchoredPath(absBase, locationRoot);
   return [
     ...droppedGlobMatchesToIssues(findings.dropped, locationRoot),
     ...findings.allRefused.map((entry) => {
@@ -890,7 +911,12 @@ async function applyNonGlobFileEntry(
     };
   }
 
-  const { relDest, absSource, absDest } = await copyNonGlobEntry(fileEntry, absoluteSource, opts.skillOutputDir);
+  const { relDest, absSource, absDest } = await copyNonGlobEntry(
+    fileEntry,
+    absoluteSource,
+    opts.projectRoot,
+    opts.skillOutputDir,
+  );
   return {
     dests: [relDest],
     dropped: [],

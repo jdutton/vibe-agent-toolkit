@@ -1008,6 +1008,96 @@ describe('applyFilesConfig never-package defaults', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// A thrown message from this module is MACHINE-READABLE OUTPUT.
+//
+// Every throw here reaches `vat skills build`'s stdout verbatim, as
+// `failedSkills[].message` — the document adopters paste into issues and CI
+// logs. So each path a message states has to be project-relative: an absolute
+// one publishes the developer's home directory and whatever the directories
+// above the project are called, which this project treats as worse than
+// leaking a credential.
+//
+// Parameterized over EVERY route that throws, deliberately. The pre-existing
+// guard for this contract (`build-run-ledger.test.ts`) drove a single NON-GLOB
+// fixture, which is the one route whose message never interpolated a path —
+// so it certified "no absolute path in failedSkills[]" for a feature where the
+// glob routes published one ([[fixtures-that-cannot-distinguish]]).
+// ---------------------------------------------------------------------------
+
+/**
+ * An absolute path in any position a message can put one: POSIX `/x` or Windows
+ * `C:\x` / `C:/x`, at a word boundary so a relative `dist/gen` never matches.
+ *
+ * Shape, not containment: on macOS the temp root resolves through a `/private`
+ * symlink, so `not.toContain(projectRoot)` alone can pass over an absolute path
+ * that merely spells its prefix the other way.
+ */
+const ABSOLUTE_PATH_SHAPE = /(?:^|[\s(<'"])(?:\/|[A-Za-z]:[\\/])/;
+
+interface ThrowRoute {
+  label: string;
+  /** Sandbox + the config that drives THIS route to its throw. */
+  setup: () => { projectRoot: string; skillOutputDir: string; filesConfig: SkillFileEntry[] };
+  /** Proves the case reached the intended throw and not a different one. */
+  reached: RegExp;
+}
+
+const THROW_ROUTES: ThrowRoute[] = [
+  {
+    label: 'non-glob source missing',
+    setup: () => ({
+      ...makeApplySandbox(),
+      filesConfig: [{ source: 'dist/gen/missing.json', dest: 'x.json' }],
+    }),
+    reached: /does not exist/,
+  },
+  {
+    label: 'non-glob source is a directory',
+    setup: () => ({
+      ...makeApplySandbox(),
+      // `dist/gen` is a directory makeApplySandbox creates.
+      filesConfig: [{ source: 'dist/gen', dest: 'output' }],
+    }),
+    reached: /use a glob/,
+  },
+  {
+    label: 'glob matched nothing',
+    setup: () => ({
+      ...makeApplySandbox(),
+      filesConfig: [{ source: 'dist/nonexistent/**/*', dest: 'out' }],
+    }),
+    reached: /matched no files/,
+  },
+  {
+    label: 'glob matched only never-packaged files',
+    setup: () => ({
+      ...makeNeverPackageSandbox(NEVER_PACKAGED),
+      filesConfig: [{ source: EXTRAS_GLOB, dest: EXTRAS_DIR }],
+    }),
+    reached: /never packaged/,
+  },
+];
+
+describe.each(THROW_ROUTES)('applyFilesConfig failure message ($label)', (route) => {
+  afterEach(() => {
+    for (const dir of APPLY_TMP_DIRS.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('states no absolute path — the message is published on stdout', async () => {
+    const { projectRoot, skillOutputDir, filesConfig } = route.setup();
+
+    const error = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir }).then(
+      () => undefined,
+      (e: unknown) => e as Error,
+    );
+
+    expect(error?.message).toMatch(route.reached);
+    expect(error?.message).not.toContain(projectRoot);
+    expect(error?.message).not.toMatch(ABSOLUTE_PATH_SHAPE);
+  });
+});
+
 const INTEGRITY_TMP_PREFIX = 'vat-integrity-';
 
 /** Create an isolated temp dir and return src + dst paths under it (dst defaults to dst.txt). */

@@ -14,7 +14,7 @@ import { copyFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import type { SkillFileEntry } from '@vibe-agent-toolkit/resources';
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { issueLocation, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 export interface ApplyPluginFilesArgs {
   projectRoot: string;
@@ -57,8 +57,12 @@ export async function applyPluginFiles(args: ApplyPluginFilesArgs): Promise<void
     const sourceAbs = safePath.resolve(projectRoot, entry.source);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from project root
     if (!existsSync(sourceAbs)) {
+      // Project-relative, never absolute: this throw is reported as a build
+      // failure on machine-readable stdout, where an absolute path publishes the
+      // developer's home directory into whatever issue or CI log it lands in.
       throw new Error(
-        `plugin files[].source not found: ${entry.source} (resolved to ${sourceAbs})`,
+        `plugin files[].source not found: ${entry.source} ` +
+          `(resolved to ${issueLocation(sourceAbs, projectRoot) || '.'})`,
       );
     }
     const destAbs = validateDest(entry.dest, pluginOutputDir);
