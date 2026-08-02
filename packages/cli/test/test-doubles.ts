@@ -25,6 +25,25 @@ export const silentLogger: Logger = {
   debug: (_msg: string): void => {},
 };
 
+/**
+ * A logger that records every line it is handed, on every channel.
+ *
+ * ONE definition, beside {@link silentLogger}, for the same reason: a report is
+ * only assertable if the suite can read it, and every suite that needs to read
+ * one would otherwise re-type this four-method object.
+ *
+ * All four channels land in ONE array, in call order. That is the point: a
+ * report's meaning depends on what was printed NEXT TO what — a file count under
+ * the wrong skill's banner is a defect no per-channel bucket can express.
+ */
+export function recordingLogger(): { logger: Logger; lines: string[] } {
+  const lines: string[] = [];
+  const push = (message: string): void => {
+    lines.push(message);
+  };
+  return { logger: { info: push, warn: push, error: push, debug: () => {} }, lines };
+}
+
 /** What {@link captureProcessExit} observed. */
 export interface CapturedExit {
   /** Everything written to `process.stderr` during the run. */

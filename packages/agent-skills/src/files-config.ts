@@ -19,6 +19,7 @@ import {
   globMagicRemainder,
   hasParentTraversalSegment,
   isGlob,
+  issueLocation,
   safePath,
   staticGlobBase,
   toForwardSlash,
@@ -61,11 +62,28 @@ export interface DroppedGlobMatch {
   /** The glob `source:` whose net caught it. */
   source: string;
   /**
+   * ABSOLUTE path of the refused file, forward-slashed.
+   *
+   * The reported subject: this is the one path in this record a reader can
+   * actually open. `dest` names a path that, by definition, does NOT exist —
+   * nothing was written there — so a finding anchored at the dest cannot be
+   * traced back to anything. Kept absolute rather than pre-relativized because
+   * the run's anchor is the caller's to choose (`locationRoot` may not be the
+   * project root when one run spans several projects); every emitter passes it
+   * through {@link issueLocation} at emit time.
+   */
+  absFile: string;
+  /**
    * Skill-output-relative dest the file WOULD have had, spelled exactly as a
    * COPIED dest is (see {@link normalizeRelPath}) so consumers can compare the
    * two populations without re-deriving either. `checkBrokenPackagedLinks` keys
    * its never-package remediation on this exact set: a link is "broken because
    * VAT refused to package it" only when its target is one of THESE paths.
+   *
+   * A SET KEY, not a location: it is the coordinate system the packaged link
+   * graph is expressed in, and mixing it into an issue's `location` — which is
+   * always a source path to open — is what made one issue list speak two
+   * coordinate systems at once.
    */
   dest: string;
 }
@@ -90,20 +108,35 @@ export interface AppliedFilesConfig {
 }
 
 /**
- * Turn never-package drops into reportable build findings.
+ * Turn never-package drops into reportable findings.
  *
  * Lives here rather than in the packager because this module owns the concept:
  * the drop and the issue describing it must not be able to disagree.
+ *
+ * Anchored at the SOURCE file, in ONE coordinate system for both the location
+ * and the message. The finding used to name the would-be `dest` in both, which
+ * meant the only path it gave you was an output path nothing was ever written to
+ * — so the issue list mixed output coordinates (this code) with source
+ * coordinates (every other pre-build code) and an adopter could not open the
+ * thing that went missing. The glob pattern stays in the message because it
+ * answers the second question ("which entry caught this?"), but it is no longer
+ * the only identifiable thing in the finding.
+ *
+ * @param locationRoot The ONE base this run anchors locations at. Required, not
+ *   defaulted to the project root: a defaulted anchor is how a multi-project run
+ *   silently emits paths relative to the wrong tree.
  */
 export function droppedGlobMatchesToIssues(
   dropped: readonly DroppedGlobMatch[],
+  locationRoot: string,
 ): ValidationIssue[] {
-  return dropped.map((drop) =>
-    materializeIssue('FILES_GLOB_DROPPED_NEVER_PACKAGED', {
-      location: drop.dest,
-      detail: `${drop.dest} matched by files: source '${drop.source}'`,
-    }),
-  );
+  return dropped.map((drop) => {
+    const file = issueLocation(drop.absFile, locationRoot);
+    return materializeIssue('FILES_GLOB_DROPPED_NEVER_PACKAGED', {
+      location: file,
+      detail: `${file} matched by files: source '${drop.source}'`,
+    });
+  });
 }
 
 /**
@@ -472,6 +505,11 @@ async function expandGlobEntry(
     droppedRel: dropped,
     dropped: dropped.map((rel) => ({
       source: entry.source,
+      // The refused file itself. Computed HERE, where the base a match is
+      // relative to is known for certain, rather than re-derived by each
+      // consumer from `dest` — a dest cannot be inverted back to a source once
+      // the entry has rebased it.
+      absFile: toForwardSlash(safePath.joinUnderRoot(absoluteBase, rel)),
       dest: normalizeRelPath(safePath.join(entry.dest, rel)),
     })),
   };
@@ -558,13 +596,61 @@ async function copyGlobEntry(
   return { copied, pairs, rels, dropped };
 }
 
+/** One GLOB `files:` entry that currently expands to nothing at all. */
+export interface UnmatchedGlobEntry {
+  /** The glob `source:` that matched no files. */
+  source: string;
+  /**
+   * ABSOLUTE path of the directory it expanded under (the glob's static base),
+   * forward-slashed. Absolute for the same reason as
+   * {@link DroppedGlobMatch.absFile}: the run's anchor is the emitter's choice.
+   * The directory need not exist — "it isn't there yet" is the common case.
+   */
+  absBase: string;
+}
+
+/** One GLOB `files:` entry whose every match the never-package list refused. */
+export interface AllRefusedGlobEntry {
+  /** The glob `source:` that netted only never-packaged files. */
+  source: string;
+  /** ABSOLUTE path of the directory it expanded under, forward-slashed. */
+  absBase: string;
+  /**
+   * ABSOLUTE paths of every match, all of them refused. Carried in full because
+   * this finding SUPERSEDES the per-file drops for its entry (see
+   * {@link collectPreBuildGlobFindings}), so it is the only place those file
+   * names are still reported.
+   */
+  absRefused: string[];
+}
+
 /**
- * Every never-packaged file the project's GLOB `files:` entries would catch,
- * without copying anything.
+ * What the project's GLOB `files:` entries look like BEFORE anything is built.
  *
- * The pre-build half of {@link applyFilesConfig}'s `dropped`: `vat skills validate`
- * and `vat audit` can answer "what will this config silently fail to ship?" before
- * a build exists, and they answer it by running THE expansion the copy runs
+ * The three buckets are MUTUALLY EXCLUSIVE per entry, and they are the same three
+ * verdicts `copyGlobEntry` reaches at copy time — one entry cannot be both
+ * "matched nothing" and "matched only refused files", and an entry counted in
+ * `allRefused` contributes no `dropped` rows. Overlapping buckets would let one
+ * config produce two findings naming two different causes.
+ */
+export interface PreBuildGlobFindings {
+  /**
+   * Never-packaged files a glob would catch while still shipping something else.
+   * See {@link DroppedGlobMatch}.
+   */
+  dropped: DroppedGlobMatch[];
+  /** Globs that matched, but whose every match was refused — they ship nothing. */
+  allRefused: AllRefusedGlobEntry[];
+  /** Globs that currently match nothing — the other input the build dies on. */
+  unmatched: UnmatchedGlobEntry[];
+}
+
+/**
+ * What the project's GLOB `files:` entries would do, without copying anything.
+ *
+ * The pre-build half of {@link applyFilesConfig}: `vat skills validate` and
+ * `vat audit` can answer "what will this config fail to ship?" before a build
+ * exists, and they answer it by running THE expansion the copy runs
  * ({@link expandGlobEntry}) — a second, independently written expansion would be
  * free to disagree with the copy about what ships, which is the whole defect class
  * this module exists to close.
@@ -574,28 +660,110 @@ async function copyGlobEntry(
  * the expected state, not a failure. `copyGlobEntry` still raises there, where the
  * build HAS run and zero matches is real.
  *
+ * That reasoning settles the SEVERITY of a failing expansion, not whether to
+ * mention it — and this used to return only `dropped`, so the gate reported the
+ * drop that is harmless by design (a glob is a net) and said nothing about either
+ * expansion outcome that is certain to fail the very next command. `unmatched`
+ * and `allRefused` end that silence, graded `info` and `warning` respectively (see
+ * FILES_GLOB_MATCHED_NOTHING / FILES_GLOB_MATCHED_ONLY_NEVER_PACKAGED).
+ *
+ * The three buckets partition the entries exactly as `copyGlobEntry`'s own two
+ * throws plus its success path do — same predicates, same order, one expansion.
+ *
  * Drops re-shipped by an explicit entry are filtered out for the same reason
  * {@link applyFilesConfig} filters them: reporting "it did not ship" about a file
  * the documented escape hatch puts in the bundle tells an author their remediation
- * failed when it worked.
+ * failed when it worked. That filter is deliberately NOT applied to `allRefused`:
+ * `copyGlobEntry` throws on an entry whose own kept-set is empty no matter what
+ * any other entry ships, so filtering it would predict a green build that fails.
  */
-export async function collectDroppedGlobMatches(
+export async function collectPreBuildGlobFindings(
   filesConfig: readonly SkillFileEntry[],
   projectRoot: string,
-): Promise<DroppedGlobMatch[]> {
+): Promise<PreBuildGlobFindings> {
   const shippedDests = new Set(explicitFilesConfigDests(filesConfig));
   const dropped: DroppedGlobMatch[] = [];
+  const allRefused: AllRefusedGlobEntry[] = [];
+  const unmatched: UnmatchedGlobEntry[] = [];
   for (const entry of filesConfig) {
     if (!isGlob(entry.source)) continue;
     // A '..' segment in the magic remainder is a malformed pattern that
     // `expandGlobEntry` refuses to expand. It is the BUILD's error to raise (and
-    // `copyGlobEntry` does); a pre-build gate asking "what gets dropped?" must not
-    // abort the whole run over it — it simply has no drops to report for the entry.
+    // `copyGlobEntry` does); a pre-build gate asking "what would this do?" must not
+    // abort the whole run over it — and it must not put the entry in either failure
+    // bucket, which would name a cause (an unbuilt or unshippable artifact) that is
+    // not the one.
     if (hasParentTraversalSegment(globMagicRemainder(entry.source))) continue;
     const expansion = await expandGlobEntry(entry, projectRoot);
+    const absBase = toForwardSlash(expansion.absoluteBase);
+    // The two predicates below are `copyGlobEntry`'s two throws, in its order and
+    // keyed on its fields: zero total matches first, then zero SURVIVING matches.
+    // Keeping them distinct is what stops a wholly-refused glob from being
+    // reported as an unbuilt one — the build says "has your build run?" only in
+    // the first case, and sending an author to re-run a build that already ran is
+    // exactly the misdirection the second error was written to avoid.
+    if (expansion.allMatches.length === 0) {
+      unmatched.push({ source: entry.source, absBase });
+      continue;
+    }
+    if (expansion.kept.length === 0) {
+      // Supersedes this entry's per-file drops rather than adding to them: the
+      // build raises ONE error listing every refused file, and reporting the same
+      // cause again at file granularity would double-count a single defect. The
+      // file names are preserved on `absRefused`.
+      allRefused.push({
+        source: entry.source,
+        absBase,
+        absRefused: expansion.dropped.map((d) => d.absFile),
+      });
+      continue;
+    }
     dropped.push(...expansion.dropped.filter((d) => !shippedDests.has(normalizeRelPath(d.dest))));
   }
-  return dropped;
+  return { dropped, allRefused, unmatched };
+}
+
+/**
+ * Turn {@link collectPreBuildGlobFindings} into reportable pre-build issues.
+ *
+ * THE emitter for the pre-build gates, so a lane cannot pick up one half of the
+ * findings and quietly drop the other — which is how the zero-match went
+ * unreported for as long as it did.
+ *
+ * @param locationRoot The ONE base this run anchors locations at (see
+ *   {@link droppedGlobMatchesToIssues}).
+ */
+export function preBuildGlobFindingsToIssues(
+  findings: PreBuildGlobFindings,
+  locationRoot: string,
+): ValidationIssue[] {
+  // Both entry-level findings anchor at the glob's static base: they are about an
+  // ENTRY, not a file, and the base is the only path they have. `issueLocation`
+  // returns '' when the base IS the anchor root (a project-root-wide glob such as
+  // `**/*`); '.' is that same directory spelled as a path a reader can act on.
+  const anchorBase = (absBase: string): string => issueLocation(absBase, locationRoot) || '.';
+  return [
+    ...droppedGlobMatchesToIssues(findings.dropped, locationRoot),
+    ...findings.allRefused.map((entry) => {
+      const base = anchorBase(entry.absBase);
+      // Every refused file, in the SAME source coordinates the drop findings use —
+      // this issue is the only surviving report of those names.
+      const refused = entry.absRefused.map((f) => issueLocation(f, locationRoot)).join(', ');
+      return materializeIssue('FILES_GLOB_MATCHED_ONLY_NEVER_PACKAGED', {
+        location: base,
+        detail:
+          `files: source '${entry.source}' matched ${entry.absRefused.length} file(s) under ${base}, ` +
+          `all never packaged: ${refused}`,
+      });
+    }),
+    ...findings.unmatched.map((entry) => {
+      const base = anchorBase(entry.absBase);
+      return materializeIssue('FILES_GLOB_MATCHED_NOTHING', {
+        location: base,
+        detail: `files: source '${entry.source}' expands under ${base}`,
+      });
+    }),
+  ];
 }
 
 /**

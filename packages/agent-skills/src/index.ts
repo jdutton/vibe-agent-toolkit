@@ -37,13 +37,17 @@ export {
 
 export {
   applyFilesConfig,
-  collectDroppedGlobMatches,
+  collectPreBuildGlobFindings,
   droppedGlobMatchesToIssues,
   explicitFilesConfigDests,
   mergeFilesConfig,
+  preBuildGlobFindingsToIssues,
+  type AllRefusedGlobEntry,
   type AppliedFilesConfig,
   type ApplyFilesConfigOptions,
   type DroppedGlobMatch,
+  type PreBuildGlobFindings,
+  type UnmatchedGlobEntry,
 } from './files-config.js';
 
 export {

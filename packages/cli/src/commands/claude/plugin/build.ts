@@ -24,6 +24,7 @@ import {
   collectPostBuildIssues,
   formatIssueLines,
   formatIssueSetHeading,
+  formatPackagedFileCount,
   issuesToRenderAtVerbosity,
   sumSeverityCounts,
 } from '../../../utils/issue-rendering.js';
@@ -822,7 +823,7 @@ export async function packagePluginLocalSkills(input: {
       registry: input.registry,
     });
     input.logger.info(
-      `         ${skillName} -> skills/${skillDirPath} (${result.files.dependencies.length + 1} files)`,
+      `         ${skillName} -> skills/${skillDirPath} (${formatPackagedFileCount(result)})`,
     );
     packaged.push({ skillDirPath, result });
   }

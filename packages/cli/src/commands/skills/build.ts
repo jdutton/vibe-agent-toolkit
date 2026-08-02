@@ -39,8 +39,11 @@ import { handleCommandError } from '../../utils/command-error.js';
 import { loadConfig } from '../../utils/config-loader.js';
 import {
   collectPostBuildIssues,
+  countCollapsedFindings,
+  formatCollapsedFindingsHint,
   formatIssueLines,
   formatIssueSetHeading,
+  formatPackagedFileCount,
   formatRunIssueLines,
   issuesToRenderAtVerbosity,
   sumSeverityCounts,
@@ -115,19 +118,27 @@ Output:
   YAML summary -> stdout (for programmatic parsing)
   Build progress -> stderr (for human reading)
 
-  On stderr, every findings heading names the whole set and its severity
-  breakdown, and errors are always printed in full beneath it. Warnings and
-  info findings stay collapsed into that heading unless --verbose, because
-  they are the high-cardinality ones (one adopter skill carries 348
-  LINK_DROPPED_BY_DEPTH warnings alone).
+  On stderr, every findings heading names its skill, the whole set and its
+  severity breakdown, and errors are always printed in full beneath it.
+  Warnings and info findings stay collapsed into that heading unless
+  --verbose, because they are the high-cardinality ones (one adopter skill
+  carries 348 LINK_DROPPED_BY_DEPTH warnings alone); one line at the end of
+  the run names how many were collapsed.
 
-  --verbose changes the stderr report only. The stdout YAML is identical at
-  either verbosity because it publishes issueCounts ONLY — per-finding detail
-  (code, message, location) is on stderr and nowhere else in this command's
-  output. If you need the full machine-readable finding list, run
-  'vat skills validate' or 'vat audit'; those emit per-finding issues arrays.
+  --verbose changes the stderr report ONLY. The stdout YAML is identical at
+  either verbosity: every row carries its full issues array (code, message,
+  location, fix) whether or not the human report printed it, because filtering
+  a machine-readable document by a human report's verbosity breaks the
+  consumers that parse it.
 
-  skills:         one row per skill that produced a bundle
+  skills:         one row per skill whose bundle EXISTS on disk — empty
+                  whenever outputCommitted is false
+  skillsStaged:   the same rows for a run that built its bundles and then
+                  aborted the promotion. Deliberately a different key, and
+                  deliberately carrying no outputPath: nothing was written, so
+                  there is no path to publish. A consumer that installs,
+                  symlinks or checksums what a build produced reads skills[]
+                  and correctly finds nothing.
   failedSkills:   one row per skill that could not be packaged AT ALL (no
                   bundle exists for it); each carries name, error and an
                   issueCounts of one error
@@ -147,19 +158,22 @@ Output:
   issueCounts:    the run total, which reconciles against the rows above:
 
                     issueCounts = sum(skills[].issueCounts)
+                                + sum(skillsStaged[].issueCounts)
                                 + sum(failedSkills[].issueCounts)
                                 + sum(validationFailedSkills[].issueCounts)
                                 + runIssueCounts
 
                   Every error, warning and info in the header total is
-                  therefore attributable to a row you can point at.
+                  therefore attributable to a row you can point at. (Exactly
+                  one of skills / skillsStaged is ever non-empty, so no
+                  packaged bundle is counted twice.)
   outputCommitted:
                   whether dist/skills was REPLACED by this run. A build writes
                   into a staging directory and promotes it only if the whole
                   run is clean, so 'false' means nothing on disk changed and
-                  the previous dist/skills (if any) is exactly as it was.
-                  skills[].outputPath names where each bundle WOULD live; when
-                  outputCommitted is false, nothing was written there.
+                  the previous dist/skills (if any) is exactly as it was — and
+                  the packaged rows are published as skillsStaged, without an
+                  outputPath, because none was written.
 
 Exit Codes:
   0 - All skills built successfully (or dry-run preview)
@@ -217,12 +231,19 @@ export function formatPreBuildIssueReport(
 }
 
 /**
- * Render post-build integrity issues, each prefixed by its OWN resolved severity.
+ * Render ONE skill's post-build integrity issues, each prefixed by its OWN
+ * resolved severity.
  *
  * Reads BOTH post-build channels (see `collectPostBuildIssues`) so a build that
  * failed purely on the built-output validation still shows the findings that
  * failed it, and the heading names the set's actual severity mix rather than
  * calling every set by its worst member.
+ *
+ * The heading NAMES THE SKILL, matching `vat claude plugin build`'s per-skill
+ * heading, because this line is printed in the outcome pass — the validation pass
+ * has already emitted every `Building skill: <name>` banner, so at scale (92
+ * banners, then 86 outcome blocks) an unnamed heading sits under an unrelated
+ * skill's banner and is read as that skill's findings.
  *
  * The heading is unconditional and counts the WHOLE set; `verbose` decides only
  * which findings get a block beneath it (see `issuesToRenderAtVerbosity`). This
@@ -232,34 +253,47 @@ export function formatPreBuildIssueReport(
  * still renders its heading: collapsing that too would turn a warning-carrying
  * build into silence, which is the reassuring direction this module warns about.
  *
+ * The trailing colon is what varies: it introduces the blocks below, so a heading
+ * with nothing beneath it does not print one. A colon promising a list that the
+ * current verbosity will not print is the defect this half fixes; the other half
+ * is the run-level `--verbose` hint (see `formatCollapsedFindingsHint`).
+ *
  * Pure: returns the lines instead of writing them, so the whole rendered set is
  * assertable without capturing a stream.
  */
 export function formatPostBuildIssueReport(
+  skillName: string,
   result: PackageSkillResult,
   verbose: boolean,
 ): string[] {
   const issues = collectPostBuildIssues(result);
   if (issues.length === 0) return [];
-  const lines = [`   ${formatIssueSetHeading(issues, 'post-build')}:`];
-  for (const issue of issuesToRenderAtVerbosity(issues, verbose)) {
+  const rendered = issuesToRenderAtVerbosity(issues, verbose);
+  const heading = `   ${skillName}: ${formatIssueSetHeading(issues, 'post-build')}`;
+  const lines = [rendered.length === 0 ? heading : `${heading}:`];
+  for (const issue of rendered) {
     lines.push(...formatIssueLines(issue, '     '));
   }
   return lines;
 }
 
 /**
- * Log post-build integrity issues to stderr (the human stream; stdout is
- * reserved for the YAML summary).
+ * Log one skill's post-build integrity issues to stderr (the human stream;
+ * stdout is reserved for the YAML summary).
+ *
+ * Returns how many findings this verbosity collapsed, so the run can print ONE
+ * hint naming the total rather than one per skill.
  */
 function logPostBuildIssues(
+  skillName: string,
   result: PackageSkillResult,
   logger: ReturnType<typeof createLogger>,
   verbose: boolean,
-): void {
-  for (const line of formatPostBuildIssueReport(result, verbose)) {
+): number {
+  for (const line of formatPostBuildIssueReport(skillName, result, verbose)) {
     logger.info(line);
   }
+  return countCollapsedFindings(collectPostBuildIssues(result), verbose);
 }
 
 /**
@@ -431,10 +465,14 @@ const failureIssueCounts = (): SeverityCounts => ({ errors: 1, warnings: 0, info
  *
  * The header total reconciles against the document, by construction:
  *
- *     issueCounts === Σ skills[].issueCounts
+ *     issueCounts === Σ (skills[] ∪ skillsStaged[])[].issueCounts
  *                   + Σ failedSkills[].issueCounts
  *                   + Σ validationFailedSkills[].issueCounts
  *                   + runIssueCounts
+ *
+ * `skills` and `skillsStaged` are the same population under two names, and
+ * exactly one of them is ever non-empty (see the comment on `skills` below), so
+ * summing both is summing each packaged bundle once.
  *
  * Every addend therefore has a ROW a reader can point at. Counting the failures
  * only in the header — which is how this first shipped — reproduced, one command
@@ -442,6 +480,17 @@ const failureIssueCounts = (): SeverityCounts => ({ errors: 1, warnings: 0, info
  * more than its rows summed to (there, 1814 warnings against 1800), leaving a
  * consumer to hand-count a list to find out what the difference was. `--help`
  * states this identity; changing it means changing that text too.
+ *
+ * Each packaged row carries its `issues` as well as its counts. It did not, for
+ * a while: the findings were collected here and then dropped at the publish
+ * step, so the document offered a count with no `code`, no location and no fix
+ * string at ANY verbosity — an adopter run published 67 warnings and zero
+ * findings. That is acute for the four detectors this lane added: their output
+ * existed only on stderr, where no CI consumer reads it. Full findings on the
+ * rows is the shape `vat audit` and `vat skills validate --verbose` already
+ * publish, and it is verbosity-INDEPENDENT here for the reason stated in
+ * `issuesToRenderAtVerbosity`: filtering a machine-readable document by a human
+ * report's verbosity silently breaks the consumers that parse it.
  *
  * Takes the whole {@link SkillBuildRun} rather than a positional list of its
  * parts: the run has four populations now, and a positional call site can
@@ -464,6 +513,13 @@ export function buildYamlSummary(
     outputPath: string;
     filesPackaged: number;
     issueCounts: SeverityCounts;
+    issues: ValidationIssue[];
+  }>;
+  skillsStaged: Array<{
+    name: string;
+    filesPackaged: number;
+    issueCounts: SeverityCounts;
+    issues: ValidationIssue[];
   }>;
   failedSkills: Array<{ name: string; error: string; issueCounts: SeverityCounts }>;
   validationFailedSkills: Array<{ name: string; issueCounts: SeverityCounts }>;
@@ -549,12 +605,31 @@ export function buildYamlSummary(
     // `skills` lists what exists on disk. A failed skill is published in its own
     // list rather than here, because every field of this shape (outputPath,
     // filesPackaged) would have to be invented for a bundle that was not written.
-    skills: perSkill.map(({ name, outputPath, filesPackaged, issueCounts }) => ({
-      name,
-      outputPath,
-      filesPackaged,
-      issueCounts,
-    })),
+    //
+    // That invariant did not survive `outputCommitted: false`, which is the OTHER
+    // way a row can name a path nothing was written to: the bundles are built into
+    // staging and the promotion is then aborted, so a failed 86-skill run published
+    // 86 `dist/skills/<name>` paths of which 85 did not exist (verified with
+    // `fs.existsSync` over every row). A CI step reading `skills[].outputPath` to
+    // install, symlink or checksum got 85 dead paths, with no signal but a sibling
+    // boolean it was not told to read.
+    //
+    // So the rows MOVE when the swap did not happen, rather than losing a field:
+    // a consumer iterating `skills[]` sees the empty list its documented meaning
+    // ("what exists on disk") demands, while `skillsStaged[]` — a name that
+    // promises nothing about the disk — keeps the findings and the counts the
+    // header identity is summed from. Those rows publish no `outputPath` at all,
+    // because there is no honest value for it: the staging path has been deleted
+    // and the final path was never written.
+    skills: outputCommitted ? perSkill : [],
+    skillsStaged: outputCommitted
+      ? []
+      : perSkill.map(({ name, filesPackaged, issueCounts, issues }) => ({
+        name,
+        filesPackaged,
+        issueCounts,
+        issues,
+      })),
     failedSkills,
     validationFailedSkills,
     runIssues: [...runIssues],
@@ -569,7 +644,7 @@ function outputBuildYaml(run: SkillBuildRun, duration: number): void {
   const summary = buildYamlSummary(run, duration);
   const {
     status, skillsBuilt, skillsFailed, skillsFailedValidation, issueCounts, runIssueCounts,
-    skills, failedSkills, validationFailedSkills, outputCommitted,
+    skills, skillsStaged, failedSkills, validationFailedSkills, outputCommitted,
     duration: durationText,
   } = summary;
   // In the header, beside the other counts: these are the numbers the exit code
@@ -590,6 +665,10 @@ function outputBuildYaml(run: SkillBuildRun, duration: number): void {
         issueCounts,
         runIssueCounts,
         skills,
+        // Always published, even empty, for the same reason `failedSkills` is: an
+        // absent key reads as "this run had no such concept", and a consumer that
+        // has to distinguish absent from empty will get it wrong.
+        skillsStaged,
         failedSkills,
         validationFailedSkills,
         skillsWithErrorNames: summary.skillsWithErrors,
@@ -604,6 +683,11 @@ function outputBuildYaml(run: SkillBuildRun, duration: number): void {
 /** How the human stream names the output tree. One spelling, one place. */
 const DIST_SKILLS_LABEL = 'dist/skills';
 
+/** The tree a successful build promotes its staged bundles into. */
+function distSkillsDir(cwd: string): string {
+  return safePath.resolve(cwd, 'dist', 'skills');
+}
+
 /**
  * Where a skill's bundle lives once a build has earned the swap.
  *
@@ -612,7 +696,94 @@ const DIST_SKILLS_LABEL = 'dist/skills';
  * construction the path the swap lands on.
  */
 function finalOutputPath(cwd: string, skillName: string): string {
-  return safePath.resolve(cwd, 'dist', 'skills', skillNameToFsPath(skillName));
+  return safePath.join(distSkillsDir(cwd), skillNameToFsPath(skillName));
+}
+
+/**
+ * Rewrite `value` when it names `from` or something inside it; otherwise
+ * `undefined`, so a caller can fall through to the next candidate base.
+ *
+ * The separator in the prefix test is load-bearing: `beginStagedBuild` parks the
+ * previous output at `${root}.previous`, a SIBLING whose string starts with the
+ * staging root. A bare `startsWith` would rewrite it into the final tree and
+ * report a finding against a path that never held the file.
+ */
+function replacePathPrefix(value: string, from: string, to: string): string | undefined {
+  if (value === from) return to;
+  return value.startsWith(`${from}/`) ? `${to}${value.slice(from.length)}` : undefined;
+}
+
+/**
+ * Map any path anchored on the run's staging root onto the tree the swap lands
+ * on — the ONE re-anchoring, applied to every path a result publishes.
+ *
+ * Staging is transient in BOTH outcomes: `dist/.vat-skills-<rand>` is renamed
+ * away on success and deleted on failure, and the `mkdtemp` suffix means a
+ * reader cannot even reconstruct it. Any path that escapes this mapping is
+ * therefore unopenable by the time anyone reads it — which is what the published
+ * `outputPath` was fixed for, while the per-finding `location` strings kept
+ * leaking it (`Location: dist/.vat-skills-uxxJfu/demo/SKILL.md`, observed on a
+ * real adopter and on a two-skill fixture). One mapper, applied at one seam, is
+ * what keeps the two from drifting apart again.
+ *
+ * Both spellings are handled because the two carriers use different coordinate
+ * systems: `outputPath` is absolute (see `buildYamlSummary`), while a finding's
+ * `location` is relative to the project root the validator anchored on. The
+ * mapping preserves whichever it was given — re-basing a location here would put
+ * the report into two coordinate systems, the very thing `locationRoot` exists
+ * to prevent.
+ */
+function createStagingPathMapper(cwd: string, stagingRoot: string): (value: string) => string {
+  const absoluteFrom = toForwardSlash(stagingRoot);
+  const absoluteTo = distSkillsDir(cwd);
+  const relativeFrom = toForwardSlash(safePath.relative(cwd, stagingRoot));
+  const relativeTo = toForwardSlash(safePath.relative(cwd, absoluteTo));
+
+  return (value: string): string => {
+    const forward = toForwardSlash(value);
+    return (
+      replacePathPrefix(forward, absoluteFrom, absoluteTo)
+      ?? replacePathPrefix(forward, relativeFrom, relativeTo)
+      ?? value
+    );
+  };
+}
+
+/** Re-anchor the `location` of every issue that names a staged path. */
+function reanchorIssueLocations(
+  issues: readonly ValidationIssue[],
+  mapPath: (value: string) => string,
+): ValidationIssue[] {
+  return issues.map((issue) => {
+    if (issue.location === undefined) return issue;
+    const location = mapPath(issue.location);
+    return location === issue.location ? issue : { ...issue, location };
+  });
+}
+
+/**
+ * Re-anchor everything ONE skill's result says about where things are.
+ *
+ * Both post-build channels are rewritten, not just the one the summary reads:
+ * `collectPostBuildIssues` merges them and either can carry a staged location
+ * (the built-output validation runs against the staged `SKILL.md` itself), so a
+ * mapper applied to one of them leaves the report half-anchored.
+ */
+function reanchorStagedResult(
+  result: PackageSkillResult,
+  mapPath: (value: string) => string,
+): PackageSkillResult {
+  const reanchored: PackageSkillResult = { ...result, outputPath: mapPath(result.outputPath) };
+  if (result.postBuildIssues) {
+    reanchored.postBuildIssues = reanchorIssueLocations(result.postBuildIssues, mapPath);
+  }
+  if (result.postBuildValidation) {
+    reanchored.postBuildValidation = {
+      ...result.postBuildValidation,
+      allErrors: reanchorIssueLocations(result.postBuildValidation.allErrors, mapPath),
+    };
+  }
+  return reanchored;
 }
 
 /**
@@ -880,31 +1051,42 @@ export async function runSkillBuild(input: SkillBuildRunInput): Promise<SkillBui
   const results: Array<{ name: string; result: PackageSkillResult }> = [];
   const skillsWithErrors: string[] = [];
   const failures: SkillBuildFailure[] = [];
+  const mapStagedPath = createStagingPathMapper(cwd, staging.root);
+  let collapsedFindings = 0;
   for (const [i, spec] of buildable.entries()) {
     const outcome = outcomes[i];
     if (!outcome) continue;
+    const skillName = spec.skill.name;
     if (outcome.status === 'failed') {
-      // No `Built N files` line here: nothing was built, and claiming a count
-      // for an absent bundle is the misreport this branch exists to avoid.
-      logger.error(`\nBuild failed for skill: ${spec.skill.name}`);
+      // No file-count line here: nothing was built, and claiming a count for an
+      // absent bundle is the misreport this branch exists to avoid.
+      logger.error(`\nBuild failed for skill: ${skillName}`);
       logger.error(`   ${outcome.error.message}`);
-      failures.push({ name: spec.skill.name, message: outcome.error.message });
+      failures.push({ name: skillName, message: outcome.error.message });
       continue;
     }
-    const { result } = outcome;
-    logger.info(`   Built ${result.files.dependencies.length + 1} files`);
-    logPostBuildIssues(result, logger, verbose);
+    // Re-anchored BEFORE anything reads it — the report below and the published
+    // row both. The bundle was written under staging, and staging is transient
+    // in both outcomes, so any path that survives this call unmapped is a path
+    // its reader cannot open. See `createStagingPathMapper`.
+    const result = reanchorStagedResult(outcome.result, mapStagedPath);
+    // Named, because this line is printed in a SECOND pass: the validation pass
+    // above emits every `Building skill: <name>` banner first, so at scale (92
+    // banners, then 86 outcomes) an unnamed count line sits under an unrelated
+    // skill's banner and reads as that skill's result.
+    logger.info(`   ${skillName}: built ${formatPackagedFileCount(result)}`);
+    collapsedFindings += logPostBuildIssues(skillName, result, logger, verbose);
     if (result.hasErrors) {
-      skillsWithErrors.push(spec.skill.name);
+      skillsWithErrors.push(skillName);
     }
-    // Re-anchored onto the FINAL path. The bundle was written under staging, but
-    // staging is transient: publishing that path would hand a consumer a
-    // directory that stops existing the moment this function returns.
-    results.push({
-      name: spec.skill.name,
-      result: { ...result, outputPath: finalOutputPath(cwd, spec.skill.name) },
-    });
+    results.push({ name: skillName, result });
   }
+  // ONE hint for the run, after every skill has reported — the shape `vat audit`
+  // already uses. Per skill it would repeat 86 times on the adopter run that
+  // motivated it; omitted entirely (which is how this shipped) the collapsed
+  // block is a heading with nothing under it and no way to learn there is more.
+  const collapsedHint = formatCollapsedFindingsHint(collapsedFindings, 'build');
+  if (collapsedHint !== undefined) logger.info(collapsedHint);
 
   // Drain point: every skill and every lane has now contributed, so this is the
   // first place the run can honestly say an entry matched nothing. A skill that

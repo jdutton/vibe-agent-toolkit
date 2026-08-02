@@ -7,8 +7,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   applyFilesConfig,
   buildArtifactHint,
-  collectDroppedGlobMatches,
+  collectPreBuildGlobFindings,
   explicitFilesConfigDests,
+  preBuildGlobFindingsToIssues,
   globEntryDest,
   mergeFilesConfig,
   verifyFilesIntegrity,
@@ -169,10 +170,17 @@ describe('explicitFilesConfigDests', () => {
   });
 });
 
-/** Sandbox with `<projectRoot>/extras/{keep.json,README.md,CLAUDE.md}`. */
+/**
+ * Sandbox with `<projectRoot>/gen/extras/{keep.json,README.md,CLAUDE.md}`.
+ *
+ * The SOURCE directory (`gen/extras`) is deliberately not the DEST (`extras`).
+ * Where those two spellings coincide, a fixture cannot distinguish a finding
+ * anchored at the source file from one anchored at the would-be dest — and that
+ * is exactly the distinction the cases below assert.
+ */
 function makeExtrasSandbox(): string {
   const { projectRoot } = makeApplySandbox();
-  const extras = safePath.join(projectRoot, EXTRAS_DEST);
+  const extras = safePath.join(projectRoot, EXTRAS_SRC_DIR);
   mkdirSyncReal(extras, { recursive: true });
   writeFileSync(safePath.join(extras, 'keep.json'), '{}');
   writeFileSync(safePath.join(extras, 'README.md'), '# readme\n');
@@ -180,29 +188,53 @@ function makeExtrasSandbox(): string {
   return projectRoot;
 }
 
+const EXTRAS_SRC_DIR = 'gen/extras';
 const EXTRAS_DEST = 'extras';
-const EXTRAS_GLOB_SOURCE = 'extras/**/*';
+const EXTRAS_GLOB_SOURCE = `${EXTRAS_SRC_DIR}/**/*`;
+const EXTRAS_MD_GLOB_SOURCE = `${EXTRAS_SRC_DIR}/*.md`;
+const EXTRAS_README_SOURCE = `${EXTRAS_SRC_DIR}/README.md`;
+const EXTRAS_CLAUDE_SOURCE = `${EXTRAS_SRC_DIR}/CLAUDE.md`;
 const EXTRAS_README_DEST = 'extras/README.md';
 const EXTRAS_CLAUDE_DEST = 'extras/CLAUDE.md';
 const extrasGlob: SkillFileEntry = { source: EXTRAS_GLOB_SOURCE, dest: EXTRAS_DEST };
+/** A glob over an artifact directory the project has not built yet. */
+const UNBUILT_GLOB: SkillFileEntry = { source: 'dist/not-built/**/*', dest: 'packs' };
+const UNBUILT_BASE = 'dist/not-built';
 
-describe('collectDroppedGlobMatches', () => {
+/** Project-relative spelling of an absolute path a finding carries. */
+function relTo(projectRoot: string, abs: string): string {
+  return toForwardSlash(safePath.relative(projectRoot, abs));
+}
+
+const byString = (a: string, b: string): number => a.localeCompare(b);
+
+describe('collectPreBuildGlobFindings', () => {
   afterEach(() => {
     for (const dir of APPLY_TMP_DIRS.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
 
   it('reports each never-packaged file a glob matched, spelled as its would-be dest', async () => {
     const projectRoot = makeExtrasSandbox();
-    const dropped = await collectDroppedGlobMatches([extrasGlob], projectRoot);
-    expect(dropped.map(d => d.dest).sort((a, b) => a.localeCompare(b)))
+    const { dropped } = await collectPreBuildGlobFindings([extrasGlob], projectRoot);
+    expect(dropped.map(d => d.dest).sort(byString))
       .toEqual([EXTRAS_CLAUDE_DEST, EXTRAS_README_DEST]);
     expect(dropped.every(d => d.source === EXTRAS_GLOB_SOURCE)).toBe(true);
   });
 
+  // The dest names a path that, by definition, does NOT exist — the file was
+  // refused. Without the source path the finding cannot be traced back to
+  // anything the author can open.
+  it('carries the source file behind each drop, not only its would-be dest', async () => {
+    const projectRoot = makeExtrasSandbox();
+    const { dropped } = await collectPreBuildGlobFindings([extrasGlob], projectRoot);
+    expect(dropped.map(d => relTo(projectRoot, d.absFile)).sort(byString))
+      .toEqual([EXTRAS_CLAUDE_SOURCE, EXTRAS_README_SOURCE]);
+  });
+
   it('does not report a drop an explicit entry re-ships (the documented escape hatch)', async () => {
     const projectRoot = makeExtrasSandbox();
-    const dropped = await collectDroppedGlobMatches(
-      [extrasGlob, { source: EXTRAS_README_DEST, dest: EXTRAS_README_DEST }],
+    const { dropped } = await collectPreBuildGlobFindings(
+      [extrasGlob, { source: EXTRAS_README_SOURCE, dest: EXTRAS_README_DEST }],
       projectRoot,
     );
     // Order-independent: the filter is on the FINAL declared dest set, not on the
@@ -212,23 +244,185 @@ describe('collectDroppedGlobMatches', () => {
 
   it('ignores non-glob entries entirely', async () => {
     const projectRoot = makeExtrasSandbox();
-    const dropped = await collectDroppedGlobMatches(
-      [{ source: EXTRAS_CLAUDE_DEST, dest: 'notes/CLAUDE.md' }],
+    const findings = await collectPreBuildGlobFindings(
+      [{ source: EXTRAS_CLAUDE_SOURCE, dest: 'notes/CLAUDE.md' }],
       projectRoot,
     );
+    expect(findings).toEqual({ dropped: [], allRefused: [], unmatched: [] });
+  });
+
+  // --- THREE populations, three verdicts -----------------------------------
+  //
+  // `copyGlobEntry` fails a glob entry in two distinct ways and ships happily in
+  // a third, and the pre-build gate has to tell all three apart. Each case below
+  // asserts the FULL triple, not just its own bucket: an assertion that only
+  // looked at one field could not tell these populations apart at all, which is
+  // the failure mode that let two of the three go unreported.
+  //
+  //   partial     → some matches ship, some refused  → drops, no failure
+  //   all-refused → matched, nothing can ship        → build error (exclusion)
+  //   unmatched   → matched nothing at all           → build error (has your build run?)
+
+  it('partial: reports drops only — the entry still ships something', async () => {
+    const projectRoot = makeExtrasSandbox();
+    const { dropped, allRefused, unmatched } = await collectPreBuildGlobFindings(
+      [extrasGlob],
+      projectRoot,
+    );
+    expect(dropped.map(d => d.dest).sort(byString))
+      .toEqual([EXTRAS_CLAUDE_DEST, EXTRAS_README_DEST]);
+    expect(allRefused).toEqual([]);
+    expect(unmatched).toEqual([]);
+  });
+
+  // The residual left by the first fix: this entry MATCHED, so it is not
+  // "unmatched" — and every match was refused, so it ships nothing and
+  // `copyGlobEntry` throws its own distinct error. The gate used to emit only the
+  // per-file drops here, i.e. the harmless half, and stay silent about the fact
+  // that this entry kills the build.
+  it('all-refused: reports the entry as shipping nothing, not as unmatched', async () => {
+    const projectRoot = makeExtrasSandbox();
+    const { dropped, allRefused, unmatched } = await collectPreBuildGlobFindings(
+      [{ source: EXTRAS_MD_GLOB_SOURCE, dest: EXTRAS_DEST }],
+      projectRoot,
+    );
+    expect(unmatched).toEqual([]);
+    expect(allRefused.map(e => e.source)).toEqual([EXTRAS_MD_GLOB_SOURCE]);
+    expect(allRefused.map(e => relTo(projectRoot, e.absBase))).toEqual([EXTRAS_SRC_DIR]);
+    expect(allRefused[0]?.absRefused.map(f => relTo(projectRoot, f)).sort(byString))
+      .toEqual([EXTRAS_CLAUDE_SOURCE, EXTRAS_README_SOURCE]);
+    // One entry-level finding SUPERSEDES the per-file drops, exactly as the build
+    // raises one error listing every refused file rather than N receipts. Leaving
+    // both would report the same cause at two granularities.
     expect(dropped).toEqual([]);
   });
 
-  // Pre-build lanes run BEFORE the artifact exists. A glob over an unbuilt `dist/`
-  // must be silent here — `copyGlobEntry` still throws at copy time, where the
-  // build genuinely has run and zero matches is a real failure.
-  it('is silent for a glob whose base does not exist yet', async () => {
+  // A pre-build gate runs before the artifact exists, so zero matches is the
+  // EXPECTED state — and it is also the exact input `copyGlobEntry` dies on. Both
+  // are true at once, so the gate reports it at `info` rather than staying silent
+  // about the one condition that is certain to fail the build.
+  it('unmatched: reports a glob whose base does not exist yet, as neither a drop nor all-refused', async () => {
     const projectRoot = makeExtrasSandbox();
-    const dropped = await collectDroppedGlobMatches(
-      [{ source: 'dist/not-built/**/*', dest: 'packs' }],
+    const { dropped, allRefused, unmatched } = await collectPreBuildGlobFindings(
+      [UNBUILT_GLOB],
       projectRoot,
     );
     expect(dropped).toEqual([]);
+    expect(allRefused).toEqual([]);
+    expect(unmatched.map(u => u.source)).toEqual([UNBUILT_GLOB.source]);
+    expect(unmatched.map(u => relTo(projectRoot, u.absBase))).toEqual([UNBUILT_BASE]);
+  });
+
+  // The escape hatch does NOT rescue this entry, and the gate must not pretend it
+  // does: `copyGlobEntry` throws on an entry whose own kept-set is empty, whatever
+  // some other entry ships. Filtering this finding by the declared dest set — the
+  // way drops are filtered — would predict a green build that fails.
+  it('all-refused: still fires when an explicit entry re-ships one of the refused files', async () => {
+    const projectRoot = makeExtrasSandbox();
+    const { allRefused } = await collectPreBuildGlobFindings(
+      [
+        { source: EXTRAS_MD_GLOB_SOURCE, dest: EXTRAS_DEST },
+        { source: EXTRAS_README_SOURCE, dest: EXTRAS_README_DEST },
+      ],
+      projectRoot,
+    );
+    expect(allRefused.map(e => e.source)).toEqual([EXTRAS_MD_GLOB_SOURCE]);
+  });
+});
+
+describe('preBuildGlobFindingsToIssues', () => {
+  afterEach(() => {
+    for (const dir of APPLY_TMP_DIRS.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('anchors a drop at the source file and names the glob that caught it', async () => {
+    const projectRoot = makeExtrasSandbox();
+    const issues = preBuildGlobFindingsToIssues(
+      await collectPreBuildGlobFindings([extrasGlob], projectRoot),
+      projectRoot,
+    );
+    const readme = issues.find(i => i.location === EXTRAS_README_SOURCE);
+    expect(readme?.code).toBe('FILES_GLOB_DROPPED_NEVER_PACKAGED');
+    expect(readme?.severity).toBe('warning');
+    // Subject first (the file to open), then the entry that caught it.
+    expect(readme?.message).toContain(EXTRAS_README_SOURCE);
+    expect(readme?.message).toContain(EXTRAS_GLOB_SOURCE);
+  });
+
+  // One issue, ONE coordinate system: the drop is about a SOURCE file, so its
+  // location must not be a would-be output path that exists nowhere.
+  it('never anchors a drop at the dest it did not ship to', async () => {
+    const projectRoot = makeExtrasSandbox();
+    const issues = preBuildGlobFindingsToIssues(
+      await collectPreBuildGlobFindings([extrasGlob], projectRoot),
+      projectRoot,
+    );
+    expect(issues.map(i => i.location)).not.toContain(EXTRAS_README_DEST);
+    expect(issues.map(i => i.location)).not.toContain(EXTRAS_CLAUDE_DEST);
+  });
+
+  it('reports an unmatched glob as info naming the build failure it predicts', async () => {
+    const projectRoot = makeExtrasSandbox();
+    const issues = preBuildGlobFindingsToIssues(
+      await collectPreBuildGlobFindings([UNBUILT_GLOB], projectRoot),
+      projectRoot,
+    );
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.code).toBe('FILES_GLOB_MATCHED_NOTHING');
+    expect(issues[0]?.severity).toBe('info');
+    expect(issues[0]?.location).toBe(UNBUILT_BASE);
+    expect(issues[0]?.message).toContain(UNBUILT_GLOB.source);
+    expect(issues[0]?.message).toMatch(/build/i);
+  });
+
+  // A separate CODE from the zero-match, because the two have different causes
+  // and different remedies: "run your build first" is useless advice for a glob
+  // that netted only files VAT never packages, and vice versa.
+  it('reports an all-refused glob under its own code, naming every refused file', async () => {
+    const projectRoot = makeExtrasSandbox();
+    const issues = preBuildGlobFindingsToIssues(
+      await collectPreBuildGlobFindings(
+        [{ source: EXTRAS_MD_GLOB_SOURCE, dest: EXTRAS_DEST }],
+        projectRoot,
+      ),
+      projectRoot,
+    );
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.code).toBe('FILES_GLOB_MATCHED_ONLY_NEVER_PACKAGED');
+    expect(issues[0]?.severity).toBe('warning');
+    expect(issues[0]?.location).toBe(EXTRAS_SRC_DIR);
+    expect(issues[0]?.message).toContain(EXTRAS_MD_GLOB_SOURCE);
+    // Every refused file, in source coordinates — the same single coordinate
+    // system the drop findings use.
+    expect(issues[0]?.message).toContain(EXTRAS_CLAUDE_SOURCE);
+    expect(issues[0]?.message).toContain(EXTRAS_README_SOURCE);
+  });
+
+  // The remedy must be executable. Two ways it could misdirect: sending the
+  // reader to re-run a build that already ran (that is the OTHER code's advice),
+  // or offering a wider glob — which clears the error while still shipping none
+  // of these files, because the never-package filter matches on basename at any
+  // width. Advice that looks like it worked and silently did not.
+  it('gives an all-refused glob an executable remedy, not the zero-match one', async () => {
+    const projectRoot = makeExtrasSandbox();
+    const issues = preBuildGlobFindingsToIssues(
+      await collectPreBuildGlobFindings(
+        [{ source: EXTRAS_MD_GLOB_SOURCE, dest: EXTRAS_DEST }],
+        projectRoot,
+      ),
+      projectRoot,
+    );
+    const fix = issues[0]?.fix ?? '';
+    expect(fix).toMatch(/explicit/i);
+    expect(fix).not.toMatch(/has your build run|run your build|produce the artifact first/i);
+    // Widening may be MENTIONED, but only to rule it out — never as the remedy.
+    // Checked per sentence rather than with one spanning pattern: a regex that
+    // has to reach across a clause to find the negation is both fragile and the
+    // shape the linter rejects for backtracking.
+    const widenSentence = fix.split('.').find((s) => s.toLowerCase().includes('widen'));
+    if (widenSentence !== undefined) {
+      expect(widenSentence.toLowerCase()).toMatch(/\bnot\b|\bnever\b/);
+    }
   });
 });
 

@@ -586,8 +586,13 @@ describe('never-packaged glob matches reach the structured build result', () => 
 
     const issues = result.postBuildIssues ?? [];
     const drops = issues.filter(i => i.code === 'FILES_GLOB_DROPPED_NEVER_PACKAGED');
+    // Anchored at the SOURCE file (`dist/extras/…`), not the dest subtree
+    // (`extras/…`) the entry would have rebased it into: the dest was never
+    // written, so it names a path that exists in no tree. The two spellings
+    // differ here on purpose — that is what makes this assertion able to tell
+    // them apart.
     expect(drops.map(i => i.location).sort((a, b) => (a ?? '').localeCompare(b ?? ''))).toEqual(
-      DROPPED_BASENAMES.map(n => `extras/${n}`).sort((a, b) => a.localeCompare(b)),
+      DROPPED_BASENAMES.map(n => `dist/extras/${n}`).sort((a, b) => a.localeCompare(b)),
     );
     // The count the report publishes — derived the same way the CLI derives it.
     expect(countBySeverity(issues).warnings).toBeGreaterThanOrEqual(DROPPED_BASENAMES.length);

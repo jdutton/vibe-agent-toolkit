@@ -135,6 +135,50 @@ export const CODE_REGISTRY = {
     'No action needed if the drop is intended — a glob is a net, not a declaration. To ship that specific file deliberately, add an explicit `files:` entry naming it (`source: <path>`); to stop matching it at all, narrow the glob.',
     'files_glob_dropped_never_packaged',
   ),
+  // The third of three verdicts a pre-build gate can reach about one glob entry
+  // (partial drop / nothing shippable / nothing matched). This one: the glob
+  // matched, and the never-package list refused EVERY match, so the entry ships
+  // nothing and `copyGlobEntry` raises its own distinct error.
+  //
+  // A separate code rather than a widened FILES_GLOB_MATCHED_NOTHING because the
+  // two have different causes and therefore different remedies: "produce the
+  // artifact first" is useless advice for a glob that netted only files VAT never
+  // packages, and "name the file explicitly" is useless for one whose directory
+  // is empty. One code would have to carry both, and a reader would have to work
+  // out which half applied to them.
+  //
+  // `warning`, not `error`: a pre-build tree can be a PARTIAL artifact just as it
+  // can be an absent one — a stale `dist/` holding only a README.md is the same
+  // phenomenon that makes the zero-match `info` — so blocking CI here can be
+  // wrong. Louder than `info` because, unlike an empty directory, a directory
+  // containing only never-packaged files is not the ordinary pre-build state.
+  FILES_GLOB_MATCHED_ONLY_NEVER_PACKAGED: entry(
+    'warning',
+    'A `files:` glob matched only files that are never packaged into a skill bundle (agent-instruction files such as CLAUDE.md, navigation files such as README.md), so the entry ships nothing and `vat skills build` fails on it.',
+    // Deliberately does NOT say "widen the glob": the never-package filter matches
+    // on basename and applies at any width, so a wider glob clears the error while
+    // still shipping none of these files — advice that looks like it worked.
+    'Name the file you intend to ship in an explicit (non-glob) `files:` entry (`source: <path>`), or point the glob at a directory that holds files which can be packaged. Widening the glob does not help — the never-package filter matches on basename at any width. Set severity.FILES_GLOB_MATCHED_ONLY_NEVER_PACKAGED to ignore if the entry is deliberately inert.',
+    'files_glob_matched_only_never_packaged',
+  ),
+  // Distinct from FILES_GLOB_DROPPED_NEVER_PACKAGED, which is about a glob that
+  // MATCHED and then had a match refused, and from
+  // FILES_GLOB_MATCHED_ONLY_NEVER_PACKAGED, where it matched and none survived.
+  // This one is about a glob that matched nothing at all — the other input
+  // `vat skills build` dies on.
+  //
+  // `info`, not `warning`: a pre-build gate runs before the artifact exists, so a
+  // glob over an unbuilt `dist/` matching nothing is the expected state and must
+  // not fail anyone's CI. But "expected state" and "the build will die on this"
+  // are both true at once, and the gate used to report NEITHER — reporting the
+  // drop that is harmless by design while staying silent about the zero-match
+  // that is fatal.
+  FILES_GLOB_MATCHED_NOTHING: entry(
+    'info',
+    'A `files:` glob currently matches no files; `vat skills build` fails on a glob that matches nothing, so the build will fail unless that artifact is produced first.',
+    'No action needed if the glob points at a build artifact your project produces before `vat skills build` runs — matching nothing beforehand is expected. Otherwise correct the pattern (a `files:` source resolves relative to the project root) or drop the entry. Set severity.FILES_GLOB_MATCHED_NOTHING to ignore to silence it everywhere.',
+    'files_glob_matched_nothing',
+  ),
   PACKAGED_TEST_INPUT: entry(
     'warning',
     "A link or files: entry pointed into the skill's declared test input (its test.evals path) and was NOT packaged; test input — including the expected_output answer key — never ships to consumers.",

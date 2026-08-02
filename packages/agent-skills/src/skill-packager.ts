@@ -777,7 +777,10 @@ export async function packageSkill(
     // Reported as an issue, not written to stderr: a file vanishing from a bundle
     // has to be visible in `issueCounts`, or CI reads a clean report for a build
     // that quietly shipped less than the config declared.
-    ...droppedGlobMatchesToIssues(appliedFiles.dropped),
+    // Anchored at the PROJECT root, not `outputPath` like its neighbours here: a
+    // dropped file is a source file that never reached the output, so the only
+    // path a reader can open is its source path.
+    ...droppedGlobMatchesToIssues(appliedFiles.dropped, projectRoot),
     // Presence-side backstop for agent-instruction files. The walker excludes
     // them from link-following, but a `files:` glob can still copy one in, and
     // a file that arrives without a link is invisible to the link lane.

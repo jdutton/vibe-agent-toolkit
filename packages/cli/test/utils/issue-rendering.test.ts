@@ -44,8 +44,11 @@ import {
 } from '../../src/commands/skills/validate.js';
 import {
   collectPostBuildIssues,
+  countCollapsedFindings,
+  formatCollapsedFindingsHint,
   formatIssueLines,
   formatIssueSetHeading,
+  formatPackagedFileCount,
   formatSeverityBreakdown,
   issuesToRenderAtVerbosity,
   severityLabel,
@@ -723,6 +726,7 @@ describe('vat skills validate — formatSkillProgressLine', () => {
 describe('vat skills build — formatPostBuildIssueReport', () => {
   it('does not label an info finding [WARNING]', () => {
     const lines = formatPostBuildIssueReport(
+      SKILL,
       packageResult([issue('info', 'LINK_DEFERRED_ARTIFACT')], undefined),
       true,
     );
@@ -731,26 +735,68 @@ describe('vat skills build — formatPostBuildIssueReport', () => {
 
   it('does not label a mixed set "post-build error(s)" wholesale', () => {
     const lines = formatPostBuildIssueReport(
+      SKILL,
       packageResult([issue('error', 'E1'), issue('warning', 'W1'), issue('info', 'I1')], undefined),
       true,
     );
-    expect(lines[0]).toBe('   3 post-build issues (1 error, 1 warning, 1 info):');
+    expect(lines[0]).toBe(`   ${SKILL}: 3 post-build issues (1 error, 1 warning, 1 info):`);
     expect(renderedLabels(lines)).toEqual(['ERROR', 'WARNING', 'INFO']);
+  });
+
+  it('names the skill whose outcome it is reporting', () => {
+    // The defect: the outcome pass printed 86 NAMELESS headings after the
+    // validation pass had already printed 92 `Building skill: <name>` banners,
+    // so a heading was read as belonging to whichever banner came last.
+    const lines = formatPostBuildIssueReport(SKILL, packageResult2(mixedIssues()), false);
+    expect(lines[0]?.startsWith(`   ${SKILL}: `)).toBe(true);
   });
 
   it('renders the issues when the build failed purely on postBuildValidation', () => {
     // The defect: this printed NOTHING — the user was told the build failed and
     // shown no reason at all.
     const lines = formatPostBuildIssueReport(
+      SKILL,
       packageResult(undefined, [issue('error', 'BUILT_ONLY')]),
       false,
     );
-    expect(lines[0]).toBe('   1 post-build issue (1 error):');
+    expect(lines[0]).toBe(`   ${SKILL}: 1 post-build issue (1 error):`);
     expect(renderedLabels(lines)).toEqual(['ERROR']);
   });
 
   it('renders nothing when there is nothing', () => {
-    expect(formatPostBuildIssueReport(packageResult([], undefined), false)).toEqual([]);
+    expect(formatPostBuildIssueReport(SKILL, packageResult([], undefined), false)).toEqual([]);
+  });
+});
+
+describe('countCollapsedFindings / formatCollapsedFindingsHint', () => {
+  it('counts what --verbose would add, and nothing the config silenced', () => {
+    // 6 findings: 1 error (always rendered), 3 warnings + 1 info (collapsed),
+    // 1 allow-suppressed (rendered at NO verbosity, so never "hidden by -v").
+    expect(countCollapsedFindings(mixedIssues(), false)).toBe(4);
+    expect(countCollapsedFindings(mixedIssues(), true)).toBe(0);
+  });
+
+  it('names both ways to read what it did not print', () => {
+    expect(formatCollapsedFindingsHint(4, 'build')).toBe(
+      '\n4 warning/info finding(s) not shown — re-run with --verbose, '
+      + "or read this build's YAML report on stdout, which lists every finding.",
+    );
+  });
+
+  it('says nothing when nothing was collapsed', () => {
+    expect(formatCollapsedFindingsHint(0, 'build')).toBeUndefined();
+  });
+});
+
+describe('formatPackagedFileCount', () => {
+  it('does not say `1 files`', () => {
+    expect(formatPackagedFileCount(packageResult([], undefined))).toBe('1 file');
+  });
+
+  it('counts the root SKILL.md alongside its dependencies', () => {
+    const result = packageResult([], undefined);
+    result.files.dependencies = ['a.md', 'b.md'];
+    expect(formatPackagedFileCount(result)).toBe('3 files');
   });
 });
 
@@ -784,6 +830,10 @@ function countsFromPublishedRows(summary: ReturnType<typeof buildYamlSummary>): 
   const zero: SeverityCounts = { errors: 0, warnings: 0, info: 0 };
   const rows: ReadonlyArray<{ issueCounts?: SeverityCounts | undefined }> = [
     ...summary.skills,
+    // Same population as `skills` under the name a NOT-promoted run publishes it
+    // under; exactly one of the two is ever non-empty, so this adds each packaged
+    // bundle once and the identity holds in both outcomes.
+    ...summary.skillsStaged,
     ...summary.failedSkills,
     ...summary.validationFailedSkills,
   ];
@@ -1077,6 +1127,56 @@ describe('vat skills build — buildYamlSummary', () => {
     expect(countsFromPublishedRows(summary)).toEqual(summary.issueCounts);
   });
 
+  it('publishes each row\'s findings, not just how many there were', () => {
+    // The defect: the issues were collected here and dropped at the publish step,
+    // so a build report carried counts with no code, no location and no fix
+    // string at ANY verbosity — an adopter run published 67 warnings and zero
+    // findings, and the four detectors this lane added were invisible to CI.
+    const finding = issue('warning', 'LINK_DROPPED_BY_DEPTH', {
+      location: 'dist/skills/a/docs/deep.md',
+      fix: 'raise linkFollowDepth',
+    });
+    const summary = summaryOf(
+      { results: [{ name: 'a', result: packageResult([finding], undefined) }] },
+      1,
+    );
+
+    expect(summary.skills[0]?.issues).toEqual([finding]);
+  });
+
+  it('publishes no `skills[]` row when the output was never promoted', () => {
+    // The defect, measured on a 90-skill adopter: 86 rows carrying
+    // `dist/skills/<name>` paths of which 85 did not exist, because the run
+    // staged its bundles and then aborted the promotion. `skills` is documented
+    // as what exists on disk, so on a failed run it lists nothing — the rows move
+    // to a key that promises nothing about the disk, and carry no path at all.
+    const summary = summaryOf(
+      {
+        results: [{ name: 'a', result: packageResult([issue('warning', 'W1')], undefined) }],
+        failures: [{ name: 'boom', message: THREW }],
+        outputCommitted: false,
+      },
+      1,
+    );
+
+    expect(summary.skills).toEqual([]);
+    expect(summary.skillsStaged.map((s) => s.name)).toEqual(['a']);
+    expect(summary.skillsStaged[0]).not.toHaveProperty('outputPath');
+    // The findings and the counts survive the move, so the header still closes.
+    expect(summary.skillsStaged[0]?.issueCounts).toEqual({ errors: 0, warnings: 1, info: 0 });
+    expect(countsFromPublishedRows(summary)).toEqual(summary.issueCounts);
+  });
+
+  it('keeps the rows in `skills[]`, with their paths, when the swap did happen', () => {
+    const summary = summaryOf(
+      { results: [{ name: 'a', result: packageResult(undefined, undefined) }] },
+      1,
+    );
+
+    expect(summary.skillsStaged).toEqual([]);
+    expect(summary.skills.map((s) => s.outputPath)).toEqual(['/out/skill']);
+  });
+
   it('publishes whether dist/skills was actually replaced', () => {
     // Exit 1 with no way to tell "your previous output is intact" from "your
     // output tree is gone" is the ambiguity this field exists to remove.
@@ -1250,9 +1350,9 @@ describe('vat skills validate — formatValidationReportLines at default verbosi
 
 describe('vat skills build — formatPostBuildIssueReport verbosity', () => {
   it('renders the error in full and collapses the rest, heading counts intact', () => {
-    const lines = formatPostBuildIssueReport(packageResult2(mixedIssues()), false);
+    const lines = formatPostBuildIssueReport(SKILL, packageResult2(mixedIssues()), false);
 
-    expect(lines[0]).toBe(`   6 post-build issues ${FULL_BREAKDOWN}:`);
+    expect(lines[0]).toBe(`   ${SKILL}: 6 post-build issues ${FULL_BREAKDOWN}:`);
     expect(renderedLabels(lines)).toEqual(['ERROR']);
     const rendered = lines.join('\n');
     expect(rendered).toContain('[ERROR] [SKILL_MISSING_DESCRIPTION] SKILL_MISSING_DESCRIPTION happened');
@@ -1263,9 +1363,9 @@ describe('vat skills build — formatPostBuildIssueReport verbosity', () => {
   });
 
   it('renders every emitted severity under --verbose, still never the ignored one', () => {
-    const lines = formatPostBuildIssueReport(packageResult2(mixedIssues()), true);
+    const lines = formatPostBuildIssueReport(SKILL, packageResult2(mixedIssues()), true);
 
-    expect(lines[0]).toBe(`   6 post-build issues ${FULL_BREAKDOWN}:`);
+    expect(lines[0]).toBe(`   ${SKILL}: 6 post-build issues ${FULL_BREAKDOWN}:`);
     expect(renderedLabels(lines)).toEqual(['ERROR', 'WARNING', 'WARNING', 'WARNING', 'INFO']);
     expect(lines.join('\n')).not.toContain('LINK_TO_NAVIGATION_FILE happened');
   });
@@ -1273,16 +1373,20 @@ describe('vat skills build — formatPostBuildIssueReport verbosity', () => {
   it('keeps the heading for a warning-only set so the counts survive the collapse', () => {
     // The reassuring failure mode this guards: collapsing the bodies AND the
     // heading turns a warning-carrying build into silence.
+    //
+    // And NO trailing colon: nothing renders beneath it at this verbosity, and a
+    // colon that introduces an empty list is the other half of the same defect.
     const lines = formatPostBuildIssueReport(
+      SKILL,
       packageResult2([issue('warning', 'LINK_DROPPED_BY_DEPTH')]),
       false,
     );
-    expect(lines).toEqual(['   1 post-build issue (1 warning):']);
+    expect(lines).toEqual([`   ${SKILL}: 1 post-build issue (1 warning)`]);
   });
 
   it('renders nothing when there is nothing, at either verbosity', () => {
-    expect(formatPostBuildIssueReport(packageResult2([]), false)).toEqual([]);
-    expect(formatPostBuildIssueReport(packageResult2([]), true)).toEqual([]);
+    expect(formatPostBuildIssueReport(SKILL, packageResult2([]), false)).toEqual([]);
+    expect(formatPostBuildIssueReport(SKILL, packageResult2([]), true)).toEqual([]);
   });
 });
 

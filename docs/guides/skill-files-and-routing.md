@@ -253,9 +253,14 @@ Every dropped file is reported as a
 warning in the structured result, not only on stderr — a build that silently changed what ships
 cannot report `warnings: 0`. The **pre-build** gates report it too: `vat skills validate` and
 `vat audit` expand the same globs through the same code path as the copy, so you see the drop
-before a build exists and the two lanes cannot disagree about what ships. (Pre-build, a glob whose
-base has not been built yet simply has nothing to report — the zero-match *error* below belongs to
-copy time, where the build has run.) If `SKILL.md` links to a dropped file (via its glob **dest** path,
+before a build exists and the two lanes cannot disagree about what ships. The gates also predict the
+two ways a glob entry ends up shipping *nothing*, each of which is a hard error at copy time:
+[`FILES_GLOB_MATCHED_NOTHING`](../validation-codes.md#files_glob_matched_nothing) (`info` — the base
+has not been built yet, which is both the expected pre-build state *and* the input the "has your
+build run?" error fires on) and
+[`FILES_GLOB_MATCHED_ONLY_NEVER_PACKAGED`](../validation-codes.md#files_glob_matched_only_never_packaged)
+(`warning` — it matched, and every match was refused). Reporting only the drops left
+`vat skills validate` returning success on a config that cannot build. If `SKILL.md` links to a dropped file (via its glob **dest** path,
 which validate treats as a deferred artifact), the packaged link has no target and the build fails
 with [`PACKAGED_BROKEN_LINK`](../validation-codes.md#packaged_broken_link) naming the never-package
 rule as the cause — declare the file explicitly, or drop the link. That cause is only named when

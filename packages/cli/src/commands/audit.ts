@@ -17,7 +17,6 @@ import {
   crawlAndResolveRegistry,
   detectDeclaredButMissing,
   detectMarketplacePluginSourceMissing,
-  detectPackagedAgentInstructionFiles,
   resetPackagingRegistryCache,
   detectPresentButUndeclared,
   detectReferenceTargetMissing,
@@ -55,7 +54,7 @@ import { detectFormat } from '@vibe-agent-toolkit/discovery';
 import {
   findProjectRoot,
   gitFindRoot,
-  GitTracker,
+  type GitTracker,
   isAbsolutePath,
   isGitUrl,
   issueLocation,
@@ -79,6 +78,8 @@ import {
   resetLoadedConfigCache,
 } from '../utils/config-loader.js';
 import {
+  countCollapsedFindings,
+  formatCollapsedFindingsHint,
   formatIssueLines,
   formatSeverityBreakdown,
   issuesToRenderAtVerbosity,
@@ -90,6 +91,11 @@ import { mergeSkillPackagingConfig } from '../utils/skill-packaging-config.js';
 import { renderSkillQualityFooter } from '../utils/skill-quality-footer.js';
 import { computeConfigVerdicts } from '../utils/verdict-helpers.js';
 
+import {
+  distributedTreeFindings,
+  getOrCreateGitTracker,
+  resetGitTrackerCache,
+} from './audit/distributed-tree.js';
 import { withClonedRepo } from './audit/git-url-clone.js';
 import { buildHierarchicalOutput } from './audit/hierarchical-output.js';
 import {
@@ -276,7 +282,7 @@ function packagingResultToValidationResult(
  * Used for direct SKILL.md and vat-agent paths passed to `vat audit`.
  *
  * @param crawlTree Whether this call owns the presence-side crawl of the skill's
- *   directory (see the `detectPackagedAgentInstructionFiles` call below). REQUIRED
+ *   directory (see {@link appendDistributedTreeFindings} below). REQUIRED
  *   and never defaulted, because the wrong answer is silent in both directions: a
  *   skill nested inside a plugin is already crawled by `validatePlugin` at any
  *   depth, so crawling again reports one file twice, while omitting it for a
@@ -340,50 +346,34 @@ async function validateSingleSkill(
     validateOptions.isVATGenerated = true;
   }
   const result = await validateSkill(validateOptions);
-  appendDistributedTreeFindings(result, skillPath, locationRoot, crawlTree);
+  await appendDistributedTreeFindings(result, skillPath, locationRoot, crawlTree);
   return result;
 }
 
 /**
- * Crawl a NON-config-declared skill's own directory for agent-instruction files
- * and append what it finds. Mutates `result`, like every other additive detector
+ * Crawl a DISTRIBUTED skill's own directory for agent-instruction files and
+ * append what it finds. Mutates `result`, like every other additive detector
  * pass in this command.
  *
- * WHY only the non-declared population, and why this is not a heuristic: the
- * caller reaches this only after `resolveSkillPackagingConfig` returned `null`,
- * which is a statement of provenance rather than a guess about one. That helper
- * walks up to the nearest `vibe-agent-toolkit.config.yaml` and matches the
- * SKILL.md by ABSOLUTE PATH against the project's own declared skill set. A match
- * means the project says "this is my source"; no match means the tree was handed
- * to us — an installed skill, a third-party bundle, an unpacked tarball, or a
- * built `dist/` bundle (whose path is never the declared source path). That is
- * exactly the population where a `CLAUDE.md` demonstrably shipped.
- *
- * Deliberately NOT a `dist/`-path-substring test: adopter output directories
- * vary, and a heuristic on a path segment is the defect class this work closes.
- * The config-declared branch stays silent, which is the hard constraint —
- * guidance beside a source SKILL.md in a repo is fine and must never be flagged.
- *
- * `[]` declared dests: this lane resolves a skill by PATH, and a distributed
- * bundle's path is not its source skill's path, so there is no config block to
- * read intent from here. `vat verify` is the lane that maps a built bundle back
- * to the config that produced it, and it applies the §8.2 explicit-`files:`
- * exemption there.
+ * Which trees count as distributed — and why the config's declaration is NOT the
+ * discriminator any more — lives with the classifier in
+ * `./audit/distributed-tree.ts` (`classifyScannedSkillTree`). In short: a repository that never adopted
+ * VAT declares nothing, and an adopting repo's `include` globs never enumerate
+ * its drafts and fixtures, so "not declared" swept up two populations of
+ * ordinary repo source. Reaching this function still implies `resolveSkillPackagingConfig`
+ * returned `null` (the config-aware branch returns before it), but that is now a
+ * consequence of the control flow, not the test being applied.
  *
  * @param crawlTree `false` when a plugin lane already crawled this subtree — see
  *   {@link validateSingleSkill}.
  */
-function appendDistributedTreeFindings(
+async function appendDistributedTreeFindings(
   result: ValidationResult,
   skillPath: string,
   locationRoot: string,
   crawlTree: boolean,
-): void {
-  if (!crawlTree) return;
-  appendIssues(
-    result,
-    detectPackagedAgentInstructionFiles(safePath.resolve(skillPath, '..'), locationRoot, []),
-  );
+): Promise<void> {
+  appendIssues(result, await distributedTreeFindings(skillPath, locationRoot, crawlTree));
 }
 
 /**
@@ -1604,10 +1594,12 @@ function renderAuditFooter(
  *
  * That trailing line points at THIS audit's YAML report, deliberately — do not
  * broaden it back into a claim about "the YAML report" in general. It is only
- * true of the verbs that emit full `issues:` arrays (`vat audit`,
- * `vat skills validate`); the `vat build` family publishes `issueCounts` only,
- * so the same sentence there would send a CI consumer to a document that cannot
- * answer it.
+ * true of the verbs that emit full `issues:` arrays, and which verbs those are
+ * has changed: `vat skills build` now publishes them too, so the sentence is
+ * shared rather than re-spelled (see `formatCollapsedFindingsHint`, which takes
+ * the report name for exactly this reason). Any verb that publishes counts alone
+ * must still not use it — there, it would send a CI consumer to a document that
+ * cannot answer the question.
  *
  * Pure: takes results, returns lines. It reads `issues` and never rewrites it,
  * because `runAuditAtPath` builds the YAML document from the very same array.
@@ -1626,7 +1618,7 @@ export function formatAuditFindingsLines(
     const rendered = issuesToRenderAtVerbosity(result.issues, verbose);
     // What --verbose WOULD show, minus what this verbosity shows. Derived from
     // the policy rather than re-stating it, so the count cannot contradict it.
-    collapsed += issuesToRenderAtVerbosity(result.issues, true).length - rendered.length;
+    collapsed += countCollapsedFindings(result.issues, verbose);
 
     lines.push(
       `\n${findingSubject(result, root)} — ${formatSeverityBreakdown(countBySeverity(result.issues))}:`,
@@ -1636,12 +1628,8 @@ export function formatAuditFindingsLines(
     }
   }
 
-  if (collapsed > 0) {
-    lines.push(
-      `\n${collapsed} warning/info finding(s) not shown — re-run with --verbose, ` +
-        "or read this audit's YAML report on stdout, which lists every finding.",
-    );
-  }
+  const hint = formatCollapsedFindingsHint(collapsed, 'audit');
+  if (hint !== undefined) lines.push(hint);
 
   return lines;
 }
@@ -1733,10 +1721,10 @@ async function handleFileEntry(
       validateOptions.checkUnreferencedFiles = true;
     }
     const result = await validateSkill(validateOptions);
-    // Wild mode IS the distributed-tree population — see
-    // appendDistributedTreeFindings. Suppressed under a plugin ancestor, which
-    // already crawled this whole subtree at any depth.
-    appendDistributedTreeFindings(result, fullPath, locationRoot, !scanCtx.underPluginDir);
+    // Wild mode is where the distributed-tree question is even ASKED; the
+    // classifier answers it. Suppressed under a plugin ancestor, which already
+    // crawled this whole subtree at any depth.
+    await appendDistributedTreeFindings(result, fullPath, locationRoot, !scanCtx.underPluginDir);
     return result;
   }
 
@@ -1893,9 +1881,6 @@ function resolveProjectExcludes(
   return { isMatch, base: projectRoot, label: 'excluded by config' };
 }
 
-/** Cache of (gitRoot → initialized GitTracker) to avoid re-spawning ls-files. */
-const gitTrackerCache: Map<string, GitTracker> = new Map();
-
 /**
  * Cache of (projectRoot → registry for the *inventory* link walk).
  *
@@ -1958,23 +1943,12 @@ async function pluginInventoryAt(dir: string): Promise<Awaited<ReturnType<typeof
  * governing configs, or skill-discovery maps from a prior run.
  */
 export function resetAuditCaches(): void {
-  gitTrackerCache.clear();
+  resetGitTrackerCache();
   resetPackagingRegistryCache();
   inventoryRegistryCache.clear();
   resetProjectRootCaches();
   resetLoadedConfigCache();
   resetSkillDiscoveryCache();
-}
-
-async function getOrCreateGitTracker(gitRoot: string): Promise<GitTracker> {
-  const cached = gitTrackerCache.get(gitRoot);
-  if (cached !== undefined) {
-    return cached;
-  }
-  const tracker = new GitTracker(gitRoot);
-  await tracker.initialize();
-  gitTrackerCache.set(gitRoot, tracker);
-  return tracker;
 }
 
 /**

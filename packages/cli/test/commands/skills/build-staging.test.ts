@@ -1,4 +1,5 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- test code writes into its own temp dirs */
+import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 
 import type { SkillPackagingConfig } from '@vibe-agent-toolkit/agent-skills';
@@ -6,13 +7,16 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  buildYamlSummary,
   runSkillBuild,
   type BuildSkillSpec,
   type SkillBuildRun,
   type SkillBuildRunInput,
 } from '../../../src/commands/skills/build.js';
+import { collectPostBuildIssues } from '../../../src/utils/issue-rendering.js';
+import type { Logger } from '../../../src/utils/logger.js';
 import { createTempDirTracker } from '../../system/test-common.js';
-import { silentLogger as SILENT_LOGGER } from '../../test-doubles.js';
+import { recordingLogger, silentLogger as SILENT_LOGGER } from '../../test-doubles.js';
 
 /**
  * A body whose relative link resolves to nothing: `LINK_MISSING_TARGET`, an
@@ -29,36 +33,90 @@ const CLEAN_BODY = 'Nothing to see.';
  */
 const PREVIOUS_BUNDLE = 'previous good output — a failed build must not touch this\n';
 
-async function writeSkill(cwd: string, name: string, body: string): Promise<BuildSkillSpec> {
+const CLEAN_DESCRIPTION = 'A skill used to exercise vat skills build in tests.';
+
+/**
+ * A description that trips `SKILL_DESCRIPTION_WRONG_PERSON` — a `warning` the
+ * BUILT lane emits against the STAGED copy of `SKILL.md`, so the finding carries
+ * that copy's path as its `location`. The vehicle for every assertion about
+ * where a post-build finding says it is.
+ */
+const WRONG_PERSON_DESCRIPTION =
+  'You should use this skill whenever a test needs a post-build finding to exist.';
+
+/** The `mkdtemp` prefix `beginStagedBuild` writes under `dist/`. */
+const STAGING_PREFIX = '.vat-skills-';
+
+/** One skill fixture: its name, its body, and (optionally) a noisy description. */
+type SkillFixture = readonly [name: string, body: string, description?: string];
+
+/** How one run is driven — every field optional so a case names only what it uses. */
+interface BuildOptions {
+  onlySkill?: string;
+  logger?: Logger;
+  verbose?: boolean;
+}
+
+async function writeSkill(
+  cwd: string,
+  name: string,
+  body: string,
+  description: string,
+): Promise<BuildSkillSpec> {
   const dir = safePath.join(cwd, 'skills', name);
   await mkdir(dir, { recursive: true });
   const sourcePath = safePath.join(dir, 'SKILL.md');
   await writeFile(
     sourcePath,
-    `---\nname: ${name}\ndescription: A skill used to exercise vat skills build in tests.\n---\n\n# ${name}\n\n${body}\n`,
+    `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n\n${body}\n`,
   );
   return { skill: { name, sourcePath }, packagingConfig: {} as SkillPackagingConfig };
 }
 
+/**
+ * Make `cwd` a project root.
+ *
+ * Load-bearing for every location assertion: `validateSkillForPackaging` anchors
+ * its `location` strings on the project root it discovers from the file being
+ * validated, so without a config file here the built lane finds no root above the
+ * staged bundle and emits a bare `SKILL.md` — a fixture that could not tell a
+ * re-anchored path from an unanchored one.
+ */
+const seedProjectRoot = (cwd: string): Promise<void> =>
+  writeFile(safePath.join(cwd, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n');
+
 /** Build the named skills (name → body) in one run, optionally in `--skill` mode. */
 async function build(
   cwd: string,
-  skills: ReadonlyArray<readonly [name: string, body: string]>,
-  onlySkill?: string,
+  skills: readonly SkillFixture[],
+  options: BuildOptions = {},
 ): Promise<SkillBuildRun> {
   const specs: BuildSkillSpec[] = [];
-  for (const [name, body] of skills) specs.push(await writeSkill(cwd, name, body));
+  for (const [name, body, description] of skills) {
+    specs.push(await writeSkill(cwd, name, body, description ?? CLEAN_DESCRIPTION));
+  }
   // `[]`: these fixtures declare no eval suites, so the project-wide test-input
   // list is genuinely empty — not a lane declining to supply it.
   const input: SkillBuildRunInput = {
     specs,
     cwd,
-    logger: SILENT_LOGGER,
+    logger: options.logger ?? SILENT_LOGGER,
     projectSkills: [],
-    onlySkill,
-    verbose: false,
+    onlySkill: options.onlySkill,
+    verbose: options.verbose ?? false,
   };
   return runSkillBuild(input);
+}
+
+/**
+ * Drive one run carrying exactly ONE collapsible (warning) finding, and return
+ * every line it printed — the fixture behind both verbosity assertions.
+ */
+async function collapseReportLines(cwd: string, verbose: boolean): Promise<string[]> {
+  await seedProjectRoot(cwd);
+  const { logger, lines } = recordingLogger();
+  await build(cwd, [['demo', CLEAN_BODY, WRONG_PERSON_DESCRIPTION]], { logger, verbose });
+  return lines;
 }
 
 /** Seed `dist/skills/<name>/SKILL.md` for each name, as a previous build would have. */
@@ -157,7 +215,7 @@ describe('runSkillBuild - dist/skills is replaced only by a build that succeeded
   it('replaces only the named skill in --skill mode', async () => {
     const cwd = createTempDir();
     await seedPreviousOutput(cwd, ['one', 'two']);
-    const run = await build(cwd, [['one', CLEAN_BODY]], 'one');
+    const run = await build(cwd, [['one', CLEAN_BODY]], { onlySkill: 'one' });
 
     expect(run.outputCommitted).toBe(true);
     await expect(readBundle(cwd, 'one')).resolves.toContain('name: one');
@@ -168,11 +226,147 @@ describe('runSkillBuild - dist/skills is replaced only by a build that succeeded
   it('leaves the named skill\'s previous bundle intact when --skill mode fails', async () => {
     const cwd = createTempDir();
     await seedPreviousOutput(cwd, ['one', 'two']);
-    const run = await build(cwd, [['one', BROKEN_BODY]], 'one');
+    const run = await build(cwd, [['one', BROKEN_BODY]], { onlySkill: 'one' });
 
     expect(run.outputCommitted).toBe(false);
     await expect(readBundle(cwd, 'one')).resolves.toBe(PREVIOUS_BUNDLE);
     await expect(readBundle(cwd, 'two')).resolves.toBe(PREVIOUS_BUNDLE);
     await expect(distEntries(cwd)).resolves.toEqual(['skills']);
+  });
+});
+
+describe('runSkillBuild - findings point at the tree the swap lands on', () => {
+  const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-build-staging-anchor-');
+
+  afterEach(() => cleanupTempDirs());
+
+  /** Every post-build finding location the run published, across every skill. */
+  const publishedLocations = (run: SkillBuildRun): Array<string | undefined> =>
+    run.results.flatMap(({ result }) => collectPostBuildIssues(result).map((i) => i.location));
+
+  it('re-anchors a finding off the transient staging directory', async () => {
+    // The defect: the location named `dist/.vat-skills-<rand>/demo/SKILL.md` — a
+    // directory that has been renamed (success) or removed (failure) by the time
+    // anyone reads it, and whose random suffix makes it unreconstructable.
+    const cwd = createTempDir();
+    await seedProjectRoot(cwd);
+    const run = await build(cwd, [['demo', CLEAN_BODY, WRONG_PERSON_DESCRIPTION]]);
+
+    const locations = publishedLocations(run);
+    expect(locations).toContain('dist/skills/demo/SKILL.md');
+    expect(locations.join('\n')).not.toContain(STAGING_PREFIX);
+  });
+
+  it('re-anchors on a run that never promoted its output either', async () => {
+    // The adopter met this on a FAILED run, where the staging directory is not
+    // renamed but DELETED — so the published path is unopenable in both outcomes.
+    const cwd = createTempDir();
+    await seedProjectRoot(cwd);
+    const run = await build(cwd, [
+      ['demo', CLEAN_BODY, WRONG_PERSON_DESCRIPTION],
+      ['bad', BROKEN_BODY],
+    ]);
+
+    expect(run.outputCommitted).toBe(false);
+    expect(publishedLocations(run)).toContain('dist/skills/demo/SKILL.md');
+    expect(publishedLocations(run).join('\n')).not.toContain(STAGING_PREFIX);
+  });
+
+  it('never shows the operator a staging path on stderr', async () => {
+    // The re-anchoring has to happen BEFORE the report is rendered, not only
+    // before the result is returned: the human stream is where an operator reads
+    // these locations first.
+    const cwd = createTempDir();
+    await seedProjectRoot(cwd);
+    const { logger, lines } = recordingLogger();
+    await build(cwd, [['demo', CLEAN_BODY, WRONG_PERSON_DESCRIPTION]], { logger, verbose: true });
+
+    expect(lines.join('\n')).toContain('Location: dist/skills/demo/SKILL.md');
+    expect(lines.join('\n')).not.toContain(STAGING_PREFIX);
+  });
+});
+
+describe('runSkillBuild - every outcome line names its skill', () => {
+  const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-build-staging-attrib-');
+
+  afterEach(() => cleanupTempDirs());
+
+  it('attributes the file count and the findings heading to the skill that produced them', async () => {
+    // The defect: the validation pass printed 92 `Building skill: <name>` banners
+    // and the outcome pass then printed 86 NAMELESS result lines, so at two skills
+    // `ok`'s file count appeared beneath `demo`'s failure banner and read as
+    // "demo failed, and built 1 file".
+    const cwd = createTempDir();
+    await seedProjectRoot(cwd);
+    const { logger, lines } = recordingLogger();
+    await build(cwd, [['demo', CLEAN_BODY, WRONG_PERSON_DESCRIPTION], ['ok', CLEAN_BODY]], {
+      logger,
+    });
+
+    expect(lines).toContain('   ok: built 1 file');
+    expect(lines.some((l) => l.startsWith('   demo: 1 post-build issue'))).toBe(true);
+  });
+
+  it('pluralizes the file count', async () => {
+    const cwd = createTempDir();
+    const { logger, lines } = recordingLogger();
+    await build(cwd, [['ok', CLEAN_BODY]], { logger });
+    expect(lines).not.toContain('   ok: built 1 files');
+  });
+});
+
+describe('runSkillBuild - a collapsed findings block says how to see it', () => {
+  const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-build-staging-collapse-');
+
+  afterEach(() => cleanupTempDirs());
+
+  it('drops the colon that promised a list, and points at the two ways to read it', async () => {
+    // The defect: `1 post-build issue (1 info):` printed its colon and then
+    // nothing, with no hint that --verbose exists — unlike `vat audit`, which
+    // has said so all along.
+    const lines = await collapseReportLines(createTempDir(), false);
+
+    expect(lines.some((l) => l.endsWith('post-build issue (1 warning)'))).toBe(true);
+    expect(lines.some((l) => l.endsWith('post-build issue (1 warning):'))).toBe(false);
+    expect(lines.filter((l) => l.includes('re-run with --verbose'))).toHaveLength(1);
+  });
+
+  it('keeps the colon and drops the hint when the bodies are actually printed', async () => {
+    const lines = await collapseReportLines(createTempDir(), true);
+
+    expect(lines.some((l) => l.endsWith('post-build issue (1 warning):'))).toBe(true);
+    expect(lines.filter((l) => l.includes('re-run with --verbose'))).toEqual([]);
+  });
+});
+
+describe('runSkillBuild - no published output path that does not exist', () => {
+  const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-build-staging-paths-');
+
+  afterEach(() => cleanupTempDirs());
+
+  it('publishes no `skills[]` row at all when the output was not promoted', async () => {
+    // The defect, measured on a 90-skill adopter: a failed run published 86
+    // `skills[]` rows carrying `dist/skills/<name>` paths, 85 of which did not
+    // exist — the bundles were staged and the promotion was then aborted.
+    const cwd = createTempDir();
+    const run = await build(cwd, [['good', CLEAN_BODY], ['bad', BROKEN_BODY]]);
+    const summary = buildYamlSummary(run, 1);
+
+    expect(summary.outputCommitted).toBe(false);
+    expect(summary.skills).toEqual([]);
+    // The findings are not lost — they move to a list whose name does not
+    // promise disk presence, and which carries no path at all.
+    expect(summary.skillsStaged.map((s) => s.name)).toEqual(['good']);
+    expect(JSON.stringify(summary.skillsStaged)).not.toContain('outputPath');
+  });
+
+  it('publishes a path that exists for every row of a promoted run', async () => {
+    const cwd = createTempDir();
+    const run = await build(cwd, [['good', CLEAN_BODY]]);
+    const summary = buildYamlSummary(run, 1);
+
+    expect(summary.outputCommitted).toBe(true);
+    expect(summary.skillsStaged).toEqual([]);
+    expect(summary.skills.map((s) => existsSync(s.outputPath))).toEqual([true]);
   });
 });

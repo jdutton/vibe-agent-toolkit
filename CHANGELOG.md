@@ -173,9 +173,13 @@ ever exhibited them.
   including a **built skill bundle**, which no lane inspected before: audit and verify read
   `SKILL.md` plus what links reach from it, so a bundle carrying two such files reported
   `filesScanned: 1`, zero issues, and `warnings: 0`. `vat audit` decides a tree is distributed by
-  PROVENANCE, not by path shape: a skill the discovered project's own config declares is source and
-  stays silent (guidance beside a source `SKILL.md` is deliberately fine); anything else — an
-  installed skill, a third-party bundle, a built `dist/` bundle — is an artifact someone handed us.
+  PROVENANCE, not by path shape and not by your config: a `SKILL.md` inside a Claude install root
+  (`~/.claude/plugins|skills|marketplaces`) is an installed artifact, and one that is **gitignored or
+  outside any git repository** is a built bundle or an unpacked third-party tree. Repository source
+  — tracked, *or* written and not yet committed — stays silent, so guidance beside a source
+  `SKILL.md` is deliberately fine whether or not your project has adopted VAT at all. The install-root
+  clause outranks the git one because Claude Code installs marketplaces by `git clone`, which makes an
+  installed tree tracked source of somebody else's repo.
   Measured on one real install: **7 findings across 628 audited skills**, one of which was an
   intentional scaffold template. It is a `warning`, not an `error` — nothing mis-resolves and the
   bundle works; this is the "you have something on your shoe" check. Silence an intentional one
@@ -217,6 +221,32 @@ ever exhibited them.
   build as `PACKAGED_BROKEN_LINK` — now naming the never-package rule as the cause, but **only when
   that file was genuinely dropped by a glob**; the same link broken any other way keeps the ordinary
   remediation instead of being told a story about a glob that never ran.
+- **The pre-build gates now predict BOTH glob failures that kill the build**, via two new codes.
+  `vat skills build` has two distinct hard errors for a `files:` glob — it matched nothing ("has
+  your build run?"), or it matched and every match was refused by the never-package list — and
+  `vat skills validate`, the lane adopters run in CI *before* the build, reported `success` (or only
+  the harmless per-file drops) on both. It reported the case that is harmless by design and stayed
+  silent about the two that are fatal.
+  - **`FILES_GLOB_MATCHED_NOTHING` (`info`)** — the glob currently matches no files. `info` is
+    deliberate: matching nothing before the artifact exists is the expected state and must not fail
+    anyone's CI, but "expected" and "the next command will fail" are both true at once.
+  - **`FILES_GLOB_MATCHED_ONLY_NEVER_PACKAGED` (`warning`)** — the glob matched, and every match was
+    a `CLAUDE.md`/`README.md`-class file, so the entry ships nothing. Louder than `info` because a
+    populated directory holding only never-packaged files is not the ordinary pre-build state; still
+    not an `error`, because a pre-build tree can be a *partial* artifact as easily as an absent one.
+    One finding per entry (it replaces that entry's per-file drops, mirroring the build's single
+    error), and it is **not** silenced by an explicit entry re-shipping one of the refused files —
+    the build fails on that config regardless, so predicting otherwise would predict a green build
+    that fails. Its remedy explicitly rules out widening the glob, which clears the error while
+    still shipping none of those files.
+
+  The three verdicts are mutually exclusive per entry, so one config never produces two findings
+  naming two causes. Override either with `validation.severity.<CODE>`.
+- **`FILES_GLOB_DROPPED_NEVER_PACKAGED` now names the file that was dropped.** It named the would-be
+  `dest` and the glob pattern, so its `location` was an output path nothing was ever written to —
+  one issue list speaking two coordinate systems, and no way to open the thing that went missing.
+  The finding is now anchored at the refused **source file** (project-relative, like every other
+  source-phase code); the pattern stays in the message because it answers "which entry caught this?".
 - **`PACKAGED_AGENT_INSTRUCTION_FILE`'s remediation now distinguishes the two trees it runs
   against.** In a *distributed* tree (a built bundle or an installed plugin — the dominant audited
   population, which has no VAT config at all) the fix is still to remove the file. In a *repo
@@ -380,6 +410,18 @@ ever exhibited them.
   same `outputCommitted` fact rather than recomputed, so the status and the exit code cannot
   disagree. `--dry-run` now touches `dist/` not at all — the pre-clean used to run before the
   dry-run branch.
+  The report **names its findings**, not merely how many there were: each row carries a full
+  `issues:` array in the shape `vat audit` and `vat skills validate` already publish, so a CI
+  consumer can act on a build's warnings instead of reading a bare count. On a ~90-skill adopter
+  run the previous shape reported 67 warnings with no `code`, no location and no fix string at any
+  verbosity. Two corollaries of the staging design come with it: every finding's location is
+  anchored on the **final** path rather than the transient `dist/.vat-skills-<rand>/` directory
+  that is renamed or deleted before the command returns, and a run that staged bundles without
+  promoting them publishes them under `skillsStaged` — carrying no `outputPath` at all, so
+  `skills[]` keeps meaning "exists on disk" instead of listing 85 paths that do not. Per-skill
+  progress and finding lines name their skill, which at 92 skills is the difference between a
+  readable log and 86 anonymous `Built N files` lines, one of which was being read as belonging to
+  the failure printed above it.
 
 ### Fixed
 

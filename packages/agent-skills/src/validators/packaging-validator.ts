@@ -31,7 +31,7 @@ import { DeferredArtifacts, parseMarkdown, ResourceRegistry, type SkillExecutabl
 import { findProjectRoot, issueLocation, normalizedTmpdir, toForwardSlash, safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
 
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
-import { collectDroppedGlobMatches, droppedGlobMatchesToIssues } from '../files-config.js';
+import { collectPreBuildGlobFindings, preBuildGlobFindingsToIssues } from '../files-config.js';
 import {
   packagedFileEntries,
   resolveTestInputDirs,
@@ -517,15 +517,24 @@ export async function validateSkillForPackaging(
     projectRoot,
   );
 
-  // Files a `files:` GLOB will catch and the never-package list will refuse.
-  // Reported HERE, before any build, because this is where it is still cheap to
-  // act on: `vat skills validate` and `vat audit` can expand the same globs the
-  // packager expands without writing anything, and the drop warning is the only
-  // signal standing between a documentation-bearing glob base and a silent content
-  // loss the day someone adds a README.md to it. Same expansion as the copy — see
-  // collectDroppedGlobMatches — so the two lanes cannot disagree about what ships.
+  // What the `files:` GLOBs will do to this build, reported HERE — before any
+  // build — because this is where it is still cheap to act on: `vat skills
+  // validate` and `vat audit` can expand the same globs the packager expands
+  // without writing anything. Same expansion as the copy — see
+  // collectPreBuildGlobFindings — so the two lanes cannot disagree about what
+  // ships. Two populations, both load-bearing:
+  //   - a never-package DROP is the only signal standing between a
+  //     documentation-bearing glob base and a silent content loss the day someone
+  //     adds a README.md to it;
+  //   - a glob matching NOTHING is the input `vat skills build` dies on, and this
+  //     gate is what adopters run before that build. Reporting the harmless drop
+  //     while staying silent about the fatal zero-match was the asymmetry that
+  //     let `vat skills validate` return success on a config that cannot build.
   rawIssues.push(
-    ...droppedGlobMatchesToIssues(await collectDroppedGlobMatches(packagedFiles, projectRoot)),
+    ...preBuildGlobFindingsToIssues(
+      await collectPreBuildGlobFindings(packagedFiles, projectRoot),
+      locationRoot,
+    ),
   );
   const testInputDirs = resolveTestInputDirs(packagingConfig ?? {}, dirname(skillPath), projectSkills);
 

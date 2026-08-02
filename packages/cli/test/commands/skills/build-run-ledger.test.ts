@@ -7,8 +7,9 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { runSkillBuild, type BuildSkillSpec } from '../../../src/commands/skills/build.js';
+import type { Logger } from '../../../src/utils/logger.js';
 import { createTempDirTracker } from '../../system/test-common.js';
-import { silentLogger as SILENT_LOGGER } from '../../test-doubles.js';
+import { recordingLogger, silentLogger as SILENT_LOGGER } from '../../test-doubles.js';
 
 const SOURCE_SCOPED_FIELD = 'validation.allow.NON_PORTABLE_ASSET_REFERENCE';
 const DEAD_ENTRY_FIELD = 'validation.allow.SKILL_TOO_LARGE';
@@ -139,13 +140,6 @@ describe('runSkillBuild - one allow-usage ledger for the whole invocation', () =
 // an absent `files:` source. Same contract, a vehicle that still throws.
 // ---------------------------------------------------------------------------
 
-/** A logger that records every line, so the report itself is assertable. */
-function recordingLogger(): { logger: Logger; lines: string[] } {
-  const lines: string[] = [];
-  const push = (message: string) => { lines.push(message); };
-  return { logger: { info: push, warn: push, error: push, debug: () => {} }, lines };
-}
-
 /** The phrase the surviving throw uses to attribute itself to a skill. */
 const THROWN_ATTRIBUTION = "skill 'two'";
 
@@ -185,10 +179,10 @@ describe('runSkillBuild - a skill that throws does not discard the batch', () =>
     expect(run.failures[0]?.message).toContain(THROWN_ATTRIBUTION);
   });
 
-  it('does not claim `Built N files` for a skill that never built', async () => {
+  it('does not claim a file count for a skill that never built', async () => {
     const { logger, lines } = recordingLogger();
     await buildRunWithOneThrowingSkill(createTempDir(), logger);
-    expect(lines.filter((l) => l.includes('Built '))).toHaveLength(2);
+    expect(lines.filter((l) => l.includes(': built '))).toHaveLength(2);
     expect(lines.some((l) => l.includes(THROWN_ATTRIBUTION))).toBe(true);
   });
 

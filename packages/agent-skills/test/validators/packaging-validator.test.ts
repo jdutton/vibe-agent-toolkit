@@ -1318,11 +1318,19 @@ describe('PackagingValidationResult - allErrors is the sole container of issue r
 // ---------------------------------------------------------------------------
 
 const GLOB_DROP_CODE = 'FILES_GLOB_DROPPED_NEVER_PACKAGED';
-const EXTRAS_GLOB_SOURCE = 'extras/**/*';
+const GLOB_UNMATCHED_CODE = 'FILES_GLOB_MATCHED_NOTHING';
+const GLOB_ALL_REFUSED_CODE = 'FILES_GLOB_MATCHED_ONLY_NEVER_PACKAGED';
+// The glob's SOURCE dir differs from its DEST on purpose: where the two spell
+// the same path, this fixture could not tell a finding anchored at the source
+// file from one anchored at the would-be dest.
+const EXTRAS_SRC_DIR = 'gen/extras';
+const EXTRAS_GLOB_SOURCE = `${EXTRAS_SRC_DIR}/**/*`;
 const EXTRAS_DEST = 'extras';
+const EXTRAS_README_SOURCE = `${EXTRAS_SRC_DIR}/README.md`;
 const EXTRAS_README_DEST = 'extras/README.md';
+const UNBUILT_GLOB_SOURCE = 'dist/not-built/**/*';
 
-/** Validate a skill whose tree has `extras/{keep.json,README.md}`. */
+/** Validate a skill whose tree has `gen/extras/{keep.json,README.md}`. */
 async function validateWithExtras(
 	files: Array<{ source: string; dest: string }>,
 ): Promise<PackagingValidationResult> {
@@ -1333,35 +1341,136 @@ async function validateWithExtras(
 	);
 	const { skillPath } = createTransitiveSkillStructure(
 		tempDir,
-		{ 'extras/keep.json': '{}\n', [EXTRAS_README_DEST]: '# extras\n' },
+		{ [`${EXTRAS_SRC_DIR}/keep.json`]: '{}\n', [EXTRAS_README_SOURCE]: '# extras\n' },
 		skillContent,
 	);
 	return validateSkillForPackaging(skillPath, { files });
 }
 
 describe('glob files: drops are reported before any build', () => {
-	it('reports the never-packaged file a glob would catch', async () => {
+	it('reports the never-packaged file a glob would catch, anchored at that file', async () => {
 		const result = await validateWithExtras([{ source: EXTRAS_GLOB_SOURCE, dest: EXTRAS_DEST }]);
 
 		const drops = result.allErrors.filter((i: ValidationIssue) => i.code === GLOB_DROP_CODE);
 		expect(drops).toHaveLength(1);
 		expect(drops[0]?.severity).toBe('warning');
-		expect(drops[0]?.location).toBe(EXTRAS_README_DEST);
+		// The source file, which exists and can be opened — not the dest, which by
+		// definition was never written.
+		expect(drops[0]?.location).toBe(EXTRAS_README_SOURCE);
+		expect(drops[0]?.message).toContain(EXTRAS_README_SOURCE);
 		expect(drops[0]?.message).toContain(EXTRAS_GLOB_SOURCE);
 	});
 
 	it('stays silent when an explicit entry re-ships the dropped file', async () => {
 		const result = await validateWithExtras([
 			{ source: EXTRAS_GLOB_SOURCE, dest: EXTRAS_DEST },
-			{ source: EXTRAS_README_DEST, dest: EXTRAS_README_DEST },
+			{ source: EXTRAS_README_SOURCE, dest: EXTRAS_README_DEST },
 		]);
 
 		expect(result.allErrors.filter((i: ValidationIssue) => i.code === GLOB_DROP_CODE)).toEqual([]);
 	});
 
 	it('stays silent for a config with no glob entries at all', async () => {
-		const result = await validateWithExtras([{ source: 'extras/keep.json', dest: 'keep.json' }]);
+		const result = await validateWithExtras([
+			{ source: `${EXTRAS_SRC_DIR}/keep.json`, dest: 'keep.json' },
+		]);
 
 		expect(result.allErrors.filter((i: ValidationIssue) => i.code === GLOB_DROP_CODE)).toEqual([]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// The pre-build gate must also predict the glob failure that KILLS the build.
+//
+// `vat skills build` dies on a glob that matches nothing ("has your build
+// run?"). This gate — the one adopters run in CI *before* the build — used to
+// report `success` with zero findings on exactly that input, while reporting the
+// drop that is harmless by design. Severity stays `info` because matching
+// nothing before the artifact exists is the expected state; silence was the bug.
+// ---------------------------------------------------------------------------
+describe('glob files: entries that currently match nothing are reported before any build', () => {
+	it('reports the unmatched glob, naming the pattern and the build consequence', async () => {
+		const result = await validateWithExtras([{ source: UNBUILT_GLOB_SOURCE, dest: 'packs' }]);
+
+		const unmatched = result.allErrors.filter(
+			(i: ValidationIssue) => i.code === GLOB_UNMATCHED_CODE,
+		);
+		expect(unmatched).toHaveLength(1);
+		expect(unmatched[0]?.severity).toBe('info');
+		expect(unmatched[0]?.location).toBe('dist/not-built');
+		expect(unmatched[0]?.message).toContain(UNBUILT_GLOB_SOURCE);
+		expect(unmatched[0]?.message).toMatch(/build/i);
+	});
+
+	it('stays silent for a glob that matches at least one file', async () => {
+		const result = await validateWithExtras([{ source: EXTRAS_GLOB_SOURCE, dest: EXTRAS_DEST }]);
+
+		expect(
+			result.allErrors.filter((i: ValidationIssue) => i.code === GLOB_UNMATCHED_CODE),
+		).toEqual([]);
+	});
+
+	it('stays silent for a non-glob entry whose source does not exist', async () => {
+		// A missing single-file source is the BUILD's error to raise; this code is
+		// about a pattern that expanded to nothing, and a non-glob entry has no
+		// expansion at all.
+		const result = await validateWithExtras([{ source: 'dist/cli.mjs', dest: 'cli.mjs' }]);
+
+		expect(
+			result.allErrors.filter((i: ValidationIssue) => i.code === GLOB_UNMATCHED_CODE),
+		).toEqual([]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// The third population: the glob matched, and NOTHING it matched can ship.
+//
+// `vat skills build` has a second, distinct hard error for this ("matched N
+// file(s) … but all of them are never packaged") — deliberately not "has your
+// build run?", because the build HAS run. The gate emitted only the per-file
+// drops here: the harmless half of the same silence R4 closed for the
+// zero-match case. `warning`, not `error`, for the same reason the zero-match is
+// `info`: a pre-build tree can be a PARTIAL artifact as easily as an absent one.
+// ---------------------------------------------------------------------------
+describe('glob files: entries that can ship nothing are reported before any build', () => {
+	// Matches README.md only — keep.json is excluded by the extension, so every
+	// match is refused. Distinct from the partial fixture (`gen/extras/**/*`,
+	// which also nets keep.json) and from the unbuilt one (which matches nothing).
+	const ALL_REFUSED_GLOB_SOURCE = `${EXTRAS_SRC_DIR}/*.md`;
+
+	it('reports the entry once, naming the refused file and the pattern', async () => {
+		const result = await validateWithExtras([
+			{ source: ALL_REFUSED_GLOB_SOURCE, dest: EXTRAS_DEST },
+		]);
+
+		const inert = result.allErrors.filter(
+			(i: ValidationIssue) => i.code === GLOB_ALL_REFUSED_CODE,
+		);
+		expect(inert).toHaveLength(1);
+		expect(inert[0]?.severity).toBe('warning');
+		expect(inert[0]?.location).toBe(EXTRAS_SRC_DIR);
+		expect(inert[0]?.message).toContain(ALL_REFUSED_GLOB_SOURCE);
+		expect(inert[0]?.message).toContain(EXTRAS_README_SOURCE);
+	});
+
+	// The three verdicts must be mutually exclusive at the gate too, or a reader
+	// gets two causes for one entry.
+	it('reports neither a per-file drop nor an unmatched glob for the same entry', async () => {
+		const result = await validateWithExtras([
+			{ source: ALL_REFUSED_GLOB_SOURCE, dest: EXTRAS_DEST },
+		]);
+
+		expect(result.allErrors.filter((i: ValidationIssue) => i.code === GLOB_DROP_CODE)).toEqual([]);
+		expect(
+			result.allErrors.filter((i: ValidationIssue) => i.code === GLOB_UNMATCHED_CODE),
+		).toEqual([]);
+	});
+
+	it('stays silent for a glob that still ships something', async () => {
+		const result = await validateWithExtras([{ source: EXTRAS_GLOB_SOURCE, dest: EXTRAS_DEST }]);
+
+		expect(
+			result.allErrors.filter((i: ValidationIssue) => i.code === GLOB_ALL_REFUSED_CODE),
+		).toEqual([]);
 	});
 });

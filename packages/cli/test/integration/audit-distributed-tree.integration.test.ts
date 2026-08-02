@@ -9,8 +9,13 @@
  * invisible: on a real adopter bundle carrying two of them, `vat audit` reported
  * `filesScanned: 1` and zero issues.
  *
- * The discriminator these tests pin is provenance, not path shape: a skill the
- * project's own config DECLARES is source (silent); anything else was handed to us.
+ * The discriminator these tests pin is provenance, not path shape — and NOT the
+ * project's config either. "The config does not declare this skill" was the
+ * original discriminator and it was wrong in both of the ways a repository can
+ * fail to adopt VAT: a repo with no config at all, and a repo whose `include`
+ * globs simply do not enumerate every skill directory in the tree. Both are
+ * source, and neither was ever handed to anyone. See
+ * `classifyScannedSkillTree` for what replaced it.
  */
 
 import { writeFileSync } from 'node:fs';
@@ -18,13 +23,14 @@ import { writeFileSync } from 'node:fs';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import type { AuditCommandOptions } from '../../src/commands/audit.js';
-import { deriveScanRoot, getValidationResults, resetAuditCaches } from '../../src/commands/audit.js';
 import { createTempDirTracker } from '../system/test-common.js';
+import { commitTestFixture, initTestGitRepo, runAudit } from '../test-helpers.js';
 
 const CODE = 'PACKAGED_AGENT_INSTRUCTION_FILE';
 const SKILL_NAME = 'demo';
 const CLAUDE_MD = 'CLAUDE.md';
+/** The conventional pool directory a repo keeps its source skills in. */
+const SKILLS_DIR = 'skills';
 const PLUGIN_NAME = 'demo-plugin';
 const PLUGIN_MANIFEST = JSON.stringify({
   name: PLUGIN_NAME,
@@ -32,24 +38,7 @@ const PLUGIN_MANIFEST = JSON.stringify({
   version: '1.0.0',
 });
 
-const silentLogger = {
-  info: (_msg: string) => {},
-  error: (_msg: string) => {},
-  debug: (_msg: string) => {},
-};
-
 const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-audit-distributed-');
-
-async function runAudit(targetPath: string, options: AuditCommandOptions = {}) {
-  resetAuditCaches();
-  return getValidationResults(
-    targetPath,
-    options.recursive !== false,
-    options,
-    silentLogger,
-    deriveScanRoot(targetPath),
-  );
-}
 
 /** Every agent-instruction finding across a result set, by location. */
 function instructionFindings(results: Awaited<ReturnType<typeof runAudit>>): string[] {
@@ -81,15 +70,20 @@ function writePluginWithSkillGuidance(): { root: string; plugin: string } {
   const plugin = safePath.join(root, 'plugins', PLUGIN_NAME);
   mkdirSyncReal(safePath.join(plugin, '.claude-plugin'), { recursive: true });
   writeFileSync(safePath.join(plugin, '.claude-plugin', 'plugin.json'), PLUGIN_MANIFEST, 'utf-8');
-  writeSkill(safePath.join(plugin, 'skills', SKILL_NAME), [CLAUDE_MD]);
+  writeSkill(safePath.join(plugin, SKILLS_DIR, SKILL_NAME), [CLAUDE_MD]);
   return { root, plugin };
 }
 
+/** A config whose `include` enumerates the `.claude/skills/` pool and nothing else. */
 const CONFIG = `version: 1
 skills:
   include:
     - ".claude/skills/**/SKILL.md"
 `;
+
+function writeVatConfig(root: string): void {
+  writeFileSync(safePath.join(root, 'vibe-agent-toolkit.config.yaml'), CONFIG, 'utf-8');
+}
 
 describe('audit: distributed skill trees (integration)', () => {
   afterEach(() => {
@@ -98,12 +92,12 @@ describe('audit: distributed skill trees (integration)', () => {
 
   it('reports agent-instruction files in a bundle no config declares', async () => {
     // The B1 population: a built bundle sitting beside the config that produced
-    // it. Its PATH is not the declared source path, so it is not a declared
-    // source skill — it is output someone can ship.
+    // it, in a tree that is not a git repository at all — output someone can ship,
+    // with no working copy anywhere claiming it as source.
     const root = createTempDir();
-    writeFileSync(safePath.join(root, 'vibe-agent-toolkit.config.yaml'), CONFIG, 'utf-8');
-    writeSkill(safePath.join(root, '.claude', 'skills', SKILL_NAME), []);
-    const bundle = safePath.join(root, 'dist', 'skills', SKILL_NAME);
+    writeVatConfig(root);
+    writeSkill(safePath.join(root, '.claude', SKILLS_DIR, SKILL_NAME), []);
+    const bundle = safePath.join(root, 'dist', SKILLS_DIR, SKILL_NAME);
     writeSkill(bundle, [CLAUDE_MD, 'notes/AGENTS.md']);
 
     expect(instructionFindings(await runAudit(bundle))).toEqual([CLAUDE_MD, 'notes/AGENTS.md']);
@@ -112,8 +106,8 @@ describe('audit: distributed skill trees (integration)', () => {
   // THE hard constraint. Guidance beside a source SKILL.md is deliberately fine.
   it('stays silent for a config-DECLARED source skill with a CLAUDE.md beside it', async () => {
     const root = createTempDir();
-    writeFileSync(safePath.join(root, 'vibe-agent-toolkit.config.yaml'), CONFIG, 'utf-8');
-    const source = safePath.join(root, '.claude', 'skills', SKILL_NAME);
+    writeVatConfig(root);
+    const source = safePath.join(root, '.claude', SKILLS_DIR, SKILL_NAME);
     writeSkill(source, [CLAUDE_MD]);
 
     expect(instructionFindings(await runAudit(source))).toEqual([]);
@@ -144,9 +138,96 @@ describe('audit: distributed skill trees (integration)', () => {
 
   it('reports nothing for a clean bundle', async () => {
     const root = createTempDir();
-    const bundle = safePath.join(root, 'dist', 'skills', SKILL_NAME);
+    const bundle = safePath.join(root, 'dist', SKILLS_DIR, SKILL_NAME);
     writeSkill(bundle, ['resources/guide.md', 'README.md']);
 
     expect(instructionFindings(await runAudit(bundle))).toEqual([]);
+  });
+
+  // The two false positives R5 closed. Both trees are ordinary repository source
+  // that nobody handed to anybody, and both fired under the config-declaration
+  // discriminator. The first one matters most: `vat audit` on a fresh repo is the
+  // FIRST command a new user runs, and it greeted them with a warning telling them
+  // to delete repo guidance that ships nowhere.
+  describe('repository source is never a distributed tree', () => {
+    it('stays silent for a tracked source skill in a repo with no VAT config at all', async () => {
+      const root = createTempDir();
+      writeSkill(safePath.join(root, SKILLS_DIR, SKILL_NAME), [CLAUDE_MD]);
+      commitTestFixture(root);
+
+      expect(instructionFindings(await runAudit(root))).toEqual([]);
+    });
+
+    it("stays silent for a tracked source skill the config's include globs do not match", async () => {
+      // An adopting repo whose `include` enumerates `.claude/skills/**` still has
+      // drafts, vendored copies and fixtures elsewhere in the tree. Not being
+      // named by a glob is not evidence that a tree was published.
+      const root = createTempDir();
+      writeVatConfig(root);
+      writeSkill(safePath.join(root, '.claude', SKILLS_DIR, SKILL_NAME), []);
+      writeSkill(safePath.join(root, 'drafts', 'wip'), [CLAUDE_MD]);
+      commitTestFixture(root);
+
+      expect(instructionFindings(await runAudit(safePath.join(root, 'drafts', 'wip')))).toEqual([]);
+    });
+
+    it('stays silent for a brand-new skill the author has not committed yet', async () => {
+      // Untracked-but-not-ignored is authoring in progress, not a distribution
+      // artifact. Requiring a commit before a repo counts as source would make
+      // the very first `vat audit` of a new skill the loudest one.
+      const root = createTempDir();
+      initTestGitRepo(root);
+      writeSkill(safePath.join(root, SKILLS_DIR, SKILL_NAME), [CLAUDE_MD]);
+
+      expect(instructionFindings(await runAudit(root))).toEqual([]);
+    });
+  });
+
+  // The population the detector exists for. Each of these must still fire, and
+  // each is a different reason for firing — none of them is "the config did not
+  // mention it".
+  describe('distributed trees still report', () => {
+    it('reports a built bundle under a gitignored dist/ inside the repo', async () => {
+      // `vat verify` reads dist by definition, and `vat audit <bundle>` must agree
+      // with it. The bundle is INSIDE a git repo whose source is committed, so the
+      // repo/no-repo question cannot answer this one — gitignored is what does.
+      const root = createTempDir();
+      writeFileSync(safePath.join(root, '.gitignore'), 'dist/\n', 'utf-8');
+      writeSkill(safePath.join(root, SKILLS_DIR, SKILL_NAME), []);
+      commitTestFixture(root);
+      const bundle = safePath.join(root, 'dist', SKILLS_DIR, SKILL_NAME);
+      writeSkill(bundle, [CLAUDE_MD]);
+
+      expect(instructionFindings(await runAudit(bundle))).toEqual([CLAUDE_MD]);
+    });
+
+    it('reports an installed skill under the Claude install root even when it is tracked', async () => {
+      // Claude Code installs marketplaces by `git clone`, so an installed tree's
+      // files are TRACKED SOURCE of somebody else's repo — for a git-distributed
+      // plugin, tracked source IS what ships. Tracked-ness therefore cannot be the
+      // whole discriminator, and the install location has to win over it.
+      const claudeDir = createTempDir();
+      const installed = safePath.join(claudeDir, SKILLS_DIR, SKILL_NAME);
+      writeSkill(installed, [CLAUDE_MD]);
+      commitTestFixture(claudeDir);
+
+      const previous = process.env['CLAUDE_CONFIG_DIR'];
+      process.env['CLAUDE_CONFIG_DIR'] = claudeDir;
+      try {
+        expect(instructionFindings(await runAudit(installed))).toEqual([CLAUDE_MD]);
+      } finally {
+        if (previous === undefined) delete process.env['CLAUDE_CONFIG_DIR'];
+        else process.env['CLAUDE_CONFIG_DIR'] = previous;
+      }
+    });
+
+    it('reports an unpacked bundle that lies outside any git repository', async () => {
+      // A third-party tarball unpacked to disk: no repo, no config, no declaration
+      // — and a `CLAUDE.md` that demonstrably travelled with the artifact.
+      const unpacked = safePath.join(createTempDir(), SKILL_NAME);
+      writeSkill(unpacked, [CLAUDE_MD]);
+
+      expect(instructionFindings(await runAudit(unpacked))).toEqual([CLAUDE_MD]);
+    });
   });
 });
