@@ -118,6 +118,15 @@ ever exhibited them.
 - **`REGISTRY_SHAPE_DRIFT` (default `info`)** — emitted when Claude Code's installed-plugins
   registry parses cleanly but carries a field VAT does not model, so drift stays visible without
   being an error.
+- **`TREE_PROVENANCE_INDETERMINATE` (default `warning`)** — emitted when `vat audit` cannot decide
+  whether a tree is a distribution artifact or ordinary repository source because git could not be
+  consulted (`git` absent from `PATH`, or an unreadable or corrupt `.git`). Previously that failure
+  collapsed to "source" and the packaged-agent-instruction detector switched itself off silently,
+  reporting `status: success` with no indication that a check had been skipped — the wrong direction
+  for a check about what leaves your repository. The code makes a claim only about the tool's own
+  capability, never about the artifact, so it does not manufacture a "this file shipped" assertion
+  from a missing binary. It is emitted only when the tree actually contains agent-instruction files,
+  so a clean repository in a git-less container stays quiet rather than warning once per skill.
 - **Declared test input is auto-excluded from packaged output.** Declaring a path under
   `skills.config.<name>.test.evals` names it as that skill's eval suite; VAT now treats that
   declaration as the instruction not to package it, and reports what it withheld via
@@ -184,6 +193,36 @@ ever exhibited them.
   intentional scaffold template. It is a `warning`, not an `error` — nothing mis-resolves and the
   bundle works; this is the "you have something on your shoe" check. Silence an intentional one
   with `validation.severity.PACKAGED_AGENT_INSTRUCTION_FILE: ignore`.
+- **The provenance classifier behind it no longer fails open, and no longer depends on how a path is
+  spelled.** Five ways the same detector could be switched off or misfired, all found by adversarial
+  review of the above and all fixed test-first:
+  - **New `TREE_PROVENANCE_INDETERMINATE` (warning).** Every way of failing to reach git — no `git`
+    on `PATH`, a corrupt `.git`, an unreadable `.git` — produced the same "not ignored" answer, which
+    reads as repository source, which is silence: the detector disabled itself, the run still said
+    `status: success`, and nothing anywhere said why. Provenance now has a third state, and a tree it
+    could not classify says so instead of passing. Emitted only when the tree actually holds
+    agent-instruction files, so a clean repository in a container without git stays quiet; deliberately
+    **not** resolved by assuming "distributed", which would assert a shipment nothing observed and
+    prescribe deleting files from ordinary source trees.
+  - **A skill your config declares is now classified like any other.** `vat audit` consulted the
+    classifier only in its config-free lane; both config-aware call sites returned before reaching it.
+    That left the *abandoned* config-declaration discriminator alive at the caller in its purest
+    suppressing form — adding a `vibe-agent-toolkit.config.yaml` to a dotfiles repo removed findings
+    from skills installed under `~/.claude`.
+  - **A symlinked `~/.claude` is followed.** Install-root paths were compared unresolved, so keeping
+    `~/.claude` as a symlink into a dotfiles checkout and auditing that checkout by its real path
+    missed the install-root clause entirely — the same files, two verdicts, decided by which spelling
+    was typed.
+  - **A case-variant path no longer marks tracked source as distributed.** On macOS and Windows,
+    `<repo>/Skills/demo` (tab-completed, or round-tripped through a case-normalising layer) read as
+    "absent from git's file set and present on disk" ⇒ ignored ⇒ distributed: a false warning on
+    committed source.
+  - **`CLAUDE_CONFIG_DIR` is resolved once, at the point it is read.** A blank value —
+    `CLAUDE_CONFIG_DIR=`, the ordinary way a shell or a CI env block clears a variable — passed
+    through `??` and turned every derived install root into a *relative* path, making `$cwd/skills`
+    a Claude install root and warning on every skill in a plain source tree. A relative value made
+    the verdict depend on the invoking directory, and a `~`-prefixed one (never expanded inside a
+    `.env` file) resolved to `$cwd/~/.claude`, silently disabling install-root detection altogether.
 - **BREAKING: a `files:` glob and a plugin's verbatim tree-copy no longer ship files that never
   belong in a bundle.** Two routes reached a published bundle without any link pointing at them, and
   neither produced a finding. A plugin's `source:` directory was tree-copied verbatim, so a
@@ -423,6 +462,19 @@ ever exhibited them.
   readable log and 86 anonymous `Built N files` lines, one of which was being read as belonging to
   the failure printed above it.
 
+- **BREAKING: `-v` is no longer an alias for `--version`. It now means `--verbose`, which is what
+  every verb that accepts it already advertised.** The root command registered
+  `.version(…, '-v, --version')`, and Commander resolves a root option before the subcommand's own —
+  so the short flag silently shadowed the `-v, --verbose` that `validate`, `verify`, `build`,
+  `skills build` and `skills validate` each document in their own `--help`. `vat validate -v`
+  printed the version string and exited **0** having validated nothing, so a CI step spelled that
+  way was a permanently-green gate that ran no checks. Any script relying on `vat -v` to print the
+  version must switch to `vat --version`; `-v` now reaches the subcommand as `--verbose`, and at the
+  root it is rejected as an unknown option rather than silently doing something else. The regression
+  guard is a system test that runs the assembled program — the pre-existing unit test called
+  `parseOptions(['-v'])` on a subcommand built in isolation, where the flag always resolved
+  correctly, and so could never have caught this.
+
 ### Fixed
 
 **Link integrity and packaging fidelity**
@@ -513,6 +565,47 @@ ever exhibited them.
   file has one destination and an explicit entry outranks a glob that merely caught it.
 
 **Reports that told the truth about themselves**
+
+- **`validation.severity` overrides now actually apply in `vat audit` and `vat verify`.** Two
+  independent defects made the documented opt-out a no-op for every code, not just the new ones.
+  First, `vat audit`'s config lookup never searched upward: for a directory argument it resolved the
+  argument itself, so auditing `dist/skills/<name>` looked for `vibe-agent-toolkit.config.yaml`
+  *inside the bundle*, found none, and silently skipped severity filtering entirely — the config
+  root is now found by walking up, the same way the rest of the CLI does. Second, the filter only
+  considered results of skill type, so a finding on a **plugin** or marketplace tree kept its
+  severity no matter what the config said; `skills.defaults.validation.severity` now applies
+  project-wide, with `skills.config.<name>` still layering on top wherever a result names a skill.
+  That second half is the load-bearing one: the legitimate false positive this project's severity
+  posture is built around — a plugin that intentionally ships a scaffold `CLAUDE.md` *template* —
+  lands on a plugin result, which no per-skill key can name. `vat verify` had a third variant: its
+  packaged-content phase published the detector's raw output without consulting the config at all,
+  and now resolves severity through the same helper as every other lane, so `: error` promotes and
+  changes the exit code rather than being ignored. The reason this survived a green suite is that
+  the shared `runAudit` test helper calls the validation stage **directly**, upstream of the
+  severity filter — so no existing audit test could observe severity config even in principle. The
+  new regression tests drive the assembled report path instead.
+
+- **`CLAUDE_CONFIG_DIR` is now normalised once, where it is read.** An empty or whitespace-only
+  value was not caught by the `??` default, so `$cwd/skills` and `$cwd/plugins` were treated as
+  Claude install roots and ordinary project source was misclassified as installed artifacts. A
+  relative value made the answer depend on the process's working directory, and a `~/`-prefixed
+  value was never expanded. The value is now trimmed, treated as absent when blank, `~`-expanded and
+  resolved at its single read site. Install-root comparisons additionally canonicalise both sides,
+  so a symlinked Claude config directory — and, on macOS/Windows, a case-variant spelling of an
+  ordinary repository path — no longer flips the verdict.
+
+- **Build and plugin failure messages no longer publish your absolute filesystem paths into
+  machine-readable stdout.** Four `files:` failure routes — a missing non-glob source, a glob that
+  matched nothing, a glob whose every match is never-packaged, and the plugin lane's
+  `files[].source not found` — each interpolated the fully resolved absolute path into
+  `failedSkills[].message` / `failures[].message`. That is the output adopters paste into CI logs
+  and issue reports, so a build failure disclosed the operator's home directory and the project's
+  location on disk. All four are now anchored project-relative through the same helper the rest of
+  the module uses, so there is one spelling of the rule rather than four. The existing guard test
+  ("…without publishing where the run happened") passed only because its fixture used a **non-glob**
+  source and its matcher looked for `: /` — the glob routes spell their path after `under `, which
+  that pattern could never have matched. It now drives all four routes and matches an absolute POSIX
+  *or* Windows path at any word boundary.
 
 - **Piped output is no longer truncated at 64 KB.** Node makes a pipe's stdio non-blocking, so
   `console.log` is buffered and asynchronous — and every command calls `process.exit()` the moment

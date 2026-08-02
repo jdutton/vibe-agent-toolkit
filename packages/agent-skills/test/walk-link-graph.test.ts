@@ -7,6 +7,7 @@ import type { ResourceLink, ResourceMetadata, SkillFileEntry } from '@vibe-agent
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { walkerExclusionsToIssues } from '../src/validators/walker-to-issues.js';
 import { walkLinkGraph, type ExcludeRule, type WalkableRegistry, type WalkLinkGraphOptions } from '../src/walk-link-graph.js';
 
 import { setupTempDir } from './test-helpers.js';
@@ -338,6 +339,29 @@ function expectBundledIds(result: ReturnType<typeof walkLinkGraph>, expectedIds:
   }
 }
 
+/**
+ * Assert a link to `docs/<basename>` is refused as an agent-instruction file:
+ * nothing bundled, one exclusion with the agent-instruction reason, and — via the
+ * live extraction front-end — exactly the `LINK_TO_AGENT_INSTRUCTION_FILE` the
+ * author is meant to see. Both halves matter: a walker that stops refusing ships
+ * the file AND goes silent, so asserting only "not bundled" would let the second
+ * half regress unnoticed.
+ */
+function expectAgentInstructionRefused(
+  basename: string,
+  options?: Partial<WalkLinkGraphOptions>,
+): void {
+  const registry = createAgentInstructionRegistry(basename);
+  const result = walkLinkGraph(SKILL_ID, registry, defaultOptions(options));
+
+  expect(result.bundledResources).toHaveLength(0);
+  expect(result.excludedReferences).toHaveLength(1);
+  expect(result.excludedReferences[0]?.excludeReason).toBe(REASON_AGENT_INSTRUCTION);
+  expect(walkerExclusionsToIssues(result.excludedReferences, PROJECT_ROOT).map(i => i.code)).toEqual([
+    'LINK_TO_AGENT_INSTRUCTION_FILE',
+  ]);
+}
+
 /** Assert walk produced no bundled resources and no excluded references */
 function expectEmptyWalkResult(result: ReturnType<typeof walkLinkGraph>): void {
   expect(result.bundledResources).toHaveLength(0);
@@ -479,23 +503,34 @@ describe('walkLinkGraph', () => {
     it.each(['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', 'GEMINI.md'])(
       'should exclude %s from the bundle',
       (basename) => {
-        const registry = createAgentInstructionRegistry(basename);
-        const result = walkLinkGraph(SKILL_ID, registry, defaultOptions());
-
-        expect(result.bundledResources).toHaveLength(0);
-        expect(result.excludedReferences).toHaveLength(1);
-        expect(result.excludedReferences[0]?.excludeReason).toBe(REASON_AGENT_INSTRUCTION);
+        expectAgentInstructionRefused(basename);
       },
     );
+
+    // A case-insensitive filesystem (APFS, NTFS) resolves `Claude.md` for the
+    // `CLAUDE.md` lookup Claude Code performs, so a mis-cased file the walker
+    // lets through is bundled AND loaded as live instructions exactly as the
+    // shouted spelling would be. The walker is the lane that decides whether the
+    // file travels at all; its two siblings — the plugin tree-copy and the
+    // packaged-presence backstop — each carry their own mis-case guard, and
+    // without this one an enumerate-the-spellings check reintroduces the whole
+    // harm with the suite green.
+    it.each([
+      'Claude.md',
+      'claude.md',
+      'CLAUDE.MD',
+      'Claude.local.md',
+      'Agents.md',
+      'agents.md',
+      'Gemini.md',
+    ])('refuses a link to %s whatever its case', (basename) => {
+      expectAgentInstructionRefused(basename);
+    });
 
     it('should exclude agent instruction files even when excludeNavigationFiles is false', () => {
       // These files are repo-internal guidance, not content at the wrong
       // granularity. The navigation-file opt-out must not reopen the door.
-      const registry = createAgentInstructionRegistry('CLAUDE.md');
-      const result = walkLinkGraph(SKILL_ID, registry, defaultOptions({ excludeNavigationFiles: false }));
-
-      expect(result.bundledResources).toHaveLength(0);
-      expect(result.excludedReferences[0]?.excludeReason).toBe(REASON_AGENT_INSTRUCTION);
+      expectAgentInstructionRefused('CLAUDE.md', { excludeNavigationFiles: false });
     });
 
     it('should not treat an ordinary doc with a similar name as agent instructions', () => {
