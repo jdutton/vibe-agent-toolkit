@@ -650,11 +650,17 @@ export interface AllRefusedGlobEntry {
 /**
  * What the project's GLOB `files:` entries look like BEFORE anything is built.
  *
- * The three buckets are MUTUALLY EXCLUSIVE per entry, and they are the same three
- * verdicts `copyGlobEntry` reaches at copy time — one entry cannot be both
+ * The three buckets are MUTUALLY EXCLUSIVE per entry, and they are three of the
+ * FOUR verdicts `copyGlobEntry` reaches at copy time — one entry cannot be both
  * "matched nothing" and "matched only refused files", and an entry counted in
  * `allRefused` contributes no `dropped` rows. Overlapping buckets would let one
  * config produce two findings naming two different causes.
+ *
+ * The fourth verdict has NO bucket: a `..` segment in the glob's magic remainder
+ * makes the pattern unexpandable, `expandGlobEntry` throws, and
+ * {@link collectPreBuildGlobFindings} skips the entry rather than mislabelling it.
+ * So a config certain to fail the build produces no pre-build finding at all —
+ * see the skip in that function for why nothing here can honestly carry it.
  */
 export interface PreBuildGlobFindings {
   /**
@@ -690,8 +696,15 @@ export interface PreBuildGlobFindings {
  * and `allRefused` end that silence, graded `info` and `warning` respectively (see
  * FILES_GLOB_MATCHED_NOTHING / FILES_GLOB_MATCHED_ONLY_NEVER_PACKAGED).
  *
- * The three buckets partition the entries exactly as `copyGlobEntry`'s own two
- * throws plus its success path do — same predicates, same order, one expansion.
+ * The three buckets partition the entries as two of `copyGlobEntry`'s three throws
+ * plus its success path do — same predicates, same order, one expansion. Its THIRD
+ * throw (`expandGlobEntry` refusing a `..` segment in the magic remainder) has no
+ * bucket, and the skip below explains why — but the consequence belongs here: this
+ * function's answer to "what will this config fail to ship?" is silent for that one
+ * malformed shape, which is the same class of silence `unmatched`/`allRefused` were
+ * added to end. Closing it needs a code of its own (a wrong-shaped PATTERN, not an
+ * unbuilt or unshippable artifact), or a `source` refine on `SkillFileEntrySchema`
+ * that rejects the pattern at config load and makes the skip unreachable.
  *
  * Drops re-shipped by an explicit entry are filtered out for the same reason
  * {@link applyFilesConfig} filters them: reporting "it did not ship" about a file
@@ -716,6 +729,13 @@ export async function collectPreBuildGlobFindings(
     // abort the whole run over it — and it must not put the entry in either failure
     // bucket, which would name a cause (an unbuilt or unshippable artifact) that is
     // not the one.
+    //
+    // KNOWN GAP, stated rather than implied by a `continue`: this skip is total, so
+    // the entry produces NO finding in any pre-build lane and the author first hears
+    // about it from a failed build. Not "misreported", but not reported either. The
+    // honest fix is a distinct code for a wrong-shaped pattern, or rejecting the
+    // pattern in `SkillFileEntrySchema.source` the way `dest` already is — at which
+    // point this line becomes defense-in-depth against a config that cannot load.
     if (hasParentTraversalSegment(globMagicRemainder(entry.source))) continue;
     const expansion = await expandGlobEntry(entry, projectRoot);
     const absBase = toForwardSlash(expansion.absoluteBase);
@@ -881,12 +901,48 @@ async function applyGlobFileEntry(
   };
 }
 
+/**
+ * Reject a NON-GLOB `dest` that names a directory rather than a file.
+ *
+ * A non-glob entry is a typed single-file slot: one source, one output path. A
+ * `dest` ending in a separator (or spelling the dest root itself) names a
+ * directory, and nothing downstream noticed — `copyFile` wrote the source's bytes
+ * to a file NAMED `guides`, and the config then accounted for `guides/` while the
+ * bundle held `guides`, so the two never compared equal.
+ *
+ * Worth its own error rather than a silent normalization because of WHAT can ride
+ * in: an explicit entry is the one thing that sanctions shipping an
+ * agent-instruction file, and at a directory-shaped dest that file arrives under a
+ * basename no never-package rule and no presence detector recognizes. Renaming
+ * `CLAUDE.md` to `guides` on the author's behalf is not a service.
+ *
+ * GLOB entries are deliberately exempt: their `dest` IS a subtree root, and every
+ * match is joined onto it (`safePath.join('packs/', 'a/x.json')`), which drops the
+ * trailing separator on its own.
+ */
+function assertFileShapedDest(entry: SkillFileEntry): void {
+  const normalized = normalizeRelPath(entry.dest);
+  if (normalized !== '' && normalized !== '.' && !normalized.endsWith('/')) return;
+  let base = normalized;
+  while (base.endsWith('/')) base = base.slice(0, -1);
+  const suggested = `${base}/${entry.source.slice(entry.source.lastIndexOf('/') + 1)}`;
+  throw new Error(
+    `files: dest '${entry.dest}' names a directory, but a non-glob entry copies ONE file to ONE path. ` +
+    `Name the output file itself (e.g. dest: '${normalizeRelPath(suggested)}'), ` +
+    `or use a glob source to copy a whole subtree.`,
+  );
+}
+
 /** Copy one NON-GLOB `files:` entry. */
 async function applyNonGlobFileEntry(
   fileEntry: SkillFileEntry,
   opts: ApplyFilesConfigOptions,
   bundledFileSet: Set<string>,
 ): Promise<EntryOutcome> {
+  // Before the bundled-skip branch below, never inside it: which branch an entry
+  // takes depends on whether link traversal happened to reach the source first,
+  // and a malformed dest must not be validated by an ordering accident.
+  assertFileShapedDest(fileEntry);
   const absoluteSource = safePath.resolve(safePath.join(opts.projectRoot, fileEntry.source));
   const optedIn = fileEntry.integrity === true;
 

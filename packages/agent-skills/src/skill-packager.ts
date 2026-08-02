@@ -326,6 +326,16 @@ export function packagingConfigToPackageOptions(
     ...(config.resourceNaming && { resourceNaming: config.resourceNaming }),
     ...(config.stripPrefix && { stripPrefix: config.stripPrefix }),
     ...(config.linkFollowDepth !== undefined && { linkFollowDepth: config.linkFollowDepth }),
+    // `!== undefined`, not truthiness: `false` is the only value that carries
+    // information here (the packager defaults to `true`), so a truthiness spread
+    // would drop exactly the setting a user bothered to write. Dropping it made
+    // this conversion disagree with `packaging-validator.ts`, which reads the same
+    // key straight off the config — the gate predicted a README ships and the
+    // build stripped it, from one config, inside the conversion that promises
+    // byte-for-byte parity between lanes.
+    ...(config.excludeNavigationFiles !== undefined && {
+      excludeNavigationFiles: config.excludeNavigationFiles,
+    }),
     ...(config.excludeReferencesFromBundle && { excludeReferencesFromBundle: config.excludeReferencesFromBundle }),
     ...(config.files && { files: config.files }),
     ...(config.validation && { validation: config.validation }),

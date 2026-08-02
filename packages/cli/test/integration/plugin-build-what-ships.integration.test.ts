@@ -280,7 +280,11 @@ const GUIDED_PLUGIN = 'guided-plugin';
 /** The live pattern every guided fixture declares: it really does catch `scratch/`. */
 const LIVE_EXCLUDE = 'scratch/**';
 
-function guidedConfig(excludePatterns: readonly string[]): string {
+function guidedConfig(
+  excludePatterns: readonly string[],
+  extraPluginKeys: readonly string[] = [],
+): string {
+  const extra = extraPluginKeys.map((line) => `\n          ${line}`).join('');
   return `version: 1
 skills:
   include: ["plugins/*/skills/**/SKILL.md"]
@@ -293,15 +297,30 @@ claude:
         - name: ${GUIDED_PLUGIN}
           description: Plugin whose source dir holds guidance, a front page, and scratch
           skills: []
-          exclude: [${excludePatterns.map((p) => JSON.stringify(p)).join(', ')}]
+          exclude: [${excludePatterns.map((p) => JSON.stringify(p)).join(', ')}]${extra}
 `;
+}
+
+/**
+ * The project files a guided fixture needs, WITHOUT the plugin's source tree —
+ * so a case can choose whether that tree exists at all.
+ */
+function writeGuidedProjectFiles(
+  tempDir: string,
+  excludePatterns: readonly string[],
+  extraPluginKeys: readonly string[] = [],
+): void {
+  writeTestFile(safePath.join(tempDir, 'package.json'), JSON.stringify({ name: 't', version: '1.0.0' }));
+  writeTestFile(
+    safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
+    guidedConfig(excludePatterns, extraPluginKeys),
+  );
+  writeTestFile(safePath.join(tempDir, '.gitignore'), 'dist/\n');
 }
 
 /** Fixture with one of every never-package shape; returns the built plugin dir. */
 function writeGuidedFixture(tempDir: string, excludePatterns: readonly string[] = [LIVE_EXCLUDE]): string {
-  writeTestFile(safePath.join(tempDir, 'package.json'), JSON.stringify({ name: 't', version: '1.0.0' }));
-  writeTestFile(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), guidedConfig(excludePatterns));
-  writeTestFile(safePath.join(tempDir, '.gitignore'), 'dist/\n');
+  writeGuidedProjectFiles(tempDir, excludePatterns);
 
   const plugin = safePath.join(tempDir, 'plugins', GUIDED_PLUGIN);
   for (const dir of ['docs', 'scratch', 'commands']) {
@@ -393,6 +412,42 @@ describe('plugin build — never-package defaults and the exclude knob (integrat
     expect(rendered).toContain("'no-such-dir/**'");
     expect(rendered).toContain("'*.nope'");
     expect(rendered).not.toContain(`'${LIVE_EXCLUDE}'`);
+  });
+
+  /**
+   * The one configuration in which `exclude:` is UNAMBIGUOUSLY dead: no source
+   * directory, so the tree-copy never runs and not one pattern can have matched.
+   *
+   * Guarded here because the happy-path lane's guard cannot speak for it — that
+   * lane reads `treeResult.unusedExcludePatterns` from a tree-copy that RAN, while
+   * this one is a hand-built result in the `else` branch of `pluginSourceExists`.
+   * Reporting `[]` there restored perfect silence with the whole suite green.
+   *
+   * The plugin still needs CONTENT — a source-less plugin with no `files:` and no
+   * pool skills is rejected outright ("has no content"), so that shape could never
+   * reach the branch. One `files:` mapping is the smallest thing that makes the
+   * plugin buildable while leaving its source directory genuinely absent.
+   */
+  it('publishes every exclude pattern as dead when the plugin source dir does not exist', async () => {
+    tempDir = createTestTempDir('vat-plugin-no-source-exclude-');
+    writeGuidedProjectFiles(tempDir, [LIVE_EXCLUDE, 'no-such-dir/**'], [
+      'files: [{ source: "front.md", dest: "README.md" }]',
+    ]);
+    writeTestFile(safePath.join(tempDir, 'front.md'), '# Guided Plugin\n\nThe front page.\n');
+    commitTestFixture(tempDir);
+
+    const lines: string[] = [];
+    const results = await runClaudePluginBuild(tempDir, {
+      logger: { ...silentLogger, info: (m: string) => lines.push(m) },
+    });
+
+    // BOTH patterns, including the one that is live in every other fixture: with
+    // no tree to walk, "live" is not a property any pattern can have here.
+    expect(results[0]?.plugins[0]?.issueCounts).toEqual({ errors: 0, warnings: 2, info: 0 });
+    const rendered = lines.join('\n');
+    expect(rendered).toContain('PLUGIN_EXCLUDE_PATTERN_UNUSED');
+    expect(rendered).toContain(`'${LIVE_EXCLUDE}'`);
+    expect(rendered).toContain("'no-such-dir/**'");
   });
 
   it('publishes zero findings when every exclude pattern matched', async () => {

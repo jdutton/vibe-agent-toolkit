@@ -22,6 +22,10 @@ const CLI_DEST = 'scripts/cli.mjs';
 const GLOB_PACKS_SOURCE = 'dist/packs/**/*';
 const GLOB_PACKS_DEST = 'packs';
 const BUILD_ARTIFACT_FRAGMENT = 'build artifact';
+/** A repo-internal agent-instruction file — the payload a bad dest can launder. */
+const AGENT_INSTRUCTION_FILE = 'CLAUDE.md';
+/** A `dest` that names a DIRECTORY, which a single-file entry cannot satisfy. */
+const DIR_SHAPED_DEST = 'guides/';
 
 /** Tmp dirs created by applyFilesConfig tests, cleaned up after each. */
 const APPLY_TMP_DIRS: string[] = [];
@@ -192,6 +196,8 @@ const EXTRAS_SRC_DIR = 'gen/extras';
 const EXTRAS_DEST = 'extras';
 const EXTRAS_GLOB_SOURCE = `${EXTRAS_SRC_DIR}/**/*`;
 const EXTRAS_MD_GLOB_SOURCE = `${EXTRAS_SRC_DIR}/*.md`;
+/** A glob whose MAGIC remainder climbs above its own static base — unexpandable. */
+const PARENT_TRAVERSAL_GLOB_SOURCE = `${EXTRAS_SRC_DIR}/**/../../*`;
 const EXTRAS_README_SOURCE = `${EXTRAS_SRC_DIR}/README.md`;
 const EXTRAS_CLAUDE_SOURCE = `${EXTRAS_SRC_DIR}/CLAUDE.md`;
 const EXTRAS_README_DEST = 'extras/README.md';
@@ -251,10 +257,10 @@ describe('collectPreBuildGlobFindings', () => {
     expect(findings).toEqual({ dropped: [], allRefused: [], unmatched: [] });
   });
 
-  // --- THREE populations, three verdicts -----------------------------------
+  // --- THREE reported populations (of FOUR verdicts) ------------------------
   //
-  // `copyGlobEntry` fails a glob entry in two distinct ways and ships happily in
-  // a third, and the pre-build gate has to tell all three apart. Each case below
+  // `copyGlobEntry` fails a glob entry in THREE distinct ways and ships happily in
+  // a fourth, and the pre-build gate has to tell them apart. Each case below
   // asserts the FULL triple, not just its own bucket: an assertion that only
   // looked at one field could not tell these populations apart at all, which is
   // the failure mode that let two of the three go unreported.
@@ -262,6 +268,8 @@ describe('collectPreBuildGlobFindings', () => {
   //   partial     → some matches ship, some refused  → drops, no failure
   //   all-refused → matched, nothing can ship        → build error (exclusion)
   //   unmatched   → matched nothing at all           → build error (has your build run?)
+  //   malformed   → '..' in the magic remainder      → build error (unexpandable),
+  //                 and NO pre-build finding at all — the known gap pinned below.
 
   it('partial: reports drops only — the entry still ships something', async () => {
     const projectRoot = makeExtrasSandbox();
@@ -311,6 +319,32 @@ describe('collectPreBuildGlobFindings', () => {
     expect(allRefused).toEqual([]);
     expect(unmatched.map(u => u.source)).toEqual([UNBUILT_GLOB.source]);
     expect(unmatched.map(u => relTo(projectRoot, u.absBase))).toEqual([UNBUILT_BASE]);
+  });
+
+  /**
+   * The fourth verdict, and the one no bucket carries: a `..` segment in the magic
+   * remainder makes the pattern unexpandable, so the build dies on it and the
+   * pre-build gate says nothing.
+   *
+   * What this case GUARDS is the half that is settled — the gate stays non-throwing
+   * (it runs before an artifact exists and must not abort a whole run over one
+   * entry), and it never mislabels the entry as unbuilt or as unshippable, which
+   * would send the author to fix a cause that is not theirs. It deliberately does
+   * NOT assert the findings object is empty: that would cement the silence, and the
+   * day a wrong-shaped-pattern code exists this case should keep passing.
+   */
+  it('malformed: neither throws nor mislabels a glob whose remainder climbs out of its base', async () => {
+    const projectRoot = makeExtrasSandbox();
+    const malformed: SkillFileEntry = { source: PARENT_TRAVERSAL_GLOB_SOURCE, dest: EXTRAS_DEST };
+
+    const { dropped, allRefused, unmatched } = await collectPreBuildGlobFindings(
+      [malformed],
+      projectRoot,
+    );
+
+    expect(unmatched.map(u => u.source)).not.toContain(PARENT_TRAVERSAL_GLOB_SOURCE);
+    expect(allRefused.map(e => e.source)).not.toContain(PARENT_TRAVERSAL_GLOB_SOURCE);
+    expect(dropped.map(d => d.source)).not.toContain(PARENT_TRAVERSAL_GLOB_SOURCE);
   });
 
   // The escape hatch does NOT rescue this entry, and the gate must not pretend it
@@ -553,6 +587,62 @@ describe('applyFilesConfig', () => {
     await expect(applyFilesConfig({ filesConfig, projectRoot, skillOutputDir })).rejects.toThrow(
       /use a glob/,
     );
+  });
+
+  /**
+   * A non-glob `dest` is a FILE path, and a trailing separator says "directory".
+   * Left unchecked, `copyFile` happily wrote the source's bytes to a file NAMED
+   * `guides`, and two lanes then disagreed with the bundle: the config accounted
+   * for `guides/` while the packaged path is `guides`, and — the reason this is
+   * more than cosmetic — an agent-instruction file laundered its way in under a
+   * basename no detector recognizes. `CLAUDE.md` is deliberately the fixture: an
+   * explicit entry sanctions shipping it, but only at the dest the author wrote.
+   */
+  it('throws on a directory-shaped dest instead of writing the source under that name', async () => {
+    const { projectRoot, skillOutputDir } = makeApplySandbox();
+    writeFileSync(safePath.join(projectRoot, AGENT_INSTRUCTION_FILE), '# agent instructions\n');
+    const filesConfig: SkillFileEntry[] = [
+      { source: AGENT_INSTRUCTION_FILE, dest: DIR_SHAPED_DEST },
+    ];
+
+    await expect(applyFilesConfig({ filesConfig, projectRoot, skillOutputDir })).rejects.toThrow(
+      /names a directory/,
+    );
+    // The laundered artifact: a FILE called `guides` holding CLAUDE.md's bytes.
+    expect(existsSync(safePath.join(skillOutputDir, 'guides'))).toBe(false);
+  });
+
+  /**
+   * The bundled-skip branch never reaches the copy, so a guard placed only there
+   * would let the same malformed dest through whenever link traversal happened to
+   * materialize the source first — an ordering accident deciding whether config is
+   * validated.
+   */
+  it('throws on a directory-shaped dest even when link traversal already bundled the source', async () => {
+    const { projectRoot, skillOutputDir } = makeApplySandbox();
+    const absSource = safePath.resolve(safePath.join(projectRoot, AGENT_INSTRUCTION_FILE));
+    writeFileSync(absSource, '# agent instructions\n');
+    const filesConfig: SkillFileEntry[] = [
+      { source: AGENT_INSTRUCTION_FILE, dest: DIR_SHAPED_DEST },
+    ];
+
+    await expect(
+      applyFilesConfig({ filesConfig, projectRoot, skillOutputDir, bundledFiles: [absSource] }),
+    ).rejects.toThrow(/names a directory/);
+  });
+
+  /** A GLOB dest is a subtree root, so a trailing separator there is harmless. */
+  it('accepts a trailing separator on a GLOB dest, where it names the subtree', async () => {
+    const { projectRoot, skillOutputDir } = makeApplySandbox();
+    mkdirSyncReal(safePath.join(projectRoot, 'dist', 'packs', 'a'), { recursive: true });
+    writeFileSync(safePath.join(projectRoot, 'dist', 'packs', 'a', 'x.json'), '{"a":1}');
+    const filesConfig: SkillFileEntry[] = [
+      { source: GLOB_PACKS_SOURCE, dest: `${GLOB_PACKS_DEST}/` },
+    ];
+
+    const { dests } = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir });
+
+    expect(dests).toEqual([toForwardSlash(safePath.join('packs', 'a', 'x.json'))]);
   });
 
   it('throws with build-artifact hint when missing source looks like a build product', async () => {

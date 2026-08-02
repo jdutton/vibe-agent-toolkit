@@ -6,6 +6,7 @@ import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { detectPackagedAgentInstructionFiles } from '../../src/validators/agent-instruction-presence.js';
+import { runGit } from '../skill-source/test-helpers.js';
 import { setupTempDir } from '../test-helpers.js';
 
 const NOTES_CLAUDE = 'notes/CLAUDE.md';
@@ -118,5 +119,35 @@ describe('detectPackagedAgentInstructionFiles', () => {
 
   it('normalizes declared dests so a ./-spelled entry still exempts', () => {
     expect(scan([NOTES_CLAUDE], [`./${NOTES_CLAUDE}`])).toEqual([]);
+  });
+
+  /**
+   * The ONE case every other test in this file is structurally blind to.
+   *
+   * `setupTempDir` is a bare `mkdtemp` — no repository — so the crawler's git lane
+   * never engages and `respectGitignore` cannot change any answer. Every scan above
+   * would agree with a detector that respected gitignore, and the subject of this
+   * detector is BUILT output: a bundle under a gitignored `dist/`, where the crawl's
+   * default (`git ls-files`, tracked files only) returns nothing at all and the scan
+   * passes by scanning zero files.
+   *
+   * A real repo is what makes the difference observable: `git init` alone is enough
+   * for `git ls-files` to return an empty set for an untracked tree, and the
+   * `.gitignore` makes the fixture the actual shape the comment describes. Until
+   * this case existed the guard lived in another package's integration test, one
+   * fixture re-scope away from evaporating.
+   */
+  it('scans a built bundle sitting under a gitignored dist/ inside a real repo', () => {
+    const root = getTempDir();
+    runGit(['init', '--initial-branch=main'], root);
+    writeFileSync(safePath.join(root, '.gitignore'), 'dist/\n');
+    const bundleDir = safePath.join(root, 'dist', 'skills', 'demo');
+    mkdirSyncReal(bundleDir, { recursive: true });
+    writeFileSync(safePath.join(bundleDir, 'CLAUDE.md'), '# guidance\n');
+    writeFileSync(safePath.join(bundleDir, 'SKILL.md'), '# skill\n');
+
+    const issues = detectPackagedAgentInstructionFiles(bundleDir, root, []);
+
+    expect(issues.map(i => i.location)).toEqual(['dist/skills/demo/CLAUDE.md']);
   });
 });

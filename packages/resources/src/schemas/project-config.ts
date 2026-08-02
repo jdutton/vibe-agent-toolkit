@@ -1,5 +1,5 @@
 import { ValidationConfigSchema } from '@vibe-agent-toolkit/agent-schema';
-import { hasParentTraversalSegment, isAbsoluteAnyPlatform } from '@vibe-agent-toolkit/utils';
+import { globMagicRemainder, hasParentTraversalSegment, isAbsoluteAnyPlatform } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
 import { LinkAuthConfigSchema } from './link-auth.js';
@@ -136,7 +136,30 @@ export const ExcludeReferencesFromBundleSchema = z.object({
  * - integrity (optional): byte-verify the copied set against the matched source set at build time
  */
 export const SkillFileEntrySchema = z.object({
-  source: z.string().min(1).describe('Source path relative to project root'),
+  source: z.string().min(1)
+    // A `..` segment AFTER a glob's static base is a malformed PATTERN, not a
+    // path. `glob` honors it and climbs above the base the pattern is resolved
+    // against, so `expandGlobEntry` cannot expand it safely at any phase and
+    // throws — killing the build. The pre-build gate has no bucket for that
+    // verdict (its three buckets cover dropped / all-refused / unmatched), so a
+    // config that could never build passed `vat skills validate` silently and
+    // died at copy time. Rejecting it here makes the config unloadable, which
+    // every lane already surfaces through the existing config-error path — no
+    // new validation code, and the runtime throw becomes unreachable
+    // defense-in-depth rather than the only guard.
+    //
+    // Only the MAGIC REMAINDER is constrained. The static base may legitimately
+    // begin with `..` — that is the deliberate sibling-base monorepo feature —
+    // and a non-glob source is an ordinary path, so neither is touched here.
+    .refine(
+      (s) => !hasParentTraversalSegment(globMagicRemainder(s)),
+      {
+        message:
+          "source must not contain a '..' segment after its static base: parent-directory " +
+          'traversal inside the glob portion escapes the base the pattern is resolved against',
+      },
+    )
+    .describe('Source path relative to project root'),
   dest: z.string().min(1)
     // Containment guard (zip-slip class): dest is OUR config output and is joined
     // onto the skill output directory at build time, so it must stay inside it.

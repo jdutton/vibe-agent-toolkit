@@ -101,6 +101,43 @@ describe('SkillFileEntrySchema', () => {
     const result = SkillFileEntrySchema.safeParse({ source: BASE_SOURCE, dest: String.raw`C:\Users\evil` });
     expect(result.success).toBe(false);
   });
+
+  // A `..` segment AFTER a glob's static base is a malformed pattern, not a
+  // path: `glob` honors it and climbs above the base it was resolved against,
+  // so `expandGlobEntry` throws and the build dies. The pre-build gate has no
+  // bucket for that verdict and was silent on it, so a config that could never
+  // build passed validation and failed only at copy time. Rejecting it here
+  // makes the config unloadable, which every lane already reports through the
+  // existing config-error path — no new validation code required.
+  it('rejects a ".." segment in a glob source\'s magic remainder', () => {
+    for (const source of [
+      'dist/gen/**/../../secrets/*',
+      'dist/**/../*.mjs',
+      'a/*/../b/*.json',
+    ]) {
+      const result = SkillFileEntrySchema.safeParse({ source, dest: BASE_DEST });
+      expect(result.success, `expected rejection for ${source}`).toBe(false);
+    }
+  });
+
+  // The STATIC base may legitimately begin with `..` — that is the deliberate
+  // sibling-base monorepo feature, and narrowing it here would break it. Only
+  // the magic remainder is constrained, exactly mirroring the runtime throw.
+  it('still accepts a `..` in the static base of a glob source', () => {
+    const result = SkillFileEntrySchema.safeParse({
+      source: '../shared/dist/**/*.mjs',
+      dest: BASE_DEST,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('still accepts a non-glob source containing ".."', () => {
+    const result = SkillFileEntrySchema.safeParse({
+      source: '../shared/dist/a.mjs',
+      dest: BASE_DEST,
+    });
+    expect(result.success).toBe(true);
+  });
 });
 
 describe('SkillPackagingConfigSchema', () => {
