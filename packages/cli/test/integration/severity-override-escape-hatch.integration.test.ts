@@ -29,7 +29,9 @@ import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { buildAuditReport, resetAuditCaches } from '../../src/commands/audit.js';
+import { discoverSkillsFromConfig } from '../../src/commands/skills/skill-discovery.js';
 import { checkPackagedAgentInstructionFiles } from '../../src/commands/verify.js';
+import { loadConfig } from '../../src/utils/config-loader.js';
 import { createTempDirTracker } from '../system/test-common.js';
 import { commitTestFixture, silentLogger } from '../test-helpers.js';
 
@@ -58,9 +60,9 @@ function severityBlock(indent: string): string {
  * Both placements are exercised because both are documented: `skills.defaults`
  * is the project-wide switch and `skills.config.<name>` is the per-skill one.
  *
- * `skills.config.<name>` is present in EVERY variant, override or not: `vat verify`
- * enumerates built bundles from that map, so a variant that dropped it would check
- * nothing and report `[]` for a reason that has nothing to do with severity.
+ * `skills.config.<name>` is present in EVERY variant, override or not — not because
+ * `vat verify` needs it (the enumeration is the union of discovery and that map), but
+ * because the `per-skill` scope has nowhere else to write its override.
  */
 function configYaml(scope: OverrideScope): string {
   const base = `version: 1\nskills:\n  include:\n    - "skills/**/SKILL.md"\n`;
@@ -113,6 +115,13 @@ function projectWithPlugin(scope: OverrideScope): { root: string; plugin: string
   return { root, plugin };
 }
 
+/** Agent-instruction findings `vat verify`'s packaged-content phase publishes for `root`. */
+async function verifyFindings(root: string): Promise<string[]> {
+  const config = loadConfig(root);
+  const discovered = config?.skills ? await discoverSkillsFromConfig(config.skills, root) : [];
+  return checkPackagedAgentInstructionFiles(root, discovered).map((i) => String(i.location));
+}
+
 /** Agent-instruction findings `vat audit <target>` publishes, AFTER severity filtering. */
 async function auditFindings(target: string): Promise<string[]> {
   resetAuditCaches();
@@ -161,20 +170,19 @@ describe('severity escape hatch: PACKAGED_AGENT_INSTRUCTION_FILE (integration)',
   });
 
   describe('vat verify, packaged-content phase', () => {
-    it(CONTROL_CASE,() => {
+    it(CONTROL_CASE,async () => {
       const { root } = projectWithBundle('none');
-      expect(checkPackagedAgentInstructionFiles(root).map((i) => String(i.location)))
-        .toEqual(['dist/skills/demo/CLAUDE.md']);
+      await expect(verifyFindings(root)).resolves.toEqual(['dist/skills/demo/CLAUDE.md']);
     });
 
-    it('honours skills.defaults.validation.severity', () => {
+    it('honours skills.defaults.validation.severity', async () => {
       const { root } = projectWithBundle('defaults');
-      expect(checkPackagedAgentInstructionFiles(root)).toEqual([]);
+      await expect(verifyFindings(root)).resolves.toEqual([]);
     });
 
-    it('honours skills.config.<name>.validation.severity', () => {
+    it('honours skills.config.<name>.validation.severity', async () => {
       const { root } = projectWithBundle('per-skill');
-      expect(checkPackagedAgentInstructionFiles(root)).toEqual([]);
+      await expect(verifyFindings(root)).resolves.toEqual([]);
     });
   });
 });

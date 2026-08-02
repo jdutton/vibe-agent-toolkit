@@ -37,6 +37,7 @@ import { Command } from 'commander';
 
 import { handleCommandError } from '../utils/command-error.js';
 import { loadConfig } from '../utils/config-loader.js';
+import { formatIssueLines } from '../utils/issue-rendering.js';
 import type { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
 import { requireProjectRoot } from '../utils/project-root-policy.js';
@@ -62,6 +63,7 @@ import {
   type PhaseVocabulary,
 } from './phase-utils.js';
 import { rejectPositionalArguments } from './positional-args.js';
+import type { DiscoveredSkill } from './skills/command-helpers.js';
 import { discoverSkillsFromConfig } from './skills/skill-discovery.js';
 
 export interface VerifyCommandOptions {
@@ -237,13 +239,37 @@ function tryAddCheckEntry(
  * phases report the real config error, and an in-process phase must not race them
  * with a second, worse diagnosis.
  *
+ * The pool arm enumerates the skills the run DISCOVERED, unioned with the keys of
+ * `skills.config`. It used to be the config keys alone, which made both in-process
+ * phases blind to the common case: a per-skill `config:` block is optional, so a
+ * skill discovered only by `skills.include` had no key and its bundle was never
+ * looked at. Measured on a two-skill fixture with an identical `CLAUDE.md` planted
+ * in each built bundle, `packaged-content` reported ONE finding and exit 0 — the
+ * phase was structurally blind to the population its own doc comment cites as the
+ * motivating incident. The same line made `files-config-dests` a total no-op for a
+ * project whose `files:` entries live only under `skills.defaults`, while the
+ * startup banner still announced that the phase ran.
+ *
+ * The config keys stay in the union rather than being replaced by discovery: a key
+ * naming a skill discovery does not reach (a renamed glob, a stale entry) still
+ * points at a bundle that may be sitting in `dist/`, and dropping it would trade
+ * one blindness for another.
+ *
+ * `discovered` is a REQUIRED parameter, not an optional convenience: discovery
+ * crawls the whole project, `vat verify` already needs the same list for its
+ * consistency phase, and an optional parameter here would let a call site quietly
+ * re-crawl (or, worse, skip discovery and reinstate the blindness above).
+ *
  * The merge goes through {@link mergeSkillPackagingConfig} — the ONE helper every
  * lane uses — so `vat verify` and `vat build` cannot disagree about a skill's
  * effective config. Doing the `files:` half by hand here and leaving `validation:`
  * unread is what made `severity.PACKAGED_AGENT_INSTRUCTION_FILE: ignore` a no-op in
  * this command.
  */
-function collectBuiltSkillOutputs(cwd: string): CheckEntry[] {
+function collectBuiltSkillOutputs(
+  cwd: string,
+  discovered: readonly DiscoveredSkill[],
+): CheckEntry[] {
   try {
     const config = loadConfig(cwd);
     if (!config) return [];
@@ -254,8 +280,12 @@ function collectBuiltSkillOutputs(cwd: string): CheckEntry[] {
     // Dedup map: key = `skillName\0outputDir` → check entry
     const checks = new Map<string, CheckEntry>();
 
-    // --- Pool/config skills: candidate dir is dist/skills/<fsName> ---
-    for (const skillName of Object.keys(skillsConfig?.config ?? {})) {
+    // --- Pool skills: candidate dir is dist/skills/<fsName> ---
+    const poolNames = new Set<string>([
+      ...discovered.map((skill) => skill.name),
+      ...Object.keys(skillsConfig?.config ?? {}),
+    ]);
+    for (const skillName of poolNames) {
       const perSkill = skillsConfig?.config?.[skillName] as Record<string, unknown> | undefined;
       const outputDir = safePath.resolve(cwd, 'dist', 'skills', skillNameToFsPath(skillName));
       tryAddCheckEntry(checks, skillName, outputDir, mergeSkillPackagingConfig(defaults, perSkill));
@@ -289,11 +319,16 @@ function collectBuiltSkillOutputs(cwd: string): CheckEntry[] {
  * A dest is "missing" ONLY when absent from a candidate dir that exists. If a skill
  * has no existing candidate dir, it is not reported (build didn't run for that mode).
  *
+ * @param discovered - The skills this run discovered from `skills.include`. See
+ *   {@link collectBuiltSkillOutputs} for why it is required rather than optional.
  * @returns One result per (skill, outputDir) pair where dests are absent.
  */
-export function checkFilesConfigDests(cwd: string): FilesDestCheckResult[] {
+export function checkFilesConfigDests(
+  cwd: string,
+  discovered: readonly DiscoveredSkill[],
+): FilesDestCheckResult[] {
   const results: FilesDestCheckResult[] = [];
-  for (const check of collectBuiltSkillOutputs(cwd)) {
+  for (const check of collectBuiltSkillOutputs(cwd, discovered)) {
     const { skillName, outputDir } = check;
     const mergedFiles = filesOf(check);
     if (mergedFiles.length === 0) continue;
@@ -348,10 +383,16 @@ export function checkFilesConfigDests(cwd: string): FilesDestCheckResult[] {
  * is not. See `AllowUsageLedger` in `@vibe-agent-toolkit/agent-schema`.
  *
  * Locations anchor at `cwd`, the run's stated root, so a reader can open them.
+ *
+ * @param discovered - The skills this run discovered from `skills.include`. See
+ *   {@link collectBuiltSkillOutputs} for why it is required rather than optional.
  */
-export function checkPackagedAgentInstructionFiles(cwd: string): ValidationIssue[] {
+export function checkPackagedAgentInstructionFiles(
+  cwd: string,
+  discovered: readonly DiscoveredSkill[],
+): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
-  for (const check of collectBuiltSkillOutputs(cwd)) {
+  for (const check of collectBuiltSkillOutputs(cwd, discovered)) {
     const raw = detectPackagedAgentInstructionFiles(
       check.outputDir,
       cwd,
@@ -435,6 +476,12 @@ function reportFilesDestErrors(
  *
  * A companion to the document entry, never a substitute for it: this phase's
  * findings are published into the YAML too (see {@link FindingsPhaseResult}).
+ *
+ * Rendered through the SHARED {@link formatIssueLines}, which `vat skills build`
+ * and `vat skills validate` already use. The hand-rolled renderer this replaces
+ * printed severity, code, location and fix — and dropped `message`, the only part
+ * of a finding that says what is wrong. A second renderer for the same shape is
+ * how one command's findings end up spelled differently from every other's.
  */
 function reportPackagedContentIssues(
   issues: readonly ValidationIssue[],
@@ -442,10 +489,7 @@ function reportPackagedContentIssues(
 ): void {
   logger.error(`\n▶ Phase: ${PACKAGED_CONTENT}`);
   for (const issue of issues) {
-    logger.error(`  ${issue.severity.toUpperCase()} [${issue.code}]: ${issue.location ?? ''}`);
-    if (issue.fix !== undefined) {
-      logger.error(`    Fix: ${issue.fix}`);
-    }
+    for (const line of formatIssueLines(issue, '  ')) logger.error(line);
   }
 }
 
@@ -614,6 +658,39 @@ interface PublishedIssue {
   code: string;
   message: string;
   fix: string;
+  /** Project-relative path of the file to open. Absent when the finding has none. */
+  location?: string;
+  /** 1-based line within {@link PublishedIssue.location}. */
+  line?: number;
+  /** Doc link the code's registry entry carries. */
+  reference?: string;
+}
+
+/**
+ * Project ONE finding into the archived YAML.
+ *
+ * The whole anchor rides along. This shape used to be `{severity, code, message,
+ * fix}` and the projection destructured exactly those four, so every
+ * `packaged-content` finding reached the document with no `location` — the same
+ * defect this PR fixed one command over in `vat skills build`, where a published
+ * count carried "no `code`, no location and no fix string at ANY verbosity". It
+ * looked survivable only because `materializeIssue` happens to interpolate the
+ * detail into `message` for this one code; that is a coincidence, not a contract,
+ * and stderr is not the document a CI consumer parses.
+ */
+export function toPublishedIssue(issue: ValidationIssue): PublishedIssue {
+  return {
+    severity: issue.severity,
+    code: issue.code,
+    message: issue.message,
+    fix: issue.fix ?? '',
+    // Conditional rather than `location: issue.location`: `exactOptionalPropertyTypes`
+    // distinguishes an absent key from an explicit `undefined`, and a YAML document
+    // carrying `location: null` claims something the finding never said.
+    ...(issue.location === undefined ? {} : { location: issue.location }),
+    ...(issue.line === undefined ? {} : { line: issue.line }),
+    ...(issue.reference === undefined ? {} : { reference: issue.reference }),
+  };
 }
 
 /**
@@ -650,13 +727,18 @@ function asValidationIssues(issues: readonly ConsistencyIssue[]): ValidationIssu
  * to go to stderr only, so the archived YAML — the artifact of record — said
  * nothing happened. And a warning-only run reported `passed`, which is the
  * reassuring answer to a question it could not represent.
+ *
+ * Discovery is handed in rather than performed here: it crawls the whole project,
+ * and the packaged-content and files-config-dests phases need the same list. One
+ * crawl per run, one answer to "which skills does this project have".
  */
-async function runConsistencyPhase(
+function runConsistencyPhase(
   logger: ReturnType<typeof createLogger>,
   phaseResults: PhaseResult[],
   config: ProjectConfig | undefined,
   projectRoot: string,
-): Promise<void> {
+  discoveredSkills: readonly DiscoveredSkill[],
+): void {
   if (!config?.skills) {
     // Nothing to cross-reference, so nothing to report: a run without a
     // `skills:` block is a genuine no-op, and {@link selectInProcessVerifyPhases}
@@ -671,8 +753,7 @@ async function runConsistencyPhase(
     return;
   }
 
-  const discoveredSkills = await discoverSkillsFromConfig(config.skills, projectRoot);
-  const consistencyResult = runConsistencyChecks(discoveredSkills, config, projectRoot);
+  const consistencyResult = runConsistencyChecks([...discoveredSkills], config, projectRoot);
   const issues = consistencyResult.issues;
 
   if (issues.length > 0) {
@@ -684,7 +765,7 @@ async function runConsistencyPhase(
     name: 'consistency',
     status: calculateValidationStatus(asValidation),
     issueCounts: countBySeverity(asValidation),
-    issues: issues.map(({ severity, code, message, fix }) => ({ severity, code, message, fix })),
+    issues: asValidation.map(toPublishedIssue),
   };
   phaseResults.push(result);
 }
@@ -734,9 +815,18 @@ async function verifyTopLevelCommand(
       phaseResults.push(runPhase(binPath, phase));
     }
 
+    // ONE discovery for the whole in-process half of the run. Every phase below
+    // asks the same question — "which skills does this project have" — and each
+    // answer used to be a different one: `consistency` crawled, while
+    // `files-config-dests` and `packaged-content` read `skills.config` keys and
+    // were therefore blind to every skill discovered by a glob.
+    const discoveredSkills = inProcess.length > 0 && config?.skills
+      ? await discoverSkillsFromConfig(config.skills, projectRoot)
+      : [];
+
     // Post-build files config check: verify all dest paths exist in built output
     if (inProcess.includes(FILES_CONFIG_DESTS)) {
-      const filesDestResults = checkFilesConfigDests(projectRoot);
+      const filesDestResults = checkFilesConfigDests(projectRoot, discoveredSkills);
       if (filesDestResults.length > 0) {
         reportFilesDestErrors(filesDestResults, logger);
         phaseResults.push({
@@ -753,7 +843,7 @@ async function verifyTopLevelCommand(
     // `issueCounts`, or a CI consumer reads a clean report for a bundle carrying
     // one. Warnings do not fail the run; the exit code still comes from errors.
     if (inProcess.includes(PACKAGED_CONTENT)) {
-      const packagedIssues = checkPackagedAgentInstructionFiles(projectRoot);
+      const packagedIssues = checkPackagedAgentInstructionFiles(projectRoot, discoveredSkills);
       if (packagedIssues.length > 0) {
         reportPackagedContentIssues(packagedIssues, logger);
       }
@@ -761,16 +851,14 @@ async function verifyTopLevelCommand(
         name: PACKAGED_CONTENT,
         status: calculateValidationStatus(packagedIssues),
         issueCounts: countBySeverity(packagedIssues),
-        issues: packagedIssues.map(({ severity, code, message, fix }) => ({
-          severity, code, message, fix: fix ?? '',
-        })),
+        issues: packagedIssues.map(toPublishedIssue),
       };
       phaseResults.push(packagedResult);
     }
 
     // Consistency check: cross-reference discovered skills vs package.json and plugin assignments
     if (inProcess.includes('consistency')) {
-      await runConsistencyPhase(logger, phaseResults, config, projectRoot);
+      runConsistencyPhase(logger, phaseResults, config, projectRoot, discoveredSkills);
     }
 
     const duration = Date.now() - startTime;

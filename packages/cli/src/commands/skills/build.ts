@@ -174,6 +174,13 @@ Output:
                   the previous dist/skills (if any) is exactly as it was — and
                   the packaged rows are published as skillsStaged, without an
                   outputPath, because none was written.
+  promotionError: present ONLY when the promotion/discard step itself failed
+                  (EACCES, ENOSPC, or the ENOTEMPTY a concurrent build in the
+                  same dist/ produces). Its text names what is on disk and the
+                  single 'mv' that recovers it, because the parked path carries
+                  a random suffix nobody can reconstruct. Read outputCommitted
+                  beside it: a promotion that landed the tree and then failed to
+                  clean up still committed the output.
 
 Exit Codes:
   0 - All skills built successfully (or dry-run preview)
@@ -182,7 +189,9 @@ Exit Codes:
       aborts the run: every failure of every kind is collected and reported
       in ONE pass, so one build cycle surfaces all the work. Because the run
       failed, outputCommitted is false and dist/skills was left untouched.
-  2 - System error (config invalid, directory not found)
+  2 - System error (config invalid, directory not found), or a failure on the
+      promotion path — see promotionError. The YAML document is still written
+      in that case; it is the only report that says where the output went.
 
 Requirements:
   projectRoot: required (errors if no vibe-agent-toolkit.config.yaml or .git/ ancestor)
@@ -508,6 +517,8 @@ export function buildYamlSummary(
   skillsFailedValidation: number;
   skillsWithErrors: string[];
   outputCommitted: boolean;
+  /** Present only when the promotion/discard step itself failed. */
+  promotionError?: string;
   skills: Array<{
     name: string;
     outputPath: string;
@@ -577,7 +588,11 @@ export function buildYamlSummary(
   }));
 
   return {
-    status: failures.length > 0 || validationFailures.length > 0
+    // `promotionError` gates too: a run whose bundles all validated cleanly and
+    // whose promotion then threw has no issue to derive a status from, so
+    // deriving it from the issue channels alone would publish `success` beside an
+    // exit code of 2 and a `dist/skills` nobody can vouch for.
+    status: failures.length > 0 || validationFailures.length > 0 || run.promotionError !== undefined
       ? 'error'
       : calculateValidationStatus([...allIssues, ...runIssues]),
     issueCounts: sumSeverityCounts([
@@ -594,6 +609,7 @@ export function buildYamlSummary(
     // rather than re-derived here: two definitions of "did this build change
     // anything" is exactly how a report ends up contradicting the disk.
     outputCommitted,
+    ...(run.promotionError === undefined ? {} : { promotionError: run.promotionError }),
     // The OTHER meaning of "failed", published because the exit code follows
     // THIS one and nothing in the document did. `skillsFailed` counts skills
     // that could not be packaged at all; a skill that packaged fine and then
@@ -664,6 +680,13 @@ function outputBuildYaml(run: SkillBuildRun, duration: number): void {
       {
         issueCounts,
         runIssueCounts,
+        // Published in the BODY, not the header: `writeYamlHeader` writes raw
+        // `key: value` lines, and this text is multi-line by design (what is on
+        // disk, and the `mv` that recovers it). Emitting it there would produce a
+        // document that does not parse — the one failure mode a report about a
+        // failed build must not add. `status: error` and `outputCommitted` are
+        // already in the header, so a reader who stops there is not misled.
+        ...(summary.promotionError === undefined ? {} : { promotionError: summary.promotionError }),
         skills,
         // Always published, even empty, for the same reason `failedSkills` is: an
         // absent key reads as "this run had no such concept", and a consumer that
@@ -768,8 +791,24 @@ function reanchorIssueLocations(
  * `collectPostBuildIssues` merges them and either can carry a staged location
  * (the built-output validation runs against the staged `SKILL.md` itself), so a
  * mapper applied to one of them leaves the report half-anchored.
+ *
+ * The `postBuildIssues` half is a live invariant with NO live producer today, and
+ * the distinction matters to anyone changing it. Every issue on that channel is
+ * anchored either on the bundle (`checkUnreferencedFiles`,
+ * `checkBrokenPackagedLinks`, `detectPackagedAgentInstructionFiles`,
+ * `checkPackagedTestInput` — all `relative(outputPath, …)`) or on the SOURCE
+ * project root (`droppedGlobMatchesToIssues`, `walkerExclusionsToIssues`,
+ * `deferredAssetsToIssues`, `FILENAME_COLLISION` — all `relative(projectRoot, …)`,
+ * where `projectRoot` is discovered from the skill's own source path). Neither
+ * spelling contains the staging prefix, so deleting this branch changes no
+ * fixture in the repo — which is exactly why it is unit-tested directly rather
+ * than through a build. Do not delete it on the strength of a green suite: the
+ * moment any producer anchors on `outputPath` ABSOLUTELY, this is the only thing
+ * standing between a report and a path its reader cannot open.
+ *
+ * Exported for that unit test.
  */
-function reanchorStagedResult(
+export function reanchorStagedResult(
   result: PackageSkillResult,
   mapPath: (value: string) => string,
 ): PackageSkillResult {
@@ -800,15 +839,53 @@ function reanchorStagedResult(
  * `status: success / Skills available: 0` against a tree the previous command
  * had deleted.
  */
-interface BuildStaging {
+export interface BuildStaging {
   /** Where each bundle is written during the run, in place of `dist/skills`. */
   root: string;
   /** True when a previous build's output was set aside and can be restored. */
   hadPreviousOutput: boolean;
+  /**
+   * Where the previous output is held while the run is in flight.
+   *
+   * Published so a failure on the promotion path can NAME it. It is a
+   * `mkdtemp`-suffixed sibling, so a reader who is not told the path cannot
+   * reconstruct it — which is the difference between "recover with one `mv`" and
+   * "your previous output is gone".
+   */
+  parkedPath: string;
+  /**
+   * How the human stream names what THIS run promotes.
+   *
+   * `dist/skills` for a full build, `dist/skills/<name>` in `--skill` mode. The
+   * scope is not cosmetic: a failed `--skill bad` used to report "Nothing was
+   * written — dist/skills does not exist" while `dist/skills` sat on disk holding
+   * every sibling bundle. Only this skill's bundle was ever in question.
+   */
+  promoteLabel: string;
+  /** True once this run's bundles have actually landed on the promotion target. */
+  promoted: () => boolean;
   /** Promote the staged tree, discarding the previous output. */
   commit: () => Promise<void>;
   /** Discard the staged tree, restoring the previous output byte for byte. */
   abort: () => Promise<void>;
+  /**
+   * Best-effort repair after {@link BuildStaging.commit} or
+   * {@link BuildStaging.abort} threw, and a description of what is left on disk.
+   *
+   * Never overwrites whatever occupies the promotion target: a promotion can fail
+   * BECAUSE a concurrent build already promoted its own tree there, and restoring
+   * over it would replace fresh output with a stale copy. When the target is
+   * occupied the parked tree is left where it is and named in the report instead.
+   */
+  recover: () => Promise<StagingRecovery>;
+}
+
+/** What a best-effort {@link BuildStaging.recover} left behind. */
+export interface StagingRecovery {
+  /** True when the previous output was moved back onto the promotion target. */
+  restoredPrevious: boolean;
+  /** Paths still on disk that this run could not clean up, in report order. */
+  residue: string[];
 }
 
 /**
@@ -841,8 +918,18 @@ interface BuildStaging {
  * cannot tell a dead run's parked tree from a live run's, and adopting the wrong
  * one would restore stale bundles over fresh output. Closing this needs a lock on
  * `dist/`, not a heuristic.
+ *
+ * That window covers KILLS only. A promotion that throws — EACCES, ENOSPC, or the
+ * ENOTEMPTY a concurrent build produces with no injection at all — is deterministic,
+ * needs no signal, and IS handled: see {@link BuildStaging.recover} and
+ * {@link settleStaging}.
+ *
+ * Exported for tests, which drive the primitives directly. Injecting a promotion
+ * failure through a whole `runSkillBuild` would mean racing the filesystem;
+ * holding the staging handle lets a test create the exact on-disk state
+ * (a target reoccupied between the park and the promotion) that produces one.
  */
-async function beginStagedBuild(
+export async function beginStagedBuild(
   cwd: string,
   onlySkill: string | undefined,
 ): Promise<BuildStaging> {
@@ -868,9 +955,21 @@ async function beginStagedBuild(
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
   if (hadPreviousOutput) await rename(promoteTo, parked);
 
+  // Flipped the instant this run's bundles reach `promoteTo`, so a later failure
+  // in the SAME call (the parked-tree cleanup, the staging-shell removal) is not
+  // mistaken for "the output never landed". Without it, a `commit()` that renamed
+  // successfully and then failed to delete the parked copy would report
+  // `outputCommitted: false` about a `dist/skills` that holds the new output.
+  let promoted = false;
+
   return {
     root,
     hadPreviousOutput,
+    parkedPath: parked,
+    promoteLabel: subPath === undefined
+      ? DIST_SKILLS_LABEL
+      : `${DIST_SKILLS_LABEL}/${subPath}`,
+    promoted: () => promoted,
     commit: async () => {
       // Guarded because in single-skill mode the staged bundle is a SUBPATH that
       // exists only if that one skill actually built. (In full-build mode the
@@ -884,6 +983,7 @@ async function beginStagedBuild(
         // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
         await rename(promoteFrom, promoteTo);
       }
+      promoted = true;
       await rm(parked, { recursive: true, force: true });
       // A no-op in full-build mode (the rename above consumed it); in
       // single-skill mode this is the now-empty staging shell.
@@ -897,7 +997,118 @@ async function beginStagedBuild(
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
       await rename(parked, promoteTo);
     },
+    recover: async () => {
+      const residue: string[] = [];
+      let restoredPrevious = false;
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
+      const targetFree = !existsSync(promoteTo);
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
+      if (hadPreviousOutput && existsSync(parked)) {
+        if (targetFree) {
+          try {
+            // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
+            await mkdir(promoteToParent, { recursive: true });
+            // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
+            await rename(parked, promoteTo);
+            restoredPrevious = true;
+          } catch {
+            // The repair is best-effort by construction: it runs because the
+            // filesystem already refused something. A throw here must not replace
+            // the original diagnosis, so the parked path is reported as residue
+            // and the caller still names the real cause.
+            residue.push(parked);
+          }
+        } else {
+          residue.push(parked);
+        }
+      }
+      // This run's own staging root is always safe to drop: it holds output this
+      // run produced and can rebuild. Leaving it is what accumulated a complete
+      // copy of the build output in `dist/` on every failed promotion.
+      try {
+        await rm(root, { recursive: true, force: true });
+      } catch {
+        residue.push(root);
+      }
+      return { restoredPrevious, residue };
+    },
   };
+}
+
+/**
+ * Promote or discard the staged tree, and never leave the operator without an
+ * answer when that fails.
+ *
+ * `commit()` / `abort()` used to be called bare. Any throw on that path — the
+ * promotion `rename`, the restore `rename`, either cleanup — propagated to
+ * `buildCommand`'s catch, which exits 2 WITHOUT emitting the YAML document. The
+ * measured result: `dist/skills` absent, the user's previous output orphaned at
+ * `dist/.vat-skills-<rand>.previous` under a name the `mkdtemp` suffix makes
+ * unguessable, and not one byte of the report whose `outputCommitted` field
+ * `--help` tells an operator to read when they see a non-zero exit.
+ *
+ * So: repair what can be repaired, then return a message rather than throwing —
+ * the caller publishes the document first and exits 2 after.
+ *
+ * `outputCommitted` comes from {@link BuildStaging.promoted}, not from
+ * `!runFailed`: a `commit()` that renamed the tree into place and then failed to
+ * delete the parked copy DID replace `dist/skills`, and saying otherwise would
+ * put the report back into contradiction with the disk — the one thing this whole
+ * summary exists to prevent.
+ */
+export async function settleStaging(
+  staging: BuildStaging,
+  runFailed: boolean,
+  logger: ReturnType<typeof createLogger>,
+): Promise<{ outputCommitted: boolean; promotionError?: string }> {
+  try {
+    await (runFailed ? staging.abort() : staging.commit());
+  } catch (error) {
+    const recovery = await staging.recover();
+    return {
+      outputCommitted: staging.promoted(),
+      promotionError: describePromotionFailure(staging, error, recovery),
+    };
+  }
+
+  if (runFailed) {
+    logger.error(
+      staging.hadPreviousOutput
+        ? `\n   Nothing was replaced — the previous ${staging.promoteLabel} is intact`
+        : `\n   Nothing was written — ${staging.promoteLabel} does not exist`,
+    );
+  }
+  return { outputCommitted: !runFailed };
+}
+
+/**
+ * State the failure, then state what is on disk and how to get back.
+ *
+ * Every branch names an absolute path the operator can act on. A promotion
+ * failure is the one moment where "your previous output is at <path>" is the
+ * whole remedy, and the path is unreconstructable without being told.
+ */
+function describePromotionFailure(
+  staging: BuildStaging,
+  error: unknown,
+  recovery: StagingRecovery,
+): string {
+  const cause = error instanceof Error ? error.message : String(error);
+  const lines = [`Build output promotion failed: ${cause}`];
+  if (staging.promoted()) {
+    lines.push(`   ${staging.promoteLabel} DOES hold this run's output — the failure was in the cleanup that follows.`);
+  } else if (recovery.restoredPrevious) {
+    lines.push(`   The previous ${staging.promoteLabel} has been restored; nothing this run built was kept.`);
+  } else if (staging.hadPreviousOutput) {
+    lines.push(`   The previous ${staging.promoteLabel} is parked at ${staging.parkedPath}`);
+    lines.push(`   Recover it with: mv ${staging.parkedPath} <your ${staging.promoteLabel}>`);
+  } else {
+    lines.push(`   ${staging.promoteLabel} was never written, and there was no previous output to lose.`);
+  }
+  for (const path of recovery.residue) {
+    lines.push(`   Left on disk (this run could not remove it): ${path}`);
+  }
+  return lines.join('\n');
 }
 
 /** One discovered skill paired with the packaging config merged for it. */
@@ -954,6 +1165,16 @@ export interface SkillBuildRun {
    * needs before deciding whether their downstream consumers are broken.
    */
   outputCommitted: boolean;
+  /**
+   * The promotion/discard step itself failed — a SYSTEM error, not a validation
+   * one, and the only failure mode where the state of `dist/skills` is in doubt.
+   *
+   * Carried on the run rather than thrown so the document is still published: an
+   * exception here used to escape all the way to `handleCommandError`, which
+   * exits 2 having emitted nothing at all. Its text names what is on disk and how
+   * to recover it — see {@link describePromotionFailure}.
+   */
+  promotionError?: string;
 }
 
 /** The inputs of ONE `vat skills build` invocation. */
@@ -1113,16 +1334,7 @@ export async function runSkillBuild(input: SkillBuildRunInput): Promise<SkillBui
     || skillsWithErrors.length > 0
     || runIssues.some((i) => i.severity === 'error');
 
-  if (runFailed) {
-    await staging.abort();
-    logger.error(
-      staging.hadPreviousOutput
-        ? `\n   Nothing was replaced — the previous ${DIST_SKILLS_LABEL} is intact`
-        : `\n   Nothing was written — ${DIST_SKILLS_LABEL} does not exist`,
-    );
-  } else {
-    await staging.commit();
-  }
+  const { outputCommitted, promotionError } = await settleStaging(staging, runFailed, logger);
 
   return {
     results,
@@ -1130,7 +1342,8 @@ export async function runSkillBuild(input: SkillBuildRunInput): Promise<SkillBui
     skillsWithErrors,
     failures,
     validationFailures,
-    outputCommitted: !runFailed,
+    outputCommitted,
+    ...(promotionError === undefined ? {} : { promotionError }),
   };
 }
 
@@ -1244,6 +1457,17 @@ async function buildCommand(
       logger.info(line);
     }
     logRunFailures(run, logger);
+
+    // A promotion failure is a SYSTEM error (2), not a validation one (1): the
+    // build's verdict on the skills is not what went wrong, and a CI script has
+    // to be able to tell "your skills are broken" from "the filesystem refused
+    // and dist/skills is in a state someone must look at". Reported AFTER the
+    // document is written, which is the whole reason it rides on the run rather
+    // than being thrown from inside it.
+    if (run.promotionError !== undefined) {
+      logger.error(`\n${run.promotionError}`);
+      process.exit(2);
+    }
 
     // Gated on the SAME fact that decided whether the swap happened, not on a
     // second copy of the predicate: the exit code and `outputCommitted` can then

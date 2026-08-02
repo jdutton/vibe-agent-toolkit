@@ -2,13 +2,21 @@
 import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 
-import type { SkillPackagingConfig } from '@vibe-agent-toolkit/agent-skills';
+import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import type {
+  PackageSkillResult,
+  PackagingValidationResult,
+  SkillPackagingConfig,
+} from '@vibe-agent-toolkit/agent-skills';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  beginStagedBuild,
   buildYamlSummary,
+  reanchorStagedResult,
   runSkillBuild,
+  settleStaging,
   type BuildSkillSpec,
   type SkillBuildRun,
   type SkillBuildRunInput,
@@ -46,6 +54,13 @@ const WRONG_PERSON_DESCRIPTION =
 
 /** The `mkdtemp` prefix `beginStagedBuild` writes under `dist/`. */
 const STAGING_PREFIX = '.vat-skills-';
+
+/** The location every anchor assertion expects once the staging path is mapped away. */
+const DEMO_SKILL_LOCATION = 'dist/skills/demo/SKILL.md';
+
+/** A bundle written into `dist/skills` by a DIFFERENT run, mid-flight. */
+const OTHER_RUN_BUNDLE = 'from-the-other-run';
+const OTHER_RUN_BYTES = 'other run\n';
 
 /** One skill fixture: its name, its body, and (optionally) a noisy description. */
 type SkillFixture = readonly [name: string, body: string, description?: string];
@@ -253,7 +268,7 @@ describe('runSkillBuild - findings point at the tree the swap lands on', () => {
     const run = await build(cwd, [['demo', CLEAN_BODY, WRONG_PERSON_DESCRIPTION]]);
 
     const locations = publishedLocations(run);
-    expect(locations).toContain('dist/skills/demo/SKILL.md');
+    expect(locations).toContain(DEMO_SKILL_LOCATION);
     expect(locations.join('\n')).not.toContain(STAGING_PREFIX);
   });
 
@@ -268,7 +283,7 @@ describe('runSkillBuild - findings point at the tree the swap lands on', () => {
     ]);
 
     expect(run.outputCommitted).toBe(false);
-    expect(publishedLocations(run)).toContain('dist/skills/demo/SKILL.md');
+    expect(publishedLocations(run)).toContain(DEMO_SKILL_LOCATION);
     expect(publishedLocations(run).join('\n')).not.toContain(STAGING_PREFIX);
   });
 
@@ -281,7 +296,7 @@ describe('runSkillBuild - findings point at the tree the swap lands on', () => {
     const { logger, lines } = recordingLogger();
     await build(cwd, [['demo', CLEAN_BODY, WRONG_PERSON_DESCRIPTION]], { logger, verbose: true });
 
-    expect(lines.join('\n')).toContain('Location: dist/skills/demo/SKILL.md');
+    expect(lines.join('\n')).toContain(`Location: ${DEMO_SKILL_LOCATION}`);
     expect(lines.join('\n')).not.toContain(STAGING_PREFIX);
   });
 });
@@ -368,5 +383,174 @@ describe('runSkillBuild - no published output path that does not exist', () => {
     expect(summary.outputCommitted).toBe(true);
     expect(summary.skillsStaged).toEqual([]);
     expect(summary.skills.map((s) => existsSync(s.outputPath))).toEqual([true]);
+  });
+});
+
+describe('runSkillBuild - the failure message names what THIS run promotes', () => {
+  const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-build-staging-scope-');
+
+  afterEach(() => cleanupTempDirs());
+
+  it('names the single bundle, not the whole tree, when --skill mode fails with siblings on disk', async () => {
+    // The defect: `--skill one` failing with no previous bundle for `one`
+    // printed "Nothing was written — dist/skills does not exist" while
+    // dist/skills sat on disk holding `two`. The direction is the alarming one:
+    // an operator is told their whole output tree is gone when it is not.
+    const cwd = createTempDir();
+    await seedPreviousOutput(cwd, ['two']);
+    const { logger, lines } = recordingLogger();
+
+    const run = await build(cwd, [['one', BROKEN_BODY]], { onlySkill: 'one', logger });
+
+    expect(run.outputCommitted).toBe(false);
+    expect(lines.join('\n')).toContain('Nothing was written — dist/skills/one does not exist');
+    // And the claim is true of the disk it describes.
+    await expect(readBundle(cwd, 'two')).resolves.toBe(PREVIOUS_BUNDLE);
+  });
+
+  it('names the single bundle in the "nothing was replaced" arm too', async () => {
+    const cwd = createTempDir();
+    await seedPreviousOutput(cwd, ['one', 'two']);
+    const { logger, lines } = recordingLogger();
+
+    await build(cwd, [['one', BROKEN_BODY]], { onlySkill: 'one', logger });
+
+    expect(lines.join('\n')).toContain('Nothing was replaced — the previous dist/skills/one is intact');
+  });
+
+  it('still names the whole tree for a full build', async () => {
+    const cwd = createTempDir();
+    const { logger, lines } = recordingLogger();
+
+    await build(cwd, [['bad', BROKEN_BODY]], { logger });
+
+    expect(lines.join('\n')).toContain('Nothing was written — dist/skills does not exist');
+  });
+});
+
+/** Write one file into `dir`, creating it — a stand-in for a staged bundle. */
+async function seedTree(dir: string, contents: string): Promise<void> {
+  await mkdir(dir, { recursive: true });
+  await writeFile(safePath.join(dir, 'SKILL.md'), contents);
+}
+
+describe('beginStagedBuild - a failed promotion still leaves an answer', () => {
+  const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-build-staging-promote-');
+
+  afterEach(() => cleanupTempDirs());
+
+  it('restores the parked previous output when the promotion target is free', async () => {
+    // The primitive the whole repair rests on: after `commit()` throws, the
+    // previous tree is one rename away and nothing else knows where it is.
+    const cwd = createTempDir();
+    await seedPreviousOutput(cwd, ['kept']);
+    const staging = await beginStagedBuild(cwd, undefined);
+
+    expect(staging.hadPreviousOutput).toBe(true);
+    expect(existsSync(safePath.join(cwd, 'dist', 'skills'))).toBe(false);
+
+    const recovery = await staging.recover();
+
+    expect(recovery.restoredPrevious).toBe(true);
+    expect(recovery.residue).toEqual([]);
+    await expect(readBundle(cwd, 'kept')).resolves.toBe(PREVIOUS_BUNDLE);
+    // Its own staging root is always safe to drop, and dropping it is what stops
+    // a full copy of the build output accumulating in dist/ per failed promotion.
+    await expect(distEntries(cwd)).resolves.toEqual(['skills']);
+  });
+
+  it('never restores over a tree that already occupies the promotion target', async () => {
+    // The concurrent-build case, which needs no injection: the other run promoted
+    // its own output while this one was building. Restoring here would replace
+    // fresh output with a stale copy, so the parked tree is REPORTED instead.
+    const cwd = createTempDir();
+    await seedPreviousOutput(cwd, ['kept']);
+    const staging = await beginStagedBuild(cwd, undefined);
+    await seedTree(safePath.join(cwd, 'dist', 'skills', OTHER_RUN_BUNDLE), OTHER_RUN_BYTES);
+
+    const recovery = await staging.recover();
+
+    expect(recovery.restoredPrevious).toBe(false);
+    expect(recovery.residue).toEqual([staging.parkedPath]);
+    await expect(readdir(safePath.join(cwd, 'dist', 'skills'))).resolves.toEqual([OTHER_RUN_BUNDLE]);
+  });
+
+  it('reports the promotion failure, names the parked path, and publishes the document', async () => {
+    // End to end through `settleStaging`: a real ENOTEMPTY/EPERM from renaming
+    // the staging root onto a non-empty directory, with no mocks.
+    const cwd = createTempDir();
+    await seedPreviousOutput(cwd, ['kept']);
+    const staging = await beginStagedBuild(cwd, undefined);
+    await seedTree(safePath.join(staging.root, 'fresh'), 'this run\n');
+    // A concurrent build promoted first. `rename(root, dist/skills)` now fails.
+    await seedTree(safePath.join(cwd, 'dist', 'skills', OTHER_RUN_BUNDLE), OTHER_RUN_BYTES);
+
+    const settled = await settleStaging(staging, false, SILENT_LOGGER);
+
+    expect(settled.outputCommitted).toBe(false);
+    expect(settled.promotionError).toContain('Build output promotion failed');
+    expect(settled.promotionError).toContain(staging.parkedPath);
+    expect(settled.promotionError).toContain('mv ');
+  });
+});
+
+/** A staging root with the `mkdtemp` suffix spelled out, so the mapper is real. */
+const STAGED = 'dist/.vat-skills-abc123';
+
+/** The one rewrite `createStagingPathMapper` performs, in its relative spelling. */
+const mapPath = (value: string): string =>
+  value.startsWith(`${STAGED}/`) ? `dist/skills${value.slice(STAGED.length)}` : value;
+
+function resultWith(overrides: Partial<PackageSkillResult>): PackageSkillResult {
+  return {
+    outputPath: `${STAGED}/demo`,
+    files: { skill: 'SKILL.md', dependencies: [] },
+    hasErrors: false,
+    ...overrides,
+  } as PackageSkillResult;
+}
+
+const stagedIssue = (location: string): ValidationIssue => ({
+  code: 'PACKAGED_BROKEN_LINK',
+  severity: 'error',
+  message: 'A packaged link resolves to nothing.',
+  location,
+});
+
+describe('reanchorStagedResult - BOTH post-build channels are re-anchored', () => {
+  // A live invariant with no live producer: every current `postBuildIssues`
+  // location is bundle-relative or source-project-relative, so removing the
+  // branch below breaks no build fixture in the repo. Asserted directly, because
+  // "the suite stayed green" is not evidence about a branch nothing exercises.
+
+  it('re-anchors a location on the postBuildIssues channel', () => {
+    const result = reanchorStagedResult(
+      resultWith({ postBuildIssues: [stagedIssue(`${STAGED}/demo/pack/b.md`)] }),
+      mapPath,
+    );
+
+    expect(result.postBuildIssues?.[0]?.location).toBe('dist/skills/demo/pack/b.md');
+  });
+
+  it('re-anchors a location on the postBuildValidation channel', () => {
+    const result = reanchorStagedResult(
+      resultWith({
+        postBuildValidation: {
+          allErrors: [stagedIssue(`${STAGED}/demo/SKILL.md`)],
+        } as PackagingValidationResult,
+      }),
+      mapPath,
+    );
+
+    expect(result.postBuildValidation?.allErrors[0]?.location).toBe(DEMO_SKILL_LOCATION);
+  });
+
+  it('leaves a location that names no staged path alone', () => {
+    const result = reanchorStagedResult(
+      resultWith({ postBuildIssues: [stagedIssue('resources/skills/demo/extra/CLAUDE.md')] }),
+      mapPath,
+    );
+
+    expect(result.postBuildIssues?.[0]?.location).toBe('resources/skills/demo/extra/CLAUDE.md');
   });
 });

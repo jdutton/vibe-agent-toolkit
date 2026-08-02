@@ -46,6 +46,7 @@ import {
   checkFilesConfigDests,
   formatVerifyAnnouncement,
   selectVerifyPhases,
+  toPublishedIssue,
 } from '../../src/commands/verify.js';
 import { captureProcessExit, type CapturedExit } from '../test-doubles.js';
 
@@ -250,7 +251,9 @@ describe('checkFilesConfigDests', () => {
         'version: 1\nresources:\n  include: ["docs/**/*.md"]\n',
       );
 
-      expect(checkFilesConfigDests(dir)).toEqual([]);
+      // `[]` is what the command itself passes here: with no `skills:` block
+      // there is nothing to discover, so this is the real input, not a stub.
+      expect(checkFilesConfigDests(dir, [])).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -331,5 +334,46 @@ describe('rejectRetiredOnly', () => {
     expect(stderr).toContain('vat validate');
     expect(stderr).toContain('~35s');
     expect(stderr).toContain('vat build --only');
+  });
+});
+
+describe('toPublishedIssue', () => {
+  // The archived YAML is what a CI consumer parses; stderr is not. A finding that
+  // reaches the document without its anchor names no file at all — the same defect
+  // `vat skills build` was fixed for one command over, reproduced here by a
+  // `PublishedIssue` shape that declared only {severity, code, message, fix}.
+  it('carries the whole anchor into the document', () => {
+    expect(toPublishedIssue({
+      code: 'PACKAGED_AGENT_INSTRUCTION_FILE',
+      severity: 'warning',
+      message: 'A repo-internal agent-instruction file is packaged in this bundle.',
+      location: 'dist/skills/demo/CLAUDE.md',
+      line: 3,
+      fix: 'Remove it from the bundle.',
+      reference: 'docs/validation-codes.md',
+    })).toEqual({
+      code: 'PACKAGED_AGENT_INSTRUCTION_FILE',
+      severity: 'warning',
+      message: 'A repo-internal agent-instruction file is packaged in this bundle.',
+      location: 'dist/skills/demo/CLAUDE.md',
+      line: 3,
+      fix: 'Remove it from the bundle.',
+      reference: 'docs/validation-codes.md',
+    });
+  });
+
+  it('omits the optional keys entirely rather than publishing them as null', () => {
+    // `exactOptionalPropertyTypes` distinguishes absent from explicit-undefined,
+    // and `yaml.stringify` renders the latter as `location: null` — a claim the
+    // finding never made.
+    const published = toPublishedIssue({
+      code: 'SKILL_MISSING_DESCRIPTION',
+      severity: 'error',
+      message: 'No description.',
+    });
+
+    expect(Object.keys(published).toSorted((a, b) => a.localeCompare(b)))
+      .toEqual(['code', 'fix', 'message', 'severity']);
+    expect(published.fix).toBe('');
   });
 });
