@@ -88,8 +88,10 @@ export interface TreeCopyResult {
  *
  * The agent-instruction list ONLY. `NEVER_PACKAGE_IN_SKILL_BUNDLE` also carries
  * the navigation patterns, and importing that here would strip the front page off
- * three in five real plugins: 57 of 94 installed plugins ship a plugin-root
- * `README.md`, and `copyDistributionFiles` copies READMEs to the marketplace root
+ * three in five real plugins: measured 2026-08-02, 50 of 86 installed plugins ship
+ * a plugin-root `README.md` (57 of 94 when first measured — the population moves as
+ * plugins come and go; the ratio is what carries the argument, so re-measure rather
+ * than cite this as current), and `copyDistributionFiles` copies READMEs to the marketplace root
  * on purpose. A README is vestigial *inside a skill bundle* and load-bearing at a
  * plugin root — that asymmetry is why the two lists must stay separate.
  */

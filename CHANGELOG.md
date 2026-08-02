@@ -448,7 +448,14 @@ ever exhibited them.
   `outputCommitted` and `skillsFailedValidation`, and the command's exit code is derived from the
   same `outputCommitted` fact rather than recomputed, so the status and the exit code cannot
   disagree. `--dry-run` now touches `dist/` not at all — the pre-clean used to run before the
-  dry-run branch.
+  dry-run branch. If the promotion itself fails — an I/O error on the rename, rather than a failing
+  build — the run no longer dies without saying anything: it restores the parked tree where it
+  safely can, publishes a `promotionError` naming the parked path and the exact `mv` to recover it,
+  forces `status: error`, and exits **2** *after* writing the document. Previously that path threw
+  past the reporting layer, leaving `dist/skills` absent, the previous output orphaned under
+  `dist/.vat-skills-*.previous`, and **no report emitted at all**. A scoped `--skill <name>` failure
+  also now names the bundle it actually touched rather than claiming the whole `dist/skills` tree
+  is missing while sibling bundles sit beside it.
   The report **names its findings**, not merely how many there were: each row carries a full
   `issues:` array in the shape `vat audit` and `vat skills validate` already publish, so a CI
   consumer can act on a build's warnings instead of reading a bare count. On a ~90-skill adopter
@@ -461,6 +468,15 @@ ever exhibited them.
   progress and finding lines name their skill, which at 92 skills is the difference between a
   readable log and 86 anonymous `Built N files` lines, one of which was being read as belonging to
   the failure printed above it.
+
+- **BREAKING: `vat skills validate <path>` now exits 2 on a path it cannot scope to, instead of
+  reporting success.** A path that does not exist, is not a directory, or holds no
+  `vibe-agent-toolkit.config.yaml` was silently rescoped to nothing and reported
+  `No skills section in config yaml — nothing to validate` with **exit 0** — so a CI step naming a
+  mistyped path passed while validating zero skills. The error now names the path, explains what a
+  path argument points at, and suggests `vat audit <path>` for scanning an arbitrary directory. Only
+  an explicit argument is judged; bare `vat skills validate` is unchanged. (`vat skills build` has
+  the same hole and is not yet fixed.)
 
 - **BREAKING: `-v` is no longer an alias for `--version`. It now means `--verbose`, which is what
   every verb that accepts it already advertised.** The root command registered
@@ -584,6 +600,46 @@ ever exhibited them.
   the shared `runAudit` test helper calls the validation stage **directly**, upstream of the
   severity filter — so no existing audit test could observe severity config even in principle. The
   new regression tests drive the assembled report path instead.
+
+- **`vat audit --user` no longer audits every marketplace-installed plugin twice.**
+  `getClaudeUserPaths()` reports `marketplaces/` as a directory *inside* `plugins/`, and the user
+  scan walked `plugins/` recursively — already reaching every installed marketplace — and then
+  walked `marketplaces/` again. The same subject appeared under two separate `path:` entries, so
+  every finding class was inflated: one real install reported **12** agent-instruction findings for
+  **7** distinct files. Roots contained in another root are now dropped, but only when the walk is
+  recursive — under `--no-recursive` a walk of `plugins/` never reaches `marketplaces/`, so filtering
+  there would trade a double count for no coverage at all.
+
+- **A `files:` entry with a directory-shaped `dest` no longer writes a file named after the
+  directory.** `dest: "guides/"` on a non-glob entry silently produced a *file* called `guides`
+  holding the source's bytes. Two consequences: the written path never compared equal to the
+  declared dest, and — because every never-package rule and the presence detector match on
+  **basename** — a `CLAUDE.md` routed this way landed under a name none of them recognised,
+  laundering an agent-instruction file past the detectors entirely. Such a `dest` is now rejected at
+  config-parse time. Globs are unaffected: their `dest` is a subtree root, where a trailing
+  separator is meaningless rather than wrong.
+
+- **A `files:` glob with a `..` segment after its static base is now rejected when the config
+  loads.** `source: "dist/gen/**/../../secrets/*"` parsed cleanly and passed `vat skills validate`,
+  then killed the build at copy time — the pre-build gate had no verdict for that shape, so the one
+  failure mode that is *certain* to break the build was the one it stayed silent about. The static
+  base may still legitimately begin with `..` (the deliberate sibling-base monorepo feature), and a
+  non-glob source is still an ordinary path; only the glob's magic remainder is constrained.
+
+- **`packagingConfigToPackageOptions` now forwards `excludeNavigationFiles`.** It was dropped in the
+  canonical config→options conversion whose own docstring promises byte-for-byte parity, so with the
+  flag set `false` the pre-build gate predicted a `README.md` would ship and the build stripped it —
+  the gate and the build disagreeing about the same config, in the one function that exists to stop
+  exactly that.
+
+- **`vat verify` now inspects skills discovered by `skills.include` globs, not just those with an
+  explicit `skills.config.<name>` block.** Its in-process phases enumerated the config's keys, so a
+  project that discovers skills by glob had them silently skipped — and for a project using only
+  `skills.defaults.files`, the `files-config-dests` check was a **total no-op while its phase banner
+  still reported that it ran**. The enumeration is now the union of the run's discovered skills and
+  the config keys, with discovery performed once per run and shared, so the crawl count is unchanged.
+  **Adopters should expect new findings** on projects that use `skills.defaults.files` or omit
+  `skills.config` — those bundles were never being checked.
 
 - **`CLAUDE_CONFIG_DIR` is now normalised once, where it is read.** An empty or whitespace-only
   value was not caught by the `??` default, so `$cwd/skills` and `$cwd/plugins` were treated as

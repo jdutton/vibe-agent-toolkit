@@ -210,7 +210,17 @@ export const CODE_REGISTRY = {
   ),
   PACKAGED_BROKEN_LINK: entry(
     'error',
-    'Link in the packaged output resolves to a file that is not present in the output (likely a link-rewriter bug).',
+    // The CAUSE deliberately lives in `fix`, not here. This code has two
+    // populations — a link-rewriter bug, and a target the never-package filter
+    // dropped on purpose — and only the emitting lane knows which one it is
+    // holding, so only the per-issue `fix` can name it. When the cause was
+    // asserted in the description ("likely a link-rewriter bug"), the
+    // policy-drop branch shipped one issue whose message blamed VAT and whose
+    // `fix` said "Nothing to report — VAT dropped this file on purpose": the two
+    // halves of a single finding contradicting each other. The description now
+    // states only what every emission observed — the link does not resolve in
+    // the output — and each lane supplies its own remediation.
+    'Link in the packaged output resolves to a file that is not present in the output.',
     'Report the issue — this indicates a VAT bug. As a temporary workaround, set severity.PACKAGED_BROKEN_LINK to ignore while the underlying bug is fixed.',
     'packaged_broken_link',
   ),

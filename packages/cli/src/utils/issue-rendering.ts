@@ -319,7 +319,15 @@ export function formatCollapsedFindingsHint(
 }
 
 /**
- * How many files a bundle contains, in prose: `1 file`, `11 files`.
+ * How many files LINK TRAVERSAL put in a bundle, in prose: `1 file`, `11 files`.
+ *
+ * Deliberately not called the bundle's file count, which is what it reads like and
+ * is not: `files.dependencies` carries only what the link-graph walk discovered, so
+ * every file `files:` copied in — each glob match, plus any explicit entry the walk
+ * had not already bundled — is absent from the total. A bundle holding SKILL.md, one
+ * linked doc and one declared artifact prints `2 files`. That undercount is issue
+ * #177 and is deliberately NOT patched here; this wording is only the part that can
+ * be made true today, so nobody reads the number as an inventory of the output.
  *
  * The `+ 1` is the bundle's root `SKILL.md`, which `files.dependencies` does not
  * list — spelled once here rather than at each progress line, so the two build

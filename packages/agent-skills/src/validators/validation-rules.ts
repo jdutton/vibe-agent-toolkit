@@ -267,8 +267,12 @@ export const NAVIGATION_FILE_PATTERNS = [
  *    `CLAUDE.md` is read as instructions the moment the agent opens a reference
  *    beside it. (Skills installed outside the cwd — `~/.claude/skills`, plugin
  *    directories — are not affected by this second harm. `AGENTS.md` and
- *    `GEMINI.md` are not read by Claude Code at all; they are listed here for
- *    the portability and collision reasons.)
+ *    `GEMINI.md` are not loaded as memory by Claude Code — it reads `CLAUDE.md`,
+ *    and picks up an `AGENTS.md` only where a `CLAUDE.md` imports it explicitly
+ *    (`@AGENTS.md`) or `/init` incorporates it — so they are listed here for the
+ *    portability and collision reasons, and treated identically to `CLAUDE.md`.)
+ *
+ * @vendor-claim reviewed=2026-08-02 verify=Re-read https://code.claude.com/docs/en/memory — "How CLAUDE.md files load" for harm 2, and the "AGENTS.md" section for the AGENTS.md/GEMINI.md sentence
  */
 export const AGENT_INSTRUCTION_FILE_PATTERNS = [
   'CLAUDE.md',
@@ -284,10 +288,12 @@ export const AGENT_INSTRUCTION_FILE_PATTERNS = [
  *
  * - {@link AGENT_INSTRUCTION_FILE_PATTERNS} — never packaged on ANY surface.
  * - {@link NAVIGATION_FILE_PATTERNS} — never packaged into a *skill bundle*, and
- *   **only** there. A plugin-root `README.md` is the plugin's front page (57 of 94
- *   installed plugins ship one), so the plugin tree-copy must import the agent-
- *   instruction list alone. Merging the two lists would strip the front page off
- *   three in five real plugins.
+ *   **only** there. A plugin-root `README.md` is the plugin's front page (measured
+ *   2026-08-02: 50 of 86 installed plugins ship one; 57 of 94 when first measured),
+ *   so the plugin tree-copy must import the agent-instruction list alone. Merging
+ *   the two lists would strip the front page off three in five real plugins. The
+ *   population moves as plugins are installed and removed — the ratio is the load-
+ *   bearing part, so re-measure before citing the count as current.
  *
  * Only globs consult this list. Naming `source: README.md` explicitly is an
  * unambiguous instruction to ship that file; a glob is a net, not a declaration,

@@ -140,9 +140,11 @@ describe('treeCopyPlugin', () => {
     expect(existsSync(safePath.join(dest, 'docs', 'GEMINI.md'))).toBe(false);
   });
 
-  // 57 of 94 installed plugins ship a plugin-root README.md and it is their front
-  // page — the skill-bundle navigation exclusions must NEVER reach this lane. If a
-  // later "simplification" merges the two lists, this test is what fails.
+  // Measured 2026-08-02: 50 of 86 installed plugins ship a plugin-root README.md
+  // (57 of 94 when first measured — the population moves, the ~3-in-5 ratio holds),
+  // and it is their front page — the skill-bundle navigation exclusions must NEVER
+  // reach this lane. If a later "simplification" merges the two lists, this test is
+  // what fails.
   it('DOES copy README/index navigation files — tier 2 is skill-bundle-only', async () => {
     await writeFile(safePath.join(src, 'README.md'), '# plugin front page');
     await writeFile(safePath.join(src, 'index.md'), '# index');
