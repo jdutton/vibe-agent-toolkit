@@ -92,8 +92,10 @@ import { renderSkillQualityFooter } from '../utils/skill-quality-footer.js';
 import { computeConfigVerdicts } from '../utils/verdict-helpers.js';
 
 import {
+  crawlOwnsSubtree,
   distributedTreeFindings,
   getOrCreateGitTracker,
+  isWithin,
   resetGitTrackerCache,
 } from './audit/distributed-tree.js';
 import { withClonedRepo } from './audit/git-url-clone.js';
@@ -536,6 +538,39 @@ Examples:
 
 
 /**
+ * Which of the Claude install roots a `--user` run actually walks.
+ *
+ * The three roots read as siblings and are NOT: `marketplacesDir` is
+ * `<claudeDir>/plugins/marketplaces`, i.e. INSIDE `pluginsDir`. A recursive walk
+ * of `plugins/` already reaches every installed marketplace, so scanning
+ * `marketplaces/` afterwards audited each marketplace-installed plugin and skill
+ * a SECOND time, in a second result, under the identical `path:`. On one real
+ * machine that turned 7 distinct agent-instruction files into 12 reported rows —
+ * and it inflates every finding class, not one code, because the whole subject
+ * is re-audited rather than one detector re-firing.
+ *
+ * The containment test is `isWithin`, the same one the provenance classifier
+ * uses, so "inside" means the same thing on both sides and on Windows.
+ *
+ * Gated on `recursive`, and that is not defensive dressing: under
+ * `--no-recursive` a walk of `plugins/` stops at its top level and never reaches
+ * `marketplaces/`, so dropping the nested root there would replace a double
+ * count with no coverage at all.
+ *
+ * Pure, and exported for that reason: the shape of the defect is "the list of
+ * roots was wrong", which is assertable as a list.
+ *
+ * @internal Exported for unit testing only — not part of the public CLI API.
+ */
+export function userScanTargets(candidates: readonly string[], recursive: boolean): string[] {
+  const resolved = candidates.map((dir) => safePath.resolve(dir));
+  if (!recursive) return resolved;
+  return resolved.filter(
+    (dir) => !resolved.some((other) => other !== dir && isWithin(other, dir)),
+  );
+}
+
+/**
  * Handle --user audit: scans ~/.claude/plugins, ~/.claude/skills, ~/.claude/marketplaces
  * and outputs hierarchical YAML. Calls process.exit() when done.
  */
@@ -568,19 +603,16 @@ async function auditUserDirectories(
 
   const results: ValidationResult[] = [];
 
-  if (pluginsDirExists) {
-    logger.debug(`Auditing user-level plugins at: ${pluginsDir}`);
-    results.push(...await getValidationResults(pluginsDir, recursive, options, logger, scanRoot));
-  }
-
-  if (skillsDirExists) {
-    logger.debug(`Auditing user-level skills at: ${skillsDir}`);
-    results.push(...await getValidationResults(skillsDir, recursive, options, logger, scanRoot));
-  }
-
-  if (marketplacesDirExists) {
-    logger.debug(`Auditing user-level marketplaces at: ${marketplacesDir}`);
-    results.push(...await getValidationResults(marketplacesDir, recursive, options, logger, scanRoot));
+  // The roots that exist, minus any one another already covers — see
+  // {@link userScanTargets}. `marketplaces/` lives inside `plugins/`.
+  const present = [
+    ...(pluginsDirExists ? [pluginsDir] : []),
+    ...(skillsDirExists ? [skillsDir] : []),
+    ...(marketplacesDirExists ? [marketplacesDir] : []),
+  ];
+  for (const target of userScanTargets(present, recursive)) {
+    logger.debug(`Auditing user-level resources at: ${target}`);
+    results.push(...await getValidationResults(target, recursive, options, logger, scanRoot));
   }
 
   // Run compatibility analysis if --compat flag is set
@@ -1629,9 +1661,15 @@ export function formatAuditFindingsLines(
     // the policy rather than re-stating it, so the count cannot contradict it.
     collapsed += countCollapsedFindings(result.issues, verbose);
 
-    lines.push(
-      `\n${findingSubject(result, root)} — ${formatSeverityBreakdown(countBySeverity(result.issues))}:`,
-    );
+    // The heading is unconditional and counts the WHOLE set — for a
+    // warning-only file at default verbosity it IS the report. The trailing
+    // colon is what varies: it introduces the blocks below, so a heading with
+    // nothing beneath it does not print one. Same rule, same reason, as
+    // `formatPostBuildIssueReport` in `skills/build.ts` — a colon promising a
+    // list the current verbosity will not print is a promise the renderer
+    // already knows it will break.
+    const heading = `\n${findingSubject(result, root)} — ${formatSeverityBreakdown(countBySeverity(result.issues))}`;
+    lines.push(rendered.length === 0 ? heading : `${heading}:`);
     for (const issue of rendered) {
       lines.push(...formatIssueLines(issue, '  '));
     }
@@ -1679,6 +1717,56 @@ function isExcludedPath(
 }
 
 /**
+ * Does the SKILL.md at `skillMdPath` own its own presence-side crawl, or has an
+ * ancestor crawl already covered it?
+ *
+ * The single place the walk answers that question, for both owner kinds — see
+ * {@link ScanContext.crawledRoot}. `isWithin` rather than a bare
+ * `crawledRoot === null`: the claim is a containment claim and it is spelled
+ * once, in the module that already got the separator right.
+ */
+function ownsOwnCrawl(scanCtx: ScanContext, skillMdPath: string): boolean {
+  return scanCtx.crawledRoot === null || !isWithin(scanCtx.crawledRoot, safePath.resolve(skillMdPath));
+}
+
+/**
+ * Hand the descending context an owner for everything below `owner`, unless one
+ * is already claimed. First owner wins, and `null` claims nothing.
+ */
+function claimSubtree(scanCtx: ScanContext, owner: string | null): ScanContext {
+  if (owner === null || scanCtx.crawledRoot !== null) return scanCtx;
+  return { ...scanCtx, crawledRoot: safePath.resolve(owner) };
+}
+
+/**
+ * The context this directory's SUBDIRECTORIES are walked with.
+ *
+ * A `SKILL.md` here means this directory's own crawl reaches every descendant at
+ * any depth, so it — not each nested skill in turn — owns the subtree below.
+ *
+ * Resolved before the entry loop rather than inside it: `SKILL.md` and the
+ * subdirectories it governs are siblings in one `readdir`, and their order is
+ * the filesystem's to choose, so deciding this mid-loop would make the verdict
+ * depend on it.
+ *
+ * Conditional on the crawl actually RUNNING ({@link crawlOwnsSubtree}), not on
+ * the SKILL.md merely existing: a repo-source skill's crawl is skipped
+ * entirely, so claiming its subtree would trade a double count for a missed
+ * finding — and provenance is not monotone down a tree.
+ */
+async function contextForDescendants(
+  dirPath: string,
+  entries: readonly { name: string; isFile: () => boolean }[],
+  scanCtx: ScanContext,
+): Promise<ScanContext> {
+  if (!entries.some((entry) => entry.isFile() && entry.name === 'SKILL.md')) return scanCtx;
+  const skillMd = safePath.join(dirPath, 'SKILL.md');
+  if (!ownsOwnCrawl(scanCtx, skillMd)) return scanCtx;
+  if (!await crawlOwnsSubtree(skillMd)) return scanCtx;
+  return claimSubtree(scanCtx, dirPath);
+}
+
+/**
  * Handle file entry during directory scan
  */
 async function handleFileEntry(
@@ -1722,7 +1810,7 @@ async function handleFileEntry(
         skillConfig.targets as readonly Target[] | undefined,
         locationRoot,
       );
-      await appendDistributedTreeFindings(configAware, fullPath, locationRoot, !scanCtx.underPluginDir);
+      await appendDistributedTreeFindings(configAware, fullPath, locationRoot, ownsOwnCrawl(scanCtx, fullPath));
       return configAware;
     }
 
@@ -1735,7 +1823,7 @@ async function handleFileEntry(
     // Wild mode is where the distributed-tree question is even ASKED; the
     // classifier answers it. Suppressed under a plugin ancestor, which already
     // crawled this whole subtree at any depth.
-    await appendDistributedTreeFindings(result, fullPath, locationRoot, !scanCtx.underPluginDir);
+    await appendDistributedTreeFindings(result, fullPath, locationRoot, ownsOwnCrawl(scanCtx, fullPath));
     return result;
   }
 
@@ -1772,11 +1860,10 @@ async function handleDirectoryEntry(
 
   // Recurse into subdirectories (both plugin/marketplace dirs and regular dirs).
   // Below a plugin, `validatePlugin` has already crawled the whole subtree for
-  // agent-instruction files, so the per-skill crawl must stand down or one file
-  // is reported twice. The flag is sticky: it never clears on the way down.
-  const childCtx: ScanContext = hasClaudePlugin && !scanCtx.underPluginDir
-    ? { ...scanCtx, underPluginDir: true }
-    : scanCtx;
+  // agent-instruction files, so every crawl below must stand down or one file
+  // is reported twice. See {@link ScanContext.crawledRoot} — first owner wins,
+  // and it never clears on the way down.
+  const childCtx = claimSubtree(scanCtx, hasClaudePlugin ? fullPath : null);
   if (recursive) {
     const subResults = await scanDirectory(fullPath, recursive, options, logger, childCtx, baseDir, nestedConfigLog);
     results.push(...subResults);
@@ -1808,18 +1895,31 @@ interface ScanContext {
    */
   projectExcludes: ExcludeMatcher | null;
   /**
-   * True once the walk has descended into a directory that `validatePlugin`
-   * already scanned.
+   * The directory whose presence-side crawl already owns everything below this
+   * point — or `null` while nothing does.
    *
-   * `detectPackagedAgentInstructionFiles` matches at ANY depth, so a plugin
-   * result already reports every agent-instruction file under the plugin —
-   * nested skill directories included. Without this flag the per-skill crawl
-   * reports each of those a second time, in a second result, and the run's
-   * `issueCounts` double-counts one file. Carried on the context rather than as
-   * a parameter because it must survive every level of {@link scanDirectory}
-   * recursion below the plugin, not just the immediate child.
+   * `detectPackagedAgentInstructionFiles` matches at ANY depth, so whichever
+   * crawl runs highest in the tree already reports every agent-instruction file
+   * beneath it, nested skill directories included. Every crawl below it must
+   * stand down or one file is reported once per ancestor, in as many results,
+   * and the run's `issueCounts` — the number a CI gate reads — counts it that
+   * many times.
+   *
+   * TWO kinds of owner reach this field, and it used to hold only the first:
+   *
+   * - a **plugin** directory, crawled by `validatePlugin`;
+   * - a **skill** directory whose own crawl {@link crawlOwnsSubtree} confirms
+   *   will run. A skill nested under another skill had no guard at all, so a
+   *   chain of 20 nested skills holding one `CLAUDE.md` each produced 210
+   *   warnings for 20 files — quadratic in nesting depth.
+   *
+   * A path, not a boolean, so the owner can be named in the containment test
+   * and so the two owner kinds stay one concept. Carried on the context rather
+   * than as a parameter because it must survive every level of
+   * {@link scanDirectory} recursion below the owner, not just the immediate
+   * child. First owner wins: it is set once and never cleared on the way down.
    */
-  underPluginDir: boolean;
+  crawledRoot: string | null;
 }
 
 /**
@@ -1980,7 +2080,7 @@ async function resolveScanContext(
   const projectExcludes = resolveProjectExcludes(dirPath, logger);
   const detectedRoot = gitFindRoot(dirPath);
   if (detectedRoot === null) {
-    return { gitRoot: null, gitTracker: null, locationRoot, projectExcludes, underPluginDir: false };
+    return { gitRoot: null, gitTracker: null, locationRoot, projectExcludes, crawledRoot: null };
   }
 
   const tracker = await getOrCreateGitTracker(detectedRoot);
@@ -1988,10 +2088,10 @@ async function resolveScanContext(
   // If the scan root itself is gitignored (e.g. user targeted `dist/`), disable
   // gitignore filtering so the user's explicit intent wins.
   if (tracker.isIgnoredByActiveSet(dirPath)) {
-    return { gitRoot: null, gitTracker: null, locationRoot, projectExcludes, underPluginDir: false };
+    return { gitRoot: null, gitTracker: null, locationRoot, projectExcludes, crawledRoot: null };
   }
 
-  return { gitRoot: detectedRoot, gitTracker: tracker, locationRoot, projectExcludes, underPluginDir: false };
+  return { gitRoot: detectedRoot, gitTracker: tracker, locationRoot, projectExcludes, crawledRoot: null };
 }
 
 /**
@@ -2103,6 +2203,8 @@ async function scanDirectory(
 
   const entries = await fs.readdir(dirPath, { withFileTypes: true });
 
+  const descendCtx = await contextForDescendants(dirPath, entries, resolvedScanCtx);
+
   // Build full paths and batch-check gitignore status
   const entryPaths = entries.map(e => safePath.join(dirPath, e.name));
   const gitIgnoredMap = buildGitIgnoreMap(entryPaths, resolvedScanCtx.gitTracker, options.includeArtifacts ?? false);
@@ -2122,7 +2224,9 @@ async function scanDirectory(
         results.push(result);
       }
     } else if (entry.isDirectory()) {
-      const dirResults = await handleDirectoryEntry(fullPath, recursive, options, logger, resolvedBaseDir, resolvedScanCtx, resolvedNestedLog);
+      // `descendCtx`, not `resolvedScanCtx`: this level's own skill (if any)
+      // owns everything below, including this subdirectory.
+      const dirResults = await handleDirectoryEntry(fullPath, recursive, options, logger, resolvedBaseDir, descendCtx, resolvedNestedLog);
       results.push(...dirResults);
     }
   }

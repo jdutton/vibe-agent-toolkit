@@ -37,6 +37,13 @@
  *    ships, which is precisely how a scaffold template like Anthropic's
  *    `dataverse` `templates/CLAUDE.md` reaches every consumer. Judging that tree
  *    by tracked-ness would silence the dominant audited population.
+ *
+ *    Both halves of that sentence are statements about somebody else's product,
+ *    and clause 1 outranking clause 2 rests on them. No test in this repo can
+ *    contradict either — they can only be re-read:
+ *
+ * @vendor-claim reviewed=2026-08-02 verify=Install a marketplace with /plugin marketplace add and confirm ~/.claude/plugins/marketplaces/<name> is a git working copy; confirm dataverse still ships templates/CLAUDE.md
+ *
  * 2. **Not git-visible source** — the `SKILL.md` is gitignored, or it lies
  *    outside any git repository. A built `dist/` bundle is gitignored; an
  *    unpacked tarball is outside a repo; a working tree's skill is neither.
@@ -116,9 +123,22 @@ export async function getOrCreateGitTracker(gitRoot: string): Promise<GitTracker
   return tracker;
 }
 
+/**
+ * Cache of (canonical SKILL.md path → verdict).
+ *
+ * The walk asks the same question about the same skill twice: once to decide
+ * whether this skill's crawl OWNS the subtree below it (see
+ * {@link crawlOwnsSubtree}) and once when the crawl runs. Both answers derive
+ * from filesystem and git state, which is fixed for the duration of one audit —
+ * so it is memoized rather than re-derived, and cleared alongside the tracker it
+ * is derived from, which is what every reset path already calls.
+ */
+const provenanceCache: Map<string, SkillTreeProvenance> = new Map();
+
 /** Clear the per-root tracker cache (see `resetAuditCaches`). */
 export function resetGitTrackerCache(): void {
   gitTrackerCache.clear();
+  provenanceCache.clear();
 }
 
 /**
@@ -133,6 +153,15 @@ export function resetGitTrackerCache(): void {
  * {@link classifyScannedSkillTree}), which is the answer that stays silent.
  */
 export type SkillTreeProvenance = 'repo-source' | 'distributed' | 'indeterminate';
+
+/**
+ * The silent verdict, spelled once.
+ *
+ * Three call sites now test for it — the two clauses that return it and
+ * {@link crawlOwnsSubtree}, which is defined as "not this" — and a verdict
+ * literal that drifts in one of them fails open.
+ */
+const REPO_SOURCE: SkillTreeProvenance = 'repo-source';
 
 /**
  * One canonical, forward-slashed spelling of a path — symlinks resolved, and on a
@@ -165,8 +194,12 @@ function canonicalPath(filePath: string): string {
  * hand us a backslash path, and a prefix test across mixed separators reports a
  * sibling directory as "outside" — the exact shape that would quietly turn this
  * whole clause off on one platform.
+ *
+ * Exported because `audit.ts` asks the same containment question of the same
+ * kind of path when deciding which crawl owns a subtree; a second spelling of a
+ * prefix test is how the separator bug gets reintroduced on one side only.
  */
-function isWithin(root: string, absolutePath: string): boolean {
+export function isWithin(root: string, absolutePath: string): boolean {
   const normalizedRoot = toForwardSlash(root);
   const normalizedPath = toForwardSlash(absolutePath);
   return normalizedPath === normalizedRoot || normalizedPath.startsWith(`${normalizedRoot}/`);
@@ -194,6 +227,17 @@ function isUnderClaudeInstallRoot(canonicalAbsolutePath: string): boolean {
  */
 export async function classifyScannedSkillTree(skillMdPath: string): Promise<SkillTreeProvenance> {
   const absolute = canonicalPath(skillMdPath);
+  const memoized = provenanceCache.get(absolute);
+  if (memoized !== undefined) {
+    return memoized;
+  }
+  const verdict = await classifyUncached(absolute);
+  provenanceCache.set(absolute, verdict);
+  return verdict;
+}
+
+/** {@link classifyScannedSkillTree}'s clauses, on an already-canonical path. */
+async function classifyUncached(absolute: string): Promise<SkillTreeProvenance> {
   if (isUnderClaudeInstallRoot(absolute)) {
     return 'distributed';
   }
@@ -213,7 +257,25 @@ export async function classifyScannedSkillTree(skillMdPath: string): Promise<Ski
   if (!tracker.isUsable()) {
     return 'indeterminate';
   }
-  return tracker.isIgnoredByActiveSet(absolute) ? 'distributed' : 'repo-source';
+  return tracker.isIgnoredByActiveSet(absolute) ? 'distributed' : REPO_SOURCE;
+}
+
+/**
+ * Will a crawl rooted at this SKILL.md's directory actually report the WHOLE
+ * subtree beneath it — nested skills included?
+ *
+ * The question the directory walk needs before it descends, and it is not the
+ * same as "is there a SKILL.md here". {@link distributedTreeFindings} matches at
+ * any depth, so a distributed (or unclassifiable) skill's crawl covers every
+ * descendant and they must stand down or one file is counted once per ancestor.
+ * A `repo-source` skill's crawl does not run at all, so standing its descendants
+ * down would convert a double count into silence — and provenance is NOT
+ * monotone down a tree: a gitignored bundle can sit inside a tracked source
+ * skill, and a scan rooted above `<claudeDir>/skills` reaches an install root
+ * from outside one.
+ */
+export async function crawlOwnsSubtree(skillMdPath: string): Promise<boolean> {
+  return (await classifyScannedSkillTree(skillMdPath)) !== REPO_SOURCE;
 }
 
 /**
@@ -245,7 +307,7 @@ export async function distributedTreeFindings(
 ): Promise<ValidationIssue[]> {
   if (!crawlTree) return [];
   const provenance = await classifyScannedSkillTree(skillPath);
-  if (provenance === 'repo-source') return [];
+  if (provenance === REPO_SOURCE) return [];
 
   const treeRoot = safePath.resolve(skillPath, '..');
   const present = detectPackagedAgentInstructionFiles(treeRoot, locationRoot, []);

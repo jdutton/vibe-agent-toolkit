@@ -136,15 +136,23 @@ describe('classifyScannedSkillTree', () => {
     await expect(classifyWithInstallRoot(claudeDir, skillMd)).resolves.toBe(DISTRIBUTED);
   });
 
-  it('leaves a repo that merely sits NEXT TO the install root alone', async () => {
-    // Guards the prefix test itself: `~/.claude-work` must not read as inside
-    // `~/.claude`, which a bare startsWith without the separator would do.
+  it('leaves a tree that merely sits NEXT TO an install root alone', async () => {
+    // Guards the separator in the prefix test itself, and it can only do that if
+    // the fixture is a sibling of a directory the clause actually compares
+    // against. The roots are `<claudeDir>/skills`, `<claudeDir>/plugins` and
+    // `<claudeDir>/plugins/marketplaces` — NOT `claudeDir` itself — so a fixture
+    // at `<parent>/.claude-work` next to `<parent>/.claude` is not a prefix of
+    // any root under either spelling of the test, and agrees with a bare
+    // `startsWith` implementation as readily as with the correct one.
+    // `<claudeDir>/skills-work` is the sibling that separates them: it shares the
+    // `<claudeDir>/skills` prefix and is outside it.
     const parent = createTempDir();
     const claudeDir = safePath.join(parent, '.claude');
-    const sibling = safePath.join(parent, '.claude-work');
-    mkdirSyncReal(claudeDir, { recursive: true });
-    const skillMd = placeSkill(sibling, SKILL_REL_DIR);
-    commitTestFixture(sibling);
+    mkdirSyncReal(safePath.join(claudeDir, 'skills'), { recursive: true });
+    const skillMd = placeSkill(claudeDir, 'skills-work/demo');
+    // Committed, so clause 2 says source: only a prefix test that ignores the
+    // separator can produce `distributed` here.
+    commitTestFixture(parent);
 
     await expect(classifyWithInstallRoot(claudeDir, skillMd)).resolves.toBe(SOURCE);
   });

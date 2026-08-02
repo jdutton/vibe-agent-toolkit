@@ -2,9 +2,90 @@
  * Skills validate command - Commander.js wrapper
  */
 
+import { existsSync, statSync } from 'node:fs';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
-import { validateCommand } from './validate.js';
+import { type SkillsValidateCommandOptions, validateCommand } from './validate.js';
+
+/** The name `loadConfig` looks for in the directory this command is pointed at. */
+const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
+
+const COMMAND = 'vat skills validate';
+
+/**
+ * Why the path the operator typed cannot scope this run — or `undefined` when it
+ * can.
+ *
+ * `vat skills validate <path>` takes the path as "read the config in THIS
+ * directory". Nothing checked that the directory existed or held one: the path
+ * was resolved, `loadConfig` found nothing there, and the run printed
+ * "No skills section in config yaml — nothing to validate" and exited **0**. In
+ * a package where the bare invocation validates 13 skills, one mistyped
+ * character rescoped it to nothing and still reported success — the same
+ * "went wide / went narrow and reported success" defect
+ * `rejectPositionalArguments` was added to `vat verify` / `vat validate`
+ * / `vat build` for, arrived at from the opposite direction.
+ *
+ * Only an EXPLICIT argument is judged. With no argument the command means "the
+ * current directory", and a cwd that happens to hold no config is the documented
+ * nothing-to-do case, not a mis-scoped run.
+ *
+ * `VAT_TEST_CONFIG` is honoured for the same reason `loadConfig` honours it: when
+ * it is set, the config does not come from the named directory at all, so
+ * demanding one there would reject a scope that is in fact resolvable.
+ *
+ * Pure — returns the message instead of writing it, so both answers are
+ * assertable without capturing a stream.
+ *
+ * `vat skills build` carries the identical `[path]` argument and the identical
+ * hole; it is deliberately left alone here rather than half-converged.
+ */
+export function unscopableSkillsPath(pathArg: string | undefined): string | undefined {
+  if (pathArg === undefined) return undefined;
+
+  const resolved = safePath.resolve(pathArg);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- a CLI argument is the subject of this check
+  if (!existsSync(resolved)) return 'no such directory';
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- ditto; existence was just established
+  if (!statSync(resolved).isDirectory()) return 'not a directory';
+
+  if (process.env['VAT_TEST_CONFIG'] !== undefined) return undefined;
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- ditto
+  if (!existsSync(safePath.join(resolved, CONFIG_FILENAME))) {
+    return `no ${CONFIG_FILENAME} there`;
+  }
+  return undefined;
+}
+
+/**
+ * Refuse to run when the operator scoped the command at something it cannot
+ * read a config from.
+ *
+ * Exit 2, matching `rejectPositionalArguments`: exit 1 on this command is
+ * documented as "validation errors found", and reporting a usage error as 1
+ * tells a CI gate the project's skills are broken when nothing was inspected.
+ */
+function rejectUnscopablePath(pathArg: string | undefined): void {
+  const reason = unscopableSkillsPath(pathArg);
+  if (reason === undefined) return;
+
+  process.stderr.write(
+    `error: '${COMMAND}' cannot scope to '${String(pathArg)}' (${reason}).\n` +
+      `\n` +
+      `  '${COMMAND} <path>' reads the ${CONFIG_FILENAME} in the directory it is\n` +
+      `  pointed at. This argument used to be accepted and the run silently\n` +
+      `  rescoped to NOTHING: it printed "nothing to validate" and exited 0, so an\n` +
+      `  operator who mistyped a path got a green tick for a scan that never\n` +
+      `  happened.\n` +
+      `\n` +
+      `  Fix: point '${COMMAND}' at a directory holding a ${CONFIG_FILENAME},\n` +
+      `  or run it with no argument to use the current directory.\n` +
+      `  To inspect ONE skill or bundle by path, use: vat audit <path>\n`,
+  );
+  process.exit(2);
+}
 
 export function createValidateCommand(): Command {
   const command = new Command('validate');
@@ -15,7 +96,10 @@ export function createValidateCommand(): Command {
     .option('--skill <name>', 'Validate specific skill only')
     .option('-v, --verbose', 'Show all validated skills and every individual finding, including excluded reference paths')
     .option('-d, --debug', 'Enable debug logging')
-    .action(validateCommand)
+    .action(async (pathArg: string | undefined, options: SkillsValidateCommandOptions) => {
+      rejectUnscopablePath(pathArg);
+      await validateCommand(pathArg, options);
+    })
     .addHelpText(
       'after',
       `

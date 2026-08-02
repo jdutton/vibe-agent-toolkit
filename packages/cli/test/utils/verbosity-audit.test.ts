@@ -68,10 +68,11 @@ function renderedLabels(lines: string[]): string[] {
  */
 function headingSubjects(lines: string[]): string[] {
   return lines.flatMap((line) => {
-    // Headings are `\n<subject> — <severity breakdown>:`; the trailing colon is
-    // what separates them from the collapsed-count footer, which also carries a
-    // ` — `.
-    const heading = /^\n(.*?) — .*:$/.exec(line);
+    // Headings are `\n<subject> — <severity breakdown>`, with a trailing colon
+    // ONLY when findings render beneath. The severity breakdown is what
+    // separates a heading from the collapsed-count footer, which also carries a
+    // ` — ` but ends in prose.
+    const heading = /^\n(.*?) — .*(?:error|warning|info)s?:?$/.exec(line);
     return heading?.[1] === undefined ? [] : [heading[1]];
   });
 }
@@ -188,6 +189,30 @@ describe('vat audit — formatAuditFindingsLines', () => {
     expect(renderedLabels(lines)).toEqual([]);
     expect(lines[0]).toContain('skills/csvsum/SKILL.md');
     expect(lines[0]).toContain('1 warning, 1 info');
+  });
+
+  it('ends a heading in ":" only when findings render beneath it', () => {
+    // The build half of this change already made the colon conditional
+    // (`formatPostBuildIssueReport`): a colon introduces the blocks below, so a
+    // heading with nothing beneath it must not print one. Audit kept appending
+    // it unconditionally, which produced `SKILL.md — 1 warning:` followed by a
+    // blank space and then the run-level collapse hint.
+    //
+    // Both directions are asserted from ONE fixture, differing only in
+    // verbosity, so neither "never print the colon" nor "always print it" can
+    // satisfy this test.
+    const collapsing = [skillResult('csvsum', [issue('warning', 'LINK_DROPPED_BY_DEPTH')])];
+    const rendering = [skillResult('csvsum', [issue('error', 'SKILL_MISSING_DESCRIPTION')])];
+
+    expect(formatAuditFindingsLines(collapsing, ROOT, false)[0]).toBe(
+      '\nskills/csvsum/SKILL.md — 1 warning',
+    );
+    expect(formatAuditFindingsLines(collapsing, ROOT, true)[0]).toBe(
+      '\nskills/csvsum/SKILL.md — 1 warning:',
+    );
+    expect(formatAuditFindingsLines(rendering, ROOT, false)[0]).toBe(
+      '\nskills/csvsum/SKILL.md — 1 error:',
+    );
   });
 
   it('never renders an allow-listed finding, at any verbosity', () => {
