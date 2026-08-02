@@ -31,6 +31,7 @@ import {
   buildYamlSummary,
   formatPostBuildIssueReport,
   formatPreBuildIssueReport,
+  type SkillBuildRun,
 } from '../../src/commands/skills/build.js';
 import {
   buildPackageHeader,
@@ -771,7 +772,7 @@ describe('vat skills build — formatPreBuildIssueReport', () => {
 
 /**
  * Re-add a build summary's header total from the ROWS it publishes, exactly as a
- * consumer must: one bucket per row across BOTH row lists, plus the single
+ * consumer must: one bucket per row across ALL THREE row lists, plus the single
  * run-level bucket.
  *
  * A row that publishes no bucket contributes zero on purpose — that is what makes
@@ -784,18 +785,44 @@ function countsFromPublishedRows(summary: ReturnType<typeof buildYamlSummary>): 
   const rows: ReadonlyArray<{ issueCounts?: SeverityCounts | undefined }> = [
     ...summary.skills,
     ...summary.failedSkills,
+    ...summary.validationFailedSkills,
   ];
   return sumSeverityCounts([...rows.map((r) => r.issueCounts ?? zero), summary.runIssueCounts]);
 }
 
+/**
+ * `buildYamlSummary` over ONE run, with every population empty unless named.
+ *
+ * The run carries four populations and a committed/not-committed fact now, and
+ * most of these cases care about exactly one of them. Naming only what a case
+ * exercises keeps the fixture from restating five empty lists per test — and
+ * makes the two same-shaped failure lists impossible to transpose by accident.
+ */
+function summaryOf(run: Partial<SkillBuildRun>, duration: number): ReturnType<typeof buildYamlSummary> {
+  return buildYamlSummary(
+    {
+      results: [],
+      failures: [],
+      runIssues: [],
+      skillsWithErrors: [],
+      validationFailures: [],
+      outputCommitted: true,
+      ...run,
+    },
+    duration,
+  );
+}
+
 describe('vat skills build — buildYamlSummary', () => {
   it('does not publish `success` for a build that emitted post-build errors', () => {
-    const summary = buildYamlSummary(
-      [{ name: 'a', result: packageResult(undefined, [issue('error', 'BUILT_ONLY')]) }],
-      [],
+    const summary = summaryOf(
+      {
+        results: [{ name: 'a', result: packageResult(undefined, [issue('error', 'BUILT_ONLY')]) }],
+        failures: [],
+        runIssues: [],
+        skillsWithErrors: [],
+      },
       12,
-      [],
-      [],
     );
     // The defect: `status: success` was a literal, printed alongside exit code 1.
     expect(summary.status).toBe('error');
@@ -803,38 +830,44 @@ describe('vat skills build — buildYamlSummary', () => {
   });
 
   it('says `warning` when the build shipped warnings and no errors', () => {
-    const summary = buildYamlSummary(
-      [{ name: 'a', result: packageResult([issue('warning', 'W1')], undefined) }],
-      [],
+    const summary = summaryOf(
+      {
+        results: [{ name: 'a', result: packageResult([issue('warning', 'W1')], undefined) }],
+        failures: [],
+        runIssues: [],
+        skillsWithErrors: [],
+      },
       1,
-      [],
-      [],
     );
     expect(summary.status).toBe('warning');
   });
 
   it('says `success` for info-only findings, with the info count beside it', () => {
-    const summary = buildYamlSummary(
-      [{ name: 'a', result: packageResult([issue('info', 'I1')], undefined) }],
-      [],
+    const summary = summaryOf(
+      {
+        results: [{ name: 'a', result: packageResult([issue('info', 'I1')], undefined) }],
+        failures: [],
+        runIssues: [],
+        skillsWithErrors: [],
+      },
       1,
-      [],
-      [],
     );
     expect(summary.status).toBe('success');
     expect(summary.issueCounts).toEqual({ errors: 0, warnings: 0, info: 1 });
   });
 
   it('publishes per-skill counts and sums them for the run', () => {
-    const summary = buildYamlSummary(
-      [
+    const summary = summaryOf(
+      {
+        results: [
         { name: 'a', result: packageResult([issue('warning', 'W1')], undefined) },
         { name: 'b', result: packageResult([issue('info', 'I1')], [issue('info', 'I2')]) },
       ],
-      [],
+        failures: [],
+        runIssues: [],
+        skillsWithErrors: [],
+      },
       1,
-      [],
-      [],
     );
     expect(summary.skills.map((s) => s.issueCounts)).toEqual([
       { errors: 0, warnings: 1, info: 0 },
@@ -848,15 +881,17 @@ describe('vat skills build — buildYamlSummary', () => {
     // skill, so a header that omitted it would report fewer findings than the
     // human stream renders — and the run-level bucket is what lets a consumer
     // reconcile the two without hand-counting a list.
-    const summary = buildYamlSummary(
-      [
+    const summary = summaryOf(
+      {
+        results: [
         { name: 'a', result: packageResult([issue('warning', 'W1')], undefined) },
         { name: 'b', result: packageResult(undefined, [issue('info', 'I1')]) },
       ],
-      [],
+        failures: [],
+        runIssues: [issue('warning', 'ALLOW_UNUSED'), issue('warning', 'ALLOW_UNUSED')],
+        skillsWithErrors: [],
+      },
       1,
-      [issue('warning', 'ALLOW_UNUSED'), issue('warning', 'ALLOW_UNUSED')],
-      [],
     );
 
     const perSkill = sumSeverityCounts(summary.skills.map((s) => s.issueCounts));
@@ -869,12 +904,14 @@ describe('vat skills build — buildYamlSummary', () => {
   });
 
   it('lets a run-level error decide the status no skill could', () => {
-    const summary = buildYamlSummary(
-      [{ name: 'a', result: packageResult(undefined, undefined) }],
-      [],
+    const summary = summaryOf(
+      {
+        results: [{ name: 'a', result: packageResult(undefined, undefined) }],
+        failures: [],
+        runIssues: [issue('error', 'ALLOW_UNUSED')],
+        skillsWithErrors: [],
+      },
       1,
-      [issue('error', 'ALLOW_UNUSED')],
-      [],
     );
     expect(summary.status).toBe('error');
   });
@@ -885,24 +922,28 @@ describe('vat skills build — buildYamlSummary', () => {
     // A skill that never built emits no issues at all, so a summary derived
     // only from issue channels called the run `success` while the command
     // exited 1 — the reassuring contradiction this summary exists to prevent.
-    const summary = buildYamlSummary(
-      [{ name: 'ok', result: packageResult(undefined, undefined) }],
-      [{ name: 'boom', message: THREW }],
+    const summary = summaryOf(
+      {
+        results: [{ name: 'ok', result: packageResult(undefined, undefined) }],
+        failures: [{ name: 'boom', message: THREW }],
+        runIssues: [],
+        skillsWithErrors: [],
+      },
       1,
-      [],
-      [],
     );
     expect(summary.status).toBe('error');
     expect(summary.issueCounts).toEqual({ errors: 1, warnings: 0, info: 0 });
   });
 
   it('counts a thrown skill as failed, not built, and names it', () => {
-    const summary = buildYamlSummary(
-      [{ name: 'ok', result: packageResult(undefined, undefined) }],
-      [{ name: 'boom', message: THREW }],
+    const summary = summaryOf(
+      {
+        results: [{ name: 'ok', result: packageResult(undefined, undefined) }],
+        failures: [{ name: 'boom', message: THREW }],
+        runIssues: [],
+        skillsWithErrors: [],
+      },
       1,
-      [],
-      [],
     );
     expect(summary.skillsBuilt).toBe(1);
     expect(summary.skillsFailed).toBe(1);
@@ -919,12 +960,14 @@ describe('vat skills build — buildYamlSummary', () => {
     // NOWHERE in the rows, so `issueCounts: {errors: 1}` sat above rows summing
     // to `{errors: 0}` — the same unreconcilable header (1814 vs 1800) that
     // `vat skills validate` was fixed for one command over.
-    const summary = buildYamlSummary(
-      [{ name: 'ok', result: packageResult([issue('warning', 'W1')], [issue('info', 'I1')]) }],
-      [{ name: 'boom', message: THREW }],
+    const summary = summaryOf(
+      {
+        results: [{ name: 'ok', result: packageResult([issue('warning', 'W1')], [issue('info', 'I1')]) }],
+        failures: [{ name: 'boom', message: THREW }],
+        runIssues: [issue('warning', 'ALLOW_UNUSED')],
+        skillsWithErrors: [],
+      },
       1,
-      [issue('warning', 'ALLOW_UNUSED')],
-      [],
     );
     expect(summary.issueCounts).toEqual({ errors: 1, warnings: 2, info: 1 });
     expect(countsFromPublishedRows(summary)).toEqual(summary.issueCounts);
@@ -940,12 +983,14 @@ describe('vat skills build — buildYamlSummary', () => {
     // Two definitions of "failed" — could-not-package vs packaged-then-invalid —
     // and only the first had a machine field. A CI job reading either one saw a
     // clean build.
-    const summary = buildYamlSummary(
-      [{ name: BUILT_BUT_INVALID, result: packageResult(undefined, [issue('error', 'E1')]) }],
-      [],
+    const summary = summaryOf(
+      {
+        results: [{ name: BUILT_BUT_INVALID, result: packageResult(undefined, [issue('error', 'E1')]) }],
+        failures: [],
+        runIssues: [],
+        skillsWithErrors: [BUILT_BUT_INVALID],
+      },
       1,
-      [],
-      [BUILT_BUT_INVALID],
     );
 
     // It IS built — it produced a bundle — so the pre-existing fields keep their
@@ -962,12 +1007,14 @@ describe('vat skills build — buildYamlSummary', () => {
     // A guard against the tempting "fix": folding both into `skillsFailed` would
     // make `skillsBuilt + skillsFailed` exceed the number of skills, and would
     // put a row in `failedSkills` for a bundle that exists on disk.
-    const summary = buildYamlSummary(
-      [{ name: 'invalid', result: packageResult(undefined, [issue('error', 'E1')]) }],
-      [{ name: 'threw', message: 'Filename collision detected' }],
+    const summary = summaryOf(
+      {
+        results: [{ name: 'invalid', result: packageResult(undefined, [issue('error', 'E1')]) }],
+        failures: [{ name: 'threw', message: 'Filename collision detected' }],
+        runIssues: [],
+        skillsWithErrors: ['invalid'],
+      },
       1,
-      [],
-      ['invalid'],
     );
 
     expect(summary.skillsFailed).toBe(1);
@@ -978,15 +1025,63 @@ describe('vat skills build — buildYamlSummary', () => {
   });
 
   it('publishes an empty list, not a missing field, on a clean build', () => {
-    const summary = buildYamlSummary(
-      [{ name: 'a', result: packageResult(undefined, undefined) }],
-      [],
+    const summary = summaryOf(
+      {
+        results: [{ name: 'a', result: packageResult(undefined, undefined) }],
+        failures: [],
+        runIssues: [],
+        skillsWithErrors: [],
+      },
       1,
-      [],
-      [],
     );
     expect(summary.skillsWithErrors).toEqual([]);
     expect(summary.status).toBe('success');
+  });
+
+  it('gives a skill rejected before the build its own row, with its own counts', () => {
+    // The THIRD failure mode: the pre-build source validation rejected it, so
+    // packaging never ran. It is neither a `failedSkills` (packaging threw) nor
+    // a `skills` (a bundle exists), and unlike a throw it has a real severity
+    // distribution — a flat one-error stand-in would under-report the 5 warnings.
+    const summary = summaryOf(
+      { validationFailures: [{ name: 'rejected', issueCounts: { errors: 2, warnings: 5, info: 1 } }] },
+      1,
+    );
+
+    expect(summary.skillsFailedValidation).toBe(1);
+    expect(summary.validationFailedSkills).toEqual([
+      { name: 'rejected', issueCounts: { errors: 2, warnings: 5, info: 1 } },
+    ]);
+    // Not folded into either neighbour.
+    expect(summary.skillsFailed).toBe(0);
+    expect(summary.failedSkills).toEqual([]);
+    expect(summary.skills).toEqual([]);
+    expect(summary.status).toBe('error');
+  });
+
+  it('closes the header identity with all four populations present at once', () => {
+    const summary = summaryOf(
+      {
+        results: [{ name: 'invalid', result: packageResult([issue('warning', 'W1')], [issue('error', 'E1')]) }],
+        failures: [{ name: 'threw', message: THREW }],
+        validationFailures: [{ name: 'rejected', issueCounts: { errors: 2, warnings: 0, info: 3 } }],
+        runIssues: [issue('warning', 'ALLOW_UNUSED')],
+        skillsWithErrors: ['invalid'],
+        outputCommitted: false,
+      },
+      1,
+    );
+
+    // Guards against a vacuous pass: every population contributes something.
+    expect(summary.issueCounts).toEqual({ errors: 4, warnings: 2, info: 3 });
+    expect(countsFromPublishedRows(summary)).toEqual(summary.issueCounts);
+  });
+
+  it('publishes whether dist/skills was actually replaced', () => {
+    // Exit 1 with no way to tell "your previous output is intact" from "your
+    // output tree is gone" is the ambiguity this field exists to remove.
+    expect(summaryOf({ outputCommitted: false }, 1).outputCommitted).toBe(false);
+    expect(summaryOf({}, 1).outputCommitted).toBe(true);
   });
 });
 

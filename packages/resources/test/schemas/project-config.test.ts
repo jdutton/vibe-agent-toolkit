@@ -387,13 +387,53 @@ describe('ClaudeMarketplacePluginEntrySchema (full plugin support)', () => {
     expect(result.success).toBe(true);
   });
 
-  it('accepts plugin with exclude globs for the verbatim tree-copy', () => {
+  // `success === true` alone would still pass if the field were silently dropped
+  // or coerced — the value has to come back out byte-for-byte. Directory-shaped
+  // spellings are accepted syntax too (tree-copy normalizes a bare directory name
+  // and its trailing-slash form to cover the subtree), so the schema must not
+  // narrow those away either.
+  it.each([
+    { shape: 'globs', exclude: ['scratch/**', 'docs/internal/**'] },
+    { shape: 'directory-shaped spellings', exclude: ['scratch', 'docs/internal/', 'notes.md'] },
+  ])('round-trips exclude $shape unchanged', ({ exclude }) => {
     const result = ClaudeMarketplacePluginEntrySchema.safeParse({
       name: 'my-plugin',
       skills: '*',
-      exclude: ['scratch/**', 'docs/internal/**'],
+      exclude,
     });
     expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.exclude).toEqual(exclude);
+    }
+  });
+
+  it('rejects a bare string exclude (must be an array)', () => {
+    const result = ClaudeMarketplacePluginEntrySchema.safeParse({
+      name: 'my-plugin',
+      skills: '*',
+      exclude: 'scratch/**',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects non-string exclude entries', () => {
+    const result = ClaudeMarketplacePluginEntrySchema.safeParse({
+      name: 'my-plugin',
+      skills: '*',
+      exclude: [123],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('leaves exclude undefined when not declared', () => {
+    const result = ClaudeMarketplacePluginEntrySchema.safeParse({
+      name: 'my-plugin',
+      skills: '*',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.exclude).toBeUndefined();
+    }
   });
 
   it('requires skills field on plugin entry', () => {

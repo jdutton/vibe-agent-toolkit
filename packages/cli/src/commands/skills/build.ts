@@ -8,7 +8,7 @@
  */
 
 import { existsSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rename, rm } from 'node:fs/promises';
 
 import {
   allowUnusedIssues,
@@ -31,11 +31,11 @@ import {
   type SkillPackagingConfig,
 } from '@vibe-agent-toolkit/agent-skills';
 import type { Target } from '@vibe-agent-toolkit/claude-marketplace';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 import * as yaml from 'yaml';
 
-import { handleCommandError, handleValidationGateFailure } from '../../utils/command-error.js';
+import { handleCommandError } from '../../utils/command-error.js';
 import { loadConfig } from '../../utils/config-loader.js';
 import {
   collectPostBuildIssues,
@@ -119,34 +119,55 @@ Output:
   breakdown, and errors are always printed in full beneath it. Warnings and
   info findings stay collapsed into that heading unless --verbose, because
   they are the high-cardinality ones (one adopter skill carries 348
-  LINK_DROPPED_BY_DEPTH warnings alone). The stdout YAML is NOT affected by
-  --verbose: it carries every finding at every verbosity.
+  LINK_DROPPED_BY_DEPTH warnings alone).
+
+  --verbose changes the stderr report only. The stdout YAML is identical at
+  either verbosity because it publishes issueCounts ONLY — per-finding detail
+  (code, message, location) is on stderr and nowhere else in this command's
+  output. If you need the full machine-readable finding list, run
+  'vat skills validate' or 'vat audit'; those emit per-finding issues arrays.
 
   skills:         one row per skill that produced a bundle
   failedSkills:   one row per skill that could not be packaged AT ALL (no
                   bundle exists for it); each carries name, error and an
                   issueCounts of one error
+  validationFailedSkills / skillsFailedValidation:
+                  the THIRD failure mode — skills rejected by the PRE-build
+                  source validation, so packaging was never attempted for
+                  them. Distinct from failedSkills (packaging was attempted
+                  and threw) because the fix is different: these carry their
+                  own issueCounts, and the findings behind them are on stderr.
   skillsWithErrors / skillsWithErrorNames:
-                  the OTHER failure mode — skills that packaged fine and then
+                  the FOURTH failure mode — skills that packaged fine and then
                   emitted post-build validation errors. They are counted in
-                  skillsBuilt, not skillsFailed, so read BOTH before concluding
-                  a run was clean: the exit code follows this one too.
+                  skillsBuilt, not skillsFailed, so read ALL of these before
+                  concluding a run was clean: the exit code follows this one too.
   runIssueCounts: findings that belong to the run rather than to any one
                   skill (ALLOW_UNUSED)
   issueCounts:    the run total, which reconciles against the rows above:
 
                     issueCounts = sum(skills[].issueCounts)
                                 + sum(failedSkills[].issueCounts)
+                                + sum(validationFailedSkills[].issueCounts)
                                 + runIssueCounts
 
                   Every error, warning and info in the header total is
                   therefore attributable to a row you can point at.
+  outputCommitted:
+                  whether dist/skills was REPLACED by this run. A build writes
+                  into a staging directory and promotes it only if the whole
+                  run is clean, so 'false' means nothing on disk changed and
+                  the previous dist/skills (if any) is exactly as it was.
+                  skills[].outputPath names where each bundle WOULD live; when
+                  outputCommitted is false, nothing was written there.
 
 Exit Codes:
   0 - All skills built successfully (or dry-run preview)
-  1 - One or more skills emitted validation errors, or could not be packaged
-      at all (a skill that fails to package does NOT abort the others; the
-      rest still build and the failures are listed under failedSkills)
+  1 - One or more skills failed pre-build validation, emitted post-build
+      validation errors, or could not be packaged at all. No single skill
+      aborts the run: every failure of every kind is collected and reported
+      in ONE pass, so one build cycle surfaces all the work. Because the run
+      failed, outputCommitted is false and dist/skills was left untouched.
   2 - System error (config invalid, directory not found)
 
 Requirements:
@@ -277,7 +298,24 @@ interface ValidateSkillInput {
   verbose: boolean;
 }
 
-async function validateSkillOrExit(input: ValidateSkillInput): Promise<void> {
+/**
+ * Run the PRE-build source validation for one skill and REPORT the verdict —
+ * never act on it.
+ *
+ * This used to `process.exit(1)` from inside the per-skill loop, so a run named
+ * the first bad skill and nothing else. Measured on a 90-skill adopter: 3 of the
+ * 28 errors and 1 of the 6 broken skills, which is six full build cycles to
+ * discover the work. Returning the failure lets {@link runSkillBuild} collect
+ * every one of them and fail once, at the end, with the whole list.
+ *
+ * The returned counts come from `allErrors` — the full EMITTED set including
+ * warnings and info (its name lies; see `PackagingValidationResult`) — so the
+ * row this becomes carries the same three-valued distribution every other row
+ * publishes, rather than a flat "one error" stand-in.
+ */
+async function validateSkillBeforeBuild(
+  input: ValidateSkillInput,
+): Promise<SkillValidationFailure | undefined> {
   const { skillName, sourcePath, packagingConfig, logger, locationRoot, allowLedger, projectSkills, verbose } = input;
   logger.debug(`   Validating skill: ${skillName}`);
 
@@ -305,10 +343,12 @@ async function validateSkillOrExit(input: ValidateSkillInput): Promise<void> {
     if (validationResult.ignoredErrors.length > 0) {
       logger.debug(`   ${validationResult.ignoredErrors.length} issue(s) allowed by config`);
     }
-    return;
+    return undefined;
   }
 
-  // Validation failed - display every emitted finding and exit
+  // Validation failed — display every emitted finding, then hand the verdict
+  // back. No `Build aborted` line: the run continues, and saying otherwise here
+  // would contradict the 89 skills that go on to build beneath this message.
   logger.error(`\nSkill validation failed: ${skillName}`);
   logger.error(`   Source: ${sourcePath}`);
 
@@ -317,11 +357,7 @@ async function validateSkillOrExit(input: ValidateSkillInput): Promise<void> {
   }
   displayIgnoredErrors(validationResult, logger);
 
-  logger.error(`\n   Build aborted due to validation errors`);
-  // Every finding above went to STDERR. Exiting here without the stdout summary
-  // is what made `vat skills build | jq .status` return an empty document
-  // alongside exit 1 — the one case the help text documents exit 1 for.
-  handleValidationGateFailure(skillName, validationResult.allErrors);
+  return { name: skillName, issueCounts: countBySeverity(validationResult.allErrors) };
 }
 
 /**
@@ -397,6 +433,7 @@ const failureIssueCounts = (): SeverityCounts => ({ errors: 1, warnings: 0, info
  *
  *     issueCounts === Σ skills[].issueCounts
  *                   + Σ failedSkills[].issueCounts
+ *                   + Σ validationFailedSkills[].issueCounts
  *                   + runIssueCounts
  *
  * Every addend therefore has a ROW a reader can point at. Counting the failures
@@ -405,20 +442,23 @@ const failureIssueCounts = (): SeverityCounts => ({ errors: 1, warnings: 0, info
  * more than its rows summed to (there, 1814 warnings against 1800), leaving a
  * consumer to hand-count a list to find out what the difference was. `--help`
  * states this identity; changing it means changing that text too.
+ *
+ * Takes the whole {@link SkillBuildRun} rather than a positional list of its
+ * parts: the run has four populations now, and a positional call site can
+ * transpose two same-shaped lists in silence.
  */
 export function buildYamlSummary(
-  results: Array<{ name: string; result: PackageSkillResult }>,
-  failures: readonly SkillBuildFailure[],
+  run: SkillBuildRun,
   duration: number,
-  runIssues: readonly ValidationIssue[],
-  skillsWithErrors: readonly string[],
 ): {
   status: 'success' | 'warning' | 'error';
   issueCounts: SeverityCounts;
   runIssueCounts: SeverityCounts;
   skillsBuilt: number;
   skillsFailed: number;
+  skillsFailedValidation: number;
   skillsWithErrors: string[];
+  outputCommitted: boolean;
   skills: Array<{
     name: string;
     outputPath: string;
@@ -426,9 +466,11 @@ export function buildYamlSummary(
     issueCounts: SeverityCounts;
   }>;
   failedSkills: Array<{ name: string; error: string; issueCounts: SeverityCounts }>;
+  validationFailedSkills: Array<{ name: string; issueCounts: SeverityCounts }>;
   runIssues: ValidationIssue[];
   duration: string;
 } {
+  const { results, failures, runIssues, skillsWithErrors, validationFailures, outputCommitted } = run;
   const perSkill = results.map(({ name, result }) => {
     const issues = collectPostBuildIssues(result);
     return {
@@ -466,19 +508,36 @@ export function buildYamlSummary(
     error: message,
     issueCounts: failureIssueCounts(),
   }));
+  // The THIRD population, and the one an adopter meets first: a skill the
+  // PRE-build source validation rejected, so packaging was never attempted. It
+  // gets its own rows rather than joining either list above, because neither
+  // answers the question this one raises — `failedSkills` says packaging was
+  // attempted and threw, `skills` says a bundle exists. And unlike a throw, this
+  // failure HAS a severity distribution of its own, so it publishes the real
+  // counts instead of the flat `failureIssueCounts()` stand-in.
+  const validationFailedSkills = validationFailures.map(({ name, issueCounts }) => ({
+    name,
+    issueCounts,
+  }));
 
   return {
-    status: failures.length > 0
+    status: failures.length > 0 || validationFailures.length > 0
       ? 'error'
       : calculateValidationStatus([...allIssues, ...runIssues]),
     issueCounts: sumSeverityCounts([
       ...perSkill.map((s) => s.issueCounts),
       ...failedSkills.map((s) => s.issueCounts),
+      ...validationFailedSkills.map((s) => s.issueCounts),
       runIssueCounts,
     ]),
     runIssueCounts,
     skillsBuilt: results.length,
     skillsFailed: failures.length,
+    skillsFailedValidation: validationFailures.length,
+    // Whether dist/skills was actually REPLACED. Carried through from the run
+    // rather than re-derived here: two definitions of "did this build change
+    // anything" is exactly how a report ends up contradicting the disk.
+    outputCommitted,
     // The OTHER meaning of "failed", published because the exit code follows
     // THIS one and nothing in the document did. `skillsFailed` counts skills
     // that could not be packaged at all; a skill that packaged fine and then
@@ -497,6 +556,7 @@ export function buildYamlSummary(
       issueCounts,
     })),
     failedSkills,
+    validationFailedSkills,
     runIssues: [...runIssues],
     duration: `${duration}ms`,
   };
@@ -505,25 +565,24 @@ export function buildYamlSummary(
 /**
  * Output build results
  */
-function outputBuildYaml(
-  results: Array<{ name: string; result: PackageSkillResult }>,
-  failures: readonly SkillBuildFailure[],
-  duration: number,
-  runIssues: readonly ValidationIssue[],
-  skillsWithErrors: readonly string[],
-): void {
-  const summary = buildYamlSummary(results, failures, duration, runIssues, skillsWithErrors);
+function outputBuildYaml(run: SkillBuildRun, duration: number): void {
+  const summary = buildYamlSummary(run, duration);
   const {
-    status, skillsBuilt, skillsFailed, issueCounts, runIssueCounts, skills, failedSkills,
+    status, skillsBuilt, skillsFailed, skillsFailedValidation, issueCounts, runIssueCounts,
+    skills, failedSkills, validationFailedSkills, outputCommitted,
     duration: durationText,
   } = summary;
-  // In the header, beside the other two counts: this is the number the exit code
+  // In the header, beside the other counts: these are the numbers the exit code
   // actually follows, so a reader who stops at the header is not misled by it.
+  // `outputCommitted` rides up here too — a reader who sees exit 1 needs to know
+  // whether their dist/skills still exists before they do anything else.
   writeYamlHeader({
     status,
     skillsBuilt,
     skillsFailed,
+    skillsFailedValidation,
     skillsWithErrors: summary.skillsWithErrors.length,
+    outputCommitted,
   });
   process.stdout.write(
     yaml.stringify(
@@ -532,6 +591,7 @@ function outputBuildYaml(
         runIssueCounts,
         skills,
         failedSkills,
+        validationFailedSkills,
         skillsWithErrorNames: summary.skillsWithErrors,
         runIssues: summary.runIssues,
       },
@@ -541,24 +601,132 @@ function outputBuildYaml(
   process.stdout.write(`duration: ${durationText}\n`);
 }
 
+/** How the human stream names the output tree. One spelling, one place. */
+const DIST_SKILLS_LABEL = 'dist/skills';
+
 /**
- * Clean stale skill output directories before building.
- * Full build: clear entire dist/skills/. Single skill: clear just that skill's dir.
+ * Where a skill's bundle lives once a build has earned the swap.
+ *
+ * THE one definition, shared by the progress line, the published `outputPath`
+ * and the staging promotion — so the path a reader is told about is by
+ * construction the path the swap lands on.
  */
-async function cleanStaleSkillOutputs(cwd: string, skillName: string | undefined): Promise<void> {
-  if (skillName) {
-    const singleSkillDir = safePath.resolve(cwd, 'dist', 'skills', skillNameToFsPath(skillName));
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from validated option
-    if (existsSync(singleSkillDir)) {
-      await rm(singleSkillDir, { recursive: true, force: true });
-    }
-  } else {
-    const allSkillsDir = safePath.resolve(cwd, 'dist', 'skills');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
-    if (existsSync(allSkillsDir)) {
-      await rm(allSkillsDir, { recursive: true, force: true });
-    }
-  }
+function finalOutputPath(cwd: string, skillName: string): string {
+  return safePath.resolve(cwd, 'dist', 'skills', skillNameToFsPath(skillName));
+}
+
+/**
+ * A build in progress: it writes under {@link root} and earns `dist/skills` only
+ * by finishing clean.
+ *
+ * The old flow deleted `dist/skills` up front and wrote the new bundles straight
+ * into it, so ANY failure left the tree destroyed rather than stale — and
+ * `dist/` is gitignored, so the previous good output was unrecoverable. Measured
+ * on a 90-skill adopter: 27 skill directories and 106 files present before,
+ * directory absent after. Downstream consumers (`vat claude plugin install
+ * --dev` symlinks out of `dist/skills`; plugin builds re-read it) then saw an
+ * ABSENT tree, and a later `vat build --only claude` reported
+ * `status: success / Skills available: 0` against a tree the previous command
+ * had deleted.
+ */
+interface BuildStaging {
+  /** Where each bundle is written during the run, in place of `dist/skills`. */
+  root: string;
+  /** True when a previous build's output was set aside and can be restored. */
+  hadPreviousOutput: boolean;
+  /** Promote the staged tree, discarding the previous output. */
+  commit: () => Promise<void>;
+  /** Discard the staged tree, restoring the previous output byte for byte. */
+  abort: () => Promise<void>;
+}
+
+/**
+ * Move the previous output aside and open a staging root for this run.
+ *
+ * Three properties the placement is load-bearing for:
+ *
+ * 1. **Same filesystem.** The staging root is a SIBLING of `dist/skills` under
+ *    `dist/`, so promotion is a `rename` — atomic and free — never a
+ *    cross-device copy of a tree that can be tens of thousands of files.
+ * 2. **Invisible to the run.** `createProjectRegistry` crawls the project for
+ *    `**\/*.md` and excludes `**\/dist/**`, so nothing staged here can enter the
+ *    registry the packager resolves links against. The leading dot is a second
+ *    belt: a `files:` glob like `dist/**` does not descend into dot-directories.
+ * 3. **The final path is ABSENT while the build runs.** The previous tree is
+ *    renamed away before the first bundle is written, which is exactly what the
+ *    delete-up-front flow guaranteed — so no lane can read a half-replaced
+ *    `dist/skills`, and a stale bundle cannot leak into the new output.
+ *
+ * `mkdtemp` rather than a fixed name: two builds in one `dist/` must not share a
+ * staging root, and a leftover root from a killed run must not be adopted.
+ *
+ * KNOWN WINDOW, deliberately not closed here: a run killed between the park and
+ * the commit/abort (Ctrl-C on a multi-minute build, a CI timeout, a crash) leaves
+ * `dist/skills` absent and the previous output parked at
+ * `dist/.vat-skills-<rand>.previous`. That is no worse than the delete-up-front
+ * flow this replaces — there, the same interrupt lost the tree outright — and the
+ * output is recoverable with a single `mv`. Auto-recovering it on the next run is
+ * NOT safe as long as `mkdtemp` allows concurrent builds in one `dist/`: a sweep
+ * cannot tell a dead run's parked tree from a live run's, and adopting the wrong
+ * one would restore stale bundles over fresh output. Closing this needs a lock on
+ * `dist/`, not a heuristic.
+ */
+async function beginStagedBuild(
+  cwd: string,
+  onlySkill: string | undefined,
+): Promise<BuildStaging> {
+  const distDir = safePath.resolve(cwd, 'dist');
+  const skillsDir = safePath.join(distDir, 'skills');
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
+  await mkdir(distDir, { recursive: true });
+  const root = toForwardSlash(await mkdtemp(safePath.join(distDir, '.vat-skills-')));
+
+  // `--skill <name>` rebuilds ONE bundle, so the all-or-nothing guarantee is
+  // scoped to that bundle: its siblings under dist/skills are neither replaced
+  // nor set aside, exactly as the delete-just-that-directory flow behaved.
+  const subPath = onlySkill === undefined ? undefined : skillNameToFsPath(onlySkill);
+  const promoteFrom = subPath === undefined ? root : safePath.join(root, subPath);
+  const promoteTo = subPath === undefined ? skillsDir : safePath.join(skillsDir, subPath);
+  // `skillNameToFsPath` yields ONE path segment, so the parent is always known
+  // without a dirname call.
+  const promoteToParent = subPath === undefined ? distDir : skillsDir;
+  const parked = `${root}.previous`;
+
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
+  const hadPreviousOutput = existsSync(promoteTo);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
+  if (hadPreviousOutput) await rename(promoteTo, parked);
+
+  return {
+    root,
+    hadPreviousOutput,
+    commit: async () => {
+      // Guarded because in single-skill mode the staged bundle is a SUBPATH that
+      // exists only if that one skill actually built. (In full-build mode the
+      // staging root always exists, so a run that built nothing promotes an
+      // empty dist/skills — an accurate statement of "this build produced no
+      // bundles", where the old delete-up-front flow left the path absent.)
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
+      if (existsSync(promoteFrom)) {
+        // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
+        await mkdir(promoteToParent, { recursive: true });
+        // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
+        await rename(promoteFrom, promoteTo);
+      }
+      await rm(parked, { recursive: true, force: true });
+      // A no-op in full-build mode (the rename above consumed it); in
+      // single-skill mode this is the now-empty staging shell.
+      await rm(root, { recursive: true, force: true });
+    },
+    abort: async () => {
+      await rm(root, { recursive: true, force: true });
+      if (!hadPreviousOutput) return;
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
+      await mkdir(promoteToParent, { recursive: true });
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
+      await rename(parked, promoteTo);
+    },
+  };
 }
 
 /** One discovered skill paired with the packaging config merged for it. */
@@ -580,6 +748,22 @@ export interface SkillBuildFailure {
   message: string;
 }
 
+/**
+ * A skill the PRE-build source validation rejected — packaging was never
+ * attempted for it.
+ *
+ * The third of four populations, and deliberately not merged into either
+ * neighbour: {@link SkillBuildFailure} means packaging ran and threw, and
+ * `skillsWithErrors` means a bundle exists and is invalid. This one means the
+ * source never qualified. It carries real per-severity counts (a rejected
+ * source has a whole emitted finding set) rather than the one-error stand-in a
+ * throw is forced to publish.
+ */
+export interface SkillValidationFailure {
+  name: string;
+  issueCounts: SeverityCounts;
+}
+
 /** Everything one `vat build` invocation produced, ready to report on. */
 export interface SkillBuildRun {
   results: Array<{ name: string; result: PackageSkillResult }>;
@@ -589,6 +773,32 @@ export interface SkillBuildRun {
   skillsWithErrors: string[];
   /** Skills that never built because packaging threw. */
   failures: SkillBuildFailure[];
+  /** Skills that never built because their SOURCE failed validation. */
+  validationFailures: SkillValidationFailure[];
+  /**
+   * Whether `dist/skills` was replaced by this run.
+   *
+   * `false` means the staged tree was thrown away and whatever was on disk
+   * before is still there, untouched — the fact an operator staring at exit 1
+   * needs before deciding whether their downstream consumers are broken.
+   */
+  outputCommitted: boolean;
+}
+
+/** The inputs of ONE `vat skills build` invocation. */
+export interface SkillBuildRunInput {
+  specs: readonly BuildSkillSpec[];
+  cwd: string;
+  logger: ReturnType<typeof createLogger>;
+  /** The RUN's declared eval suites — the whole project's, not `specs`'. */
+  projectSkills: readonly DeclaredEvalSuite[];
+  /**
+   * `--skill <name>`, or `undefined` for a full build. Scopes BOTH what gets
+   * built and what the swap replaces, so a single-skill build leaves its
+   * siblings' bundles exactly where they were.
+   */
+  onlySkill: string | undefined;
+  verbose: boolean;
 }
 
 /**
@@ -607,25 +817,29 @@ export interface SkillBuildRun {
  * nothing"; only the union can. Hence one ledger, drained once, here.
  *
  * Extracted from the command body so the span is testable without driving
- * `process.exit` — the drain seam is the thing worth asserting.
+ * `process.exit` — the drain seam is the thing worth asserting. Nothing in here
+ * exits: every failure of every kind is COLLECTED and returned, so one run
+ * surfaces all the work rather than the first item of it.
  */
-export async function runSkillBuild(
-  specs: readonly BuildSkillSpec[],
-  cwd: string,
-  logger: ReturnType<typeof createLogger>,
-  projectSkills: readonly DeclaredEvalSuite[],
-  verbose = false,
-): Promise<SkillBuildRun> {
+export async function runSkillBuild(input: SkillBuildRunInput): Promise<SkillBuildRun> {
+  const { specs, cwd, logger, projectSkills, onlySkill, verbose } = input;
   const allowLedger = createAllowUsageLedger();
+  const staging = await beginStagedBuild(cwd, onlySkill);
 
-  // Validate all skills before building
-  for (const { skill, packagingConfig } of specs) {
-    const outputDir = safePath.resolve(cwd, 'dist', 'skills', skillNameToFsPath(skill.name));
+  // Validate every skill before building ANY of them, and keep going past the
+  // ones that fail: a rejected source is a finding to report, not a reason to
+  // stop looking. The path logged is the FINAL one — it is where the bundle will
+  // live if this run earns the swap, and the staging path is an implementation
+  // detail no reader should have to decode.
+  const buildable: BuildSkillSpec[] = [];
+  const validationFailures: SkillValidationFailure[] = [];
+  for (const spec of specs) {
+    const { skill, packagingConfig } = spec;
     logger.info(`\nBuilding skill: ${skill.name}`);
     logger.info(`   Source: ${skill.sourcePath}`);
-    logger.info(`   Output: ${outputDir}`);
+    logger.info(`   Output: ${finalOutputPath(cwd, skill.name)}`);
 
-    await validateSkillOrExit({
+    const failure = await validateSkillBeforeBuild({
       skillName: skill.name,
       sourcePath: skill.sourcePath,
       packagingConfig,
@@ -635,21 +849,27 @@ export async function runSkillBuild(
       projectSkills,
       verbose,
     });
+    if (failure) {
+      validationFailures.push(failure);
+      continue;
+    }
+    buildable.push(spec);
   }
 
-  // Build all skills with a shared registry.
+  // Build the skills that qualified, with a shared registry.
   //
   // `projectSkills` is the run's declared eval suites — the whole project's, not
   // `specs`'. `--skill x` narrows what gets BUILT; it never narrows what counts as
   // test input, because an excluded skill's suite is still an answer key that must
   // not ship inside x's bundle.
-  const buildSpecs: SkillBuildSpec[] = specs.map(({ skill, packagingConfig }) => ({
+  const buildSpecs: SkillBuildSpec[] = buildable.map(({ skill, packagingConfig }) => ({
     skillPath: skill.sourcePath,
     options: packagingConfigToPackageOptions(
       packagingConfig,
       {
         skillPath: skill.sourcePath,
-        outputPath: safePath.resolve(cwd, 'dist', 'skills', skillNameToFsPath(skill.name)),
+        // Into staging, not dist/skills: see `beginStagedBuild`.
+        outputPath: safePath.join(staging.root, skillNameToFsPath(skill.name)),
       },
       projectSkills,
     ),
@@ -660,7 +880,7 @@ export async function runSkillBuild(
   const results: Array<{ name: string; result: PackageSkillResult }> = [];
   const skillsWithErrors: string[] = [];
   const failures: SkillBuildFailure[] = [];
-  for (const [i, spec] of specs.entries()) {
+  for (const [i, spec] of buildable.entries()) {
     const outcome = outcomes[i];
     if (!outcome) continue;
     if (outcome.status === 'failed') {
@@ -677,7 +897,13 @@ export async function runSkillBuild(
     if (result.hasErrors) {
       skillsWithErrors.push(spec.skill.name);
     }
-    results.push({ name: spec.skill.name, result });
+    // Re-anchored onto the FINAL path. The bundle was written under staging, but
+    // staging is transient: publishing that path would hand a consumer a
+    // directory that stops existing the moment this function returns.
+    results.push({
+      name: spec.skill.name,
+      result: { ...result, outputPath: finalOutputPath(cwd, spec.skill.name) },
+    });
   }
 
   // Drain point: every skill and every lane has now contributed, so this is the
@@ -692,7 +918,70 @@ export async function runSkillBuild(
   // ALLOW_UNUSED. That is a warning, and `runHasErrors` gates on `error` only,
   // so it cannot fail a build on its own — and the run is already exiting 1 on
   // the failure the operator actually needs to fix.
-  return { results, runIssues: allowUnusedIssues(allowLedger), skillsWithErrors, failures };
+  const runIssues = allowUnusedIssues(allowLedger);
+
+  // ONE predicate, evaluated once, for BOTH "does dist/skills get replaced" and
+  // (via `outputCommitted`) "what does the command exit with". Two definitions
+  // of "this run failed" is how a report ends up disagreeing with the disk and
+  // with the exit code — the failure mode this whole summary exists to prevent.
+  // A run-level ALLOW_UNUSED is a `warning`, so it is not in here: a warning must
+  // never discard artifacts that were produced correctly.
+  const runFailed = failures.length > 0
+    || validationFailures.length > 0
+    || skillsWithErrors.length > 0
+    || runIssues.some((i) => i.severity === 'error');
+
+  if (runFailed) {
+    await staging.abort();
+    logger.error(
+      staging.hadPreviousOutput
+        ? `\n   Nothing was replaced — the previous ${DIST_SKILLS_LABEL} is intact`
+        : `\n   Nothing was written — ${DIST_SKILLS_LABEL} does not exist`,
+    );
+  } else {
+    await staging.commit();
+  }
+
+  return {
+    results,
+    runIssues,
+    skillsWithErrors,
+    failures,
+    validationFailures,
+    outputCommitted: !runFailed,
+  };
+}
+
+/**
+ * Name every way this run failed, on stderr, one section per population.
+ *
+ * All four sections print — a run can fail in several ways at once, and the
+ * whole point of collecting rather than aborting is that ONE build cycle shows
+ * an adopter all of the work. A section that stopped at the first population
+ * would put the fail-fast defect back one level up.
+ */
+function logRunFailures(run: SkillBuildRun, logger: ReturnType<typeof createLogger>): void {
+  const { failures, skillsWithErrors, validationFailures, runIssues } = run;
+  if (validationFailures.length > 0) {
+    logger.error(`\nBuild failed: ${validationFailures.length} skill(s) failed pre-build validation`);
+    for (const { name } of validationFailures) logger.error(`   - ${name}`);
+  }
+  if (failures.length > 0) {
+    logger.error(`\nBuild failed: ${failures.length} skill(s) could not be packaged at all`);
+    for (const { name, message } of failures) {
+      logger.error(`   - ${name}: ${message.split('\n')[0] ?? message}`);
+    }
+  }
+  if (skillsWithErrors.length > 0) {
+    logger.error(`\nBuild failed: ${skillsWithErrors.length} skill(s) emitted post-build validation errors`);
+    for (const name of skillsWithErrors) logger.error(`   - ${name}`);
+  }
+  // A run-level finding belongs to no skill, so the loops above cannot carry it.
+  // Only `error` severity gates: ALLOW_UNUSED ships as a `warning`, and a
+  // warning must never abort a build that produced its artifacts.
+  if (runIssues.some((i) => i.severity === 'error')) {
+    logger.error(`\nBuild failed: run-level validation errors (project config, not any one skill)`);
+  }
 }
 
 async function buildCommand(
@@ -733,11 +1022,12 @@ async function buildCommand(
 
     logger.info(`Found ${skillsToBuild.length} skill(s) to build`);
 
-    if (!options.dryRun) {
-      await cleanStaleSkillOutputs(cwd, options.skill);
-    }
-
-    // Handle dry-run mode
+    // Handle dry-run mode. Nothing has touched `dist/` at this point — the
+    // staging directory and the swap both live inside `runSkillBuild`, which a
+    // dry run never reaches, so "preview without creating files" is now true of
+    // the OUTPUT TREE as well as of the bundles. (The old flow deleted
+    // `dist/skills` before this branch and relied on an `if (!options.dryRun)`
+    // guard three lines up to stay honest.)
     if (options.dryRun) {
       const duration = Date.now() - startTime;
       performDryRun(skillsToBuild, duration, logger);
@@ -756,46 +1046,31 @@ async function buildCommand(
     // not the set of files that count as some skill's declared test input.
     const projectSkills = collectDeclaredEvalSuites(skillsConfig, discoveredSkills);
 
-    const { results, runIssues, skillsWithErrors, failures } = await runSkillBuild(
-      buildSpecs,
+    const run = await runSkillBuild({
+      specs: buildSpecs,
       cwd,
       logger,
       projectSkills,
-      options.verbose === true,
-    );
-
+      onlySkill: options.skill,
+      verbose: options.verbose === true,
+    });
     const duration = Date.now() - startTime;
 
     // Output YAML results
-    outputBuildYaml(results, failures, duration, runIssues, skillsWithErrors);
-    for (const line of formatRunIssueLines(runIssues)) {
+    outputBuildYaml(run, duration);
+    for (const line of formatRunIssueLines(run.runIssues)) {
       logger.info(line);
     }
+    logRunFailures(run, logger);
 
-    if (failures.length > 0) {
-      logger.error(`\nBuild failed: ${failures.length} skill(s) could not be packaged at all`);
-      for (const { name, message } of failures) {
-        logger.error(`   - ${name}: ${message.split('\n')[0] ?? message}`);
-      }
-    }
-    if (skillsWithErrors.length > 0) {
-      logger.error(`\nBuild failed: ${skillsWithErrors.length} skill(s) emitted post-build validation errors`);
-      for (const name of skillsWithErrors) {
-        logger.error(`   - ${name}`);
-      }
-    }
-    // A run-level finding belongs to no skill, so the loop above cannot carry
-    // it. Only `error` severity gates: ALLOW_UNUSED ships as a `warning`, and a
-    // warning must never abort a build that produced its artifacts.
-    const runHasErrors = runIssues.some((i) => i.severity === 'error');
-    if (runHasErrors) {
-      logger.error(`\nBuild failed: run-level validation errors (project config, not any one skill)`);
-    }
-    if (skillsWithErrors.length > 0 || runHasErrors || failures.length > 0) {
+    // Gated on the SAME fact that decided whether the swap happened, not on a
+    // second copy of the predicate: the exit code and `outputCommitted` can then
+    // never disagree about whether this run succeeded.
+    if (!run.outputCommitted) {
       process.exit(1);
     }
 
-    logger.info(`\nBuilt ${results.length} skill(s) successfully`);
+    logger.info(`\nBuilt ${run.results.length} skill(s) successfully`);
 
     process.exit(0);
   } catch (error) {

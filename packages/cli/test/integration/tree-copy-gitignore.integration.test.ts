@@ -90,3 +90,78 @@ describe('treeCopyPlugin — gitignore enforcement', () => {
     cleanupTempDirs();
   });
 });
+
+/**
+ * The `exclude:` knob, exercised on the GIT FAST PATH — the lane that actually
+ * ships, and the one the unit tests (temp dirs, no repo) never reach.
+ *
+ * `git ls-files` only ever yields FILE paths, so a directory-shaped pattern
+ * (`scratch`, `scratch/`) matched nothing here while the non-git walker pruned
+ * the directory outright: same config, opposite result, and nothing reported
+ * either way.
+ */
+describe('treeCopyPlugin — caller exclude patterns (git fast path)', () => {
+  const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-tree-copy-ex-');
+  const SCRATCH_SUBTREE_GLOB = 'scratch/**';
+
+  it.each([[SCRATCH_SUBTREE_GLOB], ['scratch'], ['scratch/']])(
+    'excludes the scratch subtree for pattern %s',
+    async (pattern) => {
+      const { root, src, dest } = initPluginTreeFixture(createTempDir);
+
+      await mkdir(safePath.join(src, 'scratch'), { recursive: true });
+      await writeFile(safePath.join(src, 'scratch', 'notes.md'), '# scratch');
+      await writeFile(safePath.join(src, 'keep.md'), '# keep');
+      await writeCommandFile(src);
+      commitAll(root);
+
+      const result = await treeCopyPlugin({ sourceDir: src, destDir: dest, exclude: [pattern] });
+
+      expect(existsSync(safePath.join(dest, 'scratch', 'notes.md'))).toBe(false);
+      expect(existsSync(safePath.join(dest, 'keep.md'))).toBe(true);
+      expect(result.filesCopied).toBe(2);
+      // A directory-shaped pattern must register HITS on this lane too, or the
+      // caller would report a working pattern as dead (the git fast path yields
+      // only file paths — see expandExcludePattern).
+      expect(result.unusedExcludePatterns).toEqual([]);
+
+      cleanupTempDirs();
+    },
+  );
+
+  it('reports an exclude pattern that matched nothing on the git fast path', async () => {
+    const { root, src, dest } = initPluginTreeFixture(createTempDir);
+
+    await writeCommandFile(src);
+    commitAll(root);
+
+    const result = await treeCopyPlugin({
+      sourceDir: src,
+      destDir: dest,
+      exclude: [SCRATCH_SUBTREE_GLOB],
+    });
+
+    expect(result.unusedExcludePatterns).toEqual([SCRATCH_SUBTREE_GLOB]);
+
+    cleanupTempDirs();
+  });
+
+  it('never copies mis-cased agent-instruction files (git fast path)', async () => {
+    const { root, src, dest } = initPluginTreeFixture(createTempDir);
+
+    await writeFile(safePath.join(src, 'Claude.md'), '# mixed case at root');
+    await mkdir(safePath.join(src, 'docs'), { recursive: true });
+    await writeFile(safePath.join(src, 'docs', 'agents.md'), '# lower case at depth');
+    await writeFile(safePath.join(src, 'Readme.md'), '# front page, stays');
+    await writeCommandFile(src);
+    commitAll(root);
+
+    await treeCopyPlugin({ sourceDir: src, destDir: dest });
+
+    expect(existsSync(safePath.join(dest, 'Claude.md'))).toBe(false);
+    expect(existsSync(safePath.join(dest, 'docs', 'agents.md'))).toBe(false);
+    expect(existsSync(safePath.join(dest, 'Readme.md'))).toBe(true);
+
+    cleanupTempDirs();
+  });
+});

@@ -182,7 +182,11 @@ Skills, config, and packaging each have a distinct role. These boundaries are in
 
 **Key rules:**
 - `vat verify` drives validation from config.yaml discovery, checking package.json as a suspect
-- `publish: false` in `skills.config.<name>` opts a skill out of distribution checks (default: `true`)
+- `publish: false` in `skills.config.<name>` opts a skill out of the **distribution-consistency**
+  checks — the `package.json` `vat.skills` and plugin-membership cross-checks in `consistency-check`
+  (default: `true`). It does **not** exempt the skill from build-time packaging validation: a
+  `publish: false` skill is still discovered, built, and held to every packaging rule, and its
+  errors still fail the build. Packaging correctness is not conditional on shipping.
 - Error messages always reference the config mechanism so developers discover the fix from the error
 - No VAT-specific fields in SKILL.md frontmatter — skills are portable artifacts
 

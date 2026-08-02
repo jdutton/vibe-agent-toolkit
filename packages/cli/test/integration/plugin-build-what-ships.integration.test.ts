@@ -32,7 +32,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { runClaudePluginBuild } from '../../src/commands/claude/plugin/build.js';
 import { cleanupTestTempDir, createTestTempDir, writeTestFile } from '../system/test-common.js';
-import { commitTestFixture, marketplacePluginOutDir, silentAuditLogger } from '../test-helpers.js';
+import { commitTestFixture, marketplacePluginOutDir, silentLogger } from '../test-helpers.js';
 
 const MARKETPLACE = 'mp';
 const SKILLS_DIR = 'skills';
@@ -161,7 +161,7 @@ describe('plugin build — what each phase produces under skills/ (integration)'
     tempDir = createTestTempDir('vat-plugin-skills-dirs-');
     const outDir = writeFixture(tempDir);
 
-    const results = await runClaudePluginBuild(tempDir, { logger: silentAuditLogger });
+    const results = await runClaudePluginBuild(tempDir, { logger: silentLogger });
 
     // Two skills packaged: the flat one and the NESTED one. The nested skill used to
     // be invisible to the packager and fell through to the verbatim tree-copy.
@@ -187,7 +187,7 @@ describe('plugin build — what each phase produces under skills/ (integration)'
     tempDir = createTestTempDir('vat-plugin-skills-gitignored-');
     const outDir = writeFixture(tempDir);
 
-    const results = await runClaudePluginBuild(tempDir, { logger: silentAuditLogger });
+    const results = await runClaudePluginBuild(tempDir, { logger: silentLogger });
 
     // Only the two tracked skills are packaged; the gitignored one is not a skill
     // this project publishes (`vat skills build` cannot discover it either).
@@ -205,7 +205,7 @@ describe('plugin build — what each phase produces under skills/ (integration)'
     mkdirSyncReal(poolDist, { recursive: true });
     writeTestFile(safePath.join(poolDist, SKILL_FILE), skillMd(NESTED_SKILL));
 
-    await runClaudePluginBuild(tempDir, { logger: silentAuditLogger });
+    await runClaudePluginBuild(tempDir, { logger: silentLogger });
 
     // The pool copy is the sole source; the plugin-local nested copy is neither
     // packaged nor tree-copied. Two definitions of one skill, at two depths in one
@@ -242,7 +242,7 @@ describe('plugin build — what each phase produces under skills/ (integration)'
     mkdirSyncReal(poolDist, { recursive: true });
     writeTestFile(safePath.join(poolDist, SKILL_FILE), skillMd(POOL_ONLY_SKILL));
 
-    await expect(runClaudePluginBuild(tempDir, { logger: silentAuditLogger })).rejects.toThrow(
+    await expect(runClaudePluginBuild(tempDir, { logger: silentLogger })).rejects.toThrow(
       /two DIFFERENT skills claim the same output directory/,
     );
   });
@@ -261,7 +261,7 @@ describe('plugin build — what each phase produces under skills/ (integration)'
 
     const warnings: string[] = [];
     await runClaudePluginBuild(tempDir, {
-      logger: { ...silentAuditLogger, info: (m: string) => { warnings.push(m); } },
+      logger: { ...silentLogger, info: (m: string) => { warnings.push(m); } },
     });
 
     expect(warnings.some((m) => m.includes('skills/brand-new/SKILL.md') && m.includes('not tracked by git'))).toBe(true);
@@ -277,7 +277,11 @@ describe('plugin build — what each phase produces under skills/ (integration)'
 
 const GUIDED_PLUGIN = 'guided-plugin';
 
-const GUIDED_CONFIG = `version: 1
+/** The live pattern every guided fixture declares: it really does catch `scratch/`. */
+const LIVE_EXCLUDE = 'scratch/**';
+
+function guidedConfig(excludePatterns: readonly string[]): string {
+  return `version: 1
 skills:
   include: ["plugins/*/skills/**/SKILL.md"]
 claude:
@@ -289,13 +293,14 @@ claude:
         - name: ${GUIDED_PLUGIN}
           description: Plugin whose source dir holds guidance, a front page, and scratch
           skills: []
-          exclude: ["scratch/**"]
+          exclude: [${excludePatterns.map((p) => JSON.stringify(p)).join(', ')}]
 `;
+}
 
 /** Fixture with one of every never-package shape; returns the built plugin dir. */
-function writeGuidedFixture(tempDir: string): string {
+function writeGuidedFixture(tempDir: string, excludePatterns: readonly string[] = [LIVE_EXCLUDE]): string {
   writeTestFile(safePath.join(tempDir, 'package.json'), JSON.stringify({ name: 't', version: '1.0.0' }));
-  writeTestFile(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), GUIDED_CONFIG);
+  writeTestFile(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), guidedConfig(excludePatterns));
   writeTestFile(safePath.join(tempDir, '.gitignore'), 'dist/\n');
 
   const plugin = safePath.join(tempDir, 'plugins', GUIDED_PLUGIN);
@@ -334,7 +339,7 @@ describe('plugin build — never-package defaults and the exclude knob (integrat
     tempDir = createTestTempDir('vat-plugin-never-package-');
     const outDir = writeGuidedFixture(tempDir);
 
-    await runClaudePluginBuild(tempDir, { logger: silentAuditLogger });
+    await runClaudePluginBuild(tempDir, { logger: silentLogger });
 
     // Tier 1 — no agent-instruction file at any depth. A `CLAUDE.md` beside
     // `plugin.json` used to ship verbatim to every consumer.
@@ -354,5 +359,48 @@ describe('plugin build — never-package defaults and the exclude knob (integrat
 
     // ...and ordinary content is untouched by all of it.
     expect(existsSync(safePath.join(outDir, 'commands', 'go.md'))).toBe(true);
+  });
+
+  // The whole point of the finding: an `exclude:` pattern that no-oped has to
+  // reach the plugin's PUBLISHED counts. It used to be a bare stderr line beside
+  // `issueCounts: {errors: 0, warnings: 0, info: 0}` — so a CI consumer read
+  // "clean" for a build whose exclusions demonstrably changed what shipped.
+  it('publishes a dead exclude pattern in the plugin issueCounts, and only the dead ones', async () => {
+    tempDir = createTestTempDir('vat-plugin-dead-exclude-');
+    const outDir = writeGuidedFixture(tempDir, [LIVE_EXCLUDE, 'no-such-dir/**', '*.nope']);
+
+    const lines: string[] = [];
+    const results = await runClaudePluginBuild(tempDir, {
+      logger: { ...silentLogger, info: (m: string) => lines.push(m) },
+    });
+
+    const plugin = results[0]?.plugins[0];
+    // Two dead patterns, one live — the live one must NOT be accused, or the
+    // author is sent to delete a line of config that is doing work.
+    expect(plugin?.issueCounts).toEqual({ errors: 0, warnings: 2, info: 0 });
+
+    // ...and the live pattern really did exclude, so this is not a build that
+    // no-oped everything. A fixture where the exclusion did nothing could not
+    // tell a working report from a broken one.
+    expect(existsSync(safePath.join(outDir, 'scratch', 'notes.md'))).toBe(false);
+    expect(existsSync(safePath.join(outDir, 'commands', 'go.md'))).toBe(true);
+
+    // The human channel keeps the detail at DEFAULT verbosity: these findings are
+    // bounded by the size of the author's exclude: list, so collapsing them into a
+    // count would re-hide the only evidence a typo'd pattern exists.
+    const rendered = lines.join('\n');
+    expect(rendered).toContain('PLUGIN_EXCLUDE_PATTERN_UNUSED');
+    expect(rendered).toContain("'no-such-dir/**'");
+    expect(rendered).toContain("'*.nope'");
+    expect(rendered).not.toContain(`'${LIVE_EXCLUDE}'`);
+  });
+
+  it('publishes zero findings when every exclude pattern matched', async () => {
+    tempDir = createTestTempDir('vat-plugin-live-exclude-');
+    writeGuidedFixture(tempDir);
+
+    const results = await runClaudePluginBuild(tempDir, { logger: silentLogger });
+
+    expect(results[0]?.plugins[0]?.issueCounts).toEqual({ errors: 0, warnings: 0, info: 0 });
   });
 });

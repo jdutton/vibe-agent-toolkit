@@ -24,7 +24,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { buildAuditReport } from '../../src/commands/audit.js';
 import { anchorContractViolations, anchorsBelowRoot, pluginManifestLocations } from '../anchor-contract-helpers.js';
-import { runAudit, silentAuditLogger } from '../test-helpers.js';
+import { runAudit, silentLogger } from '../test-helpers.js';
 
 /**
  * Two sibling VAT projects with byte-identical internal layout. Each owns a
@@ -136,7 +136,7 @@ describe('vat audit — one run, one anchor base', () => {
   });
 
   it('emits exactly one absolute path — the top-level root — and re-bases every other path onto it', async () => {
-    const { document } = await buildAuditReport(scanRoot, {}, Date.now(), silentAuditLogger);
+    const { document } = await buildAuditReport(scanRoot, {}, Date.now(), silentLogger);
 
     expect(document.root).toBe(toForwardSlash(scanRoot));
     expect(isAbsoluteAnyPlatform(document.root)).toBe(true);
@@ -152,7 +152,7 @@ describe('vat audit — one run, one anchor base', () => {
   // Assert the distinguishing power itself, or the coverage silently rots away
   // again the next time the fixture is simplified.
   it('actually has linked files to walk, so the absolute-path contract is not vacuous', async () => {
-    const { document } = await buildAuditReport(scanRoot, {}, Date.now(), silentAuditLogger);
+    const { document } = await buildAuditReport(scanRoot, {}, Date.now(), silentLogger);
 
     const linkedAnchors = anchorsBelowRoot(document).filter((a) => a.trail.includes('linkedFiles'));
     expect(linkedAnchors.length).toBeGreaterThan(0);
@@ -164,7 +164,7 @@ describe('vat audit — one run, one anchor base', () => {
     // relativizes to the empty string. An empty path is a value every consumer
     // has to special-case; `.` is joinable and needs no special case.
     const pluginDir = safePath.join(scanRoot, PROJECTS[0], 'plugins', 'plugin-a');
-    const { document } = await buildAuditReport(pluginDir, {}, Date.now(), silentAuditLogger);
+    const { document } = await buildAuditReport(pluginDir, {}, Date.now(), silentLogger);
 
     const anchors = anchorsBelowRoot(document);
     expect(anchors.map((a) => a.value)).toContain('.');
@@ -179,7 +179,7 @@ describe('vat audit — one run, one anchor base', () => {
       scanRoot,
       { verbose: true, compat: true },
       Date.now(),
-      silentAuditLogger,
+      silentLogger,
     );
 
     const anchors = anchorsBelowRoot(document);
@@ -189,7 +189,7 @@ describe('vat audit — one run, one anchor base', () => {
   });
 
   it('gives the two same-named plugins distinct locations for their distinct manifests', async () => {
-    const { document } = await buildAuditReport(scanRoot, {}, Date.now(), silentAuditLogger);
+    const { document } = await buildAuditReport(scanRoot, {}, Date.now(), silentLogger);
 
     // A collision collapses these two strings into one.
     expect(pluginManifestLocations(anchorsBelowRoot(document))).toEqual(

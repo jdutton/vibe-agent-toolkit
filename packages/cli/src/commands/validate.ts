@@ -47,6 +47,7 @@ import {
   type PhaseSelection,
   type PhaseVocabulary,
 } from './phase-utils.js';
+import { rejectPositionalArguments } from './positional-args.js';
 
 /** Surfaces `vat validate` knows how to run, in stable execution order. */
 const VALID_SURFACES = ['resources', 'skills'] as const;
@@ -79,6 +80,9 @@ export interface ValidateCommandOptions {
  * the retired-`--only` message: resources 13.9s + skills 19.3s.
  */
 const VALIDATE_FULL_RUN_SECONDS = 35;
+
+/** How this command names itself in every user-facing diagnostic. */
+const COMMAND_NAME = 'vat validate';
 
 export function createValidateTopLevelCommand(): Command {
   const command = new Command('validate');
@@ -124,7 +128,13 @@ Exit Codes:
   1 - Validation errors found, or the retired '--only' flag was passed
   2 - System error (this command's own, or propagated from a validator that
       could not run: exited 2, was killed by a signal, was never spawned, or
-      wrote output that could not be parsed)
+      wrote output that could not be parsed), or a usage error such as passing
+      a path
+
+Arguments:
+  None. Scope comes from vibe-agent-toolkit.config.yaml, never from the command
+  line — a path argument is rejected (exit 2) rather than discarded. For a
+  path-scoped run use 'vat resources validate <path>' or 'vat audit <path>'.
 
 Requirements:
   projectRoot: required (errors if no vibe-agent-toolkit.config.yaml or .git/ ancestor)
@@ -175,15 +185,28 @@ export function selectValidateSurfaces(
   return decidePhaseSelection(undefined, phases, VALIDATE_VOCABULARY);
 }
 
-async function validateTopLevelCommand(options: ValidateCommandOptions): Promise<void> {
+async function validateTopLevelCommand(
+  options: ValidateCommandOptions,
+  command: Command,
+): Promise<void> {
+  // First, and before requireProjectRoot: `vat validate docs/` used to be
+  // accepted, have its path discarded, run wide over every configured surface
+  // and report success. Nothing below can un-tell that lie, so the run ends
+  // here. (`vat resources validate <path>` is the path-taking form.)
+  rejectPositionalArguments(
+    command.args,
+    COMMAND_NAME,
+    'validates every source surface vibe-agent-toolkit.config.yaml declares',
+  );
+
   // Before requireProjectRoot: a retired flag is a usage error, and answering it
   // with "no vibe-agent-toolkit.config.yaml found" would diagnose the wrong
   // problem for anyone running the old invocation outside a project.
-  rejectRetiredOnly(options.only, 'vat validate', VALIDATE_FULL_RUN_SECONDS);
+  rejectRetiredOnly(options.only, COMMAND_NAME, VALIDATE_FULL_RUN_SECONDS);
 
   // requireProjectRoot returns the discovered root; read config from there so a
   // subdirectory invocation doesn't load an empty config and falsely pass.
-  const projectRoot = requireProjectRoot(process.cwd(), 'vat validate');
+  const projectRoot = requireProjectRoot(process.cwd(), COMMAND_NAME);
 
   const logger = createLogger(options.debug ? { debug: true } : {});
   const startTime = Date.now();

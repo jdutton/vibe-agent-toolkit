@@ -18,7 +18,7 @@ import { writeFileSync } from 'node:fs';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { checkFilesConfigDests } from '../../src/commands/verify.js';
+import { checkFilesConfigDests, checkPackagedAgentInstructionFiles } from '../../src/commands/verify.js';
 import { createTempDirTracker } from '../system/test-common.js';
 
 // ---------------------------------------------------------------------------
@@ -289,5 +289,121 @@ describe('checkFilesConfigDests (tree-copy distribution awareness)', () => {
       expect(results).toHaveLength(1);
       expect(results[0]?.outputDir).toBe(poolOutputSkillDir);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B1: the built-bundle arm of PACKAGED_AGENT_INSTRUCTION_FILE
+//
+// `vat verify` reads the built dist/ tree by definition, so the crawl is
+// unconditional here — no provenance question to answer, unlike `vat audit`.
+// ---------------------------------------------------------------------------
+
+/** A pool-only fixture with `rel` files written into the built bundle. */
+function withPoolFiles(rel: string[]): string {
+  const { tempDir, poolOutputSkillDir } = setupFilesDestsFixture({
+    includeTreeCopyPlugin: false,
+    createPluginSourceSkillDir: false,
+    createPoolDir: true,
+    createPluginTreeDir: false,
+    createDestInPluginTree: false,
+    createDestInPool: true,
+  });
+  for (const r of rel) {
+    const full = safePath.join(poolOutputSkillDir, r);
+    mkdirSyncReal(safePath.join(full, '..'), { recursive: true });
+    writeFileSync(full, GUIDANCE_BYTES, 'utf-8');
+  }
+  return tempDir;
+}
+
+const GUIDANCE_BYTES = '# guidance\n';
+
+describe('checkPackagedAgentInstructionFiles (built skill bundles)', () => {
+  afterEach(() => {
+    cleanupTempDirs();
+  });
+
+  it('reports an agent-instruction file at the bundle root', () => {
+    const issues = checkPackagedAgentInstructionFiles(withPoolFiles(['CLAUDE.md']));
+
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.code).toBe('PACKAGED_AGENT_INSTRUCTION_FILE');
+    expect(issues[0]?.location).toContain('CLAUDE.md');
+  });
+
+  it('reports one nested inside the bundle, which nothing links to', () => {
+    // The exact blindness B1 names: no link reaches it, so the link lane cannot
+    // see it, and only a tree crawl can.
+    const issues = checkPackagedAgentInstructionFiles(withPoolFiles(['notes/AGENTS.md']));
+
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.location).toContain('notes/AGENTS.md');
+  });
+
+  it('reports nothing for a clean bundle', () => {
+    expect(checkPackagedAgentInstructionFiles(withPoolFiles([]))).toEqual([]);
+  });
+
+  // §8.2: the config IS knowable here, so an explicit `files:` entry naming the
+  // dest is honoured — the build put it there because config said to.
+  it('does not report a dest an explicit files: entry declared', () => {
+    const { tempDir, poolOutputSkillDir } = setupFilesDestsFixture({
+      includeTreeCopyPlugin: false,
+      createPluginSourceSkillDir: false,
+      createPoolDir: true,
+      createPluginTreeDir: false,
+      createDestInPluginTree: false,
+      createDestInPool: true,
+    });
+    // Re-point the fixture's single explicit entry at an agent-instruction dest.
+    writeFileSync(
+      safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
+      `version: 1
+skills:
+  include:
+    - "resources/skills/**/SKILL.md"
+  config:
+    ${SKILL_NAME}:
+      files:
+        - source: notes/CLAUDE.md
+          dest: notes/CLAUDE.md
+`,
+      'utf-8',
+    );
+    mkdirSyncReal(safePath.join(poolOutputSkillDir, 'notes'), { recursive: true });
+    writeFileSync(safePath.join(poolOutputSkillDir, 'notes', 'CLAUDE.md'), '# ok\n', 'utf-8');
+
+    expect(checkPackagedAgentInstructionFiles(tempDir)).toEqual([]);
+  });
+
+  it('crawls the plugin-tree output dir too, not only the pool dir', () => {
+    const { tempDir, pluginOutputSkillDir } = setupFilesDestsFixture({
+      includeTreeCopyPlugin: true,
+      createPluginSourceSkillDir: true,
+      createPoolDir: false,
+      createPluginTreeDir: true,
+      createDestInPluginTree: true,
+      createDestInPool: false,
+    });
+    writeFileSync(safePath.join(pluginOutputSkillDir, 'CLAUDE.md'), GUIDANCE_BYTES, 'utf-8');
+
+    const issues = checkPackagedAgentInstructionFiles(tempDir);
+
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.location).toContain('CLAUDE.md');
+  });
+
+  it('reports nothing when no build output exists', () => {
+    const { tempDir } = setupFilesDestsFixture({
+      includeTreeCopyPlugin: false,
+      createPluginSourceSkillDir: false,
+      createPoolDir: false,
+      createPluginTreeDir: false,
+      createDestInPluginTree: false,
+      createDestInPool: false,
+    });
+
+    expect(checkPackagedAgentInstructionFiles(tempDir)).toEqual([]);
   });
 });

@@ -2,11 +2,18 @@
  * Unit tests for validation rules and thresholds
  */
 
+import picomatch from 'picomatch';
 import { describe, expect, it } from 'vitest';
 
 import {
+	AGENT_INSTRUCTION_FILE_PATTERNS,
 	createIssue,
+	isAgentInstructionBasename,
+	isNavigationBasename,
+	isNeverPackagedBasename,
 	NAVIGATION_FILE_PATTERNS,
+	NEVER_PACKAGE_IN_SKILL_BUNDLE,
+	toAnyDepthGlobs,
 	VALIDATION_RULES,
 	VALIDATION_THRESHOLDS,
 } from '../../src/validators/validation-rules.js';
@@ -29,11 +36,119 @@ describe('NAVIGATION_FILE_PATTERNS', () => {
 		expect(NAVIGATION_FILE_PATTERNS).toContain('overview.md');
 	});
 
-	it('should include case-insensitive variants', () => {
-		expect(NAVIGATION_FILE_PATTERNS).toContain('readme.md');
-		expect(NAVIGATION_FILE_PATTERNS).toContain('INDEX.md');
-		expect(NAVIGATION_FILE_PATTERNS).toContain('TOC.md');
-		expect(NAVIGATION_FILE_PATTERNS).toContain('OVERVIEW.md');
+	// Enumerating spellings provably cannot win: the list carried README.md/readme.md
+	// but never `Readme.md`, the single most common real spelling. Matching is
+	// case-insensitive now, so exactly ONE canonical spelling per name may appear —
+	// a second spelling is dead weight that implies enumeration still matters.
+	it('carries exactly one canonical spelling per name (matching is case-insensitive)', () => {
+		const lowered = NAVIGATION_FILE_PATTERNS.map((p) => p.toLowerCase());
+		expect(new Set(lowered).size).toBe(NAVIGATION_FILE_PATTERNS.length);
+	});
+
+	it('AGENT_INSTRUCTION_FILE_PATTERNS carries one canonical spelling per name too', () => {
+		const lowered = AGENT_INSTRUCTION_FILE_PATTERNS.map((p) => p.toLowerCase());
+		expect(new Set(lowered).size).toBe(AGENT_INSTRUCTION_FILE_PATTERNS.length);
+	});
+});
+
+/**
+ * On a case-insensitive filesystem (macOS APFS, Windows), `Claude.md` and
+ * `claude.md` satisfy Claude Code's project-local instruction lookup exactly as
+ * `CLAUDE.md` does — so a case-sensitive never-package list leaves the exact harm
+ * the feature exists to prevent fully reachable.
+ */
+describe('never-package basename matchers (case-insensitive)', () => {
+	const AGENT_INSTRUCTION_SPELLINGS = [
+		'CLAUDE.md',
+		'Claude.md',
+		'claude.md',
+		'CLAUDE.MD',
+		'AGENTS.md',
+		'Agents.md',
+		'agents.md',
+		'GEMINI.md',
+		'gemini.md',
+		'CLAUDE.local.md',
+		'claude.local.md',
+	];
+
+	const NAVIGATION_SPELLINGS = [
+		'README.md',
+		'Readme.md',
+		'ReadMe.md',
+		'readme.md',
+		'README.MD',
+		'index.md',
+		'Index.md',
+		'INDEX.md',
+		'toc.md',
+		'TOC.md',
+		'Toc.md',
+		'overview.md',
+		'Overview.md',
+		'OVERVIEW.md',
+	];
+
+	const NOT_MATCHED = ['SKILL.md', 'notes.md', 'my-README.md', 'claude.md.bak', 'readme.txt'];
+
+	it.each(AGENT_INSTRUCTION_SPELLINGS)('isAgentInstructionBasename(%s) is true', (name) => {
+		expect(isAgentInstructionBasename(name)).toBe(true);
+		expect(isNeverPackagedBasename(name)).toBe(true);
+	});
+
+	it.each(NAVIGATION_SPELLINGS)('isNavigationBasename(%s) is true', (name) => {
+		expect(isNavigationBasename(name)).toBe(true);
+		expect(isNeverPackagedBasename(name)).toBe(true);
+	});
+
+	it.each(NOT_MATCHED)('isNeverPackagedBasename(%s) is false', (name) => {
+		expect(isNeverPackagedBasename(name)).toBe(false);
+	});
+
+	it('navigation files are not agent-instruction files (the two tiers stay separate)', () => {
+		expect(isAgentInstructionBasename('README.md')).toBe(false);
+		expect(isNavigationBasename('CLAUDE.md')).toBe(false);
+	});
+});
+
+/**
+ * The glob lane and the basename lane must never disagree — one matcher, two
+ * spellings of the same answer. This test is the drift guard: if a future change
+ * makes the globs case-sensitive again (or the Set), the two verdicts diverge here.
+ */
+describe('toAnyDepthGlobs', () => {
+	const isNeverPackagedPath = picomatch(toAnyDepthGlobs(NEVER_PACKAGE_IN_SKILL_BUNDLE), { dot: true });
+
+	const SPELLINGS = [
+		'CLAUDE.md',
+		'Claude.md',
+		'claude.md',
+		'AGENTS.md',
+		'Agents.md',
+		'GEMINI.md',
+		'README.md',
+		'Readme.md',
+		'readme.md',
+		'Index.md',
+		'Overview.md',
+	];
+
+	it.each(SPELLINGS)('matches %s at the tree root', (name) => {
+		expect(isNeverPackagedPath(name)).toBe(true);
+	});
+
+	it.each(SPELLINGS)('matches %s at any depth', (name) => {
+		expect(isNeverPackagedPath(`docs/nested/${name}`)).toBe(true);
+	});
+
+	it.each(['SKILL.md', 'docs/notes.md', 'docs/my-README.md'])('does not match %s', (path) => {
+		expect(isNeverPackagedPath(path)).toBe(false);
+	});
+
+	it('glob verdict and basename verdict agree for every spelling', () => {
+		for (const name of [...SPELLINGS, 'SKILL.md', 'notes.md', 'my-README.md']) {
+			expect(isNeverPackagedPath(name)).toBe(isNeverPackagedBasename(name));
+		}
 	});
 });
 

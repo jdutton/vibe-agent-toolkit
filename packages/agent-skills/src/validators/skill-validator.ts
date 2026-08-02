@@ -16,7 +16,7 @@ import { validateFrontmatterRules, validateFrontmatterSchema } from './frontmatt
 import { detectNonImperativeBody } from './imperative-body-detection.js';
 import { detectKebabCaseViolation } from './kebab-case-detection.js';
 import type { LinkedFileValidationResult, ValidateOptions, ValidationResult } from './types.js';
-import { NAVIGATION_FILE_PATTERNS } from './validation-rules.js';
+import { isNeverPackagedBasename } from './validation-rules.js';
 
 /**
  * Validate an Agent Skill (SKILL.md file)
@@ -160,12 +160,18 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
 // Link Traversal (BFS)
 // ============================================================================
 
-/** Files to never flag as unreferenced */
-const UNREFERENCED_EXCLUDE_PATTERNS = new Set([
-  'SKILL.md',
-  'CLAUDE.md',
-  ...(NAVIGATION_FILE_PATTERNS as readonly string[]),
-]);
+/**
+ * Files to never flag as unreferenced.
+ *
+ * The skill's own entry point, plus everything VAT never packages into a skill
+ * bundle (agent-instruction files and navigation files). Delegates to the shared
+ * CASE-INSENSITIVE matcher rather than a Set of literal spellings: a `Readme.md`
+ * is as unreferenceable as a `README.md`, and a Set can only ever know the
+ * spellings someone thought to enumerate.
+ */
+function isExemptFromUnreferencedCheck(fileName: string): boolean {
+  return fileName === 'SKILL.md' || isNeverPackagedBasename(fileName);
+}
 
 /**
  * Validate a single local_file link: boundary check, existence check.
@@ -376,7 +382,7 @@ function detectUnreferencedFiles(
     const fileName = basename(relPath);
 
     // Skip excluded patterns
-    if (UNREFERENCED_EXCLUDE_PATTERNS.has(fileName)) {
+    if (isExemptFromUnreferencedCheck(fileName)) {
       continue;
     }
 

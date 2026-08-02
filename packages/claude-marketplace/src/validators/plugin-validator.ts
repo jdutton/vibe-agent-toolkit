@@ -111,11 +111,28 @@ export async function validatePlugin(
 	const anchorRoot = resolveAnchorRoot(options?.locationRoot, pluginPath);
 	const location = issueLocation(pluginJsonPath, anchorRoot);
 
-	// A plugin's `source:` directory is tree-copied verbatim, so repo-internal
-	// agent guidance sitting beside plugin.json ships to every consumer. No link
-	// points at it and plugin artifacts are exempt from the skill orphan rules,
-	// so this scan is the only thing that sees it.
-	issues.push(...detectPackagedAgentInstructionFiles(pluginPath, anchorRoot));
+	// Repo-internal agent guidance sitting beside plugin.json. No link points at
+	// it and plugin artifacts are exempt from the skill orphan rules, so this scan
+	// is the only thing that sees it.
+	//
+	// `pluginPath` is whatever tree the caller handed us, and the two are NOT the
+	// same claim: an INSTALLED plugin (the dominant `vat audit` population — no VAT
+	// config, no `files:` entry anywhere) is a distributed artifact, so the file
+	// demonstrably shipped; a plugin SOURCE directory in an adopter's repo is not,
+	// because `vat build`'s tree-copy now excludes these basenames at any depth and
+	// a `files:` glob filters them out of its matches. Saying "tree-copied verbatim,
+	// so it ships to every consumer" was true when this scan was written and is
+	// false for the source lane today — measured on a real adopter, `vat audit`
+	// warned about a plugin-root CLAUDE.md that `vat verify` proved was absent from
+	// the built output. The finding still fires for both (the file IS in the tree
+	// being scanned), but the remediation must not prescribe deleting a file the
+	// build already excludes — see PACKAGED_AGENT_INSTRUCTION_FILE's registry entry,
+	// which states both lanes.
+	// No declared dests: this lane inspects a plugin TREE, and a plugin has no
+	// `files:` block of its own — the per-skill `files:` config that could sanction
+	// a dest lives in the project config the SKILL lanes read. `[]` is the honest
+	// answer here, not a defaulted one.
+	issues.push(...detectPackagedAgentInstructionFiles(pluginPath, anchorRoot, []));
 
 	// Check plugin.json exists
 	if (!existsSync(pluginJsonPath)) {

@@ -8,18 +8,20 @@ import { describe, expect, it } from 'vitest';
 import { detectPackagedAgentInstructionFiles } from '../../src/validators/agent-instruction-presence.js';
 import { setupTempDir } from '../test-helpers.js';
 
+const NOTES_CLAUDE = 'notes/CLAUDE.md';
+
 describe('detectPackagedAgentInstructionFiles', () => {
   const { getTempDir } = setupTempDir('vat-agent-instruction-presence-');
 
   /** Write `files` (relative paths) into a fresh tree and scan it. */
-  const scan = (files: string[], locationRoot?: string) => {
+  const scan = (files: string[], declaredDests: string[] = []) => {
     const root = getTempDir();
     for (const rel of files) {
       const full = safePath.join(root, rel);
       mkdirSyncReal(dirname(full), { recursive: true });
       writeFileSync(full, '# content\n');
     }
-    return detectPackagedAgentInstructionFiles(root, locationRoot ?? root);
+    return detectPackagedAgentInstructionFiles(root, root, declaredDests);
   };
 
   it('reports every agent-instruction basename found in the tree', () => {
@@ -43,6 +45,25 @@ describe('detectPackagedAgentInstructionFiles', () => {
     ]);
   });
 
+  // The backstop must not be evadable by spelling. On APFS/NTFS a `Claude.md`
+  // is resolved by the same lookup Claude Code performs for `CLAUDE.md`, so a
+  // case-sensitive detector reports a clean tree while the harm ships.
+  // Each spelling lives in its own directory — two spellings of one name in one
+  // directory are the SAME file on a case-insensitive filesystem.
+  it('reports mis-cased agent-instruction files too', () => {
+    const issues = scan([
+      'a/Claude.md',
+      'b/claude.md',
+      'c/agents.md',
+      'd/Agents.md',
+      'e/CLAUDE.MD',
+      'f/Gemini.md',
+    ]);
+
+    expect(issues).toHaveLength(6);
+    expect(issues.every((i) => i.code === 'PACKAGED_AGENT_INSTRUCTION_FILE')).toBe(true);
+  });
+
   it('reports nothing for a clean tree', () => {
     expect(scan(['SKILL.md', 'resources/guide.md', 'README.md'])).toEqual([]);
   });
@@ -60,7 +81,7 @@ describe('detectPackagedAgentInstructionFiles', () => {
     mkdirSyncReal(pluginDir, { recursive: true });
     writeFileSync(safePath.join(pluginDir, 'CLAUDE.md'), '# guidance\n');
 
-    const issues = detectPackagedAgentInstructionFiles(pluginDir, root);
+    const issues = detectPackagedAgentInstructionFiles(pluginDir, root, []);
 
     expect(issues).toHaveLength(1);
     expect(issues[0]?.location).toBe('plugins/demo/CLAUDE.md');
@@ -68,6 +89,34 @@ describe('detectPackagedAgentInstructionFiles', () => {
 
   it('returns an empty list for a directory that does not exist', () => {
     const missing = safePath.join(getTempDir(), 'not-there');
-    expect(detectPackagedAgentInstructionFiles(missing, missing)).toEqual([]);
+    expect(detectPackagedAgentInstructionFiles(missing, missing, [])).toEqual([]);
+  });
+
+  // §8.2 precedence: an EXPLICIT `files:` entry naming a dest is an unambiguous
+  // instruction to ship that file. Reporting it — with a remedy that says "remove
+  // the file" — tells the author their own sanctioned config is the defect.
+  it('does not report a dest an explicit files: entry declared', () => {
+    expect(scan([NOTES_CLAUDE, 'SKILL.md'], [NOTES_CLAUDE])).toEqual([]);
+  });
+
+  it('still reports an agent-instruction file no declaration covers', () => {
+    // Same tree, same declaration — the bundle-root CLAUDE.md is not the declared
+    // dest, so the suppression must not spill onto it.
+    const issues = scan(['CLAUDE.md', NOTES_CLAUDE], [NOTES_CLAUDE]);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.location).toBe('CLAUDE.md');
+  });
+
+  // A declaration is EXACT membership, never a prefix test: the caller passes
+  // explicit dests only, and a directory-shaped entry must not launder its whole
+  // subtree. (Mirrors `refusesAgentInstructionFile` in walk-link-graph.ts.)
+  it('does not treat a declared dest as a prefix exemption for its subtree', () => {
+    const issues = scan(['notes/deep/CLAUDE.md'], ['notes']);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.location).toBe('notes/deep/CLAUDE.md');
+  });
+
+  it('normalizes declared dests so a ./-spelled entry still exempts', () => {
+    expect(scan([NOTES_CLAUDE], [`./${NOTES_CLAUDE}`])).toEqual([]);
   });
 });

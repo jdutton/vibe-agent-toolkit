@@ -12,6 +12,7 @@ import { existsSync, statSync } from 'node:fs';
 import { copyFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
+import { type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import type { SkillFileEntry } from '@vibe-agent-toolkit/resources';
 import {
   fileContentHash,
@@ -23,13 +24,12 @@ import {
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
 import { glob } from 'glob';
+import picomatch from 'picomatch';
 
-import { NEVER_PACKAGE_IN_SKILL_BUNDLE } from './validators/validation-rules.js';
+import { materializeIssue } from './validators/rule-engine/index.js';
+import { isNeverPackagedBasename } from './validators/validation-rules.js';
 
 export type { SkillFileEntry } from '@vibe-agent-toolkit/resources';
-
-/** Basename lookup for {@link NEVER_PACKAGE_IN_SKILL_BUNDLE} (case-sensitive, as the walker is). */
-const NEVER_PACKAGE_BASENAMES = new Set<string>(NEVER_PACKAGE_IN_SKILL_BUNDLE);
 
 /**
  * Partition a glob's matches into the files that may be packaged and the
@@ -47,9 +47,63 @@ function partitionNeverPackaged(matches: readonly string[]): { kept: string[]; d
   const dropped: string[] = [];
   for (const rel of matches) {
     const basename = rel.slice(rel.lastIndexOf('/') + 1);
-    (NEVER_PACKAGE_BASENAMES.has(basename) ? dropped : kept).push(rel);
+    // THE shared matcher, not a local `Set.has` — a raw set is case-sensitive, and
+    // `Claude.md` satisfies Claude Code's project-local lookup exactly as
+    // `CLAUDE.md` does on APFS/NTFS, so a case-sensitive check leaves the harm
+    // reachable by renaming one letter.
+    (isNeverPackagedBasename(basename) ? dropped : kept).push(rel);
   }
   return { kept, dropped };
+}
+
+/** One file a GLOB `files:` entry matched and the never-package list refused. */
+export interface DroppedGlobMatch {
+  /** The glob `source:` whose net caught it. */
+  source: string;
+  /**
+   * Skill-output-relative dest the file WOULD have had, spelled exactly as a
+   * COPIED dest is (see {@link normalizeRelPath}) so consumers can compare the
+   * two populations without re-deriving either. `checkBrokenPackagedLinks` keys
+   * its never-package remediation on this exact set: a link is "broken because
+   * VAT refused to package it" only when its target is one of THESE paths.
+   */
+  dest: string;
+}
+
+/** What {@link applyFilesConfig} accounted for, and what it deliberately did not. */
+export interface AppliedFilesConfig {
+  /**
+   * Every skill-output-relative dest this config accounts for, one per FILE
+   * (glob entries expanded). See {@link applyFilesConfig} for why the orphan
+   * check must be told this list.
+   */
+  dests: string[];
+  /**
+   * Files a GLOB matched that the never-package list dropped.
+   *
+   * Returned rather than written to a `warn` sink because a file vanishing from
+   * a bundle is a build FINDING, not a log line: it has to reach the structured
+   * report (`issueCounts`), or a CI consumer reads `warnings: 0` for a build
+   * that silently shipped less than the config asked for.
+   */
+  dropped: DroppedGlobMatch[];
+}
+
+/**
+ * Turn never-package drops into reportable build findings.
+ *
+ * Lives here rather than in the packager because this module owns the concept:
+ * the drop and the issue describing it must not be able to disagree.
+ */
+export function droppedGlobMatchesToIssues(
+  dropped: readonly DroppedGlobMatch[],
+): ValidationIssue[] {
+  return dropped.map((drop) =>
+    materializeIssue('FILES_GLOB_DROPPED_NEVER_PACKAGED', {
+      location: drop.dest,
+      detail: `${drop.dest} matched by files: source '${drop.source}'`,
+    }),
+  );
 }
 
 /**
@@ -75,14 +129,6 @@ export function buildArtifactHint(source: string): string {
   return '';
 }
 
-/** Result of matching a link target against files config */
-export interface FilesMatchResult {
-  /** Whether the link matched source or dest */
-  match: 'source' | 'dest';
-  /** The matching files entry */
-  entry: SkillFileEntry;
-}
-
 /**
  * Normalize a relative path for comparison: forward slashes, no leading `./`.
  * The path's ROOT is the caller's business; this only fixes the spelling.
@@ -100,6 +146,46 @@ export function normalizeRelPath(p: string): string {
     normalized = normalized.slice(2);
   }
   return normalized;
+}
+
+/**
+ * The skill-output-relative dest a GLOB `files:` entry gives one absolute source
+ * path, or `undefined` when the entry's expansion would not include it.
+ *
+ * Answers, without running the glob, the question the packager must settle BEFORE
+ * anything is copied: "does the config already declare where this file goes?" A
+ * glob's expansion is late-bound to copy time ({@link copyGlobEntry}), so the path
+ * map used to have no entry for its matches — and a match that link traversal ALSO
+ * found was therefore dropped at its type-derived location while the glob copied
+ * it to the declared dest. Identical bytes shipped twice, the rewritten link
+ * pointed at traversal's copy, and the declared `dest:` was dead. One file, one
+ * dest: the declaration wins, and this is how the path map learns it.
+ *
+ * The three gates below are exactly {@link copyGlobEntry}'s own, restated as a
+ * predicate so the dest computed here is the dest the copy actually writes:
+ * under the static base, matching the magic remainder (`dot: true`, as the copy
+ * expands), and not refused by {@link partitionNeverPackaged}. A never-packaged
+ * match has NO dest — re-pointing the path map at one would rewrite a link to a
+ * file that never arrives.
+ */
+export function globEntryDest(
+  entry: SkillFileEntry,
+  projectRoot: string,
+  absSource: string,
+): string | undefined {
+  if (!isGlob(entry.source)) return undefined;
+
+  const absoluteBase = toForwardSlash(
+    safePath.resolve(safePath.join(projectRoot, staticGlobBase(entry.source))),
+  );
+  const abs = toForwardSlash(safePath.resolve(absSource));
+  if (!abs.startsWith(absoluteBase + '/')) return undefined;
+
+  const rel = abs.slice(absoluteBase.length + 1);
+  if (!picomatch.isMatch(rel, globMagicRemainder(entry.source), { dot: true })) return undefined;
+  if (isNeverPackagedBasename(rel.slice(rel.lastIndexOf('/') + 1))) return undefined;
+
+  return normalizeRelPath(safePath.join(entry.dest, rel));
 }
 
 /**
@@ -161,57 +247,23 @@ export function mergeFilesConfig(
 }
 
 /**
- * Match a link target path against files config entries.
+ * The skill-output-relative dests named by EXPLICIT (non-glob) `files:` entries.
  *
- * Returns the matching entry and whether it matched on source or dest.
- * Source matches take priority over dest matches.
+ * THE definition of "the config declared this output path", shared by every lane
+ * that has to decide whether a file in a bundle is there on purpose. Naming a
+ * `source`/`dest` pair is an unambiguous instruction to ship that file; a GLOB
+ * never named the file it caught, so its expansion is deliberately absent from
+ * this list — a net is not a declaration. (`walk-link-graph.ts`'s
+ * `refusesAgentInstructionFile` draws the same line on the link side, and
+ * {@link partitionNeverPackaged} on the copy side; all three must agree or the
+ * mechanisms disagree about one bundle.)
  *
- * For GLOB entries (`isGlob(entry.source)`), matching is by directory prefix:
- * - source match: link is equal to or under the glob's static base
- * - dest match: link is equal to or under entry.dest
- *
- * Single-file entries still match EXACTLY (unchanged).
- *
- * @param linkTarget - Resolved link target path (relative to project root)
- * @param files - Merged files config entries
- * @returns Match result or null if no match
+ * Spelled via {@link normalizeRelPath}, which is the spelling a packaged file's
+ * output-relative path is computed with — so membership can be tested by exact
+ * equality, never by a prefix test.
  */
-export function matchLinkToFiles(
-  linkTarget: string,
-  files: SkillFileEntry[],
-): FilesMatchResult | null {
-  const normalized = normalizeRelPath(linkTarget);
-
-  /** True when `candidate` equals `normalized` or is a path-prefix of it. */
-  function isPrefixMatch(candidate: string): boolean {
-    return normalized === candidate || normalized.startsWith(candidate + '/');
-  }
-
-  // Source match has priority (checked before dest across all entries)
-  for (const entry of files) {
-    if (isGlob(entry.source)) {
-      const base = normalizeRelPath(staticGlobBase(entry.source));
-      if (isPrefixMatch(base)) {
-        return { match: 'source', entry };
-      }
-    } else if (normalizeRelPath(entry.source) === normalized) {
-      return { match: 'source', entry };
-    }
-  }
-
-  // Then check dest match
-  for (const entry of files) {
-    if (isGlob(entry.source)) {
-      const destBase = normalizeRelPath(entry.dest);
-      if (isPrefixMatch(destBase)) {
-        return { match: 'dest', entry };
-      }
-    } else if (normalizeRelPath(entry.dest) === normalized) {
-      return { match: 'dest', entry };
-    }
-  }
-
-  return null;
+export function explicitFilesConfigDests(files: readonly SkillFileEntry[]): string[] {
+  return files.filter((entry) => !isGlob(entry.source)).map((entry) => normalizeRelPath(entry.dest));
 }
 
 /** Options for {@link applyFilesConfig}. */
@@ -231,13 +283,6 @@ export interface ApplyFilesConfigOptions {
    * {@link copyGlobEntry}. Defaults to none (copy all).
    */
   bundledFiles?: string[];
-  /**
-   * Sink for non-fatal packaging notices — currently the files a GLOB entry
-   * matched and the never-package defaults dropped. Without it the drop is
-   * silent, and an author who expected their glob to ship a `README.md` has no
-   * thread to pull.
-   */
-  warn?: (message: string) => void;
 }
 
 /**
@@ -280,16 +325,20 @@ export function verifyFilesIntegrity(
  * diffing against the expected rel set is what catches a misrouted rebase, a
  * stale leftover, or a dropped file.
  *
- * SAFETY ASSUMPTION (why this can't false-positive): a glob entry OWNS its dest
- * directory (`skillOutputDir/<entry.dest>`) and the build wipes the skill output
- * dir before copying (skill-packager.ts removes `resolvedOutput` recursively
- * before any copy). Nothing else writes into this subtree, so any EXTRA file is a
- * genuine bug, not a co-tenant. This scoping is what makes the set check safe
- * here even though a project-wide "no extra files" check would not be.
+ * SAFETY ASSUMPTION (why this can't false-positive): a glob entry does NOT own
+ * its dest directory outright — another `files:` entry may legitimately declare a
+ * dest inside the same subtree, and that is exactly how the documented escape
+ * hatch works (an explicit `source: extras/README.md` re-ships a file the glob
+ * refused). So `expectedRel` is the union of what THIS entry copied and every
+ * other entry's declared dest under the same subtree, and the caller runs this
+ * only after ALL entries have copied — see {@link applyFilesConfig}. What is left
+ * over is a file no entry accounts for: a genuine bug, not a co-tenant. (The build
+ * wipes the skill output dir before copying — skill-packager.ts removes
+ * `resolvedOutput` recursively — so there are no stale files either.)
  *
  * @param destDir      Absolute path to the glob entry's dest subtree.
- * @param expectedRel  Forward-slash rel paths (relative to `destDir`) the copy
- *                     step wrote for THIS entry.
+ * @param expectedRel  Forward-slash rel paths (relative to `destDir`) that the
+ *                     whole `files:` config accounts for inside this subtree.
  * @param source       The entry's `source` (for error messages only).
  * @throws if the actual subtree omits an expected file or contains an extra one.
  */
@@ -356,6 +405,78 @@ async function copyNonGlobEntry(
   return { relDest: normalizeRelPath(entry.dest), absSource: absoluteSource, absDest: absoluteDest };
 }
 
+/** What expanding one GLOB `files:` entry against the project tree yielded. */
+interface GlobExpansion {
+  /** Absolute path of the glob's static base (used in the copy's error messages). */
+  absoluteBase: string;
+  /** Every match, base-relative, BEFORE the never-package filter. */
+  allMatches: string[];
+  /** Matches that may be packaged, base-relative (the copy's work list). */
+  kept: string[];
+  /**
+   * Matches the never-package list refused, BASE-relative — the coordinate the
+   * author wrote the glob in. Used only by the copy's error message, which is
+   * about the pattern, not about an output that was never written.
+   */
+  droppedRel: string[];
+  /**
+   * The same refusals spelled as their would-be DESTS. Every reporting consumer
+   * wants this one: they ask "is the file this link points AT one VAT refused to
+   * package?", and that is only answerable in output-relative coordinates.
+   */
+  dropped: DroppedGlobMatch[];
+}
+
+/**
+ * THE expansion of one GLOB `files:` entry — the single answer to "which files does
+ * this pattern name, and which of them never ship?".
+ *
+ * Extracted so the copy ({@link copyGlobEntry}) and the pre-build gates
+ * ({@link collectDroppedGlobMatches}) cannot expand the same glob two ways. A
+ * second expansion that disagrees with the copy's is exactly how a lane comes to
+ * report a bundle that was never produced.
+ *
+ * Deliberately reports NO verdict: zero matches is a fact here, and only the caller
+ * knows whether it is a failure (the copy, after a build) or the expected state (a
+ * validate run before one).
+ *
+ * @throws if the glob's magic remainder contains a `..` segment — `glob` honors it
+ *   and climbs above `absoluteBase`, so the pattern cannot be expanded safely at
+ *   any phase. (The static base may legitimately contain a leading `..`: that is
+ *   the deliberate sibling-base monorepo feature.)
+ */
+async function expandGlobEntry(
+  entry: SkillFileEntry,
+  projectRoot: string,
+): Promise<GlobExpansion> {
+  const remainder = globMagicRemainder(entry.source);
+  if (hasParentTraversalSegment(remainder)) {
+    throw new Error(
+      `files: source '${entry.source}' (glob) has a '..' segment in its glob portion ('${remainder}'); ` +
+      `parent-directory traversal is not allowed after the static base.`,
+    );
+  }
+  const absoluteBase = safePath.resolve(safePath.join(projectRoot, staticGlobBase(entry.source)));
+
+  // dot: true so hidden files under the source subtree are included — keeps the
+  // package symmetric with verifyDestSet (M10: silent dot-file drop).
+  const rawMatches = await glob(remainder, { cwd: absoluteBase, nodir: true, dot: true });
+  const allMatches = rawMatches.map((m) => toForwardSlash(m)).sort((a, b) => a.localeCompare(b));
+
+  const { kept, dropped } = partitionNeverPackaged(allMatches);
+
+  return {
+    absoluteBase,
+    allMatches,
+    kept,
+    droppedRel: dropped,
+    dropped: dropped.map((rel) => ({
+      source: entry.source,
+      dest: normalizeRelPath(safePath.join(entry.dest, rel)),
+    })),
+  };
+}
+
 /**
  * Expand a glob entry, copy all matched files, and return copied rel-dest paths
  * plus source/dest pairs for optional integrity verification.
@@ -378,25 +499,16 @@ async function copyGlobEntry(
   entry: SkillFileEntry,
   projectRoot: string,
   skillOutputDir: string,
-  warn?: (message: string) => void,
-): Promise<{ copied: string[]; pairs: { absSource: string; absDest: string }[]; rels: string[] }> {
-  const base = staticGlobBase(entry.source);
-  const remainder = globMagicRemainder(entry.source);
-  // H2: the static base may legitimately contain leading '..' (the deliberate
-  // sibling-base monorepo feature), but the MAGIC REMAINDER must never contain a
-  // '..' segment — `glob` honors it and climbs above absoluteBase. Reject it.
-  if (hasParentTraversalSegment(remainder)) {
-    throw new Error(
-      `files: source '${entry.source}' (glob) has a '..' segment in its glob portion ('${remainder}'); ` +
-      `parent-directory traversal is not allowed after the static base.`,
-    );
-  }
-  const absoluteBase = safePath.resolve(safePath.join(projectRoot, base));
-
-  // dot: true so hidden files under the source subtree are included — keeps the
-  // package symmetric with verifyDestSet (M10: silent dot-file drop).
-  const rawMatches = await glob(remainder, { cwd: absoluteBase, nodir: true, dot: true });
-  const allMatches = rawMatches.map((m) => toForwardSlash(m)).sort((a, b) => a.localeCompare(b));
+): Promise<{
+  copied: string[];
+  pairs: { absSource: string; absDest: string }[];
+  rels: string[];
+  dropped: DroppedGlobMatch[];
+}> {
+  const { absoluteBase, allMatches, kept: matches, droppedRel, dropped } = await expandGlobEntry(
+    entry,
+    projectRoot,
+  );
 
   if (allMatches.length === 0) {
     throw new Error(
@@ -404,21 +516,18 @@ async function copyGlobEntry(
     );
   }
 
-  const { kept: matches, dropped } = partitionNeverPackaged(allMatches);
-  if (dropped.length > 0 && warn) {
-    warn(
-      `files: source '${entry.source}' (glob) skipped ${dropped.length} file(s) never packaged into ` +
-      `a skill bundle: ${dropped.join(', ')}. Declare an explicit source: entry to ship one deliberately.`,
-    );
-  }
   // Distinct from the zero-match case above: the build DID run and the glob DID
   // match — every match is simply a file that never ships. Saying "has your build
   // run?" here would send the author hunting a build failure that isn't there.
   if (matches.length === 0) {
     throw new Error(
       `files: source '${entry.source}' (glob) matched ${allMatches.length} file(s) under ${absoluteBase}, ` +
-      `but all of them are never packaged into a skill bundle: ${dropped.join(', ')}. ` +
-      `Declare an explicit source: entry for a file you intend to ship, or widen the glob.`,
+      `but all of them are never packaged into a skill bundle: ${droppedRel.join(', ')}. ` +
+      // NOT "widen the glob": the filter is on basename and applies at any width, so a
+      // wider glob clears this error while still shipping none of these files — advice
+      // that looks like it worked and silently does not.
+      `Declare an explicit source: entry for a file you intend to ship, ` +
+      `or point the glob at a directory that holds files which can be packaged.`,
     );
   }
 
@@ -446,7 +555,47 @@ async function copyGlobEntry(
     rels.push(toForwardSlash(rel));
   }
 
-  return { copied, pairs, rels };
+  return { copied, pairs, rels, dropped };
+}
+
+/**
+ * Every never-packaged file the project's GLOB `files:` entries would catch,
+ * without copying anything.
+ *
+ * The pre-build half of {@link applyFilesConfig}'s `dropped`: `vat skills validate`
+ * and `vat audit` can answer "what will this config silently fail to ship?" before
+ * a build exists, and they answer it by running THE expansion the copy runs
+ * ({@link expandGlobEntry}) — a second, independently written expansion would be
+ * free to disagree with the copy about what ships, which is the whole defect class
+ * this module exists to close.
+ *
+ * Non-throwing by construction, unlike {@link copyGlobEntry}: a pre-build gate runs
+ * before the artifact exists, so a glob over an unbuilt `dist/` matching nothing is
+ * the expected state, not a failure. `copyGlobEntry` still raises there, where the
+ * build HAS run and zero matches is real.
+ *
+ * Drops re-shipped by an explicit entry are filtered out for the same reason
+ * {@link applyFilesConfig} filters them: reporting "it did not ship" about a file
+ * the documented escape hatch puts in the bundle tells an author their remediation
+ * failed when it worked.
+ */
+export async function collectDroppedGlobMatches(
+  filesConfig: readonly SkillFileEntry[],
+  projectRoot: string,
+): Promise<DroppedGlobMatch[]> {
+  const shippedDests = new Set(explicitFilesConfigDests(filesConfig));
+  const dropped: DroppedGlobMatch[] = [];
+  for (const entry of filesConfig) {
+    if (!isGlob(entry.source)) continue;
+    // A '..' segment in the magic remainder is a malformed pattern that
+    // `expandGlobEntry` refuses to expand. It is the BUILD's error to raise (and
+    // `copyGlobEntry` does); a pre-build gate asking "what gets dropped?" must not
+    // abort the whole run over it — it simply has no drops to report for the entry.
+    if (hasParentTraversalSegment(globMagicRemainder(entry.source))) continue;
+    const expansion = await expandGlobEntry(entry, projectRoot);
+    dropped.push(...expansion.dropped.filter((d) => !shippedDests.has(normalizeRelPath(d.dest))));
+  }
+  return dropped;
 }
 
 /**
@@ -460,12 +609,17 @@ async function copyGlobEntry(
  * packager does (`resolve(join(projectRoot, source))`, so an absolute-looking
  * source roots UNDER the project).
  *
- * Returns every skill-output-relative dest path this config accounts for, one per
- * FILE (glob entries expanded), normalized via {@link normalizeRelPath} so each
- * value compares equal to the path `checkUnreferencedFiles` computes for the
- * packaged file. Callers must pass this to the post-build orphan check: a dest
- * declared in `files:` is proof of intent, and a lane that doesn't know the list
- * flags VAT's own copies as files the author forgot to document.
+ * Returns an {@link AppliedFilesConfig}: `dests` is every skill-output-relative
+ * dest path this config accounts for, one per FILE (glob entries expanded),
+ * normalized via {@link normalizeRelPath} so each value compares equal to the path
+ * `checkUnreferencedFiles` computes for the packaged file. Callers must pass it to
+ * the post-build orphan check: a dest declared in `files:` is proof of intent, and
+ * a lane that doesn't know the list flags VAT's own copies as files the author
+ * forgot to document. `dropped` is the never-packaged files a glob matched and
+ * this function refused — callers must report it (see
+ * {@link droppedGlobMatchesToIssues}) and pass its dests to
+ * `checkBrokenPackagedLinks`, which is the only lane that can tell a link broken
+ * by policy from a link broken by a rewriter bug.
  *
  * ONE invariant, both spellings: when this returns, every file the config matched
  * exists at its declared dest and is reported. A source already materialized by
@@ -484,43 +638,69 @@ async function copyGlobEntry(
  * (agent-instruction files at any surface, navigation files in a skill bundle);
  * an explicit entry is not. See {@link partitionNeverPackaged}.
  *
- * When `integrity: true` is set on an entry, `verifyFilesIntegrity` is called
- * after copying to assert byte-identical content. For GLOB entries it ALSO runs
- * `verifyDestSet` to assert the dest subtree contains exactly the copied rels
- * (no missing, no extra) — catching a misrouted rebase the byte check misses.
+ * When `integrity: true` is set on an entry, `verifyFilesIntegrity` is called to
+ * assert byte-identical content. For GLOB entries it ALSO runs `verifyDestSet` to
+ * assert the dest subtree contains exactly the files the config accounts for (no
+ * missing, no extra) — catching a misrouted rebase the byte check misses.
  * Single-file entries get only the byte check (dest is a file, not a subtree).
+ *
+ * Every integrity check runs AFTER all entries have copied, never inline. Inline,
+ * the verdict depended on the ORDER entries appear in: an explicit
+ * `source: extras/README.md` (the documented escape hatch for a file the glob's
+ * never-package filter drops) listed BEFORE the glob made the glob's set check
+ * throw `unexpected file 'README.md'`, while the same two entries in the opposite
+ * order passed — and in the passing order the check ran before the explicit entry
+ * had written anything, so it was no longer a statement about the shipped bundle.
  *
  * @throws if a declared `source` does not exist — a declared build artifact must
  * be present at copy time (callers that defer existence validate it upstream).
  */
-/** Copy + optionally integrity-check one GLOB `files:` entry; returns its declared rel-dests. */
+
+/**
+ * Integrity work for one entry, deferred until every entry has copied.
+ * `rels` is present only for GLOB entries (a single-file dest is not a subtree).
+ */
+interface PendingIntegrity {
+  entry: SkillFileEntry;
+  pairs: { absSource: string; absDest: string }[];
+  rels: string[] | undefined;
+}
+
+/** What applying ONE `files:` entry produced. */
+interface EntryOutcome {
+  /** Skill-output-relative dests this entry accounts for. */
+  dests: string[];
+  dropped: DroppedGlobMatch[];
+  /** Deferred integrity work, or `undefined` when the entry did not opt in. */
+  pending: PendingIntegrity | undefined;
+}
+
+/** Copy one GLOB `files:` entry. */
 async function applyGlobFileEntry(
   fileEntry: SkillFileEntry,
   opts: ApplyFilesConfigOptions,
-): Promise<string[]> {
-  const { copied, pairs, rels } = await copyGlobEntry(
+): Promise<EntryOutcome> {
+  const { copied, pairs, rels, dropped } = await copyGlobEntry(
     fileEntry,
     opts.projectRoot,
     opts.skillOutputDir,
-    opts.warn,
   );
-  if (fileEntry.integrity === true) {
-    verifyFilesIntegrity(pairs);
-    // Scoped set check: the glob entry owns its dest subtree and the build wiped
-    // the output dir first, so the on-disk subtree must equal exactly the rels we
-    // copied — catches a misrouted rebase the pair-hash misses.
-    await verifyDestSet(safePath.joinUnderRoot(opts.skillOutputDir, fileEntry.dest), rels, fileEntry.source);
-  }
-  return copied;
+  return {
+    dests: copied,
+    dropped,
+    pending: fileEntry.integrity === true ? { entry: fileEntry, pairs, rels } : undefined,
+  };
 }
 
-/** Copy + optionally integrity-check one NON-GLOB `files:` entry; returns its declared rel-dests. */
+/** Copy one NON-GLOB `files:` entry. */
 async function applyNonGlobFileEntry(
   fileEntry: SkillFileEntry,
   opts: ApplyFilesConfigOptions,
   bundledFileSet: Set<string>,
-): Promise<string[]> {
+): Promise<EntryOutcome> {
   const absoluteSource = safePath.resolve(safePath.join(opts.projectRoot, fileEntry.source));
+  const optedIn = fileEntry.integrity === true;
+
   if (bundledFileSet.has(toForwardSlash(absoluteSource))) {
     // Already materialized by link traversal (copied to entry.dest via the path
     // map) — don't copy it a second time. But a requested `integrity` check must
@@ -528,34 +708,98 @@ async function applyNonGlobFileEntry(
     // dest is byte-identical to the source, exactly as the copy path below would.
     // (The bundled copy lands at entry.dest — see applyNonGlobEntriesToPathMap in
     // skill-packager.ts.)
-    if (fileEntry.integrity === true) {
-      const absDest = safePath.joinUnderRoot(opts.skillOutputDir, fileEntry.dest);
-      verifyFilesIntegrity([{ absSource: absoluteSource, absDest }]);
-    }
+    const absDest = safePath.joinUnderRoot(opts.skillOutputDir, fileEntry.dest);
     // The dest is still reported: this function answers "which output paths does
     // `files:` account for," not "which bytes did I move." Whether link traversal
     // or this copy put the file there is an ordering accident, and callers that
     // ask "is this packaged file declared?" must not get a different answer for it.
-    return [normalizeRelPath(fileEntry.dest)];
+    return {
+      dests: [normalizeRelPath(fileEntry.dest)],
+      dropped: [],
+      pending: optedIn
+        ? { entry: fileEntry, pairs: [{ absSource: absoluteSource, absDest }], rels: undefined }
+        : undefined,
+    };
   }
 
   const { relDest, absSource, absDest } = await copyNonGlobEntry(fileEntry, absoluteSource, opts.skillOutputDir);
-  if (fileEntry.integrity === true) {
-    verifyFilesIntegrity([{ absSource, absDest }]);
-  }
-  return [relDest];
+  return {
+    dests: [relDest],
+    dropped: [],
+    pending: optedIn ? { entry: fileEntry, pairs: [{ absSource, absDest }], rels: undefined } : undefined,
+  };
 }
 
-export async function applyFilesConfig(opts: ApplyFilesConfigOptions): Promise<string[]> {
+/**
+ * `dest` expressed relative to the `destRoot` subtree, or `null` when it does not
+ * live inside it. Both arguments are skill-output-relative and normalized.
+ *
+ * Equality returns `null` on purpose: a dest EQUAL to the subtree root names the
+ * directory itself, not a file inside it, so it contributes nothing to a file set.
+ */
+function relUnderDest(destRoot: string, dest: string): string | null {
+  if (destRoot === '' || destRoot === '.') return dest;
+  return dest.startsWith(destRoot + '/') ? dest.slice(destRoot.length + 1) : null;
+}
+
+/**
+ * Run every opted-in integrity check once the whole config has copied.
+ *
+ * `allDests` is the config's complete accounting, which is what makes a glob's
+ * dest-set check order-independent: a sibling entry's dest inside the same subtree
+ * is EXPECTED (that is the escape hatch working), while a file no entry declares
+ * is still unexpected — so this stays a real assertion about the shipped bundle
+ * rather than being weakened into a permissive one.
+ */
+async function runDeferredIntegrity(
+  pending: readonly PendingIntegrity[],
+  allDests: readonly string[],
+  skillOutputDir: string,
+): Promise<void> {
+  for (const { entry, pairs, rels } of pending) {
+    verifyFilesIntegrity(pairs);
+    if (rels === undefined) continue;
+
+    const destRoot = normalizeRelPath(entry.dest);
+    const expected = new Set(rels);
+    for (const dest of allDests) {
+      const rel = relUnderDest(destRoot, dest);
+      if (rel !== null && rel !== '') expected.add(rel);
+    }
+    await verifyDestSet(
+      safePath.joinUnderRoot(skillOutputDir, entry.dest),
+      [...expected],
+      entry.source,
+    );
+  }
+}
+
+export async function applyFilesConfig(opts: ApplyFilesConfigOptions): Promise<AppliedFilesConfig> {
   const bundledFileSet = new Set((opts.bundledFiles ?? []).map((f) => toForwardSlash(f)));
-  const copied: string[] = [];
+  const dests: string[] = [];
+  const dropped: DroppedGlobMatch[] = [];
+  const pending: PendingIntegrity[] = [];
 
   for (const fileEntry of opts.filesConfig) {
-    const entryCopied = isGlob(fileEntry.source)
+    const outcome = isGlob(fileEntry.source)
       ? await applyGlobFileEntry(fileEntry, opts)
       : await applyNonGlobFileEntry(fileEntry, opts, bundledFileSet);
-    copied.push(...entryCopied);
+    dests.push(...outcome.dests);
+    dropped.push(...outcome.dropped);
+    if (outcome.pending) pending.push(outcome.pending);
   }
 
-  return copied;
+  await runDeferredIntegrity(pending, dests, opts.skillOutputDir);
+
+  // A drop is only worth reporting if the file genuinely did not ship. In the
+  // escape-hatch config the guide prescribes — a glob over a subtree plus an
+  // explicit entry naming one never-packaged file inside it — the glob drops
+  // that dest and the explicit entry writes it. Reporting the drop there would
+  // assert "it did not ship" about a file sitting in the bundle, telling an
+  // author their documented remediation had failed. Filtering on the FINAL dest
+  // set (not on entry order) keeps the finding true whichever order they wrote.
+  const shippedDests = new Set(dests.map((d) => normalizeRelPath(d)));
+  const reportableDropped = dropped.filter((d) => !shippedDests.has(normalizeRelPath(d.dest)));
+
+  return { dests, dropped: reportableDropped };
 }

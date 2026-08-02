@@ -1306,3 +1306,62 @@ describe('PackagingValidationResult - allErrors is the sole container of issue r
 		}
 	});
 });
+
+// ---------------------------------------------------------------------------
+// E-glob: the pre-build gates surface FILES_GLOB_DROPPED_NEVER_PACKAGED.
+//
+// It used to fire only during a build that got far enough to package. `vat
+// skills validate` and `vat audit` expand the same globs against the same tree
+// and can say the same thing without writing anything — which matters because a
+// glob whose base is documentation-bearing loses content silently the day
+// someone adds a README.md to it.
+// ---------------------------------------------------------------------------
+
+const GLOB_DROP_CODE = 'FILES_GLOB_DROPPED_NEVER_PACKAGED';
+const EXTRAS_GLOB_SOURCE = 'extras/**/*';
+const EXTRAS_DEST = 'extras';
+const EXTRAS_README_DEST = 'extras/README.md';
+
+/** Validate a skill whose tree has `extras/{keep.json,README.md}`. */
+async function validateWithExtras(
+	files: Array<{ source: string; dest: string }>,
+): Promise<PackagingValidationResult> {
+	const tempDir = getTempDir();
+	const skillContent = createSkillContent(
+		{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
+		SKILL_HEADER,
+	);
+	const { skillPath } = createTransitiveSkillStructure(
+		tempDir,
+		{ 'extras/keep.json': '{}\n', [EXTRAS_README_DEST]: '# extras\n' },
+		skillContent,
+	);
+	return validateSkillForPackaging(skillPath, { files });
+}
+
+describe('glob files: drops are reported before any build', () => {
+	it('reports the never-packaged file a glob would catch', async () => {
+		const result = await validateWithExtras([{ source: EXTRAS_GLOB_SOURCE, dest: EXTRAS_DEST }]);
+
+		const drops = result.allErrors.filter((i: ValidationIssue) => i.code === GLOB_DROP_CODE);
+		expect(drops).toHaveLength(1);
+		expect(drops[0]?.severity).toBe('warning');
+		expect(drops[0]?.location).toBe(EXTRAS_README_DEST);
+		expect(drops[0]?.message).toContain(EXTRAS_GLOB_SOURCE);
+	});
+
+	it('stays silent when an explicit entry re-ships the dropped file', async () => {
+		const result = await validateWithExtras([
+			{ source: EXTRAS_GLOB_SOURCE, dest: EXTRAS_DEST },
+			{ source: EXTRAS_README_DEST, dest: EXTRAS_README_DEST },
+		]);
+
+		expect(result.allErrors.filter((i: ValidationIssue) => i.code === GLOB_DROP_CODE)).toEqual([]);
+	});
+
+	it('stays silent for a config with no glob entries at all', async () => {
+		const result = await validateWithExtras([{ source: 'extras/keep.json', dest: 'keep.json' }]);
+
+		expect(result.allErrors.filter((i: ValidationIssue) => i.code === GLOB_DROP_CODE)).toEqual([]);
+	});
+});

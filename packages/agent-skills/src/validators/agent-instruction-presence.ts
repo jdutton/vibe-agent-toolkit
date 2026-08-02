@@ -18,7 +18,9 @@
 import { existsSync } from 'node:fs';
 
 import { type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
-import { crawlDirectorySync, issueLocation } from '@vibe-agent-toolkit/utils';
+import { crawlDirectorySync, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
+
+import { normalizeRelPath } from '../files-config.js';
 
 import { materializeIssue } from './rule-engine/index.js';
 import { AGENT_INSTRUCTION_FILE_PATTERNS, toAnyDepthGlobs } from './validation-rules.js';
@@ -38,13 +40,28 @@ const INCLUDE_GLOBS = toAnyDepthGlobs(AGENT_INSTRUCTION_FILE_PATTERNS);
  * @param locationRoot Anchor base for reported locations. Pass the run's stated
  *   root, not `rootDir`, when the two differ — a location the reader cannot
  *   open is worse than no location.
+ * @param declaredDests Skill-output-relative dests named by EXPLICIT (non-glob)
+ *   `files:` entries — {@link explicitFilesConfigDests}. Such a dest is NOT
+ *   reported: naming a file in config is an unambiguous instruction to ship it,
+ *   and this finding's remediation is "remove the file", i.e. undo what the
+ *   config sanctioned. Callers that cannot know the config (an installed
+ *   third-party bundle, a plugin tree with no `files:` block) pass `[]` — the
+ *   honest answer, since intent is genuinely unknowable there.
+ *
+ *   REQUIRED, not defaulted: every caller must state its answer, or a lane that
+ *   silently inherits `[]` re-opens the contradiction for the population it
+ *   governs. Matching is EXACT membership, never a prefix test — a directory-ish
+ *   dest must not launder its whole subtree (see {@link explicitFilesConfigDests}).
  */
 export function detectPackagedAgentInstructionFiles(
   rootDir: string,
   locationRoot: string,
+  declaredDests: readonly string[],
 ): ValidationIssue[] {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- rootDir is a validated build-output path
   if (!existsSync(rootDir)) return [];
+
+  const declared = new Set(declaredDests.map((d) => normalizeRelPath(d)));
 
   // `respectGitignore: false` and an empty `exclude` are both load-bearing: the
   // subject is BUILT output, which normally lives under a gitignored `dist/`
@@ -59,8 +76,15 @@ export function detectPackagedAgentInstructionFiles(
     respectGitignore: false,
   });
 
-  return files.map((file) => {
+  const issues: ValidationIssue[] = [];
+  for (const file of files) {
+    // The declaration is expressed relative to the SCANNED tree (a `files:` dest is
+    // skill-output-relative), while the reported location is relative to
+    // `locationRoot` — the two roots differ whenever a batching caller anchors
+    // elsewhere, so the exemption test must use rootDir and never the location.
+    if (declared.has(normalizeRelPath(safePath.relative(rootDir, file)))) continue;
     const location = issueLocation(file, locationRoot);
-    return materializeIssue('PACKAGED_AGENT_INSTRUCTION_FILE', { location, detail: location });
-  });
+    issues.push(materializeIssue('PACKAGED_AGENT_INSTRUCTION_FILE', { location, detail: location }));
+  }
+  return issues;
 }

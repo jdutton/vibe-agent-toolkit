@@ -8,6 +8,11 @@ import type { AuditCommandOptions } from '../src/commands/audit.js';
 import { deriveScanRoot, getValidationResults, resetAuditCaches } from '../src/commands/audit.js';
 
 import { type CliResult, executeCli } from './system/test-helpers/cli-runner.js';
+import { silentLogger } from './test-doubles.js';
+
+// Re-exported so the many suites that reach for a silent logger keep ONE import
+// site, while the definition itself lives in the dependency-light module.
+export { silentLogger } from './test-doubles.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const binPath = safePath.resolve(__dirname, '../dist/bin.js');
@@ -22,16 +27,6 @@ export function runCliCommand(command: string, ...args: string[]): SpawnSyncRetu
     encoding: 'utf-8',
   });
 }
-
-/**
- * Silent logger for use in integration tests — suppresses all output.
- */
-export const silentAuditLogger = {
-  info: (_msg: string): void => {},
-  warn: (_msg: string): void => {},
-  error: (_msg: string): void => {},
-  debug: (_msg: string): void => {},
-};
 
 /**
  * Run `vat audit` validation directly against a target path (no CLI subprocess).
@@ -49,7 +44,7 @@ export async function runAudit(
     targetPath,
     options.recursive !== false,
     options,
-    silentAuditLogger,
+    silentLogger,
     deriveScanRoot(targetPath),
   );
 }

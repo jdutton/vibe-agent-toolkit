@@ -18,7 +18,7 @@ import type { DeferredArtifacts, ResourceLink, ResourceMetadata } from '@vibe-ag
 import { type GitTracker, isGitIgnored, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 
-import { AGENT_INSTRUCTION_FILE_PATTERNS, NAVIGATION_FILE_PATTERNS } from './validators/validation-rules.js';
+import { isAgentInstructionBasename, isNavigationBasename } from './validators/validation-rules.js';
 
 /**
  * Resolution result for a single link found in a bundled markdown file.
@@ -186,15 +186,10 @@ function isOutsideProject(targetPath: string, projectRoot: string): boolean {
   return safePath.relative(projectRoot, targetPath).startsWith('..');
 }
 
-/** Check if a filename is a navigation file */
-function isNavigationFile(filename: string): boolean {
-  return (NAVIGATION_FILE_PATTERNS as readonly string[]).includes(filename);
-}
-
-/** Check if a filename is a repo-internal agent-instruction file */
-function isAgentInstructionFile(filename: string): boolean {
-  return (AGENT_INSTRUCTION_FILE_PATTERNS as readonly string[]).includes(filename);
-}
+// Navigation / agent-instruction classification is the shared, case-insensitive
+// matcher from validation-rules (`isNavigationBasename` / `isAgentInstructionBasename`),
+// used directly at the call sites below. On APFS/NTFS a `Claude.md` is loaded as
+// instructions exactly as a `CLAUDE.md` is, so the walker must refuse both spellings.
 
 /** Create an exclusion record */
 function makeExclusion(
@@ -272,6 +267,48 @@ function checkDeferred(
     return true;
   }
   return false;
+}
+
+/**
+ * Does the walker refuse to bundle this target because it is a repo-internal
+ * agent-instruction file (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`)?
+ *
+ * These cannot normally travel in a bundle: they describe the repository they
+ * live in, they collide on basename across packages, and a project-locally
+ * installed skill puts them where Claude Code will load them as instructions.
+ * Deliberately NOT gated on `excludeNavigationFiles` — that knob is about content
+ * granularity, a different question from "this file is not distributable".
+ *
+ * The escape hatch is an EXPLICIT `skills.config.<name>.files` entry naming the
+ * file, and it is honoured HERE rather than "bypassing the walker". It was
+ * documented as a bypass and was not one: the walker refused the LINK whatever the
+ * config said, so an author who declared the file got it shipped, got the link to
+ * it silently stripped from the packaged content, and STILL got a build-failing
+ * error whose own remedy was the thing they had already done. Honouring the
+ * declaration here is what makes that remedy real — the file is bundled,
+ * `applyFilesEntriesToPathMap` re-points it at the declared dest, and the
+ * rewritten link resolves to it.
+ *
+ * "Explicit" is EXACT membership in {@link DeferredArtifacts.sourcePaths},
+ * deliberately NOT the directory-prefix test {@link DeferredArtifacts.covers}
+ * performs. That set registers a GLOB entry by its STATIC BASE — a directory — so
+ * a glob's matches are only ever prefix CHILDREN of what is in the set, while an
+ * explicit `source: notes/CLAUDE.md` is in it verbatim. Exact equality is
+ * therefore precisely the explicit-vs-glob discriminator, and reusing the
+ * already-plumbed `deferredArtifacts` avoids standing up a second model of the
+ * same `files:` config for one lane to drift away from.
+ *
+ * That distinction is load-bearing: naming a file is an unambiguous instruction to
+ * ship it, whereas a glob is a net, not a declaration — it never named the file it
+ * caught and so does not get to launder the exemption an explicit declaration
+ * earns. `partitionNeverPackaged` in files-config.ts draws the same line on the
+ * copy side; both must agree or the two mechanisms disagree about one bundle.
+ */
+function refusesAgentInstructionFile(targetPath: string, options: WalkLinkGraphOptions): boolean {
+  if (!isAgentInstructionBasename(basename(targetPath))) return false;
+  const declaredSources = options.deferredArtifacts?.sourcePaths;
+  if (declaredSources === undefined) return true;
+  return !declaredSources.has(toForwardSlash(safePath.relative(options.projectRoot, targetPath)));
 }
 
 /**
@@ -405,20 +442,14 @@ function checkExclusions(
   }
 
   // Check navigation file exclusion
-  if (options.excludeNavigationFiles && isNavigationFile(basename(targetPath))) {
+  if (options.excludeNavigationFiles && isNavigationBasename(basename(targetPath))) {
     excludedReferences.push(makeExclusion(targetPath, sourcePath, targetExists, 'navigation-file', link));
     return true;
   }
 
-  // Repo-internal agent-instruction files (CLAUDE.md, AGENTS.md, GEMINI.md)
-  // cannot travel in a bundle: they describe the repository they live in, they
-  // collide on basename across packages, and a project-locally installed skill
-  // puts them where Claude Code will load them as instructions. Deliberately
-  // NOT gated on `excludeNavigationFiles` — that knob is about content
-  // granularity, a different question from "this file is not distributable".
-  // The escape hatch for shipping one on purpose is an explicit
-  // `skills.config.<name>.files` entry, which bypasses the walker entirely.
-  if (isAgentInstructionFile(basename(targetPath))) {
+  // Repo-internal agent-instruction files — see {@link refusesAgentInstructionFile}
+  // for why they cannot travel, and for the explicit-`files:` escape hatch.
+  if (refusesAgentInstructionFile(targetPath, options)) {
     excludedReferences.push(makeExclusion(targetPath, sourcePath, targetExists, 'agent-instruction-file', link));
     return true;
   }

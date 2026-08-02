@@ -6,9 +6,10 @@
  *   2. vat skills validate     (SKILL.md frontmatter validation)
  *   3. vat claude marketplace validate  (strict marketplace validation, when configured)
  *   4. files-config-dests  (in-process; every `files:` dest exists in the built output)
- *   5. consistency check  (in-process; skill distribution integrity — package.json, plugin assignment)
+ *   5. packaged-content  (in-process; built bundles carry nothing that must not ship)
+ *   6. consistency check  (in-process; skill distribution integrity — package.json, plugin assignment)
  *
- * 1–3 are subprocess phases chosen by {@link selectVerifyPhases}; 4–5 run here and
+ * 1–3 are subprocess phases chosen by {@link selectVerifyPhases}; 4–6 run here and
  * are chosen by `selectInProcessVerifyPhases`. Both sets are config-gated, and both
  * are announced on startup.
  */
@@ -22,7 +23,12 @@ import {
   type SeverityCounts,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/agent-schema';
-import { computeTreeCopiedSkillLocations, mergeFilesConfig } from '@vibe-agent-toolkit/agent-skills';
+import {
+  computeTreeCopiedSkillLocations,
+  detectPackagedAgentInstructionFiles,
+  explicitFilesConfigDests,
+  mergeFilesConfig,
+} from '@vibe-agent-toolkit/agent-skills';
 import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
@@ -52,6 +58,7 @@ import {
   type PhaseSelection,
   type PhaseVocabulary,
 } from './phase-utils.js';
+import { rejectPositionalArguments } from './positional-args.js';
 import { discoverSkillsFromConfig } from './skills/skill-discovery.js';
 
 export interface VerifyCommandOptions {
@@ -67,6 +74,9 @@ export interface VerifyCommandOptions {
  * 1.0s + consistency under a second.
  */
 const VERIFY_FULL_RUN_SECONDS = 32;
+
+/** How this command names itself in every user-facing diagnostic. */
+const COMMAND_NAME = 'vat verify';
 
 export function createVerifyTopLevelCommand(): Command {
   const command = new Command('verify');
@@ -99,11 +109,14 @@ Description:
   Phases (in-process, run after the above, when 'skills:' is configured):
     files-config-dests → every 'files:' dest exists in the built output. Appears
                          in the document only when a dest is missing.
+    packaged-content   → built skill bundles carry no repo-internal agent-instruction
+                         file (CLAUDE.md, AGENTS.md, GEMINI.md). A dest an explicit
+                         'files:' entry names is honoured, not reported.
     consistency        → skill distribution integrity (package.json, plugin assignment)
 
-  A run with a 'skills:' block runs all three of skills, files-config-dests and
-  consistency: they read that same config block. Without it neither in-process
-  phase has anything to read, so neither runs.
+  A run with a 'skills:' block runs all four of skills, files-config-dests,
+  packaged-content and consistency: they read that same config block. Without it
+  no in-process phase has anything to read, so none run.
 
   The startup line on stderr names, in order, the phases that will inspect
   something. A phase that would consult nothing is not listed; a phase that does
@@ -116,9 +129,10 @@ Output:
     is a single parseable document (a phase's stdout is never streamed
     through). A phase's status comes from the child's REPORTED status, not
     from its exit code — an exit code cannot express 'warning'. In-process
-    phases also publish issueCounts {errors, warnings, info}; 'consistency'
-    carries its findings into the document too, while 'files-config-dests'
-    publishes counts only and lists the missing dests on stderr.
+    phases also publish issueCounts {errors, warnings, info}; 'consistency' and
+    'packaged-content' carry their findings into the document too, while
+    'files-config-dests' publishes counts only and lists the missing dests on
+    stderr.
   Progress and validation errors → stderr (streamed live)
 
   By default each subprocess phase reports a per-asset summary plus the assets
@@ -130,7 +144,12 @@ Exit Codes:
   1 - Validation errors found
   2 - System error (this command's own, or propagated from a phase that could
       not run: exited 2, was killed by a signal, was never spawned, or wrote
-      output that could not be parsed)
+      output that could not be parsed), or a usage error such as passing a path
+
+Arguments:
+  None. Scope comes from vibe-agent-toolkit.config.yaml, never from the command
+  line — a path argument is rejected (exit 2) rather than discarded. To inspect
+  ONE skill or bundle by path, use 'vat audit <path>'.
 
 Requirements:
   projectRoot: required (errors if no vibe-agent-toolkit.config.yaml or .git/ ancestor)
@@ -173,9 +192,14 @@ type CheckEntry = {
  * Register a check for (skillName, outputDir, mergedFiles) in the dedup map.
  *
  * Skips silently if:
- *   - mergedFiles is empty (no entries to verify)
  *   - outputDir does not exist on disk (not a candidate)
  *   - the key was already added (dedup guard)
+ *
+ * An EMPTY `mergedFiles` is registered, not skipped: {@link checkFilesConfigDests}
+ * has nothing to verify for such a skill and filters it out itself, but
+ * {@link checkPackagedAgentInstructionFiles} must still crawl that bundle — a skill
+ * with no `files:` block is exactly the one whose agent-instruction file arrived by
+ * some other route, and dropping it here would make the crawl blind to it.
  */
 function tryAddCheckEntry(
   checks: Map<string, CheckEntry>,
@@ -183,7 +207,6 @@ function tryAddCheckEntry(
   outputDir: string,
   mergedFiles: ReturnType<typeof mergeFilesConfig>,
 ): void {
-  if (mergedFiles.length === 0) return;
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- outputDir is resolved from config, not user input
   if (!existsSync(outputDir)) return;
   const key = `${skillName}\0${outputDir}`;
@@ -193,18 +216,19 @@ function tryAddCheckEntry(
 }
 
 /**
- * Check that all dest paths from the merged files config exist in the built output.
+ * Every built skill bundle this project's config accounts for that EXISTS on disk,
+ * with the `files:` entries that govern it.
  *
- * Checks each skill's dests in the location(s) where `vat build` actually wrote them:
- *   - Pool skills: `dist/skills/<fsName>/`            (only when that dir exists)
- *   - Tree-copy skills: `dist/.claude/plugins/.../skills/<name>/` (only when that dir exists)
+ * ONE enumeration of "where did `vat build` write this skill", shared by every
+ * in-process verify phase, in the two locations the build actually uses:
+ *   - Pool skills: `dist/skills/<fsName>/`
+ *   - Tree-copy skills: `dist/.claude/plugins/.../skills/<name>/`
  *
- * A dest is "missing" ONLY when absent from a candidate dir that exists. If a skill
- * has no existing candidate dir, it is not reported (build didn't run for that mode).
- *
- * @returns One result per (skill, outputDir) pair where dests are absent.
+ * Returns `[]` (never throws) for an unreadable config: `vat verify`'s subprocess
+ * phases report the real config error, and an in-process phase must not race them
+ * with a second, worse diagnosis.
  */
-export function checkFilesConfigDests(cwd: string): FilesDestCheckResult[] {
+function collectBuiltSkillOutputs(cwd: string): CheckEntry[] {
   try {
     const config = loadConfig(cwd);
     if (!config) return [];
@@ -234,26 +258,70 @@ export function checkFilesConfigDests(cwd: string): FilesDestCheckResult[] {
       tryAddCheckEntry(checks, loc.skillDirPath, loc.skillOutputDir, mergedFiles);
     }
 
-    // --- Run each pending check and collect results ---
-    const results: FilesDestCheckResult[] = [];
-    for (const { skillName, outputDir, mergedFiles } of checks.values()) {
-      const missing: string[] = [];
-      for (const entry of mergedFiles) {
-        const destPath = safePath.resolve(outputDir, entry.dest);
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- destPath resolved from config
-        if (!existsSync(destPath)) {
-          missing.push(entry.dest);
-        }
-      }
-      if (missing.length > 0) {
-        results.push({ skillName, outputDir, missing });
-      }
-    }
-
-    return results;
+    return [...checks.values()];
   } catch {
     return [];
   }
+}
+
+/**
+ * Check that all dest paths from the merged files config exist in the built output.
+ *
+ * A dest is "missing" ONLY when absent from a candidate dir that exists. If a skill
+ * has no existing candidate dir, it is not reported (build didn't run for that mode).
+ *
+ * @returns One result per (skill, outputDir) pair where dests are absent.
+ */
+export function checkFilesConfigDests(cwd: string): FilesDestCheckResult[] {
+  const results: FilesDestCheckResult[] = [];
+  for (const { skillName, outputDir, mergedFiles } of collectBuiltSkillOutputs(cwd)) {
+    if (mergedFiles.length === 0) continue;
+    const missing: string[] = [];
+    for (const entry of mergedFiles) {
+      const destPath = safePath.resolve(outputDir, entry.dest);
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- destPath resolved from config
+      if (!existsSync(destPath)) {
+        missing.push(entry.dest);
+      }
+    }
+    if (missing.length > 0) {
+      results.push({ skillName, outputDir, missing });
+    }
+  }
+  return results;
+}
+
+/**
+ * Crawl every built skill bundle for repo-internal agent-instruction files.
+ *
+ * The built-skill-bundle arm of `PACKAGED_AGENT_INSTRUCTION_FILE`. Its description
+ * has always claimed three surfaces — a built skill bundle, an installed plugin, a
+ * plugin source directory — but only the two plugin arms had a producer: the skill
+ * lanes inspect SKILL.md plus what links reach from it, so a file that arrives in a
+ * bundle with no link at all was invisible to every command. Measured on an adopter
+ * bundle carrying two of them: `vat audit` reported `filesScanned: 1`, zero issues,
+ * and `vat verify` reported `warnings: 0`.
+ *
+ * UNCONDITIONAL here, with no provenance test: `vat verify` reads the built `dist/`
+ * tree by definition, so every tree this enumerates is distributed output. (`vat
+ * audit` takes an arbitrary path and therefore must answer the provenance question
+ * first — see `appendDistributedTreeFindings` in audit.ts.)
+ *
+ * Explicit `files:` dests are exempt (§8.2): here the config is knowable, and
+ * naming a dest is an instruction to ship that file. A glob match never earns the
+ * exemption — a glob is a net, not a declaration — which is why the exempt set
+ * comes from {@link explicitFilesConfigDests} rather than from every `files:` entry.
+ *
+ * Locations anchor at `cwd`, the run's stated root, so a reader can open them.
+ */
+export function checkPackagedAgentInstructionFiles(cwd: string): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  for (const { outputDir, mergedFiles } of collectBuiltSkillOutputs(cwd)) {
+    issues.push(
+      ...detectPackagedAgentInstructionFiles(outputDir, cwd, explicitFilesConfigDests(mergedFiles)),
+    );
+  }
+  return issues;
 }
 
 /**
@@ -286,6 +354,25 @@ function reportFilesDestErrors(
     logger.error(`  Skill '${skillName}': missing dest file(s) in ${outputDir}/:`);
     for (const dest of missing) {
       logger.error(`    - ${dest}`);
+    }
+  }
+}
+
+/**
+ * Log packaged-content findings to stderr.
+ *
+ * A companion to the document entry, never a substitute for it: this phase's
+ * findings are published into the YAML too (see {@link FindingsPhaseResult}).
+ */
+function reportPackagedContentIssues(
+  issues: readonly ValidationIssue[],
+  logger: ReturnType<typeof createLogger>
+): void {
+  logger.error(`\n▶ Phase: ${PACKAGED_CONTENT}`);
+  for (const issue of issues) {
+    logger.error(`  ${issue.severity.toUpperCase()} [${issue.code}]: ${issue.location ?? ''}`);
+    if (issue.fix !== undefined) {
+      logger.error(`    Fix: ${issue.fix}`);
     }
   }
 }
@@ -393,8 +480,11 @@ export function selectVerifyPhases(
   });
 }
 
+/** The in-process phase that crawls built skill bundles for what must not ship. */
+const PACKAGED_CONTENT = 'packaged-content';
+
 /** Phases that run in this process, after the subprocess phases, in execution order. */
-type InProcessPhaseName = typeof FILES_CONFIG_DESTS | 'consistency';
+type InProcessPhaseName = typeof FILES_CONFIG_DESTS | typeof PACKAGED_CONTENT | 'consistency';
 
 /**
  * Which in-process phases this run performs, given the config.
@@ -429,7 +519,7 @@ type InProcessPhaseName = typeof FILES_CONFIG_DESTS | 'consistency';
  * though a clean run reports nothing.
  */
 function selectInProcessVerifyPhases(config: ProjectConfig | undefined): InProcessPhaseName[] {
-  return config?.skills === undefined ? [] : [FILES_CONFIG_DESTS, 'consistency'];
+  return config?.skills === undefined ? [] : [FILES_CONFIG_DESTS, PACKAGED_CONTENT, 'consistency'];
 }
 
 /**
@@ -444,9 +534,11 @@ export function formatVerifyAnnouncement(
   return `🔍 vat verify (phases: ${all.join(' → ')})`;
 }
 
-/** A consistency finding as it appears in the archived YAML. */
-interface PublishedConsistencyIssue {
-  severity: ConsistencyIssueSeverity;
+/** An in-process phase's finding as it appears in the archived YAML. */
+interface PublishedIssue {
+  // Widened from ConsistencyIssueSeverity: `packaged-content` publishes real
+  // ValidationIssues, whose severity vocabulary also carries 'ignore'.
+  severity: ValidationIssue['severity'] | ConsistencyIssueSeverity;
   code: string;
   message: string;
   fix: string;
@@ -461,7 +553,7 @@ interface PublishedConsistencyIssue {
  */
 interface FindingsPhaseResult extends PhaseResult {
   issueCounts: SeverityCounts;
-  issues: PublishedConsistencyIssue[];
+  issues: PublishedIssue[];
 }
 
 /**
@@ -525,14 +617,26 @@ async function runConsistencyPhase(
   phaseResults.push(result);
 }
 
-async function verifyTopLevelCommand(options: VerifyCommandOptions): Promise<void> {
+async function verifyTopLevelCommand(
+  options: VerifyCommandOptions,
+  command: Command,
+): Promise<void> {
+  // First, and before requireProjectRoot: `vat verify dist/skills/demo` used to
+  // be accepted, have its path discarded, run wide over the whole project and
+  // report success. Nothing below can un-tell that lie, so the run ends here.
+  rejectPositionalArguments(
+    command.args,
+    COMMAND_NAME,
+    'verifies every phase vibe-agent-toolkit.config.yaml declares, against the built dist/ tree',
+  );
+
   // Before requireProjectRoot: a retired flag is a usage error, and answering it
   // with "no vibe-agent-toolkit.config.yaml found" would diagnose the wrong
   // problem for anyone running the old invocation outside a project.
-  rejectRetiredOnly(options.only, 'vat verify', VERIFY_FULL_RUN_SECONDS);
+  rejectRetiredOnly(options.only, COMMAND_NAME, VERIFY_FULL_RUN_SECONDS);
 
   // Spec §7: `vat verify` requires a projectRoot.
-  const projectRoot = requireProjectRoot(process.cwd(), 'vat verify');
+  const projectRoot = requireProjectRoot(process.cwd(), COMMAND_NAME);
 
   const { logger, startTime, binPath } = createPhaseContext(options.debug);
 
@@ -569,6 +673,27 @@ async function verifyTopLevelCommand(options: VerifyCommandOptions): Promise<voi
           issueCounts: { errors: filesDestResults.length, warnings: 0, info: 0 },
         });
       }
+    }
+
+    // Packaged-content check: crawl each built skill bundle for repo-internal
+    // agent-instruction files. Publishes its findings INTO the document rather
+    // than only logging them — a file that must not ship has to be visible in
+    // `issueCounts`, or a CI consumer reads a clean report for a bundle carrying
+    // one. Warnings do not fail the run; the exit code still comes from errors.
+    if (inProcess.includes(PACKAGED_CONTENT)) {
+      const packagedIssues = checkPackagedAgentInstructionFiles(projectRoot);
+      if (packagedIssues.length > 0) {
+        reportPackagedContentIssues(packagedIssues, logger);
+      }
+      const packagedResult: FindingsPhaseResult = {
+        name: PACKAGED_CONTENT,
+        status: calculateValidationStatus(packagedIssues),
+        issueCounts: countBySeverity(packagedIssues),
+        issues: packagedIssues.map(({ severity, code, message, fix }) => ({
+          severity, code, message, fix: fix ?? '',
+        })),
+      };
+      phaseResults.push(packagedResult);
     }
 
     // Consistency check: cross-reference discovered skills vs package.json and plugin assignments

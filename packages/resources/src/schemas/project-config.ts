@@ -299,8 +299,11 @@ export type SkillsConfig = z.infer<typeof SkillsConfigSchema>;
  *   pool skills (built by `vat skills build`) into the plugin bundle.
  * - `source` (optional): path to plugin dir (default: plugins/<name>). Tree-copied verbatim.
  * - `files` (optional): explicit source->dest mappings for artifacts built outside the plugin dir.
- * - `exclude` (optional): globs the verbatim tree-copy must skip. Additive to the built-in
- *   exclusions (`.claude-plugin/`, agent-instruction files); for project-specific junk only.
+ * - `exclude` (optional): patterns the verbatim tree-copy must skip — a glob, or a bare
+ *   directory name (with or without a trailing slash), which covers its whole subtree in
+ *   both crawl lanes. Additive to the built-in exclusions (`.claude-plugin/`,
+ *   agent-instruction files); for project-specific junk only. A pattern that matches
+ *   nothing is warned about, never silently ignored.
  */
 export const ClaudeMarketplacePluginEntrySchema = z.object({
   name: z.string()
@@ -315,7 +318,7 @@ export const ClaudeMarketplacePluginEntrySchema = z.object({
   files: z.array(SkillFileEntrySchema).optional()
     .describe('Explicit source→dest file mappings for compiled artifacts outside the plugin directory'),
   exclude: z.array(z.string()).optional()
-    .describe('Glob patterns (relative to the plugin source dir) to leave out of the verbatim tree-copy'),
+    .describe('Patterns (relative to the plugin source dir) to leave out of the verbatim tree-copy: a glob ("scratch/**"), or a directory name with or without a trailing slash ("scratch", "scratch/") which covers that directory and everything under it'),
   version: z.string().regex(SEMVER_REGEX, {
     message: 'version must be a valid semver string (e.g., "1.2.3" or "1.0.0-rc.1")',
   }).optional()

@@ -52,14 +52,31 @@ export const CODE_REGISTRY = {
   ),
   LINK_TO_AGENT_INSTRUCTION_FILE: entry(
     'error',
-    'Markdown link targets a repo-internal agent-instruction file (CLAUDE.md, AGENTS.md, GEMINI.md); it was excluded from the bundle.',
-    'Link the specific content the file describes, or extract the shared part into a document intended for distribution. To ship the file deliberately, declare it under skills.config.<name>.files.',
+    // "excluded from the bundle" used to be asserted unconditionally, and it was
+    // FALSE in the one configuration the fix string recommended: with an explicit
+    // files: entry naming the file, the file shipped. The description now states
+    // the precondition that makes it true, and names the consequence the old
+    // wording left silent — the link is stripped, so the packaged prose points at
+    // nothing.
+    'Markdown link targets a repo-internal agent-instruction file (CLAUDE.md, AGENTS.md, GEMINI.md) that no explicit files: entry declares; it is not bundled and the link is stripped from the packaged content.',
+    // Three real remedies, then the declaration route. The absolute-URL route is
+    // listed because it is the cheapest correct fix for the dominant population —
+    // links that point UPWARD out of the skill dir at a file whose canonical home
+    // is a repository the reader can open.
+    //
+    // The declaration route is stated as EXPLICIT (non-glob) deliberately: it used
+    // to read "declare it under skills.config.<name>.files" and doing exactly that
+    // changed nothing, because the walker refused the link whatever the config
+    // said. The remedy told you to do the thing you had already done. It is now
+    // honoured, and the qualifier is load-bearing — a glob is a net, not a
+    // declaration, and never packages one of these files.
+    "Link the specific content the file describes; point the link at the file's canonical home as an absolute URL; or extract the shared part into a document intended for distribution. To ship the file deliberately, name it in an explicit (non-glob) skills.config.<name>.files entry — the file is then bundled and this link is rewritten to the declared dest.",
     'link_to_agent_instruction_file',
   ),
   LINK_TO_GITIGNORED_FILE: entry(
     'error',
     'Markdown link targets a gitignored file; risks leaking ignored data into the bundle.',
-    'Link to a non-ignored file or adjust .gitignore. Allow the specific path via validation.allow if the risk has been reviewed.',
+    'Link to a non-ignored file or adjust .gitignore. Allow the specific path via validation.allow if the risk has been reviewed. If the target is a build artifact, declare it under skills.config.<name>.files instead.',
     'link_to_gitignored_file',
   ),
   LINK_MISSING_TARGET: entry(
@@ -94,9 +111,29 @@ export const CODE_REGISTRY = {
   ),
   PACKAGED_AGENT_INSTRUCTION_FILE: entry(
     'warning',
-    'A repo-internal agent-instruction file (CLAUDE.md, AGENTS.md, GEMINI.md) is present in the distributed output.',
-    'Remove it from the distributed tree, or move it outside the directory that is packaged. If it must ship, set severity.PACKAGED_AGENT_INSTRUCTION_FILE to ignore so the exception is recorded in config.',
+    'A repo-internal agent-instruction file (CLAUDE.md, AGENTS.md, GEMINI.md) is present in the scanned tree — a built skill bundle, an installed plugin, or a plugin source directory.',
+    // Two lanes hand this detector different trees, and one remediation has to be
+    // true for both. In a DIST tree the file demonstrably shipped, so removing it
+    // is the fix. In a repo SOURCE tree the build already excludes it from the
+    // plugin tree-copy and from files: globs, so it does not ship unless an
+    // explicit files: entry names it — prescribing deletion there told adopters to
+    // delete a useful repo-internal doc to silence a warning about a file that no
+    // longer travels.
+    //
+    // The last clause is for the third lane: `vat audit <path>` resolves a subject
+    // by PATH, and a built bundle's path is not its source skill's declared path,
+    // so that lane cannot reach the `files:` block that may have sanctioned the
+    // file. `vat build` and `vat verify` CAN, and they honour it by not reporting
+    // at all — so a reader who sees this from audit alone must not conclude the
+    // declaration failed.
+    'In a distributed tree (a built bundle or an installed plugin) remove the file, or move it outside the directory that is packaged. In a repo source tree, confirm first whether it ships: the build excludes agent-instruction files from the plugin tree-copy and from files: globs, so only an explicit files: entry naming it puts it in the output. If it must ship, set severity.PACKAGED_AGENT_INSTRUCTION_FILE to ignore so the exception is recorded in config. If an explicit files: entry already names this dest, vat build and vat verify honour it and stay silent; vat audit reports it anyway because a path-addressed scan cannot see the config that declared it.',
     'packaged_agent_instruction_file',
+  ),
+  FILES_GLOB_DROPPED_NEVER_PACKAGED: entry(
+    'warning',
+    'A `files:` glob matched a file that is never packaged into a skill bundle (an agent-instruction file such as CLAUDE.md, or a navigation file such as README.md); it was dropped and did not ship.',
+    'No action needed if the drop is intended — a glob is a net, not a declaration. To ship that specific file deliberately, add an explicit `files:` entry naming it (`source: <path>`); to stop matching it at all, narrow the glob.',
+    'files_glob_dropped_never_packaged',
   ),
   PACKAGED_TEST_INPUT: entry(
     'warning',
@@ -115,6 +152,16 @@ export const CODE_REGISTRY = {
     'Two source files package to the same destination path in the bundle; one would overwrite the other.',
     "Rename one of the files, or switch resourceNaming to a path-based strategy ('resource-id' or 'preserve-path') so the sources map to distinct destinations.",
     'filename_collision',
+  ),
+  PLUGIN_EXCLUDE_PATTERN_UNUSED: entry(
+    'warning',
+    'A plugin `exclude:` pattern matched no file in the plugin source tree; it excluded nothing from the built bundle.',
+    // Names only what the author can act on. A dead pattern has no "correct"
+    // resolution VAT can pick — the path may be a typo, or the junk it used to
+    // catch may simply be gone — so the fix is to check it against the source
+    // dir and then either correct it or delete the line.
+    "Check the pattern against the plugin source directory (patterns are relative to it, and a bare directory name covers its whole subtree), then correct the path — or drop the entry from the marketplace plugin entry's exclude: list if what it targeted no longer exists.",
+    'plugin_exclude_pattern_unused',
   ),
   DUPLICATE_RESOURCE_ID: entry(
     'error',
@@ -221,7 +268,7 @@ export const CODE_REGISTRY = {
   SKILL_CROSS_SKILL_AUTH_UNDECLARED: entry(
     'warning',
     'SKILL.md body declares a dependency on a sibling skill or ANTHROPIC_*_KEY environment variable that is not mentioned in the description.',
-    'Name the dependency in the description (e.g. "Requires ado skill for auth" or "Requires ANTHROPIC_ADMIN_API_KEY") so agents loading the skill discover it without reading the body.',
+    'Name the dependency in the description (e.g. "Requires ado skill for auth" or "Requires ANTHROPIC_ADMIN_API_KEY") so agents loading the skill discover it without reading the body. Allow via validation.allow with a reason when the dependency is genuinely runtime-optional.',
     'skill_cross_skill_auth_undeclared',
   ),
   SKILL_DESCRIPTION_STYLE_MIXED_IN_PACKAGE: entry(
@@ -377,7 +424,7 @@ export const CODE_REGISTRY = {
   LINK_TO_GITIGNORED: entry(
     'error',
     'A tracked file links to a gitignored file.',
-    'Link a tracked target or un-ignore it.',
+    'Link a tracked target or un-ignore it. If the target is a build artifact, declare it under skills.config.<name>.files instead.',
     'link_to_gitignored',
   ),
   LINK_UNRESOLVED_REFERENCE: entry(

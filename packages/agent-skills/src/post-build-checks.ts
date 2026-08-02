@@ -15,7 +15,6 @@ import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { normalizeRelPath } from './files-config.js';
 import { evaluate, makeRuleContext, materializeIssue } from './validators/rule-engine/index.js';
-import { NEVER_PACKAGE_IN_SKILL_BUNDLE } from './validators/validation-rules.js';
 
 /**
  * Regex matching markdown inline links: [text](href).
@@ -113,23 +112,38 @@ async function extractLocalHrefs(filePath: string): Promise<string[]> {
 }
 
 /**
- * Extra detail (with a leading space) when a broken link's target is a file VAT
- * never packages into a skill bundle, otherwise `''`.
+ * Remediation for a link broken because a glob `files:` entry's never-package
+ * filter refused its target.
  *
- * The generic remediation for this code blames the link rewriter. That is right
- * for the population it was written for and wrong here: a glob `files:` entry
- * filters these basenames out deliberately, so the link is broken by policy, not
- * by a defect. Without this clause an author who linked a `README.md` under a glob
- * dest goes looking for a VAT bug instead of naming the file explicitly.
+ * The registry `fix` for `PACKAGED_BROKEN_LINK` says to report a VAT bug. That is
+ * right for the population it was written for and actively wrong here — VAT
+ * dropped the file deliberately, by policy — so the issue is re-fixed rather than
+ * re-coded. Deliberately NOT a new code: the finding is the same one (a link in
+ * the output resolves to nothing, still an error, still blocking), and `code` is
+ * what adopters key `validation.severity` / `validation.allow` on, so splitting it
+ * would silently orphan every existing `PACKAGED_BROKEN_LINK` override.
  */
-function neverPackagedClause(href: string): string {
+const NEVER_PACKAGED_LINK_FIX =
+  'Nothing to report — VAT dropped this file on purpose (a `files:` glob never packages ' +
+  'agent-instruction or navigation files). Ship it by adding an explicit `files:` entry that ' +
+  'names it (`source: <path>`), point the link at content that does ship, or drop the link.';
+
+/**
+ * Extra detail (with a leading space) when a broken link's target is a file a
+ * glob `files:` entry actually dropped in THIS build, otherwise `''`.
+ *
+ * Keyed on the drop, never on the basename. A basename test claimed a glob had
+ * refused the file in builds where no glob ran at all — a false story on a
+ * build-BLOCKING error, whose prescribed remedy ("declare it explicitly") is not
+ * even satisfiable when the link resolves outside the skill output dir, since
+ * `dest` is schema-guarded to stay inside it.
+ */
+function neverPackagedClause(href: string, wasDropped: boolean): string {
+  if (!wasDropped) return '';
   const name = href.slice(href.lastIndexOf('/') + 1);
-  if (!(NEVER_PACKAGE_IN_SKILL_BUNDLE as readonly string[]).includes(name)) {
-    return '';
-  }
   return (
-    ` — '${name}' is never packaged into a skill bundle by a glob 'files:' entry.` +
-    ` Declare it explicitly (source: <path>/${name}) to ship it, or drop the link.`
+    ` — '${name}' was matched by a glob 'files:' entry and dropped: it is never packaged` +
+    ` into a skill bundle. Declare it explicitly (source: <path>/${name}) to ship it, or drop the link.`
   );
 }
 
@@ -138,12 +152,18 @@ function neverPackagedClause(href: string): string {
  * issues for any that don't resolve to a file in the packaged output.
  *
  * Shared by markdown and HTML broken-link checks to eliminate duplicate resolve/emit logic.
+ *
+ * `droppedDestSet` holds skill-output-relative dests a glob `files:` entry dropped
+ * (from `applyFilesConfig`). Empty for callers with no files-config context, which
+ * is the honest answer for them: they cannot know that anything was dropped, so
+ * they must not claim it was.
  */
 function collectBrokenLinkIssues(
   sourceFile: string,
   hrefs: string[],
   allFileSet: Set<string>,
   outputDir: string,
+  droppedDestSet: ReadonlySet<string>,
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const relativeSourcePath = toForwardSlash(safePath.relative(outputDir, sourceFile));
@@ -170,10 +190,12 @@ function collectBrokenLinkIssues(
       // (a link-rewriter bug) rather than LINK_MISSING_TARGET via phase: 'built'.
       const code = evaluate(makeRuleContext({ subject: 'edge', phase: 'built', existsAtSource: false }));
       if (code !== null) {
-        issues.push(materializeIssue(code, {
+        const wasDropped = droppedDestSet.has(toForwardSlash(safePath.relative(outputDir, resolved)));
+        const issue = materializeIssue(code, {
           location: relativeSourcePath,
-          detail: `link: ${href} from ${relativeSourcePath}${neverPackagedClause(href)}`,
-        }));
+          detail: `link: ${href} from ${relativeSourcePath}${neverPackagedClause(href, wasDropped)}`,
+        });
+        issues.push(wasDropped ? { ...issue, fix: NEVER_PACKAGED_LINK_FIX } : issue);
       }
     }
   }
@@ -338,8 +360,21 @@ export async function checkUnreferencedFiles(
 /**
  * Check that every local file link in packaged markdown and HTML files resolves to a file
  * that exists in the packaged output.
+ *
+ * @param outputDir Absolute path to the packaged skill output.
+ * @param droppedDests Skill-output-relative dests a glob `files:` entry matched
+ *   and the never-package list refused — `applyFilesConfig(...).dropped`, mapped
+ *   to `.dest`. A link resolving to one of THESE is broken by deliberate policy,
+ *   and gets a remediation that says so instead of the generic "report a VAT bug".
+ *   Defaults to none for callers that never ran a files config (e.g.
+ *   `validateShippedPluginSkillLinks`, which inspects an already-built plugin
+ *   tree): they cannot know a drop happened, so they correctly claim no cause.
  */
-export async function checkBrokenPackagedLinks(outputDir: string): Promise<ValidationIssue[]> {
+export async function checkBrokenPackagedLinks(
+  outputDir: string,
+  droppedDests: readonly string[] = [],
+): Promise<ValidationIssue[]> {
+  const droppedDestSet = new Set(droppedDests.map(d => normalizeRelPath(d)));
   const allFiles = walkDir(outputDir);
   const linkableFiles = allFiles.filter(f =>
     f.endsWith('.md') || f.endsWith('.html') || f.endsWith('.htm')
@@ -350,7 +385,7 @@ export async function checkBrokenPackagedLinks(outputDir: string): Promise<Valid
 
   for (const sourceFile of linkableFiles) {
     const hrefs = await extractLocalHrefs(sourceFile);
-    issues.push(...collectBrokenLinkIssues(sourceFile, hrefs, allFileSet, outputDir));
+    issues.push(...collectBrokenLinkIssues(sourceFile, hrefs, allFileSet, outputDir, droppedDestSet));
   }
 
   return issues;

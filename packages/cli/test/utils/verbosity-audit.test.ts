@@ -59,6 +59,40 @@ function renderedLabels(lines: string[]): string[] {
   return lines.flatMap((line) => /^\s*\[(ERROR|WARNING|INFO|IGNORED)]/.exec(line)?.slice(1, 2) ?? []);
 }
 
+/**
+ * The subject of every findings heading — the text left of the ` — ` separator.
+ *
+ * Asserted over the WHOLE set rather than one heading, because the bug this
+ * guards is a heading whose subject rendered as the empty string: the operator
+ * was told a nameless something had two warnings and then shown neither.
+ */
+function headingSubjects(lines: string[]): string[] {
+  return lines.flatMap((line) => {
+    // Headings are `\n<subject> — <severity breakdown>:`; the trailing colon is
+    // what separates them from the collapsed-count footer, which also carries a
+    // ` — `.
+    const heading = /^\n(.*?) — .*:$/.exec(line);
+    return heading?.[1] === undefined ? [] : [heading[1]];
+  });
+}
+
+/** A whole-directory result, i.e. one whose `path` IS the scan root. */
+function rootResult(
+  metadata: ValidationResult['metadata'],
+  issues: ValidationIssue[],
+): ValidationResult {
+  const counts = countBySeverity(issues);
+  return {
+    path: ROOT,
+    type: 'claude-plugin',
+    status: statusFor(counts),
+    summary: `${counts.errors} errors, ${counts.warnings} warnings, ${counts.info} info`,
+    issues,
+    issueCounts: counts,
+    ...(metadata === undefined ? {} : { metadata }),
+  };
+}
+
 /** One skill: the error that failed it plus the high-cardinality noise beside it. */
 function mixedFixture(): ValidationResult[] {
   return [
@@ -102,6 +136,40 @@ describe('vat audit — formatAuditFindingsLines', () => {
     expect(text).toContain('4 warning/info');
     expect(text).toContain('--verbose');
     expect(text).toContain('YAML');
+  });
+
+  it("scopes the collapsed-findings pointer to THIS report, not to 'the YAML report' in general", () => {
+    // The pointer used to promise that "the YAML report on stdout … always
+    // lists every finding". True of `vat audit` and `vat skills validate`; FALSE
+    // of the whole `vat build` family, whose stdout YAML publishes issueCounts
+    // only (an adopter run reported 67 warnings with zero `issues:` arrays and
+    // zero `code:` fields, in default AND --verbose mode). Scope the claim to
+    // the report the operator is actually holding so it cannot be read as a
+    // property of VAT's YAML output generally.
+    const text = formatAuditFindingsLines(mixedFixture(), ROOT, false).join('\n');
+    expect(text).toContain("this audit's YAML report on stdout");
+    expect(text).not.toContain('the YAML report on stdout, which always lists every finding');
+  });
+
+  it('never heads a block with an EMPTY subject, even when the finding IS the scan root', () => {
+    // Auditing a plugin directory produces a result whose `path` equals the scan
+    // root, so the relative location is the empty string and the heading rendered
+    // as a bare " — 2 warnings:". Every heading must name something.
+    const lines = formatAuditFindingsLines(
+      [rootResult({ name: 'my-plugin' }, [issue('warning', 'A'), issue('warning', 'B')])],
+      ROOT,
+      false,
+    );
+    expect(headingSubjects(lines)).toEqual(['my-plugin']);
+    expect(lines.filter((l) => l.startsWith('\n — '))).toEqual([]);
+  });
+
+  it('falls back to a non-empty subject for a root-level result with no name metadata', () => {
+    const lines = formatAuditFindingsLines([rootResult(undefined, [issue('warning', 'A')])], ROOT, false);
+    for (const subject of headingSubjects(lines)) {
+      expect(subject).not.toBe('');
+    }
+    expect(headingSubjects(lines)).toHaveLength(1);
   });
 
   it('renders EVERY emitted severity under --verbose, not just the errors', () => {

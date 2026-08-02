@@ -37,7 +37,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { buildAuditReport } from '../../src/commands/audit.js';
 import { anchorContractViolations, anchorsBelowRoot } from '../anchor-contract-helpers.js';
-import { gitAddAll, initTestGitRepo, silentAuditLogger } from '../test-helpers.js';
+import { gitAddAll, initTestGitRepo, silentLogger } from '../test-helpers.js';
 
 function writeFileAt(filePath: string, content: string): void {
   fs.mkdirSync(safePath.resolve(filePath, '..'), { recursive: true });
@@ -114,7 +114,7 @@ describe('audit report coherence (integration)', () => {
     writePluginWithStaleCounts(safePath.join(tempDir, 'plugins', 'no-version'));
     gitAddAll(tempDir);
 
-    ({ document } = await buildAuditReport(tempDir, { recursive: true }, Date.now(), silentAuditLogger));
+    ({ document } = await buildAuditReport(tempDir, { recursive: true }, Date.now(), silentLogger));
   });
 
   afterAll(() => {

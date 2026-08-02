@@ -209,7 +209,14 @@ A glob's matches are filtered against a built-in never-package list before anyth
 | Tier | Files | Never packaged into |
 |---|---|---|
 | Agent-instruction | `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `GEMINI.md` | any bundle — skill **and** plugin |
-| Navigation | `README.md`, `readme.md`, `index.md`, `INDEX.md`, `toc.md`, `TOC.md`, `overview.md`, `OVERVIEW.md` | a **skill bundle** only |
+| Navigation | `README.md`, `index.md`, `toc.md`, `overview.md` | a **skill bundle** only |
+
+**Matching is case-insensitive**, so one spelling per name is listed above and every
+other spelling is covered: `Claude.md`, `claude.md` and `CLAUDE.MD` are all dropped
+exactly as `CLAUDE.md` is, and `Readme.md` / `ReadMe.md` as `README.md` is. This is not
+cosmetic — on a case-insensitive filesystem (macOS APFS, Windows NTFS) Claude Code's
+lookup for a project-local `CLAUDE.md` resolves a `Claude.md` just the same, so a
+case-sensitive list would leave the whole harm reachable by renaming one letter.
 
 Navigation files are deliberately *not* excluded from the plugin tree-copy: a plugin-root
 `README.md` is the plugin's front page, and most published plugins ship one.
@@ -225,25 +232,42 @@ files:
 ```
 
 Naming a path is an unambiguous instruction to ship that file, so an explicit entry always wins
-and a deliberate scaffold or skill README needs no new config. A glob never named the file it
+and a deliberate scaffold or skill README needs no new config. That instruction is followed all the
+way through: an explicitly-named dest is also exempt from
+[`PACKAGED_AGENT_INSTRUCTION_FILE`](../validation-codes.md#packaged_agent_instruction_file) in
+`vat build` and `vat verify`, so declaring the file does not then earn you a warning telling you to
+delete it. (`vat audit <path>` still reports it — that lane resolves a subject by path and cannot
+reach the config that declared it; `vat verify` is the authoritative answer.) A glob never named the file it
 caught, so it does not inherit the intent an explicit declaration carries. (Same principle that
 exempts a declared `files:` dest from [`PACKAGED_UNREFERENCED_FILE`](../validation-codes.md#packaged_unreferenced_file),
 and that auto-excludes a declared `test.evals` path.) Link-following already refuses to bundle
 both file classes; this keeps glob expansion from disagreeing with it.
 
-Dropped files are reported as a build warning naming each one. If `SKILL.md` links to a dropped
-file (via its glob **dest** path, which validate treats as a deferred artifact), the packaged link
-has no target and the build fails with
-[`PACKAGED_BROKEN_LINK`](../validation-codes.md#packaged_broken_link) naming the never-package rule
-as the cause — declare the file explicitly, or drop the link.
+**Entry order does not matter.** The explicit entry above may sit before or after the glob, and
+that holds even when the glob carries `integrity: true` over the same dest subtree — integrity is
+evaluated once every entry has copied, against the union of what all of them declared, so it stays
+a statement about the bundle you actually ship.
+
+Every dropped file is reported as a
+[`FILES_GLOB_DROPPED_NEVER_PACKAGED`](../validation-codes.md#files_glob_dropped_never_packaged)
+warning in the structured result, not only on stderr — a build that silently changed what ships
+cannot report `warnings: 0`. The **pre-build** gates report it too: `vat skills validate` and
+`vat audit` expand the same globs through the same code path as the copy, so you see the drop
+before a build exists and the two lanes cannot disagree about what ships. (Pre-build, a glob whose
+base has not been built yet simply has nothing to report — the zero-match *error* below belongs to
+copy time, where the build has run.) If `SKILL.md` links to a dropped file (via its glob **dest** path,
+which validate treats as a deferred artifact), the packaged link has no target and the build fails
+with [`PACKAGED_BROKEN_LINK`](../validation-codes.md#packaged_broken_link) naming the never-package
+rule as the cause — declare the file explicitly, or drop the link. That cause is only named when
+the file really was dropped by a glob; an ordinary broken link to a `README.md` keeps the ordinary
+remediation.
 
 #### Build-time errors
 
 A glob that matches **zero files** is a hard error at build time:
 
 ```
-files entry for skill 'report-tools': glob 'dist/packs/**/*' matched no files.
-Has your build run?
+files: source 'dist/packs/**/*' (glob) matched no files under /repo/dist/packs — has your build run?
 ```
 
 A glob whose matches are **all** never-packaged is a distinct hard error — it names the exclusion
@@ -252,8 +276,12 @@ rather than sending you hunting for a build failure that isn't there:
 ```
 files: source 'extras/**/*' (glob) matched 2 file(s) under /repo/extras, but all of them are
 never packaged into a skill bundle: CLAUDE.md, README.md. Declare an explicit source: entry
-for a file you intend to ship, or widen the glob.
+for a file you intend to ship, or point the glob at a directory that holds files which can be
+packaged.
 ```
+
+Widening the glob is *not* a fix: the filter is on basename and applies at any width, so a wider
+pattern clears the error while still shipping none of these files.
 
 A **non-glob** `source` that resolves to a directory is a hard error telling you to use a glob instead:
 

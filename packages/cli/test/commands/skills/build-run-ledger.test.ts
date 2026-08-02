@@ -7,15 +7,8 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { runSkillBuild, type BuildSkillSpec } from '../../../src/commands/skills/build.js';
-import type { Logger } from '../../../src/utils/logger.js';
 import { createTempDirTracker } from '../../system/test-common.js';
-
-const SILENT_LOGGER: Logger = {
-  info: () => {},
-  warn: () => {},
-  error: () => {},
-  debug: () => {},
-};
+import { silentLogger as SILENT_LOGGER } from '../../test-doubles.js';
 
 const SOURCE_SCOPED_FIELD = 'validation.allow.NON_PORTABLE_ASSET_REFERENCE';
 const DEAD_ENTRY_FIELD = 'validation.allow.SKILL_TOO_LARGE';
@@ -87,7 +80,14 @@ async function allowUnusedAcrossBuildRun(cwd: string): Promise<{
 
   // `[]`: these fixtures declare no eval suites, so the project-wide test-input
   // list is genuinely empty — not a lane declining to supply it.
-  const run = await runSkillBuild(specs, cwd, SILENT_LOGGER, []);
+  const run = await runSkillBuild({
+    specs,
+    cwd,
+    logger: SILENT_LOGGER,
+    projectSkills: [],
+    onlySkill: undefined,
+    verbose: false,
+  });
   const unused = [
     ...run.results.flatMap(({ result }) => [
       ...(result.postBuildIssues ?? []),
@@ -166,7 +166,7 @@ async function buildRunWithOneThrowingSkill(cwd: string, logger: Logger) {
       : {}) as SkillPackagingConfig;
     specs.push({ skill: { name, sourcePath }, packagingConfig });
   }
-  return runSkillBuild(specs, cwd, logger, []);
+  return runSkillBuild({ specs, cwd, logger, projectSkills: [], onlySkill: undefined, verbose: false });
 }
 
 describe('runSkillBuild - a skill that throws does not discard the batch', () => {

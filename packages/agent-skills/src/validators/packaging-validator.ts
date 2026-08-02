@@ -31,6 +31,7 @@ import { DeferredArtifacts, parseMarkdown, ResourceRegistry, type SkillExecutabl
 import { findProjectRoot, issueLocation, normalizedTmpdir, toForwardSlash, safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
 
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
+import { collectDroppedGlobMatches, droppedGlobMatchesToIssues } from '../files-config.js';
 import {
   packagedFileEntries,
   resolveTestInputDirs,
@@ -508,12 +509,23 @@ export async function validateSkillForPackaging(
   // caller has no project to enumerate — a single-skill audit of a tree with no
   // config — which narrows this lane to the subject's own suite and nothing else.
   const projectSkills = shared?.projectSkills ?? [];
+  const packagedFiles = packagedFileEntries(
+    packagingConfig ?? {}, dirname(skillPath), projectRoot, projectSkills,
+  );
   const deferred = DeferredArtifacts.from(
-    [{
-      files: packagedFileEntries(packagingConfig ?? {}, dirname(skillPath), projectRoot, projectSkills),
-      skillDir: dirname(skillPath),
-    }],
+    [{ files: packagedFiles, skillDir: dirname(skillPath) }],
     projectRoot,
+  );
+
+  // Files a `files:` GLOB will catch and the never-package list will refuse.
+  // Reported HERE, before any build, because this is where it is still cheap to
+  // act on: `vat skills validate` and `vat audit` can expand the same globs the
+  // packager expands without writing anything, and the drop warning is the only
+  // signal standing between a documentation-bearing glob base and a silent content
+  // loss the day someone adds a README.md to it. Same expansion as the copy — see
+  // collectDroppedGlobMatches — so the two lanes cannot disagree about what ships.
+  rawIssues.push(
+    ...droppedGlobMatchesToIssues(await collectDroppedGlobMatches(packagedFiles, projectRoot)),
   );
   const testInputDirs = resolveTestInputDirs(packagingConfig ?? {}, dirname(skillPath), projectSkills);
 

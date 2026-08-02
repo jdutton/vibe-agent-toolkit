@@ -205,7 +205,7 @@ describe('checkUnreferencedFiles - files: config dests', () => {
     const outputDir = await setupOutputDir();
     await writeSkillMd(outputDir, NO_LINKS_BODY);
 
-    const dests = await applyFilesConfig({
+    const { dests } = await applyFilesConfig({
       filesConfig: [
         { source: toForwardSlash(safePath.join(BUILD_ARTIFACTS, 'engine.wasm')), dest: VENDOR_WASM },
         { source: toForwardSlash(safePath.join(BUILD_ARTIFACTS, 'schemas', '*.json')), dest: 'schemas' },
@@ -280,15 +280,60 @@ describe('checkBrokenPackagedLinks', () => {
   // link to one is genuinely broken in the output and must still fail the build.
   // But the generic remediation blames a link-rewriter bug, which would send the
   // author hunting a VAT defect instead of naming the file explicitly.
-  it('names the never-package cause instead of implying a VAT bug', async () => {
-    const outputDir = await setupOutputDir([RESOURCES]);
-    await writeSkillMd(outputDir, ['# Skill', '', 'See [readme](resources/README.md).'].join('\n'));
+  //
+  // The clause is keyed on the DROP, not on the basename: a build where no glob
+  // ran dropped nothing, so the same link there is an ordinary broken link and the
+  // never-package story would be false (and its prescribed remedy unsatisfiable).
+  it('names the never-package cause — and only the file a glob actually dropped', async () => {
+    const projectRoot = safePath.join(getTempDir(), 'never-packaged-project');
+    const extras = safePath.join(projectRoot, 'extras');
+    await mkdir(extras, { recursive: true });
+    await writeFile(safePath.join(extras, 'README.md'), '# front page\n');
+    await writeFile(safePath.join(extras, 'guide.md'), '# Guide\n');
+
+    const outputDir = safePath.join(getTempDir(), 'never-packaged-out');
+    await mkdir(outputDir, { recursive: true });
+    await writeSkillMd(
+      outputDir,
+      ['# Skill', '', 'See [readme](resources/README.md) and [guide](resources/guide.md).'].join('\n'),
+    );
+
+    // A REAL glob drop supplies the dest list — not a hand-written string.
+    const applied = await applyFilesConfig({
+      filesConfig: [{ source: 'extras/**/*', dest: RESOURCES }],
+      projectRoot,
+      skillOutputDir: outputDir,
+    });
+    expect(applied.dropped.map(d => d.dest)).toEqual(['resources/README.md']);
+
+    const issues = await checkBrokenPackagedLinks(outputDir, applied.dropped.map(d => d.dest));
+    const broken = issues.find((i) => i.code === 'PACKAGED_BROKEN_LINK');
+
+    expect(broken).toBeDefined();
+    // `message` is always set, so asserting on it alone is a real assertion —
+    // the old `message ?? fix` fallback had a branch that could never run.
+    expect(broken?.message).toMatch(/never packaged/i);
+    // ...and the remediation must stop telling the author to report a VAT bug
+    // about a file VAT dropped deliberately.
+    expect(broken?.fix).not.toMatch(/VAT bug/i);
+  });
+
+  // The false-positive shape the clause used to fire on: nothing was dropped
+  // (no glob ran at all), so the sentence "a glob 'files:' entry never packages
+  // this" is simply false — and its remedy ("declare it explicitly") cannot be
+  // satisfied for a target outside the skill output dir.
+  it('stays silent about never-packaging when no glob dropped anything', async () => {
+    const outputDir = await setupOutputDir(['vendor']);
+    await writeSkillMd(outputDir, ['# Skill', '', 'See [guide](vendor/guide.md).'].join('\n'));
+    await writeResource(outputDir, 'vendor/guide.md', '# Guide\n\nUp to [readme](../README.md).\n');
 
     const issues = await checkBrokenPackagedLinks(outputDir);
     const broken = issues.find((i) => i.code === 'PACKAGED_BROKEN_LINK');
 
     expect(broken).toBeDefined();
-    expect(broken?.message ?? broken?.fix ?? '').toMatch(/never packaged/i);
+    expect(broken?.message).not.toMatch(/never packaged/i);
+    // The generic rewriter-bug remediation is correct for THIS population.
+    expect(broken?.fix).toMatch(/VAT bug/i);
   });
 
   it('should skip external URLs', async () => {

@@ -54,7 +54,14 @@ import {
 } from '@vibe-agent-toolkit/utils';
 
 import { CLAUDE_WEB_REFERENCES_SUBDIR, getTargetSubdir } from './content-type-routing.js';
-import { applyFilesConfig, buildArtifactHint, type SkillFileEntry } from './files-config.js';
+import {
+  applyFilesConfig,
+  buildArtifactHint,
+  droppedGlobMatchesToIssues,
+  explicitFilesConfigDests,
+  globEntryDest,
+  type SkillFileEntry,
+} from './files-config.js';
 import { checkBrokenPackagedLinks, checkUnreferencedFiles } from './post-build-checks.js';
 import {
   checkPackagedTestInput,
@@ -640,9 +647,11 @@ export async function packageSkill(
     bundledFiles, outputPath, resourceNaming, namingBasePath, stripPrefix, target,
   );
 
-  // 8b. Apply files config: register single-file entries in path map.
-  // GLOB entries are skipped — late binding via applyFilesConfig owns their expansion.
-  applyNonGlobEntriesToPathMap(filesConfig, projectRoot, outputPath, pathMap, skillMetadata.name);
+  // 8b. Apply files config to the path map: single-file entries by name, and glob
+  // entries by re-pointing the link-bundled files they claim at the declared dest.
+  applyFilesEntriesToPathMap(
+    filesConfig, projectRoot, outputPath, pathMap, skillMetadata.name, bundledFiles,
+  );
 
   // 8c. Collisions are judged on the FINAL destination map, so a `files:` remap is
   // a real remedy and a `files:`-created collision is still caught. See
@@ -732,10 +741,16 @@ export async function packageSkill(
   // Keep the dests it reports: they are what makes the orphan check below able to
   // tell "the author forgot to document this" from "VAT put this here because the
   // config said to." Discarding them makes the build fail on its own payload.
-  const filesConfigDests = await applyFilesConfig({
+  const appliedFiles = await applyFilesConfig({
     filesConfig, projectRoot, skillOutputDir: outputPath, bundledFiles,
-    warn: (message) => process.stderr.write(`warning: ${message}\n`),
   });
+  const filesConfigDests = appliedFiles.dests;
+  // Dests a glob matched and the never-package list refused. Two consumers, and
+  // both are load-bearing: the broken-link check below needs them to tell a link
+  // broken by policy from a link broken by the rewriter, and the finding channel
+  // needs them or the structured report says `warnings: 0` about a build that
+  // silently shipped less than the config asked for.
+  const droppedGlobDests = appliedFiles.dropped.map((drop) => drop.dest);
 
   // 13. Post-build integrity check: no SKILL.md in subdirectories
   // A SKILL.md is a skill definition marker — it must only exist at the root.
@@ -757,11 +772,26 @@ export async function packageSkill(
     // helper.
     ...collisionIssues,
     ...await checkUnreferencedFiles(outputPath, filesConfigDests),
-    ...await checkBrokenPackagedLinks(outputPath),
+    ...await checkBrokenPackagedLinks(outputPath, droppedGlobDests),
+    // A receipt for every file a glob matched and the never-package list refused.
+    // Reported as an issue, not written to stderr: a file vanishing from a bundle
+    // has to be visible in `issueCounts`, or CI reads a clean report for a build
+    // that quietly shipped less than the config declared.
+    ...droppedGlobMatchesToIssues(appliedFiles.dropped),
     // Presence-side backstop for agent-instruction files. The walker excludes
     // them from link-following, but a `files:` glob can still copy one in, and
     // a file that arrives without a link is invisible to the link lane.
-    ...detectPackagedAgentInstructionFiles(outputPath, outputPath),
+    //
+    // Explicitly-declared dests are exempt (§8.2 precedence): the build KNOWS the
+    // config here, and an explicit `files:` entry is an instruction to ship that
+    // exact file. Reporting it fired this warning on the very config the guide
+    // prescribes as the escape hatch, with a remedy ("remove the file") that says
+    // to undo what the author was told to write.
+    ...detectPackagedAgentInstructionFiles(
+      outputPath,
+      outputPath,
+      explicitFilesConfigDests(filesConfig),
+    ),
     // A receipt for each `files:` entry that was dropped for pointing into declared
     // test input — the build already produced the right artifact; this just says so.
     ...testInputFileEntryIssues(droppedTestInputFiles),
@@ -1141,23 +1171,67 @@ function buildSyntheticAssetResource(
 }
 
 /**
- * Register single-file (non-glob) files config entries in the path map.
+ * Re-point every LINK-BUNDLED file a GLOB `files:` entry also claims at the dest
+ * that entry declares.
  *
- * GLOB entries are skipped — their source contains glob magic, never exists as a
- * literal path at build time, and would wrongly throw. Late binding via
- * applyFilesConfig owns their expansion at copy time.
+ * A glob's expansion is late-bound to copy time, so its matches used to be absent
+ * from the path map entirely — and a match that link traversal ALSO discovered was
+ * therefore parked at its type-derived location (`resources/GUIDE.md`) while
+ * `applyFilesConfig` copied the same bytes to the declared dest
+ * (`packs/alpha/GUIDE.md`). Two identical files shipped, the rewritten link pointed
+ * at traversal's copy, the declared `dest:` was dead, and nothing said so — a size
+ * regression for anyone shipping multi-megabyte artifacts, and a `dest:` that lies
+ * whenever the same file is also referenced from prose.
+ *
+ * Only files already in `bundledFiles` are considered: this is not a second
+ * expansion of the glob (that stays with {@link copyGlobEntry}), it is the path map
+ * — the authority on where a file ends up — learning what the config already said.
+ */
+function applyGlobEntryToPathMap(
+  entry: SkillFileEntry,
+  projectRoot: string,
+  outputPath: string,
+  pathMap: Map<string, string>,
+  bundledFiles: string[],
+): void {
+  for (const bundled of bundledFiles) {
+    const dest = globEntryDest(entry, projectRoot, bundled);
+    if (dest === undefined) continue;
+    // joinUnderRoot mirrors the non-glob branch's zip-slip guard below.
+    pathMap.set(toForwardSlash(bundled), safePath.joinUnderRoot(outputPath, dest));
+  }
+}
+
+/**
+ * Register `files:` config entries in the path map.
+ *
+ * Two passes, GLOBS FIRST, and the order is the precedence rule: an explicit entry
+ * naming a file outranks a glob that merely caught it, exactly as it does on the
+ * copy side (see `partitionNeverPackaged` — a glob is a net, not a declaration).
+ * Applying globs second would let one silently overwrite the dest an author spelled
+ * out, and the explicit entry's own copy is then skipped as "already bundled at its
+ * dest" — so the declared file would never be written at all.
  *
  * Called from step 8b of packageSkill to keep the main function under the
  * cognitive-complexity limit.
  */
-function applyNonGlobEntriesToPathMap(
+function applyFilesEntriesToPathMap(
   filesConfig: SkillFileEntry[],
   projectRoot: string,
   outputPath: string,
   pathMap: Map<string, string>,
   skillName: string,
+  bundledFiles: string[],
 ): void {
   for (const fileEntry of filesConfig) {
+    if (isGlob(fileEntry.source)) {
+      applyGlobEntryToPathMap(fileEntry, projectRoot, outputPath, pathMap, bundledFiles);
+    }
+  }
+
+  for (const fileEntry of filesConfig) {
+    // A glob source contains magic, never exists as a literal path, and would
+    // wrongly throw the existence check below; its dests were handled above.
     if (isGlob(fileEntry.source)) continue;
 
     const absoluteSource = safePath.resolve(safePath.join(projectRoot, fileEntry.source));

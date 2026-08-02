@@ -7,8 +7,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   applyFilesConfig,
   buildArtifactHint,
+  collectDroppedGlobMatches,
+  explicitFilesConfigDests,
+  globEntryDest,
   mergeFilesConfig,
-  matchLinkToFiles,
   verifyFilesIntegrity,
   verifyDestSet,
   type SkillFileEntry,
@@ -146,79 +148,134 @@ describe('mergeFilesConfig', () => {
   });
 });
 
-describe('matchLinkToFiles', () => {
-  const files: SkillFileEntry[] = [
-    { source: CLI_SOURCE, dest: CLI_DEST },
-    { source: 'src/templates/config.json', dest: 'scripts/config.json' },
-  ];
-
-  it('should match when link target matches files[].source', () => {
-    const result = matchLinkToFiles(CLI_SOURCE, files);
-    expect(result).toEqual({ match: 'source', entry: files[0] });
-  });
-
-  it('should match when link target matches files[].dest', () => {
-    const result = matchLinkToFiles(CLI_DEST, files);
-    expect(result).toEqual({ match: 'dest', entry: files[0] });
-  });
-
-  it('should return null when no match', () => {
-    const result = matchLinkToFiles('other/file.mjs', files);
-    expect(result).toBeNull();
-  });
-
-  it('should normalize paths with ./ prefix', () => {
-    const result = matchLinkToFiles(`./${CLI_SOURCE}`, files);
-    expect(result).toEqual({ match: 'source', entry: files[0] });
-  });
-
-  it('should prefer source match over dest match when both match', () => {
-    const ambiguousFiles: SkillFileEntry[] = [
-      { source: CLI_DEST, dest: 'tools/cli.mjs' },
-      { source: 'other/tool.mjs', dest: CLI_DEST },
+describe('explicitFilesConfigDests', () => {
+  it('returns the dests of non-glob entries only', () => {
+    // A glob is a net, not a declaration — it never named the file it caught, so
+    // its expansion must not earn the exemption an explicit entry earns.
+    const files: SkillFileEntry[] = [
+      { source: CLI_SOURCE, dest: CLI_DEST },
+      { source: GLOB_PACKS_SOURCE, dest: GLOB_PACKS_DEST },
     ];
-    const result = matchLinkToFiles(CLI_DEST, ambiguousFiles);
-    expect(result?.match).toBe('source');
-    expect(result?.entry).toBe(ambiguousFiles[0]);
+    expect(explicitFilesConfigDests(files)).toEqual([CLI_DEST]);
   });
 
-  // ---- Glob entry prefix matching ----
-
-  it('glob entry: matches dest prefix (link under dest dir)', () => {
-    const globEntry: SkillFileEntry = { source: GLOB_PACKS_SOURCE, dest: GLOB_PACKS_DEST };
-    const result = matchLinkToFiles('packs/ce/x.json', [globEntry]);
-    expect(result).toEqual({ match: 'dest', entry: globEntry });
+  it('normalizes the spelling so it compares equal to a packaged rel path', () => {
+    expect(explicitFilesConfigDests([{ source: 'a/b.md', dest: './notes/CLAUDE.md' }]))
+      .toEqual(['notes/CLAUDE.md']);
   });
 
-  it('glob entry: matches source-base prefix (link under source static base)', () => {
-    const globEntry: SkillFileEntry = { source: GLOB_PACKS_SOURCE, dest: GLOB_PACKS_DEST };
-    const result = matchLinkToFiles('dist/packs/ce/x.json', [globEntry]);
-    expect(result).toEqual({ match: 'source', entry: globEntry });
+  it('returns an empty list for no entries', () => {
+    expect(explicitFilesConfigDests([])).toEqual([]);
+  });
+});
+
+/** Sandbox with `<projectRoot>/extras/{keep.json,README.md,CLAUDE.md}`. */
+function makeExtrasSandbox(): string {
+  const { projectRoot } = makeApplySandbox();
+  const extras = safePath.join(projectRoot, EXTRAS_DEST);
+  mkdirSyncReal(extras, { recursive: true });
+  writeFileSync(safePath.join(extras, 'keep.json'), '{}');
+  writeFileSync(safePath.join(extras, 'README.md'), '# readme\n');
+  writeFileSync(safePath.join(extras, 'CLAUDE.md'), '# guidance\n');
+  return projectRoot;
+}
+
+const EXTRAS_DEST = 'extras';
+const EXTRAS_GLOB_SOURCE = 'extras/**/*';
+const EXTRAS_README_DEST = 'extras/README.md';
+const EXTRAS_CLAUDE_DEST = 'extras/CLAUDE.md';
+const extrasGlob: SkillFileEntry = { source: EXTRAS_GLOB_SOURCE, dest: EXTRAS_DEST };
+
+describe('collectDroppedGlobMatches', () => {
+  afterEach(() => {
+    for (const dir of APPLY_TMP_DIRS.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
 
-  it('glob entry: source prefix match wins over dest match (priority preserved)', () => {
-    // Entry whose source static base matches the link — source check comes first
-    const globEntry: SkillFileEntry = { source: GLOB_PACKS_SOURCE, dest: GLOB_PACKS_DEST };
-    // 'dist/packs/ce/x.json' matches source base 'dist/packs', not dest 'packs'
-    const result = matchLinkToFiles('dist/packs/ce/x.json', [globEntry]);
-    expect(result?.match).toBe('source');
+  it('reports each never-packaged file a glob matched, spelled as its would-be dest', async () => {
+    const projectRoot = makeExtrasSandbox();
+    const dropped = await collectDroppedGlobMatches([extrasGlob], projectRoot);
+    expect(dropped.map(d => d.dest).sort((a, b) => a.localeCompare(b)))
+      .toEqual([EXTRAS_CLAUDE_DEST, EXTRAS_README_DEST]);
+    expect(dropped.every(d => d.source === EXTRAS_GLOB_SOURCE)).toBe(true);
   });
 
-  it('glob entry: does NOT match sibling dir that shares prefix (the +/ guard)', () => {
-    // 'packsX/y.json' must NOT match dest 'packs' — only 'packs/' subtree matches
-    const globEntry: SkillFileEntry = { source: GLOB_PACKS_SOURCE, dest: GLOB_PACKS_DEST };
-    const result = matchLinkToFiles('packsX/y.json', [globEntry]);
-    expect(result).toBeNull();
+  it('does not report a drop an explicit entry re-ships (the documented escape hatch)', async () => {
+    const projectRoot = makeExtrasSandbox();
+    const dropped = await collectDroppedGlobMatches(
+      [extrasGlob, { source: EXTRAS_README_DEST, dest: EXTRAS_README_DEST }],
+      projectRoot,
+    );
+    // Order-independent: the filter is on the FINAL declared dest set, not on the
+    // order the two entries were written.
+    expect(dropped.map(d => d.dest)).toEqual([EXTRAS_CLAUDE_DEST]);
   });
 
-  it('single-file entry: still matches EXACTLY, not as prefix', () => {
-    const singleEntry: SkillFileEntry = { source: 'a/b.mjs', dest: 'scripts/b.mjs' };
-    // Exact match returns the entry
-    const exactResult = matchLinkToFiles('a/b.mjs', [singleEntry]);
-    expect(exactResult).toEqual({ match: 'source', entry: singleEntry });
-    // 'a/b.mjs/c' must NOT match a single-file entry (isGlob is false, so exact only)
-    const childResult = matchLinkToFiles('a/b.mjs/c', [singleEntry]);
-    expect(childResult).toBeNull();
+  it('ignores non-glob entries entirely', async () => {
+    const projectRoot = makeExtrasSandbox();
+    const dropped = await collectDroppedGlobMatches(
+      [{ source: EXTRAS_CLAUDE_DEST, dest: 'notes/CLAUDE.md' }],
+      projectRoot,
+    );
+    expect(dropped).toEqual([]);
+  });
+
+  // Pre-build lanes run BEFORE the artifact exists. A glob over an unbuilt `dist/`
+  // must be silent here — `copyGlobEntry` still throws at copy time, where the
+  // build genuinely has run and zero matches is a real failure.
+  it('is silent for a glob whose base does not exist yet', async () => {
+    const projectRoot = makeExtrasSandbox();
+    const dropped = await collectDroppedGlobMatches(
+      [{ source: 'dist/not-built/**/*', dest: 'packs' }],
+      projectRoot,
+    );
+    expect(dropped).toEqual([]);
+  });
+});
+
+describe('globEntryDest', () => {
+  const PROJECT_ROOT = safePath.resolve('/project');
+  const globEntry: SkillFileEntry = { source: GLOB_PACKS_SOURCE, dest: GLOB_PACKS_DEST };
+  const abs = (rel: string) => safePath.resolve(PROJECT_ROOT, rel);
+
+  it('rebases a matched source under the declared dest', () => {
+    expect(globEntryDest(globEntry, PROJECT_ROOT, abs('dist/packs/alpha/data.json')))
+      .toBe('packs/alpha/data.json');
+  });
+
+  it('returns undefined for a non-glob entry (its dest is applied by name)', () => {
+    expect(globEntryDest({ source: CLI_SOURCE, dest: CLI_DEST }, PROJECT_ROOT, abs(CLI_SOURCE)))
+      .toBeUndefined();
+  });
+
+  it('returns undefined for a path outside the glob static base', () => {
+    expect(globEntryDest(globEntry, PROJECT_ROOT, abs('dist/other/data.json'))).toBeUndefined();
+    // The `+ '/'` guard: a sibling directory sharing the base's name prefix.
+    expect(globEntryDest(globEntry, PROJECT_ROOT, abs('dist/packsX/data.json'))).toBeUndefined();
+  });
+
+  it('returns undefined when the magic remainder does not match', () => {
+    // Under the static base, but the glob only takes .json — answering with a dest
+    // here would re-point the path map at a file the copy never writes.
+    const jsonOnly: SkillFileEntry = { source: 'dist/packs/**/*.json', dest: GLOB_PACKS_DEST };
+    expect(globEntryDest(jsonOnly, PROJECT_ROOT, abs('dist/packs/alpha/NOTES.txt'))).toBeUndefined();
+    expect(globEntryDest(jsonOnly, PROJECT_ROOT, abs('dist/packs/alpha/data.json')))
+      .toBe('packs/alpha/data.json');
+  });
+
+  it('returns undefined for a never-packaged basename the glob happened to catch', () => {
+    // partitionNeverPackaged DROPS these from the copy, so they have no dest at
+    // all — a glob is a net, not a declaration.
+    for (const name of ['CLAUDE.md', 'AGENTS.md', 'README.md']) {
+      expect(globEntryDest(globEntry, PROJECT_ROOT, abs(`dist/packs/alpha/${name}`)))
+        .toBeUndefined();
+    }
+  });
+
+  it('includes dot files, matching the copy expansion', () => {
+    // copyGlobEntry expands with `dot: true`; a predicate that disagreed would
+    // leave hidden files packaged twice.
+    expect(globEntryDest(globEntry, PROJECT_ROOT, abs('dist/packs/.hidden.json')))
+      .toBe('packs/.hidden.json');
   });
 });
 
@@ -231,7 +288,7 @@ describe('applyFilesConfig', () => {
     const { projectRoot, skillOutputDir } = makeApplySandbox();
     const filesConfig: SkillFileEntry[] = [{ source: DATA_SOURCE, dest: DATA_DEST }];
 
-    const copied = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir });
+    const { dests: copied } = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir });
 
     expect(copied).toEqual([DATA_DEST]);
     const destPath = safePath.join(skillOutputDir, 'data', DATA_FILE);
@@ -244,7 +301,7 @@ describe('applyFilesConfig', () => {
     const filesConfig: SkillFileEntry[] = [{ source: DATA_SOURCE, dest: DATA_DEST }];
     const bundledFiles = [safePath.resolve(safePath.join(projectRoot, DATA_SOURCE))];
 
-    const dests = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir, bundledFiles });
+    const { dests } = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir, bundledFiles });
 
     // No second copy — link traversal already placed the file at entry.dest.
     expect(existsSync(safePath.join(skillOutputDir, 'data', DATA_FILE))).toBe(false);
@@ -264,7 +321,7 @@ describe('applyFilesConfig', () => {
     mkdirSyncReal(safePath.join(skillOutputDir, 'data'), { recursive: true });
     writeFileSync(destPath, DATA_BYTES);
 
-    const dests = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir, bundledFiles });
+    const { dests } = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir, bundledFiles });
 
     // The copy is still skipped (bundled), but the requested integrity check ran.
     expect(dests).toEqual([DATA_DEST]);
@@ -334,7 +391,7 @@ describe('applyFilesConfig', () => {
     writeFileSync(safePath.join(projectRoot, 'dist', 'packs', 'b', 'y.json'), '{"b":2}');
 
     const filesConfig: SkillFileEntry[] = [{ source: GLOB_PACKS_SOURCE, dest: GLOB_PACKS_DEST }];
-    const copied = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir });
+    const { dests: copied } = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir });
 
     // Derive expected dests using safePath + toForwardSlash (never hardcode separators)
     const expectedA = toForwardSlash(safePath.join('packs', 'a', 'x.json'));
@@ -356,7 +413,7 @@ describe('applyFilesConfig', () => {
     writeFileSync(safePath.join(projectRoot, 'dist', 'bin', 'skip.txt'), 'skip');
 
     const filesConfig: SkillFileEntry[] = [{ source: 'dist/bin/*.mjs', dest: 'scripts' }];
-    const copied = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir });
+    const { dests: copied } = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir });
 
     const expectedA = toForwardSlash(safePath.join('scripts', 'a.mjs'));
     const expectedB = toForwardSlash(safePath.join('scripts', 'b.mjs'));
@@ -449,7 +506,7 @@ describe('applyFilesConfig', () => {
     APPLY_TMP_DIRS.push(skillOutputDir);
 
     const filesConfig: SkillFileEntry[] = [{ source: '../sibling/lib/**/*.js', dest: 'lib' }];
-    const copied = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir });
+    const { dests: copied } = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir });
 
     expect(copied).toEqual([toForwardSlash(safePath.join('lib', 'x.js'))]);
     expect(existsSync(safePath.join(skillOutputDir, 'lib', 'x.js'))).toBe(true);
@@ -465,7 +522,7 @@ describe('applyFilesConfig', () => {
     writeFileSync(safePath.join(projectRoot, 'dist', 'packs', hiddenFile), '{"h":1}');
 
     const filesConfig: SkillFileEntry[] = [{ source: 'dist/packs/**/*', dest: 'packs', integrity: true }];
-    const copied = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir });
+    const { dests: copied } = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir });
 
     expect(copied).toContain(toForwardSlash(safePath.join('packs', hiddenFile)));
     expect(existsSync(safePath.join(skillOutputDir, 'packs', hiddenFile))).toBe(true);
@@ -482,7 +539,7 @@ describe('applyFilesConfig', () => {
     const s = makePackGlobSandbox();
     const filesConfig: SkillFileEntry[] = [{ source: PACK_GLOB_SOURCE, dest: PACK_GLOB_DEST }];
 
-    const copied = await applyFilesConfig({
+    const { dests: copied } = await applyFilesConfig({
       filesConfig,
       projectRoot: s.projectRoot,
       skillOutputDir: s.skillOutputDir,
@@ -541,7 +598,7 @@ describe('applyFilesConfig', () => {
     };
 
     // Without integrity: the undeclared file is never reported as accounted for.
-    const copied = await applyFilesConfig(opts);
+    const { dests: copied } = await applyFilesConfig(opts);
     expect(copied).not.toContain(toForwardSlash(safePath.join(PACK_GLOB_DEST, 'alpha', 'orphan.json')));
 
     // With integrity: the dest-subtree set check still fires on it.
@@ -588,6 +645,17 @@ function makeNeverPackageSandbox(
   return { projectRoot, skillOutputDir };
 }
 
+/** Sorted comparison of skill-output-relative paths (order is not part of the contract). */
+function expectSamePaths(actual: readonly string[], expected: readonly string[]): void {
+  const byName = (a: string, b: string): number => a.localeCompare(b);
+  expect([...actual].sort(byName)).toEqual([...expected].sort(byName));
+}
+
+/** The `extras/<name>` dests a glob entry would produce for these basenames. */
+function extrasDests(names: readonly string[]): string[] {
+  return names.map((n) => `${EXTRAS_DIR}/${n}`);
+}
+
 describe('applyFilesConfig never-package defaults', () => {
   afterEach(() => {
     for (const dir of APPLY_TMP_DIRS.splice(0)) rmSync(dir, { recursive: true, force: true });
@@ -597,12 +665,9 @@ describe('applyFilesConfig never-package defaults', () => {
     const { projectRoot, skillOutputDir } = makeNeverPackageSandbox();
     const filesConfig: SkillFileEntry[] = [{ source: EXTRAS_GLOB, dest: EXTRAS_DIR }];
 
-    const copied = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir });
+    const { dests: copied } = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir });
 
-    const byName = (a: string, b: string): number => a.localeCompare(b);
-    expect([...copied].sort(byName)).toEqual(
-      STILL_PACKAGED.map((n) => `${EXTRAS_DIR}/${n}`).sort(byName),
-    );
+    expectSamePaths(copied, extrasDests(STILL_PACKAGED));
     for (const name of NEVER_PACKAGED) {
       expect(existsSync(safePath.join(skillOutputDir, EXTRAS_DIR, name))).toBe(false);
     }
@@ -620,7 +685,7 @@ describe('applyFilesConfig never-package defaults', () => {
       { source: DOCS_README, dest: DOCS_README },
     ];
 
-    const copied = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir });
+    const { dests: copied } = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir });
 
     expect(copied).toContain(DOCS_README);
     expect(existsSync(safePath.join(skillOutputDir, 'docs', 'README.md'))).toBe(true);
@@ -635,25 +700,108 @@ describe('applyFilesConfig never-package defaults', () => {
     ];
 
     // A dropped file must land in neither `rels` nor the on-disk subtree, or
-    // verifyDestSet reports it as missing/unexpected.
-    await expect(applyFilesConfig({ filesConfig, projectRoot, skillOutputDir })).resolves.toEqual(
-      expect.arrayContaining([`${EXTRAS_DIR}/data.json`]),
-    );
+    // verifyDestSet reports it as missing/unexpected. Asserted as an EXACT list:
+    // `arrayContaining` is a superset check that survives deleting the whole
+    // never-package filter, so it could never have failed on a regression.
+    const { dests } = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir });
+    expectSamePaths(dests, extrasDests(STILL_PACKAGED));
   });
 
-  it('warns naming each file the never-package list dropped', async () => {
-    const { projectRoot, skillOutputDir } = makeNeverPackageSandbox();
-    const warnings: string[] = [];
+  // The basename lane must use the shared case-insensitive matcher, not a raw
+  // Set: on APFS/NTFS a `Claude.md` satisfies Claude Code's project-local
+  // instruction lookup exactly as `CLAUDE.md` does, so a case-sensitive check
+  // leaves the whole harm reachable by renaming one letter.
+  it('drops never-packaged basenames whatever their case', async () => {
+    const oddSpellings = ['Claude.md', 'Readme.md', 'INDEX.MD'];
+    const { projectRoot, skillOutputDir } = makeNeverPackageSandbox([
+      ...oddSpellings,
+      ...STILL_PACKAGED,
+    ]);
     const filesConfig: SkillFileEntry[] = [{ source: EXTRAS_GLOB, dest: EXTRAS_DIR }];
 
-    await applyFilesConfig({
-      filesConfig, projectRoot, skillOutputDir, warn: (m) => warnings.push(m),
+    const { dests, dropped } = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir });
+
+    expectSamePaths(dropped.map((d) => d.dest), extrasDests(oddSpellings));
+    expectSamePaths(dests, extrasDests(STILL_PACKAGED));
+  });
+
+  it('reports each file the never-package list dropped, with the dest it would have had', async () => {
+    const { projectRoot, skillOutputDir } = makeNeverPackageSandbox();
+    const filesConfig: SkillFileEntry[] = [{ source: EXTRAS_GLOB, dest: EXTRAS_DIR }];
+
+    const { dropped } = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir });
+
+    // Structured, not a stderr line: this is what makes the drop visible in the
+    // machine-readable build report (and what feeds the broken-link clause).
+    expectSamePaths(dropped.map((d) => d.dest), extrasDests(NEVER_PACKAGED));
+    expect(new Set(dropped.map((d) => d.source))).toEqual(new Set([EXTRAS_GLOB]));
+  });
+
+  // The escape hatch the drop's own error message (and the guide) prescribes:
+  // name the never-packaged file in an EXPLICIT entry so it ships anyway. With
+  // `integrity: true` on the glob covering the same subtree, that config used to
+  // pass or throw depending purely on the order the two entries appear in —
+  // explicit-first threw `unexpected file 'README.md'`, glob-first passed. Same
+  // config, opposite verdicts, and the error blamed integrity with no hint that
+  // ordering or the never-package list was involved.
+  //
+  // Both orders are asserted because either one alone is satisfiable by a fix
+  // that just re-sorts the entries instead of making the check order-independent.
+  describe.each([
+    { label: 'explicit entry first', explicitFirst: true },
+    { label: 'glob entry first', explicitFirst: false },
+  ])('integrity glob + explicit escape hatch ($label)', ({ explicitFirst }) => {
+    const explicit: SkillFileEntry = {
+      source: `${EXTRAS_DIR}/README.md`,
+      dest: `${EXTRAS_DIR}/README.md`,
+    };
+    const globEntry: SkillFileEntry = {
+      source: EXTRAS_GLOB,
+      dest: EXTRAS_DIR,
+      integrity: true,
+    };
+
+    it('ships the explicitly-named file into the integrity-checked dest subtree', async () => {
+      const { projectRoot, skillOutputDir } = makeNeverPackageSandbox();
+      const filesConfig = explicitFirst ? [explicit, globEntry] : [globEntry, explicit];
+
+      const { dests } = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir });
+
+      expectSamePaths(dests, extrasDests([...STILL_PACKAGED, 'README.md']));
+      expect(existsSync(safePath.join(skillOutputDir, EXTRAS_DIR, 'README.md'))).toBe(true);
+      // The OTHER never-packaged files stay dropped — the escape hatch is per-file.
+      expect(existsSync(safePath.join(skillOutputDir, EXTRAS_DIR, 'CLAUDE.md'))).toBe(false);
     });
 
-    const combined = warnings.join('\n');
-    for (const name of NEVER_PACKAGED) {
-      expect(combined).toContain(name);
-    }
+    // FILES_GLOB_DROPPED_NEVER_PACKAGED says the file "was dropped and did not
+    // ship". In the escape-hatch config that sentence is FALSE for README.md —
+    // the glob dropped it, the explicit entry shipped it, and the finding would
+    // tell an author their documented remediation had failed. A drop is only
+    // reportable when nothing else put the file in the bundle.
+    it('does not report a drop for a file another entry ships', async () => {
+      const { projectRoot, skillOutputDir } = makeNeverPackageSandbox();
+      const filesConfig = explicitFirst ? [explicit, globEntry] : [globEntry, explicit];
+
+      const { dropped } = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir });
+
+      expect(dropped.map((d) => d.dest)).not.toContain(`${EXTRAS_DIR}/README.md`);
+      // …but the genuinely-dropped siblings are still reported.
+      expect(dropped.map((d) => d.dest)).toContain(`${EXTRAS_DIR}/CLAUDE.md`);
+    });
+
+    // The set check must still be a statement about the SHIPPED bundle: an
+    // unexpected file no entry accounts for has to fail in both orders too,
+    // otherwise "order-independent" was bought by making the check permissive.
+    it('still rejects a file under the dest subtree that no entry declares', async () => {
+      const { projectRoot, skillOutputDir } = makeNeverPackageSandbox();
+      mkdirSyncReal(safePath.join(skillOutputDir, EXTRAS_DIR), { recursive: true });
+      writeFileSync(safePath.join(skillOutputDir, EXTRAS_DIR, 'stray.json'), '{"stray":true}');
+      const filesConfig = explicitFirst ? [explicit, globEntry] : [globEntry, explicit];
+
+      await expect(
+        applyFilesConfig({ filesConfig, projectRoot, skillOutputDir }),
+      ).rejects.toThrow(/unexpected file 'stray\.json'/);
+    });
   });
 
   it('reports the exclusion — not "has your build run?" — when only never-packaged files match', async () => {

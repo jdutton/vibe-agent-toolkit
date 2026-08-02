@@ -11,8 +11,8 @@ import { cpSync, existsSync, readFileSync } from 'node:fs';
 import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 
-import { countBySeverity, type SeverityCounts } from '@vibe-agent-toolkit/agent-schema';
-import { createProjectRegistry, getPluginOutputDir, getPluginSourceDir, listPluginSourceSkillDirs, listUntrackedPluginSkillDirs, packageSkill, packagingConfigToPackageOptions, skillNameToFsPath, type DeclaredEvalSuite, type PackageSkillResult } from '@vibe-agent-toolkit/agent-skills';
+import { countBySeverity, type SeverityCounts, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { createProjectRegistry, getPluginOutputDir, getPluginSourceDir, listPluginSourceSkillDirs, listUntrackedPluginSkillDirs, materializeIssue, packageSkill, packagingConfigToPackageOptions, skillNameToFsPath, type DeclaredEvalSuite, type PackageSkillResult } from '@vibe-agent-toolkit/agent-skills';
 import type { ClaudeMarketplaceConfig, ClaudeMarketplacePluginEntry, ResourceRegistry, SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
@@ -72,14 +72,21 @@ interface PluginBuildResult {
   explicitFilesCopied: number;
   localSkillsPackaged: number;
   /**
-   * Per-severity post-build findings across this plugin's plugin-local skills.
+   * Per-severity findings for the WHOLE plugin: its plugin-local skills'
+   * post-build findings PLUS plugin-level findings that belong to no skill (a
+   * dead `exclude:` pattern, say).
    *
    * Published rather than folded into the plugin's success/failure: the build
    * gate is two-valued (a warning does not fail it), so a bare `status` cannot
    * say whether a "built" plugin shipped warnings or info findings — and the
    * reading a consumer takes from silence is the reassuring one.
+   *
+   * Named for the plugin, not for its skills: as `localSkillIssueCounts` this
+   * field silently defined "a plugin's findings" as "its skills' findings", so
+   * a plugin-level finding had nowhere to land and was written to stderr beside
+   * a published `warnings: 0`.
    */
-  localSkillIssueCounts: SeverityCounts;
+  issueCounts: SeverityCounts;
 }
 
 export interface MarketplaceBuildResult {
@@ -317,7 +324,7 @@ async function pluginBuildCommand(options: PluginBuildCommandOptions): Promise<v
       status: 'success',
       // The build gate is two-valued and a warning does not fail it, so the
       // distribution has to travel next to the status rather than inside it.
-      issueCounts: sumSeverityCounts(allPlugins.map((p) => p.localSkillIssueCounts)),
+      issueCounts: sumSeverityCounts(allPlugins.map((p) => p.issueCounts)),
       marketplacesBuilt: results.filter((r) => r.status === 'built').length,
       pluginsBuilt: totalPlugins,
       skillsPackaged: totalSkills,
@@ -336,7 +343,7 @@ async function pluginBuildCommand(options: PluginBuildCommandOptions): Promise<v
           treeFilesCopied: p.treeFilesCopied,
           explicitFilesCopied: p.explicitFilesCopied,
           localSkillsPackaged: p.localSkillsPackaged,
-          issueCounts: p.localSkillIssueCounts,
+          issueCounts: p.issueCounts,
         })),
       })),
       duration: `${duration}ms`,
@@ -878,6 +885,60 @@ function reportPackagedSkillIssues(
   return { withErrors, issueCounts };
 }
 
+/**
+ * Turn the tree-copy's dead `exclude:` patterns into located, coded findings.
+ *
+ * Built through `materializeIssue` so severity / fix / reference come from
+ * `CODE_REGISTRY` — the same construction site every other producer uses, which
+ * is what keeps docs, runtime, and tests from drifting.
+ *
+ * `location` is the plugin SOURCE dir in project-relative coordinates: that is
+ * the tree the pattern failed to match, and the four-anchor contract requires a
+ * path the reader can open. The pattern itself travels in `detail` (the message)
+ * because it is not a path — a pattern is not openable and does not belong in
+ * `location` or `link`.
+ */
+function unusedExcludeIssues(
+  unusedExcludePatterns: readonly string[],
+  configDir: string,
+  pluginSourceDir: string,
+): ValidationIssue[] {
+  const sourceRel = toForwardSlash(safePath.relative(configDir, pluginSourceDir));
+  return unusedExcludePatterns.map((pattern) =>
+    materializeIssue('PLUGIN_EXCLUDE_PATTERN_UNUSED', {
+      location: sourceRel,
+      detail: `'${pattern}' under ${sourceRel}`,
+    }),
+  );
+}
+
+/**
+ * Print the plugin-level findings to stderr and return their severity counts.
+ *
+ * Rendered IN FULL at every verbosity — `issuesToRenderAtVerbosity(…, true)` —
+ * rather than collapsing warnings into the heading. The verbosity collapse
+ * exists for high-cardinality per-file findings (one adopter skill carries 348
+ * of one code); these are bounded by the number of `exclude:` entries the author
+ * wrote, and each names a specific line of their config. Collapsing them would
+ * reproduce the exact silence this reporting path was added to remove. The
+ * shared helper is still what decides it, so `ignore` (an adopter's
+ * `validation.allow`) is honored here like everywhere else.
+ */
+function reportPluginIssues(
+  issues: readonly ValidationIssue[],
+  logger: ReturnType<typeof createLogger>,
+): SeverityCounts {
+  if (issues.length > 0) {
+    logger.info(`         plugin: ${formatIssueSetHeading(issues)}`);
+    for (const issue of issuesToRenderAtVerbosity(issues, true)) {
+      for (const line of formatIssueLines(issue, '         ')) {
+        logger.info(line);
+      }
+    }
+  }
+  return countBySeverity(issues);
+}
+
 /** A plugin-local skill and the pool skill whose output directory it would overwrite. */
 interface SkillDirConflict {
   skill: PluginLocalSkill;
@@ -1046,7 +1107,7 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildResult> 
     projectSkills,
     logger,
   });
-  const { withErrors: skillsWithErrors, issueCounts: localSkillIssueCounts } =
+  const { withErrors: skillsWithErrors, issueCounts: localSkillCounts } =
     reportPackagedSkillIssues(packagedLocalSkills, logger, verbose);
   if (skillsWithErrors.length > 0) {
     throw new Error(
@@ -1086,7 +1147,27 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildResult> 
         ...(pluginDef.exclude ? { exclude: pluginDef.exclude } : {}),
         warn: (m) => logger.info(`warning: ${m}`),
       })
-    : { commandsCopied: 0, hooksCopied: 0, agentsCopied: 0, mcpCopied: 0, filesCopied: 0 };
+    : {
+        commandsCopied: 0,
+        hooksCopied: 0,
+        agentsCopied: 0,
+        mcpCopied: 0,
+        filesCopied: 0,
+        // No source dir means the tree-copy never ran, so EVERY declared pattern
+        // matched nothing. Reporting `[]` here would make the one configuration
+        // in which `exclude:` is unambiguously dead the one configuration that
+        // says nothing about it.
+        unusedExcludePatterns: pluginDef.exclude ?? [],
+      };
+
+  // Plugin-level findings: they belong to the plugin, not to any one skill, and
+  // they are summed into the SAME `issueCounts` the skills' findings land in.
+  // Anything else republishes the bug: a build that changed what ships while its
+  // machine-readable report said `warnings: 0`.
+  const pluginIssueCounts = reportPluginIssues(
+    unusedExcludeIssues(treeResult.unusedExcludePatterns, configDir, pluginSourceDir),
+    logger,
+  );
 
   // Phase 3: pool-skill copy-in (from dist/skills/ via the plugin's skills: selector).
   const skillsCopied = await copyPoolSkills(
@@ -1153,6 +1234,6 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildResult> 
     treeFilesCopied: treeResult.filesCopied,
     explicitFilesCopied,
     localSkillsPackaged,
-    localSkillIssueCounts,
+    issueCounts: sumSeverityCounts([localSkillCounts, pluginIssueCounts]),
   };
 }

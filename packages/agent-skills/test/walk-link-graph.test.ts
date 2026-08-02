@@ -48,6 +48,7 @@ const MOCK_CHECKSUM = 'a'.repeat(64) as ResourceMetadata['checksum'];
 // Exclude reason literals — avoid string duplication in assertions
 const REASON_SKILL_DEFINITION = 'skill-definition';
 const REASON_MISSING_TARGET = 'missing-target';
+const REASON_AGENT_INSTRUCTION = 'agent-instruction-file';
 
 /** Href whose target is never created on disk — the broken-link subject. */
 const MISSING_HREF = './docs/gone.md';
@@ -155,6 +156,45 @@ function createOnDiskChain(): {
   const guide = createMockResource(GUIDE_ID, guidePath, [createLocalLink('ref', './ref.md', REF_ID)]);
   const ref = createMockResource(REF_ID, refPath);
   return { root, skillPath, guidePath, refPath, registry: createMockRegistry([skill, guide, ref]) };
+}
+
+/** Project-relative path of the on-disk agent-instruction file a `files:` entry may declare. */
+const DECLARED_CLAUDE_REL = 'docs/CLAUDE.md';
+const DECLARED_CLAUDE_ID = 'declared-claude-md';
+
+/**
+ * Write `docs/CLAUDE.md` for real and walk a link to it with the given `files:`
+ * source declarations.
+ *
+ * A real on-disk fixture is mandatory here. A fictional path is `!existsSync`,
+ * which makes `checkDeferred` classify it as a not-yet-built artifact BEFORE the
+ * agent-instruction branch is reached — the rows would then pass without the
+ * branch under test ever running.
+ */
+function walkDeclaredAgentInstruction(sources: string[]): ReturnType<typeof walkLinkGraph> {
+  const tmpDir = getTempDir();
+  const target = safePath.resolve(tmpDir, DECLARED_CLAUDE_REL);
+  mkdirSyncReal(dirname(target), { recursive: true });
+  writeFileSync(target, '# Repo guidance\n');
+
+  const skillPath = safePath.resolve(tmpDir, 'SKILL.md');
+  writeFileSync(skillPath, '# Skill\n');
+  const skill = createMockResource(SKILL_ID, skillPath, [
+    createLocalLink('guidance', `./${DECLARED_CLAUDE_REL}`, DECLARED_CLAUDE_ID),
+  ]);
+  const registry = createMockRegistry([skill, createMockResource(DECLARED_CLAUDE_ID, target)]);
+
+  return walkLinkGraph(SKILL_ID, registry, {
+    maxDepth: 5,
+    excludeRules: [],
+    projectRoot: tmpDir,
+    skillRootPath: skillPath,
+    deferredArtifacts: makeDeferredArtifactsFromRelPaths({
+      sourcePaths: sources,
+      skillDir: tmpDir,
+      projectRoot: tmpDir,
+    }),
+  });
 }
 
 /**
@@ -444,7 +484,7 @@ describe('walkLinkGraph', () => {
 
         expect(result.bundledResources).toHaveLength(0);
         expect(result.excludedReferences).toHaveLength(1);
-        expect(result.excludedReferences[0]?.excludeReason).toBe('agent-instruction-file');
+        expect(result.excludedReferences[0]?.excludeReason).toBe(REASON_AGENT_INSTRUCTION);
       },
     );
 
@@ -455,7 +495,7 @@ describe('walkLinkGraph', () => {
       const result = walkLinkGraph(SKILL_ID, registry, defaultOptions({ excludeNavigationFiles: false }));
 
       expect(result.bundledResources).toHaveLength(0);
-      expect(result.excludedReferences[0]?.excludeReason).toBe('agent-instruction-file');
+      expect(result.excludedReferences[0]?.excludeReason).toBe(REASON_AGENT_INSTRUCTION);
     });
 
     it('should not treat an ordinary doc with a similar name as agent instructions', () => {
@@ -463,6 +503,36 @@ describe('walkLinkGraph', () => {
       const result = walkLinkGraph(SKILL_ID, registry, defaultOptions());
 
       expectBundledIds(result, ['agent-instruction-CLAUDE-setup.md']);
+    });
+
+    // The precedence this pins: naming a file in `files:` is an unambiguous
+    // instruction to ship it, so the link to it must be FOLLOWED (bundled through
+    // the path map, which the entry re-points at the declared dest). Refusing the
+    // link anyway is what made the code's own remedy unsatisfiable — the author
+    // declared the file, it shipped, and the build still failed telling them to
+    // declare it. A GLOB earns nothing here: it never named the file it caught.
+    //
+    // Real on-disk fixtures are mandatory. A fictional path is `!existsSync`, which
+    // makes `checkDeferred` classify it as a not-yet-built artifact BEFORE the
+    // agent-instruction branch is reached — the test would then pass without the
+    // branch under test ever running.
+    describe('explicit files: declaration', () => {
+      it('bundles an agent-instruction file an EXPLICIT files: source names', () => {
+        const result = walkDeclaredAgentInstruction([DECLARED_CLAUDE_REL]);
+
+        expectBundledIds(result, [DECLARED_CLAUDE_ID]);
+        expect(result.excludedReferences).toHaveLength(0);
+      });
+
+      it('still excludes an agent-instruction file only a files: GLOB caught', () => {
+        // `docs/**/*` registers its STATIC BASE (`docs`) as the source path, so the
+        // file is a prefix child of the declaration rather than the declaration.
+        const result = walkDeclaredAgentInstruction(['docs/**/*']);
+
+        expect(result.bundledResources).toHaveLength(0);
+        expect(result.excludedReferences).toHaveLength(1);
+        expect(result.excludedReferences[0]?.excludeReason).toBe(REASON_AGENT_INSTRUCTION);
+      });
     });
   });
 

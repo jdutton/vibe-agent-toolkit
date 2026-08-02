@@ -37,10 +37,13 @@ export {
 
 export {
   applyFilesConfig,
+  collectDroppedGlobMatches,
+  droppedGlobMatchesToIssues,
+  explicitFilesConfigDests,
   mergeFilesConfig,
-  matchLinkToFiles,
+  type AppliedFilesConfig,
   type ApplyFilesConfigOptions,
-  type FilesMatchResult,
+  type DroppedGlobMatch,
 } from './files-config.js';
 
 export {
@@ -65,6 +68,11 @@ export { generateFixSuggestion } from './validators/validation-utils.js';
 export { detectKebabCaseViolation, type KebabCaseSurface } from './validators/kebab-case-detection.js';
 export { detectMissingRecommendedFields } from './validators/plugin-recommended-fields.js';
 export { detectPackagedAgentInstructionFiles } from './validators/agent-instruction-presence.js';
+// The single construction site for a coded finding. Exported so a CLI lane that
+// discovers a finding of its own builds it from CODE_REGISTRY like every other
+// producer — a hand-rolled `{severity, code, message, fix, reference}` literal is
+// how docs, runtime, and tests come to disagree.
+export { materializeIssue, type MaterializeOpts } from './validators/rule-engine/index.js';
 export {
   deriveObservations,
   observationToIssue,
@@ -89,6 +97,9 @@ export {
 export {
   AGENT_INSTRUCTION_FILE_PATTERNS,
   createIssue,
+  isAgentInstructionBasename,
+  isNavigationBasename,
+  isNeverPackagedBasename,
   NAVIGATION_FILE_PATTERNS,
   NEVER_PACKAGE_IN_SKILL_BUNDLE,
   toAnyDepthGlobs,
