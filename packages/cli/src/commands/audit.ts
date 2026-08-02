@@ -329,12 +329,14 @@ async function validateSingleSkill(
       sharedCtx.gitTracker = gitTracker;
     }
     const packagingResult = await validateSkillForPackaging(skillPath, skillConfig, 'source', sharedCtx);
-    return packagingResultToValidationResult(
+    const configAware = packagingResultToValidationResult(
       skillPath,
       packagingResult,
       skillConfig.targets as readonly Target[] | undefined,
       locationRoot,
     );
+    await appendDistributedTreeFindings(configAware, skillPath, locationRoot, crawlTree);
+    return configAware;
   }
 
   // Fallback: basic validation
@@ -360,9 +362,15 @@ async function validateSingleSkill(
  * `./audit/distributed-tree.ts` (`classifyScannedSkillTree`). In short: a repository that never adopted
  * VAT declares nothing, and an adopting repo's `include` globs never enumerate
  * its drafts and fixtures, so "not declared" swept up two populations of
- * ordinary repo source. Reaching this function still implies `resolveSkillPackagingConfig`
- * returned `null` (the config-aware branch returns before it), but that is now a
- * consequence of the control flow, not the test being applied.
+ * ordinary repo source.
+ *
+ * Called from BOTH lanes — config-aware and wild — deliberately. It used to be
+ * reachable only from the wild one, which left the abandoned discriminator alive
+ * at the caller in its purest suppressing form: adding a `vibe-agent-toolkit.config.yaml`
+ * to a dotfiles repo removed findings from skills installed under `~/.claude`,
+ * because a config-aware match returned before the classifier was ever asked.
+ * Whether the project also declares a skill says nothing about where that skill
+ * lives, so it must not decide whether the question gets asked.
  *
  * @param crawlTree `false` when a plugin lane already crawled this subtree — see
  *   {@link validateSingleSkill}.
@@ -495,13 +503,17 @@ Gitignore-Aware Scanning:
   Outside a git repository, no automatic exclusions apply.
 
 Config-Aware Validation:
-  When a vibe-agent-toolkit.config.yaml is found at the git root, audit
-  uses the project's build settings (linkFollowDepth, files,
-  excludeReferencesFromBundle) to validate skills. This prevents false
-  warnings for links that the build pipeline resolves.
+  The governing vibe-agent-toolkit.config.yaml is found by walking UP from
+  the audited path, so a built bundle deep under dist/ is still governed by
+  its project's config. Audit uses that project's build settings
+  (linkFollowDepth, files, excludeReferencesFromBundle) to validate skills,
+  which prevents false warnings for links the build pipeline resolves.
 
   Config-aware mode never applies validation.allow — audit always shows
-  all issues. validation.severity is respected for display grouping.
+  all issues. validation.severity IS applied: a code set to 'ignore' is
+  hidden. skills.defaults.validation.severity applies project-wide (skills,
+  plugins and marketplaces alike); skills.config.<name>.validation.severity
+  layers on top for that skill.
 
 Exit Codes:
   0 - Always (even when validation errors are surfaced)
@@ -587,22 +599,6 @@ async function auditUserDirectories(
   logHierarchicalSummary(results, logger);
 }
 
-/**
- * Apply severity filtering to validation results.
- *
- * Audit is advisory only: it applies `validation.severity` to decide what to
- * show, but deliberately ignores `validation.allow`. Codes configured as
- * `severity: 'ignore'` are stripped from the result issues before rendering.
- *
- * The severity config is per-skill, keyed by skill name in
- * `config.skills.config[skillName].validation.severity`.
- * Defaults config (`config.skills.defaults.validation.severity`) is also
- * checked as a fallback.
- *
- * @param results - Raw validation results from skill/plugin validators
- * @param config - Parsed VATConfig (may be undefined if no config file)
- * @returns New results array with ignored codes removed from issues
- */
 /** Skill resource types that can have per-skill validation config. */
 const SKILL_RESULT_TYPES: ReadonlySet<ValidationResult['type']> = new Set([RESOURCE_TYPE_AGENT_SKILL, 'vat-agent']);
 
@@ -634,17 +630,27 @@ export function deriveScanRoot(targetPath: string): string {
 /**
  * Derive the project root directory for config loading.
  *
- * For a direct SKILL.md path, the project root is two levels up (skill dir → skills/ → project/).
- * For a directory or undefined path, use the directory itself (or cwd).
+ * Walks UP from the audit target through {@link findProjectRoot} — the same
+ * discovery ladder (`vibe-agent-toolkit.config.yaml`, then `.git/`) that
+ * `resolveSkillPackagingConfig` uses per skill, so the two cannot disagree about
+ * which project governs a path.
+ *
+ * It used to guess by SHAPE instead: a directory argument resolved to ITSELF and
+ * a `SKILL.md` argument to exactly two levels up. Neither reaches a project root
+ * from a built bundle — `vat audit dist/skills/demo` looked for the config inside
+ * the bundle, found none, and `applySeverityFilter` early-returned. The effect was
+ * that `severity.PACKAGED_AGENT_INSTRUCTION_FILE: ignore` — the opt-out this very
+ * command's `fix` text tells the reader to write — did nothing whenever audit was
+ * pointed at the bundle rather than at the project. Measured: `warnings: 1` with
+ * the override and without it, from the same tree, while `vat audit .` on that
+ * same project honoured it.
+ *
+ * `null` (no config and no git anywhere above) falls back to the target itself,
+ * which is what the shape-based version returned for every path.
  */
 function deriveConfigRoot(targetPath: string | undefined): string {
-  if (targetPath === undefined) {
-    return process.cwd();
-  }
-  if (targetPath.endsWith('SKILL.md')) {
-    return safePath.resolve(safePath.join(targetPath, '..', '..'));
-  }
-  return safePath.resolve(targetPath);
+  const start = targetPath === undefined ? process.cwd() : deriveScanRoot(targetPath);
+  return findProjectRoot(start) ?? start;
 }
 
 /**
@@ -675,10 +681,17 @@ function buildFilteredResult(
  * show, but deliberately ignores `validation.allow`. Codes configured as
  * `severity: 'ignore'` are stripped from the result issues before rendering.
  *
- * The severity config is per-skill, keyed by skill name in
- * `config.skills.config[skillName].validation.severity`.
- * Defaults config (`config.skills.defaults.validation.severity`) is also
- * checked as a fallback.
+ * Two scopes, both live:
+ *  - `skills.defaults.validation.severity` — the PROJECT-WIDE map, applied to
+ *    every result this run produced, including `claude-plugin` and `marketplace`
+ *    ones. It used to be applied only to skill-typed results, which left the
+ *    opt-out inert for the population that motivated it: the false positive
+ *    `PACKAGED_AGENT_INSTRUCTION_FILE` was kept at `warning` for — an official
+ *    plugin's intentional scaffold template — is a finding on a PLUGIN tree, and
+ *    no per-skill key can name it. Measured before the fix: a plugin result kept
+ *    its warning with `severity: ignore` set at `skills.defaults`.
+ *  - `skills.config.<name>.validation.severity` — layered on top, and only for a
+ *    result that names a skill, since that key is keyed by skill name.
  *
  * @param results - Raw validation results from skill/plugin validators
  * @param config - Parsed VATConfig (may be undefined if no config file)
@@ -696,11 +709,7 @@ function applySeverityFilter(
   const defaultSeverity = skillsConfig.defaults?.validation?.severity ?? {};
 
   return results.map(result => {
-    if (!SKILL_RESULT_TYPES.has(result.type)) {
-      return result;
-    }
-
-    const skillName = result.metadata?.name;
+    const skillName = SKILL_RESULT_TYPES.has(result.type) ? result.metadata?.name : undefined;
     const perSkillSeverity = skillName === undefined
       ? {}
       : (skillsConfig.config?.[skillName]?.validation?.severity ?? {});
@@ -1707,12 +1716,14 @@ async function handleFileEntry(
         ? { locationRoot, projectSkills }
         : { gitTracker: scanCtx.gitTracker, locationRoot, projectSkills };
       const packagingResult = await validateSkillForPackaging(fullPath, skillConfig, 'source', sharedCtx);
-      return packagingResultToValidationResult(
+      const configAware = packagingResultToValidationResult(
         fullPath,
         packagingResult,
         skillConfig.targets as readonly Target[] | undefined,
         locationRoot,
       );
+      await appendDistributedTreeFindings(configAware, fullPath, locationRoot, !scanCtx.underPluginDir);
+      return configAware;
     }
 
     // Wild mode: basic validation

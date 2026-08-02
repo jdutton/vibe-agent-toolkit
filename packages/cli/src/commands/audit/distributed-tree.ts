@@ -41,6 +41,12 @@
  *    outside any git repository. A built `dist/` bundle is gitignored; an
  *    unpacked tarball is outside a repo; a working tree's skill is neither.
  *
+ * Neither clause consults the project's config, and neither is CONDITIONAL on it:
+ * `vat audit` asks this question in its config-aware lane exactly as it does in
+ * its wild one. The config-declaration test was not merely replaced inside this
+ * module — it also had to stop gating whether this module is reached, or it
+ * survives at the caller in its purest form, where it can only suppress.
+ *
  * Untracked-but-not-ignored is deliberately SOURCE, not "distributed": that is
  * a skill the author has written and not yet committed, and treating authoring
  * in progress as a distribution artifact would make the first audit of a new
@@ -65,12 +71,29 @@
  *   somebody's repo source is the same situation as auditing your own. A
  *   third-party *plugin* still reports, because the plugin lane crawls the whole
  *   plugin tree independently of this classifier.
+ *
+ * ## When git cannot be consulted
+ *
+ * Clause 2 is only as good as git's willingness to answer, and `gitLsFiles`
+ * returns the same `null` for a missing binary, a corrupt `.git` and an
+ * unreadable one. That `null` used to arrive here as "not ignored" — i.e. source,
+ * i.e. silence — so the detector switched itself off and the run still reported
+ * `status: success` with nothing to indicate why. This module therefore has a
+ * third answer, `'indeterminate'`, and reports it (see
+ * {@link distributedTreeFindings}) rather than guessing in either direction.
  */
 
 import { type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
-import { detectPackagedAgentInstructionFiles } from '@vibe-agent-toolkit/agent-skills';
+import { detectPackagedAgentInstructionFiles, materializeIssue } from '@vibe-agent-toolkit/agent-skills';
 import { getClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
-import { gitFindRoot, GitTracker, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import {
+  gitFindRoot,
+  GitTracker,
+  issueLocation,
+  normalizePath,
+  safePath,
+  toForwardSlash,
+} from '@vibe-agent-toolkit/utils';
 
 /** Cache of (gitRoot → initialized GitTracker) to avoid re-spawning ls-files. */
 const gitTrackerCache: Map<string, GitTracker> = new Map();
@@ -104,8 +127,36 @@ export function resetGitTrackerCache(): void {
  * `'repo-source'` — a working tree somebody is authoring in.
  * `'distributed'` — an artifact somebody published: a built bundle, an installed
  * skill or plugin, an unpacked third-party tarball.
+ * `'indeterminate'` — the question could not be asked, because git could not be
+ * consulted. A THIRD state, not a default: the two-valued version of this type
+ * forced every git failure into `'repo-source'` (see
+ * {@link classifyScannedSkillTree}), which is the answer that stays silent.
  */
-export type SkillTreeProvenance = 'repo-source' | 'distributed';
+export type SkillTreeProvenance = 'repo-source' | 'distributed' | 'indeterminate';
+
+/**
+ * One canonical, forward-slashed spelling of a path — symlinks resolved, and on a
+ * case-insensitive filesystem (macOS, NTFS) the case as it is stored on disk.
+ *
+ * Every comparison in this module goes through it, and both sides of every
+ * comparison do, because two unrelated defects follow from comparing paths as the
+ * caller happened to spell them:
+ *
+ * - `~/.claude` is very often a SYMLINK into a dotfiles checkout. Auditing that
+ *   checkout by its real path missed the install-root clause entirely: the same
+ *   physical files, two verdicts, decided by which spelling was typed.
+ * - `GitTracker`'s active set is keyed by exact string while the `existsSync`
+ *   qualifier beside it is case-INsensitive, so `<repo>/Skills/demo/SKILL.md`
+ *   read as "absent from the set and present on disk" ⇒ ignored ⇒ distributed:
+ *   a false finding against tracked source, reachable by tab-completion.
+ *
+ * Canonicalising the SKILL.md before deriving the git root is what keeps the
+ * second fix honest — the tracker's own keys are built from the root it is given,
+ * so a canonical lookup against a non-canonical root would miss every time.
+ */
+function canonicalPath(filePath: string): string {
+  return toForwardSlash(normalizePath(safePath.resolve(filePath)));
+}
 
 /**
  * True when `absolutePath` is `root` or lies beneath it.
@@ -128,12 +179,12 @@ function isWithin(root: string, absolutePath: string): boolean {
  * environment variable the operator (and every test fixture) is entitled to
  * change between runs, and a cached answer would describe the wrong machine.
  */
-function isUnderClaudeInstallRoot(absolutePath: string): boolean {
+function isUnderClaudeInstallRoot(canonicalAbsolutePath: string): boolean {
   const { pluginsDir, skillsDir, marketplacesDir } = getClaudeUserPaths();
   // marketplacesDir is nested under pluginsDir; listed anyway so the set reads as
   // the three install destinations rather than as an accident of layout.
   return [pluginsDir, skillsDir, marketplacesDir].some((dir) =>
-    isWithin(safePath.resolve(dir), absolutePath),
+    isWithin(canonicalPath(dir), canonicalAbsolutePath),
   );
 }
 
@@ -142,7 +193,7 @@ function isUnderClaudeInstallRoot(absolutePath: string): boolean {
  * reasoning behind each clause and the order they are applied in.
  */
 export async function classifyScannedSkillTree(skillMdPath: string): Promise<SkillTreeProvenance> {
-  const absolute = safePath.resolve(skillMdPath);
+  const absolute = canonicalPath(skillMdPath);
   if (isUnderClaudeInstallRoot(absolute)) {
     return 'distributed';
   }
@@ -153,6 +204,15 @@ export async function classifyScannedSkillTree(skillMdPath: string): Promise<Ski
   }
 
   const tracker = await getOrCreateGitTracker(gitRoot);
+  // Fail CLOSED. `isIgnoredByActiveSet` cannot distinguish "git says this file is
+  // tracked" from "git was never asked", and both come back `false` ⇒
+  // `'repo-source'` ⇒ silence. So the detector used to switch itself off — with a
+  // green status and no diagnostic — whenever `git` was missing from `PATH` or the
+  // repository's `.git` was corrupt or unreadable. Ask whether git answered before
+  // reading anything into its answer.
+  if (!tracker.isUsable()) {
+    return 'indeterminate';
+  }
   return tracker.isIgnoredByActiveSet(absolute) ? 'distributed' : 'repo-source';
 }
 
@@ -161,11 +221,15 @@ export async function classifyScannedSkillTree(skillMdPath: string): Promise<Ski
  * directory is a distributed tree. Empty otherwise — including when the caller
  * says a plugin lane already owns this subtree.
  *
- * `[]` declared dests: this lane resolves a skill by PATH, and a distributed
- * bundle's path is not its source skill's declared path, so there is no config
- * block to read intent from here. `vat verify` is the lane that maps a built
- * bundle back to the config that produced it, and it applies the explicit-`files:`
- * exemption there.
+ * `[]` declared dests, from BOTH callers, including the config-aware one that does
+ * hold a `files:` block. The parameter takes skill-OUTPUT-relative dests, and the
+ * tree crawled here is not an output tree — it is wherever the SKILL.md lives, so
+ * a `dest` and a path relative to this root are two different coordinate systems.
+ * Feeding dests in would exempt by accidental basename agreement and mislabel it
+ * as intent. `vat verify` is the lane that maps a built bundle back to the config
+ * that produced it, with both sides in output coordinates, and it applies the
+ * explicit-`files:` exemption there — which is what
+ * `PACKAGED_AGENT_INSTRUCTION_FILE`'s own remediation already tells readers.
  *
  * @param crawlTree `false` when a plugin lane already crawled this subtree.
  *   REQUIRED and never defaulted, because the wrong answer is silent in both
@@ -180,6 +244,25 @@ export async function distributedTreeFindings(
   crawlTree: boolean,
 ): Promise<ValidationIssue[]> {
   if (!crawlTree) return [];
-  if ((await classifyScannedSkillTree(skillPath)) === 'repo-source') return [];
-  return detectPackagedAgentInstructionFiles(safePath.resolve(skillPath, '..'), locationRoot, []);
+  const provenance = await classifyScannedSkillTree(skillPath);
+  if (provenance === 'repo-source') return [];
+
+  const treeRoot = safePath.resolve(skillPath, '..');
+  const present = detectPackagedAgentInstructionFiles(treeRoot, locationRoot, []);
+  if (provenance === 'distributed') return present;
+
+  // Provenance is unknown. Report the unknown, not the files: calling them
+  // packaged would assert that they travelled to a consumer, which is exactly the
+  // fact that could not be established. And say nothing at all when the tree holds
+  // none — with nothing to classify, no answer was lost, and a healthy git would
+  // have been silent here too. That keeps the notice proportional to the actual
+  // ambiguity instead of warning once per skill across a git-less container.
+  if (present.length === 0) return [];
+  const location = issueLocation(treeRoot, locationRoot);
+  return [
+    materializeIssue('TREE_PROVENANCE_INDETERMINATE', {
+      location,
+      detail: `${location} (${present.length} agent-instruction file(s) found, unclassified)`,
+    }),
+  ];
 }

@@ -85,6 +85,48 @@ function writeVatConfig(root: string): void {
   writeFileSync(safePath.join(root, 'vibe-agent-toolkit.config.yaml'), CONFIG, 'utf-8');
 }
 
+/** A config whose `include` enumerates the pool directly under `root`. */
+function writeVatConfigForPool(root: string): void {
+  writeFileSync(
+    safePath.join(root, 'vibe-agent-toolkit.config.yaml'),
+    `version: 1\nskills:\n  include:\n    - "${SKILLS_DIR}/**/SKILL.md"\n`,
+    'utf-8',
+  );
+}
+
+/**
+ * Stage a committed skill carrying a `CLAUDE.md` under a Claude install root.
+ *
+ * The three install-root tests differ only in whether the project's config also
+ * DECLARES the skill and in how the audit subject is named (directory vs its
+ * `SKILL.md`). Sharing the staging keeps each test's intent in its assertion
+ * rather than in a re-read wall of identical setup. Committing is load-bearing:
+ * these fixtures assert that the install-root clause outranks tracked-ness, so
+ * an uncommitted tree would prove nothing.
+ */
+function stageInstalledSkill(declared: boolean): { claudeDir: string; installed: string } {
+  const claudeDir = createTempDir();
+  if (declared) {
+    writeVatConfigForPool(claudeDir);
+  }
+  const installed = safePath.join(claudeDir, SKILLS_DIR, SKILL_NAME);
+  writeSkill(installed, [CLAUDE_MD]);
+  commitTestFixture(claudeDir);
+  return { claudeDir, installed };
+}
+
+/** Run `body` with `CLAUDE_CONFIG_DIR` pointed at `claudeDir`, then restore it. */
+async function withClaudeConfigDir<T>(claudeDir: string, body: () => Promise<T>): Promise<T> {
+  const previous = process.env['CLAUDE_CONFIG_DIR'];
+  process.env['CLAUDE_CONFIG_DIR'] = claudeDir;
+  try {
+    return await body();
+  } finally {
+    if (previous === undefined) delete process.env['CLAUDE_CONFIG_DIR'];
+    else process.env['CLAUDE_CONFIG_DIR'] = previous;
+  }
+}
+
 describe('audit: distributed skill trees (integration)', () => {
   afterEach(() => {
     cleanupTempDirs();
@@ -104,11 +146,19 @@ describe('audit: distributed skill trees (integration)', () => {
   });
 
   // THE hard constraint. Guidance beside a source SKILL.md is deliberately fine.
+  //
+  // The commit is load-bearing, not ceremony: "source" is a claim about git, and a
+  // `mkdtemp` directory with no repo has no git semantics at all — it is outside
+  // any repository, which the classifier calls distributed by design. Before A4
+  // this fixture passed WITHOUT a repo, because being config-declared returned
+  // early and the classifier was never asked. That early return was the bug; a
+  // fixture that depends on it is asserting the bug.
   it('stays silent for a config-DECLARED source skill with a CLAUDE.md beside it', async () => {
     const root = createTempDir();
     writeVatConfig(root);
     const source = safePath.join(root, '.claude', SKILLS_DIR, SKILL_NAME);
     writeSkill(source, [CLAUDE_MD]);
+    commitTestFixture(root);
 
     expect(instructionFindings(await runAudit(source))).toEqual([]);
   });
@@ -206,19 +256,38 @@ describe('audit: distributed skill trees (integration)', () => {
       // files are TRACKED SOURCE of somebody else's repo — for a git-distributed
       // plugin, tracked source IS what ships. Tracked-ness therefore cannot be the
       // whole discriminator, and the install location has to win over it.
-      const claudeDir = createTempDir();
-      const installed = safePath.join(claudeDir, SKILLS_DIR, SKILL_NAME);
-      writeSkill(installed, [CLAUDE_MD]);
-      commitTestFixture(claudeDir);
+      const { claudeDir, installed } = stageInstalledSkill(false);
 
-      const previous = process.env['CLAUDE_CONFIG_DIR'];
-      process.env['CLAUDE_CONFIG_DIR'] = claudeDir;
-      try {
+      await withClaudeConfigDir(claudeDir, async () => {
         expect(instructionFindings(await runAudit(installed))).toEqual([CLAUDE_MD]);
-      } finally {
-        if (previous === undefined) delete process.env['CLAUDE_CONFIG_DIR'];
-        else process.env['CLAUDE_CONFIG_DIR'] = previous;
-      }
+      });
+    });
+
+    // A4 — the classifier was only ever consulted in WILD mode: both call sites
+    // sat after an early return taken whenever the project's config declared the
+    // SKILL.md by absolute path. That predicate is exactly the discriminator this
+    // module's header says was wrong and was replaced — it was deleted from the
+    // classifier and left at the caller, where it can only suppress. Adding a VAT
+    // config to a dotfiles repo silently voided the documented "known limit"
+    // above: same files, same install root, one fewer finding.
+    it('reports an installed skill the project config also DECLARES', async () => {
+      const { claudeDir, installed } = stageInstalledSkill(true);
+
+      await withClaudeConfigDir(claudeDir, async () => {
+        expect(instructionFindings(await runAudit(installed))).toEqual([CLAUDE_MD]);
+      });
+    });
+
+    // The SAME suppression lived at a SECOND call site — the single-SKILL.md lane
+    // — with its own copy of the early return. Pinning only the directory-walk
+    // lane above would leave `vat audit <path>/SKILL.md` blind to it.
+    it('reports it for a config-DECLARED skill named by its SKILL.md path', async () => {
+      const { claudeDir, installed } = stageInstalledSkill(true);
+
+      await withClaudeConfigDir(claudeDir, async () => {
+        const results = await runAudit(safePath.join(installed, 'SKILL.md'));
+        expect(instructionFindings(results)).toEqual([CLAUDE_MD]);
+      });
     });
 
     it('reports an unpacked bundle that lies outside any git repository', async () => {

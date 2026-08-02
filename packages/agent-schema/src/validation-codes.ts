@@ -129,6 +129,29 @@ export const CODE_REGISTRY = {
     'In a distributed tree (a built bundle or an installed plugin) remove the file, or move it outside the directory that is packaged. In a repo source tree, confirm first whether it ships: the build excludes agent-instruction files from the plugin tree-copy and from files: globs, so only an explicit files: entry naming it puts it in the output. If it must ship, set severity.PACKAGED_AGENT_INSTRUCTION_FILE to ignore so the exception is recorded in config. If an explicit files: entry already names this dest, vat build and vat verify honour it and stay silent; vat audit reports it anyway because a path-addressed scan cannot see the config that declared it.',
     'packaged_agent_instruction_file',
   ),
+  // The companion PACKAGED_AGENT_INSTRUCTION_FILE needs in order to be allowed to
+  // stay silent. Its audit lane only reports files in a DISTRIBUTED tree, and the
+  // distributed/source question is answered from git — so anything that stops git
+  // answering (no binary on PATH, a corrupt or unreadable `.git`) used to collapse
+  // to "not ignored", i.e. source, i.e. silence, with `status: success` and no
+  // trace anywhere that the detector had been switched off.
+  //
+  // A missing answer is therefore reported as a missing answer. Deliberately NOT
+  // resolved by assuming `distributed`: that manufactures a substantive claim
+  // about the artifact ("this file shipped to consumers") that nothing observed,
+  // and its remediation — remove the file — is wrong advice for the ordinary
+  // source tree in a container with no git.
+  //
+  // `warning`, matching the code it stands in for, so a CI gate counting warnings
+  // cannot be quietly zeroed by breaking git. Emitted only when the tree actually
+  // holds agent-instruction files: with none there, nothing was left unclassified
+  // and healthy git would have said nothing either.
+  TREE_PROVENANCE_INDETERMINATE: entry(
+    'warning',
+    'Could not determine whether a scanned skill tree is repository source or a distributed artifact, because `git` could not be consulted; agent-instruction files present in the tree were left unclassified rather than silently accepted.',
+    'Make `git` runnable for this tree — install it, put it on PATH, or repair the repository whose `.git` directory could not be read — then re-run the audit. Set severity.TREE_PROVENANCE_INDETERMINATE to ignore if this environment deliberately has no git and the unclassified files are known to be repository source.',
+    'tree_provenance_indeterminate',
+  ),
   FILES_GLOB_DROPPED_NEVER_PACKAGED: entry(
     'warning',
     'A `files:` glob matched a file that is never packaged into a skill bundle (an agent-instruction file such as CLAUDE.md, or a navigation file such as README.md); it was dropped and did not ship.',

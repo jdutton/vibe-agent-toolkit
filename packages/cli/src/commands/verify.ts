@@ -20,6 +20,8 @@ import { basename } from 'node:path';
 import {
   calculateValidationStatus,
   countBySeverity,
+  resolveSeverity,
+  type IssueCode,
   type SeverityCounts,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/agent-schema';
@@ -27,7 +29,7 @@ import {
   computeTreeCopiedSkillLocations,
   detectPackagedAgentInstructionFiles,
   explicitFilesConfigDests,
-  mergeFilesConfig,
+  type SkillPackagingConfig,
 } from '@vibe-agent-toolkit/agent-skills';
 import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
@@ -38,6 +40,7 @@ import { loadConfig } from '../utils/config-loader.js';
 import type { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
 import { requireProjectRoot } from '../utils/project-root-policy.js';
+import { mergeSkillPackagingConfig } from '../utils/skill-packaging-config.js';
 
 import {
   runConsistencyChecks,
@@ -185,17 +188,23 @@ function skillNameToFsPath(name: string): string {
 type CheckEntry = {
   skillName: string;
   outputDir: string;
-  mergedFiles: ReturnType<typeof mergeFilesConfig>;
+  /** The skill's effective packaging config — `files:` AND `validation:`. */
+  packaging: SkillPackagingConfig;
 };
 
+/** The `files:` entries governing a candidate, `[]` when the skill declares none. */
+function filesOf(entry: CheckEntry): NonNullable<SkillPackagingConfig['files']> {
+  return entry.packaging.files ?? [];
+}
+
 /**
- * Register a check for (skillName, outputDir, mergedFiles) in the dedup map.
+ * Register a check for (skillName, outputDir, packaging) in the dedup map.
  *
  * Skips silently if:
  *   - outputDir does not exist on disk (not a candidate)
  *   - the key was already added (dedup guard)
  *
- * An EMPTY `mergedFiles` is registered, not skipped: {@link checkFilesConfigDests}
+ * An EMPTY `files:` block is registered, not skipped: {@link checkFilesConfigDests}
  * has nothing to verify for such a skill and filters it out itself, but
  * {@link checkPackagedAgentInstructionFiles} must still crawl that bundle — a skill
  * with no `files:` block is exactly the one whose agent-instruction file arrived by
@@ -205,13 +214,13 @@ function tryAddCheckEntry(
   checks: Map<string, CheckEntry>,
   skillName: string,
   outputDir: string,
-  mergedFiles: ReturnType<typeof mergeFilesConfig>,
+  packaging: SkillPackagingConfig,
 ): void {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- outputDir is resolved from config, not user input
   if (!existsSync(outputDir)) return;
   const key = `${skillName}\0${outputDir}`;
   if (!checks.has(key)) {
-    checks.set(key, { skillName, outputDir, mergedFiles });
+    checks.set(key, { skillName, outputDir, packaging });
   }
 }
 
@@ -227,6 +236,12 @@ function tryAddCheckEntry(
  * Returns `[]` (never throws) for an unreadable config: `vat verify`'s subprocess
  * phases report the real config error, and an in-process phase must not race them
  * with a second, worse diagnosis.
+ *
+ * The merge goes through {@link mergeSkillPackagingConfig} — the ONE helper every
+ * lane uses — so `vat verify` and `vat build` cannot disagree about a skill's
+ * effective config. Doing the `files:` half by hand here and leaving `validation:`
+ * unread is what made `severity.PACKAGED_AGENT_INSTRUCTION_FILE: ignore` a no-op in
+ * this command.
  */
 function collectBuiltSkillOutputs(cwd: string): CheckEntry[] {
   try {
@@ -234,17 +249,16 @@ function collectBuiltSkillOutputs(cwd: string): CheckEntry[] {
     if (!config) return [];
 
     const skillsConfig = config.skills;
-    const defaults = skillsConfig?.defaults;
+    const defaults = skillsConfig?.defaults as Record<string, unknown> | undefined;
 
     // Dedup map: key = `skillName\0outputDir` → check entry
     const checks = new Map<string, CheckEntry>();
 
     // --- Pool/config skills: candidate dir is dist/skills/<fsName> ---
     for (const skillName of Object.keys(skillsConfig?.config ?? {})) {
-      const perSkill = skillsConfig?.config?.[skillName];
-      const mergedFiles = mergeFilesConfig(defaults?.files, perSkill?.files);
+      const perSkill = skillsConfig?.config?.[skillName] as Record<string, unknown> | undefined;
       const outputDir = safePath.resolve(cwd, 'dist', 'skills', skillNameToFsPath(skillName));
-      tryAddCheckEntry(checks, skillName, outputDir, mergedFiles);
+      tryAddCheckEntry(checks, skillName, outputDir, mergeSkillPackagingConfig(defaults, perSkill));
     }
 
     // --- Tree-copy skills: candidate dirs are plugin output skill dirs ---
@@ -253,9 +267,14 @@ function collectBuiltSkillOutputs(cwd: string): CheckEntry[] {
       // path (`group/nested-skill` for a nested skill), so try its trailing segment
       // too — the spelling that matches for every skill whose dir is named after it.
       const dirLeaf = basename(loc.skillDirPath);
-      const perSkill = skillsConfig?.config?.[loc.skillDirPath] ?? skillsConfig?.config?.[dirLeaf];
-      const mergedFiles = mergeFilesConfig(defaults?.files, perSkill?.files);
-      tryAddCheckEntry(checks, loc.skillDirPath, loc.skillOutputDir, mergedFiles);
+      const perSkill = (skillsConfig?.config?.[loc.skillDirPath] ?? skillsConfig?.config?.[dirLeaf]) as
+        Record<string, unknown> | undefined;
+      tryAddCheckEntry(
+        checks,
+        loc.skillDirPath,
+        loc.skillOutputDir,
+        mergeSkillPackagingConfig(defaults, perSkill),
+      );
     }
 
     return [...checks.values()];
@@ -274,7 +293,9 @@ function collectBuiltSkillOutputs(cwd: string): CheckEntry[] {
  */
 export function checkFilesConfigDests(cwd: string): FilesDestCheckResult[] {
   const results: FilesDestCheckResult[] = [];
-  for (const { skillName, outputDir, mergedFiles } of collectBuiltSkillOutputs(cwd)) {
+  for (const check of collectBuiltSkillOutputs(cwd)) {
+    const { skillName, outputDir } = check;
+    const mergedFiles = filesOf(check);
     if (mergedFiles.length === 0) continue;
     const missing: string[] = [];
     for (const entry of mergedFiles) {
@@ -312,16 +333,67 @@ export function checkFilesConfigDests(cwd: string): FilesDestCheckResult[] {
  * exemption — a glob is a net, not a declaration — which is why the exempt set
  * comes from {@link explicitFilesConfigDests} rather than from every `files:` entry.
  *
+ * Each bundle's findings are then resolved against that skill's effective
+ * `validation.severity` (see {@link resolveIssueSeverity}), so the opt-out the
+ * code's own `fix` text prescribes actually works here. It did not: this phase
+ * published `detectPackagedAgentInstructionFiles`' raw output straight into the
+ * document, so `severity.PACKAGED_AGENT_INSTRUCTION_FILE: ignore` changed nothing
+ * — measured `warnings: 1` with the override at `skills.defaults`, at
+ * `skills.config.<name>`, and with no override at all.
+ *
+ * `validation.allow` is deliberately NOT applied. Allow is a per-PATH suppression
+ * whose usage is only answerable across a whole run, and this phase would have to
+ * drain a ledger it is not the run of — reporting ALLOW_UNUSED for every entry the
+ * project declares for other lanes. Severity is answerable per unit of work; allow
+ * is not. See `AllowUsageLedger` in `@vibe-agent-toolkit/agent-schema`.
+ *
  * Locations anchor at `cwd`, the run's stated root, so a reader can open them.
  */
 export function checkPackagedAgentInstructionFiles(cwd: string): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
-  for (const { outputDir, mergedFiles } of collectBuiltSkillOutputs(cwd)) {
-    issues.push(
-      ...detectPackagedAgentInstructionFiles(outputDir, cwd, explicitFilesConfigDests(mergedFiles)),
+  for (const check of collectBuiltSkillOutputs(cwd)) {
+    const raw = detectPackagedAgentInstructionFiles(
+      check.outputDir,
+      cwd,
+      explicitFilesConfigDests(filesOf(check)),
     );
+    issues.push(...resolveIssueSeverity(raw, check.packaging.validation));
   }
   return issues;
+}
+
+/**
+ * Re-severity a detector's raw findings against one skill's `validation.severity`,
+ * dropping the codes resolved to `ignore`.
+ *
+ * Resolution, not just suppression: an adopter who promotes a code to `error` has
+ * to see it fail the run, and this command's exit code is derived from severity.
+ *
+ * An un-overridden code short-circuits rather than round-tripping through
+ * {@link resolveSeverity}. Two reasons, and the second is the load-bearing one:
+ * the answer would be the registry default, which is already the severity the
+ * issue carries (`materializeIssue` built it from the same registry); and
+ * `resolveSeverity` indexes `CODE_REGISTRY` unguarded, so handing it a
+ * non-registry code would throw rather than pass the issue through. Overridden
+ * codes still go through that ONE resolver — this is not a second copy of it.
+ */
+function resolveIssueSeverity(
+  issues: readonly ValidationIssue[],
+  validation: SkillPackagingConfig['validation'],
+): ValidationIssue[] {
+  const overrides = validation?.severity;
+  if (overrides === undefined) return [...issues];
+  const resolved: ValidationIssue[] = [];
+  for (const issue of issues) {
+    if (!(issue.code in overrides)) {
+      resolved.push(issue);
+      continue;
+    }
+    const severity = resolveSeverity(issue.code as IssueCode, { severity: overrides });
+    if (severity === 'ignore') continue;
+    resolved.push(severity === issue.severity ? issue : { ...issue, severity });
+  }
+  return resolved;
 }
 
 /**

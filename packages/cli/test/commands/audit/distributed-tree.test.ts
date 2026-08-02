@@ -8,13 +8,14 @@
  * would agree with any implementation, including a no-op.
  */
 
-import { writeFileSync } from 'node:fs';
+import { existsSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   classifyScannedSkillTree,
+  distributedTreeFindings,
   resetGitTrackerCache,
 } from '../../../src/commands/audit/distributed-tree.js';
 import { createTempDirTracker } from '../../system/test-common.js';
@@ -25,6 +26,7 @@ const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-tree-proven
 const SKILL_REL_DIR = 'skills/demo';
 const SOURCE: Awaited<ReturnType<typeof classifyScannedSkillTree>> = 'repo-source';
 const DISTRIBUTED: Awaited<ReturnType<typeof classifyScannedSkillTree>> = 'distributed';
+const INDETERMINATE: Awaited<ReturnType<typeof classifyScannedSkillTree>> = 'indeterminate';
 
 /** Create `<root>/<relDir>/SKILL.md` and return its absolute path. */
 function placeSkill(root: string, relDir: string): string {
@@ -33,6 +35,33 @@ function placeSkill(root: string, relDir: string): string {
   const skillMd = safePath.join(dir, 'SKILL.md');
   writeFileSync(skillMd, '---\nname: demo\ndescription: x\n---\n', 'utf-8');
   return skillMd;
+}
+
+/** Drop a `CLAUDE.md` beside a SKILL.md so the presence crawl has something to find. */
+function placeGuidanceBeside(skillMd: string): void {
+  writeFileSync(safePath.join(skillMd, '..', 'CLAUDE.md'), '# repo guidance\n', 'utf-8');
+}
+
+/**
+ * Make `git ls-files` fail inside `root` while leaving `.git` present on disk.
+ *
+ * Renaming `HEAD` is the cheapest reproduction of the whole family: git exits 128,
+ * `gitLsFiles` returns `null`, and `gitFindRoot` — a pure `existsSync` walk — still
+ * reports the directory as a repository. `git` missing from `PATH` and an
+ * unreadable `.git` reach the identical `null` through the same call.
+ */
+function breakGitMetadata(root: string): void {
+  renameSync(safePath.join(root, '.git', 'HEAD'), safePath.join(root, '.git', 'HEAD.bak'));
+}
+
+/** Create a symlink, or report that this host will not let us (Windows without admin). */
+function trySymlink(target: string, link: string): boolean {
+  try {
+    symlinkSync(target, link);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -118,5 +147,108 @@ describe('classifyScannedSkillTree', () => {
     commitTestFixture(sibling);
 
     await expect(classifyWithInstallRoot(claudeDir, skillMd)).resolves.toBe(SOURCE);
+  });
+
+  // A3 — the classifier used to FAIL OPEN here. `gitLsFiles` returns null for a
+  // missing binary, a corrupt `.git` and an unreadable `.git` alike; that null
+  // collapsed to "not ignored", which reads as source, which is silence. A
+  // security-adjacent detector that switches itself off when a subprocess is
+  // missing — and says nothing — is worse than one that was never written.
+  it('refuses to answer when git cannot be consulted, instead of calling the tree source', async () => {
+    const root = createTempDir();
+    const skillMd = placeSkill(root, SKILL_REL_DIR);
+    commitTestFixture(root);
+
+    // Control, same fixture, same call: with git healthy this IS source. Without
+    // it the two answers would be indistinguishable and this test would agree
+    // with any implementation.
+    await expect(classifyScannedSkillTree(skillMd)).resolves.toBe(SOURCE);
+
+    resetGitTrackerCache();
+    breakGitMetadata(root);
+
+    await expect(classifyScannedSkillTree(skillMd)).resolves.toBe(INDETERMINATE);
+  });
+
+  // A9 — `~/.claude` symlinked into a dotfiles checkout is a common setup, and
+  // auditing that checkout by its REAL path used to miss clause 1 entirely:
+  // both sides were compared unresolved.
+  it('sees through a symlinked Claude config dir to the real install root', async () => {
+    const repo = createTempDir();
+    const realDir = safePath.join(repo, 'realclaude');
+    const skillMd = placeSkill(realDir, SKILL_REL_DIR);
+    commitTestFixture(repo);
+    const linkDir = safePath.join(repo, 'linkclaude');
+    if (!trySymlink(realDir, linkDir)) return;
+
+    // Everything is committed, so clause 2 says `repo-source`; only clause 1 can
+    // produce the right answer, and only if it canonicalises first.
+    await expect(classifyWithInstallRoot(linkDir, skillMd)).resolves.toBe(DISTRIBUTED);
+  });
+
+  // C7 — `Set.has` on the git active set is case-SENSITIVE while the `existsSync`
+  // qualifier beside it is case-INsensitive, so a differently-cased spelling of a
+  // tracked file read as "absent from the set and present on disk" ⇒ ignored ⇒
+  // distributed. Reachable by tab-completion or a case-normalising layer.
+  it('is not fooled by a case-variant spelling of a tracked source path', async () => {
+    const root = createTempDir();
+    placeSkill(root, 'skills/demo');
+    commitTestFixture(root);
+
+    const variant = safePath.join(root, 'Skills', 'demo', 'SKILL.md');
+    // On a case-SENSITIVE filesystem this path names nothing, so there is no
+    // second spelling to be confused by and nothing to assert.
+    if (!existsSync(variant)) return;
+
+    await expect(classifyScannedSkillTree(variant)).resolves.toBe(SOURCE);
+  });
+});
+
+describe('distributedTreeFindings', () => {
+  afterEach(() => {
+    resetGitTrackerCache();
+    cleanupTempDirs();
+  });
+
+  it('reports the agent-instruction files of a distributed tree', async () => {
+    const root = createTempDir();
+    const skillMd = placeSkill(root, `dist/${SKILL_REL_DIR}`);
+    placeGuidanceBeside(skillMd);
+
+    const issues = await distributedTreeFindings(skillMd, root, true);
+
+    expect(issues.map((i) => i.code)).toEqual(['PACKAGED_AGENT_INSTRUCTION_FILE']);
+  });
+
+  // A3's reporting half. The degradation has to reach `issues`/`issueCounts` —
+  // this repo has already learned that a stderr notice is not a reported finding.
+  it('reports ONE indeterminate finding, not silence, when git cannot be consulted', async () => {
+    const root = createTempDir();
+    const skillMd = placeSkill(root, SKILL_REL_DIR);
+    placeGuidanceBeside(skillMd);
+    commitTestFixture(root);
+
+    // Control: healthy git says source, so nothing is reported.
+    expect(await distributedTreeFindings(skillMd, root, true)).toEqual([]);
+
+    resetGitTrackerCache();
+    breakGitMetadata(root);
+
+    const issues = await distributedTreeFindings(skillMd, root, true);
+    expect(issues.map((i) => i.code)).toEqual(['TREE_PROVENANCE_INDETERMINATE']);
+    expect(issues[0]?.severity).toBe('warning');
+  });
+
+  // Proportionality: a tree holding no agent-instruction file has nothing whose
+  // classification was lost, so an unanswerable git is not worth saying. Without
+  // this, every skill in a git-less container warns about nothing.
+  it('stays silent when git cannot be consulted and the tree holds nothing to classify', async () => {
+    const root = createTempDir();
+    const skillMd = placeSkill(root, SKILL_REL_DIR);
+    commitTestFixture(root);
+    resetGitTrackerCache();
+    breakGitMetadata(root);
+
+    expect(await distributedTreeFindings(skillMd, root, true)).toEqual([]);
   });
 });

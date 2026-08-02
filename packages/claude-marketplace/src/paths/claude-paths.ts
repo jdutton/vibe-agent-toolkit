@@ -74,9 +74,40 @@ export function buildClaudeUserPaths(claudeDir: string): ClaudeUserPaths {
  * ```
  */
 export function getClaudeUserPaths(): ClaudeUserPaths {
-  const home = homedir();
-  const claudeDir = process.env['CLAUDE_CONFIG_DIR'] ?? safePath.join(home, '.claude');
-  return buildClaudeUserPaths(claudeDir);
+  return buildClaudeUserPaths(resolveClaudeDir(homedir()));
+}
+
+/**
+ * The install root `CLAUDE_CONFIG_DIR` names, as an ABSOLUTE path — or `~/.claude`
+ * when it names nothing usable.
+ *
+ * Three shapes of the variable used to leak straight through `??` and
+ * `join`, and each one silently relocated every install root derived from it:
+ *
+ * - **Blank.** `CLAUDE_CONFIG_DIR=` is how a shell and a CI env block unset a
+ *   value, but the empty string is not nullish, so `??` kept it and the derived
+ *   paths became the RELATIVE strings `skills`, `plugins`. Whoever resolved them
+ *   first anchored them at `process.cwd()` — turning `$cwd/skills`, the
+ *   conventional source pool, into a Claude install root.
+ * - **Relative.** Same anchor problem, without the accident: the same tree
+ *   classified differently depending on where the command was invoked from.
+ * - **`~`-prefixed.** Nothing expands `~` inside a `.env` file or a CI variable
+ *   block, and resolving it literally yields `$cwd/~/.claude` — a directory that
+ *   exists nowhere, so every install-root test quietly answers "no".
+ *
+ * Resolved HERE, at the single place the variable is read, rather than in each
+ * consumer: a consumer that forgets is not distinguishable from one that has no
+ * opinion.
+ */
+function resolveClaudeDir(home: string): string {
+  const configured = process.env['CLAUDE_CONFIG_DIR']?.trim();
+  if (configured === undefined || configured.length === 0) {
+    return safePath.join(home, '.claude');
+  }
+  if (configured === '~' || configured.startsWith('~/') || configured.startsWith('~\\')) {
+    return safePath.join(home, configured.slice(1));
+  }
+  return safePath.resolve(configured);
 }
 
 /**
