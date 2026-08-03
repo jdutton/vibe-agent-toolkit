@@ -20,8 +20,6 @@ import { basename } from 'node:path';
 import {
   calculateValidationStatus,
   countBySeverity,
-  resolveSeverity,
-  type IssueCode,
   type SeverityCounts,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/agent-schema';
@@ -38,6 +36,7 @@ import { Command } from 'commander';
 import { handleCommandError } from '../utils/command-error.js';
 import { loadConfig } from '../utils/config-loader.js';
 import { formatIssueLines } from '../utils/issue-rendering.js';
+import { resolveIssueSeverity } from '../utils/issue-severity.js';
 import type { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
 import { requireProjectRoot } from '../utils/project-root-policy.js';
@@ -401,40 +400,6 @@ export function checkPackagedAgentInstructionFiles(
     issues.push(...resolveIssueSeverity(raw, check.packaging.validation));
   }
   return issues;
-}
-
-/**
- * Re-severity a detector's raw findings against one skill's `validation.severity`,
- * dropping the codes resolved to `ignore`.
- *
- * Resolution, not just suppression: an adopter who promotes a code to `error` has
- * to see it fail the run, and this command's exit code is derived from severity.
- *
- * An un-overridden code short-circuits rather than round-tripping through
- * {@link resolveSeverity}. Two reasons, and the second is the load-bearing one:
- * the answer would be the registry default, which is already the severity the
- * issue carries (`materializeIssue` built it from the same registry); and
- * `resolveSeverity` indexes `CODE_REGISTRY` unguarded, so handing it a
- * non-registry code would throw rather than pass the issue through. Overridden
- * codes still go through that ONE resolver — this is not a second copy of it.
- */
-function resolveIssueSeverity(
-  issues: readonly ValidationIssue[],
-  validation: SkillPackagingConfig['validation'],
-): ValidationIssue[] {
-  const overrides = validation?.severity;
-  if (overrides === undefined) return [...issues];
-  const resolved: ValidationIssue[] = [];
-  for (const issue of issues) {
-    if (!(issue.code in overrides)) {
-      resolved.push(issue);
-      continue;
-    }
-    const severity = resolveSeverity(issue.code as IssueCode, { severity: overrides });
-    if (severity === 'ignore') continue;
-    resolved.push(severity === issue.severity ? issue : { ...issue, severity });
-  }
-  return resolved;
 }
 
 /**

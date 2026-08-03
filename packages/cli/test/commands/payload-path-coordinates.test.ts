@@ -42,6 +42,7 @@ import {
   anchorsBelowRoot,
   pluginManifestLocations,
 } from '../anchor-contract-helpers.js';
+import { silentLogger } from '../test-doubles.js';
 
 /**
  * Synthetic absolute paths, resolved rather than written as literals — on
@@ -277,7 +278,10 @@ const MANIFEST_DIR = '.claude-plugin';
 
 /** Emit the document the command would, for a marketplace on disk. */
 async function marketplaceReportFor(root: string): Promise<Record<string, unknown>> {
-  const { marketplaceResult, pluginResults, issues } = await collectMarketplaceFindings(root);
+  const { marketplaceResult, pluginResults, issues } = await collectMarketplaceFindings(
+    root,
+    silentLogger,
+  );
   return buildMarketplaceValidateReport({
     status: 'error',
     root,

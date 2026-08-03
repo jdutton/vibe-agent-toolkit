@@ -17,6 +17,7 @@ import {
   calculateValidationStatus,
   countBySeverity,
   type SeverityCounts,
+  type ValidationConfig,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/agent-schema';
 import {
@@ -25,11 +26,13 @@ import {
   type ValidationResult,
 } from '@vibe-agent-toolkit/agent-skills';
 import { validatePlugin } from '@vibe-agent-toolkit/claude-marketplace';
-import { issueLocation, safePath } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { formatDuration, handleCommandError } from '../../../utils/command-error.js';
+import { loadConfig } from '../../../utils/config-loader.js';
 import { summarizeFindings, type FindingCountSummary } from '../../../utils/issue-rendering.js';
+import { resolveIssueSeverity } from '../../../utils/issue-severity.js';
 import { createLogger } from '../../../utils/logger.js';
 import { writeYamlOutput } from '../../../utils/output.js';
 import { relativizePathEntries } from '../../../utils/relativize-paths.js';
@@ -93,9 +96,19 @@ async function validatePluginSkills(pluginDir: string, marketplacePath: string):
 
 /**
  * Validate all plugins under the plugins/ directory.
+ *
+ * `validation` is the governing project's severity map (see
+ * {@link resolveProjectValidationConfig}). It is applied to each plugin result
+ * HERE rather than to the flat list at the end because the emitted document
+ * publishes both: `issues` and `plugins[].issues` are two views of the same
+ * findings, plus `plugins[].status`. Resolving once, at the producer, is what
+ * keeps them from disagreeing — a suppressed warning still listed under
+ * `plugins[]`, or a plugin `status: warning` above an issue list that no longer
+ * contains a warning.
  */
 async function validatePlugins(
   marketplacePath: string,
+  validation: ValidationConfig | undefined,
 ): Promise<{ pluginResults: ValidationResult[]; issues: ValidationIssue[] }> {
   const pluginsDir = safePath.join(marketplacePath, 'plugins');
   if (!existsSync(pluginsDir)) return { pluginResults: [], issues: [] };
@@ -113,15 +126,72 @@ async function validatePlugins(
     // its findings land in a different coordinate system than the marketplace
     // and skill findings beside them — and every plugin's manifest collapses to
     // the same `.claude-plugin/plugin.json`.
-    const pluginResult = await validatePlugin(pluginDir, { strict: true, locationRoot: marketplacePath });
+    const rawResult = await validatePlugin(pluginDir, { strict: true, locationRoot: marketplacePath });
+    const pluginIssues = resolveIssueSeverity(rawResult.issues, validation);
+    const pluginResult: ValidationResult = {
+      ...rawResult,
+      issues: pluginIssues,
+      status: calculateValidationStatus(pluginIssues),
+      issueCounts: countBySeverity(pluginIssues),
+    };
     pluginResults.push(pluginResult);
-    issues.push(...pluginResult.issues);
+    issues.push(...pluginIssues);
 
     const skillIssues = await validatePluginSkills(pluginDir, marketplacePath);
-    issues.push(...skillIssues);
+    issues.push(...resolveIssueSeverity(skillIssues, validation));
   }
 
   return { pluginResults, issues };
+}
+
+/**
+ * The `validation` config governing findings about `marketplacePath`.
+ *
+ * A built marketplace tree lives under the project that produced it
+ * (`dist/.claude/plugins/marketplaces/<name>/`), so the governing config is
+ * found by walking UP through {@link findProjectRoot} — the same discovery
+ * ladder every other lane uses, so they cannot disagree about which project
+ * governs a path.
+ *
+ * `skills.defaults.validation` is the ONE available scope, and deliberately so.
+ * A marketplace finding is not attributable to a skill, and neither
+ * `ClaudeMarketplaceSchema` nor `ClaudeMarketplacePluginEntrySchema` has a
+ * `validation` key — both are `.strict()`, so adding one to a config is a config
+ * error rather than an override. Per-plugin granularity is therefore
+ * unreachable by design until those schemas gain a key, which is a config-surface
+ * decision, not a fix.
+ *
+ * Why this phase needed it at all: `PACKAGED_AGENT_INSTRUCTION_FILE` ships at
+ * `warning` precisely because a legitimate exception exists — a plugin
+ * intentionally shipping a scaffold `CLAUDE.md` — and the code's own `fix` text
+ * tells the reader to record it as `severity.PACKAGED_AGENT_INSTRUCTION_FILE:
+ * ignore`. This command never read any config, so that instruction was a total
+ * no-op here: measured, the warnings survived the override at `skills.defaults`,
+ * at every per-skill key, and at the plugin's own name, and `vat verify` could
+ * not be made to reach `status: success` on a project that intends to ship one.
+ *
+ * A config that exists but does not parse yields no overrides rather than
+ * aborting: `vat verify` runs its `resources` and `skills` phases against the
+ * same config and both report the real parse error, so the run is not silent —
+ * and failing marketplace validation over an unrelated config defect would be a
+ * worse answer than validating it unmodified. The reason is logged, never
+ * swallowed.
+ */
+function resolveProjectValidationConfig(
+  marketplacePath: string,
+  logger: ReturnType<typeof createLogger>,
+): ValidationConfig | undefined {
+  const projectRoot = findProjectRoot(marketplacePath);
+  if (projectRoot === null) return undefined;
+  try {
+    return loadConfig(projectRoot)?.skills?.defaults?.validation;
+  } catch (error) {
+    logger.error(
+      `Warning: could not read ${projectRoot} config for validation.severity overrides — ` +
+        `reporting unmodified severities (${error instanceof Error ? error.message : String(error)})`,
+    );
+    return undefined;
+  }
 }
 
 /** Every finding the command reports, all anchored at one marketplace root. */
@@ -129,13 +199,29 @@ export interface MarketplaceFindings {
   marketplaceResult: ValidationResult;
   /** Empty when the manifest failed: the run bails before reaching plugins. */
   pluginResults: ValidationResult[];
-  /** Manifest, required-file, plugin and skill issues, in report order. */
+  /**
+   * Manifest, required-file, plugin and skill issues, in report order, with
+   * every severity already resolved against the governing project's
+   * `validation.severity` map.
+   */
   issues: ValidationIssue[];
+  /**
+   * The run's overall status — the value the command's exit code is derived
+   * from (`error` → 1, otherwise 0), and the status `vat verify` reads back as
+   * this phase's status.
+   *
+   * Computed here rather than by the caller so it cannot be derived from a
+   * different issue set than the one reported. A promote-to-`error` override
+   * that moved a severity without moving this would be half-wired: the finding
+   * would read `error` while the run still exited 0.
+   */
+  status: 'success' | 'warning' | 'error';
 }
 
 /**
  * Run every validator this command reports on, each anchored at
- * `marketplacePath`.
+ * `marketplacePath`, and resolve their severities against the governing
+ * project's `validation.severity` map.
  *
  * Anchoring is what makes this one function rather than four call sites in the
  * command body. Unlike `path`, an issue `location` cannot be re-based at the
@@ -148,28 +234,59 @@ export interface MarketplaceFindings {
  * `join(root, location)` resolved for some findings and named nothing for
  * others.
  *
+ * Severity resolution is likewise INSIDE this function rather than a step the
+ * command adds after it. Its absence is the whole defect this addressed, and a
+ * command-body step is one a caller can forget: with it here, `status`, the
+ * exit code, the flat `issues` list and `plugins[].issues` all derive from a
+ * single resolved set, and the smallest testable entry point is the one that
+ * includes the filter.
+ *
  * Exported so that contract is testable against a real marketplace without a
  * CLI spawn; the command adds only the exit code and the emission.
+ *
+ * @param logger - Used only to report a config that exists but cannot be read.
+ *   Required, not optional: a defaulted logger is how that diagnosis goes
+ *   nowhere.
  */
 export async function collectMarketplaceFindings(
   marketplacePath: string,
+  logger: ReturnType<typeof createLogger>,
 ): Promise<MarketplaceFindings> {
   const marketplaceResult = await validateMarketplace(marketplacePath, {
     locationRoot: marketplacePath,
   });
 
   // A missing or malformed manifest makes every downstream check meaningless.
+  //
+  // These issues are deliberately NOT severity-resolved: an override governs
+  // findings ABOUT a marketplace that could be read, not the failure to read
+  // one. Resolving them would let `MARKETPLACE_MISSING_MANIFEST: ignore` empty
+  // the list and report `status: success` beside a summary saying the manifest
+  // is missing — a run that never happened claiming it passed.
   if (marketplaceResult.status === 'error') {
-    return { marketplaceResult, pluginResults: [], issues: [...marketplaceResult.issues] };
+    return {
+      marketplaceResult,
+      pluginResults: [],
+      issues: [...marketplaceResult.issues],
+      status: 'error',
+    };
   }
 
+  const validation = resolveProjectValidationConfig(marketplacePath, logger);
   const fileIssues = checkMarketplaceFiles(marketplacePath);
-  const { pluginResults, issues: pluginIssues } = await validatePlugins(marketplacePath);
+  const { pluginResults, issues: pluginIssues } = await validatePlugins(marketplacePath, validation);
+
+  const issues = [
+    ...resolveIssueSeverity(marketplaceResult.issues, validation),
+    ...resolveIssueSeverity(fileIssues, validation),
+    ...pluginIssues,
+  ];
 
   return {
     marketplaceResult,
     pluginResults,
-    issues: [...marketplaceResult.issues, ...fileIssues, ...pluginIssues],
+    issues,
+    status: calculateValidationStatus(issues),
   };
 }
 
@@ -316,11 +433,10 @@ async function marketplaceValidateCommand(
     const marketplacePath = safePath.resolve(targetPath ?? '.');
     logger.info(`Validating marketplace: ${marketplacePath}`);
 
-    const { marketplaceResult, pluginResults, issues } =
-      await collectMarketplaceFindings(marketplacePath);
+    const { marketplaceResult, pluginResults, issues, status } =
+      await collectMarketplaceFindings(marketplacePath, logger);
 
     const bailed = marketplaceResult.status === 'error';
-    const status = calculateValidationStatus(issues);
     const issueCounts = countBySeverity(issues);
 
     writeYamlOutput(

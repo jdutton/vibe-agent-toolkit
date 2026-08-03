@@ -59,6 +59,7 @@ import {
   writeYamlHeader,
   type DiscoveredSkill,
 } from './command-helpers.js';
+import { rejectUnscopablePath, type SkillsScopeSubject } from './scope-guard.js';
 import { discoverSkillsFromConfig } from './skill-discovery.js';
 
 export interface SkillsBuildCommandOptions {
@@ -67,6 +68,20 @@ export interface SkillsBuildCommandOptions {
   debug?: boolean;
   verbose?: boolean;
 }
+
+/**
+ * What a mis-scoped `vat skills build` used to do.
+ *
+ * The twin of the `vat skills validate` hole, and strictly the worse of the two:
+ * a mistyped path printed "No skills configuration found — nothing to build" and
+ * exited **0**, so a release pipeline whose build step named the wrong directory
+ * published having built nothing, with a green tick. Measured on a project whose
+ * bare `vat skills build` finds a skill: `vat skills build nope` exited 0.
+ */
+const SCOPE_SUBJECT: SkillsScopeSubject = {
+  command: 'vat skills build',
+  silentSuccess: 'nothing to build',
+};
 
 export function createBuildCommand(): Command {
   const command = new Command('build');
@@ -78,7 +93,10 @@ export function createBuildCommand(): Command {
     .option('--dry-run', 'Preview build without creating files')
     .option('-v, --verbose', 'Show every individual finding, not just the errors')
     .option('--debug', 'Enable debug logging')
-    .action(buildCommand)
+    .action(async (pathArg: string | undefined, options: SkillsBuildCommandOptions) => {
+      rejectUnscopablePath(SCOPE_SUBJECT, pathArg);
+      await buildCommand(pathArg, options);
+    })
     .addHelpText(
       'after',
       `
@@ -189,9 +207,16 @@ Exit Codes:
       aborts the run: every failure of every kind is collected and reported
       in ONE pass, so one build cycle surfaces all the work. Because the run
       failed, outputCommitted is false and dist/skills was left untouched.
-  2 - System error (config invalid, directory not found), or a failure on the
-      promotion path — see promotionError. The YAML document is still written
-      in that case; it is the only report that says where the output went.
+  2 - System error (config invalid, directory not found), a [path] argument
+      this command cannot read a config from, or a failure on the promotion
+      path — see promotionError. On a promotion failure the YAML document is
+      still written; it is the only report that says where the output went.
+
+  A [path] naming a directory that does not exist, is not a directory, or holds
+  no vibe-agent-toolkit.config.yaml is REFUSED with exit 2. It previously
+  printed "No skills configuration found — nothing to build" and exited 0, so a
+  pipeline whose build step named the wrong directory shipped having built
+  nothing, and reported success.
 
 Requirements:
   projectRoot: required (errors if no vibe-agent-toolkit.config.yaml or .git/ ancestor)
@@ -554,6 +579,14 @@ export function buildYamlSummary(
       // every `path` and `location` in a report is expressed relative to"). Making this
       // one field relative ahead of that decision picks the anchor by accident and
       // leaves the document in two coordinate systems.
+      //
+      // Do not read the rest of the report as clean because the failure MESSAGES
+      // are: those were scrubbed of absolute project paths and are confirmed clean,
+      // but the SUCCESS-path fields were not. This one and the plugin lane's `dir:`
+      // (5 places in the measured report — see `pluginBuildCommand` in
+      // ../claude/plugin/build.ts) are the two that still publish `$HOME` into CI
+      // logs, and they wait on the same `root:` decision — fix them as a pair, or
+      // the two lanes end up anchored differently.
       outputPath: result.outputPath,
       filesPackaged: result.files.dependencies.length + 1,
       issueCounts: countBySeverity(issues),
@@ -582,6 +615,21 @@ export function buildYamlSummary(
   // attempted and threw, `skills` says a bundle exists. And unlike a throw, this
   // failure HAS a severity distribution of its own, so it publishes the real
   // counts instead of the flat `failureIssueCounts()` stand-in.
+  //
+  // KNOWN, DELIBERATELY NOT FIXED — these rows carry no `issues` key, so the
+  // findings that just failed the build are COUNTED here and never NAMED. On a
+  // real adopter monorepo build, all 28 build-blocking errors were counted but
+  // never named — 551 of 1707 findings were named overall. A CI consumer reading
+  // stdout gets a number it cannot act on; the findings themselves exist only on
+  // stderr.
+  //
+  // Stated explicitly, because a reader will otherwise assume it is covered: the
+  // sibling defect on the `skills` rows — their `issues` array dropped at the
+  // publish seam, see the comment on `buildYamlSummary` — was fixed, and that fix
+  // does NOT cover this row type. This one is not a publish-seam drop: the
+  // findings never reach here at all. `SkillValidationFailure` is `{ name,
+  // issueCounts }`, so fixing it means widening that type back at the pre-build
+  // validation lane, not adding a key at this call.
   const validationFailedSkills = validationFailures.map(({ name, issueCounts }) => ({
     name,
     issueCounts,
@@ -1100,8 +1148,10 @@ function describePromotionFailure(
   } else if (recovery.restoredPrevious) {
     lines.push(`   The previous ${staging.promoteLabel} has been restored; nothing this run built was kept.`);
   } else if (staging.hadPreviousOutput) {
-    lines.push(`   The previous ${staging.promoteLabel} is parked at ${staging.parkedPath}`);
-    lines.push(`   Recover it with: mv ${staging.parkedPath} <your ${staging.promoteLabel}>`);
+    lines.push(
+      `   The previous ${staging.promoteLabel} is parked at ${staging.parkedPath}`,
+      `   Recover it with: mv ${staging.parkedPath} <your ${staging.promoteLabel}>`,
+    );
   } else {
     lines.push(`   ${staging.promoteLabel} was never written, and there was no previous output to lose.`);
   }

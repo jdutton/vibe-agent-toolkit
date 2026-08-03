@@ -655,6 +655,28 @@ describe('vat skills validate — formatValidationReportLines', () => {
     expect(lines[0]).toContain('1 info');
   });
 
+  it('never claims "nothing to act on" over an info finding the build dies on', () => {
+    // FILES_GLOB_MATCHED_NOTHING is `info` on purpose — a glob over an unbuilt
+    // dist/ matching nothing is the expected pre-build state and must not fail
+    // anyone's CI — and `vat skills build` exits 1 on exactly that input. The
+    // banner printed "All validations passed … nothing to act on" directly above
+    // the one line saying the build will fail. Asserted at the DEFAULT verbosity,
+    // which is what an adopter sees.
+    const lines = formatValidationReportLines(
+      [packagingResult('demo', [issue('info', 'FILES_GLOB_MATCHED_NOTHING')])],
+      [],
+      false,
+    );
+    expect(lines[0]).not.toContain('nothing to act on');
+    expect(lines[0]).not.toContain('All validations passed');
+    expect(lines[0]).toContain('Validation passed with findings');
+    expect(lines[0]).toContain('1 info');
+    // The finding itself is still reported — the claim was wrong, not the listing.
+    expect(lines.some((line) => line.includes('FILES_GLOB_MATCHED_NOTHING'))).toBe(true);
+  });
+
+  // The control on the fix above: dropping the clause unconditionally must NOT
+  // cost a genuinely clean run its unqualified all-clear.
   it('keeps the plain all-clear banner for a genuinely clean batch', () => {
     for (const verbose of [false, true]) {
       expect(formatValidationReportLines([packagingResult('a', [])], [], verbose)).toEqual([

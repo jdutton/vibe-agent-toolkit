@@ -247,6 +247,33 @@ describe('distributedTreeFindings', () => {
     expect(issues[0]?.severity).toBe('warning');
   });
 
+  // N5/N13 — the ORDINARY `vat audit <bundle-path>` shape, where the audited
+  // target IS the skill tree. `issueLocation` then relativizes a path against
+  // itself, and `path.relative` answers `''` for that: the finding published
+  // `location: ""` — not a location — and `materializeIssue`'s `(detail)` wrapper
+  // rendered the empty positional part as `( (1 agent-instruction file(s) …))`,
+  // which reads as a formatter bug.
+  //
+  // Every sibling case above anchors at the REPO root, so the tree is always a
+  // subdirectory and `''` and `.` are indistinguishable there — fixtures that
+  // agree with the defect as readily as with the fix.
+  it('anchors the finding at `.` when the audited target IS the tree', async () => {
+    const root = createTempDir();
+    const skillMd = placeSkill(root, SKILL_REL_DIR);
+    placeGuidanceBeside(skillMd);
+    commitTestFixture(root);
+    resetGitTrackerCache();
+    breakGitMetadata(root);
+
+    const treeRoot = safePath.resolve(skillMd, '..');
+    const issues = await distributedTreeFindings(skillMd, treeRoot, true);
+
+    expect(issues.map((i) => i.code)).toEqual(['TREE_PROVENANCE_INDETERMINATE']);
+    expect(issues[0]?.location).toBe('.');
+    expect(issues[0]?.message).not.toContain('( (');
+    expect(issues[0]?.message).toContain('(. (1 agent-instruction file(s) found, unclassified))');
+  });
+
   // Proportionality: a tree holding no agent-instruction file has nothing whose
   // classification was lost, so an unanswerable git is not worth saying. Without
   // this, every skill in a git-less container warns about nothing.

@@ -321,6 +321,18 @@ async function pluginBuildCommand(options: PluginBuildCommandOptions): Promise<v
 
     const allPlugins = results.flatMap((r) => r.plugins);
 
+    // KNOWN, DELIBERATELY NOT FIXED — this lane NAMES NOTHING. Every level of this
+    // document publishes severity counts and no findings: `vat build --only claude`
+    // on a real adopter monorepo published `warnings: 70, info: 30` with zero named
+    // findings anywhere in the document, at any verbosity. A reader is told how many
+    // things are wrong and never which. The findings exist — `summarizePackagedSkillIssues`
+    // and `reportPluginIssues` render them — but only to stderr, where no CI consumer
+    // reads them.
+    //
+    // Same class as the `validationFailedSkills` rows in ../../skills/build.ts, a
+    // different lane. Fixing it means carrying `ValidationIssue[]` up through
+    // `PluginBuildResult`/`MarketplaceBuildResult` beside the counts they already
+    // carry, then publishing it on the plugin rows below.
     writeYamlOutput({
       status: 'success',
       // The build gate is two-valued and a warning does not fail it, so the
@@ -335,6 +347,16 @@ async function pluginBuildCommand(options: PluginBuildCommandOptions): Promise<v
         ...(r.reason ? { reason: r.reason } : {}),
         plugins: r.plugins.map((p) => ({
           name: p.pluginName,
+          // KNOWN, DELIBERATELY NOT FIXED — an ABSOLUTE path, so stdout carries
+          // `$HOME`. Measured on a real adopter monorepo run: 5 places in the
+          // published document. Failure MESSAGES in this change were scrubbed of
+          // absolute project paths and are confirmed clean; the success-path fields
+          // like this one were not, so the leak survives in the reports CI keeps.
+          //
+          // Do NOT relativize it on its own. It is blocked on the same undecided
+          // question as `skills[].outputPath` in ../../skills/build.ts: which root
+          // these reports anchor on. Picking one here picks it by accident, and the
+          // two build lanes then publish paths in two coordinate systems.
           dir: p.pluginDir,
           skills: p.skillsCopied,
           commandsCopied: p.commandsCopied,

@@ -198,6 +198,17 @@ export function buildValidateSummary(
     runIssueCounts,
     // `skillsValidated` stays the true denominator even though the default
     // `results[]` lists only the skills with something to say.
+    //
+    // KNOWN, DELIBERATELY NOT FIXED — the denominator and the listing disagree,
+    // and nothing in the document explains the gap. A real adopter run published
+    // `skillsValidated: 92` beside a `results:` array of 62 rows. Omitting the
+    // clean skills is the DESIGN — a report of 92 rows where 30 say nothing is a
+    // report nobody reads — but 23 of the omitted were config-DECLARED skills, so
+    // a reader reconciling 92 against 62 cannot tell "validated and clean" from
+    // "never validated at all". The omission is deliberate; the unexplained
+    // difference is the defect. A fix names the omitted population rather than
+    // re-listing it (a count of clean skills, or their names on a separate key) —
+    // it does not put the empty rows back.
     skillsValidated: results.length,
     results: verbose
       ? results.map((r) => toVerboseYamlResult(r))
@@ -288,19 +299,38 @@ const STATUS_GLYPHS: Record<ValidationStatus, string> = {
   success: '✅',
 };
 
-/** Banner naming what the run actually found. */
+/**
+ * Banner naming what the run actually found.
+ *
+ * "All validations passed" — with nothing after it — is reserved for a run with
+ * NO finding at all. Any non-error finding gets the same "passed with findings"
+ * wording whatever its severity, because the banner cannot tell an `info` that
+ * is genuinely inert from one whose own message says the build will die on it.
+ * The info-only banner used to assert "nothing to act on" and was printed
+ * directly above `FILES_GLOB_MATCHED_NOTHING`, whose message reads "`vat skills
+ * build` fails on a glob that matches nothing, so the build will fail unless
+ * that artifact is produced first" — a headline contradicting the single line
+ * beneath it.
+ *
+ * The severity is right (a glob over an unbuilt `dist/` matching nothing is the
+ * expected pre-build state and must not fail CI); only the claim was wrong. It
+ * is dropped rather than made conditional because the code registry carries no
+ * build-blocking fact to condition it on — `CodeRegistryEntry` in
+ * agent-schema/src/validation-codes.ts is exactly `defaultSeverity` /
+ * `description` / `fix` / `reference` — and keying the claim
+ * on a hardcoded list of code names would assert a cause this renderer cannot
+ * observe, and would go stale the next time a code is added.
+ */
 function reportBanner(status: ValidationStatus, counts: SeverityCounts): string {
   if (status === 'error') {
     return `\n❌ Validation failed — ${formatSeverityBreakdown(counts)}:\n`;
   }
-  if (status === 'warning') {
+  if (counts.warnings + counts.info > 0) {
     // Non-blocking (exit 0), which is exactly why this used to print
-    // "All validations passed" over the warnings.
-    return `\n⚠️  Validation passed with findings — ${formatSeverityBreakdown(counts)}:\n`;
+    // "All validations passed" over the findings.
+    return `\n${STATUS_GLYPHS[status]} Validation passed with findings — ${formatSeverityBreakdown(counts)}:\n`;
   }
-  return counts.info > 0
-    ? `\n✅ All validations passed — ${formatSeverityBreakdown(counts)}, nothing to act on:\n`
-    : '\n✅ All validations passed';
+  return '\n✅ All validations passed';
 }
 
 /**

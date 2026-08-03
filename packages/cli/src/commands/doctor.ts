@@ -692,7 +692,7 @@ export function doctorCommand(program: Command): void {
   program
     .command('doctor')
     .description('Diagnose vat setup and environment')
-    .option('--verbose', 'Show all checks including passing ones')
+    .option('-v, --verbose', 'Show all checks including passing ones')
     .addHelpText('after', `
 When to run:
   • Before starting development (ensure environment is ready)

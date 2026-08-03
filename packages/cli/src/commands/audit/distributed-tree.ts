@@ -279,6 +279,35 @@ export async function crawlOwnsSubtree(skillMdPath: string): Promise<boolean> {
 }
 
 /**
+ * The tree's own directory, spelled as a location a reader can act on.
+ *
+ * `issueLocation` is `path.relative`, so it answers `''` when the subject IS the
+ * anchor — and that is not an exotic case here, it is the ORDINARY
+ * `vat audit <bundle-path>` invocation: the audited target and the tree are the
+ * same directory. `''` then reached the report as `location: ""` and, interpolated
+ * into the detail below, produced `( (1 agent-instruction file(s) …))` — an empty
+ * positional part that reads as a rendering bug. `.` is that same directory
+ * spelled as something a consumer can open, resolve and glob.
+ *
+ * Fixed HERE rather than inside `issueLocation` deliberately. `issueLocation` is
+ * a relativizer shared by ~20 producers, and only its CALLER knows whether "the
+ * anchor root itself" is a subject its findings can have; for the producers that
+ * anchor a file against a containing directory, subject-equals-anchor cannot
+ * happen at all. The sibling `Location: (validation.allow.<CODE>)` findings look
+ * like this defect and are NOT it: those are `ALLOW_UNUSED`/`ALLOW_EXPIRED` meta
+ * issues that carry no `location` whatsoever (only a `field` pointing into the
+ * project config), which `formatIssueAnchor` renders as `(field)` on purpose.
+ *
+ * @see `anchoredPath` in `agent-skills/src/files-config.ts` and the `|| '.'` in
+ *   `cli/src/commands/claude/plugin/plugin-files.ts` — the same fallback, spelled
+ *   twice already. Consolidating all three into one utils-level helper is a wider
+ *   change than this fix.
+ */
+function treeLocation(treeRoot: string, locationRoot: string): string {
+  return issueLocation(treeRoot, locationRoot) || '.';
+}
+
+/**
  * The agent-instruction files present in a skill's own directory, when that
  * directory is a distributed tree. Empty otherwise — including when the caller
  * says a plugin lane already owns this subtree.
@@ -320,7 +349,7 @@ export async function distributedTreeFindings(
   // have been silent here too. That keeps the notice proportional to the actual
   // ambiguity instead of warning once per skill across a git-less container.
   if (present.length === 0) return [];
-  const location = issueLocation(treeRoot, locationRoot);
+  const location = treeLocation(treeRoot, locationRoot);
   return [
     materializeIssue('TREE_PROVENANCE_INDETERMINATE', {
       location,

@@ -91,4 +91,32 @@ describe('root --version does not shadow subcommand -v/--verbose', () => {
     expect(result.stdout).toContain('filesScanned:');
     expect(result.status).toBe(0);
   });
+
+  // `doctor` is the verb freeing `-v` at the root MISSED. Every sibling above
+  // advertises `-v, --verbose`; `doctor` registered the long form alone, so the
+  // flag it no longer shadowed arrived as an UNKNOWN option — `vat doctor -v`
+  // exited 1 with `error: unknown option '-v'`, having diagnosed nothing. The
+  // short form was never "restored" for doctor because doctor never had it.
+  //
+  // Asserted through the assembled program for the reason in this block's header:
+  // a `parseOptions(['-v'])` call on a `doctor` command built in isolation is the
+  // fixture that cannot fail.
+  it('routes -v to doctor, which had advertised only the long form', async () => {
+    const result = await executeBunVat(import.meta.url, ['doctor', '-v']);
+
+    expect(result.stderr).not.toContain("unknown option '-v'");
+    // Doctor's banner. Its exit code is environment-dependent (a failed check is
+    // a legitimate 1), so the parse is what this asserts, not the diagnosis.
+    expect(result.stdout).toContain('vat doctor');
+  });
+
+  // `audit` is the OTHER verb the root cleanup missed, and the one an adopter is
+  // most likely to have spelled `-v` in CI. Same shape as doctor: long form only,
+  // so the freed flag arrived as an unknown option and exited 1.
+  it('routes -v to audit, which had advertised only the long form', async () => {
+    const result = await executeBunVat(import.meta.url, ['audit', '--help']);
+
+    expect(result.stdout).toContain('-v, --verbose');
+    expect(result.stderr).not.toContain("unknown option '-v'");
+  });
 });

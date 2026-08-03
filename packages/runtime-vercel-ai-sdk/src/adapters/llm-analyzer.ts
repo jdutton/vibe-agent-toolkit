@@ -51,8 +51,13 @@ export function convertLLMAnalyzerToFunction<TInput, TOutput>(
     const callLLM = async (prompt: string) => {
       const result = await generateText({
         model: llmConfig.model,
-        ...(llmConfig.temperature ? { temperature: llmConfig.temperature } : {}),
-        ...(llmConfig.maxTokens ? { maxTokens: llmConfig.maxTokens } : {}),
+        // Guarded on `!== undefined`, not truthiness: `temperature: 0` is the
+        // single most requested setting for structured output, and truthiness
+        // drops exactly the value carrying the information. The context below
+        // already spells it `?? 0.7`, so the two halves of this function
+        // disagreed about whether 0 was a real setting.
+        ...(llmConfig.temperature === undefined ? {} : { temperature: llmConfig.temperature }),
+        ...(llmConfig.maxTokens === undefined ? {} : { maxTokens: llmConfig.maxTokens }),
         ...llmConfig.additionalSettings,
         prompt,
       });

@@ -84,6 +84,7 @@ import {
   formatSeverityBreakdown,
   issuesToRenderAtVerbosity,
 } from '../utils/issue-rendering.js';
+import { resolveIssueSeverity } from '../utils/issue-severity.js';
 import { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
 import { relativizePathEntries } from '../utils/relativize-paths.js';
@@ -410,7 +411,12 @@ export function createAuditCommand(): Command {
     .option('--exclude <glob>', 'Exclude paths matching glob pattern (repeatable)', collect, [])
     .option('--include-artifacts', 'Include gitignored paths (build artifacts, dependencies) that are excluded by default')
     .option('--user', 'Audit user-level Claude resources (default: $CLAUDE_CONFIG_DIR or ~/.claude — scans plugins/, skills/, marketplaces/)')
-    .option('--verbose', 'Show all scanned resources, including those without issues')
+    // `-v` short form: `vat audit -v` used to print the version (the root
+    // `-v, --version` shadowed every subcommand), and after that alias was
+    // removed it exited 1 as an unknown option — while five sibling verbs
+    // accepted it. Advertising only the long form is what made the CHANGELOG's
+    // "`-v` means `--verbose` on every verb" claim untrue.
+    .option('-v, --verbose', 'Show all scanned resources, including those without issues')
     .option('--warn-unreferenced-files', 'Warn about files not referenced in skill markdown')
     .option('--compat', 'Run compatibility analysis for each plugin (shows claude-code, claude-cowork, claude-chat support)')
     .option('--settings [file]', 'Check plugins against Claude settings (auto-discover or specify file; requires --compat)')
@@ -707,11 +713,25 @@ function buildFilteredResult(
 }
 
 /**
- * Apply severity filtering to validation results.
+ * Apply severity resolution to validation results.
  *
  * Audit is advisory only: it applies `validation.severity` to decide what to
- * show, but deliberately ignores `validation.allow`. Codes configured as
- * `severity: 'ignore'` are stripped from the result issues before rendering.
+ * show and at what severity, but deliberately ignores `validation.allow`.
+ *
+ * **Both directions, via the one shared resolver.** This used to compute the
+ * merged override map correctly and then consult it for a single value —
+ * `issues.filter(i => effective[i.code] !== 'ignore')` — so `ignore` worked
+ * while `error`, `warning` and `info` fell through untouched. Measured end to
+ * end on a real adopter tree: `severity: error` at BOTH scopes left
+ * `severity: warning`, `errors: 0`, `status: warning`, while `vat verify` on the
+ * same config promoted correctly. Two lanes, one config key, opposite answers.
+ *
+ * Status and counts are re-derived from the resolved severities by
+ * {@link buildFilteredResult}, so a promotion moves the reported status. It does
+ * NOT move this command's exit code — `vat audit` is advisory and its exit-code
+ * behaviour is a separate, pre-existing question tracked in its own issue. That
+ * asymmetry with `vat verify` (whose exit code IS severity-derived) is
+ * deliberate here rather than overlooked.
  *
  * Two scopes, both live:
  *  - `skills.defaults.validation.severity` — the PROJECT-WIDE map, applied to
@@ -724,6 +744,24 @@ function buildFilteredResult(
  *    its warning with `severity: ignore` set at `skills.defaults`.
  *  - `skills.config.<name>.validation.severity` — layered on top, and only for a
  *    result that names a skill, since that key is keyed by skill name.
+ *
+ * KNOWN, DELIBERATELY NOT FIXED — per-skill scope cannot reach a finding nested
+ * inside a plugin tree, even when that finding IS attributable to a skill.
+ * `vat audit <plugin dir>` reports two findings: the plugin root's `CLAUDE.md`
+ * (attributable to no skill, which is the case the project-wide scope above was
+ * added for) and an `AGENTS.md` nested inside one of the plugin's OWN skills,
+ * which is attributable. Measured: neither moves under
+ * `skills.config.<that skill>` nor under `skills.config.<the plugin's name>`;
+ * only the project-wide `skills.defaults` moves them. The mechanism is the line
+ * below — a `claude-plugin` result is not in `SKILL_RESULT_TYPES`, so `skillName`
+ * is `undefined` and the per-skill map is never consulted, no matter which name
+ * the adopter writes.
+ *
+ * The consequence worth stating plainly: an adopter with ONE intentional
+ * agent-instruction file in ONE plugin has to silence the code project-wide in
+ * this lane, losing the detector everywhere else. The marketplace lane has the
+ * same project-wide-only limitation for a different reason, recorded there: both
+ * marketplace config schemas are `.strict()` with no `validation` key at all.
  *
  * @param results - Raw validation results from skill/plugin validators
  * @param config - Parsed VATConfig (may be undefined if no config file)
@@ -753,13 +791,22 @@ function applySeverityFilter(
       return result;
     }
 
-    const filteredIssues = result.issues.filter(issue => effectiveSeverity[issue.code] !== 'ignore');
+    const resolvedIssues = resolveIssueSeverity(result.issues, { severity: effectiveSeverity });
 
-    if (filteredIssues.length === result.issues.length) {
+    // Short-circuit only when NOTHING moved. Comparing lengths alone was the old
+    // test, and it is blind to the promote direction by construction: a resolved
+    // `error` keeps the array exactly as long as it was, so an early return on
+    // equal lengths discarded every re-severitied issue and reported the raw
+    // ones. The severities have to be compared too.
+    const unchanged =
+      resolvedIssues.length === result.issues.length &&
+      resolvedIssues.every((issue, index) => issue.severity === result.issues[index]?.severity);
+
+    if (unchanged) {
       return result;
     }
 
-    return buildFilteredResult(result, filteredIssues);
+    return buildFilteredResult(result, resolvedIssues);
   });
 }
 

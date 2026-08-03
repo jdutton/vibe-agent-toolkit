@@ -4,7 +4,7 @@ import {
   SimpleValidationOutputSchema,
   simpleValidatorAgent,
 } from '@vibe-agent-toolkit/test-agents';
-import { expect } from 'vitest';
+import { expect, it } from 'vitest';
 
 import { convertPureFunctionToTool, convertPureFunctionsToTools } from '../src/adapters/pure-function.js';
 
@@ -39,4 +39,31 @@ createPureFunctionTestSuite({
     expect(Object.keys(registeredTools).length).toBeGreaterThan(0);
     expect(result.metadata.toolName).toMatch(/^mcp__/);
   },
+});
+
+// Runtime-specific: the shared factory wraps convertPureFunctionsToTools so that only the
+// executors survive, so nothing above exercises the MCP namespacing contract. Batch tools are
+// registered under the caller-supplied server name and keyed by the *config key*, not the agent
+// manifest name — that key is what an `allowedTools` entry has to spell.
+it('registers batch pure-function tools under the caller-supplied MCP server name', () => {
+  const { server, metadata } = convertPureFunctionsToTools(
+    {
+      validateHaiku: {
+        agent: simpleValidatorAgent as never,
+        inputSchema: SimpleValidationInputSchema as never,
+        outputSchema: SimpleValidationOutputSchema as never,
+      },
+    },
+    'cat-tools',
+  );
+
+  expect(server.name).toBe('cat-tools');
+  expect(metadata.serverName).toBe('cat-tools');
+  expect(metadata.tools['validateHaiku']).toMatchObject({
+    archetype: 'pure-function',
+    name: 'haiku-validator',
+    toolName: 'mcp__cat-tools__validateHaiku',
+  });
+  // The MCP server registers under the key, not under the manifest name.
+  expect(Object.keys(getRegisteredTools(server))).toEqual(['validateHaiku']);
 });
