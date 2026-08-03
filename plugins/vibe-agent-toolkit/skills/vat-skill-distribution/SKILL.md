@@ -468,7 +468,13 @@ A planned improvement: `vat build` would bundle the plugin install logic into `d
 VAT supports bundling any Claude Code plugin asset — not just skills. Drop the plugin
 under `plugins/<name>/` in the same native layout Claude expects. VAT tree-copies
 everything (minus `skills/` and `.claude-plugin/`), merges author `plugin.json` with
-VAT-owned identity fields, and applies any `files[]` mappings for artifacts built
-outside the plugin dir. A `files:` entry's `source` may be a glob (`*`, `**`, `?`, `[`) — the entry then fans out to a directory `dest` using prefix-strip + tail-preserve mapping, with the glob resolved only at build time so SKILL.md links to files landing under a glob dest are treated as deferred artifacts at validate time. An optional `integrity: true` flag byte-verifies the copy at build time and (for glob entries) asserts the dest subtree is an exact match. For the full model — prefix-strip mechanics, late-binding semantics, sibling sources, and scope limits — see [docs/guides/skill-files-and-routing.md]().
+the identity fields the marketplace config owns, and applies any `files[]` mappings for
+artifacts built outside the plugin dir. The config owns `name`, `version`, and the
+`author` subfields `owner` can express (`name`, `email`); every other `author` subfield —
+`author.url` in particular, which VAT's config has no field for — passes through from
+`plugin.json` untouched, and the generated `marketplace.json` republishes that same
+merged author. A `files:` entry's `source` may be a glob (`*`, `**`, `?`, `[`) — the entry then fans out to a directory `dest` using prefix-strip + tail-preserve mapping, with the glob resolved only at build time so SKILL.md links to files landing under a glob dest are treated as deferred artifacts at validate time. An optional `integrity: true` flag byte-verifies the copy at build time and (for glob entries) asserts the dest subtree is an exact match. **A glob honors the never-package list; an explicit entry does not** — a glob drops agent-instruction files (`CLAUDE.md`, `AGENTS.md`, …) and, in a skill bundle, navigation files (`README.md`, `index.md`, …), while `source: extras/README.md` still ships because naming a path is an instruction. For the full model — prefix-strip mechanics, late-binding semantics, sibling sources, never-package tiers, and scope limits — see docs/guides/skill-files-and-routing.md.
 
-See [docs/guides/marketplace-distribution.md]() section "Full-plugin authoring".
+The plugin tree-copy drops agent-instruction files at any depth but **keeps** `README.md` — a plugin-root README is the plugin's front page. Project-specific junk goes in `exclude: ["scratch/**"]` on the plugin entry.
+
+See docs/guides/marketplace-distribution.md section "Full-plugin authoring".

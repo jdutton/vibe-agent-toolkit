@@ -125,13 +125,20 @@ steps:
 ## Interpreting Output
 
 ```yaml
+root: /abs/path/you/pointed/audit/at   # the ONE absolute path in the document
 status: warning
 summary:
   filesScanned: 23
   success: 21
   warnings: 2
   errors: 0
+files:
+  - path: plugins/my-plugin                                          # relative to root
+    issues:
+      - location: plugins/my-plugin/.claude-plugin/plugin.json       # relative to root
 ```
+
+**`root` is the coordinate system for the whole document.** Every `path` and every issue `location` is forward-slashed and relative to it, so `join(root, location)` is the file to open and a `location` identifies a file uniquely even when a run spans several projects with the same internal layout. `root` is the *invocation scan root*, deliberately not each skill's governing-config root — per-skill packaging rules still come from the nearest-ancestor `vibe-agent-toolkit.config.yaml`, but that discovery has no say in how a path is spelled. `--user` states the shared Claude config dir; a URL audit omits `root` and the provenance header names the base instead.
 
 Severity taxonomy in audit output:
 - **Errors:** Missing required frontmatter, broken links, invalid plugin.json schema, link integrity violations
