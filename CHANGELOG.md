@@ -7,176 +7,644 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
+## [0.1.41] - 2026-08-03
 
-- **`vat skill test` — transcript-grounded evaluation with a separate executor and grader (issue #145).** Each eval now runs in two roles instead of one self-grading agent: a blind **executor** (the skill under test) performs the eval task and its transcript is captured **in memory**, then a separate **grader** judges that transcript against skill-creator's rubric and emits a per-eval fragment. **vat is the sole writer** of `results/` — it merges the grader fragments into `grading.json`/`friction.json`/`tool-eval.json` after re-verifying a secret per-run nonce carried in each fragment. This is the anti-forgery model: the executor never receives the nonce (it is delivered only via the grader's stdin, never written to disk or an argv), so untrusted skill code running in the shared sandbox cannot **blindly** mint a result vat will accept, forge its own passing grade, or tamper with the transcript (same-uid caveat under **Security**). A grader-side internal failure or a missing/forged nonce aborts the run with the harness-broke exit **1** and is never laundered into a pass/fail verdict.
-- **Separate grader model — new `graderModel` config and `--grader-model` flag.** The existing `model` config (and `--model`) now selects the **executor** model; a new `graderModel` (and `--grader-model <id>`, default `claude-sonnet-5`) independently selects the **grader** model, so you can run the skill under one model and grade under a stronger/cheaper one. `--concurrency <n>` bounds how many evals run in parallel (each retrying a rate-limit with backoff).
-- **Declared tool-expectations — assert which tools/executables a skill should (and shouldn't) invoke.** An eval may declare a `toolExpectations` block (`mustRun` / `mustNotRun` / `mustSucceed` / `sequence`) in `evals.json`; the grader judges it **from the transcript** (preferring the structured `tool_use`/`tool_result` entries, and recognizing varied launch forms of the same executable — `uv run dxa.py`, `python3 dxa.py`, `./dxa`, `node dist/dxa.mjs` — as the same tool) and emits a tool verdict. vat writes these to a new **`tool-eval.json`** (kept in its own channel — tool verdicts never leak into `grading.json`). To help the grader recognize a skill's own executables, the skill packaging config accepts a `declaredExecutables` manifest (`{ path, kind, howInvoked }`); those flow into the grader prompt as recognition hints (**fenced as untrusted data** — see Security).
-- **`mustSucceed` — assert a tool ran *and* succeeded.** `toolExpectations.mustSucceed: [<executable>…]` checks each executable ran **and** its `tool_result` wasn't an error (issue [#148](https://github.com/jdutton/vibe-agent-toolkit/issues/148)). It's judged from the transcript, so a skill that swallows a non-zero exit (`cmd || true`) still reads as succeeded — pair it with an output expectation when you need certainty.
-- **Advisory eval-weakness warning.** Before any spend, the harness warns (non-fatally) when an eval's expectations are all presence-only (`"mentions X"`) with no negative check or `toolExpectations` — the pattern that lets a wrong answer pass. Never changes the exit code.
-- **Advisory undeclared-executable warning.** Also before any spend, the harness warns (non-fatally) when a `toolExpectations` entry names an executable that looks like a **typo** of one of the skill's `declaredExecutables` (e.g. `dxa-py` when the skill declares `dxa`) — a name that never matches a real tool makes `mustRun`/`mustSucceed`/`sequence` fail for the wrong reason (or `mustNotRun` pass vacuously). Conservative by design: it fires only when there is a specific declared name the reference is probably a typo of (single-edit or separator-decorated), so a deliberate reference to a built-in/system tool (`Bash`, `git`) is never flagged, and it stays silent when the skill declares no executables. Zero-token static check; never changes the exit code. *(Adopter follow-up from the #145 beta.)*
-- **Run-wide spend aggregation in the summary.** The summary line now carries a `≈$<total> across <N> sessions` suffix rolling up `total_cost_usd` across every executor **and** grader session — so a `--dry-run`-then-live cadence (pre-release/nightly) has a visible per-run cost to budget against. The suffix is omitted when no session reported a cost (e.g. a mock-spawn test); it rides the verdict line after any `(N tool)` marker, and the fail-fast SKIPPED note stays on its own following line. *(Adopter follow-up from the #145 beta.)*
-- **Composite verdict — output + tool expectations, fail-closed.** The reported pass/fail now ANDs the per-expectation output grade with every tool verdict, and the run fails closed (exit **4**) if any of `grading.json`/`friction.json`/`tool-eval.json` is missing, unparseable, or invalid after the merge. The summary suffix names tool failures (e.g. `FAIL 1/1 (1 tool)`).
-- **Cost-tiered fail-fast — spend on cheap evals first.** Evals may declare a numeric `tier`; the harness runs ascending tiers (cheapest first), bounded-parallel within a tier, and **gates between tiers** — once a cheaper tier fails a gating expectation the higher (more expensive) tiers are **SKIPPED**, never graded and never counted as passed. A fail-fast-gated run is an eval failure (exit **4**), and the summary names the skipped tier and eval count.
-
-- **`vat skill test run --evals <path>` — grade a skill against an eval suite outside its own tree (issue [#163](https://github.com/jdutton/vibe-agent-toolkit/issues/163)).** This is the missing half of a feature that already shipped: `npm:`/`url:`/`vendored` subjects have always been testable, but suite lookup only ever searched *inside* the subject's tree — and a correctly packaged skill provably carries no suite, because the suite is the answer key and excluding it from the bundle is exactly what VAT enforces. The only external skill you could eval was one whose publisher shipped their answer key. `--evals` resolves against the **current directory** (so an operator's shell path means what they typed), while config `test.evals` continues to resolve against the **skill source**; both now accept an absolute path or an npm bare specifier (honoring the target package's `exports` map, so a shared eval corpus can be distributed as a package). Each eval's declared input `files` resolve relative to the *suite's* directory, so fixtures travel with the suite rather than with the skill, and the suite itself is still never staged anywhere the executor can reach.
-  - **Bug fixed in passing:** an absolute `test.evals` was silently folded into `<skillDir>/<path>` by a plain path join. That path did not exist, so the run did not fail — it **bootstrapped a starter template there and exited 3**, telling the operator to fill in a suite they had already written.
-- **A skill's own `evals/` is now stripped from the staged tree even when the run grades a different suite.** Staging used the *same* value for "where do I read the suite" and "what do I remove from every staged copy", so pointing `test.evals`/`--evals` at any other location silently disabled the strip — nothing inside the skill matched the configured path, so nothing was removed and the skill's own answer key sat in the executor's working directory. The conventional `evals/` is now always stripped in addition to the configured suite (a no-op in the common case, where they are the same path). The invariant is "the executor's filesystem contains no answer key", not "…none for the suite we happen to be grading". Caught by the existing answer-key canary once it was pointed at an out-of-tree suite.
-
-- **`workspaces/` and `results/` are now created `0700`.** They previously inherited the umask (typically `0755`) and were protected only by the `0700` harness root — which `--out` can relocate and `--keep` preserves. They hold each eval's declared input files and, in `grading.json`, verbatim quotes from the executor transcript; with an out-of-tree suite that can be data that was never in your repo. Note this narrows *who can read* those artifacts, not *what is written*: anything a skill reads out of a fixture still lands in `results/` as evidence text, and `results/` survives `--keep` by design.
-
-- **Dependency-audit CI gate + accepted-risk register.** A new `.github/workflows/dependency-audit.yml` runs OSV-Scanner against the committed `bun.lock` (on push/PR to `main`, weekly, and on demand) and **fails on any advisory not listed in the new `osv-scanner.toml` register**. The register documents each deferred advisory with a reason (multi-major glob tooling that can't be safely pinned, dev/test-only packages outside the consumer install graph, or fixes requiring a breaking major bump). A green audit means "zero un-triaged vulnerabilities", not "zero vulnerabilities".
-- **Grouped Dependabot config (`.github/dependabot.yml`).** One batched weekly PR for npm dependencies and one for GitHub Actions (grouped `patterns: ["*"]`), instead of a PR per dependency.
-- **Corrected provenance on `VALIDATION_THRESHOLDS`, plus two repo gates that keep unverifiable claims visible.** The threshold table was headed "based on Anthropic guidance"; of its six numbers only `RECOMMENDED_SKILL_LINES` (500) is actually Anthropic's, and `MAX_DESCRIPTION_CHARS_CLAUDE_CODE` (250) is VAT's own reading of where the Claude Code `/skills` listing truncates — Anthropic documents 1024. `MAX_TOTAL_LINES`, `MAX_FILE_COUNT`, `MAX_REFERENCE_DEPTH` and `MIN_DESCRIPTION_LENGTH` are VAT-originated. Adopters tuning these should know which are vendor-sourced. Backing this up, `bun run validate-structure` gained two warning-level rules: claims about the outside world (other vendors' install paths, runtime capability profiles, semantics read out of someone else's binary) now carry a greppable `reviewed=`/`verify=` annotation and are reported once the 90-day review window lapses; and tracked files that cite documents under gitignored working directories are reported, since such citations are unfollowable from any clone. A third, error-level rule ratchets per-severity counts: a lane that publishes a validation status alongside a findings collection must publish per-severity counts beside it, since a status alone cannot express a three-valued severity distribution. It lands with every currently-nonconforming lane listed explicitly (19 at first, 11 after the shared-collapse migration below) and asserts both directions — a listed lane that starts conforming fails the build until its entry is removed, and a newly-added lane that is in no bucket fails until it is classified — so the list can only shrink. (`validate-structure` also no longer announces "validation failed" on a warnings-only run that then exits 0.)
-
-- **User-facing docs for `vat skill test` and its config surface (`packages/cli/docs/skill-test.md`).** The per-skill `skills.config.<skill>.test` block and the global `test:` node were previously discoverable only via `--help` or by reading source — an adopter reported finding `timeout` by reading `run.js`. The new page documents every knob with its type/unit, default, and equivalent CLI flag (including `timeout`'s eval-count-scaled default and `graderModel`/`concurrency` defaults), plus the exit-code contract, the `results/` artifacts, and companion-staging behavior. `vat skills` (plural) docs and the CLI index now signpost it, since the singular/plural split is where adopters looked first.
-- **`LINK_UNRESOLVED_REFERENCE` (default `warning`) — detects dangling reference-style links.** `[text][label]` and the collapsed `[label][]` form have no matching `[label]: url` definition; CommonMark resolves references at parse time, so a dangling one degrades to literal bracketed text with no link node ever produced — an mdast-based checker is structurally blind to it, so a dedicated raw-source scanner (`packages/resources/src/unresolved-references.ts`) catches it instead. Deliberately tuned for precision over recall: numeric, single-character, punctuation-edged, and multi-line references are never reported. See [`LINK_UNRESOLVED_REFERENCE`](docs/validation-codes.md#link_unresolved_reference).
-- **Declared test input is now auto-excluded from packaged output.** Declaring a path under `skills.config.<name>.test.evals` names it as a skill's eval suite — the `expected_output`/`expectations` answer key for the tasks the skill is graded on — and that declaration now *is* the instruction not to package it: VAT drops it automatically via both entry routes (link traversal and `files:` entries) instead of requiring a second declaration or config edit. The new `PACKAGED_TEST_INPUT` code (default `warning`) is a receipt, not a gate — it fires once per dropped target, whether a `files:` entry or a markdown link pointed at it, so neither a `files:` entry that silently did nothing nor a link silently rewritten out of the shipped `SKILL.md` can be mistaken for one that worked. Every lane that models the bundle (`vat skills validate`, `vat skills build`, the plugin build) applies the same exclusion and emits the same receipt at the same location. The receipt covers the skipped copy only: if `SKILL.md` links the `dest` that entry would have produced, that link is still reported as a broken link (and fails the build) in every lane, because VAT has decided nothing will materialize it. See [`PACKAGED_TEST_INPUT`](docs/validation-codes.md#packaged_test_input) and `packages/agent-skills/src/test-input.ts`.
-- **`mdast-util-to-string` is now a declared dependency of `@vibe-agent-toolkit/resources`.** It was previously used transitively in `link-parser.ts` but did not actually resolve under Bun; it's now a direct `package.json` dependency, with heading-anchor slugging pinned to `includeImageAlt: false` so the swap is behavior-preserving.
-
-### Fixed
-
-- **`vat skills build` no longer fails on its own `files:` payload.** `PACKAGED_UNREFERENCED_FILE` (severity `error`) fired on files VAT itself had just copied into the packaged output from a skill's `files:` map — a vendored engine, generated schemas, data packs, anything consumed by code rather than read by a human. The rule engine has always treated a `files:` declaration as proof of intent on equal footing with a link or a documented mention; the post-build check never received the list, so every declared dest was evaluated as "not declared." The packager now passes the dests `applyFilesConfig` reports (glob entries expanded) to the orphan check, and both sides normalize through one exported `normalizeRelPath`. Adopters who added `validation.allow` waivers restating their own `files:` map can delete them. The check keeps its teeth: a packaged file that is neither linked, nor mentioned, nor declared in `files:` still fails the build.
-- **`PACKAGED_UNREFERENCED_FILE` remediation text** no longer tells you to waive the finding for a programmatically-consumed file; it points at `skills.config.<name>.files`, where a declared `dest` is exempt outright. The same correction was applied to a second, stale copy of that string and to VAT's own `vat-skill-authoring` skill, which had been prescribing the waiver to agents.
-- **A root-absolute markdown link (`/docs/guide.md`) is no longer reported as `LINK_OUTSIDE_PROJECT`.** RFC 3986 §4.2 absolute-path references resolve against the **project root**, which is what `resolveLocalHref` has always done for `vat resources validate`. The skill link-graph walker instead resolved every href with `path.resolve(dirname(source), href)` — and `path.resolve` **discards its base** when the second argument is absolute, so `/docs/guide.md` came back as the *filesystem*-root path and was then classified outside every project root but `/`. One link, two lanes, two answers: the resources lane resolved it and found the file; this lane raised an **error** against a target that exists and is in the registry. Measured on one real monorepo: **81 such errors, all false**, enough to fail an adopter's build. The walker now delegates to the single resolver rather than restating the rule; a root-absolute link that genuinely escapes the project root is still excluded. This was previously unreachable for the skills most affected, because link traversal for them was returning zero linked files (see below).
-- **`vat claude plugin build` no longer re-reads the whole project once per skill.** Plugin-local skills are packaged through `packageSkill`, which builds a project-wide `ResourceRegistry` — crawling and parsing **every markdown file in the project** — when the caller passes none. This lane passed none, in a loop, so an N-skill plugin paid N full-project scans. The cost is fixed per skill and independent of the skill's own size: on a monorepo with 1039 markdown files, a 1-file skill and a 17-file skill each cost the same **~25s**, which put a 46-skill build past a 30-minute CI cap with no output during the gaps. The build now creates the registry **once per run** and threads it through every plugin and skill (**~2× faster** per skill; the one-time project scan is now visible up front and logged under `--debug`). `vat skills build` was never affected — it already went through `packageSkills`, whose doc comment says "one registry for the entire project (crawling all .md files once)": two producers of a plugin's skills, two answers about how many times the project gets read. The shared builder is now exported as `createProjectRegistry`, and `packageSkills` uses it too — it had been building its registry **without the project config**, so skills built through that lane belonged to no collection while skills built through the single-skill fallback did, and the packager rewrites frontmatter URI-references per collection schema.
-- **Skill discovery can see `dist/` again.** `NEVER_CRAWL_GLOBS` was adopted verbatim as the discovery scanner's exclusion list, but that list carries `**/dist/**` and the scanner's deliberately did not: classifying what it finds as source or **build output** is the scanner's job, so a scanner that cannot walk `dist/` reports zero build outputs and calls it a clean scan. Build output now lives in its own `BUILD_OUTPUT_GLOBS` — excluded by the crawler's default, not spread by discovery — so "never user content" and "output we produced" stay two questions with two answers.
-- **A newly-authored, uncommitted `SKILL.md` is now discovered.** Config-driven skill discovery crawled via `git ls-files`, which lists only tracked files, so a brand-new skill was invisible: `vat skills validate` silently reported one fewer skill and exited 0, and `vat skills build` did not ship it. Nothing warned — the count was the only tell. Discovery now passes `includeUntracked: true`, the documented knob for exactly this, which keeps the fast path.
-- **`vat audit`: info-severity findings are no longer invisible.** The terse renderer decided "nothing to show" from the result's *status*, and an info-only result is `success` — so a real `--user` scan counted 504 info findings and rendered none of the 167 belonging to the 128 skills that had info findings and nothing else. The decision now keys on whether the result has findings at all.
-- **`vat audit`: a result's status, counts and summary now follow its findings.** Detector findings were appended after the primary validator had already published a verdict, so a plugin carrying a warning reported `status: success`, `issueCounts: {0,0,0}` and `summary: Valid plugin` in the same entry that listed the warning — and a marketplace with a missing plugin source reported overall `success` above a `severity: error` finding. Applying a `validation.severity: ignore` config had the same effect on `issueCounts`.
-- **`vat audit --user`: cached skills are matched against their own source.** The cache/source index was keyed by bare skill name; one real scan had 93 such collisions across two marketplaces, so cached copies were compared against unrelated same-named skills — reporting `cacheStatus: stale` for byte-identical copies, and able to hide genuinely drifted ones as `fresh`. Matching is now keyed on marketplace + plugin + skill.
-- **`vat skills validate` no longer reports warnings as success.** The top-level `status` was a two-value collapse that could not express `warning`, so a run with active warnings printed `status: success` and "✅ All validations passed" above them. Warning- and info-only findings are now rendered in the human-readable report at all — previously only skills that failed the gate were printed, and of their warnings only `ALLOW_EXPIRED`. Warnings remain non-blocking (exit 0).
-- **Info-severity findings are no longer labelled `[WARNING]`** in `vat skills build` and `vat claude plugin build`.
-- **A build that fails only on built-output validation now shows why.** Both build lanes read only one of the two post-build issue channels that the failure condition ORs, so a skill whose packaged output failed validation aborted the build with no issue text at all. Issue sets are also now labelled by what they contain (`3 post-build issues (1 error, 1 warning, 1 info)`) instead of calling every set "post-build error(s)".
-- **`vat skills build` no longer prints `status: success` on a failed build** (the YAML status was a literal, contradicting exit code 1), and `--dry-run` now reports `validated: false`, since it validates nothing.
-- **`vat skills package` reports warnings and info findings.** The renderer dropped every info finding and ran only for error-severity results, so a warning-severity result printed a bare "✅ Validation passed".
-- **`vat audit settings` emits the full `overrode` provenance chain** for every effective value, naming each value it replaced down to the lowest-precedence layer — the question the command exists to answer. It was computed and then dropped.
-- **`writeYamlOutput` no longer emits a trailing `---`.** In YAML `---` OPENS a document, so every command's stdout was a two-document stream and a plain `YAML.parse()` threw `Source contains multiple documents` — on output this CLI documents as machine-parseable. The repo's own test helper had been written around it with `parseAllDocuments(...)`, which is what kept it invisible.
-
-### Changed
-
-- **BREAKING: `vat validate`, `vat verify`, `vat build`: exit code 2 ("System error") is now actually reachable.** A phase whose child exits 2, is killed by a signal, or never spawns exits 2 instead of 1 — previously every non-zero child exit was reported as 1, making a broken config indistinguishable from a broken link, and rendering the documented exit code unreachable. `runPhase` also no longer ignores `result.error`/`result.signal`. Per-phase `status` changes from `passed`/`failed` to `success`/`warning`/`error`/`system-error`, each phase carries `exitCode`/`signal`/`error` where applicable, and the top-level status uses the same vocabulary (worst phase wins; `system-error` outranks `error`). `vat verify --only consistency` now exits 1 in a project with no `skills:` block instead of exiting 0 with an empty phase list.
-- **BREAKING: `vat verify`'s consistency phase reports `warning` (not `passed`) when it emits warnings**, and publishes `issueCounts` plus the findings themselves into the archived YAML — they previously went to stderr only, so the artifact of record said nothing happened. Warnings still do not fail the run.
-- **BREAKING: `vat skill review --yaml`'s `status` now agrees with its exit code.** It was `PackagingValidationResult.status` — the two-valued packaging *gate* verdict, structurally unable to say `warning` — so a warning-bearing review reported `status: success` while exiting 1. The exit code (the deliberate, documented contract) is unchanged; the lying channel was the status. `summary:` is renamed `issueCounts:` to match every other lane.
-- **BREAKING: `vat audit` output names file counts and finding counts apart.** `summary.success|warnings|errors` (which count FILES) become `summary.filesPassed|filesWithWarnings|filesWithErrors`, and the top-level `issues` counts block (which counts FINDINGS) becomes `issueCounts` — the same field name and meaning it already has on every file entry. Two different denominators previously shared one word in adjacent keys.
-- **BREAKING: `vat audit --user` plugin groups are named after the plugin.** The marketplace plugin name was read at a fixed offset from `marketplaces/`, which in Claude Code's real installed layout (`marketplaces/{m}/plugins/{p}/skills/...`) is the literal segment `plugins` — 242 of 257 skills in one scan were grouped under a single fake plugin named `plugins`. Cached groups were likewise named after the version directory (`6.1.1`, `d884ae04edeb`).
-- **BREAKING: `vat doctor` reports four outcomes per check instead of a pass/fail boolean** — `pass`, `fail`, `undetermined`, `skipped`. A check that could not reach an answer (npm unreachable, an unreadable package.json) was counted as PASSING; it is now `undetermined` (❓). The summary changed from `7/7 checks passed` to `7 checks — 7 passed, 0 failed, 0 undetermined, 0 skipped`, and the concise view states how many checks it did not print — it previously claimed "7/7 checks passed" while rendering none of them, because `runDoctor` returned only the displayed subset while counting all of them. Exit codes unchanged: only `fail` exits 1. `DoctorCheckResult.passed` → `.outcome`; `DoctorResult.allPassed`/`.passedChecks` → `.outcomeCounts`.
-- **BREAKING: `vat audit settings --file` replaces `valid: true|false` with `status` + `issueCounts` + `findings`**, and adds `typeConfidence` (`declared`|`inferred`|`ambiguous`|`undetermined`) — user and project settings share one schema, so a file without managed-only fields is now reported as ambiguous rather than silently answered as `user`. `fields: null` (could not read) is now distinct from `fields: []` (none declared). `--show-paths` may report `exists`/`readable` as `"undetermined"` with an `accessError`, where a permission error on a parent previously read as "absent".
-- **BREAKING: `vat inventory --shallow` marks lists it did not walk as `null`, not `[]`**, and adds a `projection: shallow` marker. A shallow document was previously byte-identical to a real scan of an artifact containing nothing.
-- **BREAKING: `@vibe-agent-toolkit/claude-marketplace` settings surface.** `SettingsValidateResult` loses `valid`/`errors` for `status`/`issueCounts`/`findings`/`typeConfidence`; `getSettingsFileFields()` returns `null` (not `[]`) when unreadable; `getSettingsPaths()` returns `SettingsPathCandidate[]` with no `exists`/`readable` (a synchronous enumeration cannot know — use `resolveSettingsPaths()`); `SettingsPathEntry.exists`/`.readable` widen to `boolean | 'undetermined'`. New exports: `probePathAccess`, `summarizeSettingsFindings`, `SettingsFinding`, `SettingsTypeConfidence`, `SettingsFileField`, `SettingsPathCandidate`.
-- **`vat claude marketplace validate` publishes `issueCounts`** and its summary string gained the info term it never had. `vat build` and `vat claude plugin build` publish `issueCounts` beside their status.
-- **The `coherence-audit` skill ships in the `vibe-agent-toolkit` plugin.** It carries the method this release's audit used: the one-contract question, the failure-direction tell (every serialization defect here mapped the unrepresentable case to the *reassuring* one, which is why none was ever reported), the doc-comment-versus-code sweep, how to bound a defect class honestly, how to spot a green-but-blind test suite, and vendor-claim staleness. The name drops the `vat-` prefix because the method is generic.
-- **Removed dead `PluginJsonSchema`** from `@vibe-agent-toolkit/agent-skills` (exported from two barrels, no consumer). Its `.strict()` `author` shape would have REJECTED the `author.url` this release fixed.
-- **The RAG WordPiece tokenizer now refuses a CASED vocabulary** instead of silently degrading. Its preprocessing (lowercase + strip accents) is unconditional and correct only for an uncased model; on a cased one every capitalized word missed its vocab entry and became `[UNK]` or a wrong subword, producing embeddings that are right-shaped, right-normed, and worse — with nothing downstream able to tell. Detected from the vocab itself (bracketed literals excluded) and raised as `CasedVocabError`. There is no bypass flag, matching `IncompatibleVocabError`.
-- **One canonical never-crawl list.** Three divergent exclude lists disagreed about which directories VAT refuses to walk; the crawler's omitted worktrees entirely, so a crawl could report the same file two or three times under different paths (a worktree is a full repo copy, and this repo keeps its own at `.claude/worktrees/`). `NEVER_CRAWL_GLOBS` in `@vibe-agent-toolkit/utils` is now the single source, spread by the discovery scanner.
-- **The `vat` CLI help-docs directory is now checked in both directions.** `REQUIRED_HELP_FILES` listed 4 of 9 shipped documents and never checked the reverse, so a page could be written, published to npm, and reachable from no `--help --verbose` at all — which is true of five of them (`audit.md`, `doctor.md`, `mcp.md`, `skills.md`, `skill-test.md`, now recorded as reference-only).
-- **Ten dangling doc citations removed.** Each pointed at a design document under a gitignored working directory — unfollowable from any clone, and demonstrably so: none of them exist in a fresh worktree. The rule each was standing in for is now stated inline. Relatedly, `docs/external/anthropic-skill-authoring-best-practices.md`'s own refresh procedure cited a deleted file twice, making it unfollowable — which is likely why that cache is past its 90-day window — and `docs/architecture/skill-packaging.md` described a `status: partially-conclusive` source-review document as "empirical" when its verification runbook has never been executed.
-- **BREAKING: there is now ONE answer to "issues → status", and every validation result carries per-severity counts.** Six places independently collapsed a set of findings into a status, and they did not agree: for an **info-only** issue set, `calculateValidationStatus` (feeding the marketplace, registry and plugin validators) said `warning`, `vat audit` said `success`, `vat claude marketplace validate` said `success`, `skill-validator` re-derived it a fourth time, and `corpus/runner`'s `statusFromCounts(errors, warnings)` could not see info **at all** — its signature had no third parameter, so an info-only plugin was filed as `audit_clean`. Two commands could therefore report different statuses for the same artifact. Now:
-  - `calculateValidationStatus(issues)` and `countBySeverity(issues)` live in `@vibe-agent-toolkit/agent-schema` and are the only implementation. Status is the worst **actionable** severity: errors ⇒ `error`, warnings ⇒ `warning`, otherwise `success`.
-  - **An info-only result is `success`** — a change for every lane that went through `calculateValidationStatus`. That is defensible only because the counts now travel beside the status, which is the rest of this entry.
-  - **`ValidationResult.issueCounts` is REQUIRED** (`{ errors, warnings, info }`). Required rather than optional on purpose: the compiler now asks a new producer for the distribution instead of a reviewer having to notice it is missing. `vat claude marketplace validate` publishes the same block in its YAML, and its `summary` string gained the info term it never had.
-  - **`ignore` counts in no bucket.** Those findings were suppressed by the adopter's own `validation.allow`; counting them would resurrect something they deliberately silenced.
-  - Library callers: `calculateValidationStatus` is **removed** from `@vibe-agent-toolkit/agent-skills` and its barrels — import it from `@vibe-agent-toolkit/agent-schema`. Anything constructing a `ValidationResult` must add `issueCounts: countBySeverity(issues)`.
-  - The `validate-structure` severity-counts ratchet shrank from 19 lanes to 11. Fixing it also exposed two blind spots in the ratchet itself: it could not see the ES shorthand `issueCounts,`, and it defined its population from keyword shapes that the migration *deleted* — `audit.ts` became invisible the moment `status: 'error'` became `status: calculateValidationStatus(issues)`. It now treats a call to the shared collapse as sufficient evidence of a lane, and strips comments first, because a doc comment telling readers to call `countBySeverity(...)` read as the fix itself.
-
-- **BREAKING: `vat audit` output now states its base once (`root`) and every `path` and `location` is relative to it.** The previous change made `location` a *relative* path but left its BASE unstated and non-uniform: each resource anchored its findings at its own nearest-ancestor `vibe-agent-toolkit.config.yaml`, and a single audit run recurses across many such roots. One document therefore mixed coordinate systems. Measured on this repo's own fixture tree, two **different** files — `multi-plugin-marketplace/plugins/plugin-a/.claude-plugin/plugin.json` and `single-version-marketplace/plugins/plugin-a/.claude-plugin/plugin.json` — emitted the byte-identical `location: plugins/plugin-a/.claude-plugin/plugin.json`, while other findings in the same run were based at the repo root. A consumer could not open the file a finding named without reimplementing the governing-config walk-up, and anything that groups, de-duplicates, counts-by-file, or annotates a PR by `location` silently merged distinct plugins. Where no config or git root exists at all (auditing `~/.claude`, a plugin cache), the base collapsed to the skill's own directory and every skill's `location` became the bare string `SKILL.md`. Meanwhile `path` stayed absolute, leaking `$HOME` once per scanned file. Now:
-  - **`root`** *(new, first key)* — the invocation scan root, and the only absolute path in the document. `--user` states the shared Claude config dir (`$CLAUDE_CONFIG_DIR`, else `~/.claude`); a URL audit omits `root` because the clone lives in a tempdir nothing downstream can resolve, and the provenance header already names the base.
-  - **`files[].path`** — now relative to `root`, forward-slashed. It remains a unique identifier, and `join(root, path)` is the resource.
-  - **`location`** — now relative to the same `root`, so `join(root, location)` is the file the finding is in, and one `location` cannot name two files.
-  - Human (stderr) output is root-relative too, and `--user` no longer abbreviates paths with `~`.
-  - The scan root is an **anchor**, not a validation-policy boundary. Per-skill packaging rules still come from each skill's nearest-ancestor config (configs do not compose); that discovery no longer has any say in how a path is spelled. The two concerns are now separate variables and separate parameters throughout the validators (`locationRoot` vs `projectRoot`), because conflating them is what produced the defect.
-  - Library callers: `ValidateOptions.projectRoot` is renamed to `locationRoot`; `validatePlugin`, `validateMarketplace`, `validateInstalledPluginsRegistry`, `validateKnownMarketplacesRegistry`, and `validate` accept a `locationRoot` option (new `AnchorRootOptions`); `SkillValidationSharedContext` gains `locationRoot`; `buildHierarchicalOutput` and `getValidationResults` take the run root explicitly. Each falls back to the resource's own project root when omitted, which is correct exactly when a run covers one project.
-
-- **BREAKING: `ValidationIssue.location` is now always a project-relative POSIX path, and the things it used to double as have their own fields.** One field was carrying six incompatible kinds of value at once — absolute paths (`/Users/you/skills/foo/SKILL.md`), absolute paths with a line glued on (`…/SKILL.md:24`), relative paths (the resources lane's convention leaking through), document-internal pointers that are not paths at all (`frontmatter.description`, `validation.allow.SKILL_TOO_MANY_FILES`), Zod field paths joined by the *same* colon a line number uses (`plugin.json:plugins.0.name`), and — for walker-derived link findings — the link **target** rather than the file containing the link. A consumer could not parse `location` uniformly, could not know what to resolve it against, and absolute paths leaked the developer's home directory into CI logs. Now:
-  - **`location`** — the file you would open, as a project-relative POSIX path. **Never absolute**, enforced by a schema refinement (it was a bare `z.string()`, which is how 235 absolute paths shipped unnoticed) and by a contract test that asserts the invariant over *every* issue the skills lane emits, so a new producer with a new convention is caught the day it lands.
-  - **`line`** — the 1-based line, as a number. The field already existed on the type; no skills-lane producer had ever set it, they concatenated `:${line}` instead.
-  - **`field`** *(new)* — a dotted pointer INSIDE that document (`frontmatter.description`, `hooks[0].script`, a Zod issue path).
-  - **`link`** — a link href or target the issue concerns. Never the file to open.
-  - Human output renders these as `path:line (field)` via one shared formatter, so the split does not hide information that used to be visible.
-- **BREAKING: a link finding is now anchored to the file that CONTAINS the link, not to the link's target.** For a missing target the old `location` named a path that does not exist, so "open this to fix it" pointed at nothing — and `vat skills validate` and the packaging walker disagreed about the same code (`LINK_OUTSIDE_PROJECT`), one anchoring to the containing file and one to the target. The target now travels in `link`.
-- **BREAKING: `validation.allow` globs for link codes should be rewritten against the containing file (or the href).** `allow` entries match an issue's `location` **or** its `link`. Entries written against the resolved *target* — the value `location` used to hold for walker-derived link findings — no longer match. Rewriting them against the containing file is usually both shorter and more precise (VAT's own six-pattern `LINK_OUTSIDE_PROJECT` entry collapsed to one), and target globs were depth-fragile anyway: picomatch's `**` does not cross a leading `../`, so each extra level of nesting needed its own `../../../…` pattern.
-- **BREAKING: `validateFrontmatterSchema`, `validateFrontmatterRules`, `detectUndeclaredCrossSkillAuth`, `detectBundledResourceWithoutLinks` and the five inventory detectors take an extra argument** (the skill location / project root). They previously had no way to name the file their findings were about — which is exactly why they emitted `location: 'frontmatter'`. `ValidateOptions` gains an optional `locationRoot`, defaulting to the same config-root → git-root → skill-dir chain `validateSkillForPackaging` already used, so both skills-lane entry points express locations in one coordinate system. `issueLocation()` moved from `@vibe-agent-toolkit/resources` (internal) to `@vibe-agent-toolkit/utils` (exported) and now requires a root instead of silently falling back to an absolute path.
-
-- **Compat verdicts now honor the `location` contract in every command, not just `vat audit`.** The verdict producer took a pre-rendered `location` string, so each of its four call sites answered "relative to what?" independently — and three answered "absolute". `vat skill review --yaml` emitted a single document carrying **two coordinate systems** (relative locations from the packaging validator alongside an absolute one from the verdict), `vat skills validate` leaked the full home-directory path into `COMPAT_TARGET_*` findings, and `vat skills build` had no root to re-base against at all; only `vat audit` was correct. `computeConfigVerdicts` / `applyConfigVerdicts` now take the skill path **plus** the anchor root and re-base internally, so no caller can emit an absolute location. Library callers passing a rendered location must pass `(skillSourcePath, locationRoot)` instead.
-- **`NON_PORTABLE_COMMAND`'s `readlink -f` advice was stale and is corrected.** The fix text claimed `readlink -f` "is not available on macOS by default"; verified against macOS 26.5.2, it is present and resolves existing paths. The real, still-current hazard is narrower: on macOS it fails when the final path component does not exist, where GNU canonicalizes it (and `-f` was absent from macOS for years). The other four variants (`timeout`, `grep -P`, `sed -i`, `date -d`) were re-verified and hold. Because CI runs Ubuntu + Windows only, nothing in this repo can contradict these macOS claims, so the variant table now carries a `@vendor-claim` annotation and comes due for re-verification on a 90-day clock.
-- **BREAKING: `vat resources validate` output now says what severity each finding is — and every field named `error*` counts errors only.** The validation framework has always resolved a severity per issue, and only `error` fails the run. Neither output format said so. `--format text` printed every finding as `file:line:column: message`, so an informational note and a build-breaking error were byte-identical in shape; the structured output named four fields after "error" while three of them counted issues of *all* severities, so a scan could report `status: success` beside `filesWithErrors: 1` beside `errorsFound: 0` beside a non-empty `errors` array of info items. An adopter scanning a large monorepo got 57 findings of which ~4 were errors, had to hand-classify the report to find them, and then asked for three separate codes to be "downgraded to warnings" — all three were already `info`. The output was the only thing that said otherwise. Now:
-  - **Text format is `file:line:column: severity: message`** (the GCC/ESLint-compact convention, which editors and CI log scrapers already parse).
-  - **Naming contract:** a field named `error*` counts ERROR-severity issues only; a field named `issue*` counts every severity. `errorsFound` is unchanged (it was already error-only). `filesWithErrors` and the per-collection `filesWithErrors`/`errorCount` now count error-severity issues only — previously any info note made a file "a file with errors".
-  - **Renamed** `errorSummary` → `issueSummary` and the detail array `errors` → `issues` (with each file's inner `errors` → `issues`), since both legitimately carry all severities. Consumers parsing those keys must update.
-  - **Added** `issueCounts: {errors, warnings, info}`, matching the `issues:` block `vat audit` already emits — the two lanes now use one vocabulary for one question.
-
-- **BREAKING: `vat skills install` installs a skill under the name it declares, not the name of the directory it arrived in.** Every other lane in VAT treats the SKILL.md frontmatter `name` as the skill's identity — it is what `vat skills build` keys its output directory on, what the plugin-build collision referee matches on, and what `SKILL_CLAUDE_PLUGIN_NAME_MISMATCH` tells you to align a `plugin.json` *to*. Install was the one place that never asked the skill its name: it took the directory leaf, and for an archive source there is no meaningful leaf. A ZIP whose `SKILL.md` sits at the archive root (rather than under a top-level folder) installed as **`vat-skills-install-zip-<random>`** — the extraction temp directory — leaving an unloadable skill under a garbage name. Install already parsed the declared name during pre-verification and discarded it; it now uses it, guarded against path separators the same way `--name` always was. `--name` continues to override. Two consequences:
-  - A source directory whose leaf disagrees with the declared name now installs under the **declared** name. `vat audit` still reports the authoring mismatch separately (`SKILL_NAME_MISMATCHES_DIR`); install no longer propagates it into your skills directory.
-  - A multi-skill source in which **two skills declare the same name** now fails the whole batch, naming both directories, instead of silently installing one over the other.
-- **`vat skills install` now says which of its seven targets VAT can see back.** VAT writes to seven platform locations and reads from exactly one: `resolveSkillTarget` has a single non-test caller (install), while `vat skills list --user` and `vat audit --user` scan `~/.claude` only. Both read-side commands already documented their own Claude scope; nothing said so at the point where you *choose* a target, so installing to `cursor` succeeded and then silently fell outside VAT's own tooling. Documented in `--help` and the skills docs. Also: the target table cited `docs/plans/2026-04-08-agent-skills-ecosystem-analysis.md` as its justification — a file that is not in the repository (`docs/plans/` is untracked), so the citation could not be followed. Replaced with the review date and an explicit statement that no test verifies a path is where a platform actually looks: the tests assert the table's *shape*, so a vendor moving its convention means installs land unread with every check still green. **No paths changed** — verifying seven vendors' current conventions is research, not cleanup.
-- **A staged-tree inventory gate, closing the staging-side analogue of the packaged-output drift gate.** The drift gate exists because nothing compared *built* bytes against a baseline. The tree `vat skill test` hands the executor had the same hole from the other end: every staging test asserted one *named* property (this lands flat, that plugin nests there, a deleted source file is pruned), and all of them keep passing when staging starts emitting an **extra** file — which is exactly what an eval answer key in the executor's working directory is. `packages/agent-skills/test/integration/staged-tree-inventory.integration.test.ts` asserts the complete set of staged paths and fails on anything that appears or vanishes; proven to catch the class by disabling the eval strip and watching it name all four leaked files. Also pins the two behaviors the strip depends on: the subject's suite is *held* outside the harness root (readable by vat, unreachable by the executor) while a companion's is removed outright.
-- **`isolateEvalSuite` now rejects a missing containment root explicitly.** Its `assertInsideRoot` guard is the last line of defense before a recursive delete, and with an absent `stagingRoot` it failed with `The "from" argument must be of type string` from deep inside the path helpers — which reads as a path-handling bug rather than "the containment root is missing, so nothing can be proven safe to delete."
-- **`vat claude plugin uninstall` help no longer claims to reverse artifacts it does not touch.** It said it reverses "all install artifacts"; it removes the *plugin* artifacts (marketplace plugin dir, cache dir, both registry entries, settings) and never touches `~/.claude/skills/` — where `vat claude plugin install <dir|zip>`, `--dev`, and `vat skills install` all write. Four writers, no remover. The help now says which artifacts it reverses and which it does not.
-- **`vat claude org skills install` no longer publishes an eval suite to your organization.** The command documents "a built skill directory" as its input, but it uploaded *every* file under whatever directory it was given — and the easy mistake is pointing it at the **source** tree, which is where a skill's `evals/` (its answer key) actually lives. `evals/`, `node_modules/`, and `.git/` are now excluded at any depth, and each exclusion is named in the command's output so the skip is never silent. For a correctly built skill directory this changes nothing; it is the backstop for the case where it would have mattered most, since publishing to an org is the widest blast radius in the lifecycle. Same invariant the eval-isolation work enforces for the test sandbox: **a published skill carries no answer key**, not "…none when the operator remembered to build first."
-- **`vat skills list` reports the declared name too.** It is the preview for `vat skills install` — including `vat skills list npm:@scope/pkg`, which inspects a package without installing it — so listing directory leaves would have named directories the install never creates. The leaf remains the fallback for a `SKILL.md` too damaged to declare a name.
-
-- **BREAKING: plugin-local skills are now packaged, not copied verbatim.** A skill living in a plugin's own `skills/` source tree (`vat claude plugin build`) now goes through the same `packageSkill` packager that produces pool skills — link-following, reference-rewriting, `files:` injection, and declared-test-input exclusion all apply, and a plugin-local skill that fails post-build validation now **fails the build**, matching the bar `vat skills build` already holds pool skills to. Previously the whole source directory was tree-copied verbatim: eval suites (answer keys included), scratch files, and un-rewritten links all shipped, and packaging errors were never checked. `applyTreeCopiedSkillFiles` is removed; `packages/cli/src/commands/claude/plugin/build.ts` and `tree-copy.ts` no longer treat skill directories as tree-copy content — the packager owns them exclusively now (the build's `skillFilesCopied` result field is renamed `localSkillsPackaged` accordingly). Three consequences worth checking against your own plugin tree:
-  - **NESTED plugin-local skills are packaged too.** A `skills/<group>/<skill>/SKILL.md` is a skill Claude Code loads, so VAT now discovers it recursively and packages it in place, at the same depth. Previously only immediate `skills/*` directories were recognized; a nested skill fell through to the verbatim tree-copy and shipped its eval suite — answer key included — into the published bundle.
-  - **A gitignored or untracked skill directory is no longer published.** Skill discovery for the plugin build now honors the same git visibility the tree-copy always did (tracked files only, inside a git repo), so the two producers of a plugin's `skills/` tree agree on which files exist at all. A skill directory you keep out of the repo — and which `vat skills build` never discovers — is not packaged. A skill dir that is neither tracked nor gitignored (a new skill you have not `git add`ed yet) gets a build warning naming it, so its absence from the bundle is never silent.
-  - **The pool-collision referee matches on the declared NAME, and only the declared name.** A skill named `foo` authored in `skills/bar/`, or a nested `skills/group/foo/`, now correctly defers to the pool copy when the plugin's `skills:` selector also resolves `foo`. Previously both cases produced the skill twice — two definitions of one skill, at two depths, inside a single plugin. The winning pool copy now lands at the plugin-local skill's own authored path (`skills/group/foo/`), so `vat skill test` and `vat verify` look for the built skill where the build actually wrote it. The directory name is no longer matched as well: a plugin-local skill named `bar` living in `skills/foo/`, in a plugin selecting an *unrelated* pool skill `foo`, used to be refereed away and ship nowhere; that case is now the error it always was — **two different skills claiming one output directory fails the build**, naming both. `DistributedSkillLocation.skillDirName` is renamed `skillDirPath` (it is a path now, not a bare name), as is `SkillDistribution`'s field of the same name.
-- **`vat skill test` — a `<path>` at a config-declared skill's authored source directory now resolves to `buildable`, not `source`.** It builds the skill (real entry points) and tests the **dist**, matching what its bare name already did and what companion staging has done since issue #153 — a path was the one reference form that still silently tested un-packaged source. `--no-build` remains the escape hatch to reuse an existing dist without rebuilding (hard-failing if none exists yet); `--dry-run` is the only route that still falls back to raw source, and only when no dist exists yet. See [Skill Reference Resolution](docs/architecture/skill-packaging.md#skill-reference-resolution).
-- **BREAKING: local RAG embeddings are now batteries-included, backed by `onnxruntime-web` (WASM) instead of native `onnxruntime-node`.** `OnnxEmbeddingProvider` (the default embedding provider) no longer requires any install step — `onnxruntime-web` ships as a regular dependency of `@vibe-agent-toolkit/rag`. `TransformersEmbeddingProvider` (and its `@xenova/transformers` optional dependency) is **removed entirely** — it was the exact native-runtime code path this change replaces. `openai` remains the only opt-in peer dependency, for `OpenAIEmbeddingProvider`. Default model is unchanged (`Xenova/all-MiniLM-L6-v2`, 384 dims, int8-quantized).
-- **`model` in a skill's `test:` config now selects the executor, not a single self-grading agent.** With the executor/grader split above, a `test.model` value drives the skill-under-test run; grading defaults to `graderModel` (`claude-sonnet-5`) unless you set it. Existing single-`model` configs keep working — they just no longer also determine the grader.
-- **`vat skill test` — `--with`/`--with-optional` now stage companion skills, and a run tests exactly one subject (issue [#153](https://github.com/jdutton/vibe-agent-toolkit/issues/153)). BREAKING.** `--with name=<src>` (repeatable, or config `with:`) stages a **required** companion skill the subject can invoke; `--with-optional` (or config `optional:`) stages an **optional** one. Both make the skill invocable in the executor session — matching what every doc already promised. This replaces an accidental, undocumented behavior where `--with` merely *overrode the staging source of an already-listed positional skill* and **silently no-op'd** any name that wasn't positional (so a routing/deferral eval "passed" against a skill set that never contained the companion — the reported bug). Consequences: the positional argument is now a single `<skill>` (was variadic `<skill...>`); a **required** companion whose source can't be resolved fails the run (exit **2**), an **optional** one is skipped with a stderr warning; and staging the same name twice across subject/`--with`/`--with-optional` is a `DuplicateStagedSkillError` (exit **2**). Config `skills.config.<skill>.test.with`/`optional` now behave the same way (they previously never staged anything).
-
-### Fixed
-
-- **`<a id="short">` anchors in markdown now resolve, instead of being reported as broken links.** VAT indexed heading slugs and nothing else, so an author who put an explicit short anchor above a long heading — `<a id="materialize"></a>` above `## Materialize the warehouse snapshot into a local DuckDB file` — got `LINK_BROKEN_ANCHOR` for `toolbox.md#materialize`, a link GitHub resolves. An adopter repointed working links at the long slug to appease the tool. Markdown documents now contribute `id`/`name` attributes from raw-HTML nodes as fragment targets, matching GitHub. Only raw-HTML nodes are read, so an `id=` shown inside a fenced block, an indented block, or a backticked span is being *documented* rather than declared and is never indexed — that is why this reads the AST instead of scanning source. Markdown ids are matched case-insensitively, following markdown's existing case-folded fragment policy; erring toward resolving is deliberate, since the other direction's cost is a false error on a link that works. Unconditional for markdown: the `--check-html-anchors` opt-in governs `.html` *targets*, whose fragments are frequently defined at runtime by JS and so are not statically authoritative, which is not true of static markdown. See [`LINK_BROKEN_ANCHOR`](docs/validation-codes.md#link_broken_anchor).
-- **BREAKING (widens the scan): `.claude/` and every other dot-directory are no longer invisible to VAT's file crawler.** picomatch's default refuses to let `*` or `**` traverse a path segment beginning with a dot, so `**/*.md` — the include pattern `vat resources validate` and friends default to — could never match inside `.claude/`, `.github/`, or any other dotted directory. An adopter who dropped their `include` allowlist specifically because we told them it would widen the scan still had **68 tracked files silently uncrawled**: `.claude/rules/` (15), `.claude/skills/` (48), `.claude/commands/` (3), `.claude/agents/` (1). Adding an explicit `.claude/**/*.md` took their scan from 941 to 996 files, found a real frontmatter defect (an unquoted internal colon), and produced zero false positives — but restating VAT's own defaults as a workaround means they stop tracking future default changes. This was also, again, one question two lanes: `vat audit` already compiles its `--exclude` patterns with `dot: true` and carries a comment saying that without it "the exclude silently never fires"; the include side never got the same treatment, and neither did the crawler. `crawlDirectory` now compiles every pattern — include *and* exclude — with `dot: true`, and its `dot` option is gone, because "is this path visible?" is answered by git and by your excludes, never by whether a component happens to start with a dot. **What to expect:** if you have tracked markdown under a dot-directory and no `include` allowlist narrowing it away, VAT will now scan it and may report findings there for the first time. `.claude/` in particular is Claude's own home for the rules, skills, commands and agents VAT exists to validate.
-- **BREAKING for `owner/repo` shorthand: `vat audit <path>` never reaches the network for a path that exists.** The command asked "is this a git URL?" before asking "is this a directory?", and `isGitUrl` accepts bare GitHub shorthand — which is spelled exactly like an ordinary two-segment relative path. So `vat audit plugins/arc` (and `docs/guides`, and `packages/cli`) resolved to `https://github.com/plugins/arc.git`: the local tree was never audited, the command silently contacted github.com with a name derived from the caller's own directory layout, and the failure surfaced as `Repository not found` for a directory sitting right there. Worse, anyone registering that `owner/repo` could have had their tree cloned and reported back as your audit. An argument naming an existing file or directory is now always a path; shorthand applies only when nothing of that name exists locally. `./plugins/arc` was never affected, which is why the documented example escaped it. *(Found while trying to measure the audit-performance bug below — the first round of timings were failed clones, not audits.)*
-- **`vat audit` re-did the most expensive thing VAT owns once per skill; it now does it once per project root.** On a ~1,200-document monorepo, `vat audit` over a directory of 46 skills did not complete in ten minutes, while `vat resources validate` scanned the same tree in seconds. Two independent causes, both the same shape — a lane that had already solved this and a lane that had not:
-  - **The inventory link walk asked git the wrong question.** It crawled with `respectGitignore: false` — deliberately, to pick up untracked files an author is still editing — but that flag also means "include everything git is told to ignore", and getting there means abandoning `git ls-files` for a full recursive walk of every build cache, nested worktree and generated tree. Measured on the same repository: **39,599 ms versus 16 ms**, for 1,146 files versus 1,143. `crawlDirectory` gains an `includeUntracked` option that asks the narrower question (`git ls-files --others --exclude-standard`) and keeps the fast path; `respectGitignore: false` now documents that it costs the whole walk and is only for callers that genuinely want ignored files.
-  - **The registry was rebuilt per skill.** Building one parses every markdown (and HTML) document under the project root — ~20 s on that tree — so N skills paid it N times, twice over (once in the packaging validator, once in the inventory walk). `vat skills validate` has always shared one registry across its batch, and `crawlAndResolveRegistry`'s own documentation says it is exported "so external callers (e.g. the inventory layer) can build a registry once and pass it down rather than re-crawling per skill" — the audit lane simply never wired it. It now caches both registries per project root for the run (kept separate: the validator's crawl includes HTML and the inventory walk has always been markdown-only, and merging them would quietly widen the link graph `files.linked` is computed from).
-
-  Measured on that monorepo: auditing a plugin directly went from **369 s to 42 s** for 2 skills, and is now effectively flat in skill count at that level (a 19-skill plugin audits in 27 s — the fixed cost of parsing the corpus twice). Recursively auditing the *parent* directory of 46 skills now **completes in 571 s** where it previously did not finish in ten minutes; that residual is neither re-crawling (both caches hit — the tree has a single project root) nor duplicated work (the run performs exactly 46 skill validations for 46 skills), but ~12 s of genuine per-skill validation, which is a separate and still-open issue.
-
-- **A file whose frontmatter fails to parse is no longer also reported as having no frontmatter.** Two lanes answer "does this file have frontmatter?" — the parser, which records the parse error and knows the block is present but broken, and the schema validator, which sees only the parse *result*. A failed parse yields `undefined`, and the schema validator read `undefined` as "absent". So a document with a duplicate YAML key drew **both** `FRONTMATTER_INVALID_YAML` and `FRONTMATTER_MISSING` — the second asserting "No frontmatter found in file" about a file whose frontmatter is plainly there — and handed the author two conflicting remediations ("fix the YAML syntax" versus "add the required frontmatter"). Schema validation is now skipped for a document that did not parse, in both the global-schema and per-collection lanes; the parse error is emitted unconditionally and is the actionable finding. A file that genuinely has no frontmatter still reports `FRONTMATTER_MISSING` exactly as before. *(Found by scanning a large real monorepo: an archived ADR declaring `superseded_by` twice.)*
-- **A markdown link whose target does not ship is now stripped to plain text, in every spelling.** Three ordinary link shapes used to leave broken markdown in the packaged skill, and one of them failed the build outright. A link to a **directory** written with a trailing slash (`[refs](refs/)`) matched no rewrite rule at all, survived packaging verbatim, and then tripped `PACKAGED_BROKEN_LINK` — an `error` whose own remediation text reads "Report the issue — this indicates a VAT bug." The same link written without the slash (`[refs](refs)`), and any **non-markdown asset** dropped from the bundle (`[key](evals/evals.json)`), instead shipped `[text]()` — a valid markdown link to nowhere — because the bundled-link template interpolated an undefined target path. All three now render as plain prose, which is what an excluded *markdown* link already did. A directory link can never survive packaging: bundled resources are flattened into `resources/`, so no authored directory exists in the output to point at. This also makes `PACKAGED_TEST_INPUT`'s promise ("the link is removed from the packaged output") true for all three spellings rather than one. A companion fix in the link-rewrite regex was required to land this safely: the inline-link pattern excluded only `]` from link text, so a stray unpaired `[` in prose (e.g. a sentence listing glob metacharacters ``(`*`, `**`, `?`, `[`)``) started a match that ran forward to the *next* link, swallowing the prose between them into the link text — invisible while the template re-emitted that text verbatim, but content-destroying the moment it did not. The pattern now excludes `[` as well, anchoring each match to its own link.
-- **BREAKING: `<skill-root>/evals/evals.json` is now a declaration in the packaging lane too — the default eval-suite convention.** The harness has always defaulted to that path, reading, stripping and grading the suite whether or not a `test:` block exists. The packager did not: without an explicit `test:` block it treated nothing as test input, on the reasoning that VAT should not guess a directory named `evals/` is one. The two lanes therefore disagreed about the same skill, in the dangerous direction — the harness protected the eval signal while the build **packaged and published the answer key**. The convention is now shared, so a skill that follows it needs no config to be protected. The inference is deliberately narrow and both halves are enforced by test: it is keyed on the suite **file** existing, never on a directory's name, and it names exactly `<skill-root>/evals` — a `docs/evals/` elsewhere in the tree still ships, as does a root `evals/` holding no `evals.json`. An explicit `test.evals` still wins. **If you keep a `<skill-root>/evals/evals.json` suite and relied on it shipping, declare its contents through `files:` or move it.**
-- **`vat skill test run --dry-run` now builds (when acknowledged).** It previously reused whatever `dist/` already existed and warned the preview might be stale — so what it previewed was not necessarily what a real run would test, which is the one job a preview has. It now builds and stages exactly as a real run would, then stops: no Claude session, no tokens. **The build is gated on `--i-understand-this-runs-skill-code`**, because building runs the repo's committed `test.build` hook — an arbitrary shell command. Without the acknowledgement, `--dry-run` behaves as before (existing dist, stale warning), so it remains the one mode safe to point at an untrusted clone. `--no-build` still skips the build regardless.
-- **BREAKING: `${fixturesDir}` now resolves per eval, under that eval's own staged workspace.** Eval-suite isolation (below) removes `<staged>/evals/` from every staged subject — and `fixtures/` is a child of it — so the token, which resolved to `<stagedSkillDir>/<evalsDir>/fixtures`, named a directory that no longer exists. Interpolation is a plain string substitution with no existence check, so a skill declaring `env: { SNAP: "${fixturesDir}/snap.json" }` was handed a dead path and failed in a way that read as a *skill* bug. The token now names `<eval workspace>/fixtures` — where each eval's declared input `files` are staged, and which is also the executor's working directory. **Two consequences:** an eval that declares no input `files` has no workspace and therefore no fixtures directory, so using `${fixturesDir}` there now fails the run at preflight (exit **2**) with a message naming the env key, instead of silently injecting a path to nowhere; and declared `env` values are resolved per eval rather than once per run (the stderr transparency line is still emitted once). Pointing the token back at the suite directory was rejected deliberately — it would hand the executor a sibling path to `evals.json` and reopen the leak this release closes. **This also supersedes a 0.1.39 note** that "fixtures under the skill's `evals/fixtures/` auto-stage with the eval tree": they no longer do, because that tree is no longer staged at all. A fixture reaches the executor only by being declared in its eval's `files` list, which stages it into that eval's workspace. Note this is distinct from [#163](https://github.com/jdutton/vibe-agent-toolkit/issues/163) (eval suites stored *outside* the skill tree), which remains unimplemented.
-- **Link syntax inside fenced code blocks and inline code spans is no longer rewritten.** The rewrite pass replays a raw regex over the whole document while the parsed link list comes from mdast, which never yields a link node for code. The two views agreed only by accident: a fenced ``[Guide](refs/guide.md)`` survived merely because no *real* link claimed that href. Let a real link elsewhere in the file point at the same target and the lookup hit, so a skill teaching authored link syntax shipped a lesson pointing at the **packaged** path instead of the one a reader must type — or, for a target that does not ship, stripped the example to bare text. Code ranges are now masked before replacement, in both the inline-link and reference-definition passes, so skipping them is intentional rather than incidental.
-- **A stripped link now keeps its own text, and the author's inline formatting.** When two links in one document shared an href, stripping rendered the second one with the **first** link's text: the rewriter keys parsed links by href and lets the first occurrence win, and the strip template read `link.text` from that map. Shipped prose silently swapped one phrase for an unrelated one — VAT's own `vat-skill-review` skill shipped "See cached guidance for a cached copy…" where the author wrote the filename. The rewrite branch never exposed this because it re-emits `link.rawText`, the per-occurrence capture; the strip template now uses the same capture, which also preserves the inline markup the author wrote (``[`foo.yaml`](…)`` strips to `` `foo.yaml` ``, not bare `foo.yaml`). The map is keyed by the full href *including* any `#fragment`, so links that collide there resolve to the same target and same fragment — the display text was the only thing that could differ, and it is now per-occurrence.
-- **Eval answer-key leak: `vat skill test` no longer stages a skill's eval suite where the executor under test can read it.** Every subject-resolution route — a plain path, a plugin tree-copy, an npm/url/vendored artifact, and a `packageSkill` dist — used to carry the eval suite (`evals.json` plus its `fixtures/`, including the `expected_output`/`expectations` answer key) into the staged tree the executor runs against, letting a skill under test read its own answer key and pass while demonstrating nothing — silently, and in the direction that makes evals look *more* correct. The harness (`packages/agent-skills/src/skill-test/eval-suite-isolation.ts`) now strips the suite from every staged copy before it is copied onward or content-hashed, and relocates the subject's suite to a VAT-only, mode-`0700` directory outside the harness root; the harness reads the suite from the authored scaffold instead of the staged copy. A canary integration test walks cwd, the sandbox dir, every plugin dir, and the whole harness root at executor-spawn time to guard against regression. `overlayAuthoredEvalSuite` is removed.
-- **`resources validate` and `skills validate` now agree on `files:`-declared build artifacts.** A missing target declared under `skills.config.<name>.files` used to downgrade to the info-level `LINK_DEFERRED_ARTIFACT` under `vat skills validate`/`vat skills build`, but still hard-failed as `LINK_BROKEN_FILE` (exit 1) under `vat resources validate` — the two lanes disagreed about the same link. `vat resources validate` now reuses the same skill discovery and `files:` config merge as the skills lane, so a deferred build artifact reports the same `LINK_DEFERRED_ARTIFACT` info notice in both places.
-- **`files:` destinations are exempt from the gitignore-leak rule even before the build runs.** A `files:` entry's declared `dest` is now excluded from `LINK_TO_GITIGNORED_FILE`/`LINK_TO_GITIGNORED` regardless of whether it exists on disk yet, in both the skills-packaging lane and the general resources lane. Previously the exemption only applied once the artifact existed on disk, so **building the project could turn a previously-passing `vat skills validate` run red** on its own declared, gitignored build output.
-- **`vat skill test run --with`/`--with-optional` now build a companion that maps to a declared skill, instead of staging its raw source (issue [#158](https://github.com/jdutton/vibe-agent-toolkit/issues/158)).** A companion given as `path:<source-dir>` used to be tree-copied verbatim — skipping the `files:` build-artifact injection the subject always gets, so a companion backed by a bundled executable (e.g. a compiled CLI) staged non-functional and could hang the executor at runtime with no diagnostic. A `path:` spec pointing at a declared skill's source directory is now resolved and built exactly like the subject (same `--no-build`/`--dry-run`/security-ack gating): a **required** `--with` companion's build failure fails the run with a clear error; an **optional** `--with-optional` companion falls back to its raw (unbuilt) source only for a *non-destructive* build failure — a `pool`-distribution build, or no build attempted at all (`--no-build`/`--dry-run`) — since a failed `plugin-local` marketplace build first wipes the marketplace output tree, so continuing would stage from a deleted tree; that failure, and a security-acknowledgement, config-load, or build-hook failure, always fails the run instead. A path outside the project's config (npm-packaged, workspace, or undeclared) is unaffected. Each declared skill now builds **at most once per run** — a subject that is also a companion, or several companions sharing one marketplace, no longer trigger duplicate builds. A companion's own `test.build` pre-stage hook now runs too, scoped so the command and its working directory always come from that companion's own config (previously the subject's command could run with a companion's config root as its `cwd`); the one exception is `plugin-local` companions sharing a marketplace, where only the first participant's hook runs, because a single marketplace build serves them all. Under `--no-build`, a **required** `--with` companion with no built dist now hard-fails the run (exit **2**) instead of silently continuing.
-- **Tool checks no longer silently pass.** If an eval declared `toolExpectations` but the grader returned no tool verdict, it used to count as a pass; now it's a hard error (exit **1**). Same for a grader tool verdict whose `passed` disagrees with its own sub-checks.
-- **No more orphaned `claude` processes on failure.** When one parallel eval failed, in-flight grader/executor children were left running and billing tokens; they're now killed before the harness exits.
-- **`vat skill test run` no longer crashes on Windows with `spawn EINVAL`.** On Windows, `claude` resolves to an npm `claude.cmd` shim, and since the Node CVE-2024-27980 fix a bare `child_process.spawn` of a `.cmd` throws `EINVAL` synchronously — so the harness died the instant it tried to launch the headless session (reported by an adopter across cmd.exe, PowerShell, and Git Bash). The `claude` spawn now routes through a new hardened `spawnHardened` helper (exported from `@vibe-agent-toolkit/utils`) that detects `.cmd`/`.bat`/`.ps1` shims and launches them through the shell with per-arg quoting (no injection), reusing the Windows handling `safeExecSync` already had. A Windows-only integration test spawns a real `.cmd` shim (`npm`) to guard against regression. The same latent defect in the internal compat-empirical harness is fixed too.
-- **`spawnHeadlessClaude` reaps the child on a spawn `'error'` event.** The `'error'` handler unregistered the child from the orphan-reap set without killing it; it now kills the process tree first, closing a narrow orphan-leak window (no-ops when the child never spawned).
-- **`knip` held at `~5.85.0` — 5.86.0+ hard-crashes the `dependency-check` step.** From 5.86.0 onward, knip aborts with `ENOTDIR: not a directory, scandir .../runtime-vercel-ai-sdk/test/llm-regression.test.ts` — it appears to read the `test:llm-regression` package script (`bun test test/llm-regression.test.ts`) and then scan the *file* argument as if it were a directory. This is an uncaught exception, not a finding, so it takes the whole check down rather than reporting anything. Bisected to the 5.85.0 → 5.86.0 boundary; pinned to `~5.85.0` so 5.85.x patches still flow. The newest 5.x line is affected, so the fix path is a `knip` 6 major bump, tracked with the other pending majors. Dev tooling only — no consumer impact.
-- **`author.url` in your `plugin.json` is no longer destroyed by the plugin build.** `vat claude plugin build` replaced the whole `author` object with `{name, email}` built from the marketplace `owner`, and Claude's plugin manifest supports `author.url` while VAT's config has no field for it — so an adopter who wrote `author: {name, email, url}` lost the URL on every build with **no config field to restore it**. That is data loss, not a precedence policy. `author` is now merged **per subfield**, and ownership is decided by what the config can express: `name` and `email` come from `owner` (omitting `owner.email` still publishes an author with no email — a deliberate config statement), and every other subfield, `url` included, passes through from `plugin.json` untouched. The `plugins[].author` entries in the generated `marketplace.json` now republish that same merged object instead of rebuilding one from `owner`, so a plugin's manifest and its marketplace listing cannot disagree about who authored it. Two related fixes fall out: the "author disagrees with the marketplace owner" warning now names the specific config-owned subfields that were overridden (and no longer fires merely because `plugin.json` lists its author keys in a different order), and a **non-object** `author` — npm's `"Name <email> (url)"` string form — is still replaced wholesale, now with a warning that says why and shows the object form. See [Who owns which `author` subfield](docs/guides/marketplace-distribution.md#who-owns-which-author-subfield).
-- **`vat rag` no longer silently degrades embeddings when the configured model is not BERT-shaped.** The local ONNX embedding provider accepts any HuggingFace model id and loads *that model's own* `vocab.txt` — but then framed every sequence with **hardcoded** BERT special-token ids (`[CLS]`=101, `[SEP]`=102, `[UNK]`=100, `[PAD]`=0). Point it at a RoBERTa/XLM-R derived encoder, whose vocabulary uses `<s>`/`</s>`/`<pad>` at entirely different ids, and 101/102 are arbitrary wordpieces from that vocab while padding is written as `<s>` rather than `<pad>`. Nothing catches it: the vocab file parses, the tensor dimensions match, no exception, no warning — `vat rag index` builds a quietly worse index and `vat rag query` returns plausible-but-degraded results indefinitely. The special-token ids are now **read from the loaded vocabulary** rather than assumed, so a BERT-family model that orders them differently tokenizes *correctly*; and a vocabulary that does not define `[CLS]`/`[SEP]`/`[UNK]`/`[PAD]` at all — the signal that it is byte-level BPE or SentencePiece, which this WordPiece tokenizer cannot handle regardless of ids — now fails at **load** time with an `IncompatibleVocabError` naming the configured model, the vocab file, which tokens were missing, and which tokens were found instead. There is deliberately no flag to bypass the check: a silently-degraded index is worse than one that refused to build.
-- **BREAKING: `license: <spdx-id>` in your marketplace config now only accepts identifiers VAT can render in full — the other nine wrote a legally void `LICENSE` file.** `vat claude marketplace publish` vouched for eleven SPDX shortcuts (`mit`, `apache-2.0`, `gpl-2.0`, `gpl-3.0`, `lgpl-2.1`, `lgpl-3.0`, `bsd-2-clause`, `bsd-3-clause`, `isc`, `mpl-2.0`, `unlicense`) but carried real license text for one. Nine fell through to a two-line stub — `This software is licensed under the gpl-3.0 license.` plus a copyright line — and `apache-2.0` emitted only the short-form notice header, which points at the terms instead of stating them. That string was written verbatim as the published marketplace's `LICENSE`, so a `publish` that reported success shipped a distribution whose license file grants nothing; GPL-3.0 §4 and Apache-2.0 §4(a) both require that a complete copy of the License be conveyed with the work. Nothing flagged it, because `isSpdxIdentifier()` returning `true` was exactly the signal that made the value look supported. VAT now only claims the licenses it embeds: `mit` renders as before, and the other ten are still *recognized* — solely so they get a specific error naming the identifier, linking its canonical text on spdx.org, and telling you to set `license` to a file path (`./LICENSE`), which `publish` has always supported. **What to expect:** a config using any shortcut other than `mit` now fails at publish with that message instead of silently producing a void `LICENSE`; download the official text and point `license` at it. Embedding a license is no longer separable from claiming it — the identifier table is *derived* from the table of texts, so an identifier cannot be listed without one, and a test iterates every entry asserting the output is license terms rather than a summary or a notice header. Existing coverage named `mit` and `apache-2.0` only, and the `apache-2.0` test passed against the notice header.
-- **`vat audit` no longer reports 179 real Python standard-library modules as third-party dependencies.** The `PYTHON_IMPORT_THIRD_PARTY` scanner classified imports against a hand-typed list of 151 modules labelled "Python 3.10+ standard library" — so a plugin script with `import zoneinfo`, `import pkgutil`, `import array`, `import atexit`, `import binascii`, `import bz2`, `import dbm`, `import fcntl`, `import termios`, `import pty`, `import ntpath`, `import codeop`, `import wsgiref` or `import imghdr` was reported as depending on a third-party package that does not exist. The list is no longer hand-maintained: it is generated from CPython's own `sys.stdlib_module_names`, unioned across Python 3.10–3.14 (a union because modules come and go between releases — `imghdr` and `distutils` exist on 3.10 and were removed by 3.13 — and a script importing one is targeting an older Python, not pulling a dependency), committed as a generated artifact, and checked by tests that iterate the whole table plus an opportunistic cross-check against any local Python 3.10+ interpreter. Regenerate with `bun run generate:python-stdlib` in `packages/claude-marketplace` (needs `uv`). The previous tests could not have caught this: they checked a hand-written list of 31 modules that should be present and 11 packages that should be absent — two hand-written lists checked against a third cannot detect a module nobody thought to name.
+Entries describe change relative to **0.1.40**, the last stable release. Defects introduced and fixed
+entirely within the `0.1.41-rc.*` line are deliberately not listed — no released version ever
+exhibited them. Every fix below ships with a regression test.
 
 ### Security
 
-- **Bumped `adm-zip` to `0.6.0`, fixing a path-traversal advisory ([GHSA-xcpc-8h2w-3j85](https://github.com/advisories/GHSA-xcpc-8h2w-3j85), CVSS 7.5).** `adm-zip` is a direct dependency used at runtime by `@vibe-agent-toolkit/agent-skills`' URL skill source to extract zip archives fetched from skill-source URLs — content that isn't necessarily trusted — so this isn't just a dev-tooling audit fix.
-- **Eliminated the vulnerable `protobufjs@6` transitive chain (11 advisories, incl. a 9.8-critical) for every consumer, unconditionally.** It previously entered via `@vibe-agent-toolkit/rag`'s native embedding backend (`@xenova/transformers@2` → `onnxruntime-web@1.14.0` → `onnx-proto` → `protobufjs@^6.8.8`), and reached anyone installing `vibe-agent-toolkit` (the CLI depends on `rag`). Adopters could not override it (`onnx-proto` pins `protobufjs@^6`). Fixed by replacing the native backend with `onnxruntime-web` directly (see BREAKING note above): it resolves the patched `protobufjs@7` line with no `onnx-proto` in between. `onnx-proto`/`protobufjs@6` are absent from the lockfile, for every consumer — not just those who opt out of local embeddings.
-- **Swept the remaining transitive advisories via root `package.json` `overrides`.** Patched in-range pins for `undici`, `hono`/`@hono/node-server`, `path-to-regexp`, `qs`, `tar`, `basic-ftp`, `js-yaml`, `form-data`, `fast-uri`, `ip-address`, `express-rate-limit`, `postcss`, `smol-toml`, `yaml`, `flatted`, `lodash`, `rollup`, `vite`, and `vitest`; `handlebars`, `ws`, and `turbo` were bumped in range. Net OSV result on `bun.lock`: **32 vulnerable packages / 120 advisories → 7 / 26**, all remaining ones triaged in `osv-scanner.toml`. (Note: `overrides` harden VAT's own tree; downstream consumers already re-resolve VAT's floating ranges to these patched versions on a fresh install.)
-- **Routine dev-toolchain refresh — 19 in-range devDependency bumps, clearing 3 more advisories from the dev tree.** `eslint` `9.39.5`, `@typescript-eslint/*` `8.65.0`, `@types/node` `25.9.5`, `secretlint`/`@secretlint/*` `11.7.1`, `jscpd` `4.2.5`, `tsx` `4.23.1`, `@vitest/coverage-v8` `3.2.7`, plus `rimraf`, `semver`, `eslint-plugin-n`, `eslint-plugin-sonarjs`, and assorted `@types/*`. OSV filtered-advisory count on `bun.lock`: **31 → 28**, still **0 un-triaged**. No runtime dependency changed, so consumer resolution is unaffected. *(`knip` is deliberately held at `~5.85.0` — see the **Fixed** entry. The four pending majors — `zod` 4, `typescript` 7, `vitest` 4, `eslint` 10 — are each a real migration and are excluded from this pass.)*
-- **Refreshed the transitive-dependency pins to clear a further 15 advisories, including a 9.2-critical.** `tar` moved to `7.5.22` (five advisories, incl. [GHSA-23hp-3jrh-7fpw](https://github.com/advisories/GHSA-23hp-3jrh-7fpw), CVSS 9.2 — `tar` is a direct dependency of the CLI and extracts archives VAT does not author); `fast-uri` to `3.1.4`, `hono` to `4.12.27`, `js-yaml` to `4.3.0`, `postcss` to `8.5.18`, and a new pin for `body-parser` at `2.3.0`. `sharp` (build-time image tooling) moved to `0.35.3`, picking up the libvips fixes in [GHSA-f88m-g3jw-g9cj](https://github.com/advisories/GHSA-f88m-g3jw-g9cj). Net OSV result on `bun.lock`: **10 vulnerable packages / 20 advisories → 0 / 0** un-triaged. The two that remain un-pinnable — `brace-expansion` (no fix exists in either coexisting major line) and `@hono/node-server` (the vulnerable `serve-static` export is never imported, and the fix is a major bump outside the MCP SDK's declared range) — are documented with their reasoning in `osv-scanner.toml`.
-- **The per-run grader nonce is kept off disk and off argv.** The vat-only grader directory is named by an independent random token (not the integrity nonce), and the nonce travels only through the grader's stdin prompt. This closes a window where same-user skill code running with bypassed permissions could read the nonce from the world-listable OS temp-dir name (or a child process's argv) and forge a valid-nonce fragment.
-- **The grader's transcript fence is bound to the secret nonce.** The untrusted transcript is fenced between `===BEGIN/END TRANSCRIPT DATA <nonce>===` markers; because the executor never sees the nonce, a prompt-injected skill cannot emit a matching closing delimiter to break out of the fence and have its trailing text read as grader instructions.
-- **A skill's `declaredExecutables` strings are fenced too.** They now reach the grader inside the same nonce-bound untrusted-data fence — so a malicious third-party skill can't hide grader instructions in its own `howInvoked`/manifest strings.
-- **Grader fragments are consumed on read.** vat unlinks each fragment the instant it reads it, so skill code can't harvest the run's nonce from a leftover file and forge later verdicts. Same-uid caveat: the grader runs as the same OS user as the skill, so this raises the bar but isn't full isolation — running the grader under a separate uid/container is tracked in [#149](https://github.com/jdutton/vibe-agent-toolkit/issues/149).
-- **`vat claude org skills install` no longer publishes an eval suite that lives outside `evals/`.** The uploader's answer-key backstop was a hardcoded directory-*name* match (`evals`, `node_modules`, `.git`), so it enforced only the weaker property its own comment disclaimed. The eval suite's location is the adopter's to declare — `skills.config.<name>.test.evals`, of which `evals/evals.json` is merely the default — so a project that declares its suite anywhere else (`fixtures/qa/evals.json`, a bare `answers.json`) uploaded every `expected_output` to its Anthropic org workspace, exited 0, and printed an empty exclusion list: an affirmative report that nothing had been withheld. This was a fourth lane disagreeing with the harness, the packager, and staging about what a skill's test input is. The uploader now resolves the *declared* suite through the same nearest-ancestor config walk-up `vat audit` and `vat skill review` use — anchored on the directory argument, since pointing at a source tree by mistake is the whole scenario this backstop exists for — and withholds the suite unit (its directory, or the single file for a root-level suite) in addition to the name-based exclusions, which remain as the unconditional fail-safe when no config is discoverable. Every withheld path is reported.
+- **`vat skill test` no longer stages a skill's eval answer key where the skill under test can read
+  it.** Every subject-resolution route — a plain path, a plugin tree-copy, an npm/url/vendored
+  artifact, a `packageSkill` dist — carried the eval suite (`evals.json` plus its `fixtures/`,
+  including `expected_output`/`expectations`) into the tree the executor runs against, so a skill
+  could read its own answer key and pass while demonstrating nothing. The suite is now stripped from
+  every staged copy before it is copied onward or content-hashed, and relocated to a VAT-only,
+  mode-`0700` directory outside the harness root. `workspaces/` and `results/` are likewise created
+  `0700` rather than inheriting the umask.
+- **`vat claude org skills install` no longer uploads your eval suite to your Anthropic org
+  workspace.** It uploaded *every* file it found, with a hardcoded directory-*name* backstop
+  (`evals`, `node_modules`, `.git`) — so a project keeping its suite anywhere else
+  (`fixtures/qa/evals.json`, a bare `answers.json`) published every `expected_output`, exited 0, and
+  printed an empty exclusion list. The uploader now resolves the *declared* suite through the same
+  nearest-ancestor config walk-up `vat audit` and `vat skill review` use, and withholds it in
+  addition to the name-based exclusions, which remain as the fail-safe when no config is
+  discoverable. Every withheld path is reported.
+- **Dependency sweep — the tree goes from 32 vulnerable packages / 120 advisories to 0
+  un-triaged.** Highlights an adopter inherits directly: `adm-zip` → `0.6.0`, closing a
+  path-traversal advisory ([GHSA-xcpc-8h2w-3j85](https://github.com/advisories/GHSA-xcpc-8h2w-3j85),
+  CVSS 7.5) in a package used at runtime to extract archives fetched from skill-source URLs;
+  `tar` → `7.5.22`, closing five advisories including
+  [GHSA-23hp-3jrh-7fpw](https://github.com/advisories/GHSA-23hp-3jrh-7fpw) (CVSS 9.2) in a direct
+  CLI dependency; and the **complete elimination of the `protobufjs@6` transitive chain (11
+  advisories, including a 9.8-critical) for every consumer, unconditionally** — adopters could not
+  previously override it because `onnx-proto` pins `protobufjs@^6`. Remaining transitive advisories
+  are pinned via root `overrides`; the two that cannot be fixed (`brace-expansion`, whose fix exists
+  in neither coexisting major line, and `@hono/node-server`, whose vulnerable `serve-static` export
+  is never imported) are documented in `osv-scanner.toml`. An OSV-Scanner CI gate now runs against
+  the committed lockfile.
+- **The `vat skill test` grader protocol is hardened against a skill forging its own verdict.** vat
+  is the sole writer of `results/`; each grader fragment carries a secret per-run nonce the executor
+  never sees (delivered only via the grader's stdin — never on disk, never in argv), fragments are
+  unlinked the instant they are read, and the untrusted transcript and a skill's own
+  `declaredExecutables` strings reach the grader inside a nonce-bound fence. Same-uid caveat: the
+  grader runs as the same OS user as the skill, so this raises the bar substantially but is not full
+  isolation — separate-uid/container isolation is tracked in
+  [#149](https://github.com/jdutton/vibe-agent-toolkit/issues/149).
+
+### Added
+
+- **`vat skill test` — transcript-grounded evaluation with a separate executor and grader (issue
+  [#145](https://github.com/jdutton/vibe-agent-toolkit/issues/145)).** Each eval now runs in two
+  roles instead of one self-grading agent: a blind **executor** (the skill under test) performs the
+  task and its transcript is captured in memory, then a separate **grader** judges that transcript
+  against the rubric. A grader-side internal failure, or a missing/forged nonce, aborts with the
+  harness-broke exit **1** and is never laundered into a pass/fail verdict.
+  - `graderModel` config and `--grader-model <id>` (default `claude-sonnet-5`) select the grader
+    independently of `model`/`--model`, which now select the **executor**. `--concurrency <n>`
+    bounds parallel evals, each retrying a rate-limit with backoff.
+  - **Declared tool-expectations.** An eval may declare `toolExpectations`
+    (`mustRun` / `mustNotRun` / `mustSucceed` / `sequence`), judged from the transcript and written
+    to their own `tool-eval.json` channel so tool verdicts never leak into `grading.json`. A skill's
+    packaging config accepts a `declaredExecutables` manifest (`{ path, kind, howInvoked }`) so the
+    grader recognizes varied launch forms of one tool (`uv run csvsum.py`, `./csvsum`,
+    `node dist/csvsum.mjs`).
+  - **Composite, fail-closed verdict.** The reported pass/fail ANDs the output grade with every tool
+    verdict, and the run fails closed (exit **4**) if any result artifact is missing, unparseable or
+    invalid after the merge.
+  - **Cost-tiered fail-fast.** Evals may declare a numeric `tier`; tiers run cheapest-first,
+    bounded-parallel within a tier, stopping before the expensive ones once a cheaper tier fails.
+  - **Two advisory pre-spend warnings** (never change the exit code): an eval whose expectations are
+    all presence-only with no negative check, and a `toolExpectations` entry that looks like a typo
+    of a declared executable.
+  - **Run-wide spend aggregation** — the summary carries `≈$<total> across <N> sessions`.
+- **`vat skill test run --evals <path>` — grade a skill against an eval suite stored outside its own
+  tree** (issue [#163](https://github.com/jdutton/vibe-agent-toolkit/issues/163)).
+- **`exclude:` on a marketplace plugin entry.** Patterns, relative to the plugin source dir, that
+  the verbatim tree-copy must skip — for project-specific content the built-in exclusions cannot
+  know about. Additive to the defaults (`.claude-plugin/`, gitignored files, produced skill dirs,
+  agent-instruction files).
+
+  ```yaml
+  plugins:
+    - name: my-plugin
+      skills: "*"
+      exclude: ["scratch/**", "docs/internal"]
+  ```
+
+  A pattern may be a glob (`scratch/**`) or a bare directory name with or without a trailing slash;
+  all three drop the whole subtree, in or out of a git repository. A pattern matching nothing is a
+  `PLUGIN_EXCLUDE_PATTERN_UNUSED` warning in the structured result.
+- **Declared test input is auto-excluded from packaged output.** Declaring a path under
+  `skills.config.<name>.test.evals` names it as that skill's eval suite; VAT now treats that
+  declaration as the instruction not to package it, and reports what it withheld via
+  `PACKAGED_TEST_INPUT`. Declarations are assembled once per run across the whole project, so one
+  skill's suite cannot leak into another skill's bundle via an ordinary documentation citation.
+- **New validation codes**, each overridable with `validation.severity.<CODE>`:
+  - **`LINK_UNRESOLVED_REFERENCE` (`warning`)** — a dangling reference-style link: `[text][label]`
+    or the collapsed `[label][]` with no matching `[label]: url` definition.
+  - **`REGISTRY_SHAPE_DRIFT` (`info`)** — Claude Code's installed-plugins registry parses cleanly
+    but carries a field VAT does not model, so drift stays visible without being an error.
+  - **`TREE_PROVENANCE_INDETERMINATE` (`warning`)** — `vat audit` could not decide whether a tree is
+    a distribution artifact or ordinary repository source because git could not be consulted (`git`
+    absent from `PATH`, an unreadable or corrupt `.git`). It claims only that the tool could not
+    tell, never anything about the artifact, and fires only when the tree actually contains
+    agent-instruction files, so a clean repo in a git-less container stays quiet.
+  - **`LINK_TO_AGENT_INSTRUCTION_FILE` (`error`)**, **`PACKAGED_AGENT_INSTRUCTION_FILE` (`warning`)**,
+    **`FILES_GLOB_DROPPED_NEVER_PACKAGED` (`warning`)**, **`FILES_GLOB_MATCHED_NOTHING` (`info`)**
+    and **`FILES_GLOB_MATCHED_ONLY_NEVER_PACKAGED` (`warning`)** — see Changed.
+- **User-facing documentation for `vat skill test` and its config surface**
+  (`packages/cli/docs/skill-test.md`), covering the per-skill `skills.config.<skill>.test` block and
+  the global `test:` node.
+- **The `coherence-audit` skill ships in the `vibe-agent-toolkit` plugin** — the audit method this
+  release used: the one-contract question, the failure-direction tell, and how to spot a test suite
+  that is structurally blind to the defect it covers.
+
+### Changed
+
+- **BREAKING: repo-internal agent-instruction files (`CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`,
+  `GEMINI.md`) are no longer bundled into skills, and linking to one is now an `error`
+  (`LINK_TO_AGENT_INSTRUCTION_FILE`).** Bundling them caused silent mis-resolution — under
+  `resourceNaming: basename` two packages' `CLAUDE.md` files collapse onto one destination, and an
+  adopter verified by checksum that 2 of 3 links in a packaged document pointed at the wrong file —
+  and unintended instruction loading: Claude Code loads `CLAUDE.md` files under the working
+  directory on demand, so a skill installed project-locally (`.claude/skills/<name>/`) turns a
+  bundled `CLAUDE.md` into live agent instructions the moment a reference beside it is opened.
+
+  **What to do**, cheapest first:
+  - **Point the link at the file's canonical home as an absolute URL** — it survives packaging
+    verbatim and keeps the pointer. On one adopter this cleared 15 of 28 errors with seven one-line
+    edits.
+  - **Link the specific content the file describes**, or extract the shared part into a document
+    meant for distribution — the right answer when the skill tells the agent to *read* the target.
+  - **Ship it deliberately**: declare it under `skills.config.<name>.files` with an **explicit**
+    (non-glob) `source:`. It is bundled at its declared `dest`, the link is rewritten to point at
+    it, and the finding does not fire. A glob that merely catches the file earns none of that.
+
+  `validation.severity.LINK_TO_AGENT_INSTRUCTION_FILE: ignore` silences the finding; unless an
+  explicit `files:` entry names the file, it stays out of the bundle either way. The check runs in
+  the packaging lanes (`vat build`, `vat validate`, `vat verify`); auditing a skill tree whose
+  documents merely *contain* `CLAUDE.md` files is unaffected.
+- **New `PACKAGED_AGENT_INSTRUCTION_FILE` (warning) — the presence-side half.** The link check
+  cannot see a file that arrives in a bundle without any link. `vat build`, `vat verify` (a new
+  in-process `packaged-content` phase crawling every built skill bundle) and `vat audit` now report
+  each agent-instruction file found in a distributed tree, whatever route put it there — including a
+  **built skill bundle**, which no lane inspected before: a bundle carrying two such files reported
+  `filesScanned: 1`, zero issues, `warnings: 0`. `vat audit` decides a tree is distributed by
+  PROVENANCE, not path shape and not your config: a `SKILL.md` inside a Claude install root
+  (`~/.claude/plugins|skills|marketplaces`) is an installed artifact, and one that is **gitignored or
+  outside any git repository** is a built bundle or unpacked third-party tree. Repository source —
+  tracked, *or* written and not yet committed — stays silent, whether or not your project has
+  adopted VAT. The install-root clause outranks the git one because Claude Code installs
+  marketplaces by `git clone`. Measured on one real install: **7 findings across 628 audited
+  skills**, one an intentional scaffold template. In `vat build` and `vat verify` an **explicit**
+  `files:` entry naming the file suppresses it (a glob match earns nothing); `vat audit <path>`
+  still reports it, having no config block to read intent from. Silence an intentional one with
+  `validation.severity.PACKAGED_AGENT_INSTRUCTION_FILE: ignore`.
+- **BREAKING: a `files:` glob and a plugin's verbatim tree-copy no longer ship files that never
+  belong in a bundle.** Two routes reached a published bundle with no link pointing at them and no
+  finding: a plugin's `source:` directory was tree-copied verbatim, so a `CLAUDE.md` beside
+  `plugin.json` shipped to every consumer; and a `files:` glob (`source: extras/**/*`) shipped
+  whatever it caught, including an `extras/README.md`, because `PACKAGED_UNREFERENCED_FILE` exempts
+  any declared `files:` dest and the glob inherited an exemption earned by *explicit* declaration.
+  Now:
+  - **Agent-instruction files** are never packaged by a glob on any surface — skill bundle *and*
+    plugin tree-copy, at any depth, **whatever their case**. (The plugin tree-copy has no per-file
+    escape at all.) Case-insensitivity is load-bearing: on APFS and NTFS, Claude Code's lookup for a
+    project-local `CLAUDE.md` is satisfied by `Claude.md` or `claude.md` just the same.
+  - **Navigation files** (`README.md`, `index.md`, `toc.md`, `overview.md` + case variants) are
+    never packaged into a **skill bundle**, but are still copied from a plugin source dir: a
+    plugin-root `README.md` is the plugin's front page — 57 of 94 plugins installed on one real
+    machine ship one, against 6 of 339 skills with a README beside their `SKILL.md`.
+  - **The rule is glob-vs-explicit.** `source: extras/README.md` — a file you named — still ships. A
+    deliberate scaffold or skill README needs **no new config**.
+
+  **What to do:** if a glob was your way of shipping one of these, name it explicitly; entry order
+  does not matter, including alongside an `integrity: true` glob over the same subtree. Every
+  dropped file is a `FILES_GLOB_DROPPED_NEVER_PACKAGED` **warning in the structured result** (not
+  merely stderr), anchored at the refused **source** file. A glob whose matches are *all*
+  never-packaged is a hard build error. A `SKILL.md` link to a dropped file still fails the build as
+  `PACKAGED_BROKEN_LINK`, now naming the never-package rule as the cause.
+- **The pre-build gates now predict BOTH glob failures that kill the build.** `vat skills build` has
+  two distinct hard errors for a `files:` glob — matched nothing ("has your build run?"), or matched
+  and every match was refused by the never-package list — and `vat skills validate`, the lane
+  adopters run in CI *before* the build, reported `success` on both. Two new codes close that:
+  **`FILES_GLOB_MATCHED_NOTHING` (`info`)**, deliberately `info` because matching nothing before the
+  artifact exists is expected and must not fail anyone's CI; and
+  **`FILES_GLOB_MATCHED_ONLY_NEVER_PACKAGED` (`warning`)**, one finding per entry, **not** silenced
+  by an explicit entry re-shipping one of the refused files. The three verdicts are mutually
+  exclusive per entry.
+- **BREAKING: there is now ONE answer to "findings → status", and every validation result carries
+  per-severity counts.** Six places independently collapsed findings into a verdict and disagreed.
+  Consequences across the CLI: `status` everywhere uses the same three-value vocabulary
+  (`success` | `warning` | `failed`) — `vat resources validate` and `vat skill review --yaml`
+  previously used two-valued vocabularies that could not express `warning`, and `vat skills
+  validate` printed `status: success` and "✅ All validations passed" above active warnings; every
+  result publishes `issueCounts`; `activeErrors`/`activeWarnings` are gone in favour of `allErrors`
+  as the sole container; `vat audit` names file counts and finding counts apart
+  (`summary.success|warnings|errors` become `summary.filesPassed|filesWithWarnings|filesWithErrors`);
+  `vat audit settings --file` replaces `valid: true|false` with `status` + `issueCounts` +
+  `findings` + `typeConfidence`; `vat doctor` reports four outcomes per check (`pass`, `fail`,
+  `undetermined`, `skipped`) rather than a boolean; and `@vibe-agent-toolkit/claude-marketplace`'s
+  `SettingsValidateResult` loses `valid`/`errors` for the same shape. **Every field named `error*`
+  now counts errors only** — `vat resources validate` had such fields carrying mixed-severity
+  totals, so a consumer gating on them blocked on warnings. **Exit code 2 ("System error") is now
+  actually reachable** on `vat validate`, `vat verify` and `vat build`: a phase whose child exits 2,
+  is killed by a signal, or never spawns is a system error, not a validation failure. Warnings
+  remain non-blocking (exit 0).
+- **BREAKING: `ValidationIssue.location` is always a project-relative POSIX path, and a link finding
+  is anchored to the file that CONTAINS the link, not to the link's target.** One field had been
+  carrying six incompatible meanings; for a missing target the old `location` named a path that does
+  not exist, so no editor could open it. **If you have `validation.allow` globs for link codes, they
+  must be rewritten against the containing file (or the href)** — `allow` entries match an issue's
+  `location` or its `link`, both of which changed meaning here.
+- **BREAKING: reports state their base once (`root`) and every `path` and `location` is relative to
+  it.** Applies to `vat audit`, `vat resources scan --verbose`, `vat skills list`, `vat agent list`,
+  `vat rag query` and `vat claude marketplace validate` — the last renames its top-level `path:` to
+  `root:` and makes each `plugins[].path` relative to it. Absolute `$HOME` paths no longer appear in
+  machine-readable output, so an audit can be shared or archived and still resolve. `vat inventory`
+  and `vat audit settings` are deliberately unchanged; human-readable **stderr** keeps absolute
+  paths.
+- **BREAKING: `vat validate` stdout is a single parseable YAML document.** Child phases ran with
+  inherited stdio, so N child documents were concatenated with no separator and `YAML.parse()` threw.
+- **BREAKING: `--only` is removed from `vat verify` and `vat validate`.** Measured on a large
+  adopter project, `vat verify` takes 31.7s end to end — the flag saved little and multiplied the
+  ways a run could be partial. `vat build --only` remains.
+- **BREAKING: the validating commands report per ASSET by default; `--verbose` restores full
+  detail.** Applies to `vat resources validate`, `vat skills validate` and `vat claude marketplace
+  validate`. **Errors always render in full at any verbosity**; warnings and info collapse into a
+  count line. Machine-readable output is never filtered.
+- **BREAKING: `vat verify` can see warnings.** Phase status was derived from the child's exit code
+  alone, and `vat skills validate` exits 0 while reporting `status: warning` — so a warning phase
+  reported `passed`. Its consistency phase now reports `warning` when it emits warnings, and
+  publishes `issueCounts` plus the findings into the archived report.
+- **BREAKING (widens the scan): `.claude/` and every other dot-directory is no longer invisible to
+  VAT's file crawler.** picomatch refuses to let `*` or `**` traverse a segment beginning with a
+  dot, so `**/*.md` — the default include pattern — could never match inside `.claude/`, `.github/`
+  or any dotted directory. One adopter had **68 tracked files silently uncrawled** (`.claude/rules/`
+  15, `.claude/skills/` 48, `.claude/commands/` 3, `.claude/agents/` 1). Every pattern now compiles
+  with `dot: true`. **What to expect:** tracked markdown under a dot-directory with no narrowing
+  `include` allowlist will now be scanned, and may report findings for the first time.
+- **BREAKING: a path argument no longer voids the project's `include`/`exclude` globs.** Affects
+  `vat resources validate|scan <path>`, `vat rag index <path>` and `vat audit <path>`. These re-based
+  the crawl onto the given path, discarding every root-relative glob — so naming a subdirectory
+  scanned build output, vendored trees and deliberately-broken fixtures the project had excluded on
+  purpose, turning a green project red. On VAT's own tree `vat resources validate
+  packages/vat-development-agents` reported 50 files / 7 errors where the configured run reported
+  success; it now reports 25 files / 0 errors. The crawl base stays at the project root, the path
+  narrows `include` only, and `exclude` always applies. A path outside the project root warns; a
+  path that does not exist now fails loudly instead of reporting `filesScanned: 0` as success.
+- **BREAKING for `owner/repo` shorthand: `vat audit <path>` never reaches the network for a path
+  that exists.** The command asked "is this a git URL?" before "is this a directory?", and bare
+  GitHub shorthand is spelled exactly like a two-segment relative path — so `vat audit plugins/arc`
+  resolved to `https://github.com/plugins/arc.git`, never audited the local tree, and silently
+  contacted github.com with a name derived from your own directory layout. Anyone registering that
+  `owner/repo` could have had their tree cloned and reported back as your audit. An argument naming
+  an existing file or directory is now always a path; shorthand applies only when nothing of that
+  name exists locally.
+- **BREAKING: `<skill-root>/evals/evals.json` is a declaration in the packaging lane too.** The
+  harness has always defaulted to that path; the packager did not, so the harness protected the eval
+  signal while the build **packaged and published the answer key**. The inference is narrow: keyed
+  on the suite *file* existing, never a directory's name, and only at exactly `<skill-root>/evals`.
+  An explicit `test.evals` still wins. **If you keep a `<skill-root>/evals/evals.json` suite and
+  relied on it shipping, declare its contents through `files:` or move it.**
+- **BREAKING: `${fixturesDir}` resolves per eval, under that eval's own staged workspace.** Because
+  eval-suite isolation removes `<staged>/evals/` from every staged subject, the old target no longer
+  exists. **This supersedes the 0.1.39 note** that fixtures under `evals/fixtures/` auto-stage with
+  the eval tree — they no longer do; a fixture reaches the executor only by being declared in its
+  eval's `files` list. An eval that declares no input `files` has no workspace, so `${fixturesDir}`
+  there now fails at preflight (exit **2**) naming the env key, instead of injecting a path to
+  nowhere.
+- **BREAKING: `vat skill test`'s `--with`/`--with-optional` stage companion skills, and a run tests
+  exactly one subject** (issue [#153](https://github.com/jdutton/vibe-agent-toolkit/issues/153)).
+  `--with name=<src>` stages a **required** companion the subject can invoke; `--with-optional`
+  stages an optional one. This replaces an undocumented behavior where `--with` merely overrode the
+  staging source of an already-listed positional skill and **silently no-op'd** any name that wasn't
+  positional — so a routing/deferral eval could "pass" against a skill set that never contained the
+  companion. The positional argument is now a single `<skill>` (was variadic). A required companion
+  that cannot be resolved fails the run (exit **2**); an optional one is skipped with a warning;
+  staging the same name twice is an error. `skills.config.<skill>.test.with`/`optional` behave the
+  same way — they previously never staged anything. A companion mapping to a declared skill is now
+  **built** rather than tree-copied from raw source, so one backed by a bundled executable no longer
+  stages non-functional and hangs the executor with no diagnostic.
+- **BREAKING: `license: <spdx-id>` in your marketplace config only accepts identifiers VAT can
+  render in full.** `vat claude marketplace publish` vouched for eleven SPDX shortcuts but carried
+  real license text for one. Nine fell through to a two-line stub, and `apache-2.0` emitted only the
+  short-form notice header — written verbatim as the published `LICENSE`, so a `publish` reporting
+  success shipped a distribution whose license file grants nothing (GPL-3.0 §4 and Apache-2.0 §4(a)
+  both require conveying a complete copy of the License). `mit` renders as before; the other ten now
+  fail with an error naming the identifier, linking its canonical text, and telling you to point
+  `license` at a file path (`./LICENSE`), which `publish` has always supported.
+- **BREAKING: `vat skills install` installs a skill under the name it declares, not the name of the
+  directory it arrived in.** Every other lane treats SKILL.md frontmatter as the identity. The
+  command now also says which of its seven targets VAT can see back, and `vat skills list` reports
+  the declared name alongside the directory name.
+- **BREAKING: plugin-local skills are packaged, not copied verbatim.** A skill in a plugin's own
+  `skills/` source tree (`vat claude plugin build`) now goes through the same packaging pipeline as
+  every other skill — link traversal, reference rewriting, nav stripping and `files:` injection.
+- **BREAKING: local RAG embeddings are batteries-included, backed by `onnxruntime-web` (WASM)
+  instead of native `onnxruntime-node`.** No native addon to build. This also fixes **`vat rag
+  index`/`query` exiting 134 on macOS**: the native backend raced LanceDB's native runtime at
+  process teardown and their static destructors could abort with `libc++abi: mutex lock failed`
+  (SIGABRT) **after** the command had already produced correct output.
+- **BREAKING: a link to a file that does not exist reports `LINK_MISSING_TARGET`, not
+  `LINK_TO_GITIGNORED_FILE`.** Three layers composed to name the wrong cause in every real case.
+- **BREAKING: `flushStdout` is removed** from `@vibe-agent-toolkit/cli` (library API only). It had
+  no production callers and was not a harmless no-op — it waited only above `highWaterMark`. The
+  blocking-stdio fix below replaces it.
+- **BREAKING: `vat audit --user` plugin groups are named after the plugin.** The name was read at a
+  fixed offset from `marketplaces/`, which does not hold in Claude Code's real layout.
+- **BREAKING (library API): `validateFrontmatterSchema`, `validateFrontmatterRules`,
+  `detectUndeclaredCrossSkillAuth`, `detectBundledResourceWithoutLinks` and the five inventory
+  detectors take an extra argument** — the skill location / project root. Required rather than
+  optional by design: a defaulted parameter would let existing call sites silently keep the old
+  behaviour. Only affects code importing these directly; no CLI surface changes.
+- **BREAKING: `vat skills build` no longer stops at the first bad skill, and a failed build no longer
+  destroys `dist/skills/`.** It validated skills one at a time and exited on the first failure, after
+  clearing the whole output tree up front — so on a 90-skill adopter monorepo, a run carrying 28
+  errors across 6 skills reported **3 of them, named 1 of the 6, and left `dist/skills` absent**, not
+  merely stale: 27 bundles and 106 files of gitignored, unrecoverable prior output. `vat claude
+  plugin install --dev` symlinks each skill *out of* `dist/skills/` and skips what it cannot find, so
+  the installed plugin ended up with no skills, and a subsequent `vat build --only claude` reported
+  `status: success` with `errors: 0` against input the previous command had deleted. Separately, a
+  skill that failed by *throwing* escaped the batch entirely: a single filename collision discarded
+  all 89 other results and collapsed the report into one bare `error:` string. **The exit code for
+  that case changes 2 → 1** — it is the validation failure it always was, and a collision is now
+  reported as a finding naming its skill by declared name rather than thrown as a raw `Error`.
+
+  Now every skill is validated, every failure collected and contained, and the run reports all of
+  them in one pass, with pre-build validation failure published as its own population distinct from
+  "packaging threw" and "built, then failed validation". Output is written to a staging directory
+  beside `dist/skills` and promoted with a same-filesystem rename only when the run earns it; a
+  failed run restores the previous bundle byte for byte. The report gains `outputCommitted`,
+  `skillsFailedValidation` and `skillsStaged`, and the exit code derives from `outputCommitted`
+  rather than being recomputed. `--dry-run` now touches `dist/` not at all. A failed promotion
+  publishes a `promotionError` naming the parked path and the exact `mv` to recover it, forces
+  `status: error`, and exits **2** *after* writing the document — previously that path threw past
+  the reporting layer and emitted no report at all. The report also **names its findings**: each row
+  carries a full `issues:` array in the shape `vat audit` and `vat skills validate` already publish,
+  where a ~90-skill adopter run previously reported 67 warnings with no `code`, no location and no
+  fix string at any verbosity. Per-skill progress lines name their skill, which at 92 skills is the
+  difference between a readable log and 86 anonymous `Built N files` lines.
+- **BREAKING: `vat skills validate <path>` and `vat skills build <path>` now exit 2 on a path they
+  cannot scope to, instead of reporting success.** A path that does not exist, is not a directory,
+  or holds no `vibe-agent-toolkit.config.yaml` was silently rescoped to nothing and signed off with
+  **exit 0**. A CI step naming a mistyped path passed while validating zero skills; a release step
+  naming one published having built nothing, and reported success. Both errors now name the path and
+  suggest `vat audit <path>` for scanning an arbitrary directory. Only an explicit argument is
+  judged; the bare invocations are unchanged.
+- **BREAKING: `-v` is no longer an alias for `--version`. It now means `--verbose` on every verb
+  that has a `--verbose`.** The root registered `.version(…, '-v, --version')`, and Commander
+  resolves a root option before the subcommand's own — so the short flag silently shadowed the
+  `-v, --verbose` that `validate`, `verify`, `build`, `skills build` and `skills validate` each
+  document in their own `--help`. `vat validate -v` printed the version string and exited **0**
+  having validated nothing, so a CI step spelled that way was a permanently-green gate that ran no
+  checks. Any script relying on `vat -v` to print the version must switch to `vat --version`. `vat
+  audit` and `vat doctor` advertised only the long `--verbose`; both now carry the short form too.
+- **`validation.severity` overrides now work in every lane and in BOTH directions.** The documented
+  opt-out was a partial or total no-op in four places: `vat audit` consulted the merged override map
+  for exactly one value (`!== 'ignore'`), so suppression worked while `error`, `warning` and `info`
+  fell through — an adopter promoting a code to `error` saw `severity: warning`, `errors: 0`,
+  `status: warning`, while `vat verify` on the *same config key* promoted correctly; `vat audit`'s
+  config lookup never searched upward, so auditing `dist/skills/<name>` looked for
+  `vibe-agent-toolkit.config.yaml` *inside the bundle* and skipped severity filtering entirely; the
+  filter only considered results of skill type, so a finding on a **plugin** or marketplace tree
+  kept its severity regardless of config (the load-bearing half — a plugin that intentionally ships
+  a scaffold `CLAUDE.md` *template* lands on a plugin result, which no per-skill key can name); and
+  `vat verify`'s `marketplace:<name>` phase read no project config at all, so two
+  `PACKAGED_AGENT_INSTRUCTION_FILE` warnings survived `ignore` at `skills.defaults`, at every
+  per-skill key, and at the plugin's own name, while its `packaged-content` phase honoured the same
+  key on the same tree.
+
+  `skills.defaults.validation.severity` now applies project-wide, with `skills.config.<name>`
+  layering on top wherever a result names a skill, and one shared resolver serves every lane —
+  skill, plugin, marketplace, required-file and in-plugin-skill findings alike. A promotion moves
+  the reported severity, the result `status`, and `vat claude marketplace validate`'s exit code (1)
+  that `vat verify` reads back as the phase status; it does **not** change `vat audit`'s exit code,
+  which stays advisory. Manifest-unreadable findings are exempt. Per-plugin granularity remains
+  unavailable: neither marketplace config schema has a `validation` key.
+
+### Fixed
+
+**Link integrity and packaging fidelity**
+
+- **Frontmatter schemas declaring JSON Schema draft 2020-12 or 2019-09 now compile.** VAT compiled
+  every external `frontmatterSchema` with Ajv's default export, which carries only draft-07 and
+  older meta-schemas, so a schema declaring the current standard raised `FRONTMATTER_SCHEMA_ERROR`
+  at **error** severity for *every file in the collection* — one adopter saw **247 errors from a
+  single four-property schema**. VAT now selects the Ajv build matching the declared dialect, and
+  also registers the non-canonical `http://` spelling of each dialect URI as an alias.
+- **Root-relative (`/docs/…`) markdown links survive packaging instead of being silently stripped.**
+  The link-graph walker resolved them and **bundled** the target while `ResourceRegistry` left the
+  link unresolved, so the packaged prose lost the link entirely: on one real adopter document the
+  packaged copy carried **4 links where the source had 15**, and the orphaned target then failed the
+  build with an error-severity `PACKAGED_UNREFERENCED_FILE`. Relatedly, a root-absolute link is no
+  longer misreported as `LINK_OUTSIDE_PROJECT`, which produced **81 false errors** on one monorepo.
+- **A markdown link whose target does not ship is stripped to plain text, in every spelling, keeping
+  its own text and inline formatting.** A directory link with a trailing slash (`[refs](refs/)`)
+  survived verbatim and tripped `PACKAGED_BROKEN_LINK`; the same link without the slash, and any
+  non-markdown asset dropped from the bundle, shipped `[text]()`; and two links sharing an href
+  rendered the second with the **first** link's text (VAT's own `vat-skill-review` skill shipped
+  "See cached guidance for a cached copy…" where the author wrote the filename). The inline-link
+  regex also no longer runs past a stray unpaired `[` into the next link.
+- **Link syntax inside fenced code blocks and inline code spans is no longer rewritten**, so a skill
+  *teaching* link syntax ships the spelling a reader must type rather than the packaged path.
+- **`<a id="short">` anchors in markdown resolve instead of being reported as broken links.** VAT
+  indexed heading slugs only, so an explicit short anchor above a long heading produced
+  `LINK_BROKEN_ANCHOR` for a link GitHub resolves — one adopter repointed working links at the long
+  slug to appease the tool. An `id=` inside a code block is still never indexed.
+- **A file declared in `files:` and also linked from `SKILL.md` now ships exactly once, at the
+  destination it declares.** An **explicit** entry shipped twice — at the declared `dest:` and again
+  where the link-follower puts it, with the rewritten link pointing at the second copy, while
+  `filesPackaged` counted the `files:` side alone (reporting 2 where the disk held 4). A **glob**
+  entry had the mirror-image bug: it skipped a file link traversal had already bundled, *before*
+  computing its destination, so the file was missing from the declared `dest` subtree and the build
+  exited 0 — and `integrity: true` did not catch it, the file being in neither the expected set nor
+  the on-disk subtree. The path map is now built in two passes, globs first, explicit second.
+- **`vat skills build` no longer fails on its own `files:` payload.** `PACKAGED_UNREFERENCED_FILE`
+  (severity `error`) fired on files VAT itself had just copied in from a skill's `files:` map — a
+  vendored engine, generated schemas, data packs. Adopters who added `validation.allow` waivers
+  restating their own `files:` map can delete them.
+- **A `files:` remap is now a real remedy for a filename collision.** `FILENAME_COLLISION` was
+  judged on the naming strategy's *would-be* destinations, one step before `files:` entries override
+  them, so an adopter who remapped both colliding sources to distinct dests still had the build
+  failed at **error** severity for a collision that no longer physically occurred. The check now
+  runs against the **final** destination map — and it moved rather than weakened: two `files:`
+  entries pointing at one dest is a genuine collision the old check had no trace of.
+- **A `files:` entry with a directory-shaped `dest` no longer writes a file named after the
+  directory.** `dest: "guides/"` on a non-glob entry silently produced a *file* called `guides`
+  holding the source's bytes. Such a `dest` is now rejected at config-parse time; globs are
+  unaffected, their `dest` being a subtree root.
+- **A `files:` glob with a `..` segment after its static base is now rejected when the config
+  loads.** `source: "dist/gen/**/../../secrets/*"` parsed cleanly, passed `vat skills validate`, then
+  killed the build at copy time. The static base may still begin with `..` (the deliberate
+  sibling-base monorepo feature).
+- **`packagingConfigToPackageOptions` now forwards `excludeNavigationFiles`.** It was dropped in the
+  canonical config→options conversion whose docstring promises byte-for-byte parity, so with the
+  flag `false` the pre-build gate predicted a `README.md` would ship and the build stripped it.
+- **`resources validate` and `skills validate` agree on `files:`-declared build artifacts**, and a
+  `files:` destination is exempt from the gitignore-leak rule even before the build runs — so
+  building the project can no longer turn a previously-passing `vat skills validate` red on its own
+  declared, gitignored output.
+- **A file whose frontmatter fails to parse is no longer also reported as having no frontmatter.** A
+  document with a duplicate YAML key drew both `FRONTMATTER_INVALID_YAML` and `FRONTMATTER_MISSING`,
+  with two conflicting remediations.
+- **`vat verify` now inspects skills discovered by `skills.include` globs, not just those with an
+  explicit `skills.config.<name>` block.** Its in-process phases enumerated config keys, so a
+  glob-discovered skill was silently skipped — and for a project using only `skills.defaults.files`,
+  the `files-config-dests` check was a **total no-op while its phase banner still reported that it
+  ran**. **Adopters should expect new findings** on projects that use `skills.defaults.files` or
+  omit `skills.config`.
+
+**Reports that told the truth about themselves**
+
+- **Piped output is no longer truncated at 64 KB.** Node makes a pipe's stdio non-blocking and every
+  command calls `process.exit()` without draining those buffers, so everything past the first pipe
+  buffer was silently discarded, cut mid-token, **with exit code 0** — breaking exactly the usage
+  the CLI's own docs recommend (`vat command | jq .status`). A large `vat resources scan --verbose`
+  emitted **65,540 bytes through a pipe against 346,937 to a file**, so a consumer read a header
+  claiming 1,322 files above a list containing 293. An interactive TTY is unbuffered and always
+  looked correct. Both streams are now blocking at startup — including stderr, which carries the
+  findings — in both published bins.
+- **`writeYamlOutput` no longer emits a trailing `---`.** In YAML `---` OPENS a document, so every
+  command's stdout was a two-document stream and a plain `YAML.parse()` threw `Source contains
+  multiple documents` — on output this CLI documents as machine-parseable.
+- **`vat audit --user` no longer audits every marketplace-installed plugin twice.** `marketplaces/`
+  lives *inside* `plugins/`, and the user scan walked both recursively, so every finding class was
+  inflated: one real install reported **12** agent-instruction findings for **7** distinct files.
+  Roots contained in another root are now dropped, but only when the walk is recursive.
+- **`vat audit`: info-severity findings are no longer invisible.** The terse renderer decided
+  "nothing to show" from the result's *status*, and an info-only result is `success` — so a real
+  `--user` scan counted 504 info findings and rendered none of the 167 belonging to the 128 skills
+  that had info findings and nothing else. Info findings are also no longer labelled `[WARNING]`.
+- **`vat audit`: a result's status, counts and summary follow its findings, and header totals agree
+  with per-file totals.** A plugin carrying a warning reported `status: success`,
+  `issueCounts: {0,0,0}` and `summary: Valid plugin` in the same entry that listed the warning. One
+  `--user` run reported 55/422/504 in the header against 55/360/405 summed per file — **91 of 614
+  entries declared `{0,0,0}` directly above the findings they listed.** Every total is now derived
+  from one traversal of the final issue set.
+- **The `skills` command family told four inconsistent stories; it now tells one.** Its header
+  reported more warnings than its rows summed to (1814 vs 1800 on a large tree); a `skills` failure
+  produced **zero bytes of stdout** before exiting 2; `vat skills build` and `vat skills package`
+  exited 1 from their validation gate with empty stdout though `--help` documents a summary for
+  exactly that case; and `vat skills package` hardcoded `status: success`, so a skill `vat skills
+  build` reported as `warning` came back `success`. A build that fails only on built-output
+  validation now also shows why.
+- **`vat audit settings` emits the full `overrode` provenance chain** for every effective value,
+  naming each value it replaced down to the lowest-precedence layer — the question the command
+  exists to answer. It was computed and then dropped.
+- **`vat audit --user`: cached skills are matched against their own source.** The cache/source index
+  was keyed by bare skill name; one real scan had 93 collisions across two marketplaces, so cached
+  copies were compared against unrelated same-named skills — reporting `cacheStatus: stale` for
+  byte-identical copies, and able to hide genuinely drifted ones as `fresh`.
+- **`vat verify`, `vat validate` and `vat build` reject a path argument instead of silently
+  discarding it.** Commander accepts excess arguments by default, so `vat verify dist/skills/demo`
+  threw the path away, ran an unscoped whole-project verify, and reported `status: success`; on
+  `vat build` the same defect silently rescoped a command that *writes*. All three now exit 2 naming
+  the discarded argument and pointing at `vat audit <path>` — exit 2 rather than Commander's
+  usage-error 1, because on these commands 1 means "validation errors found".
+- **Build and plugin failure messages no longer publish your absolute filesystem paths into
+  machine-readable stdout.** Four `files:` failure routes interpolated the fully resolved absolute
+  path into `failedSkills[].message` / `failures[].message` — the output adopters paste into CI logs
+  and issue reports — disclosing the operator's home directory and the project's location on disk.
+- **`vat --version` names the binary that produced it.** The `-dev (<path>)` suffix was derived from
+  the *current directory*, not the binary, so a development build run by absolute path from another
+  repository printed a version string byte-identical to the released one — precisely the situation
+  every adopter integration test runs in. The output now carries a `binary:` line derived from the
+  entry module Node actually loaded; the version still comes first, so `--version | head -1` parses
+  as before.
+**Crashes, hangs and stalls**
+
+- **`vat skill test run` no longer crashes on Windows with `spawn EINVAL`.** On Windows `claude`
+  resolves to an npm `.cmd` shim, and since the Node CVE-2024-27980 fix a bare `spawn` of a `.cmd`
+  throws synchronously — so the harness died the instant it tried to launch the session (reported by
+  an adopter across cmd.exe, PowerShell and Git Bash). Spawning now detects `.cmd`/`.bat`/`.ps1`
+  shims and launches them through the shell with per-arg quoting. In-flight grader/executor children
+  are also killed before the harness exits, rather than left running and billing tokens.
+- **`vat audit` no longer dies on a single unreadable file.** One markdown file the process could
+  not open — anywhere under the crawl root — aborted the whole command with `status: error` and exit
+  **2**, returning none of the findings already gathered. It now degrades to one `parseError` per
+  affected skill.
+- **`vat audit <owner>/<repo>` no longer stalls ~60 seconds on a git credential prompt.**
+  Interaction is disabled for the clone, but **only when the URL was inferred from shorthand**, so
+  someone who typed a full URL for a private repo can still authenticate. `GIT_TERMINAL_PROMPT=0`
+  alone was measured to be insufficient: every askpass hook short-circuits the terminal path before
+  that variable is consulted, so an editor exporting `GIT_ASKPASS` would have kept the entire stall.
+- **`vat build --only` with an unroutable phase prints a structured document instead of a stack
+  trace.** It threw from outside the command's try block, so the user got a raw Node stack, **zero
+  bytes of stdout**, and an exit 1 indistinguishable from "validation errors". The message was also
+  self-refuting: *"Unknown phase: claude. Valid phases: skills, claude."*
+
+**Performance**
+
+- **`vat audit` re-did the most expensive thing VAT owns once per skill; it now does it once per
+  project root.** On a ~1,200-document monorepo, auditing a directory of 46 skills did not complete
+  in ten minutes while `vat resources validate` scanned the same tree in seconds. Two independent
+  causes: the inventory link walk crawled with `respectGitignore: false`, which also means "include
+  everything git is told to ignore" and abandons `git ls-files` for a full recursive walk of every
+  build cache and nested worktree — **39,599 ms versus 16 ms**, for 1,146 files versus 1,143; and
+  the registry was rebuilt per skill, parsing every markdown document under the project root (~20 s
+  on that tree) N times over. Auditing a plugin directly went from **369 s to 42 s** for 2 skills
+  and is now effectively flat in skill count (a 19-skill plugin audits in 27 s).
+- **`vat claude plugin build` no longer re-reads the whole project once per skill.** The cost was
+  fixed per skill and independent of the skill's own size: on a monorepo with 1,039 markdown files a
+  1-file skill and a 17-file skill each cost **~25 s**, putting a 46-skill build past a 30-minute CI
+  cap with no output during the gaps. The registry is now created once per run and threaded through
+  (**~2× faster** per skill). `vat skills build` was never affected.
+
+**Discovery and detection**
+
+- **A newly-authored, uncommitted `SKILL.md` is now discovered.** Discovery crawled via
+  `git ls-files`, which lists only tracked files, so a brand-new skill was invisible: `vat skills
+  validate` silently reported one fewer skill and exited 0, and `vat skills build` did not ship it.
+  Nothing warned — the count was the only tell.
+- **`vat audit --user`: 52 of 59 errors were false; the run goes 59 → 7.** VAT modelled Claude
+  Code's installed-plugins registry and `known_marketplaces.json` — maximally external data — with
+  `.strict()` schemas, a non-optional `isLocal` that current Claude Code never writes, and a `scope`
+  union missing the `project` and `local` values the real file contains. Drift stays visible via the
+  new `REGISTRY_SHAPE_DRIFT`.
+- **`ALLOW_UNUSED` is evaluated across the whole run instead of per skill.** `validation.allow` is
+  declared per *package* but unused-ness was computed per *skill*, so an entry scoped to two files
+  was reported unused by every other skill — **87 false warnings from 3 legitimate entries** on
+  VAT's own 13-skill package, and 32 on `vat build` from a second, independent cause. Both go to 0,
+  with all entries still listed under "Allowed issues" so the zero is a true answer rather than a
+  suppression. A genuinely dead entry still yields exactly one warning for the run.
+- **The bundled-resource-link detector can fire on `.md` files at all.** It hardcoded
+  `['scripts','references','assets']` while the routing module that calls itself the single source
+  of truth routes `.md` and every unknown extension to `resources/`, so the most common bundled
+  shape was structurally unreachable; coverage was also computed per *directory*, so one live
+  mention marked a whole directory referenced. Measured over the plugin corpus fixture: **6 → 19
+  findings, 0 lost.**
+- **`vat audit` no longer reports 179 real Python standard-library modules as third-party
+  dependencies.** `PYTHON_IMPORT_THIRD_PARTY` classified imports against a hand-typed list of 151
+  modules, so `import zoneinfo`, `import fcntl`, `import wsgiref` and 176 others were reported as
+  depending on packages that do not exist. The list is now generated from CPython's own
+  `sys.stdlib_module_names`, unioned across Python 3.10–3.14.
+- **An external link no longer changes verdict between the first run and the second.** The
+  fresh-fetch path judged "alive" against an exact allowlist while the cache-read path used a
+  `>= 200 && < 400` range, so twelve status codes failed one run and then passed for the next 24
+  hours off the persistent cache — self-concealing, since it disappeared on exactly the retry you
+  would run to reproduce it.
+- **`CLAUDE_CONFIG_DIR` is now normalised once, where it is read.** An empty or whitespace-only
+  value — `CLAUDE_CONFIG_DIR=`, the ordinary way a shell or CI env block clears a variable — was not
+  caught by the `??` default, so `$cwd/skills` and `$cwd/plugins` were treated as Claude install
+  roots. A relative value made the answer depend on the working directory, and a `~/`-prefixed one
+  (never expanded inside a `.env` file) resolved to `$cwd/~/.claude`, silently disabling
+  install-root detection altogether. The value is now trimmed, treated as absent when blank,
+  `~`-expanded and resolved at its single read site. Install-root comparisons additionally
+  canonicalise both sides, so a symlinked Claude config directory — and, on macOS/Windows, a
+  case-variant spelling of an ordinary repository path — no longer flips the verdict.
+
+**Other**
+
+- **The Vercel AI SDK adapters no longer discard an explicit `temperature: 0`.** Both
+  `llm-analyzer` and `conversational-assistant` spread the setting through a truthiness guard, so
+  the one value a caller is most likely to set deliberately — deterministic output — was silently
+  replaced by the provider default. The same guard dropped `maxTokens: 0`. Both are now guarded on
+  `!== undefined`.
+- **`author.url` in your `plugin.json` is no longer destroyed by the plugin build.** `vat claude
+  plugin build` replaced the whole `author` object with `{name, email}` built from the marketplace
+  `owner`, and Claude's manifest supports `author.url` while VAT's config has no field for it — so
+  an adopter who wrote `author: {name, email, url}` lost the URL on every build **with no config
+  field to restore it**. `author` is now merged per subfield: `name` and `email` come from `owner`,
+  everything else passes through untouched.
+- **`vat rag` no longer silently degrades embeddings when the configured model is not BERT-shaped.**
+  The local ONNX provider accepted any HuggingFace model id and loaded that model's own `vocab.txt`,
+  but framed every sequence with **hardcoded** BERT special-token ids. Point it at a RoBERTa-derived
+  encoder and those ids are arbitrary wordpieces while padding is written as `<s>` rather than
+  `<pad>` — the vocab parses, dimensions match, no exception, no warning, and `vat rag index` builds
+  a quietly worse index forever. Special-token ids are now read from the loaded vocabulary, and a
+  vocabulary that does not define them fails at **load** time with an `IncompatibleVocabError`
+  naming the model, the file, and the missing tokens. There is deliberately no bypass flag.
+- **Two remediation strings no longer prescribe the wrong fix.** `PACKAGED_UNREFERENCED_FILE` and
+  `SKILL_REFERENCES_BUT_NO_LINKS` told you to waive the finding via `validation.allow`; both now
+  point at `skills.config.<name>.files`, where a declared `dest` is exempt outright. The old
+  phrasing led one adopter to hand-write ~130 lines of waivers duplicating their own `files:` map.
+- **VAT's published skill-review rubric no longer attributes VAT's own rules to Anthropic.**
+  Re-verified against the live best-practices page, which showed **no vendor drift** — every numeric
+  limit unchanged. Three items marked `[A]` are VAT's own and are now `[VAT]`, and the rubric records
+  where VAT *under*-enforces the vendor: `REFERENCE_TOO_DEEP` fires only above 2 hops, so a chain
+  that is Anthropic's own "Bad example: Too deep" passes validation. **No threshold value changed.**
+- **`vat claude org`'s not-yet-implemented stubs no longer promise a release that already shipped.**
+  They emitted `plannedFor: "0.1.22"` from a package 19 releases later. The version literal is gone
+  rather than bumped, since any literal re-creates the same rot.
 
 ### Notes for adopters
 
-- **Fixed: `vat rag index`/`query` no longer exits 134 on macOS.** The previous native embedding backend (`onnxruntime-node`, loaded transitively via `@xenova/transformers`) raced LanceDB's native runtime at process teardown — their static destructors could abort with `libc++abi: mutex lock failed` (SIGABRT, exit 134) **after** the command had already produced correct output. Replacing it with `onnxruntime-web` (WASM, no native addon, no static destructors) removes the race entirely; `vat rag index`/`query` now exits 0 on macOS. The RAG-CLI dogfooding system tests are un-skipped accordingly.
-- The `--allow-eval-failure` opt-out (from 0.1.40) also downgrades a **fail-fast-gated** run to exit **0** — consistent with how it downgrades any eval failure, but worth knowing if you gate CI on tiered runs.
-- **`mustRun` means *invoked*; use `mustSucceed` for *worked*.** `mustRun` passes as long as the tool ran, even if it errored. If you care that it actually succeeded, use `mustSucceed` (above) — and remember both are transcript-judged, so a swallowed non-zero exit can still read as success.
-- **`tool-eval.json` is always written** (`{"evals": []}` when no eval declares `toolExpectations`) so the fail-closed artifact check has something to read — consumers should check `.evals.length`, not file existence.
-- A malformed **friction** item from the grader (e.g. a bare string instead of the object shape) is now **dropped with a warning** rather than aborting the run — friction is advisory, so it never discards the verdict-bearing grading. The grader prompt also spells out the friction object shape and scopes friction to packaging fidelity. *(Hardening from real-adopter beta testing of this feature.)*
-- **`mustSucceed` is transcript-judged — a captured exit code is the honest ceiling.** Because `Bash` reports `is_error: false` on a swallowed non-zero exit, ground-truth tool success needs a captured/observed exit code. Two fast-follows track the stronger guarantees: nudging the executor to echo exit codes so `mustSucceed` is near-deterministic ([#150](https://github.com/jdutton/vibe-agent-toolkit/issues/150)), and naming the ceiling explicitly alongside separate-uid isolation ([#151](https://github.com/jdutton/vibe-agent-toolkit/issues/151), [#149](https://github.com/jdutton/vibe-agent-toolkit/issues/149)).
+- **`mustRun` means *invoked*; use `mustSucceed` for *worked*.** `mustRun` passes as long as the
+  tool ran, even if it errored. Both are transcript-judged, so a skill that swallows a non-zero exit
+  (`cmd || true`) can still read as success — pair it with an output expectation when you need
+  certainty. Tracked in [#150](https://github.com/jdutton/vibe-agent-toolkit/issues/150).
+- **`tool-eval.json` is always written** (`{"evals": []}` when no eval declares `toolExpectations`)
+  so the fail-closed artifact check has something to read — check `.evals.length`, not file
+  existence.
+- **`--allow-eval-failure` (from 0.1.40) also downgrades a fail-fast-gated run to exit 0** —
+  consistent with how it downgrades any eval failure, but worth knowing if you gate CI on tiered
+  runs.
+- **`status: warning` on a warnings-only project is deliberate.** `success` means "nothing you must
+  act on", not "nothing to see" — so a CI gate should read `issueCounts.errors` or the exit code,
+  both of which stay `0` through any number of warnings.
 
 ## [0.1.40] - 2026-07-12
 
@@ -214,7 +682,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Declared test-env passthrough.** `passEnv` / `--pass-env` forwards host variables; `env` / `--env` injects values with `${fixturesDir}` / `${stagedSkillDir}` / `${harnessRoot}` / `${resultsDir}` interpolation. Both apply *after* the security allowlist — protected names always win, so committed test config can neither reroute your account credentials nor inject code: auth credentials, `PATH`, and credential-routing variables (`ANTHROPIC_BASE_URL` and the other endpoint/proxy overrides, `NODE_OPTIONS`, `NODE_EXTRA_CA_CERTS`) cannot be overridden. Fixtures under the skill's `evals/fixtures/` auto-stage with the eval tree.
   - **Project-aware subject resolution.** Name a skill declared in `vibe-agent-toolkit.config.yaml` and `run` builds it first and tests the shipping **dist** — link-following, reference-rewriting, nav-stripping, and `files:` injection all applied — so you exercise exactly what installs, not the source tree. A path (including an already-built dist dir), or a `workspace:` / `npm:` / `url:` / `path:` / `vendored` source, is tested as-is; use `./<name>` to force a local directory over a colliding declared name. `--no-build` stages an existing dist without rebuilding (and errors if it is absent); `--dry-run` assembles the command without building and flags when the previewed dist may be stale, and — when no `evals.json` exists yet — reports where a real run *would* scaffold the template (exit 3) instead of writing it, so a dry run never touches your tree. A build failure fails fast at preflight (exit 2), before any tokens are spent.
   - **Eval `files` are now provisioned.** Each eval's declared input files are staged into a per-eval working directory the executor operates on, enabling realistic "drop the agent in a project" evals. Files resolve relative to the `evals.json` directory and are materialized under `<harnessRoot>/workspaces/<id>/`; the experimenter prompt hands the executor that directory via a new `{{WORKSPACES_ROOT}}` token. A declared-but-missing input file fails fast at preflight (exit 2). Previously `files` was documented but inert.
-  - **Merge-readiness: liberal eval-suite schema, macOS subscription-auth fix, expanded skill, first dogfood suite.** (1) `evals.json` is adopter-authored data VAT *reads*, so its schema is now liberal per VAT's Postel's Law: `EvalSuiteSchema`/`EvalEntrySchema` are `.passthrough()` and `id` accepts a descriptive **string** or an int — only the fields VAT consumes (`prompt`, `expected_output`, `expectations`) stay required. This reverses the earlier strict-parser call that rejected real adopter suites three ways (string `id`, `category`, `_category_note`) and restores compatibility for the flagship adopter (app-platform/dxa). The persisted `test:` *config* block stays **strict** (it's VAT-produced config) — the deliberate inverse. (2) **macOS subscription-auth fix:** the harness env allowlist (`buildForwardedEnv`) dropped the POSIX `USER`/`LOGNAME` vars, so on macOS `claude auth status` could not read the login Keychain with the API key scrubbed — `--auth subscription` (and `inherit`'s subscription fallback) wrongly failed preflight, and the experimenter child could not authenticate. `USER`/`LOGNAME` are now forwarded (non-secret; already derivable from the forwarded `HOME`). (3) The `vibe-agent-toolkit:vat-skill-testing` skill gains a research-grounded "Authoring `evals.json`" section (blind realistic prompts, discriminating + negative expectations, categories, fixtures, `--baseline` skill-lift, grading) and a full flag⇄config knob table. (4) Ships the first committed VAT dogfood suite (`vat-skill-review`, 5 evals across catch-violation / no-false-positive / guidance-correctness) wired via `skills.config.vat-skill-review.test`, with eval fixtures excluded from `vat resources validate`.
+  - **Merge-readiness: liberal eval-suite schema, macOS subscription-auth fix, expanded skill, first dogfood suite.** (1) `evals.json` is adopter-authored data VAT *reads*, so its schema is now liberal per VAT's Postel's Law: `EvalSuiteSchema`/`EvalEntrySchema` are `.passthrough()` and `id` accepts a descriptive **string** or an int — only the fields VAT consumes (`prompt`, `expected_output`, `expectations`) stay required. This reverses the earlier strict-parser call that rejected real adopter suites three ways (string `id`, `category`, `_category_note`) and restores compatibility for the flagship adopter's suites. The persisted `test:` *config* block stays **strict** (it's VAT-produced config) — the deliberate inverse. (2) **macOS subscription-auth fix:** the harness env allowlist (`buildForwardedEnv`) dropped the POSIX `USER`/`LOGNAME` vars, so on macOS `claude auth status` could not read the login Keychain with the API key scrubbed — `--auth subscription` (and `inherit`'s subscription fallback) wrongly failed preflight, and the experimenter child could not authenticate. `USER`/`LOGNAME` are now forwarded (non-secret; already derivable from the forwarded `HOME`). (3) The `vibe-agent-toolkit:vat-skill-testing` skill gains a research-grounded "Authoring `evals.json`" section (blind realistic prompts, discriminating + negative expectations, categories, fixtures, `--baseline` skill-lift, grading) and a full flag⇄config knob table. (4) Ships the first committed VAT dogfood suite (`vat-skill-review`, 5 evals across catch-violation / no-false-positive / guidance-correctness) wired via `skills.config.vat-skill-review.test`, with eval fixtures excluded from `vat resources validate`.
 - **`files:` entries now support glob sources and an optional `integrity` byte-verify.** A `source` containing glob magic (`*`, `**`, `?`, `[`) fans out into a directory `dest`, preserving the directory structure below the static base (glob is VAT's existing idiom, as in `skills.include` — no `recursive` flag). Globbed dests are late-bound, so `SKILL.md` links into them are treated as deferred artifacts at validate time (no `LINK_TO_GITIGNORED_FILE` allowlist needed). Add `integrity: true` to byte-verify the copy at build time and assert an exact dest subtree for glob entries.
 - **`NON_PORTABLE_ASSET_REFERENCE` validation code (default `warning`) — a portability check family.** `vat skills validate` / `vat audit` now flag a skill document that references a bundled script/asset via a non-portable anchor, scanning the `SKILL.md` body **and every reachable bundled markdown doc** (agents copy invocations from reference files too). It's a family of sub-checks under one code — `claude-plugin-root`, `claude-project-dir`, and `absolute-script-path` — each finding names the variant and carries a tailored fix, and a single `validation.allow` entry silences the whole family for a file. These anchors don't exist when a skill is mounted standalone (claude.ai upload, API container), so the path breaks on the agent's first invocation; reference bundled files relative to the skill directory instead. See [`NON_PORTABLE_ASSET_REFERENCE`](docs/validation-codes.md#non_portable_asset_reference).
 - **Skill-authoring guidance: portable bundled-script paths.** The `vibe-agent-toolkit:vat-skill-authoring` skill now documents how to reference bundled scripts/assets portably (relative to the skill directory, never `CLAUDE_PLUGIN_ROOT`/absolute/env-var anchors), and `vibe-agent-toolkit:vat-skill-review` carries the matching pre-publication checklist item.
@@ -259,12 +727,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`vat build` now fails when a shipped Claude plugin skill has a broken packaged link.** `vat claude plugin build` never ran a post-assembly link check on the plugin output tree — only the pool packaging path did. A plugin skill whose shipped links were broken (e.g. relative links that assumed pool-packaging relocation but the skill was verbatim tree-copied) previously shipped silently. `vat build` now runs the existing depth-free `checkBrokenPackagedLinks` check against every shipped skill dir after the `claude` phase and fails the build with a `PACKAGED_BROKEN_LINK` error on any dead link. The check is scoped per skill dir — a skill is a self-contained portable unit, so a link that escapes its own directory (even to a sibling skill that co-ships in the same plugin) is a broken shipped link.
 - **`vat claude plugin build` no longer double-produces a skill that is both pool-selected and present in the plugin's own `skills/` source tree.** Tree-copy (verbatim, unaware of packaging) and pool-import (packaged, link-rewritten) never coordinated — a skill claimed by both mechanisms shipped as two coexisting copies at different depths inside the same `skills/<name>/` directory, with the raw tree-copy carrying un-rewritten (and therefore potentially dead) relative links. The plugin's resolved pool selector is now excluded from the verbatim tree-copy before it runs, so the pool-packaged copy is the sole source for a colliding skill; the build prints a warning naming the skill and both sources. Non-colliding tree-copy and pool-import usage is unaffected.
 - **`validateSkill` no longer silently reports a boundary-escaping AND missing link as a warning-only boundary notice.** `validateLocalLink`'s boundary-escape check returned before the existence check ever ran, so a link that both escaped the skill directory boundary and pointed at a non-existent file was classified `LINK_OUTSIDE_PROJECT` (warning) and never surfaced as broken — this is why `vat claude marketplace validate` could report a shipped tree with a dead, boundary-escaping link as 0 errors. Existence is now checked before boundary classification: a missing target is always `LINK_INTEGRITY_BROKEN` (error), regardless of whether it also escapes the boundary. A link that escapes the boundary but resolves to an existing file is unaffected (still a warning).
-- **Skill-test eval-suite schema hardened after an adversarial review of the Postel liberalization.** Four issues the `id`/passthrough widening introduced or left open, all verified against the real `dxa` adopter suites in `app-platform`:
-  - **String eval ids are now validated as filesystem-safe path segments** (`[A-Za-z0-9_-]+`). A string `id` names a per-eval working directory, and the experimenter substitutes it verbatim into `<workspaces>/<id>`; an id like `year:extraction` previously passed parse, then failed on Windows (illegal filename) — surfacing as a *misleading* "escapes the eval directory" copy error. Rejected at parse with a clear message instead. dxa's hyphenated ids (`dollar-quote-recovery`) are unaffected.
+- **Skill-test eval-suite schema hardened after an adversarial review of the Postel liberalization.** Four issues the `id`/passthrough widening introduced or left open, all verified against a real adopter's eval suites:
+  - **String eval ids are now validated as filesystem-safe path segments** (`[A-Za-z0-9_-]+`). A string `id` names a per-eval working directory, and the experimenter substitutes it verbatim into `<workspaces>/<id>`; an id like `year:extraction` previously passed parse, then failed on Windows (illegal filename) — surfacing as a *misleading* "escapes the eval directory" copy error. Rejected at parse with a clear message instead. Hyphenated ids are unaffected.
   - **Numeric `1` and string `"1"` no longer slip past the uniqueness check.** Ids are deduped on their stringified form, since both name the same workspace directory and would otherwise silently clobber each other's staged files.
   - **A near-miss typo of the optional `files` field is now flagged** (`filez` → "did you mean files?"). Under plain `.passthrough()` such a typo was silently swallowed and the eval ran in an empty workspace. The check is a single-edit match scoped to recognized fields, so legitimate adopter extras (`name`, `category`, `notes`, `_category_note`) still pass through untouched.
   - **`stageEvalWorkspaces` no longer mislabels copy failures as containment escapes.** Containment (`joinUnderRoot`) and the filesystem copy are now in separate try/catch blocks, so a permission/illegal-filename/disk error reports accurately instead of as "escapes the eval directory."
-- **Skill-test `expected_output` is now optional, and is fed to the grader as context when present.** The pass/fail verdict is always decided per `expectations` entry, so `expected_output` is no longer required (per Postel's Law) — this unblocks real adopter suites (e.g. `dxa-consumption`) that grade with `expectations` alone. Previously the field was accepted but consumed by nothing; the experimenter prompt now passes it to the grader as the author's prose description of a correct result, informing judgment without becoming a checklist item. Still validated as a non-empty string when present.
+- **Skill-test `expected_output` is now optional, and is fed to the grader as context when present.** The pass/fail verdict is always decided per `expectations` entry, so `expected_output` is no longer required (per Postel's Law) — this unblocks real adopter suites that grade with `expectations` alone. Previously the field was accepted but consumed by nothing; the experimenter prompt now passes it to the grader as the author's prose description of a correct result, informing judgment without becoming a checklist item. Still validated as a non-empty string when present.
 - **`vat claude plugin build` now copies a tree-copied skill's `files:` artifacts into the distributed plugin (#127).** A skill that ships build-provided artifacts in its own directory via `files: [{ source, dest }]` but lives in a plugin's source tree was distributed by a verbatim tree-copy that skipped its `files:` step, so the shipped plugin was missing those artifacts. Build now applies each tree-copied skill's `files:` config into `skills/<name>/`, exactly as it already does for shared-pool skills — removing the need for an external inject-into-dist script (which VAT couldn't see, producing false `LINK_TO_GITIGNORED_FILE` and `missing-bundled-file` findings).
 - **`vat verify` no longer false-flags skills in plugins distributed by verbatim tree-copy (`vat build --only claude`).** A plugin that ships its skills by copying its own `skills/` tree (`source:` set, `skills: []`) builds correctly, but two verify checks still assumed the shared-skill-pool model and failed a byte-correct artifact: `files-config-dests` looked for a skill's `files:` dests only under `dist/skills/<name>/` and missed the plugin tree where build actually wrote them, and `PUBLISHED_SKILL_NOT_IN_PLUGIN` was blind to `source:`, flagging every skill a tree-copy plugin ships. Both checks (and `vat build`) now agree on where a tree-copied skill lands, so the false failures are gone. (Whether private `.claude/skills/**` skills should count as "published" is unchanged and tracked separately.)
 - **`ExternalLinkValidator.clearCache()` and `getCacheStats()` now operate on both caches (issue #113).** Slice 2 introduced a second cache instance for authenticated-link results (per-OS-user scoping); the existing `clearCache()` / `getCacheStats()` methods continued to touch only the anonymous cache, so an adopter rotating a token would see stale `401`/`403` entries until the auth cache TTL expired. Both methods now clear/sum across both caches.
@@ -493,7 +961,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.35] - 2026-05-09
 
 ### Added
-- **Multi-plugin marketplaces with independent versioning.** Each plugin in a marketplace can now declare its own version (in `plugins/<name>/.claude-plugin/plugin.json:version` or via the marketplace config's per-plugin `version` field), get its own per-plugin source-repo tag (`<plugin>-v<version>`) on `vat claude marketplace publish`, and ship its own CHANGELOG (default `<plugin.source>/CHANGELOG.md`, override via the per-plugin `changelog` field) bundled into the published marketplace at `plugins/<name>/CHANGELOG.md`. The published `marketplace.json` includes `version` per plugin entry when defined. Marketplaces with no per-plugin version inherit the root `package.json:version` (backwards compatible — exercised by integration test scenario 3 against the existing avonrisk-sdlc shape). Unblocks the AvonRiskBuilders marketplace where each topical plugin must version and release independently.
+- **Multi-plugin marketplaces with independent versioning.** Each plugin in a marketplace can now declare its own version (in `plugins/<name>/.claude-plugin/plugin.json:version` or via the marketplace config's per-plugin `version` field), get its own per-plugin source-repo tag (`<plugin>-v<version>`) on `vat claude marketplace publish`, and ship its own CHANGELOG (default `<plugin.source>/CHANGELOG.md`, override via the per-plugin `changelog` field) bundled into the published marketplace at `plugins/<name>/CHANGELOG.md`. The published `marketplace.json` includes `version` per plugin entry when defined. Marketplaces with no per-plugin version inherit the root `package.json:version` (backwards compatible — exercised by integration test scenario 3 against an existing adopter marketplace shape). Unblocks a multi-plugin adopter marketplace where each topical plugin must version and release independently.
 
 ### Changed
 - **Version precedence in `mergePluginJson` flipped.** When both a marketplace-config version and a `plugin.json:version` are present, config wins (with a reconciliation warning); when only `plugin.json:version` is present, it now wins over the root `package.json` version. Previously the root version always won. Single-version marketplaces (no per-plugin version anywhere) are unaffected.
@@ -558,7 +1026,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `vat verify --cwd packages/vat-development-agents`: 12.68s → 2.85s (~4.4x)
   - `vat skills validate packages/vat-development-agents`: 10.05s → 1.44s (~7x)
 - No observable output changes for `vat audit` / `vat skills validate` / `vat verify` — YAML output diffs clean pre/post across all three commands except wall-time fields. One internal shift worth noting: `@vibe-agent-toolkit/discovery`'s `LocalScanner.scan()` now instantiates and eagerly `initialize()`s a `GitTracker` on every call so in-project gitignore checks are O(1); this adds a single `git ls-files` spawn per scan invocation (was effectively a no-op when only one file was scanned). New `GitTracker` APIs (`hasActiveDescendant`, `isIgnoredByActiveSet`) are non-breaking additions; `initialize()` accepts an options bag with `includeUntracked` defaulting to `true`.
-- **Final spawn sweep (post-rc.3).** Two independent spawn-eliminations that together recover the rc.2 baseline and beat it for single-config projects. (1) `vat audit` now caches `discoverSkillsFromConfig` by governing-config root, so per-skill walk-up resolution no longer re-expands the same config's globs N times for an N-skill package. (2) `packages/resources/src/link-validator.ts` switched both `gitTracker.isIgnored()` call sites (source + target) to `isIgnoredByActiveSet`, which answers O(1) against the pre-populated active set for in-project paths. Link validation fires per link and skills typically have dozens of links, so this was the largest remaining spawn source in the audit hot path. Post-fix medians (M-series Mac, 3 runs): VAT self `vat audit .` ~2.5s (recovered rc.2 baseline after rc.3's ~12% regression); vibe-validate `vat audit .` 0.96s → ~0.20s (~5x faster); avonrisk-sdlc `vat audit .` 5.43s → ~4.0s. Windows sees roughly 2x these wins since process-spawn overhead there is ~10x higher than on Linux.
+- **Final spawn sweep (post-rc.3).** Two independent spawn-eliminations that together recover the rc.2 baseline and beat it for single-config projects. (1) `vat audit` now caches `discoverSkillsFromConfig` by governing-config root, so per-skill walk-up resolution no longer re-expands the same config's globs N times for an N-skill package. (2) `packages/resources/src/link-validator.ts` switched both `gitTracker.isIgnored()` call sites (source + target) to `isIgnoredByActiveSet`, which answers O(1) against the pre-populated active set for in-project paths. Link validation fires per link and skills typically have dozens of links, so this was the largest remaining spawn source in the audit hot path. Post-fix medians (M-series Mac, 3 runs): VAT self `vat audit .` ~2.5s (recovered rc.2 baseline after rc.3's ~12% regression); vibe-validate `vat audit .` 0.96s → ~0.20s (~5x faster); a large adopter monorepo `vat audit .` 5.43s → ~4.0s. Windows sees roughly 2x these wins since process-spawn overhead there is ~10x higher than on Linux.
 
 ## [0.1.32] - 2026-04-19
 
@@ -574,7 +1042,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New validation codes: `CAPABILITY_LOCAL_SHELL`, `CAPABILITY_EXTERNAL_CLI`, `CAPABILITY_BROWSER_AUTH` (info); `COMPAT_TARGET_INCOMPATIBLE`, `COMPAT_TARGET_NEEDS_REVIEW` (warning); `COMPAT_TARGET_UNDECLARED` (info).
 - Validation-rule-design doc at `docs/validation-rule-design.md` articulating rule-addition bar, default severity posture, graduation path, and data-driven evolution. Referenced from `docs/validation-codes.md`.
 - Cached Anthropic skill-authoring best-practices doc at `docs/external/anthropic-skill-authoring-best-practices.md` with attribution, source URL, and fetch date. Provides a diffable reference so VAT's tooling stays aligned with upstream Anthropic guidance. CLAUDE.md documents the periodic-refresh policy.
-- `vat-skill-review.md` (formerly `skill-quality-checklist.md`) rewritten with `[A]` / `[VAT]` tags distinguishing Anthropic-aligned items from VAT-opinionated additions. Added gerund-form naming guidance (Anthropic's preferred pattern), frontmatter-key conservatism, cross-skill dependency disclosure, in-package YAML-styling consistency, and large-tables-to-reference-files guidance — all from dogfood findings across 17 real skills (8 avonrisk-sdlc + 1 vibe-validate + 8 VAT dev-agents).
+- `vat-skill-review.md` (formerly `skill-quality-checklist.md`) rewritten with `[A]` / `[VAT]` tags distinguishing Anthropic-aligned items from VAT-opinionated additions. Added gerund-form naming guidance (Anthropic's preferred pattern), frontmatter-key conservatism, cross-skill dependency disclosure, in-package YAML-styling consistency, and large-tables-to-reference-files guidance — all from dogfood findings across 17 real skills (8 from an adopter repo + 1 vibe-validate + 8 VAT dev-agents).
 - Five new skill-quality validation codes, all non-blocking:
   - `SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT` (warning): description > 250 chars — Claude Code's `/skills` listing truncation limit since v2.1.86.
   - `SKILL_DESCRIPTION_FILLER_OPENER` (warning): description opens with `This skill...`, `A skill that...`, `Used to...`, `Use when you want to...`, or `Use when you need to...`.
@@ -615,7 +1083,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Three directory-targeted markdown links in VAT docs (`CLAUDE.md`, `docs/README.md`, `docs/getting-started.md`) now point at specific files, silencing the corresponding `LINK_TARGETS_DIRECTORY` errors on VAT's own docs.
 
 ### Performance
-- **~4x speedup on monorepo-scale `vat audit`.** `gitCheckIgnoredBatch` (used by the audit walker for every directory it visits) was unconditionally running a per-path `isGitIgnored` fallback after the batch `git check-ignore --stdin` call — spawning one git subprocess per non-ignored path even when the batch's results were authoritative. The fallback now only runs when the batch exits 128 (the fatal "beyond a symbolic link" case it was designed for), per git's documented exit-code semantics. Measurements on the VAT monorepo: `vat audit .` drops from ~30s → ~7s on this laptop. Correctness verified on `avonrisk-sdlc` (which has gitignored symlinks into OneDrive) — audit produces the same zero-error, same-warning output in ~7s.
+- **~4x speedup on monorepo-scale `vat audit`.** `gitCheckIgnoredBatch` (used by the audit walker for every directory it visits) was unconditionally running a per-path `isGitIgnored` fallback after the batch `git check-ignore --stdin` call — spawning one git subprocess per non-ignored path even when the batch's results were authoritative. The fallback now only runs when the batch exits 128 (the fatal "beyond a symbolic link" case it was designed for), per git's documented exit-code semantics. Measurements on the VAT monorepo: `vat audit .` drops from ~30s → ~7s on this laptop. Correctness verified on an adopter repo that has gitignored symlinks into cloud-synced storage — audit produces the same zero-error, same-warning output in ~7s.
 
 ### Removed
 - **BREAKING:** `COMPAT_REQUIRES_BROWSER_AUTH`, `COMPAT_REQUIRES_LOCAL_SHELL`, `COMPAT_REQUIRES_EXTERNAL_CLI` codes (replaced by `CAPABILITY_*` + `COMPAT_TARGET_*`).
