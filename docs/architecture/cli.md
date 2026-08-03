@@ -83,13 +83,21 @@ Context detection in `packages/cli/src/bin/vat.ts` spawns the actual CLI with `V
 ```bash
 # Dev mode
 vat --version → 0.1.0-dev (/Users/jeff/Workspaces/vibe-agent-toolkit)
+                 binary: /Users/jeff/Workspaces/vibe-agent-toolkit/packages/cli/dist/bin.js
 
 # Local install
 vat --version → 0.1.0 (local: /path/to/project)
+                 binary: /path/to/project/node_modules/@vibe-agent-toolkit/cli/dist/bin.js
 
 # Global install
 vat --version → 0.1.0
+                 binary: /usr/local/lib/node_modules/vibe-agent-toolkit/…/dist/bin.js
 ```
+
+The `binary:` line is unconditional and derived from the entry module itself, not from the cwd.
+The context label above it *is* cwd-derived, so the same build invoked by absolute path from
+another repo reports `global` and would otherwise print a version indistinguishable from the
+released one — which is precisely the situation every adopter delta test runs in.
 
 ## Command Structure
 

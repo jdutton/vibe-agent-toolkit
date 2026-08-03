@@ -9,13 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { runSkillBuild, type BuildSkillSpec } from '../../../src/commands/skills/build.js';
 import type { Logger } from '../../../src/utils/logger.js';
 import { createTempDirTracker } from '../../system/test-common.js';
-
-const SILENT_LOGGER: Logger = {
-  info: () => {},
-  warn: () => {},
-  error: () => {},
-  debug: () => {},
-};
+import { recordingLogger, silentLogger as SILENT_LOGGER } from '../../test-doubles.js';
 
 const SOURCE_SCOPED_FIELD = 'validation.allow.NON_PORTABLE_ASSET_REFERENCE';
 const DEAD_ENTRY_FIELD = 'validation.allow.SKILL_TOO_LARGE';
@@ -87,7 +81,14 @@ async function allowUnusedAcrossBuildRun(cwd: string): Promise<{
 
   // `[]`: these fixtures declare no eval suites, so the project-wide test-input
   // list is genuinely empty — not a lane declining to supply it.
-  const run = await runSkillBuild(specs, cwd, SILENT_LOGGER, []);
+  const run = await runSkillBuild({
+    specs,
+    cwd,
+    logger: SILENT_LOGGER,
+    projectSkills: [],
+    onlySkill: undefined,
+    verbose: false,
+  });
   const unused = [
     ...run.results.flatMap(({ result }) => [
       ...(result.postBuildIssues ?? []),
@@ -139,18 +140,34 @@ describe('runSkillBuild - one allow-usage ledger for the whole invocation', () =
 // an absent `files:` source. Same contract, a vehicle that still throws.
 // ---------------------------------------------------------------------------
 
-/** A logger that records every line, so the report itself is assertable. */
-function recordingLogger(): { logger: Logger; lines: string[] } {
-  const lines: string[] = [];
-  const push = (message: string) => { lines.push(message); };
-  return { logger: { info: push, warn: push, error: push, debug: () => {} }, lines };
-}
-
 /** The phrase the surviving throw uses to attribute itself to a skill. */
 const THROWN_ATTRIBUTION = "skill 'two'";
 
-/** Three skills under `cwd`; the middle one throws on an absent `files:` source. */
-async function buildRunWithOneThrowingSkill(cwd: string, logger: Logger) {
+/**
+ * The `files:` entry the middle skill fails on.
+ *
+ * `undefined` means "the plain absent NON-GLOB source" — the packager's own
+ * throw, which names the skill. Any other value is a GLOB, which fails later
+ * inside `applyFilesConfig` and takes a different throw with a different
+ * message. Both are `failures[]`, and the leak guard below has to see both:
+ * driving only the non-glob shape is what let three glob throws publish the
+ * absolute project path under a test asserting no message does.
+ *
+ * Spelled relative to the SKILL directory, not to `cwd`: this fixture tree has
+ * neither a config nor a `.git`, so `packageSkill`'s `findProjectRoot` finds no
+ * ancestor and falls back to the skill's own directory. A `cwd`-relative glob
+ * silently resolves under `<cwd>/skills/two/skills/two/...`, matches nothing,
+ * and collapses BOTH glob cases into the zero-match route.
+ */
+const GLOB_NO_MATCH = 'dist/nope/**/*';
+const GLOB_ONLY_NEVER_PACKAGED = 'extras/**/*';
+
+/** Three skills under `cwd`; the middle one throws on its `files:` source. */
+async function buildRunWithOneThrowingSkill(
+  cwd: string,
+  logger: Logger,
+  failingSource?: string,
+) {
   const specs: BuildSkillSpec[] = [];
   for (const name of ['one', 'two', 'three']) {
     const dir = safePath.join(cwd, 'skills', name);
@@ -161,12 +178,22 @@ async function buildRunWithOneThrowingSkill(cwd: string, logger: Logger) {
       'Nothing to see.',
     );
     // Deliberately never written: resolving it is what raises.
+    const source = failingSource ?? 'skills/two/never-written.txt';
     const packagingConfig = (name === 'two'
-      ? { files: [{ source: `skills/two/never-written.txt`, dest: 'never-written.txt' }] }
+      ? { files: [{ source, dest: 'never-written.txt' }] }
       : {}) as SkillPackagingConfig;
     specs.push({ skill: { name, sourcePath }, packagingConfig });
   }
-  return runSkillBuild(specs, cwd, logger, []);
+  // The all-refused glob needs real matches that the never-package list drops,
+  // or it takes the zero-match route instead and the two cases collapse into one.
+  if (failingSource === GLOB_ONLY_NEVER_PACKAGED) {
+    const extras = safePath.join(cwd, 'skills', 'two', 'extras');
+    await mkdir(extras, { recursive: true });
+    for (const basename of ['CLAUDE.md', 'AGENTS.md']) {
+      await writeFile(safePath.join(extras, basename), `content of ${basename}\n`);
+    }
+  }
+  return runSkillBuild({ specs, cwd, logger, projectSkills: [], onlySkill: undefined, verbose: false });
 }
 
 describe('runSkillBuild - a skill that throws does not discard the batch', () => {
@@ -185,10 +212,10 @@ describe('runSkillBuild - a skill that throws does not discard the batch', () =>
     expect(run.failures[0]?.message).toContain(THROWN_ATTRIBUTION);
   });
 
-  it('does not claim `Built N files` for a skill that never built', async () => {
+  it('does not claim a file count for a skill that never built', async () => {
     const { logger, lines } = recordingLogger();
     await buildRunWithOneThrowingSkill(createTempDir(), logger);
-    expect(lines.filter((l) => l.includes('Built '))).toHaveLength(2);
+    expect(lines.filter((l) => l.includes(': built '))).toHaveLength(2);
     expect(lines.some((l) => l.includes(THROWN_ATTRIBUTION))).toBe(true);
   });
 
@@ -208,5 +235,35 @@ describe('runSkillBuild - a skill that throws does not discard the batch', () =>
     // that merely spells its prefix the other way. This reads the SHAPE of every
     // value the message states.
     expect(run.failures[0]?.message).not.toMatch(/:\s+\//);
+  });
+
+  // The case above drives ONE `files:` shape — a plain absent non-glob source,
+  // whose throw happens to interpolate no path at all. It therefore certified
+  // "no absolute path in failedSkills[]" while three sibling throws in the same
+  // feature published one; a guard that cannot fail is the defect that lets a
+  // leak ship. These cases drive the GLOB routes, where the leak actually was.
+  //
+  // Attribution is asserted on `failures[].name` here, not on the message: the
+  // glob throws are raised inside `applyFilesConfig`, which knows the entry but
+  // not the skill. The NAME is the machine-readable attribution either way.
+  it.each([
+    { label: 'glob matched nothing', source: GLOB_NO_MATCH, reached: /matched no files/ },
+    {
+      label: 'glob matched only never-packaged files',
+      source: GLOB_ONLY_NEVER_PACKAGED,
+      reached: /never packaged/,
+    },
+  ])('publishes no absolute path for a failing $label', async ({ source, reached }) => {
+    const cwd = createTempDir();
+    const run = await buildRunWithOneThrowingSkill(cwd, SILENT_LOGGER, source);
+
+    expect(run.failures.map((f) => f.name)).toEqual(['two']);
+    // Proves the case reached the intended throw rather than some earlier one.
+    expect(run.failures[0]?.message).toMatch(reached);
+    expect(JSON.stringify(run.failures)).not.toContain(cwd);
+    // Shape, for the `/private` symlink reason above — and matched at any word
+    // boundary, because the glob throws spell their path after `under `, not
+    // after `: `, which is exactly why the older `/:\s+\//` probe missed them.
+    expect(run.failures[0]?.message).not.toMatch(/(?:^|[\s(<'"])(?:\/|[A-Za-z]:[\\/])/);
   });
 });

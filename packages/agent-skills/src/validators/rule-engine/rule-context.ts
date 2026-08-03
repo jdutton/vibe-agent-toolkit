@@ -39,7 +39,9 @@ export type RuleScope = 'base-resource' | 'skill' | 'plugin';
  * Coarse classification of *what kind of thing* a resource is. `directory` is
  * the post-`stat` realization of #126's source-level `local_directory` link
  * shape; `nav` is a navigation file (README.md, index.md, …) excluded from
- * bundles.
+ * bundles; `agent-instruction` is a repo-internal agent-guidance file
+ * (CLAUDE.md, AGENTS.md, GEMINI.md), likewise excluded, but because it is not
+ * distributable at any granularity rather than merely too coarse.
  */
 export type FileKind =
   | 'doc'
@@ -48,6 +50,7 @@ export type FileKind =
   | 'data'
   | 'schema'
   | 'nav'
+  | 'agent-instruction'
   | 'directory'
   | 'unknown';
 

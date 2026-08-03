@@ -1,6 +1,7 @@
 export { generateFixSuggestion } from './validation-utils.js';
 export { detectKebabCaseViolation, type KebabCaseSurface } from './kebab-case-detection.js';
 export { detectMissingRecommendedFields } from './plugin-recommended-fields.js';
+export { detectPackagedAgentInstructionFiles } from './agent-instruction-presence.js';
 export { detectResourceFormat, enumerateSurfaces } from './format-detection.js';
 export {
 	validateInstalledPluginsRegistry,

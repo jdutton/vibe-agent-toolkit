@@ -8,6 +8,11 @@ import type { AuditCommandOptions } from '../src/commands/audit.js';
 import { deriveScanRoot, getValidationResults, resetAuditCaches } from '../src/commands/audit.js';
 
 import { type CliResult, executeCli } from './system/test-helpers/cli-runner.js';
+import { silentLogger } from './test-doubles.js';
+
+// Re-exported so the many suites that reach for a silent logger keep ONE import
+// site, while the definition itself lives in the dependency-light module.
+export { silentLogger } from './test-doubles.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const binPath = safePath.resolve(__dirname, '../dist/bin.js');
@@ -22,16 +27,6 @@ export function runCliCommand(command: string, ...args: string[]): SpawnSyncRetu
     encoding: 'utf-8',
   });
 }
-
-/**
- * Silent logger for use in integration tests — suppresses all output.
- */
-export const silentAuditLogger = {
-  info: (_msg: string): void => {},
-  warn: (_msg: string): void => {},
-  error: (_msg: string): void => {},
-  debug: (_msg: string): void => {},
-};
 
 /**
  * Run `vat audit` validation directly against a target path (no CLI subprocess).
@@ -49,7 +44,7 @@ export async function runAudit(
     targetPath,
     options.recursive !== false,
     options,
-    silentAuditLogger,
+    silentLogger,
     deriveScanRoot(targetPath),
   );
 }
@@ -88,4 +83,32 @@ export function initTestGitRepo(dir: string): void {
 export function gitAddAll(dir: string): void {
   // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for staging files in tests
   spawnSync('git', ['-C', dir, 'add', '.'], { stdio: 'ignore' });
+}
+
+/**
+ * Init + stage + commit a fixture repo in one call.
+ *
+ * Discovery and the plugin tree-copy are both tracked-files-only, so a fixture
+ * whose files are merely on disk tests invisibility by accident — an assertion
+ * that "X did not ship" passes because nothing shipped at all. Commit first.
+ */
+export function commitTestFixture(dir: string, message = 'fixture'): void {
+  initTestGitRepo(dir);
+  gitAddAll(dir);
+  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for fixture commit in tests
+  spawnSync('git', ['-C', dir, 'commit', '-q', '-m', message], { stdio: 'ignore' });
+}
+
+/**
+ * Where `vat claude plugin build` writes one plugin's bundle, given the project
+ * root a fixture was built in.
+ */
+export function marketplacePluginOutDir(
+  projectRoot: string,
+  marketplace: string,
+  plugin: string,
+): string {
+  return safePath.join(
+    projectRoot, 'dist', '.claude', 'plugins', 'marketplaces', marketplace, 'plugins', plugin,
+  );
 }

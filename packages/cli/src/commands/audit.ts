@@ -5,6 +5,7 @@
 
 import * as fs from 'node:fs';
 import { existsSync as fsExistsSync } from 'node:fs';
+import { basename } from 'node:path';
 
 import {
   calculateValidationStatus,
@@ -53,7 +54,7 @@ import { detectFormat } from '@vibe-agent-toolkit/discovery';
 import {
   findProjectRoot,
   gitFindRoot,
-  GitTracker,
+  type GitTracker,
   isAbsolutePath,
   isGitUrl,
   issueLocation,
@@ -77,10 +78,13 @@ import {
   resetLoadedConfigCache,
 } from '../utils/config-loader.js';
 import {
+  countCollapsedFindings,
+  formatCollapsedFindingsHint,
   formatIssueLines,
   formatSeverityBreakdown,
   issuesToRenderAtVerbosity,
 } from '../utils/issue-rendering.js';
+import { resolveIssueSeverity } from '../utils/issue-severity.js';
 import { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
 import { relativizePathEntries } from '../utils/relativize-paths.js';
@@ -88,6 +92,13 @@ import { mergeSkillPackagingConfig } from '../utils/skill-packaging-config.js';
 import { renderSkillQualityFooter } from '../utils/skill-quality-footer.js';
 import { computeConfigVerdicts } from '../utils/verdict-helpers.js';
 
+import {
+  crawlOwnsSubtree,
+  distributedTreeFindings,
+  getOrCreateGitTracker,
+  isWithin,
+  resetGitTrackerCache,
+} from './audit/distributed-tree.js';
 import { withClonedRepo } from './audit/git-url-clone.js';
 import { buildHierarchicalOutput } from './audit/hierarchical-output.js';
 import {
@@ -272,12 +283,20 @@ function packagingResultToValidationResult(
 /**
  * Validate a single SKILL.md file, using config-aware validation if available.
  * Used for direct SKILL.md and vat-agent paths passed to `vat audit`.
+ *
+ * @param crawlTree Whether this call owns the presence-side crawl of the skill's
+ *   directory (see {@link appendDistributedTreeFindings} below). REQUIRED
+ *   and never defaulted, because the wrong answer is silent in both directions: a
+ *   skill nested inside a plugin is already crawled by `validatePlugin` at any
+ *   depth, so crawling again reports one file twice, while omitting it for a
+ *   standalone bundle is the blindness this parameter exists to end.
  */
 async function validateSingleSkill(
   skillPath: string,
   options: AuditCommandOptions,
   logger: ReturnType<typeof createLogger>,
   locationRoot: string,
+  crawlTree: boolean,
   isVATGenerated?: boolean
 ): Promise<ValidationResult> {
   // Try config-aware validation: walk UP to the skill's nearest-ancestor
@@ -313,12 +332,14 @@ async function validateSingleSkill(
       sharedCtx.gitTracker = gitTracker;
     }
     const packagingResult = await validateSkillForPackaging(skillPath, skillConfig, 'source', sharedCtx);
-    return packagingResultToValidationResult(
+    const configAware = packagingResultToValidationResult(
       skillPath,
       packagingResult,
       skillConfig.targets as readonly Target[] | undefined,
       locationRoot,
     );
+    await appendDistributedTreeFindings(configAware, skillPath, locationRoot, crawlTree);
+    return configAware;
   }
 
   // Fallback: basic validation
@@ -329,7 +350,41 @@ async function validateSingleSkill(
   if (isVATGenerated === true) {
     validateOptions.isVATGenerated = true;
   }
-  return validateSkill(validateOptions);
+  const result = await validateSkill(validateOptions);
+  await appendDistributedTreeFindings(result, skillPath, locationRoot, crawlTree);
+  return result;
+}
+
+/**
+ * Crawl a DISTRIBUTED skill's own directory for agent-instruction files and
+ * append what it finds. Mutates `result`, like every other additive detector
+ * pass in this command.
+ *
+ * Which trees count as distributed — and why the config's declaration is NOT the
+ * discriminator any more — lives with the classifier in
+ * `./audit/distributed-tree.ts` (`classifyScannedSkillTree`). In short: a repository that never adopted
+ * VAT declares nothing, and an adopting repo's `include` globs never enumerate
+ * its drafts and fixtures, so "not declared" swept up two populations of
+ * ordinary repo source.
+ *
+ * Called from BOTH lanes — config-aware and wild — deliberately. It used to be
+ * reachable only from the wild one, which left the abandoned discriminator alive
+ * at the caller in its purest suppressing form: adding a `vibe-agent-toolkit.config.yaml`
+ * to a dotfiles repo removed findings from skills installed under `~/.claude`,
+ * because a config-aware match returned before the classifier was ever asked.
+ * Whether the project also declares a skill says nothing about where that skill
+ * lives, so it must not decide whether the question gets asked.
+ *
+ * @param crawlTree `false` when a plugin lane already crawled this subtree — see
+ *   {@link validateSingleSkill}.
+ */
+async function appendDistributedTreeFindings(
+  result: ValidationResult,
+  skillPath: string,
+  locationRoot: string,
+  crawlTree: boolean,
+): Promise<void> {
+  appendIssues(result, await distributedTreeFindings(skillPath, locationRoot, crawlTree));
 }
 
 /**
@@ -356,7 +411,12 @@ export function createAuditCommand(): Command {
     .option('--exclude <glob>', 'Exclude paths matching glob pattern (repeatable)', collect, [])
     .option('--include-artifacts', 'Include gitignored paths (build artifacts, dependencies) that are excluded by default')
     .option('--user', 'Audit user-level Claude resources (default: $CLAUDE_CONFIG_DIR or ~/.claude — scans plugins/, skills/, marketplaces/)')
-    .option('--verbose', 'Show all scanned resources, including those without issues')
+    // `-v` short form: `vat audit -v` used to print the version (the root
+    // `-v, --version` shadowed every subcommand), and after that alias was
+    // removed it exited 1 as an unknown option — while five sibling verbs
+    // accepted it. Advertising only the long form is what made the CHANGELOG's
+    // "`-v` means `--verbose` on every verb" claim untrue.
+    .option('-v, --verbose', 'Show all scanned resources, including those without issues')
     .option('--warn-unreferenced-files', 'Warn about files not referenced in skill markdown')
     .option('--compat', 'Run compatibility analysis for each plugin (shows claude-code, claude-cowork, claude-chat support)')
     .option('--settings [file]', 'Check plugins against Claude settings (auto-discover or specify file; requires --compat)')
@@ -451,13 +511,17 @@ Gitignore-Aware Scanning:
   Outside a git repository, no automatic exclusions apply.
 
 Config-Aware Validation:
-  When a vibe-agent-toolkit.config.yaml is found at the git root, audit
-  uses the project's build settings (linkFollowDepth, files,
-  excludeReferencesFromBundle) to validate skills. This prevents false
-  warnings for links that the build pipeline resolves.
+  The governing vibe-agent-toolkit.config.yaml is found by walking UP from
+  the audited path, so a built bundle deep under dist/ is still governed by
+  its project's config. Audit uses that project's build settings
+  (linkFollowDepth, files, excludeReferencesFromBundle) to validate skills,
+  which prevents false warnings for links the build pipeline resolves.
 
   Config-aware mode never applies validation.allow — audit always shows
-  all issues. validation.severity is respected for display grouping.
+  all issues. validation.severity IS applied: a code set to 'ignore' is
+  hidden. skills.defaults.validation.severity applies project-wide (skills,
+  plugins and marketplaces alike); skills.config.<name>.validation.severity
+  layers on top for that skill.
 
 Exit Codes:
   0 - Always (even when validation errors are surfaced)
@@ -478,6 +542,39 @@ Examples:
   return audit;
 }
 
+
+/**
+ * Which of the Claude install roots a `--user` run actually walks.
+ *
+ * The three roots read as siblings and are NOT: `marketplacesDir` is
+ * `<claudeDir>/plugins/marketplaces`, i.e. INSIDE `pluginsDir`. A recursive walk
+ * of `plugins/` already reaches every installed marketplace, so scanning
+ * `marketplaces/` afterwards audited each marketplace-installed plugin and skill
+ * a SECOND time, in a second result, under the identical `path:`. On one real
+ * machine that turned 7 distinct agent-instruction files into 12 reported rows —
+ * and it inflates every finding class, not one code, because the whole subject
+ * is re-audited rather than one detector re-firing.
+ *
+ * The containment test is `isWithin`, the same one the provenance classifier
+ * uses, so "inside" means the same thing on both sides and on Windows.
+ *
+ * Gated on `recursive`, and that is not defensive dressing: under
+ * `--no-recursive` a walk of `plugins/` stops at its top level and never reaches
+ * `marketplaces/`, so dropping the nested root there would replace a double
+ * count with no coverage at all.
+ *
+ * Pure, and exported for that reason: the shape of the defect is "the list of
+ * roots was wrong", which is assertable as a list.
+ *
+ * @internal Exported for unit testing only — not part of the public CLI API.
+ */
+export function userScanTargets(candidates: readonly string[], recursive: boolean): string[] {
+  const resolved = candidates.map((dir) => safePath.resolve(dir));
+  if (!recursive) return resolved;
+  return resolved.filter(
+    (dir) => !resolved.some((other) => other !== dir && isWithin(other, dir)),
+  );
+}
 
 /**
  * Handle --user audit: scans ~/.claude/plugins, ~/.claude/skills, ~/.claude/marketplaces
@@ -512,19 +609,16 @@ async function auditUserDirectories(
 
   const results: ValidationResult[] = [];
 
-  if (pluginsDirExists) {
-    logger.debug(`Auditing user-level plugins at: ${pluginsDir}`);
-    results.push(...await getValidationResults(pluginsDir, recursive, options, logger, scanRoot));
-  }
-
-  if (skillsDirExists) {
-    logger.debug(`Auditing user-level skills at: ${skillsDir}`);
-    results.push(...await getValidationResults(skillsDir, recursive, options, logger, scanRoot));
-  }
-
-  if (marketplacesDirExists) {
-    logger.debug(`Auditing user-level marketplaces at: ${marketplacesDir}`);
-    results.push(...await getValidationResults(marketplacesDir, recursive, options, logger, scanRoot));
+  // The roots that exist, minus any one another already covers — see
+  // {@link userScanTargets}. `marketplaces/` lives inside `plugins/`.
+  const present = [
+    ...(pluginsDirExists ? [pluginsDir] : []),
+    ...(skillsDirExists ? [skillsDir] : []),
+    ...(marketplacesDirExists ? [marketplacesDir] : []),
+  ];
+  for (const target of userScanTargets(present, recursive)) {
+    logger.debug(`Auditing user-level resources at: ${target}`);
+    results.push(...await getValidationResults(target, recursive, options, logger, scanRoot));
   }
 
   // Run compatibility analysis if --compat flag is set
@@ -543,22 +637,6 @@ async function auditUserDirectories(
   logHierarchicalSummary(results, logger);
 }
 
-/**
- * Apply severity filtering to validation results.
- *
- * Audit is advisory only: it applies `validation.severity` to decide what to
- * show, but deliberately ignores `validation.allow`. Codes configured as
- * `severity: 'ignore'` are stripped from the result issues before rendering.
- *
- * The severity config is per-skill, keyed by skill name in
- * `config.skills.config[skillName].validation.severity`.
- * Defaults config (`config.skills.defaults.validation.severity`) is also
- * checked as a fallback.
- *
- * @param results - Raw validation results from skill/plugin validators
- * @param config - Parsed VATConfig (may be undefined if no config file)
- * @returns New results array with ignored codes removed from issues
- */
 /** Skill resource types that can have per-skill validation config. */
 const SKILL_RESULT_TYPES: ReadonlySet<ValidationResult['type']> = new Set([RESOURCE_TYPE_AGENT_SKILL, 'vat-agent']);
 
@@ -590,17 +668,27 @@ export function deriveScanRoot(targetPath: string): string {
 /**
  * Derive the project root directory for config loading.
  *
- * For a direct SKILL.md path, the project root is two levels up (skill dir → skills/ → project/).
- * For a directory or undefined path, use the directory itself (or cwd).
+ * Walks UP from the audit target through {@link findProjectRoot} — the same
+ * discovery ladder (`vibe-agent-toolkit.config.yaml`, then `.git/`) that
+ * `resolveSkillPackagingConfig` uses per skill, so the two cannot disagree about
+ * which project governs a path.
+ *
+ * It used to guess by SHAPE instead: a directory argument resolved to ITSELF and
+ * a `SKILL.md` argument to exactly two levels up. Neither reaches a project root
+ * from a built bundle — `vat audit dist/skills/demo` looked for the config inside
+ * the bundle, found none, and `applySeverityFilter` early-returned. The effect was
+ * that `severity.PACKAGED_AGENT_INSTRUCTION_FILE: ignore` — the opt-out this very
+ * command's `fix` text tells the reader to write — did nothing whenever audit was
+ * pointed at the bundle rather than at the project. Measured: `warnings: 1` with
+ * the override and without it, from the same tree, while `vat audit .` on that
+ * same project honoured it.
+ *
+ * `null` (no config and no git anywhere above) falls back to the target itself,
+ * which is what the shape-based version returned for every path.
  */
 function deriveConfigRoot(targetPath: string | undefined): string {
-  if (targetPath === undefined) {
-    return process.cwd();
-  }
-  if (targetPath.endsWith('SKILL.md')) {
-    return safePath.resolve(safePath.join(targetPath, '..', '..'));
-  }
-  return safePath.resolve(targetPath);
+  const start = targetPath === undefined ? process.cwd() : deriveScanRoot(targetPath);
+  return findProjectRoot(start) ?? start;
 }
 
 /**
@@ -625,16 +713,55 @@ function buildFilteredResult(
 }
 
 /**
- * Apply severity filtering to validation results.
+ * Apply severity resolution to validation results.
  *
  * Audit is advisory only: it applies `validation.severity` to decide what to
- * show, but deliberately ignores `validation.allow`. Codes configured as
- * `severity: 'ignore'` are stripped from the result issues before rendering.
+ * show and at what severity, but deliberately ignores `validation.allow`.
  *
- * The severity config is per-skill, keyed by skill name in
- * `config.skills.config[skillName].validation.severity`.
- * Defaults config (`config.skills.defaults.validation.severity`) is also
- * checked as a fallback.
+ * **Both directions, via the one shared resolver.** This used to compute the
+ * merged override map correctly and then consult it for a single value —
+ * `issues.filter(i => effective[i.code] !== 'ignore')` — so `ignore` worked
+ * while `error`, `warning` and `info` fell through untouched. Measured end to
+ * end on a real adopter tree: `severity: error` at BOTH scopes left
+ * `severity: warning`, `errors: 0`, `status: warning`, while `vat verify` on the
+ * same config promoted correctly. Two lanes, one config key, opposite answers.
+ *
+ * Status and counts are re-derived from the resolved severities by
+ * {@link buildFilteredResult}, so a promotion moves the reported status. It does
+ * NOT move this command's exit code — `vat audit` is advisory and its exit-code
+ * behaviour is a separate, pre-existing question tracked in its own issue. That
+ * asymmetry with `vat verify` (whose exit code IS severity-derived) is
+ * deliberate here rather than overlooked.
+ *
+ * Two scopes, both live:
+ *  - `skills.defaults.validation.severity` — the PROJECT-WIDE map, applied to
+ *    every result this run produced, including `claude-plugin` and `marketplace`
+ *    ones. It used to be applied only to skill-typed results, which left the
+ *    opt-out inert for the population that motivated it: the false positive
+ *    `PACKAGED_AGENT_INSTRUCTION_FILE` was kept at `warning` for — an official
+ *    plugin's intentional scaffold template — is a finding on a PLUGIN tree, and
+ *    no per-skill key can name it. Measured before the fix: a plugin result kept
+ *    its warning with `severity: ignore` set at `skills.defaults`.
+ *  - `skills.config.<name>.validation.severity` — layered on top, and only for a
+ *    result that names a skill, since that key is keyed by skill name.
+ *
+ * KNOWN, DELIBERATELY NOT FIXED — per-skill scope cannot reach a finding nested
+ * inside a plugin tree, even when that finding IS attributable to a skill.
+ * `vat audit <plugin dir>` reports two findings: the plugin root's `CLAUDE.md`
+ * (attributable to no skill, which is the case the project-wide scope above was
+ * added for) and an `AGENTS.md` nested inside one of the plugin's OWN skills,
+ * which is attributable. Measured: neither moves under
+ * `skills.config.<that skill>` nor under `skills.config.<the plugin's name>`;
+ * only the project-wide `skills.defaults` moves them. The mechanism is the line
+ * below — a `claude-plugin` result is not in `SKILL_RESULT_TYPES`, so `skillName`
+ * is `undefined` and the per-skill map is never consulted, no matter which name
+ * the adopter writes.
+ *
+ * The consequence worth stating plainly: an adopter with ONE intentional
+ * agent-instruction file in ONE plugin has to silence the code project-wide in
+ * this lane, losing the detector everywhere else. The marketplace lane has the
+ * same project-wide-only limitation for a different reason, recorded there: both
+ * marketplace config schemas are `.strict()` with no `validation` key at all.
  *
  * @param results - Raw validation results from skill/plugin validators
  * @param config - Parsed VATConfig (may be undefined if no config file)
@@ -652,11 +779,7 @@ function applySeverityFilter(
   const defaultSeverity = skillsConfig.defaults?.validation?.severity ?? {};
 
   return results.map(result => {
-    if (!SKILL_RESULT_TYPES.has(result.type)) {
-      return result;
-    }
-
-    const skillName = result.metadata?.name;
+    const skillName = SKILL_RESULT_TYPES.has(result.type) ? result.metadata?.name : undefined;
     const perSkillSeverity = skillName === undefined
       ? {}
       : (skillsConfig.config?.[skillName]?.validation?.severity ?? {});
@@ -668,13 +791,22 @@ function applySeverityFilter(
       return result;
     }
 
-    const filteredIssues = result.issues.filter(issue => effectiveSeverity[issue.code] !== 'ignore');
+    const resolvedIssues = resolveIssueSeverity(result.issues, { severity: effectiveSeverity });
 
-    if (filteredIssues.length === result.issues.length) {
+    // Short-circuit only when NOTHING moved. Comparing lengths alone was the old
+    // test, and it is blind to the promote direction by construction: a resolved
+    // `error` keeps the array exactly as long as it was, so an early return on
+    // equal lengths discarded every re-severitied issue and reported the raw
+    // ones. The severities have to be compared too.
+    const unchanged =
+      resolvedIssues.length === result.issues.length &&
+      resolvedIssues.every((issue, index) => issue.severity === result.issues[index]?.severity);
+
+    if (unchanged) {
       return result;
     }
 
-    return buildFilteredResult(result, filteredIssues);
+    return buildFilteredResult(result, resolvedIssues);
   });
 }
 
@@ -856,7 +988,11 @@ async function validateSurface(
   locationRoot: string,
 ): Promise<ValidationResult> {
   if (surface.type === RESOURCE_TYPE_AGENT_SKILL) {
-    return validateSingleSkill(surface.path, options, logger, locationRoot);
+    // No crawl: this arm only runs for a MULTI-surface root, which in practice is
+    // skill-claude-plugin (SKILL.md beside .claude-plugin/plugin.json). The plugin
+    // surface below crawls that same directory at any depth, so crawling here
+    // would report every agent-instruction file in it a second time.
+    return validateSingleSkill(surface.path, options, logger, locationRoot, false);
   }
   if (surface.type === RESOURCE_TYPE_CLAUDE_PLUGIN) {
     return validatePlugin(surface.path, { locationRoot });
@@ -1023,14 +1159,14 @@ export async function getValidationResults(
 	// Special handling for direct SKILL.md file
 	if (format === RESOURCE_TYPE_AGENT_SKILL) {
 		logger.debug('Detected single Agent Skill');
-		return [await validateSingleSkill(scanPath, options, logger, locationRoot)];
+		return [await validateSingleSkill(scanPath, options, logger, locationRoot, true)];
 	}
 
 	// Special handling for VAT agent: validate its SKILL.md
 	if (format === 'vat-agent') {
 		const skillPath = safePath.join(scanPath, 'SKILL.md');
 		logger.debug('Detected VAT agent, validating SKILL.md');
-		return [await validateSingleSkill(skillPath, options, logger, locationRoot, true)];
+		return [await validateSingleSkill(skillPath, options, logger, locationRoot, true, true)];
 	}
 
 	// Enumerate all manifest surfaces at the directory root. If multiple are
@@ -1142,7 +1278,9 @@ async function validatePluginSkillsViaInventory(
 			continue;
 		}
 		logger.debug(`  Validating plugin-bundled skill (inventory): ${skill.files.skillMd}`);
-		results.push(await validateSingleSkill(skill.files.skillMd, options, logger, locationRoot));
+		// No crawl: `validatePlugin` already scanned the whole plugin tree, nested
+		// skill directories included, so this lane would duplicate its findings.
+		results.push(await validateSingleSkill(skill.files.skillMd, options, logger, locationRoot, false));
 	}
 	return results;
 }
@@ -1393,6 +1531,36 @@ function renderIssueEvidence(
 }
 
 /**
+ * The name a findings block is headed with — never the empty string.
+ *
+ * `issueLocation` answers "where is this, relative to the scan root", and for a
+ * result that IS the scan root (auditing a plugin directory produces exactly
+ * that) the honest relative path is `''`. Rendered straight into a heading, that
+ * produced ` — 2 warnings:` — the operator was told a nameless something had two
+ * warnings and then, because warnings collapse at default verbosity, shown
+ * neither. Fall back in decreasing order of usefulness to the reader:
+ *
+ *  1. the relative path, whenever there is one (the common case, unchanged);
+ *  2. the resource's own name from metadata already on the result — for a plugin
+ *     or skill this is the most recognisable subject there is;
+ *  3. the last path segment, i.e. the scanned directory's own name;
+ *  4. `'.'`, the minimum honest way to say "the root you pointed me at".
+ *
+ * Every step reads data already in hand — no new I/O, and no re-deriving a path
+ * the caller already resolved.
+ */
+function findingSubject(result: ValidationResult, root: string): string {
+  const location = issueLocation(result.path, root);
+  if (location !== '') return location;
+  const name = result.metadata?.name;
+  if (name !== undefined && name !== '') return name;
+  // `basename` is empty for a filesystem root ('/' or 'C:\'), which is the only
+  // case left that '.' has to cover.
+  const directoryName = basename(result.path);
+  return directoryName === '' ? '.' : directoryName;
+}
+
+/**
  * Render supporting evidence beneath each CAPABILITY_* issue when the
  * audit was invoked with --verbose. Evidence comes from the validation
  * result itself (per-file SKILL evidence) and from any attached
@@ -1415,7 +1583,7 @@ function renderVerboseEvidence(
     ];
     if (evidenceSources.length === 0) continue;
 
-    logger.info(`\n${issueLocation(result.path, root)} — supporting evidence:`);
+    logger.info(`\n${findingSubject(result, root)} — supporting evidence:`);
     for (const issue of capabilityIssues) {
       renderIssueEvidence(issue, evidenceSources, logger);
     }
@@ -1512,6 +1680,15 @@ function renderAuditFooter(
  * the failure direction `issue-rendering.ts` exists to prevent. The trailing
  * line names the collapsed total and both ways to see it, for the same reason.
  *
+ * That trailing line points at THIS audit's YAML report, deliberately — do not
+ * broaden it back into a claim about "the YAML report" in general. It is only
+ * true of the verbs that emit full `issues:` arrays, and which verbs those are
+ * has changed: `vat skills build` now publishes them too, so the sentence is
+ * shared rather than re-spelled (see `formatCollapsedFindingsHint`, which takes
+ * the report name for exactly this reason). Any verb that publishes counts alone
+ * must still not use it — there, it would send a CI consumer to a document that
+ * cannot answer the question.
+ *
  * Pure: takes results, returns lines. It reads `issues` and never rewrites it,
  * because `runAuditAtPath` builds the YAML document from the very same array.
  *
@@ -1529,22 +1706,24 @@ export function formatAuditFindingsLines(
     const rendered = issuesToRenderAtVerbosity(result.issues, verbose);
     // What --verbose WOULD show, minus what this verbosity shows. Derived from
     // the policy rather than re-stating it, so the count cannot contradict it.
-    collapsed += issuesToRenderAtVerbosity(result.issues, true).length - rendered.length;
+    collapsed += countCollapsedFindings(result.issues, verbose);
 
-    lines.push(
-      `\n${issueLocation(result.path, root)} — ${formatSeverityBreakdown(countBySeverity(result.issues))}:`,
-    );
+    // The heading is unconditional and counts the WHOLE set — for a
+    // warning-only file at default verbosity it IS the report. The trailing
+    // colon is what varies: it introduces the blocks below, so a heading with
+    // nothing beneath it does not print one. Same rule, same reason, as
+    // `formatPostBuildIssueReport` in `skills/build.ts` — a colon promising a
+    // list the current verbosity will not print is a promise the renderer
+    // already knows it will break.
+    const heading = `\n${findingSubject(result, root)} — ${formatSeverityBreakdown(countBySeverity(result.issues))}`;
+    lines.push(rendered.length === 0 ? heading : `${heading}:`);
     for (const issue of rendered) {
       lines.push(...formatIssueLines(issue, '  '));
     }
   }
 
-  if (collapsed > 0) {
-    lines.push(
-      `\n${collapsed} warning/info finding(s) not shown — re-run with --verbose, ` +
-        'or read the YAML report on stdout, which always lists every finding.',
-    );
-  }
+  const hint = formatCollapsedFindingsHint(collapsed, 'audit');
+  if (hint !== undefined) lines.push(hint);
 
   return lines;
 }
@@ -1585,6 +1764,56 @@ function isExcludedPath(
 }
 
 /**
+ * Does the SKILL.md at `skillMdPath` own its own presence-side crawl, or has an
+ * ancestor crawl already covered it?
+ *
+ * The single place the walk answers that question, for both owner kinds — see
+ * {@link ScanContext.crawledRoot}. `isWithin` rather than a bare
+ * `crawledRoot === null`: the claim is a containment claim and it is spelled
+ * once, in the module that already got the separator right.
+ */
+function ownsOwnCrawl(scanCtx: ScanContext, skillMdPath: string): boolean {
+  return scanCtx.crawledRoot === null || !isWithin(scanCtx.crawledRoot, safePath.resolve(skillMdPath));
+}
+
+/**
+ * Hand the descending context an owner for everything below `owner`, unless one
+ * is already claimed. First owner wins, and `null` claims nothing.
+ */
+function claimSubtree(scanCtx: ScanContext, owner: string | null): ScanContext {
+  if (owner === null || scanCtx.crawledRoot !== null) return scanCtx;
+  return { ...scanCtx, crawledRoot: safePath.resolve(owner) };
+}
+
+/**
+ * The context this directory's SUBDIRECTORIES are walked with.
+ *
+ * A `SKILL.md` here means this directory's own crawl reaches every descendant at
+ * any depth, so it — not each nested skill in turn — owns the subtree below.
+ *
+ * Resolved before the entry loop rather than inside it: `SKILL.md` and the
+ * subdirectories it governs are siblings in one `readdir`, and their order is
+ * the filesystem's to choose, so deciding this mid-loop would make the verdict
+ * depend on it.
+ *
+ * Conditional on the crawl actually RUNNING ({@link crawlOwnsSubtree}), not on
+ * the SKILL.md merely existing: a repo-source skill's crawl is skipped
+ * entirely, so claiming its subtree would trade a double count for a missed
+ * finding — and provenance is not monotone down a tree.
+ */
+async function contextForDescendants(
+  dirPath: string,
+  entries: readonly { name: string; isFile: () => boolean }[],
+  scanCtx: ScanContext,
+): Promise<ScanContext> {
+  if (!entries.some((entry) => entry.isFile() && entry.name === 'SKILL.md')) return scanCtx;
+  const skillMd = safePath.join(dirPath, 'SKILL.md');
+  if (!ownsOwnCrawl(scanCtx, skillMd)) return scanCtx;
+  if (!await crawlOwnsSubtree(skillMd)) return scanCtx;
+  return claimSubtree(scanCtx, dirPath);
+}
+
+/**
  * Handle file entry during directory scan
  */
 async function handleFileEntry(
@@ -1622,12 +1851,14 @@ async function handleFileEntry(
         ? { locationRoot, projectSkills }
         : { gitTracker: scanCtx.gitTracker, locationRoot, projectSkills };
       const packagingResult = await validateSkillForPackaging(fullPath, skillConfig, 'source', sharedCtx);
-      return packagingResultToValidationResult(
+      const configAware = packagingResultToValidationResult(
         fullPath,
         packagingResult,
         skillConfig.targets as readonly Target[] | undefined,
         locationRoot,
       );
+      await appendDistributedTreeFindings(configAware, fullPath, locationRoot, ownsOwnCrawl(scanCtx, fullPath));
+      return configAware;
     }
 
     // Wild mode: basic validation
@@ -1635,7 +1866,12 @@ async function handleFileEntry(
     if (options.warnUnreferencedFiles) {
       validateOptions.checkUnreferencedFiles = true;
     }
-    return validateSkill(validateOptions);
+    const result = await validateSkill(validateOptions);
+    // Wild mode is where the distributed-tree question is even ASKED; the
+    // classifier answers it. Suppressed under a plugin ancestor, which already
+    // crawled this whole subtree at any depth.
+    await appendDistributedTreeFindings(result, fullPath, locationRoot, ownsOwnCrawl(scanCtx, fullPath));
+    return result;
   }
 
   return null;
@@ -1669,9 +1905,14 @@ async function handleDirectoryEntry(
     results.push(result);
   }
 
-  // Recurse into subdirectories (both plugin/marketplace dirs and regular dirs)
+  // Recurse into subdirectories (both plugin/marketplace dirs and regular dirs).
+  // Below a plugin, `validatePlugin` has already crawled the whole subtree for
+  // agent-instruction files, so every crawl below must stand down or one file
+  // is reported twice. See {@link ScanContext.crawledRoot} — first owner wins,
+  // and it never clears on the way down.
+  const childCtx = claimSubtree(scanCtx, hasClaudePlugin ? fullPath : null);
   if (recursive) {
-    const subResults = await scanDirectory(fullPath, recursive, options, logger, scanCtx, baseDir, nestedConfigLog);
+    const subResults = await scanDirectory(fullPath, recursive, options, logger, childCtx, baseDir, nestedConfigLog);
     results.push(...subResults);
   }
 
@@ -1700,6 +1941,32 @@ interface ScanContext {
    * the operator pointed the scan AT an excluded tree.
    */
   projectExcludes: ExcludeMatcher | null;
+  /**
+   * The directory whose presence-side crawl already owns everything below this
+   * point — or `null` while nothing does.
+   *
+   * `detectPackagedAgentInstructionFiles` matches at ANY depth, so whichever
+   * crawl runs highest in the tree already reports every agent-instruction file
+   * beneath it, nested skill directories included. Every crawl below it must
+   * stand down or one file is reported once per ancestor, in as many results,
+   * and the run's `issueCounts` — the number a CI gate reads — counts it that
+   * many times.
+   *
+   * TWO kinds of owner reach this field, and it used to hold only the first:
+   *
+   * - a **plugin** directory, crawled by `validatePlugin`;
+   * - a **skill** directory whose own crawl {@link crawlOwnsSubtree} confirms
+   *   will run. A skill nested under another skill had no guard at all, so a
+   *   chain of 20 nested skills holding one `CLAUDE.md` each produced 210
+   *   warnings for 20 files — quadratic in nesting depth.
+   *
+   * A path, not a boolean, so the owner can be named in the containment test
+   * and so the two owner kinds stay one concept. Carried on the context rather
+   * than as a parameter because it must survive every level of
+   * {@link scanDirectory} recursion below the owner, not just the immediate
+   * child. First owner wins: it is set once and never cleared on the way down.
+   */
+  crawledRoot: string | null;
 }
 
 /**
@@ -1772,9 +2039,6 @@ function resolveProjectExcludes(
   return { isMatch, base: projectRoot, label: 'excluded by config' };
 }
 
-/** Cache of (gitRoot → initialized GitTracker) to avoid re-spawning ls-files. */
-const gitTrackerCache: Map<string, GitTracker> = new Map();
-
 /**
  * Cache of (projectRoot → registry for the *inventory* link walk).
  *
@@ -1837,23 +2101,12 @@ async function pluginInventoryAt(dir: string): Promise<Awaited<ReturnType<typeof
  * governing configs, or skill-discovery maps from a prior run.
  */
 export function resetAuditCaches(): void {
-  gitTrackerCache.clear();
+  resetGitTrackerCache();
   resetPackagingRegistryCache();
   inventoryRegistryCache.clear();
   resetProjectRootCaches();
   resetLoadedConfigCache();
   resetSkillDiscoveryCache();
-}
-
-async function getOrCreateGitTracker(gitRoot: string): Promise<GitTracker> {
-  const cached = gitTrackerCache.get(gitRoot);
-  if (cached !== undefined) {
-    return cached;
-  }
-  const tracker = new GitTracker(gitRoot);
-  await tracker.initialize();
-  gitTrackerCache.set(gitRoot, tracker);
-  return tracker;
 }
 
 /**
@@ -1874,7 +2127,7 @@ async function resolveScanContext(
   const projectExcludes = resolveProjectExcludes(dirPath, logger);
   const detectedRoot = gitFindRoot(dirPath);
   if (detectedRoot === null) {
-    return { gitRoot: null, gitTracker: null, locationRoot, projectExcludes };
+    return { gitRoot: null, gitTracker: null, locationRoot, projectExcludes, crawledRoot: null };
   }
 
   const tracker = await getOrCreateGitTracker(detectedRoot);
@@ -1882,10 +2135,10 @@ async function resolveScanContext(
   // If the scan root itself is gitignored (e.g. user targeted `dist/`), disable
   // gitignore filtering so the user's explicit intent wins.
   if (tracker.isIgnoredByActiveSet(dirPath)) {
-    return { gitRoot: null, gitTracker: null, locationRoot, projectExcludes };
+    return { gitRoot: null, gitTracker: null, locationRoot, projectExcludes, crawledRoot: null };
   }
 
-  return { gitRoot: detectedRoot, gitTracker: tracker, locationRoot, projectExcludes };
+  return { gitRoot: detectedRoot, gitTracker: tracker, locationRoot, projectExcludes, crawledRoot: null };
 }
 
 /**
@@ -1997,6 +2250,8 @@ async function scanDirectory(
 
   const entries = await fs.readdir(dirPath, { withFileTypes: true });
 
+  const descendCtx = await contextForDescendants(dirPath, entries, resolvedScanCtx);
+
   // Build full paths and batch-check gitignore status
   const entryPaths = entries.map(e => safePath.join(dirPath, e.name));
   const gitIgnoredMap = buildGitIgnoreMap(entryPaths, resolvedScanCtx.gitTracker, options.includeArtifacts ?? false);
@@ -2016,7 +2271,9 @@ async function scanDirectory(
         results.push(result);
       }
     } else if (entry.isDirectory()) {
-      const dirResults = await handleDirectoryEntry(fullPath, recursive, options, logger, resolvedBaseDir, resolvedScanCtx, resolvedNestedLog);
+      // `descendCtx`, not `resolvedScanCtx`: this level's own skill (if any)
+      // owns everything below, including this subdirectory.
+      const dirResults = await handleDirectoryEntry(fullPath, recursive, options, logger, resolvedBaseDir, descendCtx, resolvedNestedLog);
       results.push(...dirResults);
     }
   }

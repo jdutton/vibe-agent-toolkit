@@ -214,6 +214,46 @@ describe('GitTracker', () => {
     });
   });
 
+  describe('isUsable()', () => {
+    // The distinction the tracker could not previously express. Both states leave
+    // the active set empty, and `isIgnoredByActiveSet` answers `false` — "not
+    // ignored" — for every path in both. A caller that INFERS from "not ignored"
+    // therefore got a fixed answer from a silently disabled tracker.
+    it('is true when git answered, even with an empty repository', async () => {
+      vi.spyOn(gitUtils, 'gitLsFiles').mockReturnValue([]);
+      const tracker = new GitTracker(projectRoot);
+      await tracker.initialize();
+
+      expect(tracker.isUsable()).toBe(true);
+      expect(tracker.getStats().activeSetSize).toBe(0);
+    });
+
+    it('is false when git could not be consulted', async () => {
+      // `null` is what gitLsFiles returns for a missing binary, a corrupt `.git`,
+      // an unreadable `.git`, and a non-repository cwd alike.
+      vi.spyOn(gitUtils, 'gitLsFiles').mockReturnValue(null);
+      const tracker = new GitTracker(projectRoot);
+      await tracker.initialize();
+
+      expect(tracker.isUsable()).toBe(false);
+      expect(tracker.getStats().activeSetSize).toBe(0);
+    });
+
+    it('is false before initialize() has run at all', () => {
+      expect(new GitTracker(projectRoot).isUsable()).toBe(false);
+    });
+
+    it('reports false again after clear(), not a stale true', async () => {
+      const tracker = new GitTracker(projectRoot);
+      await tracker.initialize();
+      expect(tracker.isUsable()).toBe(true);
+
+      tracker.clear();
+
+      expect(tracker.isUsable()).toBe(false);
+    });
+  });
+
   describe('clear()', () => {
     it('should clear cache and reset initialized flag', async () => {
       const tracker = new GitTracker(projectRoot);

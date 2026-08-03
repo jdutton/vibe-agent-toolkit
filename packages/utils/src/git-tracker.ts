@@ -66,6 +66,8 @@ export class GitTracker {
   private readonly activeAncestors: Set<string> = new Set();
   private initialized = false;
   private activeSetPopulated = false;
+  /** Whether `git ls-files` actually answered during {@link initialize}. */
+  private gitAnswered = false;
 
   constructor(projectRoot: string) {
     this.projectRoot = projectRoot;
@@ -105,8 +107,27 @@ export class GitTracker {
       this.populateAncestorSet();
     }
 
+    this.gitAnswered = files !== null;
     this.activeSetPopulated = includeUntracked && files !== null;
     this.initialized = true;
+  }
+
+  /**
+   * Did git actually answer, or is this tracker an empty shell?
+   *
+   * `gitLsFiles` returns `null` for every way asking can fail — no `git` on
+   * `PATH`, a corrupt `.git`, an unreadable `.git`, a non-repository cwd — and
+   * that `null` is otherwise indistinguishable here from "git answered, and the
+   * repository is empty": both leave the active set with zero entries, after
+   * which {@link isIgnoredByActiveSet} reports every path as NOT ignored.
+   *
+   * For a walker that is fine — unfiltered is the safe default. For a caller that
+   * INFERS something from "not ignored" (provenance, publication, leakage) it is
+   * not: the inference silently becomes a fixed answer. Such callers must ask
+   * this first and treat `false` as "no answer available", never as a verdict.
+   */
+  isUsable(): boolean {
+    return this.gitAnswered;
   }
 
   /**
@@ -273,5 +294,6 @@ export class GitTracker {
     this.activeAncestors.clear();
     this.initialized = false;
     this.activeSetPopulated = false;
+    this.gitAnswered = false;
   }
 }

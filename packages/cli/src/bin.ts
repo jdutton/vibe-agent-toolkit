@@ -53,7 +53,17 @@ const context: VersionContext | null = process.env['VAT_CONTEXT']
 program
   .name('vat')
   .description('Agent-friendly toolkit for building, testing, and deploying portable AI agents')
-  .version(getVersionString(version, context), '-v, --version', 'Output version number')
+  // `import.meta.filename`, NOT process.argv[1] and NOT anything cwd-derived:
+  // this is the file Node actually loaded (symlinks already resolved), so it
+  // identifies the running build even when the wrapper's cwd-derived context
+  // resolves to a bare 'global'. See getVersionString for the incident.
+  // Long form ONLY. A short `-v` here is registered on the ROOT program, and
+  // Commander resolves root options before the subcommand's own — so it silently
+  // shadowed the `-v, --verbose` that validate/verify/build/skills-build each
+  // advertise in their own --help. `vat validate -v` printed the version and
+  // exited 0 without validating, making a CI step spelled that way a
+  // permanently-green gate that ran nothing. Do not re-add the short flag.
+  .version(getVersionString(version, context, import.meta.filename), '--version', 'Output version number')
   .option('--cwd <dir>', 'Change working directory before running any command')
   .option('--debug', 'Enable debug logging')
   .helpCommand(false) // Disable redundant 'help' command, use --help instead

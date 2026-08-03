@@ -81,6 +81,11 @@ const SCENARIOS: Scenario[] = [
     expect: 'LINK_TO_NAVIGATION_FILE',
   },
   {
+    intent: 'link to a repo-internal agent-instruction file (CLAUDE.md, AGENTS.md, GEMINI.md)',
+    ctx: { subject: 'edge', fileKind: 'agent-instruction' },
+    expect: 'LINK_TO_AGENT_INSTRUCTION_FILE',
+  },
+  {
     intent: 'reference excluded by an author-configured pattern (valid)',
     ctx: { subject: 'edge', patternExcluded: true },
     expect: null,

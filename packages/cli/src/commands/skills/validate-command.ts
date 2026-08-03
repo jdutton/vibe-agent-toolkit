@@ -4,7 +4,23 @@
 
 import { Command } from 'commander';
 
-import { validateCommand } from './validate.js';
+import { rejectUnscopablePath, type SkillsScopeSubject } from './scope-guard.js';
+import { type SkillsValidateCommandOptions, validateCommand } from './validate.js';
+
+/**
+ * What a mis-scoped `vat skills validate` used to do.
+ *
+ * In a package where the bare invocation validates 13 skills, one mistyped
+ * character rescoped it to nothing and still reported success — the same
+ * "went wide / went narrow and reported success" defect
+ * `rejectPositionalArguments` was added to `vat verify` / `vat validate` /
+ * `vat build` for, arrived at from the opposite direction. `vat skills build`
+ * carried the identical hole and is guarded by the same module.
+ */
+const SCOPE_SUBJECT: SkillsScopeSubject = {
+  command: 'vat skills validate',
+  silentSuccess: 'nothing to validate',
+};
 
 export function createValidateCommand(): Command {
   const command = new Command('validate');
@@ -15,7 +31,10 @@ export function createValidateCommand(): Command {
     .option('--skill <name>', 'Validate specific skill only')
     .option('-v, --verbose', 'Show all validated skills and every individual finding, including excluded reference paths')
     .option('-d, --debug', 'Enable debug logging')
-    .action(validateCommand)
+    .action(async (pathArg: string | undefined, options: SkillsValidateCommandOptions) => {
+      rejectUnscopablePath(SCOPE_SUBJECT, pathArg);
+      await validateCommand(pathArg, options);
+    })
     .addHelpText(
       'after',
       `

@@ -360,6 +360,18 @@ The `vat` wrapper automatically detects your execution context:
 - Uses development build directly (no packaging)
 - Works from any subdirectory within the repo
 
+`vat --version` always prints a second line naming the binary that produced it:
+
+```
+0.1.0-rc.9-dev (/path/to/repo)
+  binary: /path/to/repo/packages/cli/dist/bin.js
+```
+
+The context label on the first line is derived from your current directory; the `binary:` line is
+derived from the file Node actually loaded. Run a checkout's build by absolute path from somewhere
+else and the label reads `global` — the `binary:` line is then the only thing that tells you which
+build you ran.
+
 **Local install** - Project has vibe-agent-toolkit in node_modules:
 - Uses locally installed version
 - Shown in version output: `0.1.0-rc.9 (local: /path/to/project)`

@@ -63,6 +63,23 @@ describe('applyPluginFiles', () => {
     ).rejects.toThrow(/missing\/file\.mjs/);
   });
 
+  // The throw above becomes a build failure on machine-readable stdout, so the
+  // path it resolves is the project's own coordinate, never the machine's.
+  it('states the missing source project-relative, not absolute', async () => {
+    const { root, out } = await setupStub();
+    const error = await applyPluginFiles({
+      projectRoot: root,
+      pluginOutputDir: out,
+      entries: [{ source: 'missing/file.mjs', dest: 'hooks/h.mjs' }],
+    }).then(
+      () => undefined,
+      (e: unknown) => e as Error,
+    );
+
+    expect(error?.message).toContain('resolved to missing/file.mjs');
+    expect(error?.message).not.toContain(root);
+  });
+
   it('rejects dest that escapes the plugin output dir (..)', async () => {
     const { root, out } = await setupStub();
     await expect(

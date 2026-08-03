@@ -17,7 +17,19 @@
 
 import { CODE_REGISTRY, type IssueCode, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 
-import type { RuleContext } from './rule-context.js';
+import type { FileKind, RuleContext } from './rule-context.js';
+
+/**
+ * File kinds the walker refuses to bundle outright, and the code each reports.
+ * Both are "this file cannot travel", differing only in why: a navigation file
+ * is content at the wrong granularity, an agent-instruction file is guidance
+ * about the repository it lives in. Kept as a table so the two stay adjacent
+ * and adding a third kind does not deepen `evaluateEdge`.
+ */
+const EXCLUDED_FILE_KIND_CODES: Partial<Record<FileKind, IssueCode>> = {
+  nav: 'LINK_TO_NAVIGATION_FILE',
+  'agent-instruction': 'LINK_TO_AGENT_INSTRUCTION_FILE',
+};
 
 /**
  * Decide the code for a **reference edge** (`subject: 'edge'`). Ordered: the
@@ -47,8 +59,9 @@ function evaluateEdge(ctx: RuleContext): IssueCode | null {
   // An existing gitignored target risks leaking ignored data into the bundle.
   if (ctx.gitignored && ctx.existsAtSource) return 'LINK_TO_GITIGNORED_FILE';
 
-  // A link to a navigation file that was excluded from the bundle.
-  if (ctx.fileKind === 'nav') return 'LINK_TO_NAVIGATION_FILE';
+  // A link to a file kind the walker excludes from the bundle outright.
+  const excludedKindCode = EXCLUDED_FILE_KIND_CODES[ctx.fileKind];
+  if (excludedKindCode) return excludedKindCode;
 
   // Excluded by an author-configured pattern — intentional, not an issue.
   if (ctx.patternExcluded) return null;

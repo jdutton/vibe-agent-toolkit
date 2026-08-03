@@ -85,8 +85,11 @@ export function convertConversationalAssistantToFunction<TInput, TOutput>(
       // eslint-disable-next-line @typescript-eslint/await-thenable
       const result = await streamText({
         model: llmConfig.model,
-        ...(llmConfig.temperature ? { temperature: llmConfig.temperature } : {}),
-        ...(llmConfig.maxTokens ? { maxTokens: llmConfig.maxTokens } : {}),
+        // `!== undefined`, not truthiness — see the note in llm-analyzer.ts:
+        // `temperature: 0` is a legitimate, commonly requested setting and
+        // truthiness silently discards it.
+        ...(llmConfig.temperature === undefined ? {} : { temperature: llmConfig.temperature }),
+        ...(llmConfig.maxTokens === undefined ? {} : { maxTokens: llmConfig.maxTokens }),
         ...llmConfig.additionalSettings,
         messages: vercelMessages,
       });

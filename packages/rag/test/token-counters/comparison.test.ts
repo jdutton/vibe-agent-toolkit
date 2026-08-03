@@ -9,6 +9,26 @@ import { describe, expect, it } from 'vitest';
 import { ApproximateTokenCounter } from '../../src/token-counters/approximate-token-counter.js';
 import { FastTokenCounter } from '../../src/token-counters/fast-token-counter.js';
 
+/**
+ * Best of N after a warm-up pass.
+ *
+ * A single cold call measures JIT compilation, not the counter: whichever counter
+ * runs first pays that cost, and on a loaded CI runner it dominates the real
+ * difference outright (an observed run had the length-division counter "slower"
+ * than full BPE tokenization). Warming up and taking the MINIMUM measures
+ * steady-state throughput, which is the claim being made.
+ */
+function bestOf(count: () => void, runs = 5): number {
+  count(); // warm-up: JIT compile, populate any lazy tables
+  let best = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < runs; i += 1) {
+    const start = performance.now();
+    count();
+    best = Math.min(best, performance.now() - start);
+  }
+  return best;
+}
+
 describe('Token Counter Comparison', () => {
   const fast = new FastTokenCounter();
   const approximate = new ApproximateTokenCounter();
@@ -47,17 +67,10 @@ describe('Token Counter Comparison', () => {
   it('should show FastTokenCounter is faster than ApproximateTokenCounter', () => {
     const longText = 'word '.repeat(10000); // 50000 chars
 
-    // Measure FastTokenCounter
-    const fastStart = performance.now();
-    fast.count(longText);
-    const fastDuration = performance.now() - fastStart;
+    const fastDuration = bestOf(() => fast.count(longText));
+    const approximateDuration = bestOf(() => approximate.count(longText));
 
-    // Measure ApproximateTokenCounter
-    const approximateStart = performance.now();
-    approximate.count(longText);
-    const approximateDuration = performance.now() - approximateStart;
-
-    // FastTokenCounter should be significantly faster
+    // FastTokenCounter (bytes/4) should beat ApproximateTokenCounter (real BPE).
     expect(fastDuration).toBeLessThan(approximateDuration);
   });
 

@@ -62,7 +62,7 @@ vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) => {
 
 const { routeInventory } = await import('../../src/commands/inventory.js');
 const { buildAuditReport, resetAuditCaches } = await import('../../src/commands/audit.js');
-const { silentAuditLogger } = await import('../test-helpers.js');
+const { silentLogger } = await import('../test-helpers.js');
 
 const SKILL_NAMES = ['alpha', 'beta', 'gamma'];
 
@@ -113,7 +113,7 @@ function messagesOf(parseErrors: { message: string }[]): string {
 async function auditPlugin(dir: string): Promise<unknown[]> {
   resetAuditCaches();
   crawlBaseDirs.length = 0;
-  const { results } = await buildAuditReport(dir, {}, Date.now(), silentAuditLogger as never);
+  const { results } = await buildAuditReport(dir, {}, Date.now(), silentLogger as never);
   return results;
 }
 

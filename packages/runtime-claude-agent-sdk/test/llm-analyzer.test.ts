@@ -4,6 +4,7 @@ import {
   SimpleNameOutputSchema,
   simpleNameGeneratorAgent,
 } from '@vibe-agent-toolkit/test-agents';
+import { expect, it } from 'vitest';
 
 import { convertLLMAnalyzerToTool, convertLLMAnalyzersToTools } from '../src/adapters/llm-analyzer.js';
 
@@ -29,4 +30,29 @@ createLLMAnalyzerTestSuite({
     apiKey: 'test-key',
     model: 'claude-sonnet-5',
   },
+});
+
+// Runtime-specific: LLM analyzers land on their own default MCP server ('vat-llm-agents'), which
+// is deliberately different from the pure-function default ('vat-agents') so the two archetypes
+// never collide in one `mcpServers` map. The factory adapter above discards the metadata, so this
+// default — and the archetype tag riding along with it — is otherwise untested.
+it('defaults batch LLM analyzers onto the vat-llm-agents MCP server', () => {
+  const converted = convertLLMAnalyzersToTools(
+    {
+      generateName: {
+        agent: simpleNameGeneratorAgent as never,
+        inputSchema: SimpleNameInputSchema as never,
+        outputSchema: SimpleNameOutputSchema as never,
+      },
+    },
+    { apiKey: 'test-key', model: 'claude-sonnet-5' },
+  );
+
+  expect(converted.server.name).toBe('vat-llm-agents');
+  expect(converted.metadata.serverName).toBe('vat-llm-agents');
+  expect(converted.metadata.tools['generateName']).toMatchObject({
+    archetype: 'llm-analyzer',
+    name: 'simple-name-generator',
+    toolName: 'mcp__vat-llm-agents__generateName',
+  });
 });

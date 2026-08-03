@@ -50,10 +50,33 @@ export const CODE_REGISTRY = {
     'Link to the specific content instead of the navigation file, or set severity.LINK_TO_NAVIGATION_FILE to ignore if this is intentional.',
     'link_to_navigation_file',
   ),
+  LINK_TO_AGENT_INSTRUCTION_FILE: entry(
+    'error',
+    // "excluded from the bundle" used to be asserted unconditionally, and it was
+    // FALSE in the one configuration the fix string recommended: with an explicit
+    // files: entry naming the file, the file shipped. The description now states
+    // the precondition that makes it true, and names the consequence the old
+    // wording left silent — the link is stripped, so the packaged prose points at
+    // nothing.
+    'Markdown link targets a repo-internal agent-instruction file (CLAUDE.md, AGENTS.md, GEMINI.md) that no explicit files: entry declares; it is not bundled and the link is stripped from the packaged content.',
+    // Three real remedies, then the declaration route. The absolute-URL route is
+    // listed because it is the cheapest correct fix for the dominant population —
+    // links that point UPWARD out of the skill dir at a file whose canonical home
+    // is a repository the reader can open.
+    //
+    // The declaration route is stated as EXPLICIT (non-glob) deliberately: it used
+    // to read "declare it under skills.config.<name>.files" and doing exactly that
+    // changed nothing, because the walker refused the link whatever the config
+    // said. The remedy told you to do the thing you had already done. It is now
+    // honoured, and the qualifier is load-bearing — a glob is a net, not a
+    // declaration, and never packages one of these files.
+    "Link the specific content the file describes; point the link at the file's canonical home as an absolute URL; or extract the shared part into a document intended for distribution. To ship the file deliberately, name it in an explicit (non-glob) skills.config.<name>.files entry — the file is then bundled and this link is rewritten to the declared dest.",
+    'link_to_agent_instruction_file',
+  ),
   LINK_TO_GITIGNORED_FILE: entry(
     'error',
     'Markdown link targets a gitignored file; risks leaking ignored data into the bundle.',
-    'Link to a non-ignored file or adjust .gitignore. Allow the specific path via validation.allow if the risk has been reviewed.',
+    'Link to a non-ignored file or adjust .gitignore. Allow the specific path via validation.allow if the risk has been reviewed. If the target is a build artifact, declare it under skills.config.<name>.files instead.',
     'link_to_gitignored_file',
   ),
   LINK_MISSING_TARGET: entry(
@@ -86,6 +109,99 @@ export const CODE_REGISTRY = {
     'Add a markdown link or code-block mention in SKILL.md or a linked resource. A file consumed programmatically belongs in skills.config.<name>.files as a source/dest pair — a declared dest is exempt, so do NOT restate it in validation.allow.',
     'packaged_unreferenced_file',
   ),
+  PACKAGED_AGENT_INSTRUCTION_FILE: entry(
+    'warning',
+    'A repo-internal agent-instruction file (CLAUDE.md, AGENTS.md, GEMINI.md) is present in the scanned tree — a built skill bundle, an installed plugin, or a plugin source directory.',
+    // Two lanes hand this detector different trees, and one remediation has to be
+    // true for both. In a DIST tree the file demonstrably shipped, so removing it
+    // is the fix. In a repo SOURCE tree the build already excludes it from the
+    // plugin tree-copy and from files: globs, so it does not ship unless an
+    // explicit files: entry names it — prescribing deletion there told adopters to
+    // delete a useful repo-internal doc to silence a warning about a file that no
+    // longer travels.
+    //
+    // The last clause is for the third lane: `vat audit <path>` resolves a subject
+    // by PATH, and a built bundle's path is not its source skill's declared path,
+    // so that lane cannot reach the `files:` block that may have sanctioned the
+    // file. `vat build` and `vat verify` CAN, and they honour it by not reporting
+    // at all — so a reader who sees this from audit alone must not conclude the
+    // declaration failed.
+    'In a distributed tree (a built bundle or an installed plugin) remove the file, or move it outside the directory that is packaged. In a repo source tree, confirm first whether it ships: the build excludes agent-instruction files from the plugin tree-copy and from files: globs, so only an explicit files: entry naming it puts it in the output. If it must ship, set severity.PACKAGED_AGENT_INSTRUCTION_FILE to ignore so the exception is recorded in config. If an explicit files: entry already names this dest, vat build and vat verify honour it and stay silent; vat audit reports it anyway because a path-addressed scan cannot see the config that declared it.',
+    'packaged_agent_instruction_file',
+  ),
+  // The companion PACKAGED_AGENT_INSTRUCTION_FILE needs in order to be allowed to
+  // stay silent. Its audit lane only reports files in a DISTRIBUTED tree, and the
+  // distributed/source question is answered from git — so anything that stops git
+  // answering (no binary on PATH, a corrupt or unreadable `.git`) used to collapse
+  // to "not ignored", i.e. source, i.e. silence, with `status: success` and no
+  // trace anywhere that the detector had been switched off.
+  //
+  // A missing answer is therefore reported as a missing answer. Deliberately NOT
+  // resolved by assuming `distributed`: that manufactures a substantive claim
+  // about the artifact ("this file shipped to consumers") that nothing observed,
+  // and its remediation — remove the file — is wrong advice for the ordinary
+  // source tree in a container with no git.
+  //
+  // `warning`, matching the code it stands in for, so a CI gate counting warnings
+  // cannot be quietly zeroed by breaking git. Emitted only when the tree actually
+  // holds agent-instruction files: with none there, nothing was left unclassified
+  // and healthy git would have said nothing either.
+  TREE_PROVENANCE_INDETERMINATE: entry(
+    'warning',
+    'Could not determine whether a scanned skill tree is repository source or a distributed artifact, because `git` could not be consulted; agent-instruction files present in the tree were left unclassified rather than silently accepted.',
+    'Make `git` runnable for this tree — install it, put it on PATH, or repair the repository whose `.git` directory could not be read — then re-run the audit. Set severity.TREE_PROVENANCE_INDETERMINATE to ignore if this environment deliberately has no git and the unclassified files are known to be repository source.',
+    'tree_provenance_indeterminate',
+  ),
+  FILES_GLOB_DROPPED_NEVER_PACKAGED: entry(
+    'warning',
+    'A `files:` glob matched a file that is never packaged into a skill bundle (an agent-instruction file such as CLAUDE.md, or a navigation file such as README.md); it was dropped and did not ship.',
+    'No action needed if the drop is intended — a glob is a net, not a declaration. To ship that specific file deliberately, add an explicit `files:` entry naming it (`source: <path>`); to stop matching it at all, narrow the glob.',
+    'files_glob_dropped_never_packaged',
+  ),
+  // The third of three verdicts a pre-build gate can reach about one glob entry
+  // (partial drop / nothing shippable / nothing matched). This one: the glob
+  // matched, and the never-package list refused EVERY match, so the entry ships
+  // nothing and `copyGlobEntry` raises its own distinct error.
+  //
+  // A separate code rather than a widened FILES_GLOB_MATCHED_NOTHING because the
+  // two have different causes and therefore different remedies: "produce the
+  // artifact first" is useless advice for a glob that netted only files VAT never
+  // packages, and "name the file explicitly" is useless for one whose directory
+  // is empty. One code would have to carry both, and a reader would have to work
+  // out which half applied to them.
+  //
+  // `warning`, not `error`: a pre-build tree can be a PARTIAL artifact just as it
+  // can be an absent one — a stale `dist/` holding only a README.md is the same
+  // phenomenon that makes the zero-match `info` — so blocking CI here can be
+  // wrong. Louder than `info` because, unlike an empty directory, a directory
+  // containing only never-packaged files is not the ordinary pre-build state.
+  FILES_GLOB_MATCHED_ONLY_NEVER_PACKAGED: entry(
+    'warning',
+    'A `files:` glob matched only files that are never packaged into a skill bundle (agent-instruction files such as CLAUDE.md, navigation files such as README.md), so the entry ships nothing and `vat skills build` fails on it.',
+    // Deliberately does NOT say "widen the glob": the never-package filter matches
+    // on basename and applies at any width, so a wider glob clears the error while
+    // still shipping none of these files — advice that looks like it worked.
+    'Name the file you intend to ship in an explicit (non-glob) `files:` entry (`source: <path>`), or point the glob at a directory that holds files which can be packaged. Widening the glob does not help — the never-package filter matches on basename at any width. Set severity.FILES_GLOB_MATCHED_ONLY_NEVER_PACKAGED to ignore if the entry is deliberately inert.',
+    'files_glob_matched_only_never_packaged',
+  ),
+  // Distinct from FILES_GLOB_DROPPED_NEVER_PACKAGED, which is about a glob that
+  // MATCHED and then had a match refused, and from
+  // FILES_GLOB_MATCHED_ONLY_NEVER_PACKAGED, where it matched and none survived.
+  // This one is about a glob that matched nothing at all — the other input
+  // `vat skills build` dies on.
+  //
+  // `info`, not `warning`: a pre-build gate runs before the artifact exists, so a
+  // glob over an unbuilt `dist/` matching nothing is the expected state and must
+  // not fail anyone's CI. But "expected state" and "the build will die on this"
+  // are both true at once, and the gate used to report NEITHER — reporting the
+  // drop that is harmless by design while staying silent about the zero-match
+  // that is fatal.
+  FILES_GLOB_MATCHED_NOTHING: entry(
+    'info',
+    'A `files:` glob currently matches no files; `vat skills build` fails on a glob that matches nothing, so the build will fail unless that artifact is produced first.',
+    'No action needed if the glob points at a build artifact your project produces before `vat skills build` runs — matching nothing beforehand is expected. Otherwise correct the pattern (a `files:` source resolves relative to the project root) or drop the entry. Set severity.FILES_GLOB_MATCHED_NOTHING to ignore to silence it everywhere.',
+    'files_glob_matched_nothing',
+  ),
   PACKAGED_TEST_INPUT: entry(
     'warning',
     "A link or files: entry pointed into the skill's declared test input (its test.evals path) and was NOT packaged; test input — including the expected_output answer key — never ships to consumers.",
@@ -94,7 +210,17 @@ export const CODE_REGISTRY = {
   ),
   PACKAGED_BROKEN_LINK: entry(
     'error',
-    'Link in the packaged output resolves to a file that is not present in the output (likely a link-rewriter bug).',
+    // The CAUSE deliberately lives in `fix`, not here. This code has two
+    // populations — a link-rewriter bug, and a target the never-package filter
+    // dropped on purpose — and only the emitting lane knows which one it is
+    // holding, so only the per-issue `fix` can name it. When the cause was
+    // asserted in the description ("likely a link-rewriter bug"), the
+    // policy-drop branch shipped one issue whose message blamed VAT and whose
+    // `fix` said "Nothing to report — VAT dropped this file on purpose": the two
+    // halves of a single finding contradicting each other. The description now
+    // states only what every emission observed — the link does not resolve in
+    // the output — and each lane supplies its own remediation.
+    'Link in the packaged output resolves to a file that is not present in the output.',
     'Report the issue — this indicates a VAT bug. As a temporary workaround, set severity.PACKAGED_BROKEN_LINK to ignore while the underlying bug is fixed.',
     'packaged_broken_link',
   ),
@@ -103,6 +229,16 @@ export const CODE_REGISTRY = {
     'Two source files package to the same destination path in the bundle; one would overwrite the other.',
     "Rename one of the files, or switch resourceNaming to a path-based strategy ('resource-id' or 'preserve-path') so the sources map to distinct destinations.",
     'filename_collision',
+  ),
+  PLUGIN_EXCLUDE_PATTERN_UNUSED: entry(
+    'warning',
+    'A plugin `exclude:` pattern matched no file in the plugin source tree; it excluded nothing from the built bundle.',
+    // Names only what the author can act on. A dead pattern has no "correct"
+    // resolution VAT can pick — the path may be a typo, or the junk it used to
+    // catch may simply be gone — so the fix is to check it against the source
+    // dir and then either correct it or delete the line.
+    "Check the pattern against the plugin source directory (patterns are relative to it, and a bare directory name covers its whole subtree), then correct the path — or drop the entry from the marketplace plugin entry's exclude: list if what it targeted no longer exists.",
+    'plugin_exclude_pattern_unused',
   ),
   DUPLICATE_RESOURCE_ID: entry(
     'error',
@@ -209,7 +345,7 @@ export const CODE_REGISTRY = {
   SKILL_CROSS_SKILL_AUTH_UNDECLARED: entry(
     'warning',
     'SKILL.md body declares a dependency on a sibling skill or ANTHROPIC_*_KEY environment variable that is not mentioned in the description.',
-    'Name the dependency in the description (e.g. "Requires ado skill for auth" or "Requires ANTHROPIC_ADMIN_API_KEY") so agents loading the skill discover it without reading the body.',
+    'Name the dependency in the description (e.g. "Requires ado skill for auth" or "Requires ANTHROPIC_ADMIN_API_KEY") so agents loading the skill discover it without reading the body. Allow via validation.allow with a reason when the dependency is genuinely runtime-optional.',
     'skill_cross_skill_auth_undeclared',
   ),
   SKILL_DESCRIPTION_STYLE_MIXED_IN_PACKAGE: entry(
@@ -365,7 +501,7 @@ export const CODE_REGISTRY = {
   LINK_TO_GITIGNORED: entry(
     'error',
     'A tracked file links to a gitignored file.',
-    'Link a tracked target or un-ignore it.',
+    'Link a tracked target or un-ignore it. If the target is a build artifact, declare it under skills.config.<name>.files instead.',
     'link_to_gitignored',
   ),
   LINK_UNRESOLVED_REFERENCE: entry(

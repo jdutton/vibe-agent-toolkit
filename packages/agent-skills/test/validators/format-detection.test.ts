@@ -217,11 +217,11 @@ describe('detectResourceFormat', () => {
 			expect(result.reason).toContain('does not exist');
 		});
 
-		it('should handle permission errors gracefully', async () => {
+		it('should handle permission errors gracefully', async (ctx) => {
 			// This test is platform-specific and may not work on all systems
 			// Skipping on Windows where permission errors are harder to simulate
 			if (process.platform === 'win32') {
-				return;
+				ctx.skip();
 			}
 
 			const tempDir = getTempDir();

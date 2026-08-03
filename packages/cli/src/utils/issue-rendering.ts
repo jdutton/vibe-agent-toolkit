@@ -273,6 +273,71 @@ export function issuesToRenderAtVerbosity(
   );
 }
 
+/**
+ * How many findings `--verbose` would render that this verbosity does not.
+ *
+ * Derived from {@link issuesToRenderAtVerbosity} rather than re-stating its rule,
+ * so the number a report quotes can never contradict the policy that produced it.
+ * Allow-suppressed findings are in neither set, so they are correctly not counted
+ * as "hidden by verbosity" — they were hidden by the adopter's own config.
+ */
+export function countCollapsedFindings(
+  issues: readonly ValidationIssue[],
+  verbose: boolean,
+): number {
+  return (
+    issuesToRenderAtVerbosity(issues, true).length
+    - issuesToRenderAtVerbosity(issues, verbose).length
+  );
+}
+
+/**
+ * The one sentence that tells a reader findings exist that they cannot see.
+ *
+ * A collapsed block is otherwise a heading with nothing beneath it — the
+ * reassuring silence this module's header warns about. `vat audit` has printed
+ * this line all along and `vat skills build` did not; one helper rather than a
+ * second phrasing of the same idea, because two wordings for one concept is how
+ * the severity collapse came to be spelled five different ways.
+ *
+ * `report` names the verb whose YAML the reader should open ("audit", "build").
+ * That clause is only honest for a command that publishes full `issues:` arrays;
+ * do not pass a report name for a verb that publishes counts alone.
+ *
+ * Returns `undefined` when nothing was collapsed, so callers print nothing rather
+ * than a "0 findings not shown" line.
+ */
+export function formatCollapsedFindingsHint(
+  collapsed: number,
+  report: string,
+): string | undefined {
+  if (collapsed <= 0) return undefined;
+  return (
+    `\n${collapsed} warning/info finding(s) not shown — re-run with --verbose, `
+    + `or read this ${report}'s YAML report on stdout, which lists every finding.`
+  );
+}
+
+/**
+ * How many files LINK TRAVERSAL put in a bundle, in prose: `1 file`, `11 files`.
+ *
+ * Deliberately not called the bundle's file count, which is what it reads like and
+ * is not: `files.dependencies` carries only what the link-graph walk discovered, so
+ * every file `files:` copied in — each glob match, plus any explicit entry the walk
+ * had not already bundled — is absent from the total. A bundle holding SKILL.md, one
+ * linked doc and one declared artifact prints `2 files`. That undercount is issue
+ * #177 and is deliberately NOT patched here; this wording is only the part that can
+ * be made true today, so nobody reads the number as an inventory of the output.
+ *
+ * The `+ 1` is the bundle's root `SKILL.md`, which `files.dependencies` does not
+ * list — spelled once here rather than at each progress line, so the two build
+ * lanes cannot come to disagree about whether the root document counts.
+ */
+export function formatPackagedFileCount(result: PackageSkillResult): string {
+  const total = result.files.dependencies.length + 1;
+  return `${total} file${total === 1 ? '' : 's'}`;
+}
+
 /** Sum severity counts across lanes (per-skill → per-plugin → per-run). */
 export function sumSeverityCounts(counts: readonly SeverityCounts[]): SeverityCounts {
   return counts.reduce<SeverityCounts>(

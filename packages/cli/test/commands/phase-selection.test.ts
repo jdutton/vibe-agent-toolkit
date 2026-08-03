@@ -32,7 +32,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { selectBuildPhases } from '../../src/commands/build.js';
 import {
@@ -46,7 +46,9 @@ import {
   checkFilesConfigDests,
   formatVerifyAnnouncement,
   selectVerifyPhases,
+  toPublishedIssue,
 } from '../../src/commands/verify.js';
+import { captureProcessExit, type CapturedExit } from '../test-doubles.js';
 
 /** Narrow to the `run` arm, failing loudly (not silently passing) otherwise. */
 function runPhases(selection: PhaseSelection): Phase[] {
@@ -71,37 +73,12 @@ function failMessage(selection: PhaseSelection): string {
 
 /**
  * Run `rejectRetiredOnly` with `process.exit` and `process.stderr.write`
- * captured. `exit` is stubbed to THROW rather than return, because the real one
- * never returns: a stub that returns would let execution fall through into code
- * the production path can never reach, and the test would then be asserting
- * against a control flow that does not exist.
+ * captured. See {@link captureProcessExit} for why the exit stub throws.
  */
-function captureRetiredOnly(only: string | undefined): {
-  stderr: string;
-  exited: number | undefined;
-} {
-  let stderr = '';
-  let exited: number | undefined;
-  const writeSpy = vi
-    .spyOn(process.stderr, 'write')
-    .mockImplementation((chunk: string | Uint8Array) => {
-      stderr += String(chunk);
-      return true;
-    });
-  const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
-    exited = code;
-    throw new Error('process.exit');
-  }) as never);
-
-  try {
+async function captureRetiredOnly(only: string | undefined): Promise<CapturedExit> {
+  return captureProcessExit(() => {
     rejectRetiredOnly(only, 'vat validate', 35);
-  } catch (error) {
-    if (!(error instanceof Error) || error.message !== 'process.exit') throw error;
-  } finally {
-    writeSpy.mockRestore();
-    exitSpy.mockRestore();
-  }
-  return { stderr, exited };
+  });
 }
 
 const SKILL_GLOB = '**/SKILL.md';
@@ -224,15 +201,15 @@ describe('formatVerifyAnnouncement', () => {
     // printed 'resources → skills' and then ran two more phases, one of which
     // (consistency) contributed its own entry to the emitted document.
     expect(announce(CONFIG_BOTH)).toBe(
-      '🔍 vat verify (phases: resources → skills → files-config-dests → consistency)',
+      '🔍 vat verify (phases: resources → skills → files-config-dests → packaged-content → consistency)',
     );
   });
 
-  it('names files-config-dests and consistency alongside skills', () => {
-    // All three read the same `skills:` block, so a run that has one runs all
-    // three. The announcement must not deny that coupling.
+  it('names every in-process phase alongside skills', () => {
+    // All of them read the same `skills:` block, so a run that has one runs all
+    // of them. The announcement must not deny that coupling.
     expect(announce(CONFIG_SKILLS_ONLY)).toBe(
-      '🔍 vat verify (phases: skills → files-config-dests → consistency)',
+      '🔍 vat verify (phases: skills → files-config-dests → packaged-content → consistency)',
     );
   });
 
@@ -274,7 +251,9 @@ describe('checkFilesConfigDests', () => {
         'version: 1\nresources:\n  include: ["docs/**/*.md"]\n',
       );
 
-      expect(checkFilesConfigDests(dir)).toEqual([]);
+      // `[]` is what the command itself passes here: with no `skills:` block
+      // there is nothing to discover, so this is the real input, not a stub.
+      expect(checkFilesConfigDests(dir, [])).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -329,17 +308,17 @@ describe('selectValidateSurfaces', () => {
 });
 
 describe('rejectRetiredOnly', () => {
-  it('is a no-op when --only was not passed', () => {
-    const { stderr, exited } = captureRetiredOnly(undefined);
+  it('is a no-op when --only was not passed', async () => {
+    const { stderr, exited } = await captureRetiredOnly(undefined);
 
     expect(stderr).toBe('');
     expect(exited).toBeUndefined();
   });
 
-  it('fails with exit 1 when --only was passed', () => {
+  it('fails with exit 1 when --only was passed', async () => {
     // Exit 1, not 0: a CI gate that was failing on a bad --only must keep
     // failing across the removal rather than flip to green.
-    expect(captureRetiredOnly('skills').exited).toBe(1);
+    expect((await captureRetiredOnly('skills')).exited).toBe(1);
   });
 
   /**
@@ -348,12 +327,53 @@ describe('rejectRetiredOnly', () => {
    * cannot tell a typo from a removal, and has no way to learn what replaced
    * it. Each assertion below is one thing that error could not say.
    */
-  it('names the removal, the command, the evidence, and where --only still works', () => {
-    const { stderr } = captureRetiredOnly('skills');
+  it('names the removal, the command, the evidence, and where --only still works', async () => {
+    const { stderr } = await captureRetiredOnly('skills');
 
     expect(stderr).toContain("'--only' was removed");
     expect(stderr).toContain('vat validate');
     expect(stderr).toContain('~35s');
     expect(stderr).toContain('vat build --only');
+  });
+});
+
+describe('toPublishedIssue', () => {
+  // The archived YAML is what a CI consumer parses; stderr is not. A finding that
+  // reaches the document without its anchor names no file at all — the same defect
+  // `vat skills build` was fixed for one command over, reproduced here by a
+  // `PublishedIssue` shape that declared only {severity, code, message, fix}.
+  it('carries the whole anchor into the document', () => {
+    expect(toPublishedIssue({
+      code: 'PACKAGED_AGENT_INSTRUCTION_FILE',
+      severity: 'warning',
+      message: 'A repo-internal agent-instruction file is packaged in this bundle.',
+      location: 'dist/skills/demo/CLAUDE.md',
+      line: 3,
+      fix: 'Remove it from the bundle.',
+      reference: 'docs/validation-codes.md',
+    })).toEqual({
+      code: 'PACKAGED_AGENT_INSTRUCTION_FILE',
+      severity: 'warning',
+      message: 'A repo-internal agent-instruction file is packaged in this bundle.',
+      location: 'dist/skills/demo/CLAUDE.md',
+      line: 3,
+      fix: 'Remove it from the bundle.',
+      reference: 'docs/validation-codes.md',
+    });
+  });
+
+  it('omits the optional keys entirely rather than publishing them as null', () => {
+    // `exactOptionalPropertyTypes` distinguishes absent from explicit-undefined,
+    // and `yaml.stringify` renders the latter as `location: null` — a claim the
+    // finding never made.
+    const published = toPublishedIssue({
+      code: 'SKILL_MISSING_DESCRIPTION',
+      severity: 'error',
+      message: 'No description.',
+    });
+
+    expect(Object.keys(published).toSorted((a, b) => a.localeCompare(b)))
+      .toEqual(['code', 'fix', 'message', 'severity']);
+    expect(published.fix).toBe('');
   });
 });

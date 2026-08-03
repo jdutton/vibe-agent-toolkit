@@ -1,10 +1,15 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- paths are test-owned temp dirs */
 /**
- * Which directories under a plugin's `skills/` tree each build phase produces, and
- * which the verbatim tree-copy is left to ship.
+ * What a plugin build is allowed to ship — the two halves of one question, kept in
+ * one file because they share a fixture shape and are read together.
  *
- * Three regressions are guarded here, all of the same shape — two phases disagreeing
- * about what a directory under `skills/` is:
+ * **Part 1 — which directories under `skills/` each phase produces**, and which the
+ * verbatim tree-copy is left to ship. Three regressions, all of the same shape: two
+ * phases disagreeing about what a directory under `skills/` is.
+ *
+ * **Part 2 — the never-package defaults and the `exclude:` knob** (second `describe`).
+ *
+ * Part 1's regressions:
  *
  *  1. **Content loss.** The tree-copy's exclusion list was once EVERY directory under
  *     `skills/`, while the packager only produced the ones holding a SKILL.md. A
@@ -22,20 +27,12 @@
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 
-import { mkdirSyncReal, safeExecSync, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { runClaudePluginBuild } from '../../src/commands/claude/plugin/build.js';
-import type { Logger } from '../../src/utils/logger.js';
 import { cleanupTestTempDir, createTestTempDir, writeTestFile } from '../system/test-common.js';
-
-/** Build progress is irrelevant here; keep it out of the test output. */
-const SILENT_LOGGER: Logger = {
-  info: () => undefined,
-  warn: () => undefined,
-  error: () => undefined,
-  debug: () => undefined,
-};
+import { commitTestFixture, marketplacePluginOutDir, silentLogger } from '../test-helpers.js';
 
 const MARKETPLACE = 'mp';
 const SKILLS_DIR = 'skills';
@@ -135,15 +132,9 @@ function writeFixture(tempDir: string, poolSelector = '[]', extra?: (skillsDir: 
 
   // Git visibility is the file set BOTH producers must agree on, so the fixture has
   // to be a real repo with a real commit — `.gitignore` alone proves nothing.
-  safeExecSync('git', ['init', '-q', '-b', 'main'], { cwd: tempDir });
-  safeExecSync('git', ['config', 'user.email', 'test@test'], { cwd: tempDir });
-  safeExecSync('git', ['config', 'user.name', 'test'], { cwd: tempDir });
-  safeExecSync('git', ['add', '-A'], { cwd: tempDir });
-  safeExecSync('git', ['commit', '-q', '-m', 'fixture'], { cwd: tempDir });
+  commitTestFixture(tempDir);
 
-  return safePath.join(
-    tempDir, 'dist', '.claude', 'plugins', 'marketplaces', MARKETPLACE, 'plugins', PLUGIN,
-  );
+  return marketplacePluginOutDir(tempDir, MARKETPLACE, PLUGIN);
 }
 
 /** Every file under `root`, as forward-slash paths relative to it. */
@@ -170,7 +161,7 @@ describe('plugin build — what each phase produces under skills/ (integration)'
     tempDir = createTestTempDir('vat-plugin-skills-dirs-');
     const outDir = writeFixture(tempDir);
 
-    const results = await runClaudePluginBuild(tempDir, { logger: SILENT_LOGGER });
+    const results = await runClaudePluginBuild(tempDir, { logger: silentLogger });
 
     // Two skills packaged: the flat one and the NESTED one. The nested skill used to
     // be invisible to the packager and fell through to the verbatim tree-copy.
@@ -196,7 +187,7 @@ describe('plugin build — what each phase produces under skills/ (integration)'
     tempDir = createTestTempDir('vat-plugin-skills-gitignored-');
     const outDir = writeFixture(tempDir);
 
-    const results = await runClaudePluginBuild(tempDir, { logger: SILENT_LOGGER });
+    const results = await runClaudePluginBuild(tempDir, { logger: silentLogger });
 
     // Only the two tracked skills are packaged; the gitignored one is not a skill
     // this project publishes (`vat skills build` cannot discover it either).
@@ -214,7 +205,7 @@ describe('plugin build — what each phase produces under skills/ (integration)'
     mkdirSyncReal(poolDist, { recursive: true });
     writeTestFile(safePath.join(poolDist, SKILL_FILE), skillMd(NESTED_SKILL));
 
-    await runClaudePluginBuild(tempDir, { logger: SILENT_LOGGER });
+    await runClaudePluginBuild(tempDir, { logger: silentLogger });
 
     // The pool copy is the sole source; the plugin-local nested copy is neither
     // packaged nor tree-copied. Two definitions of one skill, at two depths in one
@@ -251,7 +242,7 @@ describe('plugin build — what each phase produces under skills/ (integration)'
     mkdirSyncReal(poolDist, { recursive: true });
     writeTestFile(safePath.join(poolDist, SKILL_FILE), skillMd(POOL_ONLY_SKILL));
 
-    await expect(runClaudePluginBuild(tempDir, { logger: SILENT_LOGGER })).rejects.toThrow(
+    await expect(runClaudePluginBuild(tempDir, { logger: silentLogger })).rejects.toThrow(
       /two DIFFERENT skills claim the same output directory/,
     );
   });
@@ -270,12 +261,201 @@ describe('plugin build — what each phase produces under skills/ (integration)'
 
     const warnings: string[] = [];
     await runClaudePluginBuild(tempDir, {
-      logger: { ...SILENT_LOGGER, info: (m: string) => { warnings.push(m); } },
+      logger: { ...silentLogger, info: (m: string) => { warnings.push(m); } },
     });
 
     expect(warnings.some((m) => m.includes('skills/brand-new/SKILL.md') && m.includes('not tracked by git'))).toBe(true);
     // The deliberately GITIGNORED skill gets no such warning — ignoring it IS the
     // instruction, and warning every build would train authors to ignore warnings.
     expect(warnings.some((m) => m.includes(GITIGNORED_SKILL) && m.includes('not tracked by git'))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Part 2 — never-package defaults and the `exclude:` knob
+// ---------------------------------------------------------------------------
+
+const GUIDED_PLUGIN = 'guided-plugin';
+
+/** The live pattern every guided fixture declares: it really does catch `scratch/`. */
+const LIVE_EXCLUDE = 'scratch/**';
+
+function guidedConfig(
+  excludePatterns: readonly string[],
+  extraPluginKeys: readonly string[] = [],
+): string {
+  const extra = extraPluginKeys.map((line) => `\n          ${line}`).join('');
+  return `version: 1
+skills:
+  include: ["plugins/*/skills/**/SKILL.md"]
+claude:
+  marketplaces:
+    ${MARKETPLACE}:
+      owner:
+        name: Test Org
+      plugins:
+        - name: ${GUIDED_PLUGIN}
+          description: Plugin whose source dir holds guidance, a front page, and scratch
+          skills: []
+          exclude: [${excludePatterns.map((p) => JSON.stringify(p)).join(', ')}]${extra}
+`;
+}
+
+/**
+ * The project files a guided fixture needs, WITHOUT the plugin's source tree —
+ * so a case can choose whether that tree exists at all.
+ */
+function writeGuidedProjectFiles(
+  tempDir: string,
+  excludePatterns: readonly string[],
+  extraPluginKeys: readonly string[] = [],
+): void {
+  writeTestFile(safePath.join(tempDir, 'package.json'), JSON.stringify({ name: 't', version: '1.0.0' }));
+  writeTestFile(
+    safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
+    guidedConfig(excludePatterns, extraPluginKeys),
+  );
+  writeTestFile(safePath.join(tempDir, '.gitignore'), 'dist/\n');
+}
+
+/** Fixture with one of every never-package shape; returns the built plugin dir. */
+function writeGuidedFixture(tempDir: string, excludePatterns: readonly string[] = [LIVE_EXCLUDE]): string {
+  writeGuidedProjectFiles(tempDir, excludePatterns);
+
+  const plugin = safePath.join(tempDir, 'plugins', GUIDED_PLUGIN);
+  for (const dir of ['docs', 'scratch', 'commands']) {
+    mkdirSyncReal(safePath.join(plugin, dir), { recursive: true });
+  }
+
+  // Tier 1: repo-internal guidance, at the root and at depth.
+  writeTestFile(safePath.join(plugin, 'CLAUDE.md'), '# How to work on this repo\n');
+  writeTestFile(safePath.join(plugin, 'AGENTS.md'), '# Portable agent guidance\n');
+  writeTestFile(safePath.join(plugin, 'docs', 'CLAUDE.md'), '# Nested guidance\n');
+
+  // Tier 2 must NOT apply here: the plugin's front page and its navigation.
+  writeTestFile(safePath.join(plugin, 'README.md'), '# Guided Plugin\n\nThe front page.\n');
+  writeTestFile(safePath.join(plugin, 'docs', 'index.md'), '# Docs index\n');
+
+  // Tier 3: project-specific junk, named by the entry's `exclude:`.
+  writeTestFile(safePath.join(plugin, 'scratch', 'notes.md'), '# Scratch\n');
+
+  // Ordinary content that must survive all three.
+  writeTestFile(safePath.join(plugin, 'commands', 'go.md'), '# go\n');
+
+  commitTestFixture(tempDir);
+
+  return marketplacePluginOutDir(tempDir, MARKETPLACE, GUIDED_PLUGIN);
+}
+
+describe('plugin build — never-package defaults and the exclude knob (integration)', () => {
+  let tempDir: string;
+
+  afterEach(() => {
+    cleanupTestTempDir(tempDir);
+  });
+
+  it('drops agent-instruction files and excluded globs, and keeps the plugin front page', async () => {
+    tempDir = createTestTempDir('vat-plugin-never-package-');
+    const outDir = writeGuidedFixture(tempDir);
+
+    await runClaudePluginBuild(tempDir, { logger: silentLogger });
+
+    // Tier 1 — no agent-instruction file at any depth. A `CLAUDE.md` beside
+    // `plugin.json` used to ship verbatim to every consumer.
+    expect(existsSync(safePath.join(outDir, 'CLAUDE.md'))).toBe(false);
+    expect(existsSync(safePath.join(outDir, 'AGENTS.md'))).toBe(false);
+    expect(existsSync(safePath.join(outDir, 'docs', 'CLAUDE.md'))).toBe(false);
+
+    // Tier 2 is skill-bundle-only — the plugin keeps its front page and nav. 57 of
+    // 94 installed plugins ship a plugin-root README; merging the skill-bundle
+    // never-package list into this lane would strip three in five front pages.
+    // This assertion is what fails if a later "simplification" merges them.
+    expect(existsSync(safePath.join(outDir, 'README.md'))).toBe(true);
+    expect(existsSync(safePath.join(outDir, 'docs', 'index.md'))).toBe(true);
+
+    // Tier 3 — the configured exclude reached the tree-copy.
+    expect(existsSync(safePath.join(outDir, 'scratch', 'notes.md'))).toBe(false);
+
+    // ...and ordinary content is untouched by all of it.
+    expect(existsSync(safePath.join(outDir, 'commands', 'go.md'))).toBe(true);
+  });
+
+  // The whole point of the finding: an `exclude:` pattern that no-oped has to
+  // reach the plugin's PUBLISHED counts. It used to be a bare stderr line beside
+  // `issueCounts: {errors: 0, warnings: 0, info: 0}` — so a CI consumer read
+  // "clean" for a build whose exclusions demonstrably changed what shipped.
+  it('publishes a dead exclude pattern in the plugin issueCounts, and only the dead ones', async () => {
+    tempDir = createTestTempDir('vat-plugin-dead-exclude-');
+    const outDir = writeGuidedFixture(tempDir, [LIVE_EXCLUDE, 'no-such-dir/**', '*.nope']);
+
+    const lines: string[] = [];
+    const results = await runClaudePluginBuild(tempDir, {
+      logger: { ...silentLogger, info: (m: string) => lines.push(m) },
+    });
+
+    const plugin = results[0]?.plugins[0];
+    // Two dead patterns, one live — the live one must NOT be accused, or the
+    // author is sent to delete a line of config that is doing work.
+    expect(plugin?.issueCounts).toEqual({ errors: 0, warnings: 2, info: 0 });
+
+    // ...and the live pattern really did exclude, so this is not a build that
+    // no-oped everything. A fixture where the exclusion did nothing could not
+    // tell a working report from a broken one.
+    expect(existsSync(safePath.join(outDir, 'scratch', 'notes.md'))).toBe(false);
+    expect(existsSync(safePath.join(outDir, 'commands', 'go.md'))).toBe(true);
+
+    // The human channel keeps the detail at DEFAULT verbosity: these findings are
+    // bounded by the size of the author's exclude: list, so collapsing them into a
+    // count would re-hide the only evidence a typo'd pattern exists.
+    const rendered = lines.join('\n');
+    expect(rendered).toContain('PLUGIN_EXCLUDE_PATTERN_UNUSED');
+    expect(rendered).toContain("'no-such-dir/**'");
+    expect(rendered).toContain("'*.nope'");
+    expect(rendered).not.toContain(`'${LIVE_EXCLUDE}'`);
+  });
+
+  /**
+   * The one configuration in which `exclude:` is UNAMBIGUOUSLY dead: no source
+   * directory, so the tree-copy never runs and not one pattern can have matched.
+   *
+   * Guarded here because the happy-path lane's guard cannot speak for it — that
+   * lane reads `treeResult.unusedExcludePatterns` from a tree-copy that RAN, while
+   * this one is a hand-built result in the `else` branch of `pluginSourceExists`.
+   * Reporting `[]` there restored perfect silence with the whole suite green.
+   *
+   * The plugin still needs CONTENT — a source-less plugin with no `files:` and no
+   * pool skills is rejected outright ("has no content"), so that shape could never
+   * reach the branch. One `files:` mapping is the smallest thing that makes the
+   * plugin buildable while leaving its source directory genuinely absent.
+   */
+  it('publishes every exclude pattern as dead when the plugin source dir does not exist', async () => {
+    tempDir = createTestTempDir('vat-plugin-no-source-exclude-');
+    writeGuidedProjectFiles(tempDir, [LIVE_EXCLUDE, 'no-such-dir/**'], [
+      'files: [{ source: "front.md", dest: "README.md" }]',
+    ]);
+    writeTestFile(safePath.join(tempDir, 'front.md'), '# Guided Plugin\n\nThe front page.\n');
+    commitTestFixture(tempDir);
+
+    const lines: string[] = [];
+    const results = await runClaudePluginBuild(tempDir, {
+      logger: { ...silentLogger, info: (m: string) => lines.push(m) },
+    });
+
+    // BOTH patterns, including the one that is live in every other fixture: with
+    // no tree to walk, "live" is not a property any pattern can have here.
+    expect(results[0]?.plugins[0]?.issueCounts).toEqual({ errors: 0, warnings: 2, info: 0 });
+    const rendered = lines.join('\n');
+    expect(rendered).toContain('PLUGIN_EXCLUDE_PATTERN_UNUSED');
+    expect(rendered).toContain(`'${LIVE_EXCLUDE}'`);
+    expect(rendered).toContain("'no-such-dir/**'");
+  });
+
+  it('publishes zero findings when every exclude pattern matched', async () => {
+    tempDir = createTestTempDir('vat-plugin-live-exclude-');
+    writeGuidedFixture(tempDir);
+
+    const results = await runClaudePluginBuild(tempDir, { logger: silentLogger });
+
+    expect(results[0]?.plugins[0]?.issueCounts).toEqual({ errors: 0, warnings: 0, info: 0 });
   });
 });

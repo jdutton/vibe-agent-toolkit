@@ -14,6 +14,7 @@ import { writeFile } from 'node:fs/promises';
 
 /* eslint-disable security/detect-non-literal-fs-filename -- tests use dynamic file paths in temp directory */
 
+import { type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { issueLocation, mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 
@@ -22,14 +23,22 @@ import { ResourceRegistry } from '../../src/resource-registry.js';
 import { assertValidation, createGitRepo, createLink, setupSubdirTestSuite, type ValidateLinkOptions } from '../test-helpers.js';
 
 /**
- * Helper to test that a non-ignored file linking to a gitignored file returns an error
+ * Helper to test that a non-ignored file linking to a gitignored file returns an error.
+ *
+ * Returns the issue it asserted on so the caller can add a case-specific
+ * assertion in its own body — the shared expectations here are invisible both to
+ * a human reader of the test and to static analysis.
  */
-async function assertGitignoreError(gitRoot: string, linkHref: string, linkText: string): Promise<void> {
+async function assertGitignoreError(
+  gitRoot: string,
+  linkHref: string,
+  linkText: string,
+): Promise<ValidationIssue | null> {
   const sourceFile = safePath.join(gitRoot, 'source.md');
   const link = createLink('local_file', linkHref, linkText, 1);
   const headingsMap = fragmentIndex();
 
-  await assertValidation(
+  return assertValidation(
     {
       sourceFile,
       link,
@@ -91,14 +100,17 @@ async function crawlAndValidate(
 /**
  * Assert a directory-target link validates as `expected` against a temp projectRoot.
  * Collapses the repeated assertValidation scaffold shared by the directory-link tests.
+ *
+ * Returns the issue (or null) so each caller can restate its own contract in its
+ * own body rather than leaving it hidden behind this helper.
  */
 async function assertDirLink(
   sourceFile: string,
   projectRoot: string,
   link: ReturnType<typeof createLink>,
   expected: ValidateLinkOptions['expected'],
-): Promise<void> {
-  await assertValidation(
+): Promise<ValidationIssue | null> {
+  return assertValidation(
     {
       sourceFile,
       link,
@@ -599,7 +611,10 @@ describe('validateLink', () => {
       const sourceFile = safePath.join(gitRoot, 'source.md');
       fs.writeFileSync(sourceFile, '# Source');
 
-      await assertGitignoreError(gitRoot, './ignored.md', 'Link to ignored');
+      const issue = await assertGitignoreError(gitRoot, './ignored.md', 'Link to ignored');
+
+      // The issue must be attributed to the offending href, not to the source file.
+      expect(issue?.link).toBe('./ignored.md');
     });
 
     it('should pass for links to non-gitignored files in git repo', async () => {
@@ -620,7 +635,7 @@ describe('validateLink', () => {
       const link = createLink('local_file', TARGET_FILE_LINK, 'Link to target', 1);
       const headingsMap = fragmentIndex();
 
-      await assertValidation(
+      const issue = await assertValidation(
         {
           sourceFile,
           link,
@@ -633,6 +648,10 @@ describe('validateLink', () => {
         },
         expect
       );
+
+      // .gitignore lists only other.md, so target.md must survive the enabled
+      // gitignore check (skipGitIgnoreCheck: false) with no issue at all.
+      expect(issue).toBeNull();
     });
 
     it('should return error for links to gitignored directories', async () => {
@@ -652,7 +671,11 @@ describe('validateLink', () => {
       const sourceFile = safePath.join(gitRoot, 'source.md');
       fs.writeFileSync(sourceFile, '# Source');
 
-      await assertGitignoreError(gitRoot, './private/secret.md', 'Link to secret');
+      const issue = await assertGitignoreError(gitRoot, './private/secret.md', 'Link to secret');
+
+      // The gitignore rule is on the directory (`private/`), but the reported
+      // target must be the file the author actually linked to.
+      expect(issue?.message).toContain('secret.md');
     });
   });
 
@@ -816,32 +839,43 @@ describe('validateLink', () => {
 
     it('passes when leading-/ target is an existing directory', async () => {
       // /docs/ resolves to projectRoot/docs (an existing directory) — must be valid.
-      await assertDirLink(sourceFile, projectRoot, createLink('local_directory', '/docs/', 'Directory target', 1), null);
+      const issue = await assertDirLink(sourceFile, projectRoot, createLink('local_directory', '/docs/', 'Directory target', 1), null);
+
+      expect(issue, 'leading-/ directory target /docs/ exists and must not be flagged').toBeNull();
     });
 
     it('passes when relative link target is an existing directory', async () => {
       // sourceFile is in projectRoot/docs/sub; ../  resolves to projectRoot/docs.
-      await assertDirLink(sourceFile, projectRoot, createLink('local_directory', '../', 'Relative directory target', 1), null);
+      const issue = await assertDirLink(sourceFile, projectRoot, createLink('local_directory', '../', 'Relative directory target', 1), null);
+
+      expect(issue, 'relative directory target ../ resolves inside projectRoot and must not be flagged').toBeNull();
     });
 
     it('emits broken_file for a link to a missing/renamed directory', async () => {
       // /nonexistent/ resolves to a path that does not exist — must still be an error.
-      await assertDirLink(
+      const issue = await assertDirLink(
         sourceFile,
         projectRoot,
         createLink('local_directory', '/nonexistent/', 'Missing directory', 1),
         { code: 'LINK_BROKEN_FILE', messageContains: 'File not found' },
       );
+
+      // The error must name the missing directory href, so the author can find it.
+      expect(issue?.link).toBe('/nonexistent/');
     });
 
     it('passes for [/docs/](/docs/) where /docs/ resolves to an existing directory', async () => {
       // Absolute-path directory link: /docs/ resolves to projectRoot/docs (exists).
-      await assertDirLink(sourceFile, projectRoot, createLink('local_directory', '/docs/', '[/docs/](/docs/)', 1), null);
+      const issue = await assertDirLink(sourceFile, projectRoot, createLink('local_directory', '/docs/', '[/docs/](/docs/)', 1), null);
+
+      expect(issue, 'link text that mirrors the href must not change the verdict for /docs/').toBeNull();
     });
 
     it('passes for [/docs](/docs) where /docs resolves to an existing directory (local_file type)', async () => {
       // Absolute bare dir name without trailing slash — classified local_file; existing dir passes.
-      await assertDirLink(sourceFile, projectRoot, createLink('local_file', '/docs', '[/docs](/docs)', 1), null);
+      const issue = await assertDirLink(sourceFile, projectRoot, createLink('local_file', '/docs', '[/docs](/docs)', 1), null);
+
+      expect(issue, 'a local_file-classified link to an existing directory must not be flagged').toBeNull();
     });
 
     it('never triggers a directory error for external folder-shaped URL', async () => {

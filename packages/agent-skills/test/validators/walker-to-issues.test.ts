@@ -32,6 +32,7 @@ describe('walkerExclusionsToIssues', () => {
       resolution('skill-definition', '/root/other/SKILL.md'),
       resolution('directory-target', '/root/dir'),
       resolution('navigation-file', '/root/README.md'),
+      resolution('agent-instruction-file', '/root/packages/core/CLAUDE.md'),
       resolution('missing-target', '/root/nope.md', false),
       resolution('pattern-matched', '/root/docs/x.md'),
     ];
@@ -47,6 +48,7 @@ describe('walkerExclusionsToIssues', () => {
       // but no error is raised. Only a files: source that is a directory is an
       // error (checked in packaging-validator, not here).
       'LINK_TO_NAVIGATION_FILE',
+      'LINK_TO_AGENT_INSTRUCTION_FILE',
       'LINK_MISSING_TARGET',
       // pattern-matched emits no issue
     ]);

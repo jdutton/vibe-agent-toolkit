@@ -44,9 +44,7 @@ export type ValidationRuleCode =
   | 'LINKS_TO_NAVIGATION_FILES'
   | 'DESCRIPTION_TOO_VAGUE'
   | 'NO_PROGRESSIVE_DISCLOSURE'
-  | 'PACKAGED_UNREFERENCED_FILE'
-  | 'PACKAGED_TEST_INPUT'
-  | 'PACKAGED_BROKEN_LINK';
+  | 'PACKAGED_UNREFERENCED_FILE';
 
 /**
  * Validation rule definition
@@ -168,18 +166,6 @@ export const VALIDATION_RULES: Record<ValidationRuleCode, ValidationRule> = {
     // that restates the `files:` map is the symptom this text used to cause.
     fix: 'Add a markdown link from SKILL.md or a linked resource, or declare it under skills.config.<name>.files as a source/dest pair',
   },
-  PACKAGED_TEST_INPUT: {
-    code: 'PACKAGED_TEST_INPUT',
-    category: 'best_practice',
-    message: (ctx) => `Declared test input packaged into the shipped skill: ${(ctx['relativePath'] as string) ?? 'unknown'}`,
-    fix: 'Remove the files: entry mapping the eval suite into the bundle — test input is read from source, never shipped',
-  },
-  PACKAGED_BROKEN_LINK: {
-    code: 'PACKAGED_BROKEN_LINK',
-    category: 'best_practice',
-    message: (ctx) => `Broken link in packaged output: ${(ctx['href'] as string) ?? 'unknown'} (from ${(ctx['mdPath'] as string) ?? 'unknown'})`,
-    fix: 'Indicates a link-rewriting bug — the source link was valid but the packaged link is broken',
-  },
 };
 
 /**
@@ -242,18 +228,163 @@ export const VALIDATION_THRESHOLDS = {
 } as const;
 
 /**
- * Navigation file patterns to detect
+ * Navigation file patterns to detect.
+ *
+ * ONE canonical spelling per name. Every consumer matches these
+ * **case-insensitively** — via {@link isNavigationBasename} /
+ * {@link isNeverPackagedBasename} for basename lookups, or via
+ * {@link toAnyDepthGlobs} for glob lanes.
+ *
+ * This list used to enumerate spellings (`README.md` *and* `readme.md`,
+ * `index.md` *and* `INDEX.md`, …) and that approach provably cannot win: it
+ * never contained `Readme.md`, the single most common real spelling, nor
+ * `ReadMe.md` or `README.MD`. Do not re-add a second spelling of any name —
+ * matching handles case, and a duplicate implies enumeration still matters.
  */
 export const NAVIGATION_FILE_PATTERNS = [
   'README.md',
-  'readme.md',
   'index.md',
-  'INDEX.md',
   'toc.md',
-  'TOC.md',
   'overview.md',
-  'OVERVIEW.md',
 ] as const;
+
+/**
+ * Repo-internal agent-instruction files. Deliberately a SEPARATE list from
+ * {@link NAVIGATION_FILE_PATTERNS}: a README is real content at the wrong
+ * granularity, whereas these files are guidance *about the repository they live
+ * in* and are meaningless — or actively misleading — once copied into a
+ * distributed bundle.
+ *
+ * Two distinct harms, both observed:
+ *
+ * 1. **Silent mis-resolution.** Two packages' `CLAUDE.md` files bundled under
+ *    `resourceNaming: basename` collide on one destination; one wins, and every
+ *    link to either source then resolves to the winner's content.
+ * 2. **Unintended instruction loading.** Claude Code loads `CLAUDE.md` files
+ *    found in subdirectories *under the working directory* on demand, when it
+ *    reads a file in that directory. A skill installed project-locally (e.g.
+ *    `.claude/skills/<name>/`) is under the working directory, so a bundled
+ *    `CLAUDE.md` is read as instructions the moment the agent opens a reference
+ *    beside it. (Skills installed outside the cwd — `~/.claude/skills`, plugin
+ *    directories — are not affected by this second harm. `AGENTS.md` and
+ *    `GEMINI.md` are not loaded as memory by Claude Code — it reads `CLAUDE.md`,
+ *    and picks up an `AGENTS.md` only where a `CLAUDE.md` imports it explicitly
+ *    (`@AGENTS.md`) or `/init` incorporates it — so they are listed here for the
+ *    portability and collision reasons, and treated identically to `CLAUDE.md`.)
+ *
+ * @vendor-claim reviewed=2026-08-02 verify=Re-read https://code.claude.com/docs/en/memory — "How CLAUDE.md files load" for harm 2, and the "AGENTS.md" section for the AGENTS.md/GEMINI.md sentence
+ */
+export const AGENT_INSTRUCTION_FILE_PATTERNS = [
+  'CLAUDE.md',
+  'CLAUDE.local.md',
+  'AGENTS.md',
+  'GEMINI.md',
+] as const;
+
+/**
+ * Basenames a GLOB `files:` entry never packages into a **skill bundle**.
+ *
+ * Two tiers, deliberately composed here rather than merged at the source:
+ *
+ * - {@link AGENT_INSTRUCTION_FILE_PATTERNS} — never packaged on ANY surface.
+ * - {@link NAVIGATION_FILE_PATTERNS} — never packaged into a *skill bundle*, and
+ *   **only** there. A plugin-root `README.md` is the plugin's front page (measured
+ *   2026-08-02: 50 of 86 installed plugins ship one; 57 of 94 when first measured),
+ *   so the plugin tree-copy must import the agent-instruction list alone. Merging
+ *   the two lists would strip the front page off three in five real plugins. The
+ *   population moves as plugins are installed and removed — the ratio is the load-
+ *   bearing part, so re-measure before citing the count as current.
+ *
+ * Only globs consult this list. Naming `source: README.md` explicitly is an
+ * unambiguous instruction to ship that file; a glob is a net, not a declaration,
+ * and does not get to launder an exemption for a file it never named.
+ */
+export const NEVER_PACKAGE_IN_SKILL_BUNDLE = [
+  ...AGENT_INSTRUCTION_FILE_PATTERNS,
+  ...NAVIGATION_FILE_PATTERNS,
+] as const;
+
+/**
+ * Build a case-insensitive basename predicate over a fixed pattern list.
+ *
+ * THE matcher every never-package lane shares. Two lanes ask this question — a
+ * glob lane (crawler include/exclude patterns) and a basename lane (`files:`
+ * expansion, broken-link remediation) — and they must not be able to drift: the
+ * glob lane's patterns come from {@link toAnyDepthGlobs} over the same arrays,
+ * and its verdict is asserted equal to this predicate's in the unit tests.
+ *
+ * `toLowerCase()` (not `toLocaleLowerCase()`) is deliberate: the ASCII-only
+ * basenames here must fold identically under every locale, and the Turkish
+ * dotless-i rule would otherwise break `INDEX.md` on a `tr-TR` host.
+ */
+function basenameMatcher(patterns: readonly string[]): (name: string) => boolean {
+  const lowered = new Set(patterns.map((pattern) => pattern.toLowerCase()));
+  return (name: string): boolean => lowered.has(name.toLowerCase());
+}
+
+/**
+ * Is this basename a navigation file (README/index/toc/overview, any case)?
+ *
+ * Skill-bundle scope only — see {@link NEVER_PACKAGE_IN_SKILL_BUNDLE}.
+ */
+export const isNavigationBasename: (name: string) => boolean =
+  basenameMatcher(NAVIGATION_FILE_PATTERNS);
+
+/**
+ * Is this basename a repo-internal agent-instruction file (CLAUDE.md/AGENTS.md/…, any case)?
+ *
+ * Case-insensitivity is not cosmetic here: on APFS and NTFS, `Claude.md` and
+ * `claude.md` satisfy Claude Code's project-local instruction lookup exactly as
+ * `CLAUDE.md` does, so a case-sensitive check leaves the harm fully reachable.
+ */
+export const isAgentInstructionBasename: (name: string) => boolean =
+  basenameMatcher(AGENT_INSTRUCTION_FILE_PATTERNS);
+
+/**
+ * Is this basename one a GLOB `files:` entry never packages into a skill bundle?
+ *
+ * The basename-lane counterpart of {@link toAnyDepthGlobs}; both read
+ * {@link NEVER_PACKAGE_IN_SKILL_BUNDLE}. Any lane doing a `Set.has(basename)`
+ * against that constant must call this instead — a raw Set is case-sensitive and
+ * is exactly the gap this exists to close.
+ */
+export const isNeverPackagedBasename: (name: string) => boolean =
+  basenameMatcher(NEVER_PACKAGE_IN_SKILL_BUNDLE);
+
+/**
+ * Fold one literal basename into a case-insensitive glob.
+ *
+ * `CLAUDE.md` → `[cC][lL][aA][uU][dD][eE].[mM][dD]`. Bracket classes rather than a
+ * matcher-level `nocase` flag because these patterns travel INTO crawls whose
+ * other patterns (caller excludes, `skills/<dir>/**`) must stay case-sensitive —
+ * picomatch's `nocase` applies to every pattern compiled in the same call, so it
+ * would silently widen those too.
+ */
+function toCaseInsensitiveGlob(name: string): string {
+  return [...name]
+    .map((char) => {
+      const lower = char.toLowerCase();
+      const upper = char.toUpperCase();
+      return lower === upper ? char : `[${lower}${upper}]`;
+    })
+    .join('');
+}
+
+/**
+ * Expand basenames into globs matching them at the tree root AND at any depth,
+ * **regardless of case**.
+ *
+ * `**\/name` alone is not portable across matchers for a root-level hit, so both
+ * depths are emitted. Shared by the presence detector's include globs and the
+ * plugin tree-copy's exclude globs so the two can never drift apart — and folded
+ * to case-insensitive so neither can be evaded by spelling the file `Claude.md`.
+ */
+export function toAnyDepthGlobs(patterns: readonly string[]): string[] {
+  return patterns.flatMap((name) => {
+    const glob = toCaseInsensitiveGlob(name);
+    return [glob, `**/${glob}`];
+  });
+}
 
 /**
  * Create a validation issue from a rule

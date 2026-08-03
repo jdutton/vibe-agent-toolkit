@@ -36,14 +36,53 @@ describe('getClaudeUserPaths', () => {
   });
 
   it('should use CLAUDE_CONFIG_DIR when set', () => {
-    const customDir = '/custom/claude';
-    process.env['CLAUDE_CONFIG_DIR'] = customDir;
+    // Resolved, not taken verbatim: on Windows a rooted-but-driveless spelling
+    // like this one only becomes absolute after `resolve`.
+    const customDir = safePath.resolve('/custom/claude');
+    process.env['CLAUDE_CONFIG_DIR'] = '/custom/claude';
     const paths = getClaudeUserPaths();
 
     expect(paths.claudeDir).toBe(customDir);
     expect(paths.pluginsDir).toBe(safePath.join(customDir, 'plugins'));
     expect(paths.skillsDir).toBe(safePath.join(customDir, 'skills'));
     expect(paths.userSettingsPath).toBe(safePath.join(customDir, 'settings.json'));
+  });
+
+  // A8 — `??` is nullish coalescing, so `CLAUDE_CONFIG_DIR=` (the ordinary way a
+  // shell or a CI env block blanks a variable) produced claudeDir `''`, and every
+  // path below it became RELATIVE: `skills`, `plugins`. Consumers resolve those
+  // against `process.cwd()`, so `$cwd/skills` — the conventional source pool —
+  // became a Claude install root and ordinary source tripped install-root rules.
+  it.each([
+    ['empty', ''],
+    ['whitespace-only', '   '],
+  ])('should ignore a %s CLAUDE_CONFIG_DIR and fall back to ~/.claude', (_label, value) => {
+    process.env['CLAUDE_CONFIG_DIR'] = value;
+    const paths = getClaudeUserPaths();
+
+    expect(paths.claudeDir).toBe(safePath.join(homedir(), '.claude'));
+    expect(paths.skillsDir).toBe(safePath.join(homedir(), '.claude', 'skills'));
+  });
+
+  // C7 — a relative value made every derived path resolve against whatever
+  // `process.cwd()` happened to be in the consumer, so the same tree classified
+  // two different ways depending on where the command was invoked from.
+  it('should resolve a relative CLAUDE_CONFIG_DIR to an absolute path', () => {
+    process.env['CLAUDE_CONFIG_DIR'] = 'relclaude';
+    const paths = getClaudeUserPaths();
+
+    expect(paths.claudeDir).toBe(safePath.resolve('relclaude'));
+    expect(paths.skillsDir).toBe(safePath.join(safePath.resolve('relclaude'), 'skills'));
+  });
+
+  // A `~` written in a `.env` file or a CI variable block is never expanded by a
+  // shell, and resolving it literally yields `$cwd/~/.claude` — a directory that
+  // exists nowhere, silently disabling every install-root check.
+  it('should expand a leading ~ in CLAUDE_CONFIG_DIR', () => {
+    process.env['CLAUDE_CONFIG_DIR'] = '~/.claude-alt';
+    const paths = getClaudeUserPaths();
+
+    expect(paths.claudeDir).toBe(safePath.join(homedir(), '.claude-alt'));
   });
 
   it('should return consistent paths on multiple calls', () => {

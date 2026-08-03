@@ -192,17 +192,31 @@ discovery rule that this command participates in.
 **Output Format:**
 ```yaml
 status: success
-package: @my-org/my-package
 skillsBuilt: 2
-skills:
+outputCommitted: true      # false ⇒ dist/skills was NOT replaced
+skills:                    # bundles that exist on disk; empty when outputCommitted is false
   - name: skill1
     outputPath: /path/to/dist/skills/skill1
     filesPackaged: 5
+    issueCounts: { errors: 0, warnings: 1, info: 0 }
+    issues:                # every finding, at every verbosity
+      - code: LINK_DROPPED_BY_DEPTH
+        severity: warning
+        message: ...
+        location: dist/skills/skill1/docs/deep.md
+        fix: ...
   - name: skill2
     outputPath: /path/to/dist/skills/skill2
     filesPackaged: 3
+    issueCounts: { errors: 0, warnings: 0, info: 0 }
+    issues: []
+skillsStaged: []           # the same rows, WITHOUT outputPath, when the promotion was aborted
 duration: 1234ms
 ```
+
+`--verbose` changes the stderr report only — the YAML above is identical at either
+verbosity. See `vat skills build --help` for the full field list and the identity
+`issueCounts` reconciles against.
 
 **Examples:**
 ```bash

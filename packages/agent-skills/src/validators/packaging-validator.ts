@@ -31,6 +31,7 @@ import { DeferredArtifacts, parseMarkdown, ResourceRegistry, type SkillExecutabl
 import { findProjectRoot, issueLocation, normalizedTmpdir, toForwardSlash, safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
 
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
+import { collectPreBuildGlobFindings, preBuildGlobFindingsToIssues } from '../files-config.js';
 import {
   packagedFileEntries,
   resolveTestInputDirs,
@@ -98,7 +99,7 @@ export interface SkillPackagingConfig {
 /** Excluded reference detail for verbose output */
 export interface ExcludedReferenceDetail {
   path: string;
-  reason: 'depth-exceeded' | 'pattern-matched' | 'outside-project' | 'navigation-file' | 'skill-definition' | 'gitignored';
+  reason: 'depth-exceeded' | 'pattern-matched' | 'outside-project' | 'navigation-file' | 'agent-instruction-file' | 'skill-definition' | 'gitignored';
   matchedPattern?: string | undefined;
 }
 
@@ -508,12 +509,32 @@ export async function validateSkillForPackaging(
   // caller has no project to enumerate — a single-skill audit of a tree with no
   // config — which narrows this lane to the subject's own suite and nothing else.
   const projectSkills = shared?.projectSkills ?? [];
+  const packagedFiles = packagedFileEntries(
+    packagingConfig ?? {}, dirname(skillPath), projectRoot, projectSkills,
+  );
   const deferred = DeferredArtifacts.from(
-    [{
-      files: packagedFileEntries(packagingConfig ?? {}, dirname(skillPath), projectRoot, projectSkills),
-      skillDir: dirname(skillPath),
-    }],
+    [{ files: packagedFiles, skillDir: dirname(skillPath) }],
     projectRoot,
+  );
+
+  // What the `files:` GLOBs will do to this build, reported HERE — before any
+  // build — because this is where it is still cheap to act on: `vat skills
+  // validate` and `vat audit` can expand the same globs the packager expands
+  // without writing anything. Same expansion as the copy — see
+  // collectPreBuildGlobFindings — so the two lanes cannot disagree about what
+  // ships. Two populations, both load-bearing:
+  //   - a never-package DROP is the only signal standing between a
+  //     documentation-bearing glob base and a silent content loss the day someone
+  //     adds a README.md to it;
+  //   - a glob matching NOTHING is the input `vat skills build` dies on, and this
+  //     gate is what adopters run before that build. Reporting the harmless drop
+  //     while staying silent about the fatal zero-match was the asymmetry that
+  //     let `vat skills validate` return success on a config that cannot build.
+  rawIssues.push(
+    ...preBuildGlobFindingsToIssues(
+      await collectPreBuildGlobFindings(packagedFiles, projectRoot),
+      locationRoot,
+    ),
   );
   const testInputDirs = resolveTestInputDirs(packagingConfig ?? {}, dirname(skillPath), projectSkills);
 
@@ -1118,6 +1139,7 @@ function mapExcludeReason(
   switch (excludeReason) {
     case 'pattern-matched': return 'pattern-matched';
     case 'navigation-file': return 'navigation-file';
+    case 'agent-instruction-file': return 'agent-instruction-file';
     case 'skill-definition': return 'skill-definition';
     case 'gitignored': return 'gitignored';
     case 'depth-exceeded':

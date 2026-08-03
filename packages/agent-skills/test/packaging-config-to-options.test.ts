@@ -28,6 +28,29 @@ describe('packagingConfigToPackageOptions', () => {
     expect(out.files).toEqual([{ source: 'a', dest: 'b' }]);
     expect('validation' in out).toBe(false);
   });
+
+  /**
+   * `excludeNavigationFiles: false` is the ONLY value that can be dropped without
+   * a symptom in the output, because the packager's own default is `true` — so a
+   * conversion that forgets the field produces a bundle with the README stripped
+   * while `packaging-validator.ts` (which reads the same config directly) predicts
+   * it ships. The pre-build gate and the build then disagree about one bundle,
+   * inside the conversion whose docstring promises byte-for-byte parity.
+   *
+   * Asserted with `false`, never `true`: `true` is indistinguishable from the
+   * default and would pass against a conversion that forwards nothing.
+   */
+  it('forwards excludeNavigationFiles: false rather than falling back to the default', () => {
+    const out = packagingConfigToPackageOptions({ excludeNavigationFiles: false }, anchors, []);
+
+    expect(out.excludeNavigationFiles).toBe(false);
+  });
+
+  it('omits excludeNavigationFiles when the config does not set it', () => {
+    const out = packagingConfigToPackageOptions({}, anchors, []);
+
+    expect('excludeNavigationFiles' in out).toBe(false);
+  });
 });
 
 /**

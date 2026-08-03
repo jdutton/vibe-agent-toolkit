@@ -416,6 +416,43 @@ plugins:
 
 `dest` cannot escape the plugin output dir and cannot target `.claude-plugin/plugin.json` (owned by merge-write). Overwrites are allowed and logged at info level.
 
+### What the verbatim tree-copy leaves behind
+
+The plugin `source:` directory is copied verbatim, except:
+
+- **gitignored files** — the copy honors git visibility.
+- **`.claude-plugin/`** — owned by the `plugin.json` merge-write.
+- **`skills/<dir>` entries another phase produces** — skills are packaged, never copied wholesale.
+- **agent-instruction files at any depth** — `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `GEMINI.md`,
+  matched **case-insensitively** (`Claude.md`, `claude.md`, `CLAUDE.MD` are all dropped).
+  These are guidance about *your* repository; in a published bundle they leak how your team works,
+  and a project-locally installed skill can have its `CLAUDE.md` read as live instructions — a
+  lookup that a case-insensitive filesystem satisfies with any spelling.
+- **anything you name in `exclude:`** (below).
+
+`README.md` and other navigation files **are** copied — a plugin-root README is the plugin's front
+page. (Skill *bundles* exclude them; plugin roots do not.)
+
+### `exclude[]` — project-specific junk
+
+```yaml
+plugins:
+  - name: my-plugin
+    skills: "*"
+    exclude:
+      - "scratch/**"
+      - "docs/internal"     # a bare directory name covers its whole subtree
+```
+
+Patterns are relative to the plugin source dir and are additive to the built-in exclusions above.
+A pattern may be a glob (`scratch/**`) or a directory name with or without a trailing slash
+(`scratch`, `scratch/`) — all three spellings drop the whole subtree, in a git repo or out of one.
+**A pattern that matches nothing is reported as a build warning**, so a typo'd path never
+silently ships the junk it was meant to drop.
+
+Use this for content the defaults cannot know about; it is the extension point, not the primary
+mechanism.
+
 ### `plugin.json` merge rules
 
 VAT writes `.claude-plugin/plugin.json` last, merging the author's `.claude-plugin/plugin.json` (if present) with the identity fields the marketplace config owns:

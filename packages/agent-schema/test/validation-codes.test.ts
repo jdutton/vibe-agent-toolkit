@@ -8,6 +8,7 @@ describe('CODE_REGISTRY', () => {
       'LINK_OUTSIDE_PROJECT',
       'LINK_TARGETS_DIRECTORY',
       'LINK_TO_NAVIGATION_FILE',
+      'LINK_TO_AGENT_INSTRUCTION_FILE',
       'LINK_TO_GITIGNORED_FILE',
       'LINK_MISSING_TARGET',
       'LINK_TO_SKILL_DEFINITION',
@@ -36,6 +37,9 @@ describe('CODE_REGISTRY', () => {
     expect(CODE_REGISTRY.LINK_OUTSIDE_PROJECT.defaultSeverity).toBe('error');
     expect(CODE_REGISTRY.LINK_TARGETS_DIRECTORY.defaultSeverity).toBe('error');
     expect(CODE_REGISTRY.LINK_TO_NAVIGATION_FILE.defaultSeverity).toBe('warning');
+    // A README is content at the wrong granularity (warning); a CLAUDE.md is
+    // repo-internal guidance that cannot travel in a bundle at all (error).
+    expect(CODE_REGISTRY.LINK_TO_AGENT_INSTRUCTION_FILE.defaultSeverity).toBe('error');
     expect(CODE_REGISTRY.LINK_TO_GITIGNORED_FILE.defaultSeverity).toBe('error');
     expect(CODE_REGISTRY.LINK_MISSING_TARGET.defaultSeverity).toBe('error');
     expect(CODE_REGISTRY.LINK_TO_SKILL_DEFINITION.defaultSeverity).toBe('error');

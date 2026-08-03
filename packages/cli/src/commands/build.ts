@@ -39,6 +39,7 @@ import {
   type PhaseSelection,
   type PhaseVocabulary,
 } from './phase-utils.js';
+import { rejectPositionalArguments } from './positional-args.js';
 
 export interface BuildCommandOptions {
   only?: string;
@@ -58,6 +59,11 @@ export function createBuildTopLevelCommand(): Command {
     .addHelpText(
       'after',
       `
+Arguments:
+  None. 'vat build' builds what the config declares; it takes no path and
+  rejects one (exit 2) rather than discarding it and building everything.
+  To inspect a single skill or bundle by path, use 'vat audit <path>'.
+
 Description:
   Builds all project artifacts in dependency order.
 
@@ -90,9 +96,10 @@ Output:
 Exit Codes:
   0 - All phases completed successfully (warnings do not fail a build)
   1 - Build error, or '--only' named a phase that is unrecognized or unconfigured
-  2 - System error (this command's own, or propagated from a phase that could
-      not run: exited 2, was killed by a signal, was never spawned, or wrote
-      output that could not be parsed)
+  2 - System error (this command's own, a usage error such as a positional
+      argument, or propagated from a phase that could not run: exited 2, was
+      killed by a signal, was never spawned, or wrote output that could not be
+      parsed)
 
 Requirements:
   projectRoot: required (errors if no vibe-agent-toolkit.config.yaml or .git/ ancestor)
@@ -242,7 +249,20 @@ export function selectBuildPhases(
   return decidePhaseSelection(only, phases, BUILD_VOCABULARY);
 }
 
-async function buildTopLevelCommand(options: BuildCommandOptions): Promise<void> {
+async function buildTopLevelCommand(
+  options: BuildCommandOptions,
+  command: Command,
+): Promise<void> {
+  // First, and before requireProjectRoot: `vat build dist/skills/demo` used to be
+  // accepted, have its path discarded, and build the WHOLE project — the same
+  // silent-rescope defect fixed on `vat verify` / `vat validate`, and worse here
+  // because this one writes.
+  rejectPositionalArguments(
+    command.args,
+    'vat build',
+    'builds every artifact vibe-agent-toolkit.config.yaml declares, in dependency order',
+  );
+
   const cwd = process.cwd();
   // Spec §7: `vat build` requires a projectRoot.
   requireProjectRoot(cwd, 'vat build');

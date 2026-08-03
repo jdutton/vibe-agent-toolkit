@@ -11,6 +11,12 @@ describe('SOURCE_ONLY_CODES', () => {
     expect(SOURCE_ONLY_CODES.has('LINK_BOUNDARY_VIOLATION')).toBe(true);
   });
 
+  it('contains LINK_TO_AGENT_INSTRUCTION_FILE', () => {
+    // The walker excludes agent-instruction files at source, so the built
+    // output can never contain one — re-checking dist/ would be dead weight.
+    expect(SOURCE_ONLY_CODES.has('LINK_TO_AGENT_INSTRUCTION_FILE')).toBe(true);
+  });
+
   it('does NOT contain codes that apply to built output', () => {
     expect(SOURCE_ONLY_CODES.has('DESCRIPTION_TOO_VAGUE')).toBe(false);
     expect(SOURCE_ONLY_CODES.has('SKILL_LENGTH_EXCEEDS_RECOMMENDED')).toBe(false);

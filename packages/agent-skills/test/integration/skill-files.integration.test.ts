@@ -2,13 +2,14 @@
 import { existsSync, cpSync, readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 
-import { type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { normalizedTmpdir, safeExecSync, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { globSync } from 'glob';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { applyFilesConfig, mergeFilesConfig } from '../../src/files-config.js';
 import { packageSkill, type PackageSkillOptions } from '../../src/skill-packager.js';
+import { detectPackagedAgentInstructionFiles } from '../../src/validators/agent-instruction-presence.js';
 
 const FIXTURE_DIR = safePath.join(import.meta.dirname, '..', 'fixtures', 'skill-files');
 
@@ -214,7 +215,7 @@ describe('glob files entry integration', () => {
     const skillOutputDir = safePath.join(tempDir, 'out', 'plugin-build-sim', 'skills', 'tool-a');
     await mkdir(skillOutputDir, { recursive: true });
 
-    const dests = await applyFilesConfig({
+    const { dests } = await applyFilesConfig({
       filesConfig,
       projectRoot: tempDir,
       skillOutputDir,
@@ -241,10 +242,29 @@ const GUIDE_SOURCE_REL = 'gen/packs/alpha/GUIDE.md';
 const GUIDE_DEST_SEGMENTS = [LINKED_GLOB_DEST, 'alpha', 'GUIDE.md'] as const;
 /** Declared dest of the sibling that link traversal never touched. */
 const DATA_DEST_SEGMENTS = [LINKED_GLOB_DEST, 'alpha', 'data.json'] as const;
-/** Where link traversal parks its OWN copy of the guide (basename naming). */
+/**
+ * Where link traversal WOULD park its own copy of the guide (basename naming) if
+ * the declared `dest:` did not own the answer. Asserted ABSENT: one file, one dest.
+ */
 const GUIDE_TRAVERSAL_DEST = 'resources/GUIDE.md';
 const GUIDE_BYTES = '# Alpha Pack Guide\n\nHow to drive the alpha pack.\n';
 const PACK_DATA_BYTES = '{"pack":"alpha"}\n';
+
+/** A repo-internal agent-instruction file an explicit `files:` entry declares. */
+const NOTES_CLAUDE_SOURCE = 'notes/CLAUDE.md';
+const NOTES_CLAUDE_DEST = 'notes/CLAUDE.md';
+const NOTES_CLAUDE_BYTES = '# Repo notes\n\nHow this repository is organised.\n';
+
+/** SKILL.md that links the declared agent-instruction file by its SOURCE path. */
+const DECLARER_SKILL = `---
+name: declarer
+description: Declares a repo-internal agent-instruction file and links to it
+---
+
+# Declarer
+
+See the [repo notes](../../notes/CLAUDE.md).
+`;
 
 /** SKILL.md that links the glob-matched guide by its SOURCE path. */
 const LINKING_SKILL = `---
@@ -296,7 +316,18 @@ function setupLinkedGlobRepo(): LinkedGlobRepo {
     await writeFile(safePath.join(repoRoot, 'gen', 'packs', 'alpha', 'GUIDE.md'), GUIDE_BYTES);
     await writeFile(safePath.join(repoRoot, 'gen', 'packs', 'alpha', 'data.json'), PACK_DATA_BYTES);
 
-    for (const [dir, body] of [['packer', LINKING_SKILL], ['control', UNLINKED_SKILL]] as const) {
+    await mkdir(safePath.join(repoRoot, 'notes'), { recursive: true });
+    await writeFile(safePath.join(repoRoot, NOTES_CLAUDE_SOURCE), NOTES_CLAUDE_BYTES);
+    // A second file under notes/ so the glob negative-control below still has
+    // something to keep — a glob whose every match is never-packaged is a
+    // hard error in copyGlobEntry, which would mask the row's real subject.
+    await writeFile(safePath.join(repoRoot, 'notes', 'reference.md'), '# Reference\n');
+
+    for (const [dir, body] of [
+      ['packer', LINKING_SKILL],
+      ['control', UNLINKED_SKILL],
+      ['declarer', DECLARER_SKILL],
+    ] as const) {
       await mkdir(safePath.join(repoRoot, 'skills', dir), { recursive: true });
       await writeFile(safePath.join(repoRoot, 'skills', dir, 'SKILL.md'), body);
     }
@@ -395,34 +426,230 @@ describe.each([
       expect(subtreeContents(safePath.join(linked.outputPath, LINKED_GLOB_DEST)))
         .toEqual(['alpha/data.json', 'alpha/GUIDE.md']);
 
-      // ...and only the LINKED build additionally carries traversal's own copy,
-      // proving the two builds really did take different routes to the same payload.
-      expect(subtreeContents(linked.outputPath)).toContain(GUIDE_TRAVERSAL_DEST);
-      expect(subtreeContents(control.outputPath)).not.toContain(GUIDE_TRAVERSAL_DEST);
+      // ONE FILE, ONE DEST. Link traversal used to park a SECOND copy of the guide
+      // at its type-derived location while the glob copied it to the declared dest:
+      // identical bytes shipped twice, the declared `dest:` dead as far as the
+      // rewritten link was concerned, and nothing reported the duplication. The
+      // declared dest is the only answer, so linking a matched file must not change
+      // the payload AT ALL — not just the declared subtree.
+      expect(subtreeContents(linked.outputPath)).not.toContain(GUIDE_TRAVERSAL_DEST);
+      expect(subtreeContents(linked.outputPath)).toEqual(subtreeContents(control.outputPath));
+    });
+
+    it('rewrites the link to the declared dest, not to a traversal-named copy', async () => {
+      const repoRoot = getRepoRoot();
+      const result = await packageLinkedGlobSkill(repoRoot, 'packer', `${suffix}-link`, [entry]);
+
+      const packedSkill = readFileSync(safePath.join(result.outputPath, 'SKILL.md'), 'utf-8');
+      expect(packedSkill).toContain(`(${GUIDE_DEST_SEGMENTS.join('/')})`);
+      // The dead end the duplicate copy used to make the link point at.
+      expect(packedSkill).not.toContain(GUIDE_TRAVERSAL_DEST);
     });
   },
 );
 
-describe('glob files: integrity is live, not vacuously satisfied', () => {
-  /**
-   * Negative control for the row above. `integrity: true` passing there must mean
-   * "the dest subtree is exactly the declared set", not "the check is asleep".
-   *
-   * A prior non-glob entry drops an extra file INTO the glob entry's dest subtree
-   * (`applyFilesConfig` walks `filesConfig` in order), so by the time the glob
-   * entry's `verifyDestSet` runs the subtree holds a file its `rels` never claimed.
-   * If that throws, the same machinery would have caught a MISSING declared file —
-   * which is exactly what pre-d648fdd3 hid, by dropping the skipped file out of
-   * both sides of the diff at once.
-   */
-  it('rejects a dest subtree holding a file the entry never declared', async () => {
-    const repoRoot = getRepoRoot();
+// ---------------------------------------------------------------------------
+// The EXPLICIT `files:` declaration as the working escape hatch for a link to a
+// repo-internal agent-instruction file (LINK_TO_AGENT_INSTRUCTION_FILE).
+//
+// The code's own remediation told authors to declare the file under
+// `skills.config.<name>.files`. Doing exactly that used to change nothing: the
+// walker refused the LINK regardless of config, so the build shipped the file,
+// stripped the link to it, and still exited 1 with the same error prescribing the
+// same already-taken action.
+// ---------------------------------------------------------------------------
 
-    await expect(
-      packageLinkedGlobSkill(repoRoot, 'packer', 'linked-glob-integrity-negative', [
-        { source: GUIDE_SOURCE_REL, dest: 'packs/alpha/EXTRA.md' },
-        { source: LINKED_GLOB_SOURCE, dest: LINKED_GLOB_DEST, integrity: true },
-      ]),
-    ).rejects.toThrow(/integrity check for '[^']*' found unexpected file '[^']*EXTRA\.md'/);
+describe('explicit files: entry naming an agent-instruction file', () => {
+  const DECLARED = [{ source: NOTES_CLAUDE_SOURCE, dest: NOTES_CLAUDE_DEST }];
+
+  it('does not report LINK_TO_AGENT_INSTRUCTION_FILE for the declared file', async () => {
+    const result = await packageLinkedGlobSkill(getRepoRoot(), 'declarer', 'declared-ai', DECLARED);
+
+    const codes = (result.postBuildIssues ?? []).map((i) => i.code);
+    expect(codes).not.toContain('LINK_TO_AGENT_INSTRUCTION_FILE');
+  });
+
+  it('ships the file exactly once, at the declared dest', async () => {
+    const result = await packageLinkedGlobSkill(getRepoRoot(), 'declarer', 'declared-ai-once', DECLARED);
+
+    // Any CLAUDE.md in the output, wherever it landed — so a second copy under a
+    // traversal-named directory fails the row instead of hiding behind an
+    // existsSync on the one path we expected.
+    expect(subtreeContents(result.outputPath).filter((p) => p.endsWith('CLAUDE.md')))
+      .toEqual([NOTES_CLAUDE_DEST]);
+    expect(readFileSync(safePath.join(result.outputPath, NOTES_CLAUDE_DEST), 'utf-8'))
+      .toBe(NOTES_CLAUDE_BYTES);
+  });
+
+  it('rewrites the link to the declared dest instead of stripping it', async () => {
+    const result = await packageLinkedGlobSkill(getRepoRoot(), 'declarer', 'declared-ai-link', DECLARED);
+
+    // Suppressing the error while leaving the link de-linked would trade a loud,
+    // true error for a silent, false success — the whole point of the fix is that
+    // the declared file is REACHABLE from the packaged prose.
+    expect(readFileSync(safePath.join(result.outputPath, 'SKILL.md'), 'utf-8'))
+      .toContain(`(${NOTES_CLAUDE_DEST})`);
+  });
+
+  it('still reports the link when only a GLOB catches the file', async () => {
+    // A glob is a net, not a declaration: it never named the file, so it must not
+    // launder the exemption an explicit entry earns. `gen/packs/**/*` is used as
+    // the co-declared entry so the build still has something to copy.
+    const result = await packageLinkedGlobSkill(getRepoRoot(), 'declarer', 'declared-ai-glob', [
+      { source: 'notes/**/*', dest: 'notes' },
+      { source: LINKED_GLOB_SOURCE, dest: LINKED_GLOB_DEST },
+    ]);
+
+    const codes = (result.postBuildIssues ?? []).map((i) => i.code);
+    expect(codes).toContain('LINK_TO_AGENT_INSTRUCTION_FILE');
+    expect(subtreeContents(result.outputPath).filter((p) => p.endsWith('CLAUDE.md'))).toEqual([]);
+  });
+});
+
+describe('glob files: integrity accounts for the whole config, in any order', () => {
+  /**
+   * A sibling `files:` entry writing into the glob entry's dest subtree is a
+   * DECLARATION, not contamination — it is how the documented escape hatch ships a
+   * file the glob's never-package filter drops. `verifyDestSet` used to reject it,
+   * and only when the sibling was listed FIRST: listed second it wrote after the
+   * check had already run, so the same config passed. Same payload, opposite
+   * verdicts, decided by entry order.
+   *
+   * Both orders are asserted because either alone is satisfiable by re-sorting the
+   * entries rather than by making the check order-independent. Liveness — a file
+   * under the subtree that NO entry declares still throws — is proven at the unit
+   * level (files-config.test.ts, 'still rejects a file under the dest subtree that
+   * no entry declares'), where a stray can be planted; a real build wipes the
+   * output dir first, so there is nothing to plant here.
+   */
+  it.each([
+    { label: 'sibling entry first', siblingFirst: true },
+    { label: 'glob entry first', siblingFirst: false },
+  ])('accepts a sibling entry\'s declared dest inside the subtree ($label)', async ({ siblingFirst, label }) => {
+    const repoRoot = getRepoRoot();
+    const sibling = { source: GUIDE_SOURCE_REL, dest: 'packs/alpha/EXTRA.md' };
+    const globEntry = { source: LINKED_GLOB_SOURCE, dest: LINKED_GLOB_DEST, integrity: true };
+    const suffix = `linked-glob-order-${label.replaceAll(/[^a-z]+/gi, '-')}`;
+
+    const result = await packageLinkedGlobSkill(
+      repoRoot,
+      'packer',
+      suffix,
+      siblingFirst ? [sibling, globEntry] : [globEntry, sibling],
+    );
+
+    expect(subtreeContents(safePath.join(result.outputPath, LINKED_GLOB_DEST))).toEqual([
+      'alpha/data.json',
+      'alpha/EXTRA.md',
+      'alpha/GUIDE.md',
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FIX 2: a file the never-package filter drops must be visible in the STRUCTURED
+// result, not only on stderr. `postBuildIssues` is the channel the build report's
+// `issueCounts` is derived from (see collectPostBuildIssues in the CLI), so a drop
+// that never becomes a ValidationIssue reads as `warnings: 0` to a CI consumer for
+// a build that shipped less than the config declared.
+//
+// Deliberately routed through the REAL packageSkill, not through a hand-injected
+// callback: a unit test that supplies its own sink proves only that the sink is
+// called. Measured blind spot before this test existed — deleting the packager's
+// reporting line left 1522 unit + 145 integration tests green.
+// ---------------------------------------------------------------------------
+
+const EXTRAS_GLOB_ENTRY = { source: 'dist/extras/**/*', dest: 'extras' };
+const DROPPED_BASENAMES = ['CLAUDE.md', 'README.md'] as const;
+
+describe('never-packaged glob matches reach the structured build result', () => {
+  beforeAll(async () => {
+    const extras = safePath.join(getTempDir(), 'dist', 'extras');
+    await mkdir(extras, { recursive: true });
+    for (const name of DROPPED_BASENAMES) {
+      await writeFile(safePath.join(extras, name), `# ${name}\n`);
+    }
+    await writeFile(safePath.join(extras, 'data.json'), '{"ok":true}\n');
+  });
+
+  it('emits one warning-severity issue per dropped file', async () => {
+    const result = await packageFixtureSkill(getTempDir(), 'tool-a', 'never-package-report', {
+      files: [...CLI_FILES_ENTRY, EXTRAS_GLOB_ENTRY],
+    });
+
+    // PRECONDITION — the drop really happened in this build, so the assertion
+    // below cannot pass by the glob having quietly matched nothing.
+    expect(existsSync(safePath.join(result.outputPath, 'extras', 'data.json'))).toBe(true);
+    for (const name of DROPPED_BASENAMES) {
+      expect(existsSync(safePath.join(result.outputPath, 'extras', name))).toBe(false);
+    }
+
+    const issues = result.postBuildIssues ?? [];
+    const drops = issues.filter(i => i.code === 'FILES_GLOB_DROPPED_NEVER_PACKAGED');
+    // Anchored at the SOURCE file (`dist/extras/…`), not the dest subtree
+    // (`extras/…`) the entry would have rebased it into: the dest was never
+    // written, so it names a path that exists in no tree. The two spellings
+    // differ here on purpose — that is what makes this assertion able to tell
+    // them apart.
+    expect(drops.map(i => i.location).sort((a, b) => (a ?? '').localeCompare(b ?? ''))).toEqual(
+      DROPPED_BASENAMES.map(n => `dist/extras/${n}`).sort((a, b) => a.localeCompare(b)),
+    );
+    // The count the report publishes — derived the same way the CLI derives it.
+    expect(countBySeverity(issues).warnings).toBeGreaterThanOrEqual(DROPPED_BASENAMES.length);
+    for (const drop of drops) {
+      expect(drop.severity).toBe('warning');
+      expect(drop.message).toContain(EXTRAS_GLOB_ENTRY.source);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §8.2 precedence at BUILD time: an explicit `files:` entry naming an
+// agent-instruction dest expresses intent, and the build must follow it.
+//
+// Before this, `packageSkill` warned PACKAGED_AGENT_INSTRUCTION_FILE for exactly
+// the config the guide prescribes as the escape hatch — with a remedy ("remove
+// the file") that told the author to undo what config had sanctioned.
+// ---------------------------------------------------------------------------
+
+const AGENT_INSTRUCTION_CODE = 'PACKAGED_AGENT_INSTRUCTION_FILE';
+/** The same declared dest the escape-hatch cases above use, sourced from dist/. */
+const DIST_NOTES_CLAUDE_ENTRY = { source: `dist/${NOTES_CLAUDE_DEST}`, dest: NOTES_CLAUDE_DEST };
+
+describe('explicit files: dest suppresses PACKAGED_AGENT_INSTRUCTION_FILE', () => {
+
+  beforeAll(async () => {
+    const notes = safePath.join(getTempDir(), 'dist', 'notes');
+    await mkdir(notes, { recursive: true });
+    await writeFile(safePath.join(notes, 'CLAUDE.md'), '# deliberately shipped guidance\n');
+  });
+
+  it('does not report a CLAUDE.md an explicit entry named', async () => {
+    const result = await packageFixtureSkill(getTempDir(), 'tool-a', 'explicit-claude-md', {
+      files: [...CLI_FILES_ENTRY, DIST_NOTES_CLAUDE_ENTRY],
+    });
+
+    // PRECONDITION — the file really is in the bundle, so a green assertion below
+    // cannot be produced by the copy having silently not happened.
+    expect(existsSync(safePath.join(result.outputPath, 'notes', 'CLAUDE.md'))).toBe(true);
+
+    const issues = result.postBuildIssues ?? [];
+    expect(issues.filter(i => i.code === AGENT_INSTRUCTION_CODE)).toEqual([]);
+  });
+
+  it('still reports one that no entry declared', async () => {
+    // Same build shape, but the file arrives at a dest the config never named —
+    // the suppression must not spill onto the rest of the bundle.
+    const result = await packageFixtureSkill(getTempDir(), 'tool-a', 'undeclared-claude-md', {
+      files: [...CLI_FILES_ENTRY, DIST_NOTES_CLAUDE_ENTRY],
+    });
+    await writeFile(safePath.join(result.outputPath, 'AGENTS.md'), '# smuggled\n');
+
+    const issues = detectPackagedAgentInstructionFiles(
+      result.outputPath,
+      result.outputPath,
+      [NOTES_CLAUDE_DEST],
+    );
+    expect(issues.map(i => i.location)).toEqual(['AGENTS.md']);
   });
 });

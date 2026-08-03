@@ -9,7 +9,6 @@ import {
   expect,
   fileURLToPath,
   fs,
-  getBinPath,
   getWrapperPath,
   safePath,
   spawnSync,
@@ -17,8 +16,18 @@ import {
 import { createTestTempDir, setupTestProject } from './test-helpers/index.js';
 
 const wrapperPath = getWrapperPath(import.meta.url);
-const _binPath = getBinPath(import.meta.url); // Available for future tests
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * The provenance line `--version` now always prints.
+ *
+ * Adopter finding B9: the `-dev (<path>)` suffix is CWD-derived, so the same
+ * branch build invoked by absolute path from an adopter checkout resolved
+ * `Context: global` and printed a bare `0.1.41-rc.8` — byte-identical to the
+ * released rc.8. The resolved binary path is the one fact that always differs,
+ * so it is printed unconditionally rather than only under `VAT_DEBUG=1`.
+ */
+const BINARY_LINE = /binary: .*[/\\]dist[/\\]bin\.js/;
 
 describe('Context detection (system test)', () => {
   let tempDir: string;
@@ -45,6 +54,7 @@ describe('Context detection (system test)', () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('-dev');
     expect(result.stdout).toContain(repoRoot);
+    expect(result.stdout).toMatch(BINARY_LINE);
   });
 
   it('should detect dev context when running from repo', () => {
@@ -90,6 +100,10 @@ describe('Context detection (system test)', () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toMatch(/^\d+\.\d+\.\d+/);
+    // The identity check that adopter delta testing depends on: in the global
+    // fallback the version line alone cannot distinguish this build from the
+    // published one of the same version, so the binary line must be there.
+    expect(result.stdout).toMatch(BINARY_LINE);
   });
 
   it('should pass arguments through wrapper correctly', () => {
