@@ -127,8 +127,13 @@ module.exports = function createPathFunctionRule(config) {
 
     create(context) {
       const filename = context.getFilename();
-      // Exempt the implementation file and its unit test (which tests platform-native behavior)
-      if (filename.includes('path-utils.ts') || filename.includes('path-utils.test.ts')) {
+      // Exempt the implementation files and their unit test (which tests platform-native behavior).
+      // `path-core.ts` holds the pure `safePath` definitions; `path-utils.ts` the fs-touching ones.
+      if (
+        filename.includes('path-core.ts') ||
+        filename.includes('path-utils.ts') ||
+        filename.includes('path-utils.test.ts')
+      ) {
         return {};
       }
 

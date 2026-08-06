@@ -11,6 +11,9 @@
   ],
   "author": "Jeff Dutton",
   "license": "MIT",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -18,14 +21,55 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./process": {
-      "types": "./dist/process.d.ts",
-      "import": "./dist/process.js"
+    "./path": {
+      "types": "./dist/path.d.ts",
+      "import": "./dist/path.js"
     },
     "./fs": {
       "types": "./dist/fs.d.ts",
       "import": "./dist/fs.js"
-    }
+    },
+    "./process": {
+      "types": "./dist/process.d.ts",
+      "import": "./dist/process.js"
+    },
+    "./git": {
+      "types": "./dist/git.d.ts",
+      "import": "./dist/git.js"
+    },
+    "./glob": {
+      "types": "./dist/glob.d.ts",
+      "import": "./dist/glob.js"
+    },
+    "./zod": {
+      "types": "./dist/zod.d.ts",
+      "import": "./dist/zod.js"
+    },
+    "./template": {
+      "types": "./dist/template-entry.d.ts",
+      "import": "./dist/template-entry.js"
+    },
+    "./yaml": {
+      "types": "./dist/yaml.d.ts",
+      "import": "./dist/yaml.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.js"
+    },
+    "./asset": {
+      "types": "./dist/asset.d.ts",
+      "import": "./dist/asset.js"
+    },
+    "./crawl": {
+      "types": "./dist/crawl.d.ts",
+      "import": "./dist/crawl.js"
+    },
+    "./project": {
+      "types": "./dist/project.d.ts",
+      "import": "./dist/project.js"
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",

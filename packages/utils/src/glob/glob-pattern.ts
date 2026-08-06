@@ -12,7 +12,7 @@
  * magic detection if `escaped` is true.
  */
 
-import { toForwardSlash } from '../path-utils.js';
+import { toForwardSlash } from '../path-core.js';
 
 /** The glob metacharacters recognised by this module. */
 const MAGIC_CHARS = new Set(['*', '?', '[']);

@@ -2,20 +2,12 @@ import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 
 import which from 'which';
 
-import { isAbsoluteAnyPlatform } from './path-utils.js';
-import { buildWindowsShellLine, shouldUseShell, windowsShellQuote } from './windows-shell.js';
-
-/**
- * A `command` is treated as an explicit path (used verbatim, never PATH-resolved)
- * when it is absolute or contains a path separator. A bare name (`claude`, `npm`,
- * `git`) is resolved on PATH via `which.sync`. This mirrors — and preserves — the
- * behaviour callers relied on before hardening: an explicit `binPath` is spawned
- * as-given (so a nonexistent path still surfaces as an async `'error'` event, not a
- * synchronous `which` throw), while a bare command is looked up.
- */
-function isPathLike(command: string): boolean {
-  return isAbsoluteAnyPlatform(command) || command.includes('/') || command.includes('\\');
-}
+import {
+  buildWindowsShellLine,
+  isPathLike,
+  resolveShellCommandToken,
+  shouldUseShell,
+} from './windows-shell.js';
 
 /**
  * Cross-platform hardened async `spawn`, returning a live {@link ChildProcess} with
@@ -47,10 +39,9 @@ export function spawnHardened(
     return spawn(resolved, args, { ...options, shell: false });
   }
 
-  // Windows shell path (.cmd/.bat/.ps1). Use the bare command for a PATH lookup (cmd.exe
-  // re-resolves it via PATHEXT); use the quoted resolved path when given an explicit path.
-  const shellCommand = isPathLike(command) ? windowsShellQuote(resolved) : command;
-  const shellLine = buildWindowsShellLine(shellCommand, args);
+  // Windows shell path (.cmd/.bat/.ps1). Token selection is shared with the sync
+  // `safeExecSync` path so the two cannot drift — see `resolveShellCommandToken`.
+  const shellLine = buildWindowsShellLine(resolveShellCommandToken(command, resolved), args);
   // eslint-disable-next-line sonarjs/os-command -- Windows DEP0190 workaround: command is a PATH-resolved bare name or an explicit path; args are per-arg shell-quoted via windowsShellQuote()
   return spawn(shellLine, { ...options, shell: true });
 }

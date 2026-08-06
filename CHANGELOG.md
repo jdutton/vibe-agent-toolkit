@@ -7,6 +7,147 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- **`@vibe-agent-toolkit/utils/fs` no longer re-exports the pure path-string helpers.** Seven
+  symbols moved from `./fs` to the new `./path` entry: `safePath`, `toForwardSlash`,
+  `isAbsolutePath`, `isAbsoluteAnyPlatform`, `hasParentTraversalSegment`, `toAbsolutePath`, and
+  `getRelativePath`. `./fs` was a published subpath before this release and went from 14 exports to
+  7; anything importing one of those seven from `@vibe-agent-toolkit/utils/fs` must change the
+  specifier to `@vibe-agent-toolkit/utils/path`. The two entries are disjoint by design — `./fs` now
+  holds only the helpers that genuinely touch `node:fs`/`node:os`/`node:url`, which is what lets
+  `./path` reach `node:path` and nothing else. **The `.` barrel is unaffected**: it still exports all
+  seven, so consumers importing from `@vibe-agent-toolkit/utils` need no edit. Permitted under the
+  pre-1.0 policy; called out here because a silently narrowed published subpath is not.
+
+  A new guard test enumerates the `.` barrel's full export set, so a future removal from *it* cannot
+  ship unremarked the way this one nearly did.
+
+### Added
+
+- **`@vibe-agent-toolkit/utils` is now a first-class public package with narrow subpath exports.**
+  The `exports` map goes from 3 keys to 14: `./path`, `./fs`, `./process`, `./git`, `./glob`,
+  `./zod`, `./yaml`, `./template`, `./testing`, `./asset`, `./crawl`, `./project`, and
+  `./package.json`, plus the `.` barrel. Projects
+  building skills with VAT write Node code that has to run on Windows, macOS, and Linux, and hit the
+  same platform potholes VAT does — `.cmd` shims needing a shell, `tmpdir()` returning 8.3 short
+  paths, backslash-vs-forward-slash comparisons, `await import()` of an absolute path failing on
+  Windows. Those primitives are now importable without taking the whole toolkit. The `.` barrel's
+  export set is unchanged, so consumers importing from it need no edit — consumers of the
+  pre-existing `./fs` subpath do; see **Breaking** above.
+
+  This is **not** a bundle-size change: the package has set `"sideEffects": false` since 0.1.40, and
+  a tree-shaking bundler already dropped unused code from the barrel. What subpaths control is what
+  a build must *resolve* and what a module graph *reaches* — the barrel reaches `yaml`, `handlebars`,
+  and `node:fs` regardless of what you destructure, so it cannot be bundled for a browser target and
+  requires every dependency installed.
+
+- **`@vibe-agent-toolkit/utils/process` now exports the Windows spawn safety it was missing.**
+  `spawnHardened` (async spawn with correct `.cmd`/`.bat` launching), `shouldUseShell`,
+  `windowsShellQuote`, and `buildWindowsShellLine` were reachable only through the `.` barrel, so the
+  one subpath meant to make command execution safe on Windows covered synchronous exec only.
+
+- **`engines: { node: ">=22.0.0" }` on `@vibe-agent-toolkit/utils`**, which previously declared no
+  Node floor at all — an adopter on an older Node got no install-time signal.
+
+- **`./crawl` and `./project` subpaths**, promoting `crawlDirectory`/`crawlDirectorySync` and
+  `findProjectRoot`. `./crawl` is deliberately kept out of `./glob`: it is the only subpath that
+  reaches `picomatch` (linkAuth's host matching reaches it too, but only from the `.` barrel), and
+  folding it in would break `./glob`'s guarantee of reaching nothing but `node:path` and no
+  third-party package at all.
+
+### Changed
+
+- **`@vibe-agent-toolkit/utils/git` exposes exactly one git-root finder.** The subpath previously
+  re-exported whole modules, surfacing both `gitFindRoot` and the deprecated `findGitRoot` — two
+  differently-named functions for the same job, which guarantees consumers split between them. The
+  subpath is now an explicit, curated export list carrying `gitFindRoot`; `findGitRoot` remains on
+  the `.` barrel for existing callers.
+
+- **Guidance for building the Node scripts a skill ships**, in the `vat-skill-authoring` skill:
+  bundling to a self-contained tree-shaken `.mjs`, statically scanning the artifact for surviving
+  external imports, and clean-room booting it outside any `node_modules`. It documents a trap VAT
+  itself creates: `files:` injects a bundle under a different `dest` basename, so a script guarding
+  its entry point on `basename(process.argv[1])` evaluates that guard as false under the shipped
+  name and exits 0 having printed nothing — inert, while reading as success to anything watching
+  exit codes.
+
+  It also documents that trap's sibling, which an adopter found the hard way across three of their
+  own bins: npm writes `node_modules/.bin/<name>` as a **symlink**, so `process.argv[1]` is the link
+  path while `import.meta.url` is the realpath target — meaning the obvious remedy
+  (`import.meta.url === pathToFileURL(process.argv[1]).href`) fails the same fail-open way on the
+  most common invocation path of all. The guidance therefore recommends shipping a guard-free bin
+  entry module, and specifies clean-room verification on **three** legs — shipped `dest` name,
+  through a symlink, and from a packed tarball installed outside the workspace. A copy-only clean
+  room cannot see the symlink case at all: a copy has no symlink, so it certifies fail-open bins as
+  healthy.
+
+### Fixed
+
+- **`windowsShellQuote` produced command lines that `CommandLineToArgvW` mis-parses, corrupting
+  arguments and silently merging them with the argument that follows.** The function knew none of
+  Windows' backslash-escaping rules: a backslash run preceding a quote — or preceding the closing
+  quote it adds — is escape-processed by the child's parser, so `C:\Program Files\` was emitted as
+  `"C:\Program Files\"` whose final `\"` reads as an *escaped quote* rather than a terminator. A path
+  with a trailing separator and a space is the everyday case, and the space is exactly what triggers
+  quoting, so the two conditions coincide constantly.
+
+  Now implemented as the canonical algorithm: every backslash run preceding a quote or end-of-string
+  is doubled, and quotes escape as `\"`. Measured by round-tripping through an implementation of
+  `CommandLineToArgvW` over every string up to length 4 across `{a, \, ", space, %}` — the old
+  implementation fails **85 of 781** cases, 74 of them swallowing the next argument; the new one
+  fails **0**. That harness ships as a test, self-checked against Microsoft's published worked
+  examples so it cannot be silently wrong.
+
+  One documented trade: no byte sequence is correct under *both* parsers in the chain, because
+  `cmd.exe` counts every quote while the child needs an odd count to represent a literal one. `\"` is
+  chosen because it is understood identically by every known implementation, whereas `""` is absent
+  from `CommandLineToArgvW`'s documented rules and CRT variants disagree about it. The residual cost
+  is bounded and stated in the code: cmd's quote tracking desyncs only for an argument containing
+  both a quote *and* a shell metacharacter. Found by an adversarial review of the first, incomplete
+  attempt at this fix.
+
+- **`buildWindowsShellLine`'s new command-token check failed open.** It accepted any string starting
+  and ending with a quote, so a whole crafted command line (`"a b" && calc "x"`) passed validation
+  while reading, in its own JSDoc, as a general assertion. It now requires a single shell token.
+
+- **`shouldUseShell`'s documentation claimed safety properties this module does not have** —
+  "Arguments passed as array, preventing injection" and "Never concatenate user input into command
+  strings" — while the Windows shell branch does exactly that concatenation. Replaced with an honest
+  two-mode description and a named escape hatch.
+
+- **`buildWindowsShellLine` silently produced a broken command line when handed an unquoted command
+  path containing spaces**, because `cmd.exe` splits it at the first space. It now throws with a
+  message naming the offending token, and `safeExecSync`/`safeExecResult` now quote a path-like
+  command the same way `spawnHardened` already did — previously the two sibling paths disagreed, and
+  only one was correct.
+
+- **`windowsShellQuote`'s character class implied more safety than it delivered.** `%` and `!` were
+  in the set that triggers quoting, but wrapping in double quotes does not neutralize them —
+  `cmd.exe` still expands `%VAR%` inside quotes, which also corrupts literal `%` in filenames (legal
+  on Windows). Documented explicitly as *quoted, not neutralized*, with the `shell: false` escape
+  hatch named.
+
+- **`@vibe-agent-toolkit/utils/package.json` was not exported**, so
+  `require('@vibe-agent-toolkit/utils/package.json')` threw `ERR_PACKAGE_PATH_NOT_EXPORTED`. Version
+  reporting and resolution assertions all reach for it. Now exported.
+
+- **`@vibe-agent-toolkit/utils/path` and `/glob` no longer reach `node:fs`, `node:os`, and
+  `node:url`.** The pure path-string helpers shared a module with the five filesystem-touching ones,
+  whose top-level imports were pulled into every consumer's graph. The pure helpers now live in a
+  leaf module importing only `node:path`; `path-utils` re-exports it, so the **`.` barrel's** import
+  paths are unchanged (`./fs` consumers must move to `./path` — see **Breaking** above). A guard
+  test walks each entry's transitive source graph and asserts both its `node:` builtin set and its
+  third-party set, so the README's "resolves with zero deps installed" column is enforced rather
+  than merely documented. It fails loudly when it cannot resolve a module, so it cannot pass
+  vacuously — and a fixture with a dangling import exercises that failure, so the guarantee is
+  demonstrated rather than asserted.
+
+- **The `@vibe-agent-toolkit/utils` README documented four functions that do not exist**
+  (`normalizeFilePath`, `readFileContent`, `getGitRootDir`, `ensureGitRepository`) and named a fifth
+  wrongly (`setupTestTempDir`). The reference is rewritten against verified exports and organized by
+  subpath. A `../../docs/` link that resolved to nothing on npm is now absolute.
+
 ## [0.1.41] - 2026-08-03
 
 Entries describe change relative to **0.1.40**, the last stable release. Defects introduced and fixed

@@ -1,23 +1,17 @@
 /**
  * @vibe-agent-toolkit/utils/fs
  *
- * Narrow subpath export for filesystem and path primitives. Import this entry
- * point when you need cross-platform path/fs helpers without pulling in the
- * linkAuth, git, skill-testing, or macro-expansion machinery from the full
- * `"."` barrel.
+ * Filesystem-touching path helpers. Everything here reaches `node:fs`,
+ * `node:os`, or `node:url` and is therefore Node-only.
+ *
+ * For pure path-string manipulation that needs none of that, import
+ * `@vibe-agent-toolkit/utils/path` instead — it is dramatically cheaper.
  */
 
 export {
   normalizePath,
   normalizedTmpdir,
   mkdirSyncReal,
-  isAbsolutePath,
-  isAbsoluteAnyPlatform,
-  hasParentTraversalSegment,
-  toAbsolutePath,
-  getRelativePath,
-  toForwardSlash,
-  safePath,
   resolveFromImportMeta,
   dynamicImportPath,
 } from './path-utils.js';

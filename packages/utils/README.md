@@ -1,12 +1,10 @@
 # @vibe-agent-toolkit/utils
 
-Core shared utilities with no dependencies on other packages.
+Cross-platform primitives for Node tooling that has to run correctly on both Windows and Linux — safe command execution, hardened process spawning, path normalization, and git introspection.
 
-## Philosophy
+Projects building skills and agent tooling with the vibe-agent-toolkit write exactly this kind of Node code and hit exactly these platform potholes: `.cmd` shims that need a shell on Windows, 8.3 short paths from `tmpdir()`, backslash-versus-forward-slash comparisons, and `import()` of an absolute path failing on Windows without a `file://` URL. This package is the shared answer.
 
-This package provides utilities that are needed by multiple packages in the toolkit. Utilities are **added as real needs arise**, not speculatively.
-
-If you need a utility function and multiple packages would benefit from it, add it here. Otherwise, keep it local to the package that needs it.
+**Node-only.** Requires Node >= 22. See [Runtime support](#runtime-support).
 
 ## Installation
 
@@ -14,18 +12,58 @@ If you need a utility function and multiple packages would benefit from it, add 
 bun add @vibe-agent-toolkit/utils
 ```
 
-## Usage
+## Import narrowly
+
+Every area has its own subpath. Import the one you need.
+
+The package sets `"sideEffects": false`, so a modern bundler will tree-shake unused code out of the `.` barrel — importing `safePath` from `.` and from `./path` produce near-identical bundles. **Subpaths are not primarily a size optimization.** What they control is what your build has to *resolve* and what your module graph *reaches*: the `.` barrel reaches `yaml`, `handlebars`, and `node:fs` no matter what you destructure from it, so it cannot be bundled for a browser target and requires every dependency to be installed. A narrow entry reaches only what it needs.
+
+The last two columns are the ones that matter when choosing. **"Resolves with zero deps installed?"** is the sharper of the two: it separates an entry that is merely *heavy* from one that is *unbuildable* in an environment where the package's third-party dependencies are absent or unresolvable.
+
+| Subpath | Contents | Node builtins reached | Third-party | Resolves with zero deps installed? |
+|---|---|---|---|---|
+| `./path` | `safePath`, `toForwardSlash`, `isAbsolutePath`, `isAbsoluteAnyPlatform`, `hasParentTraversalSegment`, `toAbsolutePath`, `getRelativePath`, `issueLocation` | `path` only | — | **yes** |
+| `./zod` | `ZodTypeNames`, `getZodTypeName`, `isZodType`, `unwrapZodType`, `isZodOptional`, `isZodNullable` | **none** | — | **yes** |
+| `./glob` | `isGlob`, static base extraction, magic remainder | `path` only | — | **yes** |
+| `./fs` | `normalizePath`, `normalizedTmpdir`, `mkdirSyncReal`, `resolveFromImportMeta`, `dynamicImportPath`, `copyDirectory`, `verifyCaseSensitiveFilename` | `fs`, `fs/promises`, `os`, `path`, `url` | — | **yes** |
+| `./testing` | `getTestOutputDir`, `getTestOutputBase`, `setupAsyncTempDirSuite`, `setupSyncTempDirSuite` | `crypto`, `fs`, `fs/promises`, `os`, `path`, `url` | — | **yes** |
+| `./asset` | `resolveAssetReference` — paths and npm bare specifiers | `fs`, `module`, `os`, `path`, `url` | — | **yes** |
+| `./project` | `findProjectRoot`, `findConfigFile`, `findNodeWorkspaceRoot`, `resetProjectRootCaches` | `fs`, `os`, `path`, `url` | — | **yes** |
+| `./yaml` | `updateYamlIn`, `verifyConfinedYamlEdit` — byte-surgical YAML edits | **none** | `yaml` | no — needs `yaml` |
+| `./template` | `renderTemplate` — cached Handlebars | **none** | `handlebars` | no — needs `handlebars` |
+| `./process` | `safeExecSync`, `safeExecResult`, `safeExecFromString`, `isToolAvailable`, `getToolVersion`, `hasShellSyntax`, `CommandExecutionError`, `spawnHardened`, `shouldUseShell`, `windowsShellQuote`, `buildWindowsShellLine`, `resolveShellCommandToken`, `isPathLike`, `makeStdioBlocking`, `describeStdioBlocking` | `child_process`, `path` | `which` | no — needs `which` |
+| `./git` | `gitFindRoot`, `gitLsFiles`, `isGitIgnored`, `loadGitignoreRules`, `GitTracker`, `parseGitUrl`, `isGitUrl`, `nonInteractiveGitOverrides` | `child_process`, `fs`, `os`, `path`, `url` | `ignore`, `which` | no — needs `which`, `ignore` |
+| `./crawl` | `crawlDirectory`, `crawlDirectorySync`, `NEVER_CRAWL_GLOBS`, `BUILD_OUTPUT_GLOBS` | `child_process`, `fs`, `os`, `path`, `url` | `picomatch`, `which` | no — needs `picomatch`, `which` |
+| `.` | everything above | all of the above, plus `stream` | `handlebars`, `ignore`, `picomatch`, `which`, `yaml` | no — needs all of them |
+| `./package.json` | the manifest itself, for version reporting and resolution assertions | — | — | **yes** |
+
+Note `./zod` reaches nothing at all: it detects Zod types by duck-typing `_def.typeName` rather than importing Zod, which is exactly why it works across Zod v3 and v4.
+
+`./crawl` is the only *subpath* that reaches `picomatch` (the `.` barrel also reaches it, via linkAuth's host-pattern matching), and it is deliberately *not* folded into `./glob` — `./glob` is guarded as portable (`node:path`, no third-party), and directory crawling would break both halves of that guarantee.
 
 ```typescript
-import {
-  safeExecSync,
-  toForwardSlash,
-  crawlDirectory,
-  isGitIgnored,
-  getGitRootDir,
-  setupTestTempDir,
-} from '@vibe-agent-toolkit/utils';
+// Reaches node:path and nothing else
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils/path';
+import { safeExecSync, spawnHardened } from '@vibe-agent-toolkit/utils/process';
+
+// Reaches yaml, handlebars, and node:fs regardless of what you destructure
+import { safePath } from '@vibe-agent-toolkit/utils';
 ```
+
+`./package.json` is exported as well, so `require('@vibe-agent-toolkit/utils/package.json')` (or a `with { type: 'json' }` import) works for version reporting and "which build am I on?" resolution assertions instead of failing with `ERR_PACKAGE_PATH_NOT_EXPORTED`.
+
+Consumers who prefer a single seam over direct dependencies can re-export the subpaths they want from their own internal module. That pattern works well — just wrap the subpaths rather than the `.` barrel, or the narrowing is lost.
+
+## Runtime support
+
+This package targets **Node >= 22** and is not published for browsers. Most entry points reach `node:fs`, `node:child_process`, or `node:os`.
+
+A guard test in `test/subpath-purity.test.ts` walks each entry's transitive source graph and enforces **both** of the table's last two columns:
+
+- **Third-party reach** — the "Resolves with zero deps installed?" column. Every entry's expected third-party set is asserted exactly, so every **yes** row above is a tested claim rather than a documented intention, and adding a dependency to any entry is a deliberate, reviewed edit.
+- **Builtin reach** — five entries are held to a stricter contract still: `./zod`, `./yaml`, `./template` reach **no Node builtin at all**, and `./path`, `./glob` reach **`node:path` and nothing else** — the one builtin every bundler shims.
+
+That is an enforced invariant, not a browser-support commitment: there are no browser export conditions and no browser test lane. The guard exists so the property can't regress silently — it fails loudly if it cannot resolve a module, so it can't pass vacuously; `test/fixtures/dangling-import/` exercises that failure so the guarantee is demonstrated, not just claimed. If you add a new entry, add it to that test or nothing protects it.
 
 ## Available Utilities
 
@@ -37,7 +75,7 @@ Uses duck typing via `_def.typeName` instead of `instanceof` checks, which fail 
 
 **Quick Example**:
 ```typescript
-import { getZodTypeName, isZodType, ZodTypeNames } from '@vibe-agent-toolkit/utils';
+import { getZodTypeName, isZodType, ZodTypeNames } from '@vibe-agent-toolkit/utils/zod';
 import { z } from 'zod';
 
 const schema = z.string().optional();
@@ -67,31 +105,76 @@ UNION, INTERSECTION, TUPLE, RECORD, MAP, SET,
 FUNCTION, LAZY, PROMISE, and more...
 ```
 
-**See**: [docs/zod-compatibility.md](../../docs/zod-compatibility.md) for complete guide
+**See**: [docs/zod-compatibility.md](https://github.com/jdutton/vibe-agent-toolkit/blob/main/docs/zod-compatibility.md) for the complete guide
 
 **Peer Dependency**: Requires `zod ^3.25.0 || ^4.0.0`
 
 ---
 
-### Process Spawning
-- `safeExecSync()` - Cross-platform secure command execution without shell
+### Path strings — `@vibe-agent-toolkit/utils/path`
 
-### Path Utilities
-- `toForwardSlash()` - Convert paths to forward slashes (Windows/Unix compatibility)
-- `getRelativePath()` - Get relative path between two absolute paths
-- `normalizeFilePath()` - Normalize file paths for consistent comparisons
+These always return forward slashes on every platform, so they are safe for comparisons, `Map` keys, globs, and display.
 
-### File System
-- `crawlDirectory()` - Recursively crawl directories with pattern filtering
-- `readFileContent()` - Read file content with encoding detection
+- `safePath.join()` / `.resolve()` / `.relative()` - forward-slash equivalents of the `node:path` functions
+- `toForwardSlash()` - explicit converter for any path string
+- `toAbsolutePath()` - resolve a path relative to a base directory
+- `getRelativePath()` - relative path between two absolute paths
+- `isAbsolutePath()` / `isAbsoluteAnyPlatform()` - absolute-path predicates
+- `hasParentTraversalSegment()` - detect `..` segments before using a caller-supplied path
+- `issueLocation()` - format a `file:line`-style location relative to a project root
 
-### Git Integration
-- `isGitIgnored()` - Check if file is gitignored (cached per directory)
-- `getGitRootDir()` - Find git repository root directory
-- `ensureGitRepository()` - Verify current directory is in a git repo
+### Filesystem — `@vibe-agent-toolkit/utils/fs`
 
-### Test Helpers
-- `setupTestTempDir()` - Create temp directory for tests with cleanup
+These return **OS-native** separators, because they resolve real filesystem identity via `realpathSync.native()` (which is what resolves Windows 8.3 short names). Wrap with `toForwardSlash()` if you need forward slashes.
+
+⚠️ **`normalizePath()` has an input-dependent split personality.** It lives on `./fs` (rather than `./path`) for the right reason — it calls `realpathSync.native()` — but which of two different things it does depends on its argument: given a single *relative* path it is pure string work, equivalent to `path.normalize`, touching no filesystem; given anything else it resolves to absolute and performs a filesystem `realpath`, so it follows symlinks, resolves 8.3 short names, and — when the path does not exist — silently falls back to the merely-resolved path. Two semantics under one name: check which case you are in before relying on either.
+
+- `normalizePath()` - resolve 8.3 short names and return the real path (see the warning above)
+- `normalizedTmpdir()` - `os.tmpdir()` with short names resolved
+- `mkdirSyncReal()` - create a directory and return its real path
+- `resolveFromImportMeta()` - resolve paths relative to an `import.meta.url`
+- `dynamicImportPath()` - `import()` an absolute path (works on Windows, which rejects bare absolute paths)
+- `copyDirectory()` / `verifyCaseSensitiveFilename()`
+
+### Processes — `@vibe-agent-toolkit/utils/process`
+
+- `safeExecSync()` / `safeExecResult()` / `safeExecFromString()` - cross-platform command execution with no shell injection
+- `spawnHardened()` - async spawn with streaming stdio and correct Windows `.cmd`/`.bat` launching
+- `shouldUseShell()` / `windowsShellQuote()` / `buildWindowsShellLine()` - Windows shell-invocation helpers
+- `isToolAvailable()` / `getToolVersion()` / `hasShellSyntax()`
+- `makeStdioBlocking()` - stop `process.exit()` truncating output in a published bin
+
+### Git — `@vibe-agent-toolkit/utils/git`
+
+- `gitFindRoot()` - find the repository root from a starting directory
+- `gitLsFiles()` - enumerate tracked files
+- `isGitIgnored()` - check whether a path is gitignored
+- `loadGitignoreRules()` - load a repository's ignore rules
+- `GitTracker` - cached tracked-file lookups for repeated checks
+- `parseGitUrl()` / `isGitUrl()` - recognize and decompose git URLs, including `owner/repo` shorthand and `#ref:subpath` fragments
+- `nonInteractiveGitOverrides()` - env and `git -c` overrides that stop a clone blocking on a credential prompt
+
+**One root finder, on purpose.** This entry exports `gitFindRoot()` and not the deprecated `findGitRoot()` alias, which does exactly the same thing under a different name. Shipping both on the same entry guarantees half of all callers pick each. `findGitRoot()` remains reachable from the `.` barrel for existing callers.
+
+### Test helpers — `@vibe-agent-toolkit/utils/testing`
+
+- `setupAsyncTempDirSuite()` / `setupSyncTempDirSuite()` - per-suite temp directories with cleanup
+- `getTestOutputDir()` / `getTestOutputBase()` - isolated test output paths
+
+### Project roots — `@vibe-agent-toolkit/utils/project`
+
+- `findProjectRoot()` - the VAT project root: nearest `vibe-agent-toolkit.config.yaml`, else nearest `.git/`, else `null`
+- `findConfigFile()` / `findNodeWorkspaceRoot()` - the narrower individual probes
+- `resetProjectRootCaches()` - invalidate the module-level walk-up cache (long-lived processes and tests that mutate fixtures)
+
+These are CLI-boundary functions: inner libraries should take a root as a parameter rather than discovering one. They return `string | null` with no internal fallback, so a caller with no root has to decide one rather than silently landing on an absolute path.
+
+### Directory crawling — `@vibe-agent-toolkit/utils/crawl`
+
+- `crawlDirectory()` / `crawlDirectorySync()` - gitignore-aware directory walks
+- `NEVER_CRAWL_GLOBS` / `BUILD_OUTPUT_GLOBS` - the standard exclusion sets
+
+Glob *pattern inspection* is a separate entry, `./glob`, and stays that way: `./glob` is dependency-free and reaches only `node:path`, whereas crawling reaches the filesystem, `git`, and `picomatch`.
 
 ## License
 
