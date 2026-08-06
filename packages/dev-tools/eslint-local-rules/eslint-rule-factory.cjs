@@ -10,7 +10,10 @@
  * @param {string} config.safeFn - Name of safe replacement function (e.g., 'normalizedTmpdir')
  * @param {string} config.safeModule - Module containing safe function (e.g., '@vibe-validate/utils')
  * @param {string} config.message - Error message to display
- * @param {string} [config.exemptFile] - Filename pattern to exempt (e.g., 'safe-exec.ts')
+ * @param {readonly string[]} [config.exemptFiles] - Repo-relative paths allowed to
+ *   call the unsafe function (e.g., `['packages/utils/src/safe-exec.ts']`). Matched
+ *   at a path-segment boundary by `exempt-path-matcher.cjs` — NOT as a substring, so
+ *   a same-named file in another directory is still linted.
  * @param {boolean} [config.checkMemberExpression] - Check for obj.method() calls (default: false)
  * @returns {Object} ESLint rule definition
  *
@@ -23,8 +26,11 @@
  *   safeFn: 'normalizedTmpdir',
  *   safeModule: '@vibe-validate/utils',
  *   message: 'Use normalizedTmpdir() for Windows compatibility',
+ *   exemptFiles: ['packages/utils/src/path-utils.ts'],
  * });
  */
+
+const { createExemptPathMatcher } = require('./exempt-path-matcher.cjs');
 
 /**
  * Helper function to filter unsafe import specifiers
@@ -63,9 +69,11 @@ module.exports = function createNoUnsafeRule(config) {
     safeFn,
     safeModule,
     message,
-    exemptFile,
+    exemptFiles = [],
     checkMemberExpression = false,
   } = config;
+
+  const isExemptPath = createExemptPathMatcher(exemptFiles);
 
   // Normalize module names (support both 'node:os' and 'os')
   const moduleVariants = [unsafeModule];
@@ -91,11 +99,10 @@ module.exports = function createNoUnsafeRule(config) {
     },
 
     create(context) {
-      const filename = context.getFilename();
       const sourceCode = context.getSourceCode();
 
-      // Check if this file is exempt
-      if (exemptFile && filename.includes(exemptFile)) {
+      // Only the declared implementation file(s) may call the unsafe function.
+      if (isExemptPath(context.getFilename())) {
         return {};
       }
 

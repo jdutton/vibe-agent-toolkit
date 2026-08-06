@@ -104,9 +104,25 @@ module.exports = factory({
   safeFn: 'safeUnlinkSync',
   safeModule: './common.js',
   message: 'Use safeUnlinkSync() for better error handling and cross-platform compatibility',
-  exemptFile: 'common.ts', // Where the safe version is implemented
+  // Where the safe version is implemented. ALWAYS a repo-relative path, never a
+  // bare basename: exemptions are anchored at a path-segment boundary
+  // (`exempt-path-matcher.cjs`), so a same-named file in another directory is
+  // still linted. A bare `'common.ts'` used to be a substring match, which
+  // silently exempted every path merely CONTAINING it.
+  exemptFiles: ['packages/dev-tools/src/common.ts'],
 });
 ```
+
+**Never exempt with `filename.includes(...)`.** All three exemption shapes live in
+`packages/dev-tools/eslint-local-rules/exempt-path-matcher.cjs` — reuse them:
+
+| Question the rule is asking | Helper | Substring bug it replaces |
+|---|---|---|
+| "Is this THAT file?" | `createExemptPathMatcher(['packages/utils/src/path-utils.ts'])` | `includes('path-utils.ts')` also exempted `tools/hooks/path-utils.ts` |
+| "Is this file INSIDE that package?" | `createExemptDirectoryMatcher(['packages/git/'])` | `includes('packages/git/')` also exempted `vendor/copy-packages/git/` |
+| "Is this a test file?" | `isTestFile(filename)` | `includes('.test.ts')` also exempted `x.test.ts.bak` and `tsconfig.test.json` |
+
+All three normalize to forward slashes first, so they behave identically on Windows.
 
 ### 3. Add to `index.js`
 

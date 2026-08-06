@@ -17,5 +17,5 @@ module.exports = factory({
   safeFn: 'normalizePath',
   safeModule: '@vibe-agent-toolkit/utils',
   message: 'Use normalizePath() from @vibe-agent-toolkit/utils instead of fs.realpathSync() for consistent Windows 8.3 path resolution',
-  exemptFile: 'path-utils.ts', // Implementation file
+  exemptFiles: ['packages/utils/src/path-utils.ts'], // Implementation file
 });

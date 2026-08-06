@@ -14,6 +14,8 @@
  * - execSync('tar xzf file.tar.gz')
  */
 
+const { isTestFile } = require('./exempt-path-matcher.cjs');
+
 /**
  * Unix-specific commands that should not be used
  * Categorized for better documentation
@@ -96,10 +98,11 @@ module.exports = {
   },
 
   create(context) {
-    const filename = context.getFilename();
-
-    // Exempt test files that specifically test Unix command detection
-    if (filename.includes('.test.ts') || filename.includes('.test.js')) {
+    // Exempt test files that specifically test Unix command detection.
+    // Anchored on the basename by `exempt-path-matcher.cjs` — a substring check
+    // also exempted `example.test.ts.bak`, a `.test.ts-helpers/` directory, and
+    // `tsconfig.test.json` (via the `.test.js` spelling).
+    if (isTestFile(context.getFilename())) {
       return {};
     }
 

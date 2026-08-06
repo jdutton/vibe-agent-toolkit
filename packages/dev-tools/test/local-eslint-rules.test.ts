@@ -6,9 +6,15 @@
  * scaffolding in exactly one place.
  */
 
+import type { Rule } from 'eslint';
 import { describe, expect, it } from 'vitest';
 
-import { loadLocalRule, type RuleCases, ruleTester } from './eslint-rule-test-harness.js';
+import {
+  loadLocalRule,
+  loadLocalRuleModule,
+  type RuleCases,
+  ruleTester,
+} from './eslint-rule-test-harness.js';
 
 const NO_URL_PATHNAME_FOR_FS_CASES: RuleCases = {
   valid: [
@@ -93,6 +99,52 @@ const PREFER_STARTSWITH_OVER_REGEX_CASES: RuleCases = {
 interface RuleSuite {
   name: string;
   cases: RuleCases;
+}
+
+/**
+ * `no-path-join` / `no-path-resolve` / `no-path-relative` share one factory, so
+ * they share one case table. The load-bearing legs are the last three invalid
+ * cases: a DECOY file whose basename matches an exempt implementation file but
+ * whose directory does not. The factory used to exempt via
+ * `filename.includes('path-utils.ts')`, so every decoy linted clean — the exact
+ * bug that let a private `tools/hooks/path-utils.ts` ship raw path calls in a
+ * consumer repo running a fork of these rules.
+ */
+const SAFE_IMPORT = "import { safePath } from '@vibe-agent-toolkit/utils';";
+const LINTED_FILE = 'packages/cli/src/example.ts';
+
+function pathFunctionRuleCases(fn: 'join' | 'relative' | 'resolve'): RuleCases {
+  const unsafeMemberCode = `import path from 'node:path'; const p = path.${fn}(a, b);`;
+  const unsafeMemberOutput = `import path from 'node:path';\n${SAFE_IMPORT} const p = safePath.${fn}(a, b);`;
+  const errors = [{ messageId: 'noUnsafePathFn' }];
+  const decoy = (filename: string) => ({ code: unsafeMemberCode, filename, output: unsafeMemberOutput, errors });
+
+  return {
+    valid: [
+      // The safe call is never flagged.
+      { code: `${SAFE_IMPORT} const p = safePath.${fn}(a, b);`, filename: LINTED_FILE },
+      // Genuinely exempt implementation files, by their real repo-relative paths.
+      { code: unsafeMemberCode, filename: 'packages/utils/src/path-core.ts' },
+      { code: unsafeMemberCode, filename: '/Users/dev/vat/packages/utils/src/path-utils.ts' },
+      { code: unsafeMemberCode, filename: 'packages/utils/test/path-utils.test.ts' },
+      // Same exemption, spelled with Windows separators.
+      { code: unsafeMemberCode, filename: String.raw`C:\dev\vat\packages\utils\src\path-core.ts` },
+    ],
+    invalid: [
+      // Fires on the unsafe member call and the unsafe named import.
+      { code: unsafeMemberCode, filename: LINTED_FILE, output: unsafeMemberOutput, errors },
+      {
+        code: `import { ${fn} } from 'node:path'; const p = ${fn}(a, b);`,
+        filename: LINTED_FILE,
+        output: `\n${SAFE_IMPORT} const p = safePath.${fn}(a, b);`,
+        errors,
+      },
+      // DECOY basenames — same file name, different directory. MUST still fire.
+      decoy('tools/hooks/path-utils.ts'),
+      decoy('packages/other/src/path-core.ts'),
+      decoy('packages/cli/src/my-path-utils.ts'),
+    ],
+  };
 }
 
 
@@ -252,6 +304,71 @@ const REQUIRE_JUSTIFIED_SKIP_CASES: RuleCases = {
   ],
 };
 
+/**
+ * `no-os-tmpdir` / `no-fs-mkdirSync` / `no-fs-realpathSync` /
+ * `no-child-process-execSync` share the OTHER factory, which had the same
+ * substring-exemption bug (`filename.includes('path-utils.ts')`). Same decoy
+ * discipline applies: a same-named file in a different directory must fire.
+ */
+interface UnsafeCallRuleSpec {
+  unsafeFn: string;
+  unsafeModule: string;
+  safeFn: string;
+  exemptPath: string;
+}
+
+function unsafeCallRuleCases({ unsafeFn, unsafeModule, safeFn, exemptPath }: UnsafeCallRuleSpec): RuleCases {
+  const unsafeCode = `import { ${unsafeFn} } from '${unsafeModule}';\nconst r = ${unsafeFn}(x);`;
+  const output = `import { ${safeFn} } from '@vibe-agent-toolkit/utils';\n\nconst r = ${safeFn}(x);`;
+  const errors = [{ messageId: 'noUnsafeOperation' }];
+  const decoy = (filename: string) => ({ code: unsafeCode, filename, output, errors });
+  const exemptBasename = exemptPath.slice(exemptPath.lastIndexOf('/') + 1);
+
+  return {
+    valid: [
+      { code: `import { ${safeFn} } from '@vibe-agent-toolkit/utils';\nconst r = ${safeFn}(x);`, filename: LINTED_FILE },
+      { code: unsafeCode, filename: exemptPath },
+      { code: unsafeCode, filename: `/Users/dev/vat/${exemptPath}` },
+    ],
+    invalid: [
+      { code: unsafeCode, filename: LINTED_FILE, output, errors },
+      // DECOY basenames — the shape that shipped raw tmpdir()/realpathSync()
+      // past a fork of this rule pack in a consumer repo.
+      decoy(`tools/hooks/${exemptBasename}`),
+      decoy(`packages/other/src/${exemptBasename}`),
+    ],
+  };
+}
+
+/**
+ * `no-unix-shell-commands` exempts test files, because the tests for the detector
+ * necessarily name the banned commands. That exemption was
+ * `filename.includes('.test.ts')`, which is a CATEGORY check written as an
+ * unanchored substring: it also exempted `example.test.ts.bak`, a `.test.ts`
+ * directory, and (really, in this repo) `tsconfig.test.json` via `.test.js`.
+ * The valid legs prove genuine test files are STILL exempt — without them the
+ * rule could be "fixed" by exempting nothing and this suite would stay green.
+ */
+const UNIX_CMD_CODE = "safeExecSync('tar', ['xzf', archive]);";
+const UNIX_TEST_FILE = 'packages/dev-tools/test/example.test.ts';
+const NO_UNIX_SHELL_COMMANDS_CASES: RuleCases = {
+  valid: [
+    { code: "safeExecSync('node', [script]);", filename: LINTED_FILE },
+    { code: UNIX_CMD_CODE, filename: UNIX_TEST_FILE },
+    { code: UNIX_CMD_CODE, filename: `/Users/dev/vat/${UNIX_TEST_FILE}` },
+    { code: UNIX_CMD_CODE, filename: String.raw`C:\dev\vat\packages\dev-tools\test\example.test.ts` },
+  ],
+  invalid: [
+    { code: UNIX_CMD_CODE, filename: LINTED_FILE, errors: [{ messageId: 'noUnixCommand' }] },
+    { code: "execSync('tar xzf x.tgz');", filename: LINTED_FILE, errors: [{ messageId: 'noUnixCommand' }] },
+    // DECOYS — every one of these linted clean under the substring exemption.
+    { code: UNIX_CMD_CODE, filename: 'packages/cli/src/example.test.ts.bak', errors: [{ messageId: 'noUnixCommand' }] },
+    { code: UNIX_CMD_CODE, filename: 'packages/cli/src/.test.ts-helpers/impl.ts', errors: [{ messageId: 'noUnixCommand' }] },
+  ],
+};
+
+const PATH_UTILS_IMPL = 'packages/utils/src/path-utils.ts';
+
 const SUITES: readonly RuleSuite[] = [
   { name: 'no-url-pathname-for-fs', cases: NO_URL_PATHNAME_FOR_FS_CASES },
   { name: 'no-bare-dynamic-import-path', cases: NO_BARE_DYNAMIC_IMPORT_PATH_CASES },
@@ -259,6 +376,37 @@ const SUITES: readonly RuleSuite[] = [
   { name: 'prefer-startswith-over-regex', cases: PREFER_STARTSWITH_OVER_REGEX_CASES },
   { name: 'no-unsafe-root-join', cases: NO_UNSAFE_ROOT_JOIN_CASES },
   { name: 'require-justified-skip', cases: REQUIRE_JUSTIFIED_SKIP_CASES },
+  { name: 'no-unix-shell-commands', cases: NO_UNIX_SHELL_COMMANDS_CASES },
+  { name: 'no-path-join', cases: pathFunctionRuleCases('join') },
+  { name: 'no-path-resolve', cases: pathFunctionRuleCases('resolve') },
+  { name: 'no-path-relative', cases: pathFunctionRuleCases('relative') },
+  {
+    name: 'no-os-tmpdir',
+    cases: unsafeCallRuleCases({
+      unsafeFn: 'tmpdir', unsafeModule: 'node:os', safeFn: 'normalizedTmpdir', exemptPath: PATH_UTILS_IMPL,
+    }),
+  },
+  {
+    name: 'no-fs-mkdirSync',
+    cases: unsafeCallRuleCases({
+      unsafeFn: 'mkdirSync', unsafeModule: 'node:fs', safeFn: 'mkdirSyncReal', exemptPath: PATH_UTILS_IMPL,
+    }),
+  },
+  {
+    name: 'no-fs-realpathSync',
+    cases: unsafeCallRuleCases({
+      unsafeFn: 'realpathSync', unsafeModule: 'node:fs', safeFn: 'normalizePath', exemptPath: PATH_UTILS_IMPL,
+    }),
+  },
+  {
+    name: 'no-child-process-execSync',
+    cases: unsafeCallRuleCases({
+      unsafeFn: 'execSync',
+      unsafeModule: 'node:child_process',
+      safeFn: 'safeExecSync',
+      exemptPath: 'packages/utils/src/safe-exec.ts',
+    }),
+  },
 ];
 
 describe.each(SUITES)('$name', ({ name, cases }) => {
@@ -270,5 +418,52 @@ describe.each(SUITES)('$name', ({ name, cases }) => {
 
   it('passes RuleTester cases', () => {
     expect(() => { ruleTester.run(name, rule, cases); }).not.toThrow();
+  });
+});
+
+/**
+ * `no-command-direct-factory` builds rules rather than being one, so it needs its
+ * own suite. Its `exemptPackage` had the DIRECTORY flavor of the substring bug:
+ * `filename.includes('packages/git/')` also exempted `vendor/copy-packages/git/`
+ * and `tools/my-packages/git/` — any directory whose name merely ENDS WITH the
+ * exempt one. Those are the load-bearing invalid legs below.
+ */
+describe('no-command-direct-factory', () => {
+  type CommandRuleConfig = {
+    command: string;
+    packageName: string;
+    availableFunctions: string[];
+    exemptPackage?: string;
+  };
+  const createNoCommandDirectRule =
+    loadLocalRuleModule<(config: CommandRuleConfig) => Rule.RuleModule>('no-command-direct-factory.cjs');
+
+  const rule = createNoCommandDirectRule({
+    command: 'git',
+    packageName: '@vibe-agent-toolkit/git',
+    availableFunctions: ['executeGitCommand()'],
+    exemptPackage: 'packages/git/',
+  });
+  const gitCode = "safeExecSync('git', ['status']);";
+  const errors = [{ messageId: 'noGitDirect' }];
+
+  it('passes RuleTester cases', () => {
+    expect(() => {
+      ruleTester.run('no-git-commands-direct', rule, {
+        valid: [
+          { code: "safeExecSync('node', [script]);", filename: LINTED_FILE },
+          { code: gitCode, filename: 'packages/git/src/index.ts' },
+          { code: gitCode, filename: '/Users/dev/vat/packages/git/src/index.ts' },
+          { code: gitCode, filename: String.raw`C:\dev\vat\packages\git\src\index.ts` },
+        ],
+        invalid: [
+          { code: gitCode, filename: LINTED_FILE, errors },
+          { code: "execSync('git status');", filename: LINTED_FILE, errors },
+          // DECOY directories — exempted by the old substring check.
+          { code: gitCode, filename: 'vendor/copy-packages/git/src/index.ts', errors },
+          { code: gitCode, filename: 'tools/my-packages/git/exec.ts', errors },
+        ],
+      });
+    }).not.toThrow();
   });
 });

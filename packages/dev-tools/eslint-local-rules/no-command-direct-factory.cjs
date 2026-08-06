@@ -10,6 +10,8 @@
  * so all command-checking rules reference the same execution patterns.
  */
 
+const { createExemptDirectoryMatcher } = require('./exempt-path-matcher.cjs');
+
 // ============================================================================
 // COMMAND EXECUTION PATTERNS - Single Source of Truth
 // ============================================================================
@@ -170,7 +172,10 @@ function createCommandChecker(options) {
  * @param {string} config.command - Command name to detect (e.g., 'git', 'gh')
  * @param {string} config.packageName - Package containing wrappers (e.g., '@vibe-validate/git')
  * @param {string[]} config.availableFunctions - List of available wrapper functions
- * @param {string} [config.exemptPackage] - Package to exempt (e.g., 'packages/git/')
+ * @param {string} [config.exemptPackage] - Repo-relative directory of the package that
+ *   OWNS the wrappers, e.g. `'packages/git/'`. Matched at a path-segment boundary by
+ *   `exempt-path-matcher.cjs` — NOT as a substring, so `vendor/copy-packages/git/` is
+ *   still linted.
  * @returns {Object} ESLint rule definition
  *
  * @example
@@ -187,6 +192,7 @@ function createCommandChecker(options) {
 function createNoCommandDirectRule(config) {
   const { command, packageName, availableFunctions, exemptPackage } = config;
 
+  const isUnderExemptPackage = createExemptDirectoryMatcher(exemptPackage ? [exemptPackage] : []);
   const functionList = availableFunctions.join(', ');
   const messageId = `no${command.charAt(0).toUpperCase()}${command.slice(1)}Direct`;
 
@@ -206,10 +212,8 @@ function createNoCommandDirectRule(config) {
     },
 
     create(context) {
-      const filename = context.getFilename();
-
       // Exempt the package itself (where centralization happens)
-      if (exemptPackage && filename.includes(exemptPackage)) {
+      if (isUnderExemptPackage(context.getFilename())) {
         return {};
       }
 

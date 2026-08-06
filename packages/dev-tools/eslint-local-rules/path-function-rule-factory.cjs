@@ -8,9 +8,24 @@
  * Auto-fixes to safePath.fn() from @vibe-agent-toolkit/utils.
  */
 
+const { createExemptPathMatcher } = require('./exempt-path-matcher.cjs');
+
 const PATH_MODULES = new Set(['node:path', 'path']);
 const SAFE_MODULE = '@vibe-agent-toolkit/utils';
 const SAFE_OBJECT = 'safePath';
+
+/**
+ * The only files allowed to call raw `node:path` functions, as anchored
+ * repo-relative paths (see `exempt-path-matcher.cjs` for why these are not
+ * substrings). `path-core.ts` holds the pure `safePath` definitions,
+ * `path-utils.ts` the fs-touching ones, and `path-utils.test.ts` asserts the
+ * platform-native behavior those wrap.
+ */
+const isExemptImplementationFile = createExemptPathMatcher([
+  'packages/utils/src/path-core.ts',
+  'packages/utils/src/path-utils.ts',
+  'packages/utils/test/path-utils.test.ts',
+]);
 
 /**
  * Remove a named import specifier, handling comma cleanup.
@@ -126,14 +141,7 @@ module.exports = function createPathFunctionRule(config) {
     },
 
     create(context) {
-      const filename = context.getFilename();
-      // Exempt the implementation files and their unit test (which tests platform-native behavior).
-      // `path-core.ts` holds the pure `safePath` definitions; `path-utils.ts` the fs-touching ones.
-      if (
-        filename.includes('path-core.ts') ||
-        filename.includes('path-utils.ts') ||
-        filename.includes('path-utils.test.ts')
-      ) {
+      if (isExemptImplementationFile(context.getFilename())) {
         return {};
       }
 

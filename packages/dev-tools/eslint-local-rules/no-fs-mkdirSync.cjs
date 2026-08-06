@@ -17,5 +17,5 @@ module.exports = factory({
   safeFn: 'mkdirSyncReal',
   safeModule: '@vibe-agent-toolkit/utils',
   message: 'Use mkdirSyncReal() from @vibe-agent-toolkit/utils instead of fs.mkdirSync() for Windows path normalization',
-  exemptFile: 'path-utils.ts', // Implementation file
+  exemptFiles: ['packages/utils/src/path-utils.ts'], // Implementation file
 });
