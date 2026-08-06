@@ -615,6 +615,21 @@ describe('validateSkillForPackaging - Non-portable asset references', () => {
 		expect(issue?.message).not.toContain('$CLAUDE_PROJECT_DIR}');
 	});
 
+	// Regression guard for the OTHER direction of the same fix: narrowing the
+	// match to kill the spurious-brace false positive must not lose the operator
+	// forms `${NAME:-default}` / `${NAME#…}`, which are idiomatic non-portable
+	// references to the very variable the rule targets. A lone `\$\{NAME\}`
+	// alternative matched neither.
+	it('flags a braced expansion that carries a default operator', async () => {
+		const issue = await findNonPortableAssetIssue(
+			getTempDir,
+			'\n# Test Skill\n\n```bash\nDIR="${CLAUDE_PROJECT_DIR:-$PWD}/data"\n```',
+		);
+
+		expect(issue).toBeDefined();
+		expect(issue?.message).toContain('CLAUDE_PROJECT_DIR');
+	});
+
 	it('still matches the fully-braced form exactly', async () => {
 		const issue = await findNonPortableAssetIssue(
 			getTempDir,

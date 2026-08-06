@@ -860,11 +860,21 @@ const RELATIVE_PATH_HINT =
  * `"${VAR:-$CLAUDE_PROJECT_DIR}"` the optional trailing `\}?` eats the closing
  * brace of the *outer* `${…:-…}`, and the finding reads `"$CLAUDE_PROJECT_DIR}"`
  * — which looks exactly like the typo `$FOO}` for `${FOO}` and sends reviewers
- * to a file that is in fact correct shell. Alternation ties the closing brace to
- * the presence of an opening one.
+ * to a file that is in fact correct shell.
+ *
+ * The two alternatives, in order:
+ *  1. `\$\{NAME\}` — the fully-braced form `${NAME}`, captured *with* its own
+ *     closing brace so the message renders it intact.
+ *  2. `\$\{?NAME\b` — a bare `$NAME` or a braced expansion that carries an
+ *     operator (`${NAME:-…}`, `${NAME#…}`, `${NAME/…}`), matched only up to the
+ *     word boundary after NAME so it never swallows a brace that isn't the
+ *     variable's own. Trying (1) first is what keeps the closing brace on the
+ *     plain form; falling to (2) is what still flags the operator forms — a
+ *     lone `\$\{NAME\}` alternative silently missed `${NAME:-default}`, an
+ *     idiomatic non-portable reference.
  */
 // eslint-disable-next-line security/detect-non-literal-regexp -- composed from a compile-time constant name, no user input
-const envVarPattern = (name: string): RegExp => new RegExp(String.raw`\$\{${name}\}|\$${name}\b`);
+const envVarPattern = (name: string): RegExp => new RegExp(String.raw`\$\{${name}\}|\$\{?${name}\b`);
 
 const NON_PORTABLE_ASSET_VARIANTS: readonly PortabilityVariant[] = [
   {
