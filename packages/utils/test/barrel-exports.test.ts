@@ -40,7 +40,8 @@ const BARREL_EXPORTS = [
   'expandMacro',
   'fileContentHash',
   'findConfigFile',
-  'findGitRoot',
+  // 'findGitRoot' — REMOVED. A body-for-body alias of `gitFindRoot`; see
+  // `module-subpaths.test.ts` and the CHANGELOG's Removed entry.
   'findNodeWorkspaceRoot',
   'findProjectRoot',
   'formatForwardedEnvLine',

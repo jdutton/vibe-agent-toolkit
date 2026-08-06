@@ -7,11 +7,14 @@
  *
  * The re-exports below are explicit rather than `export *` on purpose. A
  * blanket re-export surfaced TWO root finders under two names — `gitFindRoot`
- * and the deprecated `findGitRoot` — which guarantees half of all adopters
- * reach for each. Only `gitFindRoot` is on this entry.
+ * and a `findGitRoot` alias whose entire body was `return gitFindRoot(startDir)`
+ * — which guarantees half of all adopters reach for each.
  *
- * `findGitRoot` (the deprecated alias in `gitignore-checker`, which just calls
- * `gitFindRoot`) remains available on the `.` barrel for existing callers.
+ * Curating this entry alone only moved the coin flip: `findGitRoot` stayed on
+ * the `.` barrel, the entry with the most consumers, so both names remained
+ * reachable from one import. The alias is now DELETED (pre-1.0 policy: remove
+ * old code rather than maintain two APIs). `gitFindRoot` is the only root
+ * finder in the package.
  */
 
 export { gitFindRoot, gitLsFiles, isGitIgnored } from './git-utils.js';

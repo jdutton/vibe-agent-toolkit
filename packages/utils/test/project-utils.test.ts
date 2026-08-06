@@ -232,7 +232,7 @@ describe('findProjectRoot (config → git → null ladder)', () => {
   });
 
   it('neither present: returns null (no fallback to startDir)', () => {
-    // Same caveat as findConfigFile/findGitRoot null tests: we can only
+    // Same caveat as findConfigFile/gitFindRoot null tests: we can only
     // assert the function does not return startDir itself, since the tempDir
     // may live inside a real repo. The contract is "no fallback to startDir".
     const isolated = safePath.join(tempDir, 'isolated', 'deep');

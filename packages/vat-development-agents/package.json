@@ -84,6 +84,9 @@
   },
   "author": "VAT Team",
   "license": "MIT",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/jdutton/vibe-agent-toolkit.git"

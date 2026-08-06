@@ -266,8 +266,19 @@ export function resolveShellCommandToken(command: string, resolvedPath: string):
  * and ends with `"`", which is true of an entire crafted command line —
  * `"a b" && calc "x"` — so a caller could hand over something that runs `calc` and this
  * function would wave it through as "already quoted".
+ *
+ * The empty string is neither shape, and needs saying because it slipped between both
+ * branches: `''` does not start with `"`, and `SHELL_QUOTE_TRIGGER` cannot match a string
+ * with no characters, so the metacharacter branch returned true. `buildWindowsShellLine('',
+ * ['calc', 'b'])` was accepted and emitted `" calc b"` — a line whose first cmd.exe token
+ * is `calc`, i.e. the caller's first *argument* silently promoted into the command
+ * position. The explicit length check is what makes "one token" mean *one*, not *at most
+ * one*. (Whitespace-only tokens were already rejected — `\s` is in the trigger class.)
  */
 function isSingleShellToken(token: string): boolean {
+  if (token.length === 0) {
+    return false;
+  }
   if (token.startsWith('"')) {
     return token.length >= 2 && token.endsWith('"') && !token.slice(1, -1).includes('"');
   }

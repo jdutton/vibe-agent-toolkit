@@ -28,7 +28,6 @@ The last two columns are the ones that matter when choosing. **"Resolves with ze
 | `./fs` | `normalizePath`, `normalizedTmpdir`, `mkdirSyncReal`, `resolveFromImportMeta`, `dynamicImportPath`, `copyDirectory`, `verifyCaseSensitiveFilename` | `fs`, `fs/promises`, `os`, `path`, `url` | — | **yes** |
 | `./testing` | `getTestOutputDir`, `getTestOutputBase`, `setupAsyncTempDirSuite`, `setupSyncTempDirSuite` | `crypto`, `fs`, `fs/promises`, `os`, `path`, `url` | — | **yes** |
 | `./asset` | `resolveAssetReference` — paths and npm bare specifiers | `fs`, `module`, `os`, `path`, `url` | — | **yes** |
-| `./project` | `findProjectRoot`, `findConfigFile`, `findNodeWorkspaceRoot`, `resetProjectRootCaches` | `fs`, `os`, `path`, `url` | — | **yes** |
 | `./yaml` | `updateYamlIn`, `verifyConfinedYamlEdit` — byte-surgical YAML edits | **none** | `yaml` | no — needs `yaml` |
 | `./template` | `renderTemplate` — cached Handlebars | **none** | `handlebars` | no — needs `handlebars` |
 | `./process` | `safeExecSync`, `safeExecResult`, `safeExecFromString`, `isToolAvailable`, `getToolVersion`, `hasShellSyntax`, `CommandExecutionError`, `spawnHardened`, `shouldUseShell`, `windowsShellQuote`, `buildWindowsShellLine`, `resolveShellCommandToken`, `isPathLike`, `makeStdioBlocking`, `describeStdioBlocking` | `child_process`, `path` | `which` | no — needs `which` |
@@ -154,20 +153,22 @@ These return **OS-native** separators, because they resolve real filesystem iden
 - `parseGitUrl()` / `isGitUrl()` - recognize and decompose git URLs, including `owner/repo` shorthand and `#ref:subpath` fragments
 - `nonInteractiveGitOverrides()` - env and `git -c` overrides that stop a clone blocking on a credential prompt
 
-**One root finder, on purpose.** This entry exports `gitFindRoot()` and not the deprecated `findGitRoot()` alias, which does exactly the same thing under a different name. Shipping both on the same entry guarantees half of all callers pick each. `findGitRoot()` remains reachable from the `.` barrel for existing callers.
+**One root finder, on purpose.** `gitFindRoot()` is the only one in the package. There used to be a second name, `findGitRoot()`, whose entire body was `return gitFindRoot(startDir)`; two names for one function guarantees half of all callers pick each. Keeping it off this entry was not enough — it stayed on the `.` barrel, so both names were still one import away — so it has been removed outright. Replace any `findGitRoot(` with `gitFindRoot(`; the behavior is identical.
 
 ### Test helpers — `@vibe-agent-toolkit/utils/testing`
 
 - `setupAsyncTempDirSuite()` / `setupSyncTempDirSuite()` - per-suite temp directories with cleanup
 - `getTestOutputDir()` / `getTestOutputBase()` - isolated test output paths
 
-### Project roots — `@vibe-agent-toolkit/utils/project`
+### Project roots — `@vibe-agent-toolkit/utils` (barrel only)
 
 - `findProjectRoot()` - the VAT project root: nearest `vibe-agent-toolkit.config.yaml`, else nearest `.git/`, else `null`
 - `findConfigFile()` / `findNodeWorkspaceRoot()` - the narrower individual probes
 - `resetProjectRootCaches()` - invalidate the module-level walk-up cache (long-lived processes and tests that mutate fixtures)
 
 These are CLI-boundary functions: inner libraries should take a root as a parameter rather than discovering one. They return `string | null` with no internal fallback, so a caller with no root has to decide one rather than silently landing on an absolute path.
+
+**No `./project` subpath — on purpose.** These four are VAT-shaped rather than general, so a narrow entry advertising them oversells them. `findProjectRoot()` looks for `vibe-agent-toolkit.config.yaml` and then `.git/`; if your repo's notion of "root" is a `pnpm-workspace.yaml`, a `turbo.json`, or a lockfile, that ladder is not your ladder — and for a *published* package, keying anything on `.git/` is a bug, since it will not be there at install time. `findNodeWorkspaceRoot()` is narrower still: it needs a `package.json` carrying a `"workspaces"` key, which pnpm and Bun workspaces do not have. `findConfigFile()` hardcodes VAT's config filename. If you want a git root, take `gitFindRoot()` from [`./git`](#git--vibe-agent-toolkitutilsgit); if you want your own marker, a six-line walk-up is more honest than a helper whose ladder you have to work around.
 
 ### Directory crawling — `@vibe-agent-toolkit/utils/crawl`
 

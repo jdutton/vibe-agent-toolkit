@@ -65,10 +65,6 @@
       "types": "./dist/crawl.d.ts",
       "import": "./dist/crawl.js"
     },
-    "./project": {
-      "types": "./dist/project.d.ts",
-      "import": "./dist/project.js"
-    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -90,9 +86,6 @@
     "picomatch": "^4.0.3",
     "which": "^5.0.0",
     "yaml": "^2.6.1"
-  },
-  "peerDependencies": {
-    "zod": "^3.25.0 || ^4.0.0"
   },
   "devDependencies": {
     "@types/picomatch": "^4.0.2",

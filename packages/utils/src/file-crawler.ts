@@ -72,8 +72,25 @@ const PICOMATCH_OPTIONS = { dot: true } as const;
  * worktrees at `.claude/worktrees/`, inside a dot-directory that `dot: true`
  * (see {@link PICOMATCH_OPTIONS}) deliberately makes reachable.
  *
+ * `.turbo` is here rather than in {@link BUILD_OUTPUT_GLOBS}, and the placement
+ * is the decision. The line between the two lists is not "who produced it" —
+ * `coverage/` is tool output too — it is *does any lane exist precisely to look
+ * at it*. Something does walk `dist/`; nothing walks `.turbo`, which holds
+ * `turbo-<task>.log` telemetry plus, when `cacheDir` points inside it,
+ * hash-keyed cache entries that are COPIES of package build output. That is the
+ * `.worktrees` failure two lines up, not the `dist` one: a crawl that descends
+ * into it reports the same file twice under two paths. Filing it as build
+ * output would have it exactly backwards, since a lane spreading only this list
+ * is by definition a lane that wants to see built output — and so is precisely
+ * the lane that must not walk a cache of copies. (Turborepo is a common enough
+ * monorepo layout that this is not hypothetical: every package in THIS repo has
+ * a `.turbo/`.)
+ *
  * Note these patterns only bite when `respectGitignore` is false; the fast
- * `git ls-files` path never sees ignored directories in the first place.
+ * `git ls-files` path never sees ignored directories in the first place. For
+ * `.turbo` that is the only path it could bite on — it is gitignored by every
+ * turborepo setup — which is the same position `coverage/` and `.test-output/`
+ * are in.
  */
 export const NEVER_CRAWL_GLOBS = [
   '**/node_modules/**',      // Dependencies (40K+ files), never user content
@@ -82,6 +99,7 @@ export const NEVER_CRAWL_GLOBS = [
   '**/.test-output/**',      // Test artifacts
   '**/.worktrees/**',        // Git worktrees are full repo copies — never traverse
   '**/.claude/worktrees/**', // Claude Code worktrees, same reason
+  '**/.turbo/**',            // turborepo task logs + cache — see below
 ] as const;
 
 /**

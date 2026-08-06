@@ -314,6 +314,35 @@ describe('buildWindowsShellLine', () => {
     });
   });
 
+  /**
+   * A commandToken that is NO token at all. The empty string tripped neither branch
+   * of the predicate — it does not start with `"`, and the metacharacter regex does
+   * not match an empty string — so `buildWindowsShellLine('', ['calc', 'b'])` was
+   * ACCEPTED and emitted `" calc b"`, a line whose first token is `calc`. cmd.exe
+   * would run the first argument as the command.
+   *
+   * Not reachable from today's two call sites (both `which.sync(command)` first,
+   * which throws on `''`), but "unreachable" is a property of the current callers,
+   * not of this function — and this guard's entire job is to be true independent of
+   * them. The whitespace-only cases are pinned alongside so the fix cannot regress
+   * the branch that already worked.
+   */
+  describe('rejects a commandToken that is no token at all', () => {
+    it.each([
+      { label: 'the empty string', token: '' },
+      { label: 'a single space', token: ' ' },
+      { label: 'a tab', token: '\t' },
+    ])('$label', ({ token }) => {
+      expect(() => buildWindowsShellLine(token, ['calc', 'b'])).toThrow(/commandToken/);
+    });
+
+    // The concrete consequence, pinned: whatever this function emits, its first
+    // cmd.exe token must never be an argument the caller supplied.
+    it('never emits a line whose command position is the first argument', () => {
+      expect(() => buildWindowsShellLine('', ['calc'])).toThrow();
+    });
+  });
+
   it('still accepts the two legitimate shapes', () => {
     expect(buildWindowsShellLine('claude', ['--v'])).toBe('claude --v');
     expect(buildWindowsShellLine(`C:${BS}tools${BS}claude.cmd`, ['--v'])).toBe(

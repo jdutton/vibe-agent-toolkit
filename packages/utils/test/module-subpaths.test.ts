@@ -13,18 +13,29 @@ describe('whole-module subpath entries', () => {
     expect(typeof mod.nonInteractiveGitOverrides).toBe('function');
   });
 
-  // Two names for one root finder guarantees half of adopters pick each. The
-  // `./git` entry ships exactly one: `gitFindRoot`. The deprecated
-  // `findGitRoot` alias stays reachable on the `.` barrel only.
-  it('./git ships exactly one root finder — findGitRoot is not on it', async () => {
+  /**
+   * ONE root finder, everywhere — not one per entry.
+   *
+   * `findGitRoot` was a body-for-body alias: `export function findGitRoot(startDir)
+   * { return gitFindRoot(startDir); }`. Keeping it off `./git` fixed the symptom
+   * (adopters of the narrow entry could only find one name) while leaving the cause
+   * in place: the `.` barrel — the entry with the most consumers — still offered
+   * both, so the coin-flip just moved. Its own hiding place was the tell, too:
+   * `findGitRoot` was one of the 22 symbols reachable ONLY from the wide barrel,
+   * which is precisely the shape "import the one you need" is supposed to rule out.
+   *
+   * Under the pre-1.0 policy (CLAUDE.md: "DO NOT maintain old APIs alongside new
+   * ones", "DO remove old code completely"), the alias is deleted rather than
+   * relocated. No production code in this repo ever called it.
+   */
+  it('./git ships exactly one root finder, and the barrel agrees', async () => {
     const mod = await import('../src/git.js');
     expect('findGitRoot' in mod).toBe(false);
     expect('gitFindRoot' in mod).toBe(true);
 
-    // Referenced by string, not by identifier: `findGitRoot` is deprecated and
-    // a direct property access trips the deprecation lint.
     const barrel: Record<string, unknown> = await import('../src/index.js');
-    expect(typeof barrel['findGitRoot']).toBe('function');
+    expect('findGitRoot' in barrel).toBe(false);
+    expect(typeof barrel['gitFindRoot']).toBe('function');
   });
 
   it('./crawl exposes directory crawling and the crawl-exclusion globs', async () => {
@@ -35,9 +46,17 @@ describe('whole-module subpath entries', () => {
     expect(Array.isArray(mod.BUILD_OUTPUT_GLOBS)).toBe(true);
   });
 
-  it('./project exposes project-root discovery', async () => {
-    const mod = await import('../src/project.js');
-    expect(typeof mod.findProjectRoot).toBe('function');
+  // No `./project` entry: it was removed after its four exports scored zero
+  // replaceable call sites on the package's primary consumer (see
+  // `package-exports.test.ts` for the measurement). `project-utils` is still
+  // built and still reachable from the `.` barrel for VAT's own internals — the
+  // published SUBPATH is what went away, not the code.
+  it('project-root discovery stays on the `.` barrel', async () => {
+    const barrel: Record<string, unknown> = await import('../src/index.js');
+    expect(typeof barrel['findProjectRoot']).toBe('function');
+    expect(typeof barrel['findConfigFile']).toBe('function');
+    expect(typeof barrel['findNodeWorkspaceRoot']).toBe('function');
+    expect(typeof barrel['resetProjectRootCaches']).toBe('function');
   });
 
   it('./glob exposes the glob pattern helpers', async () => {

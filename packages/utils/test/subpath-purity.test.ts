@@ -139,7 +139,6 @@ describe('every subpath entry reaches exactly the third-party packages the READM
     { entry: 'fs.ts', thirdParty: [] },
     { entry: 'testing.ts', thirdParty: [] },
     { entry: 'asset.ts', thirdParty: [] },
-    { entry: 'project.ts', thirdParty: [] },
     { entry: 'yaml.ts', thirdParty: ['yaml'] },
     { entry: 'template-entry.ts', thirdParty: ['handlebars'] },
     { entry: 'process.ts', thirdParty: ['which'] },

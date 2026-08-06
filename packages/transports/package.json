@@ -41,5 +41,8 @@
     "directory": "packages/transports"
   },
   "author": "Jeff Dutton",
-  "license": "MIT"
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.0.0"
+  }
 }

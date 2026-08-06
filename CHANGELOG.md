@@ -26,8 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`@vibe-agent-toolkit/utils` is now a first-class public package with narrow subpath exports.**
-  The `exports` map goes from 3 keys to 14: `./path`, `./fs`, `./process`, `./git`, `./glob`,
-  `./zod`, `./yaml`, `./template`, `./testing`, `./asset`, `./crawl`, `./project`, and
+  The `exports` map goes from 3 keys to 13: `./path`, `./fs`, `./process`, `./git`, `./glob`,
+  `./zod`, `./yaml`, `./template`, `./testing`, `./asset`, `./crawl`, and
   `./package.json`, plus the `.` barrel. Projects
   building skills with VAT write Node code that has to run on Windows, macOS, and Linux, and hit the
   same platform potholes VAT does — `.cmd` shims needing a shell, `tmpdir()` returning 8.3 short
@@ -47,22 +47,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `windowsShellQuote`, and `buildWindowsShellLine` were reachable only through the `.` barrel, so the
   one subpath meant to make command execution safe on Windows covered synchronous exec only.
 
-- **`engines: { node: ">=22.0.0" }` on `@vibe-agent-toolkit/utils`**, which previously declared no
-  Node floor at all — an adopter on an older Node got no install-time signal.
+- **`engines: { node: ">=22.0.0" }` on all 21 published packages.** Exactly one of the 21 declared a
+  Node floor before this release, so an adopter installing on an older Node got no install-time
+  signal from any of the other 20 — they simply failed later, at a syntax or API error, with nothing
+  pointing at the Node version.
 
-- **`./crawl` and `./project` subpaths**, promoting `crawlDirectory`/`crawlDirectorySync` and
-  `findProjectRoot`. `./crawl` is deliberately kept out of `./glob`: it is the only subpath that
+- **The vestigial `zod` peerDependency is gone from `@vibe-agent-toolkit/utils`.** It was a
+  *required* peer, so anyone importing only `./path` was still told by their package manager to
+  install `zod`. The package imports `zod` nowhere: all six occurrences of `from 'zod'` in the
+  shipped `dist` are inside JSDoc `@example` blocks, and the version-introspection helpers
+  deliberately duck-type `_def.typeName` rather than importing the library — which is exactly what
+  makes them work across v3 and v4. The declared range (`^3.25.0 || ^4.0.0`) would additionally have
+  rejected a future major that the duck typing handles by design. `zod` remains a devDependency, so
+  the test that exercises the introspection against a real `zod` is unaffected.
+
+- **A `./crawl` subpath**, promoting `crawlDirectory`/`crawlDirectorySync` and the crawl-exclusion
+  glob constants. It is deliberately kept out of `./glob`: it is the only subpath that
   reaches `picomatch` (linkAuth's host matching reaches it too, but only from the `.` barrel), and
   folding it in would break `./glob`'s guarantee of reaching nothing but `node:path` and no
   third-party package at all.
+
+  A `./project` subpath (`findProjectRoot`, `findConfigFile`, `findNodeWorkspaceRoot`,
+  `resetProjectRootCaches`) was prototyped and **deliberately dropped before release**. Validated
+  against the package's primary real-world consumer, its four exports had zero replaceable call
+  sites: `findNodeWorkspaceRoot` needs a `package.json` carrying a `"workspaces"` key and returned
+  `null` from every directory in that pnpm workspace; `findConfigFile` hardcodes VAT's config
+  filename; and `findProjectRoot`'s config-then-`.git` ladder contradicted all six of that repo's
+  own marker walk-ups — one of them a published runtime package, where keying on `.git/` would be a
+  bug, since it is absent at install time. The two sites that genuinely wanted a `.git` walk-up are
+  served by `gitFindRoot` on `./git`. All four functions remain on the `.` barrel, where VAT's own
+  internals use them; only the narrow entry is gone.
 
 ### Changed
 
 - **`@vibe-agent-toolkit/utils/git` exposes exactly one git-root finder.** The subpath previously
   re-exported whole modules, surfacing both `gitFindRoot` and the deprecated `findGitRoot` — two
   differently-named functions for the same job, which guarantees consumers split between them. The
-  subpath is now an explicit, curated export list carrying `gitFindRoot`; `findGitRoot` remains on
-  the `.` barrel for existing callers.
+  subpath is now an explicit, curated export list carrying `gitFindRoot`; see **Removed** for the
+  alias itself.
 
 - **Guidance for building the Node scripts a skill ships**, in the `vat-skill-authoring` skill:
   bundling to a self-contained tree-shaken `.mjs`, statically scanning the artifact for surviving
@@ -82,7 +104,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   room cannot see the symlink case at all: a copy has no symlink, so it certifies fail-open bins as
   healthy.
 
+### Removed
+
+- **`findGitRoot` is gone from `@vibe-agent-toolkit/utils`. Use `gitFindRoot`** — the behavior is
+  identical, because `findGitRoot`'s entire body was `return gitFindRoot(startDir)`. It had carried
+  an `@deprecated` tag for some time. Curating it off the new `./git` subpath (see **Changed**)
+  addressed only the symptom: the alias stayed on the `.` barrel, the entry with the most consumers,
+  so both names remained one import away and the coin flip just moved. Under the pre-1.0 policy
+  (never maintain two APIs for the same job) the alias is deleted rather than relocated. No
+  production code in this repository ever called it.
+
+  This also removes one of the symbols that were reachable **only** from the wide `.` barrel — the
+  shape that undercuts "import the one you need" — and it is the one whose narrow home already
+  existed.
+
 ### Fixed
+
+- **VAT crawls walked into `.turbo`.** turborepo's per-package directory was on neither
+  `NEVER_CRAWL_GLOBS` nor `BUILD_OUTPUT_GLOBS`, so any crawl with `respectGitignore: false` — the
+  path those lists exist for — descended into it and reported turbo's task logs, and, where
+  `cacheDir` points inside `.turbo`, files out of the hash-keyed cache. That cache holds *copies* of
+  package build output, so the crawl reported the same file twice under two paths: the duplicate
+  reading `**/.worktrees/**` is on the never-crawl list to prevent. It is now on
+  `NEVER_CRAWL_GLOBS` (not `BUILD_OUTPUT_GLOBS` — a lane that spreads only the never-crawl list is
+  by definition one that wants to see build output, and is precisely the lane that must not walk a
+  cache of copies). Turborepo is common enough for this to matter: every package in this repo has a
+  `.turbo/`.
+
+- **`buildWindowsShellLine('')` accepted an empty command token and promoted the caller's first
+  argument into the command position.** `isSingleShellToken` guards against a `commandToken` that
+  cmd.exe could split or partly re-execute, but `''` tripped neither of its branches — it does not
+  start with a quote, and the metacharacter regex cannot match a string with no characters — so
+  `buildWindowsShellLine('', ['calc', 'b'])` returned `" calc b"`, a line whose command is `calc`.
+  Not reachable from either of the current call sites (both resolve the command through
+  `which.sync` first, which throws on `''`), but that is a property of today's callers rather than
+  of the function, and this guard's whole purpose is to hold independently of them.
 
 - **`windowsShellQuote` produced command lines that `CommandLineToArgvW` mis-parses, corrupting
   arguments and silently merging them with the argument that follows.** The function knew none of
