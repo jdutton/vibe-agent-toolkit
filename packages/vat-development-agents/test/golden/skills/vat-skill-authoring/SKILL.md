@@ -105,6 +105,55 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/my-skill/scripts/run.mjs" <verb> ...
 
 A script bundled via the `files:` config lands at a skill-relative `dest` (e.g. `scripts/run.mjs`) — reference it in the body by that same relative path, so the documented invocation and the packaged layout are the same string. `files:` is also what lets `vat verify` confirm the artifact actually ships at that path (see `vibe-agent-toolkit:vat-skill-distribution`); a script injected by an external build step VAT can't see has no such guarantee.
 
+### One script, several skills — where does it live?
+
+When several skills in the same plugin need the *same* executable, you have two
+placements, and the choice is about distribution, not tidiness.
+
+**Per-skill (the default).** Each skill carries its own copy via its own `files:`
+entry, referenced skill-relative. Every skill stays self-contained, so any of
+them can be mounted standalone. The cost is duplicated bytes — N copies of the
+same bundle in the packaged plugin.
+
+**Plugin-level.** A marketplace plugin entry takes its own `files:` array whose
+`dest` is relative to the *plugin* root, so one copy serves every skill:
+
+```yaml
+plugins:
+  - name: my-plugin
+    source: plugins/my-plugin
+    files:
+      - source: dist/tool.mjs
+        dest: scripts/tool.mjs        # dest may NOT be under skills/
+```
+
+Skill bodies then reach it as `${CLAUDE_PLUGIN_ROOT}/scripts/tool.mjs` — which
+is exactly the anchor the section above tells you to avoid, and `vat audit` will
+flag it (`NON_PORTABLE_ASSET_REFERENCE`). That warning is correct: those skills
+can no longer be mounted standalone.
+
+**So the deciding question is per skill: does it ever need to run outside this
+plugin?** If yes, duplicate — the redundant bytes are the price of portability,
+and deduping would break the thing that makes it a skill. If no (an internal
+skill only ever shipped inside its plugin), plugin-level is the better shape;
+record the decision rather than silencing it globally:
+
+```yaml
+validation:
+  allow:
+    NON_PORTABLE_ASSET_REFERENCE:
+      - paths: ["plugins/my-plugin/skills/**/SKILL.md"]
+        reason: "plugin-only skills; never mounted standalone"
+```
+
+Prefer `allow` over `severity: … ignore` — the `reason` is required by schema, so
+the tradeoff stays visible to whoever reads it next, and the entry is scoped to
+the paths where it applies instead of disabling the check repo-wide.
+
+Note the boundary VAT enforces: a plugin-level `files:` `dest` may not resolve
+under `skills/`. Plugin artifacts and skill artifacts are separate streams — pick
+one per artifact rather than writing into the skill tree from the plugin side.
+
 ## packagingOptions Reference
 
 Packaging options are configured per skill in `vibe-agent-toolkit.config.yaml` under `skills.config.<name>`:

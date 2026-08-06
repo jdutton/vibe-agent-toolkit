@@ -852,16 +852,36 @@ interface PortabilityVariant {
 const RELATIVE_PATH_HINT =
   'Reference bundled files by a path relative to the skill directory (e.g. `scripts/run.mjs`).';
 
+/**
+ * Match `$NAME` or `${NAME}`, without ever consuming a brace that belongs to an
+ * enclosing expansion.
+ *
+ * A naive `\$\{?NAME\}?` mis-captures inside nested parameter expansion: given
+ * `"${VAR:-$CLAUDE_PROJECT_DIR}"` the optional trailing `\}?` eats the closing
+ * brace of the *outer* `${…:-…}`, and the finding reads `"$CLAUDE_PROJECT_DIR}"`
+ * — which looks exactly like the typo `$FOO}` for `${FOO}` and sends reviewers
+ * to a file that is in fact correct shell. Alternation ties the closing brace to
+ * the presence of an opening one.
+ */
+// eslint-disable-next-line security/detect-non-literal-regexp -- composed from a compile-time constant name, no user input
+const envVarPattern = (name: string): RegExp => new RegExp(String.raw`\$\{${name}\}|\$${name}\b`);
+
 const NON_PORTABLE_ASSET_VARIANTS: readonly PortabilityVariant[] = [
   {
     label: 'claude-plugin-root',
-    pattern: /\$\{?CLAUDE_PLUGIN_ROOT\}?/,
+    pattern: envVarPattern('CLAUDE_PLUGIN_ROOT'),
     fix: `\`CLAUDE_PLUGIN_ROOT\` is a Claude Code plugin-only variable that points at the plugin, not the skill, and is absent under standalone mounts. ${RELATIVE_PATH_HINT}`,
   },
   {
+    // NOT an asset reference. CLAUDE_PROJECT_DIR denotes the *user's repository*
+    // — the thing the skill operates on — so there is no skill-relative path
+    // that can express it and the RELATIVE_PATH_HINT advice does not apply.
+    // Advising it here actively misleads: an adopter reported that the pattern
+    // this flags (`--project-dir` → `$CLAUDE_PROJECT_DIR` → cwd) was their *fix*
+    // for anchoring user artifacts on the plugin install dir by mistake.
     label: 'claude-project-dir',
-    pattern: /\$\{?CLAUDE_PROJECT_DIR\}?/,
-    fix: `\`CLAUDE_PROJECT_DIR\` is a Claude Code-only variable absent on other runtimes. ${RELATIVE_PATH_HINT}`,
+    pattern: envVarPattern('CLAUDE_PROJECT_DIR'),
+    fix: '`CLAUDE_PROJECT_DIR` is a Claude Code-only variable, so a skill relying on it will not resolve the user\'s project on other runtimes. There is no skill-relative equivalent — if the skill genuinely operates on the user\'s repository, take the location as an explicit parameter with `$CLAUDE_PROJECT_DIR` as a fallback, and make sure the skill\'s declared `targets` reflect the Claude Code dependency.',
   },
   {
     label: 'absolute-script-path',
@@ -1017,8 +1037,11 @@ function collectNonPortableAssetReferenceIssues(
   collectPortabilityFamilyIssues(content, docLocation, issues, {
     code: 'NON_PORTABLE_ASSET_REFERENCE',
     variants: NON_PORTABLE_ASSET_VARIANTS,
+    // The headline names the finding only; remediation differs per variant (a
+    // skill-relative path is the answer for bundled assets but is meaningless
+    // for CLAUDE_PROJECT_DIR), so the advice lives in each variant's `fix`.
     summarize: (label, match) =>
-      `Non-portable asset reference [${label}]: "${match}" — reference bundled files relative to the skill directory`,
+      `Non-portable reference [${label}]: "${match}" — will not resolve on every surface this skill can run on`,
   });
 }
 
