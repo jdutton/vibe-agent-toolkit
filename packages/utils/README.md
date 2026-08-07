@@ -25,7 +25,7 @@ The last two columns are the ones that matter when choosing. **"Resolves with ze
 | `./path` | `safePath`, `toForwardSlash`, `isAbsolutePath`, `isAbsoluteAnyPlatform`, `hasParentTraversalSegment`, `toAbsolutePath`, `getRelativePath`, `issueLocation` | `path` only | — | **yes** |
 | `./zod` | `ZodTypeNames`, `getZodTypeName`, `isZodType`, `unwrapZodType`, `isZodOptional`, `isZodNullable` | **none** | — | **yes** |
 | `./glob` | `isGlob`, static base extraction, magic remainder | `path` only | — | **yes** |
-| `./fs` | `normalizePath`, `normalizedTmpdir`, `mkdirSyncReal`, `resolveFromImportMeta`, `dynamicImportPath`, `copyDirectory`, `verifyCaseSensitiveFilename` | `fs`, `fs/promises`, `os`, `path`, `url` | — | **yes** |
+| `./fs` | `normalizePath`, `normalizedTmpdir`, `mkdirSyncReal`, `resolveFromImportMeta`, `dynamicImportPath`, `copyDirectory`, `verifyCaseSensitiveFilename`, `FsLookupCache` | `fs`, `fs/promises`, `os`, `path`, `url` | — | **yes** |
 | `./testing` | `getTestOutputDir`, `getTestOutputBase`, `setupAsyncTempDirSuite`, `setupSyncTempDirSuite` | `crypto`, `fs`, `fs/promises`, `os`, `path`, `url` | — | **yes** |
 | `./asset` | `resolveAssetReference` — paths and npm bare specifiers | `fs`, `module`, `os`, `path`, `url` | — | **yes** |
 | `./yaml` | `updateYamlIn`, `verifyConfinedYamlEdit` — byte-surgical YAML edits | **none** | `yaml` | no — needs `yaml` |
@@ -133,7 +133,11 @@ These return **OS-native** separators, because they resolve real filesystem iden
 - `mkdirSyncReal()` - create a directory and return its real path
 - `resolveFromImportMeta()` - resolve paths relative to an `import.meta.url`
 - `dynamicImportPath()` - `import()` an absolute path (works on Windows, which rejects bare absolute paths)
-- `copyDirectory()` / `verifyCaseSensitiveFilename()`
+- `copyDirectory()`
+- `verifyCaseSensitiveFilename(filePath, fsCache)` - case-exact existence check; takes a per-run `FsLookupCache`
+- `FsLookupCache` - per-run memo for `realpath`/`readdir`, sharing in-flight promises. Construct one per
+  validation run and let it die with the run — never a module-level singleton, or a long-lived process
+  answers from a stale directory listing.
 
 ### Processes — `@vibe-agent-toolkit/utils/process`
 
@@ -147,7 +151,7 @@ These return **OS-native** separators, because they resolve real filesystem iden
 
 - `gitFindRoot()` - find the repository root from a starting directory
 - `gitLsFiles()` - enumerate tracked files
-- `isGitIgnored()` - check whether a path is gitignored
+- `isGitIgnored()` - check whether a path is gitignored (outside a repository it answers from the filesystem, spawning nothing)
 - `loadGitignoreRules()` - load a repository's ignore rules
 - `GitTracker` - cached tracked-file lookups for repeated checks
 - `parseGitUrl()` / `isGitUrl()` - recognize and decompose git URLs, including `owner/repo` shorthand and `#ref:subpath` fragments
