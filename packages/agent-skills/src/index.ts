@@ -77,6 +77,7 @@ export { detectPackagedAgentInstructionFiles } from './validators/agent-instruct
 // producer — a hand-rolled `{severity, code, message, fix, reference}` literal is
 // how docs, runtime, and tests come to disagree.
 export { materializeIssue, type MaterializeOpts } from './validators/rule-engine/index.js';
+export { detectHostedIncompatibleShape } from './validators/plugin-hosted-shape.js';
 export {
   deriveObservations,
   observationToIssue,
