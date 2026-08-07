@@ -372,6 +372,12 @@ export const CODE_REGISTRY = {
     'Add a "license" SPDX identifier (e.g. "MIT") to plugin.json so redistribution terms are explicit.',
     'plugin_missing_license',
   ),
+  PLUGIN_TOPLEVEL_BIN_DIR: entry(
+    'warning',
+    'Plugin ships a top-level `bin/` directory. `bin/` is a supported Claude Code CLI feature (its entries join the Bash tool PATH as bare commands), but a claude.ai-hosted marketplace sync has been observed to skip plugins containing it.',
+    'If nothing invokes these as bare commands, move them to `scripts/` — the documented home for helper scripts — and invoke by path. Keep `bin/` only if you rely on PATH exposure and distribute via the CLI. Set severity.PLUGIN_TOPLEVEL_BIN_DIR to ignore, or add a validation.allow entry, to opt out.',
+    'plugin_toplevel_bin_dir',
+  ),
   PLUGIN_NAME_NOT_KEBAB_CASE: entry(
     'info',
     'Plugin name does not match the kebab-case convention required by Claude Code (lowercase alphanumeric with single hyphens).',
