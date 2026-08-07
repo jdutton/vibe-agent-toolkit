@@ -59,6 +59,59 @@ export interface DuplicateIdCollision {
   conflictingPath: string;
 }
 
+/**
+ * Filesystem errno codes that mean "this path could not be read", as opposed to
+ * "VAT is broken".
+ *
+ * Deliberately an allow-list rather than a catch-all. Demoting every non-
+ * duplicate error to a finding would silently convert a parser or indexing
+ * defect into a per-file warning, and the corpus-wide symptom of that is a
+ * quietly shrinking population — the exact failure mode this code exists to
+ * make loud.
+ *
+ * `ELOOP` is the symlink cycle; `ENOENT` the dangling symlink and the file
+ * deleted between enumeration and parse; `EISDIR`/`ENOTDIR` a path whose type
+ * changed underneath the crawl.
+ */
+const READ_FAILURE_CODES: ReadonlySet<string> = new Set([
+  'EACCES',
+  'EISDIR',
+  'ELOOP',
+  'EMFILE',
+  'ENAMETOOLONG',
+  'ENFILE',
+  'ENOENT',
+  'ENOTDIR',
+  'EPERM',
+]);
+
+/**
+ * Whether an error is a filesystem read failure rather than a defect.
+ *
+ * @param error - The thrown value
+ * @returns True when the error carries a recognized filesystem errno code
+ */
+function isReadFailure(error: unknown): error is Error & { code: string } {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const { code } = error as { code?: unknown };
+  return typeof code === 'string' && READ_FAILURE_CODES.has(code);
+}
+
+/**
+ * One enumerated file that could not be read, and so is absent from the
+ * registry despite the crawl having found it.
+ */
+export interface UnreadableResource {
+  /** Absolute path of the file that was enumerated but not admitted. */
+  filePath: string;
+  /** The underlying read failure, as reported by the filesystem. */
+  reason: string;
+  /** `ENOENT`, `EACCES`, … when the platform supplied one. */
+  code?: string;
+}
+
 export class DuplicateResourceIdError extends Error {
   readonly id: string;
   readonly existingPath: string;
@@ -317,6 +370,26 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   private duplicateIdCollisions: DuplicateIdCollision[] = [];
 
   /**
+   * Files `addResources()` enumerated but could not read.
+   * Cleared by clear(). Surfaced as RESOURCE_UNREADABLE issues in validate().
+   */
+  private unreadableResources: UnreadableResource[] = [];
+
+  /**
+   * Reads that failed, in the order `addResources` attempted them.
+   *
+   * Same rationale as {@link getDuplicateIdCollisions}: this is a population
+   * fact. A file that was enumerated and then skipped is absent from every
+   * downstream count, and an issue list says a read failed without letting a
+   * caller reconcile "enumerated" against "admitted".
+   *
+   * @returns A copy of the failure log, oldest first
+   */
+  getUnreadableResources(): UnreadableResource[] {
+    return [...this.unreadableResources];
+  }
+
+  /**
    * Duplicate-id drops, in the order `addResources` made them.
    *
    * Exposed because arrival order is behaviour, not bookkeeping: the rule is
@@ -550,16 +623,28 @@ export class ResourceRegistry implements ResourceCollectionInterface {
             conflictingPath: error.conflictingPath,
           });
           // First-added wins; skip conflicting file and continue crawling.
+        } else if (isReadFailure(error)) {
+          // A file the crawl handed us that we cannot read. Recorded, not
+          // thrown: previously this terminated `vat resources scan|validate`
+          // and `vat audit` with a raw ENOENT stack trace, which a committed
+          // dangling `*.md` symlink reaches on `crawlDirectory`'s git route
+          // (that route returns mode-120000 entries and does no symlink
+          // filtering).
+          //
+          // ⛔ Recorded rather than skipped, deliberately. Swallowing the read
+          // would trade a loud crash for a silent population change — the file
+          // would vanish from every downstream count with nothing said. It
+          // becomes a RESOURCE_UNREADABLE issue in validate().
+          this.unreadableResources.push({
+            filePath: fp,
+            reason: error.message,
+            ...(typeof (error as { code?: unknown }).code === 'string' && {
+              code: (error as { code: string }).code,
+            }),
+          });
         } else {
-          // ⚠️ Everything that is not a duplicate-id error propagates, and that
-          // includes a plain read failure. A committed dangling `*.md` symlink
-          // is enumerated by `crawlDirectory`'s git branch (which ignores
-          // `followSymlinks`), reaches `readFile` here, and terminates the
-          // whole command with a raw ENOENT stack trace instead of producing a
-          // finding. Pinned by
-          // packages/cli/test/integration/enumeration-symlink-divergence.integration.test.ts.
-          // The fix needs a real issue code — dropping the file silently would
-          // trade a loud crash for a silent population change.
+          // Not a read failure and not a collision: a genuine defect in parsing
+          // or indexing, which must not be demoted to a finding.
           throw error;
         }
       }
@@ -697,6 +782,25 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         `Two files resolve to the same resource id '${id}': '${issueLocation(existingPath, locationRoot(this.baseDir))}' and '${issueLocation(conflictingPath, locationRoot(this.baseDir))}'. Rename one of the files so they produce distinct resource ids.`,
       ),
     );
+  }
+
+  /**
+   * Emit RESOURCE_UNREADABLE errors for reads that failed during addResources().
+   *
+   * The message states that the file was **skipped**, because the consequence
+   * a reader needs is not "a read failed" but "this file is in none of the
+   * counts you are about to read".
+   * @private
+   */
+  private collectUnreadableResourceErrors(): ValidationIssue[] {
+    return this.unreadableResources.map(({ filePath, reason, code }) => {
+      const where = issueLocation(filePath, locationRoot(this.baseDir));
+      const errno = code === undefined ? '' : ` (${code})`;
+      return createRegistryIssue(
+        'RESOURCE_UNREADABLE',
+        `'${where}' was enumerated but could not be read, so it was skipped and is absent from every count in this report${errno}: ${reason}`,
+      );
+    });
   }
 
   /**
@@ -999,6 +1103,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       ...this.collectHtmlParseErrors(),
       ...this.collectUnresolvedReferenceIssues(),
       ...this.collectDuplicateIdErrors(),
+      ...this.collectUnreadableResourceErrors(),
     );
 
     // Validate each link in each resource
@@ -1376,6 +1481,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     this.resourcesByName.clear();
     this.resourcesByChecksum.clear();
     this.duplicateIdCollisions = [];
+    this.unreadableResources = [];
     // Compiled schemas are snapshots of files on disk: a registry being reused
     // for a fresh crawl must re-read them rather than trust a prior compile.
     this.compiledCollectionSchemas.clear();

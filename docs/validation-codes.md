@@ -542,6 +542,14 @@ Reported like every other packaging finding — a located, coded issue on the bu
 - **Why it matters:** Resource ids must be unique — a collision means one file silently shadows the other in lookups, link resolution, and bundling. This surfaces as a reported issue rather than aborting the whole run with an uncaught error.
 - **Fix:** Rename one of the files so they produce distinct resource ids.
 
+### `RESOURCE_UNREADABLE`
+
+- **Default:** `error`
+- **What:** A file the crawl enumerated could not be read, so it was skipped. Most often a committed symlink whose target is missing; also permissions, or a file deleted between enumeration and parse.
+- **Why it matters:** The file is absent from every count in the report — `filesScanned`, link totals, bundle contents — while the crawl found it. Before this code existed, an unreadable file terminated `vat resources scan`/`validate` and `vat audit` with a raw `ENOENT` stack trace; the alternative of skipping it quietly would have traded a loud crash for a silent population change, which is worse. The finding names the file so the gap between "enumerated" and "validated" is accounted for rather than inferred.
+- **Scope:** Only recognized filesystem errno codes (`ENOENT`, `EACCES`, `ELOOP`, `EISDIR`, …) are reported this way. A parse or indexing defect still throws, so a bug in VAT cannot disguise itself as a per-file warning.
+- **Fix:** Repoint or delete the dangling symlink, restore the missing target, or fix the permissions. Set `severity.RESOURCE_UNREADABLE` to `warning` if a corpus is expected to contain unresolvable entries.
+
 ## Quality Codes
 
 *Stance: see [Length and Shape](./skill-quality-and-compatibility.md#length-and-shape) and [Authoring](./skill-quality-and-compatibility.md#authoring).*

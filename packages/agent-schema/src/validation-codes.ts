@@ -255,6 +255,12 @@ export const CODE_REGISTRY = {
     'Rename one of the files so they produce distinct resource ids.',
     'duplicate_resource_id',
   ),
+  RESOURCE_UNREADABLE: entry(
+    'error',
+    'A file the crawl enumerated could not be read, so it was skipped. Most often a committed symlink whose target is missing; also permissions, or a file deleted between enumeration and parse.',
+    'Repoint or delete the dangling symlink, restore the missing target, or fix the permissions. Set severity.RESOURCE_UNREADABLE to warning if a corpus is expected to contain unresolvable entries.',
+    'resource_unreadable',
+  ),
   SKILL_LENGTH_EXCEEDS_RECOMMENDED: entry(
     'warning',
     'SKILL.md line count exceeds the recommended limit; longer files degrade skill triggering.',
@@ -673,5 +679,4 @@ export type NonOverridableCode =
   | 'UNKNOWN_FORMAT'
   | 'SKILL_TOO_LONG'
   | 'REFERENCE_MISSING_TOC'
-  | 'DESCRIPTION_FIRST_PERSON'
-  | 'RESOURCE_UNREACHABLE';
+  | 'DESCRIPTION_FIRST_PERSON';

@@ -36,6 +36,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A file that cannot be read no longer kills the command.** `vat resources scan`/`validate` and
+  `vat audit` terminated with a raw `ENOENT` stack trace when the crawl handed them a file they
+  could not open — reachable from a plain `git clone`, because a committed dangling `*.md` symlink
+  is returned by `git ls-files` as an ordinary mode-120000 entry. The read failure is now recorded
+  and reported as the new **`RESOURCE_UNREADABLE`** (`error`), naming the file and stating that it
+  was skipped. **This is a population change:** the file is enumerated but not admitted, so it is
+  absent from `filesScanned`, link totals and bundle contents — previously nothing was absent
+  because nothing completed. Only recognized filesystem errno codes (`ENOENT`, `EACCES`, `ELOOP`,
+  `EISDIR`, …) are demoted to findings; a parse or indexing defect still throws, so a bug in VAT
+  cannot disguise itself as a per-file warning. Set `severity.RESOURCE_UNREADABLE` to `warning` for
+  corpora expected to contain unresolvable entries. `ResourceRegistry.getUnreadableResources()`
+  returns the raw log for callers reconciling enumerated-against-admitted.
 - **`vat audit` and post-build validation no longer expect files that `vat skills build` never
   ships.** The two lanes disagreed about whether HTML is traversable. Audit's registry includes
   `.html`/`.htm`, and the link walker treated *any* registry member as a door — so on

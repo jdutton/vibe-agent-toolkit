@@ -184,16 +184,20 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
         // path, and nothing below filters them out — whereas the manual walk
         // (see `processSymlink`) returns early unless `followSymlinks` is set.
         // So the SAME tree with the SAME options has a different population
-        // depending only on whether a `.git` exists above it, and a committed
-        // dangling `*.md` symlink reaches `parseMarkdown` here and throws
-        // ENOENT out of `ResourceRegistry.addResources`, terminating the
-        // command rather than producing a finding.
+        // depending only on whether a `.git` exists above it.
+        //
+        // A committed dangling `*.md` symlink returned from here no longer
+        // terminates the command: `ResourceRegistry.addResources` records the
+        // read failure and reports it as RESOURCE_UNREADABLE. The population
+        // divergence itself is still live.
         //
         // Pinned (as today's behaviour, deliberately) by
         // packages/cli/test/integration/enumeration-symlink-divergence.integration.test.ts.
-        // Making the two routes agree changes enumeration on real corpora, so
-        // it needs its own change with a changelog entry naming the population
-        // change — not a drive-by fix here.
+        // Making the two routes agree changes enumeration on real corpora — in
+        // one of two opposite directions, since excluding symlinks here drops
+        // committed content while including them in the walk grows the off-git
+        // population — so it is a product decision with its own changelog
+        // entry, not a drive-by fix here.
         //
         // Git ls-files succeeded - filter using glob patterns
         const isIncluded = picomatch(include, picoOptions);

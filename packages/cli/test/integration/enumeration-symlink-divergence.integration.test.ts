@@ -11,28 +11,36 @@
  * glob-filters. So the *same tree with the same options* has a different
  * population depending on whether a `.git` exists above it.
  *
- * ## 2. A committed dangling `*.md` symlink terminates the command
+ * ## 2. A committed dangling `*.md` symlink — FIXED, and these assertions flipped
  *
  * On the git route that mode-120000 entry reaches `addResource` →
- * `parseMarkdown` → `readFile`, which throws `ENOENT`. `addResources` catches
- * only `DuplicateResourceIdError`, so the error escapes `registry.crawl` and
- * the process dies with a raw stack trace — not a validation finding, a crash.
- * Off the git route the identical tree is fine, because the walk never
- * enumerated the symlink at all.
+ * `parseMarkdown` → `readFile`, which throws `ENOENT`. `addResources` used to
+ * catch only `DuplicateResourceIdError`, so the error escaped `registry.crawl`
+ * and the process died with a raw stack trace — not a validation finding, a
+ * crash. It is now recorded and reported as `RESOURCE_UNREADABLE`.
  *
- * ⚠️ **These tests pin what VAT does TODAY, not what it should do.** Both are
- * genuine defects and both fixes change output on real corpora, so neither
- * belongs in the change that builds the instrument. When they are fixed, these
- * assertions flip — deliberately, in the change that fixes them, with a
- * changelog entry naming the population change.
+ * The assertions below were flipped in that change, as this docstring said they
+ * should be. They deliberately still check that the file is **enumerated and
+ * not admitted**: "no crash" alone would also be satisfied by making the crawl
+ * skip the entry, which would trade the crash for a silent population change.
+ *
+ * ⚠️ **Defect 1 is still pinned as TODAY's behaviour, not as correct
+ * behaviour.** Making the two routes agree changes enumeration on real corpora
+ * in one of two opposite directions (the git route excluding symlinks loses
+ * committed content; the walk route including them grows the off-git
+ * population), so it is a product decision and does not belong in a drive-by.
+ * When it is settled, those assertions flip too, with a changelog entry naming
+ * the population change.
  *
  * The 1.1 GB `~/.claude` baseline corpus is the reason this matters in
  * practice: it contains 15 deliberately-dangling `*.md` symlinks and has no
- * `.git`, which is the only reason recording that baseline succeeded.
+ * `.git`, which is the only reason recording that baseline succeeded — and,
+ * now, the reason the same corpus inside a repo produces 15 findings instead
+ * of one stack trace.
  */
 import { mkdtempSync, rmSync } from 'node:fs';
 
-import { canCreateSymlinks, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { canCreateSymlinks, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -42,6 +50,12 @@ import {
 } from '../../src/pipeline-oracles/index.js';
 
 const roots: string[] = [];
+
+/** Assertion message for the fixture prerequisite, not for a VAT behaviour. */
+const GIT_INIT_FAILED = 'git init failed — is git on PATH?';
+
+/** The corpus-relative path of the deliberately-dangling symlink. */
+const DANGLING = 'symlinks/dangling.md';
 
 /** A disposable corpus root, tracked for cleanup. */
 function makeRoot(label: string): string {
@@ -70,7 +84,7 @@ describe('symlink enumeration diverges by crawl route', () => {
       );
       return;
     }
-    expect(gitBuilt.gitInitialized, 'git init failed — is git on PATH?').toBe(true);
+    expect(gitBuilt.gitInitialized, GIT_INIT_FAILED).toBe(true);
 
     const lane = laneById('resources');
     const onGit = await captureEnumerationSnapshot(lane, { corpusRoot: gitRoot, corpus: 'symlink/git' });
@@ -112,34 +126,70 @@ describe('symlink enumeration diverges by crawl route', () => {
   });
 });
 
-describe('a committed dangling *.md symlink terminates every resource lane', () => {
-  it('crashes on the git route and is invisible on the walk route', async () => {
+describe('a committed dangling *.md symlink is reported, not fatal', () => {
+  it('completes the git route and records the unreadable file', async () => {
     const gitRoot = makeRoot('dangling-git');
     const walkRoot = makeRoot('dangling-walk');
     if (!canCreateSymlinks(gitRoot)) {
-      console.warn('enumeration-symlink-divergence: symlinks unavailable; the dangling-symlink crash was NOT exercised');
+      console.warn('enumeration-symlink-divergence: symlinks unavailable; the dangling-symlink path was NOT exercised');
       return;
     }
     const gitBuilt = materializeTrapCorpus(gitRoot, { initGit: true, includeDanglingSymlink: true });
     materializeTrapCorpus(walkRoot, { includeDanglingSymlink: true });
-    expect(gitBuilt.gitInitialized, 'git init failed — is git on PATH?').toBe(true);
+    expect(gitBuilt.gitInitialized, GIT_INIT_FAILED).toBe(true);
 
     const lane = laneById('resources');
     const onGit = await captureEnumerationSnapshot(lane, { corpusRoot: gitRoot, corpus: 'dangling/git' });
     const onWalk = await captureEnumerationSnapshot(lane, { corpusRoot: walkRoot, corpus: 'dangling/walk' });
 
-    // TODAY: the git route dies. The crawl still enumerated everything — it is
-    // the parse that throws — so `enumerated` is populated and `admitted` is
-    // empty, which is precisely the shape that distinguishes "this lane could
-    // not run" from "this lane found nothing".
-    expect(onGit.buildError).toMatch(/ENOENT/);
-    expect(onGit.admitted).toEqual([]);
-    expect(onGit.enumerated.length).toBeGreaterThan(0);
-    expect(onGit.enumerated.some((row) => row.path === 'symlinks/dangling.md' && row.symlinkResolves === false)).toBe(true);
+    // The lane now runs to completion. Before RESOURCE_UNREADABLE it died here
+    // with a raw ENOENT: `admitted` was empty and `buildError` matched /ENOENT/.
+    expect(onGit.buildError).toBeUndefined();
+    expect(onGit.admitted.length).toBeGreaterThan(0);
 
-    // TODAY: the walk route never sees it, so the same tree validates cleanly.
+    // The dangling entry is still ENUMERATED — the git route returns
+    // mode-120000 paths — and is simply not ADMITTED. That gap is the
+    // population change the finding accounts for, so assert both halves: a fix
+    // that made the crawl skip it instead would satisfy "no crash" while
+    // silently changing what the corpus is.
+    expect(onGit.enumerated.some((row) => row.path === DANGLING && row.symlinkResolves === false)).toBe(
+      true,
+    );
+    expect(onGit.admitted).not.toContain(DANGLING);
+
+    // Unchanged, and still the divergence pinned at the top of this file: the
+    // walk route never enumerates the symlink at all, so it has nothing to
+    // report. Same tree, same options, different population.
     expect(onWalk.buildError).toBeUndefined();
     expect(onWalk.admitted.length).toBeGreaterThan(0);
-    expect(onWalk.enumerated.some((row) => row.path === 'symlinks/dangling.md')).toBe(false);
+    expect(onWalk.enumerated.some((row) => row.path === DANGLING)).toBe(false);
+  });
+
+  it('reports RESOURCE_UNREADABLE naming the file, rather than failing silently', async () => {
+    const root = makeRoot('dangling-issue');
+    if (!canCreateSymlinks(root)) {
+      console.warn('enumeration-symlink-divergence: symlinks unavailable; RESOURCE_UNREADABLE was NOT exercised');
+      return;
+    }
+    const built = materializeTrapCorpus(root, { initGit: true, includeDanglingSymlink: true });
+    expect(built.gitInitialized, GIT_INIT_FAILED).toBe(true);
+
+    const registry = await laneById('resources').build(root);
+
+    // The raw log first: a caller reconciling enumerated-vs-admitted needs the
+    // path, not a rendered message.
+    const unreadable = registry.getUnreadableResources();
+    expect(unreadable).toHaveLength(1);
+    expect(toForwardSlash(unreadable[0]?.filePath ?? '')).toContain(DANGLING);
+    expect(unreadable[0]?.code).toBe('ENOENT');
+
+    // Then the finding, which is what a user actually sees. A stderr notice
+    // would not count: the report has to carry it.
+    const result = await registry.validate();
+    const issue = result.issues.find((candidate) => candidate.code === 'RESOURCE_UNREADABLE');
+    expect(issue, 'validate() did not report the unreadable file').toBeDefined();
+    expect(issue?.severity).toBe('error');
+    expect(issue?.message).toContain('dangling.md');
+    expect(issue?.message).toMatch(/skipped/i);
   });
 });

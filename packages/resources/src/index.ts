@@ -38,6 +38,7 @@ export {
   generateIdFromPath,
   type CrawlOptions,
   type DuplicateIdCollision,
+  type UnreadableResource,
   type ResourceRegistryOptions,
   type RegistryStats,
   type CollectionStats,
