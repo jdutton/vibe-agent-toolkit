@@ -3,8 +3,8 @@ lane: skills-build
 corpus: trap/git
 route: git-ls-files
 gitAvailable: true
-enumeratedCount: 16
-admittedCount: 15
+enumeratedCount: 18
+admittedCount: 17
 collisionCount: 1
 buildError: -
 
@@ -15,17 +15,19 @@ buildError: -
 2	broken/dangling-reference.md	true	false	false	false	-	k1.markdown.4f7676629aa6b3a43a912325c9d5f0847a3af5a28c51f0610f8046742a1519b4
 3	broken/exotic-frontmatter.md	true	false	false	false	-	k1.markdown.0de4bae35943b2badc3e9dff11ce490186438df2e82f97aec24114bdbf96b195
 4	docs/Case.md	true	false	false	false	-	k1.markdown.c7ea65cb38f8d6df156b34813f7d6a079ba8d69c133c7c254e066ce6655a5baf
-5	docs/guide.md	true	false	false	false	-	k1.markdown.108f2a9cd167d06448fb2209135e3ddc033d4e2c1356415574aab8d673e7161c
-6	docs/sibling.md	true	false	false	false	-	k1.markdown.67bdc639b157a669f9adea87b698e5d6af8fed059a8cb1c1c09a4f138936bb66
-7	dup-hyphen/note.md	true	false	false	false	-	k1.markdown.7b721128893996c29eaac42b042c71605f0f11ab7c8dd597860526e3939c2167
-8	dup/hyphen-note.md	true	false	false	false	-	k1.markdown.4ac4b04af9f1e10174918d406145c72cb00e4214a2ba49076ef168fbf6b2eaf5
-9	empty.md	true	false	false	false	-	k1.markdown.17168c653cc4703618ed339022ab8789582bd711f5d6697c4f5f0a183f75814c
-10	links/to-case.md	true	false	false	false	-	k1.markdown.0c9f162da29f6879ea5f1e062ef2c3db833f85adf11a17a2bdffd5b38edfb1d1
-11	links/to-dir.md	true	false	false	false	-	k1.markdown.8e9e32803df20e60ee7c37719c6ef8e2a1a9ffa20c0dae81da1c8d5dc659cd4e
-12	links/to-ignored.md	true	false	false	false	-	k1.markdown.8e61e96430a8cb31c2fdb61e95c1574c18b4c817c8a83ef0353d47f1888bc067
-13	links/to-missing.md	true	false	false	false	-	k1.markdown.066c8e792c839584b6817e36756f122127334e7a8a7643b16f396713ce7976a6
-14	symlinks/a/target.md	true	false	false	false	-	k1.markdown.59687063d2df3063831b905dbf1cd6dc86839ac950e8a86b1c89ab92829b41cf
-15	symlinks/b/target.md	true	false	false	false	-	k1.markdown.163c953a7ed2348961516460de6b2290fd6c5f4fa1c6a1a55cf1ab2c0b97f2de
+5	docs/anchored.md	true	false	false	false	-	k1.markdown.d8f18fa1b20bc609f4e070f38eecfaef38c39ffda78012ad854505acc76df1a5
+6	docs/guide.md	true	false	false	false	-	k1.markdown.108f2a9cd167d06448fb2209135e3ddc033d4e2c1356415574aab8d673e7161c
+7	docs/sibling.md	true	false	false	false	-	k1.markdown.67bdc639b157a669f9adea87b698e5d6af8fed059a8cb1c1c09a4f138936bb66
+8	dup-hyphen/note.md	true	false	false	false	-	k1.markdown.7b721128893996c29eaac42b042c71605f0f11ab7c8dd597860526e3939c2167
+9	dup/hyphen-note.md	true	false	false	false	-	k1.markdown.4ac4b04af9f1e10174918d406145c72cb00e4214a2ba49076ef168fbf6b2eaf5
+10	empty.md	true	false	false	false	-	k1.markdown.17168c653cc4703618ed339022ab8789582bd711f5d6697c4f5f0a183f75814c
+11	links/to-anchor.md	true	false	false	false	-	k1.markdown.3166ac6853e62123296ef01ca15e3609ce366c18b39ca376b7de19cff69d612a
+12	links/to-case.md	true	false	false	false	-	k1.markdown.0c9f162da29f6879ea5f1e062ef2c3db833f85adf11a17a2bdffd5b38edfb1d1
+13	links/to-dir.md	true	false	false	false	-	k1.markdown.8e9e32803df20e60ee7c37719c6ef8e2a1a9ffa20c0dae81da1c8d5dc659cd4e
+14	links/to-ignored.md	true	false	false	false	-	k1.markdown.8e61e96430a8cb31c2fdb61e95c1574c18b4c817c8a83ef0353d47f1888bc067
+15	links/to-missing.md	true	false	false	false	-	k1.markdown.066c8e792c839584b6817e36756f122127334e7a8a7643b16f396713ce7976a6
+16	symlinks/a/target.md	true	false	false	false	-	k1.markdown.59687063d2df3063831b905dbf1cd6dc86839ac950e8a86b1c89ab92829b41cf
+17	symlinks/b/target.md	true	false	false	false	-	k1.markdown.163c953a7ed2348961516460de6b2290fd6c5f4fa1c6a1a55cf1ab2c0b97f2de
 
 ## admitted (ordered, post-deduplication)
 0	README.md
@@ -33,16 +35,18 @@ buildError: -
 2	broken/dangling-reference.md
 3	broken/exotic-frontmatter.md
 4	docs/Case.md
-5	docs/guide.md
-6	docs/sibling.md
-7	dup-hyphen/note.md
-8	empty.md
-9	links/to-case.md
-10	links/to-dir.md
-11	links/to-ignored.md
-12	links/to-missing.md
-13	symlinks/a/target.md
-14	symlinks/b/target.md
+5	docs/anchored.md
+6	docs/guide.md
+7	docs/sibling.md
+8	dup-hyphen/note.md
+9	empty.md
+10	links/to-anchor.md
+11	links/to-case.md
+12	links/to-dir.md
+13	links/to-ignored.md
+14	links/to-missing.md
+15	symlinks/a/target.md
+16	symlinks/b/target.md
 
 ## collisions (first-added-wins drops, in arrival order)
 dup-hyphen-note-md	won=dup-hyphen/note.md	dropped=dup/hyphen-note.md

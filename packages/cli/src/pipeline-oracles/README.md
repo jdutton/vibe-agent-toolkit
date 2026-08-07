@@ -28,7 +28,7 @@ projection and judgement at once. Two consequences:
 | Instrument | What it answers | Status |
 |---|---|---|
 | **Enumeration snapshot** | Per lane, per corpus: which paths, **in which order**, with `exists` / `isDirectory` / `gitignored` / `isSymlink` / `symlinkResolves` / content key | Built |
-| **Parse-fact snapshot** | Per content key: links + ordinals, headings + slugs, frontmatter **source**, parse conditions | Built |
+| **Parse-fact snapshot** | Per content key: links + ordinals, headings + slugs, frontmatter **source and value shapes**, fragment anchors, content/key agreement, parse conditions — with `keyof ParseResult` coverage enforced at compile time | Built |
 | **Rule-invocation log** | Per run: which check ran, over how many rows, emitting how many findings | **Not built** — see below |
 
 ### ⛔ The enumeration snapshot is never sorted
@@ -55,11 +55,45 @@ paths key the same and their facts differ, a content-addressed cache is unsound.
 If the same bytes key differently across runs, it is useless. Neither is visible
 in command output.
 
-Frontmatter is captured as **source**, not as the parsed object. A YAML→JSON
-round-trip is lossy in ways a validator notices: `.inf` and `.nan` become `null`,
-`!!binary` becomes a Buffer envelope, and a cyclic anchor makes `JSON.stringify`
-throw. A cache storing the object would hand Ajv `Infinity` on a cold run and
-`null` on a warm one — same corpus, same config, different reported issues.
+#### Every `ParseResult` field is accounted for, and `tsc` enforces it
+
+The snapshot's claim is *"if a cached parse differs from a fresh one, a row here
+differs."* A field of `ParseResult` that no row records breaks that claim
+silently: the cache corrupts it, every golden stays green, and the gate reports
+success for precisely the thing it exists to catch.
+
+So `parse-fact-snapshot.ts` partitions `keyof ParseResult` into
+`CapturedParseResultField` and `UnrecordedParseResultField`, and asserts the
+remainder is `never`. **Adding a field to `ParseResult` fails the build** until
+someone states which bucket it is in. The guard lives in `src/` deliberately —
+no test file in this repository is typechecked, so the same assertion written in
+`test/` would assert nothing.
+
+This is not a hypothetical. `anchors` was uncovered until 2026-08-07, and it is
+the input to `ResourceRegistry.buildFragmentIndex` — every `file.md#fragment`
+check in VAT.
+
+#### Frontmatter is captured twice, because one capture cannot do the job
+
+- **Source** (`frontmatterSource`), the block as written. A YAML→JSON round-trip
+  is lossy in ways a validator notices: `.inf` and `.nan` become `null`,
+  `!!binary` becomes a Buffer envelope, and a cyclic anchor makes
+  `JSON.stringify` throw. A snapshot storing the parsed object would report two
+  different things for one document depending on whether it had been cached.
+- **Shapes** (`frontmatterFields`), each top-level key with the runtime type of
+  its value. The source is re-derived from the document text, so it is *constant
+  by construction* across a cached and an uncached parse — it detects a change
+  in the parser and is structurally blind to a cache handing back a lossily
+  round-tripped object. The shapes are what move: `.inf` goes `number` → `null`,
+  `!!binary` goes `Buffer` → `Object`. Top-level only, so a cyclic anchor is
+  recorded rather than thrown on.
+
+#### Absent is not empty
+
+`anchors` is optional under `exactOptionalPropertyTypes` and both parsers omit
+the key rather than emitting `[]`. The golden renders absent as `-` and present-
+but-empty as `(none)`, so a layer that normalises one into the other shows up as
+a diff instead of passing.
 
 ## The five lanes
 
@@ -98,6 +132,18 @@ assume it.
 bun run test:integration          # compares against the committed goldens
 UPDATE_DRIFT_GOLDEN=1 bun run test:integration   # regenerate, then READ THE DIFF
 ```
+
+`UPDATE_DRIFT_GOLDEN` is declared in `turbo.json`'s `globalEnv`, which is what
+makes the second command work at all. Turbo runs tasks in a strict environment
+and passes through only declared variables, so before it was declared the
+regeneration command ran the suite with the flag **unset** — it compared against
+the goldens, passed, and wrote nothing, while looking exactly like a successful
+regeneration. Being in `globalEnv` also puts it in the task hash, so a
+regeneration run can never be served from the cache of a comparison run.
+
+If the goldens do not move when you expect them to, check that first: this
+repository caches `test:integration`, and a replayed task prints the same green
+as an executed one.
 
 Goldens live in `packages/cli/test/golden/pipeline-oracles/`, mirroring the
 convention `packages/vat-development-agents/test/system/packaged-output-drift.system.test.ts`

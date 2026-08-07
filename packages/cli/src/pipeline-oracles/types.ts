@@ -136,6 +136,23 @@ export interface HeadingFact {
 }
 
 /**
+ * One top-level frontmatter key and the runtime shape of its value.
+ *
+ * The shape, not the value, is the fact worth holding still here. A YAML→JSON
+ * round-trip preserves most values and changes their *type*: `.inf` becomes
+ * `null` (`number` → `null`), `!!binary` becomes a plain envelope object
+ * (`Buffer` → `Object`), a date becomes a string. Recording `typeName` catches
+ * every one of those while staying cycle-safe, because it never descends past
+ * the top level — and a cyclic YAML anchor is exactly what makes a value-
+ * recording snapshot throw instead of record.
+ */
+export interface FrontmatterFieldFact {
+  key: string;
+  /** `null`, a `typeof` result, or the constructor name for objects. */
+  typeName: string;
+}
+
+/**
  * Facts a parse produces from one blob. Keyed by content key, never by path —
  * that is the property that makes this doubles as the parse cache's oracle.
  */
@@ -157,6 +174,40 @@ export interface ParseFactRow {
    * corpus, same config, different reported issues.
    */
   frontmatterSource: string | null;
+  /**
+   * Top-level frontmatter keys and value shapes as the **parser** returned them,
+   * or `null` when `frontmatter` is absent from the parse result entirely.
+   *
+   * {@link frontmatterSource} alone cannot do this job. It is re-derived from
+   * the document text, so it is constant by construction across a cached and an
+   * uncached parse — it detects a change in the *parser*, and is structurally
+   * blind to a cache that hands back a lossily round-tripped object. This field
+   * is the one that discriminates, which is why both are here.
+   */
+  frontmatterFields: FrontmatterFieldFact[] | null;
+  /**
+   * Fragment targets the parse declared, or `null` when the field is absent.
+   *
+   * Absent and `[]` are different states in the contract — `ParseResult.anchors`
+   * is optional under `exactOptionalPropertyTypes` and both parsers omit the key
+   * rather than emitting an empty array — so they are different values here.
+   * A cache that normalises one into the other must show up as a diff.
+   *
+   * This feeds `ResourceRegistry.buildFragmentIndex`, so it is the input to
+   * every `file.md#fragment` check. A parse layer that dropped it would change
+   * anchor validation across the whole corpus while every other fact held.
+   */
+  anchors: string[] | null;
+  /**
+   * Whether re-keying `ParseResult.content` reproduces {@link contentKey}.
+   *
+   * The full text is deliberately not stored — it would make the golden the
+   * corpus. This is the assertion that text carries instead: the parser handed
+   * back the same bytes it was keyed on. A parse layer that returned content
+   * from one blob under the key of another has no other tell in this snapshot,
+   * and `false` here means the key is not naming what the row describes.
+   */
+  contentMatchesKey: boolean;
   /** Parse-time oddities: YAML errors, HTML well-formedness, dangling refs. */
   conditions: ConditionFact[];
 }

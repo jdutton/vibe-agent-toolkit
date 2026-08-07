@@ -1,13 +1,16 @@
 # parse-fact-snapshot
 corpus: trap/non-git
-blobCount: 21
+blobCount: 23
 
 ## blob k1.html.29ea537818e21b8c340d049d63dba80d23dce347701efe133cf5142c3126e1ca
 parser: html
 paths: docs/page.html
 sizeBytes: 126
 estimatedTokenCount: 32
+contentMatchesKey: true
 frontmatterSource: -
+frontmatterFields: -
+anchors: top
 links: 1
   0	local_file	-	line=3	href=guide.md	text=
 headings: 0
@@ -18,7 +21,10 @@ parser: html
 paths: docs/page.htm
 sizeBytes: 59
 estimatedTokenCount: 15
+contentMatchesKey: true
 frontmatterSource: -
+frontmatterFields: -
+anchors: -
 links: 1
   0	local_file	-	line=1	href=sibling.md	text=
 headings: 0
@@ -30,7 +36,10 @@ parser: html
 paths: empty.html
 sizeBytes: 0
 estimatedTokenCount: 0
+contentMatchesKey: true
 frontmatterSource: -
+frontmatterFields: -
+anchors: -
 links: 0
 headings: 0
 conditions: 1
@@ -41,7 +50,10 @@ parser: html
 paths: broken/malformed.html
 sizeBytes: 36
 estimatedTokenCount: 9
+contentMatchesKey: true
 frontmatterSource: -
+frontmatterFields: -
+anchors: -
 links: 0
 headings: 0
 conditions: 1
@@ -52,7 +64,10 @@ parser: markdown
 paths: links/to-missing.md
 sizeBytes: 41
 estimatedTokenCount: 11
+contentMatchesKey: true
 frontmatterSource: -
+frontmatterFields: -
+anchors: -
 links: 1
   0	local_file	link	line=3	href=../docs/nowhere.md	text=gone
 headings: 1
@@ -64,7 +79,10 @@ parser: markdown
 paths: ignored/secret.md
 sizeBytes: 64
 estimatedTokenCount: 16
+contentMatchesKey: true
 frontmatterSource: -
+frontmatterFields: -
+anchors: -
 links: 0
 headings: 1
   0	h1	slug=secret	line=1	text=Secret
@@ -75,7 +93,10 @@ parser: markdown
 paths: links/to-case.md
 sizeBytes: 38
 estimatedTokenCount: 10
+contentMatchesKey: true
 frontmatterSource: -
+frontmatterFields: -
+anchors: -
 links: 1
   0	local_file	link	line=3	href=../docs/case.md	text=Case
 headings: 1
@@ -87,7 +108,10 @@ parser: markdown
 paths: broken/exotic-frontmatter.md
 sizeBytes: 97
 estimatedTokenCount: 25
+contentMatchesKey: true
 frontmatterSource: ceiling: .inf\nundefined_value: .nan\npayload: !!binary |\n  aGVsbG8=
+frontmatterFields: ceiling:number, payload:Buffer, undefined_value:number
+anchors: -
 links: 0
 headings: 1
   0	h1	slug=exotic-frontmatter	line=8	text=Exotic frontmatter
@@ -98,7 +122,10 @@ parser: markdown
 paths: docs/guide.md
 sizeBytes: 344
 estimatedTokenCount: 86
+contentMatchesKey: true
 frontmatterSource: title: Guide\ndescription: An ordinary document, so the snapshot has a baseline to be unlike.
+frontmatterFields: description:string, title:string
+anchors: -
 links: 2
   0	local_file	link	line=8	href=sibling.md	text=the sibling
   1	local_file	link	line=8	href=../README.md	text=back up
@@ -113,7 +140,10 @@ parser: markdown
 paths: symlinks/b/target.md
 sizeBytes: 68
 estimatedTokenCount: 17
+contentMatchesKey: true
 frontmatterSource: -
+frontmatterFields: -
+anchors: -
 links: 0
 headings: 1
   0	h1	slug=b	line=1	text=B
@@ -124,7 +154,10 @@ parser: markdown
 paths: empty.md
 sizeBytes: 0
 estimatedTokenCount: 0
+contentMatchesKey: true
 frontmatterSource: -
+frontmatterFields: -
+anchors: -
 links: 0
 headings: 0
 conditions: 0
@@ -134,7 +167,10 @@ parser: markdown
 paths: README.md
 sizeBytes: 105
 estimatedTokenCount: 27
+contentMatchesKey: true
 frontmatterSource: -
+frontmatterFields: -
+anchors: -
 links: 3
   0	local_file	link	line=3	href=docs/guide.md	text=guide
   1	local_file	link	line=3	href=docs/page.html	text=page
@@ -143,12 +179,30 @@ headings: 1
   0	h1	slug=trap-corpus	line=1	text=Trap corpus
 conditions: 0
 
+## blob k1.markdown.3166ac6853e62123296ef01ca15e3609ce366c18b39ca376b7de19cff69d612a
+parser: markdown
+paths: links/to-anchor.md
+sizeBytes: 56
+estimatedTokenCount: 14
+contentMatchesKey: true
+frontmatterSource: -
+frontmatterFields: -
+anchors: -
+links: 1
+  0	local_file	link	line=3	href=../docs/anchored.md#mixed-case	text=mixed
+headings: 1
+  0	h1	slug=to-an-anchor	line=1	text=To an anchor
+conditions: 0
+
 ## blob k1.markdown.3eddf50474c7af1104b3d551a99a00968868ce334144b06ab55bc60cbbc83b07
 parser: markdown
 paths: broken/bad-frontmatter.md
 sizeBytes: 35
 estimatedTokenCount: 9
+contentMatchesKey: true
 frontmatterSource: title: [unclosed
+frontmatterFields: -
+anchors: -
 links: 0
 headings: 1
   0	h1	slug=broken	line=5	text=Broken
@@ -160,7 +214,10 @@ parser: markdown
 paths: dup/hyphen-note.md
 sizeBytes: 43
 estimatedTokenCount: 11
+contentMatchesKey: true
 frontmatterSource: id: shared-note
+frontmatterFields: id:string
+anchors: -
 links: 0
 headings: 1
   0	h1	slug=note-under-dup	line=5	text=Note under dup/
@@ -171,7 +228,10 @@ parser: markdown
 paths: broken/dangling-reference.md
 sizeBytes: 37
 estimatedTokenCount: 10
+contentMatchesKey: true
 frontmatterSource: -
+frontmatterFields: -
+anchors: -
 links: 0
 headings: 1
   0	h1	slug=dangling	line=1	text=Dangling
@@ -183,7 +243,10 @@ parser: markdown
 paths: symlinks/a/target.md
 sizeBytes: 28
 estimatedTokenCount: 7
+contentMatchesKey: true
 frontmatterSource: -
+frontmatterFields: -
+anchors: -
 links: 0
 headings: 1
   0	h1	slug=a	line=1	text=A
@@ -194,7 +257,10 @@ parser: markdown
 paths: docs/sibling.md
 sizeBytes: 55
 estimatedTokenCount: 14
+contentMatchesKey: true
 frontmatterSource: -
+frontmatterFields: -
+anchors: -
 links: 0
 headings: 1
   0	h1	slug=sibling	line=1	text=Sibling
@@ -205,7 +271,10 @@ parser: markdown
 paths: dup-hyphen/note.md
 sizeBytes: 50
 estimatedTokenCount: 13
+contentMatchesKey: true
 frontmatterSource: id: shared-note
+frontmatterFields: id:string
+anchors: -
 links: 0
 headings: 1
   0	h1	slug=note-under-dup-hyphen	line=5	text=Note under dup-hyphen/
@@ -216,7 +285,10 @@ parser: markdown
 paths: links/to-ignored.md
 sizeBytes: 53
 estimatedTokenCount: 14
+contentMatchesKey: true
 frontmatterSource: -
+frontmatterFields: -
+anchors: -
 links: 1
   0	local_file	link	line=3	href=../ignored/secret.md	text=secret
 headings: 1
@@ -228,7 +300,10 @@ parser: markdown
 paths: links/to-dir.md
 sizeBytes: 34
 estimatedTokenCount: 9
+contentMatchesKey: true
 frontmatterSource: -
+frontmatterFields: -
+anchors: -
 links: 1
   0	local_file	link	line=3	href=../docs	text=docs
 headings: 1
@@ -240,9 +315,28 @@ parser: markdown
 paths: docs/Case.md
 sizeBytes: 62
 estimatedTokenCount: 16
+contentMatchesKey: true
 frontmatterSource: -
+frontmatterFields: -
+anchors: -
 links: 0
 headings: 1
   0	h1	slug=case	line=1	text=Case
+conditions: 0
+
+## blob k1.markdown.d8f18fa1b20bc609f4e070f38eecfaef38c39ffda78012ad854505acc76df1a5
+parser: markdown
+paths: docs/anchored.md
+sizeBytes: 127
+estimatedTokenCount: 32
+contentMatchesKey: true
+frontmatterSource: -
+frontmatterFields: -
+anchors: mixed-case, also
+links: 1
+  0	local_file	link	line=9	href=../links/to-anchor.md	text=links/to-anchor.md
+headings: 2
+  0	h1	slug=anchored	line=1	text=Anchored
+  1	h2	slug=section	line=5	text=Section
 conditions: 0
 

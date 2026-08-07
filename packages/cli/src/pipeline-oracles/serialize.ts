@@ -9,7 +9,7 @@
  * corpus-relative and forward-slashed by the time it arrives here.
  */
 
-import type { EnumerationSnapshot, ParseFactSnapshot } from './types.js';
+import type { EnumerationSnapshot, FrontmatterFieldFact, ParseFactSnapshot } from './types.js';
 
 /** `true` / `false` / `-` for an unanswered column, so columns stay aligned in width. */
 function flag(value: boolean | null): string {
@@ -126,7 +126,12 @@ export function renderParseFactSnapshot(snapshot: ParseFactSnapshot): string {
     lines.push(`paths: ${(snapshot.pathsByKey[row.contentKey] ?? []).join(', ')}`);
     lines.push(`sizeBytes: ${String(row.sizeBytes)}`);
     lines.push(`estimatedTokenCount: ${String(row.estimatedTokenCount)}`);
+    lines.push(`contentMatchesKey: ${String(row.contentMatchesKey)}`);
     lines.push(`frontmatterSource: ${renderMultiline(row.frontmatterSource)}`);
+    // `-` is the absent field; `(none)` is a present-but-empty one. Collapsing
+    // the two would hide a cache that normalises `undefined` into `[]`.
+    lines.push(`frontmatterFields: ${renderFrontmatterFields(row.frontmatterFields)}`);
+    lines.push(`anchors: ${renderList(row.anchors)}`);
 
     lines.push(`links: ${String(row.links.length)}`);
     for (const link of row.links) {
@@ -164,4 +169,34 @@ function renderInline(value: string): string {
 /** Same, for an optional multi-line block. */
 function renderMultiline(value: string | null): string {
   return value === null ? '-' : renderInline(value);
+}
+
+/**
+ * Render an optional string list, keeping absent distinct from empty.
+ *
+ * `-` means the parse result omitted the field; `(none)` means it supplied an
+ * empty one. Those are different observations about the contract, and a layer
+ * that turns one into the other is exactly what this snapshot is watching for.
+ *
+ * @param values - The list, or null when the field was absent
+ * @returns A one-line rendering
+ */
+function renderList(values: readonly string[] | null): string {
+  if (values === null) {
+    return '-';
+  }
+  return values.length === 0 ? '(none)' : values.map((value) => renderInline(value)).join(', ');
+}
+
+/**
+ * Render frontmatter key/shape pairs, keeping absent distinct from empty.
+ *
+ * @param fields - The facts, or null when the parse result had no frontmatter
+ * @returns A one-line rendering
+ */
+function renderFrontmatterFields(fields: readonly FrontmatterFieldFact[] | null): string {
+  if (fields === null) {
+    return '-';
+  }
+  return fields.length === 0 ? '(none)' : fields.map((field) => `${field.key}:${field.typeName}`).join(', ');
 }

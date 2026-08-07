@@ -141,6 +141,12 @@ describe('renderParseFactSnapshot', () => {
         links: [{ ordinal: 0, href: './x.md', text: 'x', type: 'local_file', line: 3, nodeType: 'link' }],
         headings: [{ ordinal: 0, level: 1, text: 'Title', slug: 'title', line: 1 }],
         frontmatterSource: 'title: T\nvalue: .inf',
+        frontmatterFields: [
+          { key: 'title', typeName: 'string' },
+          { key: 'value', typeName: 'number' },
+        ],
+        anchors: ['top'],
+        contentMatchesKey: true,
         conditions: [{ code: 'PARSE_ODDITY', message: 'something\nmultiline', line: 2 }],
       },
     ],
@@ -172,6 +178,51 @@ describe('renderParseFactSnapshot', () => {
       rows: facts.rows.map((entry) => ({ ...entry, frontmatterSource: null })),
     };
     expect(renderParseFactSnapshot(withoutFrontmatter)).toContain('frontmatterSource: -');
+  });
+
+  it('records frontmatter value SHAPES, which is what a lossy round-trip changes', () => {
+    // The source block is re-derived from the document text and is therefore
+    // identical whether a parse was cached or fresh. The shapes are not: a
+    // YAML->JSON round-trip turns `.inf` from a number into null.
+    const rendered = renderParseFactSnapshot(facts);
+    expect(rendered).toContain('frontmatterFields: title:string, value:number');
+
+    const roundTripped: ParseFactSnapshot = {
+      ...facts,
+      rows: facts.rows.map((entry) => ({
+        ...entry,
+        frontmatterFields: [
+          { key: 'title', typeName: 'string' },
+          { key: 'value', typeName: 'null' },
+        ],
+      })),
+    };
+    expect(renderParseFactSnapshot(roundTripped)).not.toBe(rendered);
+  });
+
+  it('keeps an ABSENT optional list distinct from a present empty one', () => {
+    // Both parsers omit `anchors` entirely rather than emitting `[]`, so a
+    // layer that normalises undefined into [] is a contract change. Collapsing
+    // the two renderings would make that change invisible.
+    const absent = renderParseFactSnapshot({
+      ...facts,
+      rows: facts.rows.map((entry) => ({ ...entry, anchors: null })),
+    });
+    const empty = renderParseFactSnapshot({
+      ...facts,
+      rows: facts.rows.map((entry) => ({ ...entry, anchors: [] })),
+    });
+    expect(absent).toContain('anchors: -');
+    expect(empty).toContain('anchors: (none)');
+    expect(absent).not.toBe(empty);
+  });
+
+  it('surfaces a parse whose content does not re-key to its own row', () => {
+    const mismatched = renderParseFactSnapshot({
+      ...facts,
+      rows: facts.rows.map((entry) => ({ ...entry, contentMatchesKey: false })),
+    });
+    expect(mismatched).toContain('contentMatchesKey: false');
   });
 });
 

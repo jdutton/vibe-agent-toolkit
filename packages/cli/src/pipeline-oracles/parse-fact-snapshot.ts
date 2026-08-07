@@ -9,12 +9,80 @@
  * visible in command output.
  */
 
-import { parseHtml, parseMarkdown, readContentWithKey } from '@vibe-agent-toolkit/resources';
-import type { HeadingNode, ParseResult, ResourceLink } from '@vibe-agent-toolkit/resources';
+import { computeContentKey, parseHtml, parseMarkdown, readContentWithKey } from '@vibe-agent-toolkit/resources';
+import type { HeadingNode, ParserKind, ParseResult, ResourceLink } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { relativize } from './path-facts.js';
-import type { ConditionFact, HeadingFact, LinkFact, ParseFactRow, ParseFactSnapshot } from './types.js';
+import type {
+  ConditionFact,
+  FrontmatterFieldFact,
+  HeadingFact,
+  LinkFact,
+  ParseFactRow,
+  ParseFactSnapshot,
+} from './types.js';
+
+/**
+ * Every field of {@link ParseResult}, accounted for.
+ *
+ * ## Why this exists
+ *
+ * This snapshot is the correctness oracle for a content-addressed parse cache:
+ * its whole claim is *"if a cached parse differs from a fresh one, a row here
+ * differs."* A field of `ParseResult` that no row records breaks that claim
+ * silently — the cache corrupts it, every golden stays green, and the gate
+ * reports success for the one thing it was built to catch.
+ *
+ * That is not hypothetical. `anchors` was uncovered until 2026-08-07, and it is
+ * the input to `ResourceRegistry.buildFragmentIndex` — i.e. to every
+ * `file.md#fragment` check in VAT.
+ *
+ * ## How it is enforced
+ *
+ * Each field is listed in exactly one of the two unions below, and
+ * {@link UnaccountedParseResultFields} is asserted empty at compile time. Adding
+ * a field to `ParseResult` therefore fails `tsc` until someone states which
+ * bucket it belongs in. This module is under `src/`, so it is genuinely
+ * typechecked — a guard written in `test/` would assert nothing, because no test
+ * file in this repository is typechecked.
+ */
+type CapturedParseResultField =
+  | 'links'
+  | 'headings'
+  | 'frontmatter'
+  | 'frontmatterError'
+  | 'sizeBytes'
+  | 'estimatedTokenCount'
+  | 'anchors'
+  | 'parseErrors'
+  | 'unresolvedReferences';
+
+/**
+ * Fields deliberately not recorded verbatim, each with the assertion that
+ * stands in for it.
+ *
+ * - `content`: storing it would make the golden a copy of the corpus. The row
+ *   carries `contentMatchesKey` instead, which asserts the parser handed back
+ *   the bytes it was keyed on — the property a cache can actually violate.
+ */
+type UnrecordedParseResultField = 'content';
+
+/** Non-empty iff `ParseResult` grew a field neither union mentions. */
+type UnaccountedParseResultFields = Exclude<
+  keyof ParseResult,
+  CapturedParseResultField | UnrecordedParseResultField
+>;
+
+/**
+ * Compile-time assertion that every `ParseResult` field is accounted for.
+ *
+ * When this line errors, the type of `PARSE_RESULT_FIELDS_ACCOUNTED_FOR` names
+ * the unlisted field(s). Add each to `CapturedParseResultField` **and record it
+ * in `toRow`**, or to `UnrecordedParseResultField` **with the assertion that
+ * replaces it**. Do not widen the union to silence the error.
+ */
+export const PARSE_RESULT_FIELDS_ACCOUNTED_FOR: UnaccountedParseResultFields extends never ? true : never = true;
 
 /**
  * Capture parse facts for a set of absolute paths.
@@ -68,7 +136,7 @@ export async function captureParseFactSnapshot(
 /** Read+key a path, or report null when it cannot be read. */
 async function readKeyedOrSkip(
   absolutePath: string,
-): Promise<{ key: string; content: string; parserKind: string } | null> {
+): Promise<{ key: string; content: string; parserKind: ParserKind } | null> {
   try {
     return await readContentWithKey(absolutePath);
   } catch {
@@ -88,7 +156,7 @@ async function parseOrNull(absolutePath: string, parserKind: string): Promise<Pa
 /** Assemble one row from a parse result. */
 function toRow(
   contentKey: string,
-  parserKind: string,
+  parserKind: ParserKind,
   content: string,
   parsed: ParseResult,
 ): ParseFactRow {
@@ -100,8 +168,52 @@ function toRow(
     links: parsed.links.map(toLinkFact),
     headings: flattenHeadings(parsed.headings),
     frontmatterSource: extractFrontmatterSource(content),
+    frontmatterFields: toFrontmatterFields(parsed.frontmatter),
+    // Absent stays distinguishable from empty: both parsers omit the key rather
+    // than emitting `[]`, so `null` and `[]` are different observations.
+    anchors: parsed.anchors === undefined ? null : [...parsed.anchors],
+    contentMatchesKey: computeContentKey(parsed.content, parserKind) === contentKey,
     conditions: collectConditions(parsed),
   };
+}
+
+/**
+ * Record top-level frontmatter keys and the runtime shape of their values.
+ *
+ * Shapes rather than values, and top level only. Both restrictions are load-
+ * bearing: a cyclic YAML anchor makes any recursive value capture throw (so the
+ * document would silently never be recorded), while `typeof`/constructor name
+ * is precisely what a lossy round-trip changes — `Infinity` → `null`,
+ * `Buffer` → `Object`, `Date` → `String`.
+ *
+ * @param frontmatter - The parsed frontmatter object, or undefined when absent
+ * @returns One fact per key, sorted by key, or null when frontmatter is absent
+ */
+function toFrontmatterFields(frontmatter: Record<string, unknown> | undefined): FrontmatterFieldFact[] | null {
+  if (frontmatter === undefined) {
+    return null;
+  }
+  return Object.entries(frontmatter)
+    .map(([key, value]) => ({ key, typeName: typeNameOf(value) }))
+    .sort((a, b) => a.key.localeCompare(b.key));
+}
+
+/**
+ * Name a value's runtime shape without reading the value itself.
+ *
+ * @param value - Any frontmatter value
+ * @returns `'null'`, a `typeof` result, or the constructor name for objects
+ */
+function typeNameOf(value: unknown): string {
+  if (value === null) {
+    return 'null';
+  }
+  if (typeof value !== 'object') {
+    return typeof value;
+  }
+  // Array/Date/Buffer/Object are all distinct answers here, and a lossy
+  // round-trip moves a value between them.
+  return (value.constructor as { name?: string } | undefined)?.name ?? 'Object';
 }
 
 /**

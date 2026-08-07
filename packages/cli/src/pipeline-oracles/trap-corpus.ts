@@ -99,6 +99,30 @@ export const TRAP_CORPUS_FILES: CorpusFiles = Object.freeze({
   ].join('\n'),
   'docs/page.htm': '<html><body><a href="sibling.md">sibling</a></body></html>\n',
 
+  // Fragment targets declared from MARKDOWN, via raw HTML. Without this the
+  // `anchors` parse fact is exercised on the HTML parser only, and markdown's
+  // path through `extractHtmlAnchors` — a different function, with a different
+  // rule — has no coverage at all.
+  //
+  // The two spellings are the point. Markdown case-folds fragments, so both
+  // `id="Mixed-Case"` and `name="ALSO"` are recorded lowercased, while the HTML
+  // parser records ids verbatim. That fold is the kind of normalisation a parse
+  // layer can drop without changing a single link, heading or byte count, and
+  // `docs/page.html#top` cannot show it because `top` is already lowercase.
+  'docs/anchored.md': [
+    '# Anchored',
+    '',
+    '<a id="Mixed-Case"></a>',
+    '',
+    '## Section',
+    '',
+    '<a name="ALSO"></a>',
+    '',
+    'Linked from [links/to-anchor.md](../links/to-anchor.md).',
+    '',
+  ].join('\n'),
+  'links/to-anchor.md': '# To an anchor\n\n[mixed](../docs/anchored.md#mixed-case)\n',
+
   // The empty-file parser-discriminator collision. Identical bytes; git keys
   // both as e69de29…; the parse results are not the same. A bytes-only content
   // key would serve one for the other.
