@@ -2,9 +2,9 @@
 import fs from 'node:fs/promises';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { copyDirectory, verifyCaseSensitiveFilename } from '../src/fs-utils.js';
+import { copyDirectory, FsLookupCache, verifyCaseSensitiveFilename } from '../src/fs-utils.js';
 import { setupAsyncTempDirSuite } from '../src/test-helpers.js';
 
 import { setupNestedDirectory } from './test-helpers.js';
@@ -195,8 +195,100 @@ describe('fs-utils', () => {
     });
   });
 
+  describe('FsLookupCache', () => {
+    it('reads a directory once no matter how many lookups hit it', async () => {
+      await fs.writeFile(safePath.join(tempDir, 'a.txt'), '');
+      const cache = new FsLookupCache();
+      const spy = vi.spyOn(fs, 'readdir');
+
+      await cache.readdir(tempDir);
+      await cache.readdir(tempDir);
+      await cache.readdir(tempDir);
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      spy.mockRestore();
+    });
+
+    it('collapses concurrent lookups of the same directory to one syscall', async () => {
+      const cache = new FsLookupCache();
+      const spy = vi.spyOn(fs, 'readdir');
+
+      // Fired before the first readdir settles: without in-flight promise sharing
+      // each of these would start its own syscall.
+      const results = await Promise.all([
+        cache.readdir(tempDir),
+        cache.readdir(tempDir),
+        cache.readdir(tempDir),
+      ]);
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(results[0]).toBe(results[1]);
+      spy.mockRestore();
+    });
+
+    it('caches the unreadable-directory answer as null without re-spawning the syscall', async () => {
+      const cache = new FsLookupCache();
+      const missing = safePath.join(tempDir, 'no-such-dir');
+      const spy = vi.spyOn(fs, 'readdir');
+
+      expect(await cache.readdir(missing)).toBe(null);
+      expect(await cache.readdir(missing)).toBe(null);
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      spy.mockRestore();
+    });
+
+    it('memoizes realpath and falls back to a resolved path when it fails', async () => {
+      const cache = new FsLookupCache();
+      const spy = vi.spyOn(fs, 'realpath');
+
+      const real = await cache.realpath(tempDir);
+      expect(await cache.realpath(tempDir)).toBe(real);
+      expect(spy).toHaveBeenCalledTimes(1);
+
+      const missing = safePath.join(tempDir, 'no-such-path');
+      expect(await cache.realpath(missing)).toBe(safePath.resolve(missing));
+      spy.mockRestore();
+    });
+
+    it('is instance-scoped, so a new instance never serves another run stale entries', async () => {
+      const dirPath = safePath.join(tempDir, 'growing');
+      await fs.mkdir(dirPath);
+      await fs.writeFile(safePath.join(dirPath, 'first.txt'), '');
+
+      const firstRun = new FsLookupCache();
+      expect(await firstRun.readdir(dirPath)).toEqual(['first.txt']);
+
+      await fs.writeFile(safePath.join(dirPath, 'second.txt'), '');
+
+      // Same instance: still the snapshot it took (that is the point of a per-run cache).
+      expect(await firstRun.readdir(dirPath)).toEqual(['first.txt']);
+      // A fresh instance — what a new validation run constructs — sees the new state.
+      const secondRun = new FsLookupCache();
+      expect((await secondRun.readdir(dirPath))?.length).toBe(2);
+    });
+  });
+
   describe('verifyCaseSensitiveFilename', () => {
     const TEST_FILE = 'TestFile.txt';
+
+    it('reads the parent directory once for every link that shares a cache', async () => {
+      const names = ['One.txt', 'Two.txt', 'Three.txt'];
+      for (const name of names) {
+        await fs.writeFile(safePath.join(tempDir, name), '');
+      }
+      const cache = new FsLookupCache();
+      const spy = vi.spyOn(fs, 'readdir');
+
+      const results = await Promise.all(
+        names.map((name) => verifyCaseSensitiveFilename(safePath.join(tempDir, name), cache)),
+      );
+
+      expect(results.every((r) => r.exists)).toBe(true);
+      // The regression this cache exists for: one uncached readdir per link.
+      expect(spy).toHaveBeenCalledTimes(1);
+      spy.mockRestore();
+    });
 
     it('should return exists=true for exact case match', async () => {
       // Setup
@@ -204,7 +296,7 @@ describe('fs-utils', () => {
       await fs.writeFile(filePath, 'content');
 
       // Execute
-      const result = await verifyCaseSensitiveFilename(filePath);
+      const result = await verifyCaseSensitiveFilename(filePath, new FsLookupCache());
 
       // Verify
       expect(result.exists).toBe(true);
@@ -218,7 +310,7 @@ describe('fs-utils', () => {
       await fs.writeFile(actualPath, 'content');
 
       // Execute
-      const result = await verifyCaseSensitiveFilename(wrongCasePath);
+      const result = await verifyCaseSensitiveFilename(wrongCasePath, new FsLookupCache());
 
       // Verify
       // On case-insensitive filesystems, the file will be found
@@ -232,7 +324,7 @@ describe('fs-utils', () => {
       const filePath = safePath.join(tempDir, 'NonExistent.txt');
 
       // Execute
-      const result = await verifyCaseSensitiveFilename(filePath);
+      const result = await verifyCaseSensitiveFilename(filePath, new FsLookupCache());
 
       // Verify
       expect(result.exists).toBe(false);
@@ -247,7 +339,7 @@ describe('fs-utils', () => {
       await fs.writeFile(filePath, 'content');
 
       // Execute
-      const result = await verifyCaseSensitiveFilename(filePath);
+      const result = await verifyCaseSensitiveFilename(filePath, new FsLookupCache());
 
       // Verify
       expect(result.exists).toBe(true);
@@ -263,7 +355,7 @@ describe('fs-utils', () => {
       await fs.writeFile(actualPath, 'content');
 
       // Execute
-      const result = await verifyCaseSensitiveFilename(wrongCasePath);
+      const result = await verifyCaseSensitiveFilename(wrongCasePath, new FsLookupCache());
 
       // Verify
       expect(result.exists).toBe(false);

@@ -20,6 +20,7 @@ import path from 'node:path';
 
 import { createRegistryIssue, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import {
+  FsLookupCache,
   isGitIgnored,
   type GitTracker,
   issueLocation,
@@ -55,6 +56,16 @@ function linkExtras(
  * Options for link validation.
  */
 export interface ValidateLinkOptions {
+  /**
+   * Per-run filesystem lookup memo, shared by every link in the run.
+   *
+   * Required rather than optional on purpose: resolving a link needs a listing of
+   * the target's parent directory, and a corpus resolves thousands of links into a
+   * few hundred directories. An optional cache is one an options literal quietly
+   * omits, and the omission is invisible — the answers stay correct and the
+   * syscalls come back.
+   */
+  fsCache: FsLookupCache;
   /** Project root directory (for git-ignore checking) */
   projectRoot?: string;
   /** Skip git-ignore checks (optimization when checkGitIgnored is false) */
@@ -328,7 +339,12 @@ async function validateLocalFileLink(
     return resolutionFailureIssue(resolved, link, sourceFilePath, options?.projectRoot);
   }
 
-  const fileResult = await validateResolvedFile(resolved.resolvedPath);
+  // No options at all means no run to scope a cache to (single ad-hoc call);
+  // a fresh instance is exactly the old, un-memoized behaviour.
+  const fileResult = await validateResolvedFile(
+    resolved.resolvedPath,
+    options?.fsCache ?? new FsLookupCache(),
+  );
 
   const deferred = deferredArtifactIssue(
     fileResult,
@@ -407,12 +423,14 @@ async function validateAnchorLink(
  * Verify that the resolved filesystem path exists with the correct case.
  *
  * @param resolvedPath - Absolute filesystem path produced by {@link resolveLocalHref}.
+ * @param fsCache - Per-run filesystem lookup memo.
  * @returns Object with exists flag, the path, and optional case-mismatch info.
  */
 async function validateResolvedFile(
   resolvedPath: string,
+  fsCache: FsLookupCache,
 ): Promise<{ exists: boolean; resolvedPath: string; actualName?: string; isDirectory: boolean }> {
-  const verification = await verifyCaseSensitiveFilename(resolvedPath);
+  const verification = await verifyCaseSensitiveFilename(resolvedPath, fsCache);
 
   let isDirectory = false;
   if (verification.exists) {

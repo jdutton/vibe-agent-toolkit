@@ -7,7 +7,7 @@ This directory contains all packages in the vibe-agent-toolkit monorepo. This RE
 | Package | npm Package | Status | Purpose |
 |---------|-------------|--------|---------|
 | agent-schema | `@vibe-agent-toolkit/agent-schema` | Published | JSON Schema definitions and TypeScript types for agent manifests |
-| utils | `@vibe-agent-toolkit/utils` | Published | Core utility functions (no internal dependencies) |
+| utils | `@vibe-agent-toolkit/utils` | Published | Core utility functions, plus the ESLint rules enforcing them on `/eslint` (no internal dependencies) |
 | discovery | `@vibe-agent-toolkit/discovery` | Published | Intelligent file discovery for agents and Agent Skills |
 | resources | `@vibe-agent-toolkit/resources` | Published | Markdown resource parsing, validation, and link integrity |
 | rag | `@vibe-agent-toolkit/rag` | Published | Abstract RAG interfaces and shared implementations |
@@ -122,8 +122,16 @@ JSON Schema definitions and TypeScript types for VAT agent manifest format. Uses
 
 Core utility functions with minimal external dependencies. Provides cross-platform file operations, process spawning, path handling, and gitignore support. This package has no internal dependencies by design - all other packages can depend on it safely.
 
+The 21 ESLint rules that enforce those safety helpers ship on the **`/eslint` subpath** — a safety
+API without its enforcement is half a product, and one install means a rule can never name a helper
+signature the installed `utils` no longer has. CommonJS rule modules under `packages/utils/eslint/`,
+no build step, and they reach nothing at all: the rules emit import *text* naming `utils` and never
+load it, and never `require('eslint')` either, which is why `eslint` is an *optional* peer and the
+other twelve subpaths are unaffected. This repo dogfoods it via the root `eslint.config.js`.
+See [the rule README](./utils/eslint/README.md) for the rule table.
+
 **Dependencies**:
-- External: `ignore`, `picomatch`, `which`
+- External: `ignore`, `picomatch`, `which`; `eslint` (optional peer, >=9, for `/eslint` only)
 - Internal: None
 
 ---

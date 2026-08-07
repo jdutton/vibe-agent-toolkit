@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/rag-lancedb",
-  "version": "0.1.41",
+  "version": "0.1.42-rc.1",
   "type": "module",
   "description": "LanceDB implementation of RAG interfaces for vibe-agent-toolkit",
   "keywords": [
@@ -11,6 +11,9 @@
   ],
   "author": "Jeff Dutton",
   "license": "MIT",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

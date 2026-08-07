@@ -43,6 +43,19 @@ reason = "minimatch ReDoS; 3.x/9.x/10.x coexist so a single global pin is unsafe
 id = "GHSA-7r86-cg39-jmmj"
 reason = "minimatch ReDoS; 3.x/9.x/10.x coexist so a single global pin is unsafe. Low severity, VAT-authored globs only. Re-evaluate when glob majors converge."
 
+# --- brace-expansion (ReDoS) --------------------------------------------------
+# Same shape as minimatch/picomatch below, and for the same reason: the tree
+# carries brace-expansion 1.x, 2.x, AND 5.x simultaneously. The advisory is
+# fixed separately in each line (1.1.18 / 2.1.4 / 5.0.9), so no single value in
+# the global `overrides` block can patch all three — pinning any one of them
+# forces the other two majors onto an incompatible version. ReDoS in brace
+# expansion of attacker-controlled patterns; VAT only expands patterns it
+# authors. Delete this entry when the majors converge, or if bun gains
+# per-consumer override scoping.
+[[IgnoredVulns]]
+id = "GHSA-rgw5-rvv9-x895"
+reason = "brace-expansion ReDoS; 1.x/2.x/5.x coexist and the fix lands separately in each line, so a single global pin is unsafe. VAT-authored patterns only. Re-evaluate when the majors converge."
+
 # --- picomatch (ReDoS / method injection) ------------------------------------
 # picomatch 2.x and 4.x both present (2.x transitively under chokidar/micromatch,
 # 4.x declared directly). v2→v4 is a breaking major, so a global pin would

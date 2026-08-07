@@ -14,7 +14,7 @@ This skill covers the **file-based install method for Claude Code CLI** (`~/.cla
 This is the only install method VAT currently supports.
 
 For the full install landscape — Claude Desktop paths, enterprise CI deployment,
-Anthropic Cloud org management, MDM integration, and the `vat plugins uninstall`
+Anthropic Cloud org management, MDM integration, and the `vat claude plugin uninstall`
 design — see the contributor reference at `docs/contributing/vat-install-architecture.md`
 in the `vibe-agent-toolkit` repo (contributor material, not bundled with this skill).
 

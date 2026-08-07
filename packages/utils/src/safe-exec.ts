@@ -2,7 +2,11 @@ import { spawnSync, type SpawnSyncOptions } from 'node:child_process';
 
 import which from 'which';
 
-import { buildWindowsShellLine, shouldUseShell } from './windows-shell.js';
+import {
+  buildWindowsShellLine,
+  resolveShellCommandToken,
+  shouldUseShell,
+} from './windows-shell.js';
 
 /**
  * Options for safe command execution
@@ -68,6 +72,11 @@ export class CommandExecutionError extends Error {
  * shell metacharacters (`*`, `?`, `(`, `)`, etc.) with `EINVAL`. When shell mode is
  * needed, join command + args into a single string with per-arg quoting via
  * {@link windowsShellQuote} so metacharacters don't get re-interpreted by cmd.exe.
+ *
+ * The command token itself is chosen by {@link resolveShellCommandToken} — the same
+ * helper the async {@link ./spawn-hardened.ts} path uses, so a bare PATH name stays bare
+ * (cmd.exe re-resolves it via PATHEXT) while an explicit path is quoted from its resolved
+ * value. Passing the raw command here used to break silently on `C:\Program Files\…`.
  */
 function resolveAndSpawn(
   command: string,
@@ -87,12 +96,11 @@ function resolveAndSpawn(
     encoding: options.encoding,
   };
 
-  const execCommand = useShell ? command : commandPath;
   if (!useShell) {
-    return spawnSync(execCommand, args, spawnOptions);
+    return spawnSync(commandPath, args, spawnOptions);
   }
 
-  const shellLine = buildWindowsShellLine(execCommand, args);
+  const shellLine = buildWindowsShellLine(resolveShellCommandToken(command, commandPath), args);
   // eslint-disable-next-line sonarjs/os-command -- Windows DEP0190 workaround: command resolved via which.sync(); args are per-arg shell-quoted via windowsShellQuote()
   return spawnSync(shellLine, { ...spawnOptions, shell: true });
 }

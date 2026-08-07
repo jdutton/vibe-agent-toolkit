@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/discovery",
-  "version": "0.1.41",
+  "version": "0.1.42-rc.1",
   "description": "Intelligent file discovery for VAT agents and Agent Skills",
   "type": "module",
   "main": "./dist/index.js",
@@ -34,5 +34,8 @@
     "directory": "packages/discovery"
   },
   "author": "Jeff Dutton",
-  "license": "MIT"
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.0.0"
+  }
 }
