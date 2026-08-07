@@ -11,20 +11,7 @@ import path from 'node:path';
 
 import ignore, { type Ignore } from 'ignore';
 
-import { gitFindRoot } from './git-utils.js';
 import { safePath , toForwardSlash } from './path-utils.js';
-
-/**
- * Find the git repository root by walking up from the given directory.
- *
- * @param startDir - Directory to start searching from
- * @returns Path to git root, or null if not in a git repository
- *
- * @deprecated Use gitFindRoot from git-utils.ts instead
- */
-export function findGitRoot(startDir: string): string | null {
-  return gitFindRoot(startDir);
-}
 
 /**
  * Load and parse .gitignore files from git root to baseDir.

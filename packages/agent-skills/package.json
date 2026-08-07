@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/agent-skills",
-  "version": "0.1.41",
+  "version": "0.1.42-rc.1",
   "description": "Build, validate, and package agent skills in the Agent Skills format",
   "type": "module",
   "main": "./dist/index.js",
@@ -64,5 +64,8 @@
     "directory": "packages/agent-skills"
   },
   "author": "Jeff Dutton",
-  "license": "MIT"
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.0.0"
+  }
 }

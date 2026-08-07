@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/agent-config",
-  "version": "0.1.41",
+  "version": "0.1.42-rc.1",
   "description": "Agent manifest loading and validation",
   "type": "module",
   "main": "./dist/index.js",
@@ -48,5 +48,8 @@
     "directory": "packages/agent-config"
   },
   "author": "Jeff Dutton",
-  "license": "MIT"
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.0.0"
+  }
 }

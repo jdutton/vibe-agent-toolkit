@@ -1,5 +1,8 @@
 import type { KnipConfig } from 'knip';
 
+/** Every package's TypeScript source lives here; several workspaces below name it. */
+const SRC_TS = 'src/**/*.ts';
+
 const config: KnipConfig = {
   // Only report dependency issues (not unused files/exports/types)
   include: ['dependencies', 'unlisted', 'unresolved'],
@@ -32,12 +35,12 @@ const config: KnipConfig = {
     },
 
     'packages/*': {
-      project: ['src/**/*.ts'],
+      project: [SRC_TS],
     },
 
     // agent-schema: scripts/ uses utils for JSON Schema generation
     'packages/agent-schema': {
-      entry: ['src/**/*.ts', 'scripts/**/*.ts'],
+      entry: [SRC_TS, 'scripts/**/*.ts'],
     },
 
     // CLI: Commander.js wires commands from bin.ts, not index.ts
@@ -55,7 +58,7 @@ const config: KnipConfig = {
 
     // dev-tools: scripts are invoked via tsx from root, not from src/index.ts
     'packages/dev-tools': {
-      entry: ['src/**/*.ts'],
+      entry: [SRC_TS],
     },
 
     // rag: OpenAI is an opt-in optional peerDependency loaded via dynamic
@@ -73,6 +76,22 @@ const config: KnipConfig = {
     // Runtime adapters: some deps provide types or are used in tests/examples
     'packages/runtime-vercel-ai-sdk': {
       ignoreDependencies: ['@ai-sdk/provider', '@ai-sdk/provider-utils'],
+    },
+
+    // utils: the `./eslint` subpath is hand-written CommonJS outside src/. Its
+    // entry point and rules are `.cjs` and are only ever loaded by ESLint itself,
+    // so they need naming explicitly or knip never walks them.
+    'packages/utils': {
+      entry: ['src/index.ts', 'eslint/index.cjs', 'eslint/rules/*.cjs'],
+      project: [SRC_TS, 'eslint/*.cjs', 'eslint/rules/*.cjs'],
+      // The `eslint` devDep IS used — `test/eslint/*` imports `RuleTester` and the
+      // integration test drives `ESLint` — but `project` above covers no `test/**`,
+      // so knip cannot see those imports and would report it unused. Ignored for
+      // that reason, NOT because nothing needs it: deleting the devDep breaks the
+      // rule suites, and this entry means knip will not warn you. (The rule modules
+      // themselves genuinely never require('eslint') — that is what makes the peer
+      // optional — but it is not why this line is here.)
+      ignoreDependencies: ['eslint'],
     },
 
     // vat-development-agents has standalone agent files + TS compiler plugin

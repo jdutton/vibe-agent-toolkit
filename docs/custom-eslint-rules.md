@@ -8,14 +8,51 @@
 
 **When you identify a dangerous pattern that was fixed:**
 1. **Document why it's dangerous** (security, cross-platform, performance)
-2. **Create a custom ESLint rule** in `packages/dev-tools/eslint-local-rules/`
+2. **Create a custom ESLint rule** in `packages/utils/eslint/rules/`
 3. **The pattern can never be reintroduced** - ESLint catches it automatically
 
 This is "good overkill" - prevents technical debt from accumulating through AI-assisted development.
 
-## Current Rules
+## Where the rules live
 
-Located in `packages/dev-tools/eslint-local-rules/`:
+Source: `packages/utils/eslint/rules/`. They **ship** on the
+[`@vibe-agent-toolkit/utils/eslint`](../packages/utils/eslint/README.md) subpath — this repo
+consumes them by that same public specifier, like any other adopter (root `eslint.config.js` imports
+it), so a change here is a change to a public API. That README is the adopter-facing rule table;
+this doc is the contributor view.
+
+They live inside `utils` rather than in a plugin package of their own because an ESLint plugin is
+*data*: every rule module exports a plain object and none of them `require('eslint')`. So the pack
+adds nothing to the twelve runtime subpaths, `eslint` can be an **optional** peer dependency, and
+the rules can never be installed at a different version from the helpers whose signatures they name.
+Anything you add here inherits that contract — `test/eslint/subpath-purity.test.ts` fails the build
+on the first `require()` of anything outside `eslint/`.
+
+Two things follow from being published:
+
+- **No rule may bake in a repo-specific exemption path.** `packages/utils/src/path-utils.ts` is a
+  fact about *this* repo; as a default it would be a silent hole at that path in every other one.
+  Exemptions are a rule **option** (`{ exemptFiles: [...] }`), and this repo passes its own in
+  `eslint.config.js`.
+- **The plugin is registered under the `local` namespace here**, not the conventional
+  `@vibe-agent-toolkit` one, because 23 `eslint-disable-next-line local/…` directives across 19 files
+  in 7 packages are keyed on it — renaming turns every one into a no-op suppression while the tree
+  still lints clean. Adopters get `@vibe-agent-toolkit/…` from `configs.recommended`.
+  Flat config lets the namespace be any key, so it is a local alias, not part of the published
+  contract. ESLint 9 defaults `reportUnusedDisableDirectives` to `warn` and this repo lints with
+  `--max-warnings=0`, so if the alias ever stops resolving, all 23 surface as dead directives and
+  fail CI rather than passing silently.
+
+  Re-derive the count with the command below, **not** a bare `rg 'local/'` — this file, `CLAUDE.md`,
+  `CHANGELOG.md` and `eslint.config.js` all *discuss* the directive, and counting those prose
+  mentions as directives is how this number was wrong twice (43, then 26):
+
+  ```bash
+  rg --no-heading -g '!node_modules' -g '!dist' \
+     "eslint-disable[a-z-]* .*local/" packages | wc -l
+  ```
+
+## Current Rules
 
 ### `no-child-process-execSync`
 
@@ -41,7 +78,9 @@ Enforces `safePath.join()`, `safePath.resolve()`, `safePath.relative()` from `@v
 
 **Implementation**: Uses a shared `path-function-rule-factory.cjs` (separate from `eslint-rule-factory.cjs`) because the replacement target is an object method (`safePath.join`), not a standalone function.
 
-**Exempt**: `packages/utils/src/path-utils.ts` (the implementation file).
+**Exempt**: whatever the consuming config declares. This repo passes
+`{ exemptFiles: ['packages/utils/src/path-core.ts', 'packages/utils/src/path-utils.ts', 'packages/utils/test/path-utils.test.ts'] }`
+in `eslint.config.js`. The rule ships no default.
 
 ### `require-justified-skip`
 
@@ -92,41 +131,72 @@ See `eslint-rule-factory.cjs` for the template.
 
 ### 2. Create rule file
 
-In `packages/dev-tools/eslint-local-rules/`:
+In `packages/utils/eslint/rules/`:
 
 ```javascript
 // no-fs-unlinkSync.cjs
 const factory = require('./eslint-rule-factory.cjs');
+const { SAFE_FS_MODULE } = require('./safe-import.cjs');
 
 module.exports = factory({
   unsafeFn: 'unlinkSync',
   unsafeModule: 'node:fs',
   safeFn: 'safeUnlinkSync',
-  safeModule: './common.js',
-  message: 'Use safeUnlinkSync() for better error handling and cross-platform compatibility',
-  exemptFile: 'common.ts', // Where the safe version is implemented
+  safeModule: SAFE_FS_MODULE,  // from './safe-import.cjs' — the NARROW subpath
+  message: `Use safeUnlinkSync() from ${SAFE_FS_MODULE} for better error handling and cross-platform compatibility`,
+  // NOTE: `safeModule` is where the autofix WRITES the import, so it must name
+  // the subpath that actually exports `safeFn` — never the `.` barrel. Take it
+  // from `safe-import.cjs` rather than spelling the string here: the rules and
+  // the README table drifted apart once already, and the autofix rewrote code
+  // away from the very subpaths the release existed to introduce.
+  // NOTE: do NOT pass `exemptFiles` here. The factory supports it as a fallback,
+  // but a shipped rule must not name a repo-specific implementation path — the
+  // package is published, and that default becomes a hole in every consumer's
+  // tree. The consuming config declares its own (see step 4).
 });
 ```
 
-### 3. Add to `index.js`
+**Never exempt with `filename.includes(...)`.** All three exemption shapes live in
+`packages/utils/eslint/rules/exempt-path-matcher.cjs` — reuse them:
+
+| Question the rule is asking | Helper | Substring bug it replaces |
+|---|---|---|
+| "Is this THAT file?" | `createExemptPathMatcher(['packages/utils/src/path-utils.ts'])` | `includes('path-utils.ts')` also exempted `tools/hooks/path-utils.ts` |
+| "Is this file INSIDE that package?" | `createExemptDirectoryMatcher(['packages/git/'])` | `includes('packages/git/')` also exempted `vendor/copy-packages/git/` |
+| "Is this a test file?" | `isTestFile(filename)` | `includes('.test.ts')` also exempted `x.test.ts.bak` and `tsconfig.test.json` |
+
+All three normalize to forward slashes first, so they behave identically on Windows.
+
+### 3. Register it in `packages/utils/eslint/index.cjs`
 
 ```javascript
-export default {
-  rules: {
-    'no-child-process-execSync': require('./no-child-process-execSync.cjs'),
-    'no-fs-unlinkSync': require('./no-fs-unlinkSync.cjs'), // New rule
-  },
+const rules = {
+  'no-child-process-execSync': require('./rules/no-child-process-execSync.cjs'),
+  'no-fs-unlinkSync': require('./rules/no-fs-unlinkSync.cjs'), // New rule
 };
 ```
 
-### 4. Enable in `eslint.config.js`
+`configs.recommended` is generated from that object, so a new rule is enabled for adopters
+automatically — at `error` unless you add it to `RECOMMENDED_WARN`.
+
+### 4. Enable in `eslint.config.js`, naming this repo's exempt files
 
 ```javascript
 rules: {
-  'local/no-child-process-execSync': 'error',
-  'local/no-fs-unlinkSync': 'error', // New rule
+  'local/no-child-process-execSync': ['error', { exemptFiles: ['packages/utils/src/safe-exec.ts'] }],
+  'local/no-fs-unlinkSync': ['error', { exemptFiles: ['packages/dev-tools/src/common.ts'] }], // New rule
 }
 ```
+
+Exempt paths are ALWAYS repo-relative, never a bare basename: they are anchored at a path-segment
+boundary (`exempt-path-matcher.cjs`), so a same-named file in another directory is still linted. A
+bare `'common.ts'` used to be a substring match, which silently exempted every path merely
+CONTAINING it.
+
+### 5. Add a case table in `packages/utils/test/eslint/rules.test.ts`
+
+Include at least one **decoy**: a file whose basename matches an exempt path but whose directory
+does not. That leg is what proves the exemption is anchored.
 
 ## Why This Matters for Agentic Development
 

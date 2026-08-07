@@ -767,17 +767,29 @@ Located in `packages/dev-tools/src/`:
 - `pre-publish-check.ts` - Pre-publish validation
 - `determine-publish-tags.ts` - npm dist-tag determination
 
-Custom ESLint rules in `packages/dev-tools/eslint-local-rules/`.
-
 Tools follow same quality standards as packages (linted, typed, tested).
 
 ## Custom ESLint Rules - Agentic Code Safety Pattern
 
 **For AI-Heavy Development**: Create custom ESLint rules for dangerous patterns to prevent AI from reintroducing them.
 
-**Current rules:** `no-child-process-execSync` (enforces `safeExecSync()`)
+The 21 rules live in `packages/utils/eslint/` and **ship publicly** on the
+`@vibe-agent-toolkit/utils/eslint` subpath — inside the package whose helpers they enforce, so the
+two can never be installed at different versions. This repo dogfoods them by that same public
+specifier: the root `eslint.config.js` imports it (registered under the `local` namespace, which is
+why every `eslint-disable-next-line local/…` directive still works).
 
-See [docs/custom-eslint-rules.md](docs/custom-eslint-rules.md) for pattern details and how to create new rules.
+They are `.cjs` in an ESM package on purpose (Node keys module format off the extension), and they
+`require()` nothing outside `eslint/` — not even `eslint`, which is why it is an **optional** peer
+dependency and the other twelve subpaths are unaffected. `packages/utils/test/eslint/subpath-purity.test.ts`
+enforces that.
+
+Because it is published, **no rule may hardcode a repo-specific exemption path** — exemptions are a
+rule option (`['error', { exemptFiles: ['packages/utils/src/path-utils.ts'] }]`) declared by the
+consuming config, and this repo declares its own.
+
+See [docs/custom-eslint-rules.md](docs/custom-eslint-rules.md) for how to add a rule, and
+[packages/utils/eslint/README.md](packages/utils/eslint/README.md) for the full rule table.
 
 ## Demo Guidelines
 

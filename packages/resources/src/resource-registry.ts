@@ -12,7 +12,7 @@ import type fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { createRegistryIssue, type IssueCode, runSingleUnitValidation, type ValidationConfig, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
-import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, type GitTracker, issueLocation, normalizedTmpdir, resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, FsLookupCache, type GitTracker, issueLocation, normalizedTmpdir, resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { calculateChecksum } from './checksum.js';
 import { getCollectionsForFile } from './collection-matcher.js';
@@ -215,6 +215,15 @@ export class ResourceRegistry implements ResourceCollectionInterface {
 
   /** Optional git tracker for efficient git-ignore checking */
   readonly gitTracker?: GitTracker;
+
+  /**
+   * Filesystem lookup memo for the current `validate()` run.
+   *
+   * Replaced at the top of every run rather than kept for the registry's lifetime:
+   * it caches directory *listings*, so a registry that outlives an edit (watch mode,
+   * a server) must not answer the next run from the previous run's snapshot.
+   */
+  private fsCache: FsLookupCache = new FsLookupCache();
 
   private readonly resourcesByPath: Map<string, ResourceMetadata> = new Map();
   private readonly resourcesById: Map<string, ResourceMetadata> = new Map();
@@ -608,8 +617,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       for (const link of resource.links) {
         // Only pass options if projectRoot is defined (exactOptionalPropertyTypes requirement)
         const validateOptions = this.baseDir === undefined
-          ? { skipGitIgnoreCheck, checkHtmlAnchors }
+          ? { fsCache: this.fsCache, skipGitIgnoreCheck, checkHtmlAnchors }
           : {
+              fsCache: this.fsCache,
               projectRoot: this.baseDir,
               skipGitIgnoreCheck,
               checkHtmlAnchors,
@@ -774,8 +784,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       // New: walk URI-family frontmatter values. Default-on; explicit `false` disables.
       if (validation.checkFrontmatterLinks !== false && resource.frontmatter) {
         const linkOptions: ValidateLinkOptions = this.baseDir === undefined
-          ? { skipGitIgnoreCheck }
+          ? { fsCache: this.fsCache, skipGitIgnoreCheck }
           : {
+              fsCache: this.fsCache,
               projectRoot: this.baseDir,
               skipGitIgnoreCheck,
               ...(this.gitTracker !== undefined && { gitTracker: this.gitTracker }),
@@ -843,6 +854,10 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    */
   async validate(options?: ValidateOptions): Promise<ValidationResult> {
     const startTime = Date.now();
+
+    // Fresh per run: directory listings are a snapshot, and a registry can outlive
+    // the state it was validated against.
+    this.fsCache = new FsLookupCache();
 
     // Build fragment index for anchor validation
     const fragmentsByFile = this.buildFragmentIndex();

@@ -31,7 +31,7 @@ If you need forward slashes from these, wrap with `toForwardSlash()`.
 
 ### ESLint enforcement
 
-Raw `path.join()`, `path.resolve()`, and `path.relative()` are banned by ESLint rules (`no-path-join`, `no-path-resolve`, `no-path-relative`). Use `safePath.*` instead. The implementation file `path-utils.ts` is exempt.
+Raw `path.join()`, `path.resolve()`, and `path.relative()` are banned by ESLint rules (`no-path-join`, `no-path-resolve`, `no-path-relative`). Use `safePath.*` instead. The implementation files are exempt: `path-core.ts` (which holds the pure `safePath` definitions) and `path-utils.ts` (the filesystem-touching helpers), plus `path-utils.test.ts`, which tests platform-native behavior.
 
 ### When adding new path functions
 

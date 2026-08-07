@@ -111,6 +111,8 @@ export function gitLsFiles(options: {
  * handles the common pattern where a gitignored directory contains symlinks to external content
  * (e.g., OneDrive, shared drives).
  *
+ * **Outside a repository**: answered from the filesystem, with zero subprocesses (see below).
+ *
  * **Performance warning**: This spawns a git subprocess for each file (plus up to N ancestor
  * checks when the path traverses a symlink). For bulk workflows, initialize a
  * {@link GitTracker} once and use `isIgnoredByActiveSet()` for O(1) in-repo lookups.
@@ -120,6 +122,21 @@ export function gitLsFiles(options: {
  * @returns true if file is gitignored, false otherwise
  */
 export function isGitIgnored(filePath: string, cwd: string = process.cwd()): boolean {
+  // `git check-ignore` exits 128 for two unrelated conditions: "not a git repository"
+  // and "beyond a symbolic link". The exit code alone cannot distinguish them, and the
+  // symlink recovery below (walk the ancestors, re-spawning git for each) is exactly
+  // the wrong response to the first: with no repository *every* ancestor also exits
+  // 128, so the walk never breaks, climbs to the filesystem root, and returns `false`
+  // after (1 + depth) spawns — per call, for every link in the corpus. It is the right
+  // answer by the wrong route, which is why no assertion ever caught it; on a
+  // 3,437-document tree with no `.git` ancestor, spawnSync was 87.6% of the run.
+  //
+  // "Is there a repository here?" is a filesystem question, so settle it from the
+  // filesystem before spawning anything.
+  if (gitFindRoot(cwd) === null) {
+    return false;
+  }
+
   try {
     // Resolve git path using which for security (avoids PATH manipulation)
     const gitPath = which.sync('git');
