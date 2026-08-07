@@ -103,7 +103,7 @@ The "use instead" column names the `@vibe-agent-toolkit/utils` subpath the repla
 
 | Rule | Bans | Use instead | Subpath | Fix | `recommended` |
 |---|---|---|---|---|---|
-| `prefer-startswith-over-regex` | `/^foo/.test(s)` | `s.startsWith('foo')` | — | | `warn` |
+| `prefer-startswith-over-regex` | `/^foo/.test(s)` | `s.startsWith('foo')` | — | | `error` |
 | `no-test-scoped-functions` | helper functions declared inside `describe`/`it` | module scope | — | | — |
 | `require-justified-skip` | unannotated `it.skip`/`it.todo`, tautological assertions, empty test bodies | a `SKIP(#123): reason` annotation, or a real assertion | — | | — |
 

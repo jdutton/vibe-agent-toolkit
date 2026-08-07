@@ -88,20 +88,21 @@ const RECOMMENDED_EXCLUDE = new Set(['require-justified-skip', 'no-test-scoped-f
  *
  * Raise them all to `error` once the backlog is clear — that is what VAT itself does.
  *
- * `prefer-startswith-over-regex` is `warn` for a different reason than the rest: it
- * is the one rule here that does not flag something that is *wrong somewhere*. Every
- * other `error` rule catches a real defect on some platform — a Windows 8.3 short
- * path, a backslash comparison, a shell injection, a dynamic import that throws.
- * `/^https:/.test(s)` is correct everywhere; preferring `startsWith` is readability
- * (and shifting SonarCloud's S6557 left of a merge). It should not block an adopter's
- * CI on day one alongside "this will crash on Windows".
+ * The criterion for `warn` is MIGRATION VOLUME, not how real the finding is. Every
+ * rule in this pack either prevents a bug or shifts a static-analysis finding left of
+ * a merge, and both are worth blocking on; what `warn` buys is a first run that reads
+ * as a backlog to `--fix` rather than a wall. `prefer-startswith-over-regex` was
+ * briefly graded on a different axis ("style, not a defect") and demoted — that was
+ * wrong twice over: avoiding a SonarQube S6557 at lint time instead of at merge time
+ * is a real saving, and the rule's matcher rejects any regex containing a
+ * metacharacter, so it only fires on true literal prefixes and has near-zero churn.
+ * It is `error`.
  */
 const RECOMMENDED_WARN = new Set([
   'no-path-join',
   'no-path-resolve',
   'no-path-relative',
   'no-unsafe-root-join',
-  'prefer-startswith-over-regex',
 ]);
 
 /** Plugin namespace an adopter gets from `configs.recommended`. */

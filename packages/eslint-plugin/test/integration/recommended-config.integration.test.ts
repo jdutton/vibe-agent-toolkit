@@ -213,15 +213,16 @@ describe('configs.recommended (published artifact)', () => {
     const messages = await lintProjectFile(project, VIOLATIONS_FILE, project.configPath);
     const byRule = severityByRule(messages);
 
-    // warn — the high-churn auto-fixable path rules, plus the one rule that flags
-    // style rather than a defect (see RECOMMENDED_WARN's rationale in index.cjs).
+    // warn — the high-churn auto-fixable path rules. The criterion is migration
+    // volume, not how real the finding is (see RECOMMENDED_WARN in index.cjs).
     expect(byRule.get('@vibe-agent-toolkit/no-path-join')).toBe(SEVERITY.warn);
-    expect(byRule.get('@vibe-agent-toolkit/prefer-startswith-over-regex')).toBe(SEVERITY.warn);
 
-    // error — everything else in the safety core.
+    // error — everything else in the safety core, including the rules whose value is
+    // shifting a static-analysis finding left of a merge rather than catching a crash.
     expect(byRule.get(NO_OS_TMPDIR)).toBe(SEVERITY.error);
     expect(byRule.get('@vibe-agent-toolkit/no-child-process-execSync')).toBe(SEVERITY.error);
     expect(byRule.get('@vibe-agent-toolkit/no-file-url-string-concat')).toBe(SEVERITY.error);
+    expect(byRule.get('@vibe-agent-toolkit/prefer-startswith-over-regex')).toBe(SEVERITY.error);
 
     // The split is real, not an artifact of one severity being unused.
     const severities = new Set(byRule.values());
