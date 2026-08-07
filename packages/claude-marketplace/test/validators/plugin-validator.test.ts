@@ -1,5 +1,8 @@
+/* eslint-disable security/detect-non-literal-fs-filename -- test sandbox paths derived from tmp dirs */
+import fs from 'node:fs';
+
 import { countBySeverity } from '@vibe-agent-toolkit/agent-schema';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -263,6 +266,27 @@ describe('validatePlugin', () => {
 			// The kebab-case observation rides along at info severity.
 			expect(result.issueCounts.info).toBe(1);
 		});
+	});
+
+	// `bin/` is a documented, supported Claude Code feature; the hosted-sync
+	// rejection behind PLUGIN_TOPLEVEL_BIN_DIR is a single undocumented
+	// observation. Until that changes it must stay advisory — never a
+	// build-blocking error, not even on the strict publish path.
+	it('reports a top-level bin/ directory as a warning, even under strict', async () => {
+		const tempDir = getTempDir();
+		const pluginPath = createTestPlugin(
+			tempDir,
+			{ name: 'bin-plugin', version: '1.0.0' },
+			'bin-plugin',
+		);
+		mkdirSyncReal(safePath.join(pluginPath, 'bin'), { recursive: true });
+		fs.writeFileSync(safePath.join(pluginPath, 'bin', 'tool.mjs'), 'export {};');
+
+		const result = await validatePlugin(pluginPath, { strict: true });
+
+		const issue = result.issues.find((i) => i.code === 'PLUGIN_TOPLEVEL_BIN_DIR');
+		expect(issue?.severity).toBe('warning');
+		expect(result.issues.some((i) => i.severity === 'error')).toBe(false);
 	});
 
 });

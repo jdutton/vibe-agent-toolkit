@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import {
 	type AnchorRootOptions,
+	detectHostedIncompatibleShape,
 	detectKebabCaseViolation,
 	detectMissingRecommendedFields,
 	detectPackagedAgentInstructionFiles,
@@ -205,6 +206,12 @@ export async function validatePlugin(
 			});
 		}
 	}
+
+	// Directory-shape check. Independent of manifest contents, so it runs whether
+	// or not the schema parsed. Deliberately NOT escalated by `strict`: the
+	// hosted-sync behaviour it reports is observed, not documented by Anthropic,
+	// and `bin/` remains a supported CLI feature — see plugin-hosted-shape.ts.
+	issues.push(...detectHostedIncompatibleShape(pluginPath));
 
 	const validationResult: ValidationResult = {
 		path: pluginPath,
