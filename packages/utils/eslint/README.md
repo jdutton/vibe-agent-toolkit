@@ -1,22 +1,24 @@
-# @vibe-agent-toolkit/eslint-plugin
+# `@vibe-agent-toolkit/utils/eslint`
 
-ESLint rules that enforce the cross-platform and agentic-code safety helpers in [`@vibe-agent-toolkit/utils`](https://www.npmjs.com/package/@vibe-agent-toolkit/utils).
+ESLint rules that enforce the cross-platform and agentic-code safety helpers in the rest of [`@vibe-agent-toolkit/utils`](https://www.npmjs.com/package/@vibe-agent-toolkit/utils).
 
 Twenty-one rules, all of them derived from a bug that actually shipped: `os.tmpdir()` returning an 8.3 short path on a Windows CI runner, `path.join()` producing backslashes that then failed a string comparison, `await import(absolutePath)` throwing on Windows without a `file://` URL, `execSync()` interpolating a caller-controlled string into a shell. Most auto-fix.
 
 ## Installation
 
 ```bash
-bun add -d @vibe-agent-toolkit/eslint-plugin
+bun add @vibe-agent-toolkit/utils
 ```
 
-Requires ESLint 9+ (flat config) and Node >= 22. The rules emit *import text* naming `@vibe-agent-toolkit/utils`, but carry no runtime dependency on it — install `utils` only if you intend to take the fixes.
+There is no separate plugin package: the rules are a subpath of the package whose helpers they enforce, so the two can never drift to different versions. Requires ESLint 9+ (flat config) and Node >= 22.
+
+`eslint` is an **optional** peer dependency, and this subpath adds no dependency to the others. An ESLint plugin is data, not code that runs — every rule module here exports a plain object and none of them `require('eslint')` — so installing `utils` for `safePath.join()` alone pulls in nothing extra and warns about nothing.
 
 ## Usage
 
 ```js
 // eslint.config.js
-import vat from '@vibe-agent-toolkit/eslint-plugin';
+import vat from '@vibe-agent-toolkit/utils/eslint';
 
 export default [
   vat.configs.recommended,
@@ -28,7 +30,7 @@ export default [
 To pick rules yourself, register the plugin and name them:
 
 ```js
-import vat from '@vibe-agent-toolkit/eslint-plugin';
+import vat from '@vibe-agent-toolkit/utils/eslint';
 
 export default [
   {
@@ -114,7 +116,7 @@ The "use instead" column names the `@vibe-agent-toolkit/utils` subpath the repla
 They still ship, and they are worth turning on deliberately:
 
 ```js
-import vat from '@vibe-agent-toolkit/eslint-plugin';
+import vat from '@vibe-agent-toolkit/utils/eslint';
 
 export default [
   vat.configs.recommended,

@@ -19,7 +19,6 @@
  * The last package (umbrella) depends on all others.
  */
 export const PUBLISHED_PACKAGES = [
-  'eslint-plugin', // No workspace deps — safe to publish first
   'agent-schema',
   'utils',
   'discovery',

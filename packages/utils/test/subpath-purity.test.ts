@@ -5,6 +5,8 @@ import { describe, expect, it } from 'vitest';
 import { resolveFromImportMeta } from '../src/fs.js';
 import { safePath } from '../src/path.js';
 
+import { stripCommentLines } from './test-helpers.js';
+
 const srcDir = resolveFromImportMeta(import.meta.url, '..', 'src');
 
 /** Everything an entry module's transitive source graph pulls in from outside itself. */
@@ -19,29 +21,6 @@ const IMPORT_SPECIFIER = /from\s+'([^']+)'/gu;
 
 /** `picomatch` → `picomatch`; `@scope/pkg/sub` → `@scope/pkg`. Not a filesystem path. */
 const PACKAGE_NAME = /^(@[^/]+\/[^/]+|[^/]+)/u;
-
-/**
- * Drop comment lines before scanning for imports.
- *
- * Once bare specifiers count (below), doc comments stop being harmless noise:
- * `path-core.ts` and `zod-introspection.ts` both contain ` * import { z } from 'zod';`
- * inside JSDoc examples, and counting those would report `zod` as a third-party
- * dependency of the `./path` and `./zod` entries, which reach nothing at all.
- *
- * Line-based rather than a block-comment regex so it stays linear-time and cannot
- * swallow code. A real import statement never begins a line with `*`, `//`, or `/*`
- * — including a multi-line `import {\n  a,\n} from 'x'`, whose continuation lines
- * are also not comment-prefixed.
- */
-function stripCommentLines(source: string): string {
-  return source
-    .split('\n')
-    .filter((line) => {
-      const trimmed = line.trimStart();
-      return !trimmed.startsWith('*') && !trimmed.startsWith('//') && !trimmed.startsWith('/*');
-    })
-    .join('\n');
-}
 
 function packageNameOf(specifier: string): string {
   return PACKAGE_NAME.exec(specifier)?.[1] ?? specifier;

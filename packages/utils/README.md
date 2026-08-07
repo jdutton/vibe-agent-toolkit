@@ -33,7 +33,8 @@ The last two columns are the ones that matter when choosing. **"Resolves with ze
 | `./process` | `safeExecSync`, `safeExecResult`, `safeExecFromString`, `isToolAvailable`, `getToolVersion`, `hasShellSyntax`, `CommandExecutionError`, `spawnHardened`, `shouldUseShell`, `windowsShellQuote`, `buildWindowsShellLine`, `resolveShellCommandToken`, `isPathLike`, `makeStdioBlocking`, `describeStdioBlocking` | `child_process`, `path` | `which` | no — needs `which` |
 | `./git` | `gitFindRoot`, `gitLsFiles`, `isGitIgnored`, `loadGitignoreRules`, `GitTracker`, `parseGitUrl`, `isGitUrl`, `nonInteractiveGitOverrides` | `child_process`, `fs`, `os`, `path`, `url` | `ignore`, `which` | no — needs `which`, `ignore` |
 | `./crawl` | `crawlDirectory`, `crawlDirectorySync`, `NEVER_CRAWL_GLOBS`, `BUILD_OUTPUT_GLOBS` | `child_process`, `fs`, `os`, `path`, `url` | `picomatch`, `which` | no — needs `picomatch`, `which` |
-| `.` | everything above | all of the above, plus `stream` | `handlebars`, `ignore`, `picomatch`, `which`, `yaml` | no — needs all of them |
+| `./eslint` | the 21 ESLint rules that enforce everything above — see [ESLint rules](#eslint-rules--vibe-agent-toolkitutilseslint) | **none** | — | **yes** |
+| `.` | every runtime entry above (not `./eslint`) | all of the above, plus `stream` | `handlebars`, `ignore`, `picomatch`, `which`, `yaml` | no — needs all of them |
 | `./package.json` | the manifest itself, for version reporting and resolution assertions | — | — | **yes** |
 
 Note `./zod` reaches nothing at all: it detects Zod types by duck-typing `_def.typeName` rather than importing Zod, which is exactly why it works across Zod v3 and v4.
@@ -63,6 +64,8 @@ A guard test in `test/subpath-purity.test.ts` walks each entry's transitive sour
 - **Builtin reach** — five entries are held to a stricter contract still: `./zod`, `./yaml`, `./template` reach **no Node builtin at all**, and `./path`, `./glob` reach **`node:path` and nothing else** — the one builtin every bundler shims.
 
 That is an enforced invariant, not a browser-support commitment: there are no browser export conditions and no browser test lane. The guard exists so the property can't regress silently — it fails loudly if it cannot resolve a module, so it can't pass vacuously; `test/fixtures/dangling-import/` exercises that failure so the guarantee is demonstrated, not just claimed. If you add a new entry, add it to that test or nothing protects it.
+
+`./eslint` is hand-written CommonJS rather than compiled TypeScript, so that walker cannot see it; `test/eslint/subpath-purity.test.ts` holds it to the same contract by walking its `require()` graph instead — no builtin, no third-party, and in particular never `eslint` itself.
 
 ## Available Utilities
 
@@ -180,6 +183,27 @@ These are CLI-boundary functions: inner libraries should take a root as a parame
 - `NEVER_CRAWL_GLOBS` / `BUILD_OUTPUT_GLOBS` - the standard exclusion sets
 
 Glob *pattern inspection* is a separate entry, `./glob`, and stays that way: `./glob` is dependency-free and reaches only `node:path`, whereas crawling reaches the filesystem, `git`, and `picomatch`.
+
+### ESLint rules — `@vibe-agent-toolkit/utils/eslint`
+
+A safety helper is only as good as its enforcement: `safePath.join()` prevents a class of Windows bug precisely once — the moment someone writes `path.join()` instead, the helper's existence has bought nothing. So the 21 rules that direct code to these helpers ship with them, on their own subpath:
+
+```js
+// eslint.config.js
+import vat from '@vibe-agent-toolkit/utils/eslint';
+
+export default [
+  vat.configs.recommended,
+];
+```
+
+`configs.recommended` registers the rules under the `@vibe-agent-toolkit` namespace and turns on the cross-platform safety core (19 of the 21 — the two test-style rules are opt-in). Most rules auto-fix, and every message names the replacement and the subpath it lives on. Rules that ban a primitive take an `exemptFiles` option naming the file that implements *your* wrapper; there are deliberately no built-in exemptions.
+
+**[Full rule table, severities, and exemption semantics →](./eslint/README.md)**
+
+Requires ESLint 9+ (flat config). `eslint` is an **optional** peer dependency and adds nothing to the entries above: an ESLint plugin is data, not code that runs — the rule modules export plain objects and none of them `require('eslint')` — so this subpath reaches no Node builtin and no third-party package at all, and installing `utils` for `safePath.join()` alone pulls in nothing extra.
+
+Shipping them here rather than as a separate `eslint-plugin` package is deliberate: one install, one version, and no way for a rule to name a helper signature the installed `utils` no longer has.
 
 ## License
 

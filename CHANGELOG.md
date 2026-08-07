@@ -43,35 +43,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **New published package `@vibe-agent-toolkit/eslint-plugin` — 21 ESLint rules that enforce the
-  safety helpers in `@vibe-agent-toolkit/utils`.** The helpers exist because `path.join()`,
-  `os.tmpdir()`, `fs.realpathSync()`, `child_process.execSync()` and `await import(absolutePath)`
-  each have a platform pothole; until now nothing stopped a call to the raw primitive, so the API
-  shipped without its enforcement. The rules were maintained privately in this repo and had never
-  been installable. Most auto-fix, and every message names the replacement and the `utils` subpath
-  it lives on.
+- **A `@vibe-agent-toolkit/utils/eslint` subpath — 21 ESLint rules that enforce the safety helpers
+  in the rest of the package.** The helpers exist because `path.join()`, `os.tmpdir()`,
+  `fs.realpathSync()`, `child_process.execSync()` and `await import(absolutePath)` each have a
+  platform pothole; until now nothing stopped a call to the raw primitive, so the API shipped
+  without its enforcement. The rules were maintained privately in this repo and had never been
+  installable. Most auto-fix, and every message names the replacement and the `utils` subpath it
+  lives on.
 
   ```js
   // eslint.config.js
-  import vat from '@vibe-agent-toolkit/eslint-plugin';
+  import vat from '@vibe-agent-toolkit/utils/eslint';
   export default [vat.configs.recommended];
   ```
 
-  `configs.recommended` registers the plugin under the `@vibe-agent-toolkit` namespace and enables
+  `configs.recommended` registers the rules under the `@vibe-agent-toolkit` namespace and enables
   the cross-platform safety core — 19 of the 21 rules, `error` except four at `warn`
   (`no-path-join`, `no-path-resolve`, `no-path-relative`, `no-unsafe-root-join`), the ones whose
   first run on an existing codebase produces a migration rather than a bug list. The two left out,
   `require-justified-skip` and `no-test-scoped-functions`, encode a position on *test style* rather
-  than a portability fact; they ship in the package and are enabled by naming them. Rules take an
-  `exemptFiles` option naming the file(s) allowed to call the banned primitive — the one that
-  implements your wrapper. There are deliberately **no** built-in exemptions: those paths are a
-  claim about one repo's layout, and matching is anchored at a path segment, so declaring
-  `src/paths.ts` never exempts `tools/hooks/paths.ts`. Requires ESLint 9+ (flat config) and Node
-  >= 22; carries no runtime dependency on `utils`. Full rule table in the package README.
+  than a portability fact; they ship and are enabled by naming them. Rules take an `exemptFiles`
+  option naming the file(s) allowed to call the banned primitive — the one that implements your
+  wrapper. There are deliberately **no** built-in exemptions: those paths are a claim about one
+  repo's layout, and matching is anchored at a path segment, so declaring `src/paths.ts` never
+  exempts `tools/hooks/paths.ts`. Requires ESLint 9+ (flat config) and Node >= 22. Full rule table
+  in [the subpath's README](https://github.com/jdutton/vibe-agent-toolkit/blob/main/packages/utils/eslint/README.md).
+
+  **There is no separate plugin package to install**, and `eslint` is declared as an *optional* peer
+  dependency, so nothing changes for consumers who take `utils` for `safePath.join()` alone: they
+  get no unmet-peer warning and no new dependency. An ESLint plugin is data rather than code that
+  runs — the rule modules export plain objects and never `require('eslint')` — so this entry
+  reaches no Node builtin and no third-party package, and the other twelve subpaths keep resolving
+  in a tree with no ESLint anywhere in it. The cost is bytes on disk and nothing else: the packed
+  tarball goes 147,473 → 178,690 bytes (+31 KB compressed, 113 KB unpacked) for 27 `.cjs` files
+  nothing loads unless you lint. What it buys is one install, one version, and no way for a rule to
+  name a helper signature the installed `utils` no longer has.
 
 - **`@vibe-agent-toolkit/utils` is now a first-class public package with narrow subpath exports.**
-  The `exports` map goes from 3 keys to 13: `./path`, `./fs`, `./process`, `./git`, `./glob`,
-  `./zod`, `./yaml`, `./template`, `./testing`, `./asset`, `./crawl`, and
+  The `exports` map goes from 3 keys to 14: `./path`, `./fs`, `./process`, `./git`, `./glob`,
+  `./zod`, `./yaml`, `./template`, `./testing`, `./asset`, `./crawl`, `./eslint` (see below), and
   `./package.json`, plus the `.` barrel. Projects
   building skills with VAT write Node code that has to run on Windows, macOS, and Linux, and hit the
   same platform potholes VAT does — `.cmd` shims needing a shell, `tmpdir()` returning 8.3 short

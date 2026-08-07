@@ -8,18 +8,25 @@
 
 **When you identify a dangerous pattern that was fixed:**
 1. **Document why it's dangerous** (security, cross-platform, performance)
-2. **Create a custom ESLint rule** in `packages/eslint-plugin/rules/`
+2. **Create a custom ESLint rule** in `packages/utils/eslint/rules/`
 3. **The pattern can never be reintroduced** - ESLint catches it automatically
 
 This is "good overkill" - prevents technical debt from accumulating through AI-assisted development.
 
 ## Where the rules live
 
-Source: `packages/eslint-plugin/rules/`. They **ship** as
-[`@vibe-agent-toolkit/eslint-plugin`](../packages/eslint-plugin/README.md) — this repo consumes the
-published package like any other adopter (root `eslint.config.js` imports it), so a change here is a
-change to a public API. The README is the adopter-facing rule table; this doc is the contributor
-view.
+Source: `packages/utils/eslint/rules/`. They **ship** on the
+[`@vibe-agent-toolkit/utils/eslint`](../packages/utils/eslint/README.md) subpath — this repo
+consumes them by that same public specifier, like any other adopter (root `eslint.config.js` imports
+it), so a change here is a change to a public API. That README is the adopter-facing rule table;
+this doc is the contributor view.
+
+They live inside `utils` rather than in a plugin package of their own because an ESLint plugin is
+*data*: every rule module exports a plain object and none of them `require('eslint')`. So the pack
+adds nothing to the twelve runtime subpaths, `eslint` can be an **optional** peer dependency, and
+the rules can never be installed at a different version from the helpers whose signatures they name.
+Anything you add here inherits that contract — `test/eslint/subpath-purity.test.ts` fails the build
+on the first `require()` of anything outside `eslint/`.
 
 Two things follow from being published:
 
@@ -28,8 +35,12 @@ Two things follow from being published:
   Exemptions are a rule **option** (`{ exemptFiles: [...] }`), and this repo passes its own in
   `eslint.config.js`.
 - **The plugin is registered under the `local` namespace here**, not the conventional
-  `@vibe-agent-toolkit` one, because 43 `eslint-disable-next-line local/…` directives are keyed on
-  it. Adopters get `@vibe-agent-toolkit/…` from `configs.recommended`.
+  `@vibe-agent-toolkit` one, because 26 `eslint-disable-next-line local/…` directives across 22 files
+  in 7 packages are keyed on it — renaming turns every one into a no-op suppression while the tree
+  still lints clean. Adopters get `@vibe-agent-toolkit/…` from `configs.recommended`.
+  Flat config lets the namespace be any key, so it is a local alias, not part of the published
+  contract. Check with `eslint --report-unused-disable-directives`: if the alias ever stops
+  resolving to the rules, all 26 report as dead directives.
 
 ## Current Rules
 
@@ -110,7 +121,7 @@ See `eslint-rule-factory.cjs` for the template.
 
 ### 2. Create rule file
 
-In `packages/eslint-plugin/rules/`:
+In `packages/utils/eslint/rules/`:
 
 ```javascript
 // no-fs-unlinkSync.cjs
@@ -130,7 +141,7 @@ module.exports = factory({
 ```
 
 **Never exempt with `filename.includes(...)`.** All three exemption shapes live in
-`packages/eslint-plugin/rules/exempt-path-matcher.cjs` — reuse them:
+`packages/utils/eslint/rules/exempt-path-matcher.cjs` — reuse them:
 
 | Question the rule is asking | Helper | Substring bug it replaces |
 |---|---|---|
@@ -140,7 +151,7 @@ module.exports = factory({
 
 All three normalize to forward slashes first, so they behave identically on Windows.
 
-### 3. Register it in `packages/eslint-plugin/index.cjs`
+### 3. Register it in `packages/utils/eslint/index.cjs`
 
 ```javascript
 const rules = {
@@ -166,7 +177,7 @@ boundary (`exempt-path-matcher.cjs`), so a same-named file in another directory 
 bare `'common.ts'` used to be a substring match, which silently exempted every path merely
 CONTAINING it.
 
-### 5. Add a case table in `packages/eslint-plugin/test/local-eslint-rules.test.ts`
+### 5. Add a case table in `packages/utils/test/eslint/rules.test.ts`
 
 Include at least one **decoy**: a file whose basename matches an exempt path but whose directory
 does not. That leg is what proves the exemption is anchored.

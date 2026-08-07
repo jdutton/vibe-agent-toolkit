@@ -1,7 +1,7 @@
 import eslint from '@eslint/js';
 import tseslint from '@typescript-eslint/eslint-plugin';
 import tsparser from '@typescript-eslint/parser';
-import localRules from '@vibe-agent-toolkit/eslint-plugin';
+import localRules from '@vibe-agent-toolkit/utils/eslint';
 import importPlugin from 'eslint-plugin-import';
 import pluginNode from 'eslint-plugin-n';
 import security from 'eslint-plugin-security';
@@ -14,16 +14,16 @@ import unicorn from 'eslint-plugin-unicorn';
  * Same rules for all code: src, tests, and tools
  * No special cases - consistent standards everywhere
  *
- * Includes the agentic code safety rules VAT publishes as
- * `@vibe-agent-toolkit/eslint-plugin` (source: packages/eslint-plugin/).
+ * Includes the agentic code safety rules VAT publishes on the
+ * `@vibe-agent-toolkit/utils/eslint` subpath (source: packages/utils/eslint/).
  *
  * The plugin is registered under the `local` NAMESPACE rather than its
  * conventional `@vibe-agent-toolkit` one. Flat config lets the namespace be any
- * key, and 43 `eslint-disable-next-line local/…` directives across 8 packages
- * are keyed on it — renaming would silently turn every one of them into a
- * no-op suppression while the tree still lints clean at first glance. The
- * namespace is a local alias, not part of the published contract; adopters
- * starting fresh get `@vibe-agent-toolkit/…` from `configs.recommended`.
+ * key, and every `eslint-disable-next-line local/…` directive in the tree is
+ * keyed on it — renaming would silently turn each one into a no-op suppression
+ * while the tree still lints clean at first glance. The namespace is a local
+ * alias, not part of the published contract; adopters starting fresh get
+ * `@vibe-agent-toolkit/…` from `configs.recommended`.
  */
 
 /**
@@ -250,7 +250,7 @@ export default [
   },
 
   // Plain JS / CJS / MJS files (eslint configs, dev-tools scripts, the rule
-  // pack in `packages/eslint-plugin/rules/*.cjs`). These
+  // pack in `packages/utils/eslint/rules/*.cjs`). These
   // files were previously unlinted because the TS block above only globs
   // **/*.ts and **/*.tsx — letting findings like SonarCloud's S6324
   // (`prefer-set-has`) and S7773 (`prefer-string-raw`) only surface

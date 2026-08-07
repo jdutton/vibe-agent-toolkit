@@ -4,50 +4,67 @@
  *
  * This repo's `eslint.config.js` does NOT consume `configs.recommended` — it keeps
  * its own explicit severity map under the `local` namespace. So the flat config an
- * adopter actually installs is the one surface in this package that nothing else
- * touches: a misnamed rule key, a `files`-field omission that leaves `rules/` out
- * of the tarball, or a namespace typo would all ship green through lint, unit
- * tests and CI.
+ * adopter actually installs is the one surface of the `./eslint` subpath that
+ * nothing else touches: a misnamed rule key, a `files`-field omission that leaves
+ * `eslint/rules/` out of the tarball, a missing `"./eslint"` export, or a namespace
+ * typo would all ship green through lint, unit tests and CI.
  *
- * The test therefore refuses to import `../../index.cjs`. It runs:
- *   npm pack  →  install the tarball into a throwaway project OUTSIDE the
- *   workspace  →  write the `eslint.config.js` from README.md verbatim  →  lint.
+ * The test therefore refuses to import `../../eslint/index.cjs`. It runs:
+ *   npm pack  →  materialize exactly the packed file set as an installed package
+ *   in a throwaway project OUTSIDE the workspace  →  write the `eslint.config.js`
+ *   from the README verbatim  →  lint.
  *
- * Everything resolves from the throwaway project's own `node_modules`, so a file
- * present in the source tree but missing from `files` fails here and only here.
+ * Everything resolves from the throwaway project's own `node_modules`, by bare
+ * specifier, through the manifest's `exports` map — so a file present in the source
+ * tree but missing from `files`, or an `exports` key pointing at a path that only
+ * exists pre-publish, fails here and only here.
  *
- * Tier: integration. It spawns two `npm` processes, which the testing guide
- * normally routes to the system tier — but both run offline against a local
- * tarball with zero remote dependencies, and the whole suite (pack + install +
- * three lint passes) measures well under the integration tier's 5s budget.
+ * **Why the file set rather than the tarball.** Until the rules moved into `utils`
+ * this installed the tarball with `npm install --offline`, which worked because the
+ * standalone plugin package had ZERO dependencies — there was nothing for npm to
+ * resolve. `utils` has five runtime dependencies, so that same command now needs
+ * them in the local npm cache; CI installs with `bun`, leaving that cache cold, and
+ * the install would fail on a clean runner for reasons having nothing to do with
+ * what is under test. `npm pack --dry-run --json` is npm's own authoritative answer
+ * to "what ships?" — computed from `files` and the ignore rules by the same code
+ * path that builds the tarball — so copying exactly that list preserves every
+ * failure this test was built to catch while depending on neither the network, the
+ * npm cache, nor an external archiver. The rule pack needs none of those five
+ * dependencies to load, which is the whole point of it being pure data.
+ *
+ * Tier: integration. It spawns one `npm` process and copies a few hundred files.
  *
  * ESLint itself is the repo's ESLint 9 (asserted below) driven through its Node
- * API rather than a third npm install: installing eslint from the registry would
- * make this test network-dependent for no added signal — the API and the CLI load
- * the same flat config through the same resolver.
+ * API rather than an npm install: installing eslint from the registry would make
+ * this test network-dependent for no added signal — the API and the CLI load the
+ * same flat config through the same resolver.
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, normalizedTmpdir, resolveFromImportMeta } from '@vibe-agent-toolkit/utils/fs';
-import { safePath } from '@vibe-agent-toolkit/utils/path';
-import { safeExecSync } from '@vibe-agent-toolkit/utils/process';
 import { ESLint, type Linter } from 'eslint';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { mkdirSyncReal, normalizedTmpdir, resolveFromImportMeta } from '../../src/fs.js';
+import { safePath, toForwardSlash } from '../../src/path.js';
+import { safeExecSync } from '../../src/process.js';
+
 const PACKAGE_DIR = resolveFromImportMeta(import.meta.url, '..', '..');
+
+/** Where an adopter's resolver finds the package: `<project>/node_modules/<name>`. */
+const INSTALL_SUBPATH = 'node_modules/@vibe-agent-toolkit/utils';
 
 /** ESLint's numeric severities, named. */
 const SEVERITY = { warn: 1, error: 2 } as const;
 
 /**
- * `eslint.config.js` — copied verbatim from README.md ("Usage").
+ * `eslint.config.js` — copied verbatim from the README ("Usage").
  *
  * If the README snippet and this string diverge, the test stops proving anything
  * about what an adopter is told to write.
  */
 const README_USAGE_CONFIG = `// eslint.config.js
-import vat from '@vibe-agent-toolkit/eslint-plugin';
+import vat from '@vibe-agent-toolkit/utils/eslint';
 
 export default [
   vat.configs.recommended,
@@ -62,7 +79,7 @@ export default [
  * exemption check is exactly how a private `tools/hooks/path-utils.ts` full of
  * raw `tmpdir()` calls linted clean for months.
  */
-const EXEMPT_CONFIG = `import vat from '@vibe-agent-toolkit/eslint-plugin';
+const EXEMPT_CONFIG = `import vat from '@vibe-agent-toolkit/utils/eslint';
 
 export default [
   vat.configs.recommended,
@@ -109,20 +126,34 @@ interface PackedProject {
   dir: string;
   configPath: string;
   exemptConfigPath: string;
+  /** Every package-relative path npm reported as shipping. */
+  packedFiles: string[];
 }
 
-/** `npm pack` the package under test and return the tarball's absolute path. */
-function packPlugin(destination: string): string {
-  const stdout = safeExecSync('npm', ['pack', '--pack-destination', destination, '--silent'], {
+/** npm's `pack --dry-run --json` shape, reduced to the field this test reads. */
+interface PackDryRunEntry {
+  files: { path: string }[];
+}
+
+/**
+ * Ask npm which files the published tarball contains.
+ *
+ * `--dry-run` skips writing the archive; the reported list is still computed from
+ * `files` plus the ignore rules by the packer itself, so it is the shipped set, not
+ * a re-derivation of it.
+ */
+function packedFileList(): string[] {
+  const stdout = safeExecSync('npm', ['pack', '--dry-run', '--json'], {
     cwd: PACKAGE_DIR,
     encoding: 'utf8',
     stdio: 'pipe',
   }).toString();
-  const tarball = stdout.trim().split('\n').at(-1)?.trim();
-  if (!tarball) {
-    throw new Error(`npm pack produced no tarball name (stdout: ${JSON.stringify(stdout)})`);
+  const parsed = JSON.parse(stdout) as PackDryRunEntry[];
+  const files = parsed[0]?.files?.map((file) => file.path);
+  if (!files || files.length === 0) {
+    throw new Error(`npm pack --dry-run reported no files (stdout: ${JSON.stringify(stdout)})`);
   }
-  return safePath.join(destination, tarball);
+  return files;
 }
 
 /** Write `content` to `<dir>/<relativePath>`, creating parent directories. */
@@ -133,24 +164,22 @@ function writeProjectFile(dir: string, relativePath: string, content: string): s
   return absolute;
 }
 
-/**
- * Build the throwaway project: pack, install, then write config + fixtures.
- *
- * `--offline` is a guarantee, not a cache requirement: the tarball is a local
- * file and the package has zero runtime dependencies, so nothing is ever looked
- * up remotely. `--legacy-peer-deps` keeps npm from auto-installing the `eslint`
- * peer (the only thing that would need the registry).
- */
+/** Copy one packed file from the source package into the installed copy. */
+function installPackedFile(projectDir: string, relativePath: string): void {
+  const destination = safePath.join(projectDir, INSTALL_SUBPATH, relativePath);
+  mkdirSyncReal(safePath.join(destination, '..'), { recursive: true });
+  copyFileSync(safePath.join(PACKAGE_DIR, relativePath), destination);
+}
+
+/** Build the throwaway project: pack, install the packed set, then write config + fixtures. */
 function createPackedProject(): PackedProject {
-  const dir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-eslint-plugin-pack-'));
+  const dir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-utils-eslint-pack-'));
   writeProjectFile(dir, 'package.json', '{ "name": "adopter", "version": "1.0.0", "type": "module", "private": true }\n');
 
-  const tarball = packPlugin(dir);
-  safeExecSync(
-    'npm',
-    ['install', '--no-save', '--no-audit', '--no-fund', '--no-package-lock', '--legacy-peer-deps', '--offline', tarball],
-    { cwd: dir, stdio: 'pipe' },
-  );
+  const packedFiles = packedFileList();
+  for (const relativePath of packedFiles) {
+    installPackedFile(dir, relativePath);
+  }
 
   const configPath = writeProjectFile(dir, 'eslint.config.js', README_USAGE_CONFIG);
   const exemptConfigPath = writeProjectFile(dir, 'eslint.exempt.config.js', EXEMPT_CONFIG);
@@ -158,7 +187,7 @@ function createPackedProject(): PackedProject {
   writeProjectFile(dir, IMPL_FILE, TMPDIR_FIXTURE);
   writeProjectFile(dir, DECOY_FILE, TMPDIR_FIXTURE);
 
-  return { dir, configPath, exemptConfigPath };
+  return { dir, configPath, exemptConfigPath, packedFiles };
 }
 
 /** Lint one project-relative file and return every message it produced. */
@@ -194,6 +223,18 @@ afterAll(() => {
   if (project?.dir) {
     rmSync(project.dir, { recursive: true, force: true });
   }
+});
+
+describe('the ./eslint subpath ships', () => {
+  it('includes the rule pack in the published file set', () => {
+    expect(project.packedFiles).toContain('eslint/index.cjs');
+    expect(project.packedFiles).toContain('eslint/rules/no-os-tmpdir.cjs');
+    // Every rule the entry registers, plus the two shared factories and the matcher.
+    // npm reports manifest paths POSIX-style; normalize anyway so the count cannot
+    // quietly become zero on a platform that reports them otherwise.
+    const rules = project.packedFiles.filter((file) => toForwardSlash(file).startsWith('eslint/rules/'));
+    expect(rules.length).toBeGreaterThan(20);
+  });
 });
 
 describe('configs.recommended (published artifact)', () => {

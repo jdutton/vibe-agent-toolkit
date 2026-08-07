@@ -1,5 +1,8 @@
 import type { KnipConfig } from 'knip';
 
+/** Every package's TypeScript source lives here; several workspaces below name it. */
+const SRC_TS = 'src/**/*.ts';
+
 const config: KnipConfig = {
   // Only report dependency issues (not unused files/exports/types)
   include: ['dependencies', 'unlisted', 'unresolved'],
@@ -32,19 +35,12 @@ const config: KnipConfig = {
     },
 
     'packages/*': {
-      project: ['src/**/*.ts'],
-    },
-
-    // eslint-plugin: CommonJS rule modules, no TypeScript src/. Its entry point
-    // and rules are `.cjs` and are only ever loaded by ESLint itself.
-    'packages/eslint-plugin': {
-      entry: ['index.cjs', 'rules/*.cjs'],
-      project: ['rules/*.cjs'],
+      project: [SRC_TS],
     },
 
     // agent-schema: scripts/ uses utils for JSON Schema generation
     'packages/agent-schema': {
-      entry: ['src/**/*.ts', 'scripts/**/*.ts'],
+      entry: [SRC_TS, 'scripts/**/*.ts'],
     },
 
     // CLI: Commander.js wires commands from bin.ts, not index.ts
@@ -62,7 +58,7 @@ const config: KnipConfig = {
 
     // dev-tools: scripts are invoked via tsx from root, not from src/index.ts
     'packages/dev-tools': {
-      entry: ['src/**/*.ts'],
+      entry: [SRC_TS],
     },
 
     // rag: OpenAI is an opt-in optional peerDependency loaded via dynamic
@@ -80,6 +76,18 @@ const config: KnipConfig = {
     // Runtime adapters: some deps provide types or are used in tests/examples
     'packages/runtime-vercel-ai-sdk': {
       ignoreDependencies: ['@ai-sdk/provider', '@ai-sdk/provider-utils'],
+    },
+
+    // utils: the `./eslint` subpath is hand-written CommonJS outside src/. Its
+    // entry point and rules are `.cjs` and are only ever loaded by ESLint itself,
+    // so they need naming explicitly or knip never walks them.
+    'packages/utils': {
+      entry: ['src/index.ts', 'eslint/index.cjs', 'eslint/rules/*.cjs'],
+      project: [SRC_TS, 'eslint/*.cjs', 'eslint/rules/*.cjs'],
+      // `eslint` is an OPTIONAL peer (and a devDep for the rule tests): the rule
+      // modules export plain objects and never require('eslint'), which is the
+      // whole reason the pack can live on a subpath of a general-purpose package.
+      ignoreDependencies: ['eslint'],
     },
 
     // vat-development-agents has standalone agent files + TS compiler plugin

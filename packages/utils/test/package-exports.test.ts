@@ -9,6 +9,9 @@ type ExportEntry = string | { types: string; import: string };
 interface Manifest {
   engines?: Record<string, string>;
   exports: Record<string, ExportEntry>;
+  files?: string[];
+  peerDependencies?: Record<string, string>;
+  peerDependenciesMeta?: Record<string, { optional?: boolean }>;
 }
 
 function asConditions(entry: ExportEntry | undefined): { types?: string; import?: string } {
@@ -45,6 +48,34 @@ describe('utils package manifest', () => {
     expect(conditions.types).toBe(`./dist/${base}.d.ts`);
   });
 
+  /**
+   * `./eslint` is the one entry that is NOT compiled from `src/`: it is
+   * hand-written CommonJS shipped verbatim. It therefore breaks in ways the
+   * `it.each` above cannot see — a `dist/` path here, or an `eslint` directory
+   * missing from `files`, would both publish an entry that fails to resolve.
+   */
+  it('exports ./eslint from the shipped CommonJS rule pack, not from dist', () => {
+    expect(manifest.exports['./eslint']).toBe('./eslint/index.cjs');
+  });
+
+  it('ships the eslint directory in the tarball', () => {
+    expect(manifest.files).toContain('eslint');
+  });
+
+  /**
+   * ESLint is a peer, and an OPTIONAL one.
+   *
+   * Optional because an ESLint plugin is data rather than code that runs: the rule
+   * modules export plain objects and never `require('eslint')`, so all thirteen
+   * other subpaths resolve fine with no ESLint anywhere in the tree. Without
+   * `peerDependenciesMeta`, every consumer taking this package for `safePath.join()`
+   * would get an unmet-peer warning for a package it will never load.
+   */
+  it('declares eslint as an optional peer dependency', () => {
+    expect(manifest.peerDependencies?.['eslint']).toBe('>=9.0.0');
+    expect(manifest.peerDependenciesMeta?.['eslint']?.optional).toBe(true);
+  });
+
   // Adopters reach for this for version reporting, resolution assertions, and
   // "which build am I on?" checks. Without the explicit export, `require`/
   // `import` of it throws ERR_PACKAGE_PATH_NOT_EXPORTED.
@@ -74,6 +105,7 @@ describe('utils package manifest', () => {
       '.',
       './asset',
       './crawl',
+      './eslint',
       './fs',
       './git',
       './glob',

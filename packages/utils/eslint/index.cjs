@@ -1,16 +1,24 @@
 /**
- * @vibe-agent-toolkit/eslint-plugin — cross-platform and agentic-code safety rules.
+ * `@vibe-agent-toolkit/utils/eslint` — cross-platform and agentic-code safety rules.
  *
- * These rules enforce the safe helpers published by `@vibe-agent-toolkit/utils`
- * (`safePath.*`, `normalizedTmpdir()`, `mkdirSyncReal()`, `normalizePath()`,
- * `toForwardSlash()`, `safeExecSync()`). The helpers exist because the raw
- * primitives they wrap have platform potholes; the rules exist so a call to the
- * raw primitive fails at lint time on the author's machine rather than in CI on
- * a different OS.
+ * These rules enforce the safe helpers published by the rest of this package
+ * (`safePath.*` on `/path`, `normalizedTmpdir()`, `mkdirSyncReal()`,
+ * `normalizePath()` on `/fs`, `safeExecSync()` on `/process`). The helpers exist
+ * because the raw primitives they wrap have platform potholes; the rules exist so
+ * a call to the raw primitive fails at lint time on the author's machine rather
+ * than in CI on a different OS.
  *
- * CommonJS on purpose: the rule modules are `.cjs`, and a CJS entry point can be
- * both `require()`d from an `eslint.config.cjs` and `import`ed from an
- * `eslint.config.js`/`.mjs`.
+ * They ship as a SUBPATH rather than a separate package because an ESLint plugin
+ * is data, not code that runs: every module below exports a plain rule object and
+ * none of them `require('eslint')`. So this entry resolves — and the other twelve
+ * subpaths keep resolving — whether or not ESLint is installed, which is why
+ * `eslint` is declared as an OPTIONAL peer dependency. One install, one version,
+ * no way for the rules to drift from the helpers they name.
+ *
+ * CommonJS on purpose, in an ESM package: the rule modules are `.cjs`, Node keys
+ * module format off the extension regardless of the package's `"type"`, and a CJS
+ * entry point can be both `require()`d from an `eslint.config.cjs` and `import`ed
+ * from an `eslint.config.js`/`.mjs`.
  *
  * Rules whose exemptions name a file (the ONE implementation file allowed to call
  * the primitive) take an `exemptFiles` option — see README.md. The shipped
@@ -105,19 +113,27 @@ const RECOMMENDED_WARN = new Set([
   'no-unsafe-root-join',
 ]);
 
-/** Plugin namespace an adopter gets from `configs.recommended`. */
+/**
+ * Plugin namespace an adopter gets from `configs.recommended`, and therefore the
+ * prefix on every rule id (`@vibe-agent-toolkit/no-path-join`).
+ *
+ * Deliberately the SCOPE, not the full subpath specifier: rule ids are the surface
+ * adopters type into `rules`, `eslint-disable` comments and CI baselines, and they
+ * should not have to change if the pack ever moves house again. (This repo's own
+ * config registers the same object under `local` for exactly that reason.)
+ */
 const NAMESPACE = '@vibe-agent-toolkit';
 
 const plugin = {
   meta: {
-    name: '@vibe-agent-toolkit/eslint-plugin',
+    name: '@vibe-agent-toolkit/utils/eslint',
   },
   rules,
   configs: {},
 };
 
 plugin.configs.recommended = {
-  name: '@vibe-agent-toolkit/eslint-plugin/recommended',
+  name: '@vibe-agent-toolkit/utils/eslint/recommended',
   plugins: { [NAMESPACE]: plugin },
   rules: Object.fromEntries(
     Object.keys(rules)

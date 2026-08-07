@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
+interface EslintPlugin {
+  rules: Record<string, { create?: unknown } | undefined>;
+  configs: { recommended: { rules: Record<string, string> } };
+}
+
 describe('whole-module subpath entries', () => {
   it('./git exposes git root discovery, ls-files, ignore checking, and URL parsing', async () => {
     const mod = await import('../src/git.js');
@@ -90,5 +95,22 @@ describe('whole-module subpath entries', () => {
   it('./asset exposes asset reference resolution', async () => {
     const mod = await import('../src/asset.js');
     expect(typeof mod.resolveAssetReference).toBe('function');
+  });
+
+  /**
+   * `./eslint` is the one subpath not compiled from `src/`, so it is imported here
+   * the way an adopter's `eslint.config.js` does — through the exports map, by
+   * specifier — rather than by relative source path like every case above. That
+   * makes this the only test in the repo that would fail if the `./eslint` key
+   * were dropped from the manifest while the files stayed put.
+   *
+   * Rule-by-rule coverage lives in `test/eslint/`; this asserts the entry exists
+   * and has the shape ESLint requires of a plugin.
+   */
+  it('./eslint exposes the rule pack and its recommended config', async () => {
+    const mod: unknown = await import('@vibe-agent-toolkit/utils/eslint');
+    const plugin = (mod as { default: EslintPlugin }).default;
+    expect(typeof plugin.rules['no-path-join']?.create).toBe('function');
+    expect(plugin.configs.recommended.rules['@vibe-agent-toolkit/no-path-join']).toBe('warn');
   });
 });

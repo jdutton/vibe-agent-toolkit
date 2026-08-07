@@ -1,5 +1,5 @@
 /**
- * Tests for the rules in packages/eslint-plugin/rules/.
+ * Tests for the rules in packages/utils/eslint/rules/.
  *
  * Each rule contributes one row to SUITES below. Adding a new rule means
  * a new RuleCases constant plus a one-line row — keeps RuleTester
@@ -14,7 +14,7 @@ import {
   loadLocalRuleModule,
   type RuleCases,
   ruleTester,
-} from './eslint-rule-test-harness.js';
+} from './rule-test-harness.js';
 
 const NO_URL_PATHNAME_FOR_FS_CASES: RuleCases = {
   valid: [
@@ -381,13 +381,13 @@ function unsafeCallRuleCases({ unsafeFn, unsafeModule, safeFn, exemptPath }: Uns
  * rule could be "fixed" by exempting nothing and this suite would stay green.
  */
 const UNIX_CMD_CODE = "safeExecSync('tar', ['xzf', archive]);";
-const UNIX_TEST_FILE = 'packages/eslint-plugin/test/example.test.ts';
+const UNIX_TEST_FILE = 'packages/utils/test/eslint/example.test.ts';
 const NO_UNIX_SHELL_COMMANDS_CASES: RuleCases = {
   valid: [
     { code: "safeExecSync('node', [script]);", filename: LINTED_FILE },
     { code: UNIX_CMD_CODE, filename: UNIX_TEST_FILE },
     { code: UNIX_CMD_CODE, filename: `/Users/dev/vat/${UNIX_TEST_FILE}` },
-    { code: UNIX_CMD_CODE, filename: String.raw`C:\dev\vat\packages\eslint-plugin\test\example.test.ts` },
+    { code: UNIX_CMD_CODE, filename: String.raw`C:\dev\vat\packages\utils\test\eslint\example.test.ts` },
   ],
   invalid: [
     { code: UNIX_CMD_CODE, filename: LINTED_FILE, errors: [{ messageId: 'noUnixCommand' }] },

@@ -7,7 +7,10 @@
   "keywords": [
     "typescript",
     "utilities",
-    "toolkit"
+    "toolkit",
+    "cross-platform",
+    "windows",
+    "eslint"
   ],
   "author": "Jeff Dutton",
   "license": "MIT",
@@ -65,10 +68,12 @@
       "types": "./dist/crawl.d.ts",
       "import": "./dist/crawl.js"
     },
+    "./eslint": "./eslint/index.cjs",
     "./package.json": "./package.json"
   },
   "files": [
     "dist",
+    "eslint",
     "README.md"
   ],
   "scripts": {
@@ -87,9 +92,18 @@
     "which": "^5.0.0",
     "yaml": "^2.6.1"
   },
+  "peerDependencies": {
+    "eslint": ">=9.0.0"
+  },
+  "peerDependenciesMeta": {
+    "eslint": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@types/picomatch": "^4.0.2",
     "@types/which": "^3.0.4",
+    "eslint": "^9.39.5",
     "rimraf": "^6.0.1",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4",
