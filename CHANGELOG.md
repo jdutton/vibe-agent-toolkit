@@ -127,6 +127,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   export set is unchanged, so consumers importing from it need no edit — consumers of the
   pre-existing `./fs` subpath do; see **Breaking** above.
 
+  The narrow entries are narrow in their *dependency graph*, not merely in name: `./path` and
+  `./glob` reach only `node:path`, never `node:fs`, `node:os`, or `node:url`. A guard test walks
+  each entry's transitive source graph and asserts both its `node:` builtin set and its third-party
+  set, so the README's "resolves with zero deps installed" column is enforced rather than
+  documented. It fails loudly when it cannot resolve a module, so it cannot pass vacuously, and a
+  fixture with a dangling import exercises that failure.
+
   This is **not** a bundle-size change: the package has set `"sideEffects": false` since 0.1.40, and
   a tree-shaking bundler already dropped unused code from the barrel. What subpaths control is what
   a build must *resolve* and what a module graph *reaches* — the barrel reaches `yaml`, `handlebars`,
@@ -213,6 +220,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shape that undercuts "import the one you need" — and it is the one whose narrow home already
   existed.
 
+### Security
+
+- **15 advisories cleared from the dependency tree** by advancing the patched pins in the root
+  `overrides` block: `undici` 7.28.0 → 7.29.0 (5 advisories), `ip-address` 10.1.1 → 10.3.1 (3),
+  `hono` 4.12.27 → 4.12.34, `fast-uri` 3.1.4 → 3.1.5, `js-yaml` 4.3.0 → 4.3.1, and `postcss`
+  8.5.18 → 8.5.23. All are within-major bumps of transitive packages; no declared dependency
+  changed and no consumer-facing API is affected.
+
+  One advisory is **accepted rather than fixed** and recorded in `osv-scanner.toml` with its
+  reasoning: `brace-expansion` (GHSA-rgw5-rvv9-x895) resolves to 1.x, 2.x, and 5.x simultaneously
+  in this tree, and the fix lands separately in each line (1.1.18 / 2.1.4 / 5.0.9), so no single
+  value in a global `overrides` block can patch all three — pinning any one forces the other two
+  majors onto an incompatible version. It is a ReDoS against attacker-controlled brace patterns;
+  VAT only ever expands patterns it authors. Same shape, and the same deferral, as the existing
+  `minimatch` and `picomatch` entries.
+
 ### Fixed
 
 - **`isGitIgnored()` spawned a git subprocess per ancestor directory when the path was not in a git
@@ -296,17 +319,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`@vibe-agent-toolkit/utils/package.json` was not exported**, so
   `require('@vibe-agent-toolkit/utils/package.json')` threw `ERR_PACKAGE_PATH_NOT_EXPORTED`. Version
   reporting and resolution assertions all reach for it. Now exported.
-
-- **`@vibe-agent-toolkit/utils/path` and `/glob` no longer reach `node:fs`, `node:os`, and
-  `node:url`.** The pure path-string helpers shared a module with the five filesystem-touching ones,
-  whose top-level imports were pulled into every consumer's graph. The pure helpers now live in a
-  leaf module importing only `node:path`; `path-utils` re-exports it, so the **`.` barrel's** import
-  paths are unchanged (`./fs` consumers must move to `./path` — see **Breaking** above). A guard
-  test walks each entry's transitive source graph and asserts both its `node:` builtin set and its
-  third-party set, so the README's "resolves with zero deps installed" column is enforced rather
-  than merely documented. It fails loudly when it cannot resolve a module, so it cannot pass
-  vacuously — and a fixture with a dangling import exercises that failure, so the guarantee is
-  demonstrated rather than asserted.
 
 - **The `@vibe-agent-toolkit/utils` README documented four functions that do not exist**
   (`normalizeFilePath`, `readFileContent`, `getGitRootDir`, `ensureGitRepository`) and named a fifth
