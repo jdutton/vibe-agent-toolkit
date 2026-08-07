@@ -170,7 +170,7 @@ function createCommandChecker(options) {
  *
  * @param {Object} config - Rule configuration
  * @param {string} config.command - Command name to detect (e.g., 'git', 'gh')
- * @param {string} config.packageName - Package containing wrappers (e.g., '@vibe-validate/git')
+ * @param {string} config.packageName - Package containing wrappers (e.g., '@my-org/git')
  * @param {string[]} config.availableFunctions - List of available wrapper functions
  * @param {string} [config.exemptPackage] - Repo-relative directory of the package that
  *   OWNS the wrappers, e.g. `'packages/git/'`. Matched at a path-segment boundary by
@@ -183,7 +183,7 @@ function createCommandChecker(options) {
  * const { createNoCommandDirectRule } = require('./no-command-direct-factory.cjs');
  * module.exports = createNoCommandDirectRule({
  *   command: 'git',
- *   packageName: '@vibe-validate/git',
+ *   packageName: '@my-org/git',
  *   availableFunctions: ['executeGitCommand()', 'getTreeHash()', 'addNote()'],
  *   exemptPackage: 'packages/git/',
  * });

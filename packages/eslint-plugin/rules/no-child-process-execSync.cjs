@@ -17,5 +17,6 @@ module.exports = factory({
   safeFn: 'safeExecSync',
   safeModule: '@vibe-agent-toolkit/utils',
   message: 'Use safeExecSync() from @vibe-agent-toolkit/utils instead of child_process.execSync() to prevent command injection (security + cross-platform)',
-  exemptFiles: ['packages/utils/src/safe-exec.ts'], // Implementation file
+  // No baked-in exemption: the file that implements safeExecSync() is
+  // repo-specific. Consumers declare it as { exemptFiles: [...] }.
 });

@@ -27,6 +27,11 @@
  * `no-command-direct-factory.cjs` and `no-unix-shell-commands.cjs` all use these.
  * Do not re-implement any of them: the sibling-factory copy is how the bug
  * shipped four times in the first place.
+ *
+ * A fourth export, `createConfigurableExemptPathMatcher`, wires the file-shaped
+ * exemption to the rule's own ESLint option so each CONSUMER declares the paths
+ * for its own repo. It also lives here (rather than in each factory) for the same
+ * reason: two copies is how the bug spread last time.
  */
 
 /** Forward-slash a path and drop any leading `./` or `/` noise used for anchoring. */
@@ -55,6 +60,63 @@ function createExemptPathMatcher(exemptPaths) {
     return targets.some(
       (target) => normalized === target || normalized.endsWith(`/${target}`),
     );
+  };
+}
+
+/**
+ * JSON Schema for the `exemptFiles` rule option, for a rule's `meta.schema`.
+ *
+ * `additionalProperties: false` on purpose: a typo'd option key must be an ESLint
+ * config error, not a silently ignored exemption list (which would read as "the
+ * rule stopped firing for no reason").
+ */
+const EXEMPT_FILES_SCHEMA = Object.freeze({
+  type: 'object',
+  properties: {
+    exemptFiles: {
+      type: 'array',
+      items: { type: 'string' },
+      uniqueItems: true,
+    },
+  },
+  additionalProperties: false,
+});
+
+/**
+ * Wire a file-shaped exemption to the rule's `exemptFiles` option.
+ *
+ * An exemption names the ONE file in a SPECIFIC repo that implements the safe
+ * replacement, so it cannot be shipped as a useful default: a package publishing
+ * `packages/utils/src/path-utils.ts` as a built-in exemption hands every consumer
+ * a hole at that path. Hence the empty default here, and hence REPLACE rather
+ * than merge semantics — a consumer's list is the whole list.
+ *
+ * @param {readonly string[]} [defaultPaths] - Fallback used only when the rule is
+ *   configured with no `exemptFiles` option. Ship this empty unless the rule
+ *   itself owns the file (no shipped rule in this package does).
+ * @returns {(context: object) => (filename: string) => boolean} Resolver taking an
+ *   ESLint rule context and returning the anchored predicate for that invocation.
+ */
+function createConfigurableExemptPathMatcher(defaultPaths = []) {
+  const defaultMatcher = createExemptPathMatcher(defaultPaths);
+  const cache = new Map();
+
+  return function exemptMatcherFor(context) {
+    const configured = context.options?.[0]?.exemptFiles;
+    if (!Array.isArray(configured)) {
+      return defaultMatcher;
+    }
+    // JSON, not join(): a delimiter cheap enough to be collision-free is a raw
+    // NUL, which this repo bans in source (git and ripgrep treat the file as
+    // binary and skip its contents), and any printable delimiter can legally
+    // appear in a path.
+    const key = JSON.stringify(configured);
+    let matcher = cache.get(key);
+    if (!matcher) {
+      matcher = createExemptPathMatcher(configured);
+      cache.set(key, matcher);
+    }
+    return matcher;
   };
 }
 
@@ -123,6 +185,8 @@ function isTestFile(filename) {
 }
 
 module.exports = {
+  EXEMPT_FILES_SCHEMA,
+  createConfigurableExemptPathMatcher,
   createExemptDirectoryMatcher,
   createExemptPathMatcher,
   isTestFile,

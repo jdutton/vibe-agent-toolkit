@@ -31,6 +31,7 @@ describe('./fs subpath entry', () => {
     expect(typeof mod.dynamicImportPath).toBe('function');
     expect(typeof mod.copyDirectory).toBe('function');
     expect(typeof mod.verifyCaseSensitiveFilename).toBe('function');
+    expect(typeof mod.FsLookupCache).toBe('function');
   });
 
   it('does NOT re-export the pure path helpers', async () => {

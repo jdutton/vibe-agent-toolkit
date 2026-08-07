@@ -35,6 +35,13 @@ const config: KnipConfig = {
       project: ['src/**/*.ts'],
     },
 
+    // eslint-plugin: CommonJS rule modules, no TypeScript src/. Its entry point
+    // and rules are `.cjs` and are only ever loaded by ESLint itself.
+    'packages/eslint-plugin': {
+      entry: ['index.cjs', 'rules/*.cjs'],
+      project: ['rules/*.cjs'],
+    },
+
     // agent-schema: scripts/ uses utils for JSON Schema generation
     'packages/agent-schema': {
       entry: ['src/**/*.ts', 'scripts/**/*.ts'],

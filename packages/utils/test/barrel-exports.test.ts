@@ -45,6 +45,7 @@ const BARREL_EXPORTS = [
   'findNodeWorkspaceRoot',
   'findProjectRoot',
   'formatForwardedEnvLine',
+  'FsLookupCache',
   'getRelativePath',
   'getTestOutputBase',
   'getTestOutputDir',

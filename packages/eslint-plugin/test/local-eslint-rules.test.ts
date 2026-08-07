@@ -1,5 +1,5 @@
 /**
- * Tests for local ESLint rules in packages/dev-tools/eslint-local-rules/.
+ * Tests for the rules in packages/eslint-plugin/rules/.
  *
  * Each rule contributes one row to SUITES below. Adding a new rule means
  * a new RuleCases constant plus a one-line row — keeps RuleTester
@@ -109,33 +109,50 @@ interface RuleSuite {
  * `filename.includes('path-utils.ts')`, so every decoy linted clean — the exact
  * bug that let a private `tools/hooks/path-utils.ts` ship raw path calls in a
  * consumer repo running a fork of these rules.
+ *
+ * Exemptions are a RULE OPTION, not a built-in list: the file implementing the
+ * safe wrapper is repo-specific, so a shipped default would hand every other
+ * repo a hole at that path. The last two invalid legs are the regression guard
+ * for that — with no options, nothing is exempt.
  */
 const SAFE_IMPORT = "import { safePath } from '@vibe-agent-toolkit/utils';";
 const LINTED_FILE = 'packages/cli/src/example.ts';
+const PATH_CORE_IMPL = 'packages/utils/src/path-core.ts';
+const PATH_UTILS_IMPL = 'packages/utils/src/path-utils.ts';
+const PATH_UTILS_SPEC = 'packages/utils/test/path-utils.test.ts';
+
+/** The exempt-file list VAT itself passes for the three `safePath` rules. */
+const PATH_EXEMPT_OPTIONS = [
+  { exemptFiles: [PATH_CORE_IMPL, PATH_UTILS_IMPL, PATH_UTILS_SPEC] },
+];
 
 function pathFunctionRuleCases(fn: 'join' | 'relative' | 'resolve'): RuleCases {
   const unsafeMemberCode = `import path from 'node:path'; const p = path.${fn}(a, b);`;
   const unsafeMemberOutput = `import path from 'node:path';\n${SAFE_IMPORT} const p = safePath.${fn}(a, b);`;
   const errors = [{ messageId: 'noUnsafePathFn' }];
-  const decoy = (filename: string) => ({ code: unsafeMemberCode, filename, output: unsafeMemberOutput, errors });
+  const options = PATH_EXEMPT_OPTIONS;
+  const decoy = (filename: string) => ({
+    code: unsafeMemberCode, filename, options, output: unsafeMemberOutput, errors,
+  });
 
   return {
     valid: [
       // The safe call is never flagged.
-      { code: `${SAFE_IMPORT} const p = safePath.${fn}(a, b);`, filename: LINTED_FILE },
-      // Genuinely exempt implementation files, by their real repo-relative paths.
-      { code: unsafeMemberCode, filename: 'packages/utils/src/path-core.ts' },
-      { code: unsafeMemberCode, filename: '/Users/dev/vat/packages/utils/src/path-utils.ts' },
-      { code: unsafeMemberCode, filename: 'packages/utils/test/path-utils.test.ts' },
+      { code: `${SAFE_IMPORT} const p = safePath.${fn}(a, b);`, filename: LINTED_FILE, options },
+      // Files the CONSUMING config declared exempt, by their repo-relative paths.
+      { code: unsafeMemberCode, filename: PATH_CORE_IMPL, options },
+      { code: unsafeMemberCode, filename: `/Users/dev/vat/${PATH_UTILS_IMPL}`, options },
+      { code: unsafeMemberCode, filename: PATH_UTILS_SPEC, options },
       // Same exemption, spelled with Windows separators.
-      { code: unsafeMemberCode, filename: String.raw`C:\dev\vat\packages\utils\src\path-core.ts` },
+      { code: unsafeMemberCode, filename: String.raw`C:\dev\vat\packages\utils\src\path-core.ts`, options },
     ],
     invalid: [
       // Fires on the unsafe member call and the unsafe named import.
-      { code: unsafeMemberCode, filename: LINTED_FILE, output: unsafeMemberOutput, errors },
+      { code: unsafeMemberCode, filename: LINTED_FILE, options, output: unsafeMemberOutput, errors },
       {
         code: `import { ${fn} } from 'node:path'; const p = ${fn}(a, b);`,
         filename: LINTED_FILE,
+        options,
         output: `\n${SAFE_IMPORT} const p = safePath.${fn}(a, b);`,
         errors,
       },
@@ -143,6 +160,12 @@ function pathFunctionRuleCases(fn: 'join' | 'relative' | 'resolve'): RuleCases {
       decoy('tools/hooks/path-utils.ts'),
       decoy('packages/other/src/path-core.ts'),
       decoy('packages/cli/src/my-path-utils.ts'),
+      // UNCONFIGURED: the paths that used to be hardcoded into the factory are
+      // exempt only because the config above named them. With no options they
+      // are ordinary files and MUST fire — otherwise publishing this pack would
+      // ship VAT's layout as a silent hole in every adopter's repo.
+      { code: unsafeMemberCode, filename: PATH_CORE_IMPL, output: unsafeMemberOutput, errors },
+      { code: unsafeMemberCode, filename: PATH_UTILS_IMPL, output: unsafeMemberOutput, errors },
     ],
   };
 }
@@ -321,21 +344,29 @@ function unsafeCallRuleCases({ unsafeFn, unsafeModule, safeFn, exemptPath }: Uns
   const unsafeCode = `import { ${unsafeFn} } from '${unsafeModule}';\nconst r = ${unsafeFn}(x);`;
   const output = `import { ${safeFn} } from '@vibe-agent-toolkit/utils';\n\nconst r = ${safeFn}(x);`;
   const errors = [{ messageId: 'noUnsafeOperation' }];
-  const decoy = (filename: string) => ({ code: unsafeCode, filename, output, errors });
+  const options = [{ exemptFiles: [exemptPath] }];
+  const decoy = (filename: string) => ({ code: unsafeCode, filename, options, output, errors });
   const exemptBasename = exemptPath.slice(exemptPath.lastIndexOf('/') + 1);
 
   return {
     valid: [
-      { code: `import { ${safeFn} } from '@vibe-agent-toolkit/utils';\nconst r = ${safeFn}(x);`, filename: LINTED_FILE },
-      { code: unsafeCode, filename: exemptPath },
-      { code: unsafeCode, filename: `/Users/dev/vat/${exemptPath}` },
+      {
+        code: `import { ${safeFn} } from '@vibe-agent-toolkit/utils';\nconst r = ${safeFn}(x);`,
+        filename: LINTED_FILE,
+        options,
+      },
+      { code: unsafeCode, filename: exemptPath, options },
+      { code: unsafeCode, filename: `/Users/dev/vat/${exemptPath}`, options },
     ],
     invalid: [
-      { code: unsafeCode, filename: LINTED_FILE, output, errors },
+      { code: unsafeCode, filename: LINTED_FILE, options, output, errors },
       // DECOY basenames — the shape that shipped raw tmpdir()/realpathSync()
       // past a fork of this rule pack in a consumer repo.
       decoy(`tools/hooks/${exemptBasename}`),
       decoy(`packages/other/src/${exemptBasename}`),
+      // UNCONFIGURED — with no `exemptFiles` option nothing is exempt, including
+      // the path this factory used to hardcode. See pathFunctionRuleCases above.
+      { code: unsafeCode, filename: exemptPath, output, errors },
     ],
   };
 }
@@ -350,13 +381,13 @@ function unsafeCallRuleCases({ unsafeFn, unsafeModule, safeFn, exemptPath }: Uns
  * rule could be "fixed" by exempting nothing and this suite would stay green.
  */
 const UNIX_CMD_CODE = "safeExecSync('tar', ['xzf', archive]);";
-const UNIX_TEST_FILE = 'packages/dev-tools/test/example.test.ts';
+const UNIX_TEST_FILE = 'packages/eslint-plugin/test/example.test.ts';
 const NO_UNIX_SHELL_COMMANDS_CASES: RuleCases = {
   valid: [
     { code: "safeExecSync('node', [script]);", filename: LINTED_FILE },
     { code: UNIX_CMD_CODE, filename: UNIX_TEST_FILE },
     { code: UNIX_CMD_CODE, filename: `/Users/dev/vat/${UNIX_TEST_FILE}` },
-    { code: UNIX_CMD_CODE, filename: String.raw`C:\dev\vat\packages\dev-tools\test\example.test.ts` },
+    { code: UNIX_CMD_CODE, filename: String.raw`C:\dev\vat\packages\eslint-plugin\test\example.test.ts` },
   ],
   invalid: [
     { code: UNIX_CMD_CODE, filename: LINTED_FILE, errors: [{ messageId: 'noUnixCommand' }] },
@@ -366,8 +397,6 @@ const NO_UNIX_SHELL_COMMANDS_CASES: RuleCases = {
     { code: UNIX_CMD_CODE, filename: 'packages/cli/src/.test.ts-helpers/impl.ts', errors: [{ messageId: 'noUnixCommand' }] },
   ],
 };
-
-const PATH_UTILS_IMPL = 'packages/utils/src/path-utils.ts';
 
 const SUITES: readonly RuleSuite[] = [
   { name: 'no-url-pathname-for-fs', cases: NO_URL_PATHNAME_FOR_FS_CASES },

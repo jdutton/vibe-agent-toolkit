@@ -8,12 +8,13 @@
  * @param {string} config.unsafeFn - Name of unsafe function (e.g., 'tmpdir', 'mkdirSync')
  * @param {string} config.unsafeModule - Module containing unsafe function (e.g., 'node:os', 'node:fs')
  * @param {string} config.safeFn - Name of safe replacement function (e.g., 'normalizedTmpdir')
- * @param {string} config.safeModule - Module containing safe function (e.g., '@vibe-validate/utils')
+ * @param {string} config.safeModule - Module containing safe function (e.g., '@vibe-agent-toolkit/utils')
  * @param {string} config.message - Error message to display
- * @param {readonly string[]} [config.exemptFiles] - Repo-relative paths allowed to
- *   call the unsafe function (e.g., `['packages/utils/src/safe-exec.ts']`). Matched
- *   at a path-segment boundary by `exempt-path-matcher.cjs` — NOT as a substring, so
- *   a same-named file in another directory is still linted.
+ * @param {readonly string[]} [config.exemptFiles] - FALLBACK repo-relative paths
+ *   allowed to call the unsafe function, used only when the consuming config
+ *   passes no `exemptFiles` option. Ship this empty: an exemption names one file
+ *   in one repo, so a baked-in default is a hole in every OTHER repo. Consumers
+ *   declare their own via the rule option (see `exempt-path-matcher.cjs`).
  * @param {boolean} [config.checkMemberExpression] - Check for obj.method() calls (default: false)
  * @returns {Object} ESLint rule definition
  *
@@ -24,13 +25,18 @@
  *   unsafeFn: 'tmpdir',
  *   unsafeModule: 'node:os',
  *   safeFn: 'normalizedTmpdir',
- *   safeModule: '@vibe-validate/utils',
+ *   safeModule: '@vibe-agent-toolkit/utils',
  *   message: 'Use normalizedTmpdir() for Windows compatibility',
- *   exemptFiles: ['packages/utils/src/path-utils.ts'],
  * });
+ *
+ * // …and in the consumer's eslint.config.js, naming ITS implementation file:
+ * // '@vibe-agent-toolkit/no-os-tmpdir': ['error', { exemptFiles: ['src/paths.ts'] }]
  */
 
-const { createExemptPathMatcher } = require('./exempt-path-matcher.cjs');
+const {
+  EXEMPT_FILES_SCHEMA,
+  createConfigurableExemptPathMatcher,
+} = require('./exempt-path-matcher.cjs');
 
 /**
  * Helper function to filter unsafe import specifiers
@@ -73,7 +79,7 @@ module.exports = function createNoUnsafeRule(config) {
     checkMemberExpression = false,
   } = config;
 
-  const isExemptPath = createExemptPathMatcher(exemptFiles);
+  const exemptMatcherFor = createConfigurableExemptPathMatcher(exemptFiles);
 
   // Normalize module names (support both 'node:os' and 'os')
   const moduleVariants = [unsafeModule];
@@ -92,7 +98,7 @@ module.exports = function createNoUnsafeRule(config) {
         recommended: true,
       },
       fixable: 'code',
-      schema: [],
+      schema: [EXEMPT_FILES_SCHEMA],
       messages: {
         noUnsafeOperation: message,
       },
@@ -102,7 +108,7 @@ module.exports = function createNoUnsafeRule(config) {
       const sourceCode = context.getSourceCode();
 
       // Only the declared implementation file(s) may call the unsafe function.
-      if (isExemptPath(context.getFilename())) {
+      if (exemptMatcherFor(context)(context.getFilename())) {
         return {};
       }
 

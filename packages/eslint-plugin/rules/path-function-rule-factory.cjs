@@ -8,24 +8,27 @@
  * Auto-fixes to safePath.fn() from @vibe-agent-toolkit/utils.
  */
 
-const { createExemptPathMatcher } = require('./exempt-path-matcher.cjs');
+const {
+  EXEMPT_FILES_SCHEMA,
+  createConfigurableExemptPathMatcher,
+} = require('./exempt-path-matcher.cjs');
 
 const PATH_MODULES = new Set(['node:path', 'path']);
 const SAFE_MODULE = '@vibe-agent-toolkit/utils';
 const SAFE_OBJECT = 'safePath';
 
 /**
- * The only files allowed to call raw `node:path` functions, as anchored
- * repo-relative paths (see `exempt-path-matcher.cjs` for why these are not
- * substrings). `path-core.ts` holds the pure `safePath` definitions,
- * `path-utils.ts` the fs-touching ones, and `path-utils.test.ts` asserts the
- * platform-native behavior those wrap.
+ * The files allowed to call raw `node:path` functions are whichever ones the
+ * CONSUMING repo says implement (or assert) its `safePath` wrappers — declared
+ * per-rule as `{ exemptFiles: [...] }`, matched at a path-segment boundary (see
+ * `exempt-path-matcher.cjs` for why these are not substrings).
+ *
+ * This list used to be hardcoded to VAT's own `packages/utils/src/path-core.ts`
+ * et al. Those paths are meaningless in an adopter's tree and actively harmful
+ * as a default — a same-named file at the same repo-relative path would inherit
+ * an exemption it never declared. Default: nothing is exempt.
  */
-const isExemptImplementationFile = createExemptPathMatcher([
-  'packages/utils/src/path-core.ts',
-  'packages/utils/src/path-utils.ts',
-  'packages/utils/test/path-utils.test.ts',
-]);
+const exemptMatcherFor = createConfigurableExemptPathMatcher();
 
 /**
  * Remove a named import specifier, handling comma cleanup.
@@ -134,14 +137,14 @@ module.exports = function createPathFunctionRule(config) {
         recommended: true,
       },
       fixable: 'code',
-      schema: [],
+      schema: [EXEMPT_FILES_SCHEMA],
       messages: {
         noUnsafePathFn: message,
       },
     },
 
     create(context) {
-      if (isExemptImplementationFile(context.getFilename())) {
+      if (exemptMatcherFor(context)(context.getFilename())) {
         return {};
       }
 

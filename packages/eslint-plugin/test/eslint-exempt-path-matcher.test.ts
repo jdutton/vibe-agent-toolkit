@@ -15,14 +15,27 @@ import { describe, expect, it } from 'vitest';
 
 import { loadLocalRuleModule } from './eslint-rule-test-harness.js';
 
+interface RuleContextLike {
+  options: unknown[];
+}
+
 interface ExemptPathMatcherModule {
   createExemptPathMatcher(exemptPaths: readonly string[]): (filename: string) => boolean;
   createExemptDirectoryMatcher(exemptDirs: readonly string[]): (filename: string) => boolean;
+  createConfigurableExemptPathMatcher(
+    defaultPaths?: readonly string[],
+  ): (context: RuleContextLike) => (filename: string) => boolean;
   isTestFile(filename: string): boolean;
+  EXEMPT_FILES_SCHEMA: { additionalProperties: boolean; properties: Record<string, unknown> };
 }
 
-const { createExemptPathMatcher, createExemptDirectoryMatcher, isTestFile } =
-  loadLocalRuleModule<ExemptPathMatcherModule>('exempt-path-matcher.cjs');
+const {
+  createExemptPathMatcher,
+  createExemptDirectoryMatcher,
+  createConfigurableExemptPathMatcher,
+  isTestFile,
+  EXEMPT_FILES_SCHEMA,
+} = loadLocalRuleModule<ExemptPathMatcherModule>('exempt-path-matcher.cjs');
 
 const PATH_CORE = 'packages/utils/src/path-core.ts';
 const PATH_UTILS = 'packages/utils/src/path-utils.ts';
@@ -80,6 +93,61 @@ describe('createExemptPathMatcher', () => {
   it('never matches when the exempt list is empty', () => {
     const matchNothing = createExemptPathMatcher([]);
     expect(matchNothing(PATH_CORE)).toBe(false);
+  });
+});
+
+describe('createConfigurableExemptPathMatcher', () => {
+  // An exemption names ONE file in ONE repo. Publishing this pack means the
+  // paths have to come from the CONSUMER's config, or every adopter inherits a
+  // hole at whatever path the publisher happened to use.
+  const context = (options: unknown[]): RuleContextLike => ({ options });
+
+  it('exempts nothing by default', () => {
+    const matcherFor = createConfigurableExemptPathMatcher();
+    expect(matcherFor(context([]))(PATH_CORE)).toBe(false);
+    expect(matcherFor(context([{}]))(PATH_CORE)).toBe(false);
+  });
+
+  it('exempts exactly the files the rule option names', () => {
+    const matcherFor = createConfigurableExemptPathMatcher();
+    const isExempt = matcherFor(context([{ exemptFiles: [PATH_CORE] }]));
+    expect(isExempt(PATH_CORE)).toBe(true);
+    expect(isExempt(`/Users/dev/work/vat/${PATH_CORE}`)).toBe(true);
+    expect(isExempt(PATH_UTILS)).toBe(false);
+  });
+
+  it('keeps the anchoring guarantee for configured paths', () => {
+    const matcherFor = createConfigurableExemptPathMatcher();
+    const isExempt = matcherFor(context([{ exemptFiles: [PATH_UTILS] }]));
+    expect(isExempt('tools/hooks/path-utils.ts')).toBe(false);
+    expect(isExempt('packages/utils/src/my-path-utils.ts')).toBe(false);
+  });
+
+  it('REPLACES the fallback rather than merging with it', () => {
+    // Merge semantics would make a default impossible to turn off — the
+    // consumer could add exemptions but never drop one it disagrees with.
+    const matcherFor = createConfigurableExemptPathMatcher([PATH_CORE]);
+    expect(matcherFor(context([]))(PATH_CORE)).toBe(true);
+    expect(matcherFor(context([{ exemptFiles: [PATH_UTILS] }]))(PATH_CORE)).toBe(false);
+  });
+
+  it('returns independent matchers for different option lists', () => {
+    // The resolver caches per option list; a shared-cache bug would leak one
+    // file's config into another file's lint run.
+    const matcherFor = createConfigurableExemptPathMatcher();
+    const a = matcherFor(context([{ exemptFiles: [PATH_CORE] }]));
+    const b = matcherFor(context([{ exemptFiles: [PATH_UTILS] }]));
+    expect(a(PATH_CORE)).toBe(true);
+    expect(a(PATH_UTILS)).toBe(false);
+    expect(b(PATH_UTILS)).toBe(true);
+    expect(b(PATH_CORE)).toBe(false);
+  });
+
+  it('rejects unknown option keys via the shared schema', () => {
+    // A typo'd key must be an ESLint config error, not an exemption that
+    // silently does nothing while the author believes it applied.
+    expect(EXEMPT_FILES_SCHEMA.additionalProperties).toBe(false);
+    expect(Object.keys(EXEMPT_FILES_SCHEMA.properties)).toEqual(['exemptFiles']);
   });
 });
 

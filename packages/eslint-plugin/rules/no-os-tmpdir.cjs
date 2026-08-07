@@ -17,6 +17,7 @@ module.exports = factory({
   safeFn: 'normalizedTmpdir',
   safeModule: '@vibe-agent-toolkit/utils',
   message: 'Use normalizedTmpdir() from @vibe-agent-toolkit/utils instead of os.tmpdir() for Windows compatibility (prevents 8.3 short name issues like RUNNER~1)',
-  exemptFiles: ['packages/utils/src/path-utils.ts'], // Implementation file
+  // No baked-in exemption: the file that implements normalizedTmpdir() is
+  // repo-specific. Consumers declare it as { exemptFiles: [...] }.
   checkMemberExpression: true, // Catch os.tmpdir() pattern
 });

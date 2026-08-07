@@ -33,8 +33,8 @@ const UNIX_COMMANDS = {
   // ships from coreutils. So `safeExecSync('echo', …)` works only when the
   // launching shell happens to have `C:\Program Files\Git\usr\bin` on PATH
   // (e.g., Git Bash, or GitHub-hosted windows-latest runners that add it).
-  // Use Node (`safeExecSync('node', [echoFixturePath, …])`) instead — see
-  // packages/utils/test/fixtures/portable-echo.cjs for the standard fixture.
+  // Use Node (`safeExecSync('node', [echoFixturePath, …])`) instead, pointing at
+  // a committed one-line script fixture that prints its argv.
   text: ['grep', 'sed', 'awk', 'cat', 'head', 'tail', 'wc', 'cut', 'sort', 'uniq', 'tr', 'echo'],
 
   // File searching
@@ -74,7 +74,7 @@ function getAlternatives(command) {
     tail: 'Read tool with offset parameter',
     sed: 'Edit tool or string.replace()',
     awk: 'string.split() and array methods',
-    echo: 'safeExecSync(\'node\', [echoFixturePath, ...args]) using packages/utils/test/fixtures/portable-echo.cjs — `echo` is only present on Windows when Git\'s coreutils are on PATH',
+    echo: 'safeExecSync(\'node\', [echoFixturePath, ...args]) using a committed script fixture that prints its argv — `echo` is only present on Windows when Git\'s coreutils are on PATH',
   };
 
    

@@ -39,12 +39,10 @@
  * fixture must prove the detector fires at all — otherwise a detector that never
  * runs is indistinguishable from a detector that correctly found nothing.
  *
- * Worked example in tree:
- * `packages/agent-skills/test/integration/skill-packager.integration.test.ts`
- * (`skill-packager: post-build integrity`, ~lines 1031-1072) — the suppression
- * test asserts `postBuildIssues` is empty, and its sibling asserts the *same*
- * fixture produces `PACKAGED_UNREFERENCED_FILE` when suppression is off. The
- * pair is what makes the empty result meaningful.
+ * Worked shape: a suppression test asserts the issue list is empty, and its
+ * sibling asserts the *same* fixture produces the issue when suppression is
+ * turned off. The pair is what makes the empty result meaningful; either half
+ * alone proves nothing.
  *
  * Treat this rule as the cheap 3/9, not as coverage of the problem.
  *

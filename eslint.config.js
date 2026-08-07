@@ -1,13 +1,12 @@
 import eslint from '@eslint/js';
 import tseslint from '@typescript-eslint/eslint-plugin';
 import tsparser from '@typescript-eslint/parser';
+import localRules from '@vibe-agent-toolkit/eslint-plugin';
 import importPlugin from 'eslint-plugin-import';
 import pluginNode from 'eslint-plugin-n';
 import security from 'eslint-plugin-security';
 import sonarjs from 'eslint-plugin-sonarjs';
 import unicorn from 'eslint-plugin-unicorn';
-
-import localRules from './packages/dev-tools/eslint-local-rules/index.js';
 
 /**
  * Simple, strict ESLint configuration
@@ -15,24 +14,51 @@ import localRules from './packages/dev-tools/eslint-local-rules/index.js';
  * Same rules for all code: src, tests, and tools
  * No special cases - consistent standards everywhere
  *
- * Includes custom local rules for agentic code safety (see packages/dev-tools/eslint-local-rules/)
+ * Includes the agentic code safety rules VAT publishes as
+ * `@vibe-agent-toolkit/eslint-plugin` (source: packages/eslint-plugin/).
+ *
+ * The plugin is registered under the `local` NAMESPACE rather than its
+ * conventional `@vibe-agent-toolkit` one. Flat config lets the namespace be any
+ * key, and 43 `eslint-disable-next-line local/…` directives across 8 packages
+ * are keyed on it — renaming would silently turn every one of them into a
+ * no-op suppression while the tree still lints clean at first glance. The
+ * namespace is a local alias, not part of the published contract; adopters
+ * starting fresh get `@vibe-agent-toolkit/…` from `configs.recommended`.
  */
+
+/**
+ * Files allowed to call the raw primitive each rule bans — the ones that
+ * IMPLEMENT (or assert the native behavior of) the safe wrapper.
+ *
+ * These are passed as rule OPTIONS, not inherited from a default: the plugin
+ * ships no built-in exemptions, because "packages/utils/src/path-utils.ts" is a
+ * claim about THIS repo's layout and would be a silent hole in anyone else's.
+ */
+const PATH_IMPL_EXEMPT = { exemptFiles: [
+  // Pure `safePath` definitions, the fs-touching ones, and the test that
+  // asserts the platform-native behavior those wrap.
+  'packages/utils/src/path-core.ts',
+  'packages/utils/src/path-utils.ts',
+  'packages/utils/test/path-utils.test.ts',
+] };
+const PATH_UTILS_EXEMPT = { exemptFiles: ['packages/utils/src/path-utils.ts'] };
+const SAFE_EXEC_EXEMPT = { exemptFiles: ['packages/utils/src/safe-exec.ts'] };
 
 // Local rules — agentic code safety. Apply to both TS and JS source.
 const localRulesConfig = {
-  'local/no-child-process-execSync': 'error',
+  'local/no-child-process-execSync': ['error', SAFE_EXEC_EXEMPT],
   'local/no-hardcoded-path-split': 'error',
   'local/no-path-startswith': 'error',
   'local/no-unix-shell-commands': 'error',
-  'local/no-os-tmpdir': 'error',
-  'local/no-fs-mkdirSync': 'error',
-  'local/no-fs-realpathSync': 'error',
+  'local/no-os-tmpdir': ['error', PATH_UTILS_EXEMPT],
+  'local/no-fs-mkdirSync': ['error', PATH_UTILS_EXEMPT],
+  'local/no-fs-realpathSync': ['error', PATH_UTILS_EXEMPT],
   'local/no-manual-path-normalize': 'error',
   'local/no-path-sep-in-strings': 'error',
   'local/no-path-operations-in-comparisons': 'error',
-  'local/no-path-join': 'error',
-  'local/no-path-resolve': 'error',
-  'local/no-path-relative': 'error',
+  'local/no-path-join': ['error', PATH_IMPL_EXEMPT],
+  'local/no-path-resolve': ['error', PATH_IMPL_EXEMPT],
+  'local/no-path-relative': ['error', PATH_IMPL_EXEMPT],
   'local/no-test-scoped-functions': 'error',
   'local/no-fs-promises-cp': 'error',
   'local/no-url-pathname-for-fs': 'error',
@@ -223,8 +249,8 @@ export default [
     },
   },
 
-  // Plain JS / CJS / MJS files (eslint configs, dev-tools scripts, local
-  // ESLint rules in `packages/dev-tools/eslint-local-rules/*.cjs`). These
+  // Plain JS / CJS / MJS files (eslint configs, dev-tools scripts, the rule
+  // pack in `packages/eslint-plugin/rules/*.cjs`). These
   // files were previously unlinted because the TS block above only globs
   // **/*.ts and **/*.tsx — letting findings like SonarCloud's S6324
   // (`prefer-set-has`) and S7773 (`prefer-string-raw`) only surface

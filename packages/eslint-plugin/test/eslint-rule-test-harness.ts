@@ -12,12 +12,12 @@ import { type Rule, RuleTester } from 'eslint';
 
 const requireRule = createRequire(import.meta.url);
 
-/** Load any CJS module from `packages/dev-tools/eslint-local-rules/<filename>`. */
+/** Load any CJS module from `packages/eslint-plugin/rules/<filename>`. */
 export function loadLocalRuleModule<T>(filename: string): T {
-  return requireRule(`../eslint-local-rules/${filename}`) as T;
+  return requireRule(`../rules/${filename}`) as T;
 }
 
-/** Load a CJS rule module from `packages/dev-tools/eslint-local-rules/<filename>`. */
+/** Load a CJS rule module from `packages/eslint-plugin/rules/<filename>`. */
 export function loadLocalRule(filename: string): Rule.RuleModule {
   return loadLocalRuleModule<Rule.RuleModule>(filename);
 }

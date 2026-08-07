@@ -23,7 +23,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A new guard test enumerates the `.` barrel's full export set, so a future removal from *it* cannot
   ship unremarked the way this one nearly did.
 
+- **`verifyCaseSensitiveFilename(filePath)` now requires a second argument: `verifyCaseSensitiveFilename(filePath, fsCache)`.**
+  Library-only API break — no CLI behaviour changes. Answering the question needs a listing of the
+  target's parent directory, and it was doing an uncached `readdir` per call: measured at 9,963
+  `readdir` calls validating a 3,437-document tree, and 7,443 on a 1,132-document monorepo, over a
+  few hundred distinct directories. The listing now comes from a caller-supplied `FsLookupCache`
+  (new, exported from `@vibe-agent-toolkit/utils/fs` and the `.` barrel), which memoizes `readdir`
+  and `realpath` and shares in-flight promises so concurrent callers collapse to one syscall.
+  **What to do:** construct one `new FsLookupCache()` per validation run and pass it to every call
+  in that run. `verifyCaseSensitiveFilename(p, new FsLookupCache())` at each call site reproduces
+  the old behaviour exactly if you want a mechanical migration first. The cache is deliberately
+  instance-based, never a module singleton — it holds a *snapshot* of directory contents, so a
+  watch-mode or server process must let each run have its own and drop it afterwards. The parameter
+  is required rather than defaulted for the same reason: a default lets an unmigrated call site keep
+  the un-memoized path silently, which is a no-op wearing the shape of a fix.
+
+  `ValidateLinkOptions` in `@vibe-agent-toolkit/resources` gains a matching **required** `fsCache`
+  field, so anything constructing that options object must supply the run's cache.
+
 ### Added
+
+- **New published package `@vibe-agent-toolkit/eslint-plugin` — 21 ESLint rules that enforce the
+  safety helpers in `@vibe-agent-toolkit/utils`.** The helpers exist because `path.join()`,
+  `os.tmpdir()`, `fs.realpathSync()`, `child_process.execSync()` and `await import(absolutePath)`
+  each have a platform pothole; until now nothing stopped a call to the raw primitive, so the API
+  shipped without its enforcement. The rules were maintained privately in this repo and had never
+  been installable. Most auto-fix, and every message names the replacement and the `utils` subpath
+  it lives on.
+
+  ```js
+  // eslint.config.js
+  import vat from '@vibe-agent-toolkit/eslint-plugin';
+  export default [vat.configs.recommended];
+  ```
+
+  `configs.recommended` registers the plugin under the `@vibe-agent-toolkit` namespace and enables
+  the cross-platform safety core — 19 of the 21 rules, `error` except four at `warn`
+  (`no-path-join`, `no-path-resolve`, `no-path-relative`, `no-unsafe-root-join`), the ones whose
+  first run on an existing codebase produces a migration rather than a bug list. The two left out,
+  `require-justified-skip` and `no-test-scoped-functions`, encode a position on *test style* rather
+  than a portability fact; they ship in the package and are enabled by naming them. Rules take an
+  `exemptFiles` option naming the file(s) allowed to call the banned primitive — the one that
+  implements your wrapper. There are deliberately **no** built-in exemptions: those paths are a
+  claim about one repo's layout, and matching is anchored at a path segment, so declaring
+  `src/paths.ts` never exempts `tools/hooks/paths.ts`. Requires ESLint 9+ (flat config) and Node
+  >= 22; carries no runtime dependency on `utils`. Full rule table in the package README.
 
 - **`@vibe-agent-toolkit/utils` is now a first-class public package with narrow subpath exports.**
   The `exports` map goes from 3 keys to 13: `./path`, `./fs`, `./process`, `./git`, `./glob`,
@@ -119,6 +163,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   existed.
 
 ### Fixed
+
+- **`isGitIgnored()` spawned a git subprocess per ancestor directory when the path was not in a git
+  repository at all — `vat resources validate` on a 3,437-document tree outside any repository went
+  from 196 s to 20.6 s, with a byte-identical report.** `git check-ignore` exits 128 for two
+  unrelated conditions: "beyond a symbolic link" and "not a git repository". The code treated any
+  non-0/non-1 status as the first, whose recovery is to walk up the ancestor directories re-spawning
+  git for each one. Outside a repository *every* ancestor also exits 128, so the walk never broke,
+  climbed to the filesystem root, and returned `false` after (1 + depth) spawns — per call, and it is
+  called per link. It was the right answer by the wrong route, which is why no assertion ever caught
+  it; on the tree above, `spawnSync` was 87.6% of a 225.6-second run. "Is there a repository here?"
+  is now settled from the filesystem (via `gitFindRoot`) before anything is spawned, so outside a
+  repository the answer costs zero subprocesses. In-repository behaviour, including the symlink
+  ancestor walk, is unchanged and pinned by tests that assert the spawn count rather than only the
+  return value.
 
 - **VAT crawls walked into `.turbo`.** turborepo's per-package directory was on neither
   `NEVER_CRAWL_GLOBS` nor `BUILD_OUTPUT_GLOBS`, so any crawl with `respectGitignore: false` — the

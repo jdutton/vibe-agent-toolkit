@@ -8,6 +8,7 @@ This directory contains all packages in the vibe-agent-toolkit monorepo. This RE
 |---------|-------------|--------|---------|
 | agent-schema | `@vibe-agent-toolkit/agent-schema` | Published | JSON Schema definitions and TypeScript types for agent manifests |
 | utils | `@vibe-agent-toolkit/utils` | Published | Core utility functions (no internal dependencies) |
+| eslint-plugin | `@vibe-agent-toolkit/eslint-plugin` | Published | ESLint rules enforcing the `utils` cross-platform helpers (no dependencies) |
 | discovery | `@vibe-agent-toolkit/discovery` | Published | Intelligent file discovery for agents and Agent Skills |
 | resources | `@vibe-agent-toolkit/resources` | Published | Markdown resource parsing, validation, and link integrity |
 | rag | `@vibe-agent-toolkit/rag` | Published | Abstract RAG interfaces and shared implementations |
@@ -124,6 +125,20 @@ Core utility functions with minimal external dependencies. Provides cross-platfo
 
 **Dependencies**:
 - External: `ignore`, `picomatch`, `which`
+- Internal: None
+
+---
+
+#### eslint-plugin
+**npm**: `@vibe-agent-toolkit/eslint-plugin`
+
+The 21 ESLint rules that enforce the `utils` safety helpers — a safety API without its enforcement
+is half a product. CommonJS rule modules, no build step, no dependencies (the rules emit import
+*text* naming `utils`; they never load it). This repo dogfoods it via the root `eslint.config.js`.
+See [its README](./eslint-plugin/README.md) for the rule table.
+
+**Dependencies**:
+- External: `eslint` (peer, >=9)
 - Internal: None
 
 ---
