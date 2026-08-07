@@ -18,6 +18,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import {  dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -98,28 +99,77 @@ function getDevModeBinary(projectRoot: string): string | null {
 }
 
 /**
- * Find local vibe-agent-toolkit installation in node_modules
- * Walks up directory tree from project root
+ * Find the CLI the adopter's lockfile pinned, wherever their package manager put it.
  *
- * @param projectRoot - Root directory to start searching from
- * @returns Path to local bin.js if found, null otherwise
+ * Resolved through Node's OWN resolver rather than by probing a path, because the
+ * path this used to probe —
+ * `<dir>/node_modules/@vibe-agent-toolkit/cli/dist/bin.js` — assumes npm's flat
+ * layout and **does not exist under pnpm** (issue #172). An adopter depending on
+ * the umbrella `vibe-agent-toolkit` package gets no top-level
+ * `node_modules/@vibe-agent-toolkit/` directory at all; the real CLI lives under
+ * `node_modules/.pnpm/@vibe-agent-toolkit+cli@<ver>_<hash>/…`. So priority 3 never
+ * fired for them, resolution fell through to priority 4, and whichever copy of
+ * `vat.js` happened to be invoked won — silently ignoring the version they pinned.
+ * That is the exact failure `findLocalInstall` exists to prevent, and it was
+ * invisible on npm/bun, where the flat layout makes the probe succeed.
+ *
+ * `createRequire` resolution walks the ancestor `node_modules` chain itself, which
+ * is what the hand-rolled loop here used to do — and it does so correctly for
+ * npm, bun, pnpm and yarn PnP without enumerating any of their layouts.
+ *
+ * It asks for `package.json` (exported by this package precisely so it can be
+ * located) and derives the binary from the package DIRECTORY rather than from the
+ * manifest's `bin` field. `bin.vat` names `dist/bin/vat.js` — THIS wrapper — so
+ * honouring it would make the wrapper delegate to itself and spawn forever. The
+ * target is the real CLI entry, `dist/bin.js`, exactly as before; only the way it
+ * is located has changed.
+ *
+ * TWO resolution bases are tried, and the second is not redundant. Under pnpm's
+ * isolated layout only DIRECT dependencies are symlinked into the adopter's
+ * top-level `node_modules`, so when the adopter depends on the umbrella
+ * `vibe-agent-toolkit` package — the documented way to adopt VAT — the CLI is a
+ * TRANSITIVE dependency and is deliberately unreachable from the adopter root.
+ * Resolving from the adopter alone would still miss it, which is the umbrella case
+ * the issue actually describes. It IS reachable from the umbrella package's own
+ * directory, so that package is resolved first (it is a direct dependency, hence
+ * visible) and used as the base for the second hop.
+ *
+ * @param projectRoot - Directory to resolve from; ancestors are searched too.
+ * @returns Path to the local `dist/bin.js` if one is installed and built, else null.
  */
 function findLocalInstall(projectRoot: string): string | null {
-  let current = projectRoot;
-  while (true) {
-    const localBin = safePath.join(current, 'node_modules/@vibe-agent-toolkit/cli/dist/bin.js');
+  // The base need not exist — `createRequire` treats it purely as the directory
+  // to resolve relative to.
+  const fromProject = safePath.join(projectRoot, 'noop.js');
+  const umbrellaManifest = tryResolve(fromProject, 'vibe-agent-toolkit/package.json');
+  const bases = umbrellaManifest === null ? [fromProject] : [fromProject, umbrellaManifest];
+
+  for (const base of bases) {
+    const manifestPath = tryResolve(base, '@vibe-agent-toolkit/cli/package.json');
+    if (manifestPath === null) continue;
+    const localBin = safePath.join(dirname(manifestPath), 'dist', 'bin.js');
+    // Still existence-checked: a dependency can be installed without having been
+    // built (a fresh workspace checkout, a partial install), and spawning a
+    // missing file would fail far from its cause.
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- checking for local install
-    if (existsSync(localBin)) {
-      return localBin;
-    }
-    const parent = dirname(current);
-    if (parent === current) {
-      // Reached filesystem root
-      break;
-    }
-    current = parent;
+    if (existsSync(localBin)) return localBin;
   }
   return null;
+}
+
+/**
+ * `require.resolve` reduced to "found it, or didn't".
+ *
+ * A failure here is priority 3's ordinary "not applicable" answer — no local
+ * install on this base — so it falls through to the next base and ultimately to
+ * the global install rather than failing the run.
+ */
+function tryResolve(fromPath: string, specifier: string): string | null {
+  try {
+    return createRequire(fromPath).resolve(specifier);
+  } catch {
+    return null;
+  }
 }
 
 /**

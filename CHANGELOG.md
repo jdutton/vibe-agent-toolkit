@@ -238,6 +238,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The `vat` wrapper now finds the CLI an adopter pinned under pnpm (issue #172).** Its "local
+  install" priority probed exactly one hardcoded path,
+  `node_modules/@vibe-agent-toolkit/cli/dist/bin.js`, which assumes npm's flat layout. Under pnpm's
+  isolated layout that path does not exist, so the priority never fired, resolution fell through to
+  the global install, and whichever copy of `vat.js` happened to be invoked won — **silently ignoring
+  the version in the adopter's lockfile**, with no warning. The lookup now goes through Node's own
+  resolver, which handles npm, bun, pnpm and yarn PnP without enumerating any of their layouts. It
+  resolves from the adopter *and* from the umbrella `vibe-agent-toolkit` package, because pnpm
+  symlinks only direct dependencies at top level — so for the documented adoption path (depend on the
+  umbrella) the CLI is transitive and reachable only from inside that package. The target is still
+  `dist/bin.js`; only how it is located changed. It was invisible on npm/bun, where the flat layout
+  makes the old probe succeed, which is why VAT's own tree could not catch it.
+
 - **`isGitIgnored()` spawned a git subprocess per ancestor directory when the path was not in a git
   repository at all — `vat resources validate` on a 3,437-document tree outside any repository went
   from 196 s to 20.6 s, with a byte-identical report.** `git check-ignore` exits 128 for two
