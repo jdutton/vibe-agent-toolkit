@@ -118,6 +118,16 @@ export interface RuleContext {
   droppedByDepth: boolean;
   /** Edge target was excluded by an excludeReferencesFromBundle pattern. */
   patternExcluded: boolean;
+  /**
+   * The edge ORIGINATES in a bundled file the walker does not route through
+   * (HTML — see `isRoutable` in `walk-link-graph.ts`), so its target was never
+   * enqueued.
+   *
+   * A source-side property, unlike every other field here: the target may be a
+   * perfectly ordinary file that simply had no markdown referrer. That is why
+   * it cannot be expressed as a `fileKind` on the target.
+   */
+  nonRoutableSource: boolean;
 }
 
 /**
@@ -144,6 +154,7 @@ export function makeRuleContext(overrides: Partial<RuleContext> = {}): RuleConte
     crossSkillDefinition: false,
     droppedByDepth: false,
     patternExcluded: false,
+    nonRoutableSource: false,
     ...overrides,
   };
 }

@@ -8,12 +8,35 @@
  * Non-markdown assets (images, JSON, etc.) won't be in the registry and still
  * require `existsSync()` checks — this is acceptable since the goal is eliminating
  * redundant I/O for markdown files that are already parsed.
+ *
+ * ## Membership is not traversability
+ *
+ * A registry MEMBER is a file VAT has parsed: its links are known, so the
+ * packager's rewriter can reach inside it and repoint them at bundled copies. A
+ * ROUTABLE file is one the walker walks THROUGH — it enqueues that file's link
+ * targets as further bundle members. Routing is markdown-only
+ * ({@link isRoutable}); HTML is "a leaf we can read, not a door we walk
+ * through".
+ *
+ * These used to be the same thing, by accident: any link target that
+ * `getResourceById` found was queued, so a registry's include globs silently
+ * WERE the routability policy. The two production registries disagreed as a
+ * result. `crawlAndResolveRegistry` includes HTML, so `vat audit` and
+ * post-build validation walked THROUGH a bundled page and counted its targets
+ * as bundled; the packager's `createProjectRegistry` is markdown-only, so at
+ * walk time the same page was an opaque asset and its targets were dropped.
+ * Same tree, two answers to "is HTML a door" — and audit's answer described a
+ * bundle the build never produced.
+ *
+ * Links out of a non-routable member are not silently dropped: each one whose
+ * target the walk never bundled by some other route is reported as a
+ * `non-routable-source` exclusion (`LINK_FROM_NON_ROUTABLE_FILE`).
  */
 
 import { existsSync, statSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
-import { isLocalFileLink, resolveLocalHref } from '@vibe-agent-toolkit/resources';
+import { isLocalFileLink, parserKindForPath, resolveLocalHref } from '@vibe-agent-toolkit/resources';
 import type { DeferredArtifacts, ResourceLink, ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import { type GitTracker, isGitIgnored, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
@@ -49,7 +72,7 @@ export interface LinkResolution {
   /** Whether the file will be bundled */
   bundled: boolean;
   /** Reason it was excluded (only set when bundled is false) */
-  excludeReason?: 'depth-exceeded' | 'pattern-matched' | 'directory-target' | 'outside-project' | 'navigation-file' | 'agent-instruction-file' | 'skill-definition' | 'gitignored' | 'missing-target' | undefined;
+  excludeReason?: 'depth-exceeded' | 'pattern-matched' | 'directory-target' | 'outside-project' | 'navigation-file' | 'agent-instruction-file' | 'skill-definition' | 'gitignored' | 'missing-target' | 'non-routable-source' | undefined;
   /** The rule that matched (only set for pattern-matched exclusions) */
   matchedRule?: ExcludeRule | undefined;
   /** Link text from the source markdown */
@@ -226,6 +249,16 @@ interface WalkState {
   excludedReferences: LinkResolution[];
   maxBundledDepth: number;
   queue: Array<[ResourceMetadata, number]>;
+  /**
+   * Candidate `non-routable-source` exclusions, held back until the walk ends.
+   *
+   * A link out of a non-routable member may point at something the walk bundles
+   * anyway by a markdown route — reporting it the moment it is seen would make
+   * the finding depend on queue order. Filtering at the end against the final
+   * bundled sets makes it order-independent: only genuinely un-bundled targets
+   * survive into {@link WalkState.excludedReferences}.
+   */
+  unfollowedFromNonRoutable: LinkResolution[];
 }
 
 /** Compiled exclude matcher (pattern + original rule) */
@@ -532,7 +565,53 @@ function processLink(
 }
 
 /**
- * Process a registry resource link: check depth, cycle, and either bundle or exclude.
+ * Is this file one the walker walks THROUGH, enqueuing its link targets as
+ * further bundle members?
+ *
+ * Routing is markdown-only. HTML may be a registry member — parsed, links
+ * known, reachable by the rewriter — without being a door: the decision is
+ * "a leaf we can read, not a door we walk through", and it is spec-backed
+ * (Anthropic's skill guidance is markdown throughout, and VAT's own stance docs
+ * mention HTML nowhere).
+ *
+ * Keyed on {@link parserKindForPath} rather than a local extension test, so
+ * VAT keeps ONE parser discriminator: a format that gains a parser gains a
+ * routability answer in the same edit.
+ */
+function isRoutable(filePath: string): boolean {
+  return parserKindForPath(filePath) === 'markdown';
+}
+
+/**
+ * Record every local-file link out of a bundled non-routable member as a
+ * candidate `non-routable-source` exclusion.
+ *
+ * Without this the targets simply vanish: `SKILL.md → guide.html →
+ * diagram.svg` bundles the HTML, never looks inside it, and ships a bundled
+ * page whose `<img src>` points at a file that is not there. A silent drop
+ * becomes a reported one.
+ */
+function recordUnfollowedLinks(
+  member: ResourceMetadata,
+  options: WalkLinkGraphOptions,
+  state: WalkState,
+): void {
+  for (const link of member.links) {
+    if (!isLocalFileLink(link.type)) continue;
+    const hrefWithoutAnchor = link.href.split('#')[0] ?? link.href;
+    if (hrefWithoutAnchor === '') continue;
+    const targetPath = resolveHrefToPath(hrefWithoutAnchor, member.filePath, options.projectRoot);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path from a parsed resource
+    const targetExists = existsSync(targetPath);
+    state.unfollowedFromNonRoutable.push(
+      makeExclusion(targetPath, member.filePath, targetExists, 'non-routable-source', link),
+    );
+  }
+}
+
+/**
+ * Process a registry resource link: check routability, depth, cycle, and either
+ * bundle or exclude.
  */
 function processRegistryResource(
   targetResource: ResourceMetadata,
@@ -543,6 +622,24 @@ function processRegistryResource(
   options: WalkLinkGraphOptions,
   state: WalkState,
 ): void {
+  // A non-routable member is a leaf, and leaves are bundled on the same terms
+  // as plain assets — which bypass `maxDepth` entirely. Checking routability
+  // BEFORE depth is what makes adding HTML to a registry a pure gain: the file
+  // still travels exactly as it did when it was an unparsed asset, it is merely
+  // parsed now so the rewriter can reach its links. Applying the depth limit
+  // here instead would silently DROP HTML that a markdown-only registry shipped.
+  if (!isRoutable(targetResource.filePath)) {
+    if (state.visitedResourceIds.has(targetResource.id)) {
+      return;
+    }
+    state.visitedResourceIds.add(targetResource.id);
+    state.bundledResourceMap.set(targetResource.id, targetResource);
+    // `maxBundledDepth` describes how far the walk ROUTED. A leaf does not
+    // extend that, any more than a bundled PNG does.
+    recordUnfollowedLinks(targetResource, options, state);
+    return;
+  }
+
   // Check depth limit. A registry resource came from a disk crawl, so it
   // exists by construction — `targetExists: true` is a fact here, not a guess.
   if (currentDepth >= options.maxDepth) {
@@ -610,6 +707,7 @@ export function walkLinkGraph(
     excludedReferences: [],
     maxBundledDepth: 0,
     queue: [[skillResource, 0]],
+    unfollowedFromNonRoutable: [],
   };
 
   while (state.queue.length > 0) {
@@ -623,6 +721,21 @@ export function walkLinkGraph(
       if (isLocalFileLink(link.type)) {
         processLink(link, currentResource, currentDepth, registry, options, excludeMatchers, state);
       }
+    }
+  }
+
+  // Promote only the unfollowed links whose targets the walk never bundled by
+  // any other route. Deferred artifacts count as accounted-for: the target will
+  // exist once the build materializes it, which is the same reason they are not
+  // `missing-target`.
+  const bundledPaths = new Set<string>([
+    ...state.bundledAssetSet,
+    ...state.deferredAssetSet,
+    ...[...state.bundledResourceMap.values()].map(r => toForwardSlash(r.filePath)),
+  ]);
+  for (const unfollowed of state.unfollowedFromNonRoutable) {
+    if (!bundledPaths.has(toForwardSlash(unfollowed.path))) {
+      state.excludedReferences.push(unfollowed);
     }
   }
 

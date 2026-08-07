@@ -30,6 +30,11 @@
 export {
   ResourceRegistry,
   DEFAULT_RESOURCE_INCLUDE,
+  // Exported so a caller can catch it BY TYPE. `addResource` (singular) signals
+  // a first-added-wins collision only by throwing, and the one consumer that
+  // handles it was sniffing `error.message.startsWith('Duplicate resource ID')`
+  // — a check that silently stops matching the day the message is reworded.
+  DuplicateResourceIdError,
   generateIdFromPath,
   type CrawlOptions,
   type DuplicateIdCollision,

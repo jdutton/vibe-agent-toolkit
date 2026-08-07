@@ -30,6 +30,7 @@ import {
 } from '@vibe-agent-toolkit/agent-schema';
 import {
   DeferredArtifacts,
+  DuplicateResourceIdError,
   ResourceRegistry,
   loadConfig,
   openFrontmatter,
@@ -37,6 +38,7 @@ import {
   rewriteFrontmatterUriReferencesFromSchema,
   rewriteHtmlLinks,
   transformContent,
+  type DuplicateIdCollision,
   type LinkRewriteRule,
   type ParseResult,
   type ProjectConfig,
@@ -618,10 +620,10 @@ export async function packageSkill(
 
   // Register non-markdown bundled assets in the source registry so link rewriting
   // can resolve them (resolvedId must be set on links pointing to YAML, JSON, etc.).
-  // For any asset whose ID collides with a paired markdown file (e.g. config.yaml +
-  // config.md both produce id `resources-config`), we set a synthetic resolvedId on
-  // links pointing to it so link rewriting still works.
-  const collidedAssets = await registerBundledAssets(registry, bundledAssets);
+  // For any asset whose id is already taken (a path-slug clash — `a-b/c.html`
+  // and `a/b-c.html` both flatten to `a-b-c-html`), we set a synthetic
+  // resolvedId on links pointing to it so link rewriting still works.
+  const { collidedAssets, collisions: assetCollisions } = await registerBundledAssets(registry, bundledAssets);
   resolveCollidedAssetLinks(
     collectResourcesWithLinks(bundledResources, skillResource),
     collidedAssets,
@@ -739,6 +741,15 @@ export async function packageSkill(
     pathMap,
     rewriteLinks,
     fromRegistry: registry as WalkableRegistry,
+    // Both sources, because they record disjoint populations: the registry's
+    // own log holds crawl-time drops made by `addResources`, while
+    // `registerBundledAssets` holds the per-asset drops `addResource` only ever
+    // signalled by throwing. An HTML file that collides with a same-named
+    // markdown file appears ONLY in the second.
+    duplicateIdDrops: new Map(
+      [...registry.getDuplicateIdCollisions(), ...assetCollisions]
+        .map(c => [toForwardSlash(c.conflictingPath), c.existingPath]),
+    ),
     toRegistry: outputRegistry,
     rewriteRules,
     templateContext: { skill: { name: skillMetadata.name } },
@@ -979,6 +990,19 @@ function assemblePackageResult(input: AssembleResultInput): PackageSkillResult {
  * so a lane that built its own config-less registry rewrote frontmatter
  * differently from the lane that used this one — which is why there is now only
  * one builder rather than two that happened to differ in one argument.
+ *
+ * ## Why the include set is markdown-only, unlike `crawlAndResolveRegistry`'s
+ *
+ * The difference is deliberate and is NOT a hole that leaves HTML unrewritten.
+ * A bundled HTML file joins this registry later, on demand, via
+ * {@link registerBundledAssets} — which parses it and resolves its links before
+ * the copy step, so `rewriteHtmlLinks` reaches it. Crawling every `.html` under
+ * the project up front would parse generated output the build never bundles,
+ * and would move `page.md` vs `page.html` id collisions from the narrow
+ * bundled-asset path onto the whole-project crawl.
+ *
+ * Widening this glob would NOT widen what the walker follows: routing is
+ * markdown-only regardless — see `isRoutable` in `walk-link-graph.ts`.
  */
 export async function createProjectRegistry(projectRoot: string): Promise<ResourceRegistry> {
   const config = await loadConfig(projectRoot);
@@ -1059,35 +1083,52 @@ function collectResourcesWithLinks(
  * and compute the output `relativePath`. Without this, non-markdown links get stripped
  * to empty `()` parentheses.
  *
- * Collision handling: if an asset's generated ID clashes with an existing markdown
- * resource (e.g. paired `config.yaml` + `config.md` both produce id `resources-config`),
- * `addResource` throws. We catch this, skip source-registry indexing for the asset,
- * and return it so the caller can synthesize a unique ID for link rewriting.
+ * Collision handling: if an asset's generated id is already taken, `addResource`
+ * throws. We catch this, skip source-registry indexing for the asset, and return
+ * it so the caller can synthesize a unique ID for link rewriting.
  *
- * @returns Paths of assets that could not be added to the source registry due to
- *   duplicate-ID collisions. Caller must wire these up manually.
+ * The clash is a **path-slug** one, not an extension one. This used to claim the
+ * example was "paired `config.yaml` + `config.md`, both producing id
+ * `resources-config`" — {@link generateIdFromPath} appends the extension, so
+ * those are `config-yaml` and `config-md` and cannot collide. What does collide
+ * is two paths that flatten to the same slug: `a-b/c.html` and `a/b-c.html` are
+ * both `a-b-c-html`.
+ *
+ * @returns The colliding asset paths, and the collisions themselves. The caller
+ *   must wire the paths up manually; the collisions are what let the
+ *   verbatim-copy diagnostic name the file that actually won the id.
  */
 async function registerBundledAssets(
   registry: ResourceRegistry,
   bundledAssets: string[],
-): Promise<string[]> {
+): Promise<{ collidedAssets: string[]; collisions: DuplicateIdCollision[] }> {
   const collidedAssets: string[] = [];
+  const collisions: DuplicateIdCollision[] = [];
   if (bundledAssets.length === 0) {
-    return collidedAssets;
+    return { collidedAssets, collisions };
   }
   for (const assetPath of bundledAssets) {
     try {
       await registry.addResource(assetPath);
     } catch (error) {
-      if (error instanceof Error && error.message.startsWith('Duplicate resource ID')) {
+      // `addResource` (singular) THROWS on a collision and — unlike
+      // `addResources` — records nothing in the registry's collision log. So
+      // this catch is the ONLY place a bundled-asset collision is ever
+      // observable; drop the structured error here and the fact is gone.
+      if (error instanceof DuplicateResourceIdError) {
         collidedAssets.push(assetPath);
+        collisions.push({
+          id: error.id,
+          existingPath: error.existingPath,
+          conflictingPath: error.conflictingPath,
+        });
       } else {
         throw error;
       }
     }
   }
   registry.resolveLinks();
-  return collidedAssets;
+  return { collidedAssets, collisions };
 }
 
 /**
@@ -1674,6 +1715,15 @@ interface CopyRewriteContext {
   pathMap: Map<string, string>;
   rewriteLinks: boolean;
   fromRegistry: WalkableRegistry;
+  /**
+   * Files the source registry DROPPED on a first-added-wins id collision:
+   * forward-slash path of the loser → absolute path of the winner.
+   *
+   * Passed in rather than read off `fromRegistry`, which is deliberately the
+   * narrow {@link WalkableRegistry}. It exists so the verbatim-copy diagnostic
+   * can state an OBSERVED cause instead of guessing one.
+   */
+  duplicateIdDrops: ReadonlyMap<string, string>;
   toRegistry: ResourceRegistry;
   rewriteRules: LinkRewriteRule[];
   templateContext?: Record<string, unknown>;
@@ -1752,13 +1802,21 @@ async function copyAndRewriteFile(
   const resource = ctx.fromRegistry.getResource(safePath.resolve(sourcePath));
 
   if (!resource) {
-    // Resource not in registry — write content as-is. For HTML this is only
-    // reachable on an ID collision (e.g. page.html + page.md), where the asset
-    // is copied verbatim and its links are NOT rewritten (v1 limitation,
-    // mirrors the pre-existing asset-collision behavior).
+    // Resource not in registry — write content as-is, links unrewritten.
+    //
+    // The cause used to be guessed from the basename ("typically an ID
+    // collision with a same-named markdown file"), which is a plausible
+    // hypothesis this function had no way to check, and which named no file the
+    // author could go look at. The collision is now looked up, so the message
+    // either names the winning file as an observed fact or says nothing about
+    // cause at all.
+    const winner = ctx.duplicateIdDrops.get(toForwardSlash(sourcePath));
     ctx.warn(
-      `Copied '${sourcePath}' verbatim without link rewriting: it is not in the resource registry ` +
-        `(typically an ID collision with a same-named markdown file). Source-relative links inside it are not rewritten.`,
+      winner === undefined
+        ? `Copied '${sourcePath}' verbatim without link rewriting: it is not in the resource registry. ` +
+            `Source-relative links inside it are not rewritten.`
+        : `Copied '${sourcePath}' verbatim without link rewriting: it lost a resource-id collision to ` +
+            `'${winner}', which was registered first and holds the id. Source-relative links inside it are not rewritten.`,
     );
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetPath is constructed from validated paths
     await writeFile(targetPath, content, 'utf-8');

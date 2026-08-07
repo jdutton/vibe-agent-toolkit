@@ -63,6 +63,20 @@ function evaluateEdge(ctx: RuleContext): IssueCode | null {
   const excludedKindCode = EXCLUDED_FILE_KIND_CODES[ctx.fileKind];
   if (excludedKindCode) return excludedKindCode;
 
+  // Nothing about the TARGET disqualifies it; the remaining question is what
+  // the walk did with it.
+  return evaluateWalkDecision(ctx);
+}
+
+/**
+ * Decide the code for an edge whose target is, in itself, bundlable — so the
+ * verdict turns on what the WALK did rather than on what the target is.
+ *
+ * Split out from {@link evaluateEdge} to keep each arm's ordering readable (and
+ * each function under the cognitive-complexity ceiling); the two run strictly in
+ * sequence and the combined order is unchanged.
+ */
+function evaluateWalkDecision(ctx: RuleContext): IssueCode | null {
   // Excluded by an author-configured pattern — intentional, not an issue.
   if (ctx.patternExcluded) return null;
 
@@ -74,6 +88,13 @@ function evaluateEdge(ctx: RuleContext): IssueCode | null {
   if (!ctx.existsAtSource) {
     return ctx.phase === 'built' ? 'PACKAGED_BROKEN_LINK' : 'LINK_MISSING_TARGET';
   }
+
+  // The target exists but nothing bundled it, because its only referrer is a
+  // file the walker does not route through. Deliberately BELOW the missing-target
+  // check: a broken link inside an HTML page is an author error with an existing,
+  // more actionable code, and reporting the routing boundary instead would send
+  // the author to fix VAT's traversal policy over their own typo.
+  if (ctx.nonRoutableSource) return 'LINK_FROM_NON_ROUTABLE_FILE';
 
   // Resolves to an existing in-bundle file — fine.
   return null;

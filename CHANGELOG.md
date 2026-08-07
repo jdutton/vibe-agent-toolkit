@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`ResourceRegistry.getDuplicateIdCollisions()`** returns the first-added-wins drops in arrival
   order. `validate()` already reported *that* a collision happened; this reports *which file won*,
   which is the part decided by enumeration order.
+- **`LINK_FROM_NON_ROUTABLE_FILE` (`warning`) — a link out of a bundled HTML page that VAT did not follow.** VAT parses HTML, so a bundled `.html` file is a registry *member* whose links get rewritten; it is not *routable* — VAT does not walk through it to pull its own link targets into the bundle. Routing is markdown-only, matching Anthropic's skill guidance. `SKILL.md → guide.html → diagram.svg` therefore bundles the page and drops the diagram, and because the referring page *did* ship, the missing image reads as a link-rewriter bug rather than a deliberate boundary. That drop is now reported instead of silent. Opt out with `severity.LINK_FROM_NON_ROUTABLE_FILE: ignore`. A target that does not exist on disk at all stays `LINK_MISSING_TARGET` — the author's broken link is the more actionable finding.
+- **`DuplicateResourceIdError`** is exported from `@vibe-agent-toolkit/resources`, so a caller of `addResource()` can catch a first-added-wins collision **by type**. The one in-tree consumer was matching on `error.message.startsWith('Duplicate resource ID')`, which stops working silently the day the message is reworded.
 - **`canCreateSymlinks(dir)`** is exported from `@vibe-agent-toolkit/utils`. Probes whether the host
   permits symlink creation — Windows needs Developer Mode or `SeCreateSymbolicLinkPrivilege`, and the
   privilege cannot be inferred from `process.platform` — so a fixture can say it skipped rather than
@@ -34,6 +36,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`vat audit` and post-build validation no longer expect files that `vat skills build` never
+  ships.** The two lanes disagreed about whether HTML is traversable. Audit's registry includes
+  `.html`/`.htm`, and the link walker treated *any* registry member as a door — so on
+  `SKILL.md → page.html → notes.md`, audit walked through the page and counted `notes.md` as
+  bundled, while the build treated the page as a leaf asset and shipped no `notes.md` at all.
+  Audit reported a bundle that did not exist. Routability is now a property of the file rather
+  than a side effect of which globs a registry happened to crawl: markdown is routable, HTML is
+  not, in every lane. Links out of a bundled HTML page that no other route bundles are reported
+  as the new `LINK_FROM_NON_ROUTABLE_FILE` rather than silently disappearing, and the walker's
+  `excludedReferences` gain a matching `non-routable-source` reason instead of being mislabelled
+  `depth-exceeded`. **Widening a registry's include globs no longer widens what the walker
+  follows** — the two are now independent.
+- **The verbatim-copy warning named a cause that cannot happen.** When a bundled file misses the
+  resource registry it is copied with its links unrewritten, and the warning attributed that to
+  "typically an ID collision with a same-named markdown file". Resource ids carry the extension
+  (`page.md` → `page-md`, `page.html` → `page-html`), so a same-named markdown file never
+  collides — the reachable collision is a *path-slug* one, where `a-b/c.html` and `a/b-c.html`
+  both flatten to `a-b-c-html`. The warning now looks the collision up instead of guessing, and
+  names the file that actually holds the id, so there is a real path to open. When no collision
+  is recorded it states the observed fact and asserts no cause. Two code comments carrying the
+  same impossible example (`config.yaml` + `config.md` → `resources-config`) were corrected.
 - **Collection frontmatter schemas are compiled once per validation run, not once per resource.**
   Every resource belonging to a collection re-read its schema file, re-parsed the JSON, constructed a
   fresh Ajv instance and recompiled the schema — on a repository with 129 collection-bearing

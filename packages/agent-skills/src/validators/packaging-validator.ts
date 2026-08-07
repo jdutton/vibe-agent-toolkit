@@ -99,7 +99,7 @@ export interface SkillPackagingConfig {
 /** Excluded reference detail for verbose output */
 export interface ExcludedReferenceDetail {
   path: string;
-  reason: 'depth-exceeded' | 'pattern-matched' | 'outside-project' | 'navigation-file' | 'agent-instruction-file' | 'skill-definition' | 'gitignored';
+  reason: 'depth-exceeded' | 'pattern-matched' | 'outside-project' | 'navigation-file' | 'agent-instruction-file' | 'skill-definition' | 'gitignored' | 'non-routable-source';
   matchedPattern?: string | undefined;
 }
 
@@ -1175,6 +1175,11 @@ function mapExcludeReason(
     case 'agent-instruction-file': return 'agent-instruction-file';
     case 'skill-definition': return 'skill-definition';
     case 'gitignored': return 'gitignored';
+    // Reported under its own name rather than falling into the default arm.
+    // The default answers `depth-exceeded`, which for this reason would be
+    // false: the walk never reached the edge at all, because the file holding
+    // it is not one VAT routes through.
+    case 'non-routable-source': return 'non-routable-source';
     case 'depth-exceeded':
     case EXCLUDE_REASON_DIRECTORY:
     case EXCLUDE_REASON_OUTSIDE_PROJECT:

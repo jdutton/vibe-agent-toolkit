@@ -97,6 +97,15 @@ export const CODE_REGISTRY = {
     'Link to a specific resource inside the other skill, or reference the other skill by name.',
     'link_to_skill_definition',
   ),
+  LINK_FROM_NON_ROUTABLE_FILE: entry(
+    'warning',
+    // States the mechanism, because the author cannot infer it: the referring
+    // file WAS bundled, which makes the missing target look like a rewriter bug
+    // rather than a deliberate routing boundary.
+    'A bundled non-routable file (HTML) links to a file the walker did not follow, so the target is not in the bundle and the packaged link points at nothing.',
+    'Link the target from a markdown file in the bundle, declare it under skills.config.<name>.files, or set severity.LINK_FROM_NON_ROUTABLE_FILE to ignore if the packaged link is meant to resolve outside the bundle.',
+    'link_from_non_routable_file',
+  ),
   LINK_DROPPED_BY_DEPTH: entry(
     'warning',
     'Walker stopped following links at the configured linkFollowDepth; this link was not bundled.',

@@ -4,7 +4,7 @@ import { dirname } from 'node:path';
 
 import { DeferredArtifacts } from '@vibe-agent-toolkit/resources';
 import type { ResourceLink, ResourceMetadata, SkillFileEntry } from '@vibe-agent-toolkit/resources';
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { walkerExclusionsToIssues } from '../src/validators/walker-to-issues.js';
@@ -50,6 +50,7 @@ const MOCK_CHECKSUM = 'a'.repeat(64) as ResourceMetadata['checksum'];
 const REASON_SKILL_DEFINITION = 'skill-definition';
 const REASON_MISSING_TARGET = 'missing-target';
 const REASON_AGENT_INSTRUCTION = 'agent-instruction-file';
+const REASON_NON_ROUTABLE_SOURCE = 'non-routable-source';
 
 /** Href whose target is never created on disk — the broken-link subject. */
 const MISSING_HREF = './docs/gone.md';
@@ -242,6 +243,55 @@ function createLocalLink(text: string, href: string, resolvedId?: string): Resou
     line: 1,
     ...(resolvedId === undefined ? {} : { resolvedId }),
   };
+}
+
+/** Fixture ids/paths for the non-routable-member rows. */
+const HTML_ID = 'guide-html';
+const HTML_REL = 'docs/guide.html';
+const SVG_REL = 'assets/diagram.svg';
+
+/**
+ * Build `SKILL.md → docs/guide.html → assets/diagram.svg` with every file
+ * really on disk, and `guide.html` present in the registry as a member.
+ *
+ * The SVG must exist for real: a missing target is classified as
+ * `missing-target` before routability is ever consulted, so a fictional path
+ * would make the row pass without the branch under test running.
+ *
+ * @param overrides - Walk options to override (e.g. a tighter `maxDepth`)
+ * @returns The walk result plus the two on-disk paths the assertions name
+ */
+function walkThroughHtml(overrides?: Partial<WalkLinkGraphOptions>): {
+  result: ReturnType<typeof walkLinkGraph>;
+  htmlPath: string;
+  svgPath: string;
+} {
+  const root = getTempDir();
+  const skillPath = safePath.resolve(root, 'SKILL.md');
+  const htmlPath = safePath.resolve(root, HTML_REL);
+  const svgPath = safePath.resolve(root, SVG_REL);
+  mkdirSyncReal(dirname(htmlPath), { recursive: true });
+  mkdirSyncReal(dirname(svgPath), { recursive: true });
+  writeFileSync(skillPath, '# Skill\n');
+  writeFileSync(htmlPath, '<a href="../assets/diagram.svg">d</a>\n');
+  writeFileSync(svgPath, '<svg/>\n');
+
+  const skill = createMockResource(SKILL_ID, skillPath, [
+    createLocalLink('guide', `./${HTML_REL}`, HTML_ID),
+  ]);
+  const html = createMockResource(HTML_ID, htmlPath, [
+    createLocalLink('diagram', `../${SVG_REL}`),
+  ]);
+  const registry = createMockRegistry([skill, html]);
+
+  const result = walkLinkGraph(SKILL_ID, registry, {
+    maxDepth: 5,
+    excludeRules: [],
+    projectRoot: root,
+    skillRootPath: skillPath,
+    ...overrides,
+  });
+  return { result, htmlPath, svgPath };
 }
 
 function createMockRegistry(resources: ResourceMetadata[]): WalkableRegistry {
@@ -1073,6 +1123,71 @@ describe('walkLinkGraph', () => {
       expect(result.deferredAssets).toHaveLength(0);
       expect(result.excludedReferences).toHaveLength(1);
       expect(result.excludedReferences[0]?.excludeReason).toBe(REASON_MISSING_TARGET);
+    });
+  });
+
+  // ==========================================================================
+  // Routability — membership is not traversability
+  // ==========================================================================
+
+  /**
+   * A non-markdown file may be a registry MEMBER (parsed, links known, so the
+   * rewriter can reach it) without being ROUTABLE (a door the walker walks
+   * through to enqueue its targets as bundle members). Before this, membership
+   * implied traversability: any link target found by `getResourceById` was
+   * queued and its own links walked. That made `createProjectRegistry`'s
+   * include set the de-facto routability policy, and the two production
+   * registries disagreed — `crawlAndResolveRegistry` includes HTML and so
+   * routed through it, while the packager's markdown-only registry did not.
+   */
+  describe('non-routable members', () => {
+    it('bundles an HTML member so the rewriter can reach it', () => {
+      const { result, htmlPath } = walkThroughHtml();
+
+      expect(result.bundledResources.map(r => r.filePath)).toContain(htmlPath);
+    });
+
+    it('does NOT follow links out of an HTML member', () => {
+      const { result, svgPath } = walkThroughHtml();
+
+      expect(result.bundledAssets).not.toContain(toForwardSlash(svgPath));
+      expect(result.bundledResources.map(r => r.filePath)).not.toContain(svgPath);
+    });
+
+    it('reports the unfollowed link instead of dropping it silently', () => {
+      const { result, htmlPath, svgPath } = walkThroughHtml();
+
+      const unfollowed = result.excludedReferences.filter(
+        r => r.excludeReason === REASON_NON_ROUTABLE_SOURCE,
+      );
+      expect(unfollowed).toHaveLength(1);
+      // Anchored to the file CONTAINING the link, not the target.
+      expect(unfollowed[0]?.sourcePath).toBe(htmlPath);
+      expect(unfollowed[0]?.path).toBe(svgPath);
+      expect(unfollowed[0]?.targetExists).toBe(true);
+      expect(unfollowed[0]?.bundled).toBe(false);
+    });
+
+    it('surfaces the unfollowed link as LINK_FROM_NON_ROUTABLE_FILE', () => {
+      const { result } = walkThroughHtml();
+
+      const issues = walkerExclusionsToIssues(result.excludedReferences, PROJECT_ROOT);
+      expect(issues.map(i => i.code)).toContain('LINK_FROM_NON_ROUTABLE_FILE');
+    });
+
+    /**
+     * A non-routable member is bundled for the same reason a plain asset is —
+     * it is a leaf the skill references. Assets bypass `maxDepth`, so a member
+     * that behaves as a leaf must too; otherwise adding HTML to the registry
+     * would silently DROP HTML files that a markdown-only registry bundled.
+     */
+    it('bypasses the depth limit, as a plain asset does', () => {
+      const { result, htmlPath } = walkThroughHtml({ maxDepth: 0 });
+
+      expect(result.bundledResources.map(r => r.filePath)).toContain(htmlPath);
+      expect(
+        result.excludedReferences.some(r => r.excludeReason === 'depth-exceeded'),
+      ).toBe(false);
     });
   });
 });

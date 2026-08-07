@@ -49,6 +49,12 @@ function exclusionToContext(
       return makeRuleContext({ subject: 'edge', phase: 'source', existsAtSource: targetExists });
     case 'pattern-matched':
       return makeRuleContext({ subject: 'edge', patternExcluded: true });
+    case 'non-routable-source':
+      // `existsAtSource` is read from the walker's record for the same reason
+      // the gitignore arm reads it: a link out of an HTML page to a path that
+      // is not there is an author's broken link, and the engine must be able to
+      // tell the two apart rather than being handed a hardcoded `true`.
+      return makeRuleContext({ subject: 'edge', nonRoutableSource: true, existsAtSource: targetExists });
     default: {
       // Exhaustiveness guard, NOT a fallback. A `default:` arm that returns a
       // context is precisely what disables TypeScript's exhaustiveness check:
