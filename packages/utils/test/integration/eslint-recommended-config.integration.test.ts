@@ -41,13 +41,14 @@
  */
 
 import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 
 import { ESLint, type Linter } from 'eslint';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { mkdirSyncReal, normalizedTmpdir, resolveFromImportMeta } from '../../src/fs.js';
 import { safePath, toForwardSlash } from '../../src/path.js';
-import { safeExecSync } from '../../src/process.js';
+import { safeExecResult, safeExecSync } from '../../src/process.js';
 
 const PACKAGE_DIR = resolveFromImportMeta(import.meta.url, '..', '..');
 
@@ -114,6 +115,44 @@ export function base() {
   return tmpdir();
 }
 `;
+
+/**
+ * A consumer `eslint.config.ts`, type-checked against the SHIPPED `index.d.cts`.
+ *
+ * ESLint has supported TypeScript flat configs since 9.18, so this is a real
+ * adopter shape — and `./eslint` is the only one of the 14 exports whose types are
+ * hand-written rather than emitted by `tsc`. Nothing else in this repo can catch a
+ * mistake in them: `utils`' tsconfig includes only `src/**‍/*.ts`, so
+ * `bun run typecheck` never reads the declaration, and the repo's own
+ * `eslint.config.js` is JavaScript. Without this case, a broken `.d.cts` ships
+ * green.
+ */
+const TS_CONSUMER = `import vat from '@vibe-agent-toolkit/utils/eslint';
+
+const severity: string | undefined = vat.configs.recommended.rules['@vibe-agent-toolkit/no-path-join'];
+const ruleNames: string[] = Object.keys(vat.rules);
+const pluginName: string = vat.meta.name;
+
+export default [vat.configs.recommended];
+export { severity, ruleNames, pluginName };
+`;
+
+/** `nodenext` specifically — it is the resolution mode that demands `.d.cts` for a `.cjs` file. */
+const TS_CONSUMER_TSCONFIG = `{
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "target": "es2024",
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true
+  },
+  "include": ["types-consumer.ts"]
+}
+`;
+
+const TS_CONSUMER_FILE = 'types-consumer.ts';
+const TS_CONSUMER_TSCONFIG_FILE = 'tsconfig.types-consumer.json';
 
 /** Project-relative fixture paths. `EXEMPT_CONFIG` declares `IMPL_FILE` by this exact string. */
 const NO_OS_TMPDIR = '@vibe-agent-toolkit/no-os-tmpdir';
@@ -186,8 +225,29 @@ function createPackedProject(): PackedProject {
   writeProjectFile(dir, VIOLATIONS_FILE, VIOLATIONS_FIXTURE);
   writeProjectFile(dir, IMPL_FILE, TMPDIR_FIXTURE);
   writeProjectFile(dir, DECOY_FILE, TMPDIR_FIXTURE);
+  writeProjectFile(dir, TS_CONSUMER_FILE, TS_CONSUMER);
+  writeProjectFile(dir, TS_CONSUMER_TSCONFIG_FILE, TS_CONSUMER_TSCONFIG);
 
   return { dir, configPath, exemptConfigPath, packedFiles };
+}
+
+/**
+ * Run this repo's `tsc` over the throwaway project, returning `{status, output}`.
+ *
+ * Spawned as `node <path-to-tsc>` rather than the `tsc` bin: the throwaway project
+ * has no `node_modules/.bin`, and going through `process.execPath` sidesteps
+ * Windows `.cmd` shim resolution entirely.
+ */
+function typecheckProject(project: PackedProject): { status: number; output: string } {
+  const requireFromTest = createRequire(import.meta.url);
+  const typescriptRoot = safePath.resolve(requireFromTest.resolve('typescript'), '..', '..');
+  const result = safeExecResult(process.execPath, [
+    safePath.join(typescriptRoot, 'bin', 'tsc'),
+    '--project',
+    safePath.join(project.dir, TS_CONSUMER_TSCONFIG_FILE),
+  ]);
+  // tsc writes diagnostics to stdout, not stderr; keep both so a spawn failure is legible.
+  return { status: result.status, output: `${result.stdout.toString()}${result.stderr.toString()}` };
 }
 
 /** Lint one project-relative file and return every message it produced. */
@@ -229,11 +289,29 @@ describe('the ./eslint subpath ships', () => {
   it('includes the rule pack in the published file set', () => {
     expect(project.packedFiles).toContain('eslint/index.cjs');
     expect(project.packedFiles).toContain('eslint/rules/no-os-tmpdir.cjs');
-    // Every rule the entry registers, plus the two shared factories and the matcher.
+    // 21 registered rules + three shared factories (`eslint-rule-factory`,
+    // `path-function-rule-factory`, `no-command-direct-factory`) + `exempt-path-matcher`.
+    // Exact, not a floor: a floor lets rules silently fall out of the tarball.
     // npm reports manifest paths POSIX-style; normalize anyway so the count cannot
     // quietly become zero on a platform that reports them otherwise.
     const rules = project.packedFiles.filter((file) => toForwardSlash(file).startsWith('eslint/rules/'));
-    expect(rules.length).toBeGreaterThan(20);
+    expect(rules.length).toBe(25);
+  });
+
+  it('ships the hand-written types alongside them', () => {
+    expect(project.packedFiles).toContain('eslint/index.d.cts');
+  });
+
+  /**
+   * The declaration is the only shipped type surface in this package that `tsc`
+   * does not generate, and no other lane reads it. Compiled here under
+   * `moduleResolution: nodenext` — the mode that requires `.d.cts` (not `.d.ts`)
+   * to describe a `.cjs` file inside a `"type": "module"` package.
+   */
+  it('type-checks a consumer eslint.config.ts under nodenext', () => {
+    const { status, output } = typecheckProject(project);
+    expect(output).toBe('');
+    expect(status).toBe(0);
   });
 });
 

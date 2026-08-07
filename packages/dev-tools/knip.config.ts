@@ -84,9 +84,13 @@ const config: KnipConfig = {
     'packages/utils': {
       entry: ['src/index.ts', 'eslint/index.cjs', 'eslint/rules/*.cjs'],
       project: [SRC_TS, 'eslint/*.cjs', 'eslint/rules/*.cjs'],
-      // `eslint` is an OPTIONAL peer (and a devDep for the rule tests): the rule
-      // modules export plain objects and never require('eslint'), which is the
-      // whole reason the pack can live on a subpath of a general-purpose package.
+      // The `eslint` devDep IS used — `test/eslint/*` imports `RuleTester` and the
+      // integration test drives `ESLint` — but `project` above covers no `test/**`,
+      // so knip cannot see those imports and would report it unused. Ignored for
+      // that reason, NOT because nothing needs it: deleting the devDep breaks the
+      // rule suites, and this entry means knip will not warn you. (The rule modules
+      // themselves genuinely never require('eslint') — that is what makes the peer
+      // optional — but it is not why this line is here.)
       ignoreDependencies: ['eslint'],
     },
 

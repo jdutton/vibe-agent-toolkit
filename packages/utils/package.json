@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/utils",
-  "version": "0.1.41",
+  "version": "0.1.42-rc.1",
   "type": "module",
   "description": "Core utility functions shared across the vibe-agent-toolkit packages",
   "sideEffects": false,
@@ -68,7 +68,10 @@
       "types": "./dist/crawl.d.ts",
       "import": "./dist/crawl.js"
     },
-    "./eslint": "./eslint/index.cjs",
+    "./eslint": {
+      "types": "./eslint/index.d.cts",
+      "default": "./eslint/index.cjs"
+    },
     "./package.json": "./package.json"
   },
   "files": [

@@ -47,6 +47,11 @@ resources:
       include:
         - "packages/*/README.md"
         - "packages/vibe-agent-toolkit/README.md"
+        # Ships in the utils tarball and is the adopter-facing rule table for the
+        # `./eslint` subpath — governed by the same schema as any package README.
+        # It used to match the glob above as `packages/eslint-plugin/README.md`;
+        # moving the rules into `utils/eslint/` silently dropped it out.
+        - "packages/utils/eslint/README.md"
       validation:
         frontmatterSchema: "schemas/package-readme-frontmatter.json"
         mode: permissive

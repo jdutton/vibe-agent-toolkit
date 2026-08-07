@@ -4,7 +4,14 @@ import { describe, expect, it } from 'vitest';
 
 import { resolveFromImportMeta } from '../src/fs.js';
 
-type ExportEntry = string | { types: string; import: string };
+/**
+ * A value in the `exports` map: either a bare target, or conditions.
+ *
+ * The twelve compiled entries use `{types, import}` (ESM, emitted by `tsc`).
+ * `./eslint` uses `{types, default}` — it is hand-written CommonJS, and `default`
+ * rather than `import` is what lets both `require()` and `import` reach it.
+ */
+type ExportEntry = string | { types?: string; import?: string; default?: string };
 
 interface Manifest {
   engines?: Record<string, string>;
@@ -14,7 +21,7 @@ interface Manifest {
   peerDependenciesMeta?: Record<string, { optional?: boolean }>;
 }
 
-function asConditions(entry: ExportEntry | undefined): { types?: string; import?: string } {
+function asConditions(entry: ExportEntry | undefined): { types?: string; import?: string; default?: string } {
   return typeof entry === 'object' ? entry : {};
 }
 
@@ -55,7 +62,18 @@ describe('utils package manifest', () => {
    * missing from `files`, would both publish an entry that fails to resolve.
    */
   it('exports ./eslint from the shipped CommonJS rule pack, not from dist', () => {
-    expect(manifest.exports['./eslint']).toBe('./eslint/index.cjs');
+    expect(asConditions(manifest.exports['./eslint']).default).toBe('./eslint/index.cjs');
+  });
+
+  /**
+   * `.d.cts`, not `.d.ts`. Under `moduleResolution: node16`/`nodenext` TypeScript
+   * matches the declaration's extension to the module format of the file it
+   * describes, and `index.cjs` is CommonJS inside a `"type": "module"` package. A
+   * `.d.ts` here would resolve for `bundler` users and fail for `nodenext` ones —
+   * the split that makes this worth pinning rather than spot-checking.
+   */
+  it('ships hand-written types for ./eslint, in CommonJS declaration form', () => {
+    expect(asConditions(manifest.exports['./eslint']).types).toBe('./eslint/index.d.cts');
   });
 
   it('ships the eslint directory in the tarball', () => {
@@ -66,8 +84,10 @@ describe('utils package manifest', () => {
    * ESLint is a peer, and an OPTIONAL one.
    *
    * Optional because an ESLint plugin is data rather than code that runs: the rule
-   * modules export plain objects and never `require('eslint')`, so all thirteen
-   * other subpaths resolve fine with no ESLint anywhere in the tree. Without
+   * modules export plain objects and never `require('eslint')`, so all twelve
+   * other code entries resolve fine with no ESLint anywhere in the tree. (Twelve,
+   * not thirteen: the map has 14 keys, and `./package.json` is a data file rather
+   * than an entry point.) Without
    * `peerDependenciesMeta`, every consumer taking this package for `safePath.join()`
    * would get an unmet-peer warning for a package it will never load.
    */

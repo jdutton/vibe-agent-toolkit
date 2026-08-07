@@ -35,12 +35,22 @@ Two things follow from being published:
   Exemptions are a rule **option** (`{ exemptFiles: [...] }`), and this repo passes its own in
   `eslint.config.js`.
 - **The plugin is registered under the `local` namespace here**, not the conventional
-  `@vibe-agent-toolkit` one, because 26 `eslint-disable-next-line local/…` directives across 22 files
+  `@vibe-agent-toolkit` one, because 23 `eslint-disable-next-line local/…` directives across 19 files
   in 7 packages are keyed on it — renaming turns every one into a no-op suppression while the tree
   still lints clean. Adopters get `@vibe-agent-toolkit/…` from `configs.recommended`.
   Flat config lets the namespace be any key, so it is a local alias, not part of the published
-  contract. Check with `eslint --report-unused-disable-directives`: if the alias ever stops
-  resolving to the rules, all 26 report as dead directives.
+  contract. ESLint 9 defaults `reportUnusedDisableDirectives` to `warn` and this repo lints with
+  `--max-warnings=0`, so if the alias ever stops resolving, all 23 surface as dead directives and
+  fail CI rather than passing silently.
+
+  Re-derive the count with the command below, **not** a bare `rg 'local/'` — this file, `CLAUDE.md`,
+  `CHANGELOG.md` and `eslint.config.js` all *discuss* the directive, and counting those prose
+  mentions as directives is how this number was wrong twice (43, then 26):
+
+  ```bash
+  rg --no-heading -g '!node_modules' -g '!dist' \
+     "eslint-disable[a-z-]* .*local/" packages | wc -l
+  ```
 
 ## Current Rules
 

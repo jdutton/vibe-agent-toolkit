@@ -16,7 +16,7 @@
  * contract, different parser.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
@@ -26,8 +26,16 @@ import { stripCommentLines } from '../test-helpers.js';
 
 const eslintDir = resolveFromImportMeta(import.meta.url, '..', '..', 'eslint');
 
-/** `require('x')` and `require("x")`, ignoring anything inside a comment line. */
-const REQUIRE_SPECIFIER = /require\(\s*['"]([^'"]+)['"]\s*\)/gu;
+/**
+ * `require('x')` and `import('x')`, ignoring anything inside a comment line.
+ *
+ * `import()` is in here deliberately even though nothing uses it today. Dynamic
+ * import is legal in CommonJS and is exactly what a rule author reaching for
+ * ESLint's types or `RuleTester` at runtime would write — a `require`-only
+ * matcher would let that through while still reporting an empty external set,
+ * i.e. the guard would go green precisely when its claim became false.
+ */
+const MODULE_SPECIFIER = /(?:require|import)\(\s*['"]([^'"]+)['"]\s*\)/gu;
 
 interface Reached {
   /** Every non-relative specifier: `node:*` builtins and bare package names alike. */
@@ -60,7 +68,7 @@ function walkRequireGraph(entryPath: string): Reached {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths derived from eslintDir
     const source = stripCommentLines(readFileSync(current, 'utf8'));
 
-    for (const match of source.matchAll(REQUIRE_SPECIFIER)) {
+    for (const match of source.matchAll(MODULE_SPECIFIER)) {
       const specifier = match[1];
       if (specifier === undefined) continue;
       if (specifier.startsWith('.')) {
@@ -90,10 +98,18 @@ describe('the ./eslint subpath reaches nothing outside itself', () => {
 });
 
 describe('the walker actually walked (negative controls)', () => {
-  // If the graph walk stopped at the entry point, the empty external set above
-  // would be a statement about one file rather than the whole pack.
-  it('reaches every rule module the entry registers', () => {
-    expect(reached.visited.size).toBeGreaterThan(20);
+  /**
+   * Pinned to the directory listing, not a floor.
+   *
+   * `toBeGreaterThan(20)` would have let five rule modules fall out of `index.cjs`
+   * and stayed green — and, worse, said nothing about a module that ships in the
+   * tarball while being reachable from nothing. Equality catches both directions:
+   * a rule dropped from the registry, and an orphan left behind by a rename.
+   */
+  it('reaches every .cjs file in the pack, and the pack ships nothing unreachable', () => {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path derived from eslintDir
+    const ruleFiles = readdirSync(safePath.join(eslintDir, 'rules')).filter((f) => f.endsWith('.cjs'));
+    expect(reached.visited.size).toBe(ruleFiles.length + 1); // + index.cjs
   });
 
   // `no-unix-shell-commands` require()s the factory lazily, inside `create()`.

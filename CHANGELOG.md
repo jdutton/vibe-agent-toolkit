@@ -75,9 +75,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runs — the rule modules export plain objects and never `require('eslint')` — so this entry
   reaches no Node builtin and no third-party package, and the other twelve subpaths keep resolving
   in a tree with no ESLint anywhere in it. The cost is bytes on disk and nothing else: the packed
-  tarball goes 147,473 → 178,690 bytes (+31 KB compressed, 113 KB unpacked) for 27 `.cjs` files
-  nothing loads unless you lint. What it buys is one install, one version, and no way for a rule to
-  name a helper signature the installed `utils` no longer has.
+  tarball goes 146,628 → 178,690 bytes (+32,062 compressed; 113,256 unpacked across 26 `.cjs` files
+  and their README) for code nothing loads unless you lint. What it buys is one install, one
+  version, and no way for a rule to name a helper signature the installed `utils` no longer has.
 
 - **`@vibe-agent-toolkit/utils` is now a first-class public package with narrow subpath exports.**
   The `exports` map goes from 3 keys to 14: `./path`, `./fs`, `./process`, `./git`, `./glob`,
