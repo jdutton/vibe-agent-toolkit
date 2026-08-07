@@ -74,7 +74,28 @@ const rules = {
  * `configs.recommended` at all, so this exclusion changes nothing about how this
  * repo lints itself.
  */
-const RECOMMENDED_EXCLUDE = new Set(['require-justified-skip', 'no-test-scoped-functions']);
+const RECOMMENDED_EXCLUDE = new Set([
+  'require-justified-skip',
+  'no-test-scoped-functions',
+  // Excluded for a DIFFERENT reason than the two above: not a style opinion, but
+  // an unsound heuristic. It keys on whether an identifier's name ends in `root`
+  // rather than on whether any segment is caller-controlled, which makes it
+  // simultaneously noisy and blind. Measured on a 4,670-file adopter tree: 108
+  // findings, 0 autofixable, and every one of these verified by execution here:
+  //
+  //   FIRES   safePath.join(repoRoot, 'docs', 'product')  <- all literals, cannot escape
+  //   FIRES   safePath.resolve(packageRoot, '..', '..')   <- escaping IS the intent; the fix breaks it
+  //   FIRES   safePath.join(repoRoot)                     <- one argument, no segment at all
+  //   silent  safePath.join(base, userInput)              <- THE dangerous shape, missed
+  //
+  // A rule that misses the case it exists to catch must not ride in a config
+  // named `recommended` at any severity — a safety core that cries wolf teaches
+  // people to ignore it, which costs the true positives too. It still ships, and
+  // it still earns `error` where scoped to directories in which a path escape is
+  // a security boundary (this repo scopes it to the skill-test staging code).
+  // Re-include it when it keys on taint rather than on naming.
+  'no-unsafe-root-join',
+]);
 
 /**
  * Default severities for `configs.recommended`.
@@ -82,19 +103,15 @@ const RECOMMENDED_EXCLUDE = new Set(['require-justified-skip', 'no-test-scoped-f
  * `error` is the default: every rule below flags a call whose replacement is a
  * one-line swap, and a wrong answer is a real bug on some platform.
  *
- * `warn` is reserved for the two categories where a fresh adopter's first run
- * would otherwise be a wall of blocking errors they cannot triage in one sitting:
+ * `warn` is reserved for the case where a fresh adopter's first run would
+ * otherwise be a wall of blocking errors they cannot triage in one sitting:
+ * `no-path-join` / `no-path-resolve` / `no-path-relative`, the highest-churn
+ * rules by far (they fire on every raw `node:path` call in the codebase).
+ * Measured on a 4,670-file adopter tree: 3,963 + 372 + 1 findings, **all
+ * autofixable**. All three auto-fix, so `warn` lets a project run `--fix` and
+ * burn the list down incrementally instead of blocking CI on day one.
  *
- * - `no-path-join` / `no-path-resolve` / `no-path-relative` — the highest-churn
- *   rules by far (they fire on every raw `node:path` call in the codebase). All
- *   three auto-fix, so `warn` lets a project run `--fix` and burn the list down
- *   incrementally instead of blocking CI on day one.
- * - `no-unsafe-root-join` — a deliberately narrow heuristic keyed on identifiers
- *   whose name ends in `root`. It earns `error` in the directories where a path
- *   escape is a security boundary (which is how this repo scopes it), not
- *   repo-wide.
- *
- * Raise them all to `error` once the backlog is clear — that is what VAT itself does.
+ * Raise them to `error` once the backlog is clear — that is what VAT itself does.
  *
  * The criterion for `warn` is MIGRATION VOLUME, not how real the finding is. Every
  * rule in this pack either prevents a bug or shifts a static-analysis finding left of
@@ -110,7 +127,6 @@ const RECOMMENDED_WARN = new Set([
   'no-path-join',
   'no-path-resolve',
   'no-path-relative',
-  'no-unsafe-root-join',
 ]);
 
 /**

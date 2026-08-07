@@ -118,6 +118,10 @@ describe('every subpath entry reaches exactly the third-party packages the READM
     { entry: 'fs.ts', thirdParty: [] },
     { entry: 'testing.ts', thirdParty: [] },
     { entry: 'asset.ts', thirdParty: [] },
+    // The reason this entry exists: dependency-free, unlike the `.` barrel that
+    // was briefly its only route. If this row ever gains a package, the entry has
+    // lost its purpose rather than merely gained a dependency.
+    { entry: 'project.ts', thirdParty: [] },
     { entry: 'yaml.ts', thirdParty: ['yaml'] },
     { entry: 'template-entry.ts', thirdParty: ['handlebars'] },
     { entry: 'process.ts', thirdParty: ['which'] },

@@ -58,11 +58,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ```
 
   `configs.recommended` registers the rules under the `@vibe-agent-toolkit` namespace and enables
-  the cross-platform safety core — 19 of the 21 rules, `error` except four at `warn`
-  (`no-path-join`, `no-path-resolve`, `no-path-relative`, `no-unsafe-root-join`), the ones whose
-  first run on an existing codebase produces a migration rather than a bug list. The two left out,
-  `require-justified-skip` and `no-test-scoped-functions`, encode a position on *test style* rather
-  than a portability fact; they ship and are enabled by naming them. Rules take an `exemptFiles`
+  the cross-platform safety core — 18 of the 21 rules, `error` except three at `warn`
+  (`no-path-join`, `no-path-resolve`, `no-path-relative`), the ones whose first run on an existing
+  codebase produces a migration rather than a bug list — measured at 4,336 findings on a
+  4,670-file tree, **all autofixable**. Three rules ship without riding in `recommended`:
+  `require-justified-skip` and `no-test-scoped-functions` encode a position on *test style* rather
+  than a portability fact, and `no-unsafe-root-join` is held back on correctness — it keys on
+  whether an identifier's name ends in `root` rather than on taint, so it fires on all-literal
+  calls and stays silent on `safePath.join(base, userInput)`, the shape it exists to catch. All
+  three are enabled by naming them. Rules take an `exemptFiles`
   option naming the file(s) allowed to call the banned primitive — the one that implements your
   wrapper. There are deliberately **no** built-in exemptions: those paths are a claim about one
   repo's layout, and matching is anchored at a path segment, so declaring `src/paths.ts` never
@@ -80,9 +84,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   version, and no way for a rule to name a helper signature the installed `utils` no longer has.
 
 - **`@vibe-agent-toolkit/utils` is now a first-class public package with narrow subpath exports.**
-  The `exports` map goes from 3 keys to 14: `./path`, `./fs`, `./process`, `./git`, `./glob`,
-  `./zod`, `./yaml`, `./template`, `./testing`, `./asset`, `./crawl`, `./eslint` (see below), and
-  `./package.json`, plus the `.` barrel. Projects
+  The `exports` map goes from 3 keys to 15: `./path`, `./fs`, `./process`, `./git`, `./glob`,
+  `./zod`, `./yaml`, `./template`, `./testing`, `./asset`, `./crawl`, `./project`, `./eslint`
+  (see below), and `./package.json`, plus the `.` barrel. `./project` carries `findProjectRoot`,
+  `findConfigFile`, `findNodeWorkspaceRoot` and `resetProjectRootCaches` — functions whose own code
+  imports nothing but `node:fs` and `node:path`, so reaching them no longer requires the `.` barrel
+  and its five third-party dependencies. They remain VAT-shaped (`findProjectRoot` looks for
+  `vibe-agent-toolkit.config.yaml`, then `.git/`), which the README says plainly; the entry exists
+  so that finding out costs nothing. Projects
   building skills with VAT write Node code that has to run on Windows, macOS, and Linux, and hit the
   same platform potholes VAT does — `.cmd` shims needing a shell, `tmpdir()` returning 8.3 short
   paths, backslash-vs-forward-slash comparisons, `await import()` of an absolute path failing on

@@ -25,7 +25,7 @@ export default [
 ];
 ```
 
-`configs.recommended` registers the plugin under the `@vibe-agent-toolkit` namespace and enables the **cross-platform safety core** — 19 of the 21 rules, most at `error` and four at `warn` (see [Severities](#severities)). The other two are test-style opinions and are opt-in; the [rule tables](#rules) mark each rule's `recommended` severity, and `—` means not in `recommended`.
+`configs.recommended` registers the plugin under the `@vibe-agent-toolkit` namespace and enables the **cross-platform safety core** — 18 of the 21 rules, most at `error` and three at `warn` (see [Severities](#severities)). The other three are opt-in; the [rule tables](#rules) mark each rule's `recommended` severity, and `—` means not in `recommended`.
 
 To pick rules yourself, register the plugin and name them:
 
@@ -80,7 +80,7 @@ The "use instead" column names the `@vibe-agent-toolkit/utils` subpath the repla
 | `no-path-sep-in-strings` | `path.sep` embedded in a string literal | `toForwardSlash()` | `/path` | | `error` |
 | `no-manual-path-normalize` | hand-rolled `.replace(/\\/g, '/')` | `toForwardSlash()` | `/path` | ✓ | `error` |
 | `no-path-operations-in-comparisons` | raw `path.*()` results in string comparisons | wrap in `toForwardSlash()` | `/path` | | `error` |
-| `no-unsafe-root-join` | `safePath.join(someRoot, x)` where `x` can escape | `safePath.joinUnderRoot()` | `/path` | | `warn` |
+| `no-unsafe-root-join` | `safePath.join(someRoot, x)` where `x` can escape | `safePath.joinUnderRoot()` | `/path` | | — |
 
 ### Filesystem and process
 
@@ -111,9 +111,22 @@ The "use instead" column names the `@vibe-agent-toolkit/utils` subpath the repla
 
 ### What `recommended` deliberately leaves out
 
-`configs.recommended` is the cross-platform safety core. `no-test-scoped-functions` and `require-justified-skip` are **not** in it: both are positions on *test style* — where a helper may be declared, and what grammar annotates a disabled test — rather than portability or correctness facts. Installing this package for `safePath.join()` should not also import someone else's test conventions.
+Three rules ship without riding in `recommended`, for two different reasons.
 
-They still ship, and they are worth turning on deliberately:
+**Test-style opinions** — `no-test-scoped-functions` (where a helper may be declared) and `require-justified-skip` (the annotation grammar for a disabled test). Neither is a portability or correctness fact, and installing this package for `safePath.join()` should not also import someone else's test conventions. Both are worth turning on deliberately.
+
+**Unsound, pending a rewrite** — `no-unsafe-root-join`. It keys on whether an identifier's *name* ends in `root` rather than on whether any segment is caller-controlled, which makes it noisy and blind at the same time. Measured against 4,670 files of real adopter source: 108 findings, none autofixable. Verified behaviour:
+
+```js
+safePath.join(repoRoot, 'docs', 'product')  // FIRES — all literals, nothing can escape
+safePath.resolve(packageRoot, '..', '..')   // FIRES — escaping is the intent; the fix breaks it
+safePath.join(repoRoot)                     // FIRES — one argument, no segment at all
+safePath.join(base, userInput)              // SILENT — the shape it exists to catch
+```
+
+A rule that misses its own target does not belong in a config named `recommended` at any severity: a safety core that cries wolf teaches people to ignore it, and that costs you the true positives too. It still ships, and it still earns `error` when scoped to directories where a path escape is a security boundary — which is how this repo uses it, on its skill-test staging code. It will return to `recommended` when it keys on taint rather than on naming.
+
+Enable any of the three by naming it:
 
 ```js
 import vat from '@vibe-agent-toolkit/utils/eslint';
@@ -126,17 +139,23 @@ export default [
       '@vibe-agent-toolkit/require-justified-skip': 'error',
     },
   },
+  {
+    // Scope it to where an escape is a security boundary, not repo-wide.
+    files: ['src/staging/**/*.ts'],
+    rules: { '@vibe-agent-toolkit/no-unsafe-root-join': 'error' },
+  },
 ];
 ```
 
 ### Severities
 
-Within `recommended`, `error` is the default; four rules are `warn`:
+Within `recommended`, `error` is the default; three rules are `warn`:
 
-- **`no-path-join`, `no-path-resolve`, `no-path-relative`** — by far the highest-churn rules; they fire on every raw `node:path` call in an existing codebase. All three auto-fix, so `warn` lets a project run `--fix` and burn the list down incrementally instead of blocking CI on day one.
-- **`no-unsafe-root-join`** — a deliberately narrow heuristic keyed on identifiers whose name ends in `root`. It earns `error` in the directories where a path escape is a security boundary, not repo-wide.
+- **`no-path-join`, `no-path-resolve`, `no-path-relative`** — by far the highest-churn rules; they fire on every raw `node:path` call in an existing codebase. Measured on a 4,670-file adopter tree: 3,963 + 372 + 1 findings, **every one of them autofixable**. `warn` lets a project run `--fix` and burn the list down incrementally instead of blocking CI on day one.
 
-Raise all four to `error` once the backlog is clear. That is what this repo does.
+Raise all three to `error` once the backlog is clear. That is what this repo does.
+
+The criterion for `warn` is **migration volume**, not how real the finding is — a rule whose findings we doubted would be out of `recommended` entirely, not demoted. Everything at `error` either prevents a bug or moves a static-analysis finding left of a merge.
 
 ## Why custom rules
 

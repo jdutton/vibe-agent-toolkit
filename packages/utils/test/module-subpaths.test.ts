@@ -51,12 +51,21 @@ describe('whole-module subpath entries', () => {
     expect(Array.isArray(mod.BUILD_OUTPUT_GLOBS)).toBe(true);
   });
 
-  // No `./project` entry: it was removed after its four exports scored zero
-  // replaceable call sites on the package's primary consumer (see
-  // `package-exports.test.ts` for the measurement). `project-utils` is still
-  // built and still reachable from the `.` barrel for VAT's own internals — the
-  // published SUBPATH is what went away, not the code.
-  it('project-root discovery stays on the `.` barrel', async () => {
+  /**
+   * `./project` exists so these four are reachable WITHOUT the barrel.
+   *
+   * They were briefly barrel-only, which made a capability whose own code imports
+   * nothing but `node:fs` and `node:path` cost five third-party packages to reach.
+   * Both routes are asserted: the subpath, because that is the point, and the
+   * barrel, because removing them from it would be a separate breaking change.
+   */
+  it('./project exposes project-root discovery, and the barrel still agrees', async () => {
+    const mod = await import('../src/project.js');
+    expect(typeof mod.findProjectRoot).toBe('function');
+    expect(typeof mod.findConfigFile).toBe('function');
+    expect(typeof mod.findNodeWorkspaceRoot).toBe('function');
+    expect(typeof mod.resetProjectRootCaches).toBe('function');
+
     const barrel: Record<string, unknown> = await import('../src/index.js');
     expect(typeof barrel['findProjectRoot']).toBe('function');
     expect(typeof barrel['findConfigFile']).toBe('function');

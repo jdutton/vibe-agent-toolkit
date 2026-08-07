@@ -1,8 +1,9 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
 import { resolveFromImportMeta } from '../src/fs.js';
+import { safePath } from '../src/path.js';
 
 /**
  * A value in the `exports` map: either a bare target, or conditions.
@@ -47,6 +48,7 @@ describe('utils package manifest', () => {
     ['./testing', 'testing'],
     ['./asset', 'asset'],
     ['./crawl', 'crawl'],
+    ['./project', 'project'],
   ])('exports %s from the %s entry module', (key, base) => {
     const entry = manifest.exports[key];
     expect(entry).toBeDefined();
@@ -109,16 +111,29 @@ describe('utils package manifest', () => {
    * right file, but says nothing about a key nobody listed. Adding an entry here
    * is cheap; removing one is a breaking change that needs a CHANGELOG note.
    *
-   * `./project` was removed deliberately. Validating against the package's primary
-   * real-world consumer found ZERO replaceable call sites for its four exports:
+   * **Pin the MEMBERS, never the count.** An adopter diffing two previews of this
+   * package caught what our own review missed: the key count stayed at 14 across a
+   * release in which `./project` went out and `./eslint` came in. A cardinality
+   * assertion is satisfied by any swap; only the member list notices that the
+   * occupants changed completely.
+   *
+   * `./project` was withdrawn and then restored, and the round trip is worth
+   * recording. The withdrawal measured whether the four functions were USEFUL to
+   * the package's primary real-world consumer, and they largely are not:
    * `findNodeWorkspaceRoot` returns `null` from every directory in that repo (no
    * `package.json` there carries a `"workspaces"` key — it is a pnpm workspace),
    * `findConfigFile` takes no filename parameter and every site there already
    * knows its own root, and `findProjectRoot`'s config-then-`.git` ladder
-   * contradicts all six of that repo's own marker walk-ups — one of which is a
-   * published runtime package, where depending on `.git` would be a bug. The two
-   * sites that genuinely want a `.git` walk-up are served by `gitFindRoot` on
-   * `./git`. The functions remain on the `.` barrel for VAT's own internals.
+   * contradicts all six of that repo's own marker walk-ups.
+   *
+   * That was the wrong question. What decides whether an ENTRY should exist is how
+   * heavy the only remaining door is. With `./project` gone the sole route to these
+   * functions was the `.` barrel, which reaches `handlebars`, `yaml`, `picomatch`,
+   * `ignore` and `which` — so a consumer avoiding the barrel on graph-weight
+   * grounds (the entire premise of this layout) could not reach a capability whose
+   * own code imports nothing but `node:fs` and `node:path`. The functions are still
+   * VAT-shaped, and README.md says so; the entry exists so that reaching them does
+   * not cost five third-party packages.
    */
   it('exports exactly the recorded key set', () => {
     expect(Object.keys(manifest.exports).sort((a, b) => a.localeCompare(b))).toEqual([
@@ -132,6 +147,7 @@ describe('utils package manifest', () => {
       './package.json',
       './path',
       './process',
+      './project',
       './template',
       './testing',
       './yaml',
@@ -139,7 +155,29 @@ describe('utils package manifest', () => {
     ]);
   });
 
-  it('no longer exports ./project — its four functions stay on the `.` barrel', () => {
-    expect(manifest.exports['./project']).toBeUndefined();
+  /**
+   * Every entry module must have a source file. `tsc --build --clean` cannot
+   * delete an output whose source is already gone — the regenerated
+   * `.tsbuildinfo` no longer lists it — so a deleted entry leaves its compiled
+   * `.js` behind in `dist/`, and `files: ["dist"]` then ships a module with no
+   * source. That is exactly what happened when `./project` was withdrawn: the
+   * key left the manifest, `dist/project.js` kept shipping, and the tarball
+   * carried a room with its door bricked up for a full release cycle. An adopter
+   * found it, not us. Nothing else in the build guards this.
+   */
+  it('every dist-backed entry resolves to a real source file', () => {
+    const srcDir = resolveFromImportMeta(import.meta.url, '..', 'src');
+    const DIST = './dist/';
+    const missing: string[] = [];
+
+    for (const [key, entry] of Object.entries(manifest.exports)) {
+      const target = asConditions(entry).import;
+      if (!target?.startsWith(DIST)) continue;
+      const relative = `${target.slice(DIST.length, -'.js'.length)}.ts`;
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- path derived from srcDir
+      if (!existsSync(safePath.join(srcDir, relative))) missing.push(key);
+    }
+
+    expect(missing).toEqual([]);
   });
 });

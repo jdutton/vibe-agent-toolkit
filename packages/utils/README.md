@@ -33,6 +33,7 @@ The last two columns are the ones that matter when choosing. **"Resolves with ze
 | `./process` | `safeExecSync`, `safeExecResult`, `safeExecFromString`, `isToolAvailable`, `getToolVersion`, `hasShellSyntax`, `CommandExecutionError`, `spawnHardened`, `shouldUseShell`, `windowsShellQuote`, `buildWindowsShellLine`, `resolveShellCommandToken`, `isPathLike`, `makeStdioBlocking`, `describeStdioBlocking` | `child_process`, `path` | `which` | no — needs `which` |
 | `./git` | `gitFindRoot`, `gitLsFiles`, `isGitIgnored`, `loadGitignoreRules`, `GitTracker`, `parseGitUrl`, `isGitUrl`, `nonInteractiveGitOverrides` | `child_process`, `fs`, `os`, `path`, `url` | `ignore`, `which` | no — needs `which`, `ignore` |
 | `./crawl` | `crawlDirectory`, `crawlDirectorySync`, `NEVER_CRAWL_GLOBS`, `BUILD_OUTPUT_GLOBS` | `child_process`, `fs`, `os`, `path`, `url` | `picomatch`, `which` | no — needs `picomatch`, `which` |
+| `./project` | `findProjectRoot`, `findConfigFile`, `findNodeWorkspaceRoot`, `resetProjectRootCaches` | `fs`, `path` | — | **yes** |
 | `./eslint` | the 21 ESLint rules that enforce everything above — see [ESLint rules](#eslint-rules--vibe-agent-toolkitutilseslint) | **none** | — | **yes** |
 | `.` | every runtime entry above (not `./eslint`) | all of the above, plus `stream` | `handlebars`, `ignore`, `picomatch`, `which`, `yaml` | no — needs all of them |
 | `./package.json` | the manifest itself, for version reporting and resolution assertions | — | — | **yes** |
@@ -175,7 +176,9 @@ These return **OS-native** separators, because they resolve real filesystem iden
 
 These are CLI-boundary functions: inner libraries should take a root as a parameter rather than discovering one. They return `string | null` with no internal fallback, so a caller with no root has to decide one rather than silently landing on an absolute path.
 
-**No `./project` subpath — on purpose.** These four are VAT-shaped rather than general, so a narrow entry advertising them oversells them. `findProjectRoot()` looks for `vibe-agent-toolkit.config.yaml` and then `.git/`; if your repo's notion of "root" is a `pnpm-workspace.yaml`, a `turbo.json`, or a lockfile, that ladder is not your ladder — and for a *published* package, keying anything on `.git/` is a bug, since it will not be there at install time. `findNodeWorkspaceRoot()` is narrower still: it needs a `package.json` carrying a `"workspaces"` key, which pnpm and Bun workspaces do not have. `findConfigFile()` hardcodes VAT's config filename. If you want a git root, take `gitFindRoot()` from [`./git`](#git--vibe-agent-toolkitutilsgit); if you want your own marker, a six-line walk-up is more honest than a helper whose ladder you have to work around.
+**These four are VAT-shaped — read this before reaching for them.** `findProjectRoot()` looks for `vibe-agent-toolkit.config.yaml` and then `.git/`; if your repo's notion of "root" is a `pnpm-workspace.yaml`, a `turbo.json`, or a lockfile, that ladder is not your ladder — and for a *published* package, keying anything on `.git/` is a bug, since it will not be there at install time. `findNodeWorkspaceRoot()` is narrower still: it needs a `package.json` carrying a `"workspaces"` key, which pnpm and Bun workspaces do not have. `findConfigFile()` hardcodes VAT's config filename. If you want a git root, take `gitFindRoot()` from [`./git`](#git--vibe-agent-toolkitutilsgit); if you want your own marker, a six-line walk-up is more honest than a helper whose ladder you have to work around.
+
+They are nonetheless on their own [`./project`](#import-narrowly) entry rather than the barrel alone. The entry was briefly withdrawn on the grounds that the functions fit few repos — which is true, and is what the paragraph above says — but that answered the wrong question. What decides whether an *entry* exists is how heavy the only remaining door is: barrel-only, these four cost `handlebars`, `yaml`, `picomatch`, `ignore` and `which` to reach, while their own code imports nothing but `node:fs` and `node:path`. Publishing the entry is not a claim that the ladder fits you — only that finding out shouldn't cost five dependencies.
 
 ### Directory crawling — `@vibe-agent-toolkit/utils/crawl`
 
@@ -197,7 +200,7 @@ export default [
 ];
 ```
 
-`configs.recommended` registers the rules under the `@vibe-agent-toolkit` namespace and turns on the cross-platform safety core (19 of the 21 — the two test-style rules are opt-in). Most rules auto-fix, and every message names the replacement and the subpath it lives on. Rules that ban a primitive take an `exemptFiles` option naming the file that implements *your* wrapper; there are deliberately no built-in exemptions.
+`configs.recommended` registers the rules under the `@vibe-agent-toolkit` namespace and turns on the cross-platform safety core (18 of the 21 — three rules are opt-in). Most rules auto-fix, and every message names the replacement and the subpath it lives on. Rules that ban a primitive take an `exemptFiles` option naming the file that implements *your* wrapper; there are deliberately no built-in exemptions.
 
 **[Full rule table, severities, and exemption semantics →](./eslint/README.md)**
 

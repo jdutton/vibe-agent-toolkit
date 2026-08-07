@@ -348,7 +348,16 @@ describe('configs.recommended (published artifact)', () => {
     expect([...severities].sort((a, b) => a - b)).toEqual([SEVERITY.warn, SEVERITY.error]);
   });
 
-  it('omits the two test-style rules that are opt-in', async () => {
+  /**
+   * Three rules ship without riding in `recommended`, for two different reasons.
+   * `no-test-scoped-functions` and `require-justified-skip` are positions on test
+   * style. `no-unsafe-root-join` is excluded on CORRECTNESS: it keys on whether an
+   * identifier's name ends in `root` rather than on taint, so it fires on
+   * all-literal calls and stays silent on `safePath.join(base, userInput)` — the
+   * shape it exists to catch. Measured on a 4,670-file adopter tree: 108 findings,
+   * none autofixable.
+   */
+  it('omits the three opt-in rules', async () => {
     const eslint = new ESLint({ cwd: project.dir, overrideConfigFile: project.configPath });
     const config = (await eslint.calculateConfigForFile(
       safePath.join(project.dir, VIOLATIONS_FILE),
@@ -357,6 +366,14 @@ describe('configs.recommended (published artifact)', () => {
     expect(config.rules['@vibe-agent-toolkit/no-path-join']).toBeDefined();
     expect(config.rules['@vibe-agent-toolkit/no-test-scoped-functions']).toBeUndefined();
     expect(config.rules['@vibe-agent-toolkit/require-justified-skip']).toBeUndefined();
+    expect(config.rules['@vibe-agent-toolkit/no-unsafe-root-join']).toBeUndefined();
+  });
+
+  // The pack still SHIPS all three — they are opt-in, not withdrawn.
+  it('still ships the opt-in rules for explicit enabling', () => {
+    expect(project.packedFiles).toContain('eslint/rules/no-unsafe-root-join.cjs');
+    expect(project.packedFiles).toContain('eslint/rules/no-test-scoped-functions.cjs');
+    expect(project.packedFiles).toContain('eslint/rules/require-justified-skip.cjs');
   });
 });
 

@@ -68,6 +68,10 @@
       "types": "./dist/crawl.d.ts",
       "import": "./dist/crawl.js"
     },
+    "./project": {
+      "types": "./dist/project.d.ts",
+      "import": "./dist/project.js"
+    },
     "./eslint": {
       "types": "./eslint/index.d.cts",
       "default": "./eslint/index.cjs"
