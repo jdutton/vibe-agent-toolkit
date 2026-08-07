@@ -238,6 +238,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **One unreadable subdirectory no longer aborts an entire `vat audit` run (issue #180).** An
+  `EACCES` anywhere under the audited tree used to propagate out of the directory walk and end the
+  command with `status: error`, exit code 2, and **zero findings** — discarding everything already
+  collected from readable siblings. A single root-owned or quarantined directory under
+  `~/.claude/plugins` killed the flagship `vat audit --user` invocation outright. The walk now scopes
+  the failure to the subtree that caused it: siblings are still scanned, findings already collected
+  survive, and the gap is reported as the new `SCAN_PATH_UNREADABLE` (`warning`) naming the path and
+  the OS message. Silence was not an option — a scan reporting `success` while having skipped a
+  subtree is the same failure shape as a detector that quietly disables itself.
+
+  Note for anyone tracing this from the issue: the cause recorded there (`crawlDirectorySync` in
+  `agent-instruction-presence.ts`) is not the one. That crawl already guards each directory
+  individually; the unguarded `readdir` was `scanDirectory`'s own, in `commands/audit.ts`.
+
 - **`isGitIgnored()` spawned a git subprocess per ancestor directory when the path was not in a git
   repository at all — `vat resources validate` on a 3,437-document tree outside any repository went
   from 196 s to 20.6 s, with a byte-identical report.** `git check-ignore` exits 128 for two
@@ -435,6 +449,15 @@ exhibited them. Every fix below ships with a regression test.
   - **`LINK_TO_AGENT_INSTRUCTION_FILE` (`error`)**, **`PACKAGED_AGENT_INSTRUCTION_FILE` (`warning`)**,
     **`FILES_GLOB_DROPPED_NEVER_PACKAGED` (`warning`)**, **`FILES_GLOB_MATCHED_NOTHING` (`info`)**
     and **`FILES_GLOB_MATCHED_ONLY_NEVER_PACKAGED` (`warning`)** — see Changed.
+  - **`FILES_GLOB_SKIPPED_NON_REGULAR_FILE` (`warning`)** — a `files:` glob matched something that
+    is not a regular file (a symlink to a **directory**, a dangling symlink, a FIFO, a socket, a
+    device node). It cannot be packaged, so it is skipped and the rest of the entry still ships.
+    `glob`'s `nodir: true` cannot exclude these: glob does not follow symlinks, so a link pointing
+    at a directory is never a directory *to it*. **A symlink to a regular FILE is still copied by
+    content** — the predicate is "does this resolve to a regular file, without throwing", not "is
+    this a symlink", so that legitimate and widely-used case is untouched. Reported by the
+    pre-build gates (`vat skills validate`, `vat audit`) and by the build, from one shared
+    expansion.
 - **User-facing documentation for `vat skill test` and its config surface**
   (`packages/cli/docs/skill-test.md`), covering the per-skill `skills.config.<skill>.test` block and
   the global `test:` node.

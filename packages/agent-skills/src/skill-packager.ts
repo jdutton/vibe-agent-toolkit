@@ -60,6 +60,7 @@ import {
   droppedGlobMatchesToIssues,
   explicitFilesConfigDests,
   globEntryDest,
+  skippedGlobMatchesToIssues,
   type SkillFileEntry,
 } from './files-config.js';
 import { checkBrokenPackagedLinks, checkUnreferencedFiles } from './post-build-checks.js';
@@ -791,6 +792,10 @@ export async function packageSkill(
     // dropped file is a source file that never reached the output, so the only
     // path a reader can open is its source path.
     ...droppedGlobMatchesToIssues(appliedFiles.dropped, projectRoot),
+    // The same receipt, for matches that are not copyable files at all. Anchored
+    // identically and for the identical reason. Until issue #183 this population
+    // had no channel because the build died on the first one it met.
+    ...skippedGlobMatchesToIssues(appliedFiles.skipped, projectRoot),
     // Presence-side backstop for agent-instruction files. The walker excludes
     // them from link-following, but a `files:` glob can still copy one in, and
     // a file that arrives without a link is invisible to the link lane.

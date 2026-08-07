@@ -4,7 +4,7 @@
  */
 
 import * as fs from 'node:fs';
-import { existsSync as fsExistsSync } from 'node:fs';
+import { existsSync as fsExistsSync, type Dirent } from 'node:fs';
 import { basename } from 'node:path';
 
 import {
@@ -22,6 +22,7 @@ import {
   detectReferenceTargetMissing,
   detectResourceFormat,
   enumerateSurfaces,
+  materializeIssue,
   validate,
   validateMarketplace,
   validateSkill,
@@ -2192,6 +2193,44 @@ function getSkipReason(
   return null;
 }
 
+/**
+ * The one finding a subtree the walk could not enter produces.
+ *
+ * A synthetic result rather than an issue appended to some neighbour: nothing
+ * about the unreadable directory was validated, so it has no host result to hang
+ * off, and attaching it to a sibling would attribute the condition to a tree that
+ * scanned fine. Typed `unknown` for the same reason — the whole point is that its
+ * contents were never seen, so any more specific type would be a claim the scan
+ * cannot support.
+ *
+ * The OS message is carried through verbatim (it names the errno and the syscall,
+ * which is what distinguishes a permissions problem from a vanished mount), but it
+ * is no longer the ONLY thing the run says — the code, the location and the fix
+ * come from the registry.
+ */
+function unreadableDirectoryResult(
+  dirPath: string,
+  error: unknown,
+  locationRoot: string,
+): ValidationResult {
+  const location = issueLocation(dirPath, locationRoot);
+  const issues = [
+    materializeIssue('SCAN_PATH_UNREADABLE', {
+      location,
+      detail: `${location}: ${error instanceof Error ? error.message : String(error)}`,
+    }),
+  ];
+  const issueCounts = countBySeverity(issues);
+  return {
+    path: dirPath,
+    type: 'unknown',
+    status: calculateValidationStatus(issues),
+    summary: formatCountsSummary(issueCounts),
+    issues,
+    issueCounts,
+  };
+}
+
 async function scanDirectory(
   dirPath: string,
   recursive: boolean,
@@ -2248,7 +2287,19 @@ async function scanDirectory(
     excludeMatchers.push(resolvedScanCtx.projectExcludes);
   }
 
-  const entries = await fs.readdir(dirPath, { withFileTypes: true });
+  // Guarded because `vat audit` is a bulk linter over trees it does not own, and
+  // an unreadable entry is an ordinary condition there — one root-owned directory
+  // under `~/.claude/plugins` used to abort the flagship `vat audit --user` run
+  // outright, losing every finding already collected (issue #180). The failure is
+  // scoped to the subtree that caused it: this returns instead of throwing, so the
+  // CALLER's loop keeps its readable siblings and the walk continues.
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(dirPath, { withFileTypes: true });
+  } catch (error) {
+    logger.debug(`Unreadable directory: ${dirPath}`);
+    return [unreadableDirectoryResult(dirPath, error, resolvedScanCtx.locationRoot)];
+  }
 
   const descendCtx = await contextForDescendants(dirPath, entries, resolvedScanCtx);
 

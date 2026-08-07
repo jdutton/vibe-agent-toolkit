@@ -1,5 +1,5 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- test sandbox paths derived from tmp dirs */
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -207,6 +207,39 @@ const extrasGlob: SkillFileEntry = { source: EXTRAS_GLOB_SOURCE, dest: EXTRAS_DE
 const UNBUILT_GLOB: SkillFileEntry = { source: 'dist/not-built/**/*', dest: 'packs' };
 const UNBUILT_BASE = 'dist/not-built';
 
+/**
+ * Sandbox with `<projectRoot>/gen/assets/{ok.mjs, sub/inner.mjs, linkdir -> sub}`.
+ *
+ * `linkdir` is a symlink pointing at the sibling DIRECTORY `sub`. That is the one
+ * shape `glob`'s `nodir: true` cannot filter: glob does not follow the link, so it
+ * never stats a directory and hands the link back as an ordinary match. `ok.mjs` is
+ * the regular sibling that must still ship — without it the case could not tell
+ * "skipped the link" from "refused the whole entry".
+ */
+function makeNonRegularSandbox(): { projectRoot: string; skillOutputDir: string } {
+  const sandbox = makeApplySandbox();
+  const assets = safePath.join(sandbox.projectRoot, NON_REGULAR_SRC_DIR);
+  mkdirSyncReal(safePath.join(assets, 'sub'), { recursive: true });
+  writeFileSync(safePath.join(assets, 'sub', 'inner.mjs'), 'export const inner = 1;\n');
+  writeFileSync(safePath.join(assets, 'ok.mjs'), OK_BYTES);
+  symlinkSync('sub', safePath.join(assets, 'linkdir'), 'dir');
+  return sandbox;
+}
+
+const NON_REGULAR_SRC_DIR = 'gen/assets';
+const NON_REGULAR_DEST = 'scripts';
+/** Non-recursive on purpose: `**\/*` would also match through the link's target. */
+const NON_REGULAR_GLOB_SOURCE = `${NON_REGULAR_SRC_DIR}/*`;
+const NON_REGULAR_LINK_SOURCE = `${NON_REGULAR_SRC_DIR}/linkdir`;
+const NON_REGULAR_LINK_DEST = 'scripts/linkdir';
+const NON_REGULAR_OK_DEST = 'scripts/ok.mjs';
+/** Bytes of the regular sibling, asserted through a symlink-to-file copy. */
+const OK_BYTES = 'export const ok = 1;\n';
+const nonRegularGlob: SkillFileEntry = {
+  source: NON_REGULAR_GLOB_SOURCE,
+  dest: NON_REGULAR_DEST,
+};
+
 /** Project-relative spelling of an absolute path a finding carries. */
 function relTo(projectRoot: string, abs: string): string {
   return toForwardSlash(safePath.relative(projectRoot, abs));
@@ -254,7 +287,7 @@ describe('collectPreBuildGlobFindings', () => {
       [{ source: EXTRAS_CLAUDE_SOURCE, dest: 'notes/CLAUDE.md' }],
       projectRoot,
     );
-    expect(findings).toEqual({ dropped: [], allRefused: [], unmatched: [] });
+    expect(findings).toEqual({ dropped: [], allRefused: [], unmatched: [], skipped: [] });
   });
 
   // --- THREE reported populations (of FOUR verdicts) ------------------------
@@ -362,6 +395,31 @@ describe('collectPreBuildGlobFindings', () => {
     );
     expect(allRefused.map(e => e.source)).toEqual([EXTRAS_MD_GLOB_SOURCE]);
   });
+
+  // A FIFTH population, orthogonal to the four verdicts above: those partition by
+  // what the never-package POLICY decided, this one by what the matched object
+  // physically IS. `glob`'s `nodir: true` filters on what glob itself stat'd, and
+  // it does not follow links — so a symlink-to-directory is not a dir to it and
+  // arrives in the match list as if it were a file.
+  it.skipIf(process.platform === 'win32')(
+    'non-regular: reports a symlink-to-directory a glob matched, without refusing the entry',
+    async () => {
+      const { projectRoot } = makeNonRegularSandbox();
+      const { dropped, allRefused, unmatched, skipped } = await collectPreBuildGlobFindings(
+        [nonRegularGlob],
+        projectRoot,
+      );
+      expect(skipped.map(s => relTo(projectRoot, s.absFile))).toEqual([NON_REGULAR_LINK_SOURCE]);
+      expect(skipped.map(s => s.dest)).toEqual([NON_REGULAR_LINK_DEST]);
+      expect(skipped.every(s => s.source === NON_REGULAR_GLOB_SOURCE)).toBe(true);
+      // The entry still ships its regular sibling, so it is none of the three
+      // failure verdicts — reporting it as `allRefused` would predict a build
+      // failure that does not happen.
+      expect(allRefused).toEqual([]);
+      expect(unmatched).toEqual([]);
+      expect(dropped).toEqual([]);
+    },
+  );
 });
 
 describe('preBuildGlobFindingsToIssues', () => {
@@ -893,6 +951,82 @@ describe('applyFilesConfig', () => {
       }),
     ).rejects.toThrow(/unexpected file '[^']*orphan\.json'/);
   });
+
+  // Regression, issue #183. `copyFile` on a symlink-to-directory raises a raw
+  // `ENOTSUP` — which on macOS reads "operation not supported on socket" and so
+  // actively misdescribes the object — and it escaped as the build's WHOLE
+  // explanation, naming neither the `files:` entry nor the path. A hard build
+  // failure on an OS errno with no attribution gives the author nothing to act on.
+  it.skipIf(process.platform === 'win32')(
+    'skips a symlink-to-directory instead of dying on a raw ENOTSUP, and still ships the rest',
+    async () => {
+      const { projectRoot, skillOutputDir } = makeNonRegularSandbox();
+
+      const { dests, skipped } = await applyFilesConfig({
+        filesConfig: [nonRegularGlob],
+        projectRoot,
+        skillOutputDir,
+      });
+
+      // The regular sibling still ships — the entry degrades, it does not fail.
+      expect(dests).toEqual([NON_REGULAR_OK_DEST]);
+      expect(existsSync(safePath.join(skillOutputDir, 'scripts', 'ok.mjs'))).toBe(true);
+      // Nothing was written at the link's dest: a directory-shaped object must not
+      // arrive in a bundle as a file holding its target's bytes.
+      expect(existsSync(safePath.join(skillOutputDir, 'scripts', 'linkdir'))).toBe(false);
+      // And the skip is a reported FINDING, not a silent drop: it names the entry
+      // that caught it and the path, which is what the raw errno never did.
+      expect(skipped.map(s => s.dest)).toEqual([NON_REGULAR_LINK_DEST]);
+      expect(skipped.map(s => s.source)).toEqual([NON_REGULAR_GLOB_SOURCE]);
+    },
+  );
+
+  // The one path where the throw is the LAST word about the entry — it aborts the
+  // build, so the `skipped` findings never reach a report. A message listing only
+  // the policy drops would assert "all of them are never packaged" while silently
+  // omitting paths that failed for a completely different reason.
+  it.skipIf(process.platform === 'win32')(
+    'names BOTH causes when a glob nets only never-packaged files and non-files',
+    async () => {
+      const { projectRoot, skillOutputDir } = makeNonRegularSandbox();
+      const assets = safePath.join(projectRoot, NON_REGULAR_SRC_DIR);
+      // Leave the entry with nothing shippable: the only regular file it can match
+      // is a never-packaged basename, alongside the directory symlink.
+      rmSync(safePath.join(assets, 'ok.mjs'));
+      writeFileSync(safePath.join(assets, AGENT_INSTRUCTION_FILE), '# guidance\n');
+
+      await expect(
+        applyFilesConfig({ filesConfig: [nonRegularGlob], projectRoot, skillOutputDir }),
+      ).rejects.toThrow(/never packaged[\s\S]*CLAUDE\.md[\s\S]*not regular files[\s\S]*linkdir/);
+    },
+  );
+
+  // The control the issue calls out explicitly: a symlink to a FILE is copied by
+  // content, which is reasonable behaviour and must NOT be caught by the guard.
+  // Without this case an over-broad `isSymbolicLink()` test would pass everything
+  // above while silently dropping a legitimate, widely-used shape.
+  it.skipIf(process.platform === 'win32')(
+    'still copies a symlink to a regular file by content',
+    async () => {
+      const { projectRoot, skillOutputDir } = makeNonRegularSandbox();
+      symlinkSync(
+        'ok.mjs',
+        safePath.join(projectRoot, NON_REGULAR_SRC_DIR, 'linkfile.mjs'),
+        'file',
+      );
+
+      const { dests, skipped } = await applyFilesConfig({
+        filesConfig: [nonRegularGlob],
+        projectRoot,
+        skillOutputDir,
+      });
+
+      expect(dests).toContain('scripts/linkfile.mjs');
+      expect(readFileSync(safePath.join(skillOutputDir, 'scripts', 'linkfile.mjs'), 'utf-8'))
+        .toBe(OK_BYTES);
+      expect(skipped.map(s => s.dest)).toEqual([NON_REGULAR_LINK_DEST]);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
