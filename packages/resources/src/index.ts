@@ -94,8 +94,15 @@ export { parseHtml } from './html-link-parser.js';
 export type { HtmlParseError } from './schemas/resource-metadata.js';
 export { rewriteHtmlLinks, type UnappliedRewrite } from './html-transform.js';
 
-// Export frontmatter validation
-export { validateFrontmatter } from './frontmatter-validator.js';
+// Export frontmatter validation. `compileFrontmatterSchema` +
+// `validateCompiledFrontmatter` is the form to use when validating many
+// documents against one schema — `validateFrontmatter` compiles per call.
+export {
+  compileFrontmatterSchema,
+  validateCompiledFrontmatter,
+  validateFrontmatter,
+  type CompiledFrontmatterSchema,
+} from './frontmatter-validator.js';
 
 // Public Ajv factory for adopters consuming VAT-generated schemas. Registers
 // URI-family formats (uri, uri-reference, iri, iri-reference) so schemas

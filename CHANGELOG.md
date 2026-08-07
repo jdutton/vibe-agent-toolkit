@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Collection frontmatter schemas are compiled once per validation run, not once per resource.**
+  Every resource belonging to a collection re-read its schema file, re-parsed the JSON, constructed a
+  fresh Ajv instance and recompiled the schema — on a repository with 129 collection-bearing
+  resources and 2 distinct schemas, that was 129 compilations of the same two schemas. Compiled
+  validators are now memoized for the span of one run, keyed on validation mode plus the *resolved*
+  schema path, so two collections naming one schema by different specifiers (a relative path and an
+  npm bare specifier) share a validator. On a ~1,100-document repository `ResourceRegistry.validate()`
+  drops from **668 ms to 168 ms**; measured over the schema-bearing collections alone, 655 ms to
+  94 ms. The cache is discarded when the run returns, so a schema edited between runs is picked up.
+  Reported issues are unchanged, including the wording of schema-load failures.
+
+### Added
+
+- **`compileFrontmatterSchema()` and `validateCompiledFrontmatter()`** are exported from
+  `@vibe-agent-toolkit/resources`, splitting schema compilation from validation. Use them when
+  validating many documents against one schema; `validateFrontmatter()` is unchanged and still
+  compiles per call.
+
 ## [0.1.41] - 2026-08-03
 
 Entries describe change relative to **0.1.40**, the last stable release. Defects introduced and fixed

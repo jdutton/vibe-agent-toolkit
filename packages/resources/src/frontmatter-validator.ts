@@ -15,59 +15,48 @@
 
 import { createRegistryIssue, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { issueLocation } from '@vibe-agent-toolkit/utils';
+import type { ValidateFunction } from 'ajv';
 
 import { createAjvWithUriFormats } from './ajv-factory.js';
 import type { ValidationMode } from './schemas/project-config.js';
 import { locationRoot } from './utils.js';
 
 /**
- * Validate frontmatter against a JSON Schema.
+ * A JSON Schema prepared once for repeated frontmatter validation.
  *
- * Behavior:
- * - Missing frontmatter: Error only if schema has required fields
- * - Extra fields: Allowed by default (unless schema sets additionalProperties: false)
- * - Type mismatches: Always reported as errors
- * - Permissive mode: Ignores additionalProperties: false (allows schema layering)
- *
- * @param frontmatter - Parsed frontmatter object (or undefined if no frontmatter)
- * @param schema - JSON Schema object
- * @param resourcePath - File path for error reporting
- * @param mode - Validation mode: 'strict' (default) or 'permissive'
- * @param schemaPath - Path to schema file (for error context)
- * @param projectRoot - Project root for computing relative issue locations
- * @returns Array of validation issues (empty if valid)
- *
- * @example
- * ```typescript
- * const schema = {
- *   type: 'object',
- *   required: ['title'],
- *   properties: { title: { type: 'string' } }
- * };
- * const issues = validateFrontmatter(
- *   frontmatter,
- *   schema,
- *   '/docs/guide.md',
- *   'strict',
- *   '/schema.json'
- * );
- * ```
+ * Ajv compilation is the expensive half of frontmatter validation and its
+ * result is reusable: the compiled validator is a pure function of
+ * (schema, mode). Callers validating many documents against the same schema —
+ * every collection in a project — must compile once via
+ * {@link compileFrontmatterSchema} and reuse the result, rather than paying
+ * compilation per document.
  */
-export function validateFrontmatter(
-  frontmatter: Record<string, unknown> | undefined,
-  schema: object,
-  resourcePath: string,
-  mode: ValidationMode = 'strict',
-  schemaPath?: string,
-  projectRoot?: string,
-): ValidationIssue[] {
-  const issues: ValidationIssue[] = [];
+export interface CompiledFrontmatterSchema {
+  /** The schema as supplied by the caller, unmodified. */
+  readonly schema: object;
+  /** The mode the validator was compiled for. */
+  readonly mode: ValidationMode;
+  /** Ajv validator for the effective (mode-adjusted) schema. */
+  readonly validate: ValidateFunction;
+}
 
+/**
+ * Compile a JSON Schema for frontmatter validation in the given mode.
+ *
+ * Permissive mode compiles a clone with `additionalProperties: true`, so the
+ * mode is part of the compiled artifact's identity — a cache of compiled
+ * schemas must key on (schema source, mode), never on the source alone.
+ *
+ * @param schema - JSON Schema object
+ * @param mode - Validation mode: 'strict' (default) or 'permissive'
+ * @returns The compiled schema, reusable across any number of documents
+ */
+export function compileFrontmatterSchema(
+  schema: object,
+  mode: ValidationMode = 'strict',
+): CompiledFrontmatterSchema {
   // In permissive mode, clone schema and set additionalProperties: true
-  let effectiveSchema = schema;
-  if (mode === 'permissive') {
-    effectiveSchema = makeSchemaPermissive(schema);
-  }
+  const effectiveSchema = mode === 'permissive' ? makeSchemaPermissive(schema) : schema;
 
   // Use the shared Ajv factory so the internal validator and any adopter
   // consuming `createAjvWithUriFormats` see identical format behavior.
@@ -83,7 +72,31 @@ export function validateFrontmatter(
     allowUnionTypes: true,
   });
 
-  const validate = ajv.compile(effectiveSchema);
+  return { schema, mode, validate: ajv.compile(effectiveSchema) };
+}
+
+/**
+ * Validate frontmatter against an already-compiled schema.
+ *
+ * Identical in output to {@link validateFrontmatter}; this is the entry point
+ * for callers that validate many documents against one schema.
+ *
+ * @param frontmatter - Parsed frontmatter object (or undefined if no frontmatter)
+ * @param compiled - Result of {@link compileFrontmatterSchema}
+ * @param resourcePath - File path for error reporting
+ * @param schemaPath - Path to schema file (for error context)
+ * @param projectRoot - Project root for computing relative issue locations
+ * @returns Array of validation issues (empty if valid)
+ */
+export function validateCompiledFrontmatter(
+  frontmatter: Record<string, unknown> | undefined,
+  compiled: CompiledFrontmatterSchema,
+  resourcePath: string,
+  schemaPath?: string,
+  projectRoot?: string,
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  const { schema, mode, validate } = compiled;
 
   // Case 1: No frontmatter present
   if (!frontmatter) {
@@ -124,6 +137,61 @@ export function validateFrontmatter(
   }
 
   return issues;
+}
+
+/**
+ * Validate frontmatter against a JSON Schema, compiling the schema on the spot.
+ *
+ * One-shot convenience over {@link compileFrontmatterSchema} +
+ * {@link validateCompiledFrontmatter}. **Do not call this in a loop over
+ * documents sharing a schema** — that recompiles the schema per document. Use
+ * the two-step form there instead.
+ *
+ * Behavior:
+ * - Missing frontmatter: Error only if schema has required fields
+ * - Extra fields: Allowed by default (unless schema sets additionalProperties: false)
+ * - Type mismatches: Always reported as errors
+ * - Permissive mode: Ignores additionalProperties: false (allows schema layering)
+ *
+ * @param frontmatter - Parsed frontmatter object (or undefined if no frontmatter)
+ * @param schema - JSON Schema object
+ * @param resourcePath - File path for error reporting
+ * @param mode - Validation mode: 'strict' (default) or 'permissive'
+ * @param schemaPath - Path to schema file (for error context)
+ * @param projectRoot - Project root for computing relative issue locations
+ * @returns Array of validation issues (empty if valid)
+ *
+ * @example
+ * ```typescript
+ * const schema = {
+ *   type: 'object',
+ *   required: ['title'],
+ *   properties: { title: { type: 'string' } }
+ * };
+ * const issues = validateFrontmatter(
+ *   frontmatter,
+ *   schema,
+ *   '/docs/guide.md',
+ *   'strict',
+ *   '/schema.json'
+ * );
+ * ```
+ */
+export function validateFrontmatter(
+  frontmatter: Record<string, unknown> | undefined,
+  schema: object,
+  resourcePath: string,
+  mode: ValidationMode = 'strict',
+  schemaPath?: string,
+  projectRoot?: string,
+): ValidationIssue[] {
+  return validateCompiledFrontmatter(
+    frontmatter,
+    compileFrontmatterSchema(schema, mode),
+    resourcePath,
+    schemaPath,
+    projectRoot,
+  );
 }
 
 /**
