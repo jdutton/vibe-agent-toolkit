@@ -32,6 +32,7 @@ export {
   DEFAULT_RESOURCE_INCLUDE,
   generateIdFromPath,
   type CrawlOptions,
+  type DuplicateIdCollision,
   type ResourceRegistryOptions,
   type RegistryStats,
   type CollectionStats,
@@ -88,6 +89,17 @@ export {
 
 // Export parser interface for advanced use cases
 export { parseMarkdown, classifyLink, isLocalFileLink, type ParseResult } from './link-parser.js';
+
+// Parse identity: which parser a path routes to, and the key a parse result is
+// filed under. Path-independent by construction — see content-key.ts.
+export {
+  CONTENT_KEY_SCHEMA_VERSION,
+  computeContentKey,
+  parserKindForPath,
+  readContentWithKey,
+  type KeyedContent,
+  type ParserKind,
+} from './content-key.js';
 
 export { parseHtml } from './html-link-parser.js';
 // HtmlParseError is Zod-sourced (single source of truth) — see schemas/resource-metadata.ts.

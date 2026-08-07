@@ -16,6 +16,7 @@ import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, type GitTracker
 
 import { calculateChecksum } from './checksum.js';
 import { getCollectionsForFile } from './collection-matcher.js';
+import { parserKindForPath } from './content-key.js';
 import type { DeferredArtifacts } from './deferred-artifacts.js';
 import { ExternalLinkValidator } from './external-link-validator.js';
 import {
@@ -45,6 +46,19 @@ import { locationRoot, matchesGlobPattern, resolveLocalHref } from './utils.js';
  * issue data without re-deriving the id from the file path (which would be
  * wrong when the id came from a frontmatter `idField` value).
  */
+/**
+ * One first-added-wins drop: two files produced the same resource id, and the
+ * later arrival was skipped.
+ */
+export interface DuplicateIdCollision {
+  /** The id both files claimed. */
+  id: string;
+  /** Absolute path of the file that arrived first and therefore won. */
+  existingPath: string;
+  /** Absolute path of the file that arrived later and was skipped. */
+  conflictingPath: string;
+}
+
 export class DuplicateResourceIdError extends Error {
   readonly id: string;
   readonly existingPath: string;
@@ -300,7 +314,23 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * Collisions recorded by addResources() when two files produce the same resource id.
    * Cleared by clear(). Surfaced as DUPLICATE_RESOURCE_ID issues in validate().
    */
-  private duplicateIdCollisions: Array<{ id: string; existingPath: string; conflictingPath: string }> = [];
+  private duplicateIdCollisions: DuplicateIdCollision[] = [];
+
+  /**
+   * Duplicate-id drops, in the order `addResources` made them.
+   *
+   * Exposed because arrival order is behaviour, not bookkeeping: the rule is
+   * first-added-wins, so which of two colliding files gets validated, bundled
+   * and rewritten is decided by enumeration order. `validate()` turns these
+   * into `DUPLICATE_RESOURCE_ID` issues; a caller that needs to compare
+   * populations across a refactor needs the raw drops, because an issue list
+   * says a collision happened without saying which file survived it.
+   *
+   * @returns A copy of the collision log, oldest first
+   */
+  getDuplicateIdCollisions(): DuplicateIdCollision[] {
+    return [...this.duplicateIdCollisions];
+  }
 
   constructor(options?: ResourceRegistryOptions) {
     if (options?.baseDir !== undefined) {
@@ -435,10 +465,10 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // Normalize path to absolute
     const absolutePath = safePath.resolve(filePath);
 
-    // Parse the file — HTML or markdown depending on extension
-    const lowerPath = absolutePath.toLowerCase();
-    const isHtml = lowerPath.endsWith('.html') || lowerPath.endsWith('.htm');
-    const parseResult = isHtml
+    // Parse the file — HTML or markdown depending on extension. The
+    // discriminator lives in content-key.ts because parser selection is part of
+    // a document's parse identity, not an incidental property of this call site.
+    const parseResult = parserKindForPath(absolutePath) === 'html'
       ? await parseHtml(absolutePath)
       : await parseMarkdown(absolutePath);
 
@@ -521,6 +551,15 @@ export class ResourceRegistry implements ResourceCollectionInterface {
           });
           // First-added wins; skip conflicting file and continue crawling.
         } else {
+          // ⚠️ Everything that is not a duplicate-id error propagates, and that
+          // includes a plain read failure. A committed dangling `*.md` symlink
+          // is enumerated by `crawlDirectory`'s git branch (which ignores
+          // `followSymlinks`), reaches `readFile` here, and terminates the
+          // whole command with a raw ENOENT stack trace instead of producing a
+          // finding. Pinned by
+          // packages/cli/test/integration/enumeration-symlink-divergence.integration.test.ts.
+          // The fix needs a real issue code — dropping the file silently would
+          // trade a loud crash for a silent population change.
           throw error;
         }
       }

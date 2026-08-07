@@ -1,0 +1,248 @@
+# parse-fact-snapshot
+corpus: trap/non-git
+blobCount: 21
+
+## blob k1.html.29ea537818e21b8c340d049d63dba80d23dce347701efe133cf5142c3126e1ca
+parser: html
+paths: docs/page.html
+sizeBytes: 126
+estimatedTokenCount: 32
+frontmatterSource: -
+links: 1
+  0	local_file	-	line=3	href=guide.md	text=
+headings: 0
+conditions: 0
+
+## blob k1.html.3fd36f8e0c55f10608f285fb12408c3ff19924268245a79198a349f88769420b
+parser: html
+paths: docs/page.htm
+sizeBytes: 59
+estimatedTokenCount: 15
+frontmatterSource: -
+links: 1
+  0	local_file	-	line=1	href=sibling.md	text=
+headings: 0
+conditions: 1
+  MALFORMED_HTML	line=1	missing-doctype
+
+## blob k1.html.737e05c1cb6ca63fc9414dbe6cf2ad13d14fdf178b8b6ec89f5766ab2dc148cf
+parser: html
+paths: empty.html
+sizeBytes: 0
+estimatedTokenCount: 0
+frontmatterSource: -
+links: 0
+headings: 0
+conditions: 1
+  MALFORMED_HTML	line=1	missing-doctype
+
+## blob k1.html.7747e96c7e64aed3e3321cfd4b03879678bfa074812cbf568b61d8c46da564fb
+parser: html
+paths: broken/malformed.html
+sizeBytes: 36
+estimatedTokenCount: 9
+frontmatterSource: -
+links: 0
+headings: 0
+conditions: 1
+  MALFORMED_HTML	line=1	missing-doctype
+
+## blob k1.markdown.066c8e792c839584b6817e36756f122127334e7a8a7643b16f396713ce7976a6
+parser: markdown
+paths: links/to-missing.md
+sizeBytes: 41
+estimatedTokenCount: 11
+frontmatterSource: -
+links: 1
+  0	local_file	link	line=3	href=../docs/nowhere.md	text=gone
+headings: 1
+  0	h1	slug=to-nothing	line=1	text=To nothing
+conditions: 0
+
+## blob k1.markdown.0a33e5e38deb84da046953417194c79dfca6e85f9cb93a75fe1879878c535f11
+parser: markdown
+paths: ignored/secret.md
+sizeBytes: 64
+estimatedTokenCount: 16
+frontmatterSource: -
+links: 0
+headings: 1
+  0	h1	slug=secret	line=1	text=Secret
+conditions: 0
+
+## blob k1.markdown.0c9f162da29f6879ea5f1e062ef2c3db833f85adf11a17a2bdffd5b38edfb1d1
+parser: markdown
+paths: links/to-case.md
+sizeBytes: 38
+estimatedTokenCount: 10
+frontmatterSource: -
+links: 1
+  0	local_file	link	line=3	href=../docs/case.md	text=Case
+headings: 1
+  0	h1	slug=wrong-case	line=1	text=Wrong case
+conditions: 0
+
+## blob k1.markdown.0de4bae35943b2badc3e9dff11ce490186438df2e82f97aec24114bdbf96b195
+parser: markdown
+paths: broken/exotic-frontmatter.md
+sizeBytes: 97
+estimatedTokenCount: 25
+frontmatterSource: ceiling: .inf\nundefined_value: .nan\npayload: !!binary |\n  aGVsbG8=
+links: 0
+headings: 1
+  0	h1	slug=exotic-frontmatter	line=8	text=Exotic frontmatter
+conditions: 0
+
+## blob k1.markdown.108f2a9cd167d06448fb2209135e3ddc033d4e2c1356415574aab8d673e7161c
+parser: markdown
+paths: docs/guide.md
+sizeBytes: 344
+estimatedTokenCount: 86
+frontmatterSource: title: Guide\ndescription: An ordinary document, so the snapshot has a baseline to be unlike.
+links: 2
+  0	local_file	link	line=8	href=sibling.md	text=the sibling
+  1	local_file	link	line=8	href=../README.md	text=back up
+headings: 3
+  0	h1	slug=guide	line=6	text=Guide
+  1	h2	slug=nested-heading	line=10	text=Nested heading
+  2	h2	slug=nested-heading-1	line=12	text=Nested heading
+conditions: 0
+
+## blob k1.markdown.163c953a7ed2348961516460de6b2290fd6c5f4fa1c6a1a55cf1ab2c0b97f2de
+parser: markdown
+paths: symlinks/b/target.md
+sizeBytes: 68
+estimatedTokenCount: 17
+frontmatterSource: -
+links: 0
+headings: 1
+  0	h1	slug=b	line=1	text=B
+conditions: 0
+
+## blob k1.markdown.17168c653cc4703618ed339022ab8789582bd711f5d6697c4f5f0a183f75814c
+parser: markdown
+paths: empty.md
+sizeBytes: 0
+estimatedTokenCount: 0
+frontmatterSource: -
+links: 0
+headings: 0
+conditions: 0
+
+## blob k1.markdown.248704ff6f113b84adfbd6000260a216bde1a2ca79ddd1c7c909d8f641c259ff
+parser: markdown
+paths: README.md
+sizeBytes: 105
+estimatedTokenCount: 27
+frontmatterSource: -
+links: 3
+  0	local_file	link	line=3	href=docs/guide.md	text=guide
+  1	local_file	link	line=3	href=docs/page.html	text=page
+  2	local_file	link	line=3	href=docs/nowhere.md	text=missing file
+headings: 1
+  0	h1	slug=trap-corpus	line=1	text=Trap corpus
+conditions: 0
+
+## blob k1.markdown.3eddf50474c7af1104b3d551a99a00968868ce334144b06ab55bc60cbbc83b07
+parser: markdown
+paths: broken/bad-frontmatter.md
+sizeBytes: 35
+estimatedTokenCount: 9
+frontmatterSource: title: [unclosed
+links: 0
+headings: 1
+  0	h1	slug=broken	line=5	text=Broken
+conditions: 1
+  FRONTMATTER_INVALID_YAML	line=1	Flow sequence in block collection must be sufficiently indented and end with a ] at line 1, column 17:\n\ntitle: [unclosed\n                ^\n
+
+## blob k1.markdown.4ac4b04af9f1e10174918d406145c72cb00e4214a2ba49076ef168fbf6b2eaf5
+parser: markdown
+paths: dup/hyphen-note.md
+sizeBytes: 43
+estimatedTokenCount: 11
+frontmatterSource: id: shared-note
+links: 0
+headings: 1
+  0	h1	slug=note-under-dup	line=5	text=Note under dup/
+conditions: 0
+
+## blob k1.markdown.4f7676629aa6b3a43a912325c9d5f0847a3af5a28c51f0610f8046742a1519b4
+parser: markdown
+paths: broken/dangling-reference.md
+sizeBytes: 37
+estimatedTokenCount: 10
+frontmatterSource: -
+links: 0
+headings: 1
+  0	h1	slug=dangling	line=1	text=Dangling
+conditions: 1
+  LINK_UNRESOLVED_REFERENCE	line=3	nowhere
+
+## blob k1.markdown.59687063d2df3063831b905dbf1cd6dc86839ac950e8a86b1c89ab92829b41cf
+parser: markdown
+paths: symlinks/a/target.md
+sizeBytes: 28
+estimatedTokenCount: 7
+frontmatterSource: -
+links: 0
+headings: 1
+  0	h1	slug=a	line=1	text=A
+conditions: 0
+
+## blob k1.markdown.67bdc639b157a669f9adea87b698e5d6af8fed059a8cb1c1c09a4f138936bb66
+parser: markdown
+paths: docs/sibling.md
+sizeBytes: 55
+estimatedTokenCount: 14
+frontmatterSource: -
+links: 0
+headings: 1
+  0	h1	slug=sibling	line=1	text=Sibling
+conditions: 0
+
+## blob k1.markdown.7b721128893996c29eaac42b042c71605f0f11ab7c8dd597860526e3939c2167
+parser: markdown
+paths: dup-hyphen/note.md
+sizeBytes: 50
+estimatedTokenCount: 13
+frontmatterSource: id: shared-note
+links: 0
+headings: 1
+  0	h1	slug=note-under-dup-hyphen	line=5	text=Note under dup-hyphen/
+conditions: 0
+
+## blob k1.markdown.8e61e96430a8cb31c2fdb61e95c1574c18b4c817c8a83ef0353d47f1888bc067
+parser: markdown
+paths: links/to-ignored.md
+sizeBytes: 53
+estimatedTokenCount: 14
+frontmatterSource: -
+links: 1
+  0	local_file	link	line=3	href=../ignored/secret.md	text=secret
+headings: 1
+  0	h1	slug=to-an-ignored-file	line=1	text=To an ignored file
+conditions: 0
+
+## blob k1.markdown.8e9e32803df20e60ee7c37719c6ef8e2a1a9ffa20c0dae81da1c8d5dc659cd4e
+parser: markdown
+paths: links/to-dir.md
+sizeBytes: 34
+estimatedTokenCount: 9
+frontmatterSource: -
+links: 1
+  0	local_file	link	line=3	href=../docs	text=docs
+headings: 1
+  0	h1	slug=to-a-directory	line=1	text=To a directory
+conditions: 0
+
+## blob k1.markdown.c7ea65cb38f8d6df156b34813f7d6a079ba8d69c133c7c254e066ce6655a5baf
+parser: markdown
+paths: docs/Case.md
+sizeBytes: 62
+estimatedTokenCount: 16
+frontmatterSource: -
+links: 0
+headings: 1
+  0	h1	slug=case	line=1	text=Case
+conditions: 0
+

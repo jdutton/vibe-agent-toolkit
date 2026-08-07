@@ -1,0 +1,186 @@
+/**
+ * Shapes for the intermediate correctness oracles.
+ *
+ * See `./README.md` for what these are for and why a whole-command golden is
+ * not sufficient on its own.
+ */
+
+/**
+ * The corpus-enumerating routines VAT actually has. There is no single one —
+ * there are five, and they disagree about what the corpus is. Each is named
+ * here by the lane that owns it, so a snapshot can say *whose* population
+ * changed rather than only *that* output changed.
+ */
+export type LaneId =
+  /** `vat resources scan` / `vat resources validate` — the only config-aware lane. */
+  | 'resources'
+  /** `vat audit` and post-build validation — memoized per root, deliberately config-less. */
+  | 'audit'
+  /** `vat skills build` — via `createProjectRegistry`; config-aware but markdown-only. */
+  | 'skills-build'
+  /** `vat inventory` — the only lane that asks git for untracked files. */
+  | 'inventory'
+  /** `vat skills validate` — a batch-scoped shared registry, markdown-only, config-less. */
+  | 'skills-validate';
+
+/** Which of `crawlDirectory`'s two mutually exclusive routes answered the crawl. */
+export type EnumerationRoute =
+  /** `git ls-files` answered. Output is git-sorted, hence portable across hosts. */
+  | 'git-ls-files'
+  /**
+   * A recursive `readdirSync` walk answered, because there was no git root (or
+   * git failed). Output is in **filesystem order**, which differs between ext4,
+   * APFS and NTFS — so an ordered golden captured on one host does not hold on
+   * another. Snapshots taken on this route are order-stable within a host and
+   * only set-comparable across hosts.
+   */
+  | 'walk';
+
+/**
+ * One enumerated path and the cheap attributes later stages must not go compute
+ * for themselves.
+ *
+ * `gitignored` is worth stating plainly: on the `git-ls-files` route it is
+ * constant-`false`, because `git ls-files` cannot return an ignored path. It is
+ * a real question only for paths that arrive from somewhere other than the
+ * enumeration — parse-discovered link targets, chiefly — which is exactly what
+ * `LINK_TO_GITIGNORED` is about. The column is carried here so the two
+ * populations can be compared, not because it varies within one.
+ */
+export interface EnumerationRow {
+  /** Corpus-relative, forward-slashed, so a snapshot is host-independent. */
+  path: string;
+  /**
+   * The key this document's parse would be filed under, over the bytes on disk
+   * right now. `null` when the path could not be read (broken symlink,
+   * directory, permissions).
+   */
+  contentKey: string | null;
+  exists: boolean;
+  isDirectory: boolean;
+  gitignored: boolean;
+  isSymlink: boolean;
+  /** `null` when the path is not a symlink. */
+  symlinkResolves: boolean | null;
+}
+
+/** A duplicate-id drop, recorded in arrival order by `addResources`. */
+export interface CollisionRow {
+  id: string;
+  /** The file that arrived first and therefore won. Corpus-relative. */
+  existingPath: string;
+  /** The file that arrived later and was skipped. Corpus-relative. */
+  conflictingPath: string;
+}
+
+/**
+ * What one lane enumerated over one corpus.
+ *
+ * ⛔ `enumerated` and `admitted` are **order-preserving and must never be
+ * sorted**. `ResourceRegistry.addResources` is first-added-wins on
+ * `DuplicateResourceIdError`, so arrival order decides which of two colliding
+ * files is the one that gets validated and bundled. A sorted snapshot hides
+ * precisely the defect this oracle exists to catch.
+ */
+export interface EnumerationSnapshot {
+  laneId: LaneId;
+  /** Human label for the corpus, so a golden filename means something. */
+  corpus: string;
+  route: EnumerationRoute;
+  /** Whether a usable git tracker was available to answer `gitignored`. */
+  gitAvailable: boolean;
+  /** Ordered, pre-deduplication: what the crawl handed to `addResources`. */
+  enumerated: EnumerationRow[];
+  /** Ordered, post-deduplication: the registry's arrival order. Corpus-relative. */
+  admitted: string[];
+  /** Drops the first-added-wins rule made, in arrival order. */
+  collisions: CollisionRow[];
+  /**
+   * Set when the lane's production builder **threw** instead of returning a
+   * registry, with `admitted` and `collisions` left empty.
+   *
+   * A lane that cannot enumerate a corpus is a fact about VAT, not a fault in
+   * the harness, and recording it is the only way a golden can show it. It is
+   * reachable today: a committed dangling `*.md` symlink terminates every
+   * resource lane with an unhandled `ENOENT`, because `git ls-files` returns
+   * mode-120000 entries and `addResources` catches only duplicate-id errors.
+   */
+  buildError?: string;
+  /**
+   * Non-empty when `enumerated` does not reconcile with `admitted` plus
+   * `collisions` — i.e. this module's restatement of the lane's crawl options
+   * has drifted from what the lane's real builder does. That drift is itself
+   * the finding; it is surfaced in the snapshot rather than thrown, so a golden
+   * diff shows it.
+   */
+  restatementDrift: string[];
+}
+
+/** One link occurrence, with the ordinal that makes it addressable. */
+export interface LinkFact {
+  ordinal: number;
+  href: string;
+  text: string;
+  type: string;
+  line: number | null;
+  nodeType: string | null;
+}
+
+/** One heading, with the slug anchors resolve against. */
+export interface HeadingFact {
+  ordinal: number;
+  level: number;
+  text: string;
+  slug: string;
+  line: number | null;
+}
+
+/**
+ * Facts a parse produces from one blob. Keyed by content key, never by path —
+ * that is the property that makes this doubles as the parse cache's oracle.
+ */
+export interface ParseFactRow {
+  contentKey: string;
+  parserKind: string;
+  sizeBytes: number;
+  estimatedTokenCount: number;
+  links: LinkFact[];
+  headings: HeadingFact[];
+  /**
+   * The frontmatter block **as written**, delimiters excluded, or `null` when
+   * the document has none.
+   *
+   * Deliberately the source and not the parsed object: a YAML→JSON round-trip
+   * is lossy in ways a validator notices (`.inf`/`.nan` become `null`,
+   * `!!binary` becomes a Buffer envelope, cyclic anchors make `JSON.stringify`
+   * throw). A cold run would hand Ajv `Infinity` and a warm run `null` — same
+   * corpus, same config, different reported issues.
+   */
+  frontmatterSource: string | null;
+  /** Parse-time oddities: YAML errors, HTML well-formedness, dangling refs. */
+  conditions: ConditionFact[];
+}
+
+/** A parse-time oddity. `code` is an open vocabulary; add rows, never columns. */
+export interface ConditionFact {
+  code: string;
+  message: string;
+  line: number | null;
+}
+
+/** Parse facts for a corpus, keyed by content key. */
+export interface ParseFactSnapshot {
+  corpus: string;
+  /**
+   * Ordered by content key so this snapshot is comparable across hosts even
+   * when the enumeration that produced it was in filesystem order. Sorting is
+   * safe HERE and unsafe in {@link EnumerationSnapshot} because a parse fact is
+   * a function of the blob alone — nothing about it depends on arrival order.
+   */
+  rows: ParseFactRow[];
+  /**
+   * Corpus-relative paths that mapped to each key, sorted. Two paths under one
+   * key is the cache's whole reason to exist; zero paths is impossible.
+   */
+  pathsByKey: Record<string, string[]>;
+}

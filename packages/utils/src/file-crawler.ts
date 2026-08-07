@@ -178,6 +178,23 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
       });
 
       if (gitFiles !== null) {
+        // ⚠️ KNOWN DIVERGENCE: this branch ignores `followSymlinks`.
+        //
+        // `git ls-files` returns symlinks as mode-120000 entries like any other
+        // path, and nothing below filters them out — whereas the manual walk
+        // (see `processSymlink`) returns early unless `followSymlinks` is set.
+        // So the SAME tree with the SAME options has a different population
+        // depending only on whether a `.git` exists above it, and a committed
+        // dangling `*.md` symlink reaches `parseMarkdown` here and throws
+        // ENOENT out of `ResourceRegistry.addResources`, terminating the
+        // command rather than producing a finding.
+        //
+        // Pinned (as today's behaviour, deliberately) by
+        // packages/cli/test/integration/enumeration-symlink-divergence.integration.test.ts.
+        // Making the two routes agree changes enumeration on real corpora, so
+        // it needs its own change with a changelog entry naming the population
+        // change — not a drive-by fix here.
+        //
         // Git ls-files succeeded - filter using glob patterns
         const isIncluded = picomatch(include, picoOptions);
         const isExcluded = exclude.length > 0 ? picomatch(exclude, picoOptions) : (): boolean => false;
