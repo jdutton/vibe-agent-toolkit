@@ -26,8 +26,11 @@ module.exports = factory({
   unsafeModule: 'node:fs/promises',
   safeFn: 'cpSync',
   safeModule: 'node:fs',
+  // `{{safeModule}}` resolves to `node:fs` unless overridden. A builtin always
+  // resolves, so this rule has no seam problem — it takes the option only
+  // because it shares the factory.
   message:
-    'Use cpSync() from node:fs instead of cp() from node:fs/promises. ' +
+    'Use cpSync() from {{safeModule}} instead of cp() from node:fs/promises. ' +
     'Node 22 async cp({ recursive: true }) silently drops files in nested directories. ' +
     'cpSync() works correctly across all Node versions.',
 });

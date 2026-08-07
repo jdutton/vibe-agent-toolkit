@@ -5,16 +5,24 @@
  * - Named: import { join } from 'node:path' → join(...)
  * - Default/namespace: import path from 'node:path' → path.join(...)
  *
- * Auto-fixes to safePath.fn() from @vibe-agent-toolkit/utils.
+ * Auto-fixes to safePath.fn() from `@vibe-agent-toolkit/utils/path` — the narrow
+ * subpath that owns `safePath`, NOT the barrel. See `safe-import.cjs`.
  */
 
 const {
-  EXEMPT_FILES_SCHEMA,
+  UNANCHORED_EXEMPT_FILE,
+  UNANCHORED_EXEMPT_MESSAGE,
   createConfigurableExemptPathMatcher,
+  reportUnanchoredExemptEntries,
 } = require('./exempt-path-matcher.cjs');
+const {
+  EXEMPT_AND_SAFE_MODULE_SCHEMA,
+  SAFE_PATH_MODULE,
+  isNameAlreadyBound,
+  resolveSafeModule,
+} = require('./safe-import.cjs');
 
 const PATH_MODULES = new Set(['node:path', 'path']);
-const SAFE_MODULE = '@vibe-agent-toolkit/utils';
 const SAFE_OBJECT = 'safePath';
 
 /**
@@ -113,7 +121,7 @@ function buildFix(fixer, node, unsafeFn, isNamed, sourceCode, state) {
       fixes.push(fixer.insertTextAfter(lastSpec, `, ${SAFE_OBJECT}`));
     } else {
       const targetNode = state.namedImportNode || sourceCode.ast.body[0];
-      fixes.push(fixer.insertTextAfter(targetNode, `\nimport { ${SAFE_OBJECT} } from '${SAFE_MODULE}';`));
+      fixes.push(fixer.insertTextAfter(targetNode, `\nimport { ${SAFE_OBJECT} } from '${state.safeModule}';`));
     }
     state.hasSafePathImport = true;
   }
@@ -137,32 +145,49 @@ module.exports = function createPathFunctionRule(config) {
         recommended: true,
       },
       fixable: 'code',
-      schema: [EXEMPT_FILES_SCHEMA],
+      schema: [EXEMPT_AND_SAFE_MODULE_SCHEMA],
       messages: {
         noUnsafePathFn: message,
+        [UNANCHORED_EXEMPT_FILE]: UNANCHORED_EXEMPT_MESSAGE,
       },
     },
 
     create(context) {
       if (exemptMatcherFor(context)(context.getFilename())) {
-        return {};
+        // Still surface a malformed exemption list: the file we are standing in
+        // may be exempt only BECAUSE the entry is unanchored.
+        return {
+          Program(node) {
+            reportUnanchoredExemptEntries(context, node);
+          },
+        };
       }
 
       const sourceCode = context.getSourceCode();
       const state = {
+        // Resolved per invocation — the option belongs to the consuming repo,
+        // which may point different rules at different re-export entries.
+        safeModule: resolveSafeModule(context, SAFE_PATH_MODULE),
         namedImportSpec: null,
         namedImportNode: null,
         defaultImportName: null,
-        hasSafePathImport: false,
+        // Seeded from SCOPE, not from "did I see an import from SAFE_MODULE?".
+        // A file already importing `safePath` from the barrel needs the call
+        // rewritten but must NOT gain a second binding of the same name.
+        hasSafePathImport: isNameAlreadyBound(sourceCode, SAFE_OBJECT),
         safeImportNode: null,
       };
 
       return {
+        Program(node) {
+          reportUnanchoredExemptEntries(context, node);
+        },
+
         ImportDeclaration(node) {
           if (PATH_MODULES.has(node.source.value)) {
             trackPathImport(node, unsafeFn, state);
           }
-          if (node.source.value === SAFE_MODULE) {
+          if (node.source.value === state.safeModule) {
             trackSafeImport(node, state);
           }
         },
@@ -176,6 +201,10 @@ module.exports = function createPathFunctionRule(config) {
           context.report({
             node,
             messageId: 'noUnsafePathFn',
+            // The module name reaches the message through `{{safeModule}}` rather
+            // than being spelled out in each rule's string, so the advice cannot
+            // drift from where the fixer actually writes the import.
+            data: { safeModule: state.safeModule },
             fix(fixer) {
               return buildFix(fixer, node, unsafeFn, classification.isNamed, sourceCode, state);
             },

@@ -6,7 +6,7 @@
  * which breaks `fs` operations (ENOENT or `D:\D:\...`).
  *
  * Fix: use `fileURLToPath(new URL(...))` from `node:url`, or
- * `resolveFromImportMeta()` from `@vibe-agent-toolkit/utils`.
+ * `resolveFromImportMeta()` from `@vibe-agent-toolkit/utils/fs`.
  *
  * @example
  * // ❌ BAD — Windows-broken
@@ -18,6 +18,12 @@
  */
 
 'use strict';
+
+const {
+  SAFE_FS_MODULE,
+  SAFE_MODULE_ONLY_SCHEMA,
+  resolveSafeModule,
+} = require('./safe-import.cjs');
 
 /**
  * Returns true if `node` is the `import.meta.url` `MemberExpression`.
@@ -77,9 +83,9 @@ module.exports = {
     messages: {
       useFileURLToPath:
         'Do not use `.pathname` on `new URL(..., import.meta.url)` — on Windows it returns `/D:/...` and breaks `fs`. ' +
-        'Use `fileURLToPath(new URL(...))` from `node:url` or `resolveFromImportMeta()` from `@vibe-agent-toolkit/utils`.',
+        'Use `fileURLToPath(new URL(...))` from `node:url` or `resolveFromImportMeta()` from `{{safeModule}}`.',
     },
-    schema: [],
+    schema: [SAFE_MODULE_ONLY_SCHEMA],
   },
 
   create(context) {
@@ -89,7 +95,11 @@ module.exports = {
           return;
         }
         if (isUrlConstructorWithImportMeta(node.object)) {
-          context.report({ node, messageId: 'useFileURLToPath' });
+          context.report({
+            node,
+            messageId: 'useFileURLToPath',
+            data: { safeModule: resolveSafeModule(context, SAFE_FS_MODULE) },
+          });
         }
       },
     };

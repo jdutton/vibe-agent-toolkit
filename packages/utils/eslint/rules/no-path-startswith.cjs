@@ -2,14 +2,14 @@
  * ESLint rule to enforce using toForwardSlash() before path.startsWith()
  *
  * Cross-platform path comparisons fail on Windows when mixing backslashes and forward slashes.
- * This rule enforces using toForwardSlash() from @vibe-agent-toolkit/utils for consistent behavior.
+ * This rule enforces using toForwardSlash() from `@vibe-agent-toolkit/utils/path` for consistent behavior.
  *
  * @example
  * // ❌ BAD - fails on Windows
  * if (pluginDir.startsWith(marketplaceDir)) { ... }
  *
  * // ✅ GOOD - works cross-platform
- * import { toForwardSlash } from '@vibe-agent-toolkit/utils';
+ * import { toForwardSlash } from '@vibe-agent-toolkit/utils/path';
  * const normalizedPlugin = toForwardSlash(pluginDir);
  * const normalizedMarketplace = toForwardSlash(marketplaceDir);
  * if (normalizedPlugin.startsWith(normalizedMarketplace)) { ... }
@@ -58,6 +58,12 @@ function isNormalizedVariable(name) {
   return name.toLowerCase().startsWith('normalized');
 }
 
+const {
+  SAFE_MODULE_ONLY_SCHEMA,
+  SAFE_PATH_MODULE,
+  resolveSafeModule,
+} = require('./safe-import.cjs');
+
 module.exports = {
   meta: {
     type: 'problem',
@@ -68,13 +74,14 @@ module.exports = {
     },
     messages: {
       useNormalizeHelper:
-        'Use toForwardSlash() from @vibe-agent-toolkit/utils before path.startsWith() for cross-platform compatibility. ' +
+        'Use toForwardSlash() from {{safeModule}} before path.startsWith() for cross-platform compatibility. ' +
         'Direct string comparison fails on Windows with mixed separators.',
     },
-    schema: [],
+    schema: [SAFE_MODULE_ONLY_SCHEMA],
   },
 
   create(context) {
+    const reportData = { safeModule: resolveSafeModule(context, SAFE_PATH_MODULE) };
     return {
       CallExpression(node) {
         // Check if this is a .startsWith() call
@@ -105,6 +112,7 @@ module.exports = {
             context.report({
               node,
               messageId: 'useNormalizeHelper',
+              data: reportData,
             });
           }
         }
@@ -121,6 +129,7 @@ module.exports = {
             context.report({
               node,
               messageId: 'useNormalizeHelper',
+              data: reportData,
             });
           }
         }

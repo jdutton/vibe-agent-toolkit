@@ -6,7 +6,7 @@
  * scaffolding in exactly one place.
  */
 
-import type { Rule } from 'eslint';
+import { Linter, type Rule } from 'eslint';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -115,7 +115,19 @@ interface RuleSuite {
  * repo a hole at that path. The last two invalid legs are the regression guard
  * for that — with no options, nothing is exempt.
  */
-const SAFE_IMPORT = "import { safePath } from '@vibe-agent-toolkit/utils';";
+/**
+ * The autofix targets the NARROW subpath that owns `safePath`, not the barrel.
+ *
+ * The rules used to write `@vibe-agent-toolkit/utils` here while the README
+ * table shipped in the same tarball told adopters the replacement lived on
+ * `/path` — so the release whose entire purpose was narrow subpaths shipped lint
+ * rules that mechanically rewrote code away from them. An adopter running the
+ * pack over 4,670 files reported 4,719 such sites.
+ */
+const SAFE_PATH_MODULE = '@vibe-agent-toolkit/utils/path';
+const SAFE_FS_MODULE = '@vibe-agent-toolkit/utils/fs';
+const BARREL = '@vibe-agent-toolkit/utils';
+const SAFE_IMPORT = `import { safePath } from '${SAFE_PATH_MODULE}';`;
 const LINTED_FILE = 'packages/cli/src/example.ts';
 const PATH_CORE_IMPL = 'packages/utils/src/path-core.ts';
 const PATH_UTILS_IMPL = 'packages/utils/src/path-utils.ts';
@@ -139,6 +151,12 @@ function pathFunctionRuleCases(fn: 'join' | 'relative' | 'resolve'): RuleCases {
     valid: [
       // The safe call is never flagged.
       { code: `${SAFE_IMPORT} const p = safePath.${fn}(a, b);`, filename: LINTED_FILE, options },
+      // …including when it was reached through the barrel.
+      {
+        code: `import { safePath } from '${BARREL}'; const p = safePath.${fn}(a, b);`,
+        filename: LINTED_FILE,
+        options,
+      },
       // Files the CONSUMING config declared exempt, by their repo-relative paths.
       { code: unsafeMemberCode, filename: PATH_CORE_IMPL, options },
       { code: unsafeMemberCode, filename: `/Users/dev/vat/${PATH_UTILS_IMPL}`, options },
@@ -166,6 +184,111 @@ function pathFunctionRuleCases(fn: 'join' | 'relative' | 'resolve'): RuleCases {
       // ship VAT's layout as a silent hole in every adopter's repo.
       { code: unsafeMemberCode, filename: PATH_CORE_IMPL, output: unsafeMemberOutput, errors },
       { code: unsafeMemberCode, filename: PATH_UTILS_IMPL, output: unsafeMemberOutput, errors },
+      // ALREADY BOUND: the file reaches `safePath` through the BARREL. Rewrite
+      // the call, but do NOT add an import — a second `safePath` binding is
+      // `SyntaxError: Identifier 'safePath' has already been declared`, so the
+      // autofix would emit code that cannot parse. Latent while the fix target
+      // WAS the barrel; live the moment it became `/path`, for exactly the
+      // population being migrated.
+      {
+        code: `import { safePath } from '${BARREL}';\nimport path from 'node:path';\nconst p = path.${fn}(a, b);`,
+        filename: LINTED_FILE,
+        options,
+        output: `import { safePath } from '${BARREL}';\nimport path from 'node:path';\nconst p = safePath.${fn}(a, b);`,
+        errors,
+      },
+      // Same conflict from a plain top-level declaration, which no
+      // import-scanning check would have seen.
+      {
+        code: `const safePath = makeIt();\nimport path from 'node:path';\nconst p = path.${fn}(a, b);`,
+        filename: LINTED_FILE,
+        options,
+        output: `const safePath = makeIt();\nimport path from 'node:path';\nconst p = safePath.${fn}(a, b);`,
+        errors,
+      },
+    ],
+  };
+}
+
+/**
+ * A bare-basename `exemptFiles` entry exempts that filename EVERYWHERE.
+ *
+ * ESLint reports absolute filenames, so the matcher's `endsWith('/' + target)`
+ * leg fires for every `path-utils.ts` in the tree — the same repo-wide hole the
+ * anchoring rewrite closed, reopened one config entry at a time. Reported
+ * through the lint channel rather than as a schema `pattern`, because the schema
+ * sees the RAW string and `./path-utils.ts` contains a `/` while normalizing to
+ * exactly the same hole.
+ */
+/**
+ * `safeModule` — point the fixer at the CONSUMING repo's re-export seam.
+ *
+ * The narrow-subpath defaults are right only for a repo importing this package
+ * directly. An adopter measured what they cost everyone else: of the 61 packages
+ * in their workspace that would receive a new import, **52 (620 files) do not
+ * declare `@vibe-agent-toolkit/utils`**. Under pnpm's isolated `node_modules`
+ * that import does not degrade, it fails to resolve — so the autofix is only as
+ * good as its ability to name a specifier that resolves where the fix lands.
+ * Across their top 25 affected packages the default resolved in 0; their seam
+ * resolved in 24.
+ *
+ * PER-RULE, because a seam need not split its symbols the way this package does:
+ * theirs carries `normalizedTmpdir` but not `safePath`, so `no-os-tmpdir` and
+ * `no-path-join` need different targets — what one shared key cannot express.
+ */
+const SEAM = '@acme/dev-tools/path-utils';
+
+/**
+ * Named because each now heads three suites — its own cases, the `safeModule`
+ * cases, and the unanchored-`exemptFiles` cases. One rule per code path:
+ * `no-path-join` stands for `path-function-rule-factory`, `no-os-tmpdir` for
+ * `eslint-rule-factory`.
+ */
+const PATH_FACTORY_RULE = 'no-path-join';
+const CALL_FACTORY_RULE = 'no-os-tmpdir';
+
+function safeModuleCases(unsafeCode: string, fixedCode: string, errors: object[]): RuleCases {
+  return {
+    valid: [
+      // Already importing from the configured seam — nothing to add.
+      { code: fixedCode, filename: LINTED_FILE, options: [{ safeModule: SEAM }] },
+    ],
+    invalid: [
+      {
+        code: unsafeCode,
+        filename: LINTED_FILE,
+        options: [{ safeModule: SEAM }],
+        output: fixedCode,
+        errors,
+      },
+    ],
+  };
+}
+
+const UNANCHORED_ERROR = [{ messageId: 'unanchoredExemptFile' }];
+
+function unanchoredExemptCases(unsafeCode: string, safeCode: string): RuleCases {
+  return {
+    valid: [
+      // Properly anchored: no advisory.
+      { code: safeCode, filename: LINTED_FILE, options: [{ exemptFiles: [PATH_UTILS_IMPL] }] },
+      // No option at all: nothing to advise about.
+      { code: safeCode, filename: LINTED_FILE },
+      // Windows-spelled but still anchored.
+      {
+        code: safeCode,
+        filename: LINTED_FILE,
+        options: [{ exemptFiles: [String.raw`packages\utils\src\path-utils.ts`] }],
+      },
+    ],
+    invalid: [
+      // Fires on a file the entry does NOT match…
+      { code: safeCode, filename: LINTED_FILE, options: [{ exemptFiles: ['path-utils.ts'] }], errors: UNANCHORED_ERROR },
+      // …and on the file it DOES match, which is exempt only because of it.
+      { code: unsafeCode, filename: PATH_UTILS_IMPL, options: [{ exemptFiles: ['path-utils.ts'] }], errors: UNANCHORED_ERROR },
+      // `./x` normalizes to the same hole — the spelling a schema `pattern`
+      // would have waved through.
+      { code: safeCode, filename: LINTED_FILE, options: [{ exemptFiles: ['./path-utils.ts'] }], errors: UNANCHORED_ERROR },
     ],
   };
 }
@@ -337,12 +460,16 @@ interface UnsafeCallRuleSpec {
   unsafeFn: string;
   unsafeModule: string;
   safeFn: string;
+  /** The NARROW subpath that owns `safeFn` — never the barrel. */
+  safeModule: string;
   exemptPath: string;
 }
 
-function unsafeCallRuleCases({ unsafeFn, unsafeModule, safeFn, exemptPath }: UnsafeCallRuleSpec): RuleCases {
+function unsafeCallRuleCases(
+  { unsafeFn, unsafeModule, safeFn, safeModule, exemptPath }: UnsafeCallRuleSpec,
+): RuleCases {
   const unsafeCode = `import { ${unsafeFn} } from '${unsafeModule}';\nconst r = ${unsafeFn}(x);`;
-  const output = `import { ${safeFn} } from '@vibe-agent-toolkit/utils';\n\nconst r = ${safeFn}(x);`;
+  const output = `import { ${safeFn} } from '${safeModule}';\n\nconst r = ${safeFn}(x);`;
   const errors = [{ messageId: 'noUnsafeOperation' }];
   const options = [{ exemptFiles: [exemptPath] }];
   const decoy = (filename: string) => ({ code: unsafeCode, filename, options, output, errors });
@@ -351,7 +478,7 @@ function unsafeCallRuleCases({ unsafeFn, unsafeModule, safeFn, exemptPath }: Uns
   return {
     valid: [
       {
-        code: `import { ${safeFn} } from '@vibe-agent-toolkit/utils';\nconst r = ${safeFn}(x);`,
+        code: `import { ${safeFn} } from '${safeModule}';\nconst r = ${safeFn}(x);`,
         filename: LINTED_FILE,
         options,
       },
@@ -367,6 +494,15 @@ function unsafeCallRuleCases({ unsafeFn, unsafeModule, safeFn, exemptPath }: Uns
       // UNCONFIGURED — with no `exemptFiles` option nothing is exempt, including
       // the path this factory used to hardcode. See pathFunctionRuleCases above.
       { code: unsafeCode, filename: exemptPath, output, errors },
+      // ALREADY BOUND through the BARREL — rewrite the call, add no import. A
+      // second binding of `safeFn` is a SyntaxError, not a redundant import.
+      {
+        code: `import { ${safeFn} } from '${BARREL}';\nimport { ${unsafeFn} } from '${unsafeModule}';\nconst r = ${unsafeFn}(x);`,
+        filename: LINTED_FILE,
+        options,
+        output: `import { ${safeFn} } from '${BARREL}';\n\nconst r = ${safeFn}(x);`,
+        errors,
+      },
     ],
   };
 }
@@ -406,25 +542,28 @@ const SUITES: readonly RuleSuite[] = [
   { name: 'no-unsafe-root-join', cases: NO_UNSAFE_ROOT_JOIN_CASES },
   { name: 'require-justified-skip', cases: REQUIRE_JUSTIFIED_SKIP_CASES },
   { name: 'no-unix-shell-commands', cases: NO_UNIX_SHELL_COMMANDS_CASES },
-  { name: 'no-path-join', cases: pathFunctionRuleCases('join') },
+  { name: PATH_FACTORY_RULE, cases: pathFunctionRuleCases('join') },
   { name: 'no-path-resolve', cases: pathFunctionRuleCases('resolve') },
   { name: 'no-path-relative', cases: pathFunctionRuleCases('relative') },
   {
-    name: 'no-os-tmpdir',
+    name: CALL_FACTORY_RULE,
     cases: unsafeCallRuleCases({
-      unsafeFn: 'tmpdir', unsafeModule: 'node:os', safeFn: 'normalizedTmpdir', exemptPath: PATH_UTILS_IMPL,
+      unsafeFn: 'tmpdir', unsafeModule: 'node:os', safeFn: 'normalizedTmpdir',
+      safeModule: SAFE_FS_MODULE, exemptPath: PATH_UTILS_IMPL,
     }),
   },
   {
     name: 'no-fs-mkdirSync',
     cases: unsafeCallRuleCases({
-      unsafeFn: 'mkdirSync', unsafeModule: 'node:fs', safeFn: 'mkdirSyncReal', exemptPath: PATH_UTILS_IMPL,
+      unsafeFn: 'mkdirSync', unsafeModule: 'node:fs', safeFn: 'mkdirSyncReal',
+      safeModule: SAFE_FS_MODULE, exemptPath: PATH_UTILS_IMPL,
     }),
   },
   {
     name: 'no-fs-realpathSync',
     cases: unsafeCallRuleCases({
-      unsafeFn: 'realpathSync', unsafeModule: 'node:fs', safeFn: 'normalizePath', exemptPath: PATH_UTILS_IMPL,
+      unsafeFn: 'realpathSync', unsafeModule: 'node:fs', safeFn: 'normalizePath',
+      safeModule: SAFE_FS_MODULE, exemptPath: PATH_UTILS_IMPL,
     }),
   },
   {
@@ -433,8 +572,51 @@ const SUITES: readonly RuleSuite[] = [
       unsafeFn: 'execSync',
       unsafeModule: 'node:child_process',
       safeFn: 'safeExecSync',
+      safeModule: '@vibe-agent-toolkit/utils/process',
       exemptPath: 'packages/utils/src/safe-exec.ts',
     }),
+  },
+  // `safeModule`, once per code path that WRITES an import: the two factories
+  // and `no-manual-path-normalize`, which has its own fixer.
+  {
+    name: PATH_FACTORY_RULE,
+    cases: safeModuleCases(
+      "import path from 'node:path';\nconst p = path.join(a, b);",
+      `import path from 'node:path';\nimport { safePath } from '${SEAM}';\nconst p = safePath.join(a, b);`,
+      [{ messageId: 'noUnsafePathFn' }],
+    ),
+  },
+  {
+    name: CALL_FACTORY_RULE,
+    cases: safeModuleCases(
+      "import { tmpdir } from 'node:os';\nconst r = tmpdir();",
+      `import { normalizedTmpdir } from '${SEAM}';\n\nconst r = normalizedTmpdir();`,
+      [{ messageId: 'noUnsafeOperation' }],
+    ),
+  },
+  {
+    name: 'no-manual-path-normalize',
+    cases: safeModuleCases(
+      "const n = p.split(path.sep).join('/');",
+      `import { toForwardSlash } from '${SEAM}';\nconst n = toForwardSlash(p);`,
+      [{ messageId: 'useToForwardSlash' }],
+    ),
+  },
+  // The unanchored-`exemptFiles` advisory, once per factory: `no-path-join`
+  // covers `path-function-rule-factory`, `no-os-tmpdir` the other one.
+  {
+    name: PATH_FACTORY_RULE,
+    cases: unanchoredExemptCases(
+      "import path from 'node:path'; const p = path.join(a, b);",
+      `${SAFE_IMPORT} const p = safePath.join(a, b);`,
+    ),
+  },
+  {
+    name: CALL_FACTORY_RULE,
+    cases: unanchoredExemptCases(
+      "import { tmpdir } from 'node:os';\nconst r = tmpdir();",
+      `import { normalizedTmpdir } from '${SAFE_FS_MODULE}';\nconst r = normalizedTmpdir();`,
+    ),
   },
 ];
 
@@ -494,5 +676,96 @@ describe('no-command-direct-factory', () => {
         ],
       });
     }).not.toThrow();
+  });
+});
+
+/**
+ * A message placeholder and the schema that fills it must not drift apart.
+ *
+ * `{{safeModule}}` is only ever substituted because the rule read the option and
+ * passed it as report `data`. A rule that interpolates it WITHOUT declaring the
+ * option in `meta.schema` cannot be pointed at a consumer's seam — its advice
+ * would keep naming this package's subpath while the fixers around it wrote the
+ * consumer's, which is the same fixer/docs divergence that made the autofix
+ * target a blocker in the first place.
+ *
+ * Declaring the option is only half of it. The other half — that the rule
+ * actually passes `safeModule` as report `data` — cannot be seen structurally:
+ * a rule may declare the option, read it, and still omit it from a single
+ * `context.report` call, at which point ESLint renders the literal
+ * `{{safeModule}}` into the message a developer reads. So the second suite
+ * below RENDERS every one of these rules and asserts no placeholder survives.
+ *
+ * The set of rules is pinned by MEMBERSHIP, not by count: each one must have a
+ * snippet here that provokes it. Seven of the twenty-one have no RuleTester
+ * suite at all, so a check that merely counted would let exactly those drift.
+ */
+const PATH_IMPORT = "import path from 'node:path';\n";
+
+/** One snippet per rule that interpolates `{{safeModule}}`, chosen to provoke it. */
+const SAFE_MODULE_RULE_TRIGGERS: Record<string, string> = {
+  'no-path-join': `${PATH_IMPORT}const p = path.join(a, b);`,
+  'no-path-resolve': `${PATH_IMPORT}const p = path.resolve(a, b);`,
+  'no-path-relative': `${PATH_IMPORT}const p = path.relative(a, b);`,
+  'no-path-sep-in-strings': `${PATH_IMPORT}const s = 'a' + path.sep + 'b';`,
+  // Reports path calls in ARGUMENT position, not receiver position.
+  'no-path-operations-in-comparisons': `${PATH_IMPORT}const y = base.startsWith(path.relative(a, b));`,
+  'no-manual-path-normalize': "const n = p.split(path.sep).join('/');",
+  'no-hardcoded-path-split': "const parts = p.split('/');",
+  'no-path-startswith': "const x = filePath.startsWith('/a');",
+  'no-os-tmpdir': "import { tmpdir } from 'node:os';\nconst t = tmpdir();",
+  'no-fs-mkdirSync': "import { mkdirSync } from 'node:fs';\nmkdirSync(d, { recursive: true });",
+  'no-fs-realpathSync': "import { realpathSync } from 'node:fs';\nconst r = realpathSync(p);",
+  'no-fs-promises-cp': "import { cp } from 'node:fs/promises';\nawait cp(a, b);",
+  'no-child-process-execSync': "import { execSync } from 'node:child_process';\nexecSync('ls');",
+  'no-url-pathname-for-fs': "const p = new URL('../fixtures/x.yaml', import.meta.url).pathname;",
+  'no-bare-dynamic-import-path': 'const m = await import(configPath);',
+};
+
+describe('every {{safeModule}} placeholder is backed by the option that fills it', () => {
+  const plugin = loadLocalRuleModule<{
+    rules: Record<string, Rule.RuleModule>;
+  }>('../index.cjs');
+
+  const rulesUsingPlaceholder = Object.entries(plugin.rules).filter(([, rule]) =>
+    Object.values(rule.meta?.messages ?? {}).some((message) => message.includes('{{safeModule}}')),
+  );
+
+  it('exercises exactly the rules that use it (guards against a vacuous pass)', () => {
+    // Membership, not cardinality: an unchanged count can mask changed occupants.
+    const byName = (a: string, b: string): number => a.localeCompare(b);
+    expect(rulesUsingPlaceholder.map(([name]) => name).sort(byName)).toStrictEqual(
+      Object.keys(SAFE_MODULE_RULE_TRIGGERS).sort(byName),
+    );
+  });
+
+  it.each(rulesUsingPlaceholder)('%s declares the safeModule option', (_name, rule) => {
+    const schema = rule.meta?.schema;
+    expect(Array.isArray(schema)).toBe(true);
+    const [options] = schema as [{ properties?: Record<string, unknown> }];
+    expect(options.properties).toHaveProperty('safeModule');
+  });
+
+  it.each(rulesUsingPlaceholder)('%s renders the configured module, not the placeholder', (name, rule) => {
+    const messages = new Linter().verify(
+      SAFE_MODULE_RULE_TRIGGERS[name] ?? '',
+      [
+        {
+          files: ['**/*.ts'],
+          plugins: { local: { rules: { [name]: rule } } },
+          rules: { [`local/${name}`]: ['error', { safeModule: SEAM }] },
+          languageOptions: { ecmaVersion: 2024, sourceType: 'module' },
+        },
+      ],
+      { filename: LINTED_FILE },
+    );
+
+    // A snippet that stopped provoking its rule would make the assertions below
+    // vacuously true, so require a report before inspecting one.
+    expect(messages.length).toBeGreaterThan(0);
+    for (const { message } of messages) {
+      expect(message).not.toContain('{{');
+      expect(message).toContain(SEAM);
+    }
   });
 });

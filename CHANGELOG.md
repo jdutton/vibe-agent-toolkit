@@ -66,11 +66,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than a portability fact, and `no-unsafe-root-join` is held back on correctness — it keys on
   whether an identifier's name ends in `root` rather than on taint, so it fires on all-literal
   calls and stays silent on `safePath.join(base, userInput)`, the shape it exists to catch. All
-  three are enabled by naming them. Rules take an `exemptFiles`
+  three are enabled by naming them.
+
+  **`--fix` writes the import to the narrow subpath that owns the helper**, matching the rule
+  table: `path.join()` becomes `safePath.join()` imported from `@vibe-agent-toolkit/utils/path`,
+  the `fs` rules point at `./fs`, and `no-child-process-execSync` at `./process`. A file that
+  already reaches the helper through the `.` barrel keeps its existing import and only has the
+  call rewritten — a second binding of the same name would be `SyntaxError: Identifier 'safePath'
+  has already been declared`, so the fixer checks whether the name is bound at all rather than
+  whether it was imported from the module the fixer prefers. That check is scope-based, so a
+  top-level `const safePath = …` is a conflict too.
+
+  **A per-rule `safeModule` option redirects both the fix and the message at your own re-export
+  seam** — `['error', { safeModule: '@acme/dev-tools/paths' }]`. Necessary because in a workspace
+  with isolated `node_modules` an import of an undeclared package does not degrade, it fails to
+  resolve: an adopter measured that the defaults would write a specifier resolving in **0 of their
+  top 25 affected packages** while their own seam resolved in 24 — 620 files across 52 packages
+  that declare no dependency on this one. Per-rule rather than a single shared key because a seam
+  need not split its symbols the way this package does (theirs carried `normalizedTmpdir()` but not
+  `safePath`, so the `fs` and `path` families needed different targets). Every rule that names a
+  module accepts it, including the six that only advise and never fix, so configured advice never
+  points at a module you don't use.
+
+  Rules take an `exemptFiles`
   option naming the file(s) allowed to call the banned primitive — the one that implements your
   wrapper. There are deliberately **no** built-in exemptions: those paths are a claim about one
   repo's layout, and matching is anchored at a path segment, so declaring `src/paths.ts` never
-  exempts `tools/hooks/paths.ts`. Requires ESLint 9+ (flat config) and Node >= 22. Full rule table
+  exempts `tools/hooks/paths.ts`. An entry with no `/` at all is reported as
+  `unanchoredExemptFile` rather than accepted: because ESLint reports absolute filenames, a bare
+  `paths.ts` exempts every file of that name anywhere in the tree, including ones added later.
+  Requires ESLint 9+ (flat config) and Node >= 22. Full rule table
   in [the subpath's README](https://github.com/jdutton/vibe-agent-toolkit/blob/main/packages/utils/eslint/README.md).
 
   **There is no separate plugin package to install**, and `eslint` is declared as an *optional* peer
@@ -79,9 +104,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runs — the rule modules export plain objects and never `require('eslint')` — so this entry
   reaches no Node builtin and no third-party package, and the other twelve subpaths keep resolving
   in a tree with no ESLint anywhere in it. The cost is bytes on disk and nothing else: the packed
-  tarball goes 146,628 → 178,690 bytes (+32,062 compressed; 113,256 unpacked across 26 `.cjs` files
-  and their README) for code nothing loads unless you lint. What it buys is one install, one
-  version, and no way for a rule to name a helper signature the installed `utils` no longer has.
+  tarball goes 148,953 → 187,753 bytes (+38,800 compressed; 135,381 unpacked across 27 `.cjs`
+  files, a README and a type declaration) for code nothing loads unless you lint. Both endpoints
+  are measured in the same tree, by packing with and without the `eslint` entry in `files`, so the
+  delta is the subpath's cost and not the drift of a `dist/` built months apart. What it buys is
+  one install, one version, and no way for a rule to name a helper signature the installed `utils`
+  no longer has.
 
 - **`@vibe-agent-toolkit/utils` is now a first-class public package with narrow subpath exports.**
   The `exports` map goes from 3 keys to 15: `./path`, `./fs`, `./process`, `./git`, `./glob`,

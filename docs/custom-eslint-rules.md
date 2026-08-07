@@ -136,13 +136,19 @@ In `packages/utils/eslint/rules/`:
 ```javascript
 // no-fs-unlinkSync.cjs
 const factory = require('./eslint-rule-factory.cjs');
+const { SAFE_FS_MODULE } = require('./safe-import.cjs');
 
 module.exports = factory({
   unsafeFn: 'unlinkSync',
   unsafeModule: 'node:fs',
   safeFn: 'safeUnlinkSync',
-  safeModule: './common.js',
-  message: 'Use safeUnlinkSync() for better error handling and cross-platform compatibility',
+  safeModule: SAFE_FS_MODULE,  // from './safe-import.cjs' — the NARROW subpath
+  message: `Use safeUnlinkSync() from ${SAFE_FS_MODULE} for better error handling and cross-platform compatibility`,
+  // NOTE: `safeModule` is where the autofix WRITES the import, so it must name
+  // the subpath that actually exports `safeFn` — never the `.` barrel. Take it
+  // from `safe-import.cjs` rather than spelling the string here: the rules and
+  // the README table drifted apart once already, and the autofix rewrote code
+  // away from the very subpaths the release existed to introduce.
   // NOTE: do NOT pass `exemptFiles` here. The factory supports it as a fallback,
   // but a shipped rule must not name a repo-specific implementation path — the
   // package is published, and that default becomes a hole in every consumer's

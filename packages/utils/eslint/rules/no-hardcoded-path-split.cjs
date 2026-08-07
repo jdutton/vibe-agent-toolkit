@@ -18,13 +18,19 @@
  * const filename = basename(filePath);
  *
  * // ✅ GOOD - normalize then split (inline)
- * import { toForwardSlash } from '@vibe-agent-toolkit/utils';
+ * import { toForwardSlash } from '@vibe-agent-toolkit/utils/path';
  * const parts = toForwardSlash(filePath).split('/');
  *
  * // ✅ GOOD - normalize then split (variable)
  * const normalizedPath = toForwardSlash(filePath);
  * const parts = normalizedPath.split('/');
  */
+
+const {
+  SAFE_MODULE_ONLY_SCHEMA,
+  SAFE_PATH_MODULE,
+  resolveSafeModule,
+} = require('./safe-import.cjs');
 
 module.exports = {
   meta: {
@@ -37,12 +43,13 @@ module.exports = {
     messages: {
       noHardcodedSplit:
         String.raw`Avoid .split('/') or .split('\') on file paths (breaks on Windows/Unix). ` +
-        'Use path.basename() to extract filename, or toForwardSlash() from @vibe-agent-toolkit/utils to normalize paths first.',
+        'Use path.basename() to extract filename, or toForwardSlash() from {{safeModule}} to normalize paths first.',
     },
-    schema: [],
+    schema: [SAFE_MODULE_ONLY_SCHEMA],
   },
 
   create(context) {
+    const reportData = { safeModule: resolveSafeModule(context, SAFE_PATH_MODULE) };
     // Track variables that were assigned from toForwardSlash()
     const normalizedVariables = new Set();
 
@@ -126,6 +133,7 @@ module.exports = {
         context.report({
           node,
           messageId: 'noHardcodedSplit',
+          data: reportData,
         });
       },
     };

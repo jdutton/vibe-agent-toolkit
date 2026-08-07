@@ -10,10 +10,16 @@
  * if (content.includes(relativePath)) { ... }  // FAILS on Windows!
  *
  * // ✅ GOOD - normalize before comparison
- * import { toForwardSlash } from '@vibe-agent-toolkit/utils';
+ * import { toForwardSlash } from '@vibe-agent-toolkit/utils/path';
  * const relativePath = toForwardSlash(path.relative(baseDir, filePath));
  * if (content.includes(relativePath)) { ... }
  */
+
+const {
+  SAFE_MODULE_ONLY_SCHEMA,
+  SAFE_PATH_MODULE,
+  resolveSafeModule,
+} = require('./safe-import.cjs');
 
 module.exports = {
   meta: {
@@ -25,13 +31,14 @@ module.exports = {
     },
     messages: {
       normalizePathOperation:
-        'Wrap path.{{method}}() with toForwardSlash() from @vibe-agent-toolkit/utils before using in string operations. ' +
+        'Wrap path.{{method}}() with toForwardSlash() from {{safeModule}} before using in string operations. ' +
         'Path operations return OS-specific separators that fail in cross-platform comparisons.',
     },
-    schema: [],
+    schema: [SAFE_MODULE_ONLY_SCHEMA],
   },
 
   create(context) {
+    const safeModule = resolveSafeModule(context, SAFE_PATH_MODULE);
     // Path methods that return paths with OS-specific separators
     const pathMethodsReturningPaths = new Set([
       'relative',
@@ -78,7 +85,7 @@ module.exports = {
     const reportPathArgument = (arg) => {
       const method = unnormalizedPathCallMethod(arg);
       if (method !== undefined) {
-        context.report({ node: arg, messageId: 'normalizePathOperation', data: { method } });
+        context.report({ node: arg, messageId: 'normalizePathOperation', data: { method, safeModule } });
         return;
       }
       if (
@@ -89,7 +96,7 @@ module.exports = {
         context.report({
           node: arg,
           messageId: 'normalizePathOperation',
-          data: { method: 'operation' },
+          data: { method: 'operation', safeModule },
         });
       }
     };
@@ -101,7 +108,7 @@ module.exports = {
           context.report({
             node: expr,
             messageId: 'normalizePathOperation',
-            data: { method },
+            data: { method, safeModule },
           });
         }
       }

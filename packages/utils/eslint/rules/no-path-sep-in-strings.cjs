@@ -10,10 +10,16 @@
  * if (filePath.includes(path.sep)) { ... }
  *
  * // ✅ GOOD - normalize then split
- * import { toForwardSlash } from '@vibe-agent-toolkit/utils';
+ * import { toForwardSlash } from '@vibe-agent-toolkit/utils/path';
  * const parts = toForwardSlash(filePath).split('/');
  * if (toForwardSlash(filePath).includes('/')) { ... }
  */
+
+const {
+  SAFE_MODULE_ONLY_SCHEMA,
+  SAFE_PATH_MODULE,
+  resolveSafeModule,
+} = require('./safe-import.cjs');
 
 module.exports = {
   meta: {
@@ -26,12 +32,13 @@ module.exports = {
     messages: {
       noPathSep:
         'Avoid using path.sep in string operations (split, includes, indexOf, etc.). ' +
-        'Use toForwardSlash() from @vibe-agent-toolkit/utils to normalize paths to forward slashes first.',
+        'Use toForwardSlash() from {{safeModule}} to normalize paths to forward slashes first.',
     },
-    schema: [],
+    schema: [SAFE_MODULE_ONLY_SCHEMA],
   },
 
   create(context) {
+    const reportData = { safeModule: resolveSafeModule(context, SAFE_PATH_MODULE) };
     // String methods that take a separator/search argument
     const stringMethodsWithSeparator = new Set([
       'split',
@@ -69,6 +76,7 @@ module.exports = {
           context.report({
             node,
             messageId: 'noPathSep',
+            data: reportData,
           });
         }
       },
@@ -88,6 +96,7 @@ module.exports = {
           context.report({
             node,
             messageId: 'noPathSep',
+            data: reportData,
           });
         }
       },
@@ -111,6 +120,7 @@ module.exports = {
             context.report({
               node,
               messageId: 'noPathSep',
+              data: reportData,
             });
           }
         }

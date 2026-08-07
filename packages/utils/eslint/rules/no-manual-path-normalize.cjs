@@ -9,9 +9,18 @@
  * const normalized = somePath.split('\\').join('/');
  *
  * // ✅ GOOD - use utility function
- * import { toForwardSlash } from '@vibe-agent-toolkit/utils';
+ * import { toForwardSlash } from '@vibe-agent-toolkit/utils/path';
  * const normalized = toForwardSlash(relativePath);
  */
+
+const {
+  SAFE_MODULE_ONLY_SCHEMA,
+  SAFE_PATH_MODULE,
+  isNameAlreadyBound,
+  resolveSafeModule,
+} = require('./safe-import.cjs');
+
+const SAFE_FN = 'toForwardSlash';
 
 module.exports = {
   meta: {
@@ -24,23 +33,27 @@ module.exports = {
     fixable: 'code',
     messages: {
       useToForwardSlash:
-        'Use toForwardSlash() from @vibe-agent-toolkit/utils instead of manual path normalization. ' +
+        'Use toForwardSlash() from {{safeModule}} instead of manual path normalization. ' +
         'Manual normalization is error-prone and less maintainable.',
     },
-    schema: [],
+    schema: [SAFE_MODULE_ONLY_SCHEMA],
   },
 
   create(context) {
     const sourceCode = context.getSourceCode();
-    let hasToForwardSlashImport = false;
+    const targetModule = resolveSafeModule(context, SAFE_PATH_MODULE);
+    // Seeded from SCOPE: a file that already imports `toForwardSlash` from the
+    // barrel must have the call rewritten WITHOUT gaining a second binding of
+    // the same name — that is a SyntaxError. See `safe-import.cjs`.
+    let hasToForwardSlashImport = isNameAlreadyBound(sourceCode, SAFE_FN);
     let utilsImportNode = null;
 
     return {
       ImportDeclaration(node) {
-        if (node.source.value === '@vibe-agent-toolkit/utils') {
+        if (node.source.value === targetModule) {
           utilsImportNode = node;
           for (const spec of node.specifiers) {
-            if (spec.type === 'ImportSpecifier' && spec.imported.name === 'toForwardSlash') {
+            if (spec.type === 'ImportSpecifier' && spec.imported.name === SAFE_FN) {
               hasToForwardSlashImport = true;
             }
           }
@@ -79,25 +92,30 @@ module.exports = {
               context.report({
                 node,
                 messageId: 'useToForwardSlash',
+                data: { safeModule: targetModule },
                 fix(fixer) {
                   const fixes = [];
 
                   // Replace the entire .split(...).join('/') with toForwardSlash(...)
                   const originalVar = sourceCode.getText(variableBeingSplit);
-                  fixes.push(fixer.replaceText(node, `toForwardSlash(${originalVar})`));
+                  fixes.push(fixer.replaceText(node, `${SAFE_FN}(${originalVar})`));
 
                   // Add import if needed
                   if (!hasToForwardSlashImport) {
                     if (utilsImportNode) {
                       // Add to existing utils import
                       const lastSpecifier = utilsImportNode.specifiers.at(-1);
-                      fixes.push(fixer.insertTextAfter(lastSpecifier, ', toForwardSlash'));
+                      fixes.push(fixer.insertTextAfter(lastSpecifier, `, ${SAFE_FN}`));
                     } else {
                       // Create new import at the top
                       const firstNode = sourceCode.ast.body[0];
-                      const newImport = `import { toForwardSlash } from '@vibe-agent-toolkit/utils';\n`;
+                      const newImport = `import { ${SAFE_FN} } from '${targetModule}';\n`;
                       fixes.push(fixer.insertTextBefore(firstNode, newImport));
                     }
+                    // Multiple reports in one pass share this closure; without
+                    // this, a second occurrence in the same file inserts the
+                    // import a second time.
+                    hasToForwardSlashImport = true;
                   }
 
                   return fixes;

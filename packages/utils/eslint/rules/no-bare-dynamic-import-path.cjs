@@ -6,7 +6,7 @@
  * URL. Observed bug: `await import('D:\\a\\repo\\config.js')` throws.
  *
  * Fix: `await import(pathToFileURL(p).href)` from `node:url`, or
- * `await dynamicImportPath(p)` from `@vibe-agent-toolkit/utils`.
+ * `await dynamicImportPath(p)` from `@vibe-agent-toolkit/utils/fs`.
  *
  * Heuristic (intentionally narrow — some false positives are preferable to
  * false negatives for a shift-left lint rule, but the user can suppress per line):
@@ -24,6 +24,12 @@
  */
 
 'use strict';
+
+const {
+  SAFE_FS_MODULE,
+  SAFE_MODULE_ONLY_SCHEMA,
+  resolveSafeModule,
+} = require('./safe-import.cjs');
 
 const PATH_CALL_NAMES = new Set(['join', 'resolve']);
 const PATH_OBJECT_NAMES = new Set(['path', 'safePath']);
@@ -114,9 +120,9 @@ module.exports = {
     messages: {
       useFileUrl:
         'Dynamic `import()` of a filesystem path fails on Windows. ' +
-        'Wrap with `pathToFileURL(p).href` from `node:url`, or use `dynamicImportPath(p)` from `@vibe-agent-toolkit/utils`.',
+        'Wrap with `pathToFileURL(p).href` from `node:url`, or use `dynamicImportPath(p)` from `{{safeModule}}`.',
     },
-    schema: [],
+    schema: [SAFE_MODULE_ONLY_SCHEMA],
   },
 
   create(context) {
@@ -124,7 +130,11 @@ module.exports = {
       ImportExpression(node) {
         const kind = classifyImportArgument(node.source);
         if (kind) {
-          context.report({ node, messageId: 'useFileUrl' });
+          context.report({
+            node,
+            messageId: 'useFileUrl',
+            data: { safeModule: resolveSafeModule(context, SAFE_FS_MODULE) },
+          });
         }
       },
     };

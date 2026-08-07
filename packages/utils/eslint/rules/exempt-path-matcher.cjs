@@ -43,8 +43,11 @@ function normalizeForMatch(value) {
  * Build a predicate that reports whether a linted filename is one of `exemptPaths`.
  *
  * @param {readonly string[]} exemptPaths - Repo-relative paths, e.g.
- *   `['packages/utils/src/path-utils.ts']`. A bare basename is accepted but will
- *   only match a file at the repo root — pass the full repo-relative path.
+ *   `['packages/utils/src/path-utils.ts']`. A bare basename is accepted by the
+ *   matcher but matches that filename ANYWHERE in the tree (ESLint filenames are
+ *   absolute, so the `endsWith('/' + target)` leg is what fires) — pass the full
+ *   repo-relative path. Rules surface that mistake via
+ *   {@link reportUnanchoredExemptEntries}.
  * @returns {(filename: string) => boolean} Anchored, separator-agnostic predicate.
  */
 function createExemptPathMatcher(exemptPaths) {
@@ -121,6 +124,70 @@ function createConfigurableExemptPathMatcher(defaultPaths = []) {
 }
 
 /**
+ * `messageId` every rule that accepts `exemptFiles` must declare, so an
+ * unanchored entry is reported through the normal lint channel.
+ *
+ * Not a JSON Schema `pattern` on the option, which would be the obvious place:
+ * the schema sees the RAW string, and `./path-utils.ts` contains a `/` while
+ * normalizing to exactly the same repo-wide exemption as `path-utils.ts`. A
+ * check that the wrong spelling slips past is worse than none. Not a
+ * `process.emitWarning` either — a notice on stderr is not a reported finding
+ * and gets scrolled past.
+ */
+const UNANCHORED_EXEMPT_FILE = 'unanchoredExemptFile';
+
+/**
+ * The `meta.messages` entry for {@link UNANCHORED_EXEMPT_FILE}.
+ *
+ * ESLint filenames are ABSOLUTE, and an exemption matches when the filename ends
+ * with `/` + the entry. So a bare basename does not mean "the file at the repo
+ * root" (as this module's JSDoc used to claim) — it means EVERY file with that
+ * name, anywhere in the tree, including ones added later by someone who never
+ * saw the config. That is the same repo-wide hole the anchoring rewrite closed,
+ * reopened one config entry at a time.
+ */
+const UNANCHORED_EXEMPT_MESSAGE =
+  'exemptFiles entry "{{entry}}" is a bare filename, so it exempts EVERY file named ' +
+  '"{{entry}}" anywhere in the repo — including files added later. Give the ' +
+  'repo-relative path instead (e.g. "packages/utils/src/{{entry}}").';
+
+/**
+ * The configured `exemptFiles` entries that are not anchored to a directory.
+ *
+ * Runs on the NORMALIZED entry, so `./x.ts` and `x.ts` are both caught.
+ *
+ * @param {object} context - ESLint rule context.
+ * @returns {string[]} Offending entries, as the consumer spelled them.
+ */
+function findUnanchoredExemptEntries(context) {
+  const configured = context.options?.[0]?.exemptFiles;
+  if (!Array.isArray(configured)) {
+    return [];
+  }
+  return configured.filter((entry) => {
+    const normalized = normalizeForMatch(entry).replace(/^\/+/, '');
+    return normalized.length > 0 && !normalized.includes('/');
+  });
+}
+
+/**
+ * Report every unanchored `exemptFiles` entry against the `Program` node.
+ *
+ * Deliberately stateless — no "warn once per process" dedupe. ESLint caches
+ * results per file, so a rule that remembers having warned goes SILENT on the
+ * second run against a warm cache, which is precisely when a stale config is
+ * least likely to be noticed.
+ *
+ * @param {object} context - ESLint rule context.
+ * @param {object} node - The `Program` node to anchor the report on.
+ */
+function reportUnanchoredExemptEntries(context, node) {
+  for (const entry of findUnanchoredExemptEntries(context)) {
+    context.report({ node, messageId: UNANCHORED_EXEMPT_FILE, data: { entry } });
+  }
+}
+
+/**
  * Build a predicate that reports whether a linted filename lives UNDER one of
  * `exemptDirs`.
  *
@@ -186,9 +253,13 @@ function isTestFile(filename) {
 
 module.exports = {
   EXEMPT_FILES_SCHEMA,
+  UNANCHORED_EXEMPT_FILE,
+  UNANCHORED_EXEMPT_MESSAGE,
   createConfigurableExemptPathMatcher,
   createExemptDirectoryMatcher,
   createExemptPathMatcher,
+  findUnanchoredExemptEntries,
   isTestFile,
   normalizeForMatch,
+  reportUnanchoredExemptEntries,
 };

@@ -8,7 +8,9 @@
  * @param {string} config.unsafeFn - Name of unsafe function (e.g., 'tmpdir', 'mkdirSync')
  * @param {string} config.unsafeModule - Module containing unsafe function (e.g., 'node:os', 'node:fs')
  * @param {string} config.safeFn - Name of safe replacement function (e.g., 'normalizedTmpdir')
- * @param {string} config.safeModule - Module containing safe function (e.g., '@vibe-agent-toolkit/utils')
+ * @param {string} config.safeModule - Module containing safe function. Pass the
+ *   NARROW subpath that owns the symbol (`@vibe-agent-toolkit/utils/fs`), never
+ *   the barrel — see `safe-import.cjs` for why.
  * @param {string} config.message - Error message to display
  * @param {readonly string[]} [config.exemptFiles] - FALLBACK repo-relative paths
  *   allowed to call the unsafe function, used only when the consuming config
@@ -25,7 +27,7 @@
  *   unsafeFn: 'tmpdir',
  *   unsafeModule: 'node:os',
  *   safeFn: 'normalizedTmpdir',
- *   safeModule: '@vibe-agent-toolkit/utils',
+ *   safeModule: SAFE_FS_MODULE,
  *   message: 'Use normalizedTmpdir() for Windows compatibility',
  * });
  *
@@ -34,9 +36,16 @@
  */
 
 const {
-  EXEMPT_FILES_SCHEMA,
+  UNANCHORED_EXEMPT_FILE,
+  UNANCHORED_EXEMPT_MESSAGE,
   createConfigurableExemptPathMatcher,
+  reportUnanchoredExemptEntries,
 } = require('./exempt-path-matcher.cjs');
+const {
+  EXEMPT_AND_SAFE_MODULE_SCHEMA,
+  isNameAlreadyBound,
+  resolveSafeModule,
+} = require('./safe-import.cjs');
 
 /**
  * Helper function to filter unsafe import specifiers
@@ -98,26 +107,45 @@ module.exports = function createNoUnsafeRule(config) {
         recommended: true,
       },
       fixable: 'code',
-      schema: [EXEMPT_FILES_SCHEMA],
+      schema: [EXEMPT_AND_SAFE_MODULE_SCHEMA],
       messages: {
         noUnsafeOperation: message,
+        [UNANCHORED_EXEMPT_FILE]: UNANCHORED_EXEMPT_MESSAGE,
       },
     },
 
     create(context) {
       const sourceCode = context.getSourceCode();
+      // Resolved per invocation, not at factory-construction time: the option is
+      // the consuming repo's, and one repo can configure the same rule
+      // differently across config blocks.
+      const targetModule = resolveSafeModule(context, safeModule);
 
       // Only the declared implementation file(s) may call the unsafe function.
       if (exemptMatcherFor(context)(context.getFilename())) {
-        return {};
+        // Still surface a malformed exemption list: the file we are standing in
+        // may be exempt only BECAUSE the entry is unanchored.
+        return {
+          Program(node) {
+            reportUnanchoredExemptEntries(context, node);
+          },
+        };
       }
 
       let hasUnsafeImport = false;
-      let hasSafeImport = false;
+      // Seeded from SCOPE, not from "did I see an import from safeModule?".
+      // A file already importing `safeFn` from the barrel needs the call
+      // rewritten but must NOT gain a second binding of the same name — that is
+      // a SyntaxError, not a redundant import. See `safe-import.cjs`.
+      let hasSafeImport = isNameAlreadyBound(sourceCode, safeFn);
       let unsafeImportNode = null;
       let safeImportNode = null;
 
       return {
+        Program(node) {
+          reportUnanchoredExemptEntries(context, node);
+        },
+
         ImportDeclaration(node) {
           // Track unsafe module imports
           if (moduleVariants.includes(node.source.value)) {
@@ -130,7 +158,7 @@ module.exports = function createNoUnsafeRule(config) {
           }
 
           // Track safe module imports
-          if (node.source.value === safeModule) {
+          if (node.source.value === targetModule) {
             safeImportNode = node;
             for (const spec of node.specifiers) {
               if (spec.type === 'ImportSpecifier' && spec.imported.name === safeFn) {
@@ -164,6 +192,7 @@ module.exports = function createNoUnsafeRule(config) {
           context.report({
             node,
             messageId: 'noUnsafeOperation',
+            data: { safeModule: targetModule },
             fix(fixer) {
               const fixes = [];
 
@@ -185,7 +214,7 @@ module.exports = function createNoUnsafeRule(config) {
                 } else {
                   // Create new import after unsafe import or at the top
                   const targetNode = unsafeImportNode || sourceCode.ast.body[0];
-                  const newImport = `import { ${safeFn} } from '${safeModule}';\n`;
+                  const newImport = `import { ${safeFn} } from '${targetModule}';\n`;
                   fixes.push(fixer.insertTextAfter(targetNode, newImport));
                 }
               }
