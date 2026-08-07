@@ -28,7 +28,7 @@ projection and judgement at once. Two consequences:
 | Instrument | What it answers | Status |
 |---|---|---|
 | **Enumeration snapshot** | Per lane, per corpus: which paths, **in which order**, with `exists` / `isDirectory` / `gitignored` / `isSymlink` / `symlinkResolves` / content key | Built |
-| **Parse-fact snapshot** | Per content key: links + ordinals, headings + slugs, frontmatter **source and value shapes**, fragment anchors, content/key agreement, parse conditions — with `keyof ParseResult` coverage enforced at compile time | Built |
+| **Parse-fact snapshot** | Per content key: links + ordinals + `resolvedId`, headings + slugs, frontmatter **source, value shapes and value digests**, fragment anchors, optional-array presence states, byte and decoded lengths, parse conditions — with `keyof ParseResult` coverage enforced at compile time | Built |
 | **Rule-invocation log** | Per run: which check ran, over how many rows, emitting how many findings | **Not built** — see below |
 
 ### ⛔ The enumeration snapshot is never sorted
@@ -73,27 +73,47 @@ This is not a hypothetical. `anchors` was uncovered until 2026-08-07, and it is
 the input to `ResourceRegistry.buildFragmentIndex` — every `file.md#fragment`
 check in VAT.
 
-#### Frontmatter is captured twice, because one capture cannot do the job
+#### Frontmatter is captured three ways, because no one capture does the job
 
-- **Source** (`frontmatterSource`), the block as written. A YAML→JSON round-trip
-  is lossy in ways a validator notices: `.inf` and `.nan` become `null`,
-  `!!binary` becomes a Buffer envelope, and a cyclic anchor makes
-  `JSON.stringify` throw. A snapshot storing the parsed object would report two
-  different things for one document depending on whether it had been cached.
-- **Shapes** (`frontmatterFields`), each top-level key with the runtime type of
-  its value. The source is re-derived from the document text, so it is *constant
-  by construction* across a cached and an uncached parse — it detects a change
-  in the parser and is structurally blind to a cache handing back a lossily
-  round-tripped object. The shapes are what move: `.inf` goes `number` → `null`,
-  `!!binary` goes `Buffer` → `Object`. Top-level only, so a cyclic anchor is
-  recorded rather than thrown on.
+- **Source** (`frontmatterSource`), the block as written. Catches a change in
+  the *parser*. It is re-derived from the freshly-read bytes, so it is
+  **constant by construction for a given content key** — which means it can
+  never detect a cache fault, and that is why the other two exist.
+- **Shapes** (`frontmatterFields[].typeName`), each top-level key with the
+  runtime type of its value. This is what a lossy round-trip moves: `.inf` goes
+  `number` → `null`, `!!binary` goes `Buffer` → `Object`. Top-level only, so a
+  cyclic anchor is recorded rather than thrown on.
+- **Value digests** (`frontmatterFields[].valueDigest`). Shape alone is not
+  enough and the gap is not hypothetical: every `SKILL.md` in a corpus has
+  `{name: string, description: string}`, so a cache serving one skill's parse
+  for another moved nothing. The digest is hand-rolled rather than
+  `JSON.stringify` because every input it must survive breaks that — `.inf` and
+  `.nan` serialize to `null`, `!!binary` to an envelope, and a cyclic anchor
+  throws, which would mean the document is silently never recorded at all.
 
-#### Absent is not empty
+#### Absent is not empty — and it matters where it is *reachable*
 
-`anchors` is optional under `exactOptionalPropertyTypes` and both parsers omit
-the key rather than emitting `[]`. The golden renders absent as `-` and present-
-but-empty as `(none)`, so a layer that normalises one into the other shows up as
-a diff instead of passing.
+The rule is real, but it was first enforced in the one place it cannot fire.
+Both parsers spread `anchors` conditionally (`...(list.length > 0 && { anchors })`),
+so a present-but-empty `anchors` is **unreachable**; its rendering is defensive
+only.
+
+Where it does fire is `parseErrors` and `unresolvedReferences`. `collectConditions`
+reads both through `?? []`, so absent and empty produce an identical `conditions`
+list — while the contract distinguishes them explicitly (`unresolvedReferences`
+is *"HTML leaves this undefined; markdown always populates it (possibly empty)"*).
+Those states are therefore recorded separately, in `optionalArrays`.
+
+#### Lists are one entry per line, never joined
+
+A `', '` join is ambiguous, and it was not a theoretical ambiguity: `["p, q"]`
+and `["p", "q"]` rendered the identical line `anchors: p, q`, and `id="p, q"`
+survives both parsers verbatim — two different fragment-target sets,
+indistinguishable, on the field that feeds every `file.md#fragment` check. Every
+list now renders a count header (`-` for absent, a number otherwise) followed by
+one tab-delimited line per entry, and every interpolated value goes through
+`renderInline`. `href` and `slug` previously did not, so a tab or newline inside
+one could corrupt the table.
 
 ## The five lanes
 

@@ -138,16 +138,23 @@ describe('renderParseFactSnapshot', () => {
         parserKind: 'markdown',
         sizeBytes: 42,
         estimatedTokenCount: 11,
-        links: [{ ordinal: 0, href: './x.md', text: 'x', type: 'local_file', line: 3, nodeType: 'link' }],
+        links: [
+          { ordinal: 0, href: './x.md', text: 'x', type: 'local_file', line: 3, nodeType: 'link', resolvedId: null },
+        ],
         headings: [{ ordinal: 0, level: 1, text: 'Title', slug: 'title', line: 1 }],
         frontmatterSource: 'title: T\nvalue: .inf',
         frontmatterFields: [
-          { key: 'title', typeName: 'string' },
-          { key: 'value', typeName: 'number' },
+          { key: 'title', typeName: 'string', valueDigest: 'aaaaaaaaaaaa' },
+          { key: 'value', typeName: 'number', valueDigest: 'bbbbbbbbbbbb' },
         ],
         anchors: ['top'],
-        contentMatchesKey: true,
+        decodedLength: 42,
         conditions: [{ code: 'PARSE_ODDITY', message: 'something\nmultiline', line: 2 }],
+        optionalArrays: [
+          { field: 'anchors', state: 'present' },
+          { field: 'parseErrors', state: 'absent' },
+          { field: 'unresolvedReferences', state: 'empty' },
+        ],
       },
     ],
     pathsByKey: { 'k1.markdown.aaa': ['one.md', 'two.md'] },
@@ -168,8 +175,26 @@ describe('renderParseFactSnapshot', () => {
     // href alone cannot distinguish them in a document that links one target
     // more than once.
     const rendered = renderParseFactSnapshot(facts);
-    expect(rendered).toContain('  0\tlocal_file\tlink\tline=3\thref=./x.md\ttext=x');
+    expect(rendered).toContain('  0\tlocal_file\tlink\tline=3\tresolvedId=-\thref=./x.md\ttext=x');
     expect(rendered).toContain('  0\th1\tslug=title\tline=1\ttext=Title');
+  });
+
+  it('shows a resolvedId, which on a fresh parse should always be absent', () => {
+    // `resolvedId` is the one field of a parsed link that production code
+    // mutates in place after parsing (skill-packager stamps it while bundling,
+    // and skips links that already carry one). A non-null value in a snapshot
+    // taken straight off a parse means something wrote to a result this oracle
+    // assumed was pristine — which is exactly how a shared cached ParseResult
+    // would leak one skill's bundling decision into another's.
+    const stamped = renderParseFactSnapshot({
+      ...facts,
+      rows: facts.rows.map((entry) => ({
+        ...entry,
+        links: entry.links.map((link) => ({ ...link, resolvedId: 'leaked-from-another-skill' })),
+      })),
+    });
+    expect(stamped).toContain('resolvedId=leaked-from-another-skill');
+    expect(stamped).not.toBe(renderParseFactSnapshot(facts));
   });
 
   it('renders absent frontmatter as - rather than as an empty block', () => {
@@ -185,25 +210,80 @@ describe('renderParseFactSnapshot', () => {
     // identical whether a parse was cached or fresh. The shapes are not: a
     // YAML->JSON round-trip turns `.inf` from a number into null.
     const rendered = renderParseFactSnapshot(facts);
-    expect(rendered).toContain('frontmatterFields: title:string, value:number');
+    expect(rendered).toContain('frontmatterFields: 2');
+    expect(rendered).toContain('  value\tnumber\t');
 
     const roundTripped: ParseFactSnapshot = {
       ...facts,
       rows: facts.rows.map((entry) => ({
         ...entry,
         frontmatterFields: [
-          { key: 'title', typeName: 'string' },
-          { key: 'value', typeName: 'null' },
+          { key: 'title', typeName: 'string', valueDigest: 'aaaaaaaaaaaa' },
+          { key: 'value', typeName: 'null', valueDigest: 'cccccccccccc' },
         ],
       })),
     };
     expect(renderParseFactSnapshot(roundTripped)).not.toBe(rendered);
   });
 
+  it('records frontmatter VALUES too, so same-shape documents stay distinguishable', () => {
+    // Shape alone cannot separate two SKILL.md files: both are
+    // {name: string, description: string}. A cache serving one skill's parse
+    // for another would move nothing without the digest.
+    const otherValues: ParseFactSnapshot = {
+      ...facts,
+      rows: facts.rows.map((entry) => ({
+        ...entry,
+        frontmatterFields: (entry.frontmatterFields ?? []).map((field) => ({
+          ...field,
+          valueDigest: `${field.valueDigest.slice(0, 11)}X`,
+        })),
+      })),
+    };
+    expect(renderParseFactSnapshot(otherValues)).not.toBe(renderParseFactSnapshot(facts));
+  });
+
+  it('does not let two different lists render to the same line', () => {
+    // The regression this replaces: joining on ', ' made ["p, q"] and
+    // ["p","q"] byte-identical, and `id="p, q"` survives both parsers verbatim.
+    const oneCommaAnchor = renderParseFactSnapshot({
+      ...facts,
+      rows: facts.rows.map((entry) => ({ ...entry, anchors: ['p, q'] })),
+    });
+    const twoAnchors = renderParseFactSnapshot({
+      ...facts,
+      rows: facts.rows.map((entry) => ({ ...entry, anchors: ['p', 'q'] })),
+    });
+    expect(oneCommaAnchor).not.toBe(twoAnchors);
+    expect(oneCommaAnchor).toContain('anchors: 1');
+    expect(twoAnchors).toContain('anchors: 2');
+  });
+
+  it('escapes a tab inside an href, which would otherwise forge a column', () => {
+    const rendered = renderParseFactSnapshot({
+      ...facts,
+      rows: facts.rows.map((entry) => ({
+        ...entry,
+        links: entry.links.map((link) => ({ ...link, href: 'a\tb' })),
+      })),
+    });
+    expect(rendered).toContain(String.raw`href=a\tb`);
+  });
+
+  it('separates the presence state of optional arrays from their contents', () => {
+    // `conditions` folds parseErrors and unresolvedReferences through `?? []`,
+    // so absent and empty collapse there. The contract distinguishes them.
+    expect(renderParseFactSnapshot(facts)).toContain(
+      'optionalArrays: anchors=present parseErrors=absent unresolvedReferences=empty',
+    );
+  });
+
   it('keeps an ABSENT optional list distinct from a present empty one', () => {
-    // Both parsers omit `anchors` entirely rather than emitting `[]`, so a
-    // layer that normalises undefined into [] is a contract change. Collapsing
-    // the two renderings would make that change invisible.
+    // A layer that normalises undefined into [] is a contract change, so `-`
+    // and `0` must not collapse. Note this is defensive for `anchors`
+    // specifically — both parsers spread that key conditionally, so a
+    // present-but-empty anchors list is unreachable from a real parse. The
+    // states that DO occur are carried in `optionalArrays`.
     const absent = renderParseFactSnapshot({
       ...facts,
       rows: facts.rows.map((entry) => ({ ...entry, anchors: null })),
@@ -213,16 +293,24 @@ describe('renderParseFactSnapshot', () => {
       rows: facts.rows.map((entry) => ({ ...entry, anchors: [] })),
     });
     expect(absent).toContain('anchors: -');
-    expect(empty).toContain('anchors: (none)');
+    expect(empty).toContain('anchors: 0');
     expect(absent).not.toBe(empty);
   });
 
-  it('surfaces a parse whose content does not re-key to its own row', () => {
-    const mismatched = renderParseFactSnapshot({
+  it('carries a byte length and a decoded length, which diverge on malformed UTF-8', () => {
+    // The pair is the point. `sizeBytes` is stat().size; `decodedLength` comes
+    // from the decoded string. Decoding is many-to-one on invalid input, so
+    // these two move independently exactly where content-addressing is hardest
+    // — and the content key is computed over the bytes for that reason.
+    const rendered = renderParseFactSnapshot(facts);
+    expect(rendered).toContain('sizeBytes: 42');
+    expect(rendered).toContain('decodedLength: 42');
+
+    const lossyDecode = renderParseFactSnapshot({
       ...facts,
-      rows: facts.rows.map((entry) => ({ ...entry, contentMatchesKey: false })),
+      rows: facts.rows.map((entry) => ({ ...entry, decodedLength: 40 })),
     });
-    expect(mismatched).toContain('contentMatchesKey: false');
+    expect(lossyDecode).not.toBe(rendered);
   });
 });
 

@@ -44,17 +44,28 @@ describe('parserKindForPath', () => {
   });
 });
 
+/**
+ * Encode a source string to the bytes `computeContentKey` takes.
+ *
+ * ⚠️ Every call below goes through this rather than passing a string directly.
+ * That is not style: `createHash().update()` accepts a string happily, and NO
+ * test file in this repository is typechecked — so a call site left passing a
+ * string would compile, run, and pass while exercising a code path that no
+ * longer exists in production.
+ */
+const bytes = (text: string): Uint8Array => Buffer.from(text, 'utf-8');
+
 describe('computeContentKey', () => {
   it('is stable for identical input', () => {
-    expect(computeContentKey('# hi\n', 'markdown')).toBe(computeContentKey('# hi\n', 'markdown'));
+    expect(computeContentKey(bytes('# hi\n'), 'markdown')).toBe(computeContentKey(bytes('# hi\n'), 'markdown'));
   });
 
   it('is path-independent — the same bytes anywhere share a key', () => {
     // No path is an input at all; this test exists to pin that the signature
     // never grows one, because a path-derived key makes history replay and
     // cross-lane sharing impossible.
-    const a = computeContentKey('same', 'markdown');
-    const b = computeContentKey('same', 'markdown');
+    const a = computeContentKey(bytes('same'), 'markdown');
+    const b = computeContentKey(bytes('same'), 'markdown');
     expect(a).toBe(b);
   });
 
@@ -62,12 +73,12 @@ describe('computeContentKey', () => {
     // This is the realizable case: git keys an empty file as e69de29… whatever
     // its extension, so a bytes-only key serves an HTML parse for a markdown
     // document and vice versa.
-    expect(computeContentKey('', 'markdown')).not.toBe(computeContentKey('', 'html'));
+    expect(computeContentKey(bytes(''), 'markdown')).not.toBe(computeContentKey(bytes(''), 'html'));
   });
 
   it('separates the two parsers in the DIGEST, not merely in the prefix', () => {
-    const md = computeContentKey('<p>x</p>', 'markdown');
-    const html = computeContentKey('<p>x</p>', 'html');
+    const md = computeContentKey(bytes('<p>x</p>'), 'markdown');
+    const html = computeContentKey(bytes('<p>x</p>'), 'html');
     const digestOf = (key: string): string => key.slice(key.lastIndexOf('.') + 1);
     expect(digestOf(md)).not.toBe(digestOf(html));
   });
@@ -75,12 +86,38 @@ describe('computeContentKey', () => {
   it('distinguishes line endings', () => {
     // CRLF vs LF changes what remark sees; a Windows checkout must not collide
     // with a Unix one.
-    expect(computeContentKey('a\nb\n', 'markdown')).not.toBe(computeContentKey('a\r\nb\r\n', 'markdown'));
+    expect(computeContentKey(bytes('a\nb\n'), 'markdown')).not.toBe(
+      computeContentKey(bytes('a\r\nb\r\n'), 'markdown'),
+    );
   });
 
   it('distinguishes trailing whitespace and BOM', () => {
-    expect(computeContentKey('x', 'markdown')).not.toBe(computeContentKey('x ', 'markdown'));
-    expect(computeContentKey('x', 'markdown')).not.toBe(computeContentKey('﻿x', 'markdown'));
+    expect(computeContentKey(bytes('x'), 'markdown')).not.toBe(computeContentKey(bytes('x '), 'markdown'));
+    expect(computeContentKey(bytes('x'), 'markdown')).not.toBe(computeContentKey(bytes('﻿x'), 'markdown'));
+  });
+
+  it('⭐ distinguishes byte sequences that DECODE IDENTICALLY', () => {
+    // The reason the preimage is bytes and not the decoded string. UTF-8
+    // decoding is many-to-one on invalid input — every malformed sequence
+    // becomes U+FFFD — while `ParseResult.sizeBytes` is stat().size, a RAW byte
+    // count that reaches rule variables and rewriting templates. Keyed on the
+    // decoded string, these three files shared one key and had sizes 1, 2 and 1,
+    // so a cache would serve a well-formed entry with the wrong contents.
+    const invalid = [
+      Uint8Array.from([0xc2]),
+      Uint8Array.from([0xe2, 0x82]),
+      Uint8Array.from([0xff]),
+    ];
+    const decoded = invalid.map((b) => Buffer.from(b).toString('utf-8'));
+    // Precondition: they really are indistinguishable after decoding.
+    expect(new Set(decoded).size).toBe(1);
+
+    const keys = invalid.map((b) => computeContentKey(b, 'markdown'));
+    expect(new Set(keys).size).toBe(3);
+
+    // And mixing in the byte LENGTH would not have been enough: two of them
+    // are the same length.
+    expect(invalid[0]?.byteLength).toBe(invalid[2]?.byteLength);
   });
 
   it('is not length-extendable across the domain separator', () => {
@@ -90,15 +127,15 @@ describe('computeContentKey', () => {
     // pair. (The separator is written as the ESCAPE `\0`, never as a raw byte:
     // a source file containing a literal NUL is treated as binary by git and
     // ripgrep and vanishes from every grep-based sweep.)
-    expect(computeContentKey('markdown x', 'html')).not.toBe(computeContentKey('x', 'markdown'));
+    expect(computeContentKey(bytes('markdown x'), 'html')).not.toBe(computeContentKey(bytes('x'), 'markdown'));
   });
 
   it('carries the schema version, so a parser change has an invalidation lever', () => {
-    expect(computeContentKey('x', 'markdown')).toContain(`k${String(CONTENT_KEY_SCHEMA_VERSION)}.`);
+    expect(computeContentKey(bytes('x'), 'markdown')).toContain(`k${String(CONTENT_KEY_SCHEMA_VERSION)}.`);
   });
 
   it('is domain-tagged so it can never be read as a git SHA-1', () => {
-    const key = computeContentKey('x', 'markdown');
+    const key = computeContentKey(bytes('x'), 'markdown');
     expect(key).toMatch(/^k\d+\.(markdown|html)\.[0-9a-f]{64}$/);
     // 64 hex chars, and never bare hex — a git blob SHA-1 is 40 bare hex chars,
     // so the two keyspaces cannot be mixed by accidental hex length.
@@ -123,7 +160,30 @@ describe('readContentWithKey', () => {
     const keyed = await readContentWithKey(file);
     expect(keyed.content).toBe('# heading\n');
     expect(keyed.parserKind).toBe('markdown');
-    expect(keyed.key).toBe(computeContentKey('# heading\n', 'markdown'));
+    expect(keyed.key).toBe(computeContentKey(bytes('# heading\n'), 'markdown'));
+    expect(keyed.byteLength).toBe(10);
+  });
+
+  it('reports a byteLength that the decoded content cannot reproduce', async () => {
+    // The whole reason `byteLength` is carried rather than recomputed. These
+    // bytes are not valid UTF-8, so the decode is lossy and
+    // Buffer.byteLength(content) does not recover what was on disk —
+    // `ParseResult.sizeBytes` is this number, and a cache must store it.
+    const file = safePath.join(dir, 'malformed.md');
+    writeFileSync(file, Uint8Array.from([0xe2, 0x82]));
+    const keyed = await readContentWithKey(file);
+    expect(keyed.byteLength).toBe(2);
+    expect(Buffer.byteLength(keyed.content, 'utf-8')).not.toBe(keyed.byteLength);
+  });
+
+  it('gives two files that decode identically two different keys', async () => {
+    const a = safePath.join(dir, 'invalid-a.md');
+    const b = safePath.join(dir, 'invalid-b.md');
+    writeFileSync(a, Uint8Array.from([0xc2]));
+    writeFileSync(b, Uint8Array.from([0xff]));
+    const [keyedA, keyedB] = await Promise.all([readContentWithKey(a), readContentWithKey(b)]);
+    expect(keyedA.content).toBe(keyedB.content);
+    expect(keyedA.key).not.toBe(keyedB.key);
   });
 
   it('re-keys after the file changes — no enumerate→read window', async () => {

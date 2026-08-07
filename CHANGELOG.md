@@ -19,7 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it rather than repeating the extension test — because parser selection is part of a document's parse
   identity: identical bytes at `x.md` and `x.html` legitimately parse differently, which is realizable
   on the *empty file*. `readContentWithKey()` reads and keys in one step, so a caller cannot key one
-  read and parse another.
+  read and parse another, and returns the raw `byteLength` alongside the decoded content.
+  `computeContentKey()` takes **raw bytes** (`Uint8Array`), not a decoded string: UTF-8 decoding is
+  many-to-one on invalid input, so keying the decoded form gave three distinct files
+  (`[c2]`, `[e2 82]`, `[ff]`) one key while `ParseResult.sizeBytes` — a raw byte count that reaches
+  rule variables and rewriting templates — differed between them. Mixing in the byte *length* would
+  not close it either, since two of those three are the same length.
 - **`ResourceRegistry.getDuplicateIdCollisions()`** returns the first-added-wins drops in arrival
   order. `validate()` already reported *that* a collision happened; this reports *which file won*,
   which is the part decided by enumeration order.

@@ -123,6 +123,120 @@ export const TRAP_CORPUS_FILES: CorpusFiles = Object.freeze({
   ].join('\n'),
   'links/to-anchor.md': '# To an anchor\n\n[mixed](../docs/anchored.md#mixed-case)\n',
 
+  // Every `LinkType` the classifier can return, and every `LinkNodeType`.
+  //
+  // Without this the corpus exercised `local_file` on 12 of 12 links and
+  // `nodeType: 'link'` on all but the HTML ones — so `classifyLink`, a
+  // seven-outcome function, was pinned on one branch, and both of
+  // `extractLinks`' reference-style branches (`linkReference` and `definition`)
+  // were entirely unexercised. A parse layer that dropped definition rows
+  // altogether would not have moved a single golden line.
+  //
+  // Note `../docs/` keeps its trailing slash deliberately: `links/to-dir.md`
+  // links `../docs` without one and is classified `local_file`, so the
+  // `local_directory` branch was missed by the very file whose comment claims
+  // to cover directories.
+  'links/every-type.md': [
+    '# Every link type',
+    '',
+    'A [local file](../docs/sibling.md), a [local directory](../docs/), a',
+    '[same-document anchor](#every-link-type), an [external](https://example.invalid/x),',
+    'an [email](mailto:nobody@example.invalid), and an unsupported',
+    '[scheme](vatscheme://opaque).',
+    '',
+    // `embedded` is a data:/blob: URI, NOT a markdown image — `extractLinks`
+    // visits `link`, `linkReference` and `definition` nodes and never `image`,
+    // so `![alt](x.png)` yields no link at all. The image below is kept as the
+    // negative control for that: it must contribute nothing to `links`.
+    '[embedded](data:text/plain;base64,aGk=)',
+    '',
+    '![an image, which is deliberately not extracted](../docs/diagram.png)',
+    '',
+    'Reference-style [usage][ref] and a collapsed [ref][].',
+    '',
+    '[ref]: ../docs/guide.md',
+    '',
+  ].join('\n'),
+
+  // A row with MORE THAN ONE condition. Every other multi-condition path in the
+  // corpus tops out at one, so `collectConditions`' three-key sort comparator
+  // (code, then line, then message) never actually executed.
+  'broken/two-conditions.md': [
+    '---',
+    'title: [unclosed',
+    '---',
+    '',
+    '# Two conditions',
+    '',
+    'A dangling [reference][nowhere] alongside the invalid YAML above.',
+    '',
+  ].join('\n'),
+
+  // Heading depth past h2. `buildHeadingTree`'s multi-level pop branch — the one
+  // that closes several open levels at once — needs a drop of more than one
+  // level to run, which h1/h2 alone can never produce.
+  'docs/deep-headings.md': [
+    '# Level one',
+    '',
+    '## Level two',
+    '',
+    '### Level three',
+    '',
+    '#### Level four',
+    '',
+    '##### Level five',
+    '',
+    '###### Level six',
+    '',
+    '## Back to two',
+    '',
+    'The jump from h6 to h2 is the multi-pop.',
+    '',
+  ].join('\n'),
+
+  // ⭐ TWO PATHS, ONE CONTENT KEY — the case a content-addressed cache exists
+  // for, and the case the corpus could not previously produce at all. Byte-
+  // identical files at different paths: same key, one parse, two `paths:`
+  // entries on the row.
+  //
+  // These also make the oracle's dedup skip observable. It parses the first
+  // arrival and `continue`s on the second, which means "same key implies same
+  // facts" is IMPLEMENTED inside the instrument built to verify it. With two
+  // such paths present, removing the skip is a one-line experiment rather than
+  // a corpus-authoring exercise.
+  'twins/left/same.md': '# Twin\n\nByte-identical to its sibling, at a different path.\n',
+  'twins/right/same.md': '# Twin\n\nByte-identical to its sibling, at a different path.\n',
+
+  // Frontmatter present but EMPTY (`{}` after parsing). Distinct from absent,
+  // and the only way to reach `frontmatterFields: 0`.
+  'docs/empty-frontmatter.md': '---\n{}\n---\n\n# Empty frontmatter\n',
+
+  // Frontmatter value shapes the `typeName` column had no coverage for:
+  // boolean, null, Array and Object, taking it from three observed shapes to
+  // seven.
+  //
+  // `when:` is here as a MEASUREMENT, and it came back `string`, not `Date` —
+  // this project's `yaml` configuration does not construct Date objects for
+  // unquoted ISO timestamps. Worth pinning precisely because the reasoning for
+  // recording shapes cites `Date` as a case a JSON round-trip would change; on
+  // this parser that particular transition cannot occur, and the golden now
+  // says so instead of leaving it assumed.
+  'docs/frontmatter-shapes.md': [
+    '---',
+    'when: 2020-01-02T03:04:05Z',
+    'flag: true',
+    'nothing: null',
+    'list:',
+    '  - one',
+    '  - two',
+    'nested:',
+    '  inner: value',
+    '---',
+    '',
+    '# Frontmatter shapes',
+    '',
+  ].join('\n'),
+
   // The empty-file parser-discriminator collision. Identical bytes; git keys
   // both as e69de29…; the parse results are not the same. A bytes-only content
   // key would serve one for the other.

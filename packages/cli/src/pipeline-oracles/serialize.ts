@@ -9,7 +9,7 @@
  * corpus-relative and forward-slashed by the time it arrives here.
  */
 
-import type { EnumerationSnapshot, FrontmatterFieldFact, ParseFactSnapshot } from './types.js';
+import type { EnumerationSnapshot, ParseFactSnapshot } from './types.js';
 
 /** `true` / `false` / `-` for an unanswered column, so columns stay aligned in width. */
 function flag(value: boolean | null): string {
@@ -126,24 +126,37 @@ export function renderParseFactSnapshot(snapshot: ParseFactSnapshot): string {
     lines.push(`paths: ${(snapshot.pathsByKey[row.contentKey] ?? []).join(', ')}`);
     lines.push(`sizeBytes: ${String(row.sizeBytes)}`);
     lines.push(`estimatedTokenCount: ${String(row.estimatedTokenCount)}`);
-    lines.push(`contentMatchesKey: ${String(row.contentMatchesKey)}`);
+    lines.push(`decodedLength: ${String(row.decodedLength)}`);
     lines.push(`frontmatterSource: ${renderMultiline(row.frontmatterSource)}`);
-    // `-` is the absent field; `(none)` is a present-but-empty one. Collapsing
-    // the two would hide a cache that normalises `undefined` into `[]`.
-    lines.push(`frontmatterFields: ${renderFrontmatterFields(row.frontmatterFields)}`);
-    lines.push(`anchors: ${renderList(row.anchors)}`);
+    const optionalArrays = row.optionalArrays.map((fact) => `${fact.field}=${fact.state}`).join(' ');
+    lines.push(`optionalArrays: ${optionalArrays}`);
+
+    // Lists are rendered one entry per line rather than joined. A `', '` join is
+    // ambiguous: `["p, q"]` and `["p", "q"]` produced the identical golden line
+    // `anchors: p, q`, and `id="p, q"` survives both parsers verbatim — so two
+    // different fragment-target sets, on the field that drives every
+    // `file.md#fragment` check, were indistinguishable.
+    lines.push(`frontmatterFields: ${countOrAbsent(row.frontmatterFields)}`);
+    for (const field of row.frontmatterFields ?? []) {
+      lines.push(`  ${renderInline(field.key)}\t${field.typeName}\t${field.valueDigest}`);
+    }
+
+    lines.push(`anchors: ${countOrAbsent(row.anchors)}`);
+    for (const [ordinal, anchor] of (row.anchors ?? []).entries()) {
+      lines.push(`  ${String(ordinal)}\t${renderInline(anchor)}`);
+    }
 
     lines.push(`links: ${String(row.links.length)}`);
     for (const link of row.links) {
       lines.push(
-        `  ${String(link.ordinal)}\t${link.type}\t${link.nodeType ?? '-'}\tline=${String(link.line ?? '-')}\thref=${link.href}\ttext=${renderInline(link.text)}`,
+        `  ${String(link.ordinal)}\t${link.type}\t${link.nodeType ?? '-'}\tline=${String(link.line ?? '-')}\tresolvedId=${link.resolvedId ?? '-'}\thref=${renderInline(link.href)}\ttext=${renderInline(link.text)}`,
       );
     }
 
     lines.push(`headings: ${String(row.headings.length)}`);
     for (const heading of row.headings) {
       lines.push(
-        `  ${String(heading.ordinal)}\th${String(heading.level)}\tslug=${heading.slug}\tline=${String(heading.line ?? '-')}\ttext=${renderInline(heading.text)}`,
+        `  ${String(heading.ordinal)}\th${String(heading.level)}\tslug=${renderInline(heading.slug)}\tline=${String(heading.line ?? '-')}\ttext=${renderInline(heading.text)}`,
       );
     }
 
@@ -172,31 +185,16 @@ function renderMultiline(value: string | null): string {
 }
 
 /**
- * Render an optional string list, keeping absent distinct from empty.
+ * Header for an optional list: `-` when the field was absent, otherwise a count.
  *
- * `-` means the parse result omitted the field; `(none)` means it supplied an
- * empty one. Those are different observations about the contract, and a layer
- * that turns one into the other is exactly what this snapshot is watching for.
+ * Absent stays distinct from present-and-empty (`-` versus `0`), because a layer
+ * that normalises `undefined` into `[]` is a contract change. The entries
+ * themselves follow on their own lines, so nothing depends on a separator that
+ * could also occur inside a value.
  *
  * @param values - The list, or null when the field was absent
- * @returns A one-line rendering
+ * @returns `-` or the entry count
  */
-function renderList(values: readonly string[] | null): string {
-  if (values === null) {
-    return '-';
-  }
-  return values.length === 0 ? '(none)' : values.map((value) => renderInline(value)).join(', ');
-}
-
-/**
- * Render frontmatter key/shape pairs, keeping absent distinct from empty.
- *
- * @param fields - The facts, or null when the parse result had no frontmatter
- * @returns A one-line rendering
- */
-function renderFrontmatterFields(fields: readonly FrontmatterFieldFact[] | null): string {
-  if (fields === null) {
-    return '-';
-  }
-  return fields.length === 0 ? '(none)' : fields.map((field) => `${field.key}:${field.typeName}`).join(', ');
+function countOrAbsent(values: readonly unknown[] | null): string {
+  return values === null ? '-' : String(values.length);
 }

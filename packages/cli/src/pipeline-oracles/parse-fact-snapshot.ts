@@ -9,7 +9,9 @@
  * visible in command output.
  */
 
-import { computeContentKey, parseHtml, parseMarkdown, readContentWithKey } from '@vibe-agent-toolkit/resources';
+import { createHash } from 'node:crypto';
+
+import { parseHtml, parseMarkdown, readContentWithKey } from '@vibe-agent-toolkit/resources';
 import type { HeadingNode, ParserKind, ParseResult, ResourceLink } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
@@ -19,6 +21,7 @@ import type {
   FrontmatterFieldFact,
   HeadingFact,
   LinkFact,
+  OptionalArrayState,
   ParseFactRow,
   ParseFactSnapshot,
 } from './types.js';
@@ -172,9 +175,27 @@ function toRow(
     // Absent stays distinguishable from empty: both parsers omit the key rather
     // than emitting `[]`, so `null` and `[]` are different observations.
     anchors: parsed.anchors === undefined ? null : [...parsed.anchors],
-    contentMatchesKey: computeContentKey(parsed.content, parserKind) === contentKey,
+    decodedLength: parsed.content.length,
     conditions: collectConditions(parsed),
+    optionalArrays: [
+      { field: 'anchors', state: arrayState(parsed.anchors) },
+      { field: 'parseErrors', state: arrayState(parsed.parseErrors) },
+      { field: 'unresolvedReferences', state: arrayState(parsed.unresolvedReferences) },
+    ],
   };
+}
+
+/**
+ * Classify how an optional array field was supplied.
+ *
+ * @param value - The field, possibly undefined
+ * @returns Whether it was missing, present-and-empty, or populated
+ */
+function arrayState(value: readonly unknown[] | undefined): OptionalArrayState {
+  if (value === undefined) {
+    return 'absent';
+  }
+  return value.length === 0 ? 'empty' : 'present';
 }
 
 /**
@@ -194,8 +215,54 @@ function toFrontmatterFields(frontmatter: Record<string, unknown> | undefined): 
     return null;
   }
   return Object.entries(frontmatter)
-    .map(([key, value]) => ({ key, typeName: typeNameOf(value) }))
+    .map(([key, value]) => ({ key, typeName: typeNameOf(value), valueDigest: digestValue(value) }))
     .sort((a, b) => a.key.localeCompare(b.key));
+}
+
+/**
+ * A short, stable digest of a frontmatter value.
+ *
+ * Hand-rolled rather than `JSON.stringify` because every input this exists to
+ * survive breaks that: `.inf`/`.nan` serialize to `null`, `!!binary` becomes a
+ * Buffer envelope, `Date` becomes a string, and a cyclic YAML anchor throws —
+ * which would mean the document is silently never recorded at all.
+ *
+ * @param value - Any frontmatter value
+ * @returns 12 hex characters of a SHA-256 over a structural rendering
+ */
+function digestValue(value: unknown): string {
+  return createHash('sha256').update(renderValue(value, new WeakSet())).digest('hex').slice(0, 12);
+}
+
+/**
+ * Render a value structurally, tagging each node with its shape.
+ *
+ * Types are part of the rendering, so `1` and `'1'` do not collide, and keys are
+ * sorted so an object's digest does not depend on insertion order.
+ *
+ * @param value - The value to render
+ * @param seen - Objects already on the current path, for cycle detection
+ * @returns A deterministic string
+ */
+function renderValue(value: unknown, seen: WeakSet<object>): string {
+  if (value === null || typeof value !== 'object') {
+    return `${typeNameOf(value)}:${String(value)}`;
+  }
+  if (seen.has(value)) {
+    // A cyclic anchor. Recorded as a marker rather than followed: the fact that
+    // a cycle is here is the durable observation, and following it does not
+    // terminate.
+    return '<cycle>';
+  }
+  seen.add(value);
+  const rendered = Array.isArray(value)
+    ? `[${value.map((item) => renderValue(item, seen)).join(',')}]`
+    : `{${Object.entries(value as Record<string, unknown>)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, item]) => `${key}=${renderValue(item, seen)}`)
+        .join(',')}}`;
+  seen.delete(value);
+  return `${typeNameOf(value)}${rendered}`;
 }
 
 /**
@@ -231,6 +298,7 @@ function toLinkFact(link: ResourceLink, index: number): LinkFact {
     type: link.type,
     line: link.line ?? null,
     nodeType: link.nodeType ?? null,
+    resolvedId: link.resolvedId ?? null,
   };
 }
 

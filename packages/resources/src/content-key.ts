@@ -34,6 +34,32 @@
  * bytes handed to the parser.** {@link readContentWithKey} exists so a caller
  * cannot key one read and parse another. A git SHA may still be used as a
  * *lookup hint* whose miss is free — it must never be the key.
+ *
+ * ## Why the preimage is RAW BYTES and not the decoded string
+ *
+ * It was the decoded string until schema version 2, and that was unsound.
+ * UTF-8 decoding is many-to-one on invalid input: every malformed sequence
+ * becomes U+FFFD. Measured —
+ *
+ * ```text
+ * [c2]     statSize=1  decoded="�"   ┐
+ * [e2 82]  statSize=2  decoded="�"   ├─ one key, three different files
+ * [ff]     statSize=1  decoded="�"   ┘
+ * ```
+ *
+ * `ParseResult.sizeBytes` is `stat().size` — a **raw byte** count — and it
+ * reaches adopter-visible rule variables and link-rewriting templates. So a
+ * cache keyed on the decoded string would serve a well-formed entry with the
+ * wrong contents: precisely the failure the git-SHA argument above rejects,
+ * reintroduced by a different route.
+ *
+ * Mixing the byte *length* into the key does not fix it — `[c2]` and `[ff]` are
+ * both length 1. The preimage has to be the bytes.
+ *
+ * The general rule, for whoever extends this: **a key must cover every input
+ * the cached value depends on.** Enumerate the cached struct's fields and ask of
+ * each one, "is this a function of what I hashed?" Exactly one field was not,
+ * and one was enough.
  */
 
 import { createHash } from 'node:crypto';
@@ -57,7 +83,7 @@ export type ParserKind = 'markdown' | 'html';
  * `CACHE_VERSION` discipline already used by `external-link-cache.ts` and
  * `content-cache.ts`.
  */
-export const CONTENT_KEY_SCHEMA_VERSION = 1;
+export const CONTENT_KEY_SCHEMA_VERSION = 2;
 
 /** Domain separator, so this keyspace can never be confused with a git SHA-1. */
 const KEY_DOMAIN = 'vat-content-key';
@@ -80,20 +106,25 @@ export function parserKindForPath(filePath: string): ParserKind {
 /**
  * Compute the content key for a document.
  *
- * @param content - The exact string handed to the parser (decoded, not raw bytes —
- *   VAT's parsers take a UTF-8 decoded string, so that is what identity is over)
- * @param parserKind - Which parser receives it
+ * Takes **raw bytes**, not a decoded string, and the type is the enforcement:
+ * a caller holding only a decoded string cannot reach this function without
+ * re-encoding, and re-encoding a string that came from lossy decoding does not
+ * reproduce the original bytes. See the module docstring for the measurement.
+ *
+ * @param bytes - The exact bytes read from disk, before decoding
+ * @param parserKind - Which parser receives the decoded form
  * @returns An opaque, stable, path-independent key
  *
  * @example
  * ```typescript
- * computeContentKey('', 'markdown') !== computeContentKey('', 'html'); // true
+ * const empty = new Uint8Array();
+ * computeContentKey(empty, 'markdown') !== computeContentKey(empty, 'html'); // true
  * ```
  */
-export function computeContentKey(content: string, parserKind: ParserKind): string {
+export function computeContentKey(bytes: Uint8Array, parserKind: ParserKind): string {
   const digest = createHash('sha256')
     .update(`${KEY_DOMAIN}\0${String(CONTENT_KEY_SCHEMA_VERSION)}\0${parserKind}\0`, 'utf-8')
-    .update(content, 'utf-8')
+    .update(bytes)
     .digest('hex');
   return `k${String(CONTENT_KEY_SCHEMA_VERSION)}.${parserKind}.${digest}`;
 }
@@ -102,10 +133,19 @@ export function computeContentKey(content: string, parserKind: ParserKind): stri
 export interface KeyedContent {
   /** The decoded content, exactly as it must be handed to the parser. */
   content: string;
-  /** The key computed over {@link content}. */
+  /** The key computed over the RAW BYTES this content was decoded from. */
   key: string;
   /** The parser this content routes to. */
   parserKind: ParserKind;
+  /**
+   * Length of the raw bytes.
+   *
+   * Carried because it is NOT derivable from {@link content}: decoding is lossy
+   * on malformed UTF-8, so `Buffer.byteLength(content)` can differ from what was
+   * actually on disk. `ParseResult.sizeBytes` is this number, and a cache must
+   * store it rather than recompute it from the decoded string.
+   */
+  byteLength: number;
 }
 
 /**
@@ -122,7 +162,14 @@ export interface KeyedContent {
  */
 export async function readContentWithKey(filePath: string): Promise<KeyedContent> {
   const parserKind = parserKindForPath(filePath);
+  // Read as bytes and decode here, rather than letting readFile decode: the key
+  // must be over what was on disk, and the decode is lossy.
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied path, same trust level as the parsers this feeds
-  const content = await readFile(filePath, 'utf-8');
-  return { content, key: computeContentKey(content, parserKind), parserKind };
+  const bytes = await readFile(filePath);
+  return {
+    content: bytes.toString('utf-8'),
+    key: computeContentKey(bytes, parserKind),
+    parserKind,
+    byteLength: bytes.byteLength,
+  };
 }

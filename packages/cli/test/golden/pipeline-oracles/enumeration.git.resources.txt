@@ -3,35 +3,42 @@ lane: resources
 corpus: trap/git
 route: git-ls-files
 gitAvailable: true
-enumeratedCount: 22
-admittedCount: 21
+enumeratedCount: 29
+admittedCount: 28
 collisionCount: 1
 buildError: -
 
 ## enumerated (ordered, pre-deduplication)
 # ordinal	path	exists	isDirectory	gitignored	isSymlink	symlinkResolves	contentKey
-0	README.md	true	false	false	false	-	k1.markdown.248704ff6f113b84adfbd6000260a216bde1a2ca79ddd1c7c909d8f641c259ff
-1	broken/bad-frontmatter.md	true	false	false	false	-	k1.markdown.3eddf50474c7af1104b3d551a99a00968868ce334144b06ab55bc60cbbc83b07
-2	broken/dangling-reference.md	true	false	false	false	-	k1.markdown.4f7676629aa6b3a43a912325c9d5f0847a3af5a28c51f0610f8046742a1519b4
-3	broken/exotic-frontmatter.md	true	false	false	false	-	k1.markdown.0de4bae35943b2badc3e9dff11ce490186438df2e82f97aec24114bdbf96b195
-4	broken/malformed.html	true	false	false	false	-	k1.html.7747e96c7e64aed3e3321cfd4b03879678bfa074812cbf568b61d8c46da564fb
-5	docs/Case.md	true	false	false	false	-	k1.markdown.c7ea65cb38f8d6df156b34813f7d6a079ba8d69c133c7c254e066ce6655a5baf
-6	docs/anchored.md	true	false	false	false	-	k1.markdown.d8f18fa1b20bc609f4e070f38eecfaef38c39ffda78012ad854505acc76df1a5
-7	docs/guide.md	true	false	false	false	-	k1.markdown.108f2a9cd167d06448fb2209135e3ddc033d4e2c1356415574aab8d673e7161c
-8	docs/page.htm	true	false	false	false	-	k1.html.3fd36f8e0c55f10608f285fb12408c3ff19924268245a79198a349f88769420b
-9	docs/page.html	true	false	false	false	-	k1.html.29ea537818e21b8c340d049d63dba80d23dce347701efe133cf5142c3126e1ca
-10	docs/sibling.md	true	false	false	false	-	k1.markdown.67bdc639b157a669f9adea87b698e5d6af8fed059a8cb1c1c09a4f138936bb66
-11	dup-hyphen/note.md	true	false	false	false	-	k1.markdown.7b721128893996c29eaac42b042c71605f0f11ab7c8dd597860526e3939c2167
-12	dup/hyphen-note.md	true	false	false	false	-	k1.markdown.4ac4b04af9f1e10174918d406145c72cb00e4214a2ba49076ef168fbf6b2eaf5
-13	empty.html	true	false	false	false	-	k1.html.737e05c1cb6ca63fc9414dbe6cf2ad13d14fdf178b8b6ec89f5766ab2dc148cf
-14	empty.md	true	false	false	false	-	k1.markdown.17168c653cc4703618ed339022ab8789582bd711f5d6697c4f5f0a183f75814c
-15	links/to-anchor.md	true	false	false	false	-	k1.markdown.3166ac6853e62123296ef01ca15e3609ce366c18b39ca376b7de19cff69d612a
-16	links/to-case.md	true	false	false	false	-	k1.markdown.0c9f162da29f6879ea5f1e062ef2c3db833f85adf11a17a2bdffd5b38edfb1d1
-17	links/to-dir.md	true	false	false	false	-	k1.markdown.8e9e32803df20e60ee7c37719c6ef8e2a1a9ffa20c0dae81da1c8d5dc659cd4e
-18	links/to-ignored.md	true	false	false	false	-	k1.markdown.8e61e96430a8cb31c2fdb61e95c1574c18b4c817c8a83ef0353d47f1888bc067
-19	links/to-missing.md	true	false	false	false	-	k1.markdown.066c8e792c839584b6817e36756f122127334e7a8a7643b16f396713ce7976a6
-20	symlinks/a/target.md	true	false	false	false	-	k1.markdown.59687063d2df3063831b905dbf1cd6dc86839ac950e8a86b1c89ab92829b41cf
-21	symlinks/b/target.md	true	false	false	false	-	k1.markdown.163c953a7ed2348961516460de6b2290fd6c5f4fa1c6a1a55cf1ab2c0b97f2de
+0	README.md	true	false	false	false	-	k2.markdown.7e94762e0a0b1d66e18fb52e9aee95ebbf9f1bf7c281fc4bb84451421f4ec2e9
+1	broken/bad-frontmatter.md	true	false	false	false	-	k2.markdown.605fec71a8c78b65917b4095716a527ffbe3527fd7891cae38e31a7464e282a0
+2	broken/dangling-reference.md	true	false	false	false	-	k2.markdown.b5c2ac38ac6bc0b392785e30820dcd13c7db8496934627ee39efd25c422a66c0
+3	broken/exotic-frontmatter.md	true	false	false	false	-	k2.markdown.5f77164cda910eab21ee9a384a28a1e036826356d0cb1c04e642f70b71847043
+4	broken/malformed.html	true	false	false	false	-	k2.html.ada00e4686bf33b8f819a8b40ca32c233d0395d3ded5bc9bae888563c9e3038a
+5	broken/two-conditions.md	true	false	false	false	-	k2.markdown.8e6e3ec33fdfe4aca43bd7f3c132dcd52e104d0652a5639e91eaaa2c601f7c07
+6	docs/Case.md	true	false	false	false	-	k2.markdown.633af3cfcd272799f89e1532d9f64f8b21ce423c3149eab20185260b06bfb728
+7	docs/anchored.md	true	false	false	false	-	k2.markdown.22d690255e4c1a3ab9b0b831fca5bfb18b96cbf1db94eca171fdbddab2d5f6e9
+8	docs/deep-headings.md	true	false	false	false	-	k2.markdown.417d2d08a0bb3baf83318ca6d45591087f2d0cabef746596e1940bb65d7dc094
+9	docs/empty-frontmatter.md	true	false	false	false	-	k2.markdown.cf542c7dac41d91e491f3a1bfe0b9b7e2c94f6f245e97857626ac3991d7137e0
+10	docs/frontmatter-shapes.md	true	false	false	false	-	k2.markdown.28d2988b49512c2406178da5491f939d4733891ff8e8cb8b8cdf03b5ef416888
+11	docs/guide.md	true	false	false	false	-	k2.markdown.aef841d01f5ebc004484211deb33dcf5fa2cfd004bae7c43bc69514bb6ce2ce1
+12	docs/page.htm	true	false	false	false	-	k2.html.03c955d819b71fa6e1b721815fa8165d8f126f740f096b6b83166df16d839dd2
+13	docs/page.html	true	false	false	false	-	k2.html.93f47c100e5fbf672a80b4a02a7ede41ac81cb08b7a1629812bc326076e29a35
+14	docs/sibling.md	true	false	false	false	-	k2.markdown.10d6d823ce77414e521427a8ffa4923ebe8c03f201709b435254bcec3d3b5bfc
+15	dup-hyphen/note.md	true	false	false	false	-	k2.markdown.714e8e45fca52c887930cf61fd8e9a3009a05c078fd33ac767febfbaf3681654
+16	dup/hyphen-note.md	true	false	false	false	-	k2.markdown.b7a4bc080000a0a7966938aa559a1ea14aa3d75ce615978b8a00c891f10b9e2e
+17	empty.html	true	false	false	false	-	k2.html.aeb438a97f30164afd613f47d575fa92851feb118e4e298a4680251e6de33227
+18	empty.md	true	false	false	false	-	k2.markdown.dd58f774b0d17ed55b5c21ad40ffc3267ff311967dc9c49ff441906f455997db
+19	links/every-type.md	true	false	false	false	-	k2.markdown.d4e3be40910841406b4202c15ea09053c368ab82f8ba55bbdff54dbf260a8605
+20	links/to-anchor.md	true	false	false	false	-	k2.markdown.ddac6f10b01cf1e6c4a5895cead1c431b36304aae5d3a22261283be3e31d7b8b
+21	links/to-case.md	true	false	false	false	-	k2.markdown.040b5af49aab433944b84b6041257fce323cd19b616703540cbe5cb74b82a250
+22	links/to-dir.md	true	false	false	false	-	k2.markdown.22e6cc5460228b65c6e4d4f270d31d12ed29662106d052ad7863a89500a6ce25
+23	links/to-ignored.md	true	false	false	false	-	k2.markdown.696ae5589350050c03a3fbe11c98adae2fed45aad060c2b162e1cbbdde4a745b
+24	links/to-missing.md	true	false	false	false	-	k2.markdown.7bd8af63da4db21c858fc6cba7f903c7f2f6c72b79c01d71ded084aa028dc55e
+25	symlinks/a/target.md	true	false	false	false	-	k2.markdown.9911cc88ac9d2cc8e600f3b127ace755f665e74510eaafff2928d4821bd82456
+26	symlinks/b/target.md	true	false	false	false	-	k2.markdown.ebf04bbf1cc59d63e056a233054b5e09bbeface9f0b12f10dc93a39f44e0d86b
+27	twins/left/same.md	true	false	false	false	-	k2.markdown.bfd4d55184ff71532b812454fe9788c45d8e070da0a876411f865de66f2e4a89
+28	twins/right/same.md	true	false	false	false	-	k2.markdown.bfd4d55184ff71532b812454fe9788c45d8e070da0a876411f865de66f2e4a89
 
 ## admitted (ordered, post-deduplication)
 0	README.md
@@ -39,22 +46,29 @@ buildError: -
 2	broken/dangling-reference.md
 3	broken/exotic-frontmatter.md
 4	broken/malformed.html
-5	docs/Case.md
-6	docs/anchored.md
-7	docs/guide.md
-8	docs/page.htm
-9	docs/page.html
-10	docs/sibling.md
-11	dup-hyphen/note.md
-12	empty.html
-13	empty.md
-14	links/to-anchor.md
-15	links/to-case.md
-16	links/to-dir.md
-17	links/to-ignored.md
-18	links/to-missing.md
-19	symlinks/a/target.md
-20	symlinks/b/target.md
+5	broken/two-conditions.md
+6	docs/Case.md
+7	docs/anchored.md
+8	docs/deep-headings.md
+9	docs/empty-frontmatter.md
+10	docs/frontmatter-shapes.md
+11	docs/guide.md
+12	docs/page.htm
+13	docs/page.html
+14	docs/sibling.md
+15	dup-hyphen/note.md
+16	empty.html
+17	empty.md
+18	links/every-type.md
+19	links/to-anchor.md
+20	links/to-case.md
+21	links/to-dir.md
+22	links/to-ignored.md
+23	links/to-missing.md
+24	symlinks/a/target.md
+25	symlinks/b/target.md
+26	twins/left/same.md
+27	twins/right/same.md
 
 ## collisions (first-added-wins drops, in arrival order)
 dup-hyphen-note-md	won=dup-hyphen/note.md	dropped=dup/hyphen-note.md
