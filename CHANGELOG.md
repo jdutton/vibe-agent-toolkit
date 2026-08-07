@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- **Library-only, type-level: `ValidationConfigSchema` is now typed `z.ZodType<ValidationConfig>` rather than the inferred `ZodObject`.** No CLI behaviour changes and no runtime change — it is the same strict object, so `safeParse` still rejects unknown codes and unknown top-level keys, and the generated `schemas/validation-config.json` is byte-identical. **What to do:** nothing, unless you called `ZodObject`-only methods on it (`.shape`, `.extend`, `.merge`, `.pick`); those are no longer available at the type level. The `ValidationConfig` type itself is unchanged.
+
+  **Why:** `z.record(IssueCodeSchema, …)` inlined the entire code-name union into the inferred type, twice, and every downstream `.d.ts` carried both copies verbatim — `resources`' `project-config.d.ts` held 98 copies of the union, with a longest line of 4,780 characters. Past a certain width TypeScript's declaration printer starts attaching leading JSDoc to the wrong node and emits **syntactically invalid** `.d.ts`, which then fails every package that consumes it (1,341 errors from that one file). Annotating collapses those to a named `IssueCode` reference: the same file now has 0 inlined copies and a longest line of 133 characters, and the emitted declarations stay small however long the registry grows.
+
 - **`@vibe-agent-toolkit/utils/fs` no longer re-exports the pure path-string helpers.** Seven
   symbols moved from `./fs` to the new `./path` entry: `safePath`, `toForwardSlash`,
   `isAbsolutePath`, `isAbsoluteAnyPlatform`, `hasParentTraversalSegment`, `toAbsolutePath`, and

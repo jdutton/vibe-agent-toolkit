@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { IssueCodeSchema } from './validation-codes.js';
+import { IssueCodeSchema, type IssueCode } from './validation-codes.js';
 
 export const SeverityLevelSchema = z.enum(['error', 'warning', 'info', 'ignore']);
 export type SeverityLevel = z.infer<typeof SeverityLevelSchema>;
@@ -12,8 +12,37 @@ export const AllowEntrySchema = z.object({
 }).strict();
 export type AllowEntry = z.infer<typeof AllowEntrySchema>;
 
-export const ValidationConfigSchema = z.object({
+/**
+ * Written out rather than inferred, and the schema below is annotated with it.
+ *
+ * `z.record(IssueCodeSchema, …)` inlines the ENTIRE code-name union into the
+ * inferred type — twice, once per field. Every downstream `.d.ts` that mentions
+ * this schema then carries both copies verbatim: `project-config.d.ts` emitted
+ * two ~2.5 KB single-line types for it. Past a certain width TypeScript's
+ * declaration printer starts attaching leading JSDoc to the wrong node and emits
+ * syntactically invalid `.d.ts` — observed as
+ * `paths: z.ZodDefault /** …a comment from an unrelated declaration… *\/<z.ZodArray<…>>;`,
+ * which then fails every package that consumes it (1341 errors from one file).
+ *
+ * Adding two codes was enough to cross that line, so the inlining is the defect,
+ * not the codes. Annotating collapses both copies to a named `IssueCode`
+ * reference, which keeps the emitted declarations small no matter how long the
+ * registry grows — and stops the next person who adds a code from hitting this.
+ *
+ * Runtime behaviour is unchanged: the value is still the same strict `ZodObject`,
+ * so `safeParse` still rejects unknown codes and unknown top-level keys, and
+ * `zod-to-json-schema` still walks the real schema when generating
+ * `schemas/validation-config.json`.
+ */
+// The explicit `| undefined` is required by `exactOptionalPropertyTypes`, which
+// this repo enables: Zod infers an optional field as `T | undefined`, and without
+// the union the annotation is narrower than the schema it describes.
+export interface ValidationConfig {
+  severity?: Partial<Record<IssueCode, SeverityLevel>> | undefined;
+  allow?: Partial<Record<IssueCode, AllowEntry[]>> | undefined;
+}
+
+export const ValidationConfigSchema: z.ZodType<ValidationConfig, z.ZodTypeDef, unknown> = z.object({
   severity: z.record(IssueCodeSchema, SeverityLevelSchema).optional(),
   allow: z.record(IssueCodeSchema, z.array(AllowEntrySchema)).optional(),
 }).strict();
-export type ValidationConfig = z.infer<typeof ValidationConfigSchema>;
