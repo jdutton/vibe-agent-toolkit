@@ -76,16 +76,33 @@ const PREFER_STARTSWITH_OVER_REGEX_CASES: RuleCases = {
     // Patterns with regex metacharacters — must NOT flag (cannot safely flatten).
     { code: String.raw`const s = 'x'; if (/^https?:\/\//.test(s)) {}` },
     { code: "const s = 'x'; if (/^[a-z]+/.test(s)) {}" },
-    { code: String.raw`const s = 'x'; if (/\.txt$/.test(s)) {}` },
+    // Unescaped `.` is "any character" — flattening it would change what matches.
+    { code: "const s = 'x'; if (/.txt$/.test(s)) {}" },
     { code: "const s = 'x'; if (/^foo|bar/.test(s)) {}" },
     // Flags i/m make literal conversion unsafe — must not flag.
     { code: "const s = 'x'; if (/^foo/i.test(s)) {}" },
-    // Other escapes (\d, \w, \\) are not safely flattenable — must not flag.
+    // Escapes that MEAN something other than the next character — a class, an
+    // assertion, a code point — stay unflattenable.
     { code: String.raw`const s = 'x'; if (/^\d+/.test(s)) {}` },
+    { code: String.raw`const s = 'x'; if (/^\w/.test(s)) {}` },
+    { code: String.raw`const s = 'x'; if (/^\bword/.test(s)) {}` },
+    { code: String.raw`const s = 'x'; if (/^\cA/.test(s)) {}` },
+    { code: String.raw`const s = 'x'; if (/^\x41/.test(s)) {}` },
+    { code: String.raw`const s = 'x'; if (/^\p{Lu}/u.test(s)) {}` },
+    // A control character would go straight into the suggested startsWith('…').
+    { code: String.raw`const s = 'x'; if (/^\tab/.test(s)) {}` },
     // No anchor — not a prefix/suffix check.
     { code: "const s = 'x'; if (/foo/.test(s)) {}" },
     // Method calls that aren't .test() — must not flag.
     { code: "const s = 'x'; const m = /^foo/.exec(s);" },
+    // A const that does not hold a regex literal, and one reassigned after
+    // declaration: nothing here proves what `.test()` runs against.
+    { code: "const RE = makeRegex(); const s = 'x'; if (RE.test(s)) {}" },
+    { code: "let RE = /^a/; RE = /^[b]/; const s = 'x'; if (RE.test(s)) {}" },
+    { code: "const s = 'x'; if (someObject.pattern.test(s)) {}" },
+    // Resolution must respect the same metachar/flag limits as the inline form.
+    { code: String.raw`const RE = /^https?:\/\//; const s = 'x'; if (RE.test(s)) {}` },
+    { code: "const RE = /^foo/i; const s = 'x'; if (RE.test(s)) {}" },
   ],
   invalid: [
     { code: String.raw`const s = 'x'; if (/^file:\/\//.test(s)) {}`, errors: [{ messageId: 'preferStartsWith' }] },
@@ -93,6 +110,26 @@ const PREFER_STARTSWITH_OVER_REGEX_CASES: RuleCases = {
     { code: "const s = 'x'; if (/^foo/.test(s)) {}", errors: [{ messageId: 'preferStartsWith' }] },
     { code: "const s = 'x'; if (/bar$/.test(s)) {}", errors: [{ messageId: 'preferEndsWith' }] },
     { code: "const s = 'x'; if (/^abc-def/.test(s)) {}", errors: [{ messageId: 'preferStartsWith' }] },
+    // ESCAPED NON-SPECIAL CHARACTER. `\*` is an unambiguous literal asterisk,
+    // and accepting only `\/` skipped it — an adopter's SonarCloud raised the
+    // MAJOR S6557 this rule exists to shift left, on code the rule reported
+    // green. Every escape below denotes exactly the character it protects.
+    { code: String.raw`const s = 'x'; if (/^\*glob/.test(s)) {}`, errors: [{ messageId: 'preferStartsWith' }] },
+    { code: String.raw`const s = 'x'; if (/^\.hidden/.test(s)) {}`, errors: [{ messageId: 'preferStartsWith' }] },
+    // Was pinned as VALID with the note "contains `.` metachar". It does not —
+    // the `.` is escaped, and `/\.txt$/.test(s)` is `s.endsWith('.txt')` exactly.
+    { code: String.raw`const s = 'x'; if (/\.txt$/.test(s)) {}`, errors: [{ messageId: 'preferEndsWith' }] },
+    { code: String.raw`const s = 'x'; if (/^\$ref/.test(s)) {}`, errors: [{ messageId: 'preferStartsWith' }] },
+    { code: String.raw`const s = 'x'; if (/^\(paren/.test(s)) {}`, errors: [{ messageId: 'preferStartsWith' }] },
+    { code: String.raw`const s = 'x'; if (/\+plus$/.test(s)) {}`, errors: [{ messageId: 'preferEndsWith' }] },
+    // REGEX HELD IN A CONST — the normal way to hoist a hot regex, and the
+    // shape the rule was blind to because it examined only inline literals.
+    { code: "const RE = /^literal/; const s = 'x'; if (RE.test(s)) {}", errors: [{ messageId: 'preferStartsWith' }] },
+    { code: "const RE = /suffix$/; const s = 'x'; if (RE.test(s)) {}", errors: [{ messageId: 'preferEndsWith' }] },
+    {
+      code: String.raw`const RE = /^file:\/\//; function f(s) { return RE.test(s); }`,
+      errors: [{ messageId: 'preferStartsWith' }],
+    },
   ],
 };
 
@@ -128,6 +165,7 @@ const SAFE_PATH_MODULE = '@vibe-agent-toolkit/utils/path';
 const SAFE_FS_MODULE = '@vibe-agent-toolkit/utils/fs';
 const BARREL = '@vibe-agent-toolkit/utils';
 const SAFE_IMPORT = `import { safePath } from '${SAFE_PATH_MODULE}';`;
+const PATH_NAMESPACE_IMPORT = "import path from 'node:path';";
 const LINTED_FILE = 'packages/cli/src/example.ts';
 const PATH_CORE_IMPL = 'packages/utils/src/path-core.ts';
 const PATH_UTILS_IMPL = 'packages/utils/src/path-utils.ts';
@@ -157,6 +195,13 @@ function pathFunctionRuleCases(fn: 'join' | 'relative' | 'resolve'): RuleCases {
         filename: LINTED_FILE,
         options,
       },
+      // A same-named function from somewhere else is not ours. The bare-call
+      // leg keys on the name being UNBOUND, so binding it — here, or as a
+      // parameter, or as a local — is what keeps that leg from becoming a
+      // rule that flags every `join()` in the ecosystem.
+      { code: `import { ${fn} } from 'lodash'; const p = ${fn}(a, b);`, filename: LINTED_FILE, options },
+      { code: `function ${fn}(x) { return x; } const p = ${fn}(a);`, filename: LINTED_FILE, options },
+      { code: `const run = (${fn}) => ${fn}(a, b);`, filename: LINTED_FILE, options },
       // Files the CONSUMING config declared exempt, by their repo-relative paths.
       { code: unsafeMemberCode, filename: PATH_CORE_IMPL, options },
       { code: unsafeMemberCode, filename: `/Users/dev/vat/${PATH_UTILS_IMPL}`, options },
@@ -172,6 +217,64 @@ function pathFunctionRuleCases(fn: 'join' | 'relative' | 'resolve'): RuleCases {
         filename: LINTED_FILE,
         options,
         output: `\n${SAFE_IMPORT} const p = safePath.${fn}(a, b);`,
+        errors,
+      },
+      // THREE call sites, ONE pass. RuleTester applies exactly one round of
+      // fixes, so `output` here is the whole property: every call rewritten and
+      // the import surgery done, with nothing discarded for overlapping.
+      //
+      // Every fixture above has a single call site, and a single-call-site
+      // fixture CANNOT reproduce the defect this guards — the fix that edits
+      // both the import and its call spans the gap between them, so the second
+      // and third reports' ranges nested inside the first and ESLint dropped
+      // them. The specifier went away, the calls did not, and the next pass had
+      // nothing left to key on. See `buildFix` in the factory.
+      {
+        code: [
+          `import { ${fn} } from 'node:path';`,
+          `const a1 = ${fn}(a, b);`,
+          `const a2 = ${fn}(c, d);`,
+          `const a3 = ${fn}(e, f);`,
+        ].join('\n'),
+        filename: LINTED_FILE,
+        options,
+        output: [
+          '',
+          SAFE_IMPORT,
+          `const a1 = safePath.${fn}(a, b);`,
+          `const a2 = safePath.${fn}(c, d);`,
+          `const a3 = safePath.${fn}(e, f);`,
+        ].join('\n'),
+        errors: [errors[0], errors[0], errors[0]],
+      },
+      // Same shape through the namespace import, which removes no specifier —
+      // the import INSERT alone is enough to span the file and starve the rest.
+      {
+        code: [
+          PATH_NAMESPACE_IMPORT,
+          `const a1 = path.${fn}(a, b);`,
+          `const a2 = path.${fn}(c, d);`,
+        ].join('\n'),
+        filename: LINTED_FILE,
+        options,
+        output: [
+          PATH_NAMESPACE_IMPORT,
+          SAFE_IMPORT,
+          `const a1 = safePath.${fn}(a, b);`,
+          `const a2 = safePath.${fn}(c, d);`,
+        ].join('\n'),
+        errors: [errors[0], errors[0]],
+      },
+      // BARE, UNBOUND call — what a half-applied fix leaves behind. Detection
+      // used to require having seen the `node:path` specifier, so once a fix
+      // removed it the rule fell silent and `--fix` declared victory over source
+      // that no longer compiles. Recognising this shape is what makes a second
+      // `--fix` finish the job.
+      {
+        code: `const p = ${fn}(a, b);`,
+        filename: LINTED_FILE,
+        options,
+        output: `${SAFE_IMPORT}\nconst p = safePath.${fn}(a, b);`,
         errors,
       },
       // DECOY basenames — same file name, different directory. MUST still fire.
@@ -767,5 +870,134 @@ describe('every {{safeModule}} placeholder is backed by the option that fills it
       expect(message).not.toContain('{{');
       expect(message).toContain(SEAM);
     }
+  });
+});
+
+/**
+ * `--fix` must not leave behind a reference to something it just un-imported.
+ *
+ * This is the property an adopter measured on a real sweep, and it is not the
+ * property any fixture above asserts. RuleTester applies exactly ONE pass and
+ * compares a string; this runs `--fix` to its fixpoint and then asks the
+ * compiler's question — is every identifier in the result actually bound?
+ *
+ * Their numbers, over ~4,900 sites: **146 files left with a dangling
+ * reference** (140 on `join`, 16 on `resolve`), worst single file 75 unrewritten
+ * call sites. The mechanism was ESLint's fix merging — a `fix()` that edits both
+ * the import and its own call site yields ONE range spanning `min..max`, so with
+ * N call sites you get N nested ranges and ESLint keeps one. The rule then went
+ * quiet, because the specifier its detection keyed on was the thing that had
+ * just been removed. A stable fixpoint over source that does not compile, and a
+ * clean exit code. You find out at `tsc`, after the sweep.
+ *
+ * Every rule here rewrites a call AND edits imports, which is the whole
+ * population that can express the bug — including the ones that never showed it
+ * in the adopter's tree, where no file happened to call them twice.
+ */
+const REWRITE_SITES = 4;
+
+/** `[rule, importLine, callExpression]` — a source is synthesized per row. */
+const MULTI_SITE_REWRITES: Array<[string, string, string]> = [
+  ['no-path-join', "import { join } from 'node:path';", 'join(a, b)'],
+  ['no-path-resolve', "import { resolve } from 'node:path';", 'resolve(a, b)'],
+  ['no-path-relative', "import { relative } from 'node:path';", 'relative(a, b)'],
+  ['no-os-tmpdir', "import { tmpdir } from 'node:os';", 'tmpdir()'],
+  ['no-fs-mkdirSync', "import { mkdirSync } from 'node:fs';", 'mkdirSync(a)'],
+  ['no-fs-realpathSync', "import { realpathSync } from 'node:fs';", 'realpathSync(a)'],
+  ['no-child-process-execSync', "import { execSync } from 'node:child_process';", 'execSync(a)'],
+  ['no-fs-promises-cp', "import { cp } from 'node:fs/promises';", 'cp(a, b)'],
+  // No import to remove — the import INSERT alone spans the file.
+  ['no-manual-path-normalize', '', String.raw`a.split('\\').join('/')`],
+];
+
+function multiSiteSource(importLine: string, call: string): string {
+  const calls = Array.from({ length: REWRITE_SITES }, (_, i) => `const r${i} = ${call};`);
+  return [importLine, "const a = 'a';", "const b = 'b';", ...calls].filter(Boolean).join('\n');
+}
+
+describe('autofix leaves no dangling reference', () => {
+  const plugin = loadLocalRuleModule<{ rules: Record<string, Rule.RuleModule> }>('../index.cjs');
+  const languageOptions = { ecmaVersion: 2024, sourceType: 'module' } as const;
+
+  /** Bindings, not strings: `no-undef` answers the question `tsc` would. */
+  const unboundIn = (code: string): string[] =>
+    new Linter()
+      .verify(code, [{ files: ['**/*.ts'], rules: { 'no-undef': 'error' }, languageOptions }], {
+        filename: LINTED_FILE,
+      })
+      .map(({ message }) => message);
+
+  it('covers every fixable rule in the pack', () => {
+    // Membership, not cardinality — a rule added to the pack without a row here
+    // is a rule whose fixer nobody runs to a fixpoint.
+    const byName = (a: string, b: string): number => a.localeCompare(b);
+    const fixable = Object.entries(plugin.rules)
+      .filter(([, rule]) => rule.meta?.fixable === 'code')
+      .map(([name]) => name);
+    expect(MULTI_SITE_REWRITES.map(([name]) => name).sort(byName)).toStrictEqual(
+      [...fixable].sort(byName),
+    );
+  });
+
+  /**
+   * A dangling MEMBER, which the `no-undef` check above is blind to.
+   *
+   * `no-os-tmpdir` is the one rule with `checkMemberExpression`, and its fixer
+   * rewrote only the property — turning `os.tmpdir()` into
+   * `os.normalizedTmpdir()`, a method that does not exist on the `node:os`
+   * namespace. The replacement is a free function from this package, and the
+   * fixer imported it correctly; it just left the call reaching for it through
+   * the wrong object.
+   *
+   * Same silent shape as the overlap defect: the rule stops reporting (there is
+   * no `tmpdir` left to see), so lint goes green over code that throws
+   * `TypeError` at every fixed call site. `no-undef` sees a bound `os` and a
+   * property access and has nothing to say. Only `tsc` catches it — which is
+   * why an adopter's dangling-REFERENCE audit across all nine rewritable
+   * symbols came back clean on this rule.
+   */
+  it('no-os-tmpdir rewrites os.tmpdir() to a free call, not a method on the namespace', () => {
+    const config = [
+      {
+        files: ['**/*.ts'],
+        plugins: { local: { rules: { 'no-os-tmpdir': plugin.rules['no-os-tmpdir'] as Rule.RuleModule } } },
+        rules: { 'local/no-os-tmpdir': 'error' as const },
+        languageOptions,
+      },
+    ];
+    const source = "import os from 'node:os';\nconst t0 = os.tmpdir();\nconst t1 = os.tmpdir();";
+
+    expect(new Linter().verify(source, config, { filename: LINTED_FILE })).toHaveLength(2);
+
+    const { output } = new Linter().verifyAndFix(source, config, { filename: LINTED_FILE });
+    expect(output).not.toMatch(/\bos\s*\.\s*normalizedTmpdir\b/);
+    expect(output.match(/(?<![.\w])normalizedTmpdir\(\)/g)).toHaveLength(2);
+    expect(new Linter().verify(output, config, { filename: LINTED_FILE })).toStrictEqual([]);
+  });
+
+  it.each(MULTI_SITE_REWRITES)('%s', (name, importLine, call) => {
+    const source = multiSiteSource(importLine, call);
+    const config = [
+      {
+        files: ['**/*.ts'],
+        plugins: { local: { rules: { [name]: plugin.rules[name] as Rule.RuleModule } } },
+        rules: { [`local/${name}`]: 'error' as const },
+        languageOptions,
+      },
+    ];
+
+    // Negative control: a source that stopped provoking the rule would make
+    // every assertion below vacuously true.
+    const before = new Linter().verify(source, config, { filename: LINTED_FILE });
+    expect(before).toHaveLength(REWRITE_SITES);
+    expect(unboundIn(source)).toStrictEqual([]);
+
+    const { output, fixed } = new Linter().verifyAndFix(source, config, { filename: LINTED_FILE });
+    expect(fixed).toBe(true);
+
+    // The defect, stated exactly: `--fix` settles, reports nothing further, and
+    // the code it settled on references an identifier that is no longer bound.
+    expect(unboundIn(output)).toStrictEqual([]);
+    expect(new Linter().verify(output, config, { filename: LINTED_FILE })).toStrictEqual([]);
   });
 });

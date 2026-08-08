@@ -124,7 +124,7 @@ Two ways your target can be wrong, which surface differently: `ERR_MODULE_NOT_FO
 
 | Rule | Bans | Use instead | Subpath | Fix | `recommended` |
 |---|---|---|---|---|---|
-| `prefer-startswith-over-regex` | `/^foo/.test(s)` | `s.startsWith('foo')` | — | | `error` |
+| `prefer-startswith-over-regex` | `/^foo/.test(s)`, `` /^\*glob/.test(s) ``, `const RE = /^foo/; RE.test(s)` | `s.startsWith('foo')` | — | | `error` |
 | `no-test-scoped-functions` | helper functions declared inside `describe`/`it` | module scope | — | | — |
 | `require-justified-skip` | unannotated `it.skip`/`it.todo`, tautological assertions, empty test bodies | a `SKIP(#123): reason` annotation, or a real assertion | — | | — |
 
@@ -175,6 +175,14 @@ Within `recommended`, `error` is the default; three rules are `warn`:
 Raise all three to `error` once the backlog is clear. That is what this repo does.
 
 The criterion for `warn` is **migration volume**, not how real the finding is — a rule whose findings we doubted would be out of `recommended` entirely, not demoted. Everything at `error` either prevents a bug or moves a static-analysis finding left of a merge.
+
+### Running `--fix` over a large backlog
+
+Every rule that rewrites a call *and* edits imports fixes **all** of a file's call sites in a single pass, and `packages/utils/test/eslint/rules.test.ts` holds each of them to that: it runs `--fix` to its fixpoint and then asks `no-undef` whether the result still binds every identifier.
+
+That test exists because the answer used to be no. ESLint merges the fixes one `fix()` yields into a **single range spanning `min..max`**, and applies only non-overlapping ranges per pass — so a fix touching both the import and its own call site spanned everything in between, N call sites produced N nested ranges, and ESLint kept one. The rule then went quiet, because the import specifier its detection keyed on was what had just been removed. `--fix` reached a stable fixpoint over source that no longer compiles and exited clean; you found out at `tsc`. An adopter measured **146 files left with a dangling reference** across one ~4,900-site sweep, worst single file 75 unrewritten calls.
+
+One caveat survives by design: only the **first** report's fix in a file is self-sufficient. Applying a later one on its own — an editor's "fix this problem", or an `eslint-disable` on the first call site — rewrites the call without adding the import. The next full `--fix` re-inserts it, and `exemptFiles` is the supported way to opt a whole file out. The shared edits cannot be hoisted onto their own report instead: removing `join` from the import while a *suppressed* `join(...)` call survives is the same broken output reached a different way.
 
 ## Why custom rules
 

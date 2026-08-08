@@ -59,7 +59,7 @@ function filterUnsafeSpecifiers(importNode, unsafeFn) {
  * Helper function to remove unsafe import specifiers
  * Extracted to reduce nesting depth for code quality
  */
-function removeUnsafeImportSpecifiers(fixer, sourceCode, unsafeImportNode, unsafeSpecs) {
+function removeUnsafeImportSpecifiers(fixer, sourceCode, unsafeSpecs) {
   const fixes = [];
   for (const spec of unsafeSpecs) {
     const comma = sourceCode.getTokenAfter(spec);
@@ -140,6 +140,8 @@ module.exports = function createNoUnsafeRule(config) {
       let hasSafeImport = isNameAlreadyBound(sourceCode, safeFn);
       let unsafeImportNode = null;
       let safeImportNode = null;
+      // Guards the shared import edits against a second emission — see `fix()`.
+      let unsafeImportRemoved = false;
 
       return {
         Program(node) {
@@ -196,16 +198,30 @@ module.exports = function createNoUnsafeRule(config) {
             fix(fixer) {
               const fixes = [];
 
-              // Replace unsafe call with safe call
-              if (node.callee.type === 'MemberExpression') {
-                // For obj.method(), replace just the method name
-                fixes.push(fixer.replaceText(node.callee.property, safeFn));
-              } else {
-                // For method(), replace the whole callee
-                fixes.push(fixer.replaceText(node.callee, safeFn));
-              }
+              // Replace the WHOLE callee, member expression or not.
+              //
+              // Rewriting only the property turned `os.tmpdir()` into
+              // `os.normalizedTmpdir()` — a method that does not exist on the
+              // `node:os` namespace. The replacement is a free function from
+              // OUR package, and the fixer imported it correctly; it just left
+              // the call reaching for it through the wrong object. Silent, like
+              // the overlap bug below: lint went green (the rule no longer sees
+              // `tmpdir`), and it is a dangling MEMBER rather than a dangling
+              // identifier, so `no-undef` cannot see it either. `tsc` can.
+              fixes.push(fixer.replaceText(node.callee, safeFn));
 
-              // Add import if needed
+              // Add import if needed.
+              //
+              // Emitted at most ONCE per file. ESLint merges one `fix()`'s
+              // yields into a single `min..max` range and applies only
+              // non-overlapping ranges per pass — so a report that edits both
+              // the import and its own call site spans everything between them,
+              // and N such reports leave N nested ranges of which ESLint keeps
+              // exactly one. Without these guards a file with N unsafe calls
+              // needed N+1 passes and, past ESLint's 10-pass cap, silently kept
+              // calls the import no longer backs. See the same guard (and an
+              // adopter's 146-file measurement of the failure) in
+              // `path-function-rule-factory.cjs`.
               if (!hasSafeImport) {
                 if (safeImportNode) {
                   // Add to existing safe module import
@@ -217,18 +233,20 @@ module.exports = function createNoUnsafeRule(config) {
                   const newImport = `import { ${safeFn} } from '${targetModule}';\n`;
                   fixes.push(fixer.insertTextAfter(targetNode, newImport));
                 }
+                hasSafeImport = true;
               }
 
               // Remove unsafe import if it's the only specifier
-              if (hasUnsafeImport && unsafeImportNode) {
+              if (hasUnsafeImport && unsafeImportNode && !unsafeImportRemoved) {
                 const unsafeSpecs = filterUnsafeSpecifiers(unsafeImportNode, unsafeFn);
                 if (unsafeImportNode.specifiers.length === 1 && unsafeSpecs.length === 1) {
                   // Remove entire import
                   fixes.push(fixer.remove(unsafeImportNode));
                 } else if (unsafeSpecs.length > 0) {
                   // Remove just the unsafe specifier
-                  fixes.push(...removeUnsafeImportSpecifiers(fixer, sourceCode, unsafeImportNode, unsafeSpecs));
+                  fixes.push(...removeUnsafeImportSpecifiers(fixer, sourceCode, unsafeSpecs));
                 }
+                unsafeImportRemoved = true;
               }
 
               return fixes;

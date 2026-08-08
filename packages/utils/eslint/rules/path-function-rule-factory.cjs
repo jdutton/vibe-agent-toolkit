@@ -84,17 +84,43 @@ function trackSafeImport(node, state) {
 }
 
 /**
- * Check if a call expression is an unsafe path function call.
- * Returns { isUnsafe, isNamed } or null if not a match.
+ * Is `name` resolvable from `node`'s scope outward — a parameter, a local, an
+ * import, or a configured global?
+ *
+ * Used only to decide whether a bare `join(...)` with no `node:path` import is
+ * OUR `join` or somebody else's. `import { join } from 'lodash'` binds the name
+ * and is not our business; an unbound `join` is a ReferenceError waiting to
+ * happen, and — see `classifyCall` — is exactly what a half-applied autofix
+ * leaves behind.
  */
-function classifyCall(node, unsafeFn, state) {
+function isIdentifierBound(sourceCode, node, name) {
+  for (let scope = sourceCode.getScope(node); scope; scope = scope.upper) {
+    if (scope.variables.some((variable) => variable.name === name)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Check if a call expression is an unsafe path function call.
+ * Returns { isNamed } or null if not a match.
+ */
+function classifyCall(node, unsafeFn, state, sourceCode) {
   // Direct call from named import: join(...)
-  if (
-    node.callee.type === 'Identifier' &&
-    node.callee.name === unsafeFn &&
-    state.namedImportSpec
-  ) {
-    return { isNamed: true };
+  if (node.callee.type === 'Identifier' && node.callee.name === unsafeFn) {
+    if (state.namedImportSpec) {
+      return { isNamed: true };
+    }
+    // Belt and braces. Keying detection on "did I see the import?" made this
+    // rule STOP REPORTING the moment a fix removed the specifier — so a partial
+    // `--fix` reached a stable fixpoint over source that no longer compiles and
+    // exited clean. Recognising the bare call keeps the worst case at "run
+    // --fix again" instead of "you find out at tsc".
+    if (!isIdentifierBound(sourceCode, node.callee, unsafeFn)) {
+      return { isNamed: false };
+    }
+    return null;
   }
   // Member expression: path.join(...)
   if (
@@ -111,6 +137,38 @@ function classifyCall(node, unsafeFn, state) {
 
 /**
  * Build auto-fix for an unsafe path function call.
+ *
+ * ## Why the import edits are emitted at most ONCE per file
+ *
+ * ESLint merges the fixes one `fix()` yields into a SINGLE range spanning
+ * `min..max`, and applies only non-overlapping ranges per pass. A fix that
+ * touches both the import and its own call site therefore spans everything in
+ * between — so N such reports produce N nested ranges, ESLint keeps the
+ * shortest and DISCARDS THE REST.
+ *
+ * That is not an edge case, it is every file with more than one call site. The
+ * import edit landed, the other calls did not, and (before `classifyCall` grew
+ * its bare-call leg) the next pass could no longer see them because the
+ * specifier it keyed on was gone. `--fix` reached a stable fixpoint over source
+ * that does not compile and exited clean. An adopter measured 146 files left
+ * with a dangling reference across one sweep — worst single file, 75 call sites.
+ *
+ * So: the shared edits belong to the first report, and every later report emits
+ * a fix LOCAL to its own callee. Nothing overlaps, and one pass fixes the file.
+ * `no-manual-path-normalize.cjs` carries the same guard for the same reason.
+ *
+ * Caveat, deliberate and stated because it is the same defect class in
+ * miniature: only the FIRST report's fix is self-sufficient. Applying a later
+ * one ALONE — an editor's "fix this problem", or an `eslint-disable` on the
+ * first call site — rewrites the call without adding the import. The state is
+ * transient (the next full `--fix` re-inserts it, because `hasSafePathImport`
+ * is seeded from scope) and it is the strictly smaller failure: the alternative
+ * is the batch `--fix` everyone actually runs silently breaking 146 files.
+ *
+ * It cannot be closed by hoisting the shared edits onto their own report,
+ * either. Removing `join` from the import while a suppressed `join(...)` call
+ * survives is the same broken output reached a different way. `exemptFiles` is
+ * the supported way to opt a whole file out.
  */
 function buildFix(fixer, node, unsafeFn, isNamed, sourceCode, state) {
   const fixes = [fixer.replaceText(node.callee, `${SAFE_OBJECT}.${unsafeFn}`)];
@@ -121,13 +179,24 @@ function buildFix(fixer, node, unsafeFn, isNamed, sourceCode, state) {
       fixes.push(fixer.insertTextAfter(lastSpec, `, ${SAFE_OBJECT}`));
     } else {
       const targetNode = state.namedImportNode || sourceCode.ast.body[0];
-      fixes.push(fixer.insertTextAfter(targetNode, `\nimport { ${SAFE_OBJECT} } from '${state.safeModule}';`));
+      const declaration = `import { ${SAFE_OBJECT} } from '${state.safeModule}';`;
+      // Land the new import next to the imports, not after arbitrary code. A
+      // file reported only through `classifyCall`'s bare-call leg may have no
+      // import at all, and `insertTextAfter(body[0])` would push the
+      // declaration below the statement that needs it — legal, since imports
+      // hoist, but it reads as though the fixer lost track of the file.
+      fixes.push(
+        targetNode.type === 'ImportDeclaration'
+          ? fixer.insertTextAfter(targetNode, `\n${declaration}`)
+          : fixer.insertTextBefore(targetNode, `${declaration}\n`),
+      );
     }
     state.hasSafePathImport = true;
   }
 
-  if (isNamed && state.namedImportNode) {
+  if (isNamed && state.namedImportNode && !state.namedImportRemoved) {
     fixes.push(...removeSpecifier(fixer, sourceCode, state.namedImportNode, state.namedImportSpec));
+    state.namedImportRemoved = true;
   }
 
   return fixes;
@@ -170,6 +239,9 @@ module.exports = function createPathFunctionRule(config) {
         safeModule: resolveSafeModule(context, SAFE_PATH_MODULE),
         namedImportSpec: null,
         namedImportNode: null,
+        // Both of these guard a SHARED edit against being emitted by more than
+        // one report — see `buildFix` for what ESLint does with the overlap.
+        namedImportRemoved: false,
         defaultImportName: null,
         // Seeded from SCOPE, not from "did I see an import from SAFE_MODULE?".
         // A file already importing `safePath` from the barrel needs the call
@@ -193,7 +265,7 @@ module.exports = function createPathFunctionRule(config) {
         },
 
         CallExpression(node) {
-          const classification = classifyCall(node, unsafeFn, state);
+          const classification = classifyCall(node, unsafeFn, state, sourceCode);
           if (!classification) {
             return;
           }

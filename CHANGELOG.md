@@ -238,6 +238,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`--fix` on the ESLint pack no longer leaves code that does not compile.** `no-path-join` and
+  `no-path-resolve` (and, latently, every other rule that rewrites a call *and* edits imports)
+  stripped the named specifier from the `node:path` import, inserted `safePath`, and left the
+  remaining call sites in the file as bare `join(...)` / `resolve(...)` — referencing an identifier
+  that was no longer imported. An adopter measured the blast radius on a real sweep of ~4,900 sites:
+  **146 files left with a dangling reference** (140 on `join`, 16 on `resolve`), worst single file
+  75 unrewritten call sites.
+
+  **It was silent and self-limiting**, which is what made it dangerous rather than merely wrong.
+  ESLint merges the fixes one `fix()` yields into a single range spanning `min..max` and applies only
+  non-overlapping ranges per pass, so a fix touching both the import and its own call site spanned
+  everything in between; N call sites produced N nested ranges and ESLint kept exactly one. Detection
+  then keyed on having seen the import specifier — the thing that had just been removed — so the rule
+  went quiet. `--fix` reached a stable fixpoint over broken source and exited clean, with no lint
+  output suggesting anything was wrong. You found out at `tsc`, after the sweep.
+
+  Two changes: the import edits are emitted once per file and every other call site gets a fix local
+  to its own callee, so one pass fixes the file; and a bare call to a banned path function is now
+  reported even with no import present, provided the name is unbound in scope — which keeps the worst
+  case at "run `--fix` again" instead of "ships broken code". One caveat survives by design: an
+  `eslint-disable` on the *first* reported call site in a file discards that file's import edits with
+  it, so prefer `exemptFiles` to opt a whole file out.
+
+  Guarded by two tests that both fail on the old code: multi-call-site RuleTester fixtures pinning
+  the single-pass output, and a suite that runs `--fix` to its fixpoint for **every** fixable rule in
+  the pack and asserts `no-undef` finds nothing in the result. A single-call-site fixture — which is
+  what every fixture was — structurally cannot reproduce this.
+
+- **`no-os-tmpdir --fix` produced `os.normalizedTmpdir()`, a method that does not exist.** The
+  member-expression branch of the shared rule factory rewrote only the property, so `os.tmpdir()`
+  became a call on the `node:os` namespace for a free function that lives in this package — imported
+  correctly at the top of the file and then reached for through the wrong object. Every fixed call
+  site throws `TypeError` at runtime. The whole callee is now replaced.
+
+  Found by probing rather than by review, and worth recording why the adopter's audit could not have
+  caught it: their check was for a dangling *reference*, and this is a dangling *member*. `no-undef`
+  sees a bound `os` and a property access and has nothing to say, and the rule itself goes quiet
+  because there is no `tmpdir` left to report. Green lint over code that cannot run. Only `tsc` sees
+  it. `no-os-tmpdir` is the only rule in the pack with `checkMemberExpression`, so it is the only one
+  that was affected.
+
+- **`prefer-startswith-over-regex` was narrower than the SonarCloud rule it exists to shift left.**
+  Two shapes went unreported: a regex held in a `const` and used via `RE.test(x)` (only *inline*
+  literals were examined), and any escape other than `\/` — so `/^\*prefix/`, an unambiguous literal
+  asterisk, was skipped. Both now fire; an escaped non-special character is treated as the literal
+  character it protects, and a single-assignment `const` initialised with a regex literal is resolved
+  to that literal. Escapes that mean something else (`\d`, `\b`, `\x41`, `\p{…}`, control and
+  whitespace escapes) still bail, as do unescaped metacharacters.
+
+  Newly caught in code that previously linted green: `/\.txt$/.test(s)` is `s.endsWith('.txt')` — the
+  `.` is escaped, so it was never the metacharacter the old rule's own fixture claimed it was.
+
+  **Worth stating as a general finding, not a per-rule one:** an adopter running this rule at `error`
+  reports zero findings *by construction* — lint cannot go green while a violation exists. A 0-vs-0
+  tie against another implementation is not agreement, it is two rules both failing to fire. For any
+  rule an adopter reports zero findings for, that rule is **unmeasured**, not agreed.
+
+- **The Windows shell branch is now exercised on every platform.** `shouldUseShell`'s only
+  `true`-returning case was gated behind `skipIf(!onWindows)`, so the branch every Windows spawn
+  depends on never executed off Windows — and an adopter's green Windows CI lane did not reach it
+  either. New tests force `process.platform` and assert both the extension check and the full
+  `shouldUseShell` → `resolveShellCommandToken` → `buildWindowsShellLine` composition, round-tripped
+  through the `CommandLineToArgvW` reference parser. No production behaviour change; verified-green
+  and never-run are no longer indistinguishable here.
+
 - **`isGitIgnored()` spawned a git subprocess per ancestor directory when the path was not in a git
   repository at all — `vat resources validate` on a 3,437-document tree outside any repository went
   from 196 s to 20.6 s, with a byte-identical report.** `git check-ignore` exits 128 for two

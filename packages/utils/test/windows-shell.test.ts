@@ -13,6 +13,43 @@ import {
 } from '../src/windows-shell.js';
 
 const onWindows = process.platform === 'win32';
+const REAL_PLATFORM = process.platform;
+const CMD_SHIM = 'C:/npm/claude.cmd';
+
+/**
+ * Run `body` with `process.platform` substituted, then put it back.
+ *
+ * Every case that makes `shouldUseShell` return true is otherwise gated behind
+ * `skipIf(!onWindows)` — so the branch every Windows spawn depends on never
+ * executes on the machine this is developed on, and a green run on macOS says
+ * nothing about it. An adopter put it exactly: verified-green and never-run are
+ * indistinguishable from the outside. Their Windows CI lane went green without
+ * reaching this branch either — of the sixteen `safeExecSync` call sites in
+ * their tree, the three most likely to spawn a `.cmd` live in a directory that
+ * belongs to no package, so `turbo run test` never invoked them.
+ *
+ * `process.platform` is a plain value property, so `defineProperty` is what
+ * substitutes it; `vi.spyOn` cannot — there is no getter to intercept. Restored
+ * in a `finally` with the real descriptor's shape, because a leaked `win32`
+ * would silently retarget every later test in this worker.
+ */
+function asPlatform<T>(platform: NodeJS.Platform, body: () => T): T {
+  const define = (value: NodeJS.Platform): void => {
+    Object.defineProperty(process, 'platform', {
+      value,
+      writable: false,
+      enumerable: true,
+      configurable: true,
+    });
+  };
+
+  define(platform);
+  try {
+    return body();
+  } finally {
+    define(REAL_PLATFORM);
+  }
+}
 
 // NOTE: `String.raw` cannot express a string ending in a backslash (the backslash escapes
 // the closing backtick), and that shape is central to everything below — so these tests use
@@ -450,5 +487,68 @@ describe('shouldUseShell', () => {
     expect(shouldUseShell('C:/npm/CLAUDE.CMD')).toBe(true);
     expect(shouldUseShell('C:/tools/thing.bat')).toBe(true);
     expect(shouldUseShell('C:/tools/thing.ps1')).toBe(true);
+  });
+
+  /**
+   * The same extension check, with the platform FORCED — so it runs everywhere.
+   *
+   * The suite above gates the only case that returns `true` behind
+   * `skipIf(!onWindows)`, which means the branch every Windows spawn depends on
+   * never executes on the machine this is developed on. An adopter put the
+   * problem precisely: verified-green and never-run are indistinguishable from
+   * the outside. Their Windows CI lane went green without reaching this branch
+   * either — of the sixteen `safeExecSync` call sites in their tree, the three
+   * most likely to spawn a `.cmd` live in a directory that belongs to no
+   * package, so `turbo run test` never invoked them.
+   *
+   * `process.platform` is a plain value property, so `defineProperty` is what
+   * substitutes it; `vi.spyOn` cannot (there is no getter to intercept).
+   */
+  describe('with the platform forced', () => {
+    it('is true for .cmd/.bat/.ps1 shims, case-insensitively', () => {
+      const shims = [CMD_SHIM, 'C:/npm/CLAUDE.CMD', 'C:/tools/thing.bat', 'C:/tools/thing.PS1'];
+      expect(asPlatform('win32', () => shims.map((p) => shouldUseShell(p)))).toStrictEqual([
+        true, true, true, true,
+      ]);
+    });
+
+    it('is false for a real executable even on win32', () => {
+      expect(asPlatform('win32', () => shouldUseShell('C:/Program Files/nodejs/node.exe'))).toBe(false);
+      expect(asPlatform('win32', () => shouldUseShell('C:/tools/claude'))).toBe(false);
+    });
+
+    it('is false for the very same shim off Windows — the platform gate, isolated', () => {
+      expect(asPlatform('darwin', () => shouldUseShell(CMD_SHIM))).toBe(false);
+      expect(asPlatform('linux', () => shouldUseShell('/usr/local/bin/anything.cmd'))).toBe(false);
+    });
+
+    it('restores the real platform afterwards', () => {
+      expect(process.platform).toBe(REAL_PLATFORM);
+    });
+  });
+});
+
+/**
+ * The Windows shell path, end to end, on any platform.
+ *
+ * `shouldUseShell` → `resolveShellCommandToken` → `buildWindowsShellLine` is the
+ * chain `safeExecSync` and `spawnHardened` take when they spawn a `.cmd`. Each
+ * link is tested above; this asserts they compose into a command line whose
+ * `CommandLineToArgvW` round trip is exactly `[command, ...args]` — which is the
+ * claim that matters and the one no macOS run was making.
+ */
+describe('the Windows shell branch composes end to end', () => {
+  it('routes a spacey .cmd path through the shell and survives the round trip', () => {
+    const command = `C:${BS}Program Files${BS}npm${BS}claude.cmd`;
+    const args = ['--flag', 'a b', `trailing${BS}`];
+
+    const argv = asPlatform('win32', () => {
+      expect(shouldUseShell(command)).toBe(true);
+      return commandLineToArgv(
+        buildWindowsShellLine(resolveShellCommandToken(command, command), args),
+      );
+    });
+
+    expect(argv).toStrictEqual([command, ...args]);
   });
 });
