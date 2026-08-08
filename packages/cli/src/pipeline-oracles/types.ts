@@ -62,6 +62,27 @@ export interface EnumerationRow {
   isSymlink: boolean;
   /** `null` when the path is not a symlink. */
   symlinkResolves: boolean | null;
+  /**
+   * Is this path's real location inside the corpus root?
+   *
+   * `null` when the real path could not be read (a dangling link, chiefly).
+   * False means the row widens the corpus to somewhere nobody pointed the
+   * command at — the hazard the `followSymlinks` boolean bundles together with
+   * looping and with membership, and the one a visited-set does NOT bound: that
+   * guard limits re-entry, not reach.
+   */
+  targetInsideRoot: boolean | null;
+  /**
+   * Does another enumerated path in this same lane resolve to the same file?
+   *
+   * A set-level fact, so it is filled in by a pass over the whole population
+   * rather than by {@link collectPathFacts}. Recorded rather than deduplicated
+   * on purpose: collapsing aliases here would be judgement in phase 1, and the
+   * measured reality is that every symlink divergence in Anthropic's own
+   * shipped plugin trees is an alias — one blob, two names, two generated ids.
+   * Phase 4 decides what that means; this only states that it is true.
+   */
+  aliasesEnumeratedPath: boolean;
 }
 
 /** A duplicate-id drop, recorded in arrival order by `addResources`. */

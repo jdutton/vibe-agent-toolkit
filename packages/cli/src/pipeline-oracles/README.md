@@ -29,6 +29,7 @@ projection and judgement at once. Two consequences:
 |---|---|---|
 | **Enumeration snapshot** | Per lane, per corpus: which paths, **in which order**, with `exists` / `isDirectory` / `gitignored` / `isSymlink` / `symlinkResolves` / content key | Built |
 | **Parse-fact snapshot** | Per content key: links + ordinals + `resolvedId`, headings + slugs, frontmatter **source, value shapes and value digests**, fragment anchors, optional-array presence states, byte and decoded lengths, parse conditions — with `keyof ParseResult` coverage enforced at compile time | Built |
+| **Symlink divergence report** | Per lane, per corpus: the three populations one tree can present (`git ls-files`, walk without following, walk following) and every path that is not in all of them, with the reason | Built |
 | **Rule-invocation log** | Per run: which check ran, over how many rows, emitting how many findings | **Not built** — see below |
 
 ### ⛔ The enumeration snapshot is never sorted
@@ -115,6 +116,46 @@ one tab-delimited line per entry, and every interpolated value goes through
 `renderInline`. `href` and `slug` previously did not, so a tab or newline inside
 one could corrupt the table.
 
+### The symlink divergence report answers a product question with measurements
+
+`followSymlinks` is not one decision; it is three collapsed into a boolean —
+**looping/aliasing**, **escaping the crawl root**, and **membership**. Only the
+last is a product question, and it is the one the flag answers worst: it is
+honoured on the walk and ignored by `git ls-files`, so the same tree with the
+same options has a different population depending on whether a `.git` exists
+above it.
+
+Measured on two of Anthropic's own shipped plugin trees:
+
+| corpus | git route | walk, no follow | walk, following |
+|---|---:|---:|---:|
+| `superpowers/6.1.1` (no `.git`) | — | 82 | 83 |
+| `data-engineering/0.1.0` (git) | 70 | 68 | **70** |
+
+Two findings. **Following makes the routes agree exactly** — 70 and 70. And
+**every divergent row in both trees is an `alias`**: a second name for a blob
+already enumerated (`AGENTS.md → CLAUDE.md` and its inverse), never new content.
+So the decision is not up-versus-down; it is what a projection does with one
+blob that has two names. The escape case is real and lives in the trap corpus,
+but was **not observed** in either real tree — do not read "every divergence is
+an alias" as a law.
+
+⚠️ Two confounds are **classified rather than filtered**: forcing the walk means
+`respectGitignore: false`, which also stops honouring `.gitignore`; and
+`git ls-files` returns only *tracked* files. A difference removed before it is
+counted is a difference nobody can audit.
+
+### `aliasesEnumeratedPath` and `targetInsideRoot` are exercised in exactly one place
+
+Both are constant-`false` in all ten committed enumeration goldens, whose
+corpora are built with `skipSymlinks: true` — so the goldens alone cannot tell a
+working column from one that is hardcoded. `symlink-divergence.integration.test.ts`
+is the only place either is observed non-default, and it also pins the
+distinction the column would be easiest to get wrong: `twins/left/same.md` and
+`twins/right/same.md` share a **content key** and are **not** aliases. Aliasing
+is answered by real path, never by content, or every pair of empty files in any
+corpus would report as aliases of each other.
+
 ## The five lanes
 
 There is no single enumeration in VAT. There are five, and they disagree about
@@ -194,13 +235,24 @@ flip in the change that fixes it.
    git route.** `git ls-files` returns mode-120000 entries and that branch does
    no symlink filtering, so the same tree with the same options has a different
    population depending only on whether a `.git` exists above it.
-   (`enumeration-symlink-divergence.integration.test.ts`)
+   (`enumeration-symlink-divergence.integration.test.ts`; quantified by
+   `symlink-divergence.integration.test.ts` and the table above)
 2. **A committed dangling `*.md` symlink terminates the command.** On the git
    route that entry reaches `readFile`, which throws `ENOENT`; `addResources`
    catches only `DuplicateResourceIdError`, so it escapes `registry.crawl` and
    the process dies with a raw stack trace rather than reporting a finding.
    (same file)
-3. **The built lane's link graph is empty.** Packaged output landing under the
+3. **A followed directory symlink enumerated one file once per kernel-permitted
+   level.** `crawlDirectory`'s walk had no visited set, so `a/loop -> a`
+   returned `a/note.md` **sixteen times** under sixteen distinct paths — one per
+   nesting depth, bounded only by `MAXSYMLINKS` (32 on macOS, 40 on Linux, so
+   the row count was a property of the operating system) and terminating inside
+   the `catch` that exists to skip *broken* links, reporting nothing. **Fixed**,
+   not pinned: a visited-realpath set, gated on `followSymlinks` so the default
+   path pays no `realpath`. Latent rather than live — nothing in production sets
+   the flag — which is exactly why it had to be fixed *before* any convergence,
+   not after. (`file-crawler.integration.test.ts`)
+4. **The built lane's link graph is empty.** Packaged output landing under the
    project's `dist/` is excluded from the crawl that the post-build validator
    uses, so `fileCount`, `maxLinkDepth`, the size rules and — not just metrics —
    the per-bundled-file content scans all operate on an empty bundle set.

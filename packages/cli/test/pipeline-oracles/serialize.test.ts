@@ -27,6 +27,8 @@ function row(path: string, overrides: Partial<EnumerationRow> = {}): Enumeration
     gitignored: false,
     isSymlink: false,
     symlinkResolves: null,
+    targetInsideRoot: null,
+    aliasesEnumeratedPath: false,
     ...overrides,
   };
 }
@@ -69,15 +71,21 @@ describe('renderEnumerationSnapshot', () => {
   });
 
   it('renders an unanswered column as - rather than as false', () => {
-    // `symlinkResolves` is null for a non-symlink. Printing `false` would claim
-    // the link is broken; printing `-` says the question does not apply.
+    // `symlinkResolves` and `targetInsideRoot` are null for a non-symlink.
+    // Printing `false` would claim the link is broken and that its target
+    // escapes the root; printing `-` says the question does not apply.
+    //
+    // Asserted as a WHOLE line rather than a prefix: a prefix assertion keeps
+    // passing when a column is appended, so it silently stops covering every
+    // column to its right. That is exactly how this test's sibling below came
+    // to pass while no longer checking the field it is named for.
     const rendered = renderEnumerationSnapshot(snapshot([row('plain.md')]));
-    expect(rendered).toMatch(/plain\.md\ttrue\tfalse\tfalse\tfalse\t-\t/);
+    expect(rendered.split('\n')).toContain('0\tplain.md\ttrue\tfalse\tfalse\tfalse\t-\t-\tfalse\tk1.markdown.plain.md');
   });
 
   it('renders a missing content key as - rather than omitting the column', () => {
     const rendered = renderEnumerationSnapshot(snapshot([row('gone.md', { contentKey: null, exists: false })]));
-    expect(rendered).toContain('gone.md\tfalse\tfalse\tfalse\tfalse\t-\t-');
+    expect(rendered.split('\n')).toContain('0\tgone.md\tfalse\tfalse\tfalse\tfalse\t-\t-\tfalse\t-');
   });
 
   it('surfaces a build error on its own line', () => {

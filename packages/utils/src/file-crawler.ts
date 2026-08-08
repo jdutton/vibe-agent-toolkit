@@ -244,6 +244,24 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
   const results: string[] = [];
 
   /**
+   * Real paths of directories already walked, maintained ONLY when following
+   * symlinks — it is what makes a directory symlink safe to traverse.
+   *
+   * A symlinked directory can be re-entered without limit (`a/loop -> a`) and
+   * can be reached under two names (`alias-one -> real`, `alias-two -> real`).
+   * Both enumerate one blob many times under distinct paths, so each row gets
+   * its own generated id and its own bundle entry. The loop terminated before
+   * this guard existed, but only because the kernel eventually refuses to
+   * resolve further symlinks — a limit that is 32 on macOS and 40 on Linux, so
+   * the POPULATION depended on the operating system, and the walk ended inside
+   * `processSymlink`'s catch for BROKEN links, which reported nothing.
+   *
+   * Left empty when `followSymlinks` is false: without symlink traversal a
+   * directory cannot be reached twice, so the default path pays no `realpath`.
+   */
+  const visitedRealDirs = new Set<string>();
+
+  /**
    * Check if a path should be excluded based on patterns
    */
   function shouldExclude(normalizedPath: string): boolean {
@@ -258,6 +276,33 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
     if (isIncluded(normalizedPath)) {
       results.push(absolute ? fullPath : relativePath);
     }
+  }
+
+  /**
+   * Record a directory as walked, reporting whether it had already been seen.
+   *
+   * Identity is `realpathSync.native`, not the traversal path: two names for
+   * one directory must collide here or the alias is enumerated twice. A
+   * directory whose real path cannot be read is treated as already-walked —
+   * refusing to descend into something we cannot identify is the safe side of
+   * a guard whose whole job is bounding traversal.
+   *
+   * @param dir - Directory about to be walked
+   * @returns True when this directory has been walked before
+   */
+  function alreadyWalked(dir: string): boolean {
+    let realPath: string;
+    try {
+      realPath = fs.realpathSync.native(dir);
+    } catch {
+      return true;
+    }
+
+    if (visitedRealDirs.has(realPath)) {
+      return true;
+    }
+    visitedRealDirs.add(realPath);
+    return false;
   }
 
   /**
@@ -309,6 +354,10 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
    * Recursively walk directory tree
    */
   function walkDirectory(currentDir: string): void {
+    if (followSymlinks && alreadyWalked(currentDir)) {
+      return;
+    }
+
     let entries: fs.Dirent[];
 
     try {

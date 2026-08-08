@@ -9,6 +9,7 @@
  * corpus-relative and forward-slashed by the time it arrives here.
  */
 
+import type { SymlinkDivergenceReport } from './symlink-divergence.js';
 import type { EnumerationSnapshot, ParseFactSnapshot } from './types.js';
 
 /** `true` / `false` / `-` for an unanswered column, so columns stay aligned in width. */
@@ -39,7 +40,7 @@ export function renderEnumerationSnapshot(snapshot: EnumerationSnapshot): string
     `buildError: ${snapshot.buildError ?? '-'}`,
     '',
     '## enumerated (ordered, pre-deduplication)',
-    '# ordinal\tpath\texists\tisDirectory\tgitignored\tisSymlink\tsymlinkResolves\tcontentKey',
+    '# ordinal\tpath\texists\tisDirectory\tgitignored\tisSymlink\tsymlinkResolves\ttargetInsideRoot\taliasesEnumeratedPath\tcontentKey',
   ];
 
   for (const [index, row] of snapshot.enumerated.entries()) {
@@ -52,6 +53,8 @@ export function renderEnumerationSnapshot(snapshot: EnumerationSnapshot): string
         flag(row.gitignored),
         flag(row.isSymlink),
         flag(row.symlinkResolves),
+        flag(row.targetInsideRoot),
+        flag(row.aliasesEnumeratedPath),
         row.contentKey ?? '-',
       ].join('\t'),
     );
@@ -70,6 +73,43 @@ export function renderEnumerationSnapshot(snapshot: EnumerationSnapshot): string
   lines.push('', '## restatementDrift');
   for (const drift of snapshot.restatementDrift) {
     lines.push(drift);
+  }
+
+  return `${lines.join('\n')}\n`;
+}
+
+/**
+ * Render a symlink divergence report.
+ *
+ * Sorted by path, unlike the enumeration snapshot: this answers a set question
+ * across three separately-ordered populations, where arrival order carries no
+ * meaning. The ordered question stays with the enumeration snapshot.
+ *
+ * The counts are rendered even when no row diverges, because "all three
+ * populations agree" is the result this report exists to be able to state — an
+ * empty rows section with no counts above it is indistinguishable from a report
+ * that never ran.
+ *
+ * @param report - Report to render
+ * @returns Golden text, LF-terminated
+ */
+export function renderSymlinkDivergence(report: SymlinkDivergenceReport): string {
+  const lines: string[] = [
+    `# symlink-divergence`,
+    `lane: ${report.laneId}`,
+    `corpus: ${report.corpus}`,
+    `inGitRepo: ${String(report.inGitRepo)}`,
+    `gitRouteCount: ${report.counts.gitRoute === null ? '-' : String(report.counts.gitRoute)}`,
+    `walkNoFollowCount: ${String(report.counts.walkNoFollow)}`,
+    `walkFollowCount: ${String(report.counts.walkFollow)}`,
+    `divergingRowCount: ${String(report.rows.length)}`,
+    '',
+    '## diverging paths (sorted)',
+    '# path\trealPath\tclasses',
+  ];
+
+  for (const row of report.rows) {
+    lines.push([row.path, row.realPath, row.classes.join(',')].join('\t'));
   }
 
   return `${lines.join('\n')}\n`;

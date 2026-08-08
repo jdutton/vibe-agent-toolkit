@@ -35,6 +35,14 @@ export interface CorpusSymlink {
   path: string;
   /** The link's target, exactly as it should be stored (usually relative). */
   target: string;
+  /**
+   * Windows link type. Ignored on every other platform.
+   *
+   * Node auto-detects when this is omitted, but only by looking at a target
+   * that already exists — and a directory link is created before its target on
+   * a tree written in sorted order. State it for directory links.
+   */
+  type?: 'dir' | 'file';
 }
 
 /** What a materialized corpus turned out to support on this host. */
@@ -334,6 +342,51 @@ export const DANGLING_SYMLINK: CorpusSymlink = Object.freeze({
   target: 'nowhere.md',
 });
 
+/**
+ * A directory symlink that re-enters its own ancestor.
+ *
+ * `symlinks/loop/self -> ..` resolves to `symlinks/`, so a walk that follows it
+ * descends `symlinks/loop/self/loop/self/…` forever. Before `crawlDirectory`
+ * kept a visited-realpath set this did not hang: it enumerated every file under
+ * `symlinks/` once per nesting level until the **kernel** refused to resolve
+ * further links, a limit that is 32 on macOS and 40 on Linux — so the row count
+ * was a property of the operating system, and the walk terminated inside the
+ * `catch` that exists to skip BROKEN symlinks, reporting nothing.
+ *
+ * Opt-in: it is meaningless with `followSymlinks: false`, which is every
+ * existing golden, and including it by default would move all of them.
+ */
+export const DIRECTORY_LOOP_SYMLINK: CorpusSymlink = Object.freeze({
+  path: 'symlinks/loop/self',
+  target: '..',
+  type: 'dir' as const,
+});
+
+/**
+ * A file symlink whose target lies outside the corpus root.
+ *
+ * The third hazard the `followSymlinks` boolean collapses: not membership and
+ * not looping, but a link that widens the corpus to somewhere nobody pointed
+ * the command at. It matters most for `vat audit`, which runs over third-party
+ * plugin trees.
+ *
+ * Deliberately a FILE link. An escaping *directory* link would make a following
+ * walk enumerate the parent tree — for a corpus under `mkdtemp`, all of the
+ * system temp directory — and the visited-realpath guard does not prevent that:
+ * it bounds re-entry, not reach.
+ *
+ * Opt-in, and it writes {@link ESCAPE_TARGET_BASENAME} into the corpus root's
+ * PARENT, so materialize the corpus into a subdirectory of a temp dir rather
+ * than into the temp dir itself.
+ */
+export const ESCAPING_SYMLINK: CorpusSymlink = Object.freeze({
+  path: 'symlinks/escape.md',
+  target: '../../outside.md',
+});
+
+/** Basename of the file {@link ESCAPING_SYMLINK} points at, in the root's parent. */
+export const ESCAPE_TARGET_BASENAME = 'outside.md';
+
 /** Files the symlink entries point at. Split out so they exist first. */
 const SYMLINK_TARGETS: CorpusFiles = Object.freeze({
   'symlinks/a/target.md': '# A\n\nDistinct bytes from B.\n',
@@ -390,6 +443,15 @@ export interface MaterializeOptions {
    * the point of the flag and the reason it is not on by default.
    */
   includeDanglingSymlink?: boolean;
+  /**
+   * Also create {@link DIRECTORY_LOOP_SYMLINK} and {@link ESCAPING_SYMLINK}
+   * (default `false`) — the two cases only a symlink-following crawl can see.
+   *
+   * ⚠️ Writes {@link ESCAPE_TARGET_BASENAME} into the corpus root's PARENT, so
+   * materialize into a subdirectory of a temp dir, never into the temp dir
+   * itself.
+   */
+  includeSymlinkHazards?: boolean;
 }
 
 /**
@@ -420,9 +482,23 @@ export function materializeTrapCorpus(
     writeFileSync(absolutePath, files[relativePath] ?? '', 'utf-8');
   }
 
-  const links = options.includeDanglingSymlink === true
-    ? [...TRAP_CORPUS_SYMLINKS, DANGLING_SYMLINK]
-    : TRAP_CORPUS_SYMLINKS;
+  if (options.includeSymlinkHazards === true) {
+    // The escape target lives OUTSIDE the corpus, which is the whole point of
+    // that fixture — written here rather than in the files loop above, which
+    // only ever writes under the root.
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- basename is a frozen literal; parent derived from the caller's root
+    writeFileSync(
+      safePath.join(safePath.resolve(absoluteRoot, '..'), ESCAPE_TARGET_BASENAME),
+      '# Outside\n\nReached only by a symlink that escapes the corpus root.\n',
+      'utf-8',
+    );
+  }
+
+  const links = [
+    ...TRAP_CORPUS_SYMLINKS,
+    ...(options.includeDanglingSymlink === true ? [DANGLING_SYMLINK] : []),
+    ...(options.includeSymlinkHazards === true ? [DIRECTORY_LOOP_SYMLINK, ESCAPING_SYMLINK] : []),
+  ];
   const symlinksCreated = options.skipSymlinks === true ? false : writeSymlinks(absoluteRoot, links);
   const gitInitialized = options.initGit === true ? initGit(absoluteRoot) : false;
 
@@ -446,7 +522,7 @@ function writeSymlinks(root: string, links: readonly CorpusSymlink[]): boolean {
       const absolutePath = safePath.join(root, link.path);
       mkdirSyncReal(safePath.resolve(absolutePath, '..'), { recursive: true });
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- target and path both come from the frozen literals above
-      symlinkSync(link.target, absolutePath);
+      symlinkSync(link.target, absolutePath, link.type);
     }
     return true;
   } catch {

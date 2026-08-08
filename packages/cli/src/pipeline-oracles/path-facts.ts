@@ -3,10 +3,10 @@
  * go and compute them per link, per check, per lane.
  */
 
-import { lstatSync, statSync } from 'node:fs';
+import { lstatSync, realpathSync, statSync } from 'node:fs';
 
 import { readContentWithKey } from '@vibe-agent-toolkit/resources';
-import { type GitTracker, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { type GitTracker, isAbsolutePath, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import type { EnumerationRow } from './types.js';
 
@@ -86,7 +86,78 @@ export async function collectPathFacts(
     ? await keyOrNull(absolutePath)
     : null;
 
-  return { path, contentKey, exists, isDirectory, gitignored, isSymlink, symlinkResolves };
+  return {
+    path,
+    contentKey,
+    exists,
+    isDirectory,
+    gitignored,
+    isSymlink,
+    symlinkResolves,
+    targetInsideRoot: resolveInsideRoot(absolutePath, context.corpusRoot),
+    // Set-level; filled in by markAliases once the whole population is known.
+    aliasesEnumeratedPath: false,
+  };
+}
+
+/**
+ * Resolve a path and report whether it really lives inside the corpus root.
+ *
+ * @param absolutePath - Path to resolve
+ * @param corpusRoot - Root the corpus was crawled from
+ * @returns True when inside, false when outside, null when unresolvable
+ */
+function resolveInsideRoot(absolutePath: string, corpusRoot: string): boolean | null {
+  const real = realPathOrNull(absolutePath);
+  if (real === null) {
+    return null;
+  }
+  const rel = safePath.relative(corpusRoot, real);
+  return rel !== '' && !rel.startsWith('..') && !isAbsolutePath(rel);
+}
+
+/**
+ * A path's real location, or `null` when it cannot be resolved.
+ *
+ * Exported so the population pass can group by identity without resolving
+ * twice, and because "two paths are the same file" is a question only the real
+ * path can answer — comparing content keys would conflate an alias with two
+ * files that merely have identical bytes, which any corpus with two empty
+ * files already contains.
+ *
+ * @param absolutePath - Path to resolve
+ * @returns Forward-slashed real path, or null
+ */
+export function realPathOrNull(absolutePath: string): string | null {
+  try {
+    return toForwardSlash(realpathSync.native(absolutePath));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Mark every row whose real path is shared with another row in the population.
+ *
+ * Mutates in place: the rows were just built here and have not been handed out.
+ *
+ * @param rows - The lane's enumerated rows, in capture order
+ * @param absolutePaths - The same paths, absolute, in the same order
+ */
+export function markAliases(rows: EnumerationRow[], absolutePaths: readonly string[]): void {
+  const counts = new Map<string, number>();
+  const reals: (string | null)[] = absolutePaths.map((absolutePath) => realPathOrNull(absolutePath));
+
+  for (const real of reals) {
+    if (real !== null) {
+      counts.set(real, (counts.get(real) ?? 0) + 1);
+    }
+  }
+
+  for (const [index, row] of rows.entries()) {
+    const real = reals[index] ?? null;
+    row.aliasesEnumeratedPath = real !== null && (counts.get(real) ?? 0) > 1;
+  }
 }
 
 /**

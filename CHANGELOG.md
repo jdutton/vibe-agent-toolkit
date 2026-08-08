@@ -264,6 +264,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`crawlDirectory({ followSymlinks: true })` no longer enumerates a file once per symlink level.**
+  The recursive walk kept no record of which directories it had entered, so a directory symlink
+  pointing at its own ancestor (`a/loop -> a`) returned `a/note.md` **sixteen times** under sixteen
+  distinct paths — one per nesting depth. It did not hang: the walk ended when the *kernel* refused
+  to resolve further links, a limit that is 32 on macOS and 40 on Linux, so **the resulting file
+  count was a property of the operating system**. It ended inside the `catch` that exists to skip
+  broken symlinks, so nothing was reported. Two directory symlinks pointing at the same directory
+  produced the same duplication with no cycle involved at all.
+
+  The walk now keeps a set of visited real paths (`realpathSync.native`, so two names for one
+  directory collide) and enters each directory once. The set is maintained **only** when
+  `followSymlinks` is true, so the default path performs no additional `realpath` calls and its
+  behaviour is byte-for-byte unchanged. No VAT command sets the flag today, so nothing shipped was
+  affected — but `crawlDirectory` is a published export, and this had to be sound before the two
+  crawl routes can be converged on symlink handling.
+
 - **A file that cannot be read no longer kills the command.** `vat resources scan`/`validate` and
   `vat audit` terminated with a raw `ENOENT` stack trace when the crawl handed them a file they
   could not open — reachable from a plain `git clone`, because a committed dangling `*.md` symlink

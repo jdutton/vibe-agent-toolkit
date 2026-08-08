@@ -13,7 +13,7 @@ import type { ResourceRegistry } from '@vibe-agent-toolkit/resources';
 import { crawlDirectory, gitFindRoot, GitTracker, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { LaneDefinition } from './lanes.js';
-import { collectPathFacts, relativize } from './path-facts.js';
+import { collectPathFacts, markAliases, relativize } from './path-facts.js';
 import type {
   CollisionRow,
   EnumerationRoute,
@@ -60,6 +60,9 @@ export async function captureEnumerationSnapshot(
   for (const absolutePath of crawled) {
     enumerated.push(await collectPathFacts(absolutePath, { corpusRoot, gitTracker }));
   }
+  // Aliasing is a property of the population, not of a path, so it can only be
+  // answered once the whole lane has been walked.
+  markAliases(enumerated, crawled);
 
   // Post-deduplication, ordered, from the lane's real production builder. The
   // builder can throw — see EnumerationSnapshot.buildError — and a lane that

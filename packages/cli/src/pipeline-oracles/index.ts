@@ -15,10 +15,20 @@ export {
   renderEnumerationSnapshot,
   renderEnumerationSnapshotUnordered,
   renderParseFactSnapshot,
+  renderSymlinkDivergence,
 } from './serialize.js';
+export {
+  captureSymlinkDivergence,
+  type DivergenceClass,
+  type DivergenceRow,
+  type SymlinkDivergenceReport,
+} from './symlink-divergence.js';
 export {
   BUNDLING_SKILL_FILES,
   DANGLING_SYMLINK,
+  DIRECTORY_LOOP_SYMLINK,
+  ESCAPE_TARGET_BASENAME,
+  ESCAPING_SYMLINK,
   TRAP_CORPUS_FILES,
   TRAP_CORPUS_SYMLINKS,
   materializeTrapCorpus,
