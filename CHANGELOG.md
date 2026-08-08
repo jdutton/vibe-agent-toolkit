@@ -298,15 +298,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cache of copies). Turborepo is common enough for this to matter: every package in this repo has a
   `.turbo/`.
 
-- **`buildWindowsShellLine('')` accepted an empty command token and promoted the caller's first
-  argument into the command position.** `isSingleShellToken` guards against a `commandToken` that
-  cmd.exe could split or partly re-execute, but `''` tripped neither of its branches — it does not
-  start with a quote, and the metacharacter regex cannot match a string with no characters — so
-  `buildWindowsShellLine('', ['calc', 'b'])` returned `" calc b"`, a line whose command is `calc`.
-  Not reachable from either of the current call sites (both resolve the command through
-  `which.sync` first, which throws on `''`), but that is a property of today's callers rather than
-  of the function, and this guard's whole purpose is to hold independently of them.
-
 - **`windowsShellQuote` produced command lines that `CommandLineToArgvW` mis-parses, corrupting
   arguments and silently merging them with the argument that follows.** The function knew none of
   Windows' backslash-escaping rules: a backslash run preceding a quote — or preceding the closing
@@ -327,29 +318,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chosen because it is understood identically by every known implementation, whereas `""` is absent
   from `CommandLineToArgvW`'s documented rules and CRT variants disagree about it. The residual cost
   is bounded and stated in the code: cmd's quote tracking desyncs only for an argument containing
-  both a quote *and* a shell metacharacter. Found by an adversarial review of the first, incomplete
-  attempt at this fix.
+  both a quote *and* a shell metacharacter.
 
-- **`buildWindowsShellLine`'s new command-token check failed open.** It accepted any string starting
-  and ending with a quote, so a whole crafted command line (`"a b" && calc "x"`) passed validation
-  while reading, in its own JSDoc, as a general assertion. It now requires a single shell token.
+  Two safety claims in the same module were also overstated and are now documented honestly rather
+  than changed. `%` and `!` trigger quoting but are **not neutralized** by it — `cmd.exe` still
+  expands `%VAR%` inside double quotes, which also corrupts a literal `%` in a filename (legal on
+  Windows). And `shouldUseShell`'s JSDoc asserted "arguments passed as array, preventing injection"
+  and "never concatenate user input into command strings" while the Windows shell branch does
+  exactly that concatenation. Both now name `shell: false` as the escape hatch.
 
-- **`shouldUseShell`'s documentation claimed safety properties this module does not have** —
-  "Arguments passed as array, preventing injection" and "Never concatenate user input into command
-  strings" — while the Windows shell branch does exactly that concatenation. Replaced with an honest
-  two-mode description and a named escape hatch.
+- **`buildWindowsShellLine` silently produced a broken command line when handed a command path it
+  could not safely place in the command position — it now throws instead.** Two shapes reached it:
+  an unquoted path containing spaces, which `cmd.exe` splits at the first space; and `''`, which
+  promoted the caller's *first argument* into the command position, so
+  `buildWindowsShellLine('', ['calc', 'b'])` returned `" calc b"` — a line whose command is `calc`.
+  It now requires a single shell token and throws with a message naming the offending token.
+  Separately, `safeExecSync`/`safeExecResult` now quote a path-like command the way `spawnHardened`
+  already did; the sibling paths previously disagreed and only one was correct.
 
-- **`buildWindowsShellLine` silently produced a broken command line when handed an unquoted command
-  path containing spaces**, because `cmd.exe` splits it at the first space. It now throws with a
-  message naming the offending token, and `safeExecSync`/`safeExecResult` now quote a path-like
-  command the same way `spawnHardened` already did — previously the two sibling paths disagreed, and
-  only one was correct.
-
-- **`windowsShellQuote`'s character class implied more safety than it delivered.** `%` and `!` were
-  in the set that triggers quoting, but wrapping in double quotes does not neutralize them —
-  `cmd.exe` still expands `%VAR%` inside quotes, which also corrupts literal `%` in filenames (legal
-  on Windows). Documented explicitly as *quoted, not neutralized*, with the `shell: false` escape
-  hatch named.
+  **What changes for you:** a call that used to return a subtly wrong command line now raises. If
+  you pass a command path through these helpers, resolve it first (both of VAT's own call sites go
+  through `which.sync`, which is why neither could reach the empty-token case).
 
 - **`@vibe-agent-toolkit/utils/package.json` was not exported**, so
   `require('@vibe-agent-toolkit/utils/package.json')` threw `ERR_PACKAGE_PATH_NOT_EXPORTED`. Version
@@ -361,6 +350,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subpath. A `../../docs/` link that resolved to nothing on npm is now absolute.
 
 - **`NON_PORTABLE_ASSET_REFERENCE` no longer advises an impossible fix for `CLAUDE_PROJECT_DIR`.** The family emitted one shared remediation — *"reference bundled files by a path relative to the skill directory"* — for every variant. That is right for `CLAUDE_PLUGIN_ROOT` and absolute script paths, and **wrong** for `CLAUDE_PROJECT_DIR`, which denotes the *user's repository* rather than a bundled asset: no skill-relative path can express it, and substituting one silently re-anchors user artifacts onto the plugin install directory. An adopter reported the rule advising them to revert a fix for exactly that bug. The `claude-project-dir` variant now carries its own remediation (take the location as an explicit parameter with `$CLAUDE_PROJECT_DIR` as fallback; make declared `targets` reflect the Claude Code coupling), and the shared headline no longer asserts the skill-relative advice.
+
 - **`NON_PORTABLE_ASSET_REFERENCE` over-captured a closing brace in nested shell expansion.** The variant patterns used `\$\{?NAME\}?`, whose optional trailing `\}?` consumed the closing brace of an **enclosing** expansion — `"${VAR:-$CLAUDE_PROJECT_DIR}"` was reported as `` "$CLAUDE_PROJECT_DIR}" ``. The malformed token reads exactly like the typo `$FOO}`, sending reviewers to source that was in fact valid shell. Matching is now brace-balanced via alternation. *(Adopter-reported; independently reproduced.)*
 
 ## [0.1.41] - 2026-08-03
