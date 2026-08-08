@@ -12,6 +12,21 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 const CACHE_VERSION = 1;
 
 /**
+ * Owner-only mode for the cache directory.
+ *
+ * `<tmpdir>/.vat-cache/` is a world-readable location shared by every user on the
+ * host, and this cache holds the set of external URLs a project links to —
+ * including private hostnames — while the per-user `auth-<user>/` sibling is
+ * scoped by directory NAME alone, with no permission backing it. Creating the
+ * directory owner-only is what makes that scoping mean something.
+ *
+ * ⚠️ POSIX only. On Windows the mode bits reduce to the read-only flag, so this
+ * is a real mitigation on Linux and macOS and a no-op there — do not cite it as
+ * a cross-platform guarantee.
+ */
+const CACHE_DIR_MODE = 0o700;
+
+/**
  * Cache entry for external link validation results
  */
 interface CacheEntry {
@@ -90,7 +105,7 @@ export class ExternalLinkCache {
 
 		try {
 			// eslint-disable-next-line security/detect-non-literal-fs-filename -- cacheDir is constructor parameter, controlled by caller
-			await fs.mkdir(this.cacheDir, { recursive: true });
+			await fs.mkdir(this.cacheDir, { recursive: true, mode: CACHE_DIR_MODE });
 			// eslint-disable-next-line security/detect-non-literal-fs-filename -- cacheFile is derived from cacheDir
 			const data = await fs.readFile(this.cacheFile, 'utf-8');
 			this.cache = JSON.parse(data) as CacheData;
@@ -116,7 +131,7 @@ export class ExternalLinkCache {
 
 		try {
 			// eslint-disable-next-line security/detect-non-literal-fs-filename -- cacheDir is constructor parameter, controlled by caller
-			await fs.mkdir(this.cacheDir, { recursive: true });
+			await fs.mkdir(this.cacheDir, { recursive: true, mode: CACHE_DIR_MODE });
 			// eslint-disable-next-line security/detect-non-literal-fs-filename -- cacheFile is derived from cacheDir
 			await fs.writeFile(this.cacheFile, JSON.stringify(this.cache, null, 2), 'utf-8');
 		} catch {
