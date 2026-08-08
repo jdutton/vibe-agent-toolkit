@@ -166,10 +166,34 @@ describe('renderParseFactSnapshot', () => {
       },
     ],
     pathsByKey: { 'k1.markdown.aaa': ['one.md', 'two.md'] },
+    keyDisagreements: [],
   };
 
   it('lists every path that shares a key — two paths under one key is the point', () => {
     expect(renderParseFactSnapshot(facts)).toContain('paths: one.md, two.md');
+  });
+
+  it('states the disagreement count even when it is zero', () => {
+    // An absent section is indistinguishable from a check that never ran. This
+    // line is the golden's only evidence that the capture parsed every path
+    // under a key rather than parsing the first and assuming the rest matched.
+    expect(renderParseFactSnapshot(facts)).toContain('keyDisagreementCount: 0');
+  });
+
+  it('names both paths and the differing fields when two parses of one key disagree', () => {
+    const rendered = renderParseFactSnapshot({
+      ...facts,
+      keyDisagreements: [
+        {
+          contentKey: 'k1.markdown.aaa',
+          firstPath: 'one.md',
+          otherPath: 'two.md',
+          fields: ['links', 'sizeBytes'],
+        },
+      ],
+    });
+    expect(rendered).toContain('keyDisagreementCount: 1');
+    expect(rendered).toContain('!! keyDisagreement k1.markdown.aaa\tone.md\tvs\ttwo.md\tfields=links,sizeBytes');
   });
 
   it('keeps every fact on one line so the golden stays line-diffable', () => {

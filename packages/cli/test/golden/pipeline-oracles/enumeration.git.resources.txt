@@ -3,8 +3,8 @@ lane: resources
 corpus: trap/git
 route: git-ls-files
 gitAvailable: true
-enumeratedCount: 29
-admittedCount: 28
+enumeratedCount: 37
+admittedCount: 36
 collisionCount: 1
 buildError: -
 
@@ -35,10 +35,18 @@ buildError: -
 22	links/to-dir.md	true	false	false	false	-	true	false	k2.markdown.22e6cc5460228b65c6e4d4f270d31d12ed29662106d052ad7863a89500a6ce25
 23	links/to-ignored.md	true	false	false	false	-	true	false	k2.markdown.696ae5589350050c03a3fbe11c98adae2fed45aad060c2b162e1cbbdde4a745b
 24	links/to-missing.md	true	false	false	false	-	true	false	k2.markdown.7bd8af63da4db21c858fc6cba7f903c7f2f6c72b79c01d71ded084aa028dc55e
-25	symlinks/a/target.md	true	false	false	false	-	true	false	k2.markdown.9911cc88ac9d2cc8e600f3b127ace755f665e74510eaafff2928d4821bd82456
-26	symlinks/b/target.md	true	false	false	false	-	true	false	k2.markdown.ebf04bbf1cc59d63e056a233054b5e09bbeface9f0b12f10dc93a39f44e0d86b
-27	twins/left/same.md	true	false	false	false	-	true	false	k2.markdown.bfd4d55184ff71532b812454fe9788c45d8e070da0a876411f865de66f2e4a89
-28	twins/right/same.md	true	false	false	false	-	true	false	k2.markdown.bfd4d55184ff71532b812454fe9788c45d8e070da0a876411f865de66f2e4a89
+25	parse/duplicate-definition.md	true	false	false	false	-	true	false	k2.markdown.1c3dadac0d53f9bdcad9bc26eab9ab42ea159e0f6b92c85d78afbc95358fdbf8
+26	parse/frontmatter-delimited-empty.md	true	false	false	false	-	true	false	k2.markdown.06762e228e073aea8a531800e06b54721f742799646ee9bb4457b879ac2eb1f4
+27	parse/html-anchors.md	true	false	false	false	-	true	false	k2.markdown.59762272bbea28599ce4d4f8a2dfb2d598cf6759d5baa6e5454eb2c1f013dbde
+28	parse/interleaved-kinds.md	true	false	false	false	-	true	false	k2.markdown.b152e42bb4eb333eff17fa506e269be1153e06c7ccf6b45fbd612c5b042d2305
+29	parse/kitchen-sink.md	true	false	false	false	-	true	false	k2.markdown.88afc07563f0e2e331b9307e5030c2733bb01b30ddfdef6bf0b552f0ec73df64
+30	parse/masked-references.md	true	false	false	false	-	true	false	k2.markdown.1684436ab34e2fa293f39b4cd73d6278c07596d74a1912d82594c48a56b641c7
+31	parse/nested-links.md	true	false	false	false	-	true	false	k2.markdown.f1268cf596a58365e34ba18a5b0140aff91af56e45c836593d409783378e69c6
+32	parse/repeated-headings.md	true	false	false	false	-	true	false	k2.markdown.44aa026f94b724c5001c8bb8b05ee6c047bef691135b4cf8be1ff9af572149cf
+33	symlinks/a/target.md	true	false	false	false	-	true	false	k2.markdown.9911cc88ac9d2cc8e600f3b127ace755f665e74510eaafff2928d4821bd82456
+34	symlinks/b/target.md	true	false	false	false	-	true	false	k2.markdown.ebf04bbf1cc59d63e056a233054b5e09bbeface9f0b12f10dc93a39f44e0d86b
+35	twins/left/same.md	true	false	false	false	-	true	false	k2.markdown.bfd4d55184ff71532b812454fe9788c45d8e070da0a876411f865de66f2e4a89
+36	twins/right/same.md	true	false	false	false	-	true	false	k2.markdown.bfd4d55184ff71532b812454fe9788c45d8e070da0a876411f865de66f2e4a89
 
 ## admitted (ordered, post-deduplication)
 0	README.md
@@ -65,10 +73,18 @@ buildError: -
 21	links/to-dir.md
 22	links/to-ignored.md
 23	links/to-missing.md
-24	symlinks/a/target.md
-25	symlinks/b/target.md
-26	twins/left/same.md
-27	twins/right/same.md
+24	parse/duplicate-definition.md
+25	parse/frontmatter-delimited-empty.md
+26	parse/html-anchors.md
+27	parse/interleaved-kinds.md
+28	parse/kitchen-sink.md
+29	parse/masked-references.md
+30	parse/nested-links.md
+31	parse/repeated-headings.md
+32	symlinks/a/target.md
+33	symlinks/b/target.md
+34	twins/left/same.md
+35	twins/right/same.md
 
 ## collisions (first-added-wins drops, in arrival order)
 dup-hyphen-note-md	won=dup-hyphen/note.md	dropped=dup/hyphen-note.md

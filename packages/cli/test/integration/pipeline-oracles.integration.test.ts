@@ -34,12 +34,14 @@ import {
   LANES,
   captureEnumerationSnapshot,
   captureParseFactSnapshot,
+  diffParseFactRows,
   laneById,
   materializeTrapCorpus,
   renderEnumerationSnapshot,
   renderEnumerationSnapshotUnordered,
   renderParseFactSnapshot,
   type EnumerationSnapshot,
+  type ParseFactSnapshot,
 } from '../../src/pipeline-oracles/index.js';
 
 const PACKAGE_ROOT = toForwardSlash(fileURLToPath(new URL('../../', import.meta.url)));
@@ -88,6 +90,19 @@ function expectGolden(name: string, actual: string): void {
 /** A disposable corpus root, outside any repository until asked otherwise. */
 function makeCorpusRoot(label: string): string {
   return mkdtempSync(safePath.join(normalizedTmpdir(), `vat-oracle-${label}-`));
+}
+
+/**
+ * Parse everything the resources lane enumerates over a corpus.
+ *
+ * @param root - Corpus root
+ * @returns The parse-fact snapshot
+ */
+async function captureCorpusFacts(root: string): Promise<ParseFactSnapshot> {
+  const lane = laneById('resources');
+  const snapshot = await captureEnumerationSnapshot(lane, { corpusRoot: root, corpus: NON_GIT_CORPUS });
+  const absolute = snapshot.enumerated.map((row) => safePath.join(root, row.path));
+  return captureParseFactSnapshot(absolute, { corpusRoot: root, corpus: NON_GIT_CORPUS });
 }
 
 describe('enumeration snapshot — git route (ordered golden)', () => {
@@ -232,11 +247,61 @@ describe('parse-fact snapshot', () => {
   });
 
   it('matches its golden', async () => {
-    const lane = laneById('resources');
-    const snapshot = await captureEnumerationSnapshot(lane, { corpusRoot: root, corpus: NON_GIT_CORPUS });
-    const absolute = snapshot.enumerated.map((row) => safePath.join(root, row.path));
-    const facts = await captureParseFactSnapshot(absolute, { corpusRoot: root, corpus: NON_GIT_CORPUS });
-    expectGolden('parse-facts.nogit.txt', renderParseFactSnapshot(facts));
+    expectGolden('parse-facts.nogit.txt', renderParseFactSnapshot(await captureCorpusFacts(root)));
+  });
+
+  it('parses EVERY path under a key and reports no disagreement', async () => {
+    // The oracle used to parse the first path under each key and `continue` on
+    // the rest — the cache's own assumption ("same key implies same facts")
+    // implemented inside the instrument built to test it, leaving nothing to
+    // compare. Both halves are asserted here: that a key with two paths exists
+    // at all (or this check is vacuous), and that the independent parses agree.
+    const facts = await captureCorpusFacts(root);
+
+    const shared = Object.entries(facts.pathsByKey).filter(([, paths]) => paths.length > 1);
+    expect(shared.length, 'no key has two paths — the comparison never runs').toBeGreaterThan(0);
+    expect(shared.flatMap(([, paths]) => paths)).toEqual(
+      expect.arrayContaining(['twins/left/same.md', 'twins/right/same.md']),
+    );
+    expect(facts.keyDisagreements).toEqual([]);
+  });
+
+  it('names the differing fields when two parses of one key disagree', () => {
+    // A disagreement is unreachable from the corpus by construction — the whole
+    // point is that it must stay that way — so the comparator is exercised on
+    // fabricated rows. `[]` here would mean the section can never go non-empty.
+    const facts = {
+      contentKey: 'k',
+      parserKind: 'markdown',
+      sizeBytes: 10,
+      estimatedTokenCount: 3,
+      links: [],
+      headings: [],
+      frontmatterSource: null,
+      frontmatterFields: null,
+      anchors: null,
+      decodedLength: 10,
+      conditions: [],
+      optionalArrays: [{ field: 'anchors', state: 'absent' as const }],
+    };
+    expect(diffParseFactRows(facts, { ...facts })).toEqual([]);
+    expect(
+      diffParseFactRows(facts, {
+        ...facts,
+        sizeBytes: 11,
+        links: [
+          {
+            ordinal: 0,
+            href: './x.md',
+            text: 'x',
+            type: 'local_file',
+            line: 1,
+            nodeType: 'link',
+            resolvedId: 'leaked-from-another-skill',
+          },
+        ],
+      }),
+    ).toEqual(['links', 'sizeBytes']);
   });
 
   it('keys identical bytes at two extensions separately', async () => {

@@ -1,6 +1,7 @@
 # parse-fact-snapshot
 corpus: trap/non-git
-blobCount: 29
+blobCount: 37
+keyDisagreementCount: 0
 
 ## blob k2.html.03c955d819b71fa6e1b721815fa8165d8f126f740f096b6b83166df16d839dd2
 parser: html
@@ -80,6 +81,21 @@ headings: 1
   0	h1	slug=wrong-case	line=1	text=Wrong case
 conditions: 0
 
+## blob k2.markdown.06762e228e073aea8a531800e06b54721f742799646ee9bb4457b879ac2eb1f4
+parser: markdown
+paths: parse/frontmatter-delimited-empty.md
+sizeBytes: 21
+estimatedTokenCount: 6
+decodedLength: 21
+frontmatterSource: -
+optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty
+frontmatterFields: -
+anchors: -
+links: 0
+headings: 1
+  0	h1	slug=body-only	line=4	text=Body only
+conditions: 0
+
 ## blob k2.markdown.10d6d823ce77414e521427a8ffa4923ebe8c03f201709b435254bcec3d3b5bfc
 parser: markdown
 paths: docs/sibling.md
@@ -93,6 +109,41 @@ anchors: -
 links: 0
 headings: 1
   0	h1	slug=sibling	line=1	text=Sibling
+conditions: 0
+
+## blob k2.markdown.1684436ab34e2fa293f39b4cd73d6278c07596d74a1912d82594c48a56b641c7
+parser: markdown
+paths: parse/masked-references.md
+sizeBytes: 268
+estimatedTokenCount: 67
+decodedLength: 268
+frontmatterSource: -
+optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=present
+frontmatterFields: -
+anchors: -
+links: 1
+  0	external	link	line=9	resolvedId=-	href=https://example.invalid/?filter[status][eq]=1	text=q
+headings: 1
+  0	h1	slug=masked-references	line=1	text=Masked references
+conditions: 1
+  LINK_UNRESOLVED_REFERENCE	line=3	no-such-label
+
+## blob k2.markdown.1c3dadac0d53f9bdcad9bc26eab9ab42ea159e0f6b92c85d78afbc95358fdbf8
+parser: markdown
+paths: parse/duplicate-definition.md
+sizeBytes: 125
+estimatedTokenCount: 32
+decodedLength: 125
+frontmatterSource: -
+optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty
+frontmatterFields: -
+anchors: -
+links: 3
+  0	local_file	linkReference	line=3	resolvedId=-	href=./last-wins.md	text=ref
+  1	local_file	definition	line=5	resolvedId=-	href=./first-wins.md	text=dup
+  2	local_file	definition	line=6	resolvedId=-	href=./last-wins.md	text=dup
+headings: 1
+  0	h1	slug=duplicate-definition-label	line=1	text=Duplicate definition label
 conditions: 0
 
 ## blob k2.markdown.1cb2f5338ba8955e4ff0b92a7d1160c2d7ab003e06ca8a4857cc6f0781a8e766
@@ -184,6 +235,45 @@ headings: 7
   4	h5	slug=level-five	line=9	text=Level five
   5	h6	slug=level-six	line=11	text=Level six
   6	h2	slug=back-to-two	line=13	text=Back to two
+conditions: 0
+
+## blob k2.markdown.44aa026f94b724c5001c8bb8b05ee6c047bef691135b4cf8be1ff9af572149cf
+parser: markdown
+paths: parse/repeated-headings.md
+sizeBytes: 43
+estimatedTokenCount: 11
+decodedLength: 43
+frontmatterSource: -
+optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty
+frontmatterFields: -
+anchors: -
+links: 0
+headings: 5
+  0	h1	slug=same	line=1	text=Same
+  1	h2	slug=same-1	line=3	text=Same
+  2	h3	slug=same-2	line=5	text=Same
+  3	h2	slug=same-3	line=7	text=Same
+  4	h1	slug=same-4	line=9	text=Same
+conditions: 0
+
+## blob k2.markdown.59762272bbea28599ce4d4f8a2dfb2d598cf6759d5baa6e5454eb2c1f013dbde
+parser: markdown
+paths: parse/html-anchors.md
+sizeBytes: 251
+estimatedTokenCount: 63
+decodedLength: 251
+frontmatterSource: -
+optionalArrays: anchors=present parseErrors=absent unresolvedReferences=empty
+frontmatterFields: -
+anchors: 4
+  0	first
+  1	second
+  2	third
+  3	fourth
+links: 0
+headings: 2
+  0	h1	slug=html-anchors	line=1	text=HTML anchors
+  1	h2	slug=a-heading	line=5	text=A heading
 conditions: 0
 
 ## blob k2.markdown.5f77164cda910eab21ee9a384a28a1e036826356d0cb1c04e642f70b71847043
@@ -301,6 +391,36 @@ headings: 1
   0	h1	slug=trap-corpus	line=1	text=Trap corpus
 conditions: 0
 
+## blob k2.markdown.88afc07563f0e2e331b9307e5030c2733bb01b30ddfdef6bf0b552f0ec73df64
+parser: markdown
+paths: parse/kitchen-sink.md
+sizeBytes: 471
+estimatedTokenCount: 118
+decodedLength: 471
+frontmatterSource: title: kitchen sink
+optionalArrays: anchors=present parseErrors=absent unresolvedReferences=empty
+frontmatterFields: 1
+  title	string	d27d91ba9f42
+anchors: 2
+  0	topanchor
+  1	mid
+links: 9
+  0	local_file	link	line=9	resolvedId=-	href=./one.md	text=inline
+  1	external	link	line=10	resolvedId=-	href=https://example.invalid/auto	text=https://example.invalid/auto
+  2	local_file	link	line=18	resolvedId=-	href=./two.md	text=nested inline
+  3	local_file	link	line=21	resolvedId=-	href=./three.md	text=quoted
+  4	local_file	link	line=25	resolvedId=-	href=./four.md	text=table link
+  5	local_file	linkReference	line=9	resolvedId=-	href=./early.md	text=reference
+  6	local_file	linkReference	line=18	resolvedId=-	href=./late.md	text=nested ref
+  7	local_file	definition	line=7	resolvedId=-	href=./early.md	text=early-ref
+  8	local_file	definition	line=29	resolvedId=-	href=./late.md	text=late-ref
+headings: 4
+  0	h1	slug=top-a-idtopanchora	line=5	text=Top <a id="TopAnchor"></a>
+  1	h2	slug=same-heading	line=12	text=Same heading
+  2	h3	slug=same-heading-1	line=16	text=Same heading
+  3	h2	slug=same-heading-2	line=27	text=Same heading
+conditions: 0
+
 ## blob k2.markdown.8e6e3ec33fdfe4aca43bd7f3c132dcd52e104d0652a5639e91eaaa2c601f7c07
 parser: markdown
 paths: broken/two-conditions.md
@@ -352,6 +472,27 @@ headings: 3
   0	h1	slug=guide	line=6	text=Guide
   1	h2	slug=nested-heading	line=10	text=Nested heading
   2	h2	slug=nested-heading-1	line=12	text=Nested heading
+conditions: 0
+
+## blob k2.markdown.b152e42bb4eb333eff17fa506e269be1153e06c7ccf6b45fbd612c5b042d2305
+parser: markdown
+paths: parse/interleaved-kinds.md
+sizeBytes: 234
+estimatedTokenCount: 59
+decodedLength: 234
+frontmatterSource: -
+optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty
+frontmatterFields: -
+anchors: -
+links: 6
+  0	local_file	link	line=5	resolvedId=-	href=./a.md	text=alpha
+  1	local_file	link	line=9	resolvedId=-	href=./g.md	text=gamma
+  2	external	linkReference	line=5	resolvedId=-	href=https://example.invalid/first	text=beta
+  3	local_file	linkReference	line=9	resolvedId=-	href=./second.md	text=delta
+  4	external	definition	line=3	resolvedId=-	href=https://example.invalid/first	text=def-first
+  5	local_file	definition	line=7	resolvedId=-	href=./second.md	text=def-second
+headings: 1
+  0	h1	slug=interleaved	line=1	text=Interleaved
 conditions: 0
 
 ## blob k2.markdown.b5c2ac38ac6bc0b392785e30820dcd13c7db8496934627ee39efd25c422a66c0
@@ -484,5 +625,25 @@ anchors: -
 links: 0
 headings: 1
   0	h1	slug=b	line=1	text=B
+conditions: 0
+
+## blob k2.markdown.f1268cf596a58365e34ba18a5b0140aff91af56e45c836593d409783378e69c6
+parser: markdown
+paths: parse/nested-links.md
+sizeBytes: 166
+estimatedTokenCount: 42
+decodedLength: 166
+frontmatterSource: -
+optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty
+frontmatterFields: -
+anchors: -
+links: 5
+  0	external	link	line=3	resolvedId=-	href=https://example.invalid/click	text=
+  1	local_file	link	line=5	resolvedId=-	href=./inner.md	text=inner
+  2	local_file	linkReference	line=5	resolvedId=-	href=./outer.md	text=outer-ref
+  3	local_file	definition	line=7	resolvedId=-	href=./badge.png	text=img-ref
+  4	local_file	definition	line=8	resolvedId=-	href=./outer.md	text=outer-ref
+headings: 1
+  0	h1	slug=nested	line=1	text=Nested
 conditions: 0
 

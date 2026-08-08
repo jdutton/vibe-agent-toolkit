@@ -20,6 +20,7 @@ import type {
   ConditionFact,
   FrontmatterFieldFact,
   HeadingFact,
+  KeyDisagreement,
   LinkFact,
   OptionalArrayState,
   ParseFactRow,
@@ -100,7 +101,9 @@ export async function captureParseFactSnapshot(
 ): Promise<ParseFactSnapshot> {
   const corpusRoot = safePath.resolve(options.corpusRoot);
   const byKey = new Map<string, ParseFactRow>();
+  const firstPathByKey = new Map<string, string>();
   const pathsByKey = new Map<string, string[]>();
+  const keyDisagreements: KeyDisagreement[] = [];
 
   for (const absolutePath of absolutePaths) {
     const keyed = await readKeyedOrSkip(absolutePath);
@@ -108,21 +111,37 @@ export async function captureParseFactSnapshot(
       continue;
     }
 
+    const relativePath = relativize(absolutePath, corpusRoot);
     const paths = pathsByKey.get(keyed.key) ?? [];
-    paths.push(relativize(absolutePath, corpusRoot));
+    paths.push(relativePath);
     pathsByKey.set(keyed.key, paths);
 
-    if (byKey.has(keyed.key)) {
-      // Already parsed under this key. Re-parsing would be the cache's job to
-      // avoid; not re-parsing here is the same claim, asserted.
-      continue;
-    }
-
+    // ⛔ Every path is parsed, including the second and later arrivals under a
+    // key already recorded. Skipping them would be the cache's assumption —
+    // "same key implies same facts" — implemented inside the instrument that
+    // exists to test it, leaving nothing to compare against.
     const parsed = await parseOrNull(absolutePath, keyed.parserKind);
     if (parsed === null) {
       continue;
     }
-    byKey.set(keyed.key, toRow(keyed.key, keyed.parserKind, keyed.content, parsed));
+    const row = toRow(keyed.key, keyed.parserKind, keyed.content, parsed);
+
+    const existing = byKey.get(keyed.key);
+    if (existing === undefined) {
+      byKey.set(keyed.key, row);
+      firstPathByKey.set(keyed.key, relativePath);
+      continue;
+    }
+
+    const fields = diffParseFactRows(existing, row);
+    if (fields.length > 0) {
+      keyDisagreements.push({
+        contentKey: keyed.key,
+        firstPath: firstPathByKey.get(keyed.key) ?? relativePath,
+        otherPath: relativePath,
+        fields,
+      });
+    }
   }
 
   return {
@@ -133,7 +152,37 @@ export async function captureParseFactSnapshot(
         .map(([key, paths]) => [key, [...paths].sort((a, b) => a.localeCompare(b))] as const)
         .sort(([a], [b]) => a.localeCompare(b)),
     ),
+    keyDisagreements: keyDisagreements.toSorted(
+      (a, b) => a.contentKey.localeCompare(b.contentKey) || a.otherPath.localeCompare(b.otherPath),
+    ),
   };
+}
+
+/**
+ * Name the {@link ParseFactRow} fields on which two independent parses of the
+ * same content key disagree.
+ *
+ * Field-by-field rather than one digest over the whole row, because the answer
+ * has to localize: "two paths under one key parse differently" is unactionable,
+ * while "they differ on `links`" names the lane and the fix. Compared through a
+ * structural rendering so array order counts — a reordering of `links` is a
+ * disagreement, since ordinals are the addressable part.
+ *
+ * @param first - The row recorded for the key's first path
+ * @param other - The row a later path under the same key produced
+ * @returns Differing field names, sorted; empty when the rows agree
+ */
+export function diffParseFactRows(first: ParseFactRow, other: ParseFactRow): string[] {
+  const fields = new Set([...Object.keys(first), ...Object.keys(other)]);
+  const differing: string[] = [];
+  for (const field of fields) {
+    const a = (first as unknown as Record<string, unknown>)[field];
+    const b = (other as unknown as Record<string, unknown>)[field];
+    if (renderValue(a, new WeakSet()) !== renderValue(b, new WeakSet())) {
+      differing.push(field);
+    }
+  }
+  return differing.toSorted((a, b) => a.localeCompare(b));
 }
 
 /** Read+key a path, or report null when it cannot be read. */

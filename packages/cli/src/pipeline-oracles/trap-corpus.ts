@@ -166,6 +166,166 @@ export const TRAP_CORPUS_FILES: CorpusFiles = Object.freeze({
     '',
   ].join('\n'),
 
+  // ⭐ Link ordering is by node KIND, not by document position — all `link`s,
+  // then all `linkReference`s, then all `definition`s — and the goldens pin
+  // ordinals. A collapse of the parse into a single document-order traversal
+  // emits `[definition, link, linkReference, …]` instead, which is a silent
+  // renumbering of every link ordinal in the corpus.
+  //
+  // The definition FIRST is the whole point: `links/every-type.md` declares its
+  // one definition last, so on that file document order and kind order agree
+  // and a document-order collapse looks identical. This file is the only place
+  // in the corpus where the two orders disagree.
+  'parse/interleaved-kinds.md': [
+    '# Interleaved',
+    '',
+    '[def-first]: https://example.invalid/first',
+    '',
+    'An inline [alpha](./a.md) then a reference [beta][def-first] then more.',
+    '',
+    '[def-second]: ./second.md',
+    '',
+    'Another inline [gamma](./g.md) and a second reference [delta][def-second].',
+    '',
+  ].join('\n'),
+
+  // ⛔ PINS A KNOWN DEFECT. A label declared twice resolves to the LAST
+  // definition here; CommonMark says the FIRST wins, and every renderer follows
+  // CommonMark. So VAT validates a target the reader never visits.
+  //
+  // Recorded as today's behaviour deliberately: the fix is one line
+  // (`if (!definitions.has(id))`) but it CHANGES OUTPUT, so it belongs in its
+  // own commit with its own golden movement rather than riding along with the
+  // fixture that makes it visible. When it is fixed, this row's `href` flips
+  // from `./last-wins.md` to `./first-wins.md`.
+  'parse/duplicate-definition.md': [
+    '# Duplicate definition label',
+    '',
+    'A [ref][dup] pointing at a twice-declared label.',
+    '',
+    '[dup]: ./first-wins.md',
+    '[dup]: ./last-wins.md',
+    '',
+  ].join('\n'),
+
+  // Links nested inside other links. `extractLinks` visits `link`,
+  // `linkReference` and `definition` nodes wherever they occur, so an inner
+  // link inside an outer one is a second row and an image reference inside a
+  // link is not a row at all. A traversal that stopped descending at the first
+  // match — the obvious way to write a collapsed walk — would drop the inner.
+  'parse/nested-links.md': [
+    '# Nested',
+    '',
+    '[![badge][img-ref]](https://example.invalid/click)',
+    '',
+    '[Outer text with [inner](./inner.md) inside][outer-ref]',
+    '',
+    '[img-ref]: ./badge.png',
+    '[outer-ref]: ./outer.md',
+    '',
+  ].join('\n'),
+
+  // Fragment anchors across several nodes, with decoys. `docs/anchored.md`
+  // pins the case-fold on two well-separated anchors; this pins the parts that
+  // one cannot: two anchors in ONE node, an anchor inline in a paragraph, the
+  // same id declared twice, and — the decoys — an anchor inside a fenced code
+  // block and one inside an inline code span, neither of which is a fragment
+  // target any renderer would honour.
+  'parse/html-anchors.md': [
+    '# HTML anchors',
+    '',
+    '<a id="First"></a>',
+    '',
+    '## A heading',
+    '',
+    '<span name=\'Second\'></span><a id="Third">x</a>',
+    '',
+    '<a id="First"></a>',
+    '',
+    'Inline <a id="Fourth">y</a> anchor in a paragraph.',
+    '',
+    '```html',
+    '<a id="NeverIndexed"></a>',
+    '```',
+    '',
+    'An `<a id="AlsoNever">` inline code span.',
+    '',
+  ].join('\n'),
+
+  // The false-positive side of unresolved references. `broken/dangling-
+  // reference.md` supplies one genuine dangling label; every line below is
+  // bracket-shaped text that must NOT be reported — a reference inside a fenced
+  // block, a query string, an API signature with optional arguments, and a
+  // numeric citation. `collectMaskFacts` computes masked ranges and defined
+  // labels in one walk, and a masking regression is silent: it does not throw,
+  // it just starts reporting prose.
+  'parse/masked-references.md': [
+    '# Masked references',
+    '',
+    'A genuine [dangling][no-such-label] reference.',
+    '',
+    '```',
+    '[masked][also-no-such]',
+    '```',
+    '',
+    'A query param in a URL: [q](https://example.invalid/?filter[status][eq]=1)',
+    '',
+    'An API signature: needle.get(url[, options][, callback])',
+    '',
+    'Numeric citation[3][4] in prose.',
+    '',
+  ].join('\n'),
+
+  // Links in containers the corpus otherwise never puts one in — a list item, a
+  // block quote, a table cell — plus an autolink and a redefinition of a label
+  // used earlier in the document. Every link row in the rest of the corpus is
+  // in a bare paragraph, so a traversal that never descends into `list`,
+  // `blockquote` or `table` children would lose these and nothing else.
+  'parse/kitchen-sink.md': [
+    '---',
+    'title: kitchen sink',
+    '---',
+    '',
+    '# Top <a id="TopAnchor"></a>',
+    '',
+    '[early-ref]: ./early.md',
+    '',
+    'Paragraph with [inline](./one.md), a [reference][early-ref], and an autolink',
+    '<https://example.invalid/auto>.',
+    '',
+    '## Same heading',
+    '',
+    '<a id="Mid"></a>',
+    '',
+    '### Same heading',
+    '',
+    '- list item with [nested inline](./two.md) and [nested ref][late-ref]',
+    '- another with `[code][notalink]`',
+    '',
+    '> quote with [quoted](./three.md)',
+    '',
+    '| col |',
+    '| --- |',
+    '| [table link](./four.md) |',
+    '',
+    '## Same heading',
+    '',
+    '[late-ref]: ./late.md',
+    '',
+  ].join('\n'),
+
+  // Slug disambiguation ACROSS heading levels. `docs/guide.md` repeats one text
+  // at one level; the counter that suffixes `-1`, `-2` … is keyed on the text
+  // alone, so a level-aware regression is invisible there and visible here.
+  'parse/repeated-headings.md': ['# Same', '', '## Same', '', '### Same', '', '## Same', '', '# Same', ''].join('\n'),
+
+  // Frontmatter delimiters with NOTHING between them. Distinct from
+  // `docs/empty-frontmatter.md`, which contains an explicit `{}`: this is the
+  // shape a YAML parser may answer with `null`, `{}` or a parse error, and
+  // which of the three decides whether the row reports `frontmatterFields: -`
+  // (absent) or `0` (present and empty).
+  'parse/frontmatter-delimited-empty.md': '---\n---\n\n# Body only\n',
+
   // A row with MORE THAN ONE condition. Every other multi-condition path in the
   // corpus tops out at one, so `collectConditions`' three-key sort comparator
   // (code, then line, then message) never actually executed.

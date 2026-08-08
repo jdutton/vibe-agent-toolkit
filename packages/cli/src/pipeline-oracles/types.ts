@@ -306,6 +306,24 @@ export interface ConditionFact {
   line: number | null;
 }
 
+/**
+ * Two paths that key the same and did **not** parse the same.
+ *
+ * Empty is the healthy state and the only state observed so far. It is recorded
+ * rather than asserted inside the capture because a disagreement is a finding
+ * about VAT, not a fault in the harness — the same reason
+ * {@link EnumerationSnapshot.buildError} exists.
+ */
+export interface KeyDisagreement {
+  contentKey: string;
+  /** The path whose row was recorded first, corpus-relative. */
+  firstPath: string;
+  /** The later path whose independent parse disagreed, corpus-relative. */
+  otherPath: string;
+  /** Names of the {@link ParseFactRow} fields that differ, sorted. */
+  fields: string[];
+}
+
 /** Parse facts for a corpus, keyed by content key. */
 export interface ParseFactSnapshot {
   corpus: string;
@@ -321,4 +339,15 @@ export interface ParseFactSnapshot {
    * key is the cache's whole reason to exist; zero paths is impossible.
    */
   pathsByKey: Record<string, string[]>;
+  /**
+   * Keys whose paths did not all parse identically. **Must be empty.**
+   *
+   * This is the row that makes the snapshot an oracle rather than a restatement.
+   * Until 2026-08-08 the capture parsed the *first* path under each key and
+   * skipped the rest, with a comment saying so outright — *"not re-parsing here
+   * is the same claim, asserted."* That is the content-addressed cache's own
+   * assumption, implemented inside the instrument built to verify it: with one
+   * parse per key there is no second observation to disagree with.
+   */
+  keyDisagreements: KeyDisagreement[];
 }

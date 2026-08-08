@@ -56,6 +56,12 @@ paths key the same and their facts differ, a content-addressed cache is unsound.
 If the same bytes key differently across runs, it is useless. Neither is visible
 in command output.
 
+**Every path is parsed, including the second and later arrivals under a key
+already recorded**, and the rows are compared field by field into
+`keyDisagreements` — which must be empty. Skipping those parses is the cache's
+own assumption asserted inside the instrument meant to test it; see "The one
+item that was fixed rather than declared" below for what that cost.
+
 #### Every `ParseResult` field is accounted for, and `tsc` enforces it
 
 The snapshot's claim is *"if a cached parse differs from a fresh one, a row here
@@ -187,6 +193,24 @@ survive a ZIP round-trip reliably across platforms, and because building from
 code lets the corpus *ask* whether the host can create symlinks rather than
 assume it.
 
+### The `parse/` files exist because VAT's real corpus cannot distinguish
+
+VAT's own 265 tracked markdown files contain **763 `link` objects but only two
+`linkReference`s, two `definition`s, zero HTML anchors and zero frontmatter
+errors**. A whole-corpus diff over them is therefore silent on the contracts
+most at risk in a parse refactor: it cannot observe kind-ordering, reference
+resolution, anchor extraction or masking at all. The AST-traversal collapse
+diffed to zero rows across all 265 documents and that proved almost nothing —
+what proved it was an eleven-case adversarial probe, and `parse/` is that probe
+ported in so the property is guarded rather than re-established by hand.
+
+The load-bearing one is `parse/interleaved-kinds.md`. `links` is ordered by node
+**kind** — every `link`, then every `linkReference`, then every `definition` —
+not by document position, and every other document in the corpus declares its
+definitions last, where the two orders happen to agree. That file declares one
+**first**, so a collapse into a single document-order traversal renumbers its
+ordinals and nothing else's.
+
 ## Running the gate
 
 ```bash
@@ -213,6 +237,89 @@ output is correct: a drift failure is a prompt to read the diff.
 
 Because these are ordinary integration tests, they run in the existing
 Node 22/24 × Ubuntu/Windows CI matrix without any separate runner.
+
+## What this instrument can and cannot see
+
+The claim "these oracles catch a pipeline restructure going wrong" is only worth
+as much as the evidence behind it, and a green suite is not that evidence — a
+suite that asserts nothing is also green. So every fact class here was tested by
+**deliberately breaking it and confirming the gate goes red at the right row**:
+24 runs over 14 named mutations, each applied to `src/` (never to a test), run,
+and reverted.
+
+The interesting output is not the twenty that went red. It is the three that did
+not, and the two that went red in only one place.
+
+### Declared blind spots — mutations the gate cannot see
+
+**`gitignored` cannot be falsified on either route.** Forcing the column to a
+constant `false` changes nothing anywhere. On the git route `git ls-files`
+cannot return an ignored path, so the column is constant-`false` *by
+construction*; off the git route there is no gitignore oracle at all, so it is
+constant-`false` for a second, unrelated reason. The fact is real and lives in
+`GitTracker`'s memoised oracle — it is simply not a property of an enumerated
+row, and this column exists to let the two populations be compared, not because
+it varies within one. **Do not "fix" this by making the column vary.**
+
+**Disabling `restatementDrift` is invisible on a corpus that has no drift.**
+Replacing the reconciliation with `[]` leaves every test green, because drift is
+non-empty only when `lanes.ts` has diverged from the real builders and today it
+has not. Pairing the two mutations bounds the cost precisely: with a lane
+deliberately restated wrong, the drift test fires and *names the lane*; with the
+same wrong restatement **and** detection disabled, that test goes green while
+the lane's golden still moves. So the blind spot costs the **diagnosis**, not
+the detection — a drifted lane is still caught, just as an unexplained
+population change.
+
+**`anchors` can never be present-and-empty**, so the `(none)` rendering of that
+state is unreachable. Both parsers spread the key conditionally
+(`...(list.length > 0 && { anchors })`). The `absent`/`empty` distinction is
+live and falsifiable for `parseErrors` and `unresolvedReferences`, which is
+where `optionalArrays` earns its place; for `anchors` it is defensive only.
+
+### Facts observed in exactly one place
+
+`targetInsideRoot` and `aliasesEnumeratedPath` can each be replaced by a
+constant without moving a single golden line — every golden corpus is built with
+`skipSymlinks: true`, where the honest answers are `true` and `false`
+respectively. Both mutations are caught, but by exactly one assertion in
+`symlink-divergence.integration.test.ts`. Delete that test and these two columns
+become decorative. This is a property of the corpora, not of the columns.
+
+### The one item that was fixed rather than declared
+
+Until 2026-08-08 the parse-fact capture parsed the **first** path under each
+content key and skipped the rest, with a comment saying so outright: *"not
+re-parsing here is the same claim, asserted."* That is a content-addressed
+cache's own assumption — same key implies same facts — implemented inside the
+instrument built to verify it. With one parse per key there is no second
+observation, so the load-bearing mutation had nothing to disagree with.
+
+It now parses every path and compares, reporting `keyDisagreements`. The
+difference is measurable. Removing the parser kind from the content key (making
+it a pure function of bytes, which is exactly the unsound key this schema exists
+to prevent) makes `empty.md` and `empty.html` collide:
+
+- **with the fix:** `keyDisagreementCount: 0 → 1`, naming both paths and the
+  three fields they differ on (`conditions,optionalArrays,parserKind`);
+- **with the old skip restored:** `keyDisagreementCount` stays `0`. The gate
+  still goes red — `blobCount` drops from 37 to 36 — but it reports a corpus
+  that lost a document, with nothing said about *why*.
+
+Both are red. Only one is a diagnosis.
+
+### Two things the run itself taught
+
+**A mutation that produces no diff must be distinguished from one that never
+ran.** Every mutation was verified to have actually changed its file before the
+gate was run; three "no red" results turned out to be substitutions that matched
+nothing, which would otherwise have been recorded as blind spots.
+
+**Restoring a mutated file with `mv` silently keeps the mutant alive.** `mv` puts
+back the backup's original mtime, so `tsc --build` sees the restored source as
+older than its own output, skips the rebuild, and leaves the mutant in `dist` —
+where any test that imports a built package still runs it. One run was
+contaminated this way and had to be repeated. Restore with `cp` + `touch`.
 
 ## Not built yet
 
@@ -252,7 +359,16 @@ flip in the change that fixes it.
    path pays no `realpath`. Latent rather than live — nothing in production sets
    the flag — which is exactly why it had to be fixed *before* any convergence,
    not after. (`file-crawler.integration.test.ts`)
-4. **The built lane's link graph is empty.** Packaged output landing under the
+4. **A duplicated definition label resolves to the LAST definition; CommonMark
+   says the first.** `[dup]: ./first-wins.md` followed by `[dup]: ./last-wins.md`
+   makes VAT report `./last-wins.md` for the reference, while every renderer
+   links to `./first-wins.md` — so link validation checks a target the reader
+   never visits. Pre-existing, and the fix is one line
+   (`if (!definitions.has(id))`), but it changes output, so it belongs in its own
+   commit with its own golden movement. Pinned as today's behaviour by
+   `parse/duplicate-definition.md` and annotated at the code site in
+   `link-parser.ts`.
+5. **The built lane's link graph is empty.** Packaged output landing under the
    project's `dist/` is excluded from the crawl that the post-build validator
    uses, so `fileCount`, `maxLinkDepth`, the size rules and — not just metrics —
    the per-bundled-file content scans all operate on an empty bundle set.

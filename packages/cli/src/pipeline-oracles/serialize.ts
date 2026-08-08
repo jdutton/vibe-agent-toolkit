@@ -157,8 +157,22 @@ export function renderParseFactSnapshot(snapshot: ParseFactSnapshot): string {
     '# parse-fact-snapshot',
     `corpus: ${snapshot.corpus}`,
     `blobCount: ${String(snapshot.rows.length)}`,
+    // Zero is the healthy value and it is rendered anyway: an absent section is
+    // indistinguishable from a check that never ran, and this is the one line
+    // that says the oracle parsed every path rather than assuming the second
+    // one matched the first.
+    `keyDisagreementCount: ${String(snapshot.keyDisagreements.length)}`,
     '',
   ];
+
+  for (const disagreement of snapshot.keyDisagreements) {
+    lines.push(
+      `!! keyDisagreement ${disagreement.contentKey}\t${disagreement.firstPath}\tvs\t${disagreement.otherPath}\tfields=${disagreement.fields.join(',')}`,
+    );
+  }
+  if (snapshot.keyDisagreements.length > 0) {
+    lines.push('');
+  }
 
   for (const row of snapshot.rows) {
     lines.push(`## blob ${row.contentKey}`);
