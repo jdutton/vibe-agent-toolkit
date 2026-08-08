@@ -59,8 +59,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ValidateLinkOptions` in `@vibe-agent-toolkit/resources` gains a matching **required** `fsCache`
   field, so anything constructing that options object must supply the run's cache.
 
-### Added
-
 - **`vat pipeline` — an internal dev instrument for holding the resource pipeline still across a
   refactor.** Three verbs: `snapshot <dir> --out <dir>` captures what the pipeline actually
   enumerates and parses over a corpus (five enumeration lanes, a parse-fact oracle, and normalized
@@ -242,6 +240,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   validating many documents against one schema; `validateFrontmatter()` is unchanged and still
   compiles per call.
 
+- **A cross-process parse cache, on by default.** Parsing is 80.4% of `vat resources validate`'s
+  library time. Every document VAT parses is now filed under a content key — a hash of the exact
+  bytes plus the parser they route to — in `<tmpdir>/.vat-cache/parse/`, and a later run over
+  unchanged bytes reconstructs the parse instead of redoing it. Measured over this repo's 265
+  tracked markdown files: **1,177 ms cold versus 26 ms warm, a 45× reduction on the parse step**,
+  for entries totalling 21% of the corpus size.
+
+  It has to be cross-process rather than an in-memory memo because `vat validate`, `vat verify` and
+  `vat build` parse nothing themselves — they spawn the vat binary once per phase, so a per-process
+  cache could not help the three commands most worth speeding up.
+
+  Correctness properties worth knowing, because they constrain how it can be changed:
+
+  - **Entries never store the document text.** The key can only be computed by reading the file, so
+    the content is always in hand and is re-attached rather than stored. That is where the 21%
+    comes from, and it keeps the cache from being a full plaintext copy of a possibly-sensitive
+    corpus.
+  - **Frontmatter is stored as YAML source, never as the parsed object.** JSON cannot carry `.inf`,
+    `.nan` or `!!binary`, and it throws outright on cyclic anchors — those documents would have
+    silently never cached. Re-parsing the source is lossless because it is the same call the cold
+    path makes.
+  - **Every hit returns a freshly deserialized object graph.** Two resources served from one entry
+    never share a `links` array. Bundling mutates `resolvedId` on parsed links in place, so a
+    shared array would leak one skill's decisions into another's.
+  - **Fail-soft covers corruption, not wrongness.** A missing, unreadable, corrupt or
+    wrong-schema-version entry is a miss. A well-formed entry filed under a wrong key is not
+    something fail-soft can catch, which is why the key rules are strict.
+
+  A cold-versus-warm equivalence test asserts the two runs produce identical metadata **and** that
+  the warm run actually hit — verified against a mutant where the cache always misses, which leaves
+  a bare equality assertion perfectly green.
+
+- **`vat cache clear`** removes VAT's on-disk caches — the parse cache and the external-URL
+  validation caches, which share `<tmpdir>/.vat-cache/`. Reports what it removed; exits 0 when
+  there is nothing there; works even when caching is disabled, since a no-op in that case would be
+  a trap. This is the user-invocable form of "recovery is rescan", which previously had none.
+
+- **`--no-cache` on the root command** disables VAT's on-disk caches for the run by setting
+  `VAT_CACHE=0`. An environment variable rather than a plumbed flag because the commands that need
+  it most spawn child processes, and only the environment crosses that boundary. The existing
+  `vat resources validate --no-cache` keeps working and now covers both caches.
+
 ### Changed
 
 - **`ResourceRegistry.addResource` now reads each file once and stats it once, instead of twice
@@ -314,6 +354,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **VAT's on-disk cache directory is now created owner-only (`0700`) on POSIX.**
+  `<tmpdir>/.vat-cache/` is a world-readable location shared by every user on the host, and it holds
+  the set of external URLs a project links to — including private hostnames. The per-OS-user cache
+  beside it (`auth-<user>/`) was scoped **by directory name alone**, with no permission backing that
+  separation at all. Both `mkdir` sites now pass `mode: 0o700`. On Windows the mode bits reduce to
+  the read-only flag, so this is a real mitigation on Linux and macOS and a no-op there; it should
+  not be cited as a cross-platform guarantee.
+
 - **15 advisories cleared from the dependency tree** by advancing the patched pins in the root
   `overrides` block: `undici` 7.28.0 → 7.29.0 (5 advisories), `ip-address` 10.1.1 → 10.3.1 (3),
   `hono` 4.12.27 → 4.12.34, `fast-uri` 3.1.4 → 3.1.5, `js-yaml` 4.3.0 → 4.3.1, and `postcss`
@@ -329,6 +377,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `minimatch` and `picomatch` entries.
 
 ### Fixed
+
+- **Three CLI options were silently doing nothing.** Commander represents `--no-x` as the *positive*
+  key `x` (true by default, false when the flag is passed) and camelCases every long name — it never
+  produces `noX`, and never a kebab-case key. Three option reads asked for keys Commander never
+  emits, so the flags parsed, appeared in `--help`, and had no effect:
+
+  - **`vat resources validate --no-cache`** read `options.noCache`. The external-URL cache was never
+    disabled. It now is.
+  - **`vat skills package --no-rewrite-links`** read `options['no-rewrite-links']`, so relative links
+    in copied files were **always** rewritten. ⚠️ Behaviour change: a user who passed this flag as
+    documented was getting rewritten links, and their packaged output will now differ.
+  - **`vat skills package -b, --base-path <path>`** read `options['base-path']`, so the base always
+    fell back to `dirname(SKILL.md)`. ⚠️ Behaviour change with the widest reach of the three: the
+    flag now feeds link resolution, the relative paths listed in a dry run, **and** the `rootDir`
+    passed to `validateSkill` — so a package run that validated clean against the implicit base may
+    now surface findings against an explicit one. That is what the flag has always documented.
+
+  The root cause was the option *interfaces*, which declared `'no-rewrite-links'?: boolean` and
+  `'base-path'?: string` — so TypeScript validated the broken reads against a type that itself
+  encoded the wrong shape. The interfaces now declare the keys Commander really emits, which makes
+  the compiler catch this class instead of endorsing it. All 88 declared options were audited; no
+  other instances were found.
 
 - **`crawlDirectory({ followSymlinks: true })` no longer enumerates a file once per symlink level.**
   The recursive walk kept no record of which directories it had entered, so a directory symlink

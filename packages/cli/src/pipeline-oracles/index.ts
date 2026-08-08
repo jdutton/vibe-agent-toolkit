@@ -9,11 +9,7 @@
 
 export { captureEnumerationSnapshot, type CaptureOptions } from './enumeration-snapshot.js';
 export { LANES, laneById, type LaneDefinition } from './lanes.js';
-export {
-  captureParseFactSnapshot,
-  diffParseFactRows,
-  extractFrontmatterSource,
-} from './parse-fact-snapshot.js';
+export { captureParseFactSnapshot, diffParseFactRows } from './parse-fact-snapshot.js';
 export { collectPathFacts, relativize, type PathFactContext } from './path-facts.js';
 export {
   renderEnumerationSnapshot,

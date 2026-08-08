@@ -37,6 +37,35 @@ export interface ParseResult {
   headings: HeadingNode[];
   frontmatter?: Record<string, unknown>;
   frontmatterError?: string;
+  /**
+   * The frontmatter block's YAML **source**, delimiters excluded, exactly as
+   * the mdast `yaml` node carried it.
+   *
+   * Absent (key omitted) when the document has no frontmatter block at all;
+   * present-and-empty (`''`) for a block whose body is empty — so "empty block"
+   * stays distinguishable from "no block", which is a distinction neither
+   * {@link frontmatter} nor {@link frontmatterError} can make (an empty block
+   * leaves both absent, exactly as no block does).
+   *
+   * ## Why the source is carried next to the parsed object
+   *
+   * {@link frontmatter} cannot survive a JSON round trip, so nothing that
+   * stores a `ParseResult` as JSON — a disk-backed parse cache, chiefly — can
+   * reconstruct it from that field. Measured: `yaml` decodes `.inf` to
+   * `Infinity`, `.nan` to `NaN` and `!!binary` to a `Buffer`; `JSON.stringify`
+   * then maps the first two to `null` and mangles the third into an envelope
+   * object, and a cyclic YAML anchor makes it throw outright — meaning such a
+   * document could not be stored at all.
+   *
+   * Storing the source and re-running {@link parseFrontmatterSource} on a hit
+   * is lossless **by construction**, because it is literally the same
+   * computation the cold path runs. That is the only reason this field exists;
+   * it is not a convenience copy.
+   *
+   * HTML documents leave it undefined, exactly as they leave
+   * {@link frontmatter} undefined.
+   */
+  frontmatterSource?: string;
   content: string;
   sizeBytes: number;
   estimatedTokenCount: number;
@@ -136,7 +165,8 @@ export function parseMarkdownContent(content: string, sizeBytes: number): ParseR
   const tree = processor.parse(content) as Root;
 
   // Links, headings, raw-HTML anchors and frontmatter, from ONE tree walk
-  const { links, headings, anchors, frontmatter, frontmatterError } = collectAstFacts(tree);
+  const { links, headings, anchors, frontmatter, frontmatterError, frontmatterSource } =
+    collectAstFacts(tree);
 
   // Detect dangling reference-style links (full/collapsed forms with no
   // matching definition) — see findUnresolvedReferences for why this is a
@@ -152,6 +182,7 @@ export function parseMarkdownContent(content: string, sizeBytes: number): ParseR
     ...(anchors.length > 0 && { anchors }),
     ...(frontmatter !== undefined && { frontmatter }),
     ...(frontmatterError !== undefined && { frontmatterError }),
+    ...(frontmatterSource !== undefined && { frontmatterSource }),
     content,
     sizeBytes,
     estimatedTokenCount,
@@ -171,6 +202,7 @@ interface MarkdownAstFacts {
   anchors: string[];
   frontmatter?: Record<string, unknown>;
   frontmatterError?: string;
+  frontmatterSource?: string;
 }
 
 /**
@@ -215,6 +247,7 @@ interface AstWalkState {
   anchors: Set<string>;
   frontmatter?: Record<string, unknown>;
   frontmatterError?: string;
+  frontmatterSource?: string;
 }
 
 /**
@@ -273,6 +306,7 @@ function collectAstFacts(tree: Root): MarkdownAstFacts {
     anchors: [...state.anchors],
     ...(state.frontmatter !== undefined && { frontmatter: state.frontmatter }),
     ...(state.frontmatterError !== undefined && { frontmatterError: state.frontmatterError }),
+    ...(state.frontmatterSource !== undefined && { frontmatterSource: state.frontmatterSource }),
   };
 }
 
@@ -320,6 +354,15 @@ function collectNode(
  * (a `definition`'s text is its identifier and a `linkReference`'s href comes
  * from the definitions map, not the node), while position and classification
  * are shared.
+ *
+ * `line` is spread conditionally so the key is ABSENT rather than
+ * undefined-valued when a node carries no position. See
+ * {@link cleanupEmptyChildren} for why that distinction is load-bearing. This
+ * particular guard is **defensive and currently unreachable**: remark sets
+ * `position` on every node it produces, and a measured sweep of 265 tracked
+ * markdown documents found zero position-less nodes, so no test can turn it
+ * red. It is here to make "no own key of a `ParseResult` is ever valued
+ * `undefined`" true by construction rather than true by luck.
  */
 function toResourceLink(
   node: Definition | Link | LinkReference,
@@ -331,7 +374,7 @@ function toResourceLink(
     text,
     href,
     type: classifyLink(href),
-    line: node.position?.start.line,
+    ...(node.position !== undefined && { line: node.position.start.line }),
     nodeType,
   };
 }
@@ -534,6 +577,11 @@ function collectHtmlAnchors(anchors: Set<string>, node: Html): void {
  *
  * `slugger` is stateful and MUST be fed headings in document order — that is
  * how it reproduces GitHub's `-1`/`-2` suffixing for repeated heading text.
+ *
+ * `line` is spread conditionally for the same reason, and with the same
+ * caveat, as in {@link toResourceLink}: absent beats undefined-valued, and the
+ * guard is defensive — remark always sets `position`, so it is unreachable in
+ * practice and no test can falsify it.
  */
 function toFlatHeading(slugger: GithubSlugger, node: Heading): HeadingNode {
   const text = extractHeadingText(node);
@@ -541,7 +589,7 @@ function toFlatHeading(slugger: GithubSlugger, node: Heading): HeadingNode {
     level: node.depth,
     text,
     slug: slugger.slug(text),
-    line: node.position?.start.line,
+    ...(node.position !== undefined && { line: node.position.start.line }),
   };
 }
 
@@ -594,7 +642,8 @@ function extractHeadingText(node: Heading): string {
  * ## Sub2
  * ```
  *
- * Returns:
+ * Returns (note that a LEAF carries no `children` key at all — not an empty
+ * array, and not an `undefined` value; see {@link cleanupEmptyChildren}):
  * ```
  * [
  *   {
@@ -603,9 +652,9 @@ function extractHeadingText(node: Heading): string {
  *     slug: 'main',
  *     children: [
  *       { level: 2, text: 'Sub', slug: 'sub', children: [
- *         { level: 3, text: 'Deep', slug: 'deep', children: [] }
+ *         { level: 3, text: 'Deep', slug: 'deep' }
  *       ]},
- *       { level: 2, text: 'Sub2', slug: 'sub2', children: [] }
+ *       { level: 2, text: 'Sub2', slug: 'sub2' }
  *     ]
  *   }
  * ]
@@ -647,21 +696,37 @@ function buildHeadingTree(flatHeadings: HeadingNode[]): HeadingNode[] {
     stack.push(headingWithChildren);
   }
 
-  // Clean up empty children arrays (convert to undefined)
+  // Leaves are built with `children: []`; strip the key back off them.
   cleanupEmptyChildren(roots);
 
   return roots;
 }
 
 /**
- * Remove empty children arrays from heading tree (convert to undefined).
+ * Strip the `children` key off leaf headings — **deleting** it, never assigning
+ * `undefined`.
  *
- * @param headings - Array of headings to clean up
+ * ## Why `delete` and not `= undefined`
+ *
+ * The two are indistinguishable to every consumer (all of them use truthiness
+ * or optional chaining, and the Zod schema uses `.optional()`), but they are
+ * NOT indistinguishable to serialization: `JSON.stringify` drops an
+ * undefined-valued key entirely, so a heading that went through a JSON-backed
+ * parse cache comes back with the key ABSENT while a freshly parsed one has it
+ * PRESENT-but-`undefined`. `assert.deepStrictEqual` and vitest's
+ * `toStrictEqual` treat those as different values, so a cold-vs-warm
+ * equivalence gate would go red on essentially every document in a corpus over
+ * a difference nothing observes.
+ *
+ * Deleting makes the fresh result already equal to its own JSON round trip,
+ * which is the property such a cache needs.
+ *
+ * @param headings - Array of headings to clean up, mutated in place
  */
 function cleanupEmptyChildren(headings: HeadingNode[]): void {
   for (const heading of headings) {
     if (heading.children?.length === 0) {
-      heading.children = undefined;
+      delete heading.children;
     } else if (heading.children && heading.children.length > 0) {
       cleanupEmptyChildren(heading.children);
     }
@@ -669,32 +734,84 @@ function cleanupEmptyChildren(headings: HeadingNode[]): void {
 }
 
 /**
- * Parse one frontmatter block into the walk state.
+ * What a frontmatter block's YAML source means — the single implementation of
+ * that decision.
  *
- * `remark-frontmatter` emits a `yaml` node per frontmatter block. A
- * well-formed document has at most one, but nothing enforces that, so
- * last-one-wins is preserved for both the parsed object and the error
- * message — and they are independent: a block that fails to parse leaves any
- * previously parsed object in place, and vice versa.
+ * ## Why this is exported
  *
- * An empty block contributes nothing at all: no frontmatter, no error.
+ * A parse cache stores {@link ParseResult.frontmatterSource} (the source is
+ * JSON-safe; the parsed object is not) and must rebuild `frontmatter` /
+ * `frontmatterError` on a hit. If it re-implemented the decision below it would
+ * become a second implementation free to drift from this one — the same class
+ * of defect as any parallel resolver. It calls this instead, so cold and warm
+ * run *the same code*.
+ *
+ * The two properties that second caller depends on, and which must not be
+ * broken: it is **pure** (no state, no I/O, no AST) and **total** (never
+ * throws, for any string — a YAML failure comes back as `frontmatterError`).
+ *
+ * ## Acceptance rules (behaviour-preserving — do not "improve" these)
+ *
+ * - Empty or whitespace-only source → `{}`. No frontmatter, no error.
+ * - Parses to a non-null, non-array object → `{ frontmatter }`.
+ * - Parses to anything else (a bare scalar, `null`, a sequence) → `{}`. The
+ *   value is silently ignored, exactly as it always has been.
+ * - Throws → `{ frontmatterError }`.
+ *
+ * Keys are spread conditionally, so the result never carries an
+ * undefined-valued key (see {@link cleanupEmptyChildren} for why that matters).
+ *
+ * @param source - A frontmatter block's YAML body, delimiters excluded
+ * @returns The frontmatter object, the error message, or neither
+ */
+export function parseFrontmatterSource(source: string): {
+  frontmatter?: Record<string, unknown>;
+  frontmatterError?: string;
+} {
+  if (source.trim() === '') {
+    // Empty frontmatter block
+    return {};
+  }
+
+  try {
+    const parsed: unknown = yaml.parse(source);
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      return { frontmatter: parsed as Record<string, unknown> };
+    }
+    return {};
+  } catch (error) {
+    // Capture YAML parsing error for validation reporting
+    return { frontmatterError: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * Record one frontmatter block on the walk state.
+ *
+ * `remark-frontmatter` emits a `yaml` node per frontmatter block, and it
+ * recognises frontmatter **only at the start of the document** — a later `---`
+ * fence is a thematic break, not a second block — so at most one such node is
+ * reachable here (verified by probe). Nothing in this function relies on that:
+ * each of the three fields independently keeps the last node that contributed
+ * to it, so a block that fails to parse leaves a previously parsed object in
+ * place, and vice versa. `frontmatterSource` follows the same rule and is set
+ * for **every** node, including an empty one — the source is what was there,
+ * regardless of what YAML made of it.
+ *
+ * The parse decision itself is {@link parseFrontmatterSource}'s, not this
+ * function's, so a cache rebuilding a hit reaches the identical logic.
  *
  * @param state - Walk state to record the result on
  * @param node - A `yaml` frontmatter node encountered during the walk
  */
 function collectFrontmatter(state: AstWalkState, node: Yaml): void {
-  if (node.value.trim() === '') {
-    // Empty frontmatter block
-    return;
-  }
+  state.frontmatterSource = node.value;
 
-  try {
-    const parsed = yaml.parse(node.value);
-    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-      state.frontmatter = parsed as Record<string, unknown>;
-    }
-  } catch (error) {
-    // Capture YAML parsing error for validation reporting
-    state.frontmatterError = error instanceof Error ? error.message : String(error);
+  const { frontmatter, frontmatterError } = parseFrontmatterSource(node.value);
+  if (frontmatter !== undefined) {
+    state.frontmatter = frontmatter;
+  }
+  if (frontmatterError !== undefined) {
+    state.frontmatterError = frontmatterError;
   }
 }

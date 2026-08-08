@@ -289,6 +289,22 @@ vat rag search "agent deployment" --limit 5
 
 ## Environment Variables
 
+### VAT_CACHE
+Set to `0` to disable VAT's on-disk caches for the run — the parse cache and the external-URL
+validation caches, which share `<tmpdir>/.vat-cache/`:
+
+```bash
+VAT_CACHE=0 vat validate
+```
+
+The root `--no-cache` flag is the same switch: it sets this variable. The variable is what makes it
+work, because `vat validate`, `vat verify` and `vat build` do their parsing in spawned child
+processes, and only the environment crosses that boundary — a flag parsed in the parent would never
+reach them.
+
+Caching is a pure optimisation: a run with it off produces identical results, only slower. Use
+`vat cache clear` to discard what is already stored.
+
 ### VAT_DEBUG
 Enable detailed wrapper diagnostics showing context detection and resolution:
 

@@ -16,7 +16,7 @@ import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, FsLookupCache, 
 
 import { calculateChecksumFromContent } from './checksum.js';
 import { getCollectionsForFile } from './collection-matcher.js';
-import { readContentWithKey } from './content-key.js';
+import { type KeyedContent, readContentWithKey } from './content-key.js';
 import type { DeferredArtifacts } from './deferred-artifacts.js';
 import { ExternalLinkValidator } from './external-link-validator.js';
 import {
@@ -30,8 +30,9 @@ import {
 } from './frontmatter-validator.js';
 import { parseHtmlContent } from './html-link-parser.js';
 import { buildLinkAuthEngineConfig } from './link-auth-config-build.js';
-import { parseMarkdownContent } from './link-parser.js';
+import { type ParseResult, parseMarkdownContent } from './link-parser.js';
 import { fragmentIndexEntry, validateLink, type FragmentIndex, type ValidateLinkOptions } from './link-validator.js';
+import { ParseCache } from './parse-cache.js';
 import type { ResourceCollectionInterface } from './resource-collection-interface.js';
 import type { SHA256 } from './schemas/checksum.js';
 import type { ProjectConfig, ValidationMode } from './schemas/project-config.js';
@@ -164,6 +165,30 @@ export interface ResourceRegistryOptions {
   config?: ProjectConfig;
   /** Git tracker for efficient git-ignore checking (optional, improves performance) */
   gitTracker?: GitTracker;
+  /**
+   * Parse cache backing {@link ResourceRegistry.addResource} (optional).
+   *
+   * Omitted, a default {@link ParseCache} is created on first use — lazily, so
+   * the `VAT_CACHE` read happens when a document is actually parsed rather than
+   * when the registry is constructed. Supply one to point the cache at a
+   * private directory, or to disable it (`new ParseCache({ enabled: false })`).
+   */
+  parseCache?: ParseCache;
+}
+
+/**
+ * How many parses a registry served from the cache versus performed itself.
+ *
+ * Exposed because the cache is otherwise unobservable: it is content-addressed
+ * and fail-soft, so a cache that never hits produces exactly the same resources
+ * as one that always does. Any test asserting cold/warm equivalence is asserting
+ * nothing at all unless it can also show the warm run hit.
+ */
+export interface ParseCacheStats {
+  /** Parses served from a cache entry — `parseMarkdownContent` never ran. */
+  hits: number;
+  /** Parses this registry performed and then filed. */
+  misses: number;
 }
 
 /**
@@ -344,6 +369,21 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    */
   private fsCache: FsLookupCache = new FsLookupCache();
 
+  /**
+   * Disk-backed parse cache, created on first parse unless injected.
+   *
+   * Lazy rather than constructed in the constructor: `ParseCache` reads
+   * `VAT_CACHE` once, per construction, so building it eagerly would bind the
+   * decision to registry-construction time — an ordering a caller has no reason
+   * to expect and a test cannot control without mutating the real `process.env`
+   * before every `new ResourceRegistry()`.
+   */
+  private parseCacheInstance?: ParseCache;
+
+  /** Counters behind {@link getParseCacheStats}. Cumulative for the registry's life. */
+  private parseCacheHits = 0;
+  private parseCacheMisses = 0;
+
   private readonly resourcesByPath: Map<string, ResourceMetadata> = new Map();
   private readonly resourcesById: Map<string, ResourceMetadata> = new Map();
   private readonly resourcesByName: Map<string, ResourceMetadata[]> = new Map();
@@ -427,6 +467,18 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     if (options?.gitTracker !== undefined) {
       this.gitTracker = options.gitTracker;
     }
+    if (options?.parseCache !== undefined) {
+      this.parseCacheInstance = options.parseCache;
+    }
+  }
+
+  /**
+   * Parse-cache hit/miss counts for this registry.
+   *
+   * @returns A snapshot of the counters, cumulative since construction
+   */
+  getParseCacheStats(): ParseCacheStats {
+    return { hits: this.parseCacheHits, misses: this.parseCacheMisses };
   }
 
   /**
@@ -533,7 +585,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    *
    * Parses the file, generates a unique ID, and stores the resource. Costs
    * exactly one `readFile` and one `stat` per file — the parse, the checksum and
-   * the size all come off that single pair.
+   * the size all come off that single pair. The parse itself may be served from
+   * the disk-backed cache ({@link parseCached}); the read and the stat happen
+   * either way, because the key and every non-parse field come from them.
    *
    * @param filePath - Path to the markdown file (will be normalized to absolute)
    * @returns The parsed resource metadata
@@ -557,18 +611,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // route and the key's parse-route component drift apart.
     const keyed = await readContentWithKey(absolutePath);
 
-    // Parse from the bytes already in hand — HTML or markdown per `parserKind`.
-    //
-    // The `sizeBytes` argument is pass-through only: this call site never reads
-    // `parseResult.sizeBytes` back, because the number it publishes is
-    // `stats.size` below (see the `sizeBytes:` field). `keyed.byteLength` is
-    // supplied here purely so `ParseResult` carries a raw-byte count rather
-    // than a bogus one — never a length derived from `keyed.content`, since
-    // decoding is lossy on malformed UTF-8 and a re-encoded count diverges
-    // from what is on disk (see link-parser.ts).
-    const parseResult = keyed.parserKind === 'html'
-      ? parseHtmlContent(keyed.content, keyed.byteLength)
-      : parseMarkdownContent(keyed.content, keyed.byteLength);
+    // Parse from the bytes already in hand — or from a cache entry filed under
+    // the key those bytes just produced. See `parseCached` for the interception.
+    const parseResult = await this.parseCached(keyed);
 
     // Generate ID using priority chain: frontmatter field → relative path → filename stem
     const id = this.generateId(absolutePath, parseResult.frontmatter);
@@ -626,6 +671,52 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     this.indexResource(resource);
 
     return resource;
+  }
+
+  /**
+   * Produce the parse facts for an already-read document, from the cache when
+   * one is filed under its content key and from the parser otherwise.
+   *
+   * This is THE interception point: it sits between the single read that keyed
+   * the bytes and the parser that would otherwise consume them, so on a hit the
+   * parser does not run at all. Nothing downstream of it changes — the caller
+   * still publishes `stat().size` as `sizeBytes` and still checksums the decoded
+   * string, because `rehydrate` re-attaches `content`/`sizeBytes` from this same
+   * fresh read rather than from the entry (see parse-cache.ts).
+   *
+   * The `set` is **awaited**, not fired and forgotten. `vat validate`, `vat
+   * verify` and `vat build` each `spawnSync` the vat binary once per phase, so
+   * an entry that has not reached disk by process exit buys nothing; the write
+   * is measured at ~30 ms for 265 documents and `set` never throws.
+   *
+   * @param keyed - Content, key and byte length from THE read in `addResource`
+   * @returns Parse facts equal to what the parser would have produced
+   */
+  private async parseCached(keyed: KeyedContent): Promise<ParseResult> {
+    this.parseCacheInstance ??= new ParseCache();
+
+    const hit = await this.parseCacheInstance.get(keyed);
+    if (hit !== null) {
+      this.parseCacheHits += 1;
+      return hit;
+    }
+    this.parseCacheMisses += 1;
+
+    // HTML or markdown per `parserKind`.
+    //
+    // The `sizeBytes` argument is pass-through only: `addResource` never reads
+    // `parseResult.sizeBytes` back, because the number it publishes is
+    // `stats.size` (see the `sizeBytes:` field). `keyed.byteLength` is supplied
+    // here purely so `ParseResult` carries a raw-byte count rather than a bogus
+    // one — never a length derived from `keyed.content`, since decoding is lossy
+    // on malformed UTF-8 and a re-encoded count diverges from what is on disk
+    // (see link-parser.ts).
+    const result = keyed.parserKind === 'html'
+      ? parseHtmlContent(keyed.content, keyed.byteLength)
+      : parseMarkdownContent(keyed.content, keyed.byteLength);
+
+    await this.parseCacheInstance.set(keyed, result);
+    return result;
   }
 
   /**

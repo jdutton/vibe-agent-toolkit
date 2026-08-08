@@ -41,6 +41,7 @@ export {
   type UnreadableResource,
   type ResourceRegistryOptions,
   type RegistryStats,
+  type ParseCacheStats,
   type CollectionStats,
   type CollectionStat,
 } from './resource-registry.js';
@@ -106,6 +107,20 @@ export {
   type KeyedContent,
   type ParserKind,
 } from './content-key.js';
+
+// Parse cache: the disk-backed store `ResourceRegistry` files parse facts in,
+// and where it puts them. Exported for two callers only — an operator surface
+// that reclaims the space (`vat cache clear` needs `clear()` and a path to name
+// in its output), and a test or embedder that wants the registry pointed at a
+// private directory via `ResourceRegistryOptions.parseCache`.
+//
+// `dehydrate` / `rehydrate` / `ParseFacts` / `PARSE_CACHE_SCHEMA_VERSION` are
+// deliberately NOT re-exported here: they are the on-disk serialization, the
+// same category as the link-parser internals this file already withholds (see
+// the note further down). Nothing outside the cache should be able to mint or
+// read an entry payload — a well-formed entry filed under the wrong key is the
+// one failure mode fail-soft IO handling cannot catch.
+export { ParseCache, parseCacheDirectory, type ParseCacheOptions } from './parse-cache.js';
 
 export { parseHtml } from './html-link-parser.js';
 // HtmlParseError is Zod-sourced (single source of truth) — see schemas/resource-metadata.ts.

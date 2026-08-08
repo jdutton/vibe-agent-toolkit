@@ -193,8 +193,13 @@ export interface FrontmatterFieldFact {
    * Shape alone is not enough, and this is the gap it left: every SKILL.md in a
    * corpus has `{name: string, description: string}`, so a cache serving one
    * skill's parse for another moved nothing in this row. The other frontmatter
-   * column, `frontmatterSource`, cannot help — it is re-derived from the freshly
-   * read bytes, so it is constant for a given content key by construction.
+   * column, {@link ParseFactRow.frontmatterSource}, could not help while it was
+   * re-derived from the freshly read bytes — it was constant for a given content
+   * key by construction. It is now read off the parse result, so it does
+   * discriminate; this digest stays because the two answer different questions.
+   * `frontmatterSource` is the YAML *text* the parser carried, while this is the
+   * *decoded value* — and the whole reason both exist is that decoding is where
+   * `.inf`, `!!binary` and cyclic anchors are lost.
    *
    * A digest rather than the value because frontmatter values can be arbitrarily
    * large; cycle-safe and non-JSON because `.inf`/`.nan`/`!!binary` and cyclic
@@ -216,14 +221,25 @@ export interface ParseFactRow {
   links: LinkFact[];
   headings: HeadingFact[];
   /**
-   * The frontmatter block **as written**, delimiters excluded, or `null` when
-   * the document has none.
+   * The frontmatter block **as written**, delimiters excluded, as
+   * `ParseResult.frontmatterSource` reported it — `null` when the parse result
+   * omits the field, which for markdown means the document has no frontmatter
+   * block at all, and for HTML means always.
    *
    * Deliberately the source and not the parsed object: a YAML→JSON round-trip
    * is lossy in ways a validator notices (`.inf`/`.nan` become `null`,
    * `!!binary` becomes a Buffer envelope, cyclic anchors make `JSON.stringify`
    * throw). A cold run would hand Ajv `Infinity` and a warm run `null` — same
    * corpus, same config, different reported issues.
+   *
+   * ⚠️ This used to be **re-derived** here, by a private regex over the freshly
+   * read bytes. That made it constant for a given content key by construction
+   * and therefore structurally blind to a cache — and it was a second
+   * implementation of frontmatter delimiting, which disagreed with the parser's
+   * on delimiters-only blocks (`---\n---`): the regex said "no frontmatter",
+   * the parser says "an empty block". Reading the parser's field ends both
+   * problems: the column now discriminates a cache that lost or mangled the
+   * source, and there is one delimiter implementation instead of two.
    */
   frontmatterSource: string | null;
   /**

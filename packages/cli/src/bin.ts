@@ -12,6 +12,7 @@ import { Command } from 'commander';
 import { createAgentCommand, showAgentVerboseHelp } from './commands/agent/index.js';
 import { createAuditCommand } from './commands/audit.js';
 import { createBuildTopLevelCommand } from './commands/build.js';
+import { createCacheCommand, registerCacheControl } from './commands/cache/index.js';
 import { createClaudeCommand } from './commands/claude/index.js';
 import { createCorpusCommand } from './commands/corpus/index.js';
 import { doctorCommand } from './commands/doctor.js';
@@ -82,12 +83,19 @@ Example:
 
 Environment:
   VAT_DEBUG=1                          # Show context detection details
+  VAT_CACHE=0                          # Disable disk caches (same as --no-cache)
 
 For command details: vat resources --help
 For comprehensive help: vat --help --verbose
 For agent guidance: docs/cli/CLAUDE.md
 `
   );
+
+// Root `--no-cache`, plus the preAction hook that exports it as VAT_CACHE=0 so
+// it survives into the child processes that actually parse. See
+// commands/cache/index.ts for why an env var and not a plumbed flag, and for
+// what this does about the identically-named flag on `vat resources validate`.
+registerCacheControl(program);
 
 // Change working directory before any subcommand runs (if --cwd flag provided)
 program.hook('preAction', () => {
@@ -163,6 +171,7 @@ program.addCommand(createMCPCommand());
 program.addCommand(createSkillsCommand());
 program.addCommand(createSkillCommand());
 program.addCommand(createClaudeCommand());
+program.addCommand(createCacheCommand());
 
 // Internal dev instrument, listed last: not hidden (an agent driving it from a
 // terminal cannot discover a hidden verb), but not a product surface either.

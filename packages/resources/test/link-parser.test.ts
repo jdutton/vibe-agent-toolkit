@@ -18,8 +18,9 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import * as yaml from 'yaml';
 
-import { parseMarkdown, parseMarkdownContent } from '../src/link-parser.js';
+import { parseFrontmatterSource, parseMarkdown, parseMarkdownContent } from '../src/link-parser.js';
 
 import { assertAllLinksClassifiedAs, expectHeadingStructure, findPackageRoot, writeAndParse } from './test-helpers.js';
 
@@ -1223,6 +1224,219 @@ description: "use [a][nope-fm]"
       expect(fromFile.sizeBytes).not.toBe(Buffer.byteLength(content));
 
       expect(parseMarkdownContent(content, stats.size).sizeBytes).toBe(8);
+    });
+  });
+
+  // ── Own-property discipline ────────────────────────────────────────────────
+  //
+  // A disk-backed parse cache reconstructs a `ParseResult` from JSON.
+  // `JSON.stringify` DROPS undefined-valued keys, so any field this parser
+  // assigns `undefined` to comes back ABSENT — and `toStrictEqual` /
+  // `assert.deepStrictEqual` treat present-but-undefined and absent as
+  // different. Every such key is therefore a guaranteed cold-vs-warm
+  // divergence on a difference nothing observes. These tests pin the rule:
+  // the parser never produces an own key whose value is `undefined`.
+  describe('own-property discipline (no undefined-valued keys)', () => {
+    it('omits `children` entirely on a leaf heading rather than assigning undefined', () => {
+      const result = parseMarkdownContent('# Main\n\n## Leaf\n', 17);
+
+      const leaf = result.headings[0]!.children![0]!;
+      expect(leaf.text).toBe('Leaf');
+      expect('children' in leaf).toBe(false);
+      expect(Object.keys(leaf)).not.toContain('children');
+    });
+
+    it('omits `children` on every leaf of a deep tree, not just the first', () => {
+      const result = parseMarkdownContent('# A\n## B\n### C\n## D\n', 20);
+
+      const leaves: string[] = [];
+      const walk = (nodes: { text: string; children?: unknown }[]): void => {
+        for (const node of nodes) {
+          if ('children' in node) {
+            walk(node.children as { text: string; children?: unknown }[]);
+          } else {
+            leaves.push(node.text);
+          }
+        }
+      };
+      walk(result.headings);
+
+      expect(leaves).toEqual(['C', 'D']);
+    });
+
+    // The property the cache actually needs, stated directly: a JSON round trip
+    // of the whole result must be strictly equal to the original. This fails on
+    // ANY undefined-valued own key anywhere in the tree, which is why it is the
+    // guard that generalises past `children`.
+    it('survives a JSON round trip under toStrictEqual', () => {
+      const content = [
+        '---',
+        'title: T',
+        '---',
+        '',
+        '# Main',
+        '',
+        '## Leaf',
+        '',
+        `A [link](${EXAMPLE_URL}) and a [local](./x.md).`,
+        '',
+      ].join('\n');
+
+      const result = parseMarkdownContent(content, 128);
+
+      // JSON is the point: `structuredClone` PRESERVES undefined-valued keys, so
+      // it cannot observe the difference this test exists to pin, and a
+      // JSON-backed cache is the real consumer.
+      // eslint-disable-next-line unicorn/prefer-structured-clone -- see above
+      expect(JSON.parse(JSON.stringify(result)) as unknown).toStrictEqual(result);
+    });
+  });
+
+  // ── frontmatterSource ──────────────────────────────────────────────────────
+  //
+  // The YAML *source*, carried alongside the parsed object because the parsed
+  // object cannot survive JSON (`.inf`/`.nan` → null, `!!binary` → mangled,
+  // cyclic anchors → throw). Re-running `yaml.parse` on the source is lossless
+  // by construction.
+  // One malformed YAML body, reused wherever a parse failure is needed.
+  const INVALID_YAML = 'a: [unclosed';
+
+  describe('frontmatterSource', () => {
+    it('carries the block body verbatim, delimiters excluded', () => {
+      const result = parseMarkdownContent('---\ntitle: T\n---\n\n# Doc\n', 24);
+
+      expect(result.frontmatterSource).toBe('title: T');
+    });
+
+    it('preserves values a YAML→JSON round trip would destroy', () => {
+      const source = 'a: .inf\nb: .nan\nc: !!binary aGk=';
+      const result = parseMarkdownContent(`---\n${source}\n---\n\ntext\n`, 64);
+
+      expect(result.frontmatterSource).toBe(source);
+    });
+
+    // The whole point: the cache stores the source and re-derives the object.
+    it('re-parses to the same frontmatter the cold path produced', () => {
+      const result = parseMarkdownContent('---\ntitle: T\ntags: [a, b]\n---\n\n# Doc\n', 40);
+
+      expect(yaml.parse(result.frontmatterSource!) as unknown).toEqual(result.frontmatter);
+    });
+
+    it('omits the key entirely when the document has no frontmatter', () => {
+      const result = parseMarkdownContent('# Just a heading\n', 17);
+
+      expect('frontmatterSource' in result).toBe(false);
+      expect(Object.keys(result)).not.toContain('frontmatterSource');
+    });
+
+    it('omits the key for a `---` fence that is not at the start of the document', () => {
+      const result = parseMarkdownContent('# Doc\n\n---\ntitle: T\n---\n', 24);
+
+      expect('frontmatterSource' in result).toBe(false);
+    });
+
+    // A delimiters-only block IS a block. Recording it as `''` rather than
+    // omitting the key is what keeps "empty block" distinguishable from "no
+    // block at all" — `frontmatter` and `frontmatterError` stay absent for both,
+    // so the source is the only field that can tell them apart.
+    it('is present-and-empty for a delimiters-only block', () => {
+      const result = parseMarkdownContent('---\n---\n\n# Body only\n', 21);
+
+      expect('frontmatterSource' in result).toBe(true);
+      expect(result.frontmatterSource).toBe('');
+      expect(result.frontmatter).toBeUndefined();
+      expect(result.frontmatterError).toBeUndefined();
+    });
+
+    it('is present for a whitespace-only block, carrying the whitespace', () => {
+      const result = parseMarkdownContent('---\n   \n---\n\n# Doc\n', 19);
+
+      expect(result.frontmatterSource).toBe('   ');
+      expect(result.frontmatter).toBeUndefined();
+    });
+
+    // The source is what was there, regardless of whether it parsed.
+    it('is present alongside frontmatterError when the YAML is invalid', () => {
+      const result = parseMarkdownContent(`---\n${INVALID_YAML}\n---\n\n# Doc\n`, 28);
+
+      expect(result.frontmatterSource).toBe(INVALID_YAML);
+      expect(result.frontmatterError).toBeDefined();
+      expect(result.frontmatter).toBeUndefined();
+    });
+
+    it('normalises CRLF delimiters the same way the mdast node does', () => {
+      const result = parseMarkdownContent('---\r\ntitle: T\r\n---\r\n\r\n# Doc\r\n', 30);
+
+      expect(result.frontmatterSource).toBe('title: T');
+    });
+
+    // Only ONE `yaml` node is reachable under this remark configuration:
+    // `remark-frontmatter` recognises frontmatter at the start of the document
+    // only, so a later `---` fence is a thematic break, not a second block.
+    // `frontmatterSource` and `frontmatter` therefore describe the same node.
+    it('describes the leading block when a later `---` fence follows', () => {
+      const result = parseMarkdownContent('---\na: 1\n---\n\n---\nb: 2\n---\n\ntext\n', 40);
+
+      expect(result.frontmatterSource).toBe('a: 1');
+      expect(result.frontmatter).toEqual({ a: 1 });
+    });
+  });
+
+  // ── parseFrontmatterSource ─────────────────────────────────────────────────
+  //
+  // The single implementation of "what does this YAML source mean?", exported
+  // so the parse cache re-derives `frontmatter` on a hit by calling the same
+  // function the cold path calls rather than re-implementing the decision.
+  describe('parseFrontmatterSource', () => {
+    it('returns the parsed object for a well-formed mapping', () => {
+      expect(parseFrontmatterSource('title: T\nn: 1')).toEqual({ frontmatter: { title: 'T', n: 1 } });
+    });
+
+    it('returns an empty decision for an empty source', () => {
+      expect(parseFrontmatterSource('')).toEqual({});
+      expect(Object.keys(parseFrontmatterSource(''))).toEqual([]);
+    });
+
+    it('returns an empty decision for a whitespace-only source', () => {
+      expect(Object.keys(parseFrontmatterSource('  \n \t '))).toEqual([]);
+    });
+
+    // Behaviour-preserving: the pre-extraction code accepted only non-null,
+    // non-array objects and silently ignored everything else. Not "improved".
+    it('ignores a bare scalar', () => {
+      expect(Object.keys(parseFrontmatterSource('just a string'))).toEqual([]);
+    });
+
+    it('ignores an explicit null document', () => {
+      expect(Object.keys(parseFrontmatterSource('null'))).toEqual([]);
+    });
+
+    it('ignores a sequence at the document root', () => {
+      expect(Object.keys(parseFrontmatterSource('- a\n- b'))).toEqual([]);
+    });
+
+    it('reports a parse failure as frontmatterError and nothing else', () => {
+      const decision = parseFrontmatterSource(INVALID_YAML);
+
+      expect(Object.keys(decision)).toEqual(['frontmatterError']);
+      expect(decision.frontmatterError).toBeTruthy();
+    });
+
+    // Purity/totality: the cache calls this on a stored string with no AST and
+    // no filesystem in reach, and must never see it throw.
+    it('is total — never throws, for any of the shapes above', () => {
+      for (const source of ['', '   ', 'a: 1', 'null', '- a', INVALID_YAML, '\t bad: 1']) {
+        expect(() => parseFrontmatterSource(source)).not.toThrow();
+      }
+    });
+
+    // No undefined-valued keys, same rule as the parser itself.
+    it('never returns an undefined-valued key', () => {
+      for (const source of ['', 'a: 1', INVALID_YAML, 'just a string']) {
+        for (const [key, value] of Object.entries(parseFrontmatterSource(source))) {
+          expect(value, `key ${key}`).toBeDefined();
+        }
+      }
     });
   });
 });

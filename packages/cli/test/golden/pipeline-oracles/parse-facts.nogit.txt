@@ -87,7 +87,7 @@ paths: parse/frontmatter-delimited-empty.md
 sizeBytes: 21
 estimatedTokenCount: 6
 decodedLength: 21
-frontmatterSource: -
+frontmatterSource: ""
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty
 frontmatterFields: -
 anchors: -
@@ -202,7 +202,7 @@ paths: docs/frontmatter-shapes.md
 sizeBytes: 127
 estimatedTokenCount: 32
 decodedLength: 127
-frontmatterSource: when: 2020-01-02T03:04:05Z\nflag: true\nnothing: null\nlist:\n  - one\n  - two\nnested:\n  inner: value
+frontmatterSource: "when: 2020-01-02T03:04:05Z\nflag: true\nnothing: null\nlist:\n  - one\n  - two\nnested:\n  inner: value"
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty
 frontmatterFields: 5
   flag	boolean	9a216a2f4a20
@@ -282,7 +282,7 @@ paths: broken/exotic-frontmatter.md
 sizeBytes: 97
 estimatedTokenCount: 25
 decodedLength: 97
-frontmatterSource: ceiling: .inf\nundefined_value: .nan\npayload: !!binary |\n  aGVsbG8=
+frontmatterSource: "ceiling: .inf\nundefined_value: .nan\npayload: !!binary |\n  aGVsbG8="
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty
 frontmatterFields: 3
   ceiling	number	aff80bce2db3
@@ -300,7 +300,7 @@ paths: broken/bad-frontmatter.md
 sizeBytes: 35
 estimatedTokenCount: 9
 decodedLength: 35
-frontmatterSource: title: [unclosed
+frontmatterSource: "title: [unclosed"
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty
 frontmatterFields: -
 anchors: -
@@ -347,7 +347,7 @@ paths: dup-hyphen/note.md
 sizeBytes: 50
 estimatedTokenCount: 13
 decodedLength: 50
-frontmatterSource: id: shared-note
+frontmatterSource: "id: shared-note"
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty
 frontmatterFields: 1
   id	string	42fd0c457407
@@ -397,7 +397,7 @@ paths: parse/kitchen-sink.md
 sizeBytes: 471
 estimatedTokenCount: 118
 decodedLength: 471
-frontmatterSource: title: kitchen sink
+frontmatterSource: "title: kitchen sink"
 optionalArrays: anchors=present parseErrors=absent unresolvedReferences=empty
 frontmatterFields: 1
   title	string	d27d91ba9f42
@@ -427,7 +427,7 @@ paths: broken/two-conditions.md
 sizeBytes: 110
 estimatedTokenCount: 28
 decodedLength: 110
-frontmatterSource: title: [unclosed
+frontmatterSource: "title: [unclosed"
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=present
 frontmatterFields: -
 anchors: -
@@ -459,7 +459,7 @@ paths: docs/guide.md
 sizeBytes: 344
 estimatedTokenCount: 86
 decodedLength: 344
-frontmatterSource: title: Guide\ndescription: An ordinary document, so the snapshot has a baseline to be unlike.
+frontmatterSource: "title: Guide\ndescription: An ordinary document, so the snapshot has a baseline to be unlike."
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty
 frontmatterFields: 2
   description	string	7fc0ba780320
@@ -517,7 +517,7 @@ paths: dup/hyphen-note.md
 sizeBytes: 43
 estimatedTokenCount: 11
 decodedLength: 43
-frontmatterSource: id: shared-note
+frontmatterSource: "id: shared-note"
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty
 frontmatterFields: 1
   id	string	42fd0c457407
@@ -548,7 +548,7 @@ paths: docs/empty-frontmatter.md
 sizeBytes: 32
 estimatedTokenCount: 8
 decodedLength: 32
-frontmatterSource: {}
+frontmatterSource: "{}"
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty
 frontmatterFields: 0
 anchors: -

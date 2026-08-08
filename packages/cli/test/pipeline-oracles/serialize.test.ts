@@ -8,7 +8,6 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { extractFrontmatterSource } from '../../src/pipeline-oracles/parse-fact-snapshot.js';
 import { relativize } from '../../src/pipeline-oracles/path-facts.js';
 import {
   renderEnumerationSnapshot,
@@ -198,7 +197,7 @@ describe('renderParseFactSnapshot', () => {
 
   it('keeps every fact on one line so the golden stays line-diffable', () => {
     const rendered = renderParseFactSnapshot(facts);
-    expect(rendered).toContain(String.raw`frontmatterSource: title: T\nvalue: .inf`);
+    expect(rendered).toContain(String.raw`frontmatterSource: "title: T\nvalue: .inf"`);
     expect(rendered).toContain(String.raw`something\nmultiline`);
   });
 
@@ -235,6 +234,51 @@ describe('renderParseFactSnapshot', () => {
       rows: facts.rows.map((entry) => ({ ...entry, frontmatterSource: null })),
     };
     expect(renderParseFactSnapshot(withoutFrontmatter)).toContain('frontmatterSource: -');
+  });
+
+  /**
+   * Render one row with `frontmatterSource` set to `source`, and return the
+   * `frontmatterSource:` line verbatim (no trimming — trailing whitespace is
+   * the thing under test in the first case below).
+   */
+  const frontmatterSourceLine = (source: string | null): string => {
+    const rendered = renderParseFactSnapshot({
+      ...facts,
+      rows: facts.rows.map((entry) => ({ ...entry, frontmatterSource: source })),
+    });
+    return rendered.split('\n').find((line) => line.startsWith('frontmatterSource:')) ?? '';
+  };
+
+  it('renders a present-but-empty block as "" and never as trailing whitespace', () => {
+    // A delimiters-only frontmatter block (`---\n---`) is present and empty,
+    // which is a different document from one with no block at all. Unquoted it
+    // rendered as `frontmatterSource: ` — and .editorconfig sets
+    // trim_trailing_whitespace for every non-markdown file, so any editor would
+    // silently strip that space and the golden would stop matching for reasons
+    // no diff explains.
+    const line = frontmatterSourceLine('');
+    expect(line).toBe('frontmatterSource: ""');
+    expect(line).not.toMatch(/\s$/);
+    expect(line).not.toBe(frontmatterSourceLine(null));
+  });
+
+  it('keeps whitespace-only and empty blocks distinguishable', () => {
+    expect(frontmatterSourceLine('   ')).toBe('frontmatterSource: "   "');
+    expect(frontmatterSourceLine('   ')).not.toBe(frontmatterSourceLine(''));
+  });
+
+  it(String.raw`escapes backslashes so a literal \n cannot masquerade as a newline`, () => {
+    // Without backslash escaping these two documents render byte-identically,
+    // which would make the oracle blind to a real difference between them.
+    const literal = frontmatterSourceLine(String.raw`a\nb`);
+    const newline = frontmatterSourceLine('a\nb');
+    expect(literal).not.toBe(newline);
+    expect(literal).toBe(String.raw`frontmatterSource: "a\\nb"`);
+    expect(newline).toBe(String.raw`frontmatterSource: "a\nb"`);
+  });
+
+  it('escapes a double quote so the quotes always delimit the real extent', () => {
+    expect(frontmatterSourceLine('say "hi"')).toBe(String.raw`frontmatterSource: "say \"hi\""`);
   });
 
   it('records frontmatter value SHAPES, which is what a lossy round-trip changes', () => {
@@ -343,35 +387,6 @@ describe('renderParseFactSnapshot', () => {
       rows: facts.rows.map((entry) => ({ ...entry, decodedLength: 40 })),
     });
     expect(lossyDecode).not.toBe(rendered);
-  });
-});
-
-describe('extractFrontmatterSource', () => {
-  it('returns the block body verbatim, delimiters excluded', () => {
-    expect(extractFrontmatterSource('---\ntitle: T\n---\n\n# Doc\n')).toBe('title: T');
-  });
-
-  it('preserves values a YAML→JSON round-trip would destroy', () => {
-    // `.inf` becomes Infinity becomes null; `.nan` the same; `!!binary` becomes
-    // a Buffer envelope. Keeping the source keeps all three intact.
-    const source = extractFrontmatterSource('---\na: .inf\nb: .nan\nc: !!binary aGk=\n---\n\ntext\n');
-    expect(source).toBe('a: .inf\nb: .nan\nc: !!binary aGk=');
-  });
-
-  it('handles CRLF delimiters', () => {
-    expect(extractFrontmatterSource('---\r\ntitle: T\r\n---\r\n\r\n# Doc\r\n')).toBe('title: T');
-  });
-
-  it('returns null when there is no frontmatter', () => {
-    expect(extractFrontmatterSource('# Just a heading\n')).toBeNull();
-  });
-
-  it('ignores a --- fence that is not at the start of the document', () => {
-    expect(extractFrontmatterSource('# Doc\n\n---\ntitle: T\n---\n')).toBeNull();
-  });
-
-  it('returns an empty body for an empty block rather than null', () => {
-    expect(extractFrontmatterSource('---\n\n---\n\n# Doc\n')).toBe('');
   });
 });
 

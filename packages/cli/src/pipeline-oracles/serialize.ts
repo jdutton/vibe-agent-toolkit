@@ -225,17 +225,54 @@ export function renderParseFactSnapshot(snapshot: ParseFactSnapshot): string {
   return `${lines.join('\n')}\n`;
 }
 
-/** Collapse a value onto one line so a golden stays line-diffable. */
+/**
+ * Collapse a value onto one line so a golden stays line-diffable.
+ *
+ * The backslash is escaped FIRST, and the order is load-bearing: without it a
+ * source containing the two literal characters `\` `n` renders identically to
+ * one containing a real newline, so two different documents produce the same
+ * row and the oracle is blind to the difference. Escaping backslash last would
+ * re-escape the backslashes this function had just introduced.
+ *
+ * @param value - Raw value to collapse
+ * @returns The value with backslash, CR, LF and tab escaped
+ */
 function renderInline(value: string): string {
   return value
+    .replaceAll('\\', String.raw`\\`)
     .replaceAll('\r', String.raw`\r`)
     .replaceAll('\n', String.raw`\n`)
     .replaceAll('\t', String.raw`\t`);
 }
 
-/** Same, for an optional multi-line block. */
+/**
+ * Same, for an optional multi-line block — but quoted, so extent is visible.
+ *
+ * Absent renders as a bare `-`; present renders inside double quotes. Two
+ * reasons, and both are about the instrument being able to tell states apart:
+ *
+ * 1. **Present-and-empty must not render as nothing.** An unquoted empty value
+ *    emits `frontmatterSource: ` — a line with TRAILING WHITESPACE, which
+ *    `.editorconfig` (`trim_trailing_whitespace = true` for `[*]`, with `.md`
+ *    the only exemption) instructs every editor to strip. The golden would then
+ *    silently stop matching, and no other golden in the repo has such a line to
+ *    warn anyone. Quoting makes it `""` — visibly distinct from `-`, and stable
+ *    under any formatter.
+ * 2. **Leading and trailing whitespace inside a value stays visible.** A
+ *    frontmatter block of `"   "` and one of `""` are different documents;
+ *    unquoted they render nearly identically.
+ *
+ * A literal `"` inside the value is escaped so the quotes always delimit the
+ * real extent. Together with {@link renderInline}'s backslash escaping this
+ * makes the rendering injective: distinct sources always produce distinct rows.
+ *
+ * @param value - The block, or null when the field was absent
+ * @returns `-`, or the escaped value wrapped in double quotes
+ */
 function renderMultiline(value: string | null): string {
-  return value === null ? '-' : renderInline(value);
+  if (value === null) return '-';
+  const escaped = renderInline(value).replaceAll('"', String.raw`\"`);
+  return `"${escaped}"`;
 }
 
 /**

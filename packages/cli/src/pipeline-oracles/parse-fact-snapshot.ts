@@ -56,6 +56,7 @@ type CapturedParseResultField =
   | 'headings'
   | 'frontmatter'
   | 'frontmatterError'
+  | 'frontmatterSource'
   | 'sizeBytes'
   | 'estimatedTokenCount'
   | 'anchors'
@@ -124,7 +125,7 @@ export async function captureParseFactSnapshot(
     if (parsed === null) {
       continue;
     }
-    const row = toRow(keyed.key, keyed.parserKind, keyed.content, parsed);
+    const row = toRow(keyed.key, keyed.parserKind, parsed);
 
     const existing = byKey.get(keyed.key);
     if (existing === undefined) {
@@ -206,12 +207,7 @@ async function parseOrNull(absolutePath: string, parserKind: string): Promise<Pa
 }
 
 /** Assemble one row from a parse result. */
-function toRow(
-  contentKey: string,
-  parserKind: ParserKind,
-  content: string,
-  parsed: ParseResult,
-): ParseFactRow {
+function toRow(contentKey: string, parserKind: ParserKind, parsed: ParseResult): ParseFactRow {
   return {
     contentKey,
     parserKind,
@@ -219,7 +215,12 @@ function toRow(
     estimatedTokenCount: parsed.estimatedTokenCount,
     links: parsed.links.map(toLinkFact),
     headings: flattenHeadings(parsed.headings),
-    frontmatterSource: extractFrontmatterSource(content),
+    // Read off the parse result, not re-derived from the bytes. This module
+    // used to carry its own regex delimiter — a second implementation of
+    // frontmatter delimiting, which existed only because `ParseResult` did not
+    // expose the source. It does now, so the column records what the PARSER
+    // said, which is the only thing a cache can actually get wrong.
+    frontmatterSource: parsed.frontmatterSource ?? null,
     frontmatterFields: toFrontmatterFields(parsed.frontmatter),
     // Absent stays distinguishable from empty: both parsers omit the key rather
     // than emitting `[]`, so `null` and `[]` are different observations.
@@ -377,28 +378,6 @@ function flattenHeadings(headings: readonly HeadingNode[]): HeadingFact[] {
   };
   walk(headings);
   return flat;
-}
-
-/** Matches a leading YAML frontmatter block, capturing its body verbatim. */
-const FRONTMATTER_BLOCK = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
-
-/**
- * Extract the frontmatter block **as written**.
- *
- * Deliberately the raw source rather than the parsed object. Round-tripping
- * parsed YAML through JSON is lossy in ways a validator notices: `.inf` and
- * `.nan` become `null`, `!!binary` becomes a Buffer envelope, and cyclic
- * anchors make `JSON.stringify` throw so those documents would silently never
- * be recorded at all. A snapshot that stored the object would report two
- * different things for one document depending on whether it had been through a
- * cache.
- *
- * @param content - The full document text
- * @returns The frontmatter body, or null when there is none
- */
-export function extractFrontmatterSource(content: string): string | null {
-  const match = FRONTMATTER_BLOCK.exec(content);
-  return match?.[1] ?? null;
 }
 
 /**
