@@ -16,7 +16,7 @@
 import { readFile, stat } from 'node:fs/promises';
 
 import GithubSlugger from 'github-slugger';
-import type { Definition, Heading, Link, LinkReference, Root } from 'mdast';
+import type { Definition, Heading, Html, Link, LinkReference, Root, Yaml } from 'mdast';
 import { toString as mdastToString } from 'mdast-util-to-string';
 import remarkFrontmatter from 'remark-frontmatter';
 import remarkGfm from 'remark-gfm';
@@ -91,17 +91,8 @@ export async function parseMarkdown(filePath: string): Promise<ParseResult> {
 
   const tree = processor.parse(content) as Root;
 
-  // Extract links
-  const links = extractLinks(tree);
-
-  // Extract headings with tree structure
-  const headings = extractHeadings(tree);
-
-  // Explicit `<a id="...">` / `name=` fragment targets declared in raw HTML
-  const htmlAnchors = extractHtmlAnchors(tree);
-
-  // Extract frontmatter
-  const { frontmatter, error: frontmatterError } = extractFrontmatter(tree);
+  // Links, headings, raw-HTML anchors and frontmatter, from ONE tree walk
+  const { links, headings, anchors, frontmatter, frontmatterError } = collectAstFacts(tree);
 
   // Detect dangling reference-style links (full/collapsed forms with no
   // matching definition) — see findUnresolvedReferences for why this is a
@@ -114,7 +105,7 @@ export async function parseMarkdown(filePath: string): Promise<ParseResult> {
     links,
     headings,
     unresolvedReferences,
-    ...(htmlAnchors.length > 0 && { anchors: htmlAnchors }),
+    ...(anchors.length > 0 && { anchors }),
     ...(frontmatter !== undefined && { frontmatter }),
     ...(frontmatterError !== undefined && { frontmatterError }),
     content,
@@ -124,83 +115,212 @@ export async function parseMarkdown(filePath: string): Promise<ParseResult> {
 }
 
 /**
- * Extract all links from the markdown AST.
+ * Everything a single walk of the markdown AST yields.
  *
- * Handles:
- * - Regular links: [text](href)
- * - Reference-style links: [text][ref]
- * - Autolinks: <url>
+ * `anchors` is always an array here (possibly empty); `parseMarkdown` is what
+ * decides to omit the key entirely when a document declares none, so the
+ * "absent, not empty" distinction lives at exactly one place.
+ */
+interface MarkdownAstFacts {
+  links: ResourceLink[];
+  headings: HeadingNode[];
+  anchors: string[];
+  frontmatter?: Record<string, unknown>;
+  frontmatterError?: string;
+}
+
+/**
+ * Mutable state threaded through the single AST walk.
+ *
+ * The three link buckets exist because `links` is ordered **by node kind, not
+ * by document position** — all `link`s, then all `linkReference`s, then all
+ * `definition`s — a contract the parse-fact goldens pin by ordinal. A single
+ * walk sees the three kinds interleaved, so it buckets them and concatenates
+ * in kind order afterwards. Within a bucket, walk order IS document order.
+ */
+interface AstWalkState {
+  /**
+   * `[ref]: url` targets. Complete only once the walk finishes.
+   *
+   * ⚠️ KNOWN DEFECT, pre-existing and deliberately preserved by the traversal
+   * collapse (which was held to byte-identical output): when a document
+   * declares the same label twice, this map keeps the LAST definition, but
+   * CommonMark resolves a reference to the FIRST one. So for
+   *
+   *     A [ref][dup].
+   *     [dup]: ./first.md
+   *     [dup]: ./last.md
+   *
+   * VAT reports the `linkReference`'s href as `./last.md` while every renderer
+   * links to `./first.md` — meaning link validation checks a target the reader
+   * never visits. Verified by probe, 2026-08-08. The fix is one line here
+   * (`if (!definitions.has(id))` before the set), but it CHANGES OUTPUT, so it
+   * belongs in its own commit with its own golden movement, not folded into a
+   * refactor whose entire safety story is that nothing moved.
+   */
+  definitions: Map<string, string>;
+  /** `[text](href)` and autolinks. */
+  inlineLinks: ResourceLink[];
+  /** Deferred: resolving these needs the *completed* `definitions` map. */
+  linkReferenceNodes: LinkReference[];
+  /** `[ref]: url` definitions, as links in their own right. */
+  definitionLinks: ResourceLink[];
+  flatHeadings: HeadingNode[];
+  /** Stateful: dedupes slugs in document order, exactly as GitHub does. */
+  slugger: GithubSlugger;
+  anchors: Set<string>;
+  frontmatter?: Record<string, unknown>;
+  frontmatterError?: string;
+}
+
+/**
+ * Node kinds {@link collectAstFacts} reacts to.
+ *
+ * Passed to `visit` as its test so the walk is still ONE traversal while the
+ * visitor's parameter narrows to exactly these kinds — which is what lets
+ * {@link collectNode}'s switch be exhaustive (and therefore lets the compiler
+ * enforce that adding a kind here adds a case there).
+ */
+const COLLECTED_NODE_TYPES = [
+  'link',
+  'linkReference',
+  'definition',
+  'heading',
+  'html',
+  'yaml',
+] as const;
+
+/**
+ * Walk the markdown AST **once** and extract every fact `parseMarkdown` needs.
+ *
+ * Replaces seven separate `visit()` passes (definitions, links, link
+ * references, definitions again, raw HTML, headings, frontmatter) with a
+ * single traversal dispatching on `node.type`. Each pass was a full tree walk,
+ * so the tree was walked seven times per document to produce facts that are
+ * all available from one; parsing dominates every resource-reading command in
+ * the toolkit, and this is the cold path CI always pays.
+ *
+ * Output is byte-identical to the seven-pass version by construction: a
+ * filtered `visit` yields nodes of its type in the same relative order an
+ * unfiltered one does, so bucketing by kind and concatenating reproduces the
+ * previous ordering exactly (see {@link AstWalkState}).
  *
  * @param tree - Markdown AST from unified/remark
- * @returns Array of classified links with line numbers
+ * @returns Links, heading tree, raw-HTML anchors and frontmatter
  */
-function extractLinks(tree: Root): ResourceLink[] {
+function collectAstFacts(tree: Root): MarkdownAstFacts {
+  const state: AstWalkState = {
+    definitions: new Map<string, string>(),
+    inlineLinks: [],
+    linkReferenceNodes: [],
+    definitionLinks: [],
+    flatHeadings: [],
+    slugger: new GithubSlugger(),
+    anchors: new Set<string>(),
+  };
+
+  visit(tree, [...COLLECTED_NODE_TYPES], (node) => {
+    collectNode(state, node);
+  });
+
+  return {
+    links: [...state.inlineLinks, ...resolveLinkReferences(state), ...state.definitionLinks],
+    headings: buildHeadingTree(state.flatHeadings),
+    anchors: [...state.anchors],
+    ...(state.frontmatter !== undefined && { frontmatter: state.frontmatter }),
+    ...(state.frontmatterError !== undefined && { frontmatterError: state.frontmatterError }),
+  };
+}
+
+/**
+ * Record whatever one AST node contributes. Node kinds with nothing to
+ * contribute (paragraphs, text, lists, tables, …) fall through untouched.
+ */
+function collectNode(
+  state: AstWalkState,
+  node: Definition | Heading | Html | Link | LinkReference | Yaml,
+): void {
+  switch (node.type) {
+    case 'link': {
+      state.inlineLinks.push(toResourceLink(node, extractLinkText(node), node.url, 'link'));
+      break;
+    }
+    case 'linkReference': {
+      state.linkReferenceNodes.push(node);
+      break;
+    }
+    case 'definition': {
+      state.definitions.set(node.identifier, node.url);
+      state.definitionLinks.push(toResourceLink(node, node.identifier, node.url, 'definition'));
+      break;
+    }
+    case 'heading': {
+      state.flatHeadings.push(toFlatHeading(state.slugger, node));
+      break;
+    }
+    case 'html': {
+      collectHtmlAnchors(state.anchors, node);
+      break;
+    }
+    case 'yaml': {
+      collectFrontmatter(state, node);
+      break;
+    }
+  }
+}
+
+/**
+ * Build a `ResourceLink` from any of the three link-bearing node kinds.
+ *
+ * `text` and `href` are passed in because each kind derives them differently
+ * (a `definition`'s text is its identifier and a `linkReference`'s href comes
+ * from the definitions map, not the node), while position and classification
+ * are shared.
+ */
+function toResourceLink(
+  node: Definition | Link | LinkReference,
+  text: string,
+  href: string,
+  nodeType: NonNullable<ResourceLink['nodeType']>,
+): ResourceLink {
+  return {
+    text,
+    href,
+    type: classifyLink(href),
+    line: node.position?.start.line,
+    nodeType,
+  };
+}
+
+/**
+ * Resolve the deferred `linkReference` nodes against the completed definitions
+ * map, in document order.
+ *
+ * Invariant: every `linkReference` node reaching this point already has a
+ * matching `definition` — CommonMark resolves link references at PARSE time,
+ * so micromark only ever emits a `linkReference` node when a definition
+ * matched. A reference with no matching definition never becomes a node at
+ * all; it degrades to literal bracketed text in the AST (and in the rendered
+ * document), which is exactly why an AST-based checker is structurally blind
+ * to it. That dangling case is detected separately, by
+ * `findUnresolvedReferences`'s raw-source scan (see `parseMarkdown` and
+ * `unresolved-references.ts`), which reports it as
+ * `LINK_UNRESOLVED_REFERENCE`.
+ *
+ * The `undefined` branch below is therefore NOT the dangling-reference case —
+ * it is unreachable unless micromark's own parse-time contract breaks. It
+ * degrades (skips the node) rather than throwing because `parseMarkdown` runs
+ * over third-party markdown on the `vat audit` / `vat skills validate` paths:
+ * a parser quirk must not abort a whole audit run (repo CLAUDE.md, "be liberal
+ * in what you accept" for data we do not control).
+ */
+function resolveLinkReferences(state: AstWalkState): ResourceLink[] {
   const links: ResourceLink[] = [];
-
-  // First pass: collect all definition nodes (identifier → url)
-  // This allows us to resolve linkReference nodes against their definitions
-  const definitions = new Map<string, string>();
-  visit(tree, 'definition', (node: Definition) => {
-    definitions.set(node.identifier, node.url);
-  });
-
-  // Visit link nodes (regular links and autolinks)
-  visit(tree, 'link', (node: Link) => {
-    const link: ResourceLink = {
-      text: extractLinkText(node),
-      href: node.url,
-      type: classifyLink(node.url),
-      line: node.position?.start.line,
-      nodeType: 'link',
-    };
-    links.push(link);
-  });
-
-  // Visit linkReference nodes (reference-style links).
-  //
-  // Invariant: every `linkReference` node visited here already has a matching
-  // `definition` — CommonMark resolves link references at PARSE time, so
-  // micromark only ever emits a `linkReference` node when a definition
-  // matched. A reference with no matching definition never reaches this
-  // visitor at all; it degrades to literal bracketed text in the AST (and in
-  // the rendered document), which is exactly why an AST-based checker is
-  // structurally blind to it. That dangling case is detected separately, by
-  // `findUnresolvedReferences`'s raw-source scan (see `parseMarkdown` and
-  // `unresolved-references.ts`), which reports it as
-  // `LINK_UNRESOLVED_REFERENCE`.
-  //
-  // The `undefined` branch below is therefore NOT the dangling-reference case
-  // — it is unreachable unless micromark's own parse-time contract breaks. It
-  // degrades (skips the node) rather than throwing because `parseMarkdown`
-  // runs over third-party markdown on the `vat audit` / `vat skills validate`
-  // paths: a parser quirk must not abort a whole audit run (repo CLAUDE.md,
-  // "be liberal in what you accept" for data we do not control).
-  visit(tree, 'linkReference', (node: LinkReference) => {
-    const resolvedUrl = definitions.get(node.identifier);
-    if (resolvedUrl === undefined) return;
-    const link: ResourceLink = {
-      text: extractLinkText(node),
-      href: resolvedUrl,
-      type: classifyLink(resolvedUrl),
-      line: node.position?.start.line,
-      nodeType: 'linkReference',
-    };
-    links.push(link);
-  });
-
-  // Visit definition nodes (reference-style link definitions: [ref]: url)
-  // These provide the actual URLs for linkReference nodes
-  visit(tree, 'definition', (node: Definition) => {
-    const link: ResourceLink = {
-      text: node.identifier,
-      href: node.url,
-      type: classifyLink(node.url),
-      line: node.position?.start.line,
-      nodeType: 'definition',
-    };
-    links.push(link);
-  });
-
+  for (const node of state.linkReferenceNodes) {
+    const resolvedUrl = state.definitions.get(node.identifier);
+    if (resolvedUrl === undefined) continue;
+    links.push(toResourceLink(node, extractLinkText(node), resolvedUrl, 'linkReference'));
+  }
   return links;
 }
 
@@ -331,43 +451,6 @@ export function isLocalFileLink(type: LinkType): boolean {
   return type === 'local_file' || type === 'local_directory';
 }
 
-/**
- * Extract headings from the markdown AST and build a nested tree structure.
- *
- * Builds a hierarchical structure where:
- * - h2 nodes are children of the preceding h1
- * - h3 nodes are children of the preceding h2
- * - etc.
- *
- * @param tree - Markdown AST from unified/remark
- * @returns Array of top-level heading nodes with nested children
- *
- * @example
- * For markdown:
- * ```
- * # Main
- * ## Sub
- * ### Deep
- * ## Sub2
- * ```
- *
- * Returns:
- * ```
- * [
- *   {
- *     level: 1,
- *     text: 'Main',
- *     slug: 'main',
- *     children: [
- *       { level: 2, text: 'Sub', slug: 'sub', children: [
- *         { level: 3, text: 'Deep', slug: 'deep', children: [] }
- *       ]},
- *       { level: 2, text: 'Sub2', slug: 'sub2', children: [] }
- *     ]
- *   }
- * ]
- * ```
- */
 /** `id="…"` / `name="…"` attribute, single- or double-quoted. */
 const HTML_ANCHOR_ATTRIBUTE = /\b(?:id|name)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
 
@@ -378,7 +461,7 @@ const HTML_ANCHOR_ATTRIBUTE = /\b(?:id|name)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
  * `#short`; GitHub renders that id into the DOM and the fragment resolves.
  * Indexing heading slugs alone therefore reports a working link as broken.
  *
- * Only mdast `html` nodes are visited, which is what keeps this honest: a
+ * Only mdast `html` nodes reach here, which is what keeps this honest: a
  * fenced block is a `code` node, an indented block is a `code` node, and a
  * backticked span is `inlineCode`, so an `<a id="…">` being *documented*
  * rather than *declared* is never indexed. That is the whole reason this
@@ -389,42 +472,33 @@ const HTML_ANCHOR_ATTRIBUTE = /\b(?:id|name)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
  * more permissive than a browser, which compares ids exactly; erring toward
  * resolving is deliberate, since the cost of the other direction is a false
  * `LINK_BROKEN_ANCHOR` on a link that works.
+ *
+ * @param anchors - Accumulator; insertion order becomes the emitted order
+ * @param node - A raw-HTML node encountered during the walk
  */
-function extractHtmlAnchors(tree: Root): string[] {
-  const anchors = new Set<string>();
-
-  visit(tree, 'html', (node: { value?: string }) => {
-    const raw = node.value ?? '';
-    for (const match of raw.matchAll(HTML_ANCHOR_ATTRIBUTE)) {
-      const value = (match[1] ?? match[2] ?? '').trim();
-      if (value !== '') {
-        anchors.add(value.toLowerCase());
-      }
+function collectHtmlAnchors(anchors: Set<string>, node: Html): void {
+  for (const match of node.value.matchAll(HTML_ANCHOR_ATTRIBUTE)) {
+    const value = (match[1] ?? match[2] ?? '').trim();
+    if (value !== '') {
+      anchors.add(value.toLowerCase());
     }
-  });
-
-  return [...anchors];
+  }
 }
 
-function extractHeadings(tree: Root): HeadingNode[] {
-  const flatHeadings: HeadingNode[] = [];
-  const slugger = new GithubSlugger();
-
-  // First pass: collect all headings in document order
-  // GithubSlugger processes headings in order, deduplicating exactly as GitHub does
-  visit(tree, 'heading', (node: Heading) => {
-    const text = extractHeadingText(node);
-    const heading: HeadingNode = {
-      level: node.depth,
-      text,
-      slug: slugger.slug(text),
-      line: node.position?.start.line,
-    };
-    flatHeadings.push(heading);
-  });
-
-  // Second pass: build tree structure using a stack
-  return buildHeadingTree(flatHeadings);
+/**
+ * Flatten one heading node, assigning its GitHub slug.
+ *
+ * `slugger` is stateful and MUST be fed headings in document order — that is
+ * how it reproduces GitHub's `-1`/`-2` suffixing for repeated heading text.
+ */
+function toFlatHeading(slugger: GithubSlugger, node: Heading): HeadingNode {
+  const text = extractHeadingText(node);
+  return {
+    level: node.depth,
+    text,
+    slug: slugger.slug(text),
+    line: node.position?.start.line,
+  };
 }
 
 /**
@@ -466,6 +540,32 @@ function extractHeadingText(node: Heading): string {
  *
  * @param flatHeadings - Array of headings in document order
  * @returns Array of top-level headings with nested children
+ *
+ * @example
+ * For markdown:
+ * ```
+ * # Main
+ * ## Sub
+ * ### Deep
+ * ## Sub2
+ * ```
+ *
+ * Returns:
+ * ```
+ * [
+ *   {
+ *     level: 1,
+ *     text: 'Main',
+ *     slug: 'main',
+ *     children: [
+ *       { level: 2, text: 'Sub', slug: 'sub', children: [
+ *         { level: 3, text: 'Deep', slug: 'deep', children: [] }
+ *       ]},
+ *       { level: 2, text: 'Sub2', slug: 'sub2', children: [] }
+ *     ]
+ *   }
+ * ]
+ * ```
  */
 function buildHeadingTree(flatHeadings: HeadingNode[]): HeadingNode[] {
   if (flatHeadings.length === 0) {
@@ -525,41 +625,32 @@ function cleanupEmptyChildren(headings: HeadingNode[]): void {
 }
 
 /**
- * Extract and parse frontmatter from the markdown AST.
+ * Parse one frontmatter block into the walk state.
  *
- * Uses remark-frontmatter which creates 'yaml' nodes for frontmatter blocks.
- * Parses YAML content and returns as plain object.
+ * `remark-frontmatter` emits a `yaml` node per frontmatter block. A
+ * well-formed document has at most one, but nothing enforces that, so
+ * last-one-wins is preserved for both the parsed object and the error
+ * message — and they are independent: a block that fails to parse leaves any
+ * previously parsed object in place, and vice versa.
  *
- * @param tree - Markdown AST from unified/remark
- * @returns Object with parsed frontmatter and any error message
+ * An empty block contributes nothing at all: no frontmatter, no error.
+ *
+ * @param state - Walk state to record the result on
+ * @param node - A `yaml` frontmatter node encountered during the walk
  */
-function extractFrontmatter(tree: Root): {
-  frontmatter?: Record<string, unknown>;
-  error?: string;
-} {
-  let frontmatterData: Record<string, unknown> | undefined;
-  let errorMessage: string | undefined;
+function collectFrontmatter(state: AstWalkState, node: Yaml): void {
+  if (node.value.trim() === '') {
+    // Empty frontmatter block
+    return;
+  }
 
-  visit(tree, 'yaml', (node: { value: string }) => {
-    if (node.value.trim() === '') {
-      // Empty frontmatter block
-      return;
+  try {
+    const parsed = yaml.parse(node.value);
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      state.frontmatter = parsed as Record<string, unknown>;
     }
-
-    try {
-      const parsed = yaml.parse(node.value);
-      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-        frontmatterData = parsed as Record<string, unknown>;
-      }
-    } catch (error) {
-      // Capture YAML parsing error for validation reporting
-      errorMessage = error instanceof Error ? error.message : String(error);
-    }
-  });
-
-  // With exactOptionalPropertyTypes: true, we must conditionally include properties
-  return {
-    ...(frontmatterData !== undefined && { frontmatter: frontmatterData }),
-    ...(errorMessage !== undefined && { error: errorMessage }),
-  };
+  } catch (error) {
+    // Capture YAML parsing error for validation reporting
+    state.frontmatterError = error instanceof Error ? error.message : String(error);
+  }
 }

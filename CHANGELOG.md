@@ -208,6 +208,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Markdown parsing walks the syntax tree twice per document instead of fifteen times.** Every
+  resource-reading command (`vat resources validate`, `vat audit`, `vat skills build`, …) parses the
+  project's markdown, and `parseMarkdown` was making seven full `visit()` passes over the tree in
+  `link-parser.ts` (definitions, links, link references, definitions *again*, raw HTML, headings,
+  frontmatter) plus eight more in `unresolved-references.ts` (seven mask kinds, then definition
+  identifiers) — fifteen complete traversals to collect facts that are all available from one. Each
+  file is now walked once for the link/heading/anchor/frontmatter facts and once for the
+  dangling-reference mask.
+
+  Measured over this repo's 265 tracked markdown files: traversal cost drops from 306 ms to 66 ms
+  (−78%), taking whole-corpus `parseMarkdown` from 1,155 ms to 979 ms (−15%). The floor is
+  micromark's own tokenization at 864 ms, which this does not touch. **No output change**: link
+  ordering (all `link`s, then all `linkReference`s, then all `definition`s), heading slug
+  deduplication order, and HTML-anchor emission order are all preserved, verified by diffing the
+  complete `ParseResult` of all 265 documents before and after — zero rows differ.
+
 - **`@vibe-agent-toolkit/utils/git` exposes exactly one git-root finder.** The subpath previously
   re-exported whole modules, surfacing both `gitFindRoot` and the deprecated `findGitRoot` — two
   differently-named functions for the same job, which guarantees consumers split between them. The
