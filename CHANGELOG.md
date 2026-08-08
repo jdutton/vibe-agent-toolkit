@@ -244,6 +244,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`ResourceRegistry.addResource` now reads each file once and stats it once, instead of twice
+  each.** Every crawl-based command builds its registry through this method, and it was making four
+  filesystem round-trips per document: `parseMarkdown`/`parseHtml` read the file *and* stat'd it, a
+  second `stat` supplied `modifiedAt`, and `calculateChecksum` re-read the whole file to hash it. It
+  now performs one read and one stat, and derives the parse, the checksum, the byte size and the
+  modification time from that single pair.
+
+  **Output is unchanged, deliberately.** `sizeBytes` still comes from `stat().size` — never a byte
+  length re-derived from the decoded string, which diverges from the file's real size on malformed
+  UTF-8 — and `checksum` is still the SHA-256 of the *decoded* string, which is a different keyspace
+  from the raw-byte content key and is user-facing through `vat resources scan --verbose` and
+  `getResourcesByChecksum`. Both are now pinned by tests using a deliberately malformed-UTF-8
+  fixture, the only condition under which the alternatives are distinguishable.
+
 - **Markdown parsing walks the syntax tree twice per document instead of fifteen times.** Every
   resource-reading command (`vat resources validate`, `vat audit`, `vat skills build`, …) parses the
   project's markdown, and `parseMarkdown` was making seven full `visit()` passes over the tree in

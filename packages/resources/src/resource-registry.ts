@@ -8,15 +8,15 @@
  * - Query capabilities (by path, ID, or glob pattern)
  */
 
-import type fs from 'node:fs/promises';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { createRegistryIssue, type IssueCode, runSingleUnitValidation, type ValidationConfig, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, FsLookupCache, type GitTracker, issueLocation, normalizedTmpdir, resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
-import { calculateChecksum } from './checksum.js';
+import { calculateChecksumFromContent } from './checksum.js';
 import { getCollectionsForFile } from './collection-matcher.js';
-import { parserKindForPath } from './content-key.js';
+import { readContentWithKey } from './content-key.js';
 import type { DeferredArtifacts } from './deferred-artifacts.js';
 import { ExternalLinkValidator } from './external-link-validator.js';
 import {
@@ -28,9 +28,9 @@ import {
   validateCompiledFrontmatter,
   type CompiledFrontmatterSchema,
 } from './frontmatter-validator.js';
-import { parseHtml } from './html-link-parser.js';
+import { parseHtmlContent } from './html-link-parser.js';
 import { buildLinkAuthEngineConfig } from './link-auth-config-build.js';
-import { parseMarkdown } from './link-parser.js';
+import { parseMarkdownContent } from './link-parser.js';
 import { fragmentIndexEntry, validateLink, type FragmentIndex, type ValidateLinkOptions } from './link-validator.js';
 import type { ResourceCollectionInterface } from './resource-collection-interface.js';
 import type { SHA256 } from './schemas/checksum.js';
@@ -531,7 +531,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   /**
    * Add a single resource to the registry.
    *
-   * Parses the markdown file, generates a unique ID, and stores the resource.
+   * Parses the file, generates a unique ID, and stores the resource. Costs
+   * exactly one `readFile` and one `stat` per file — the parse, the checksum and
+   * the size all come off that single pair.
    *
    * @param filePath - Path to the markdown file (will be normalized to absolute)
    * @returns The parsed resource metadata
@@ -547,28 +549,48 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // Normalize path to absolute
     const absolutePath = safePath.resolve(filePath);
 
-    // Parse the file — HTML or markdown depending on extension. The
-    // discriminator lives in content-key.ts because parser selection is part of
-    // a document's parse identity, not an incidental property of this call site.
-    const parseResult = parserKindForPath(absolutePath) === 'html'
-      ? await parseHtml(absolutePath)
-      : await parseMarkdown(absolutePath);
+    // THE read. Everything below is a function of these bytes plus one stat —
+    // this used to be two whole-file reads (parse, then checksum) and two stats.
+    // `readContentWithKey` also decides the parser, so the extension test is not
+    // repeated here: parser selection is part of a document's parse identity
+    // (content-key.ts), and running the discriminator twice is how the parse
+    // route and the key's parse-route component drift apart.
+    const keyed = await readContentWithKey(absolutePath);
+
+    // Parse from the bytes already in hand — HTML or markdown per `parserKind`.
+    //
+    // The `sizeBytes` argument is pass-through only: this call site never reads
+    // `parseResult.sizeBytes` back, because the number it publishes is
+    // `stats.size` below (see the `sizeBytes:` field). `keyed.byteLength` is
+    // supplied here purely so `ParseResult` carries a raw-byte count rather
+    // than a bogus one — never a length derived from `keyed.content`, since
+    // decoding is lossy on malformed UTF-8 and a re-encoded count diverges
+    // from what is on disk (see link-parser.ts).
+    const parseResult = keyed.parserKind === 'html'
+      ? parseHtmlContent(keyed.content, keyed.byteLength)
+      : parseMarkdownContent(keyed.content, keyed.byteLength);
 
     // Generate ID using priority chain: frontmatter field → relative path → filename stem
     const id = this.generateId(absolutePath, parseResult.frontmatter);
 
-    // Check for duplicate ID (allow re-adding same file path)
+    // Check for duplicate ID (allow re-adding same file path). Deliberately
+    // ahead of the stat below, so a file that loses an id collision costs no
+    // syscall beyond the read it already paid for.
     const existingById = this.resourcesById.get(id);
     if (existingById && existingById.filePath !== absolutePath) {
       throw new DuplicateResourceIdError(id, absolutePath, existingById.filePath);
     }
 
-    // Get file modified time
-    const fs = await import('node:fs/promises');
+    // THE stat — one call serving both `modifiedAt` and `sizeBytes`.
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied path, same trust level as the read above
     const stats = await fs.stat(absolutePath);
 
-    // Calculate checksum eagerly
-    const checksum = await calculateChecksum(absolutePath);
+    // Checksum from the bytes already decoded, not a second read of the file.
+    // It hashes the DECODED STRING, which is a different keyspace from
+    // `keyed.key` — that one hashes the raw bytes on purpose (content-key.ts).
+    // Both must survive: this value is user-facing (`vat resources scan
+    // --verbose`, `audit/cache-detector.ts`, `getResourcesByChecksum`).
+    const checksum = calculateChecksumFromContent(keyed.content);
 
     // Determine collections if config is present
     const collections = this.config?.resources?.collections
@@ -588,7 +610,12 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       }),
       ...(parseResult.frontmatter !== undefined && { frontmatter: parseResult.frontmatter }),
       ...(parseResult.frontmatterError !== undefined && { frontmatterError: parseResult.frontmatterError }),
-      sizeBytes: parseResult.sizeBytes,
+      // `stat().size` — the on-disk byte count, exactly as before. Never
+      // `Buffer.byteLength(content)` or `content.length`: those measure the
+      // decoded string, and this number reaches packaged-output accounting
+      // (agent-skills/src/content-transform.ts) and adopter-visible rule
+      // variables.
+      sizeBytes: stats.size,
       estimatedTokenCount: parseResult.estimatedTokenCount,
       modifiedAt: stats.mtime,
       checksum,
@@ -891,8 +918,6 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       return issues;
     }
 
-    const fsPromises = await import('node:fs/promises');
-
     for (const resource of this.resourcesByPath.values()) {
       // Skip if resource has no collections
       if (!resource.collections || resource.collections.length === 0) {
@@ -902,7 +927,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       // Validate against each collection's schema
       const collectionIssues = await this.validateResourceCollectionSchemas(
         resource,
-        fsPromises,
+        fs,
         fragmentsByFile,
         skipGitIgnoreCheck,
       );
