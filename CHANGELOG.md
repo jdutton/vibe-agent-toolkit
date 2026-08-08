@@ -43,6 +43,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`vat pipeline` — an internal dev instrument for holding the resource pipeline still across a
+  refactor.** Three verbs: `snapshot <dir> --out <dir>` captures what the pipeline actually
+  enumerates and parses over a corpus (five enumeration lanes, a parse-fact oracle, and normalized
+  stdout/stderr from `resources scan`, `resources validate` and `audit`); `compare <before> <after>`
+  reports what moved; `check <dir>` asserts the pipeline's internal invariants without spawning
+  anything. Listed in `vat --help` deliberately — its intended caller is an agent session driving it
+  from a terminal, and a hidden verb is undiscoverable by exactly that caller — but it carries **no
+  API stability**: the lanes bind to internal builders, so the output shape, the artifact names and
+  the on-disk layout all change without notice.
+
+  `compare` defaults to a one-line-per-artifact summary and prints diff text only for an artifact
+  named with `--detail`. That is the design, not a limitation: `vat audit` alone emits 1.81 MB of
+  YAML carrying 1,755 findings, so printing the diff by default would rebuild the problem the tool
+  exists to solve. Comparison exits 0 when identical, 1 when something changed, and 2 when it
+  **refused** — a `formatVersion` mismatch is never guessed at, because a comparison of nothing
+  renders as "nothing changed" and would let a reader conclude a refactor moved nothing when in
+  fact nothing was compared.
+
 - **A `@vibe-agent-toolkit/utils/eslint` subpath — 21 ESLint rules that enforce the safety helpers
   in the rest of the package.** The helpers exist because `path.join()`, `os.tmpdir()`,
   `fs.realpathSync()`, `child_process.execSync()` and `await import(absolutePath)` each have a

@@ -17,6 +17,7 @@ import { createCorpusCommand } from './commands/corpus/index.js';
 import { doctorCommand } from './commands/doctor.js';
 import { createInventoryCommand } from './commands/inventory.js';
 import { createMCPCommand } from './commands/mcp/index.js';
+import { createPipelineCommand } from './commands/pipeline/index.js';
 import { createRagCommand, showRagVerboseHelp } from './commands/rag/index.js';
 import { createResourcesCommand, showResourcesVerboseHelp } from './commands/resources/index.js';
 import { createSkillCommand } from './commands/skill/index.js';
@@ -162,6 +163,10 @@ program.addCommand(createMCPCommand());
 program.addCommand(createSkillsCommand());
 program.addCommand(createSkillCommand());
 program.addCommand(createClaudeCommand());
+
+// Internal dev instrument, listed last: not hidden (an agent driving it from a
+// terminal cannot discover a hidden verb), but not a product surface either.
+program.addCommand(createPipelineCommand());
 
 // Add top-level orchestration commands
 program.addCommand(createBuildTopLevelCommand());

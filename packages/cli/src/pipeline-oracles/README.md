@@ -211,6 +211,66 @@ definitions last, where the two orders happen to agree. That file declares one
 **first**, so a collapse into a single document-order traversal renumbers its
 ordinals and nothing else's.
 
+## Driving these from a terminal: `vat pipeline`
+
+Everything above is reachable from tests only. `src/qa-snapshot/` wraps the same
+captures in a command so they can be run against **any** directory without
+writing a test, and pairs them with the other half of VAT's correctness
+evidence — whole-command stdout.
+
+```bash
+vat pipeline snapshot . --out /tmp/before          # capture
+# …refactor…
+vat pipeline snapshot . --out /tmp/after --compare /tmp/before
+vat pipeline compare /tmp/before /tmp/after --detail enumeration.resources
+vat pipeline check .                               # invariants only, spawns nothing
+```
+
+The two halves answer different questions and neither is worth much alone. The
+oracles are narrow: they name a lane and a row. The whole-command captures are
+broad: they catch anything and localize nothing. *"Something changed"* plus
+*"here is where"* is the pair.
+
+### The output is the part that needed designing, not the capture
+
+`vat audit` alone emits 1.81 MB of YAML carrying 1,755 findings. A tool that
+prints that by default rebuilds the problem it exists to solve, so `compare`
+prints one line per artifact and nothing else; diff text requires naming an
+artifact with `--detail`. The headline column (`linksFound 730→731`) comes from
+a shallow scan of leading `key: value` lines and is **advisory** — status and
+the line counts are the authoritative signal.
+
+### What it refuses to do
+
+- **A `formatVersion` mismatch is refused, not attempted** (exit 2). The artifact
+  sets are not the same shape, and a comparison of nothing renders as "nothing
+  changed" — which would let a reader conclude a refactor moved nothing when in
+  fact nothing was compared.
+- **A `CONTENT_KEY_SCHEMA_VERSION` bump masks the key column** on both sides and
+  says so, because that bump churns 100% of it and an unmasked diff would be
+  total and carry no information.
+- **Walk-route lanes never claim portable ordering.** They are rendered sorted
+  and the manifest records `orderPortable: false`.
+
+### ⛔ Untracked files are invisible, and the tool now says so
+
+Four of the five lanes crawl via `git ls-files`, which returns tracked files
+only. Inside a repository an untracked document is therefore enumerated by
+nothing, parsed by nothing, and **cannot move a comparison**.
+
+This is not theoretical. The first red-team run of this instrument added an
+untracked `.html` file to VAT's own tree, re-captured, and got back *"All 12
+artifacts identical"* — a confident green over a corpus that had genuinely
+changed. It is most dangerous exactly when the tool is most trusted, because the
+intended workflow is *snapshot → refactor → snapshot*, and files created during
+a refactor are untracked until someone commits them.
+
+The fix is a loud capture-time warning, not a behaviour change: making the crawl
+see untracked files would stop the instrument measuring what the product
+measures, which is a worse defect than the one it cures. Note `inventory` is the
+one lane that *does* ask for untracked files, so a corpus in this state makes the
+lanes legitimately disagree — and that disagreement is a finding.
+
 ## Running the gate
 
 ```bash

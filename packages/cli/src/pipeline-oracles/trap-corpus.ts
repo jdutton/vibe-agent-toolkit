@@ -599,8 +599,17 @@ export interface MaterializeOptions {
   /**
    * Also create {@link DANGLING_SYMLINK} (default `false`).
    *
-   * ⚠️ Combined with `initGit`, this makes every resource lane throw. That is
-   * the point of the flag and the reason it is not on by default.
+   * ⚠️ This comment used to say that combined with `initGit` it makes every
+   * resource lane **throw**, and that was true until `RESOURCE_UNREADABLE`
+   * landed. It is now wrong: the lane runs to completion and the dangling
+   * entry is *enumerated but not admitted*, reported as a finding rather than
+   * terminating the command. `enumeration-symlink-divergence.integration.test.ts`
+   * pins exactly that (`expect(onGit.buildError).toBeUndefined()`).
+   *
+   * The flag still earns its place, for the surviving reason: it is the only
+   * fixture that produces a path present on the `git ls-files` route and
+   * absent from the admitted set, which is the population gap the finding
+   * accounts for. Do not reach for it expecting a `buildError`.
    */
   includeDanglingSymlink?: boolean;
   /**
