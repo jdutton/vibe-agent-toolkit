@@ -5,7 +5,7 @@
 
 import { lstatSync, realpathSync, statSync } from 'node:fs';
 
-import { readContentWithKey } from '@vibe-agent-toolkit/resources';
+import { parserKindForPath, readContentWithKey } from '@vibe-agent-toolkit/resources';
 import { type GitTracker, isAbsolutePath, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import type { EnumerationRow } from './types.js';
@@ -169,7 +169,7 @@ export function markAliases(rows: EnumerationRow[], absolutePaths: readonly stri
  */
 async function keyOrNull(absolutePath: string): Promise<string | null> {
   try {
-    return (await readContentWithKey(absolutePath)).key;
+    return (await readContentWithKey(absolutePath, parserKindForPath(absolutePath))).key;
   } catch {
     return null;
   }

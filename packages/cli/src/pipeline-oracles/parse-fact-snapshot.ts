@@ -11,7 +11,7 @@
 
 import { createHash } from 'node:crypto';
 
-import { parseHtml, parseMarkdown, readContentWithKey } from '@vibe-agent-toolkit/resources';
+import { parseHtml, parseMarkdown, parserKindForPath, readContentWithKey } from '@vibe-agent-toolkit/resources';
 import type { HeadingNode, ParserKind, ParseResult, ResourceLink } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
@@ -191,7 +191,7 @@ async function readKeyedOrSkip(
   absolutePath: string,
 ): Promise<{ key: string; content: string; parserKind: ParserKind } | null> {
   try {
-    return await readContentWithKey(absolutePath);
+    return await readContentWithKey(absolutePath, parserKindForPath(absolutePath));
   } catch {
     return null;
   }

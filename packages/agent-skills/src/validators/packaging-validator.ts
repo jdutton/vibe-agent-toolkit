@@ -27,7 +27,7 @@ import {
   type ValidationConfig,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/agent-schema';
-import { DeferredArtifacts, parseMarkdown, ResourceRegistry, type SkillExecutableEntry } from '@vibe-agent-toolkit/resources';
+import { DeferredArtifacts, parseFileCached, ResourceRegistry, type SkillExecutableEntry } from '@vibe-agent-toolkit/resources';
 import { findProjectRoot, issueLocation, normalizedTmpdir, toForwardSlash, safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
 
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
@@ -456,9 +456,11 @@ export async function validateSkillForPackaging(
   const skillLocation = issueLocation(skillPath, locationRoot);
 
   // Parse SKILL.md
-  const parseResult = await parseMarkdown(skillPath);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillPath is validated function parameter
-  const skillContent = await readFile(skillPath, 'utf-8');
+  const parseResult = await parseFileCached(skillPath, 'markdown');
+  // The parser already decoded these bytes; a second whole-file read of the same
+  // path would only add a syscall and a TOCTOU window. `content` is the raw
+  // source verbatim, so fenced code blocks reach `runCompatDetectors` intact.
+  const skillContent = parseResult.content;
   const skillLines = skillContent.split('\n').length;
 
   // Validate frontmatter schema (name format, required fields, etc.)

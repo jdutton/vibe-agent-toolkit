@@ -12,11 +12,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { createRegistryIssue, type IssueCode, runSingleUnitValidation, type ValidationConfig, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
-import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, FsLookupCache, type GitTracker, issueLocation, normalizedTmpdir, resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, FsLookupCache, type GitTracker, issueLocation, resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { calculateChecksumFromContent } from './checksum.js';
 import { getCollectionsForFile } from './collection-matcher.js';
-import { type KeyedContent, readContentWithKey } from './content-key.js';
+import { parserKindForPath, readContentWithKey } from './content-key.js';
 import type { DeferredArtifacts } from './deferred-artifacts.js';
 import { ExternalLinkValidator } from './external-link-validator.js';
 import {
@@ -28,11 +28,9 @@ import {
   validateCompiledFrontmatter,
   type CompiledFrontmatterSchema,
 } from './frontmatter-validator.js';
-import { parseHtmlContent } from './html-link-parser.js';
 import { buildLinkAuthEngineConfig } from './link-auth-config-build.js';
-import { type ParseResult, parseMarkdownContent } from './link-parser.js';
 import { fragmentIndexEntry, validateLink, type FragmentIndex, type ValidateLinkOptions } from './link-validator.js';
-import { ParseCache } from './parse-cache.js';
+import { ParseCache, type ParseCacheStats, parseKeyed, vatCacheRoot } from './parse-cache.js';
 import type { ResourceCollectionInterface } from './resource-collection-interface.js';
 import type { SHA256 } from './schemas/checksum.js';
 import type { ProjectConfig, ValidationMode } from './schemas/project-config.js';
@@ -174,21 +172,6 @@ export interface ResourceRegistryOptions {
    * private directory, or to disable it (`new ParseCache({ enabled: false })`).
    */
   parseCache?: ParseCache;
-}
-
-/**
- * How many parses a registry served from the cache versus performed itself.
- *
- * Exposed because the cache is otherwise unobservable: it is content-addressed
- * and fail-soft, so a cache that never hits produces exactly the same resources
- * as one that always does. Any test asserting cold/warm equivalence is asserting
- * nothing at all unless it can also show the warm run hit.
- */
-export interface ParseCacheStats {
-  /** Parses served from a cache entry — `parseMarkdownContent` never ran. */
-  hits: number;
-  /** Parses this registry performed and then filed. */
-  misses: number;
 }
 
 /**
@@ -380,10 +363,6 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    */
   private parseCacheInstance?: ParseCache;
 
-  /** Counters behind {@link getParseCacheStats}. Cumulative for the registry's life. */
-  private parseCacheHits = 0;
-  private parseCacheMisses = 0;
-
   private readonly resourcesByPath: Map<string, ResourceMetadata> = new Map();
   private readonly resourcesById: Map<string, ResourceMetadata> = new Map();
   private readonly resourcesByName: Map<string, ResourceMetadata[]> = new Map();
@@ -475,10 +454,17 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   /**
    * Parse-cache hit/miss counts for this registry.
    *
-   * @returns A snapshot of the counters, cumulative since construction
+   * Read off the cache instance, so an INJECTED cache reports what it did for
+   * every one of its users rather than for this registry alone. That is the
+   * honest reading: the counters answer "did the cache serve anything", and a
+   * caller that shares one instance across registries is asking about the
+   * instance. A registry that has parsed nothing has no instance yet, and
+   * reports zeroes rather than constructing one as a side effect of being asked.
+   *
+   * @returns A snapshot of the counters
    */
   getParseCacheStats(): ParseCacheStats {
-    return { hits: this.parseCacheHits, misses: this.parseCacheMisses };
+    return this.parseCacheInstance?.stats ?? { hits: 0, misses: 0 };
   }
 
   /**
@@ -605,15 +591,17 @@ export class ResourceRegistry implements ResourceCollectionInterface {
 
     // THE read. Everything below is a function of these bytes plus one stat —
     // this used to be two whole-file reads (parse, then checksum) and two stats.
-    // `readContentWithKey` also decides the parser, so the extension test is not
-    // repeated here: parser selection is part of a document's parse identity
-    // (content-key.ts), and running the discriminator twice is how the parse
-    // route and the key's parse-route component drift apart.
-    const keyed = await readContentWithKey(absolutePath);
+    // The discriminator runs exactly ONCE here and its answer rides on `keyed`
+    // into both the content key and the parser selection in `parseKeyed`:
+    // parser selection is part of a document's parse identity (content-key.ts),
+    // and running the discriminator twice is how the parse route and the key's
+    // parse-route component drift apart.
+    const keyed = await readContentWithKey(absolutePath, parserKindForPath(absolutePath));
 
     // Parse from the bytes already in hand — or from a cache entry filed under
-    // the key those bytes just produced. See `parseCached` for the interception.
-    const parseResult = await this.parseCached(keyed);
+    // the key those bytes just produced. See `parseKeyed` for the interception.
+    this.parseCacheInstance ??= new ParseCache();
+    const parseResult = await parseKeyed(keyed, this.parseCacheInstance);
 
     // Generate ID using priority chain: frontmatter field → relative path → filename stem
     const id = this.generateId(absolutePath, parseResult.frontmatter);
@@ -671,52 +659,6 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     this.indexResource(resource);
 
     return resource;
-  }
-
-  /**
-   * Produce the parse facts for an already-read document, from the cache when
-   * one is filed under its content key and from the parser otherwise.
-   *
-   * This is THE interception point: it sits between the single read that keyed
-   * the bytes and the parser that would otherwise consume them, so on a hit the
-   * parser does not run at all. Nothing downstream of it changes — the caller
-   * still publishes `stat().size` as `sizeBytes` and still checksums the decoded
-   * string, because `rehydrate` re-attaches `content`/`sizeBytes` from this same
-   * fresh read rather than from the entry (see parse-cache.ts).
-   *
-   * The `set` is **awaited**, not fired and forgotten. `vat validate`, `vat
-   * verify` and `vat build` each `spawnSync` the vat binary once per phase, so
-   * an entry that has not reached disk by process exit buys nothing; the write
-   * is measured at ~30 ms for 265 documents and `set` never throws.
-   *
-   * @param keyed - Content, key and byte length from THE read in `addResource`
-   * @returns Parse facts equal to what the parser would have produced
-   */
-  private async parseCached(keyed: KeyedContent): Promise<ParseResult> {
-    this.parseCacheInstance ??= new ParseCache();
-
-    const hit = await this.parseCacheInstance.get(keyed);
-    if (hit !== null) {
-      this.parseCacheHits += 1;
-      return hit;
-    }
-    this.parseCacheMisses += 1;
-
-    // HTML or markdown per `parserKind`.
-    //
-    // The `sizeBytes` argument is pass-through only: `addResource` never reads
-    // `parseResult.sizeBytes` back, because the number it publishes is
-    // `stats.size` (see the `sizeBytes:` field). `keyed.byteLength` is supplied
-    // here purely so `ParseResult` carries a raw-byte count rather than a bogus
-    // one — never a length derived from `keyed.content`, since decoding is lossy
-    // on malformed UTF-8 and a re-encoded count diverges from what is on disk
-    // (see link-parser.ts).
-    const result = keyed.parserKind === 'html'
-      ? parseHtmlContent(keyed.content, keyed.byteLength)
-      : parseMarkdownContent(keyed.content, keyed.byteLength);
-
-    await this.parseCacheInstance.set(keyed, result);
-    return result;
   }
 
   /**
@@ -1349,7 +1291,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * @private
    */
   private getCacheDirectory(): string {
-    return safePath.join(normalizedTmpdir(), '.vat-cache');
+    // `vatCacheRoot()` rather than a second `normalizedTmpdir()` + literal join:
+    // one authority for where the shared cache tree lives (see parse-cache.ts).
+    return vatCacheRoot();
   }
 
   /**

@@ -155,13 +155,33 @@ export interface KeyedContent {
  * the gap between "derive the key" and "read what gets parsed" is the window in
  * which a save produces a valid entry filed under the wrong key.
  *
+ * ## Why `parserKind` is a REQUIRED argument and not defaulted to the extension
+ *
+ * The key must name the parser that will actually run, not the one the
+ * extension implies, and those genuinely differ in shipped code:
+ * `rag-lancedb/src/lancedb-rag-provider.ts` hands every resource — including the
+ * `.html` ones the registry crawls — to the **markdown** parser. Defaulting to
+ * {@link parserKindForPath} would file that document's markdown facts under
+ * `k2.html.<digest>`, the same key the registry's genuine HTML parse uses, and
+ * one lane would then be served the other's facts. That is a well-formed entry
+ * with the wrong contents — the failure class fail-soft explicitly does not
+ * cover (see parse-cache.ts).
+ *
+ * Making it required rather than defaulted is deliberate: a default here is
+ * silent at every call site that gets it wrong, and correct at none that a
+ * reviewer can see.
+ *
  * @param filePath - Absolute path to read
+ * @param parserKind - The parser this content will actually be handed to.
+ *   Callers that route by extension pass `parserKindForPath(filePath)`.
  * @returns The content, its key, and the parser it routes to
  * @throws Whatever `readFile` throws — callers decide whether a read failure is
  *   fatal or a miss
  */
-export async function readContentWithKey(filePath: string): Promise<KeyedContent> {
-  const parserKind = parserKindForPath(filePath);
+export async function readContentWithKey(
+  filePath: string,
+  parserKind: ParserKind,
+): Promise<KeyedContent> {
   // Read as bytes and decode here, rather than letting readFile decode: the key
   // must be over what was on disk, and the decode is lossy.
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied path, same trust level as the parsers this feeds

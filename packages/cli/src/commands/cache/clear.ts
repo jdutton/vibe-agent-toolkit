@@ -59,6 +59,13 @@ const EMPTY_USAGE: TreeUsage = { entries: 0, bytes: 0 };
  * itself. Refusing an unexpected shape turns that into an error instead of an
  * `rm -rf /tmp`.
  *
+ * ⚠ `@vibe-agent-toolkit/resources` now also exports a `vatCacheRoot()`, and
+ * `parseCacheDirectory()` is built from it — so on paper this derivation is a
+ * round trip. It is kept deliberately: the guard's job is to notice if that
+ * relationship ever changes, and importing the root directly would retire the
+ * only check standing between a shape change and a recursive delete of
+ * `<tmpdir>` itself. Deriving-then-verifying is the point.
+ *
  * @returns Absolute path to the cache root
  * @throws {Error} If the derived parent is not named `.vat-cache`
  */

@@ -28,7 +28,7 @@ import {
   OnnxEmbeddingProvider,
 } from '@vibe-agent-toolkit/rag';
 import {
-  parseMarkdown,
+  parseFileCached,
   transformContent,
   type ContentTransformOptions,
   type ResourceMetadata,
@@ -517,8 +517,12 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     resource: ResourceMetadata,
     result: IndexResult
   ): Promise<void> {
-    // Read file content using parseMarkdown
-    const parseResult = await parseMarkdown(resource.filePath);
+    // Read + parse, served from the disk parse cache when one is filed under
+    // these bytes. 'markdown' is stated rather than derived from the extension:
+    // this lane has always parsed every resource as markdown, including the
+    // .html ones the registry crawls, and the key must name the parser that
+    // actually ran (see content-key.ts).
+    const parseResult = await parseFileCached(resource.filePath, 'markdown');
 
     // Apply content transform if configured (e.g., rewrite links before chunking)
     const content = this.config.contentTransform

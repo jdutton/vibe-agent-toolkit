@@ -43,7 +43,7 @@ import {
   type ParseResult,
   type ProjectConfig,
   type ResourceMetadata,
-  parseMarkdown,
+  parseFileCached,
 } from '@vibe-agent-toolkit/resources';
 import {
   findProjectRoot,
@@ -540,7 +540,7 @@ export async function packageSkill(
   } = options;
 
   // 1. Parse SKILL.md frontmatter and links
-  const parseResult = await parseMarkdown(skillPath);
+  const parseResult = await parseFileCached(skillPath, 'markdown');
   const skillMetadata = extractSkillMetadata(parseResult, skillPath);
 
   // 2. Find project boundary (config root -> git root -> skill dir).

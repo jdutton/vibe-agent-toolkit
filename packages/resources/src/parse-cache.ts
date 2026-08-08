@@ -106,8 +106,9 @@ import { promises as fs } from 'node:fs';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 
-import type { KeyedContent } from './content-key.js';
-import { type ParseResult, parseFrontmatterSource } from './link-parser.js';
+import { type KeyedContent, type ParserKind, readContentWithKey } from './content-key.js';
+import { parseHtmlContent } from './html-link-parser.js';
+import { type ParseResult, parseFrontmatterSource, parseMarkdownContent } from './link-parser.js';
 import type { HtmlParseError } from './schemas/resource-metadata.js';
 import type { HeadingNode, ResourceLink, UnresolvedReference } from './types.js';
 
@@ -179,6 +180,25 @@ interface StoredEntry {
   facts: ParseFacts;
 }
 
+/**
+ * How many parses a cache instance served versus handed back to the parser.
+ *
+ * Exposed because the cache is otherwise unobservable: it is content-addressed
+ * and fail-soft, so a cache that never hits produces exactly the same results as
+ * one that always does. Any test asserting cold/warm equivalence is asserting
+ * nothing at all unless it can also show the warm run hit.
+ */
+export interface ParseCacheStats {
+  /** Lookups that returned an entry — the parser never ran. */
+  hits: number;
+  /**
+   * Lookups that returned nothing, for any reason: no entry, a corrupt or
+   * wrong-version entry, an unusable key, or a disabled cache. Every one of them
+   * costs the caller a parse, which is what makes them one number.
+   */
+  misses: number;
+}
+
 /** Options for {@link ParseCache}. Every one of them is injectable for tests. */
 export interface ParseCacheOptions {
   /**
@@ -193,12 +213,27 @@ export interface ParseCacheOptions {
 }
 
 /**
- * The default cache root: `<tmpdir>/.vat-cache/parse`.
+ * The shared cache root, `<tmpdir>/.vat-cache` — parse entries, the external-URL
+ * validation cache and linkAuth's content cache are all tenants beneath it.
+ *
+ * THE one definition of where that tree lives. It was three: this module, the
+ * registry's external-URL cache directory, and `vat cache clear`. Three copies
+ * of a path literal that a recursive delete is pointed at is exactly the sort of
+ * agreement that holds until it doesn't.
+ *
+ * @returns Absolute path, forward slashes (via `safePath.join`)
+ */
+export function vatCacheRoot(): string {
+  return safePath.join(normalizedTmpdir(), '.vat-cache');
+}
+
+/**
+ * The default parse-cache root: `<tmpdir>/.vat-cache/parse`.
  *
  * @returns Absolute path, forward slashes (via `safePath.join`)
  */
 export function parseCacheDirectory(): string {
-  return safePath.join(normalizedTmpdir(), '.vat-cache', 'parse');
+  return safePath.join(vatCacheRoot(), 'parse');
 }
 
 /**
@@ -292,10 +327,13 @@ function deriveFrontmatter(facts: ParseFacts): {
 /**
  * Disk-backed store of parse facts, keyed by content.
  *
+ * Most callers want {@link parseFileCached} or {@link parseKeyed} rather than
+ * driving `get`/`set` by hand.
+ *
  * @example
  * ```typescript
  * const cache = new ParseCache();
- * const keyed = await readContentWithKey(filePath);
+ * const keyed = await readContentWithKey(filePath, 'markdown');
  * const hit = await cache.get(keyed);
  * const result = hit ?? parseMarkdownContent(keyed.content, keyed.byteLength);
  * if (hit === null) await cache.set(keyed, result);
@@ -307,6 +345,16 @@ export class ParseCache {
 
   private readonly cacheDir: string;
 
+  /**
+   * Counters behind {@link stats}, cumulative for this instance's life.
+   *
+   * They live on the cache rather than on each caller because every caller of
+   * {@link parseKeyed} would otherwise keep its own pair, and the eight direct
+   * parse sites bite 2 migrates have nowhere to keep one.
+   */
+  private hitCount = 0;
+  private missCount = 0;
+
   constructor(options: ParseCacheOptions = {}) {
     // Read the env per construction, never at module load: a module-level read
     // is unobservable to a caller that sets the variable later, and untestable
@@ -317,13 +365,26 @@ export class ParseCache {
   }
 
   /**
+   * Hit/miss counts for this instance.
+   *
+   * @returns A snapshot of the counters, cumulative since construction
+   */
+  get stats(): ParseCacheStats {
+    return { hits: this.hitCount, misses: this.missCount };
+  }
+
+  /**
    * Look up the parse facts for an already-read document.
+   *
+   * Every call is counted, including the ones that short-circuit: a disabled
+   * cache and an unusable key are misses in the only sense that matters to a
+   * caller — the parser has to run.
    *
    * @param keyed - Content, key and byte length from one read
    * @returns A freshly-minted parse result, or `null` on any kind of miss
    */
   async get(keyed: KeyedContent): Promise<ParseResult | null> {
-    if (!this.enabled || !SAFE_KEY.test(keyed.key)) return null;
+    if (!this.enabled || !SAFE_KEY.test(keyed.key)) return this.miss();
 
     let raw: string;
     try {
@@ -331,11 +392,13 @@ export class ParseCache {
       raw = await fs.readFile(this.entryPath(keyed.key), 'utf-8');
     } catch {
       // ENOENT (never written), EACCES (perms), EISDIR — all a miss.
-      return null;
+      return this.miss();
     }
 
     const facts = readFacts(raw);
-    if (facts === null) return null;
+    if (facts === null) return this.miss();
+
+    this.hitCount += 1;
 
     // `readFacts` returns the product of a fresh `JSON.parse`, so this graph is
     // not shared with any previous caller. See the standing constraint in the
@@ -391,6 +454,12 @@ export class ParseCache {
     await removeQuietly(this.cacheDir, true);
   }
 
+  /** Count a miss and return the value every miss path returns. */
+  private miss(): null {
+    this.missCount += 1;
+    return null;
+  }
+
   private shardDir(key: string): string {
     return safePath.join(this.cacheDir, key.slice(-SHARD_LENGTH));
   }
@@ -398,6 +467,103 @@ export class ParseCache {
   private entryPath(key: string): string {
     return safePath.join(this.shardDir(key), `${key}.json`);
   }
+}
+
+/**
+ * Produce the parse facts for an already-read document, from the cache when one
+ * is filed under its content key and from the parser otherwise.
+ *
+ * THE interception point: it sits between the single read that keyed the bytes
+ * and the parser that would otherwise consume them, so on a hit the parser does
+ * not run at all. Nothing downstream changes — `rehydrate` re-attaches
+ * `content`/`sizeBytes` from the caller's own fresh read rather than from the
+ * entry, so a caller that publishes `stat().size` separately (as
+ * `ResourceRegistry.addResource` does) is unaffected.
+ *
+ * The `set` is **awaited**, not fired and forgotten. `vat validate`, `vat verify`
+ * and `vat build` each `spawnSync` the vat binary once per phase, so an entry
+ * that has not reached disk by process exit buys nothing; the write is measured
+ * at ~30 ms for 265 documents and `set` never throws.
+ *
+ * The parser is chosen by `keyed.parserKind`, which is the same value that went
+ * into the key — that is the whole reason `readContentWithKey` takes the kind as
+ * an argument rather than re-deriving it. Running the discriminator twice is how
+ * the parse route and the key's parse-route component drift apart.
+ *
+ * @param keyed - Content, key and byte length from ONE read
+ * @param cache - The store to consult and file into
+ * @returns Parse facts equal to what the parser would have produced
+ */
+export async function parseKeyed(keyed: KeyedContent, cache: ParseCache): Promise<ParseResult> {
+  const hit = await cache.get(keyed);
+  if (hit !== null) return hit;
+
+  // The `sizeBytes` argument is `keyed.byteLength` — the raw byte count of what
+  // was read — never a length derived from `keyed.content`, since decoding is
+  // lossy on malformed UTF-8 and a re-encoded count diverges from what is on
+  // disk (see link-parser.ts and content-key.ts).
+  const result =
+    keyed.parserKind === 'html'
+      ? parseHtmlContent(keyed.content, keyed.byteLength)
+      : parseMarkdownContent(keyed.content, keyed.byteLength);
+
+  await cache.set(keyed, result);
+  return result;
+}
+
+/**
+ * Process-wide cache instance for callers with nowhere to keep one.
+ *
+ * Lazy rather than constructed at module load: `ParseCache` reads `VAT_CACHE`
+ * once, per construction, so building it eagerly would bind the decision to
+ * import time — an ordering no caller has reason to expect and no test can
+ * control without mutating the real `process.env` before the first import.
+ */
+let sharedCache: ParseCache | undefined;
+
+/**
+ * The cache {@link parseFileCached} uses when the caller supplies none.
+ *
+ * @returns The process-wide instance, created on first use
+ */
+export function defaultParseCache(): ParseCache {
+  sharedCache ??= new ParseCache();
+  return sharedCache;
+}
+
+/**
+ * Read, key and parse a file, consulting the cache.
+ *
+ * The cached replacement for `parseMarkdown(path)` / `parseHtml(path)`: those
+ * two read the file themselves and hand the bytes straight to a parser, so they
+ * bypass the cache entirely. Every call site that does not go through
+ * `ResourceRegistry` uses this instead.
+ *
+ * ⚠ `parserKind` states which parser runs — it is **not** derived from the
+ * extension, because at least one shipped caller deliberately parses `.html`
+ * documents as markdown. Pass `parserKindForPath(filePath)` only if that is
+ * genuinely the rule you want; otherwise pass the kind you actually parse with,
+ * or the entry lands under a key another lane will read (see content-key.ts).
+ *
+ * One difference from `parseMarkdown`/`parseHtml`, deliberate: `sizeBytes` is
+ * the length of the bytes this call read, not a separate `stat().size`. For a
+ * regular file the two agree; where they can disagree — a file rewritten between
+ * the read and the stat — the byte count of what was actually parsed is the
+ * honest one, and it is also the number the key covers.
+ *
+ * @param filePath - Absolute path to the document
+ * @param parserKind - The parser to hand the content to
+ * @param cache - Store to use; defaults to the process-wide instance
+ * @returns The parse result, from an entry or from the parser
+ * @throws Whatever `readFile` throws — a read failure is the caller's to handle,
+ *   exactly as it was with `parseMarkdown`
+ */
+export async function parseFileCached(
+  filePath: string,
+  parserKind: ParserKind,
+  cache: ParseCache = defaultParseCache(),
+): Promise<ParseResult> {
+  return parseKeyed(await readContentWithKey(filePath, parserKind), cache);
 }
 
 /**

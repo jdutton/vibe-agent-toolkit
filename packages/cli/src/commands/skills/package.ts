@@ -17,7 +17,7 @@ import {
   type PackagingTarget,
   type ValidationResult,
 } from '@vibe-agent-toolkit/agent-skills';
-import { parseMarkdown, type ParseResult } from '@vibe-agent-toolkit/resources';
+import { parseFileCached, type ParseResult } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 import * as yaml from 'yaml';
@@ -235,7 +235,7 @@ async function collectLinkedFiles(
   }
   visited.add(normalizedPath);
 
-  const parseResult = await parseMarkdown(markdownPath);
+  const parseResult = await parseFileCached(markdownPath, 'markdown');
   const linkedFiles: string[] = [];
 
   for (const link of parseResult.links) {
@@ -374,7 +374,7 @@ async function performDryRun(
   );
 
   // Parse SKILL.md and extract metadata
-  const parseResult = await parseMarkdown(skillPath);
+  const parseResult = await parseFileCached(skillPath, 'markdown');
   const skillName = extractSkillName(parseResult);
   logger.info(`   Skill: ${skillName}`);
 

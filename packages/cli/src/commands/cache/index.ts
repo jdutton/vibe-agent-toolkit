@@ -93,7 +93,23 @@ export function createCacheCommand(): Command {
 
   cache
     .description("Manage VAT's shared on-disk caches in the system temp directory")
-    .helpCommand(false);
+    .helpCommand(false)
+    .addHelpText(
+      'after',
+      `
+Description:
+  VAT keeps three disposable caches under <tmpdir>/.vat-cache: parse facts
+  keyed by file content, external-URL validation results, and per-OS-user
+  authenticated-link content. None of them is durable — recovery is always
+  "rescan", and the OS temp purge is the eviction policy.
+
+  To run WITHOUT the caches rather than remove them, use --no-cache on any
+  command (or VAT_CACHE=0), which also applies to spawned phases.
+
+Example:
+  $ vat cache clear                    # Reclaim the temp-directory cache tree
+`
+    );
 
   cache
     .command('clear')

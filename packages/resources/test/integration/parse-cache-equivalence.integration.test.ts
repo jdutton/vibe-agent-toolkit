@@ -22,8 +22,8 @@ import { promises as fs } from 'node:fs';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { ParseCache } from '../../src/parse-cache.js';
-import { ResourceRegistry, type ParseCacheStats } from '../../src/resource-registry.js';
+import { ParseCache, type ParseCacheStats } from '../../src/parse-cache.js';
+import { ResourceRegistry } from '../../src/resource-registry.js';
 import type { ResourceMetadata } from '../../src/types.js';
 
 // ---------------------------------------------------------------------------

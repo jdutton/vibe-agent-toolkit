@@ -41,7 +41,6 @@ export {
   type UnreadableResource,
   type ResourceRegistryOptions,
   type RegistryStats,
-  type ParseCacheStats,
   type CollectionStats,
   type CollectionStat,
 } from './resource-registry.js';
@@ -120,7 +119,20 @@ export {
 // the note further down). Nothing outside the cache should be able to mint or
 // read an entry payload — a well-formed entry filed under the wrong key is the
 // one failure mode fail-soft IO handling cannot catch.
-export { ParseCache, parseCacheDirectory, type ParseCacheOptions } from './parse-cache.js';
+//
+// `parseFileCached` IS exported, and is the one every caller outside
+// `ResourceRegistry` should reach for: `parseMarkdown`/`parseHtml` read the file
+// and hand the bytes straight to a parser, so they bypass the cache entirely.
+export {
+  ParseCache,
+  defaultParseCache,
+  parseCacheDirectory,
+  parseFileCached,
+  parseKeyed,
+  vatCacheRoot,
+  type ParseCacheOptions,
+  type ParseCacheStats,
+} from './parse-cache.js';
 
 export { parseHtml } from './html-link-parser.js';
 // HtmlParseError is Zod-sourced (single source of truth) — see schemas/resource-metadata.ts.

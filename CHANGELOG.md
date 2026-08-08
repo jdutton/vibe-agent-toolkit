@@ -51,8 +51,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one key. `parserKindForPath()` is now THE markdown-vs-HTML discriminator — `ResourceRegistry` calls
   it rather than repeating the extension test — because parser selection is part of a document's parse
   identity: identical bytes at `x.md` and `x.html` legitimately parse differently, which is realizable
-  on the *empty file*. `readContentWithKey()` reads and keys in one step, so a caller cannot key one
-  read and parse another, and returns the raw `byteLength` alongside the decoded content.
+  on the *empty file*. `readContentWithKey(filePath, parserKind)` reads and keys in one step, so a
+  caller cannot key one read and parse another, and returns the raw `byteLength` alongside the decoded
+  content. Its `parserKind` is a **required argument, deliberately not defaulted to the extension**:
+  the key must name the parser that actually runs, and shipped code exists where those differ — the
+  LanceDB RAG lane hands every resource, including the `.html` ones the registry crawls, to the
+  markdown parser. A defaulted kind would file that lane's markdown facts under the key a genuine
+  HTML parse uses, and one lane would be served the other's facts. Callers that really do want the
+  extension rule pass `parserKindForPath(filePath)` explicitly.
   `computeContentKey()` takes **raw bytes** (`Uint8Array`), not a decoded string: UTF-8 decoding is
   many-to-one on invalid input, so keying the decoded form gave three distinct files
   (`[c2]`, `[e2 82]`, `[ff]`) one key while `ParseResult.sizeBytes` — a raw byte count that reaches
@@ -109,6 +115,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the warm run actually hit — verified against a mutant where the cache always misses, which leaves
   a bare equality assertion perfectly green.
 
+- **`parseFileCached(filePath, parserKind, cache?)`** in `@vibe-agent-toolkit/resources` — the cached
+  replacement for `parseMarkdown(path)` / `parseHtml(path)`. Those two read the file and hand the
+  bytes straight to a parser, so they bypass the cache entirely; every VAT call site that does not go
+  through `ResourceRegistry` now uses this instead. Eight of them did: skill packaging, skill and
+  packaging validation, the post-build HTML href scan, skill-name discovery, `vat skills package`
+  (link collection and dry-run) and the LanceDB indexer. `parseKeyed(keyed, cache)` is the same
+  interception one step lower, for a caller that has already read and keyed the bytes.
+  `defaultParseCache()` is the process-wide instance used when no cache is supplied. `parseMarkdown`
+  and `parseHtml` remain exported and uncached — the parse-fact oracle behind `vat pipeline` uses
+  them deliberately, since an oracle that consults the cache cannot verify it.
+
 - **`vat cache clear`** removes VAT's on-disk caches — the parse cache and the external-URL
   validation caches, which share `<tmpdir>/.vat-cache/`. Reports what it removed; exits 0 when
   there is nothing there; works even when caching is disabled, since a no-op in that case would be
@@ -120,6 +137,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `vat resources validate --no-cache` keeps working and now covers both caches.
 
 ### Changed
+
+- **Skill validation and skill-name discovery stopped re-reading files they had just parsed.**
+  `validateSkillPackaging` read SKILL.md a second time to count its lines and to feed the
+  compatibility detectors, and `readSkillName` read it a second time for its H1 fallback — in both
+  cases the parse result already carried the identical raw source. Each now uses `parseResult.content`,
+  removing a whole-file read per skill and the window in which the two reads could disagree.
 
 - **`ResourceRegistry.addResource` now reads each file once and stats it once, instead of twice
   each.** Every crawl-based command builds its registry through this method, and it was making four
