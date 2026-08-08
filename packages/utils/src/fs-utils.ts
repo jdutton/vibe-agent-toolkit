@@ -2,11 +2,42 @@
  * Filesystem utilities
  */
 
+import { existsSync, statSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { toForwardSlash } from './path-core.js';
 import { safePath } from './path-utils.js';
+
+/**
+ * What one path looked like the first time this run asked.
+ *
+ * The two fields are deliberately NOT collapsed into a single `stat` result:
+ * they record the outcome of `existsSync` and of `statSync` *separately*,
+ * because callers distinguish three states and only two of them are "the stat
+ * worked". See {@link FsLookupCache.probe}.
+ */
+export interface PathProbe {
+  /** `existsSync` — follows symlinks, so a dangling link reads as absent. */
+  readonly exists: boolean;
+  /**
+   * `statSync().isDirectory()`.
+   *
+   * `null` means *no answer*, which happens two ways: the path is absent, or
+   * it exists and `statSync` threw anyway (a permission change or a delete
+   * between the two calls). Callers that must tell those apart read
+   * {@link PathProbe.exists} alongside it.
+   */
+  readonly isDirectory: boolean | null;
+}
+
+/** How many probes a {@link FsLookupCache} answered, and how many cost syscalls. */
+export interface PathProbeStats {
+  /** Probe calls received. */
+  readonly probes: number;
+  /** Probes that were not already memoized, i.e. that hit the filesystem. */
+  readonly misses: number;
+}
 
 /**
  * Per-run memo for the two filesystem lookups that validation repeats on values
@@ -38,6 +69,67 @@ export class FsLookupCache {
 
   /** Path → its canonical path, falling back to the resolved path. */
   readonly #realpaths = new Map<string, Promise<string>>();
+
+  /** Path → the existence/kind pair recorded the first time it was probed. */
+  readonly #probes = new Map<string, PathProbe>();
+
+  /** Probe calls received, and how many of them reached the filesystem. */
+  #probeCount = 0;
+  #probeMisses = 0;
+
+  /**
+   * Probe counters, for tests and `--debug` output.
+   *
+   * A memo whose tests never assert its hit count is theatre: every assertion
+   * about *values* still passes when the memo is disabled, because an
+   * always-miss cache returns the same answers — only more slowly. This is the
+   * one observable that dies when the memo does.
+   */
+  get probeStats(): PathProbeStats {
+    return { probes: this.#probeCount, misses: this.#probeMisses };
+  }
+
+  /**
+   * Does this path exist, and is it a directory — asked once per run.
+   *
+   * **Both syscalls are preserved, in order, exactly as an uncached caller
+   * would make them.** `existsSync` then `statSync` is not the same as one
+   * `statSync`: the pair distinguishes "absent" from "present but unstattable",
+   * and the link walker's classifier branches differently on each. Collapsing
+   * them would be a behaviour change wearing the shape of an optimization, so
+   * this method deduplicates the pair rather than replacing it.
+   *
+   * Synchronous, unlike this class's other two lookups, because its caller (the
+   * skill link-graph walker) is synchronous throughout. One oracle answering
+   * both shapes beats a second class that differs only in colour.
+   *
+   * @param targetPath - Path to probe
+   * @returns The recorded existence/kind pair
+   */
+  probe(targetPath: string): PathProbe {
+    this.#probeCount++;
+    const cached = this.#probes.get(targetPath);
+    if (cached !== undefined) return cached;
+
+    this.#probeMisses++;
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-validated path
+    const exists = existsSync(targetPath);
+    let isDirectory: boolean | null = null;
+    if (exists) {
+      try {
+        // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-validated path
+        isDirectory = statSync(targetPath).isDirectory();
+      } catch {
+        // Present to `existsSync` but unstattable. `null` records "no answer"
+        // rather than guessing `false`, which would read as "it is a file".
+        isDirectory = null;
+      }
+    }
+
+    const result: PathProbe = { exists, isDirectory };
+    this.#probes.set(targetPath, result);
+    return result;
+  }
 
   /**
    * Canonical path for `targetPath`, falling back to `safePath.resolve()` when the

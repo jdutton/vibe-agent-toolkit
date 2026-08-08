@@ -33,12 +33,11 @@
  * `non-routable-source` exclusion (`LINK_FROM_NON_ROUTABLE_FILE`).
  */
 
-import { existsSync, statSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
 import { isLocalFileLink, parserKindForPath, resolveLocalHref } from '@vibe-agent-toolkit/resources';
 import type { DeferredArtifacts, ResourceLink, ResourceMetadata } from '@vibe-agent-toolkit/resources';
-import { type GitTracker, isGitIgnored, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
+import { FsLookupCache, type GitTracker, isGitIgnored, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 
 import { isAgentInstructionBasename, isNavigationBasename } from './validators/validation-rules.js';
@@ -169,6 +168,17 @@ export interface WalkLinkGraphOptions {
    * `isGitIgnored()` spawn so one-off callers continue to work unchanged.
    */
   gitTracker?: GitTracker;
+  /**
+   * Optional {@link FsLookupCache} to answer this walk's `exists`/`isDirectory`
+   * questions (pass 1′). Omitted, the walk builds its own and discards it.
+   *
+   * ⚠️ **Only inject one when nothing writes to the tree between the walks that
+   * share it.** The cache holds a snapshot, so a probe taken before a build
+   * step answers questions asked after it. `packageSkill` writes `dist/` per
+   * skill and therefore must NOT share a probe across skills. Provided mainly
+   * so callers can read {@link FsLookupCache.probeStats} back.
+   */
+  pathProbe?: FsLookupCache;
 }
 
 // ============================================================================
@@ -259,6 +269,30 @@ interface WalkState {
    * survive into {@link WalkState.excludedReferences}.
    */
   unfollowedFromNonRoutable: LinkResolution[];
+  /**
+   * Pass 1′ — the attribute oracle for the paths this walk asks about.
+   *
+   * Link targets are not in the enumeration by construction: they are
+   * discovered by parsing, so their `exists`/`isDirectory` attributes have to
+   * be filled after the fact. Filling them once per distinct path, rather than
+   * once per link, is the whole of the change — several documents linking the
+   * same README asked the same two syscalls that many times.
+   *
+   * **Scoped to one walk, deliberately.** `packageSkill` writes into `dist/`
+   * between skills, so a probe shared across skills would answer a
+   * post-build question from a pre-build snapshot — exactly the staleness
+   * {@link FsLookupCache}'s own docs warn about.
+   *
+   * That scoping costs most of the collapse on the packager lane, and the
+   * trade is worth stating rather than rediscovering. Measured on VAT's own
+   * tree, 2026-08-09: `vat audit .` asks 42 questions over 9 distinct targets
+   * (4.7×, because one walk revisits the same shared docs), while
+   * `vat skills build` asks 26 over 24 — 13 skills, one probe each, and
+   * targets almost never repeat inside a single skill's walk. Sharing one
+   * probe across skills would collapse that too, and would be wrong.
+   * Correctness wins; the lane simply does not have the redundancy.
+   */
+  pathProbe: FsLookupCache;
 }
 
 /** Compiled exclude matcher (pattern + original rule) */
@@ -439,14 +473,17 @@ function checkExclusions(
   link: ResourceLink,
   options: WalkLinkGraphOptions,
   excludeMatchers: ExcludeMatcher[],
-  excludedReferences: LinkResolution[],
-  deferredAssetSet: Set<string>,
+  state: WalkState,
 ): boolean {
+  const { excludedReferences, deferredAssetSet } = state;
+
   // ONE existence probe for the whole classifier. Several branches below are
   // meaningful only for a target that is actually there, and one of them
   // (gitignore) is actively WRONG without it — see the comment on that branch.
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path from parsed markdown
-  const targetExists = existsSync(targetPath);
+  //
+  // The probe also memoizes across links (pass 1′): the two syscalls are made
+  // once per distinct target, not once per reference to it.
+  const { exists: targetExists, isDirectory } = state.pathProbe.probe(targetPath);
 
   // The deferred check is the FIRST discriminator: a not-yet-materialized target
   // must be classified before any check that would read it off disk.
@@ -456,14 +493,13 @@ function checkExclusions(
 
   // Check if target is a directory
   if (targetExists) {
-    try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path from parsed markdown
-      if (statSync(targetPath).isDirectory()) {
-        excludedReferences.push(makeExclusion(targetPath, sourcePath, targetExists, 'directory-target', link));
-        return true;
-      }
-    } catch {
-      // statSync failure = skip
+    if (isDirectory === true) {
+      excludedReferences.push(makeExclusion(targetPath, sourcePath, targetExists, 'directory-target', link));
+      return true;
+    }
+    if (isDirectory === null) {
+      // Present to `existsSync` but unstattable — the classifier has no basis
+      // to say anything about it, so it skips exactly as it always has.
       return true;
     }
   }
@@ -542,7 +578,7 @@ function processLink(
   const targetPath = resolveHrefToPath(hrefWithoutAnchor, currentResource.filePath, options.projectRoot);
 
   // Check structural exclusions (deferred, directory, boundary, navigation, pattern, gitignore)
-  if (checkExclusions(targetPath, currentResource.filePath, link, options, excludeMatchers, state.excludedReferences, state.deferredAssetSet)) {
+  if (checkExclusions(targetPath, currentResource.filePath, link, options, excludeMatchers, state)) {
     return;
   }
 
@@ -553,8 +589,9 @@ function processLink(
 
   if (targetResource) {
     processRegistryResource(targetResource, targetPath, currentResource.filePath, link, currentDepth, options, state);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path from parsed markdown
-  } else if (existsSync(targetPath)) {
+    // Same answer `checkExclusions` already recorded a few lines up — this used
+    // to be a second `existsSync` of the identical path in the same tick.
+  } else if (state.pathProbe.probe(targetPath).exists) {
     // Not in registry — non-markdown asset that exists on disk
     state.bundledAssetSet.add(toForwardSlash(targetPath));
   } else {
@@ -601,8 +638,7 @@ function recordUnfollowedLinks(
     const hrefWithoutAnchor = link.href.split('#')[0] ?? link.href;
     if (hrefWithoutAnchor === '') continue;
     const targetPath = resolveHrefToPath(hrefWithoutAnchor, member.filePath, options.projectRoot);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path from a parsed resource
-    const targetExists = existsSync(targetPath);
+    const targetExists = state.pathProbe.probe(targetPath).exists;
     state.unfollowedFromNonRoutable.push(
       makeExclusion(targetPath, member.filePath, targetExists, 'non-routable-source', link),
     );
@@ -708,6 +744,7 @@ export function walkLinkGraph(
     maxBundledDepth: 0,
     queue: [[skillResource, 0]],
     unfollowedFromNonRoutable: [],
+    pathProbe: options.pathProbe ?? new FsLookupCache(),
   };
 
   while (state.queue.length > 0) {

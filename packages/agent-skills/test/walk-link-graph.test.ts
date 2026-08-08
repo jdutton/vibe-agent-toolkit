@@ -4,7 +4,7 @@ import { dirname } from 'node:path';
 
 import { DeferredArtifacts } from '@vibe-agent-toolkit/resources';
 import type { ResourceLink, ResourceMetadata, SkillFileEntry } from '@vibe-agent-toolkit/resources';
-import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { FsLookupCache, mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { walkerExclusionsToIssues } from '../src/validators/walker-to-issues.js';
@@ -1188,6 +1188,65 @@ describe('walkLinkGraph', () => {
       expect(
         result.excludedReferences.some(r => r.excludeReason === 'depth-exceeded'),
       ).toBe(false);
+    });
+  });
+
+  describe('path-attribute probing (pass 1′)', () => {
+    /**
+     * The walk's `exists`/`isDirectory` questions are answered once per DISTINCT
+     * target, not once per link naming it.
+     *
+     * This assertion is the only one in the suite that dies when the memo dies.
+     * Every other test here asserts the walk's RESULT, and an always-miss probe
+     * returns identical results — just after more syscalls. A cache test with no
+     * count assertion is theatre.
+     */
+    it('probes each distinct link target once, however many links name it', () => {
+      const root = getTempDir();
+      const skillPath = safePath.resolve(root, 'SKILL.md');
+      const guidePath = safePath.resolve(root, 'docs/guide.md');
+      const assetPath = safePath.resolve(root, 'asset.png');
+      mkdirSyncReal(dirname(guidePath), { recursive: true });
+      writeFileSync(skillPath, '# Skill\n');
+      writeFileSync(guidePath, '# Guide\n');
+      writeFileSync(assetPath, 'png\n');
+
+      // The asset is deliberately absent from the registry, so each link to it
+      // takes BOTH probe sites: the classifier's, and the not-in-registry
+      // existence check that used to be a second `existsSync` of the same path.
+      // `../asset.png` from docs/ and `./asset.png` from the root resolve to the
+      // same absolute path — which is exactly the collapse under test.
+      const skill = createMockResource(SKILL_ID, skillPath, [
+        createLocalLink('guide', './docs/guide.md', GUIDE_ID),
+        createLocalLink('asset once', './asset.png'),
+        createLocalLink('asset again', './asset.png'),
+      ]);
+      const guide = createMockResource(GUIDE_ID, guidePath, [
+        createLocalLink('asset from docs', '../asset.png'),
+      ]);
+
+      const pathProbe = new FsLookupCache();
+      walkLinkGraph(SKILL_ID, createMockRegistry([skill, guide]), {
+        maxDepth: 5,
+        excludeRules: [],
+        projectRoot: root,
+        skillRootPath: skillPath,
+        pathProbe,
+      });
+
+      const { probes, misses } = pathProbe.probeStats;
+      // Two distinct targets on disk: docs/guide.md and asset.png.
+      expect(misses).toBe(2);
+      // And they were asked about more often than that — otherwise the memo
+      // would be collapsing nothing and this test would prove nothing.
+      expect(probes).toBeGreaterThan(misses);
+    });
+
+    it('builds its own probe when the caller supplies none', () => {
+      // The default path must still work: no caller in production injects one.
+      const result = walkLinkGraph(SKILL_ID, createSkillGuideRegistry(), defaultOptions());
+
+      expect(result.bundledResources.map(r => r.id)).toContain(GUIDE_ID);
     });
   });
 });

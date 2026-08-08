@@ -5,7 +5,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { copyDirectory, FsLookupCache, verifyCaseSensitiveFilename } from '../src/fs-utils.js';
-import { setupAsyncTempDirSuite } from '../src/test-helpers.js';
+import { canCreateSymlinks, setupAsyncTempDirSuite } from '../src/test-helpers.js';
 
 import { setupNestedDirectory } from './test-helpers.js';
 
@@ -249,6 +249,68 @@ describe('fs-utils', () => {
       const missing = safePath.join(tempDir, 'no-such-path');
       expect(await cache.realpath(missing)).toBe(safePath.resolve(missing));
       spy.mockRestore();
+    });
+
+    it('probes a path once however many times it is asked about', async () => {
+      const filePath = safePath.join(tempDir, 'probed.txt');
+      await fs.writeFile(filePath, '');
+      const cache = new FsLookupCache();
+
+      const first = cache.probe(filePath);
+      cache.probe(filePath);
+      cache.probe(filePath);
+
+      // The counter is the assertion that dies when the memo dies. Every
+      // assertion below about the VALUES still passes without a memo.
+      expect(cache.probeStats).toEqual({ probes: 3, misses: 1 });
+      expect(first).toEqual({ exists: true, isDirectory: false });
+      expect(cache.probe(filePath)).toBe(first);
+    });
+
+    it('records a directory as existing and a directory', async () => {
+      const dirPath = safePath.join(tempDir, 'a-directory');
+      await fs.mkdir(dirPath);
+      const cache = new FsLookupCache();
+
+      expect(cache.probe(dirPath)).toEqual({ exists: true, isDirectory: true });
+    });
+
+    it('records an absent path as absent with no kind answer, and memoizes that too', () => {
+      const cache = new FsLookupCache();
+      const missing = safePath.join(tempDir, 'not-here.txt');
+
+      expect(cache.probe(missing)).toEqual({ exists: false, isDirectory: null });
+      cache.probe(missing);
+
+      // The absent answer is cached: re-asking is the same failed syscall.
+      expect(cache.probeStats).toEqual({ probes: 2, misses: 1 });
+    });
+
+    it('reports a dangling symlink as absent, matching existsSync rather than lstat', async ({ skip }) => {
+      // Windows CI agents often lack the symlink privilege. Say so rather than
+      // no-op: a silently skipped symlink case reads as a passing test.
+      if (!canCreateSymlinks(tempDir)) skip();
+
+      const dangling = safePath.join(tempDir, 'dangling-link');
+      await fs.symlink(safePath.join(tempDir, 'no-such-target.txt'), dangling);
+      const cache = new FsLookupCache();
+
+      // `existsSync` follows the link, so a dangling one reads as absent. The
+      // link-graph walker's classifier depends on exactly this: a target it
+      // cannot read is `missing-target`, not a present file.
+      expect(cache.probe(dangling)).toEqual({ exists: false, isDirectory: null });
+    });
+
+    it('keeps probe entries per instance, so a fresh run re-probes', async () => {
+      const filePath = safePath.join(tempDir, 'later.txt');
+      const firstRun = new FsLookupCache();
+      expect(firstRun.probe(filePath).exists).toBe(false);
+
+      await fs.writeFile(filePath, '');
+
+      // Same instance: still the snapshot it took.
+      expect(firstRun.probe(filePath).exists).toBe(false);
+      expect(new FsLookupCache().probe(filePath).exists).toBe(true);
     });
 
     it('is instance-scoped, so a new instance never serves another run stale entries', async () => {

@@ -17,3 +17,4 @@ export {
 } from './path-utils.js';
 
 export { copyDirectory, FsLookupCache, verifyCaseSensitiveFilename } from './fs-utils.js';
+export type { PathProbe, PathProbeStats } from './fs-utils.js';

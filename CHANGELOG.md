@@ -20,6 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`FsLookupCache.probe(path)`** in `@vibe-agent-toolkit/utils` — memoizes the `existsSync` +
+  `statSync` pair that link-target classification asks per link, so it is asked once per distinct
+  target instead. The two syscalls are deduplicated, not collapsed into one: the pair distinguishes
+  "absent" from "present but unstattable", and the link-graph walker branches differently on each.
+  Exposes `probeStats` (`{ probes, misses }`), and `walkLinkGraph` accepts an optional `pathProbe`
+  so callers can read those counters back. Output-neutral by design — verified with `vat pipeline`
+  (12/12 artifacts identical) and a byte-for-byte diff of the packaged skill output.
+
 - **`parseMarkdownContent(content, sizeBytes)` and `parseHtmlContent(content, sizeBytes)`** in
   `@vibe-agent-toolkit/resources` — the content-addressable halves of `parseMarkdown` / `parseHtml`,
   pure functions of their arguments with no filesystem access. The path-taking originals are
