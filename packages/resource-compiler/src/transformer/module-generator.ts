@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 
 import ts from 'typescript';
 
-import { parseMarkdown } from '../compiler/markdown-parser.js';
+import { toMarkdownResource } from '../compiler/markdown-parser.js';
 
 import { resourceToAst, createConstDeclaration } from './ast-helpers.js';
 import type { MarkdownImportInfo } from './import-detector.js';
@@ -32,7 +32,7 @@ export function generateModuleReplacement(
   // Read and parse the markdown file
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated path from import resolution
   const markdownContent = readFileSync(resolvedPath, 'utf-8');
-  const resource = parseMarkdown(markdownContent);
+  const resource = toMarkdownResource(markdownContent);
 
   // Convert resource to AST
   const resourceAst = resourceToAst(resource);

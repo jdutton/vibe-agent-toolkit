@@ -12,7 +12,7 @@ import { setupSyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
 import { glob } from 'glob';
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 
-import { parseMarkdown } from '../../src/compiler/markdown-parser.js';
+import { toMarkdownResource } from '../../src/compiler/markdown-parser.js';
 import { generateMarkdownDeclarationFile, getDeclarationPath } from '../../src/transformer/declaration-generator.js';
 import { createMultipleMarkdownFiles, verifyOperationResults } from '../test-file-helpers.js';
 
@@ -34,7 +34,7 @@ async function generateTypesForDirectory(
   for (const filePath of files) {
     try {
       const content = readFileSync(filePath, 'utf-8');
-      const resource = parseMarkdown(content);
+      const resource = toMarkdownResource(content);
       const declaration = generateMarkdownDeclarationFile(filePath, resource);
       const declarationPath = getDeclarationPath(filePath);
 

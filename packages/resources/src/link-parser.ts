@@ -60,6 +60,10 @@ export interface ParseResult {
 /**
  * Parse a markdown file and extract all links, headings, and metadata.
  *
+ * Reads the bytes, then delegates every parsing decision to
+ * {@link parseMarkdownContent}. The only thing decided here is the byte size
+ * attributed to the document: `stat().size`, the real size on disk.
+ *
  * @param filePath - Absolute path to the markdown file
  * @returns Parsed markdown data including links, headings, size, and token estimate
  * @throws Error if file cannot be read or parsed
@@ -80,7 +84,47 @@ export async function parseMarkdown(filePath: string): Promise<ParseResult> {
     stat(filePath),
   ]);
 
-  const sizeBytes = stats.size;
+  return parseMarkdownContent(content, stats.size);
+}
+
+/**
+ * Parse markdown **source** — the content-addressable half of
+ * {@link parseMarkdown}.
+ *
+ * This is a pure function of its two arguments: no filesystem access, no path,
+ * no ambient state. That is what makes it cacheable by content, and it is what
+ * a history replay needs — a historical blob read out of git is not on disk
+ * under any path, so anything that insists on a `filePath` cannot parse it.
+ * {@link parseMarkdown} is now just "read the bytes, then call this".
+ *
+ * ## Why `sizeBytes` is a parameter and NOT derived from `content`
+ *
+ * `content` is a **decoded** string; `sizeBytes` is a count of **bytes on
+ * disk**. Those are not recoverable from one another:
+ *
+ * - `content.length` is UTF-16 code units — wrong for anything non-ASCII.
+ * - `Buffer.byteLength(content, 'utf-8')` is the byte length of a *re-encoded*
+ *   string, which diverges from the file's real size whenever the source bytes
+ *   were not already well-formed UTF-8 (invalid sequences decode to U+FFFD and
+ *   re-encode to three bytes each, so the round trip does not preserve length)
+ *   — and it silently ignores a UTF-8 BOM the decoder stripped.
+ *
+ * The value reaches packaged-output accounting elsewhere in the toolkit, so it
+ * must stay the caller's decision rather than a guess made here.
+ * {@link parseMarkdown} passes `stat().size`, exactly as it always has; a
+ * caller replaying a git blob passes that blob's byte length.
+ *
+ * @param content - Decoded markdown source
+ * @param sizeBytes - Byte size the caller attributes to this content
+ * @returns Parsed markdown data including links, headings, size, and token estimate
+ *
+ * @example
+ * ```typescript
+ * const result = parseMarkdownContent('# Title\n', 8);
+ * console.log(`Found ${result.links.length} links`);
+ * ```
+ */
+export function parseMarkdownContent(content: string, sizeBytes: number): ParseResult {
   const estimatedTokenCount = Math.ceil(content.length / 4);
 
   // Parse markdown with unified/remark
@@ -117,9 +161,9 @@ export async function parseMarkdown(filePath: string): Promise<ParseResult> {
 /**
  * Everything a single walk of the markdown AST yields.
  *
- * `anchors` is always an array here (possibly empty); `parseMarkdown` is what
- * decides to omit the key entirely when a document declares none, so the
- * "absent, not empty" distinction lives at exactly one place.
+ * `anchors` is always an array here (possibly empty); `parseMarkdownContent`
+ * is what decides to omit the key entirely when a document declares none, so
+ * the "absent, not empty" distinction lives at exactly one place.
  */
 interface MarkdownAstFacts {
   links: ResourceLink[];
@@ -303,7 +347,7 @@ function toResourceLink(
  * all; it degrades to literal bracketed text in the AST (and in the rendered
  * document), which is exactly why an AST-based checker is structurally blind
  * to it. That dangling case is detected separately, by
- * `findUnresolvedReferences`'s raw-source scan (see `parseMarkdown` and
+ * `findUnresolvedReferences`'s raw-source scan (see `parseMarkdownContent` and
  * `unresolved-references.ts`), which reports it as
  * `LINK_UNRESOLVED_REFERENCE`.
  *

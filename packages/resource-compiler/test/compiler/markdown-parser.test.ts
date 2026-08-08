@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect } from 'vitest';
 
-import { parseMarkdown } from '../../src/compiler/markdown-parser.js';
+import { toMarkdownResource } from '../../src/compiler/markdown-parser.js';
 import type { MarkdownFragment } from '../../src/compiler/types.js';
 
 const FIXTURES_DIR = '../fixtures';
@@ -27,11 +27,11 @@ function loadFixture(filename: string): string {
   return readFileSync(fixturePath, 'utf-8');
 }
 
-describe('parseMarkdown', () => {
+describe('toMarkdownResource', () => {
   describe('frontmatter parsing', () => {
     it('should parse markdown without frontmatter', () => {
       const content = loadFixture('simple.md');
-      const result = parseMarkdown(content);
+      const result = toMarkdownResource(content);
 
       expect(result.frontmatter).toEqual({});
       expect(result.content).toContain(SIMPLE_MARKDOWN);
@@ -40,7 +40,7 @@ describe('parseMarkdown', () => {
 
     it('should parse markdown with YAML frontmatter', () => {
       const content = loadFixture(FIXTURE_WITH_FRONTMATTER);
-      const result = parseMarkdown(content);
+      const result = toMarkdownResource(content);
 
       expect(result.frontmatter).toEqual({
         title: 'Document with Frontmatter',
@@ -62,7 +62,7 @@ boolean: true
 ---
 # ${TEST_CONTENT}`;
 
-      const result = parseMarkdown(content);
+      const result = toMarkdownResource(content);
 
       expect(result.frontmatter).toEqual({
         title: 'Complex',
@@ -81,7 +81,7 @@ boolean: true
 
 ## Section`;
 
-      const result = parseMarkdown(content);
+      const result = toMarkdownResource(content);
 
       expect(result.frontmatter).toEqual({});
       expect(result.content).toContain(`# ${TEST_CONTENT}`);
@@ -91,7 +91,7 @@ boolean: true
   describe('H2 fragment extraction', () => {
     it('should extract multiple H2 fragments', () => {
       const content = loadFixture('simple.md');
-      const result = parseMarkdown(content);
+      const result = toMarkdownResource(content);
 
       expect(result.fragments).toHaveLength(3);
 
@@ -106,7 +106,7 @@ boolean: true
 This is the body content.
 Multiple lines supported.`;
 
-      const result = parseMarkdown(content);
+      const result = toMarkdownResource(content);
 
       expect(result.fragments).toHaveLength(1);
 
@@ -127,14 +127,14 @@ Just some content without H2 headings.
 
 ### H3 heading should be ignored`;
 
-      const result = parseMarkdown(content);
+      const result = toMarkdownResource(content);
 
       expect(result.fragments).toHaveLength(0);
     });
 
     it('should extract fragments from markdown with frontmatter', () => {
       const content = loadFixture(FIXTURE_WITH_FRONTMATTER);
-      const result = parseMarkdown(content);
+      const result = toMarkdownResource(content);
 
       expect(result.fragments).toHaveLength(2);
       expect(result.fragments[0]?.heading).toBe('Overview');
@@ -150,7 +150,7 @@ Content of first section.
 
 Content of second section.`;
 
-      const result = parseMarkdown(content);
+      const result = toMarkdownResource(content);
 
       expect(result.fragments).toHaveLength(2);
 
@@ -167,7 +167,7 @@ Content of second section.`;
   describe('slug generation', () => {
     it('should generate kebab-case slugs from headings', () => {
       const content = loadFixture('multiple-fragments.md');
-      const result = parseMarkdown(content);
+      const result = toMarkdownResource(content);
 
       const slugs = result.fragments.map((f) => f.slug);
 
@@ -181,7 +181,7 @@ Content of second section.`;
 
 ${TEST_CONTENT}`;
 
-      const result = parseMarkdown(content);
+      const result = toMarkdownResource(content);
 
       expect(result.fragments[0]?.slug).toBe('hello-world');
     });
@@ -193,7 +193,7 @@ ${TEST_CONTENT}`;
 
 ${TEST_CONTENT}`;
 
-      const result = parseMarkdown(content);
+      const result = toMarkdownResource(content);
 
       expect(result.fragments[0]?.slug).toBe('numbers-123-and-symbols-');
     });
@@ -205,7 +205,7 @@ ${TEST_CONTENT}`;
 
 ${TEST_CONTENT}`;
 
-      const result = parseMarkdown(content);
+      const result = toMarkdownResource(content);
 
       expect(result.fragments[0]?.slug).toBe('spaces--everywhere');
     });
@@ -215,7 +215,7 @@ ${TEST_CONTENT}`;
 
 ${TEST_CONTENT}`;
 
-      const result = parseMarkdown(content);
+      const result = toMarkdownResource(content);
 
       expect(result.fragments[0]?.heading).toBe('Trimmed Heading');
       expect(result.fragments[0]?.slug).toBe('trimmed-heading');
@@ -225,7 +225,7 @@ ${TEST_CONTENT}`;
   describe('camelCase generation', () => {
     it('should generate camelCase property names', () => {
       const content = loadFixture('multiple-fragments.md');
-      const result = parseMarkdown(content);
+      const result = toMarkdownResource(content);
 
       const camelCaseNames = result.fragments.map((f) => f.camelCase);
 
@@ -239,7 +239,7 @@ ${TEST_CONTENT}`;
 
 ${TEST_CONTENT}`;
 
-      const result = parseMarkdown(content);
+      const result = toMarkdownResource(content);
 
       expect(result.fragments[0]?.camelCase).toBe('introduction');
     });
@@ -249,7 +249,7 @@ ${TEST_CONTENT}`;
 
 ${TEST_CONTENT}`;
 
-      const result = parseMarkdown(content);
+      const result = toMarkdownResource(content);
 
       expect(result.fragments[0]?.camelCase).toBe('oneTwoThreeFour');
     });
@@ -259,7 +259,7 @@ ${TEST_CONTENT}`;
 
 ${TEST_CONTENT}`;
 
-      const result = parseMarkdown(content);
+      const result = toMarkdownResource(content);
 
       expect(result.fragments[0]?.camelCase).toBe('apiV20');
     });
@@ -268,7 +268,7 @@ ${TEST_CONTENT}`;
   describe('edge cases', () => {
     it('should handle empty sections', () => {
       const content = loadFixture(FIXTURE_EDGE_CASES);
-      const result = parseMarkdown(content);
+      const result = toMarkdownResource(content);
 
       const emptySection = result.fragments.find((f) => f.heading === 'Empty Section');
       expect(emptySection).toBeDefined();
@@ -277,7 +277,7 @@ ${TEST_CONTENT}`;
 
     it('should handle sections with only whitespace', () => {
       const content = loadFixture(FIXTURE_EDGE_CASES);
-      const result = parseMarkdown(content);
+      const result = toMarkdownResource(content);
 
       const whitespaceSection = result.fragments.find(
         (f) => f.heading === 'Section With Only Whitespace',
@@ -288,7 +288,7 @@ ${TEST_CONTENT}`;
 
     it('should not treat ## in content as headings', () => {
       const content = loadFixture(FIXTURE_EDGE_CASES);
-      const result = parseMarkdown(content);
+      const result = toMarkdownResource(content);
 
       const section = result.fragments.find((f) => f.heading === 'Section With ## In Content');
       expect(section).toBeDefined();
@@ -307,7 +307,7 @@ ${TEST_CONTENT}`;
 
 ${TEST_CONTENT}`;
 
-      const result = parseMarkdown(content);
+      const result = toMarkdownResource(content);
 
       expect(result.fragments).toHaveLength(2);
       expect(result.fragments[0]?.heading).toBe('First');
@@ -323,7 +323,7 @@ ${TEST_CONTENT}
 
 ## Last Section`;
 
-      const result = parseMarkdown(content);
+      const result = toMarkdownResource(content);
 
       expect(result.fragments).toHaveLength(2);
       expect(result.fragments[1]?.heading).toBe('Last Section');
@@ -332,7 +332,7 @@ ${TEST_CONTENT}
 
     it('should handle empty content', () => {
       const content = '';
-      const result = parseMarkdown(content);
+      const result = toMarkdownResource(content);
 
       expect(result.frontmatter).toEqual({});
       expect(result.content).toBe('');
@@ -353,7 +353,7 @@ const code = true;
 
 [Link](https://example.com)`;
 
-      const result = parseMarkdown(content);
+      const result = toMarkdownResource(content);
 
       const section = result.fragments[0] as MarkdownFragment;
       expect(section.body).toContain('**bold**');
@@ -369,7 +369,7 @@ const code = true;
 
 Content`;
 
-      const result = parseMarkdown(content);
+      const result = toMarkdownResource(content);
 
       expect(result.fragments).toHaveLength(1);
       expect(result.fragments[0]?.heading).toBe(longHeading);
@@ -380,7 +380,7 @@ Content`;
   describe('complete resource structure', () => {
     it('should return valid MarkdownResource structure', () => {
       const content = loadFixture(FIXTURE_WITH_FRONTMATTER);
-      const result = parseMarkdown(content);
+      const result = toMarkdownResource(content);
 
       // Check structure matches interface
       expect(result).toHaveProperty('frontmatter');
@@ -396,7 +396,7 @@ Content`;
       const content = `## Test
 
 Body`;
-      const result = parseMarkdown(content);
+      const result = toMarkdownResource(content);
       const fragment = result.fragments[0] as MarkdownFragment;
 
       // Check structure matches interface

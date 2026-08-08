@@ -839,8 +839,17 @@ const DECLARED_STATUS_VOCABULARY = new RegExp(
   String.raw`^[ \t]*(?:export[ \t]+)?type[ \t]+\w*Status\b[^;]{0,200}?'(?:${STATUS_VOCABULARY})'`,
   'm',
 );
-/** A collection of findings, which is what makes a status a *validation* verdict. */
-const FINDINGS_COLLECTION = /\b(?:issues|allErrors|activeErrors|activeWarnings|errors|warnings|findings)\b\s*[:.]/;
+/**
+ * A collection of findings, which is what makes a status a *validation* verdict.
+ *
+ * This list is the recogniser's weak point, and it has already failed twice for
+ * the same reason: a lane names its findings something the list does not know,
+ * and silently leaves the population. `audit.ts` escaped via its *status* (see
+ * `classifySeverityCountsLane`); `pipeline/check.ts` escaped via its findings,
+ * which it calls `violations`. When adding a lane, either reuse a noun already
+ * here or add yours — a lane the scan cannot see is a lane no one is ratcheting.
+ */
+const FINDINGS_COLLECTION = /\b(?:issues|allErrors|activeErrors|activeWarnings|errors|warnings|findings|violations)\b\s*[:.]/;
 /**
  * A call to the ONE shared issues→status/counts pair.
  *
@@ -989,6 +998,8 @@ const SEVERITY_COUNTS_RATCHET = new Map<string, string>([
  */
 const SEVERITY_COUNTS_NOT_APPLICABLE = new Map<string, string>([
   ['packages/cli/src/commands/rag/index-command.ts', 'indexing failures are plain strings, not severity-classified findings; status is a generic success envelope'],
+  ['packages/cli/src/commands/pipeline/snapshot.ts', 'captures, never judges: its `warnings` are capture-time CONSTRAINTS on any later comparison (a walk-route lane, a lane whose builder threw, a skipped half), not findings about the corpus, so there is no severity distribution to publish'],
+  ['packages/cli/src/commands/pipeline/check.ts', 'InvariantViolation carries no severity field — every violation is equally fatal and any one of them exits 2, so `violationCount` IS the complete distribution; a per-severity block would have exactly one bucket'],
 ]);
 
 /** What the ratchet believes about one scanned file, from its source alone. */

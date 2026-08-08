@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- **`@vibe-agent-toolkit/resource-compiler`'s `parseMarkdown` is now `toMarkdownResource`.** The
+  monorepo exported two functions named `parseMarkdown` with opposite argument domains — this one
+  takes markdown *content* and returns a `MarkdownResource` for the type/codegen compiler, while
+  `@vibe-agent-toolkit/resources`' takes a *file path* and returns a link `ParseResult`. The latter
+  keeps its name, and gained a content-only sibling (`parseMarkdownContent`), which made three
+  similarly-named parsers one rename away from a real mix-up. No alias is left behind, per the
+  pre-1.0 policy. Consumers importing `parseMarkdown` from `@vibe-agent-toolkit/resource-compiler`
+  (or its `/compiler` subpath) must rename the binding; nothing else about the function changed.
+
+### Added
+
+- **`parseMarkdownContent(content, sizeBytes)` and `parseHtmlContent(content, sizeBytes)`** in
+  `@vibe-agent-toolkit/resources` — the content-addressable halves of `parseMarkdown` / `parseHtml`,
+  pure functions of their arguments with no filesystem access. The path-taking originals are
+  unchanged and now delegate. `sizeBytes` is a parameter rather than derived from `content` because
+  the two genuinely differ: the on-disk byte count is the authority, and re-encoding a decoded
+  string diverges from it on malformed UTF-8 (each bad byte becomes a 3-byte U+FFFD).
+
 - **`@vibe-agent-toolkit/utils/fs` no longer re-exports the pure path-string helpers.** Seven
   symbols moved from `./fs` to the new `./path` entry: `safePath`, `toForwardSlash`,
   `isAbsolutePath`, `isAbsoluteAnyPlatform`, `hasParentTraversalSegment`, `toAbsolutePath`, and

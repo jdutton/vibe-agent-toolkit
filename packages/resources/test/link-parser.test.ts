@@ -13,13 +13,13 @@
 /* eslint-disable @typescript-eslint/no-non-null-assertion -- tests use non-null assertions for expected values */
 /* eslint-disable security/detect-non-literal-fs-filename -- tests use dynamic file paths in temp directory */
 
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { parseMarkdown } from '../src/link-parser.js';
+import { parseMarkdown, parseMarkdownContent } from '../src/link-parser.js';
 
 import { assertAllLinksClassifiedAs, expectHeadingStructure, findPackageRoot, writeAndParse } from './test-helpers.js';
 
@@ -98,7 +98,10 @@ Content here.
       const result = await parseMarkdown(filePath);
 
       expect(result.content).toBe(content);
-      expect(result.sizeBytes).toBe(Buffer.byteLength(content));
+      // Against stat().size, not Buffer.byteLength(content): the two coincide for
+      // valid UTF-8 like this fixture, but only the former is the authority.
+      // See 'reports the on-disk byte count, not the decoded string length'.
+      expect(result.sizeBytes).toBe((await stat(filePath)).size);
       expect(result.estimatedTokenCount).toBe(Math.ceil(content.length / 4));
       expect(result.links).toHaveLength(2);
       expect(result.headings).toHaveLength(1); // Only top-level heading
@@ -1131,6 +1134,95 @@ description: "use [a][nope-fm]"
       });
 
       expect(result.anchors).toBeUndefined();
+    });
+  });
+
+  // `parseMarkdownContent` is the content-addressable half of `parseMarkdown`:
+  // a pure function of (content, sizeBytes) that never touches the filesystem.
+  // The equivalence test is what pins the split as a refactor rather than a
+  // behaviour change — if the two halves ever disagree, this fails.
+  describe('parseMarkdownContent', () => {
+    const RICH_MARKDOWN = [
+      '---',
+      'title: Rich Document',
+      'tags: [alpha, beta]',
+      '---',
+      '',
+      '# Top Heading',
+      '',
+      '<a id="Explicit-Anchor"></a>',
+      '',
+      '## Sub Heading',
+      '',
+      `A [regular link](${EXAMPLE_URL}), an autolink <${EXAMPLE_URL}/auto>, a [ref][defined],`,
+      'a [dangling][never-defined], a [local](./sibling.md#frag) and a [mail](mailto:a@b.test).',
+      '',
+      '[defined]: ./defined-target.md',
+      '',
+    ].join('\n');
+
+    it('produces a ParseResult identical to parseMarkdown for the same file', async () => {
+      const filePath = safePath.join(tempDir, 'equivalence.md');
+      await writeFile(filePath, RICH_MARKDOWN, 'utf-8');
+
+      const [fromFile, content, stats] = await Promise.all([
+        parseMarkdown(filePath),
+        readFile(filePath, 'utf-8'),
+        stat(filePath),
+      ]);
+
+      expect(parseMarkdownContent(content, stats.size)).toEqual(fromFile);
+    });
+
+    // No file is written anywhere in this test: the content corresponds to
+    // nothing on disk, which is exactly the history-replay / cache-hit case.
+    it('parses content that corresponds to no file on disk', () => {
+      const result = parseMarkdownContent(RICH_MARKDOWN, 4242);
+
+      expect(result.content).toBe(RICH_MARKDOWN);
+      expect(result.frontmatter).toEqual({ title: 'Rich Document', tags: ['alpha', 'beta'] });
+      expect(result.headings.map((heading) => heading.text)).toEqual(['Top Heading']);
+      expect(result.anchors).toEqual(['explicit-anchor']);
+      expect(result.unresolvedReferences?.map((reference) => reference.label)).toEqual([
+        'never-defined',
+      ]);
+      expect(result.links.map((link) => link.href)).toContain('./defined-target.md');
+    });
+
+    // `sizeBytes` is the caller's to supply, not something derived from
+    // `content` — a decoded string's length is not the file's byte count.
+    it('reports sizeBytes verbatim from its argument', () => {
+      expect(parseMarkdownContent('# Tiny\n', 4242).sizeBytes).toBe(4242);
+    });
+
+    it('reports the on-disk byte count, not the decoded string length', async () => {
+      // Every other fixture in this suite is valid UTF-8, where `stat().size`,
+      // `Buffer.byteLength(content)` and `content.length` all agree — so none of
+      // them can tell those three apart. A lone 0xFF is invalid UTF-8 and decodes
+      // to U+FFFD, which re-encodes to THREE bytes, making them disagree.
+      //
+      // Without this fixture, swapping `stat().size` for
+      // `Buffer.byteLength(content)` inside `parseMarkdown` leaves all 74 tests
+      // green. That swap is a real defect — `sizeBytes` reaches packaged output
+      // bytes via content-transform.ts — so it has to be falsifiable somewhere.
+      const filePath = safePath.join(tempDir, 'malformed.md');
+      await writeFile(
+        filePath,
+        Uint8Array.from([...Buffer.from('# Bad\n'), 0xff, ...Buffer.from('\n')]),
+      );
+
+      const [content, stats] = await Promise.all([readFile(filePath, 'utf-8'), stat(filePath)]);
+
+      // Guard the guard: if these stop differing the fixture is inert and every
+      // assertion below becomes vacuous.
+      expect(stats.size).toBe(8);
+      expect(Buffer.byteLength(content)).toBe(10);
+
+      const fromFile = await parseMarkdown(filePath);
+      expect(fromFile.sizeBytes).toBe(stats.size);
+      expect(fromFile.sizeBytes).not.toBe(Buffer.byteLength(content));
+
+      expect(parseMarkdownContent(content, stats.size).sizeBytes).toBe(8);
     });
   });
 });

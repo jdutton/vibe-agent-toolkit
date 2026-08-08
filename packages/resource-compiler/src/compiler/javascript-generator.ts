@@ -87,7 +87,7 @@ function serializeValue(value: unknown, indent: number = 0): string {
  *
  * @example
  * ```typescript
- * const resource = parseMarkdown(content);
+ * const resource = toMarkdownResource(content);
  * const jsCode = generateJavaScript(resource);
  * // Outputs:
  * // export const meta = { title: "Example", tags: ["test"] };
