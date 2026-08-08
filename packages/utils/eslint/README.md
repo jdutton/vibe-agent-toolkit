@@ -112,6 +112,8 @@ Two ways your target can be wrong, which surface differently: `ERR_MODULE_NOT_FO
 | `no-child-process-execSync` | `child_process.execSync()` | `safeExecSync()` | `/process` | ✓ | `error` |
 | `no-unix-shell-commands` | `tar`, `grep`, `rm`, `echo`, … spawned directly | Node APIs, or a portable script fixture | — | | `error` |
 
+The member-call rules here check the **receiver**, not just the method name, so `env.tmpdir()` on some unrelated object is not a finding — and the namespace they check for can be bound by a static `import * as os`, by `const os = require('node:os')`, or by `const os = await import('node:os')`. The fix replaces the whole callee (`os.tmpdir()` → `normalizedTmpdir()`), which is correct however the binding was made. Matching the method name alone was the earlier behaviour and it produced `os.normalizedTmpdir()` — a method that does not exist, compiles, and throws.
+
 ### URLs and dynamic imports
 
 | Rule | Bans | Use instead | Subpath | Fix | `recommended` |
@@ -182,7 +184,23 @@ Every rule that rewrites a call *and* edits imports fixes **all** of a file's ca
 
 That test exists because the answer used to be no. ESLint merges the fixes one `fix()` yields into a **single range spanning `min..max`**, and applies only non-overlapping ranges per pass — so a fix touching both the import and its own call site spanned everything in between, N call sites produced N nested ranges, and ESLint kept one. The rule then went quiet, because the import specifier its detection keyed on was what had just been removed. `--fix` reached a stable fixpoint over source that no longer compiles and exited clean; you found out at `tsc`. An adopter measured **146 files left with a dangling reference** across one ~4,900-site sweep, worst single file 75 unrewritten calls.
 
-One caveat survives by design: only the **first** report's fix in a file is self-sufficient. Applying a later one on its own — an editor's "fix this problem", or an `eslint-disable` on the first call site — rewrites the call without adding the import. The next full `--fix` re-inserts it, and `exemptFiles` is the supported way to opt a whole file out. The shared edits cannot be hoisted onto their own report instead: removing `join` from the import while a *suppressed* `join(...)` call survives is the same broken output reached a different way.
+`eslint-disable` interacts with this in a way worth knowing about, because it is not obvious and it took an adversarial run to find. ESLint invokes a rule's `fix()` **before** the disable filter discards the problem, so a suppressed report still consumes any once-per-file edit its rule was holding. Where that edit is an import *insert*, the rules either re-emit it from every report or carry a repair leg that recognises the orphaned call and supplies the missing import on the next pass — so a disabled call site costs an extra pass, not a broken file. Where it is an import *removal*, the removal is latched and simply goes away with the discarded report, leaving an unused import for `no-unused-vars` to point at rather than a call with nothing behind it. `exemptFiles` remains the supported way to opt a whole file out.
+
+Two more things a fixer here will not do: delete a `type`-only, aliased, or re-exported specifier (removing a re-exported one produced output that did not parse), and insert an import *between* a leading `eslint-disable-next-line` and the statement it protects, which would silently revoke the suppression.
+
+#### The binding left behind
+
+`path.join(a, b)` becomes `safePath.join(a, b)`, and when that was the file's last `path.*` reference the `import path from 'node:path'` is left bound to nothing. That is not a dangling reference, so the `no-undef` fixpoint check above is blind to it — and the same adopter measured **536 errors surviving a converged `--fix` across 232 files** (289 `no-unused-vars`, 247 `sonarjs/unused-import`), every one of them this. In a repo gating at `--max-warnings=0`, `--fix` output that does not lint clean is not a finished migration.
+
+So the rules now report it themselves, as a separate `deadUnsafeImport` finding on the import line with its own fix. Being its own finding is the point: it shows up in lint output and you can `eslint-disable` it, rather than a call rewrite quietly taking a declaration with it.
+
+Deliberately narrow:
+
+- **A closed list of modules** — `node:path`, `node:os`, `node:fs`, `node:fs/promises`, `node:child_process` and their bare spellings. All Node builtins, all side-effect-free with certainty decided when the rule was written. This is *not* a general unused-import rule and will not become one; for blanket cleanup, `eslint-plugin-unused-imports` already exists and already autofixes.
+- **Only in a file these rules migrated** — the safe symbol must already be bound. A dead import in a file this pack never touched is somebody else's business.
+- **Only whole declarations, only with zero references left** — evaluated against the source as it stands on that pass, so the removal always lands *after* the rewrite that consumed the last reference, never speculatively beside it. A partially-dead declaration (`import path, { sep }` with `sep` still live) is left alone, as are bare `import 'node:path'` side-effect imports and anything carrying a `type` specifier.
+
+This cannot be delegated: `@typescript-eslint/no-unused-vars` declares `meta.fixable: 'code'` but emits only a **suggestion** for an unused import, and `--fix` never applies suggestions; `sonarjs/unused-import` declares no fixer at all. Verified with both enabled alongside these rules in one `verifyAndFix` — the import survived. Those rules abstain for a good reason, since removing an import can change behaviour; a rule that *created* the orphan knows it just consumed the last reference and knows the module, so it can act where a generic rule cannot.
 
 ## Why custom rules
 

@@ -6,6 +6,7 @@
  * scaffolding in exactly one place.
  */
 
+import * as tsParser from '@typescript-eslint/parser';
 import { Linter, type Rule } from 'eslint';
 import { describe, expect, it } from 'vitest';
 
@@ -195,13 +196,54 @@ function pathFunctionRuleCases(fn: 'join' | 'relative' | 'resolve'): RuleCases {
         filename: LINTED_FILE,
         options,
       },
-      // A same-named function from somewhere else is not ours. The bare-call
-      // leg keys on the name being UNBOUND, so binding it — here, or as a
-      // parameter, or as a local — is what keeps that leg from becoming a
-      // rule that flags every `join()` in the ecosystem.
-      { code: `import { ${fn} } from 'lodash'; const p = ${fn}(a, b);`, filename: LINTED_FILE, options },
-      { code: `function ${fn}(x) { return x; } const p = ${fn}(a);`, filename: LINTED_FILE, options },
-      { code: `const run = (${fn}) => ${fn}(a, b);`, filename: LINTED_FILE, options },
+      // A same-named function from somewhere else is not ours. The repair leg
+      // keys on the name being UNBOUND, so binding it — by import, declaration,
+      // or parameter — is what keeps it from flagging every `join()` in the
+      // ecosystem.
+      //
+      // EVERY case below puts the call in a DIFFERENT scope from the binding,
+      // on purpose. The first draft of these fixtures called at the same level
+      // as the binding, which meant `isIdentifierBound`'s walk up `scope.upper`
+      // never executed — an adversarial run deleted the entire walk and this
+      // suite stayed green while the mutant rewrote lodash's `join` into
+      // `safePath.join`. A scope-aware rule needs a scope-crossing fixture.
+      {
+        code: `${SAFE_IMPORT}\nimport { ${fn} } from 'lodash';\nfunction f(a, b) { return ${fn}(a, b); }`,
+        filename: LINTED_FILE,
+        options,
+      },
+      {
+        code: `${SAFE_IMPORT}\nfunction ${fn}(x) { return x; }\nfunction f(a) { return ${fn}(a); }`,
+        filename: LINTED_FILE,
+        options,
+      },
+      {
+        code: `${SAFE_IMPORT}\nexport const run = (${fn}) => () => ${fn}(a, b);`,
+        filename: LINTED_FILE,
+        options,
+      },
+      // Without `safePath` in scope the repair leg must not fire AT ALL — this
+      // is the gate that keeps ambient globals safe. ESLint scope analysis
+      // cannot see a `globals.d.ts`, an `@types` package, or a bundler-injected
+      // global, and `resolve`/`relative` are entirely plausible as those.
+      { code: `const p = ${fn}(a, b);`, filename: LINTED_FILE, options },
+      // A TYPE-ONLY specifier is not a call site. Tracking it made the fixer
+      // DELETE it, and because `typeof join` is a TYPE reference, `no-undef` —
+      // and so the fixpoint suite below — cannot see the damage.
+      //
+      // The call has to be here for this fixture to mean anything: with no call
+      // there is no report either way, and the case passes under a rule that
+      // tracks type specifiers just as happily as one that skips them.
+      {
+        code: [
+          `import { type ${fn} } from 'node:path';`,
+          `export type T = typeof ${fn};`,
+          `export const p = ${fn}(a, b);`,
+        ].join('\n'),
+        filename: LINTED_FILE,
+        options,
+        languageOptions: { parser: tsParser },
+      },
       // Files the CONSUMING config declared exempt, by their repo-relative paths.
       { code: unsafeMemberCode, filename: PATH_CORE_IMPL, options },
       { code: unsafeMemberCode, filename: `/Users/dev/vat/${PATH_UTILS_IMPL}`, options },
@@ -265,13 +307,74 @@ function pathFunctionRuleCases(fn: 'join' | 'relative' | 'resolve'): RuleCases {
         ].join('\n'),
         errors: [errors[0], errors[0]],
       },
-      // BARE, UNBOUND call — what a half-applied fix leaves behind. Detection
-      // used to require having seen the `node:path` specifier, so once a fix
-      // removed it the rule fell silent and `--fix` declared victory over source
-      // that no longer compiles. Recognising this shape is what makes a second
-      // `--fix` finish the job.
+      // BARE, UNBOUND call in a file that ALREADY has `safePath` — what a
+      // half-applied fix leaves behind. Detection used to require having seen
+      // the `node:path` specifier, so once a fix removed it the rule fell
+      // silent and `--fix` declared victory over source that no longer
+      // compiles. Recognising this shape is what makes a second `--fix` finish
+      // the job.
+      //
+      // The `safePath`-in-scope precondition is the whole difference between a
+      // repair leg and a second, worse detector: see the `declare global` and
+      // ambient-global valid cases below for what firing without it costs.
       {
-        code: `const p = ${fn}(a, b);`,
+        code: `${SAFE_IMPORT}\nconst p = ${fn}(a, b);\nconst q = safePath.${fn}(c, d);`,
+        filename: LINTED_FILE,
+        options,
+        output: `${SAFE_IMPORT}\nconst p = safePath.${fn}(a, b);\nconst q = safePath.${fn}(c, d);`,
+        errors,
+      },
+      // ALIASED specifier: rewrite the unbound `join(`, and KEEP the alias.
+      //
+      // `pathJoin(...)` is never the callee this rule matches, so tracking the
+      // specifier bought nothing — and cost the whole import. An unrelated
+      // unbound `join(` elsewhere in the file classified as "named", and the
+      // fixer removed the ALIAS, breaking every working `pathJoin` call site.
+      // The pinned output below is the proof the alias survives.
+      {
+        code: [
+          SAFE_IMPORT,
+          `import { ${fn} as aliased } from 'node:path';`,
+          'export const p = aliased(a, b);',
+          `export const q = ${fn}(c, d);`,
+        ].join('\n'),
+        filename: LINTED_FILE,
+        options,
+        output: [
+          SAFE_IMPORT,
+          `import { ${fn} as aliased } from 'node:path';`,
+          'export const p = aliased(a, b);',
+          `export const q = safePath.${fn}(c, d);`,
+        ].join('\n'),
+        errors,
+      },
+      // RE-EXPORTED specifier: rewrite the call, but KEEP the import.
+      //
+      // Removing it left `export { join }` naming nothing, and the fixed file
+      // did not PARSE — `Export 'join' is not defined`. Output that cannot be
+      // parsed is the worst result an autofix can produce, strictly worse than
+      // leaving a finding on screen, so the specifier stays and the residual is
+      // a lint message a human can read.
+      {
+        code: `import { ${fn} } from 'node:path';\nexport { ${fn} };\nconst p = ${fn}(a, b);`,
+        filename: LINTED_FILE,
+        options,
+        output: `import { ${fn} } from 'node:path';\n${SAFE_IMPORT}\nexport { ${fn} };\nconst p = safePath.${fn}(a, b);`,
+        errors,
+      },
+      // ORPHANED `safePath.join(...)` — the OTHER half of the repair, and the
+      // reason the file above can ever recover.
+      //
+      // ESLint runs `fix()` before the `eslint-disable` filter, so a suppressed
+      // report on the first call site consumes the once-per-file import edit
+      // and then discards it. Every other call becomes `safePath.join`, nothing
+      // imports `safePath`, and no report is left to carry the import on any
+      // later pass. An adversarial run produced exactly that as a STABLE
+      // fixpoint — `--fix` twice more changed nothing — against a docstring
+      // that claimed the state was transient. This leg is what makes the claim
+      // true.
+      {
+        code: `const p = safePath.${fn}(a, b);`,
         filename: LINTED_FILE,
         options,
         output: `${SAFE_IMPORT}\nconst p = safePath.${fn}(a, b);`,
@@ -347,14 +450,55 @@ const SEAM = '@acme/dev-tools/path-utils';
  * `no-path-join` stands for `path-function-rule-factory`, `no-os-tmpdir` for
  * `eslint-rule-factory`.
  */
-const PATH_FACTORY_RULE = 'no-path-join';
-const CALL_FACTORY_RULE = 'no-os-tmpdir';
+/**
+ * Rule names, named once. Several tables below enumerate the same rules from
+ * different angles (fixpoint, suppression, `safeModule`), and a rule renamed in
+ * one table and not another is a silently skipped suite, not a failure.
+ */
+const RULE = {
+  join: 'no-path-join',
+  resolve: 'no-path-resolve',
+  relative: 'no-path-relative',
+  tmpdir: 'no-os-tmpdir',
+  mkdir: 'no-fs-mkdirSync',
+  realpath: 'no-fs-realpathSync',
+  execSync: 'no-child-process-execSync',
+  cp: 'no-fs-promises-cp',
+  normalize: 'no-manual-path-normalize',
+} as const;
 
-function safeModuleCases(unsafeCode: string, fixedCode: string, errors: object[]): RuleCases {
+const NODE_FS = 'node:fs';
+const NODE_CHILD_PROCESS = 'node:child_process';
+
+/** `import { name } from 'module';` — spelled once, so the tables stay readable. */
+function namedImport(name: string, module: string): string {
+  return `import { ${name} } from '${module}';`;
+}
+
+const PATH_FACTORY_RULE = RULE.join;
+const CALL_FACTORY_RULE = RULE.tmpdir;
+
+/**
+ * @param unsafeCode - The shape that must report.
+ * @param fixedCode - What ONE `--fix` pass produces from it.
+ * @param errors - The expected reports.
+ * @param settledCode - The shape that must NOT report, when it differs from
+ *   `fixedCode`. One pass rewrites the call and leaves the now-unused `node:*`
+ *   binding for the pass after — so for the rules that migrate a NAMESPACE
+ *   member, the one-pass output is a legitimate finding (`deadUnsafeImport`) and
+ *   cannot double as the valid fixture. Conflating the two is how a suite ends
+ *   up asserting that a half-finished fix is the finished state.
+ */
+function safeModuleCases(
+  unsafeCode: string,
+  fixedCode: string,
+  errors: object[],
+  settledCode: string = fixedCode,
+): RuleCases {
   return {
     valid: [
       // Already importing from the configured seam — nothing to add.
-      { code: fixedCode, filename: LINTED_FILE, options: [{ safeModule: SEAM }] },
+      { code: settledCode, filename: LINTED_FILE, options: [{ safeModule: SEAM }] },
     ],
     invalid: [
       {
@@ -572,7 +716,12 @@ function unsafeCallRuleCases(
   { unsafeFn, unsafeModule, safeFn, safeModule, exemptPath }: UnsafeCallRuleSpec,
 ): RuleCases {
   const unsafeCode = `import { ${unsafeFn} } from '${unsafeModule}';\nconst r = ${unsafeFn}(x);`;
-  const output = `import { ${safeFn} } from '${safeModule}';\n\nconst r = ${safeFn}(x);`;
+  // The new import takes the removed one's LINE. It used to be welded onto
+  // whatever followed, because the fixer inserted after `body[0]` with a
+  // trailing newline regardless of what `body[0]` was — visible here only as a
+  // moved `\n`, and visible in a file whose first statement is not an import as
+  // `const os = {…};import { normalizedTmpdir } from '…';` on one line.
+  const output = `\nimport { ${safeFn} } from '${safeModule}';\nconst r = ${safeFn}(x);`;
   const errors = [{ messageId: 'noUnsafeOperation' }];
   const options = [{ exemptFiles: [exemptPath] }];
   const decoy = (filename: string) => ({ code: unsafeCode, filename, options, output, errors });
@@ -587,6 +736,26 @@ function unsafeCallRuleCases(
       },
       { code: unsafeCode, filename: exemptPath, options },
       { code: unsafeCode, filename: `/Users/dev/vat/${exemptPath}`, options },
+      // A same-named method on an unrelated object is not this module's call.
+      // The member branch used to match on the property name ALONE, so any
+      // `env.tmpdir()` was an `os.tmpdir()` finding. That was survivable while
+      // the fixer rewrote only the property — `env.normalizedTmpdir()` does not
+      // compile, so the false positive announced itself. Replacing the whole
+      // callee turned it into `normalizedTmpdir()`, which compiles, type-checks
+      // and passes `no-undef` while silently calling a different function with
+      // the receiver thrown away. A false positive that produces WORKING code
+      // is the more dangerous kind, so the receiver is now checked.
+      {
+        code: `const env = { ${unsafeFn}: () => 'x' };\nexport const r = env.${unsafeFn}();`,
+        filename: LINTED_FILE,
+        options,
+      },
+      {
+        code: `interface Env { ${unsafeFn}(): string }\nexport function pick(env: Env) { return env.${unsafeFn}(); }`,
+        filename: LINTED_FILE,
+        options,
+        languageOptions: { parser: tsParser },
+      },
     ],
     invalid: [
       { code: unsafeCode, filename: LINTED_FILE, options, output, errors },
@@ -646,8 +815,8 @@ const SUITES: readonly RuleSuite[] = [
   { name: 'require-justified-skip', cases: REQUIRE_JUSTIFIED_SKIP_CASES },
   { name: 'no-unix-shell-commands', cases: NO_UNIX_SHELL_COMMANDS_CASES },
   { name: PATH_FACTORY_RULE, cases: pathFunctionRuleCases('join') },
-  { name: 'no-path-resolve', cases: pathFunctionRuleCases('resolve') },
-  { name: 'no-path-relative', cases: pathFunctionRuleCases('relative') },
+  { name: RULE.resolve, cases: pathFunctionRuleCases('resolve') },
+  { name: RULE.relative, cases: pathFunctionRuleCases('relative') },
   {
     name: CALL_FACTORY_RULE,
     cases: unsafeCallRuleCases({
@@ -673,7 +842,7 @@ const SUITES: readonly RuleSuite[] = [
     name: 'no-child-process-execSync',
     cases: unsafeCallRuleCases({
       unsafeFn: 'execSync',
-      unsafeModule: 'node:child_process',
+      unsafeModule: NODE_CHILD_PROCESS,
       safeFn: 'safeExecSync',
       safeModule: '@vibe-agent-toolkit/utils/process',
       exemptPath: 'packages/utils/src/safe-exec.ts',
@@ -687,13 +856,15 @@ const SUITES: readonly RuleSuite[] = [
       "import path from 'node:path';\nconst p = path.join(a, b);",
       `import path from 'node:path';\nimport { safePath } from '${SEAM}';\nconst p = safePath.join(a, b);`,
       [{ messageId: 'noUnsafePathFn' }],
+      // Pass 2 takes the orphaned `path` binding with it; THIS is settled.
+      `import { safePath } from '${SEAM}';\nconst p = safePath.join(a, b);`,
     ),
   },
   {
     name: CALL_FACTORY_RULE,
     cases: safeModuleCases(
       "import { tmpdir } from 'node:os';\nconst r = tmpdir();",
-      `import { normalizedTmpdir } from '${SEAM}';\n\nconst r = normalizedTmpdir();`,
+      `\nimport { normalizedTmpdir } from '${SEAM}';\nconst r = normalizedTmpdir();`,
       [{ messageId: 'noUnsafeOperation' }],
     ),
   },
@@ -820,7 +991,7 @@ const SAFE_MODULE_RULE_TRIGGERS: Record<string, string> = {
   'no-fs-mkdirSync': "import { mkdirSync } from 'node:fs';\nmkdirSync(d, { recursive: true });",
   'no-fs-realpathSync': "import { realpathSync } from 'node:fs';\nconst r = realpathSync(p);",
   'no-fs-promises-cp': "import { cp } from 'node:fs/promises';\nawait cp(a, b);",
-  'no-child-process-execSync': "import { execSync } from 'node:child_process';\nexecSync('ls');",
+  [RULE.execSync]: `${namedImport('execSync', NODE_CHILD_PROCESS)}\nexecSync('ls');`,
   'no-url-pathname-for-fs': "const p = new URL('../fixtures/x.yaml', import.meta.url).pathname;",
   'no-bare-dynamic-import-path': 'const m = await import(configPath);',
 };
@@ -898,16 +1069,16 @@ const REWRITE_SITES = 4;
 
 /** `[rule, importLine, callExpression]` — a source is synthesized per row. */
 const MULTI_SITE_REWRITES: Array<[string, string, string]> = [
-  ['no-path-join', "import { join } from 'node:path';", 'join(a, b)'],
-  ['no-path-resolve', "import { resolve } from 'node:path';", 'resolve(a, b)'],
-  ['no-path-relative', "import { relative } from 'node:path';", 'relative(a, b)'],
-  ['no-os-tmpdir', "import { tmpdir } from 'node:os';", 'tmpdir()'],
-  ['no-fs-mkdirSync', "import { mkdirSync } from 'node:fs';", 'mkdirSync(a)'],
-  ['no-fs-realpathSync', "import { realpathSync } from 'node:fs';", 'realpathSync(a)'],
-  ['no-child-process-execSync', "import { execSync } from 'node:child_process';", 'execSync(a)'],
-  ['no-fs-promises-cp', "import { cp } from 'node:fs/promises';", 'cp(a, b)'],
+  [RULE.join, namedImport('join', 'node:path'), 'join(a, b)'],
+  [RULE.resolve, namedImport('resolve', 'node:path'), 'resolve(a, b)'],
+  [RULE.relative, namedImport('relative', 'node:path'), 'relative(a, b)'],
+  [RULE.tmpdir, namedImport('tmpdir', 'node:os'), 'tmpdir()'],
+  [RULE.mkdir, namedImport('mkdirSync', NODE_FS), 'mkdirSync(a)'],
+  [RULE.realpath, namedImport('realpathSync', NODE_FS), 'realpathSync(a)'],
+  [RULE.execSync, namedImport('execSync', NODE_CHILD_PROCESS), 'execSync(a)'],
+  [RULE.cp, namedImport('cp', 'node:fs/promises'), 'cp(a, b)'],
   // No import to remove — the import INSERT alone spans the file.
-  ['no-manual-path-normalize', '', String.raw`a.split('\\').join('/')`],
+  [RULE.normalize, '', String.raw`a.split('\\').join('/')`],
 ];
 
 function multiSiteSource(importLine: string, call: string): string {
@@ -931,8 +1102,14 @@ describe('autofix leaves no dangling reference', () => {
     // Membership, not cardinality — a rule added to the pack without a row here
     // is a rule whose fixer nobody runs to a fixpoint.
     const byName = (a: string, b: string): number => a.localeCompare(b);
+    // `!= null`, NOT `=== 'code'`. ESLint accepts `fixable: 'whitespace'` for a
+    // rule that rewrites callees and inserts imports — verified by running one —
+    // so keying on `'code'` leaves a rule that is fully fixable, absent from
+    // this list, and absent from MULTI_SITE_REWRITES. `toStrictEqual` passes on
+    // two matching omissions, which is the shape of a gate that measures
+    // nothing. (Omitting `fixable` entirely is NOT a hole: ESLint throws.)
     const fixable = Object.entries(plugin.rules)
-      .filter(([, rule]) => rule.meta?.fixable === 'code')
+      .filter(([, rule]) => rule.meta?.fixable != null)
       .map(([name]) => name);
     expect(MULTI_SITE_REWRITES.map(([name]) => name).sort(byName)).toStrictEqual(
       [...fixable].sort(byName),
@@ -999,5 +1176,662 @@ describe('autofix leaves no dangling reference', () => {
     // the code it settled on references an identifier that is no longer bound.
     expect(unboundIn(output)).toStrictEqual([]);
     expect(new Linter().verify(output, config, { filename: LINTED_FILE })).toStrictEqual([]);
+  });
+});
+
+/**
+ * `prefer-startswith-over-regex` emits SOURCE, so its message IS the deliverable.
+ *
+ * The rule has no fixer: nothing downstream re-escapes what it prints, and a
+ * developer applies the advice by hand. So the literal it names must (a) parse
+ * as a JS string and (b) denote exactly the characters the regex matches.
+ * Neither held, and no fixture covered either.
+ */
+const PREFIX_ADVICE = /startsWith\((.*)\)` over/;
+const SUFFIX_ADVICE = /endsWith\((.*)\)` over/;
+
+/** The literal the message tells a developer to write, decoded as JS would. */
+function advisedLiteral(message: string | undefined): string {
+  const text = message ?? '';
+  const match = PREFIX_ADVICE.exec(text) ?? SUFFIX_ADVICE.exec(text);
+  if (!match?.[1]) {
+    throw new Error(`no advice found in: ${text}`);
+  }
+  // `JSON.parse` accepts exactly the escapes a JS string literal does for the
+  // shapes this rule emits — and THROWS on the un-escaped text it used to
+  // produce, which is the point.
+  return JSON.parse(match[1]) as string;
+}
+
+describe('prefer-startswith-over-regex advice is valid, faithful JavaScript', () => {
+  const rule = loadLocalRule('prefer-startswith-over-regex.cjs');
+  const lint = (code: string): string[] =>
+    new Linter()
+      .verify(
+        code,
+        [
+          {
+            files: ['**/*.ts'],
+            plugins: { local: { rules: { r: rule } } },
+            rules: { 'local/r': 'error' },
+            languageOptions: { ecmaVersion: 2024, sourceType: 'module' },
+          },
+        ],
+        { filename: LINTED_FILE },
+      )
+      .map(({ message }) => message);
+
+  /**
+   * `[source, the characters the regex actually matches]`.
+   *
+   * Every row turns on a backslash or a quote — the two things that mean one
+   * thing to a regex and another to a JS string literal. `/^C:\\Users/` matches
+   * `C:\Users`; the rule printed `startsWith('C:\Users')`, which JavaScript
+   * reads back as `"C:Users"`. The UNC row is the one that bites in production:
+   * `startsWith('\\')` is ONE backslash, so a `\\`-prefix check silently
+   * becomes true for every single-backslash path.
+   */
+  const FAITHFUL_ADVICE: Array<[string, string]> = [
+    [String.raw`/^C:\\Users/`, String.raw`C:\Users`],
+    [String.raw`/^\\\\/`, '\\\\'],
+    [String.raw`/^a\\nb/`, String.raw`a\nb`],
+    [String.raw`/^a\\x41/`, String.raw`a\x41`],
+    [String.raw`/\\nb$/`, String.raw`\nb`],
+    ["/^don't/", "don't"],
+    [String.raw`/^don\'t/`, "don't"],
+    [String.raw`/^\*glob/`, '*glob'],
+    [String.raw`/^file:\/\//`, 'file://'],
+  ];
+
+  it.each(FAITHFUL_ADVICE)('%s advises the exact characters it matches', (source, expected) => {
+    const messages = lint(`export const f = (s) => ${source}.test(s);`);
+    expect(messages).toHaveLength(1);
+    // Parses as JS…
+    const advised = advisedLiteral(messages[0]);
+    // …and denotes the same characters the regex does.
+    expect(advised).toBe(expected);
+  });
+
+  it.each(FAITHFUL_ADVICE)('%s advice agrees with the regex on real strings', (source, expected) => {
+    // `source` is a fixture literal declared in FAITHFUL_ADVICE above; rebuilding it here is what
+    // lets one row drive both the lint fixture and the semantics check, so the two cannot drift
+    // apart. (The directive must sit on the line immediately before the call — a run of `//`
+    // comments is a run of separate comments, so a directive above them targets only the next
+    // comment line and is silently unused.)
+    // eslint-disable-next-line security/detect-non-literal-regexp -- fixture literal, never input
+    const regex = new RegExp(source.slice(1, source.lastIndexOf('/')));
+    const atStart = regex.source.startsWith('^');
+    const probes = [expected, `${expected}TAIL`, `HEAD${expected}`, expected.slice(1), '', 'unrelated'];
+    for (const probe of probes) {
+      const viaAdvice = atStart ? probe.startsWith(expected) : probe.endsWith(expected);
+      expect({ probe, matched: regex.test(probe) }).toStrictEqual({ probe, matched: viaAdvice });
+    }
+  });
+
+  /**
+   * `g`/`y` make `.test()` stateful through `lastIndex`. A regex LITERAL is
+   * rebuilt on every evaluation so its cursor is always 0; a hoisted `const` is
+   * one object that remembers. Resolving through a binding is therefore exactly
+   * what makes the advice wrong — and exactly what this rule newly does.
+   */
+  it.each(['g', 'y', 'gy'])('stays silent on a const-held regex with the %s flag', (flags) => {
+    expect(lint(`const RE = /^abc/${flags};\nexport const f = (s) => RE.test(s);`)).toStrictEqual([]);
+  });
+
+  it('demonstrates the divergence the g-flag guard prevents', () => {
+    const held = /^abc/g;
+    expect([1, 2, 3, 4].map(() => held.test('abcdef'))).toStrictEqual([true, false, true, false]);
+    expect([1, 2, 3, 4].map(() => 'abcdef'.startsWith('abc'))).toStrictEqual([true, true, true, true]);
+  });
+
+  it('still fires on an INLINE regex with g — the literal is rebuilt, so lastIndex is always 0', () => {
+    expect(lint('export const f = (s) => /^abc/g.test(s);')).toHaveLength(1);
+    // The regex literal below is the SUBJECT, not a style slip. `--fix` rewrote
+    // it to `'abcdef'.startsWith('abc')` — via this very rule and unicorn's —
+    // which left the assertion comparing `startsWith` to `startsWith` and
+    // passing vacuously. Exactly the class of defect this file exists to catch,
+    // committed against the file itself.
+    /* eslint-disable local/prefer-startswith-over-regex, unicorn/prefer-string-starts-ends-with -- the inline literal IS the assertion */
+    expect([1, 2, 3, 4].map(() => /^abc/g.test('abcdef'))).toStrictEqual([true, true, true, true]);
+    /* eslint-enable local/prefer-startswith-over-regex, unicorn/prefer-string-starts-ends-with */
+  });
+
+  it('renders the flags, so a reader can see what the advice rests on', () => {
+    expect(lint('export const f = (s) => /^abc/s.test(s);')[0]).toContain('/^abc/s.test(');
+  });
+
+  it('needs exactly one argument', () => {
+    expect(lint('export const f = () => /^abc/.test();')).toStrictEqual([]);
+    expect(lint('export const f = (s) => /^abc/.test(s, 1);')).toStrictEqual([]);
+  });
+
+  /**
+   * MEMBERSHIP of the bail class, pinned character by character.
+   *
+   * An adversarial run dropped 12 of the 22 characters and this suite stayed
+   * green — only 7 were named by any fixture. Under that mutant `/^\sfoo/`
+   * advised `startsWith('sfoo')`. Both directions are asserted here, so neither
+   * a narrowing nor a widening can pass unremarked.
+   */
+  const MEANINGFUL = [...'0123456789BDPSWbcdfknprstuvwx'];
+  const IDENTITY = [...'AaEeGgHhIiJjLlMmOoQqRrTtYyZz'].filter((char) => !MEANINGFUL.includes(char));
+
+  it.each(MEANINGFUL)(String.raw`\%s means something other than the character, so it bails`, (char) => {
+    expect(lint(`export const f = (s) => /^\\${char}tail/.test(s);`)).toStrictEqual([]);
+  });
+
+  it.each(IDENTITY)(String.raw`\%s is an identity escape, so it flattens`, (char) => {
+    const messages = lint(`export const f = (s) => /^\\${char}tail/.test(s);`);
+    expect(messages).toHaveLength(1);
+    expect(advisedLiteral(messages[0])).toBe(`${char}tail`);
+  });
+});
+
+/**
+ * A SUPPRESSED report still consumes the once-per-file import edit.
+ *
+ * ESLint runs a rule's `fix()` before the `eslint-disable` filter discards the
+ * problem, so `buildFix`'s "emit the shared edits once" guard is spent by a
+ * report that is then thrown away. Every other call site is rewritten to
+ * `safePath.join(...)`, nothing imports `safePath`, and — until the repair leg
+ * existed — no report survived to carry the import on any later pass.
+ *
+ * An adversarial run measured that as a STABLE fixpoint: `--fix` twice more
+ * changed nothing, lint reported zero problems, and the file did not compile.
+ * The docstring at the time claimed the state was transient. It was not. This
+ * test is the claim, executed rather than asserted.
+ */
+describe('a suppressed first report does not strand the file', () => {
+  const languageOptions = { ecmaVersion: 2024, sourceType: 'module' } as const;
+  const config = (name: string) => [
+    {
+      files: ['**/*.ts'],
+      plugins: {
+        local: {
+          rules: { [name]: loadLocalRule(`${name}.cjs`) },
+        },
+      },
+      rules: { [`local/${name}`]: 'error' as const },
+      languageOptions,
+    },
+  ];
+
+  /**
+   * The rule must still be DEFINED here even though it is switched off — an
+   * `eslint-disable` naming a rule the config does not know reports "Definition
+   * for rule … was not found", and that lands in the same message list as the
+   * `no-undef` findings this is reading. The first draft of this helper omitted
+   * it and produced a failure that looked exactly like a dangling identifier.
+   */
+  const unboundIn = (name: string, code: string): string[] =>
+    new Linter()
+      .verify(
+        code,
+        [
+          {
+            files: ['**/*.ts'],
+            plugins: { local: { rules: { [name]: loadLocalRule(`${name}.cjs`) } } },
+            rules: { 'no-undef': 'error', [`local/${name}`]: 'off' },
+            // With the rule switched off its disable directive becomes
+            // "unused", and ESLint 9 warns about that by default — into the
+            // same message list this is reading for dangling identifiers.
+            linterOptions: { reportUnusedDisableDirectives: 'off' },
+            languageOptions,
+          },
+        ],
+        { filename: LINTED_FILE },
+      )
+      .map(({ message }) => message);
+
+  it.each([
+    [RULE.join, 'join'],
+    [RULE.resolve, 'resolve'],
+    [RULE.relative, 'relative'],
+  ])('%s converges to compiling source with the first call site disabled', (name, fn) => {
+    const source = [
+      `import { ${fn} } from 'node:path';`,
+      `// eslint-disable-next-line local/${name}`,
+      `export const a = ${fn}('1', '2');`,
+      `export const b = ${fn}('3', '4');`,
+      `export const c = ${fn}('5', '6');`,
+    ].join('\n');
+    const cfg = config(name);
+
+    // Negative control: the disable really does suppress one of four reports.
+    expect(new Linter().verify(source, cfg, { filename: LINTED_FILE })).toHaveLength(2);
+    expect(unboundIn(name, source)).toStrictEqual([]);
+
+    const { output } = new Linter().verifyAndFix(source, cfg, { filename: LINTED_FILE });
+
+    // The whole point: no dangling `safePath`, and no dangling `join`.
+    expect(unboundIn(name, output)).toStrictEqual([]);
+    // The suppressed call is left ALONE — it still reads `join(...)`, which is
+    // why the `node:path` specifier must survive alongside it.
+    expect(output).toContain(`export const a = ${fn}('1', '2');`);
+    expect(output).toContain(`import { ${fn} } from 'node:path';`);
+    expect(output).toContain(`export const b = safePath.${fn}('3', '4');`);
+  });
+
+  it('recovers a file that a partial fix already stranded', () => {
+    // Exactly the broken output the old code produced and then declared clean.
+    const stranded = [
+      "import { join } from 'node:path';",
+      "export const a = join('1', '2');",
+      "export const b = safePath.join('3', '4');",
+    ].join('\n');
+    const cfg = config(RULE.join);
+
+    expect(unboundIn(RULE.join, stranded)).toStrictEqual(["'safePath' is not defined."]);
+
+    const { output } = new Linter().verifyAndFix(stranded, cfg, { filename: LINTED_FILE });
+    expect(unboundIn(RULE.join, output)).toStrictEqual([]);
+    expect(new Linter().verify(output, cfg, { filename: LINTED_FILE })).toStrictEqual([]);
+  });
+});
+
+/**
+ * The same suppression hazard, across every OTHER import-inserting rule.
+ *
+ * These rules do not key detection on the import, so they recover across passes
+ * on their own — but only because no `fix()` latches a once-per-file flag. This
+ * suite is what stops one being re-introduced: a latch here has no repair leg
+ * behind it, and the file would simply stay broken.
+ */
+const SUPPRESSION_CASES: Array<[string, string, string]> = [
+  [RULE.tmpdir, namedImport('tmpdir', 'node:os'), 'tmpdir()'],
+  [RULE.mkdir, namedImport('mkdirSync', NODE_FS), "mkdirSync('/d')"],
+  [RULE.realpath, namedImport('realpathSync', NODE_FS), "realpathSync('/p')"],
+  [RULE.execSync, namedImport('execSync', NODE_CHILD_PROCESS), "execSync('ls')"],
+  [RULE.cp, namedImport('cp', 'node:fs/promises'), "cp('a', 'b')"],
+  [RULE.normalize, '', String.raw`'x'.split('\\').join('/')`],
+];
+
+describe('a suppressed first report strands no other rule either', () => {
+  const languageOptions = { ecmaVersion: 2024, sourceType: 'module' } as const;
+
+  it.each(SUPPRESSION_CASES)('%s', (name, importLine, call) => {
+    const rule = loadLocalRule(`${name}.cjs`);
+    const source = [
+      importLine,
+      `// eslint-disable-next-line local/${name}`,
+      `export const a = ${call};`,
+      `export const b = ${call};`,
+      `export const c = ${call};`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    const base = { files: ['**/*.ts'], plugins: { local: { rules: { [name]: rule } } }, languageOptions };
+    const cfg = [{ ...base, rules: { [`local/${name}`]: 'error' as const } }];
+    const undefCfg = [
+      {
+        ...base,
+        rules: { 'no-undef': 'error' as const, [`local/${name}`]: 'off' as const },
+        linterOptions: { reportUnusedDisableDirectives: 'off' as const },
+      },
+    ];
+    const unbound = (code: string): string[] =>
+      new Linter().verify(code, undefCfg, { filename: LINTED_FILE }).map(({ message }) => message);
+
+    // Negative control: one of three reports really is suppressed.
+    expect(new Linter().verify(source, cfg, { filename: LINTED_FILE })).toHaveLength(2);
+    expect(unbound(source)).toStrictEqual([]);
+
+    const { output } = new Linter().verifyAndFix(source, cfg, { filename: LINTED_FILE });
+    expect(unbound(output)).toStrictEqual([]);
+    // The suppressed call is untouched, so whatever it needs must survive.
+    expect(output).toContain(`export const a = ${call};`);
+  });
+});
+
+/**
+ * The binding the fixer itself orphaned, and the binding forms it can see.
+ *
+ * Both suites below close gaps an adopter measured on the rc.2 tarball, over
+ * 4,963 tracked source files. They share one config helper because the two are
+ * the same rule invocation seen from two ends: what the fixer LEAVES BEHIND, and
+ * what it can RECOGNISE in the first place.
+ */
+describe('bindings the fixer consumes and the bindings it can see', () => {
+  const languageOptions = { ecmaVersion: 2024, sourceType: 'module' } as const;
+
+  const configFor = (name: string, options?: object) => [
+    {
+      files: ['**/*.ts'],
+      plugins: { local: { rules: { [name]: loadLocalRule(`${name}.cjs`) } } },
+      rules: { [`local/${name}`]: (options ? ['error', options] : 'error') as 'error' },
+      languageOptions,
+    },
+  ];
+
+  const lint = (name: string, code: string): Linter.LintMessage[] =>
+    new Linter().verify(code, configFor(name), { filename: LINTED_FILE });
+
+  const fix = (name: string, code: string): string =>
+    new Linter().verifyAndFix(code, configFor(name), { filename: LINTED_FILE }).output;
+
+  /**
+   * The adopter's gate, restated as an assertion.
+   *
+   * Their repo lints at `--max-warnings=0`. After `--fix` converged over ~5,100
+   * sites, **536 errors survived across 232 files** — every one of them the same
+   * class, the now-unused `node:path` binding, split 289 `no-unused-vars` /
+   * 247 `sonarjs/unused-import`. So the fixed output did not lint clean, and the
+   * migration was not complete. Core `no-unused-vars` is the same question in
+   * one rule, and it is the only assertion here that would have caught it: the
+   * `no-undef` fixpoint check above is blind, because a dead import leaves
+   * nothing DANGLING — it leaves something SPARE.
+   *
+   * Neither ecosystem rule can fix this for us: `@typescript-eslint/no-unused-vars`
+   * declares `meta.fixable: 'code'` and yet emits only a SUGGESTION for an unused
+   * import, and `--fix` never applies suggestions. Verified with both rules
+   * enabled in a single `verifyAndFix`; the import survived.
+   */
+  const unusedIn = (code: string): string[] =>
+    new Linter()
+      .verify(code, [{ files: ['**/*.ts'], rules: { 'no-unused-vars': 'error' }, languageOptions }], {
+        filename: LINTED_FILE,
+      })
+      .map(({ message }) => message);
+
+  const DEFAULT_IMPORT = 'default import';
+  const NAMESPACE_IMPORT = 'namespace import';
+
+  describe('--fix removes the import binding it just orphaned', () => {
+    /** `[rule, label, source]` — every source is fully migrated by one pass. */
+    const DEAD_AFTER_FIX: Array<[string, string, string]> = [
+      [RULE.join, DEFAULT_IMPORT, `${PATH_NAMESPACE_IMPORT}\nexport const p = path.join('a', 'b');`],
+      [RULE.join, NAMESPACE_IMPORT, "import * as path from 'node:path';\nexport const p = path.join('a', 'b');"],
+      [RULE.resolve, DEFAULT_IMPORT, `${PATH_NAMESPACE_IMPORT}\nexport const p = path.resolve('a', 'b');`],
+      [RULE.relative, DEFAULT_IMPORT, `${PATH_NAMESPACE_IMPORT}\nexport const p = path.relative('a', 'b');`],
+      [RULE.tmpdir, DEFAULT_IMPORT, "import os from 'node:os';\nexport const t = os.tmpdir();"],
+      [RULE.tmpdir, NAMESPACE_IMPORT, "import * as os from 'node:os';\nexport const t = os.tmpdir();"],
+      // `path.sep` is a member reference like any other, and `toForwardSlash`
+      // consumes the last one. This rule never tracked the path import at all.
+      [
+        RULE.normalize,
+        'path.sep consumed by toForwardSlash',
+        `${PATH_NAMESPACE_IMPORT}\nconst raw = 'a\\\\b';\nexport const n = raw.split(path.sep).join('/');`,
+      ],
+    ];
+
+    it.each(DEAD_AFTER_FIX)('%s (%s)', (name, _label, source) => {
+      // Negative controls: the source must provoke the rule, and must not
+      // already be carrying the very finding this test looks for afterwards.
+      expect(lint(name, source).length).toBeGreaterThan(0);
+      expect(unusedIn(source)).toStrictEqual([]);
+
+      const output = fix(name, source);
+
+      expect(unusedIn(output)).toStrictEqual([]);
+      expect(output).not.toMatch(/from 'node:(path|os)'/);
+      // …and the fixpoint still holds: nothing left to report.
+      expect(lint(name, output)).toStrictEqual([]);
+    });
+
+    /**
+     * `[rule, label, source]` — every source ends the pass with a `node:*`
+     * import that must SURVIVE. Each row disables a different guard.
+     */
+    const IMPORT_MUST_SURVIVE: Array<[string, string, string]> = [
+      // Only the all-members-migrated case is dead. This is the case the
+      // adopter confirmed already worked, kept here so a wider "just delete it"
+      // cannot pass.
+      [
+        RULE.join,
+        'another member still uses the binding',
+        `${PATH_NAMESPACE_IMPORT}\nexport const p = path.join('a', 'b');\nexport const d = path.dirname(p);`,
+      ],
+      // A bare side-effect import declares no bindings, so "every binding is
+      // dead" is vacuously true. Deleting it is an edit nobody asked for, and
+      // `node:path`'s freedom from side effects is not the point — the author's
+      // intent is unreadable.
+      [RULE.join, 'bare side-effect import', `import 'node:path';\n${SAFE_IMPORT}\nexport const p = safePath.join('a', 'b');`],
+      // EVERY binding must be dead, not merely one of them. A single-specifier
+      // fixture cannot tell `every` from `some` — both answer the same for one
+      // variable — so the declaration here has to carry two.
+      [
+        RULE.join,
+        'a second specifier on the same declaration is still live',
+        "import path, { sep } from 'node:path';\nexport const p = path.join('a', 'b');\nexport const s = sep;",
+      ],
+      // The gate that keeps this a REPAIR leg rather than a general
+      // unused-import rule: with nothing from the safe module in scope, this
+      // fixer never ran here, so the dead import is somebody else's business.
+      [RULE.join, 'file was never migrated', `${PATH_NAMESPACE_IMPORT}\nexport const x = 1;`],
+    ];
+
+    it.each(IMPORT_MUST_SURVIVE)('%s keeps the import when %s', (name, _label, source) => {
+      const output = fix(name, source);
+      expect(output).toContain("'node:path'");
+      expect(lint(name, output)).toStrictEqual([]);
+    });
+
+    /**
+     * Type-only specifiers, which have no references by construction.
+     *
+     * A `type` binding exists only for the type checker, so scope analysis
+     * reports zero references for one that IS used — `no-undef` and
+     * `no-unused-vars` are equally blind to the damage, because the reference it
+     * breaks is a TYPE reference. Round 2 learned this by deleting them.
+     */
+    it.each([
+      ['declaration-level', "import type { PlatformPath } from 'node:path';"],
+      ['specifier-level', "import { type PlatformPath } from 'node:path';"],
+    ])('%s type-only imports are never removed', (_label, typeImport) => {
+      const source = [SAFE_IMPORT, typeImport, "export const p = safePath.join('a', 'b');"].join('\n');
+      const config = [
+        {
+          files: ['**/*.ts'],
+          plugins: { local: { rules: { [RULE.join]: loadLocalRule(`${RULE.join}.cjs`) } } },
+          rules: { [`local/${RULE.join}`]: 'error' as const },
+          languageOptions: { parser: tsParser },
+        },
+      ];
+      const { output } = new Linter().verifyAndFix(source, config, { filename: LINTED_FILE });
+      expect(output).toContain(typeImport);
+    });
+  });
+
+  /**
+   * How the unsafe namespace got bound.
+   *
+   * rc.1 matched ANY receiver, so it "detected" these shapes only as a side
+   * effect of the defect that also produced `os.normalizedTmpdir()` — and it
+   * reported `const os = { tmpdir(){} }` and `env.tmpdir()` as findings it would
+   * have rewritten into a call on the wrong function. rc.2 checks the receiver
+   * and correctly rejects both, but only recognised a static `import`. Whole-
+   * callee replacement is safe however the binding was made, so the two other
+   * binding forms belong in the same set — and the false positives must stay
+   * rejected, which is what the negative rows below pin.
+   */
+  describe('a namespace bound by require() or a dynamic import is still a namespace', () => {
+    const DYNAMIC = "export async function f() {\n  const os = await import('node:os');\n  return os.tmpdir();\n}";
+    const REQUIRED = "const os = require('node:os');\nexport function f() { return os.tmpdir(); }";
+
+    it.each([
+      ['await import()', DYNAMIC],
+      ['require()', REQUIRED],
+    ])('%s is reported and rewritten to a free call', (_label, source) => {
+      expect(lint(RULE.tmpdir, source)).toHaveLength(1);
+
+      const output = fix(RULE.tmpdir, source);
+      // The defect the receiver check exists to prevent: a member call on a
+      // namespace that has no such member. It compiles and it throws.
+      expect(output).not.toMatch(/\bos\s*\.\s*normalizedTmpdir\b/);
+      expect(output).toMatch(/(?<![.\w])normalizedTmpdir\(\)/);
+      expect(lint(RULE.tmpdir, output)).toStrictEqual([]);
+    });
+
+    it.each([
+      ['an unrelated object literal', "const os = { tmpdir: () => '/t' };\nexport function f() { return os.tmpdir(); }"],
+      ['the same method on another receiver', "const env = { tmpdir: () => '/t' };\nexport function f() { return env.tmpdir(); }"],
+      [
+        'a dynamic import of a different module',
+        "export async function f() {\n  const os = await import('node:util');\n  return os.tmpdir();\n}",
+      ],
+      ['a require() of a different module', "const os = require('node:util');\nexport function f() { return os.tmpdir(); }"],
+      // Not every one-argument call that is handed a module name IS `require`.
+      // Without the callee-name check this reports, and the fix would rewrite a
+      // call on somebody else's object into a free function.
+      ['a call that merely looks like require()', "const os = notRequire('node:os');\nexport function f() { return os.tmpdir(); }"],
+    ])('%s is not a finding', (_label, source) => {
+      expect(lint(RULE.tmpdir, source)).toStrictEqual([]);
+    });
+  });
+
+  /**
+   * The gate stays readable from the SOURCE, never from a flag `fix()` can flip.
+   *
+   * ESLint runs a rule's `fix()` for a suppressed problem BEFORE the
+   * `eslint-disable` filter discards it. So any mutable "have I added the safe
+   * import?" flag is already `true` — and lying — by the time `Program:exit`
+   * runs, and a dead-import leg reading it would delete an import in a file
+   * nothing was actually migrated in. Both factories therefore snapshot the
+   * answer at `create()` time; these are the fixtures that tell the two apart.
+   *
+   * Two imports of the same module, deliberately. The suppressed call keeps its
+   * OWN binding referenced, so a single-import file cannot express the state
+   * this guards — a live report whose `fix()` flips the flag, and a dead binding
+   * sitting beside it in the same pass. The second (unused) import supplies it.
+   */
+  it.each([
+    [
+      RULE.join,
+      [
+        "import legacy from 'path';",
+        PATH_NAMESPACE_IMPORT,
+        `// eslint-disable-next-line local/${RULE.join}`,
+        "export const a = path.join('1', '2');",
+      ].join('\n'),
+    ],
+    [
+      RULE.tmpdir,
+      [
+        "import legacy from 'os';",
+        "import os from 'node:os';",
+        `// eslint-disable-next-line local/${RULE.tmpdir}`,
+        'export const a = os.tmpdir();',
+      ].join('\n'),
+    ],
+  ])('%s: a suppressed report cannot arm the dead-import leg', (name, source) => {
+    // The rule's only report is suppressed, so nothing at all is left — in
+    // particular not a `deadUnsafeImport` that the discarded report enabled.
+    expect(lint(name, source)).toStrictEqual([]);
+    expect(fix(name, source)).toBe(source);
+  });
+
+  /**
+   * The configuration an adopter actually runs: the whole pack at once.
+   *
+   * Every rule above is tested in isolation, and isolation is precisely where
+   * this cannot go wrong. Three rules migrating three members of ONE import all
+   * reach the same dead declaration on the same pass and all emit a removal over
+   * the same range — so the question is whether ESLint's overlap handling
+   * converges or starves, and no single-rule fixture asks it.
+   */
+  it('the three safePath rules together converge on one import in a single pass', () => {
+    const source = [
+      PATH_NAMESPACE_IMPORT,
+      "export const a = path.join('a', 'b');",
+      "export const b = path.resolve('c');",
+      "export const c = path.relative('d', 'e');",
+    ].join('\n');
+    const names = [RULE.join, RULE.resolve, RULE.relative];
+    const config = [
+      {
+        files: ['**/*.ts'],
+        plugins: {
+          local: { rules: Object.fromEntries(names.map((name) => [name, loadLocalRule(`${name}.cjs`)])) },
+        },
+        rules: Object.fromEntries(names.map((name) => [`local/${name}`, 'error' as const])),
+        languageOptions,
+      },
+    ];
+
+    expect(new Linter().verify(source, config, { filename: LINTED_FILE })).toHaveLength(names.length);
+
+    const { output } = new Linter().verifyAndFix(source, config, { filename: LINTED_FILE });
+
+    expect(new Linter().verify(output, config, { filename: LINTED_FILE })).toStrictEqual([]);
+    expect(unusedIn(output)).toStrictEqual([]);
+    expect(output).not.toContain("'node:path'");
+    for (const fn of ['join', 'resolve', 'relative']) {
+      expect(output).toContain(`safePath.${fn}(`);
+    }
+  });
+});
+
+/**
+ * The shared dead-import helper, exercised directly on its own module list.
+ *
+ * Every rule wired to it today pre-filters to its own module before handing a
+ * declaration over, so the allow-list inside the helper is unreachable through
+ * any of them — and an untested unreachable guard is exactly the one a future
+ * rule discovers the hard way. This calls the helper with declarations the
+ * production callers never pass it.
+ */
+describe('reportDeadUnsafeImports only ever removes a listed module', () => {
+  const { reportDeadUnsafeImports } = loadLocalRuleModule<{
+    reportDeadUnsafeImports: (
+      context: unknown,
+      sourceCode: unknown,
+      importNodes: unknown[],
+      migrated: boolean,
+    ) => void;
+  }>('dead-import.cjs');
+
+  /** Hands the helper EVERY import declaration in the file, unfiltered. */
+  const unfilteredRule = {
+    meta: {
+      type: 'problem' as const,
+      fixable: 'code' as const,
+      schema: [],
+      messages: {
+        deadUnsafeImport: "'{{local}}' from '{{module}}'",
+      },
+    },
+    create(context: Rule.RuleContext): Rule.RuleListener {
+      const { sourceCode } = context;
+      return {
+        'Program:exit'() {
+          reportDeadUnsafeImports(
+            context,
+            sourceCode,
+            sourceCode.ast.body.filter((node) => node.type === 'ImportDeclaration'),
+            true,
+          );
+        },
+      };
+    },
+  };
+
+  const removedFrom = (code: string): string =>
+    new Linter().verifyAndFix(
+      code,
+      [
+        {
+          files: ['**/*.ts'],
+          plugins: { local: { rules: { r: unfilteredRule as Rule.RuleModule } } },
+          rules: { 'local/r': 'error' },
+          languageOptions: { ecmaVersion: 2024, sourceType: 'module' },
+        },
+      ],
+      { filename: LINTED_FILE },
+    ).output;
+
+  it.each([
+    ['node:path', true],
+    ['path', true],
+    ['node:child_process', true],
+    // Side-effect-free-ness is decided at authoring time for a CLOSED list, and
+    // these are not on it. A builtin nobody wired up is still not ours to delete,
+    // and a userland module may run anything at import time.
+    ['node:crypto', false],
+    ['react', false],
+    ['./local-module.js', false],
+  ])('%s removable=%s', (module, removable) => {
+    const source = `import dead from '${module}';\nexport const x = 1;`;
+    expect(removedFrom(source).includes(`'${module}'`)).toBe(!removable);
   });
 });

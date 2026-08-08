@@ -10,6 +10,11 @@
  */
 
 const {
+  DEAD_UNSAFE_IMPORT,
+  DEAD_UNSAFE_IMPORT_MESSAGE,
+  reportDeadUnsafeImports,
+} = require('./dead-import.cjs');
+const {
   UNANCHORED_EXEMPT_FILE,
   UNANCHORED_EXEMPT_MESSAGE,
   createConfigurableExemptPathMatcher,
@@ -18,6 +23,7 @@ const {
 const {
   EXEMPT_AND_SAFE_MODULE_SCHEMA,
   SAFE_PATH_MODULE,
+  insertAboveWithComments,
   isNameAlreadyBound,
   resolveSafeModule,
 } = require('./safe-import.cjs');
@@ -58,10 +64,31 @@ function removeSpecifier(fixer, sourceCode, importNode, spec) {
 
 /**
  * Track path module specifiers from an import declaration.
+ *
+ * Two specifier shapes are deliberately NOT tracked, because tracking them is
+ * what let the fixer delete them:
+ *
+ * - **Type-only** (`import { type join, … }` / `import type { join }`). The
+ *   binding exists only for the type checker; there is no call to rewrite, and
+ *   removing the specifier silently breaks every `typeof join` that referenced
+ *   it. `no-undef` cannot see the damage — it is a TYPE reference.
+ * - **Aliased** (`import { join as pathJoin }`). The rule never reported
+ *   `pathJoin(...)` in the first place — `classifyCall` matches on the callee's
+ *   name — so tracking the specifier bought nothing and cost the whole import:
+ *   an unrelated unbound `join(` elsewhere in the file made the fixer remove
+ *   the alias, breaking every working `pathJoin` call site.
  */
 function trackPathImport(node, unsafeFn, state) {
+  if (node.importKind === 'type') {
+    return;
+  }
   for (const spec of node.specifiers) {
-    if (spec.type === 'ImportSpecifier' && spec.imported.name === unsafeFn) {
+    if (
+      spec.type === 'ImportSpecifier' &&
+      spec.importKind !== 'type' &&
+      spec.imported.name === unsafeFn &&
+      spec.local.name === unsafeFn
+    ) {
       state.namedImportSpec = spec;
       state.namedImportNode = node;
     }
@@ -69,6 +96,24 @@ function trackPathImport(node, unsafeFn, state) {
       state.defaultImportName = spec.local.name;
     }
   }
+}
+
+/**
+ * Is `name` re-exported by a bare `export { name }` in this file?
+ *
+ * Removing the import specifier then leaves the export naming nothing, and the
+ * result does not PARSE — `Export 'join' is not defined`. An autofix whose
+ * output cannot be parsed is the worst outcome available, so the specifier
+ * stays and the call sites are still rewritten. Whatever is left is a lint
+ * finding a human can read, not a broken file.
+ */
+function isReExported(sourceCode, name) {
+  return sourceCode.ast.body.some(
+    (node) =>
+      node.type === 'ExportNamedDeclaration' &&
+      !node.source &&
+      node.specifiers.some((spec) => spec.local?.name === name),
+  );
 }
 
 /**
@@ -104,34 +149,67 @@ function isIdentifierBound(sourceCode, node, name) {
 
 /**
  * Check if a call expression is an unsafe path function call.
- * Returns { isNamed } or null if not a match.
+ *
+ * Returns `{ isNamed }` — or `{ importOnly: true }` for a call that is already
+ * correct and merely missing its import — or null if not a match.
  */
 function classifyCall(node, unsafeFn, state, sourceCode) {
-  // Direct call from named import: join(...)
+  const isMember = node.callee.type === 'MemberExpression' && node.callee.property.type === 'Identifier';
+
+  // Direct call: join(...)
   if (node.callee.type === 'Identifier' && node.callee.name === unsafeFn) {
     if (state.namedImportSpec) {
       return { isNamed: true };
     }
-    // Belt and braces. Keying detection on "did I see the import?" made this
-    // rule STOP REPORTING the moment a fix removed the specifier — so a partial
+    // REPAIR LEG. Keying detection on "did I see the import?" made this rule
+    // stop reporting the moment a fix removed the specifier, so a partial
     // `--fix` reached a stable fixpoint over source that no longer compiles and
-    // exited clean. Recognising the bare call keeps the worst case at "run
-    // --fix again" instead of "you find out at tsc".
-    if (!isIdentifierBound(sourceCode, node.callee, unsafeFn)) {
+    // exited clean.
+    //
+    // Gated on `safePath` already being bound, which is what makes it a repair
+    // rather than a second, sloppier detector. An unbound `join` is NOT reliably
+    // our `join`: ESLint scope analysis does not bind `declare global { function
+    // join() }`, and it cannot see an ambient global from a `globals.d.ts`, an
+    // `@types` package, or a bundler — `resolve` and `relative` are entirely
+    // plausible as those. Requiring `safePath` in scope narrows this to the
+    // half-migrated file it exists to finish, where the name really was ours.
+    if (state.safePathBoundInSource && !isIdentifierBound(sourceCode, node.callee, unsafeFn)) {
       return { isNamed: false };
     }
     return null;
   }
-  // Member expression: path.join(...)
+
+  // Namespace call: path.join(...)
   if (
-    node.callee.type === 'MemberExpression' &&
+    isMember &&
     node.callee.object.type === 'Identifier' &&
     node.callee.object.name === state.defaultImportName &&
-    node.callee.property.type === 'Identifier' &&
     node.callee.property.name === unsafeFn
   ) {
     return { isNamed: false };
   }
+
+  // REPAIR LEG, the other half: `safePath.join(...)` with no `safePath` in
+  // scope. This is what a partially-applied fix leaves — and without it, that
+  // state is PERMANENT rather than transient.
+  //
+  // ESLint runs `fix()` for a problem BEFORE the `eslint-disable` filter
+  // discards it, so a suppressed report on the first call site consumes the
+  // once-per-file import edit and then throws it away. Every other call is
+  // rewritten to `safePath.join`, nothing imports `safePath`, and no report
+  // survives to carry the import on any later pass. Recognising the orphaned
+  // call is what closes that loop; it costs one extra pass, and only in a file
+  // that is already broken.
+  if (
+    isMember &&
+    node.callee.object.type === 'Identifier' &&
+    node.callee.object.name === SAFE_OBJECT &&
+    node.callee.property.name === unsafeFn &&
+    !isIdentifierBound(sourceCode, node.callee.object, SAFE_OBJECT)
+  ) {
+    return { importOnly: true };
+  }
+
   return null;
 }
 
@@ -157,44 +235,74 @@ function classifyCall(node, unsafeFn, state, sourceCode) {
  * a fix LOCAL to its own callee. Nothing overlaps, and one pass fixes the file.
  * `no-manual-path-normalize.cjs` carries the same guard for the same reason.
  *
- * Caveat, deliberate and stated because it is the same defect class in
- * miniature: only the FIRST report's fix is self-sufficient. Applying a later
- * one ALONE — an editor's "fix this problem", or an `eslint-disable` on the
- * first call site — rewrites the call without adding the import. The state is
- * transient (the next full `--fix` re-inserts it, because `hasSafePathImport`
- * is seeded from scope) and it is the strictly smaller failure: the alternative
- * is the batch `--fix` everyone actually runs silently breaking 146 files.
+ * Only the FIRST report's fix is self-sufficient, and that is load-bearing:
+ * applying a later one ALONE — an editor's "fix this problem", or an
+ * `eslint-disable` on the first call site — rewrites the call without adding
+ * the import. ESLint runs `fix()` before the disable filter, so a suppressed
+ * report consumes the once-per-file edit and then discards it.
  *
- * It cannot be closed by hoisting the shared edits onto their own report,
- * either. Removing `join` from the import while a suppressed `join(...)` call
- * survives is the same broken output reached a different way. `exemptFiles` is
- * the supported way to opt a whole file out.
+ * That state is recoverable rather than permanent ONLY because `classifyCall`
+ * has a repair leg for an orphaned `safePath.join(...)`. Without it the file
+ * stays broken through every subsequent `--fix`, because no report is left to
+ * carry the import — measured, not reasoned about. An earlier draft of this
+ * comment asserted the recovery came free from `hasSafePathImport` being seeded
+ * from scope; that was wrong, and an adversarial run produced the stable broken
+ * fixpoint to prove it.
+ *
+ * The shared edits still cannot be hoisted onto their own report: removing
+ * `join` from the import while a suppressed `join(...)` call survives is the
+ * same broken output reached a different way. `exemptFiles` opts a whole file
+ * out.
  */
-function buildFix(fixer, node, unsafeFn, isNamed, sourceCode, state) {
+function importSafePath(fixer, sourceCode, state) {
+  if (state.safeImportNode) {
+    const lastSpec = state.safeImportNode.specifiers.at(-1);
+    return fixer.insertTextAfter(lastSpec, `, ${SAFE_OBJECT}`);
+  }
+  const targetNode = state.namedImportNode || sourceCode.ast.body[0];
+  const declaration = `import { ${SAFE_OBJECT} } from '${state.safeModule}';`;
+  // Land the new import next to the imports, not after arbitrary code. A file
+  // reported only through a repair leg may have no path import at all, and
+  // `insertTextAfter(body[0])` would push the declaration below the statement
+  // that needs it — legal, since imports hoist, but it reads as though the
+  // fixer lost track of the file.
+  return targetNode.type === 'ImportDeclaration'
+    ? fixer.insertTextAfter(targetNode, `\n${declaration}`)
+    : insertAboveWithComments(fixer, sourceCode, targetNode, `${declaration}\n`);
+}
+
+function buildFix(fixer, node, unsafeFn, classification, sourceCode, state) {
+  // REPAIR: an orphaned `safePath.join(...)` is already the call we want, and
+  // the only thing missing is the import that a discarded report was carrying.
+  //
+  // This deliberately ignores `state.hasSafePathImport`. That flag is mutated
+  // inside `fix()`, and ESLint runs `fix()` for a SUPPRESSED problem before the
+  // disable filter throws it away — so on every pass the suppressed report
+  // spends the flag first and the repair emits nothing. The file then never
+  // recovers, which is precisely the stable broken fixpoint this leg exists to
+  // break. The gate that makes ignoring the flag safe is immutable: this
+  // classification is only reached when `safePath` is unbound in the SOURCE.
+  //
+  // Several orphaned calls yield the identical insert at the identical anchor,
+  // so ESLint applies one and drops the rest as overlapping — which is the
+  // desired outcome, not a hazard.
+  if (classification.importOnly) {
+    return [importSafePath(fixer, sourceCode, state)];
+  }
+
   const fixes = [fixer.replaceText(node.callee, `${SAFE_OBJECT}.${unsafeFn}`)];
 
   if (!state.hasSafePathImport) {
-    if (state.safeImportNode) {
-      const lastSpec = state.safeImportNode.specifiers.at(-1);
-      fixes.push(fixer.insertTextAfter(lastSpec, `, ${SAFE_OBJECT}`));
-    } else {
-      const targetNode = state.namedImportNode || sourceCode.ast.body[0];
-      const declaration = `import { ${SAFE_OBJECT} } from '${state.safeModule}';`;
-      // Land the new import next to the imports, not after arbitrary code. A
-      // file reported only through `classifyCall`'s bare-call leg may have no
-      // import at all, and `insertTextAfter(body[0])` would push the
-      // declaration below the statement that needs it — legal, since imports
-      // hoist, but it reads as though the fixer lost track of the file.
-      fixes.push(
-        targetNode.type === 'ImportDeclaration'
-          ? fixer.insertTextAfter(targetNode, `\n${declaration}`)
-          : fixer.insertTextBefore(targetNode, `${declaration}\n`),
-      );
-    }
+    fixes.push(importSafePath(fixer, sourceCode, state));
     state.hasSafePathImport = true;
   }
 
-  if (isNamed && state.namedImportNode && !state.namedImportRemoved) {
+  if (
+    classification.isNamed &&
+    state.namedImportNode &&
+    !state.namedImportRemoved &&
+    !isReExported(sourceCode, unsafeFn)
+  ) {
     fixes.push(...removeSpecifier(fixer, sourceCode, state.namedImportNode, state.namedImportSpec));
     state.namedImportRemoved = true;
   }
@@ -217,6 +325,7 @@ module.exports = function createPathFunctionRule(config) {
       schema: [EXEMPT_AND_SAFE_MODULE_SCHEMA],
       messages: {
         noUnsafePathFn: message,
+        [DEAD_UNSAFE_IMPORT]: DEAD_UNSAFE_IMPORT_MESSAGE,
         [UNANCHORED_EXEMPT_FILE]: UNANCHORED_EXEMPT_MESSAGE,
       },
     },
@@ -247,7 +356,17 @@ module.exports = function createPathFunctionRule(config) {
         // A file already importing `safePath` from the barrel needs the call
         // rewritten but must NOT gain a second binding of the same name.
         hasSafePathImport: isNameAlreadyBound(sourceCode, SAFE_OBJECT),
+        // The SAME question, answered once and never mutated. `hasSafePathImport`
+        // flips to true the moment a fix inserts the import, and gating the
+        // repair leg on a flag that the first report can flip would arm it for
+        // the rest of THIS pass — re-admitting the ambient-global false positive
+        // in any file that also has a `path.join()` to fix.
+        safePathBoundInSource: isNameAlreadyBound(sourceCode, SAFE_OBJECT),
         safeImportNode: null,
+        // EVERY path-module declaration, not just the one carrying `unsafeFn`.
+        // A file's dead binding is `import path from 'node:path'`, which
+        // `trackPathImport` only ever recorded as a NAME. See `dead-import.cjs`.
+        pathImportNodes: [],
       };
 
       return {
@@ -255,8 +374,18 @@ module.exports = function createPathFunctionRule(config) {
           reportUnanchoredExemptEntries(context, node);
         },
 
+        'Program:exit'() {
+          reportDeadUnsafeImports(
+            context,
+            sourceCode,
+            state.pathImportNodes,
+            state.safePathBoundInSource,
+          );
+        },
+
         ImportDeclaration(node) {
           if (PATH_MODULES.has(node.source.value)) {
+            state.pathImportNodes.push(node);
             trackPathImport(node, unsafeFn, state);
           }
           if (node.source.value === state.safeModule) {
@@ -278,7 +407,7 @@ module.exports = function createPathFunctionRule(config) {
             // drift from where the fixer actually writes the import.
             data: { safeModule: state.safeModule },
             fix(fixer) {
-              return buildFix(fixer, node, unsafeFn, classification.isNamed, sourceCode, state);
+              return buildFix(fixer, node, unsafeFn, classification, sourceCode, state);
             },
           });
         },

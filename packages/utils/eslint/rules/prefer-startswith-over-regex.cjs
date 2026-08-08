@@ -117,11 +117,14 @@ function findVariable(sourceCode, identifier) {
  * literal. A binding assigned more than once could hold anything by the time
  * `.test()` runs, and nothing here proves which value that is.
  *
- * @returns {{pattern: string, flags: string} | null}
+ * `indirect` is what lets the caller treat a hoisted regex differently from an
+ * inline one — see the `g`/`y` guard, which only a shared object can trip.
+ *
+ * @returns {{pattern: string, flags: string, indirect: boolean} | null}
  */
 function resolveRegex(sourceCode, node) {
   if (node.type === 'Literal' && node.regex) {
-    return node.regex;
+    return { ...node.regex, indirect: false };
   }
   if (node.type !== 'Identifier') {
     return null;
@@ -140,7 +143,27 @@ function resolveRegex(sourceCode, node) {
   }
 
   const { init } = definition.node;
-  return init.type === 'Literal' && init.regex ? init.regex : null;
+  return init.type === 'Literal' && init.regex ? { ...init.regex, indirect: true } : null;
+}
+
+/**
+ * Render the flattened literal as JS SOURCE, not as a bare character run.
+ *
+ * The literal is a string of characters; the message drops it into
+ * `startsWith(…)`, which a human reads as source. Those are different
+ * languages, and interpolating one into the other loses exactly the characters
+ * that matter. `/^C:\\Users/` flattens to `C:\Users` — one backslash — and
+ * emitting it raw produced the advice `startsWith('C:\Users')`, which JavaScript
+ * reads back as `"C:Users"`. Worse in the realistic case: a `/^\\\\/` UNC check
+ * became `startsWith('\\')`, i.e. ONE backslash, silently true for any
+ * single-backslash path. A literal containing `'` produced advice that is a
+ * `SyntaxError` outright.
+ *
+ * This rule has no fixer, so the message IS the deliverable — there is no
+ * autofixer downstream that would have escaped it correctly.
+ */
+function asSourceLiteral(literal) {
+  return JSON.stringify(literal);
 }
 
 module.exports = {
@@ -152,11 +175,14 @@ module.exports = {
       recommended: true,
     },
     messages: {
+      // `{{pattern}}` carries its FLAGS. Rendering `/^abc/` for a source
+      // `/^abc/g` hid the one character that decides whether the advice is
+      // right, from the one person positioned to notice.
       preferStartsWith:
-        "Prefer `<string>.startsWith('{{literal}}')` over `/{{pattern}}/.test(<string>)`. " +
+        'Prefer `<string>.startsWith({{literal}})` over `/{{pattern}}/{{flags}}.test(<string>)`. ' +
         String.raw`An escaped character such as \/ or \* is the literal character itself.`,
       preferEndsWith:
-        "Prefer `<string>.endsWith('{{literal}}')` over `/{{pattern}}/.test(<string>)`. " +
+        'Prefer `<string>.endsWith({{literal}})` over `/{{pattern}}/{{flags}}.test(<string>)`. ' +
         String.raw`An escaped character such as \/ or \* is the literal character itself.`,
     },
     schema: [],
@@ -174,37 +200,55 @@ module.exports = {
         ) {
           return;
         }
+        // `startsWith` needs a string receiver where `.test()` would have
+        // coerced one. Arity is the only part of that this rule can check
+        // without types — a zero-argument `.test()` coerces `undefined` to
+        // "undefined" and is nobody's prefix check. A non-string ARGUMENT
+        // (`/^\[object/.test(v)`) remains a known limitation: `.test` coerces,
+        // `startsWith` throws, and only a type checker can tell them apart.
+        if (node.arguments.length !== 1) {
+          return;
+        }
+
         const regex = resolveRegex(sourceCode, node.callee.object);
         if (!regex) {
           return;
         }
-        const { pattern, flags } = regex;
+        const { pattern, flags, indirect } = regex;
         if (flags.includes('i') || flags.includes('m')) {
           return;
         }
+        // `g` and `y` make `.test()` STATEFUL through `lastIndex`. A regex
+        // LITERAL is reconstructed on every evaluation, so its cursor is always
+        // 0 and the flags are inert; a hoisted `const` is one object that
+        // remembers. `const RE = /^abc/g` answers [true, false, true, false] to
+        // four calls on the same string where `startsWith` answers true four
+        // times — so resolving through a binding is precisely what makes this
+        // advice wrong, and precisely where it must not be given.
+        if (indirect && (flags.includes('g') || flags.includes('y'))) {
+          return;
+        }
+
+        const report = (messageId, literal) => {
+          context.report({
+            node,
+            messageId,
+            data: { literal: asSourceLiteral(literal), pattern, flags },
+          });
+        };
 
         if (pattern.startsWith('^')) {
-          const body = pattern.slice(1);
-          const literal = literalEquivalent(body);
+          const literal = literalEquivalent(pattern.slice(1));
           if (literal !== null && literal !== '') {
-            context.report({
-              node,
-              messageId: 'preferStartsWith',
-              data: { literal, pattern },
-            });
+            report('preferStartsWith', literal);
             return;
           }
         }
 
         if (pattern.endsWith('$') && !pattern.endsWith(String.raw`\$`)) {
-          const body = pattern.slice(0, -1);
-          const literal = literalEquivalent(body);
+          const literal = literalEquivalent(pattern.slice(0, -1));
           if (literal !== null && literal !== '') {
-            context.report({
-              node,
-              messageId: 'preferEndsWith',
-              data: { literal, pattern },
-            });
+            report('preferEndsWith', literal);
           }
         }
       },

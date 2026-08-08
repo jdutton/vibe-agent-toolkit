@@ -41,6 +41,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ValidateLinkOptions` in `@vibe-agent-toolkit/resources` gains a matching **required** `fsCache`
   field, so anything constructing that options object must supply the run's cache.
 
+- **The vestigial `zod` peerDependency is gone from `@vibe-agent-toolkit/utils`.** It was a
+  *required* peer, so anyone importing only `./path` was still told by their package manager to
+  install `zod`. The package imports `zod` nowhere: all six occurrences of `from 'zod'` in the
+  shipped `dist` are inside JSDoc `@example` blocks, and the version-introspection helpers
+  deliberately duck-type `_def.typeName` rather than importing the library — which is exactly what
+  makes them work across v3 and v4. The declared range (`^3.25.0 || ^4.0.0`) would additionally have
+  rejected a future major that the duck typing handles by design. `zod` remains a devDependency, so
+  the test that exercises the introspection against a real `zod` is unaffected.
+
+  **Listed as breaking, not merely removed**, because of who it breaks: not anyone importing from
+  `utils`, but a consumer that was relying on this package to pull `zod` into *their* tree and now
+  finds it absent. If you import `zod` yourself, declare it yourself. (Reported twice by an adopter
+  who went looking for this under Breaking and did not find it — it was filed under Added, beside
+  the subpath work that prompted it.)
+
 ### Added
 
 - **A `@vibe-agent-toolkit/utils/eslint` subpath — 21 ESLint rules that enforce the safety helpers
@@ -98,6 +113,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Requires ESLint 9+ (flat config) and Node >= 22. Full rule table
   in [the subpath's README](https://github.com/jdutton/vibe-agent-toolkit/blob/main/packages/utils/eslint/README.md).
 
+  `--fix` is safe to run across a whole migration: every rule that rewrites a call and edits
+  imports fixes all of a file's call sites without leaving a reference to something it just
+  un-imported, never deletes a `type`-only, aliased or re-exported specifier, and leaves a
+  suppressed call site working. Enforced by a suite that runs `--fix` to its fixpoint per rule and
+  checks the result with `no-undef`.
+
+  It also **finishes the job**, which matters in a repo gating at `--max-warnings=0`. Rewriting the
+  last `path.*` call in a file leaves `import path from 'node:path'` bound to nothing — not a
+  dangling reference, so a `no-undef` check cannot see it, and an adopter measured **536 such errors
+  surviving a converged `--fix` across 232 files**. The rules now report that orphaned binding
+  themselves, as a separate finding on the import line with its own fix, so it is visible and
+  suppressible rather than a rewrite quietly deleting a declaration. Deliberately narrow: a closed
+  list of Node builtins (`node:path`, `node:os`, `node:fs`, `node:fs/promises`,
+  `node:child_process`, and their bare spellings), only in a file where the safe symbol is already
+  bound, only whole declarations with no references left. Bare `import 'node:path'` side-effect
+  imports, `type` specifiers and partially-used declarations are left alone. This is not a general
+  unused-import rule and will not become one — the ecosystem's rules abstain here for good reason,
+  and in any case cannot help: `@typescript-eslint/no-unused-vars` declares `meta.fixable: 'code'`
+  yet emits only a *suggestion* for an unused import, which `--fix` never applies.
+
+  The member-call rules (`no-os-tmpdir` and friends) check the receiver rather than the method name,
+  and now recognise a namespace bound by `const os = require('node:os')` or
+  `const os = await import('node:os')` as well as by a static `import * as os`. An unrelated object
+  with a same-named method is still not a finding.
+
   **There is no separate plugin package to install**, and `eslint` is declared as an *optional* peer
   dependency, so nothing changes for consumers who take `utils` for `safePath.join()` alone: they
   get no unmet-peer warning and no new dependency. An ESLint plugin is data rather than code that
@@ -149,15 +189,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Node floor before this release, so an adopter installing on an older Node got no install-time
   signal from any of the other 20 — they simply failed later, at a syntax or API error, with nothing
   pointing at the Node version.
-
-- **The vestigial `zod` peerDependency is gone from `@vibe-agent-toolkit/utils`.** It was a
-  *required* peer, so anyone importing only `./path` was still told by their package manager to
-  install `zod`. The package imports `zod` nowhere: all six occurrences of `from 'zod'` in the
-  shipped `dist` are inside JSDoc `@example` blocks, and the version-introspection helpers
-  deliberately duck-type `_def.typeName` rather than importing the library — which is exactly what
-  makes them work across v3 and v4. The declared range (`^3.25.0 || ^4.0.0`) would additionally have
-  rejected a future major that the duck typing handles by design. `zod` remains a devDependency, so
-  the test that exercises the introspection against a real `zod` is unaffected.
 
 - **A `./crawl` subpath**, promoting `crawlDirectory`/`crawlDirectorySync` and the crawl-exclusion
   glob constants. It is deliberately kept out of `./glob`: it is the only subpath that
@@ -237,71 +268,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `minimatch` and `picomatch` entries.
 
 ### Fixed
-
-- **`--fix` on the ESLint pack no longer leaves code that does not compile.** `no-path-join` and
-  `no-path-resolve` (and, latently, every other rule that rewrites a call *and* edits imports)
-  stripped the named specifier from the `node:path` import, inserted `safePath`, and left the
-  remaining call sites in the file as bare `join(...)` / `resolve(...)` — referencing an identifier
-  that was no longer imported. An adopter measured the blast radius on a real sweep of ~4,900 sites:
-  **146 files left with a dangling reference** (140 on `join`, 16 on `resolve`), worst single file
-  75 unrewritten call sites.
-
-  **It was silent and self-limiting**, which is what made it dangerous rather than merely wrong.
-  ESLint merges the fixes one `fix()` yields into a single range spanning `min..max` and applies only
-  non-overlapping ranges per pass, so a fix touching both the import and its own call site spanned
-  everything in between; N call sites produced N nested ranges and ESLint kept exactly one. Detection
-  then keyed on having seen the import specifier — the thing that had just been removed — so the rule
-  went quiet. `--fix` reached a stable fixpoint over broken source and exited clean, with no lint
-  output suggesting anything was wrong. You found out at `tsc`, after the sweep.
-
-  Two changes: the import edits are emitted once per file and every other call site gets a fix local
-  to its own callee, so one pass fixes the file; and a bare call to a banned path function is now
-  reported even with no import present, provided the name is unbound in scope — which keeps the worst
-  case at "run `--fix` again" instead of "ships broken code". One caveat survives by design: an
-  `eslint-disable` on the *first* reported call site in a file discards that file's import edits with
-  it, so prefer `exemptFiles` to opt a whole file out.
-
-  Guarded by two tests that both fail on the old code: multi-call-site RuleTester fixtures pinning
-  the single-pass output, and a suite that runs `--fix` to its fixpoint for **every** fixable rule in
-  the pack and asserts `no-undef` finds nothing in the result. A single-call-site fixture — which is
-  what every fixture was — structurally cannot reproduce this.
-
-- **`no-os-tmpdir --fix` produced `os.normalizedTmpdir()`, a method that does not exist.** The
-  member-expression branch of the shared rule factory rewrote only the property, so `os.tmpdir()`
-  became a call on the `node:os` namespace for a free function that lives in this package — imported
-  correctly at the top of the file and then reached for through the wrong object. Every fixed call
-  site throws `TypeError` at runtime. The whole callee is now replaced.
-
-  Found by probing rather than by review, and worth recording why the adopter's audit could not have
-  caught it: their check was for a dangling *reference*, and this is a dangling *member*. `no-undef`
-  sees a bound `os` and a property access and has nothing to say, and the rule itself goes quiet
-  because there is no `tmpdir` left to report. Green lint over code that cannot run. Only `tsc` sees
-  it. `no-os-tmpdir` is the only rule in the pack with `checkMemberExpression`, so it is the only one
-  that was affected.
-
-- **`prefer-startswith-over-regex` was narrower than the SonarCloud rule it exists to shift left.**
-  Two shapes went unreported: a regex held in a `const` and used via `RE.test(x)` (only *inline*
-  literals were examined), and any escape other than `\/` — so `/^\*prefix/`, an unambiguous literal
-  asterisk, was skipped. Both now fire; an escaped non-special character is treated as the literal
-  character it protects, and a single-assignment `const` initialised with a regex literal is resolved
-  to that literal. Escapes that mean something else (`\d`, `\b`, `\x41`, `\p{…}`, control and
-  whitespace escapes) still bail, as do unescaped metacharacters.
-
-  Newly caught in code that previously linted green: `/\.txt$/.test(s)` is `s.endsWith('.txt')` — the
-  `.` is escaped, so it was never the metacharacter the old rule's own fixture claimed it was.
-
-  **Worth stating as a general finding, not a per-rule one:** an adopter running this rule at `error`
-  reports zero findings *by construction* — lint cannot go green while a violation exists. A 0-vs-0
-  tie against another implementation is not agreement, it is two rules both failing to fire. For any
-  rule an adopter reports zero findings for, that rule is **unmeasured**, not agreed.
-
-- **The Windows shell branch is now exercised on every platform.** `shouldUseShell`'s only
-  `true`-returning case was gated behind `skipIf(!onWindows)`, so the branch every Windows spawn
-  depends on never executed off Windows — and an adopter's green Windows CI lane did not reach it
-  either. New tests force `process.platform` and assert both the extension check and the full
-  `shouldUseShell` → `resolveShellCommandToken` → `buildWindowsShellLine` composition, round-tripped
-  through the `CommandLineToArgvW` reference parser. No production behaviour change; verified-green
-  and never-run are no longer indistinguishable here.
 
 - **`isGitIgnored()` spawned a git subprocess per ancestor directory when the path was not in a git
   repository at all — `vat resources validate` on a 3,437-document tree outside any repository went
