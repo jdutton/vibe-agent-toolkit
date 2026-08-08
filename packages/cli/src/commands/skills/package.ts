@@ -36,11 +36,43 @@ const VALID_TARGETS: readonly PackagingTarget[] = ['claude-code', 'claude-web'];
 export interface SkillsPackageCommandOptions {
   output: string;
   formats?: string;
-  'no-rewrite-links'?: boolean;
-  'base-path'?: string;
+  rewriteLinks?: boolean; // Commander negates this when --no-rewrite-links is passed; absent = true
+  basePath?: string; // Commander camelCases -b, --base-path <path>; never a 'base-path' key
   dryRun?: boolean;
   debug?: boolean;
   target?: string;
+}
+
+/**
+ * Whether packaging should rewrite relative links in copied files.
+ *
+ * Commander represents a `--no-x` boolean as the POSITIVE key `x` — defaulted to
+ * `true`, set to `false` only when the negated flag is passed; it never emits a
+ * `no-x` (or `noX`) key. This site used to read `options['no-rewrite-links']`,
+ * typed against an interface that declared that literal kebab key, so the
+ * compiler validated a read that could only ever be `undefined`:
+ * `--no-rewrite-links` was a silent no-op and links were always rewritten.
+ */
+export function resolveRewriteLinks(
+  options: Pick<SkillsPackageCommandOptions, 'rewriteLinks'>
+): boolean {
+  return options.rewriteLinks !== false;
+}
+
+/**
+ * The base directory relative links resolve against, defaulting to the SKILL.md
+ * directory when `--base-path` is not given.
+ *
+ * Same class of defect as above, in its value-carrying form: Commander camelCases
+ * `-b, --base-path <path>` to `basePath`, so the old `options['base-path']` reads
+ * were always `undefined` and the flag was ignored — the base always fell back to
+ * `dirname(skillPath)`.
+ */
+export function resolveBasePath(
+  options: Pick<SkillsPackageCommandOptions, 'basePath'>,
+  skillPath: string
+): string {
+  return options.basePath ?? dirname(skillPath);
 }
 
 export function createPackageCommand(): Command {
@@ -337,7 +369,7 @@ async function performDryRun(
   // VALIDATE FIRST - shift left to catch errors early
   const validationResult = await validateSkillOrExit(
     skillPath,
-    options['base-path'] ?? dirname(skillPath),
+    resolveBasePath(options, skillPath),
     logger,
   );
 
@@ -347,7 +379,7 @@ async function performDryRun(
   logger.info(`   Skill: ${skillName}`);
 
   // Collect linked files (recursively)
-  const basePath = options['base-path'] ?? dirname(skillPath);
+  const basePath = resolveBasePath(options, skillPath);
   const linkedFiles = await collectLinkedFiles(skillPath, basePath, new Set());
 
   logger.info(`\n📁 Files to be packaged:`);
@@ -418,13 +450,15 @@ async function packageCommand(
     // Build package options
     const packageOptions: PackageSkillOptions = {
       formats,
-      rewriteLinks: options['no-rewrite-links'] !== true,
+      rewriteLinks: resolveRewriteLinks(options),
       outputPath: options.output,
       target,
     };
 
-    if (options['base-path']) {
-      packageOptions.basePath = options['base-path'];
+    // Only set when explicitly supplied — packageSkill() owns the fallback for
+    // this field, so an unconditional resolveBasePath() here would change it.
+    if (options.basePath) {
+      packageOptions.basePath = options.basePath;
     }
 
     // Handle dry-run mode
@@ -436,7 +470,7 @@ async function packageCommand(
     // VALIDATE FIRST - shift left to catch errors early
     const validationResult = await validateSkillOrExit(
       skillPath,
-      options['base-path'] ?? dirname(skillPath),
+      resolveBasePath(options, skillPath),
       logger,
     );
     logger.info('');
