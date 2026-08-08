@@ -131,7 +131,7 @@ function resolveRegex(sourceCode, node) {
   }
 
   const variable = findVariable(sourceCode, node);
-  if (!variable || variable.defs.length !== 1) {
+  if (variable?.defs.length !== 1) {
     return null;
   }
   const [definition] = variable.defs;

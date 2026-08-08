@@ -297,7 +297,7 @@ describe('the ./eslint subpath ships', () => {
     // npm reports manifest paths POSIX-style; normalize anyway so the count cannot
     // quietly become zero on a platform that reports them otherwise.
     const rules = project.packedFiles.filter((file) => toForwardSlash(file).startsWith('eslint/rules/'));
-    expect(rules.length).toBe(27);
+    expect(rules).toHaveLength(27);
   });
 
   it('ships the hand-written types alongside them', () => {

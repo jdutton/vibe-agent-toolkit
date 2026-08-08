@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.42] - 2026-08-08
+
 ### Breaking
 
 - **`@vibe-agent-toolkit/utils/fs` no longer re-exports the pure path-string helpers.** Seven
@@ -253,11 +255,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **15 advisories cleared from the dependency tree** by advancing the patched pins in the root
-  `overrides` block: `undici` 7.28.0 → 7.29.0 (5 advisories), `ip-address` 10.1.1 → 10.3.1 (3),
-  `hono` 4.12.27 → 4.12.34, `fast-uri` 3.1.4 → 3.1.5, `js-yaml` 4.3.0 → 4.3.1, and `postcss`
-  8.5.18 → 8.5.23. All are within-major bumps of transitive packages; no declared dependency
-  changed and no consumer-facing API is affected.
+- **16 advisories cleared from the dependency tree** via the root `overrides` block: `undici`
+  7.28.0 → 7.29.0 (5 advisories), `ip-address` 10.1.1 → 10.3.1 (3), `hono` 4.12.27 → 4.12.34,
+  `fast-uri` 3.1.4 → 3.1.5, `js-yaml` 4.3.0 → 4.3.1, and `postcss` 8.5.18 → 8.5.23, plus a new
+  `nanoid` 3.3.16 → 3.3.17 pin closing GHSA-2v37-7h3g-55p8 (CVSS 8.2). `nanoid` reaches the tree
+  only through `postcss`, whose `^3.3.16` range the patched version satisfies, so no other pin
+  moved. All are within-major bumps of transitive packages; no declared dependency changed and no
+  consumer-facing API is affected.
 
   One advisory is **accepted rather than fixed** and recorded in `osv-scanner.toml` with its
   reasoning: `brace-expansion` (GHSA-rgw5-rvv9-x895) resolves to 1.x, 2.x, and 5.x simultaneously
