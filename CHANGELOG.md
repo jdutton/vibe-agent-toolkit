@@ -27,38 +27,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the two genuinely differ: the on-disk byte count is the authority, and re-encoding a decoded
   string diverges from it on malformed UTF-8 (each bad byte becomes a 3-byte U+FFFD).
 
-- **`@vibe-agent-toolkit/utils/fs` no longer re-exports the pure path-string helpers.** Seven
-  symbols moved from `./fs` to the new `./path` entry: `safePath`, `toForwardSlash`,
-  `isAbsolutePath`, `isAbsoluteAnyPlatform`, `hasParentTraversalSegment`, `toAbsolutePath`, and
-  `getRelativePath`. `./fs` was a published subpath before this release and went from 14 exports to
-  7; anything importing one of those seven from `@vibe-agent-toolkit/utils/fs` must change the
-  specifier to `@vibe-agent-toolkit/utils/path`. The two entries are disjoint by design — `./fs` now
-  holds only the helpers that genuinely touch `node:fs`/`node:os`/`node:url`, which is what lets
-  `./path` reach `node:path` and nothing else. **The `.` barrel is unaffected**: it still exports all
-  seven, so consumers importing from `@vibe-agent-toolkit/utils` need no edit. Permitted under the
-  pre-1.0 policy; called out here because a silently narrowed published subpath is not.
-
-  A new guard test enumerates the `.` barrel's full export set, so a future removal from *it* cannot
-  ship unremarked the way this one nearly did.
-
-- **`verifyCaseSensitiveFilename(filePath)` now requires a second argument: `verifyCaseSensitiveFilename(filePath, fsCache)`.**
-  Library-only API break — no CLI behaviour changes. Answering the question needs a listing of the
-  target's parent directory, and it was doing an uncached `readdir` per call: measured at 9,963
-  `readdir` calls validating a 3,437-document tree, and 7,443 on a 1,132-document monorepo, over a
-  few hundred distinct directories. The listing now comes from a caller-supplied `FsLookupCache`
-  (new, exported from `@vibe-agent-toolkit/utils/fs` and the `.` barrel), which memoizes `readdir`
-  and `realpath` and shares in-flight promises so concurrent callers collapse to one syscall.
-  **What to do:** construct one `new FsLookupCache()` per validation run and pass it to every call
-  in that run. `verifyCaseSensitiveFilename(p, new FsLookupCache())` at each call site reproduces
-  the old behaviour exactly if you want a mechanical migration first. The cache is deliberately
-  instance-based, never a module singleton — it holds a *snapshot* of directory contents, so a
-  watch-mode or server process must let each run have its own and drop it afterwards. The parameter
-  is required rather than defaulted for the same reason: a default lets an unmigrated call site keep
-  the un-memoized path silently, which is a no-op wearing the shape of a fix.
-
-  `ValidateLinkOptions` in `@vibe-agent-toolkit/resources` gains a matching **required** `fsCache`
-  field, so anything constructing that options object must supply the run's cache.
-
 - **`vat pipeline` — an internal dev instrument for holding the resource pipeline still across a
   refactor.** Three verbs: `snapshot <dir> --out <dir>` captures what the pipeline actually
   enumerates and parses over a corpus (five enumeration lanes, a parse-fact oracle, and normalized
@@ -77,142 +45,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   renders as "nothing changed" and would let a reader conclude a refactor moved nothing when in
   fact nothing was compared.
 
-- **A `@vibe-agent-toolkit/utils/eslint` subpath — 21 ESLint rules that enforce the safety helpers
-  in the rest of the package.** The helpers exist because `path.join()`, `os.tmpdir()`,
-  `fs.realpathSync()`, `child_process.execSync()` and `await import(absolutePath)` each have a
-  platform pothole; until now nothing stopped a call to the raw primitive, so the API shipped
-  without its enforcement. The rules were maintained privately in this repo and had never been
-  installable. Most auto-fix, and every message names the replacement and the `utils` subpath it
-  lives on.
-
-  ```js
-  // eslint.config.js
-  import vat from '@vibe-agent-toolkit/utils/eslint';
-  export default [vat.configs.recommended];
-  ```
-
-  `configs.recommended` registers the rules under the `@vibe-agent-toolkit` namespace and enables
-  the cross-platform safety core — 18 of the 21 rules, `error` except three at `warn`
-  (`no-path-join`, `no-path-resolve`, `no-path-relative`), the ones whose first run on an existing
-  codebase produces a migration rather than a bug list — measured at 4,336 findings on a
-  4,670-file tree, **all autofixable**. Three rules ship without riding in `recommended`:
-  `require-justified-skip` and `no-test-scoped-functions` encode a position on *test style* rather
-  than a portability fact, and `no-unsafe-root-join` is held back on correctness — it keys on
-  whether an identifier's name ends in `root` rather than on taint, so it fires on all-literal
-  calls and stays silent on `safePath.join(base, userInput)`, the shape it exists to catch. All
-  three are enabled by naming them.
-
-  **`--fix` writes the import to the narrow subpath that owns the helper**, matching the rule
-  table: `path.join()` becomes `safePath.join()` imported from `@vibe-agent-toolkit/utils/path`,
-  the `fs` rules point at `./fs`, and `no-child-process-execSync` at `./process`. A file that
-  already reaches the helper through the `.` barrel keeps its existing import and only has the
-  call rewritten — a second binding of the same name would be `SyntaxError: Identifier 'safePath'
-  has already been declared`, so the fixer checks whether the name is bound at all rather than
-  whether it was imported from the module the fixer prefers. That check is scope-based, so a
-  top-level `const safePath = …` is a conflict too.
-
-  **A per-rule `safeModule` option redirects both the fix and the message at your own re-export
-  seam** — `['error', { safeModule: '@acme/dev-tools/paths' }]`. Necessary because in a workspace
-  with isolated `node_modules` an import of an undeclared package does not degrade, it fails to
-  resolve: an adopter measured that the defaults would write a specifier resolving in **0 of their
-  top 25 affected packages** while their own seam resolved in 24 — 620 files across 52 packages
-  that declare no dependency on this one. Per-rule rather than a single shared key because a seam
-  need not split its symbols the way this package does (theirs carried `normalizedTmpdir()` but not
-  `safePath`, so the `fs` and `path` families needed different targets). Every rule that names a
-  module accepts it, including the six that only advise and never fix, so configured advice never
-  points at a module you don't use.
-
-  Rules take an `exemptFiles`
-  option naming the file(s) allowed to call the banned primitive — the one that implements your
-  wrapper. There are deliberately **no** built-in exemptions: those paths are a claim about one
-  repo's layout, and matching is anchored at a path segment, so declaring `src/paths.ts` never
-  exempts `tools/hooks/paths.ts`. An entry with no `/` at all is reported as
-  `unanchoredExemptFile` rather than accepted: because ESLint reports absolute filenames, a bare
-  `paths.ts` exempts every file of that name anywhere in the tree, including ones added later.
-  Requires ESLint 9+ (flat config) and Node >= 22. Full rule table
-  in [the subpath's README](https://github.com/jdutton/vibe-agent-toolkit/blob/main/packages/utils/eslint/README.md).
-
-  **There is no separate plugin package to install**, and `eslint` is declared as an *optional* peer
-  dependency, so nothing changes for consumers who take `utils` for `safePath.join()` alone: they
-  get no unmet-peer warning and no new dependency. An ESLint plugin is data rather than code that
-  runs — the rule modules export plain objects and never `require('eslint')` — so this entry
-  reaches no Node builtin and no third-party package, and the other twelve subpaths keep resolving
-  in a tree with no ESLint anywhere in it. The cost is bytes on disk and nothing else: the packed
-  tarball goes 148,953 → 187,753 bytes (+38,800 compressed; 135,381 unpacked across 27 `.cjs`
-  files, a README and a type declaration) for code nothing loads unless you lint. Both endpoints
-  are measured in the same tree, by packing with and without the `eslint` entry in `files`, so the
-  delta is the subpath's cost and not the drift of a `dist/` built months apart. What it buys is
-  one install, one version, and no way for a rule to name a helper signature the installed `utils`
-  no longer has.
-
-- **`@vibe-agent-toolkit/utils` is now a first-class public package with narrow subpath exports.**
-  The `exports` map goes from 3 keys to 15: `./path`, `./fs`, `./process`, `./git`, `./glob`,
-  `./zod`, `./yaml`, `./template`, `./testing`, `./asset`, `./crawl`, `./project`, `./eslint`
-  (see below), and `./package.json`, plus the `.` barrel. `./project` carries `findProjectRoot`,
-  `findConfigFile`, `findNodeWorkspaceRoot` and `resetProjectRootCaches` — functions whose own code
-  imports nothing but `node:fs` and `node:path`, so reaching them no longer requires the `.` barrel
-  and its five third-party dependencies. They remain VAT-shaped (`findProjectRoot` looks for
-  `vibe-agent-toolkit.config.yaml`, then `.git/`), which the README says plainly; the entry exists
-  so that finding out costs nothing. Projects
-  building skills with VAT write Node code that has to run on Windows, macOS, and Linux, and hit the
-  same platform potholes VAT does — `.cmd` shims needing a shell, `tmpdir()` returning 8.3 short
-  paths, backslash-vs-forward-slash comparisons, `await import()` of an absolute path failing on
-  Windows. Those primitives are now importable without taking the whole toolkit. The `.` barrel's
-  export set is unchanged, so consumers importing from it need no edit — consumers of the
-  pre-existing `./fs` subpath do; see **Breaking** above.
-
-  The narrow entries are narrow in their *dependency graph*, not merely in name: `./path` and
-  `./glob` reach only `node:path`, never `node:fs`, `node:os`, or `node:url`. A guard test walks
-  each entry's transitive source graph and asserts both its `node:` builtin set and its third-party
-  set, so the README's "resolves with zero deps installed" column is enforced rather than
-  documented. It fails loudly when it cannot resolve a module, so it cannot pass vacuously, and a
-  fixture with a dangling import exercises that failure.
-
-  This is **not** a bundle-size change: the package has set `"sideEffects": false` since 0.1.40, and
-  a tree-shaking bundler already dropped unused code from the barrel. What subpaths control is what
-  a build must *resolve* and what a module graph *reaches* — the barrel reaches `yaml`, `handlebars`,
-  and `node:fs` regardless of what you destructure, so it cannot be bundled for a browser target and
-  requires every dependency installed.
-
-- **`@vibe-agent-toolkit/utils/process` now exports the Windows spawn safety it was missing.**
-  `spawnHardened` (async spawn with correct `.cmd`/`.bat` launching), `shouldUseShell`,
-  `windowsShellQuote`, and `buildWindowsShellLine` were reachable only through the `.` barrel, so the
-  one subpath meant to make command execution safe on Windows covered synchronous exec only.
-
-- **`engines: { node: ">=22.0.0" }` on all 21 published packages.** Exactly one of the 21 declared a
-  Node floor before this release, so an adopter installing on an older Node got no install-time
-  signal from any of the other 20 — they simply failed later, at a syntax or API error, with nothing
-  pointing at the Node version.
-
-- **The vestigial `zod` peerDependency is gone from `@vibe-agent-toolkit/utils`.** It was a
-  *required* peer, so anyone importing only `./path` was still told by their package manager to
-  install `zod`. The package imports `zod` nowhere: all six occurrences of `from 'zod'` in the
-  shipped `dist` are inside JSDoc `@example` blocks, and the version-introspection helpers
-  deliberately duck-type `_def.typeName` rather than importing the library — which is exactly what
-  makes them work across v3 and v4. The declared range (`^3.25.0 || ^4.0.0`) would additionally have
-  rejected a future major that the duck typing handles by design. `zod` remains a devDependency, so
-  the test that exercises the introspection against a real `zod` is unaffected.
-
-- **A `./crawl` subpath**, promoting `crawlDirectory`/`crawlDirectorySync` and the crawl-exclusion
-  glob constants. It is deliberately kept out of `./glob`: it is the only subpath that
-  reaches `picomatch` (linkAuth's host matching reaches it too, but only from the `.` barrel), and
-  folding it in would break `./glob`'s guarantee of reaching nothing but `node:path` and no
-  third-party package at all.
-
-  A `./project` subpath (`findProjectRoot`, `findConfigFile`, `findNodeWorkspaceRoot`,
-  `resetProjectRootCaches`) was prototyped and **deliberately dropped before release**. Validated
-  against the package's primary real-world consumer, its four exports had zero replaceable call
-  sites: `findNodeWorkspaceRoot` needs a `package.json` carrying a `"workspaces"` key and returned
-  `null` from every directory in that pnpm workspace; `findConfigFile` hardcodes VAT's config
-  filename; and `findProjectRoot`'s config-then-`.git` ladder contradicted all six of that repo's
-  own marker walk-ups — one of them a published runtime package, where keying on `.git/` would be a
-  bug, since it is absent at install time. The two sites that genuinely wanted a `.git` walk-up are
-  served by `gitFindRoot` on `./git`. All four functions remain on the `.` barrel, where VAT's own
-  internals use them; only the narrow entry is gone.
-
-- **`PLUGIN_TOPLEVEL_BIN_DIR` — surface a top-level `bin/` in a published plugin (`warning`).** `bin/` and `scripts/` mean different things: Anthropic documents `bin/` as *"Executables added to the Bash tool's `PATH`… invokable as bare commands"*, while `scripts/` is the conventional home for helper scripts invoked by path. A plugin whose executables are only ever invoked by explicit path is using `bin/` without using what `bin/` provides — and a claude.ai-hosted marketplace sync has been **observed** to skip a plugin containing one, silently: the publish succeeds and the plugin simply never appears, surfacing only on the org admin console. VAT now names the shape at audit time so it is visible in the publishing repo. **Advisory only** — `bin/` is a supported, documented CLI feature, VAT has a single undocumented observation of the hosted rejection, and per [validation-rule-design.md](docs/validation-rule-design.md) that is not grounds for a build-blocking error. It is deliberately *not* escalated by strict marketplace validation, and a test pins that. Opt out with `severity.PLUGIN_TOPLEVEL_BIN_DIR: ignore` or a scoped `validation.allow` entry.
-- **`docs/contributing/plugin-distribution-findings.md` — a running evidence log behind VAT's plugin-shape rules.** [validation-rule-design.md](docs/validation-rule-design.md) requires evidence to justify a rule's severity; this is where that evidence now lives, so a `warning` shipped on one observation stays distinguishable from a `warning` shipped on principle, and can be promoted (or dropped) when evidence changes. Entries carry an explicit **DOCUMENTED / OBSERVED (n=) / INFERRED** label. Also names the *silent hosted-sync divergence* failure class — publish succeeds, plugin never appears — and carries a **"rules NOT to add"** list recording proposals that were investigated and rejected, with reasons, so they are not re-proposed. Adopter-sourced findings are recorded as shapes, never identities.
-- **Authoring guidance — where a script shared by several skills should live.** `vat-skill-authoring` gains a section on the per-skill vs. plugin-level `files:` fork. Per-skill duplication keeps each skill self-contained and standalone-mountable at the cost of duplicated bytes; a plugin-level `files:` entry (whose `dest` may not resolve under `skills/`) ships one copy but forces skill bodies onto `${CLAUDE_PLUGIN_ROOT}`, giving up standalone mounting — which `NON_PORTABLE_ASSET_REFERENCE` correctly flags. The section names the deciding question (does this skill ever run outside its plugin?), and shows recording the answer as a scoped `validation.allow` entry with a required `reason` rather than a repo-wide `severity: ignore`.
 - **Content keys — `computeContentKey()`, `parserKindForPath()`, `readContentWithKey()`** are exported
   from `@vibe-agent-toolkit/resources`. A content key names a parse result by the bytes the parser
   read *and* which parser read them, with no path component, so the same document in two trees shares
@@ -226,15 +58,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`[c2]`, `[e2 82]`, `[ff]`) one key while `ParseResult.sizeBytes` — a raw byte count that reaches
   rule variables and rewriting templates — differed between them. Mixing in the byte *length* would
   not close it either, since two of those three are the same length.
+
 - **`ResourceRegistry.getDuplicateIdCollisions()`** returns the first-added-wins drops in arrival
   order. `validate()` already reported *that* a collision happened; this reports *which file won*,
   which is the part decided by enumeration order.
+
 - **`LINK_FROM_NON_ROUTABLE_FILE` (`warning`) — a link out of a bundled HTML page that VAT did not follow.** VAT parses HTML, so a bundled `.html` file is a registry *member* whose links get rewritten; it is not *routable* — VAT does not walk through it to pull its own link targets into the bundle. Routing is markdown-only, matching Anthropic's skill guidance. `SKILL.md → guide.html → diagram.svg` therefore bundles the page and drops the diagram, and because the referring page *did* ship, the missing image reads as a link-rewriter bug rather than a deliberate boundary. That drop is now reported instead of silent. Opt out with `severity.LINK_FROM_NON_ROUTABLE_FILE: ignore`. A target that does not exist on disk at all stays `LINK_MISSING_TARGET` — the author's broken link is the more actionable finding.
+
 - **`DuplicateResourceIdError`** is exported from `@vibe-agent-toolkit/resources`, so a caller of `addResource()` can catch a first-added-wins collision **by type**. The one in-tree consumer was matching on `error.message.startsWith('Duplicate resource ID')`, which stops working silently the day the message is reworded.
+
 - **`canCreateSymlinks(dir)`** is exported from `@vibe-agent-toolkit/utils`. Probes whether the host
   permits symlink creation — Windows needs Developer Mode or `SeCreateSymbolicLinkPrivilege`, and the
   privilege cannot be inferred from `process.platform` — so a fixture can say it skipped rather than
   passing silently.
+
 - **`compileFrontmatterSchema()` and `validateCompiledFrontmatter()`** are exported from
   `@vibe-agent-toolkit/resources`, splitting schema compilation from validation. Use them when
   validating many documents against one schema; `validateFrontmatter()` is unchanged and still
@@ -314,44 +151,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deduplication order, and HTML-anchor emission order are all preserved, verified by diffing the
   complete `ParseResult` of all 265 documents before and after — zero rows differ.
 
-- **`@vibe-agent-toolkit/utils/git` exposes exactly one git-root finder.** The subpath previously
-  re-exported whole modules, surfacing both `gitFindRoot` and the deprecated `findGitRoot` — two
-  differently-named functions for the same job, which guarantees consumers split between them. The
-  subpath is now an explicit, curated export list carrying `gitFindRoot`; see **Removed** for the
-  alias itself.
-
-- **Guidance for building the Node scripts a skill ships**, in the `vat-skill-authoring` skill:
-  bundling to a self-contained tree-shaken `.mjs`, statically scanning the artifact for surviving
-  external imports, and clean-room booting it outside any `node_modules`. It documents a trap VAT
-  itself creates: `files:` injects a bundle under a different `dest` basename, so a script guarding
-  its entry point on `basename(process.argv[1])` evaluates that guard as false under the shipped
-  name and exits 0 having printed nothing — inert, while reading as success to anything watching
-  exit codes.
-
-  It also documents that trap's sibling, which an adopter found the hard way across three of their
-  own bins: npm writes `node_modules/.bin/<name>` as a **symlink**, so `process.argv[1]` is the link
-  path while `import.meta.url` is the realpath target — meaning the obvious remedy
-  (`import.meta.url === pathToFileURL(process.argv[1]).href`) fails the same fail-open way on the
-  most common invocation path of all. The guidance therefore recommends shipping a guard-free bin
-  entry module, and specifies clean-room verification on **three** legs — shipped `dest` name,
-  through a symlink, and from a packed tarball installed outside the workspace. A copy-only clean
-  room cannot see the symlink case at all: a copy has no symlink, so it certifies fail-open bins as
-  healthy.
-
-### Removed
-
-- **`findGitRoot` is gone from `@vibe-agent-toolkit/utils`. Use `gitFindRoot`** — the behavior is
-  identical, because `findGitRoot`'s entire body was `return gitFindRoot(startDir)`. It had carried
-  an `@deprecated` tag for some time. Curating it off the new `./git` subpath (see **Changed**)
-  addressed only the symptom: the alias stayed on the `.` barrel, the entry with the most consumers,
-  so both names remained one import away and the coin flip just moved. Under the pre-1.0 policy
-  (never maintain two APIs for the same job) the alias is deleted rather than relocated. No
-  production code in this repository ever called it.
-
-  This also removes one of the symbols that were reachable **only** from the wide `.` barrel — the
-  shape that undercuts "import the one you need" — and it is the one whose narrow home already
-  existed.
-
 ### Security
 
 - **VAT's on-disk cache directory is now created owner-only (`0700`) on POSIX.**
@@ -361,20 +160,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   separation at all. Both `mkdir` sites now pass `mode: 0o700`. On Windows the mode bits reduce to
   the read-only flag, so this is a real mitigation on Linux and macOS and a no-op there; it should
   not be cited as a cross-platform guarantee.
-
-- **15 advisories cleared from the dependency tree** by advancing the patched pins in the root
-  `overrides` block: `undici` 7.28.0 → 7.29.0 (5 advisories), `ip-address` 10.1.1 → 10.3.1 (3),
-  `hono` 4.12.27 → 4.12.34, `fast-uri` 3.1.4 → 3.1.5, `js-yaml` 4.3.0 → 4.3.1, and `postcss`
-  8.5.18 → 8.5.23. All are within-major bumps of transitive packages; no declared dependency
-  changed and no consumer-facing API is affected.
-
-  One advisory is **accepted rather than fixed** and recorded in `osv-scanner.toml` with its
-  reasoning: `brace-expansion` (GHSA-rgw5-rvv9-x895) resolves to 1.x, 2.x, and 5.x simultaneously
-  in this tree, and the fix lands separately in each line (1.1.18 / 2.1.4 / 5.0.9), so no single
-  value in a global `overrides` block can patch all three — pinning any one forces the other two
-  majors onto an incompatible version. It is a ReDoS against attacker-controlled brace patterns;
-  VAT only ever expands patterns it authors. Same shape, and the same deferral, as the existing
-  `minimatch` and `picomatch` entries.
 
 ### Fixed
 
@@ -428,6 +213,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cannot disguise itself as a per-file warning. Set `severity.RESOURCE_UNREADABLE` to `warning` for
   corpora expected to contain unresolvable entries. `ResourceRegistry.getUnreadableResources()`
   returns the raw log for callers reconciling enumerated-against-admitted.
+
 - **`vat audit` and post-build validation no longer expect files that `vat skills build` never
   ships.** The two lanes disagreed about whether HTML is traversable. Audit's registry includes
   `.html`/`.htm`, and the link walker treated *any* registry member as a door — so on
@@ -440,6 +226,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `excludedReferences` gain a matching `non-routable-source` reason instead of being mislabelled
   `depth-exceeded`. **Widening a registry's include globs no longer widens what the walker
   follows** — the two are now independent.
+
 - **The verbatim-copy warning named a cause that cannot happen.** When a bundled file misses the
   resource registry it is copied with its links unrewritten, and the warning attributed that to
   "typically an ID collision with a same-named markdown file". Resource ids carry the extension
@@ -449,6 +236,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   names the file that actually holds the id, so there is a real path to open. When no collision
   is recorded it states the observed fact and asserts no cause. Two code comments carrying the
   same impossible example (`config.yaml` + `config.md` → `resources-config`) were corrected.
+
 - **Collection frontmatter schemas are compiled once per validation run, not once per resource.**
   Every resource belonging to a collection re-read its schema file, re-parsed the JSON, constructed a
   fresh Ajv instance and recompiled the schema — on a repository with 129 collection-bearing
@@ -459,6 +247,273 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   drops from **668 ms to 168 ms**; measured over the schema-bearing collections alone, 655 ms to
   94 ms. The cache is discarded when the run returns, so a schema edited between runs is picked up.
   Reported issues are unchanged, including the wording of schema-load failures.
+
+## [0.1.42] - 2026-08-08
+
+### Breaking
+
+- **`@vibe-agent-toolkit/utils/fs` no longer re-exports the pure path-string helpers.** Seven
+  symbols moved from `./fs` to the new `./path` entry: `safePath`, `toForwardSlash`,
+  `isAbsolutePath`, `isAbsoluteAnyPlatform`, `hasParentTraversalSegment`, `toAbsolutePath`, and
+  `getRelativePath`. `./fs` was a published subpath before this release and went from 14 exports to
+  7; anything importing one of those seven from `@vibe-agent-toolkit/utils/fs` must change the
+  specifier to `@vibe-agent-toolkit/utils/path`. The two entries are disjoint by design — `./fs` now
+  holds only the helpers that genuinely touch `node:fs`/`node:os`/`node:url`, which is what lets
+  `./path` reach `node:path` and nothing else. **The `.` barrel is unaffected**: it still exports all
+  seven, so consumers importing from `@vibe-agent-toolkit/utils` need no edit. Permitted under the
+  pre-1.0 policy; called out here because a silently narrowed published subpath is not.
+
+  A new guard test enumerates the `.` barrel's full export set, so a future removal from *it* cannot
+  ship unremarked the way this one nearly did.
+
+- **`verifyCaseSensitiveFilename(filePath)` now requires a second argument: `verifyCaseSensitiveFilename(filePath, fsCache)`.**
+  Library-only API break — no CLI behaviour changes. Answering the question needs a listing of the
+  target's parent directory, and it was doing an uncached `readdir` per call: measured at 9,963
+  `readdir` calls validating a 3,437-document tree, and 7,443 on a 1,132-document monorepo, over a
+  few hundred distinct directories. The listing now comes from a caller-supplied `FsLookupCache`
+  (new, exported from `@vibe-agent-toolkit/utils/fs` and the `.` barrel), which memoizes `readdir`
+  and `realpath` and shares in-flight promises so concurrent callers collapse to one syscall.
+  **What to do:** construct one `new FsLookupCache()` per validation run and pass it to every call
+  in that run. `verifyCaseSensitiveFilename(p, new FsLookupCache())` at each call site reproduces
+  the old behaviour exactly if you want a mechanical migration first. The cache is deliberately
+  instance-based, never a module singleton — it holds a *snapshot* of directory contents, so a
+  watch-mode or server process must let each run have its own and drop it afterwards. The parameter
+  is required rather than defaulted for the same reason: a default lets an unmigrated call site keep
+  the un-memoized path silently, which is a no-op wearing the shape of a fix.
+
+  `ValidateLinkOptions` in `@vibe-agent-toolkit/resources` gains a matching **required** `fsCache`
+  field, so anything constructing that options object must supply the run's cache.
+
+- **The vestigial `zod` peerDependency is gone from `@vibe-agent-toolkit/utils`.** It was a
+  *required* peer, so anyone importing only `./path` was still told by their package manager to
+  install `zod`. The package imports `zod` nowhere: all six occurrences of `from 'zod'` in the
+  shipped `dist` are inside JSDoc `@example` blocks, and the version-introspection helpers
+  deliberately duck-type `_def.typeName` rather than importing the library — which is exactly what
+  makes them work across v3 and v4. The declared range (`^3.25.0 || ^4.0.0`) would additionally have
+  rejected a future major that the duck typing handles by design. `zod` remains a devDependency, so
+  the test that exercises the introspection against a real `zod` is unaffected.
+
+  **Listed as breaking, not merely removed**, because of who it breaks: not anyone importing from
+  `utils`, but a consumer that was relying on this package to pull `zod` into *their* tree and now
+  finds it absent. If you import `zod` yourself, declare it yourself. (Reported twice by an adopter
+  who went looking for this under Breaking and did not find it — it was filed under Added, beside
+  the subpath work that prompted it.)
+
+### Added
+
+- **A `@vibe-agent-toolkit/utils/eslint` subpath — 21 ESLint rules that enforce the safety helpers
+  in the rest of the package.** The helpers exist because `path.join()`, `os.tmpdir()`,
+  `fs.realpathSync()`, `child_process.execSync()` and `await import(absolutePath)` each have a
+  platform pothole; until now nothing stopped a call to the raw primitive, so the API shipped
+  without its enforcement. The rules were maintained privately in this repo and had never been
+  installable. Most auto-fix, and every message names the replacement and the `utils` subpath it
+  lives on.
+
+  ```js
+  // eslint.config.js
+  import vat from '@vibe-agent-toolkit/utils/eslint';
+  export default [vat.configs.recommended];
+  ```
+
+  `configs.recommended` registers the rules under the `@vibe-agent-toolkit` namespace and enables
+  the cross-platform safety core — 18 of the 21 rules, `error` except three at `warn`
+  (`no-path-join`, `no-path-resolve`, `no-path-relative`), the ones whose first run on an existing
+  codebase produces a migration rather than a bug list — measured at 4,336 findings on a
+  4,670-file tree, **all autofixable**. Three rules ship without riding in `recommended`:
+  `require-justified-skip` and `no-test-scoped-functions` encode a position on *test style* rather
+  than a portability fact, and `no-unsafe-root-join` is held back on correctness — it keys on
+  whether an identifier's name ends in `root` rather than on taint, so it fires on all-literal
+  calls and stays silent on `safePath.join(base, userInput)`, the shape it exists to catch. All
+  three are enabled by naming them.
+
+  **`--fix` writes the import to the narrow subpath that owns the helper**, matching the rule
+  table: `path.join()` becomes `safePath.join()` imported from `@vibe-agent-toolkit/utils/path`,
+  the `fs` rules point at `./fs`, and `no-child-process-execSync` at `./process`. A file that
+  already reaches the helper through the `.` barrel keeps its existing import and only has the
+  call rewritten — a second binding of the same name would be `SyntaxError: Identifier 'safePath'
+  has already been declared`, so the fixer checks whether the name is bound at all rather than
+  whether it was imported from the module the fixer prefers. That check is scope-based, so a
+  top-level `const safePath = …` is a conflict too.
+
+  **A per-rule `safeModule` option redirects both the fix and the message at your own re-export
+  seam** — `['error', { safeModule: '@acme/dev-tools/paths' }]`. Necessary because in a workspace
+  with isolated `node_modules` an import of an undeclared package does not degrade, it fails to
+  resolve: an adopter measured that the defaults would write a specifier resolving in **0 of their
+  top 25 affected packages** while their own seam resolved in 24 — 620 files across 52 packages
+  that declare no dependency on this one. Per-rule rather than a single shared key because a seam
+  need not split its symbols the way this package does (theirs carried `normalizedTmpdir()` but not
+  `safePath`, so the `fs` and `path` families needed different targets). Every rule that names a
+  module accepts it, including the six that only advise and never fix, so configured advice never
+  points at a module you don't use.
+
+  Rules take an `exemptFiles`
+  option naming the file(s) allowed to call the banned primitive — the one that implements your
+  wrapper. There are deliberately **no** built-in exemptions: those paths are a claim about one
+  repo's layout, and matching is anchored at a path segment, so declaring `src/paths.ts` never
+  exempts `tools/hooks/paths.ts`. An entry with no `/` at all is reported as
+  `unanchoredExemptFile` rather than accepted: because ESLint reports absolute filenames, a bare
+  `paths.ts` exempts every file of that name anywhere in the tree, including ones added later.
+  Requires ESLint 9+ (flat config) and Node >= 22. Full rule table
+  in [the subpath's README](https://github.com/jdutton/vibe-agent-toolkit/blob/main/packages/utils/eslint/README.md).
+
+  `--fix` is safe to run across a whole migration: every rule that rewrites a call and edits
+  imports fixes all of a file's call sites without leaving a reference to something it just
+  un-imported, never deletes a `type`-only, aliased or re-exported specifier, and leaves a
+  suppressed call site working. Enforced by a suite that runs `--fix` to its fixpoint per rule and
+  checks the result with `no-undef`.
+
+  It also **finishes the job**, which matters in a repo gating at `--max-warnings=0`. Rewriting the
+  last `path.*` call in a file leaves `import path from 'node:path'` bound to nothing — not a
+  dangling reference, so a `no-undef` check cannot see it, and an adopter measured **536 such errors
+  surviving a converged `--fix` across 232 files**. The rules now report that orphaned binding
+  themselves, as a separate finding on the import line with its own fix, so it is visible and
+  suppressible rather than a rewrite quietly deleting a declaration. Deliberately narrow: a closed
+  list of Node builtins (`node:path`, `node:os`, `node:fs`, `node:fs/promises`,
+  `node:child_process`, and their bare spellings), only in a file where the safe symbol is already
+  bound, only whole declarations with no references left. Bare `import 'node:path'` side-effect
+  imports, `type` specifiers and partially-used declarations are left alone. This is not a general
+  unused-import rule and will not become one — the ecosystem's rules abstain here for good reason,
+  and in any case cannot help: `@typescript-eslint/no-unused-vars` declares `meta.fixable: 'code'`
+  yet emits only a *suggestion* for an unused import, which `--fix` never applies.
+
+  The member-call rules (`no-os-tmpdir` and friends) check the receiver rather than the method name,
+  and now recognise a namespace bound by `const os = require('node:os')` or
+  `const os = await import('node:os')` as well as by a static `import * as os`. An unrelated object
+  with a same-named method is still not a finding.
+
+  **There is no separate plugin package to install**, and `eslint` is declared as an *optional* peer
+  dependency, so nothing changes for consumers who take `utils` for `safePath.join()` alone: they
+  get no unmet-peer warning and no new dependency. An ESLint plugin is data rather than code that
+  runs — the rule modules export plain objects and never `require('eslint')` — so this entry
+  reaches no Node builtin and no third-party package, and the other twelve subpaths keep resolving
+  in a tree with no ESLint anywhere in it. The cost is bytes on disk and nothing else: the packed
+  tarball goes 148,953 → 187,753 bytes (+38,800 compressed; 135,381 unpacked across 27 `.cjs`
+  files, a README and a type declaration) for code nothing loads unless you lint. Both endpoints
+  are measured in the same tree, by packing with and without the `eslint` entry in `files`, so the
+  delta is the subpath's cost and not the drift of a `dist/` built months apart. What it buys is
+  one install, one version, and no way for a rule to name a helper signature the installed `utils`
+  no longer has.
+
+- **`@vibe-agent-toolkit/utils` is now a first-class public package with narrow subpath exports.**
+  The `exports` map goes from 3 keys to 15: `./path`, `./fs`, `./process`, `./git`, `./glob`,
+  `./zod`, `./yaml`, `./template`, `./testing`, `./asset`, `./crawl`, `./project`, `./eslint`
+  (see below), and `./package.json`, plus the `.` barrel. `./project` carries `findProjectRoot`,
+  `findConfigFile`, `findNodeWorkspaceRoot` and `resetProjectRootCaches` — functions whose own code
+  imports nothing but `node:fs` and `node:path`, so reaching them no longer requires the `.` barrel
+  and its five third-party dependencies. They remain VAT-shaped (`findProjectRoot` looks for
+  `vibe-agent-toolkit.config.yaml`, then `.git/`), which the README says plainly; the entry exists
+  so that finding out costs nothing. Projects
+  building skills with VAT write Node code that has to run on Windows, macOS, and Linux, and hit the
+  same platform potholes VAT does — `.cmd` shims needing a shell, `tmpdir()` returning 8.3 short
+  paths, backslash-vs-forward-slash comparisons, `await import()` of an absolute path failing on
+  Windows. Those primitives are now importable without taking the whole toolkit. The `.` barrel's
+  export set is unchanged, so consumers importing from it need no edit — consumers of the
+  pre-existing `./fs` subpath do; see **Breaking** above.
+
+  The narrow entries are narrow in their *dependency graph*, not merely in name: `./path` and
+  `./glob` reach only `node:path`, never `node:fs`, `node:os`, or `node:url`. A guard test walks
+  each entry's transitive source graph and asserts both its `node:` builtin set and its third-party
+  set, so the README's "resolves with zero deps installed" column is enforced rather than
+  documented. It fails loudly when it cannot resolve a module, so it cannot pass vacuously, and a
+  fixture with a dangling import exercises that failure.
+
+  This is **not** a bundle-size change: the package has set `"sideEffects": false` since 0.1.40, and
+  a tree-shaking bundler already dropped unused code from the barrel. What subpaths control is what
+  a build must *resolve* and what a module graph *reaches* — the barrel reaches `yaml`, `handlebars`,
+  and `node:fs` regardless of what you destructure, so it cannot be bundled for a browser target and
+  requires every dependency installed.
+
+- **`@vibe-agent-toolkit/utils/process` now exports the Windows spawn safety it was missing.**
+  `spawnHardened` (async spawn with correct `.cmd`/`.bat` launching), `shouldUseShell`,
+  `windowsShellQuote`, and `buildWindowsShellLine` were reachable only through the `.` barrel, so the
+  one subpath meant to make command execution safe on Windows covered synchronous exec only.
+
+- **`engines: { node: ">=22.0.0" }` on all 21 published packages.** Exactly one of the 21 declared a
+  Node floor before this release, so an adopter installing on an older Node got no install-time
+  signal from any of the other 20 — they simply failed later, at a syntax or API error, with nothing
+  pointing at the Node version.
+
+- **A `./crawl` subpath**, promoting `crawlDirectory`/`crawlDirectorySync` and the crawl-exclusion
+  glob constants. It is deliberately kept out of `./glob`: it is the only subpath that
+  reaches `picomatch` (linkAuth's host matching reaches it too, but only from the `.` barrel), and
+  folding it in would break `./glob`'s guarantee of reaching nothing but `node:path` and no
+  third-party package at all.
+
+  A `./project` subpath (`findProjectRoot`, `findConfigFile`, `findNodeWorkspaceRoot`,
+  `resetProjectRootCaches`) was prototyped and **deliberately dropped before release**. Validated
+  against the package's primary real-world consumer, its four exports had zero replaceable call
+  sites: `findNodeWorkspaceRoot` needs a `package.json` carrying a `"workspaces"` key and returned
+  `null` from every directory in that pnpm workspace; `findConfigFile` hardcodes VAT's config
+  filename; and `findProjectRoot`'s config-then-`.git` ladder contradicted all six of that repo's
+  own marker walk-ups — one of them a published runtime package, where keying on `.git/` would be a
+  bug, since it is absent at install time. The two sites that genuinely wanted a `.git` walk-up are
+  served by `gitFindRoot` on `./git`. All four functions remain on the `.` barrel, where VAT's own
+  internals use them; only the narrow entry is gone.
+
+- **`PLUGIN_TOPLEVEL_BIN_DIR` — surface a top-level `bin/` in a published plugin (`warning`).** `bin/` and `scripts/` mean different things: Anthropic documents `bin/` as *"Executables added to the Bash tool's `PATH`… invokable as bare commands"*, while `scripts/` is the conventional home for helper scripts invoked by path. A plugin whose executables are only ever invoked by explicit path is using `bin/` without using what `bin/` provides — and a claude.ai-hosted marketplace sync has been **observed** to skip a plugin containing one, silently: the publish succeeds and the plugin simply never appears, surfacing only on the org admin console. VAT now names the shape at audit time so it is visible in the publishing repo. **Advisory only** — `bin/` is a supported, documented CLI feature, VAT has a single undocumented observation of the hosted rejection, and per [validation-rule-design.md](docs/validation-rule-design.md) that is not grounds for a build-blocking error. It is deliberately *not* escalated by strict marketplace validation, and a test pins that. Opt out with `severity.PLUGIN_TOPLEVEL_BIN_DIR: ignore` or a scoped `validation.allow` entry.
+- **`docs/contributing/plugin-distribution-findings.md` — a running evidence log behind VAT's plugin-shape rules.** [validation-rule-design.md](docs/validation-rule-design.md) requires evidence to justify a rule's severity; this is where that evidence now lives, so a `warning` shipped on one observation stays distinguishable from a `warning` shipped on principle, and can be promoted (or dropped) when evidence changes. Entries carry an explicit **DOCUMENTED / OBSERVED (n=) / INFERRED** label. Also names the *silent hosted-sync divergence* failure class — publish succeeds, plugin never appears — and carries a **"rules NOT to add"** list recording proposals that were investigated and rejected, with reasons, so they are not re-proposed. Adopter-sourced findings are recorded as shapes, never identities.
+- **Authoring guidance — where a script shared by several skills should live.** `vat-skill-authoring` gains a section on the per-skill vs. plugin-level `files:` fork. Per-skill duplication keeps each skill self-contained and standalone-mountable at the cost of duplicated bytes; a plugin-level `files:` entry (whose `dest` may not resolve under `skills/`) ships one copy but forces skill bodies onto `${CLAUDE_PLUGIN_ROOT}`, giving up standalone mounting — which `NON_PORTABLE_ASSET_REFERENCE` correctly flags. The section names the deciding question (does this skill ever run outside its plugin?), and shows recording the answer as a scoped `validation.allow` entry with a required `reason` rather than a repo-wide `severity: ignore`.
+
+### Changed
+
+- **`@vibe-agent-toolkit/utils/git` exposes exactly one git-root finder.** The subpath previously
+  re-exported whole modules, surfacing both `gitFindRoot` and the deprecated `findGitRoot` — two
+  differently-named functions for the same job, which guarantees consumers split between them. The
+  subpath is now an explicit, curated export list carrying `gitFindRoot`; see **Removed** for the
+  alias itself.
+
+- **Guidance for building the Node scripts a skill ships**, in the `vat-skill-authoring` skill:
+  bundling to a self-contained tree-shaken `.mjs`, statically scanning the artifact for surviving
+  external imports, and clean-room booting it outside any `node_modules`. It documents a trap VAT
+  itself creates: `files:` injects a bundle under a different `dest` basename, so a script guarding
+  its entry point on `basename(process.argv[1])` evaluates that guard as false under the shipped
+  name and exits 0 having printed nothing — inert, while reading as success to anything watching
+  exit codes.
+
+  It also documents that trap's sibling, which an adopter found the hard way across three of their
+  own bins: npm writes `node_modules/.bin/<name>` as a **symlink**, so `process.argv[1]` is the link
+  path while `import.meta.url` is the realpath target — meaning the obvious remedy
+  (`import.meta.url === pathToFileURL(process.argv[1]).href`) fails the same fail-open way on the
+  most common invocation path of all. The guidance therefore recommends shipping a guard-free bin
+  entry module, and specifies clean-room verification on **three** legs — shipped `dest` name,
+  through a symlink, and from a packed tarball installed outside the workspace. A copy-only clean
+  room cannot see the symlink case at all: a copy has no symlink, so it certifies fail-open bins as
+  healthy.
+
+### Removed
+
+- **`findGitRoot` is gone from `@vibe-agent-toolkit/utils`. Use `gitFindRoot`** — the behavior is
+  identical, because `findGitRoot`'s entire body was `return gitFindRoot(startDir)`. It had carried
+  an `@deprecated` tag for some time. Curating it off the new `./git` subpath (see **Changed**)
+  addressed only the symptom: the alias stayed on the `.` barrel, the entry with the most consumers,
+  so both names remained one import away and the coin flip just moved. Under the pre-1.0 policy
+  (never maintain two APIs for the same job) the alias is deleted rather than relocated. No
+  production code in this repository ever called it.
+
+  This also removes one of the symbols that were reachable **only** from the wide `.` barrel — the
+  shape that undercuts "import the one you need" — and it is the one whose narrow home already
+  existed.
+
+### Security
+
+- **16 advisories cleared from the dependency tree** via the root `overrides` block: `undici`
+  7.28.0 → 7.29.0 (5 advisories), `ip-address` 10.1.1 → 10.3.1 (3), `hono` 4.12.27 → 4.12.34,
+  `fast-uri` 3.1.4 → 3.1.5, `js-yaml` 4.3.0 → 4.3.1, and `postcss` 8.5.18 → 8.5.23, plus a new
+  `nanoid` 3.3.16 → 3.3.17 pin closing GHSA-2v37-7h3g-55p8 (CVSS 8.2). `nanoid` reaches the tree
+  only through `postcss`, whose `^3.3.16` range the patched version satisfies, so no other pin
+  moved. All are within-major bumps of transitive packages; no declared dependency changed and no
+  consumer-facing API is affected.
+
+  One advisory is **accepted rather than fixed** and recorded in `osv-scanner.toml` with its
+  reasoning: `brace-expansion` (GHSA-rgw5-rvv9-x895) resolves to 1.x, 2.x, and 5.x simultaneously
+  in this tree, and the fix lands separately in each line (1.1.18 / 2.1.4 / 5.0.9), so no single
+  value in a global `overrides` block can patch all three — pinning any one forces the other two
+  majors onto an incompatible version. It is a ReDoS against attacker-controlled brace patterns;
+  VAT only ever expands patterns it authors. Same shape, and the same deferral, as the existing
+  `minimatch` and `picomatch` entries.
+
+### Fixed
+
 - **`isGitIgnored()` spawned a git subprocess per ancestor directory when the path was not in a git
   repository at all — `vat resources validate` on a 3,437-document tree outside any repository went
   from 196 s to 20.6 s, with a byte-identical report.** `git check-ignore` exits 128 for two
@@ -484,15 +539,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cache of copies). Turborepo is common enough for this to matter: every package in this repo has a
   `.turbo/`.
 
-- **`buildWindowsShellLine('')` accepted an empty command token and promoted the caller's first
-  argument into the command position.** `isSingleShellToken` guards against a `commandToken` that
-  cmd.exe could split or partly re-execute, but `''` tripped neither of its branches — it does not
-  start with a quote, and the metacharacter regex cannot match a string with no characters — so
-  `buildWindowsShellLine('', ['calc', 'b'])` returned `" calc b"`, a line whose command is `calc`.
-  Not reachable from either of the current call sites (both resolve the command through
-  `which.sync` first, which throws on `''`), but that is a property of today's callers rather than
-  of the function, and this guard's whole purpose is to hold independently of them.
-
 - **`windowsShellQuote` produced command lines that `CommandLineToArgvW` mis-parses, corrupting
   arguments and silently merging them with the argument that follows.** The function knew none of
   Windows' backslash-escaping rules: a backslash run preceding a quote — or preceding the closing
@@ -513,29 +559,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chosen because it is understood identically by every known implementation, whereas `""` is absent
   from `CommandLineToArgvW`'s documented rules and CRT variants disagree about it. The residual cost
   is bounded and stated in the code: cmd's quote tracking desyncs only for an argument containing
-  both a quote *and* a shell metacharacter. Found by an adversarial review of the first, incomplete
-  attempt at this fix.
+  both a quote *and* a shell metacharacter.
 
-- **`buildWindowsShellLine`'s new command-token check failed open.** It accepted any string starting
-  and ending with a quote, so a whole crafted command line (`"a b" && calc "x"`) passed validation
-  while reading, in its own JSDoc, as a general assertion. It now requires a single shell token.
+  Two safety claims in the same module were also overstated and are now documented honestly rather
+  than changed. `%` and `!` trigger quoting but are **not neutralized** by it — `cmd.exe` still
+  expands `%VAR%` inside double quotes, which also corrupts a literal `%` in a filename (legal on
+  Windows). And `shouldUseShell`'s JSDoc asserted "arguments passed as array, preventing injection"
+  and "never concatenate user input into command strings" while the Windows shell branch does
+  exactly that concatenation. Both now name `shell: false` as the escape hatch.
 
-- **`shouldUseShell`'s documentation claimed safety properties this module does not have** —
-  "Arguments passed as array, preventing injection" and "Never concatenate user input into command
-  strings" — while the Windows shell branch does exactly that concatenation. Replaced with an honest
-  two-mode description and a named escape hatch.
+- **`buildWindowsShellLine` silently produced a broken command line when handed a command path it
+  could not safely place in the command position — it now throws instead.** Two shapes reached it:
+  an unquoted path containing spaces, which `cmd.exe` splits at the first space; and `''`, which
+  promoted the caller's *first argument* into the command position, so
+  `buildWindowsShellLine('', ['calc', 'b'])` returned `" calc b"` — a line whose command is `calc`.
+  It now requires a single shell token and throws with a message naming the offending token.
+  Separately, `safeExecSync`/`safeExecResult` now quote a path-like command the way `spawnHardened`
+  already did; the sibling paths previously disagreed and only one was correct.
 
-- **`buildWindowsShellLine` silently produced a broken command line when handed an unquoted command
-  path containing spaces**, because `cmd.exe` splits it at the first space. It now throws with a
-  message naming the offending token, and `safeExecSync`/`safeExecResult` now quote a path-like
-  command the same way `spawnHardened` already did — previously the two sibling paths disagreed, and
-  only one was correct.
-
-- **`windowsShellQuote`'s character class implied more safety than it delivered.** `%` and `!` were
-  in the set that triggers quoting, but wrapping in double quotes does not neutralize them —
-  `cmd.exe` still expands `%VAR%` inside quotes, which also corrupts literal `%` in filenames (legal
-  on Windows). Documented explicitly as *quoted, not neutralized*, with the `shell: false` escape
-  hatch named.
+  **What changes for you:** a call that used to return a subtly wrong command line now raises. If
+  you pass a command path through these helpers, resolve it first (both of VAT's own call sites go
+  through `which.sync`, which is why neither could reach the empty-token case).
 
 - **`@vibe-agent-toolkit/utils/package.json` was not exported**, so
   `require('@vibe-agent-toolkit/utils/package.json')` threw `ERR_PACKAGE_PATH_NOT_EXPORTED`. Version
@@ -547,6 +591,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subpath. A `../../docs/` link that resolved to nothing on npm is now absolute.
 
 - **`NON_PORTABLE_ASSET_REFERENCE` no longer advises an impossible fix for `CLAUDE_PROJECT_DIR`.** The family emitted one shared remediation — *"reference bundled files by a path relative to the skill directory"* — for every variant. That is right for `CLAUDE_PLUGIN_ROOT` and absolute script paths, and **wrong** for `CLAUDE_PROJECT_DIR`, which denotes the *user's repository* rather than a bundled asset: no skill-relative path can express it, and substituting one silently re-anchors user artifacts onto the plugin install directory. An adopter reported the rule advising them to revert a fix for exactly that bug. The `claude-project-dir` variant now carries its own remediation (take the location as an explicit parameter with `$CLAUDE_PROJECT_DIR` as fallback; make declared `targets` reflect the Claude Code coupling), and the shared headline no longer asserts the skill-relative advice.
+
 - **`NON_PORTABLE_ASSET_REFERENCE` over-captured a closing brace in nested shell expansion.** The variant patterns used `\$\{?NAME\}?`, whose optional trailing `\}?` consumed the closing brace of an **enclosing** expansion — `"${VAR:-$CLAUDE_PROJECT_DIR}"` was reported as `` "$CLAUDE_PROJECT_DIR}" ``. The malformed token reads exactly like the typo `$FOO}`, sending reviewers to source that was in fact valid shell. Matching is now brace-balanced via alternation. *(Adopter-reported; independently reproduced.)*
 
 ## [0.1.41] - 2026-08-03
