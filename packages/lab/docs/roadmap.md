@@ -44,6 +44,16 @@ deterministic where wall time is not**:
 - **The comparator uses exact equality, with no tolerance gate.** Verified on the real tool: two
   independent captures of the same three commands at the same coordinate produced identical counts on
   every row. Any difference is therefore a real difference, and a tolerance knob would only hide one.
+
+  ⚠️ **That determinism is over the bytes on disk, and the coordinate does not pin all of them.**
+  `subjectVersion` records a commit plus, for a dirty tree, a fingerprint of the *tracked* working
+  copy. Untracked and gitignored content — scratch directories, local plan files, build leftovers —
+  is invisible to the coordinate but perfectly visible to vat's filesystem crawl, so it can move the
+  counts while every axis reads as unchanged. Two captures in one session on one machine agree
+  because that content held still, not because it was pinned. **Cross-machine and cross-session
+  comparisons assume a stable snapshot of the subject, and nothing in the report can currently tell
+  you whether you had one.** Compare over a clean checkout when the delta has to be trusted.
+  (Making this legible — an ignored-content fingerprint, or at least a warning — is open work.)
 - **A capture compares its own repeats and reports whether they agreed.** `stable` is
   `true`/`false`/`null` — `null` when fewer than two repeats were compared, because below that nothing
   could have disagreed and determinism was never tested. A `false` or `null` blocks the comparator
