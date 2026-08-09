@@ -147,9 +147,44 @@ export class FsLookupCache {
   }
 
   /**
-   * Canonical path for `targetPath`, falling back to `safePath.resolve()` when the
-   * path does not exist or cannot be resolved (a non-existent file has no realpath,
-   * and callers comparing paths still need an answer).
+   * Canonical path for `targetPath`. A path that cannot be canonicalized is
+   * answered from its **deepest existing ancestor** — that ancestor's realpath
+   * with the missing remainder re-appended — because a non-existent file has no
+   * realpath and callers comparing paths still need an answer.
+   *
+   * ⚠️ **The fallback must stay in the same NAMESPACE as the success path, which
+   * a lexical `safePath.resolve()` is not.** The only consumer of this column
+   * compares one canonical path against another (`isWithinProject` /
+   * `isWithinProjectFrom`), so an answer resolved lexically is being compared
+   * against an answer resolved through symlinks. Where the root traverses a
+   * symlink — macOS `/tmp → /private/tmp`, bind mounts, a worktree under a
+   * symlinked path — the two spellings differ and the comparison is nonsense.
+   * Measured truth table for `isWithinProject(file, root)` under a `link → real`
+   * root, before the walk:
+   *
+   * ```text
+   * existing file, symlinked root : true
+   * MISSING  file, symlinked root : false  ← lexical fallback, wrong namespace
+   * MISSING  file, plain root     : true
+   * symlink inside pointing out   : false  (correct either way)
+   * ```
+   *
+   * The middle row is user-visible: a merely BROKEN root-absolute markdown link
+   * was reported as *escaping the project*. The walk fixes it without widening
+   * containment, because the ancestor is exactly where an escaping symlink
+   * lives — a missing file behind a directory link that points outside still
+   * canonicalizes outside.
+   *
+   * The recursion goes through `this.realpath(parent)`, not a private helper, so
+   * ancestors land in the same memo and share in-flight promises. A missing
+   * file's parent directory is almost always already cached, so the common case
+   * costs no extra syscall. **The fixpoint guard is mandatory**: `path.dirname`
+   * is idempotent at a root (`'/'` on posix, `'C:/'` for a drive, `'//server/share/'`
+   * for a UNC share), so without it the walk never terminates.
+   *
+   * Errno is deliberately not inspected. EACCES on an existing file and ELOOP on
+   * a symlink cycle land in the same catch as ENOENT, and for all three the
+   * ancestor's namespace is a strictly better answer than the lexical one.
    *
    * ⚠️ **`promisify(nodeFs.realpath)` — NOT `fs/promises.realpath`. Node ships two
    * different realpaths and they do not agree.** `fs.realpathSync` and the
@@ -202,9 +237,32 @@ export class FsLookupCache {
     // caller-validated all the same.
     const pending = promisify(nodeFs.realpath)(targetPath)
       .then(toForwardSlash)
-      .catch(() => safePath.resolve(targetPath));
+      .catch(() => this.#canonicalizeViaAncestor(targetPath));
     this.#realpaths.set(targetPath, pending);
     return pending;
+  }
+
+  /**
+   * The ancestor walk behind {@link FsLookupCache.realpath}'s fallback: canonicalize
+   * the parent — through the public method, so the memo and in-flight sharing
+   * apply — and re-append this path's own basename.
+   *
+   * Runs inside the already-stored promise's `.catch()`, which is what keeps the
+   * store-before-await property intact: the row for `targetPath` is in the map
+   * before any of this can start.
+   *
+   * @param targetPath - Path that could not be canonicalized
+   * @returns Canonical ancestor plus the missing remainder, forward-slashed
+   */
+  async #canonicalizeViaAncestor(targetPath: string): Promise<string> {
+    const absolutePath = safePath.resolve(targetPath);
+    const parent = toForwardSlash(path.dirname(absolutePath));
+    // Fixpoint at a filesystem root — `/`, `C:/`, `//server/share/` — where
+    // `dirname` returns its own input. Nothing left to walk, and no guard means
+    // no termination.
+    if (parent === absolutePath) return absolutePath;
+
+    return safePath.join(await this.realpath(parent), path.basename(absolutePath));
   }
 
   /**
@@ -463,11 +521,11 @@ export function classifyFilenameCaseFrom(
  * The materialized realpath column: path → its canonical path.
  *
  * Every filled row is a string — never `null`, never `undefined`.
- * {@link FsLookupCache.realpath} answers a path it cannot canonicalize with
- * `safePath.resolve()` rather than failing, because a path that does not exist
- * has no realpath and a caller comparing paths still needs an answer. That
- * fallback IS the contract, and it is what lets `undefined` out of this map mean
- * exactly one thing: *absent key*. See {@link realpathFrom}.
+ * {@link FsLookupCache.realpath} answers a path it cannot canonicalize from that
+ * path's deepest existing ancestor rather than failing, because a path that does
+ * not exist has no realpath and a caller comparing paths still needs an answer.
+ * That fallback IS the contract, and it is what lets `undefined` out of this map
+ * mean exactly one thing: *absent key*. See {@link realpathFrom}.
  */
 export type RealpathTable = ReadonlyMap<string, string>;
 
@@ -540,8 +598,9 @@ export async function fillRealpaths(
  */
 export function realpathFrom(table: RealpathTable, filePath: string): string {
   // `undefined` can only mean "absent key": a filled row is always a string,
-  // because `FsLookupCache.realpath` falls back to a resolved path rather than
-  // leaving an unresolvable path without an answer.
+  // because `FsLookupCache.realpath` falls back to the deepest existing
+  // ancestor's canonical path rather than leaving an unresolvable path without
+  // an answer.
   const realPath = table.get(filePath);
   if (realPath === undefined) {
     throw new Error(

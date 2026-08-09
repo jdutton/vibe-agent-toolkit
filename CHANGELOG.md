@@ -264,6 +264,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A merely *broken* root-absolute link was reported as *escaping the project* whenever the project
+  root reaches the filesystem through a symlink** — macOS `/tmp → /private/tmp`, a bind mount, a
+  checkout under a symlinked path. Canonicalizing a path that does not exist fell back to a lexical
+  resolve, which keeps the link's spelling, while the root gained the symlink's target from a
+  successful `realpath` — so the two sides were compared in different namespaces and a missing file
+  under the root read as outside it. A non-existent path is now canonicalized from its deepest
+  *existing* ancestor, with the missing remainder re-appended, in both the live-syscall form and the
+  pre-filled column that the link judge reads (these are documented as answering byte for byte
+  identically, and now do again). Containment is not widened: a missing file behind a directory
+  symlink that leaves the root is still outside, because the ancestor the walk lands on is that
+  escaping link. Adopters on such a layout will see `/docs/gone.md`-style links change from a
+  traversal error to the correct "file not found".
+
 - **`directFileCount` counted link *occurrences*, not files, and could exceed the bundle's own file
   count.** `getResolvedMarkdownLinks` walked `parseResult.links` — one entry per occurrence — and
   probed each one, so a skill whose routing table pointed 14 rows at the same document contributed

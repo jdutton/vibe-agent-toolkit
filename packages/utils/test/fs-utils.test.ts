@@ -347,6 +347,185 @@ describe('fs-utils', () => {
     });
   });
 
+  describe('FsLookupCache.realpath — a path that cannot be canonicalized', () => {
+    const GONE = 'gone.md';
+    const DOCS = 'docs';
+
+    /**
+     * The only fixture shape that can tell the two candidate answers apart: a
+     * root reached **through a symlink**.
+     *
+     * A temp dir taken from `normalizedTmpdir()` has already been realpath'd, so
+     * asking about a missing file under it yields the same string either way —
+     * lexical resolve and ancestor walk agree, and the assertion is vacuous.
+     * That is precisely why nothing caught this. Here `link-root → real-root`
+     * makes the lexical answer keep the `link-root` spelling while the walked
+     * answer gains `real-root`, so every test below can state which one it got.
+     *
+     * `outside/` is a sibling of the root, reached from inside it by symlink:
+     * the walk must not fabricate containment for paths that genuinely escape.
+     */
+    const setupSymlinkedRoot = async (
+      base: string
+    ): Promise<{ realRoot: string; canonicalRealRoot: string; linkRoot: string; outside: string }> => {
+      const realRoot = safePath.join(base, 'real-root');
+      const linkRoot = safePath.join(base, 'link-root');
+      const outside = safePath.join(base, 'outside');
+      await fs.mkdir(safePath.join(realRoot, DOCS), { recursive: true });
+      await fs.mkdir(outside, { recursive: true });
+      await fs.symlink(realRoot, linkRoot, 'dir');
+      return {
+        realRoot,
+        canonicalRealRoot: toForwardSlash(nodeFs.realpathSync(realRoot)),
+        linkRoot,
+        outside,
+      };
+    };
+
+    it('answers a missing file in the namespace of its deepest existing ancestor', async ({
+      skip,
+    }) => {
+      // Windows CI agents often lack the symlink privilege. Say so rather than
+      // no-op: a silently skipped symlink case reads as a passing test.
+      if (!canCreateSymlinks(tempDir)) skip();
+      const { canonicalRealRoot, linkRoot } = await setupSymlinkedRoot(tempDir);
+      const missing = safePath.join(linkRoot, DOCS, GONE);
+
+      const answer = await new FsLookupCache().realpath(missing);
+
+      // Proof the fixture DISCRIMINATES before trusting the green: the two
+      // candidate answers are different strings here, which they are not under a
+      // temp dir that is already its own realpath.
+      expect(safePath.resolve(missing)).not.toBe(safePath.join(canonicalRealRoot, DOCS, GONE));
+      expect(answer).toBe(safePath.join(canonicalRealRoot, DOCS, GONE));
+    });
+
+    it('walks through several missing levels to reach the ancestor that exists', async ({
+      skip,
+    }) => {
+      if (!canCreateSymlinks(tempDir)) skip();
+      const { canonicalRealRoot, linkRoot } = await setupSymlinkedRoot(tempDir);
+      const missing = safePath.join(linkRoot, DOCS, 'nope', 'deeper', GONE);
+
+      const answer = await new FsLookupCache().realpath(missing);
+
+      // Every missing component is re-appended in order — a single-level walk
+      // would answer the parent's canonical path, and a walk that dropped the
+      // basename would lose components off the tail.
+      expect(answer).toBe(safePath.join(canonicalRealRoot, DOCS, 'nope', 'deeper', GONE));
+    });
+
+    it('leaves an existing file byte-identical to realpathSync', async ({ skip }) => {
+      if (!canCreateSymlinks(tempDir)) skip();
+      const { linkRoot } = await setupSymlinkedRoot(tempDir);
+      const present = safePath.join(linkRoot, DOCS, 'here.md');
+      await fs.writeFile(present, '');
+
+      const answer = await new FsLookupCache().realpath(present);
+
+      // The success path is untouched by the fallback change, and this column's
+      // whole contract is equivalence with `fs.realpathSync` byte for byte.
+      expect(answer).toBe(toForwardSlash(nodeFs.realpathSync(present)));
+    });
+
+    it('keeps an existing symlink that points outside the root resolving outside it', async ({
+      skip,
+    }) => {
+      if (!canCreateSymlinks(tempDir)) skip();
+      const { canonicalRealRoot, realRoot, linkRoot, outside } = await setupSymlinkedRoot(tempDir);
+      const escapeTarget = safePath.join(outside, 'data.md');
+      await fs.writeFile(escapeTarget, '');
+      await fs.symlink(escapeTarget, safePath.join(realRoot, 'escape.md'));
+
+      const answer = await new FsLookupCache().realpath(safePath.join(linkRoot, 'escape.md'));
+
+      expect(answer).toBe(toForwardSlash(nodeFs.realpathSync(escapeTarget)));
+      expect(answer.startsWith(canonicalRealRoot + '/')).toBe(false);
+    });
+
+    it('keeps a missing file behind an escaping directory symlink resolving outside the root', async ({
+      skip,
+    }) => {
+      if (!canCreateSymlinks(tempDir)) skip();
+      const { canonicalRealRoot, realRoot, linkRoot, outside } = await setupSymlinkedRoot(tempDir);
+      await fs.symlink(outside, safePath.join(realRoot, 'outlink'), 'dir');
+      const missing = safePath.join(linkRoot, 'outlink', GONE);
+
+      const answer = await new FsLookupCache().realpath(missing);
+
+      // The walk must widen nothing: canonicalizing through the deepest existing
+      // ancestor is what makes an escape stay an escape, because the ancestor is
+      // where the escaping link lives.
+      expect(answer).toBe(safePath.join(toForwardSlash(nodeFs.realpathSync(outside)), GONE));
+      expect(answer.startsWith(canonicalRealRoot + '/')).toBe(false);
+    });
+
+    it('stops at the filesystem root rather than recursing forever', async () => {
+      // `path.dirname('/') === '/'` on posix and `path.win32.dirname('C:/') === 'C:/'`,
+      // so without a fixpoint guard this call never returns and the test times out
+      // instead of failing. Reaching the assertion at all is half the assertion.
+      const fsRoot = toForwardSlash(path.parse(safePath.resolve(tempDir)).root);
+      const orphan = 'vat-no-such-root-entry-9f3a';
+      const missing = safePath.join(fsRoot, orphan);
+
+      const answer = await new FsLookupCache().realpath(missing);
+
+      expect(answer).toBe(safePath.join(toForwardSlash(nodeFs.realpathSync(fsRoot)), orphan));
+    });
+    it('terminates at the filesystem root when even the root cannot be canonicalized', async () => {
+      // The fixpoint guard is UNREACHABLE through a real posix filesystem —
+      // `realpath('/')` always succeeds, so the walk stops there for lack of a
+      // failure, not for lack of a parent. It is reachable on Windows (a
+      // nonexistent or disconnected drive root, `Z:/…`), which this branch has no
+      // CI for. Forcing every canonicalization to fail reproduces that shape on
+      // any platform: without the guard the walk asks the cache for the root's
+      // own key, gets back the promise it is already inside, and deadlocks —
+      // this test then dies by timeout rather than by assertion.
+      const spy = vi
+        .spyOn(nodeFs, 'realpath')
+        .mockImplementation(((_target: string, callback: (error: Error) => void) => {
+          // Not ENOENT: EACCES and ELOOP land in the same catch, and the walk is
+          // deliberately errno-blind.
+          callback(new Error('EACCES: permission denied'));
+        }) as unknown as typeof nodeFs.realpath);
+      const fsRoot = toForwardSlash(path.parse(safePath.resolve(tempDir)).root);
+      const missing = safePath.join(fsRoot, 'a', 'b', 'c.md');
+
+      const answer = await new FsLookupCache().realpath(missing);
+
+      // Every level fell back, so the walk composes back to the lexical form —
+      // which is the right answer precisely when nothing on the path resolves.
+      expect(answer).toBe(missing);
+      expect(spy.mock.calls.length).toBeGreaterThan(1);
+      vi.restoreAllMocks();
+    });
+
+    it('shares one in-flight promise and canonicalizes the ancestor through the memo', async ({
+      skip,
+    }) => {
+      if (!canCreateSymlinks(tempDir)) skip();
+      const { linkRoot } = await setupSymlinkedRoot(tempDir);
+      const missing = safePath.join(linkRoot, DOCS, GONE);
+      const cache = new FsLookupCache();
+      const spy = vi.spyOn(nodeFs, 'realpath');
+
+      // Asked twice with no `await` in between: the SAME promise object can only
+      // come back if the row was stored before any await could run. A walk built
+      // outside the already-stored promise would hand the second caller its own.
+      const first = cache.realpath(missing);
+      expect(cache.realpath(missing)).toBe(first);
+      await first;
+
+      // Two syscalls: the missing path (fails) and its parent (succeeds).
+      expect(spy).toHaveBeenCalledTimes(2);
+      // ...and the parent was canonicalized THROUGH this cache, so it is memoized.
+      // A private recursive helper would answer identically and cost a third call.
+      await cache.realpath(safePath.join(linkRoot, DOCS));
+      expect(spy).toHaveBeenCalledTimes(2);
+      vi.restoreAllMocks();
+    });
+  });
+
   describe('classifyFilenameCase', () => {
     // Pure — not one filesystem call in this block. Hand-written listings are the
     // only way to control entry ORDER, and order is exactly what this function

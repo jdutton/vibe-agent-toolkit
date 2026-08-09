@@ -193,9 +193,31 @@ function isUnderRoot(normalizedFile: string, normalizedRoot: string): boolean {
 }
 
 /**
- * Canonicalize one path synchronously, falling back to a plain resolve when the
- * path cannot be canonicalized (a path that does not exist has no realpath, and
- * a caller comparing paths still needs an answer).
+ * Canonicalize one path synchronously. A path that cannot be canonicalized is
+ * answered from its **deepest existing ancestor** — that ancestor's realpath with
+ * the missing remainder re-appended — because a path that does not exist has no
+ * realpath and a caller comparing paths still needs an answer.
+ *
+ * ⚠️ **The fallback has to land in the same NAMESPACE as the success path, and a
+ * lexical `safePath.resolve()` does not.** Every consumer here compares one
+ * canonical path against another, so where the root traverses a symlink — macOS
+ * `/tmp → /private/tmp`, a bind mount, a worktree under a symlinked path — the
+ * lexical answer keeps the link's spelling while the root gains the target's, and
+ * the comparison is nonsense. It was user-visible: a merely BROKEN root-absolute
+ * markdown link came back as *escaping the project*. `FsLookupCache.realpath` in
+ * `packages/utils/src/fs-utils.ts` carries the measured truth table; this is its
+ * synchronous twin.
+ *
+ * The walk widens containment nowhere, because the deepest existing ancestor is
+ * exactly where an escaping directory symlink lives — a missing file behind one
+ * still canonicalizes outside the root. Errno is deliberately not inspected:
+ * EACCES on an existing file and ELOOP on a cycle land in the same catch as
+ * ENOENT, and the ancestor's namespace beats the lexical answer for all three.
+ *
+ * **The fixpoint guard is mandatory.** `path.dirname` is idempotent at a
+ * filesystem root (`'/'` on posix, `'C:/'` for a drive, `'//server/share/'` for a
+ * UNC share), so without it the walk never terminates — it fails by hanging, not
+ * by asserting.
  *
  * ⚠️ **Answers byte for byte what `FsLookupCache.realpath` answers, and that
  * equivalence is what makes {@link isWithinProject} and
@@ -214,22 +236,47 @@ function isUnderRoot(normalizedFile: string, normalizedRoot: string): boolean {
  * names the test that pins it.
  *
  * Secondary observation, and explicitly NOT the argument: the *fallback*
- * branches agree too — the extra `toForwardSlash` applied here is a no-op,
- * because `safePath.resolve` already returns forward slashes. Comparing only the
- * fallbacks and assuming the success paths were the same function is exactly how
- * the native-route divergence above shipped green. The success paths are where
- * this equivalence has to be argued.
+ * branches agree too — both compose the deepest existing ancestor's canonical
+ * path with the missing remainder, and `safePath.join` associates, so this
+ * function's single join answers what the async form's per-level recursion does.
+ * Comparing only the fallbacks and assuming the success paths were the same
+ * function is exactly how the native-route divergence above shipped green. The
+ * success paths are where this equivalence has to be argued.
  *
  * Change either form and you must change the other, or the filled column and the
  * live syscall start answering differently.
+ *
+ * Exported **only so that equivalence can be asserted on the string itself**.
+ * Every other consumer reaches this function through a boolean containment
+ * verdict, and a verdict cannot observe the remainder: a walk that re-appended
+ * nothing answers the same `true`/`false` on every fixture that can be built,
+ * because dropping components off a path's tail never moves it across a root
+ * boundary. `src/index.ts` does not re-export it, so the package's public API is
+ * unchanged.
  */
-function canonicalizeSync(filePath: string): string {
-  try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath is validated path parameter
-    return toForwardSlash(fs.realpathSync(filePath));
-  } catch {
-    // Realpath failed — the path doesn't exist, so use the resolved path.
-    return toForwardSlash(safePath.resolve(filePath));
+export function canonicalizeSync(filePath: string): string {
+  // Resolve up front so the walk only ever sees absolute, `..`-free paths.
+  // Costs nothing: Node's `fs.realpathSync` opens with the same `path.resolve`.
+  const absolutePath = safePath.resolve(filePath);
+  // Components peeled off so far, nearest-the-root first — re-appended to
+  // whichever ancestor finally canonicalizes.
+  const missingRemainder: string[] = [];
+  let candidate = absolutePath;
+
+  for (;;) {
+    try {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- candidate derives from the validated path parameter
+      return safePath.join(toForwardSlash(fs.realpathSync(candidate)), ...missingRemainder);
+    } catch {
+      const parent = toForwardSlash(path.dirname(candidate));
+      // Fixpoint at a filesystem root, where `dirname` returns its own input.
+      // Nothing left to walk, and nothing on the path resolved, so the lexical
+      // form is the right answer — and the only one available.
+      if (parent === candidate) return absolutePath;
+
+      missingRemainder.unshift(path.basename(candidate));
+      candidate = parent;
+    }
   }
 }
 
@@ -271,14 +318,16 @@ function canonicalizeSync(filePath: string): string {
  * on macOS but cannot be pinned on Windows from here). A hoist reuses the very
  * same canonical root, so it preserves every row; either shortcut does not.
  *
- * ⚠️ **Reaching the root through a symlink changes the answer for a path that
- * does not exist.** {@link canonicalizeSync}'s fallback resolves lexically, so a
- * missing file keeps the symlinked spelling while the root gains the real one.
- * Measured: an EXISTING file under a `link → real` root is `true`; the same file
- * MISSING is `false`; missing under the real root is `true`. So
- * `resolveLocalHref('/docs/gone.md', …)` reports `absolute_escapes_root` for a
- * merely-broken link whenever the caller's root traverses a symlink. Recorded,
- * not fixed — changing it changes answers, which this bite may not do.
+ * ⚠️ **A path that does not exist is canonicalized from its deepest existing
+ * ancestor, not lexically** — see {@link canonicalizeSync}. Reaching the root
+ * through a symlink used to flip this answer: an EXISTING file under a
+ * `link → real` root was `true`, the same file MISSING was `false`, and missing
+ * under the real root was `true`, so `resolveLocalHref('/docs/gone.md', …)`
+ * reported `absolute_escapes_root` for a merely-broken link. The ancestor walk
+ * puts both sides in one namespace and the middle row is now `true` like the
+ * other two. Containment is not widened by it: a missing file behind a directory
+ * symlink that leaves the root is still outside, because the ancestor the walk
+ * lands on IS that escaping link.
  *
  * @param filePath - Absolute path to check
  * @param projectRoot - Absolute path to project root
