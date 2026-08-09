@@ -36,10 +36,10 @@ import {
   PERF_FACET,
   PERF_FACET_VERSION,
   type PerfBody,
-  type PerfCommandSpec,
   type PerfCommandStats,
   PerfBodySchema,
 } from '../src/facets/perf/types.js';
+import type { MeasuredCommandSpec } from '../src/harness/commands.js';
 import { runRepeats } from '../src/harness/repeat.js';
 import type { ResolvedSubject } from '../src/harness/types.js';
 
@@ -54,10 +54,10 @@ const PREFIX = 'lab-perf-capture-';
 const CAPTURED_AT = '2026-08-09T12:34:56.000Z';
 
 /** A command that always succeeds. */
-const PASSES: PerfCommandSpec = { name: 'audit', args: ['audit'] };
+const PASSES: MeasuredCommandSpec = { name: 'audit', args: ['audit'] };
 
 /** A command that always fails, on every repeat, by argv. */
-const FAILS: PerfCommandSpec = { name: 'broken', args: [PROBE_FAIL_TOKEN] };
+const FAILS: MeasuredCommandSpec = { name: 'broken', args: [PROBE_FAIL_TOKEN] };
 
 /** The whole failure suffix a `boom` command produces, at the default stderr. */
 const FAIL_REASON = `exited ${String(PROBE_FAIL_EXIT)}: ${PROBE_DEFAULT_STDERR}`;
@@ -230,8 +230,8 @@ describe('capturePerf — no repeats at all', () => {
 describe('capturePerf — rows are independent', () => {
   it('keeps a failing command from poisoning the commands either side of it', () => {
     const probe = setupProbe(PREFIX);
-    const before: PerfCommandSpec = { name: 'before', args: ['audit'] };
-    const after: PerfCommandSpec = { name: 'after', args: ['audit', '--json'] };
+    const before: MeasuredCommandSpec = { name: 'before', args: ['audit'] };
+    const after: MeasuredCommandSpec = { name: 'after', args: ['audit', '--json'] };
 
     const report = capture(probe, { runs: 2, commands: [before, FAILS, after] });
 

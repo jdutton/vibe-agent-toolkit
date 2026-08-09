@@ -38,6 +38,20 @@ comparable.
 `VAT_ROOT_DIR` is the existing mechanism for pointing vat at a project other than its own cwd, and
 the harness drives it rather than inventing a parallel path.
 
+## Which commands get measured
+
+The harness owns the command list too — [`harness/commands.ts`](../src/harness/commands.ts) — for the
+same reason it owns the instrument. `perf` and `io` do not merely happen to measure the same three
+corpus-enumerating verbs; they *have* to, or their reports describe different work and holding one
+beside the other means nothing. Two per-facet copies would be free to drift the moment one gained a
+fourth command or changed an argument, and the drift would be invisible: both reports would still be
+well-formed, still name their commands, and still disagree about what was measured.
+
+It is also the only way a second facet can have defaults at all without importing the first, which
+the [facet contract](facets.md) forbids.
+
+The default is a default, not a definition — a caller measuring something else passes its own specs.
+
 ## Two properties the harness must preserve
 
 **Env injection must reach the child.** The I/O facet works by `NODE_OPTIONS=--require`, and vat's

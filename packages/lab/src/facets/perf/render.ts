@@ -68,7 +68,7 @@ function loadLine(body: PerfBody): string {
  * @param report - The report to render
  * @returns Text for a terminal
  */
-export function renderReport(report: ReportEnvelope<PerfBody>): string {
+export function renderPerfReport(report: ReportEnvelope<PerfBody>): string {
   const { subject, subjectVersion, instrument } = report.coordinate;
   let versionLine: string;
   if (subjectVersion.kind === 'git') {
@@ -127,7 +127,7 @@ function verdictLine(diff: PerfComparisonResult['commands'][number]): string {
  * @param comparison - A completed comparison
  * @returns Text for a terminal
  */
-export function renderComparison(comparison: PerfComparisonResult): string {
+export function renderPerfComparison(comparison: PerfComparisonResult): string {
   const heading =
     comparison.axis === null
       ? 'Comparing two reports at the same coordinate'

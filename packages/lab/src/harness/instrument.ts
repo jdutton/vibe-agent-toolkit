@@ -305,6 +305,7 @@ async function resolveTree(path: string): Promise<ResolvedInstrument> {
     command: process.execPath,
     leadingArgs: [binPath],
     version: { version, commit },
+    root: treeRoot,
   };
 }
 
@@ -348,6 +349,10 @@ async function resolveDist(path: string): Promise<ResolvedInstrument> {
     command: process.execPath,
     leadingArgs: [binPath],
     version: { version, commit: null },
+    // The package root, not the path the caller named: `dist:` accepts a bin
+    // file as readily as a directory, and rooting sites at the file's own
+    // directory would make every site outside `dist/bin` look foreign.
+    root: safePath.resolve(dirname(manifestPath)),
   };
 }
 

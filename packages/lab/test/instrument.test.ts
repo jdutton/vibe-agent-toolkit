@@ -302,3 +302,50 @@ describe('resolveInstrument — kind: npx', () => {
     await expectRejectionNaming({ kind: 'npx', spec: '   ' }, 'the spec is empty');
   });
 });
+
+/**
+ * The instrument's own filesystem root, which the `io` facet uses to rewrite an
+ * absolute call site into `packages/resources/dist/content-key.js:141`.
+ *
+ * Wrong here is not a crash. A root that is absent where it should be present
+ * leaves every site absolute and machine-specific, so two reports of the same
+ * work never share a site key and the N+1 detector sees a hundred lukewarm sites
+ * instead of one hot one. A root that is present where it should be absent
+ * bakes an `npx` cache path into the report. Both produce a complete, valid,
+ * useless report — so all three cases are pinned, not just the interesting one.
+ */
+describe('resolveInstrument — the instrument root', () => {
+  it('roots a tree at the checkout, not at its built bin', async () => {
+    const root = await makeTree('rooted-tree');
+
+    const resolved = await resolveInstrument({ kind: 'tree', path: root });
+
+    expect(resolved.root).toBe(safePath.resolve(root));
+  });
+
+  it('roots a dist at the package that owns the manifest, not at the path named', async () => {
+    const root = await makeTree('rooted-dist');
+
+    // Named two directories BELOW the package root, and by a file rather than a
+    // directory. Rooting at the caller's path would make every site outside
+    // `dist/bin` look foreign and leave it absolute.
+    const resolved = await resolveInstrument({
+      kind: 'dist',
+      path: safePath.join(root, CLI_BIN),
+    });
+
+    expect(resolved.root).toBe(safePath.resolve(safePath.join(root, 'packages/cli')));
+  });
+
+  it('gives an npx instrument no root at all, which is a fact rather than a gap', async () => {
+    const resolved = await resolveInstrument({
+      kind: 'npx',
+      spec: '@vibe-agent-toolkit/cli@0.1.41',
+    });
+
+    // A published package is unpacked under an arbitrary cache directory, and
+    // every file in it sits under `node_modules` — which the site normalizer
+    // already keys on. Naming a temp path here would mean nothing to a reader.
+    expect(resolved.root).toBeUndefined();
+  });
+});

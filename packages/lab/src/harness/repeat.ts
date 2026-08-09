@@ -22,7 +22,13 @@
  */
 
 import { runCommand } from './run.js';
-import type { CacheMode, ResolvedInstrument, RunOptions, RunResult } from './types.js';
+import type {
+  CacheMode,
+  CaptureRequest,
+  ResolvedInstrument,
+  RunOptions,
+  RunResult,
+} from './types.js';
 
 /** The token replaced with the subject's path in a command's arguments. */
 export const SUBJECT_TOKEN = '{subject}';
@@ -99,6 +105,73 @@ export function classifyRunFailure(result: RunResult): string | null {
     return `exited ${String(result.exitCode)}: ${result.stderr.trim().slice(0, STDERR_EXCERPT_CHARS)}`;
   }
   return null;
+}
+
+/**
+ * Run one command's repeats from what the capture was asked for.
+ *
+ * Every measurement facet needs exactly this translation, and two hand-written
+ * copies of it is not a stylistic problem: under `exactOptionalPropertyTypes`
+ * each optional field has to be spread conditionally, so the copies are long
+ * enough to drift and mechanical enough that a drift reads as a typo rather
+ * than as a difference in meaning. A facet that forgot to forward `timeoutMs`
+ * would silently measure under a different limit than the one requested, and
+ * its report would look exactly as trustworthy as one that had not.
+ *
+ * Building the spec and running it are one step rather than two because no
+ * caller wants a {@link RepeatSpec} it does not then run — splitting them only
+ * creates a state where a facet has described a measurement it never took.
+ *
+ * `cwd` is the subject's path, always. A facet does not get to choose where the
+ * measured command runs — that is the coordinate's axis A made real, and a
+ * facet running vat somewhere else would stamp a subject it did not measure.
+ *
+ * @param request - What the capture was asked to do
+ * @param args - This command's arguments, already materialized
+ * @param envFor - Per-repeat environment for the MEASURED run only; see
+ *   {@link RepeatSpec.envFor} for why this is separate from `env`
+ * @returns One raw result per repeat, in the order they ran
+ */
+export function runRepeatsFor(
+  request: CaptureRequest,
+  args: readonly string[],
+  envFor?: (index: number) => Readonly<Record<string, string>> | undefined,
+): RunResult[] {
+  return runRepeats({
+    instrument: request.instrument,
+    cwd: request.subject.path,
+    args,
+    runs: request.runs,
+    cache: request.cache,
+    ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
+    ...(request.env === undefined ? {} : { env: request.env }),
+    ...(envFor === undefined ? {} : { envFor }),
+  });
+}
+
+/**
+ * Say whether a set of repeats can produce a measurement at all, and why not.
+ *
+ * **Any failure poisons the whole set**, in every facet. A run of repeats where
+ * some worked and some did not is not measuring one behaviour, and reporting a
+ * statistic over the survivors quietly answers a different question than the
+ * one asked — with `perf` that is actively backwards, because a command that
+ * fails to resolve returns in a fraction of a millisecond and would drag a
+ * median down into looking like an improvement.
+ *
+ * Shared rather than written per facet because the *sentence* is part of the
+ * contract: two facets that phrase this differently make one report look more
+ * broken than another describing the identical outcome.
+ *
+ * @param results - Every repeat's outcome, raw
+ * @returns The failure to record, or `null` when every repeat ran clean
+ */
+export function summarizeRepeatFailures(results: readonly RunResult[]): string | null {
+  const reasons = results
+    .map((result) => classifyRunFailure(result))
+    .filter((reason): reason is string => reason !== null);
+  if (reasons.length === 0) return null;
+  return `${String(reasons.length)} of ${String(results.length)} repeats failed — ${reasons[0] ?? 'unknown'}`;
 }
 
 /**

@@ -34,10 +34,24 @@ This traded places with the `io` facet, which was planned to come first. Timing 
 refactor in flight actually needed, and building it first paid for the shared run harness that `io`
 then inherited.
 
-**Stage 3 — the `io` facet.** The `NODE_OPTIONS` preload counter, productised: fs and child-process
-calls attributed by call site, with Node's own module loader bucketed out. This is the N+1 detector.
+**Stage 3 — the `io` facet. Done.** The `NODE_OPTIONS` preload counter, productised: fs and
+child-process calls attributed by call site, with Node's own module loader bucketed out. This is the
+N+1 detector. `vat-lab io run|compare` works end to end.
 
-Three measured facts shape it, and each one is a way the number can be a confident lie:
+Two things it does differently from `perf`, both forced by the same measured fact — **io counts are
+deterministic where wall time is not**:
+
+- **The comparator uses exact equality, with no tolerance gate.** Verified on the real tool: two
+  independent captures of the same three commands at the same coordinate produced identical counts on
+  every row. Any difference is therefore a real difference, and a tolerance knob would only hide one.
+- **A capture compares its own repeats and reports whether they agreed.** `stable` is
+  `true`/`false`/`null` — `null` when fewer than two repeats were compared, because below that nothing
+  could have disagreed and determinism was never tested. A `false` or `null` blocks the comparator
+  from claiming a delta: the numbers are still real, but an exact-equality difference has no warrant
+  when the measurement is not known to be repeatable. `--runs 3` is the smallest run that tests it at
+  all — one warm-up plus two compared.
+
+Four measured facts shape it, and each one is a way the number can be a confident lie:
 
 - **The loader dominates, so attribution is not optional.** On `vat resources scan docs/`, 6,371 of
   6,411 recorded calls come from Node's own ESM module loader. A raw total measures Node, not vat.
@@ -48,6 +62,13 @@ Three measured facts shape it, and each one is a way the number can be a confide
   documents through `fs/promises`. A sync-only counter is precise and wrong.
 - **`require('fs/promises')` and `require('fs').promises` are the same object.** Wrapping both
   double-counts every promise-API call. The counter dedupes by function identity.
+- **`Error.stackTraceLimit` is a correctness setting, not a tuning one.** The attributor walks the
+  stack for the first non-`node:` frame, so at V8's default of 10 the walk falls off the end of deep
+  call chains and files the call under the loader. Measured on `vat resources validate docs/`: 333
+  calls attributed to vat at limit 10, versus 2,348 at limit 16 — **2,015 of vat's own calls misfiled,
+  a sevenfold undercount reported with total confidence**. Attribution saturates at 16; the counter
+  uses 24 for headroom. Any stack-walking attributor must raise the limit and prove where it
+  saturates, or its bucketing silently depends on how deep the call was.
 
 It counts **Node `fs` and `child_process` calls, not kernel syscalls** — dtrace is blocked by SIP for
 system binaries on macOS and `strace` is Linux-only, so the Node boundary is the portable place to

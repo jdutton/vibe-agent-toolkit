@@ -8,6 +8,8 @@
 
 import type { InstrumentVersion, SubjectRef, SubjectVersion } from '../envelope/coordinate.js';
 
+import type { MeasuredCommandSpec } from './commands.js';
+
 /**
  * How the caller named a vat to measure.
  *
@@ -41,6 +43,20 @@ export interface ResolvedInstrument {
   readonly leadingArgs: readonly string[];
   /** Axis C, as it will appear in every report this instrument produces. */
   readonly version: InstrumentVersion;
+  /**
+   * Absolute path the instrument's own files live under, when there is one.
+   *
+   * Used to rewrite a call site into the readable, machine-independent form
+   * `packages/resources/dist/content-key.js:141` instead of an absolute path
+   * that makes a report from one machine incomparable to every other.
+   *
+   * **`undefined` for an `npx` instrument, and that is not a gap.** A published
+   * package is unpacked somewhere inside a cache directory whose path is
+   * arbitrary, and every file in it sits under `node_modules`, which the site
+   * normalizer already keys on. Inventing a root here would name a temp
+   * directory that means nothing to a later reader.
+   */
+  readonly root?: string;
 }
 
 /** How the caller named a project to measure. */
@@ -109,6 +125,38 @@ export interface LoadReadings {
    * direction of error that matters here.
    */
   readonly contaminated: boolean;
+}
+
+/**
+ * What every measurement facet is asked for, whatever it goes on to measure.
+ *
+ * `perf` and `io` differ in what they record, not in what they are pointed at:
+ * one vat, one project, one list of commands, N repeats, one cache mode, one
+ * clock stamp. Declaring that once means a facet cannot quietly acquire its own
+ * idea of what a repeat is — and it is what lets the harness hand both of them
+ * an identical {@link RunOptions}, rather than each facet assembling one and
+ * getting the optional fields subtly wrong under `exactOptionalPropertyTypes`.
+ *
+ * A facet extends this with what is genuinely its own; the `io` facet adds
+ * where its counter lives, and nothing else.
+ */
+export interface CaptureRequest {
+  readonly instrument: ResolvedInstrument;
+  readonly subject: ResolvedSubject;
+  readonly commands: readonly MeasuredCommandSpec[];
+  /**
+   * Repeats per command, INCLUDING any warm-up a facet discards.
+   *
+   * How many of those repeats reach a statistic is the facet's business — see
+   * its own body type — but how many were *run* means one thing everywhere.
+   */
+  readonly runs: number;
+  readonly cache: CacheMode;
+  readonly timeoutMs?: number;
+  /** Extra environment for every child, the cache clear included. */
+  readonly env?: Readonly<Record<string, string>>;
+  /** Wall-clock stamp for the report, supplied so the caller owns the clock. */
+  readonly capturedAt: string;
 }
 
 /** One invocation of a vat command. */

@@ -29,14 +29,6 @@ export const PERF_FACET = 'perf';
  */
 export const PERF_FACET_VERSION = 1;
 
-/** What one vat command was asked to do. */
-export interface PerfCommandSpec {
-  /** Stable artifact name, appearing in the report and any diff. */
-  readonly name: string;
-  /** Arguments after the vat binary, with `{subject}` substituted at capture time. */
-  readonly args: readonly string[];
-}
-
 /** The measured result for one command. */
 export interface PerfCommandStats {
   readonly name: string;

@@ -23,39 +23,27 @@
  */
 
 import type { ReportEnvelope } from '../../envelope/envelope.js';
-import { REPORT_FORMAT_VERSION } from '../../envelope/envelope.js';
+import type { MeasuredCommandSpec } from '../../harness/commands.js';
 import { judgeLoad, readLoad } from '../../harness/load-guard.js';
-import { classifyRunFailure, materializeArgs, runRepeats } from '../../harness/repeat.js';
-import type {
-  CacheMode,
-  ResolvedInstrument,
-  ResolvedSubject,
-  RunResult,
-} from '../../harness/types.js';
+import { materializeArgs, runRepeatsFor, summarizeRepeatFailures } from '../../harness/repeat.js';
+import { buildReportEnvelope } from '../../harness/report.js';
+import type { CacheMode, CaptureRequest, RunResult } from '../../harness/types.js';
 
 import { summarize } from './stats.js';
 import {
   PERF_FACET,
   PERF_FACET_VERSION,
   type PerfBody,
-  type PerfCommandSpec,
   type PerfCommandStats,
 } from './types.js';
 
-/** Everything a capture needs. */
-export interface CapturePerfOptions {
-  readonly instrument: ResolvedInstrument;
-  readonly subject: ResolvedSubject;
-  readonly commands: readonly PerfCommandSpec[];
-  /** Repeats per command. One repeat yields an IQR of 0 and a weak measurement. */
-  readonly runs: number;
-  readonly cache: CacheMode;
-  readonly timeoutMs?: number;
-  /** Extra environment for every child, merged over `process.env`. */
-  readonly env?: Readonly<Record<string, string>>;
-  /** Wall-clock stamp for the report, supplied so the caller owns the clock. */
-  readonly capturedAt: string;
-}
+/**
+ * Everything a capture needs.
+ *
+ * Exactly the shared request — `perf` adds nothing of its own, because what
+ * makes it `perf` is what it records, not what it is pointed at.
+ */
+export type CapturePerfOptions = CaptureRequest;
 
 /**
  * Turn a command's repeats into a report row.
@@ -67,14 +55,12 @@ export interface CapturePerfOptions {
  * @returns The row, marked failed when no usable measurement exists
  */
 function rowFor(
-  spec: PerfCommandSpec,
+  spec: MeasuredCommandSpec,
   args: readonly string[],
   cache: CacheMode,
   results: readonly RunResult[],
 ): PerfCommandStats {
-  const failures = results
-    .map((result) => classifyRunFailure(result))
-    .filter((failure): failure is string => failure !== null);
+  const failure = summarizeRepeatFailures(results);
   const empty = { medianMs: 0, minMs: 0, maxMs: 0, iqrMs: 0 };
 
   if (results.length === 0) {
@@ -91,10 +77,9 @@ function rowFor(
     };
   }
 
-  if (failures.length > 0) {
-    // Any failure poisons the row. A set of repeats where some worked and some
-    // did not is not timing one behaviour, and reporting the median of the
-    // survivors would quietly answer a different question than the one asked.
+  if (failure !== null) {
+    // Any failure poisons the row — see `summarizeRepeatFailures`, which owns
+    // that rule and its wording so both measurement facets state it alike.
     return {
       name: spec.name,
       args,
@@ -104,7 +89,7 @@ function rowFor(
       samplesMs: [],
       exitCode: null,
       failed: true,
-      failure: `${String(failures.length)} of ${String(results.length)} repeats failed — ${failures[0] ?? 'unknown'}`,
+      failure,
     };
   }
 
@@ -133,31 +118,12 @@ export function capturePerf(options: CapturePerfOptions): ReportEnvelope<PerfBod
 
   const commands = options.commands.map((spec) => {
     const args = materializeArgs(spec.args, options.subject.path);
-    const results = runRepeats({
-      instrument: options.instrument,
-      cwd: options.subject.path,
-      args,
-      runs: options.runs,
-      cache: options.cache,
-      ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
-      ...(options.env === undefined ? {} : { env: options.env }),
-    });
+    const results = runRepeatsFor(options, args);
     return rowFor(spec, args, options.cache, results);
   });
 
   const loadAfter = readLoad();
   const load = judgeLoad(loadBefore.loadAvg1, loadAfter.loadAvg1, loadAfter.cpus);
 
-  return {
-    formatVersion: REPORT_FORMAT_VERSION,
-    facet: PERF_FACET,
-    facetVersion: PERF_FACET_VERSION,
-    coordinate: {
-      subject: options.subject.ref,
-      subjectVersion: options.subject.version,
-      instrument: options.instrument.version,
-    },
-    capturedAt: options.capturedAt,
-    body: { commands, load },
-  };
+  return buildReportEnvelope(PERF_FACET, PERF_FACET_VERSION, options, { commands, load });
 }

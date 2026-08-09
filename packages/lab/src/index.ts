@@ -38,6 +38,26 @@ export {
   ReportEnvelopeSchema,
 } from './envelope/envelope.js';
 
+export { captureIo, type CaptureIoOptions } from './facets/io/capture.js';
+export {
+  compareIo,
+  type CompareIoOptions,
+  type IoCommandDiff,
+  type IoCommandVerdict,
+  type IoComparison,
+  type IoComparisonRefused,
+  type IoComparisonResult,
+  type IoCountDelta,
+  type IoMovement,
+  type IoSiteMovement,
+  type IoSiteMovementKind,
+  type IoTotalsDelta,
+} from './facets/io/compare.js';
+export {
+  renderIoComparison,
+  renderIoReport,
+  type RenderIoReportOptions,
+} from './facets/io/render.js';
 export {
   type DumpsAccepted,
   type DumpsRefusal,
@@ -73,8 +93,7 @@ export {
   type PerfComparisonRefused,
   type PerfComparisonResult,
 } from './facets/perf/compare.js';
-export { DEFAULT_PERF_COMMANDS } from './facets/perf/default-commands.js';
-export { renderComparison, renderReport } from './facets/perf/render.js';
+export { renderPerfComparison, renderPerfReport } from './facets/perf/render.js';
 export {
   isSignificant,
   type MedianWithSpread,
@@ -89,10 +108,13 @@ export {
   PERF_FACET_VERSION,
   type PerfBody,
   PerfBodySchema,
-  type PerfCommandSpec,
   type PerfCommandStats,
 } from './facets/perf/types.js';
 
+export {
+  DEFAULT_MEASURED_COMMANDS,
+  type MeasuredCommandSpec,
+} from './harness/commands.js';
 export { resolveInstrument } from './harness/instrument.js';
 export {
   DEFAULT_LOAD_PER_CPU_THRESHOLD,
@@ -106,12 +128,16 @@ export {
   materializeArgs,
   type RepeatSpec,
   runRepeats,
+  runRepeatsFor,
   SUBJECT_TOKEN,
+  summarizeRepeatFailures,
 } from './harness/repeat.js';
+export { buildReportEnvelope } from './harness/report.js';
 export { runCommand } from './harness/run.js';
 export { resolveSubject } from './harness/subject.js';
 export type {
   CacheMode,
+  CaptureRequest,
   InstrumentSource,
   LoadReadings,
   ResolvedInstrument,
