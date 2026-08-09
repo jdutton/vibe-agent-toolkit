@@ -92,8 +92,10 @@ export const TRAP_CORPUS_FILES: CorpusFiles = Object.freeze({
   'docs/sibling.md': '# Sibling\n\nNothing special. Exists so a link resolves.\n',
 
   // Case: a link to `case.md` against a file named `Case.md` resolves on macOS
-  // and Windows and breaks on Linux. `verifyCaseSensitiveFilename` is one of
-  // the three checks that reads the filesystem at judgement time.
+  // and Windows and breaks on Linux. The filename-case check is one of the
+  // three that turn on a filesystem fact; its listing is now materialised in
+  // pass 1′ (`fillSiblingNames`) and read from that table by the judge, so this
+  // row exercises the fill/judge pair rather than a listing taken mid-judgement.
   'docs/Case.md': '# Case\n\nReferenced with the wrong case from links/to-case.md.\n',
   'links/to-case.md': '# Wrong case\n\n[Case](../docs/case.md)\n',
 

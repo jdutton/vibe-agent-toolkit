@@ -13,22 +13,56 @@
  * - Ignored files CAN link to ignored files (no error)
  * - Ignored files CAN link to non-ignored files (no error)
  * - External resources (outside project) skip git-ignore checks
+ *
+ * **Two passes, not one — and the fill is not finished yet.**
+ *
+ * The fill pass resolves every link once ({@link resolveLinkEntries}), names the
+ * local targets ({@link linkTargetPaths}) and lists their parent directories
+ * concurrently (`fillSiblingNames`). The judge pass ({@link judgeLink}) is
+ * synchronous and does **no directory listing and no href resolution** — both of
+ * those facts travel to it, the listing in the table and the resolution on the
+ * entry.
+ *
+ * ⚠️ **The judge is not I/O-free, and no comment in this file may claim it is.**
+ * Two facts judgement needs are still unfilled, and both are read at judgement
+ * time through direct imports rather than through anything the judge is handed:
+ *
+ * - `isWithinProject` — two `fs.realpathSync` per *existing* local target,
+ *   reached from {@link gitIgnoreSafetyIssue}.
+ * - `isGitIgnored` — a `spawnSync` of `git check-ignore`, reached for every
+ *   existing local target whenever `skipGitIgnoreCheck !== true` and no
+ *   {@link GitTracker} was supplied (a real configuration: the registry makes
+ *   its tracker conditional).
+ *
+ * Those are the next two columns the fill should grow. Until they are filled,
+ * judging a corpus does interleave I/O — just far less of it, and never a
+ * `readdir`.
+ *
+ * {@link validateLink} is the one-shot composition for a caller with a single
+ * link.
  */
 
 import path from 'node:path';
 
 import { createRegistryIssue, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import {
+  classifyFilenameCaseFrom,
+  fillSiblingNames,
   FsLookupCache,
   isGitIgnored,
   type GitTracker,
   issueLocation,
-  verifyCaseSensitiveFilename,
+  type SiblingNamesTable,
 } from '@vibe-agent-toolkit/utils';
 
 import type { DeferredArtifacts } from './deferred-artifacts.js';
 import type { ResourceLink } from './types.js';
-import { isWithinProject, locationRoot, resolveLocalHref } from './utils.js';
+import {
+  isWithinProject,
+  locationRoot,
+  resolveLocalHref,
+  type ResolveLocalHrefResult,
+} from './utils.js';
 
 type LinkIssueExtras = Partial<Pick<ValidationIssue, 'location' | 'line' | 'link' | 'suggestion'>>;
 
@@ -52,19 +86,122 @@ function linkExtras(
 }
 
 /**
- * Options for link validation.
+ * One link paired with the file it was found in — the unit the fill pass takes.
  */
-export interface ValidateLinkOptions {
+export interface LinkEntry {
+  link: ResourceLink;
+  sourceFilePath: string;
+}
+
+/**
+ * A link entry paired with its ONE resolution — computed in the fill pass by
+ * {@link resolveLinkEntry}, and never recomputed.
+ *
+ * `resolution` is absent exactly for the link types with no local target
+ * (`anchor`, `external`, `email`, `embedded`, `unknown`), and present for every
+ * `local_file` / `local_directory` — which is why {@link judgeLink} throws
+ * rather than resolving one itself when it finds the field missing.
+ */
+export interface ResolvedLinkEntry extends LinkEntry {
+  resolution?: ResolveLocalHrefResult;
+}
+
+/**
+ * Pass 1′, step 1: resolve one entry, once.
+ *
+ * ⚠️ **`resolveLocalHref` is not pure, which is the whole reason this step
+ * exists as its own pass.** Its absolute-path branch calls `isWithinProject`,
+ * which is two `fs.realpathSync` — so "just resolve again where you need it" is
+ * two extra syscalls per root-absolute link, not free string work. Resolve here;
+ * carry the result.
+ *
+ * @param entry - A link and the file it was found in
+ * @param projectRoot - Project root for absolute-path references
+ */
+export function resolveLinkEntry(entry: LinkEntry, projectRoot?: string): ResolvedLinkEntry {
+  if (entry.link.type !== 'local_file' && entry.link.type !== 'local_directory') {
+    return entry;
+  }
+
+  return {
+    ...entry,
+    resolution: resolveLocalHref(entry.link.href, entry.sourceFilePath, projectRoot),
+  };
+}
+
+/**
+ * Pass 1′, step 1 over a whole corpus: resolve every entry exactly once.
+ *
+ * @param entries - Links paired with their source files
+ * @param projectRoot - Project root for absolute-path references
+ * @returns The same entries, in the same order, each carrying its resolution
+ */
+export function resolveLinkEntries(
+  entries: Iterable<LinkEntry>,
+  projectRoot?: string,
+): ResolvedLinkEntry[] {
+  const resolved: ResolvedLinkEntry[] = [];
+  for (const entry of entries) {
+    resolved.push(resolveLinkEntry(entry, projectRoot));
+  }
+  return resolved;
+}
+
+/**
+ * Pass 1′, step 2: the local target paths whose parent directories the fill must
+ * list — the exact input for `fillSiblingNames`.
+ *
+ * **Pure.** It reads the resolutions {@link resolveLinkEntries} already
+ * computed; it resolves nothing and touches no filesystem.
+ *
+ * ⚠️ **Invariant: the fill set and the judged set are the SAME OBJECTS, not two
+ * computations kept in step.** This function and {@link validateLocalFileLink}
+ * both read `entry.resolution` — there is no second `resolveLocalHref` call
+ * anywhere for them to disagree with.
+ *
+ * **Why that is worth insisting on:** the table lookup THROWS on a missing row,
+ * so any divergence is a crash in a shipped command rather than a wrong answer.
+ * The previous shape resolved twice, once either side of the fill's `await`, and
+ * `resolveLocalHref`'s absolute branch is filesystem-dependent (`isWithinProject`
+ * realpaths both sides) — so a symlink changing inside that window could flip a
+ * link from `absolute_escapes_root` to `resolved`, and the judge would ask about
+ * a path the fill never listed. Identity closes that TOCTOU window outright.
+ *
+ * @param resolved - Entries already carrying their resolutions
+ * @returns Resolved target paths, in entry order; duplicates are left in (the fill de-dupes by parent directory)
+ */
+export function linkTargetPaths(resolved: Iterable<ResolvedLinkEntry>): string[] {
+  const targets: string[] = [];
+
+  for (const { resolution } of resolved) {
+    if (resolution?.kind === 'resolved') {
+      targets.push(resolution.resolvedPath);
+    }
+  }
+
+  return targets;
+}
+
+/**
+ * What the judge reads.
+ *
+ * **This bag deliberately carries no filesystem handle** — no `FsLookupCache`,
+ * no lister — so nothing the judge is *handed* can list a directory; that fact
+ * arrives already materialised in {@link JudgeLinkOptions.siblingNames}.
+ *
+ * ⚠️ **Withholding the handle does not make the judge I/O-free, and this type
+ * must not be read as claiming it does.** The judge's own module imports
+ * `isWithinProject` and `isGitIgnored` directly, so {@link gitIgnoreSafetyIssue}
+ * reaches `fs.realpathSync` and `spawnSync('git check-ignore')` without asking
+ * this bag for anything. See the module docblock.
+ */
+export interface JudgeLinkOptions {
   /**
-   * Per-run filesystem lookup memo, shared by every link in the run.
-   *
-   * Required rather than optional on purpose: resolving a link needs a listing of
-   * the target's parent directory, and a corpus resolves thousands of links into a
-   * few hundred directories. An optional cache is one an options literal quietly
-   * omits, and the omission is invisible — the answers stay correct and the
-   * syscalls come back.
+   * Pass-1′ table, covering every local target the judged links resolve to —
+   * fill it with `fillSiblingNames(linkTargetPaths(resolved), cache)` over
+   * exactly the resolved entries you are about to judge.
    */
-  fsCache: FsLookupCache;
+  siblingNames: SiblingNamesTable;
   /** Project root directory (for git-ignore checking) */
   projectRoot?: string;
   /** Skip git-ignore checks (optimization when checkGitIgnored is false) */
@@ -91,38 +228,99 @@ export interface ValidateLinkOptions {
 }
 
 /**
- * Validate a single link in a markdown resource.
- *
- * @param link - The link to validate
- * @param sourceFilePath - Absolute path to the file containing the link
- * @param fragmentsByFile - Fragment index: file path → set of valid fragments (markdown slugs + HTML id/name)
- * @param options - Validation options (projectRoot, skipGitIgnoreCheck)
- * @returns ValidationIssue if link is broken, null if valid
- *
- * @example
- * ```typescript
- * const issue = await validateLink(link, '/project/docs/guide.md', headingsMap, {
- *   projectRoot: '/project',
- *   skipGitIgnoreCheck: false
- * });
- * if (issue) {
- *   console.log(`${issue.severity}: ${issue.message}`);
- * }
- * ```
+ * The judge's options minus the filled table: the pure policy inputs, which the
+ * checks needing no filesystem fact ({@link gitIgnoreSafetyIssue}) take directly.
  */
-export async function validateLink(
-  link: ResourceLink,
-  sourceFilePath: string,
+export type LinkPolicyOptions = Omit<JudgeLinkOptions, 'siblingNames'>;
+
+/**
+ * What the one-shot composition reads: the judge's options, minus the table it
+ * fills itself, plus the cache it fills with.
+ */
+export interface ValidateLinkOptions extends LinkPolicyOptions {
+  /**
+   * Per-run filesystem lookup memo, shared by every link in the run.
+   *
+   * Required rather than optional on purpose: resolving a link needs a listing of
+   * the target's parent directory, and a corpus resolves thousands of links into a
+   * few hundred directories. An optional cache is one an options literal quietly
+   * omits, and the omission is invisible — the answers stay correct and the
+   * syscalls come back.
+   */
+  fsCache: FsLookupCache;
+}
+
+/**
+ * Carry a one-shot caller's options across to the judge, swapping the cache it
+ * filled with for the table it filled.
+ *
+ * **Copied field by field rather than spread, so `fsCache` cannot travel.** A
+ * `{ ...options, siblingNames }` would hand the judge the very filesystem handle
+ * {@link JudgeLinkOptions} exists to withhold — the property would survive in the
+ * object even though the type never mentions it. The per-field
+ * `...(x !== undefined && { x })` idiom is what `exactOptionalPropertyTypes`
+ * requires for optional fields.
+ *
+ * @param options - The one-shot caller's options (may be absent entirely)
+ * @param siblingNames - Table just filled for exactly the links about to be judged
+ */
+export function judgeOptionsFrom(
+  options: ValidateLinkOptions | undefined,
+  siblingNames: SiblingNamesTable,
+): JudgeLinkOptions {
+  return {
+    siblingNames,
+    ...(options?.projectRoot !== undefined && { projectRoot: options.projectRoot }),
+    ...(options?.skipGitIgnoreCheck !== undefined && {
+      skipGitIgnoreCheck: options.skipGitIgnoreCheck,
+    }),
+    ...(options?.gitTracker !== undefined && { gitTracker: options.gitTracker }),
+    ...(options?.checkHtmlAnchors !== undefined && { checkHtmlAnchors: options.checkHtmlAnchors }),
+    ...(options?.deferredArtifacts !== undefined && {
+      deferredArtifacts: options.deferredArtifacts,
+    }),
+  };
+}
+
+/**
+ * Decide a single already-resolved link against an already-filled sibling-name
+ * table.
+ *
+ * **Synchronous, and it does no directory listing and no href resolution** — the
+ * listing came from the fill's table, the resolution rides on `entry`. Callers
+ * that have already filled (the registry, frontmatter validation) call this
+ * directly; {@link validateLink} is the ad-hoc entry point that resolves and
+ * fills for one link first.
+ *
+ * ⚠️ **It is still not I/O-free.** With `skipGitIgnoreCheck` unset and a
+ * `projectRoot` set, every *existing* local target reaches
+ * {@link gitIgnoreSafetyIssue}, which calls `isWithinProject` (two
+ * `fs.realpathSync`) and, when no {@link GitTracker} was supplied, `isGitIgnored`
+ * (a `spawnSync` of `git check-ignore`). Judging a large corpus therefore still
+ * interleaves those two syscalls per existing target; only the `readdir` column
+ * is filled today.
+ *
+ * @param entry - The link, its source file, and its one resolution
+ * @param fragmentsByFile - Fragment index: file path → set of valid fragments (markdown slugs + HTML id/name)
+ * @param options - Judge options, carrying the filled table
+ * @returns ValidationIssue if link is broken, null if valid
+ * @throws If a local entry carries no resolution, or if the table has no row for
+ *   a local target's parent directory — see {@link linkTargetPaths}
+ */
+export function judgeLink(
+  entry: ResolvedLinkEntry,
   fragmentsByFile: FragmentIndex,
-  options?: ValidateLinkOptions
-): Promise<ValidationIssue | null> {
+  options: JudgeLinkOptions,
+): ValidationIssue | null {
+  const { link, sourceFilePath } = entry;
+
   switch (link.type) {
     case 'local_file':
     case 'local_directory':
-      return await validateLocalFileLink(link, sourceFilePath, fragmentsByFile, options);
+      return validateLocalFileLink(entry, fragmentsByFile, options);
 
     case 'anchor':
-      return await validateAnchorLink(link, sourceFilePath, fragmentsByFile, options);
+      return validateAnchorLink(link, sourceFilePath, fragmentsByFile, options);
 
     case 'external':
       // External URLs are not validated - don't report them
@@ -141,7 +339,7 @@ export async function validateLink(
       return createRegistryIssue(
         'LINK_UNKNOWN',
         'Unknown link type',
-        linkExtras(link, sourceFilePath, options?.projectRoot),
+        linkExtras(link, sourceFilePath, options.projectRoot),
       );
 
     default: {
@@ -150,6 +348,56 @@ export async function validateLink(
       return _exhaustive;
     }
   }
+}
+
+/**
+ * Validate a single link in a markdown resource — the ad-hoc, one-shot entry
+ * point: it fills a one-link sibling-name table and immediately judges it.
+ *
+ * A caller with many links should not loop over this; that reinstates one
+ * directory listing per link, serialised behind the previous link's `await`.
+ * Resolve once with {@link resolveLinkEntries}, fill once with
+ * `fillSiblingNames(linkTargetPaths(resolved), cache)`, and call
+ * {@link judgeLink} per entry instead.
+ *
+ * Its signature and its answers are unchanged by the fill/judge split, and are
+ * pinned as such by the existing `validateLink` test corpus — several of whose
+ * cases pass no `options` at all.
+ *
+ * @param link - The link to validate
+ * @param sourceFilePath - Absolute path to the file containing the link
+ * @param fragmentsByFile - Fragment index: file path → set of valid fragments (markdown slugs + HTML id/name)
+ * @param options - Validation options (fsCache, projectRoot, skipGitIgnoreCheck)
+ * @returns ValidationIssue if link is broken, null if valid
+ *
+ * @example
+ * ```typescript
+ * const issue = await validateLink(link, '/project/docs/guide.md', headingsMap, {
+ *   fsCache,
+ *   projectRoot: '/project',
+ *   skipGitIgnoreCheck: false
+ * });
+ * if (issue) {
+ *   console.log(`${issue.severity}: ${issue.message}`);
+ * }
+ * ```
+ */
+export async function validateLink(
+  link: ResourceLink,
+  sourceFilePath: string,
+  fragmentsByFile: FragmentIndex,
+  options?: ValidateLinkOptions
+): Promise<ValidationIssue | null> {
+  const entry = resolveLinkEntry({ link, sourceFilePath }, options?.projectRoot);
+
+  // No options at all means no run to scope a cache to (single ad-hoc call);
+  // a fresh instance is exactly the old, un-memoized behaviour.
+  const siblingNames = await fillSiblingNames(
+    linkTargetPaths([entry]),
+    options?.fsCache ?? new FsLookupCache(),
+  );
+
+  return judgeLink(entry, fragmentsByFile, judgeOptionsFrom(options, siblingNames));
 }
 
 /**
@@ -270,7 +518,7 @@ export function gitIgnoreSafetyIssue(
   link: ResourceLink,
   sourceFilePath: string,
   resolvedTarget: string,
-  options: ValidateLinkOptions | undefined,
+  options: LinkPolicyOptions | undefined,
 ): ValidationIssue | null {
   if (
     options?.skipGitIgnoreCheck === true ||
@@ -324,37 +572,50 @@ export function gitIgnoreSafetyIssue(
 
 /**
  * Validate a local file link (with optional anchor).
+ *
+ * Synchronous, and it resolves nothing and lists nothing: the resolution comes
+ * off the entry (the identity {@link linkTargetPaths} depends on) and the
+ * existence/case fact comes out of `options.siblingNames`.
+ *
+ * It can still reach the filesystem, through {@link gitIgnoreSafetyIssue} —
+ * `fs.realpathSync` via `isWithinProject`, plus `spawnSync('git check-ignore')`
+ * when no {@link GitTracker} was supplied. Those two facts are not filled yet;
+ * do not describe this function as free of I/O until they are.
  */
-async function validateLocalFileLink(
-  link: ResourceLink,
-  sourceFilePath: string,
+function validateLocalFileLink(
+  entry: ResolvedLinkEntry,
   fragmentsByFile: FragmentIndex,
-  options?: ValidateLinkOptions
-): Promise<ValidationIssue | null> {
-  const resolved = resolveLocalHref(link.href, sourceFilePath, options?.projectRoot);
+  options: JudgeLinkOptions,
+): ValidationIssue | null {
+  const { link, sourceFilePath, resolution: resolved } = entry;
+
+  if (resolved === undefined) {
+    // Resolving here would reinstate exactly the double-resolution (and the
+    // TOCTOU window) that carrying the resolution exists to remove.
+    throw new Error(
+      `Local link "${link.href}" in ${sourceFilePath} was judged without a ` +
+        `resolution. Build entries with resolveLinkEntries()/resolveLinkEntry() ` +
+        `— the judge must not resolve, because resolving is filesystem work.`,
+    );
+  }
 
   if (resolved.kind !== 'resolved') {
     // anchor_only → null no-op; absolute_no_root / absolute_escapes_root → broken_file.
-    return resolutionFailureIssue(resolved, link, sourceFilePath, options?.projectRoot);
+    return resolutionFailureIssue(resolved, link, sourceFilePath, options.projectRoot);
   }
 
-  // No options at all means no run to scope a cache to (single ad-hoc call);
-  // a fresh instance is exactly the old, un-memoized behaviour.
-  const fileResult = await validateResolvedFile(
-    resolved.resolvedPath,
-    options?.fsCache ?? new FsLookupCache(),
-  );
+  const fileResult = validateResolvedFile(resolved.resolvedPath, options.siblingNames);
 
   const deferred = deferredArtifactIssue(
     fileResult,
     link,
     sourceFilePath,
-    options?.deferredArtifacts,
-    options?.projectRoot,
+    options.deferredArtifacts,
+    options.projectRoot,
   );
   if (deferred) return deferred;
 
-  const notFound = fileExistenceIssue(fileResult, link, sourceFilePath, options?.projectRoot);
+  const notFound = fileExistenceIssue(fileResult, link, sourceFilePath, options.projectRoot);
   if (notFound) return notFound;
 
   const gitIgnoreIssue = gitIgnoreSafetyIssue(link, sourceFilePath, fileResult.resolvedPath, options);
@@ -365,13 +626,13 @@ async function validateLocalFileLink(
       resolved.anchor,
       fileResult.resolvedPath,
       fragmentsByFile,
-      options?.checkHtmlAnchors ?? false,
+      options.checkHtmlAnchors ?? false,
     );
     if (check === 'broken') {
       return createRegistryIssue(
         'LINK_BROKEN_ANCHOR',
         `Anchor not found: #${resolved.anchor} in ${fileResult.resolvedPath}`,
-        linkExtras(link, sourceFilePath, options?.projectRoot, ''),
+        linkExtras(link, sourceFilePath, options.projectRoot, ''),
       );
     }
   }
@@ -390,17 +651,17 @@ function assertNever(value: never): never {
 /**
  * Validate an anchor link (within current file).
  */
-async function validateAnchorLink(
+function validateAnchorLink(
   link: ResourceLink,
   sourceFilePath: string,
   fragmentsByFile: FragmentIndex,
-  options?: ValidateLinkOptions,
-): Promise<ValidationIssue | null> {
+  options: JudgeLinkOptions,
+): ValidationIssue | null {
   // Extract anchor (strip leading #)
   const anchor = link.href.startsWith('#') ? link.href.slice(1) : link.href;
 
   // Validate anchor exists in current file
-  const check = checkAnchor(anchor, sourceFilePath, fragmentsByFile, options?.checkHtmlAnchors ?? false);
+  const check = checkAnchor(anchor, sourceFilePath, fragmentsByFile, options.checkHtmlAnchors ?? false);
 
   switch (check) {
     case 'skip':
@@ -410,7 +671,7 @@ async function validateAnchorLink(
       return createRegistryIssue(
         'LINK_BROKEN_ANCHOR',
         `Anchor not found: ${link.href}`,
-        linkExtras(link, sourceFilePath, options?.projectRoot, ''),
+        linkExtras(link, sourceFilePath, options.projectRoot, ''),
       );
     default:
       return assertNever(check);
@@ -419,7 +680,8 @@ async function validateAnchorLink(
 
 
 /**
- * Verify that the resolved filesystem path exists with the correct case.
+ * Verify that the resolved filesystem path exists with the correct case, by
+ * reading the pass-1′ listing column rather than touching the filesystem.
  *
  * **Deliberately does not report whether the target is a directory.** It used
  * to, at the cost of an `fs.stat` for every link target that exists — and no
@@ -427,18 +689,19 @@ async function validateAnchorLink(
  * at four sites ({@link deferredArtifactIssue}, {@link fileExistenceIssue},
  * {@link gitIgnoreSafetyIssue} and the anchor check), and every one of them
  * takes only `exists`, `resolvedPath` or `actualName`. A future
- * link-points-at-a-directory check should fill that fact as a pass-1′ column
- * over the paths it needs, not re-stat one target at judgement time.
+ * link-points-at-a-directory check belongs in the same pass-1′ table this now
+ * reads — widen the table with a directory-kind column filled over the paths it
+ * needs, never re-stat one target at judgement time.
  *
  * @param resolvedPath - Absolute filesystem path produced by {@link resolveLocalHref}.
- * @param fsCache - Per-run filesystem lookup memo.
+ * @param siblingNames - Pass-1′ table, filled over exactly these target paths.
  * @returns Object with exists flag, the path, and optional case-mismatch info.
  */
-async function validateResolvedFile(
+function validateResolvedFile(
   resolvedPath: string,
-  fsCache: FsLookupCache,
-): Promise<{ exists: boolean; resolvedPath: string; actualName?: string }> {
-  const verification = await verifyCaseSensitiveFilename(resolvedPath, fsCache);
+  siblingNames: SiblingNamesTable,
+): { exists: boolean; resolvedPath: string; actualName?: string } {
+  const verification = classifyFilenameCaseFrom(siblingNames, resolvedPath);
 
   const result: { exists: boolean; resolvedPath: string; actualName?: string } = {
     exists: verification.exists,

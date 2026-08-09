@@ -16,5 +16,13 @@ export {
   dynamicImportPath,
 } from './path-utils.js';
 
-export { copyDirectory, FsLookupCache, verifyCaseSensitiveFilename } from './fs-utils.js';
-export type { PathProbe, PathProbeStats } from './fs-utils.js';
+// The case-sensitivity surface is the fill+judge pair and nothing else: the
+// internal `classifyFilenameCase`/`siblingNamesFrom` members and the
+// `SiblingNames` row type they trade in stay module-local. See `index.ts` for why.
+export {
+  classifyFilenameCaseFrom,
+  copyDirectory,
+  fillSiblingNames,
+  FsLookupCache,
+} from './fs-utils.js';
+export type { PathProbe, PathProbeStats, SiblingNamesTable } from './fs-utils.js';

@@ -12,7 +12,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { createRegistryIssue, type IssueCode, runSingleUnitValidation, type ValidationConfig, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
-import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, FsLookupCache, type GitTracker, issueLocation, resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, fillSiblingNames, FsLookupCache, type GitTracker, issueLocation, resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { calculateChecksumFromContent } from './checksum.js';
 import { getCollectionsForFile } from './collection-matcher.js';
@@ -29,7 +29,7 @@ import {
   type CompiledFrontmatterSchema,
 } from './frontmatter-validator.js';
 import { buildLinkAuthEngineConfig } from './link-auth-config-build.js';
-import { fragmentIndexEntry, validateLink, type FragmentIndex, type ValidateLinkOptions } from './link-validator.js';
+import { fragmentIndexEntry, judgeLink, linkTargetPaths, resolveLinkEntries, type FragmentIndex, type JudgeLinkOptions, type LinkEntry, type ValidateLinkOptions } from './link-validator.js';
 import { ParseCache, type ParseCacheStats, parseKeyed, vatCacheRoot } from './parse-cache.js';
 import type { ResourceCollectionInterface } from './resource-collection-interface.js';
 import type { SHA256 } from './schemas/checksum.js';
@@ -873,7 +873,26 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
-   * Validate all links in all resources.
+   * Validate all links in all resources, in two passes.
+   *
+   * Pass 1 resolves every link once and lists every distinct directory the
+   * corpus's local link targets live in, all at once. Pass 2 judges every link
+   * synchronously against that table. The alternative — awaiting each link in
+   * turn — serialised every cold `readdir` behind the previous link's `await`.
+   *
+   * ⚠️ **The judge loop is fully synchronous: it contains no `await`, so it
+   * never yields to the event loop.** On a large corpus it is one
+   * un-interruptible block, and it is not free — every *existing* local target
+   * still reaches `gitIgnoreSafetyIssue`, which costs two `fs.realpathSync`
+   * (via `isWithinProject`) and, whenever `this.gitTracker` is undefined and
+   * `skipGitIgnoreCheck` is false, a `spawnSync` of `git check-ignore`. Only the
+   * directory-listing column is materialised in pass 1; the realpath and
+   * git-ignore columns are not.
+   *
+   * Both passes walk `entries` in the same order the single-pass version
+   * produced issues in (resources in insertion order, links in document order);
+   * issue order is part of this command's output contract.
+   *
    * @private
    */
   private async validateAllLinks(
@@ -884,24 +903,35 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   ): Promise<ValidationIssue[]> {
     const issues: ValidationIssue[] = [];
 
+    const entries: LinkEntry[] = [];
     for (const resource of this.resourcesByPath.values()) {
       for (const link of resource.links) {
-        // Only pass options if projectRoot is defined (exactOptionalPropertyTypes requirement)
-        const validateOptions = this.baseDir === undefined
-          ? { fsCache: this.fsCache, skipGitIgnoreCheck, checkHtmlAnchors }
-          : {
-              fsCache: this.fsCache,
-              projectRoot: this.baseDir,
-              skipGitIgnoreCheck,
-              checkHtmlAnchors,
-              ...(this.gitTracker !== undefined && { gitTracker: this.gitTracker }),
-              ...(deferredArtifacts !== undefined && { deferredArtifacts }),
-            };
+        entries.push({ link, sourceFilePath: resource.filePath });
+      }
+    }
 
-        const issue = await validateLink(link, resource.filePath, fragmentsByFile, validateOptions);
-        if (issue) {
-          issues.push(issue);
-        }
+    // Pass 1′: resolve each link exactly once, then one listing per distinct
+    // target directory, issued together. The judge reads these very resolution
+    // objects — it never re-resolves.
+    const resolved = resolveLinkEntries(entries, this.baseDir);
+    const siblingNames = await fillSiblingNames(linkTargetPaths(resolved), this.fsCache);
+
+    // Only pass options if projectRoot is defined (exactOptionalPropertyTypes requirement)
+    const judgeOptions: JudgeLinkOptions = this.baseDir === undefined
+      ? { siblingNames, skipGitIgnoreCheck, checkHtmlAnchors }
+      : {
+          siblingNames,
+          projectRoot: this.baseDir,
+          skipGitIgnoreCheck,
+          checkHtmlAnchors,
+          ...(this.gitTracker !== undefined && { gitTracker: this.gitTracker }),
+          ...(deferredArtifacts !== undefined && { deferredArtifacts }),
+        };
+
+    for (const entry of resolved) {
+      const issue = judgeLink(entry, fragmentsByFile, judgeOptions);
+      if (issue) {
+        issues.push(issue);
       }
     }
 

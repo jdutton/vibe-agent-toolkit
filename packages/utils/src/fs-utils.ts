@@ -2,7 +2,16 @@
  * Filesystem utilities
  */
 
-import { existsSync, statSync } from 'node:fs';
+// ⚠️ The sync half is reached through the DEFAULT object (`nodeFs.existsSync`),
+// not as named imports, and that is load-bearing rather than stylistic. Node
+// snapshots a builtin's named ESM exports at import time, so `vi.spyOn(fs,
+// 'existsSync')` cannot see a call made through a named binding — the spy
+// attaches and counts zero, which reads exactly like "this function performs no
+// I/O". `classifyFilenameCaseFrom` is guarded by precisely that assertion (it
+// must reach neither `readdir` nor this pair), so a "tidy-up" back to named
+// imports would silently disarm the guard. The async half below already uses the
+// default object for the same reason.
+import nodeFs from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -55,11 +64,16 @@ export interface PathProbeStats {
  * arbitrarily long ago. The intended lifetime is one instance per validation run,
  * constructed as a local and collected with the run.
  *
+ * Fill first, then judge. The loop holds no `await`, because every listing the
+ * loop could have needed was already taken:
+ *
  * @example
  * ```typescript
  * const fsCache = new FsLookupCache();          // one per run
- * for (const link of links) {
- *   await verifyCaseSensitiveFilename(link.target, fsCache);
+ * const targets = links.map((link) => link.target);
+ * const siblingNames = await fillSiblingNames(targets, fsCache);  // all the I/O, once
+ * for (const target of targets) {
+ *   classifyFilenameCaseFrom(siblingNames, target);               // pure — no syscall
  * }
  * ```
  */
@@ -113,12 +127,12 @@ export class FsLookupCache {
 
     this.#probeMisses++;
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-validated path
-    const exists = existsSync(targetPath);
+    const exists = nodeFs.existsSync(targetPath);
     let isDirectory: boolean | null = null;
     if (exists) {
       try {
         // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-validated path
-        isDirectory = statSync(targetPath).isDirectory();
+        isDirectory = nodeFs.statSync(targetPath).isDirectory();
       } catch {
         // Present to `existsSync` but unstattable. `null` records "no answer"
         // rather than guessing `false`, which would read as "it is a file".
@@ -225,29 +239,90 @@ export interface SiblingNames {
 }
 
 /**
- * Fill a {@link SiblingNames} row for `filePath` — the only place I/O is legal
- * for this fact.
+ * The materialized listing column: parent directory → that directory's entry
+ * names, or `null` when it could not be read.
  *
- * ⚠️ **This is the row's *shape*, not yet a materialized pass-1′ column.** Today
- * the only caller is {@link verifyCaseSensitiveFilename}, which link validation
- * invokes once per link at judgement time — the interleaving the pipeline design
- * is working to remove. What the split buys now is that judgement
- * ({@link classifyFilenameCase}) is pure and independently testable; what it
- * does *not* yet buy is one fill per directory ahead of the judging pass. Do not
- * read this docblock as a claim that the materialization has happened.
+ * `null` carries exactly the meaning {@link SiblingNames.names} documents — an
+ * unreadable or absent directory, which is *not* the same fact as a readable
+ * empty one (`[]`), even though {@link classifyFilenameCase} collapses the two
+ * into one verdict.
  *
- * @param filePath - Absolute path whose parent directory should be listed
- * @param fsCache - Per-run lookup cache (one instance per validation run)
- * @returns The row: the expected basename plus the parent's entries, or `null` entries
+ * A *missing key* is a third thing again, and never a legal input to judgement:
+ * see {@link siblingNamesFrom}.
  */
-export async function readSiblingNames(
-  filePath: string,
-  fsCache: FsLookupCache
-): Promise<SiblingNames> {
-  const parentDir = path.dirname(filePath);
-  const expectedName = path.basename(filePath);
+export type SiblingNamesTable = ReadonlyMap<string, readonly string[] | null>;
 
-  return { expectedName, names: await fsCache.readdir(parentDir) };
+/**
+ * List the parent directory of every path in `filePaths` — the only place I/O is
+ * legal for this fact, and the pass that must run *before* any judging.
+ *
+ * ⚠️ **It takes FILE paths, not directory paths, deliberately.** It derives each
+ * parent with `path.dirname` itself, so exactly one function in the system owns
+ * the key derivation and a caller cannot construct a key that
+ * {@link siblingNamesFrom} then misses. Do not "simplify" this to take
+ * directories: that hands the derivation back to every call site and reopens the
+ * silent-miss class this shape closes.
+ *
+ * Distinct parents are listed **concurrently**: the shape this replaced asked one
+ * link at a time at judgement time, which serialised every `readdir` behind the
+ * previous link's `await`. De-duplication is by parent, so N files in one
+ * directory cost one listing; the listing itself goes through
+ * {@link FsLookupCache.readdir}, which memoizes and shares in-flight promises
+ * across fills.
+ *
+ * @param filePaths - File paths whose parent directories should be listed
+ * @param fsCache - Per-run lookup cache (one instance per validation run)
+ * @returns The filled table; empty input yields an empty table with no syscalls
+ */
+export async function fillSiblingNames(
+  filePaths: Iterable<string>,
+  fsCache: FsLookupCache
+): Promise<SiblingNamesTable> {
+  const parentDirs = new Set<string>();
+  for (const filePath of filePaths) {
+    parentDirs.add(path.dirname(filePath));
+  }
+
+  const table = new Map<string, readonly string[] | null>();
+  await Promise.all(
+    [...parentDirs].map(async (parentDir) => {
+      table.set(parentDir, await fsCache.readdir(parentDir));
+    })
+  );
+
+  return table;
+}
+
+/**
+ * Read the row for `filePath` out of an already-filled table. Pure.
+ *
+ * **A miss throws rather than degrading to `names: null`.** The fill set is
+ * derived from exactly the paths the judge will be asked about, so a missing
+ * parent is a programming error — a path judged that nobody filled. The `null`
+ * fallback would answer it as "the directory is unreadable", which reports every
+ * file under that directory as *missing*: a wrong answer wearing the shape of a
+ * graceful degradation, and one no test of the verdict would catch.
+ *
+ * Internal on purpose — {@link classifyFilenameCaseFrom} is the public judge.
+ *
+ * @param table - Table filled by {@link fillSiblingNames}
+ * @param filePath - Path being asked about
+ * @returns The row: the expected basename plus the parent's entries
+ * @throws If `table` holds no entry for the path's parent directory
+ */
+export function siblingNamesFrom(table: SiblingNamesTable, filePath: string): SiblingNames {
+  const parentDir = path.dirname(filePath);
+  // `undefined` can only mean "absent key": a filled entry is an array or an
+  // explicit `null`, never `undefined`.
+  const names = table.get(parentDir);
+  if (names === undefined) {
+    throw new Error(
+      `No sibling listing for directory "${parentDir}" (asked about "${filePath}"). ` +
+        `Fill it with fillSiblingNames() before judging.`
+    );
+  }
+
+  return { expectedName: path.basename(filePath), names };
 }
 
 /**
@@ -271,7 +346,7 @@ export async function readSiblingNames(
  * case-mismatch hint. Ledger entry D7. Fixing it means normalizing both sides in
  * the fill, which moves output and so wants its own commit.
  *
- * @param row - The listing row filled by {@link readSiblingNames}
+ * @param row - The listing row, read out of a filled table by {@link siblingNamesFrom}
  * @returns Whether the exact name exists, and the entry actually on disk (or `null`)
  */
 export function classifyFilenameCase(row: SiblingNames): {
@@ -312,40 +387,27 @@ export function classifyFilenameCase(row: SiblingNames): {
 }
 
 /**
- * Verify that a file exists with the exact case-sensitive filename.
+ * Judge `filePath` against an already-filled {@link SiblingNamesTable}.
  *
- * On case-insensitive filesystems (Windows, macOS), a file might be found even if
- * the case doesn't match. This function checks that the actual filename on disk
- * matches the requested path exactly (case-sensitive).
+ * This is the judging half of the two-pass shape: {@link fillSiblingNames} does
+ * every listing first, then this runs over as many paths as you like with no
+ * interleaved I/O.
  *
- * Answering requires listing the target's parent directory. Callers checking many
- * paths (every link in a corpus) hit the same handful of directories over and over,
- * so the listing comes from a caller-supplied {@link FsLookupCache}.
+ * **Its signature takes no {@link FsLookupCache} and no `fs` — that is the
+ * property, not an omission.** A judge that cannot reach the filesystem cannot
+ * quietly reintroduce a per-path syscall at judgement time, which is exactly what
+ * this refactor removed. Keep it that way: if a future check needs another fact
+ * about the parent directory, widen the *table*, never this parameter list.
  *
- * The cache parameter is **required rather than defaulted on purpose**: a default
- * would let an unmigrated call site silently keep the un-memoized behaviour, which
- * is a no-op wearing the shape of a fix. `new FsLookupCache()` per call reproduces
- * the old behaviour exactly, so migrating is mechanical — but it has to be a
- * decision someone made.
- *
- * @param filePath - Absolute path to the file to verify
- * @param fsCache - Per-run lookup cache (one instance per validation run)
- * @returns Object with exists flag and actual filename (or null if not found)
- *
- * @example
- * ```typescript
- * // On case-insensitive filesystem with file "README.md"
- * const fsCache = new FsLookupCache();
- * const result1 = await verifyCaseSensitiveFilename('/project/README.md', fsCache);
- * // { exists: true, actualName: 'README.md' }
- *
- * const result2 = await verifyCaseSensitiveFilename('/project/readme.md', fsCache);
- * // { exists: false, actualName: 'README.md' } - case mismatch!
- * ```
+ * @param table - Table filled by {@link fillSiblingNames}
+ * @param filePath - Absolute path to judge
+ * @returns Whether the exact name exists, and the entry actually on disk (or `null`)
+ * @throws If `table` holds no entry for the path's parent directory — see
+ *   {@link siblingNamesFrom}
  */
-export async function verifyCaseSensitiveFilename(
-  filePath: string,
-  fsCache: FsLookupCache
-): Promise<{ exists: boolean; actualName: string | null }> {
-  return classifyFilenameCase(await readSiblingNames(filePath, fsCache));
+export function classifyFilenameCaseFrom(
+  table: SiblingNamesTable,
+  filePath: string
+): { exists: boolean; actualName: string | null } {
+  return classifyFilenameCase(siblingNamesFrom(table, filePath));
 }

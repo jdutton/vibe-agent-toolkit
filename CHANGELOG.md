@@ -36,6 +36,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pre-1.0 policy. Consumers importing `parseMarkdown` from `@vibe-agent-toolkit/resource-compiler`
   (or its `/compiler` subpath) must rename the binding; nothing else about the function changed.
 
+- **`@vibe-agent-toolkit/utils` no longer exports `verifyCaseSensitiveFilename`; use
+  `fillSiblingNames` + `classifyFilenameCaseFrom`.** Answering "does this file exist at exactly this
+  case?" needs one filesystem fact — the target's parent directory listing — and the old helper took
+  that listing *per path, at the moment of judgement*. The replacement splits it into a fill pass
+  (`fillSiblingNames(filePaths, fsCache)`, which de-duplicates parents and lists them concurrently,
+  returning a `SiblingNamesTable`) and a pure judge (`classifyFilenameCaseFrom(table, filePath)`),
+  so a caller with many paths lists each directory once, up front, instead of serialising one
+  listing behind each previous answer. Removed from both the `.` barrel and the `./fs` subpath, with
+  no alias, per the pre-1.0 policy. A single ad-hoc check migrates as
+  `classifyFilenameCaseFrom(await fillSiblingNames([p], cache), p)`. Note the judge **throws** when
+  handed a table with no row for the path's parent: the fill is meant to be derived from exactly the
+  paths about to be judged, and answering a missing row as "unreadable directory" would silently
+  report every file under it as absent.
+
 ### Added
 
 - **`FsLookupCache.probe(path)`** in `@vibe-agent-toolkit/utils` — memoizes the `existsSync` +

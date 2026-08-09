@@ -30,6 +30,7 @@ const BARREL_EXPORTS = [
   'buildForwardedEnv',
   'buildWindowsShellLine',
   'canCreateSymlinks',
+  'classifyFilenameCaseFrom',
   'CommandExecutionError',
   'copyDirectory',
   'crawlDirectory',
@@ -40,6 +41,7 @@ const BARREL_EXPORTS = [
   'dynamicImportPath',
   'expandMacro',
   'fileContentHash',
+  'fillSiblingNames',
   'findConfigFile',
   // 'findGitRoot' — REMOVED. A body-for-body alias of `gitFindRoot`; see
   // `module-subpaths.test.ts` and the CHANGELOG's Removed entry.
@@ -107,7 +109,6 @@ const BARREL_EXPORTS = [
   'UnknownMacroError',
   'unwrapZodType',
   'updateYamlIn',
-  'verifyCaseSensitiveFilename',
   'verifyConfinedYamlEdit',
   'windowsShellQuote',
   'ZodTypeNames',

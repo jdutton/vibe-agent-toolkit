@@ -1,17 +1,20 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- Test code using temp directories */
+import nodeFs from 'node:fs';
 import fs from 'node:fs/promises';
+import path from 'node:path';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   classifyFilenameCase,
+  classifyFilenameCaseFrom,
   copyDirectory,
+  fillSiblingNames,
   FsLookupCache,
-  readSiblingNames,
-  verifyCaseSensitiveFilename,
+  siblingNamesFrom,
 } from '../src/fs-utils.js';
-import type { SiblingNames } from '../src/fs-utils.js';
+import type { SiblingNames, SiblingNamesTable } from '../src/fs-utils.js';
 import { canCreateSymlinks, setupAsyncTempDirSuite } from '../src/test-helpers.js';
 
 import { setupNestedDirectory } from './test-helpers.js';
@@ -401,12 +404,22 @@ describe('fs-utils', () => {
     });
   });
 
-  describe('readSiblingNames', () => {
-    it('fills the row from the parent directory listing', async () => {
+  describe('fillSiblingNames', () => {
+    const SIBLINGS = ['One.txt', 'Two.txt', 'Three.txt'];
+
+    /** Create `SIBLINGS` as empty files in `dir`; returns their paths. */
+    const writeSiblings = async (dir: string): Promise<string[]> => {
+      const filePaths = SIBLINGS.map((name) => safePath.join(dir, name));
+      await Promise.all(filePaths.map((filePath) => fs.writeFile(filePath, '')));
+      return filePaths;
+    };
+
+    it('fills a row for each file from its parent directory listing', async () => {
       const filePath = safePath.join(tempDir, 'Row.txt');
       await fs.writeFile(filePath, '');
 
-      const row = await readSiblingNames(filePath, new FsLookupCache());
+      const table = await fillSiblingNames([filePath], new FsLookupCache());
+      const row = siblingNamesFrom(table, filePath);
 
       expect(row.expectedName).toBe('Row.txt');
       expect(row.names).toContain('Row.txt');
@@ -415,16 +428,136 @@ describe('fs-utils', () => {
     it('records an unreadable parent as a null listing, never as an empty one', async () => {
       const filePath = safePath.join(tempDir, 'no-such-dir', 'Row.txt');
 
-      const row = await readSiblingNames(filePath, new FsLookupCache());
+      const table = await fillSiblingNames([filePath], new FsLookupCache());
 
-      expect(row).toEqual({ expectedName: 'Row.txt', names: null });
+      expect(siblingNamesFrom(table, filePath)).toEqual({
+        expectedName: 'Row.txt',
+        names: null,
+      });
+    });
+
+    it('lists a directory ONCE however many of its files are asked about', async () => {
+      const filePaths = await writeSiblings(tempDir);
+      const cache = new FsLookupCache();
+      const spy = vi.spyOn(cache, 'readdir');
+
+      const table = await fillSiblingNames(filePaths, cache);
+
+      // The one assertion that dies when the de-duplication dies: every
+      // assertion about the VALUES still passes when each file lists its own
+      // parent again, because the answers are identical — only slower.
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(table.size).toBe(1);
+      expect(filePaths.every((p) => siblingNamesFrom(table, p).names?.length === 3)).toBe(
+        true
+      );
+      spy.mockRestore();
+    });
+
+    it('issues the listings for distinct directories concurrently', async () => {
+      const dirs = ['d1', 'd2', 'd3'].map((name) => safePath.join(tempDir, name));
+      await Promise.all(dirs.map((dir) => fs.mkdir(dir)));
+      const filePaths = dirs.map((dir) => safePath.join(dir, 'f.txt'));
+
+      const cache = new FsLookupCache();
+      const realReaddir = cache.readdir.bind(cache);
+      let started = 0;
+      let release = (): void => {};
+      const allStarted = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      // A serial fill awaits each listing before starting the next, so the
+      // third start never happens and only this timer would free the barrier.
+      let serialized = false;
+      const escape = setTimeout(() => {
+        serialized = true;
+        release();
+      }, 500);
+
+      vi.spyOn(cache, 'readdir').mockImplementation(async (dirPath: string) => {
+        started += 1;
+        if (started === dirs.length) release();
+        await allStarted;
+        return realReaddir(dirPath);
+      });
+
+      const table = await fillSiblingNames(filePaths, cache);
+      clearTimeout(escape);
+
+      expect(serialized).toBe(false);
+      expect(table.size).toBe(3);
+      vi.restoreAllMocks();
+    });
+
+    it('yields an empty table for no files, without touching the filesystem', async () => {
+      const spy = vi.spyOn(fs, 'readdir');
+
+      const table = await fillSiblingNames([], new FsLookupCache());
+
+      expect(table.size).toBe(0);
+      expect(spy).not.toHaveBeenCalled();
+      spy.mockRestore();
     });
   });
 
-  describe('verifyCaseSensitiveFilename', () => {
+  describe('classifyFilenameCaseFrom', () => {
+    const JUDGED = 'Judged.txt';
+
+    it('judges from a filled table, reaching neither readdir nor the sync stat pair', async () => {
+      const filePath = safePath.join(tempDir, JUDGED);
+      await fs.writeFile(filePath, '');
+      // THREE routes are instrumented, not one. `readdir` is how the fill
+      // reaches disk — but `existsSync` and `statSync` are already imported at
+      // the top of `fs-utils.ts` (for `FsLookupCache.probe`), so a judge that
+      // started stat-ing its target is one keystroke away, and a readdir-only
+      // spy stays green straight through that regression. Spying the default
+      // objects, not namespace bindings, is what makes the counts real.
+      const spies = [
+        vi.spyOn(fs, 'readdir'),
+        vi.spyOn(nodeFs, 'existsSync'),
+        vi.spyOn(nodeFs, 'statSync'),
+      ];
+      const counts = (): number[] => spies.map((spy) => spy.mock.calls.length);
+
+      const table = await fillSiblingNames([filePath], new FsLookupCache());
+      // Positive control for the sync pair: `probe` takes exactly the route a
+      // regressed judge would take, through the same two module-level imports.
+      // Without it, the zeros below are indistinguishable from instruments that
+      // never attached to the functions under test.
+      new FsLookupCache().probe(filePath);
+
+      expect(counts().every((n) => n > 0)).toBe(true);
+      const beforeJudging = counts();
+
+      expect(classifyFilenameCaseFrom(table, filePath)).toEqual({
+        exists: true,
+        actualName: JUDGED,
+      });
+      expect(classifyFilenameCaseFrom(table, safePath.join(tempDir, 'judged.txt'))).toEqual({
+        exists: false,
+        actualName: JUDGED,
+      });
+
+      expect(counts()).toEqual(beforeJudging);
+      vi.restoreAllMocks();
+    });
+
+    it('throws when the table has no row for the file’s parent directory', () => {
+      const filePath = safePath.join(tempDir, 'Unfilled.txt');
+      const empty: SiblingNamesTable = new Map();
+
+      // A `names: null` fallback would report every file under the unfilled
+      // directory as MISSING — a wrong answer wearing the shape of a graceful
+      // degradation. The miss is a programming error, so it is loud.
+      expect(() => classifyFilenameCaseFrom(empty, filePath)).toThrow(path.dirname(filePath));
+      expect(() => classifyFilenameCaseFrom(empty, filePath)).toThrow('Unfilled.txt');
+    });
+  });
+
+  describe('fill + judge over a real filesystem', () => {
     const TEST_FILE = 'TestFile.txt';
 
-    it('reads the parent directory once for every link that shares a cache', async () => {
+    it('reads the parent directory once across separate fills that share a cache', async () => {
       const names = ['One.txt', 'Two.txt', 'Three.txt'];
       for (const name of names) {
         await fs.writeFile(safePath.join(tempDir, name), '');
@@ -432,86 +565,99 @@ describe('fs-utils', () => {
       const cache = new FsLookupCache();
       const spy = vi.spyOn(fs, 'readdir');
 
-      const results = await Promise.all(
-        names.map((name) => verifyCaseSensitiveFilename(safePath.join(tempDir, name), cache)),
+      // Deliberately three separate fills rather than one fill over three paths.
+      // De-duplication *within* a fill is pinned above; what this pins is the
+      // sharing `fillSiblingNames` promises ACROSS fills, which is the shape a
+      // real run has (frontmatter links, then body links, then the next file).
+      const tables = await Promise.all(
+        names.map((name) => fillSiblingNames([safePath.join(tempDir, name)], cache))
       );
 
-      expect(results.every((r) => r.exists)).toBe(true);
-      // The regression this cache exists for: one uncached readdir per link.
+      expect(
+        tables.every((table, i) =>
+          classifyFilenameCaseFrom(table, safePath.join(tempDir, names[i] ?? '')).exists
+        )
+      ).toBe(true);
+      // The regression the cache exists for: one uncached readdir per fill.
       expect(spy).toHaveBeenCalledTimes(1);
       spy.mockRestore();
     });
 
-    it('should return exists=true for exact case match', async () => {
-      // Setup
-      const filePath = safePath.join(tempDir, TEST_FILE);
-      await fs.writeFile(filePath, 'content');
+    /**
+     * Fill for one path and judge it.
+     *
+     * The one-path composition is fine *here* and wrong in production: these
+     * cases each set up their own fixture, so there is no set to fill over. A
+     * caller with many paths that loops over this shape is the serialized
+     * `readdir` the pair exists to remove.
+     */
+    const judge = async (filePath: string): Promise<{ exists: boolean; actualName: string | null }> =>
+      classifyFilenameCaseFrom(await fillSiblingNames([filePath], new FsLookupCache()), filePath);
 
-      // Execute
-      const result = await verifyCaseSensitiveFilename(filePath, new FsLookupCache());
+    // Real listings, unlike the hand-written rows the pure judge is tested with
+    // above: these pin that the fill derives the parent, and that the verdict
+    // survives a `readdir` in whatever order the platform returns it.
+    const CASES: ReadonlyArray<{
+      label: string;
+      /** Create the fixture under `dir`; returns the path to judge. */
+      setup: (dir: string) => Promise<string>;
+      expected: { exists: boolean; actualName: string | null };
+    }> = [
+      {
+        label: 'an exact-case file as present',
+        setup: async (dir) => {
+          const filePath = safePath.join(dir, TEST_FILE);
+          await fs.writeFile(filePath, 'content');
+          return filePath;
+        },
+        expected: { exists: true, actualName: TEST_FILE },
+      },
+      {
+        // Holds on both kinds of filesystem, for different reasons: a
+        // case-insensitive one finds the file under the wrong case, a
+        // case-sensitive one does not find it at all — and the case-insensitive
+        // second pass names the entry really on disk either way.
+        label: 'a case-only mismatch as absent, naming the entry really on disk',
+        setup: async (dir) => {
+          await fs.writeFile(safePath.join(dir, TEST_FILE), 'content');
+          return safePath.join(dir, 'testfile.txt');
+        },
+        expected: { exists: false, actualName: TEST_FILE },
+      },
+      {
+        // Distinct from the unreadable-parent case above: the directory lists
+        // fine, the name is simply not in it, so there is nothing to suggest.
+        label: 'a missing file in a readable directory as absent with no name to suggest',
+        setup: (dir) => Promise.resolve(safePath.join(dir, 'NonExistent.txt')),
+        expected: { exists: false, actualName: null },
+      },
+      {
+        // Nested, so the fill's own `path.dirname` derivation is what has to
+        // find the listing — not the temp root every other case shares.
+        label: 'an exact-case file one directory down as present',
+        setup: async (dir) => {
+          const subDir = safePath.join(dir, 'SubDir');
+          await fs.mkdir(subDir);
+          const filePath = safePath.join(subDir, 'File.txt');
+          await fs.writeFile(filePath, 'content');
+          return filePath;
+        },
+        expected: { exists: true, actualName: 'File.txt' },
+      },
+      {
+        label: 'a case-only mismatch one directory down',
+        setup: async (dir) => {
+          const subDir = safePath.join(dir, 'SubDir');
+          await fs.mkdir(subDir);
+          await fs.writeFile(safePath.join(subDir, 'File.txt'), 'content');
+          return safePath.join(subDir, 'file.txt');
+        },
+        expected: { exists: false, actualName: 'File.txt' },
+      },
+    ];
 
-      // Verify
-      expect(result.exists).toBe(true);
-      expect(result.actualName).toBe(TEST_FILE);
-    });
-
-    it('should return exists=false for case mismatch', async () => {
-      // Setup
-      const actualPath = safePath.join(tempDir, TEST_FILE);
-      const wrongCasePath = safePath.join(tempDir, 'testfile.txt');
-      await fs.writeFile(actualPath, 'content');
-
-      // Execute
-      const result = await verifyCaseSensitiveFilename(wrongCasePath, new FsLookupCache());
-
-      // Verify
-      // On case-insensitive filesystems, the file will be found
-      // but case won't match
-      expect(result.exists).toBe(false);
-      expect(result.actualName).toBe(TEST_FILE);
-    });
-
-    it('should return exists=false and null actualName for missing file', async () => {
-      // Setup
-      const filePath = safePath.join(tempDir, 'NonExistent.txt');
-
-      // Execute
-      const result = await verifyCaseSensitiveFilename(filePath, new FsLookupCache());
-
-      // Verify
-      expect(result.exists).toBe(false);
-      expect(result.actualName).toBe(null);
-    });
-
-    it('should handle files in subdirectories with exact case', async () => {
-      // Setup
-      const subDir = safePath.join(tempDir, 'SubDir');
-      await fs.mkdir(subDir);
-      const filePath = safePath.join(subDir, 'File.txt');
-      await fs.writeFile(filePath, 'content');
-
-      // Execute
-      const result = await verifyCaseSensitiveFilename(filePath, new FsLookupCache());
-
-      // Verify
-      expect(result.exists).toBe(true);
-      expect(result.actualName).toBe('File.txt');
-    });
-
-    it('should detect case mismatch in subdirectory filename', async () => {
-      // Setup
-      const subDir = safePath.join(tempDir, 'SubDir');
-      await fs.mkdir(subDir);
-      const actualPath = safePath.join(subDir, 'File.txt');
-      const wrongCasePath = safePath.join(subDir, 'file.txt');
-      await fs.writeFile(actualPath, 'content');
-
-      // Execute
-      const result = await verifyCaseSensitiveFilename(wrongCasePath, new FsLookupCache());
-
-      // Verify
-      expect(result.exists).toBe(false);
-      expect(result.actualName).toBe('File.txt');
+    it.each(CASES)('reports $label', async ({ setup, expected }) => {
+      expect(await judge(await setup(tempDir))).toEqual(expected);
     });
   });
 });

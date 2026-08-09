@@ -25,20 +25,36 @@ export * from './asset-reference.js';
 
 // Filesystem utilities.
 //
-// Named rather than `export *` on purpose: `readSiblingNames` /
-// `classifyFilenameCase` are the internal fill+judgement halves of
-// `verifyCaseSensitiveFilename`, and a star re-export would publish them on this
-// barrel the moment they were written. (The `./fs` subpath was already an
-// explicit list and was never at risk.) The public surface is a decision, not a
-// side effect of module layout.
+// Named rather than `export *` on purpose: `classifyFilenameCase` (the pure
+// judge over a hand-held row) and `siblingNamesFrom` (the table lookup that
+// throws on a miss) are internal members of the fill+judge pair below, and a star
+// re-export would publish them on this barrel the moment they were written. (The
+// `./fs` subpath was already an explicit list and was never at risk.) The public
+// surface is a decision, not a side effect of module layout.
+//
+// The public pair is `fillSiblingNames` (every listing, once, up front) and
+// `classifyFilenameCaseFrom` (pure judgement over the filled table). There is
+// deliberately no one-call wrapper composing them: handed one, a caller with many
+// paths loops over it, which reinstates the per-path `readdir` await the pair
+// exists to remove.
+//
+// The `SiblingNames` row type is withheld for the same reason its judge is: it is
+// only ever that judge's parameter, so publishing it would advertise a shape no
+// consumer can hand anywhere. `SiblingNamesTable` — what `fillSiblingNames`
+// returns and `classifyFilenameCaseFrom` consumes — is the one a caller can name.
 //
 // The cost of that decision, stated so it is not a surprise: a new *type* added
 // to `fs-utils.ts` no longer reaches consumers automatically, and
 // `barrel-exports.test.ts` pins runtime names only, so nothing will fail. The
 // symptom is a type that cannot be imported, which surfaces the first time
 // someone tries — not a silent break in existing code.
-export { copyDirectory, FsLookupCache, verifyCaseSensitiveFilename } from './fs-utils.js';
-export type { PathProbe, PathProbeStats } from './fs-utils.js';
+export {
+  classifyFilenameCaseFrom,
+  copyDirectory,
+  fillSiblingNames,
+  FsLookupCache,
+} from './fs-utils.js';
+export type { PathProbe, PathProbeStats, SiblingNamesTable } from './fs-utils.js';
 
 // Directory crawling with glob patterns
 export * from './file-crawler.js';

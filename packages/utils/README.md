@@ -25,7 +25,7 @@ The last two columns are the ones that matter when choosing. **"Resolves with ze
 | `./path` | `safePath`, `toForwardSlash`, `isAbsolutePath`, `isAbsoluteAnyPlatform`, `hasParentTraversalSegment`, `toAbsolutePath`, `getRelativePath`, `issueLocation` | `path` only | — | **yes** |
 | `./zod` | `ZodTypeNames`, `getZodTypeName`, `isZodType`, `unwrapZodType`, `isZodOptional`, `isZodNullable` | **none** | — | **yes** |
 | `./glob` | `isGlob`, static base extraction, magic remainder | `path` only | — | **yes** |
-| `./fs` | `normalizePath`, `normalizedTmpdir`, `mkdirSyncReal`, `resolveFromImportMeta`, `dynamicImportPath`, `copyDirectory`, `verifyCaseSensitiveFilename`, `FsLookupCache` | `fs`, `fs/promises`, `os`, `path`, `url` | — | **yes** |
+| `./fs` | `normalizePath`, `normalizedTmpdir`, `mkdirSyncReal`, `resolveFromImportMeta`, `dynamicImportPath`, `copyDirectory`, `fillSiblingNames`, `classifyFilenameCaseFrom`, `FsLookupCache` | `fs`, `fs/promises`, `os`, `path`, `url` | — | **yes** |
 | `./testing` | `getTestOutputDir`, `getTestOutputBase`, `setupAsyncTempDirSuite`, `setupSyncTempDirSuite` | `crypto`, `fs`, `fs/promises`, `os`, `path`, `url` | — | **yes** |
 | `./asset` | `resolveAssetReference` — paths and npm bare specifiers | `fs`, `module`, `os`, `path`, `url` | — | **yes** |
 | `./yaml` | `updateYamlIn`, `verifyConfinedYamlEdit` — byte-surgical YAML edits | **none** | `yaml` | no — needs `yaml` |
@@ -138,7 +138,11 @@ These return **OS-native** separators, because they resolve real filesystem iden
 - `resolveFromImportMeta()` - resolve paths relative to an `import.meta.url`
 - `dynamicImportPath()` - `import()` an absolute path (works on Windows, which rejects bare absolute paths)
 - `copyDirectory()`
-- `verifyCaseSensitiveFilename(filePath, fsCache)` - case-exact existence check; takes a per-run `FsLookupCache`
+- `fillSiblingNames(filePaths, fsCache)` - pass 1 of the case-exact existence check: list the parent
+  directory of every path, de-duplicated by directory and issued concurrently. The only I/O in the pair
+- `classifyFilenameCaseFrom(table, filePath)` - pass 2: pure judgement against the table pass 1 returned,
+  reporting the entry actually on disk when only the case differs. Fill **once** over the whole set and
+  then judge each path — a fill per path reinstates the serialized `readdir` this shape removes
 - `FsLookupCache` - per-run memo for `realpath`/`readdir`, sharing in-flight promises. Construct one per
   validation run and let it die with the run — never a module-level singleton, or a long-lived process
   answers from a stale directory listing.
