@@ -43,6 +43,14 @@ const config: KnipConfig = {
       entry: [SRC_TS, 'scripts/**/*.ts'],
     },
 
+    // lab: the `vat-lab` binary is a second entry point alongside the barrel,
+    // and it is the only thing that imports Commander. Its package.json `bin`
+    // points at `dist/`, which knip cannot map back to source — so without this
+    // the CLI's whole import graph is invisible and commander reads as unused.
+    'packages/lab': {
+      entry: ['src/index.ts', 'src/bin/vat-lab.ts'],
+    },
+
     // CLI: Commander.js wires commands from bin.ts, not index.ts
     'packages/cli': {
       entry: ['src/bin.ts'],

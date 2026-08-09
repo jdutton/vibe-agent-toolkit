@@ -82,6 +82,7 @@ const BARREL_EXPORTS = [
   'normalizePath',
   'parseGitUrl',
   'parseStreamJsonTranscript',
+  'parseWholeNumberAtLeast',
   'probeAuthStatus',
   'protectedEnvNames',
   'realpathFrom',

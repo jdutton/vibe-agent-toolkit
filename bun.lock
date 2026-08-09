@@ -217,6 +217,19 @@
         "vitest": "^3.2.4",
       },
     },
+    "packages/lab": {
+      "name": "@vibe-agent-toolkit/lab",
+      "version": "0.1.42",
+      "dependencies": {
+        "@vibe-agent-toolkit/utils": "workspace:*",
+        "commander": "^12.1.0",
+        "which": "^5.0.0",
+        "zod": "^3.23.8",
+      },
+      "devDependencies": {
+        "@types/which": "^3.0.4",
+      },
+    },
     "packages/rag": {
       "name": "@vibe-agent-toolkit/rag",
       "version": "0.1.42",
@@ -1025,6 +1038,8 @@
     "@vibe-agent-toolkit/discovery": ["@vibe-agent-toolkit/discovery@workspace:packages/discovery"],
 
     "@vibe-agent-toolkit/gateway-mcp": ["@vibe-agent-toolkit/gateway-mcp@workspace:packages/gateway-mcp"],
+
+    "@vibe-agent-toolkit/lab": ["@vibe-agent-toolkit/lab@workspace:packages/lab"],
 
     "@vibe-agent-toolkit/rag": ["@vibe-agent-toolkit/rag@workspace:packages/rag"],
 

@@ -128,3 +128,5 @@ export * from './fs/file-hash.js';
 
 // Byte-surgical YAML value updater (replace/insert without reflowing the doc)
 export * from './yaml/surgical-yaml.js';
+
+export { parseWholeNumberAtLeast } from './numeric-args.js';
