@@ -199,6 +199,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`vat audit` and `vat inventory` stopped spawning a `git check-ignore` process per link target.**
+  The skill link walk asks whether each link target is gitignored. `walkLinkGraph` has always
+  accepted a `GitTracker` — which answers that in O(1) from a single `git ls-files` — but the
+  inventory extractor was the one call site that never passed one, so it fell back to a subprocess
+  per distinct target. Measured on a 1,484-document monorepo: **786 `check-ignore` spawns per
+  `vat audit`, 9.2 s of the run**; on a real `~/.claude/plugins` install, 715 spawns. The CLI now
+  supplies a tracker source backed by the per-git-root cache the audit lane already builds, so a
+  repository is listed once instead of interrogated hundreds of times. Both lanes now spawn **zero**,
+  and the whole `vat audit` command over that monorepo goes **12.5 s → 2.5 s (≈5×)** — measured as a
+  paired A/B on one tree with only that wiring toggled. Reports are byte-identical across the change
+  on both corpora (1,431,451 and 2,788,833 bytes; only the `duration:` line differs).
+
+  **One behavioural caveat, because the two oracles are not equivalent everywhere.** `git ls-files`
+  cannot list a path reached through a symlinked ancestor directory, a path inside a git submodule,
+  or a path under `.git/`; the active set therefore reports those as *ignored*, where
+  `git check-ignore` reports them as *not ignored*. In such a tree a link target of that kind moves
+  from bundled to excluded-as-gitignored in `vat inventory`'s reported `files.linked`. No `vat audit`
+  finding is computed from that array, and across 766 real skills (this repo's 54 plus 712 installed
+  plugin skills) **not one linked set changed**. The three divergent classes are pinned as
+  expected-to-differ rows in `git-ignore-oracle-parity.integration.test.ts`, alongside the seven
+  classes where the oracles are verified to agree, so the boundary is a test rather than a footnote.
+
 - **A frontmatter link-validation failure is no longer reported as a frontmatter *schema* error.**
   `validateAgainstCollectionSchema` wrapped the schema load, the schema check and the frontmatter
   link walk in one `try` whose `catch` blamed the schema by name, so any throw out of link validation

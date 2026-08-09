@@ -13,7 +13,11 @@ import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { ClaudePluginSchema } from '../schemas/claude-plugin.js';
 
-import { extractClaudeSkillInventory, type SharedRegistrySource } from './extract-skill.js';
+import {
+	extractClaudeSkillInventory,
+	type GitTrackerSource,
+	type SharedRegistrySource,
+} from './extract-skill.js';
 import { ClaudePluginInventory, type ClaudeSkillInventory } from './types.js';
 
 type ParseErrors = ClaudePluginInventory['parseErrors'];
@@ -46,6 +50,7 @@ function memoizeSharedRegistry(
 export async function extractClaudePluginInventory(
 	pluginPath: string,
 	sharedRegistry?: SharedRegistrySource,
+	gitTrackerSource?: GitTrackerSource,
 ): Promise<ClaudePluginInventory> {
 	const absolute = safePath.resolve(pluginPath);
 
@@ -80,6 +85,7 @@ export async function extractClaudePluginInventory(
 		rootSkillMd,
 		parseErrors,
 		memoizeSharedRegistry(sharedRegistry),
+		gitTrackerSource,
 	);
 	const unexpected = await buildUnexpected(absolute, shape);
 
@@ -229,8 +235,16 @@ async function buildDiscovered(
 	rootSkillMd: string,
 	parseErrors: ParseErrors,
 	resolveSharedRegistry: () => Promise<ResourceRegistry | undefined>,
+	gitTrackerSource: GitTrackerSource | undefined,
 ): Promise<ClaudePluginInventory['discovered']> {
-	const skills = await discoverSkills(absolute, shape, rootSkillMd, parseErrors, resolveSharedRegistry);
+	const skills = await discoverSkills(
+		absolute,
+		shape,
+		rootSkillMd,
+		parseErrors,
+		resolveSharedRegistry,
+		gitTrackerSource,
+	);
 	const commands = await discoverComponents(safePath.join(absolute, 'commands'));
 	const agents = await discoverComponents(safePath.join(absolute, 'agents'));
 	return { skills, commands, agents };
@@ -242,6 +256,7 @@ async function discoverSkills(
 	rootSkillMd: string,
 	parseErrors: ParseErrors,
 	resolveSharedRegistry: () => Promise<ResourceRegistry | undefined>,
+	gitTrackerSource: GitTrackerSource | undefined,
 ): Promise<ClaudeSkillInventory[]> {
 	const skillInventories: ClaudeSkillInventory[] = [];
 
@@ -251,8 +266,13 @@ async function discoverSkills(
 	// ever reached from inside this loop, so a plugin owning no SKILL.md never asks for
 	// a registry: discovery decides, and the caller does not have to predict what
 	// discovery will find.
+	//
+	// `gitTrackerSource` rides the same channel but is NOT memoized here: it is a
+	// function of each skill's own project root (skills under one plugin can sit in
+	// different repositories), and the caller — not this package — owns the per-root
+	// cache behind it.
 	for (const skillMd of await collectSkillMdPaths(absolute, shape, rootSkillMd)) {
-		const inv = await extractClaudeSkillInventory(skillMd, resolveSharedRegistry);
+		const inv = await extractClaudeSkillInventory(skillMd, resolveSharedRegistry, gitTrackerSource);
 		for (const err of inv.parseErrors) parseErrors.push(err);
 		skillInventories.push(inv);
 	}
