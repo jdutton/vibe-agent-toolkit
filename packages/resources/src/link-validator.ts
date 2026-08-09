@@ -15,7 +15,6 @@
  * - External resources (outside project) skip git-ignore checks
  */
 
-import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { createRegistryIssue, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
@@ -422,6 +421,15 @@ async function validateAnchorLink(
 /**
  * Verify that the resolved filesystem path exists with the correct case.
  *
+ * **Deliberately does not report whether the target is a directory.** It used
+ * to, at the cost of an `fs.stat` for every link target that exists — and no
+ * caller ever read the answer. {@link validateLocalFileLink} reads this result
+ * at four sites ({@link deferredArtifactIssue}, {@link fileExistenceIssue},
+ * {@link gitIgnoreSafetyIssue} and the anchor check), and every one of them
+ * takes only `exists`, `resolvedPath` or `actualName`. A future
+ * link-points-at-a-directory check should fill that fact as a pass-1′ column
+ * over the paths it needs, not re-stat one target at judgement time.
+ *
  * @param resolvedPath - Absolute filesystem path produced by {@link resolveLocalHref}.
  * @param fsCache - Per-run filesystem lookup memo.
  * @returns Object with exists flag, the path, and optional case-mismatch info.
@@ -429,24 +437,12 @@ async function validateAnchorLink(
 async function validateResolvedFile(
   resolvedPath: string,
   fsCache: FsLookupCache,
-): Promise<{ exists: boolean; resolvedPath: string; actualName?: string; isDirectory: boolean }> {
+): Promise<{ exists: boolean; resolvedPath: string; actualName?: string }> {
   const verification = await verifyCaseSensitiveFilename(resolvedPath, fsCache);
 
-  let isDirectory = false;
-  if (verification.exists) {
-    try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolvedPath validated by verifyCaseSensitiveFilename
-      const stats = await fs.stat(resolvedPath);
-      isDirectory = stats.isDirectory();
-    } catch {
-      // Stat failed after verifyCaseSensitiveFilename said exists — treat as file.
-    }
-  }
-
-  const result: { exists: boolean; resolvedPath: string; actualName?: string; isDirectory: boolean } = {
+  const result: { exists: boolean; resolvedPath: string; actualName?: string } = {
     exists: verification.exists,
     resolvedPath,
-    isDirectory,
   };
 
   if (verification.actualName) {

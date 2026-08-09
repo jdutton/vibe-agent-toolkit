@@ -201,6 +201,117 @@ export async function copyDirectory(src: string, dest: string): Promise<void> {
 }
 
 /**
+ * The one fact on disk that a case-sensitivity question turns on: what the
+ * parent directory actually contains, paired with the name being asked about.
+ *
+ * A row, not an answer — {@link classifyFilenameCase} turns it into a verdict.
+ * Splitting the two is what lets the verdict be tested against listings that no
+ * filesystem will hand you on demand, entry ORDER in particular.
+ */
+export interface SiblingNames {
+  /** Basename being asked about, i.e. `path.basename(filePath)`. */
+  readonly expectedName: string;
+  /**
+   * The parent directory's entry names, or `null` when it could not be read.
+   *
+   * `null` is not `[]` — an unreadable or absent directory versus a readable
+   * empty one. {@link classifyFilenameCase} deliberately collapses them (both
+   * are "no such entry"), but the distinction is kept in the row because it is
+   * a *fact*, and the judge that wants it — a check that says "the directory
+   * itself is missing" rather than "the file is missing" — cannot recover it
+   * once the fill has thrown it away.
+   */
+  readonly names: readonly string[] | null;
+}
+
+/**
+ * Fill a {@link SiblingNames} row for `filePath` — the only place I/O is legal
+ * for this fact.
+ *
+ * ⚠️ **This is the row's *shape*, not yet a materialized pass-1′ column.** Today
+ * the only caller is {@link verifyCaseSensitiveFilename}, which link validation
+ * invokes once per link at judgement time — the interleaving the pipeline design
+ * is working to remove. What the split buys now is that judgement
+ * ({@link classifyFilenameCase}) is pure and independently testable; what it
+ * does *not* yet buy is one fill per directory ahead of the judging pass. Do not
+ * read this docblock as a claim that the materialization has happened.
+ *
+ * @param filePath - Absolute path whose parent directory should be listed
+ * @param fsCache - Per-run lookup cache (one instance per validation run)
+ * @returns The row: the expected basename plus the parent's entries, or `null` entries
+ */
+export async function readSiblingNames(
+  filePath: string,
+  fsCache: FsLookupCache
+): Promise<SiblingNames> {
+  const parentDir = path.dirname(filePath);
+  const expectedName = path.basename(filePath);
+
+  return { expectedName, names: await fsCache.readdir(parentDir) };
+}
+
+/**
+ * Decide whether `row.expectedName` names a real entry, at the exact case asked for.
+ *
+ * Pure: no filesystem, no cache, no path parsing — it reads only the columns it
+ * is handed, which is what makes hand-written listings a legitimate test input.
+ *
+ * **First match wins, and the exact-match pass runs first — that order IS the
+ * contract.** On a case-insensitive filesystem a listing can hold both
+ * `readme.md` and `README.md`, in either order; asking for `README.md` must
+ * report it present regardless of which one `readdir` happened to return first.
+ * Searching case-insensitively first would report the very file that exists as a
+ * case mismatch, purely on directory-entry order.
+ *
+ * ⚠️ **Comparison is raw UTF-16, so Unicode normalization is not handled** — and
+ * neither did the code this was extracted from. macOS hands back decomposed
+ * names (`e` + U+0301) where a markdown link usually carries the composed form
+ * (`é`); the two are `!==` and case-folding does not reconcile them, so an
+ * accented file that exists is reported as flatly missing, without even the
+ * case-mismatch hint. Ledger entry D7. Fixing it means normalizing both sides in
+ * the fill, which moves output and so wants its own commit.
+ *
+ * @param row - The listing row filled by {@link readSiblingNames}
+ * @returns Whether the exact name exists, and the entry actually on disk (or `null`)
+ */
+export function classifyFilenameCase(row: SiblingNames): {
+  exists: boolean;
+  actualName: string | null;
+} {
+  const { expectedName, names } = row;
+
+  if (names === null) {
+    // Parent directory doesn't exist (or can't be read)
+    return { exists: false, actualName: null };
+  }
+
+  // Find the actual filename (case-sensitive exact match).
+  // Tested against `undefined` rather than for truthiness: `readdir` never
+  // yields an empty entry name, but hand-written rows are this function's
+  // advertised input now that it is pure, and `''` is falsy — it would fall
+  // through to the case-insensitive branch and come back as `actualName: ''`.
+  const exactMatch = names.find(entry => entry === expectedName);
+
+  if (exactMatch !== undefined) {
+    // Found exact case match - file exists with correct case
+    return { exists: true, actualName: exactMatch };
+  }
+
+  // No exact match - check for case-insensitive match
+  const caseInsensitiveMatch = names.find(
+    entry => entry.toLowerCase() === expectedName.toLowerCase()
+  );
+
+  // Return result:
+  // - If case-insensitive match found: exists=false (wrong case), actualName=<actual>
+  // - If no match at all: exists=false, actualName=null
+  return {
+    exists: false,
+    actualName: caseInsensitiveMatch ?? null,
+  };
+}
+
+/**
  * Verify that a file exists with the exact case-sensitive filename.
  *
  * On case-insensitive filesystems (Windows, macOS), a file might be found even if
@@ -236,35 +347,5 @@ export async function verifyCaseSensitiveFilename(
   filePath: string,
   fsCache: FsLookupCache
 ): Promise<{ exists: boolean; actualName: string | null }> {
-  // Get parent directory and expected filename
-  const parentDir = path.dirname(filePath);
-  const expectedName = path.basename(filePath);
-
-  // Read actual directory entries
-  const entries = await fsCache.readdir(parentDir);
-  if (entries === null) {
-    // Parent directory doesn't exist (or can't be read)
-    return { exists: false, actualName: null };
-  }
-
-  // Find the actual filename (case-sensitive exact match)
-  const exactMatch = entries.find(entry => entry === expectedName);
-
-  if (exactMatch) {
-    // Found exact case match - file exists with correct case
-    return { exists: true, actualName: exactMatch };
-  }
-
-  // No exact match - check for case-insensitive match
-  const caseInsensitiveMatch = entries.find(
-    entry => entry.toLowerCase() === expectedName.toLowerCase()
-  );
-
-  // Return result:
-  // - If case-insensitive match found: exists=false (wrong case), actualName=<actual>
-  // - If no match at all: exists=false, actualName=null
-  return {
-    exists: false,
-    actualName: caseInsensitiveMatch ?? null,
-  };
+  return classifyFilenameCase(await readSiblingNames(filePath, fsCache));
 }

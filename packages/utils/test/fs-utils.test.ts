@@ -4,7 +4,14 @@ import fs from 'node:fs/promises';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { copyDirectory, FsLookupCache, verifyCaseSensitiveFilename } from '../src/fs-utils.js';
+import {
+  classifyFilenameCase,
+  copyDirectory,
+  FsLookupCache,
+  readSiblingNames,
+  verifyCaseSensitiveFilename,
+} from '../src/fs-utils.js';
+import type { SiblingNames } from '../src/fs-utils.js';
 import { canCreateSymlinks, setupAsyncTempDirSuite } from '../src/test-helpers.js';
 
 import { setupNestedDirectory } from './test-helpers.js';
@@ -328,6 +335,89 @@ describe('fs-utils', () => {
       // A fresh instance — what a new validation run constructs — sees the new state.
       const secondRun = new FsLookupCache();
       expect((await secondRun.readdir(dirPath))?.length).toBe(2);
+    });
+  });
+
+  describe('classifyFilenameCase', () => {
+    // Pure — not one filesystem call in this block. Hand-written listings are the
+    // only way to control entry ORDER, and order is exactly what this function
+    // promises: see the exact-match-wins case below.
+    const CASES: ReadonlyArray<{
+      label: string;
+      row: SiblingNames;
+      expected: { exists: boolean; actualName: string | null };
+    }> = [
+      {
+        label: 'an unreadable parent as absent with no name to suggest',
+        row: { expectedName: 'README.md', names: null },
+        expected: { exists: false, actualName: null },
+      },
+      {
+        // Deliberately the same verdict as the `null` row above: the judge
+        // collapses "unreadable directory" and "readable but empty" into one
+        // answer. This row pins that collapse rather than a distinction — the
+        // distinction survives only in the row, for a future judge that wants it.
+        label: 'an empty listing the same way as an unreadable one',
+        row: { expectedName: 'README.md', names: [] },
+        expected: { exists: false, actualName: null },
+      },
+      {
+        // `''` is falsy, so a truthiness test on the exact match would fall
+        // through to the case-insensitive branch and return `actualName: ''`.
+        // Unreachable from `readdir`, reachable from a hand-written row — which
+        // is this function's advertised input now that it is pure.
+        label: 'an empty basename against an empty entry as an exact match',
+        row: { expectedName: '', names: [''] },
+        expected: { exists: true, actualName: '' },
+      },
+      {
+        label: 'an exact match as present',
+        row: { expectedName: 'README.md', names: ['README.md'] },
+        expected: { exists: true, actualName: 'README.md' },
+      },
+      {
+        label: 'a case-only mismatch as absent, naming the entry that is really there',
+        row: { expectedName: 'readme.md', names: ['README.md'] },
+        expected: { exists: false, actualName: 'README.md' },
+      },
+      {
+        label: 'an unrelated listing as absent with no name',
+        row: { expectedName: 'README.md', names: ['CHANGELOG.md'] },
+        expected: { exists: false, actualName: null },
+      },
+    ];
+
+    it.each(CASES)('classifies $label', ({ row, expected }) => {
+      expect(classifyFilenameCase(row)).toEqual(expected);
+    });
+
+    it('lets the exact match win even when a differently-cased entry comes first', () => {
+      // The one input no filesystem hands you on demand, and the only one that
+      // can see this refactor's relocated boundary: every single-entry case
+      // above still passes with the two branches reversed, this one does not.
+      expect(
+        classifyFilenameCase({ expectedName: 'README.md', names: ['readme.md', 'README.md'] })
+      ).toEqual({ exists: true, actualName: 'README.md' });
+    });
+  });
+
+  describe('readSiblingNames', () => {
+    it('fills the row from the parent directory listing', async () => {
+      const filePath = safePath.join(tempDir, 'Row.txt');
+      await fs.writeFile(filePath, '');
+
+      const row = await readSiblingNames(filePath, new FsLookupCache());
+
+      expect(row.expectedName).toBe('Row.txt');
+      expect(row.names).toContain('Row.txt');
+    });
+
+    it('records an unreadable parent as a null listing, never as an empty one', async () => {
+      const filePath = safePath.join(tempDir, 'no-such-dir', 'Row.txt');
+
+      const row = await readSiblingNames(filePath, new FsLookupCache());
+
+      expect(row).toEqual({ expectedName: 'Row.txt', names: null });
     });
   });
 

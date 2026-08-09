@@ -23,8 +23,22 @@ export * from './stdio-blocking.js';
 // Asset reference resolution (paths + npm bare specifiers)
 export * from './asset-reference.js';
 
-// Filesystem utilities
-export * from './fs-utils.js';
+// Filesystem utilities.
+//
+// Named rather than `export *` on purpose: `readSiblingNames` /
+// `classifyFilenameCase` are the internal fill+judgement halves of
+// `verifyCaseSensitiveFilename`, and a star re-export would publish them on this
+// barrel the moment they were written. (The `./fs` subpath was already an
+// explicit list and was never at risk.) The public surface is a decision, not a
+// side effect of module layout.
+//
+// The cost of that decision, stated so it is not a surprise: a new *type* added
+// to `fs-utils.ts` no longer reaches consumers automatically, and
+// `barrel-exports.test.ts` pins runtime names only, so nothing will fail. The
+// symptom is a type that cannot be imported, which surfaces the first time
+// someone tries — not a silent break in existing code.
+export { copyDirectory, FsLookupCache, verifyCaseSensitiveFilename } from './fs-utils.js';
+export type { PathProbe, PathProbeStats } from './fs-utils.js';
 
 // Directory crawling with glob patterns
 export * from './file-crawler.js';
