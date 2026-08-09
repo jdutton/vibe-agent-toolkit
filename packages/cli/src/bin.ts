@@ -68,6 +68,21 @@ program
   .option('--cwd <dir>', 'Change working directory before running any command')
   .option('--debug', 'Enable debug logging')
   .helpCommand(false) // Disable redundant 'help' command, use --help instead
+  // `--debug` is declared BOTH here and, separately, on 47 subcommands. Commander
+  // resolves the root's definition first (the same precedence documented for the
+  // `-v` incident above), so the subcommand's own `--debug` was never populated:
+  // every action received `options.debug === undefined` no matter where the flag
+  // sat on the line, and every `logger.debug(...)` in the CLI — 59 read sites —
+  // was unreachable through its own documented flag. Measured, not inferred: with
+  // the root declaration removed the subcommand's option populates normally.
+  //
+  // Copying the root's value down at dispatch fixes all of them at once, and
+  // leaves a subcommand that sets `--debug` on its own (no root flag) untouched.
+  .hook('preAction', (thisCommand, actionCommand) => {
+    if (thisCommand.opts()['debug'] === true) {
+      actionCommand.setOptionValue('debug', true);
+    }
+  })
   .showHelpAfterError()
   .configureOutput({
     writeOut: (str) => process.stdout.write(str), // Help goes to stdout (pipeable)

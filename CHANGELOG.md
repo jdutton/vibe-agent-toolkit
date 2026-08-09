@@ -264,6 +264,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`--debug` produced no debug output from any command, and an unexpected failure printed no stack
+  under it either.** `--debug` is declared on the root program *and* on 47 subcommands; Commander
+  resolves the root's definition first, so every command's action ran with `options.debug`
+  undefined and all 74 `logger.debug(...)` sites in the CLI were unreachable through the flag they
+  document — wherever it sat on the command line. Measured on `vat resources scan <dir> --debug`:
+  one `[DEBUG]` line before the fix (written by the launcher straight from `process.argv`, which is
+  why the existing test could not fail), five after. Separately, the exit-2 envelope — the
+  *unexpected* failure — carried `error.message` alone, so an internal `TypeError` reached users as
+  a single line with no file and no frames, and a thrown non-`Error` was flattened to the literal
+  string `Unknown error`. The root value is now copied to the dispatched command, and exit-2
+  failures write the stack (or an inspected rendering of a non-`Error`) to the debug channel.
+  Output without `--debug` is unchanged.
+
 - **A merely *broken* root-absolute link was reported as *escaping the project* whenever the project
   root reaches the filesystem through a symlink** — macOS `/tmp → /private/tmp`, a bind mount, a
   checkout under a symlinked path. Canonicalizing a path that does not exist fell back to a lexical
