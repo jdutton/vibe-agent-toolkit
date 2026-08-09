@@ -38,6 +38,31 @@ export {
   ReportEnvelopeSchema,
 } from './envelope/envelope.js';
 
+export {
+  type DumpsAccepted,
+  type DumpsRefusal,
+  IO_DUMP_VERSION,
+  type IoClass,
+  type IoDump,
+  type IoDumpRow,
+  IoDumpSchema,
+  type MergedDumps,
+  type MergedDumpsResult,
+  mergeDumps,
+  normalizeSite,
+  readDumps,
+  sameBuckets,
+  type SiteRoots,
+} from './facets/io/dump.js';
+export {
+  IO_FACET,
+  IO_FACET_VERSION,
+  type IoBody,
+  IoBodySchema,
+  type IoCommandStats,
+  type IoSite,
+} from './facets/io/types.js';
+
 export { capturePerf, type CapturePerfOptions } from './facets/perf/capture.js';
 export {
   comparePerf,
@@ -60,8 +85,6 @@ export {
   summarize,
 } from './facets/perf/stats.js';
 export {
-  type CacheMode,
-  type LoadReadings,
   PERF_FACET,
   PERF_FACET_VERSION,
   type PerfBody,
@@ -78,10 +101,19 @@ export {
   type LoadSample,
   readLoad,
 } from './harness/load-guard.js';
+export {
+  classifyRunFailure,
+  materializeArgs,
+  type RepeatSpec,
+  runRepeats,
+  SUBJECT_TOKEN,
+} from './harness/repeat.js';
 export { runCommand } from './harness/run.js';
 export { resolveSubject } from './harness/subject.js';
 export type {
+  CacheMode,
   InstrumentSource,
+  LoadReadings,
   ResolvedInstrument,
   ResolvedSubject,
   RunOptions,

@@ -43,10 +43,27 @@ A facet body must contain nothing that varies between two identical runs. The en
 excludes `capturedAt` for this reason — it moves every run, so comparing it would report a difference
 between two identical measurements.
 
-Measurement facets are the hard case: wall time *always* varies. The rule is that a facet reports the
+Measurement facets are the hard case, but not all in the same way, and the difference decides how
+their comparator works.
+
+**A continuous, noisy observable — wall time.** It *always* varies. The facet reports the
 distribution rather than the sample, and the comparator applies tolerance rather than equality. A
 perf facet that emits a bare number invites exactly the flapping that made vat's correctness oracle
 zero its timings in the first place.
+
+**A discrete, deterministic observable — call counts.** Measured: `vat resources scan docs/` records
+the same 436 attributed calls on three consecutive warm runs, and the same 568 on three consecutive
+cold runs. Nothing varies, so the comparator uses **exact equality**, and it is a sharper instrument
+than any tolerance gate — a delta of one call is real.
+
+That sharpness is why such a facet must still repeat itself. Determinism is a property of the code
+being measured, not a promise the lab can make on its behalf: if repeats *disagree*, vat has become
+nondeterministic, and that is a finding in its own right rather than noise to be averaged away. The
+facet reports a `stable` flag so the comparator knows whether it is entitled to read an exact delta.
+
+One consequence for repeat counts: in `warm` mode the first repeat populates vat's on-disk cache and
+therefore systematically differs from the rest, so it is a warm-up and is discarded. Verifying
+stability then needs two more, which makes three the smallest honest number of repeats.
 
 ## Room to split into sub-packages later
 

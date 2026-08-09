@@ -25,13 +25,34 @@ refusals that keep incomparable reports apart. Every later stage writes into thi
 a released version. This is axis C made real, and every facet depends on it. See
 [Run harness](run-harness.md).
 
-**Stage 2 — the `io` facet.** The `NODE_OPTIONS` preload counter, productised: fs and child-process
-calls attributed by call site, with Node's own module loader bucketed out. This is the N+1 detector.
-
-**Stage 3 — the `perf` facet.** vat already captures `wallMs` per command and then deliberately
+**Stage 2 — the `perf` facet. Done.** vat already captures `wallMs` per command and then deliberately
 zeroes it, because the correctness oracle must not flap on timing. The fix is a *separate* perf
 manifest with median-of-N, spread, warm/cold cache control, and a machine-load guard — leaving the
 correctness artifacts byte-exact.
+
+This traded places with the `io` facet, which was planned to come first. Timing was the number the
+refactor in flight actually needed, and building it first paid for the shared run harness that `io`
+then inherited.
+
+**Stage 3 — the `io` facet.** The `NODE_OPTIONS` preload counter, productised: fs and child-process
+calls attributed by call site, with Node's own module loader bucketed out. This is the N+1 detector.
+
+Three measured facts shape it, and each one is a way the number can be a confident lie:
+
+- **The loader dominates, so attribution is not optional.** On `vat resources scan docs/`, 6,371 of
+  6,411 recorded calls come from Node's own ESM module loader. A raw total measures Node, not vat.
+  The loader aggregate is still reported, because a reader must be able to tell "6,371 were bucketed
+  out" from "there were only 40".
+- **Patching the sync API alone misses most of the work.** The same command attributes 40 calls to
+  vat when only `fs.*Sync` is counted, and 436 when the promise API is counted too — vat reads
+  documents through `fs/promises`. A sync-only counter is precise and wrong.
+- **`require('fs/promises')` and `require('fs').promises` are the same object.** Wrapping both
+  double-counts every promise-API call. The counter dedupes by function identity.
+
+It counts **Node `fs` and `child_process` calls, not kernel syscalls** — dtrace is blocked by SIP for
+system binaries on macOS and `strace` is Linux-only, so the Node boundary is the portable place to
+measure. The distinction is not pedantry: one `fs.readFile` is not one syscall, and labelling these
+syscalls would overstate what the lab can see.
 
 **Stage 4 — the `sweep` facet and the corpus registry.** Absorbs `vat corpus scan` and the 236-entry
 seed. Subjects tracked on moving refs; every observation stamped with the resolved commit.

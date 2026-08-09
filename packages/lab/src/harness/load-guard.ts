@@ -39,7 +39,7 @@
 
 import { cpus as logicalCpus, loadavg, platform } from 'node:os';
 
-import type { LoadReadings } from '../facets/perf/types.js';
+import type { LoadReadings } from './types.js';
 
 /**
  * Default contamination threshold, in load units per logical CPU.

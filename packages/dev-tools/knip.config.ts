@@ -47,8 +47,13 @@ const config: KnipConfig = {
     // and it is the only thing that imports Commander. Its package.json `bin`
     // points at `dist/`, which knip cannot map back to source — so without this
     // the CLI's whole import graph is invisible and commander reads as unused.
+    //
+    // The io facet's counter is a THIRD entry point, and an invisible one: it is
+    // loaded into the measured process via `NODE_OPTIONS=--require`, so nothing
+    // in this repo ever imports it. Without it listed here knip reads a
+    // load-bearing file as dead and deletes it on the next cleanup.
     'packages/lab': {
-      entry: ['src/index.ts', 'src/bin/vat-lab.ts'],
+      entry: ['src/index.ts', 'src/bin/vat-lab.ts', 'src/facets/io/counter.cts'],
     },
 
     // CLI: Commander.js wires commands from bin.ts, not index.ts

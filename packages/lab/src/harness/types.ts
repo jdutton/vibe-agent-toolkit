@@ -61,6 +61,56 @@ export interface ResolvedSubject {
   readonly version: SubjectVersion;
 }
 
+/**
+ * Whether vat's caches were left in place or cleared before each repeat.
+ *
+ * A harness concern rather than a facet one: clearing the cache is done by
+ * running `vat cache clear`, which is an instrument invocation like any other.
+ * It lives here so that every measurement facet shares one spelling — a `perf`
+ * report and an `io` report captured `cold` must mean the same thing by
+ * construction, and a facet that owned its own copy could drift.
+ */
+export type CacheMode = 'warm' | 'cold';
+
+/**
+ * Machine-load readings taken around the capture.
+ *
+ * **`null` means no reading, and that is not the same as zero.** Windows'
+ * `os.loadavg()` returns `[0, 0, 0]` unconditionally — "no data" wearing the
+ * costume of a perfectly idle machine. Encoding that as `0` would make every
+ * Windows run look pristine, so the numbers are nullable and
+ * {@link LoadReadings.available} is the explicit tell.
+ */
+export interface LoadReadings {
+  /** One-minute load average before the first repeat, or `null` if unmeasurable. */
+  readonly before: number | null;
+  /** One-minute load average after the last repeat, or `null` if unmeasurable. */
+  readonly after: number | null;
+  /** Logical CPU count, so the readings can be judged proportionally. */
+  readonly cpus: number;
+  /**
+   * Whether load could be measured on this platform at all.
+   *
+   * A reader must be able to tell "measured, and the machine was quiet" from
+   * "never measured" — they support completely different conclusions about how
+   * much to trust the timings.
+   */
+  readonly available: boolean;
+  /**
+   * True when the machine was busy enough that these timings are contaminated.
+   *
+   * Recorded rather than enforced: the capture still writes the report, and the
+   * reader decides. A number that silently disappeared teaches less than one
+   * labelled untrustworthy.
+   *
+   * **Absence never launders a busy reading.** If one of the two readings is
+   * missing but the other says busy, this stays `true` — letting a lost second
+   * reading erase a contamination the first one actually saw would be the one
+   * direction of error that matters here.
+   */
+  readonly contaminated: boolean;
+}
+
 /** One invocation of a vat command. */
 export interface RunResult {
   /** Wall-clock duration in milliseconds. */

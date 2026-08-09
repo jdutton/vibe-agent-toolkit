@@ -2,8 +2,8 @@
  * Capturing a `perf` report: run each command N times, and report the
  * distribution rather than a sample.
  *
- * Three things here are not incidental, and removing any of them turns the
- * numbers into decoration:
+ * Three things are not incidental, and removing any of them turns the numbers
+ * into decoration:
  *
  * 1. **A failed run contributes no timing.** Timing a crash measures how fast
  *    vat fails. Worse, the failures are *fast* — a command that cannot resolve
@@ -11,36 +11,36 @@
  *    median down and read as an improvement.
  * 2. **Cold means cold on every repeat.** Clearing the cache once and then
  *    running five times measures one cold run and four warm ones, and reports
- *    the median of a mixture that describes nothing.
+ *    the median of a mixture that describes nothing. That loop belongs to the
+ *    harness now — see `harness/repeat.ts`, which every measurement facet
+ *    shares so the property cannot hold in one facet and not another.
  * 3. **Load is read around the whole capture**, and travels in the report. A
  *    number taken on a busy machine is not wrong so much as unattributable, and
  *    the reader has to be able to see that.
+ *
+ * What stays here is everything about wall-clock statistics: which repeats are
+ * allowed near a median, and what a row says when none are.
  */
 
 import type { ReportEnvelope } from '../../envelope/envelope.js';
 import { REPORT_FORMAT_VERSION } from '../../envelope/envelope.js';
 import { judgeLoad, readLoad } from '../../harness/load-guard.js';
-import { runCommand } from '../../harness/run.js';
-import type { ResolvedInstrument, ResolvedSubject } from '../../harness/types.js';
+import { classifyRunFailure, materializeArgs, runRepeats } from '../../harness/repeat.js';
+import type {
+  CacheMode,
+  ResolvedInstrument,
+  ResolvedSubject,
+  RunResult,
+} from '../../harness/types.js';
 
 import { summarize } from './stats.js';
 import {
-  type CacheMode,
   PERF_FACET,
   PERF_FACET_VERSION,
   type PerfBody,
   type PerfCommandSpec,
   type PerfCommandStats,
 } from './types.js';
-
-/** The token replaced with the subject's path in a command's arguments. */
-const SUBJECT_TOKEN = '{subject}';
-
-/** Arguments used to clear vat's caches between cold repeats. */
-const CACHE_CLEAR_ARGS = Object.freeze(['cache', 'clear']);
-
-/** How long a single command may run before it is killed. */
-const DEFAULT_TIMEOUT_MS = 600_000;
 
 /** Everything a capture needs. */
 export interface CapturePerfOptions {
@@ -57,86 +57,27 @@ export interface CapturePerfOptions {
   readonly capturedAt: string;
 }
 
-/** One repeat's outcome, before it is allowed near a statistic. */
-interface Sample {
-  readonly wallMs: number;
-  readonly exitCode: number | null;
-  readonly failure: string | null;
-}
-
-/**
- * Substitute the subject path into a command's arguments.
- *
- * @param args - Argument template
- * @param subjectPath - Absolute path being measured
- * @returns Arguments as they will actually be run
- */
-function materializeArgs(args: readonly string[], subjectPath: string): readonly string[] {
-  return args.map((arg) => arg.replaceAll(SUBJECT_TOKEN, subjectPath));
-}
-
-/**
- * Run one repeat, classifying it before its duration is trusted.
- *
- * @param options - The capture's options
- * @param args - Fully materialized arguments
- * @returns The sample, with a failure reason when it must not be timed
- */
-function runOnce(options: CapturePerfOptions, args: readonly string[]): Sample {
-  const result = runCommand(options.instrument, args, {
-    cwd: options.subject.path,
-    ...(options.env === undefined ? {} : { env: options.env }),
-    timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-  });
-  if (result.spawnError !== null) {
-    return { wallMs: result.wallMs, exitCode: null, failure: result.spawnError };
-  }
-  if (result.exitCode !== 0) {
-    return {
-      wallMs: result.wallMs,
-      exitCode: result.exitCode,
-      failure: `exited ${String(result.exitCode)}: ${result.stderr.trim().slice(0, 200)}`,
-    };
-  }
-  return { wallMs: result.wallMs, exitCode: 0, failure: null };
-}
-
-/**
- * Clear vat's caches so the next repeat starts cold.
- *
- * Deliberately untimed and deliberately best-effort: this is setup, not
- * measurement. A failure to clear is reported by the repeat that follows it
- * being unexpectedly fast, which the spread will show.
- *
- * @param options - The capture's options
- */
-function clearCache(options: CapturePerfOptions): void {
-  runCommand(options.instrument, CACHE_CLEAR_ARGS, {
-    cwd: options.subject.path,
-    ...(options.env === undefined ? {} : { env: options.env }),
-    timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-  });
-}
-
 /**
  * Turn a command's repeats into a report row.
  *
  * @param spec - What was asked for
  * @param args - What was actually run
  * @param cache - Which cache mode the repeats used
- * @param samples - Every repeat's outcome
+ * @param results - Every repeat's outcome, raw
  * @returns The row, marked failed when no usable measurement exists
  */
 function rowFor(
   spec: PerfCommandSpec,
   args: readonly string[],
   cache: CacheMode,
-  samples: readonly Sample[],
+  results: readonly RunResult[],
 ): PerfCommandStats {
-  const failed = samples.filter((sample) => sample.failure !== null);
+  const failures = results
+    .map((result) => classifyRunFailure(result))
+    .filter((failure): failure is string => failure !== null);
   const empty = { medianMs: 0, minMs: 0, maxMs: 0, iqrMs: 0 };
 
-  if (samples.length === 0) {
+  if (results.length === 0) {
     return {
       name: spec.name,
       args,
@@ -150,7 +91,7 @@ function rowFor(
     };
   }
 
-  if (failed.length > 0) {
+  if (failures.length > 0) {
     // Any failure poisons the row. A set of repeats where some worked and some
     // did not is not timing one behaviour, and reporting the median of the
     // survivors would quietly answer a different question than the one asked.
@@ -158,21 +99,21 @@ function rowFor(
       name: spec.name,
       args,
       cache,
-      runs: samples.length,
+      runs: results.length,
       ...empty,
       samplesMs: [],
       exitCode: null,
       failed: true,
-      failure: `${String(failed.length)} of ${String(samples.length)} repeats failed — ${failed[0]?.failure ?? 'unknown'}`,
+      failure: `${String(failures.length)} of ${String(results.length)} repeats failed — ${failures[0] ?? 'unknown'}`,
     };
   }
 
-  const samplesMs = samples.map((sample) => sample.wallMs);
+  const samplesMs = results.map((result) => result.wallMs);
   return {
     name: spec.name,
     args,
     cache,
-    runs: samples.length,
+    runs: results.length,
     ...summarize(samplesMs),
     samplesMs,
     exitCode: 0,
@@ -192,14 +133,16 @@ export function capturePerf(options: CapturePerfOptions): ReportEnvelope<PerfBod
 
   const commands = options.commands.map((spec) => {
     const args = materializeArgs(spec.args, options.subject.path);
-    const samples: Sample[] = [];
-    for (let repeat = 0; repeat < options.runs; repeat++) {
-      // Every repeat, not once before the loop: clearing once would measure one
-      // cold run and the rest warm, and report the median of the mixture.
-      if (options.cache === 'cold') clearCache(options);
-      samples.push(runOnce(options, args));
-    }
-    return rowFor(spec, args, options.cache, samples);
+    const results = runRepeats({
+      instrument: options.instrument,
+      cwd: options.subject.path,
+      args,
+      runs: options.runs,
+      cache: options.cache,
+      ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+      ...(options.env === undefined ? {} : { env: options.env }),
+    });
+    return rowFor(spec, args, options.cache, results);
   });
 
   const loadAfter = readLoad();

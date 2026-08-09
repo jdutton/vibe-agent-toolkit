@@ -14,6 +14,9 @@
 
 import { z } from 'zod';
 
+import { LoadReadingsSchema, measuredCommandShape } from '../../harness/schemas.js';
+import type { CacheMode, LoadReadings } from '../../harness/types.js';
+
 /** Stable name of this facet, as it appears in the envelope header. */
 export const PERF_FACET = 'perf';
 
@@ -25,9 +28,6 @@ export const PERF_FACET = 'perf';
  * change belong to the schema rather than to the subject.
  */
 export const PERF_FACET_VERSION = 1;
-
-/** Whether vat's caches were left in place or cleared before each repeat. */
-export type CacheMode = 'warm' | 'cold';
 
 /** What one vat command was asked to do. */
 export interface PerfCommandSpec {
@@ -59,11 +59,19 @@ export interface PerfCommandStats {
   /** Every sample, so a reader can check the statistics rather than trust them. */
   readonly samplesMs: readonly number[];
   /**
-   * The exit code every repeat produced.
+   * `0` when every repeat exited cleanly, and `null` otherwise.
    *
-   * `null` when the repeats *disagreed*, which invalidates the measurement: a
-   * set of samples where some runs succeeded and some failed is not timing one
-   * behaviour. {@link PerfCommandStats.failed} records that case.
+   * Deliberately not "the code the failing repeat produced". Once any repeat
+   * fails, this row is not timing one behaviour, and the *interesting* thing is
+   * no longer a number — it is which repeats failed and why, which
+   * {@link PerfCommandStats.failure} says in words. Publishing one repeat's exit
+   * code here would invite a reader to treat it as the row's outcome when the
+   * other repeats may have exited differently.
+   *
+   * So `null` covers both mixed results and a uniform failure: two repeats that
+   * both exited 3 still report `null`, because a row whose statistics are empty
+   * has no exit code to speak of. {@link PerfCommandStats.failed} is the flag to
+   * branch on; this field is never the tell.
    */
   readonly exitCode: number | null;
   /**
@@ -77,45 +85,6 @@ export interface PerfCommandStats {
   readonly failed: boolean;
   /** Why it failed, when it did. */
   readonly failure: string | null;
-}
-
-/**
- * Machine-load readings taken around the capture.
- *
- * **`null` means no reading, and that is not the same as zero.** Windows'
- * `os.loadavg()` returns `[0, 0, 0]` unconditionally — "no data" wearing the
- * costume of a perfectly idle machine. Encoding that as `0` would make every
- * Windows run look pristine, so the numbers are nullable and
- * {@link LoadReadings.available} is the explicit tell.
- */
-export interface LoadReadings {
-  /** One-minute load average before the first repeat, or `null` if unmeasurable. */
-  readonly before: number | null;
-  /** One-minute load average after the last repeat, or `null` if unmeasurable. */
-  readonly after: number | null;
-  /** Logical CPU count, so the readings can be judged proportionally. */
-  readonly cpus: number;
-  /**
-   * Whether load could be measured on this platform at all.
-   *
-   * A reader must be able to tell "measured, and the machine was quiet" from
-   * "never measured" — they support completely different conclusions about how
-   * much to trust the timings.
-   */
-  readonly available: boolean;
-  /**
-   * True when the machine was busy enough that these timings are contaminated.
-   *
-   * Recorded rather than enforced: the capture still writes the report, and the
-   * reader decides. A number that silently disappeared teaches less than one
-   * labelled untrustworthy.
-   *
-   * **Absence never launders a busy reading.** If one of the two readings is
-   * missing but the other says busy, this stays `true` — letting a lost second
-   * reading erase a contamination the first one actually saw would be the one
-   * direction of error that matters here.
-   */
-  readonly contaminated: boolean;
 }
 
 /** The `perf` facet's report body. */
@@ -140,29 +109,16 @@ export const PerfBodySchema = z
     commands: z.array(
       z
         .object({
-          name: z.string().min(1),
-          args: z.array(z.string()),
-          cache: z.union([z.literal('warm'), z.literal('cold')]),
-          runs: z.number().int().nonnegative(),
+          ...measuredCommandShape,
           medianMs: z.number().nonnegative(),
           minMs: z.number().nonnegative(),
           maxMs: z.number().nonnegative(),
           iqrMs: z.number().nonnegative(),
           samplesMs: z.array(z.number().nonnegative()),
           exitCode: z.number().int().nullable(),
-          failed: z.boolean(),
-          failure: z.string().nullable(),
         })
         .strict(),
     ),
-    load: z
-      .object({
-        before: z.number().nullable(),
-        after: z.number().nullable(),
-        cpus: z.number().int().positive(),
-        available: z.boolean(),
-        contaminated: z.boolean(),
-      })
-      .strict(),
+    load: LoadReadingsSchema,
   })
   .strict();
