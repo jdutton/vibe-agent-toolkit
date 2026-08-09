@@ -41,6 +41,7 @@ const BARREL_EXPORTS = [
   'dynamicImportPath',
   'expandMacro',
   'fileContentHash',
+  'fillRealpaths',
   'fillSiblingNames',
   'findConfigFile',
   // 'findGitRoot' — REMOVED. A body-for-body alias of `gitFindRoot`; see
@@ -83,6 +84,7 @@ const BARREL_EXPORTS = [
   'parseStreamJsonTranscript',
   'probeAuthStatus',
   'protectedEnvNames',
+  'realpathFrom',
   'renderTemplate',
   'resetProjectRootCaches',
   'resolveAssetReference',

@@ -52,6 +52,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`fillRealpaths(paths, fsCache)` + `realpathFrom(table, path)`** in `@vibe-agent-toolkit/utils` —
+  the canonical-path column, a second fill/judge pair alongside `fillSiblingNames` +
+  `classifyFilenameCaseFrom`. Link validation asked `fs.realpathSync` twice per *existing* link
+  target, at judgement time, inside a synchronous loop: once for the target and once for the
+  **run-constant project root**. On this repo's own corpus (770 links over 266 documents) that was
+  roughly 1,500 serialised `realpathSync` calls, about half of them re-canonicalizing the same root.
+  The column now canonicalizes each distinct path once, concurrently, before judging, and the
+  project root is a single row; the judge reads the table and makes no `realpath` call of either
+  kind. Output-neutral by design — verified with `vat pipeline`, all 12 artifacts byte-identical.
+
+  ⚠️ **`FsLookupCache.realpath` now canonicalizes with `promisify(fs.realpath)` rather than
+  `fs/promises.realpath`, and the choice is load-bearing.** Node ships two different realpath
+  implementations and they do not agree: `fs.realpathSync` and the `fs.realpath` *callback* form run
+  Node's own JS lstat/readlink walk, which preserves the casing the caller asked for, while
+  `fs/promises.realpath` and `fs.realpath.native` call `uv_fs_realpath`, which reports the casing
+  **on disk**. On a case-insensitive filesystem — macOS and Windows — those return different
+  strings, so a column filled through the native route would flip containment verdicts against the
+  synchronous callers it replaces and report link problems the un-refactored code never reported.
+  Anyone who was calling `FsLookupCache.realpath` directly (it had no in-tree callers before this
+  change) now gets `realpathSync`-equivalent answers.
+
 - **`FsLookupCache.probe(path)`** in `@vibe-agent-toolkit/utils` — memoizes the `existsSync` +
   `statSync` pair that link-target classification asks per link, so it is asked once per distinct
   target instead. The two syscalls are deduplicated, not collapsed into one: the pair distinguishes

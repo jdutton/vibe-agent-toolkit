@@ -12,7 +12,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { createRegistryIssue, type IssueCode, runSingleUnitValidation, type ValidationConfig, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
-import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, fillSiblingNames, FsLookupCache, type GitTracker, issueLocation, resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, FsLookupCache, type GitTracker, issueLocation, resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { calculateChecksumFromContent } from './checksum.js';
 import { getCollectionsForFile } from './collection-matcher.js';
@@ -29,7 +29,7 @@ import {
   type CompiledFrontmatterSchema,
 } from './frontmatter-validator.js';
 import { buildLinkAuthEngineConfig } from './link-auth-config-build.js';
-import { fragmentIndexEntry, judgeLink, linkTargetPaths, resolveLinkEntries, type FragmentIndex, type JudgeLinkOptions, type LinkEntry, type ValidateLinkOptions } from './link-validator.js';
+import { fillLinkFacts, fragmentIndexEntry, judgeLink, resolveLinkEntries, type FragmentIndex, type JudgeLinkOptions, type LinkEntry, type ValidateLinkOptions } from './link-validator.js';
 import { ParseCache, type ParseCacheStats, parseKeyed, vatCacheRoot } from './parse-cache.js';
 import type { ResourceCollectionInterface } from './resource-collection-interface.js';
 import type { SHA256 } from './schemas/checksum.js';
@@ -875,19 +875,20 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   /**
    * Validate all links in all resources, in two passes.
    *
-   * Pass 1 resolves every link once and lists every distinct directory the
-   * corpus's local link targets live in, all at once. Pass 2 judges every link
-   * synchronously against that table. The alternative — awaiting each link in
-   * turn — serialised every cold `readdir` behind the previous link's `await`.
+   * Pass 1 resolves every link once, then materialises both judge columns over
+   * the corpus at once (`fillLinkFacts`): one listing per distinct target
+   * directory, and one canonical path per distinct target plus the project
+   * root. Pass 2 judges every link synchronously against those tables. The
+   * alternative — awaiting each link in turn — serialised every cold `readdir`
+   * and every `realpath` behind the previous link's `await`.
    *
    * ⚠️ **The judge loop is fully synchronous: it contains no `await`, so it
    * never yields to the event loop.** On a large corpus it is one
-   * un-interruptible block, and it is not free — every *existing* local target
-   * still reaches `gitIgnoreSafetyIssue`, which costs two `fs.realpathSync`
-   * (via `isWithinProject`) and, whenever `this.gitTracker` is undefined and
-   * `skipGitIgnoreCheck` is false, a `spawnSync` of `git check-ignore`. Only the
-   * directory-listing column is materialised in pass 1; the realpath and
-   * git-ignore columns are not.
+   * un-interruptible block, and it is not free — whenever `this.gitTracker` is
+   * undefined and `skipGitIgnoreCheck` is false, every *existing* local target
+   * still reaches `gitIgnoreSafetyIssue` → `isGitIgnored`, a `spawnSync` of
+   * `git check-ignore`. That is the one column pass 1 does not materialise
+   * (ledger entry D9); the listing and realpath columns both are.
    *
    * Both passes walk `entries` in the same order the single-pass version
    * produced issues in (resources in insertion order, links in document order);
@@ -910,17 +911,20 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       }
     }
 
-    // Pass 1′: resolve each link exactly once, then one listing per distinct
-    // target directory, issued together. The judge reads these very resolution
-    // objects — it never re-resolves.
+    // Pass 1′: resolve each link exactly once, then fill both judge columns
+    // together over exactly those resolutions. The judge reads these very
+    // resolution objects — it never re-resolves.
     const resolved = resolveLinkEntries(entries, this.baseDir);
-    const siblingNames = await fillSiblingNames(linkTargetPaths(resolved), this.fsCache);
+    const tables = await fillLinkFacts(resolved, this.fsCache, {
+      ...(this.baseDir !== undefined && { projectRoot: this.baseDir }),
+      skipGitIgnoreCheck,
+    });
 
     // Only pass options if projectRoot is defined (exactOptionalPropertyTypes requirement)
     const judgeOptions: JudgeLinkOptions = this.baseDir === undefined
-      ? { siblingNames, skipGitIgnoreCheck, checkHtmlAnchors }
+      ? { ...tables, skipGitIgnoreCheck, checkHtmlAnchors }
       : {
-          siblingNames,
+          ...tables,
           projectRoot: this.baseDir,
           skipGitIgnoreCheck,
           checkHtmlAnchors,
@@ -1097,6 +1101,23 @@ export class ResourceRegistry implements ResourceCollectionInterface {
               ...(this.gitTracker !== undefined && { gitTracker: this.gitTracker }),
             };
 
+        // ⚠️ KNOWN MISLABEL — recorded, deliberately NOT fixed in the realpath
+        // -column change (ledger D8). This `await` sits inside the schema `try`
+        // above, so ANY throw out of link validation is caught by its `catch` and
+        // re-reported as FRONTMATTER_SCHEMA_ERROR: "Failed to load or parse
+        // frontmatter schema '<schema>': <message>" — against a file whose schema
+        // loaded and compiled fine, once per resource in the collection.
+        //
+        // That matters most for the one throw the link tables raise ON PURPOSE:
+        // `realpathFrom`/`siblingNamesFrom` crash on a missing row precisely so a
+        // fill/judge divergence names its own remedy ("Fill it with
+        // fillRealpaths() before judging"). In this lane alone that remedy ends up
+        // in the tail of a schema-blaming message. See `LinkFactTables` in
+        // link-validator.ts.
+        //
+        // The fix is to narrow the `try` to just `loadCollectionSchema` +
+        // `validateCompiledFrontmatter`. That changes which errors are caught, so
+        // it can move output, and this change is held to a byte-identical bar.
         const { issues: linkIssues, externalUrls } = await validateFrontmatterLinks(
           resource.frontmatter,
           schema,

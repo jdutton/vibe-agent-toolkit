@@ -6,6 +6,7 @@
  * counts for unit tests.
  */
 
+import type { RealpathTable } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { DeferredArtifacts } from '../src/deferred-artifacts.js';
@@ -15,7 +16,7 @@ import {
   fragmentIndex,
   gitIgnoreSafetyIssue,
   resolutionFailureIssue,
-  type ValidateLinkOptions,
+  type GitIgnoreCheckOptions,
 } from '../src/link-validator.js';
 import type { ResourceLink } from '../src/types.js';
 
@@ -27,22 +28,39 @@ const PROJECT_ROOT = '/project';
 const SOURCE = `${PROJECT_ROOT}/docs/page.md`;
 const TARGET_FOO = `${PROJECT_ROOT}/foo.md`;
 const TARGET_SECRET = `${PROJECT_ROOT}/secret.md`;
+const TARGET_OUTSIDE = '/elsewhere/other.md';
 const LINK_FOO = 'foo.md';
 const LINK_ABSOLUTE_NO_ROOT = '/foo.md';
 
-function makeGitTrackerOptions(
-  tracker: { isIgnoredByActiveSet: (p: string) => boolean },
-  overrides: Partial<ValidateLinkOptions> = {},
-): ValidateLinkOptions {
-  return {
-    projectRoot: PROJECT_ROOT,
-    gitTracker: tracker as unknown as ValidateLinkOptions['gitTracker'],
-    ...overrides,
-  };
+/**
+ * The filled realpath column `gitIgnoreSafetyIssue` reads — hand-written, and
+ * covering the project root as well as every target these tests judge.
+ *
+ * Identity rows: none of these paths exist on disk, and the production fill
+ * answers a path it cannot canonicalize with `safePath.resolve()`, which is the
+ * identity for an already-absolute POSIX path. Writing the table by hand instead
+ * of calling `fillRealpaths` keeps these unit tests free of both I/O and a
+ * platform-dependent root — which is exactly what `realpathFrom` taking a table
+ * rather than a cache is for.
+ *
+ * ⚠️ A missing row THROWS, so every target below must be listed here.
+ */
+const REALPATHS: RealpathTable = new Map(
+  [PROJECT_ROOT, TARGET_FOO, TARGET_SECRET, TARGET_OUTSIDE].map((p) => [p, p]),
+);
+
+function makeOptions(overrides: Partial<GitIgnoreCheckOptions> = {}): GitIgnoreCheckOptions {
+  return { projectRoot: PROJECT_ROOT, realpaths: REALPATHS, ...overrides };
 }
 
-function makeOptions(overrides: Partial<ValidateLinkOptions> = {}): ValidateLinkOptions {
-  return { projectRoot: PROJECT_ROOT, ...overrides };
+function makeGitTrackerOptions(
+  tracker: { isIgnoredByActiveSet: (p: string) => boolean },
+  overrides: Partial<GitIgnoreCheckOptions> = {},
+): GitIgnoreCheckOptions {
+  return makeOptions({
+    gitTracker: tracker as unknown as GitIgnoreCheckOptions['gitTracker'],
+    ...overrides,
+  });
 }
 
 /** A DeferredArtifacts model whose only entry's `dest` is `relPath` (project-root-relative). */
@@ -241,19 +259,23 @@ describe('gitIgnoreSafetyIssue', () => {
   });
 
   it('returns null when projectRoot is undefined', () => {
+    // An EMPTY realpath table on purpose: with no project root the check must
+    // return before it reads the column, which is exactly what lets the fill
+    // leave it empty in this configuration. A throw here would mean the gate and
+    // the fill had drifted apart.
     expect(
-      gitIgnoreSafetyIssue(makeLink(LINK_FOO), SOURCE, TARGET_FOO, { skipGitIgnoreCheck: false }),
+      gitIgnoreSafetyIssue(makeLink(LINK_FOO), SOURCE, TARGET_FOO, {
+        skipGitIgnoreCheck: false,
+        realpaths: new Map(),
+      }),
     ).toBeNull();
   });
 
   it('returns null when target is outside the project root', () => {
+    // The table holds rows for BOTH the out-of-root target and the root — the
+    // containment answer is read, not recomputed, so both must be filled.
     expect(
-      gitIgnoreSafetyIssue(
-        makeLink('/other.md'),
-        SOURCE,
-        '/elsewhere/other.md',
-        makeOptions(),
-      ),
+      gitIgnoreSafetyIssue(makeLink('/other.md'), SOURCE, TARGET_OUTSIDE, makeOptions()),
     ).toBeNull();
   });
 

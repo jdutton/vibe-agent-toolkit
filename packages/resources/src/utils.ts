@@ -6,7 +6,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
+import {
+  toForwardSlash,
+  safePath,
+  realpathFrom,
+  type RealpathTable,
+} from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 
 /**
@@ -167,10 +172,82 @@ export function resolveLocalHref(
 }
 
 /**
- * Check if a file path is within a project directory.
+ * The containment rule itself: is `normalizedFile` at or under `normalizedRoot`?
  *
- * Resolves symlinks before comparison to handle cases where symlinks
- * point outside the project directory.
+ * Pure — **both arguments must already be canonical and forward-slashed**; this
+ * normalizes nothing and touches no filesystem. The parameter names say so, and
+ * are also what satisfies the `local/no-path-startswith` rule: the guarantee it
+ * enforces is discharged by the two callers below, which canonicalize through
+ * `toForwardSlash` (`canonicalizeSync`) or read an already-forward-slashed row
+ * out of the filled table (`realpathFrom`).
+ *
+ * It exists so the two `isWithinProject*` forms share **one** definition of
+ * containment. Two copies of the `startsWith(root + '/') || === root` pair would
+ * be free to drift, and a drift here silently changes which links are reported
+ * as gitignored leaks.
+ */
+function isUnderRoot(normalizedFile: string, normalizedRoot: string): boolean {
+  // The trailing slash prevents false positives like `/project-other` reading
+  // as being inside `/project`.
+  return normalizedFile.startsWith(normalizedRoot + '/') || normalizedFile === normalizedRoot;
+}
+
+/**
+ * Canonicalize one path synchronously, falling back to a plain resolve when the
+ * path cannot be canonicalized (a path that does not exist has no realpath, and
+ * a caller comparing paths still needs an answer).
+ *
+ * ⚠️ **Answers byte for byte what `FsLookupCache.realpath` answers, and that
+ * equivalence is what makes {@link isWithinProject} and
+ * {@link isWithinProjectFrom} interchangeable.** The reason is a deliberate
+ * choice on the async side, not an accident of shape: **Node ships two different
+ * realpaths and they do not agree.** `fs.realpathSync` (used here) and the
+ * `fs.realpath` *callback* form run Node's own JS implementation — an
+ * lstat/readlink walk that preserves the casing the caller asked for.
+ * `fs/promises.realpath` and `fs.realpath.native` call `uv_fs_realpath`, which
+ * reports the casing **on disk**. On a case-insensitive filesystem — macOS and
+ * Windows — those are different strings, so a column filled through the native
+ * route flips containment verdicts against this function and emits findings the
+ * un-refactored code never emitted. `FsLookupCache.realpath` therefore
+ * canonicalizes with `promisify(nodeFs.realpath)` **on purpose**; its docblock in
+ * `packages/utils/src/fs-utils.ts` carries the measured three-way comparison and
+ * names the test that pins it.
+ *
+ * Secondary observation, and explicitly NOT the argument: the *fallback*
+ * branches agree too — the extra `toForwardSlash` applied here is a no-op,
+ * because `safePath.resolve` already returns forward slashes. Comparing only the
+ * fallbacks and assuming the success paths were the same function is exactly how
+ * the native-route divergence above shipped green. The success paths are where
+ * this equivalence has to be argued.
+ *
+ * Change either form and you must change the other, or the filled column and the
+ * live syscall start answering differently.
+ */
+function canonicalizeSync(filePath: string): string {
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath is validated path parameter
+    return toForwardSlash(fs.realpathSync(filePath));
+  } catch {
+    // Realpath failed — the path doesn't exist, so use the resolved path.
+    return toForwardSlash(safePath.resolve(filePath));
+  }
+}
+
+/**
+ * Check if a file path is within a project directory — **the fill-pass form: it
+ * costs two `fs.realpathSync`, one of them on the run-constant project root.**
+ *
+ * Canonicalizes both sides symmetrically before comparing. Asymmetric handling
+ * (realpath one side, resolve the other) false-flags legitimate matches when
+ * `projectRoot` traverses a symlink — e.g. macOS /tmp → /private/tmp, bind
+ * mounts.
+ *
+ * ⚠️ **Judgement-time callers must use {@link isWithinProjectFrom} instead.**
+ * This form is for the fill pass, where I/O is legal — today that means
+ * {@link resolveLocalHref}'s absolute-path branch, which cannot be made
+ * table-driven: the candidate path it asks about is derived by the resolution
+ * itself, so no fill can know it in advance. Calling this from the judge is the
+ * per-link syscall the realpath column exists to remove.
  *
  * @param filePath - Absolute path to check
  * @param projectRoot - Absolute path to project root
@@ -184,34 +261,34 @@ export function resolveLocalHref(
  * ```
  */
 export function isWithinProject(filePath: string, projectRoot: string): boolean {
-  // Canonicalize both sides symmetrically. Asymmetric handling (realpath one
-  // side, resolve the other) false-flags legitimate matches when projectRoot
-  // traverses a symlink — e.g. macOS /tmp → /private/tmp, bind mounts.
-  let resolvedFilePath: string;
-  try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath is validated path parameter
-    resolvedFilePath = fs.realpathSync(filePath);
-  } catch {
-    // If realpath fails, file doesn't exist - use original path
-    resolvedFilePath = safePath.resolve(filePath);
-  }
+  return isUnderRoot(canonicalizeSync(filePath), canonicalizeSync(projectRoot));
+}
 
-  let resolvedProjectRoot: string;
-  try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- projectRoot is validated path parameter
-    resolvedProjectRoot = fs.realpathSync(projectRoot);
-  } catch {
-    resolvedProjectRoot = safePath.resolve(projectRoot);
-  }
-
-  // Normalize to forward slashes for cross-platform comparison
-  const normalizedFile = toForwardSlash(resolvedFilePath);
-  const normalizedRoot = toForwardSlash(resolvedProjectRoot);
-
-  // Check if file path starts with project root
-  // Add trailing slash to prevent false positives like:
-  // /project-other starting with /project
-  return normalizedFile.startsWith(normalizedRoot + '/') || normalizedFile === normalizedRoot;
+/**
+ * The same containment question, answered out of an already-filled realpath
+ * column. **Pure: no filesystem, no cache** — both canonical paths are read from
+ * the table with `realpathFrom`.
+ *
+ * The judgement-time form. `projectRoot` is looked up like any other row, which
+ * is the point: canonicalizing the run-constant root once per run instead of
+ * once per link is half the syscalls this column removes.
+ *
+ * Exactly equivalent to {@link isWithinProject} — same comparison
+ * ({@link isUnderRoot}), same canonicalization contract (see
+ * {@link canonicalizeSync}).
+ *
+ * @param table - Table filled by `fillRealpaths`, covering BOTH paths
+ * @param filePath - Absolute path to check
+ * @param projectRoot - Absolute path to project root
+ * @returns True if filePath is under projectRoot (after symlink resolution)
+ * @throws If the table holds no row for either path — see `realpathFrom`
+ */
+export function isWithinProjectFrom(
+  table: RealpathTable,
+  filePath: string,
+  projectRoot: string,
+): boolean {
+  return isUnderRoot(realpathFrom(table, filePath), realpathFrom(table, projectRoot));
 }
 
 /**

@@ -14,29 +14,31 @@
  * - Ignored files CAN link to non-ignored files (no error)
  * - External resources (outside project) skip git-ignore checks
  *
- * **Two passes, not one — and the fill is not finished yet.**
+ * **Two passes, not one — and the fill is still not finished.**
  *
- * The fill pass resolves every link once ({@link resolveLinkEntries}), names the
- * local targets ({@link linkTargetPaths}) and lists their parent directories
- * concurrently (`fillSiblingNames`). The judge pass ({@link judgeLink}) is
- * synchronous and does **no directory listing and no href resolution** — both of
- * those facts travel to it, the listing in the table and the resolution on the
- * entry.
+ * The fill pass ({@link fillLinkFacts}) resolves every link once
+ * ({@link resolveLinkEntries}), names the local targets
+ * ({@link linkTargetPaths}), and materialises two columns over them
+ * concurrently: their parent directories' listings (`fillSiblingNames`) and
+ * their canonical paths (`fillRealpaths`, together with the project root). The
+ * judge pass ({@link judgeLink}) is synchronous and does **no directory
+ * listing, no href resolution and no realpath** — every one of those facts
+ * travels to it, the two columns in {@link LinkFactTables} and the resolution on
+ * the entry.
  *
- * ⚠️ **The judge is not I/O-free, and no comment in this file may claim it is.**
- * Two facts judgement needs are still unfilled, and both are read at judgement
- * time through direct imports rather than through anything the judge is handed:
+ * ⚠️ **The judge is still not I/O-free, and no comment in this file may claim it
+ * is.** One fact judgement needs remains unfilled, and it is read at judgement
+ * time through a direct import rather than through anything the judge is handed:
  *
- * - `isWithinProject` — two `fs.realpathSync` per *existing* local target,
- *   reached from {@link gitIgnoreSafetyIssue}.
- * - `isGitIgnored` — a `spawnSync` of `git check-ignore`, reached for every
- *   existing local target whenever `skipGitIgnoreCheck !== true` and no
- *   {@link GitTracker} was supplied (a real configuration: the registry makes
- *   its tracker conditional).
+ * - `isGitIgnored` — a `spawnSync` of `git check-ignore`, reached from
+ *   {@link gitIgnoreSafetyIssue} for every existing local target whenever
+ *   `skipGitIgnoreCheck !== true` and no {@link GitTracker} was supplied (a real
+ *   configuration: the registry makes its tracker conditional).
  *
- * Those are the next two columns the fill should grow. Until they are filled,
- * judging a corpus does interleave I/O — just far less of it, and never a
- * `readdir`.
+ * That is the next column the fill should grow (ledger entry D9), and it is
+ * explicitly not part of the realpath change. Until it is filled, judging a
+ * corpus does interleave I/O — just far less of it, and never a `readdir` and
+ * never a `realpath`.
  *
  * {@link validateLink} is the one-shot composition for a caller with a single
  * link.
@@ -47,18 +49,20 @@ import path from 'node:path';
 import { createRegistryIssue, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import {
   classifyFilenameCaseFrom,
+  fillRealpaths,
   fillSiblingNames,
   FsLookupCache,
   isGitIgnored,
   type GitTracker,
   issueLocation,
+  type RealpathTable,
   type SiblingNamesTable,
 } from '@vibe-agent-toolkit/utils';
 
 import type { DeferredArtifacts } from './deferred-artifacts.js';
 import type { ResourceLink } from './types.js';
 import {
-  isWithinProject,
+  isWithinProjectFrom,
   locationRoot,
   resolveLocalHref,
   type ResolveLocalHrefResult,
@@ -160,8 +164,10 @@ export function resolveLinkEntries(
  * anywhere for them to disagree with.
  *
  * **Why that is worth insisting on:** the table lookup THROWS on a missing row,
- * so any divergence is a crash in a shipped command rather than a wrong answer.
- * The previous shape resolved twice, once either side of the fill's `await`, and
+ * so any divergence is a crash in a shipped command rather than a wrong answer
+ * — loudly in two of the three lanes, and mislabelled as a schema error in the
+ * third (see {@link LinkFactTables}). The previous shape resolved twice, once
+ * either side of the fill's `await`, and
  * `resolveLocalHref`'s absolute branch is filesystem-dependent (`isWithinProject`
  * realpaths both sides) — so a symlink changing inside that window could flip a
  * link from `absolute_escapes_root` to `resolved`, and the judge would ask about
@@ -183,25 +189,64 @@ export function linkTargetPaths(resolved: Iterable<ResolvedLinkEntry>): string[]
 }
 
 /**
- * What the judge reads.
+ * The pass-1′ columns the judge reads. Fill both with {@link fillLinkFacts}.
+ *
+ * ⚠️ **A missing row in either table THROWS**, by design (`siblingNamesFrom`,
+ * `realpathFrom`): a divergence between the filled set and the judged set is a
+ * programming error, and a crash names it — where a silent recompute would only
+ * make the run slower and a `null` degradation would answer wrongly. The
+ * corollary is that the fill and the judge must also agree on *whether a column
+ * is populated at all*, which is what {@link needsRealpathColumn} is for.
+ *
+ * ⚠️ **"The crash names itself" holds in two of the three judging lanes, not all
+ * three — do not lean on it as a universal.** In the registry's own link pass
+ * (`ResourceRegistry.validate`) and in {@link validateLink} the throw
+ * propagates and its message (`No canonical path for "…". Fill it with
+ * fillRealpaths() before judging.`) reaches the operator intact. In the
+ * **frontmatter** lane it does not: `resource-registry.ts` awaits
+ * `validateFrontmatterLinks` *inside* the collection-schema `try`, whose `catch`
+ * turns any throw into a `FRONTMATTER_SCHEMA_ERROR` finding. A fill/judge
+ * divergence therefore surfaces there as `Failed to load or parse frontmatter
+ * schema '<schema>'` against a file whose schema is perfectly fine, emitted once
+ * per resource in the collection, with the real remedy buried in the tail of the
+ * message. The fix is to narrow that `try` to the schema load/compile alone,
+ * which changes *which* errors it catches and so can move output — deliberately
+ * out of scope for the realpath column (ledger D8). The defect is recorded at the
+ * call site in `resource-registry.ts`.
+ */
+export interface LinkFactTables {
+  /**
+   * The listing column, covering every local target the judged links resolve
+   * to. Keyed by parent directory — `fillSiblingNames` derives that key itself,
+   * so pass it the target *file* paths.
+   */
+  siblingNames: SiblingNamesTable;
+  /**
+   * The realpath column: every local target **plus the project root**, keyed by
+   * the path string exactly as the fill was handed it.
+   *
+   * **Empty whenever {@link needsRealpathColumn} is false** — judgement cannot
+   * reach it then, so filling it would be pure added syscalls on the common
+   * path.
+   */
+  realpaths: RealpathTable;
+}
+
+/**
+ * What the judge reads: the filled columns, plus the policy.
  *
  * **This bag deliberately carries no filesystem handle** — no `FsLookupCache`,
- * no lister — so nothing the judge is *handed* can list a directory; that fact
- * arrives already materialised in {@link JudgeLinkOptions.siblingNames}.
+ * no lister — so nothing the judge is *handed* can list a directory or
+ * canonicalize a path; both facts arrive already materialised in
+ * {@link LinkFactTables}.
  *
  * ⚠️ **Withholding the handle does not make the judge I/O-free, and this type
  * must not be read as claiming it does.** The judge's own module imports
- * `isWithinProject` and `isGitIgnored` directly, so {@link gitIgnoreSafetyIssue}
- * reaches `fs.realpathSync` and `spawnSync('git check-ignore')` without asking
- * this bag for anything. See the module docblock.
+ * `isGitIgnored` directly, so {@link gitIgnoreSafetyIssue} still reaches
+ * `spawnSync('git check-ignore')` without asking this bag for anything. See the
+ * module docblock.
  */
-export interface JudgeLinkOptions {
-  /**
-   * Pass-1′ table, covering every local target the judged links resolve to —
-   * fill it with `fillSiblingNames(linkTargetPaths(resolved), cache)` over
-   * exactly the resolved entries you are about to judge.
-   */
-  siblingNames: SiblingNamesTable;
+export interface JudgeLinkOptions extends LinkFactTables {
   /** Project root directory (for git-ignore checking) */
   projectRoot?: string;
   /** Skip git-ignore checks (optimization when checkGitIgnored is false) */
@@ -228,10 +273,24 @@ export interface JudgeLinkOptions {
 }
 
 /**
- * The judge's options minus the filled table: the pure policy inputs, which the
- * checks needing no filesystem fact ({@link gitIgnoreSafetyIssue}) take directly.
+ * The judge's options minus the filled columns: the policy inputs alone.
+ *
+ * ⚠️ **This is not "the inputs of the checks that need no filesystem fact" — no
+ * such check exists.** {@link gitIgnoreSafetyIssue} needs the canonical path of
+ * its target and of the project root, and reads both out of
+ * {@link LinkFactTables.realpaths}; it takes {@link GitIgnoreCheckOptions}, not
+ * this type. `LinkPolicyOptions` is only the *carrier* shape — what
+ * {@link ValidateLinkOptions} extends, and what {@link needsRealpathColumn}
+ * inspects — never a complete input to judging.
  */
-export type LinkPolicyOptions = Omit<JudgeLinkOptions, 'siblingNames'>;
+export type LinkPolicyOptions = Omit<JudgeLinkOptions, keyof LinkFactTables>;
+
+/**
+ * What {@link gitIgnoreSafetyIssue} reads: the policy plus the one filled column
+ * it consumes. Spelled as its own type so the check's dependency on a *filled
+ * table* is visible in its signature rather than buried in its body.
+ */
+export type GitIgnoreCheckOptions = LinkPolicyOptions & Pick<LinkFactTables, 'realpaths'>;
 
 /**
  * What the one-shot composition reads: the judge's options, minus the table it
@@ -251,8 +310,110 @@ export interface ValidateLinkOptions extends LinkPolicyOptions {
 }
 
 /**
+ * Whether judgement can reach the realpath column — **the one gate the fill and
+ * the judge MUST agree on.**
+ *
+ * {@link gitIgnoreSafetyIssue} short-circuits before it ever asks about a
+ * canonical path when git-ignore checking is off or there is no project root; in
+ * that configuration a realpath fill would be pure added syscalls, which is the
+ * exact regression the realpath column exists to remove. So the fill asks this
+ * predicate too, and fills an EMPTY table when it is false.
+ *
+ * ⚠️ **Never inline this condition on either side.** `realpathFrom` throws on a
+ * missing row, so a fill that skips the column while the judge still reads it is
+ * not a slow path — it is a crash in a shipped command, and in the frontmatter
+ * lane not even a legible one (see {@link LinkFactTables}).
+ *
+ * Returns a type predicate so both call sites get `projectRoot: string` narrowed
+ * out of it, rather than re-testing it and drifting.
+ *
+ * @param policy - Any options bag carrying the two policy fields
+ */
+export function needsRealpathColumn<
+  T extends { projectRoot?: string | undefined; skipGitIgnoreCheck?: boolean | undefined },
+>(policy: T): policy is T & { projectRoot: string } {
+  return policy.skipGitIgnoreCheck !== true && policy.projectRoot !== undefined;
+}
+
+/**
+ * Pass 1′: materialise every column the judge will read, over exactly the
+ * entries about to be judged.
+ *
+ * The two fills run **concurrently** — they are independent syscall sets, and
+ * sequencing them would serialise every `realpath` behind the last `readdir`.
+ *
+ * ⚠️ **"Concurrently" here is a change in KIND, not just an ordering.** The two
+ * waves now overlap, and they are bounded by different things:
+ * `fillSiblingNames` by distinct *directories* (hundreds on a large corpus),
+ * `fillRealpaths` by distinct *files* — ~770 on VAT itself and several thousand
+ * on the 1,484-document adopter. Both are issued as a single `Promise.all` each,
+ * so the peak in-flight request count is the sum, landing on libuv's 4-thread
+ * pool. The pool queues the excess rather than spawning for it, so this is a
+ * queue-depth change and not an unbounded fan-out — but it is a real one, and
+ * anything added to this function should be weighed against it rather than
+ * assumed free.
+ *
+ * ⚠️ **TOCTOU: canonicalization moved EARLIER, and that widens one window.** At
+ * HEAD the `realpath` ran strictly *after* the existence verdict, at judgement
+ * time. It now runs here, concurrent with the very `readdir` that produces that
+ * verdict, so a target created or deleted inside the window is judged from two
+ * facts taken at slightly different instants. Both directions are reachable: a
+ * target can be listed-as-present but realpath'd-as-absent, in which case its row
+ * falls back to `safePath.resolve` and — under a project root reached through a
+ * symlink — containment reads false, the check returns early, and the git-ignore
+ * check is silently skipped; or listed-as-absent but realpath'd-as-present, in
+ * which case the existence check returns first and the row is simply never read.
+ * This is **accepted, not closed**: closing it needs a filesystem snapshot that
+ * does not exist. It differs from the resolution TOCTOU argued on
+ * {@link linkTargetPaths}, which *is* closed outright, by identity — that one
+ * could be, this one cannot.
+ *
+ * ⚠️ **With the gate open, this always costs at least one syscall — even with
+ * zero local targets** — because `policy.projectRoot` is appended
+ * unconditionally. `fillRealpaths` documents that empty input yields an empty
+ * table with no syscalls; that is a property of *that* function and does not
+ * carry across to this one. The no-syscall case here is the gate being CLOSED
+ * ({@link needsRealpathColumn} false), never an empty target list.
+ *
+ * ⚠️ **The realpath fill is a deliberate SUPERSET of what the judge asks
+ * about.** The judge only reaches {@link gitIgnoreSafetyIssue} for targets that
+ * *exist* — the deferred-artifact and existence checks return first — whereas
+ * this canonicalizes every resolved target. Narrowing it to "targets that exist"
+ * would mean recomputing the existence verdict here, i.e. two computations kept
+ * in step: precisely the drift hazard {@link linkTargetPaths} exists to close. A
+ * superset is always safe (`realpathFrom` throws only on a *missing* row), and
+ * it costs one failed `realpath` per broken link — which a green corpus does not
+ * pay at all. Do not "optimize" this into a bug.
+ *
+ * The project root is a row of its own, and that is where half the measured
+ * syscalls went: canonicalizing a run-constant root once per *link* was the
+ * defect (ledger D8), not the realpath itself.
+ *
+ * @param resolved - Entries already carrying their resolutions
+ * @param fsCache - Per-run lookup cache (one instance per validation run)
+ * @param policy - The judge's policy, read only through {@link needsRealpathColumn}
+ * @returns Both columns, filled over the same target set
+ */
+export async function fillLinkFacts(
+  resolved: readonly ResolvedLinkEntry[],
+  fsCache: FsLookupCache,
+  policy: { projectRoot?: string | undefined; skipGitIgnoreCheck?: boolean | undefined },
+): Promise<LinkFactTables> {
+  const targets = linkTargetPaths(resolved);
+
+  const [siblingNames, realpaths] = await Promise.all([
+    fillSiblingNames(targets, fsCache),
+    needsRealpathColumn(policy)
+      ? fillRealpaths([...targets, policy.projectRoot], fsCache)
+      : Promise.resolve<RealpathTable>(new Map()),
+  ]);
+
+  return { siblingNames, realpaths };
+}
+
+/**
  * Carry a one-shot caller's options across to the judge, swapping the cache it
- * filled with for the table it filled.
+ * filled with for the columns it filled.
  *
  * **Copied field by field rather than spread, so `fsCache` cannot travel.** A
  * `{ ...options, siblingNames }` would hand the judge the very filesystem handle
@@ -262,14 +423,16 @@ export interface ValidateLinkOptions extends LinkPolicyOptions {
  * requires for optional fields.
  *
  * @param options - The one-shot caller's options (may be absent entirely)
- * @param siblingNames - Table just filled for exactly the links about to be judged
+ * @param tables - Columns just filled by {@link fillLinkFacts} for exactly the
+ *   links about to be judged
  */
 export function judgeOptionsFrom(
   options: ValidateLinkOptions | undefined,
-  siblingNames: SiblingNamesTable,
+  tables: LinkFactTables,
 ): JudgeLinkOptions {
   return {
-    siblingNames,
+    siblingNames: tables.siblingNames,
+    realpaths: tables.realpaths,
     ...(options?.projectRoot !== undefined && { projectRoot: options.projectRoot }),
     ...(options?.skipGitIgnoreCheck !== undefined && {
       skipGitIgnoreCheck: options.skipGitIgnoreCheck,
@@ -286,19 +449,19 @@ export function judgeOptionsFrom(
  * Decide a single already-resolved link against an already-filled sibling-name
  * table.
  *
- * **Synchronous, and it does no directory listing and no href resolution** — the
- * listing came from the fill's table, the resolution rides on `entry`. Callers
- * that have already filled (the registry, frontmatter validation) call this
- * directly; {@link validateLink} is the ad-hoc entry point that resolves and
- * fills for one link first.
+ * **Synchronous, and it does no directory listing, no href resolution and no
+ * realpath** — the listing and the canonical paths came from the fill's columns,
+ * the resolution rides on `entry`. Callers that have already filled (the
+ * registry, frontmatter validation) call this directly; {@link validateLink} is
+ * the ad-hoc entry point that resolves and fills for one link first.
  *
  * ⚠️ **It is still not I/O-free.** With `skipGitIgnoreCheck` unset and a
  * `projectRoot` set, every *existing* local target reaches
- * {@link gitIgnoreSafetyIssue}, which calls `isWithinProject` (two
- * `fs.realpathSync`) and, when no {@link GitTracker} was supplied, `isGitIgnored`
- * (a `spawnSync` of `git check-ignore`). Judging a large corpus therefore still
- * interleaves those two syscalls per existing target; only the `readdir` column
- * is filled today.
+ * {@link gitIgnoreSafetyIssue}, which calls `isGitIgnored` — a `spawnSync` of
+ * `git check-ignore` — whenever no {@link GitTracker} was supplied. Judging a
+ * large corpus therefore still interleaves that one spawn per existing target;
+ * it is the last unfilled column (ledger entry D9), and it is not addressed
+ * here.
  *
  * @param entry - The link, its source file, and its one resolution
  * @param fragmentsByFile - Fragment index: file path → set of valid fragments (markdown slugs + HTML id/name)
@@ -355,10 +518,10 @@ export function judgeLink(
  * point: it fills a one-link sibling-name table and immediately judges it.
  *
  * A caller with many links should not loop over this; that reinstates one
- * directory listing per link, serialised behind the previous link's `await`.
- * Resolve once with {@link resolveLinkEntries}, fill once with
- * `fillSiblingNames(linkTargetPaths(resolved), cache)`, and call
- * {@link judgeLink} per entry instead.
+ * directory listing and one project-root realpath per link, serialised behind
+ * the previous link's `await`. Resolve once with {@link resolveLinkEntries},
+ * fill once with {@link fillLinkFacts}, and call {@link judgeLink} per entry
+ * instead.
  *
  * Its signature and its answers are unchanged by the fill/judge split, and are
  * pinned as such by the existing `validateLink` test corpus — several of whose
@@ -392,12 +555,13 @@ export async function validateLink(
 
   // No options at all means no run to scope a cache to (single ad-hoc call);
   // a fresh instance is exactly the old, un-memoized behaviour.
-  const siblingNames = await fillSiblingNames(
-    linkTargetPaths([entry]),
+  const tables = await fillLinkFacts(
+    [entry],
     options?.fsCache ?? new FsLookupCache(),
+    options ?? {},
   );
 
-  return judgeLink(entry, fragmentsByFile, judgeOptionsFrom(options, siblingNames));
+  return judgeLink(entry, fragmentsByFile, judgeOptionsFrom(options, tables));
 }
 
 /**
@@ -513,18 +677,31 @@ export function deferredArtifactIssue(
  * Check git-ignore safety: a non-ignored source file must not link to a
  * gitignored target. Returns a ValidationIssue when this rule is violated,
  * null otherwise (including when checks are disabled or out of scope).
+ *
+ * **The containment test is a table read, not a syscall** — hence
+ * {@link GitIgnoreCheckOptions} rather than {@link LinkPolicyOptions}. The gate
+ * it opens on is {@link needsRealpathColumn}, the same predicate
+ * {@link fillLinkFacts} uses to decide whether to populate that column: when it
+ * is false this returns before touching `options.realpaths`, and the table it
+ * would have read is legitimately empty.
+ *
+ * ⚠️ **It can still spawn.** With no {@link GitTracker} threaded in,
+ * `isGitIgnored` runs `git check-ignore` per call — the one remaining unfilled
+ * column (ledger entry D9).
  */
 export function gitIgnoreSafetyIssue(
   link: ResourceLink,
   sourceFilePath: string,
   resolvedTarget: string,
-  options: LinkPolicyOptions | undefined,
+  options: GitIgnoreCheckOptions | undefined,
 ): ValidationIssue | null {
-  if (
-    options?.skipGitIgnoreCheck === true ||
-    options?.projectRoot === undefined ||
-    !isWithinProject(resolvedTarget, options.projectRoot)
-  ) {
+  // Same predicate the fill asked, so the two can never disagree about whether
+  // `options.realpaths` holds the rows the next line reads.
+  if (options === undefined || !needsRealpathColumn(options)) {
+    return null;
+  }
+
+  if (!isWithinProjectFrom(options.realpaths, resolvedTarget, options.projectRoot)) {
     return null;
   }
 
@@ -573,14 +750,15 @@ export function gitIgnoreSafetyIssue(
 /**
  * Validate a local file link (with optional anchor).
  *
- * Synchronous, and it resolves nothing and lists nothing: the resolution comes
- * off the entry (the identity {@link linkTargetPaths} depends on) and the
- * existence/case fact comes out of `options.siblingNames`.
+ * Synchronous, and it resolves nothing, lists nothing and realpaths nothing: the
+ * resolution comes off the entry (the identity {@link linkTargetPaths} depends
+ * on), the existence/case fact out of `options.siblingNames`, and the
+ * containment fact out of `options.realpaths`.
  *
  * It can still reach the filesystem, through {@link gitIgnoreSafetyIssue} —
- * `fs.realpathSync` via `isWithinProject`, plus `spawnSync('git check-ignore')`
- * when no {@link GitTracker} was supplied. Those two facts are not filled yet;
- * do not describe this function as free of I/O until they are.
+ * `spawnSync('git check-ignore')` when no {@link GitTracker} was supplied. That
+ * fact is not filled yet (ledger entry D9); do not describe this function as
+ * free of I/O until it is.
  */
 function validateLocalFileLink(
   entry: ResolvedLinkEntry,

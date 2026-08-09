@@ -19,13 +19,13 @@
  */
 
 import { createRegistryIssue, type IssueCode } from '@vibe-agent-toolkit/agent-schema';
-import { fillSiblingNames, FsLookupCache } from '@vibe-agent-toolkit/utils';
+import { FsLookupCache } from '@vibe-agent-toolkit/utils';
 
 import { classifyLink } from './link-parser.js';
 import {
+  fillLinkFacts,
   judgeLink,
   judgeOptionsFrom,
-  linkTargetPaths,
   resolveLinkEntry,
   type FragmentIndex,
   type ResolvedLinkEntry,
@@ -64,15 +64,17 @@ interface FrontmatterLinkEntry {
  * Validate every URI-family frontmatter value against the file system.
  *
  * Uses the same fill/judge shape as the rest of link validation — classify and
- * resolve every capture (collecting external URLs as it goes), fill the
- * sibling-name table, then judge synchronously — but at a **narrower scope: one
- * fill per file, not one per corpus.** The registry lane fills once for every
- * link in the whole corpus; this function is `await`ed inside a per-resource
- * loop in `resource-registry.ts`, so its fill can only ever see the captures of
- * the file being validated. The shared `fsCache` keeps repeated directories from
- * costing repeated `readdir`s across those per-file fills, but the fills
- * themselves are not batched, and the judge still carries the per-link
- * realpath/`git check-ignore` cost documented on `judgeLink`.
+ * resolve every capture (collecting external URLs as it goes), fill both judge
+ * columns, then judge synchronously — but at a **narrower scope: one fill per
+ * file, not one per corpus.** The registry lane fills once for every link in the
+ * whole corpus; this function is `await`ed inside a per-resource loop in
+ * `resource-registry.ts`, so its fill can only ever see the captures of the file
+ * being validated. The shared `fsCache` keeps repeated directories and repeated
+ * paths from costing repeated `readdir`s and `realpath`s across those per-file
+ * fills — the project root in particular is canonicalized once for the whole run
+ * rather than once per file — but the fills themselves are not batched, and the
+ * judge still carries the per-link `git check-ignore` cost documented on
+ * `judgeLink`.
  *
  * Issue order and `externalUrls` order both follow capture order, exactly as the
  * single-pass version did.
@@ -127,11 +129,12 @@ export async function validateFrontmatterLinks(
 
   // One fill for this file's frontmatter references. The fill set is read off
   // the very resolution objects the judge will read — see linkTargetPaths.
-  const siblingNames = await fillSiblingNames(
-    linkTargetPaths(entries.map(({ entry }) => entry)),
+  const tables = await fillLinkFacts(
+    entries.map(({ entry }) => entry),
     options?.fsCache ?? new FsLookupCache(),
+    options ?? {},
   );
-  const judgeOptions = judgeOptionsFrom(options, siblingNames);
+  const judgeOptions = judgeOptionsFrom(options, tables);
 
   for (const { entry, dottedPath } of entries) {
     const issue = judgeLink(entry, fragmentsByFile, judgeOptions);

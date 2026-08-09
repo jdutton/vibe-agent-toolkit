@@ -14,6 +14,7 @@
 import nodeFs from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { promisify } from 'node:util';
 
 import { toForwardSlash } from './path-core.js';
 import { safePath } from './path-utils.js';
@@ -150,6 +151,41 @@ export class FsLookupCache {
    * path does not exist or cannot be resolved (a non-existent file has no realpath,
    * and callers comparing paths still need an answer).
    *
+   * ⚠️ **`promisify(nodeFs.realpath)` — NOT `fs/promises.realpath`. Node ships two
+   * different realpaths and they do not agree.** `fs.realpathSync` and the
+   * `fs.realpath` *callback* form run Node's own JS implementation: an
+   * lstat/readlink walk that preserves the casing you asked for. `fs/promises.realpath`
+   * and `fs.realpath.native` call `uv_fs_realpath` (`realpath(3)` /
+   * `GetFinalPathNameByHandleW`), which reports the casing **on disk**. On a
+   * case-insensitive filesystem — macOS and Windows — those are different strings,
+   * and this column feeds *synchronous* judges that previously called
+   * `fs.realpathSync` themselves. A column that does not match `realpathSync` byte
+   * for byte flips containment verdicts and emits findings the un-refactored code
+   * does not. Measured, Node v24.13.1 / darwin, disk holding `<B>/Sub/Target.TXT`,
+   * asked for `<B>/sub/target.txt`:
+   *
+   * ```text
+   * realpathSync           : <B>/sub/target.txt   ← the contract
+   * promisify(fs.realpath) : <B>/sub/target.txt   ✅ matches (this call)
+   * fs/promises.realpath   : <B>/Sub/Target.TXT   ❌ on-disk casing
+   * fs.realpath.native     : <B>/Sub/Target.TXT   ❌ on-disk casing
+   * ```
+   *
+   * They also disagree on `''`, where the sync form resolves to the cwd and the
+   * native form throws `ENOENT`. **Do not "modernize" this back to `fs/promises`** —
+   * it reads tidier and silently changes output. `packages/utils/test/fs-utils.test.ts`
+   * → *"answers a mis-cased path exactly as realpathSync does, not as the native
+   * resolver does"* pins the equivalence (and skips itself on a case-sensitive
+   * filesystem, where the two routes cannot be told apart).
+   *
+   * `promisify` is applied **per call, on the default object**, not once at module
+   * scope: an eagerly captured function bypasses any `vi.spyOn(nodeFs, 'realpath')`
+   * installed after import, so this method's I/O would count zero — indistinguishable
+   * from performing none. (`fs.realpath` carries no `util.promisify.custom`, so this
+   * promisification really does get the JS implementation; it is verified, not
+   * assumed — see *"routes canonicalization through the node:fs default object"*.)
+   * The wrapper is allocated only on a cache MISS, i.e. once per actual syscall.
+   *
    * @param targetPath - Path to canonicalize
    * @returns Canonical path with forward slashes on every platform
    */
@@ -159,9 +195,12 @@ export class FsLookupCache {
 
     // Stored before the first `await` anywhere can run, so concurrent callers
     // reaching this method share the one in-flight promise.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-validated path
-    const pending = fs
-      .realpath(targetPath)
+    //
+    // No `security/detect-non-literal-fs-filename` suppression here, unlike the
+    // sibling lookups: the rule matches a member call on an fs object, and the
+    // path is passed to the promisified wrapper instead. The path is
+    // caller-validated all the same.
+    const pending = promisify(nodeFs.realpath)(targetPath)
       .then(toForwardSlash)
       .catch(() => safePath.resolve(targetPath));
     this.#realpaths.set(targetPath, pending);
@@ -393,11 +432,19 @@ export function classifyFilenameCase(row: SiblingNames): {
  * every listing first, then this runs over as many paths as you like with no
  * interleaved I/O.
  *
- * **Its signature takes no {@link FsLookupCache} and no `fs` — that is the
- * property, not an omission.** A judge that cannot reach the filesystem cannot
- * quietly reintroduce a per-path syscall at judgement time, which is exactly what
- * this refactor removed. Keep it that way: if a future check needs another fact
- * about the parent directory, widen the *table*, never this parameter list.
+ * **The signature is not what keeps this free of I/O — a test is.** `fs-utils.ts`
+ * imports `node:fs` and `node:fs/promises` at module scope, so this function's
+ * module reaches the filesystem freely; taking no {@link FsLookupCache} and no
+ * `fs` parameter constrains a future edit not at all, which could call
+ * `nodeFs.statSync` on the next line and still typecheck. What actually holds the
+ * property is `packages/utils/test/fs-utils.test.ts` →
+ * *"judges from a filled table, reaching neither readdir nor the sync stat pair"*:
+ * it spies `fs.readdir`, `nodeFs.existsSync` and `nodeFs.statSync` on the very
+ * default objects this module imports, drives a positive control through each so
+ * a zero cannot mean "the instrument never attached", and asserts the counts do
+ * not move across judgement. If a future check needs another fact about the parent
+ * directory, widen the *table* rather than reaching for `fs` here — and expect
+ * that test, not this signature, to be what stops you.
  *
  * @param table - Table filled by {@link fillSiblingNames}
  * @param filePath - Absolute path to judge
@@ -410,4 +457,97 @@ export function classifyFilenameCaseFrom(
   filePath: string
 ): { exists: boolean; actualName: string | null } {
   return classifyFilenameCase(siblingNamesFrom(table, filePath));
+}
+
+/**
+ * The materialized realpath column: path → its canonical path.
+ *
+ * Every filled row is a string — never `null`, never `undefined`.
+ * {@link FsLookupCache.realpath} answers a path it cannot canonicalize with
+ * `safePath.resolve()` rather than failing, because a path that does not exist
+ * has no realpath and a caller comparing paths still needs an answer. That
+ * fallback IS the contract, and it is what lets `undefined` out of this map mean
+ * exactly one thing: *absent key*. See {@link realpathFrom}.
+ */
+export type RealpathTable = ReadonlyMap<string, string>;
+
+/**
+ * Canonicalize every path in `paths` — the only place I/O is legal for this
+ * fact, and the pass that must run *before* any judging.
+ *
+ * ⚠️ **Rows are keyed by the input path string exactly as given** — not a
+ * dirname, not a re-resolved form. {@link realpathFrom} looks that same string
+ * up, so any normalization applied here and not there is a silent miss (a loud
+ * one, in fact: the judge throws). Contrast {@link fillSiblingNames}, which keys
+ * by `path.dirname` *because* many files share one listing; here the answer is
+ * per path, so the path is the key.
+ *
+ * Distinct paths are canonicalized **concurrently**: the shape this replaces
+ * asked one path at a time at judgement time, which serialised every `realpath`
+ * behind the previous path's `await`. De-duplication is by path, so the same
+ * path passed N times costs one syscall; the call itself goes through
+ * {@link FsLookupCache.realpath}, which memoizes and shares in-flight promises
+ * across fills.
+ *
+ * @param paths - Paths to canonicalize
+ * @param fsCache - Per-run lookup cache (one instance per validation run)
+ * @returns The filled table; empty input yields an empty table with no syscalls
+ */
+export async function fillRealpaths(
+  paths: Iterable<string>,
+  fsCache: FsLookupCache
+): Promise<RealpathTable> {
+  const distinctPaths = new Set(paths);
+
+  const table = new Map<string, string>();
+  await Promise.all(
+    [...distinctPaths].map(async (filePath) => {
+      table.set(filePath, await fsCache.realpath(filePath));
+    })
+  );
+
+  return table;
+}
+
+/**
+ * Read the canonical path for `filePath` out of an already-filled table. Pure.
+ *
+ * **A miss throws rather than degrading to a recomputed realpath.** The fill set
+ * is derived from exactly the paths the judge will be asked about, so a missing
+ * key is a programming error — a path judged that nobody filled. Recomputing it
+ * would answer *correctly* and silently reintroduce the per-path syscall this
+ * column exists to remove: a regression no test of the verdict could catch,
+ * because the verdict would be identical, only slower.
+ *
+ * Public, unlike {@link siblingNamesFrom}: a sibling-names row is not yet an
+ * answer (it still needs {@link classifyFilenameCase}), whereas here the row IS
+ * the answer — so this lookup is itself the judge for this column, and there is
+ * nothing left to keep internal.
+ *
+ * **The signature is not what keeps this free of I/O — a test is.** As with
+ * {@link classifyFilenameCaseFrom}, this module imports `node:fs` and
+ * `node:fs/promises` at module scope, so withholding a {@link FsLookupCache} from
+ * the parameter list prevents nothing. The guard is
+ * `packages/utils/test/fs-utils.test.ts` → *"judges from a filled table, reaching
+ * neither the async nor the sync realpath"*, which spies `nodeFs.realpath` and
+ * `nodeFs.realpathSync` on the module default objects, proves both instruments
+ * attached with a positive control, and asserts zero calls across judgement.
+ *
+ * @param table - Table filled by {@link fillRealpaths}
+ * @param filePath - Path being asked about, as it was handed to the fill
+ * @returns The canonical path, with forward slashes on every platform
+ * @throws If `table` holds no row for `filePath`
+ */
+export function realpathFrom(table: RealpathTable, filePath: string): string {
+  // `undefined` can only mean "absent key": a filled row is always a string,
+  // because `FsLookupCache.realpath` falls back to a resolved path rather than
+  // leaving an unresolvable path without an answer.
+  const realPath = table.get(filePath);
+  if (realPath === undefined) {
+    throw new Error(
+      `No canonical path for "${filePath}". Fill it with fillRealpaths() before judging.`
+    );
+  }
+
+  return realPath;
 }

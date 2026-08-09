@@ -10,11 +10,14 @@ import {
   classifyFilenameCase,
   classifyFilenameCaseFrom,
   copyDirectory,
+  fillRealpaths,
   fillSiblingNames,
   FsLookupCache,
+  realpathFrom,
   siblingNamesFrom,
 } from '../src/fs-utils.js';
-import type { SiblingNames, SiblingNamesTable } from '../src/fs-utils.js';
+import type { RealpathTable, SiblingNames, SiblingNamesTable } from '../src/fs-utils.js';
+import { toForwardSlash } from '../src/path-core.js';
 import { canCreateSymlinks, setupAsyncTempDirSuite } from '../src/test-helpers.js';
 
 import { setupNestedDirectory } from './test-helpers.js';
@@ -250,7 +253,10 @@ describe('fs-utils', () => {
 
     it('memoizes realpath and falls back to a resolved path when it fails', async () => {
       const cache = new FsLookupCache();
-      const spy = vi.spyOn(fs, 'realpath');
+      // `nodeFs.realpath`, not `fs/promises.realpath`: the memo deliberately runs
+      // Node's JS realpath so its answers match `fs.realpathSync` on a
+      // case-insensitive filesystem. See the method's docblock.
+      const spy = vi.spyOn(nodeFs, 'realpath');
 
       const real = await cache.realpath(tempDir);
       expect(await cache.realpath(tempDir)).toBe(real);
@@ -658,6 +664,214 @@ describe('fs-utils', () => {
 
     it.each(CASES)('reports $label', async ({ setup, expected }) => {
       expect(await judge(await setup(tempDir))).toEqual(expected);
+    });
+  });
+
+  describe('fillRealpaths + realpathFrom', () => {
+    const PURE = 'Pure.txt';
+
+    /**
+     * Instrument BOTH canonicalization routes, on the same `node:fs` default
+     * object `fs-utils.ts` imports: the callback `realpath` (how the fill reaches
+     * disk, via `promisify`) and `realpathSync` (how a regressed judge would).
+     *
+     * Spying the default object rather than named bindings is what makes the
+     * counts real. `vi.spyOn` cannot intercept a NAMED ESM import of a builtin —
+     * Node snapshots those bindings at import time, so such a spy attaches and
+     * counts zero, which reads exactly like "this performs no I/O". The same trap
+     * catches a `promisify` hoisted to module scope: it would capture the function
+     * before any spy could replace it.
+     */
+    const spyRealpathRoutes = (): { counts: () => number[]; clear: () => void } => {
+      const spies = [vi.spyOn(nodeFs, 'realpath'), vi.spyOn(nodeFs, 'realpathSync')];
+      return {
+        counts: (): number[] => spies.map((spy) => spy.mock.calls.length),
+        clear: (): void => {
+          for (const spy of spies) spy.mockClear();
+        },
+      };
+    };
+
+    it('fills one row per distinct path, keyed by the input string exactly', async () => {
+      const names = ['Alpha.txt', 'Beta.txt'];
+      const filePaths = names.map((name) => safePath.join(tempDir, name));
+      await Promise.all(filePaths.map((filePath) => fs.writeFile(filePath, '')));
+
+      const table = await fillRealpaths(filePaths, new FsLookupCache());
+
+      // Keyed by the INPUT string, not a dirname and not a re-resolved form: the
+      // judge looks up by that same string, and any normalization here would be
+      // a miss — which throws.
+      const byName = (a: string, b: string): number => a.localeCompare(b);
+      expect([...table.keys()].sort(byName)).toEqual([...filePaths].sort(byName));
+      expect(
+        names.every((name, i) => realpathFrom(table, filePaths[i] ?? '').endsWith(name))
+      ).toBe(true);
+    });
+
+    it('canonicalizes one distinct path once however many times it is passed', async () => {
+      const filePath = safePath.join(tempDir, 'Repeated.txt');
+      await fs.writeFile(filePath, '');
+      const cache = new FsLookupCache();
+      const syscall = vi.spyOn(nodeFs, 'realpath');
+      // TWO levels are instrumented, because only one of them can see the
+      // de-duplication. `FsLookupCache.realpath` memoizes, so the SYSCALL count
+      // is 1 whether or not the fill de-dupes — measured: dropping the `Set`
+      // leaves `nodeFs.realpath` at exactly 1 and this test green. The cache-level
+      // spy is the one that dies with the de-duplication.
+      const deduped = vi.spyOn(cache, 'realpath');
+
+      const table = await fillRealpaths([filePath, filePath, filePath], cache);
+
+      // A count of exactly one is also the positive control — an instrument that
+      // never attached counts zero — and the recorded argument pins that what it
+      // counted is THIS path's canonicalization, not an incidental syscall from
+      // somewhere else in the run.
+      expect(syscall).toHaveBeenCalledTimes(1);
+      // First argument only: this is the CALLBACK form, so the recorded call also
+      // carries the continuation `promisify` supplies.
+      expect(syscall.mock.calls[0]?.[0]).toBe(filePath);
+      expect(deduped).toHaveBeenCalledTimes(1);
+      expect(table.size).toBe(1);
+      vi.restoreAllMocks();
+    });
+
+    it('gives an absent path a row too — the resolved-path fallback, not a throw', async () => {
+      const missing = safePath.join(tempDir, 'no-such-file.txt');
+
+      const table = await fillRealpaths([missing], new FsLookupCache());
+
+      // The fallback IS the contract: a non-existent path has no realpath, and a
+      // caller comparing paths still needs an answer. So a filled row is always a
+      // string, which is what lets `undefined` mean "absent key" and nothing else.
+      expect(realpathFrom(table, missing)).toBe(safePath.resolve(missing));
+    });
+
+    it('throws from realpathFrom when the table holds no row for the path', () => {
+      const unfilled = safePath.join(tempDir, 'Unkeyed.txt');
+      const empty: RealpathTable = new Map();
+
+      // Degrading to a recomputed realpath would silently reinstate the per-path
+      // syscall this column exists to remove, and no test of the VERDICT would
+      // catch it. The miss is a programming error, so it is loud — and it names
+      // the remedy.
+      expect(() => realpathFrom(empty, unfilled)).toThrow(unfilled);
+      expect(() => realpathFrom(empty, unfilled)).toThrow('fillRealpaths');
+    });
+
+    it('judges from a filled table, reaching neither the async nor the sync realpath', async () => {
+      const filePath = safePath.join(tempDir, PURE);
+      await fs.writeFile(filePath, '');
+      const routes = spyRealpathRoutes();
+
+      const table = await fillRealpaths([filePath], new FsLookupCache());
+      // Positive control for the sync route. `fs-utils.ts` has no production
+      // `realpathSync` caller today — this guard exists so that one cannot be
+      // ADDED at judgement time — so the control drives the same module-default
+      // object such a judge would reach. Without it the zero below is
+      // indistinguishable from an instrument that never attached at all.
+      nodeFs.realpathSync(tempDir);
+
+      expect(routes.counts().every((n) => n > 0)).toBe(true);
+      routes.clear();
+
+      expect(realpathFrom(table, filePath).endsWith(PURE)).toBe(true);
+      expect(routes.counts()).toEqual([0, 0]);
+      vi.restoreAllMocks();
+    });
+
+    it('yields an empty table for no paths, without touching the filesystem', async () => {
+      // Both spies come from the helper the purity case above proves attaches,
+      // so these zeros are absence of calls rather than absence of instruments.
+      const routes = spyRealpathRoutes();
+
+      const table = await fillRealpaths([], new FsLookupCache());
+
+      expect(table.size).toBe(0);
+      expect(routes.counts()).toEqual([0, 0]);
+      vi.restoreAllMocks();
+    });
+
+    it('resolves a symlink to its target, filed under the link path asked about', async ({
+      skip,
+    }) => {
+      // Windows CI agents often lack the symlink privilege. Say so rather than
+      // no-op: a silently skipped symlink case reads as a passing test.
+      if (!canCreateSymlinks(tempDir)) skip();
+
+      const targetPath = safePath.join(tempDir, 'Target.txt');
+      const linkPath = safePath.join(tempDir, 'Link.txt');
+      await fs.writeFile(targetPath, '');
+      await fs.symlink(targetPath, linkPath);
+
+      const table = await fillRealpaths([linkPath], new FsLookupCache());
+
+      // The row is the TARGET's canonical path filed under the LINK's path,
+      // which is what makes this column a canonicalization rather than an echo.
+      expect(realpathFrom(table, linkPath)).toBe(toForwardSlash(nodeFs.realpathSync(targetPath)));
+      expect(realpathFrom(table, linkPath)).not.toBe(safePath.resolve(linkPath));
+    });
+
+    it('answers a mis-cased path exactly as realpathSync does, not as the native resolver does', async ({
+      skip,
+    }) => {
+      const dirOnDisk = safePath.join(tempDir, 'CaseSub');
+      await fs.mkdir(dirOnDisk);
+      await fs.writeFile(safePath.join(dirOnDisk, 'Target.TXT'), '');
+      // BOTH components are mis-cased on purpose. The two realpath
+      // implementations differ on DIRECTORY components as well as on the
+      // basename, so a basename-only fixture under-tests the divergence.
+      const misCased = safePath.join(tempDir, 'casesub', 'target.txt');
+
+      // Probe the FIXTURE, never `process.platform`. On a case-sensitive
+      // filesystem (typical Linux CI) the mis-cased path does not exist at all:
+      // both routes fail identically, fall back to the resolved path, and the
+      // assertion below is vacuous — a pass that proves nothing. Skipping says so
+      // out loud. macOS and Windows are where this case has teeth, and they are
+      // exactly the two platforms this branch has no CI for.
+      if (!nodeFs.existsSync(misCased)) skip();
+
+      const table = await fillRealpaths([misCased], new FsLookupCache());
+
+      // Pinned to what `fs.realpathSync` answers for the SAME input rather than
+      // to a literal string: the contract is equivalence with the synchronous
+      // route that the synchronous callers this column replaced use. Anything
+      // else changes findings on a case-insensitive filesystem.
+      expect(realpathFrom(table, misCased)).toBe(toForwardSlash(nodeFs.realpathSync(misCased)));
+    });
+
+    it('answers the empty path as realpathSync does, where the native resolver throws', async () => {
+      // The fifth input class from the divergence survey: `fs.realpathSync('')`
+      // resolves to the cwd, while `fs/promises.realpath('')` throws ENOENT
+      // (measured, Node v24.13.1 / darwin). This one is a CONTRACT PIN, not a
+      // discriminator — the ENOENT lands in the `safePath.resolve()` fallback,
+      // which also answers the cwd, so the two routes agree here whenever the cwd
+      // is itself a real path. It is kept because that agreement is incidental:
+      // pinning to the sync route stops a future fallback change drifting it.
+      const table = await fillRealpaths([''], new FsLookupCache());
+
+      expect(realpathFrom(table, '')).toBe(toForwardSlash(nodeFs.realpathSync('')));
+    });
+
+    it('routes canonicalization through the node:fs default object, so a post-load spy sees it', async () => {
+      // The shape guard for `FsLookupCache.realpath`. Promisifying at module
+      // scope would capture `nodeFs.realpath` eagerly and bypass every spy
+      // installed after import — the memo would still answer correctly and this
+      // counter would read zero, which is indistinguishable from "performs no
+      // I/O". Same failure mode the file-header comment describes for named ESM
+      // imports, reached by a different route.
+      const filePath = safePath.join(tempDir, 'Spied.txt');
+      await fs.writeFile(filePath, '');
+      const spy = vi.spyOn(nodeFs, 'realpath');
+
+      const answer = await new FsLookupCache().realpath(filePath);
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy.mock.calls[0]?.[0]).toBe(filePath);
+      // The spy must not have swallowed the answer: an instrument that broke the
+      // call would also count 1.
+      expect(answer).toBe(toForwardSlash(nodeFs.realpathSync(filePath)));
+      vi.restoreAllMocks();
     });
   });
 });
