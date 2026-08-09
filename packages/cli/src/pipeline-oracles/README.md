@@ -211,41 +211,94 @@ definitions last, where the two orders happen to agree. That file declares one
 **first**, so a collapse into a single document-order traversal renumbers its
 ordinals and nothing else's.
 
-## Driving these from a terminal: `vat pipeline`
+## Driving these: by writing a test, and only that
 
-Everything above is reachable from tests only. `src/qa-snapshot/` wraps the same
-captures in a command so they can be run against **any** directory without
-writing a test, and pairs them with the other half of VAT's correctness
-evidence — whole-command stdout.
+**There is no `vat` verb behind any of this, and deliberately so.** `vat pipeline`
+used to be one; it was deleted, because a QA instrument only this repository can
+usefully run does not belong on a published CLI's surface — and shipping these two
+directories cost 335 KB of a 2,401 KB tarball (`npm pack --dry-run --json`) for
+something no adopter can use. Both directories nevertheless stay under `src/`, for a
+concrete reason: **no test file in this repository is typechecked**, and
+`tsc --build` covers `src/` — so the `keyof ParseResult` exhaustiveness guard
+above only asserts anything from where it currently sits. They are kept out of
+the published npm package by the `!dist/pipeline-oracles` and `!dist/qa-snapshot`
+negations in `packages/cli/package.json`'s `files` array, not by moving them.
+
+So the way in is a test. The ones that exist, and what each drives (paths relative
+to `packages/cli/`):
+
+| Entry point | What it drives |
+|---|---|
+| `test/integration/pipeline-oracles.integration.test.ts` | the enumeration and parse-fact oracles against the committed goldens |
+| `test/integration/qa-snapshot.integration.test.ts` | `captureSnapshot` → `writeSnapshot`/`readSnapshot` → `compareSnapshots` → `renderCompareSummary`, end to end over the trap corpus |
+| `test/integration/symlink-divergence.integration.test.ts` | the three-population divergence report, and the only place `aliasesEnumeratedPath` / `targetInsideRoot` are observed non-default |
+| `test/integration/enumeration-symlink-divergence.integration.test.ts` | the two pinned symlink defects listed at the bottom of this file |
+| `test/pipeline-oracles/serialize.test.ts`, `test/qa-snapshot/*.test.ts` | the renderers, the diff engine, the store and the invariant check, as units |
+
+One file at a time, which is the loop to use while iterating:
 
 ```bash
-vat pipeline snapshot . --out /tmp/before          # capture
-# …refactor…
-vat pipeline snapshot . --out /tmp/after --compare /tmp/before
-vat pipeline compare /tmp/before /tmp/after --detail enumeration.resources
-vat pipeline check .                               # invariants only, spawns nothing
+bunx vitest run --config vitest.integration.config.ts \
+  packages/cli/test/integration/qa-snapshot.integration.test.ts
 ```
 
-The two halves answer different questions and neither is worth much alone. The
-oracles are narrow: they name a lane and a row. The whole-command captures are
-broad: they catch anything and localize nothing. *"Something changed"* plus
-*"here is where"* is the pair.
+`src/qa-snapshot/` is the layer above the oracles. It packages a capture as a
+directory on disk, so two captures taken at different commits can be compared
+rather than only asserted against a golden, and it pairs the oracles with the
+other half of VAT's correctness evidence — whole-command stdout. The two halves
+answer different questions and neither is worth much alone. The oracles are
+narrow: they name a lane and a row. The whole-command captures are broad: they
+catch anything and localize nothing. *"Something changed"* plus *"here is where"*
+is the pair.
+
+⚠️ **The whole-command half has no caller today.** `captureSnapshot` still
+implements it behind `includeCommands`, but the only test that calls
+`captureSnapshot` passes `false` on purpose — spawning the built binary from a
+vitest run tests the build, not the instrument — and the caller that passed
+`true` was `vat pipeline snapshot`. Read the paragraph above as the design, not
+as a description of anything that runs.
+
+### Asking whether a capture is trustworthy at all
+
+Comparing two captures assumes each of them is worth comparing. `checkInvariants`
+in `src/qa-snapshot/invariants.ts` is the assertion that they are. It reads a
+`SnapshotManifest` and nothing else — no filesystem, no spawning, no build — and
+reports three violations:
+
+| Code | What it means |
+|---|---|
+| `BUILD_ERROR` | the lane's production builder threw, so its admitted and collision counts are 0 because nothing ran, not because the corpus is empty |
+| `RESTATEMENT_DRIFT` | `lanes.ts` no longer matches the builder it claims to describe, so every artifact that lane produced is a fiction — see "The five lanes" above |
+| `KEY_DISAGREEMENT` | two paths sharing a content key parsed *differently*, so a content-addressed cache over this pipeline would be unsound |
+
+Duplicate-id collisions are reported as **information, never a violation**: they
+are real and pre-existing on VAT's own tree, and a check that is red on arrival
+is a check nobody runs.
+
+It also distinguishes *clean* from *never asked*. `parseFactKeyDisagreementCount`
+is `null` when the capture skipped the parse-fact half, and nothing else in VAT
+observes key soundness — so that case lands in `unchecked`, not in a silently
+empty violation list. `vat pipeline check` used to close this hole by
+hard-coding `includeParseFacts: true` on the request it built; a library
+function never sees the request, so it says so instead.
 
 ### The output is the part that needed designing, not the capture
 
 `vat audit` alone emits 1.81 MB of YAML carrying 1,755 findings. A tool that
-prints that by default rebuilds the problem it exists to solve, so `compare`
-prints one line per artifact and nothing else; diff text requires naming an
-artifact with `--detail`. The headline column (`linksFound 730→731`) comes from
+prints that by default rebuilds the problem it exists to solve, so
+`renderCompareSummary` prints one line per artifact and nothing else; diff text
+requires naming one artifact and calling `renderUnifiedDiff` on it. The headline column (`linksFound 730→731`) comes from
 a shallow scan of leading `key: value` lines and is **advisory** — status and
 the line counts are the authoritative signal.
 
 ### What it refuses to do
 
-- **A `formatVersion` mismatch is refused, not attempted** (exit 2). The artifact
-  sets are not the same shape, and a comparison of nothing renders as "nothing
+- **A `formatVersion` mismatch is refused, not attempted.** `compareSnapshots`
+  returns empty `deltas` and a single `REFUSED:` constraint. The artifact sets
+  are not the same shape, and a comparison of nothing renders as "nothing
   changed" — which would let a reader conclude a refactor moved nothing when in
-  fact nothing was compared.
+  fact nothing was compared. A caller that ignores `constraints` re-opens exactly
+  that hole.
 - **A `CONTENT_KEY_SCHEMA_VERSION` bump masks the key column** on both sides and
   says so, because that bump churns 100% of it and an unmasked diff would be
   total and carry no information.

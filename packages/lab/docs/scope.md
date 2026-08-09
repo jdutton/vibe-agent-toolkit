@@ -47,21 +47,31 @@ should live with what it generates.
 
 ### Moves out of the CLI, but *not* into the lab
 
-**`vat pipeline` → vat's own test infrastructure, and the public verb is deleted.** The five
+**`vat pipeline` → vat's own test infrastructure, and the public verb is deleted. ✅ Done.** The five
 enumeration lanes and the parse-fact oracle reach internal builders directly —
 `pipeline-oracles/lanes.ts` imports `crawlAndResolveRegistry` and `createProjectRegistry` from
 agent-skills, `crawlSkillLinkRegistry` from claude-marketplace, and the resource loaders from cli.
 That coupling is the instrument's whole purpose, and it means the oracle **can never compare two vat
 versions**. Putting it in the lab would be putting a version-pinned tool inside a version-agnostic
-one.
+one. So the three subcommands were removed from the CLI and nothing moved here: `src/pipeline-oracles/`
+and `src/qa-snapshot/` stay exactly where they are, reachable only by writing a test, and stay under
+`src/` rather than under `test/` because no test file in this repo is typechecked and their
+compile-time exhaustiveness guards would assert nothing from there.
 
 > Its three whole-command stdout/exit captures already go through `spawnSync` of the vat binary, so
-> that third of the instrument *is* lab-shaped and moves to the lab as an output-diff facet. The
-> split is already latent in the existing artifact set.
+> that third of the instrument *is* lab-shaped and is the piece still to move here, as an output-diff
+> facet. The split is already latent in the existing artifact set. ⚠️ It has no caller at all today —
+> `captureSnapshot`'s `includeCommands` is now only ever passed `false`, because `vat pipeline
+> snapshot` was the one caller that passed `true`.
 >
-> Removing the verb also recovers `dist/qa-snapshot` + `dist/pipeline-oracles` +
-> `dist/commands/pipeline` — 580 KB of the CLI's 3,840 KB dist, 15% of what every adopter installs
-> for an instrument that by construction can never be stable.
+> Removing the verb recovers `dist/pipeline-oracles` + `dist/qa-snapshot` + `dist/commands/pipeline`
+> from the published tarball. Measured with `npm pack --dry-run --json`, not `du -sk` — which pads
+> every file to a 4 KB block and is what inflated the earlier estimate to "580 KB of 3,840 KB, 15%".
+> The real figures: 36 files / 173 KB, 28 files / 162 KB and 16 files / 58 KB, against a whole
+> `@vibe-agent-toolkit/cli` of 616 files / 2,401 KB unpacked. **393 KB of 2,401 KB — 16.4%** of what
+> every adopter installs, for an instrument that by construction can never be stable. The first two
+> are held out by `!dist/pipeline-oracles` / `!dist/qa-snapshot` in `cli`'s `files` array; the third
+> is gone because its source is.
 
 ### Explicitly stays in vat
 

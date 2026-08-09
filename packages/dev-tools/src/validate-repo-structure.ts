@@ -998,8 +998,6 @@ const SEVERITY_COUNTS_RATCHET = new Map<string, string>([
  */
 const SEVERITY_COUNTS_NOT_APPLICABLE = new Map<string, string>([
   ['packages/cli/src/commands/rag/index-command.ts', 'indexing failures are plain strings, not severity-classified findings; status is a generic success envelope'],
-  ['packages/cli/src/commands/pipeline/snapshot.ts', 'captures, never judges: its `warnings` are capture-time CONSTRAINTS on any later comparison (a walk-route lane, a lane whose builder threw, a skipped half), not findings about the corpus, so there is no severity distribution to publish'],
-  ['packages/cli/src/commands/pipeline/check.ts', 'InvariantViolation carries no severity field — every violation is equally fatal and any one of them exits 2, so `violationCount` IS the complete distribution; a per-severity block would have exactly one bucket'],
 ]);
 
 /** What the ratchet believes about one scanned file, from its source alone. */

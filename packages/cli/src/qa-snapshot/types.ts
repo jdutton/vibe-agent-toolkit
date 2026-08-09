@@ -7,13 +7,16 @@
  * captures that name a lane and a row. `~/Workspaces/vat-perf-baseline/` held
  * the other half: whole-command stdout, broad enough to catch anything and
  * unable to localize any of it. Neither is worth much alone — "something
- * changed" plus "here is where" is the pair — and until now the first was
- * reachable only by writing a test and the second only on one macOS machine.
+ * changed" plus "here is where" is the pair — and the second used to be
+ * reproducible only on one macOS machine.
  *
- * This module makes both invocable against any directory, and is therefore a
+ * This module wraps both as one capture over any directory, and is therefore a
  * **QA instrument, not a gate**. A gate must be cheap, portable and
  * green-by-default; this is none of those and never will be. It must only be
- * invocable, and its output must be *small* — see below.
+ * callable, and its output must be *small* — see below.
+ *
+ * ⛔ **Callable means from a test.** The `vat pipeline` verb that used to expose
+ * this from a terminal is deleted; there is no shipped command behind any of it.
  *
  * ⛔ **Not public API.** The lanes bind to internal builders
  * (`createProjectRegistry`, `crawlAndResolveRegistry`, …). Those move whenever
@@ -227,14 +230,20 @@ export interface CompareReport {
   provenanceNotes: string[];
 }
 
-/** Invariants asserted by `vat pipeline check`, one row per lane. */
+/**
+ * A violated pipeline invariant.
+ *
+ * `laneId` is `null` for a corpus-wide invariant — one that is a property of
+ * the capture as a whole rather than of any single lane's crawl.
+ *
+ * Produced by `checkInvariants` in `./invariants.ts`, which is the only
+ * producer and defines what each code means. The union carried two further
+ * codes (`MISSING_PATH`, `UNRESOLVED_SYMLINK`) that no code ever emitted and
+ * nothing ever read; they are gone rather than kept speculatively, so an
+ * exhaustive `switch` over this union has no unreachable arm.
+ */
 export interface InvariantViolation {
   laneId: LaneId | null;
-  code:
-    | 'BUILD_ERROR'
-    | 'RESTATEMENT_DRIFT'
-    | 'KEY_DISAGREEMENT'
-    | 'MISSING_PATH'
-    | 'UNRESOLVED_SYMLINK';
+  code: 'BUILD_ERROR' | 'RESTATEMENT_DRIFT' | 'KEY_DISAGREEMENT';
   detail: string;
 }

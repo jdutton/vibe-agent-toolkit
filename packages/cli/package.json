@@ -18,7 +18,9 @@
   "files": [
     "dist",
     "docs",
-    "README.md"
+    "README.md",
+    "!dist/pipeline-oracles",
+    "!dist/qa-snapshot"
   ],
   "scripts": {
     "build": "tsx src/utils/validate-help-files.ts && tsc && tsx ../dev-tools/src/prepare-bin.ts",

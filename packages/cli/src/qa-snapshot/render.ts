@@ -106,7 +106,7 @@ function renderBody(report: CompareReport): string[] {
   lines.push(
     '',
     `${String(report.changedCount)} of ${String(report.deltas.length)} artifacts changed.`,
-    `detail: vat pipeline compare ${report.beforeDir} ${report.afterDir} --detail ${firstMoved(sorted)}`,
+    `detail: renderDetailHeader + renderUnifiedDiff for one artifact, e.g. '${firstMoved(sorted)}'`,
   );
   return lines;
 }
@@ -138,10 +138,10 @@ function sortDeltas(deltas: readonly ArtifactDelta[]): ArtifactDelta[] {
 }
 
 /**
- * Name of the first row that moved, for the `--detail` hint.
+ * Name of the first row that moved, for the drill-down hint.
  *
  * @param sorted - Rows already sorted with moved rows first
- * @returns The selector to suggest
+ * @returns The artifact name to suggest
  */
 function firstMoved(sorted: readonly ArtifactDelta[]): string {
   return sorted.find((delta) => delta.status !== 'same')?.name ?? '';
@@ -211,16 +211,18 @@ function wrapNotes(notes: readonly string[], width: number): string[] {
 /**
  * Drill-down header for one artifact, printed above its diff text.
  *
- * This takes an already-resolved row, so it cannot fail to match: resolving a
- * user's `--detail` selector against `report.deltas` is the caller's job, and
- * the miss case is {@link renderSelectorHelp}, not a `null` from here.
+ * This takes an already-resolved row, so it cannot fail to match: resolving an
+ * artifact name against `report.deltas` is the caller's job. A miss is that
+ * caller's assertion failure — there is no renderer for it, because the only
+ * caller is a test and a test naming an artifact that does not exist has
+ * already failed with a better message than any list of alternatives.
  *
- * @param delta - The row the selector resolved to
+ * @param delta - The row the name resolved to
  * @returns The header text, LF-terminated
  */
 export function renderDetailHeader(delta: ArtifactDelta): string {
   const lines = [
-    `${TITLE} --detail ${delta.name}`,
+    `${TITLE} — detail: ${delta.name}`,
     `artifact: ${delta.artifact}   kind: ${delta.kind}`,
     `status: ${delta.status}   +${String(delta.addedLines)}/-${String(delta.removedLines)}`,
   ];
@@ -238,24 +240,5 @@ export function renderDetailHeader(delta: ArtifactDelta): string {
     );
   }
 
-  return `${lines.join('\n')}\n`;
-}
-
-/**
- * The list a user sees when their `--detail` selector matched nothing.
- *
- * @param report - The comparison whose selectors are on offer
- * @returns The help text, LF-terminated
- */
-export function renderSelectorHelp(report: CompareReport): string {
-  if (report.deltas.length === 0) {
-    return 'No artifacts were compared, so there is no selector to pass to --detail.\n';
-  }
-
-  const nameWidth = columnWidth(report.deltas.map((delta) => delta.name));
-  const lines = [
-    `No artifact matched that selector. ${String(report.deltas.length)} are available:`,
-    ...sortDeltas(report.deltas).map((delta) => `  ${delta.name.padEnd(nameWidth)}${delta.status}`),
-  ];
   return `${lines.join('\n')}\n`;
 }

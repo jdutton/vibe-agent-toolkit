@@ -22,8 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Two consequences worth knowing. **Content keys are now stable across VAT versions** — they are
   `<parserKind>.<sha256>` with no version component — so upgrading no longer churns every recorded
-  key, and `vat pipeline`'s key-masking machinery is deleted rather than left as dead weight
-  (snapshot `formatVersion` is 2; older snapshots are refused, not mis-compared). And the
+  key, and the key-masking machinery in VAT's own pipeline-snapshot test instrument is deleted
+  rather than left as dead weight (snapshot `formatVersion` is 2; older snapshots are refused, not
+  mis-compared). And the
   external-link and linkAuth caches deliberately stay *outside* the namespace: URL reachability is a
   fact about the world, not about this build, so it survives upgrades.
 
@@ -60,7 +61,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   roughly 1,500 serialised `realpathSync` calls, about half of them re-canonicalizing the same root.
   The column now canonicalizes each distinct path once, concurrently, before judging, and the
   project root is a single row; the judge reads the table and makes no `realpath` call of either
-  kind. Output-neutral by design — verified with `vat pipeline`, all 12 artifacts byte-identical.
+  kind. Output-neutral by design — verified with VAT's pipeline-snapshot oracles, all 12 artifacts
+  byte-identical.
 
   ⚠️ **`FsLookupCache.realpath` now canonicalizes with `promisify(fs.realpath)` rather than
   `fs/promises.realpath`, and the choice is load-bearing.** Node ships two different realpath
@@ -78,8 +80,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   target instead. The two syscalls are deduplicated, not collapsed into one: the pair distinguishes
   "absent" from "present but unstattable", and the link-graph walker branches differently on each.
   Exposes `probeStats` (`{ probes, misses }`), and `walkLinkGraph` accepts an optional `pathProbe`
-  so callers can read those counters back. Output-neutral by design — verified with `vat pipeline`
-  (12/12 artifacts identical) and a byte-for-byte diff of the packaged skill output.
+  so callers can read those counters back. Output-neutral by design — verified with VAT's
+  pipeline-snapshot oracles (12/12 artifacts identical) and a byte-for-byte diff of the packaged
+  skill output.
 
 - **`parseMarkdownContent(content, sizeBytes)` and `parseHtmlContent(content, sizeBytes)`** in
   `@vibe-agent-toolkit/resources` — the content-addressable halves of `parseMarkdown` / `parseHtml`,
@@ -87,24 +90,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged and now delegate. `sizeBytes` is a parameter rather than derived from `content` because
   the two genuinely differ: the on-disk byte count is the authority, and re-encoding a decoded
   string diverges from it on malformed UTF-8 (each bad byte becomes a 3-byte U+FFFD).
-
-- **`vat pipeline` — an internal dev instrument for holding the resource pipeline still across a
-  refactor.** Three verbs: `snapshot <dir> --out <dir>` captures what the pipeline actually
-  enumerates and parses over a corpus (five enumeration lanes, a parse-fact oracle, and normalized
-  stdout/stderr from `resources scan`, `resources validate` and `audit`); `compare <before> <after>`
-  reports what moved; `check <dir>` asserts the pipeline's internal invariants without spawning
-  anything. Listed in `vat --help` deliberately — its intended caller is an agent session driving it
-  from a terminal, and a hidden verb is undiscoverable by exactly that caller — but it carries **no
-  API stability**: the lanes bind to internal builders, so the output shape, the artifact names and
-  the on-disk layout all change without notice.
-
-  `compare` defaults to a one-line-per-artifact summary and prints diff text only for an artifact
-  named with `--detail`. That is the design, not a limitation: `vat audit` alone emits 1.81 MB of
-  YAML carrying 1,755 findings, so printing the diff by default would rebuild the problem the tool
-  exists to solve. Comparison exits 0 when identical, 1 when something changed, and 2 when it
-  **refused** — a `formatVersion` mismatch is never guessed at, because a comparison of nothing
-  renders as "nothing changed" and would let a reader conclude a refactor moved nothing when in
-  fact nothing was compared.
 
 - **Content keys — `computeContentKey()`, `parserKindForPath()`, `readContentWithKey()`** are exported
   from `@vibe-agent-toolkit/resources`. A content key names a parse result by the bytes the parser
@@ -184,8 +169,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (link collection and dry-run) and the LanceDB indexer. `parseKeyed(keyed, cache)` is the same
   interception one step lower, for a caller that has already read and keyed the bytes.
   `defaultParseCache()` is the process-wide instance used when no cache is supplied. `parseMarkdown`
-  and `parseHtml` remain exported and uncached — the parse-fact oracle behind `vat pipeline` uses
-  them deliberately, since an oracle that consults the cache cannot verify it.
+  and `parseHtml` remain exported and uncached — VAT's own parse-fact oracle uses them
+  deliberately, since an oracle that consults the cache cannot verify it.
 
 - **`vat cache clear`** removes VAT's on-disk caches — the parse cache and the external-URL
   validation caches, which share `<tmpdir>/.vat-cache/`. Reports what it removed; exits 0 when

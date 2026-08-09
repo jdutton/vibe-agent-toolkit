@@ -50,7 +50,7 @@ const AFTER_LABEL = '<capture:after>';
 /** The parse-fact artifact's fixed name inside a snapshot directory. */
 const PARSE_FACT_ARTIFACT = 'oracle/parse-facts.txt';
 
-/** `--detail` selector for the resources enumeration lane. */
+/** Artifact name for the resources enumeration lane, used to drill into one row. */
 const RESOURCES_SELECTOR = 'enumeration.resources';
 
 /** Lanes that crawl HTML as well as markdown — the two a new `.html` file must move. */
@@ -87,8 +87,9 @@ function captureCorpus(corpusRoot: string, corpusLabel: string): Promise<Capture
     // `packages/cli/src/bin.js` — a file that does not exist, because the build
     // emits `dist/bin.js`. All three commands would record `exitCode: null`
     // ("did not run") and this file would be asserting on the build's presence
-    // rather than on the instrument. The command half is exercised by whoever
-    // runs `vat pipeline snapshot` against a real dist, not from here.
+    // rather than on the instrument. ⚠️ Nothing turns this half on any more:
+    // `vat pipeline snapshot` was its only caller that ever passed `true`, and
+    // that verb is deleted, so the whole-command half has no live caller at all.
     includeCommands: false,
     includeParseFacts: true,
     commandTimeoutMs: COMMAND_TIMEOUT_MS,
@@ -131,14 +132,14 @@ function makeTempDir(label: string): string {
 }
 
 /**
- * One selector's status, or a message naming what the report actually carried.
+ * One artifact's status, or a message naming what the report actually carried.
  *
- * Returning the available selectors rather than `undefined` matters: a missing
+ * Returning the available artifact names rather than `undefined` matters: a missing
  * row and an unchanged row are opposite findings, and `expect(undefined)` cannot
  * tell them apart in the failure output.
  *
  * @param report - The comparison to read
- * @param name - The `--detail` selector to look up
+ * @param name - The artifact name to look up
  * @returns The row's status, or a description of the miss
  */
 function statusOf(report: CompareReport, name: string): string {
@@ -315,6 +316,6 @@ describe('qa snapshot — walk-route corpus (no repository above it)', () => {
     const summary = renderCompareSummary(report);
     expect(summary).toMatch(/enumeration\.resources +changed/u);
     expect(summary).toMatch(/enumeration\.inventory +same/u);
-    expect(summary).toContain(`--detail ${RESOURCES_SELECTOR}`);
+    expect(summary).toContain(`'${RESOURCES_SELECTOR}'`);
   });
 });

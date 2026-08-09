@@ -170,7 +170,7 @@ function readManifest(root: string, manifestPath: string): SnapshotManifest {
   if (!existsSync(manifestPath)) {
     throw new Error(
       `Not a snapshot directory: ${root}\n` +
-        `  Expected ${MANIFEST_FILENAME} at its top level. Capture one with 'vat pipeline snapshot <corpus> --out ${root}'.`,
+        `  Expected ${MANIFEST_FILENAME} at its top level. Capture one with captureSnapshot() + writeSnapshot(${root}, …) from a test.`,
     );
   }
 

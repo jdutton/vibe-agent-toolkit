@@ -348,6 +348,10 @@ describe('renderCompareSummary', () => {
     expect(text).toContain(LANE_SELECTOR);
     expect(text).toContain('enumeratedCount 265→267');
     expect(text).toContain('1 of 1 artifacts changed.');
-    expect(text).toContain(`--detail ${LANE_SELECTOR}`);
+    // The drill-down hint names the API a caller reaches for and the artifact
+    // to pass it. It named `vat pipeline compare … --detail` until that verb was
+    // deleted; a hint that names a command nobody can run is worse than none.
+    expect(text).toContain('renderDetailHeader + renderUnifiedDiff');
+    expect(text).toContain(`'${LANE_SELECTOR}'`);
   });
 });

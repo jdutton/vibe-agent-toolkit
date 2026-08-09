@@ -1,21 +1,35 @@
 /**
- * The QA snapshot instrument — the surface a command may bind to.
+ * The QA snapshot instrument — the surface a caller may bind to.
  *
  * ## What this barrel is for
  *
  * `capture` → `store` → `diff` → `render` is a pipeline with one entry point per
- * stage, and a command that wires them together should import the stages, not
- * the modules' internals. Everything re-exported here is something
- * `commands/pipeline/` calls; everything not re-exported here (`normalize.ts`'s
- * `NormalizeContext`, `diff.ts`'s masking helpers) is an implementation detail
- * that a caller has no business reaching for.
+ * stage, and a caller that wires them together should import the stages, not
+ * the modules' internals. Everything re-exported here is a stage boundary;
+ * everything not re-exported here (`normalize.ts`'s `NormalizeContext`,
+ * `diff.ts`'s masking helpers) is an implementation detail that a caller has no
+ * business reaching for.
  *
- * ## Reachable from a command, and still not public API
+ * `invariants` sits beside that chain rather than inside it. It asks whether a
+ * single capture is trustworthy at all — did every builder run, does the
+ * oracle's restatement still match the code it describes, are the content keys
+ * sound — which is a different question from whether anything moved between two
+ * captures, and the only one worth asking before you believe a comparison.
  *
- * This differs from its sibling `../pipeline-oracles/index.js` in exactly one
- * way: that barrel is reachable only from this repository's own tests, whereas
- * this one **is** reachable from a shipped verb — `vat pipeline`. That makes the
- * instrument invocable; it does not make it an API.
+ * ## Test infrastructure — reached by writing a test, not by a verb
+ *
+ * This is the same kind of thing as its sibling `../pipeline-oracles/index.js`:
+ * neither is reachable from any `vat` verb. There used to be one — `vat pipeline`
+ * — and it was deleted, because a QA instrument only this repository can
+ * usefully run does not belong on a published CLI's surface or in its tarball.
+ * The way in is `captureSnapshot` from a test; `test/integration/qa-snapshot.integration.test.ts`
+ * drives the whole capture → store → compare → render chain and is the worked
+ * example to copy.
+ *
+ * It stays under `src/` rather than moving to `test/` for one concrete reason:
+ * no test file in this repository is typechecked, and `tsc --build` covers
+ * `src/`. It is kept out of the published npm package by the `!dist/qa-snapshot`
+ * negation in this package's `files` array.
  *
  * ⛔ The lanes bind to internal builders (`createProjectRegistry`,
  * `crawlAndResolveRegistry`, …). Those move whenever the pipeline moves, which
@@ -37,7 +51,12 @@ export {
   headlineChanges,
   renderUnifiedDiff,
 } from './diff.js';
-export { renderCompareSummary, renderDetailHeader, renderSelectorHelp } from './render.js';
+export {
+  checkInvariants,
+  type CollisionNote,
+  type InvariantReport,
+} from './invariants.js';
+export { renderCompareSummary, renderDetailHeader } from './render.js';
 export { readSnapshot, snapshotPaths, writeSnapshot, type SnapshotPaths } from './store.js';
 export {
   COMMAND_DIR,
