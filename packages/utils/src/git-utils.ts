@@ -9,11 +9,23 @@ import { dirname, parse } from 'node:path';
 
 import which from 'which';
 
+import { lookupGitRoot, rememberGitRoot } from './git-root-cache.js';
 import { safePath } from './path-utils.js';
 
 
 /**
  * Find the git repository root by walking up from the given directory.
+ *
+ * Memoized module-wide via `git-root-cache.ts`: the walk seeds an entry for
+ * every directory it climbs, not just for `startDir`, because the redundancy
+ * this removes is overlapping walks from *different* start directories rather
+ * than repeated calls with the same one. A `null` answer is memoized too — that
+ * is the case that costs a walk to the filesystem root.
+ *
+ * The memo therefore does NOT see a `.git` directory created or removed after
+ * the fact. Anything that mutates repositories in-process (tests; a host that
+ * re-enters a command) must call `resetProjectRootCaches()`, which clears this
+ * cache along with the project-root one.
  *
  * @param startDir - Directory to start searching from
  * @returns Path to git root, or null if not in a git repository
@@ -21,17 +33,22 @@ import { safePath } from './path-utils.js';
 export function gitFindRoot(startDir: string): string | null {
   let currentDir = safePath.resolve(startDir);
   const root = parse(currentDir).root;
+  const climbed: string[] = [];
 
   while (currentDir !== root) {
+    const memoized = lookupGitRoot(currentDir);
+    if (memoized !== undefined) return rememberGitRoot(climbed, memoized);
+    climbed.push(currentDir);
+
     const gitDir = safePath.join(currentDir, '.git');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- walking up from validated startDir
     if (existsSync(gitDir)) {
-      return currentDir;
+      return rememberGitRoot(climbed, currentDir);
     }
     currentDir = dirname(currentDir);
   }
 
-  return null;
+  return rememberGitRoot(climbed, null);
 }
 
 /**

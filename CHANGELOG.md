@@ -264,6 +264,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`directFileCount` counted link *occurrences*, not files, and could exceed the bundle's own file
+  count.** `getResolvedMarkdownLinks` walked `parseResult.links` — one entry per occurrence — and
+  probed each one, so a skill whose routing table pointed 14 rows at the same document contributed
+  14 "direct files". A skill in this repo reported `{ fileCount: 9, directFileCount: 41 }`. The
+  packaging validator now collapses to distinct targets before resolving, preserving first-seen
+  order. The existing `directFileCount <= fileCount` assertion had been passing over the violation
+  because its fixture links three *distinct* files and so could not distinguish the two answers.
+
+- **Repeated filesystem probes across `vat audit`.** Four call sites asked the OS the same question
+  many times in one run; measured on this repo, `vat audit .` drops from 5,505 to 5,373 Node `fs`
+  calls. `gitFindRoot` now memoizes its walk, seeding every ancestor it climbs and caching the
+  negative answer (89 `existsSync` → 21); `resetProjectRootCaches()` clears it, so there is still
+  exactly one public reset. Plugin extraction walks the tree once matching a list of filenames
+  instead of once per filename (`readdir` 35 → 19). The packaging validator resolves declared
+  test-input directories once per skill rather than twice (a term quadratic in project skill count),
+  and the implicit-eval-suite probe is memoized per resolution call (`existsSync` 14 → 2). No
+  behaviour changes: link resolution order, crawl order and audit output are unchanged.
+
 - **Three CLI options were silently doing nothing.** Commander represents `--no-x` as the *positive*
   key `x` (true by default, false when the flag is passed) and camelCases every long name — it never
   produces `noX`, and never a kebab-case key. Three option reads asked for keys Commander never

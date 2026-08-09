@@ -33,7 +33,7 @@ import { findProjectRoot, issueLocation, normalizedTmpdir, toForwardSlash, safeP
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
 import { collectPreBuildGlobFindings, preBuildGlobFindingsToIssues } from '../files-config.js';
 import {
-  packagedFileEntries,
+  partitionTestInputFileEntries,
   resolveTestInputDirs,
   testInputExcludeRules,
   testInputLinkIssues,
@@ -504,16 +504,25 @@ export async function validateSkillForPackaging(
   // Only the entries the PACKAGER will actually copy defer a link: an entry pointing
   // into declared test input is dropped at build time, so its dest never appears and
   // a link to it is a genuine broken link — the same verdict `vat skills build`
-  // reaches. See packagedFileEntries in test-input.ts.
+  // reaches. Same derivation `packagedFileEntries` performs for the lanes that have
+  // no second use for the dirs — see test-input.ts.
   //
   // `projectSkills` is the PROJECT's declared eval suites, assembled once by the
   // calling lane (see SkillValidationSharedContext.projectSkills). Empty when the
   // caller has no project to enumerate — a single-skill audit of a tree with no
   // config — which narrows this lane to the subject's own suite and nothing else.
   const projectSkills = shared?.projectSkills ?? [];
-  const packagedFiles = packagedFileEntries(
-    packagingConfig ?? {}, dirname(skillPath), projectRoot, projectSkills,
-  );
+  // ONE resolution per skill, shared by both consumers below (the `files:` filter and
+  // the walker's exclude rules). It is the expensive input on this path: it probes the
+  // filesystem for a conventional suite under the subject AND under every entry in
+  // `projectSkills`, so it costs O(S) per skill and O(S^2) per run. Resolving it once
+  // per consumer doubled that quadratic term for no new information — the two call
+  // sites took identical arguments. Measured projection, 58-skill adopter declaring no
+  // `test:` block: 6,844 probes, of which 3,422 re-asked a question already answered.
+  const testInputDirs = resolveTestInputDirs(packagingConfig ?? {}, dirname(skillPath), projectSkills);
+  const packagedFiles = partitionTestInputFileEntries(
+    packagingConfig?.files ?? [], projectRoot, testInputDirs,
+  ).kept;
   const deferred = DeferredArtifacts.from(
     [{ files: packagedFiles, skillDir: dirname(skillPath) }],
     projectRoot,
@@ -538,7 +547,6 @@ export async function validateSkillForPackaging(
       locationRoot,
     ),
   );
-  const testInputDirs = resolveTestInputDirs(packagingConfig ?? {}, dirname(skillPath), projectSkills);
 
   const walkOptions: Parameters<typeof walkLinkGraph>[2] = {
     maxDepth,
@@ -1096,14 +1104,28 @@ function collectProgressiveDisclosureIssue(
 }
 
 /**
- * Process links from parsed markdown and return resolved .md file paths
+ * Process links from parsed markdown and return resolved .md file paths.
+ *
+ * Exported for unit test: the deduplication contract (one entry, and one existence
+ * probe, per DISTINCT target however many times it is linked) is not observable
+ * through `validateSkillForPackaging`'s result alone.
  */
-function getResolvedMarkdownLinks(
+export function getResolvedMarkdownLinks(
   links: Array<{ href: string; type: string }>,
   markdownPath: string
 ): string[] {
-  const resolvedPaths: string[] = [];
+  const markdownDir = dirname(markdownPath);
 
+  // Collapse to DISTINCT targets before touching the filesystem. `links` is one
+  // entry per link OCCURRENCE, and documents routinely point many occurrences at
+  // one file (a routing table linking every row to the same sub-skill). Two
+  // consequences, both fixed here rather than downstream:
+  //   - the caller derives `directFileCount` from this list, so occurrences made
+  //     it report more direct files than the whole bundle holds;
+  //   - the existence probe below ran once per occurrence. On this repo's own
+  //     cat-agents skill that was 42 probes over 9 distinct paths.
+  // A Set preserves insertion order, so the surviving order is unchanged.
+  const candidates = new Set<string>();
   for (const link of links) {
     if (link.type !== 'local_file') {
       continue;
@@ -1115,19 +1137,16 @@ function getResolvedMarkdownLinks(
       continue;
     }
 
-    // Resolve path
-    const resolvedPath = safePath.resolve(dirname(markdownPath), hrefWithoutAnchor);
+    const resolvedPath = safePath.resolve(markdownDir, hrefWithoutAnchor);
 
-    // Only include .md files that exist
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path constructed from parsed markdown
-    if (!resolvedPath.endsWith('.md') || !existsSync(resolvedPath)) {
-      continue;
+    // Only .md targets are candidates; existence is settled once, below.
+    if (resolvedPath.endsWith('.md')) {
+      candidates.add(resolvedPath);
     }
-
-    resolvedPaths.push(resolvedPath);
   }
 
-  return resolvedPaths;
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path constructed from parsed markdown
+  return [...candidates].filter(candidate => existsSync(candidate));
 }
 
 /**

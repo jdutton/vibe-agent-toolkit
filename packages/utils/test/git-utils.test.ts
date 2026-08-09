@@ -174,3 +174,96 @@ describe('isGitIgnored', () => {
     expect(isGitIgnored('file.md', CWD)).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// gitFindRoot memoization
+// ---------------------------------------------------------------------------
+//
+// Imported here rather than at the top because the file's convention is to pull
+// the code under test in after the `vi.mock` factories above are registered.
+// `gitFindRoot` touches neither mock — it is pure `existsSync` — but sharing one
+// module instance with `isGitIgnored` matters: they share the memo.
+const { gitFindRoot } = await import('../src/git-utils.js');
+const { resetProjectRootCaches } = await import('../src/project-utils.js');
+
+/** Fixture roots created by the memoization suite, torn down together. */
+const memoFixtures: string[] = [];
+
+function makeMemoFixture(prefix: string): string {
+  const dir = makeTempDir(prefix);
+  memoFixtures.push(dir);
+  return dir;
+}
+
+afterAll(() => {
+  for (const dir of memoFixtures) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+describe('gitFindRoot memoization', () => {
+  /**
+   * The 89-probe finding: on one `vat audit .` run, `existsSync` at the `.git`
+   * probe fired 89 times across 21 distinct directories. The redundancy is not
+   * "the same start directory twice" — it is many different start directories
+   * whose walks overlap on the same ancestors.
+   *
+   * So the property under test is ancestor propagation, not start-dir memoing:
+   * a walk must seed every directory it climbed through, or a sibling's walk
+   * pays for the shared ancestors again.
+   *
+   * Observability: `existsSync` is not mockable here without spying on an ESM
+   * namespace (which throws) or on `node:fs`'s default object (which silently
+   * under-counts). The memo is instead made visible the only way a pure cache
+   * ever is — by removing the thing it cached and seeing the stale answer. The
+   * final assertion is the fixture's own control: after a reset the very same
+   * call answers `null`, so a run with no cache at all could not pass this test.
+   */
+  it('seeds every ancestor it walks, so a sibling walk answers from the memo', () => {
+    const repo = makeMemoFixture('git-memo-repo-');
+    mkdirSyncReal(safePath.join(repo, '.git'));
+    const first = safePath.join(repo, 'a', 'b', 'first');
+    const sibling = safePath.join(repo, 'a', 'b', 'sibling');
+    mkdirSyncReal(first, { recursive: true });
+    mkdirSyncReal(sibling, { recursive: true });
+
+    resetProjectRootCaches();
+    expect(gitFindRoot(first)).toBe(repo);
+
+    // Everything on disk that could answer `repo` is now gone. Only the memo
+    // seeded by the walk above — which climbed through a/b — can still say so.
+    rmSync(safePath.join(repo, '.git'), { recursive: true, force: true });
+    expect(gitFindRoot(sibling)).toBe(repo);
+
+    // Control: the fixture CAN produce the other answer, so the assertion above
+    // is about the memo and not about the fixture being unfalsifiable.
+    resetProjectRootCaches();
+    expect(gitFindRoot(sibling)).toBeNull();
+  });
+
+  /**
+   * "Not in a repository" has to be cacheable too — it is the answer that costs
+   * a full walk to the filesystem root, and the one `isGitIgnored` asks for on
+   * every file of a non-repository corpus. A cache that only stores hits leaves
+   * that case paying full price.
+   *
+   * The reset is what makes the negative safe: `.git` appearing after a `null`
+   * answer is a real event (tests build fixtures; long-lived processes re-enter),
+   * and without invalidation the stale `null` would outlive it.
+   */
+  it('caches the null answer, and resetProjectRootCaches() invalidates it', () => {
+    const late = makeMemoFixture('git-memo-late-');
+
+    resetProjectRootCaches();
+    expect(gitFindRoot(late)).toBeNull();
+
+    mkdirSyncReal(safePath.join(late, '.git'));
+
+    // Still null: the negative is genuinely memoized, not recomputed.
+    expect(gitFindRoot(late)).toBeNull();
+
+    // ...and the one reset callers already know about clears it.
+    resetProjectRootCaches();
+    expect(gitFindRoot(late)).toBe(late);
+  });
+});

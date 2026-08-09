@@ -10,6 +10,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, parse } from 'node:path';
 
+import { resetGitRootCache } from './git-root-cache.js';
 import { safePath } from './path-utils.js';
 
 const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
@@ -84,13 +85,20 @@ export function findNodeWorkspaceRoot(startDir: string): string | null {
 const walkUpCache: Map<string, { configRoot: string | null }> = new Map();
 
 /**
- * Reset {@link findProjectRoot}'s module-level cache.
+ * Reset the module-level walk-up caches: {@link findProjectRoot}'s, and the git
+ * root memo behind `gitFindRoot`.
  *
  * Call at the start of each independent CLI invocation so in-process callers
  * (and integration tests sharing a vitest worker) don't observe stale results.
+ *
+ * Both caches are cleared by this one function on purpose. They memoize the same
+ * kind of fact — which ancestor governs a directory — and are invalidated by the
+ * same events, so a caller that had to remember two reset names would sooner or
+ * later remember only one.
  */
 export function resetProjectRootCaches(): void {
   walkUpCache.clear();
+  resetGitRootCache();
 }
 
 /** Write `entry` into walkUpCache for every dir in `visited`. */

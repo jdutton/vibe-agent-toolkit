@@ -249,6 +249,37 @@ function canonicalizeSync(filePath: string): string {
  * itself, so no fill can know it in advance. Calling this from the judge is the
  * per-link syscall the realpath column exists to remove.
  *
+ * ⚠️ **It canonicalizes the run-constant project root once per call, and no
+ * caller hoists it.** Measured on the crucible adopter (`vat audit .` over a
+ * ~1,500-document corpus, 2026-08-09): 1,231 `realpathSync` calls on the project
+ * root string, **one** distinct value, 100% of them attributed to
+ * `canonicalizeSync ← isWithinProject ← resolveLocalHref` — 834 under
+ * `ResourceRegistry.resolveRelativeLinkPath`, 397 under `walk-link-graph`'s
+ * `resolveHrefToPath`. So 1,230 of the 1,231 are redundant: ≈17 ms of a ≈13 s
+ * run at ≈14 µs/call, and ≈0.1 ms on VAT's own corpus (8 calls).
+ *
+ * **The hoist does not belong in this file.** Both hot callers loop over links
+ * holding one fixed root, so the fix is to canonicalize once per loop and pass
+ * the canonical root down — a signature change to `resolveLocalHref` across two
+ * packages. Two shortcuts that would have stayed inside this file were measured
+ * and rejected: a module-level memo of the root (process-lifetime hidden state
+ * in the one function obliged to answer byte for byte what
+ * `FsLookupCache.realpath` answers), and skipping the root's realpath whenever
+ * the canonical file already sits lexically under the RAW root (sound only while
+ * `realpathSync` SUCCEEDS on the file, so it flips the missing-file row below,
+ * and it rests on a prefix-of-a-realpath-is-its-own-realpath theorem that holds
+ * on macOS but cannot be pinned on Windows from here). A hoist reuses the very
+ * same canonical root, so it preserves every row; either shortcut does not.
+ *
+ * ⚠️ **Reaching the root through a symlink changes the answer for a path that
+ * does not exist.** {@link canonicalizeSync}'s fallback resolves lexically, so a
+ * missing file keeps the symlinked spelling while the root gains the real one.
+ * Measured: an EXISTING file under a `link → real` root is `true`; the same file
+ * MISSING is `false`; missing under the real root is `true`. So
+ * `resolveLocalHref('/docs/gone.md', …)` reports `absolute_escapes_root` for a
+ * merely-broken link whenever the caller's root traverses a symlink. Recorded,
+ * not fixed — changing it changes answers, which this bite may not do.
+ *
  * @param filePath - Absolute path to check
  * @param projectRoot - Absolute path to project root
  * @returns True if filePath is under projectRoot (after symlink resolution)
