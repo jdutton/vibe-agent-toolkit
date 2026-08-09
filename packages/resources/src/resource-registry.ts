@@ -1072,6 +1072,35 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // Determine validation mode (default to permissive)
     const mode = validation.mode ?? 'permissive';
 
+    // This `try` covers the schema load/compile and NOTHING else. Its `catch`
+    // blames the schema by name, so everything it can catch must genuinely be a
+    // failure to read, parse or compile that schema file.
+    //
+    // `validateCompiledFrontmatter` sits OUTSIDE it, argued from that message:
+    // running an already-compiled validator over a document is neither loading
+    // nor parsing a schema, and by that point the schema is proven good —
+    // `readAndCompileSchema` has read the file, `JSON.parse`d it and put it
+    // through `ajv.compile()`. A throw from the compiled validator is an Ajv
+    // runtime fault, and "Failed to load or parse frontmatter schema" would be a
+    // false statement about it. The same reasoning applies more sharply to
+    // `validateFrontmatterLinks` below: it is link validation, not schema
+    // handling, and the fact tables it reads throw ON PURPOSE
+    // (`realpathFrom`/`siblingNamesFrom` crash on a missing row so that a
+    // fill/judge divergence names its own remedy). That crash must reach the
+    // operator intact rather than be reworded into a schema complaint — do not
+    // re-wrap either call.
+    //
+    // ⚠️ **The widening is intended for ALL throws out of those two calls, not
+    // just the fill/judge one.** An Ajv runtime fault, an fs error inside link
+    // validation, anything else — each now escapes `registry.validate()` and
+    // aborts the run, where before it became one `FRONTMATTER_SCHEMA_ERROR` per
+    // resource in the collection. That is a real change in operator-visible
+    // behaviour and it is deliberate: none of those are a defect in the user's
+    // schema, and reporting them as one sends the reader to edit a file that is
+    // fine. A crash that names the real fault beats N findings that name the
+    // wrong one. Anything here that SHOULD become a finding must be caught at
+    // its own call site with its own code — never by widening this `try` back.
+    let compiled: CompiledFrontmatterSchema;
     try {
       const loaded = await this.loadCollectionSchema(schemaPath, mode, fsModule);
       if (!loaded.ok) {
@@ -1079,61 +1108,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         // collection reports it identically, without re-reading the file.
         throw loaded.error;
       }
-      const { schema } = loaded.compiled;
-
-      // Validate frontmatter against JSON Schema
-      const issues = validateCompiledFrontmatter(
-        resource.frontmatter,
-        loaded.compiled,
-        resource.filePath,
-        schemaPath,
-        this.baseDir,
-      );
-
-      // New: walk URI-family frontmatter values. Default-on; explicit `false` disables.
-      if (validation.checkFrontmatterLinks !== false && resource.frontmatter) {
-        const linkOptions: ValidateLinkOptions = this.baseDir === undefined
-          ? { fsCache: this.fsCache, skipGitIgnoreCheck }
-          : {
-              fsCache: this.fsCache,
-              projectRoot: this.baseDir,
-              skipGitIgnoreCheck,
-              ...(this.gitTracker !== undefined && { gitTracker: this.gitTracker }),
-            };
-
-        // ⚠️ KNOWN MISLABEL — recorded, deliberately NOT fixed in the realpath
-        // -column change (ledger D8). This `await` sits inside the schema `try`
-        // above, so ANY throw out of link validation is caught by its `catch` and
-        // re-reported as FRONTMATTER_SCHEMA_ERROR: "Failed to load or parse
-        // frontmatter schema '<schema>': <message>" — against a file whose schema
-        // loaded and compiled fine, once per resource in the collection.
-        //
-        // That matters most for the one throw the link tables raise ON PURPOSE:
-        // `realpathFrom`/`siblingNamesFrom` crash on a missing row precisely so a
-        // fill/judge divergence names its own remedy ("Fill it with
-        // fillRealpaths() before judging"). In this lane alone that remedy ends up
-        // in the tail of a schema-blaming message. See `LinkFactTables` in
-        // link-validator.ts.
-        //
-        // The fix is to narrow the `try` to just `loadCollectionSchema` +
-        // `validateCompiledFrontmatter`. That changes which errors are caught, so
-        // it can move output, and this change is held to a byte-identical bar.
-        const { issues: linkIssues, externalUrls } = await validateFrontmatterLinks(
-          resource.frontmatter,
-          schema,
-          resource.filePath,
-          fragmentsByFile,
-          linkOptions,
-        );
-        issues.push(...linkIssues);
-
-        if (externalUrls.length > 0) {
-          const prior = this.frontmatterExternalUrlsByResource.get(resource.filePath) ?? [];
-          this.frontmatterExternalUrlsByResource.set(resource.filePath, [...prior, ...externalUrls]);
-        }
-      }
-
-      return issues;
+      compiled = loaded.compiled;
     } catch (error) {
       // Handle missing or invalid schema files gracefully
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -1145,6 +1120,43 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         ),
       ];
     }
+
+    // Validate frontmatter against JSON Schema
+    const issues = validateCompiledFrontmatter(
+      resource.frontmatter,
+      compiled,
+      resource.filePath,
+      schemaPath,
+      this.baseDir,
+    );
+
+    // Walk URI-family frontmatter values. Default-on; explicit `false` disables.
+    if (validation.checkFrontmatterLinks !== false && resource.frontmatter) {
+      const linkOptions: ValidateLinkOptions = this.baseDir === undefined
+        ? { fsCache: this.fsCache, skipGitIgnoreCheck }
+        : {
+            fsCache: this.fsCache,
+            projectRoot: this.baseDir,
+            skipGitIgnoreCheck,
+            ...(this.gitTracker !== undefined && { gitTracker: this.gitTracker }),
+          };
+
+      const { issues: linkIssues, externalUrls } = await validateFrontmatterLinks(
+        resource.frontmatter,
+        compiled.schema,
+        resource.filePath,
+        fragmentsByFile,
+        linkOptions,
+      );
+      issues.push(...linkIssues);
+
+      if (externalUrls.length > 0) {
+        const prior = this.frontmatterExternalUrlsByResource.get(resource.filePath) ?? [];
+        this.frontmatterExternalUrlsByResource.set(resource.filePath, [...prior, ...externalUrls]);
+      }
+    }
+
+    return issues;
   }
 
   /**

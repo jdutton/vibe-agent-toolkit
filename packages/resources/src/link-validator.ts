@@ -198,21 +198,18 @@ export function linkTargetPaths(resolved: Iterable<ResolvedLinkEntry>): string[]
  * corollary is that the fill and the judge must also agree on *whether a column
  * is populated at all*, which is what {@link needsRealpathColumn} is for.
  *
- * ⚠️ **"The crash names itself" holds in two of the three judging lanes, not all
- * three — do not lean on it as a universal.** In the registry's own link pass
- * (`ResourceRegistry.validate`) and in {@link validateLink} the throw
- * propagates and its message (`No canonical path for "…". Fill it with
- * fillRealpaths() before judging.`) reaches the operator intact. In the
- * **frontmatter** lane it does not: `resource-registry.ts` awaits
- * `validateFrontmatterLinks` *inside* the collection-schema `try`, whose `catch`
- * turns any throw into a `FRONTMATTER_SCHEMA_ERROR` finding. A fill/judge
- * divergence therefore surfaces there as `Failed to load or parse frontmatter
- * schema '<schema>'` against a file whose schema is perfectly fine, emitted once
- * per resource in the collection, with the real remedy buried in the tail of the
- * message. The fix is to narrow that `try` to the schema load/compile alone,
- * which changes *which* errors it catches and so can move output — deliberately
- * out of scope for the realpath column (ledger D8). The defect is recorded at the
- * call site in `resource-registry.ts`.
+ * ⚠️ **"The crash names itself" now holds in all three judging lanes — keep it
+ * that way.** In the registry's own link pass (`ResourceRegistry.validate`), in
+ * {@link validateLink}, and in the **frontmatter** lane, the throw propagates
+ * and its message (`No canonical path for "…". Fill it with fillRealpaths()
+ * before judging.`) reaches the operator intact. The frontmatter lane was the
+ * exception until the collection-schema `try` in `resource-registry.ts` was
+ * narrowed to the schema load/compile alone: `validateFrontmatterLinks` used to
+ * sit inside it, so a fill/judge divergence surfaced as `Failed to load or parse
+ * frontmatter schema '<schema>'` against a file whose schema was perfectly fine,
+ * once per resource in the collection. Do not widen that `try` back over link
+ * validation, and do not add a `catch` around these calls anywhere — turning the
+ * crash into a finding is exactly what this design refuses.
  */
 export interface LinkFactTables {
   /**

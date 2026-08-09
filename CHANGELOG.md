@@ -199,6 +199,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A frontmatter link-validation failure is no longer reported as a frontmatter *schema* error.**
+  `validateAgainstCollectionSchema` wrapped the schema load, the schema check and the frontmatter
+  link walk in one `try` whose `catch` blamed the schema by name, so any throw out of link validation
+  surfaced as `FRONTMATTER_SCHEMA_ERROR: Failed to load or parse frontmatter schema '<file>'` —
+  once per resource in the collection, against a schema that had loaded and compiled fine, with the
+  real cause buried in the tail of the message. The `try` now covers the schema load alone. This
+  widens what escapes: an Ajv runtime fault or an error inside link validation now aborts the run
+  instead of becoming N findings. That is deliberate — none of them are a defect in the user's
+  schema, and reporting them as one sends the reader to edit a file that is not broken.
+
 - **Skill validation and skill-name discovery stopped re-reading files they had just parsed.**
   `validateSkillPackaging` read SKILL.md a second time to count its lines and to feed the
   compatibility detectors, and `readSkillName` read it a second time for its H1 fallback — in both
