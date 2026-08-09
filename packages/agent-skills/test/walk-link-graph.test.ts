@@ -51,6 +51,8 @@ const REASON_SKILL_DEFINITION = 'skill-definition';
 const REASON_MISSING_TARGET = 'missing-target';
 const REASON_AGENT_INSTRUCTION = 'agent-instruction-file';
 const REASON_NON_ROUTABLE_SOURCE = 'non-routable-source';
+const REASON_OUTSIDE_PROJECT = 'outside-project';
+const REASON_PATTERN_MATCHED = 'pattern-matched';
 
 /** Href whose target is never created on disk — the broken-link subject. */
 const MISSING_HREF = './docs/gone.md';
@@ -99,9 +101,35 @@ function makeDeferredArtifactsFromRelPaths(
 }
 
 /**
+ * Walk a `SKILL.md → <one link>` graph rooted at a real on-disk temp dir.
+ *
+ * The single home for that walk-option block: every on-disk one-link fixture
+ * varies only the link and whichever option it is pinning.
+ */
+function walkOnDiskLink(opts: {
+  tmpDir: string;
+  linkText: string;
+  linkRel: string;
+  overrides?: Partial<WalkLinkGraphOptions>;
+}): ReturnType<typeof walkLinkGraph> {
+  const skillPath = safePath.join(opts.tmpDir, 'SKILL.md');
+  const skill = createMockResource(SKILL_ID, skillPath, [
+    createLocalLink(opts.linkText, `./${opts.linkRel}`),
+  ]);
+  const registry = createMockRegistry([skill]);
+  return walkLinkGraph(SKILL_ID, registry, {
+    maxDepth: 5,
+    excludeRules: [],
+    projectRoot: opts.tmpDir,
+    skillRootPath: skillPath,
+    ...opts.overrides,
+  });
+}
+
+/**
  * Walk a single skill→link graph rooted at a real on-disk temp dir, with the
  * given deferred dest/source sets. Shared by the on-disk deferred tests so the
- * walk-option block is written once.
+ * deferred-artifacts block is written once.
  */
 function walkOnDiskDeferred(opts: {
   tmpDir: string;
@@ -110,21 +138,18 @@ function walkOnDiskDeferred(opts: {
   destPaths?: string[];
   sourcePaths?: string[];
 }): ReturnType<typeof walkLinkGraph> {
-  const skill = createMockResource(SKILL_ID, safePath.join(opts.tmpDir, 'SKILL.md'), [
-    createLocalLink(opts.linkText, `./${opts.linkRel}`),
-  ]);
-  const registry = createMockRegistry([skill]);
-  return walkLinkGraph(SKILL_ID, registry, {
-    maxDepth: 5,
-    excludeRules: [],
-    projectRoot: opts.tmpDir,
-    skillRootPath: safePath.join(opts.tmpDir, 'SKILL.md'),
-    deferredArtifacts: makeDeferredArtifactsFromRelPaths({
-      destPaths: opts.destPaths,
-      sourcePaths: opts.sourcePaths,
-      skillDir: opts.tmpDir,
-      projectRoot: opts.tmpDir,
-    }),
+  return walkOnDiskLink({
+    tmpDir: opts.tmpDir,
+    linkText: opts.linkText,
+    linkRel: opts.linkRel,
+    overrides: {
+      deferredArtifacts: makeDeferredArtifactsFromRelPaths({
+        destPaths: opts.destPaths,
+        sourcePaths: opts.sourcePaths,
+        skillDir: opts.tmpDir,
+        projectRoot: opts.tmpDir,
+      }),
+    },
   });
 }
 
@@ -212,6 +237,55 @@ function createGitignoredDestFixture(): { tmpDir: string; destRel: string } {
   writeFileSync(destFile, '{}\n');
   vi.mocked(isGitIgnored).mockImplementation((filePath: string) => filePath === destFile);
   return { tmpDir, destRel };
+}
+
+/**
+ * Minimal {@link WalkLinkGraphOptions.gitTracker} stub. The walker only ever
+ * calls `isIgnoredByActiveSet`, so a one-method object standing in for the real
+ * tracker keeps the oracle observable without a git repo.
+ */
+function makeGitTrackerStub(
+  isIgnoredByActiveSet: (filePath: string) => boolean,
+): NonNullable<WalkLinkGraphOptions['gitTracker']> {
+  return { isIgnoredByActiveSet } as unknown as NonNullable<WalkLinkGraphOptions['gitTracker']>;
+}
+
+/** Ids of the fan-in documents that all link the SAME gitignored target. */
+const FAN_IN_LINKER_IDS = ['fan-in-a', 'fan-in-b', 'fan-in-c'];
+
+/**
+ * `SKILL.md → {a,b,c}.md → docs/shared.md`, every file really on disk, with
+ * `docs/shared.md` the one path the caller's ignore oracle calls ignored.
+ *
+ * Three DISTINCT documents naming ONE target is the shape the gitignore memo
+ * exists for: without it the oracle is asked three times, and on the lane with
+ * no GitTracker each ask is a `git check-ignore` SPAWN.
+ */
+function createFanInGitignoredFixture(): {
+  root: string;
+  skillPath: string;
+  sharedPath: string;
+  registry: WalkableRegistry;
+} {
+  const root = getTempDir();
+  const skillPath = safePath.resolve(root, 'SKILL.md');
+  const sharedPath = safePath.resolve(root, 'docs/shared.md');
+  mkdirSyncReal(dirname(sharedPath), { recursive: true });
+  writeFileSync(skillPath, '# Skill\n');
+  writeFileSync(sharedPath, '# Shared\n');
+
+  const linkers = FAN_IN_LINKER_IDS.map((id) => {
+    const linkerPath = safePath.resolve(root, `docs/${id}.md`);
+    writeFileSync(linkerPath, '# Linker\n');
+    return createMockResource(id, linkerPath, [createLocalLink('shared', './shared.md')]);
+  });
+  const skill = createMockResource(
+    SKILL_ID,
+    skillPath,
+    FAN_IN_LINKER_IDS.map(id => createLocalLink(id, `./docs/${id}.md`, id)),
+  );
+
+  return { root, skillPath, sharedPath, registry: createMockRegistry([skill, ...linkers]) };
 }
 
 // ============================================================================
@@ -633,7 +707,7 @@ describe('walkLinkGraph', () => {
 
       expect(result.bundledResources).toHaveLength(0);
       expect(result.excludedReferences).toHaveLength(1);
-      expect(result.excludedReferences[0]?.excludeReason).toBe('pattern-matched');
+      expect(result.excludedReferences[0]?.excludeReason).toBe(REASON_PATTERN_MATCHED);
       expect(result.excludedReferences[0]?.matchedRule).toBe(rule);
     });
 
@@ -651,7 +725,7 @@ describe('walkLinkGraph', () => {
 
       expect(result.bundledResources).toHaveLength(0);
       expect(result.excludedReferences).toHaveLength(1);
-      expect(result.excludedReferences[0]?.excludeReason).toBe('pattern-matched');
+      expect(result.excludedReferences[0]?.excludeReason).toBe(REASON_PATTERN_MATCHED);
     });
   });
 
@@ -689,7 +763,7 @@ describe('walkLinkGraph', () => {
       const result = walkSingleSkill([createLocalLink('external', '../outside/doc.md')]);
 
       expect(result.excludedReferences).toHaveLength(1);
-      expect(result.excludedReferences[0]?.excludeReason).toBe('outside-project');
+      expect(result.excludedReferences[0]?.excludeReason).toBe(REASON_OUTSIDE_PROJECT);
     });
 
     // An absolute-path reference (RFC 3986 §4.2 — a leading `/`) resolves against
@@ -721,7 +795,7 @@ describe('walkLinkGraph', () => {
       const result = walkSingleSkill([createLocalLink('escape', '/../outside/doc.md')]);
 
       expect(result.excludedReferences).toHaveLength(1);
-      expect(result.excludedReferences[0]?.excludeReason).toBe('outside-project');
+      expect(result.excludedReferences[0]?.excludeReason).toBe(REASON_OUTSIDE_PROJECT);
     });
   });
 
@@ -927,21 +1001,64 @@ describe('walkLinkGraph', () => {
     it('never asks a GitTracker about a target that does not exist', () => {
       // The real-repo oracle. `vat audit` plumbs a pre-populated GitTracker
       // through, and its active set answers "ignored" for anything absent.
-      const asked: string[] = [];
-      const tracker = {
-        isIgnoredByActiveSet: (p: string) => {
-          asked.push(p);
-          return true;
-        },
-      } as unknown as NonNullable<WalkLinkGraphOptions['gitTracker']>;
+      const isIgnoredByActiveSet = vi.fn(() => true);
 
       const result = walkSingleSkill(
         [createLocalLink('gone', MISSING_HREF)],
-        { gitTracker: tracker },
+        { gitTracker: makeGitTrackerStub(isIgnoredByActiveSet) },
       );
 
-      expect(asked).toEqual([]);
+      expect(isIgnoredByActiveSet).not.toHaveBeenCalled();
       expect(result.excludedReferences[0]?.excludeReason).toBe(REASON_MISSING_TARGET);
+    });
+
+    // ------------------------------------------------------------------
+    // The oracle is asked ONCE per distinct target (the gitignoreFacts memo).
+    // ------------------------------------------------------------------
+
+    /**
+     * The memo's ONLY observable. Every other gitignore test here asserts the
+     * walk's verdict, and an always-miss memo returns identical verdicts — just
+     * after N oracle calls instead of one. On the lane where no GitTracker is
+     * plumbed through (`extract-skill`), each of those calls is a
+     * `git check-ignore` SUBPROCESS, so the call count is the whole point.
+     */
+    it('asks the gitignore oracle once for a target three documents link', () => {
+      const { root, skillPath, sharedPath, registry } = createFanInGitignoredFixture();
+      const isIgnoredByActiveSet = vi.fn((filePath: string) => filePath === sharedPath);
+
+      const result = walkLinkGraph(SKILL_ID, registry, defaultOptions({
+        projectRoot: root,
+        skillRootPath: skillPath,
+        gitTracker: makeGitTrackerStub(isIgnoredByActiveSet),
+      }));
+
+      // All three links really did reach the cascade's last branch — otherwise
+      // "asked once" would be satisfied by never asking at all.
+      const gitignored = result.excludedReferences.filter(r => r.excludeReason === 'gitignored');
+      expect(gitignored).toHaveLength(FAN_IN_LINKER_IDS.length);
+      expect(gitignored.map(r => r.path)).toEqual(Array.from({ length: 3 }, () => sharedPath));
+
+      // ...and the oracle answered for that path exactly once.
+      const asksForShared = isIgnoredByActiveSet.mock.calls.filter(([p]) => p === sharedPath);
+      expect(asksForShared).toHaveLength(1);
+    });
+
+    it('memoizes the NOT-ignored answer too, so a shared clean target is asked once', () => {
+      // The memo stores false as readily as true (`cached !== undefined`). A
+      // `if (cached)` regression would leave every clean target re-asked — the
+      // common case, and invisible in any result-only assertion.
+      const { root, skillPath, sharedPath, registry } = createFanInGitignoredFixture();
+      const isIgnoredByActiveSet = vi.fn<(filePath: string) => boolean>(() => false);
+
+      const result = walkLinkGraph(SKILL_ID, registry, defaultOptions({
+        projectRoot: root,
+        skillRootPath: skillPath,
+        gitTracker: makeGitTrackerStub(isIgnoredByActiveSet),
+      }));
+
+      expect(result.excludedReferences).toHaveLength(0);
+      expect(isIgnoredByActiveSet.mock.calls.filter(([p]) => p === sharedPath)).toHaveLength(1);
     });
   });
 
@@ -1247,6 +1364,107 @@ describe('walkLinkGraph', () => {
       const result = walkLinkGraph(SKILL_ID, createSkillGuideRegistry(), defaultOptions());
 
       expect(result.bundledResources.map(r => r.id)).toContain(GUIDE_ID);
+    });
+  });
+
+  /**
+   * The exclusion cascade is FIRST-MATCH-WINS, and the order is the behaviour —
+   * not an implementation detail of how the branches happen to be stacked.
+   *
+   * Each row below builds a target that satisfies TWO discriminators at once and
+   * pins which one reports it. Nothing else in this suite can catch a reordering:
+   * every other exclusion test constructs a target that matches exactly one
+   * branch, so shuffling the cascade leaves the whole file green while the
+   * author-facing reason silently changes.
+   */
+  describe('exclusion cascade ordering (first match wins)', () => {
+    it('reports a directory that is ALSO pattern-matched as directory-target', () => {
+      const tmpDir = getTempDir();
+      const dirRel = 'assets';
+      mkdirSyncReal(safePath.resolve(tmpDir, dirRel), { recursive: true });
+
+      const result = walkOnDiskLink({
+        tmpDir,
+        linkText: 'assets',
+        linkRel: dirRel,
+        overrides: { excludeRules: [{ patterns: [dirRel, `${dirRel}/**`] }] },
+      });
+
+      expect(result.excludedReferences).toHaveLength(1);
+      expect(result.excludedReferences[0]?.excludeReason).toBe('directory-target');
+      // A pattern-matched verdict would also carry the rule; directory-target must not.
+      expect(result.excludedReferences[0]?.matchedRule).toBeUndefined();
+    });
+
+    it('reports a README ABOVE the project root as outside-project, not navigation-file', () => {
+      const result = walkSingleSkill(
+        [createLocalLink('external readme', '../outside/README.md')],
+        { excludeNavigationFiles: true },
+      );
+
+      expect(result.excludedReferences).toHaveLength(1);
+      expect(result.excludedReferences[0]?.excludeReason).toBe(REASON_OUTSIDE_PROJECT);
+    });
+
+    it('reports a pattern-matched README as navigation-file, not pattern-matched', () => {
+      const registry = createReadmeRegistry();
+      const result = walkLinkGraph(SKILL_ID, registry, defaultOptions({
+        excludeNavigationFiles: true,
+        excludeRules: [{ patterns: ['docs/**'] }],
+      }));
+
+      expect(result.excludedReferences).toHaveLength(1);
+      expect(result.excludedReferences[0]?.excludeReason).toBe('navigation-file');
+      expect(result.excludedReferences[0]?.matchedRule).toBeUndefined();
+    });
+
+    it('reports a pattern-matched cross-skill SKILL.md as skill-definition', () => {
+      const vendorSkillId = 'vendor-skill-md';
+      const skill = createMockResource(SKILL_ID, SKILL_PATH, [
+        createLocalLink('vendor', './vendor/SKILL.md', vendorSkillId),
+      ]);
+      const vendorSkill = createMockResource(vendorSkillId, safePath.resolve('/project/vendor/SKILL.md'));
+      const registry = createMockRegistry([skill, vendorSkill]);
+
+      const result = walkLinkGraph(SKILL_ID, registry, defaultOptions({
+        excludeRules: [{ patterns: ['vendor/**'] }],
+      }));
+
+      expect(result.excludedReferences).toHaveLength(1);
+      expect(result.excludedReferences[0]?.excludeReason).toBe(REASON_SKILL_DEFINITION);
+    });
+
+    // ⭐ The gitignore adjacency is the one that MATTERS most, because it is the
+    // only cascade boundary the pass-1′ restructure actually relocated: the
+    // first seven discriminators stayed inside one function as statement order,
+    // while gitignore moved out to `classifyGitignored` and is now sequenced by
+    // a `??` expression. Swapping those two operands leaves every OTHER test in
+    // this file green — verified by executing that mutant — because each of them
+    // builds a target that matches exactly one branch. This is the fixture that
+    // makes the boundary falsifiable.
+    it('reports a target that is BOTH gitignored and pattern-matched as pattern-matched', () => {
+      const tmpDir = getTempDir();
+      const ignoredRel = 'docs/secret.md';
+      const ignoredPath = safePath.resolve(tmpDir, ignoredRel);
+      mkdirSyncReal(dirname(ignoredPath), { recursive: true });
+      writeFileSync(ignoredPath, '# Secret\n');
+
+      const result = walkOnDiskLink({
+        tmpDir,
+        linkText: 'secret',
+        linkRel: ignoredRel,
+        overrides: {
+          excludeRules: [{ patterns: ['docs/**'] }],
+          // Ignored by the oracle AND matched by the rule: the earlier branch
+          // (pattern) must win, so `gitignored` must never be the reason.
+          gitTracker: makeGitTrackerStub(() => true),
+        },
+      });
+
+      expect(result.excludedReferences).toHaveLength(1);
+      expect(result.excludedReferences[0]?.excludeReason).toBe(REASON_PATTERN_MATCHED);
+      // A pattern verdict carries its rule; the gitignore verdict never does.
+      expect(result.excludedReferences[0]?.matchedRule).toBeDefined();
     });
   });
 });

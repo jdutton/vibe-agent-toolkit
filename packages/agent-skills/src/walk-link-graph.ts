@@ -142,9 +142,9 @@ export interface WalkLinkGraphOptions {
    * as a deferred build artifact in two cases:
    *
    * - The target does not yet exist on disk ({@link checkDeferred}, the FIRST
-   *   discriminator in {@link checkExclusions}) — covered via dest OR source.
+   *   discriminator in {@link classifyExclusion}) — covered via dest OR source.
    * - The target exists, is gitignored, AND is covered as a DEST (the
-   *   gitignore branch in {@link checkExclusions}) — the expected state of a
+   *   gitignore branch, {@link classifyGitignored}) — the expected state of a
    *   build artifact once a build has run, not a leak. Source-only coverage
    *   does NOT exempt an existing, gitignored target: a `files:` source is a
    *   real file the author pointed at, and the leak signal is wanted.
@@ -293,6 +293,16 @@ interface WalkState {
    * Correctness wins; the lane simply does not have the redundancy.
    */
   pathProbe: FsLookupCache;
+  /**
+   * Pass 1′ — memoized gitignore answers, one per distinct link target asked
+   * about.
+   *
+   * Separate from {@link WalkState.pathProbe} because the oracle is not a
+   * filesystem lookup and utils must not learn about git; separate from the
+   * {@link PathFacts} row because that row is rebuilt per ask (see its docs).
+   * Sparse by design: only targets that reach the cascade's last branch appear.
+   */
+  gitignoreFacts: Map<string, boolean>;
 }
 
 /** Compiled exclude matcher (pattern + original rule) */
@@ -302,15 +312,99 @@ interface ExcludeMatcher {
 }
 
 /**
- * Check if a target path is a not-yet-materialized deferred build artifact, and
- * record it in the deferred set if so. Must run BEFORE any statSync / directory
- * check to avoid blowing up on missing paths.
+ * Pass 1′ — the filled attribute row for one link target.
+ *
+ * Link targets are outside the enumeration by construction (they are discovered
+ * by parsing), so their attributes are filled after parse rather than during
+ * it. One row per distinct path; {@link classifyExclusion} then reads columns
+ * instead of touching the filesystem.
+ *
+ * ## The three columns are not the whole row — `gitignored` is deliberately not here
+ *
+ * `exists`, `isDirectory` and `insideProject` are unconditional and cheap: the
+ * first two come from {@link FsLookupCache.probe}, which every target pays for
+ * anyway and which memoizes them across links; the third is pure path math.
+ *
+ * `gitignored` is neither, so it is read through {@link readGitignored} at the
+ * point the cascade reaches it. The oracle behind it is a `git check-ignore`
+ * **subprocess** whenever no {@link GitTracker} was plumbed through (which is
+ * the case for `extract-skill`'s lane), and the cascade reaches it only for
+ * targets that survive all seven earlier discriminators. Filling it for every
+ * row would spawn a process per directory target, per README, per
+ * pattern-excluded path — paths asked about today only because they were never
+ * asked about at all. Demand-reading keeps the *set of paths asked* identical
+ * to the shipped behaviour, which is what lets this refactor claim
+ * byte-identical output.
+ *
+ * ## Built per ask, not memoized — on purpose
+ *
+ * Storing the row would shadow the probe's own memo and silently zero out
+ * {@link FsLookupCache.probeStats}, the one observable that dies when the probe
+ * memo dies. Each layer keeps its own counted memo instead: the probe counts
+ * syscalls avoided, {@link WalkState.gitignoreFacts} collapses oracle calls.
+ *
+ * Rebuilding the row costs one `safePath.relative` per ask — pure string math
+ * on two absolute paths, no syscall. **That is a small net ADDITION, not
+ * parity:** the shipped cascade evaluated `isOutsideProject` at position 4, so
+ * it never ran for a deferred target, an existing directory, or a
+ * present-but-unstattable path. Filling the column unconditionally is the price
+ * of the row being a row, and it is stated here rather than dressed up as
+ * break-even.
+ */
+interface PathFacts {
+  /** `existsSync` — follows symlinks, so a dangling link reads as absent. */
+  readonly exists: boolean;
+  /**
+   * `statSync().isDirectory()`, or `null` for *no answer* — the path is absent,
+   * or it is present and `statSync` threw anyway. See
+   * {@link FsLookupCache.probe}.
+   */
+  readonly isDirectory: boolean | null;
+  /** Pure path math: does the target resolve inside `projectRoot`? */
+  readonly insideProject: boolean;
+}
+
+/**
+ * Build the pass-1′ row for one link target.
+ *
+ * The two syscalls come from {@link FsLookupCache.probe}, which memoizes them
+ * across links, so repeated calls for the same path are free of I/O.
+ */
+function fillPathFacts(targetPath: string, options: WalkLinkGraphOptions, state: WalkState): PathFacts {
+  const { exists, isDirectory } = state.pathProbe.probe(targetPath);
+  return {
+    exists,
+    isDirectory,
+    insideProject: !isOutsideProject(targetPath, options.projectRoot),
+  };
+}
+
+/**
+ * What the classifier decided about a target, as a value rather than as a
+ * mutation.
+ *
+ * Splitting the verdict from the recording is what lets the cascade be a pure
+ * function of {@link PathFacts}: every branch used to push into
+ * `excludedReferences` or `deferredAssetSet` on its way out, which made the
+ * classifier untestable without a filesystem and a walk state.
+ */
+type ExclusionVerdict =
+  /** A `files:`-covered build artifact — recorded in the deferred set, not as an exclusion. */
+  | { readonly kind: 'deferred' }
+  /** An exclusion to record against the link. */
+  | { readonly kind: 'excluded'; readonly reason: NonNullable<LinkResolution['excludeReason']>; readonly matchedRule?: ExcludeRule }
+  /** Stop classifying and record nothing at all. */
+  | { readonly kind: 'skipped' };
+
+/**
+ * Check if a target path is a not-yet-materialized deferred build artifact.
+ * Must run BEFORE any directory check to avoid classifying a missing path.
  *
  * This check is gated on the target NOT existing on disk: it classifies the
  * "hasn't been built yet" half of the deferred-artifact lifecycle. An
  * existing real file at a covered files: dest (or source) is NOT deferred by
  * THIS check — it falls through to the directory-target check and beyond.
- * The gitignore branch further down in {@link checkExclusions} carries its
+ * The gitignore branch further down ({@link classifyGitignored}) carries its
  * OWN, unconditional `deferredArtifacts` exemption (existing or not) for the
  * "already built, and gitignored as expected" half — see the comment there.
  * So an existing-but-gitignored covered path still ends up classified as
@@ -318,8 +412,7 @@ interface ExcludeMatcher {
  * existing-and-NOT-gitignored covered path (or an uncovered path) reaches
  * normal handling. {@link DeferredArtifacts.covers} does the exact-OR-
  * directory-prefix membership test (pure, no filesystem access); the
- * existence answer is supplied by the caller, which probes the target once
- * for the whole classifier.
+ * existence answer comes from the target's pass-1′ row.
  *
  * @returns true if the path was classified as deferred
  */
@@ -327,13 +420,8 @@ function checkDeferred(
   targetPath: string,
   targetExists: boolean,
   deferredArtifacts: DeferredArtifacts,
-  deferredAssetSet: Set<string>,
 ): boolean {
-  if (deferredArtifacts.covers(targetPath) && !targetExists) {
-    deferredAssetSet.add(toForwardSlash(targetPath));
-    return true;
-  }
-  return false;
+  return deferredArtifacts.covers(targetPath) && !targetExists;
 }
 
 /**
@@ -379,8 +467,8 @@ function refusesAgentInstructionFile(targetPath: string, options: WalkLinkGraphO
 }
 
 /**
- * Record a gitignored target as either a leak or an exempted `files:` build
- * artifact — the caller always excludes it from the walk either way; only
+ * Classify a target already known to be gitignored as either a leak or an
+ * exempted `files:` build artifact — the walk excludes it either way; only
  * the record differs.
  *
  * A files:-declared DEST is exempt from the leak rule EVEN WHEN it already
@@ -399,26 +487,17 @@ function refusesAgentInstructionFile(targetPath: string, options: WalkLinkGraphO
  * coverage must NOT exempt it. An uncovered path, or a path covered only via
  * `sourcePaths`, still reports the leak normally.
  */
-function recordGitignoredTarget(
+function classifyGitignoredTarget(
   targetPath: string,
-  sourcePath: string,
-  link: ResourceLink,
   deferredArtifacts: DeferredArtifacts | undefined,
-  excludedReferences: LinkResolution[],
-  deferredAssetSet: Set<string>,
-): void {
-  if (deferredArtifacts?.coversDest(targetPath)) {
-    deferredAssetSet.add(toForwardSlash(targetPath));
-    return;
-  }
-  // `targetExists: true` is not an assumption here — the caller only reaches
-  // this function for a target it has already stat'ed and found present.
-  excludedReferences.push(makeExclusion(targetPath, sourcePath, true, 'gitignored', link));
+): ExclusionVerdict {
+  return deferredArtifacts?.coversDest(targetPath)
+    ? { kind: 'deferred' }
+    : { kind: 'excluded', reason: 'gitignored' };
 }
 
 /**
- * The gitignore branch of {@link checkExclusions}, extracted to keep that
- * classifier within its cognitive-complexity budget.
+ * The `files:`-dest exemption for a target already known to be gitignored.
  *
  * GATED ON EXISTENCE, and the gate is the point. A path that is not there
  * cannot leak anything, and neither ignore oracle can be trusted to say so:
@@ -433,94 +512,120 @@ function recordGitignoredTarget(
  * Prefer the pre-populated GitTracker when the caller plumbed one through: it
  * answers in O(1) against the active set, no `git check-ignore` spawn.
  *
- * @returns true if the target was recorded (as a leak, or as an exempted
- *          `files:` build artifact) and the caller should stop classifying
+ * **Memoized per walk**, so a target named by many documents costs one answer
+ * rather than one per reference. The memo cannot change the answer: both
+ * oracles are pure functions of the tree, and the memo's lifetime is one walk.
+ *
+ * ⛔ **Measured on VAT's own tree, 2026-08-09, and the result is a NEGATIVE —
+ * do not sell this as a performance win.** Counting asks vs. memo misses in the
+ * built lane: `vat audit .` = 3 asks / 2 distinct, `vat skills build` = 0 / 0,
+ * `vat inventory .` = 0 / 0. **One** oracle call avoided across all three.
+ *
+ * The reason is structural, not incidental: this branch is LAST in the cascade,
+ * so a target only reaches it after surviving all seven earlier discriminators
+ * *and* existing on disk. Nearly every link target is classified before then —
+ * bundled markdown, a directory, a navigation file, a pattern match. The memo's
+ * real justification is therefore **shape, not speed**: it is what lets the
+ * oracle read sit outside {@link classifyExclusion} so that function can be a
+ * pure predicate over the row. Any future claim of a spawn-count win needs its
+ * own measurement on a corpus where this branch is actually hot.
+ *
+ * Two further bounds, so nobody reads more into it than it does:
+ *
+ * - **The collapse is within-ONE-walk fan-in only.** `collectLinkedFiles` calls
+ *   {@link walkLinkGraph} once per skill, so a target shared across skills is
+ *   still asked about once per skill. That per-walk lifetime is exactly what
+ *   makes the memo safe against `packageSkill` writing `dist/` between skills,
+ *   so it is a deliberate ceiling, not a missed optimization.
+ * - **Not every repeat was a subprocess.** {@link isGitIgnored} settles "is
+ *   there a repository here?" from the filesystem and returns early when there
+ *   is none, so on a tree with no `.git` ancestor the repeats were ancestor
+ *   walks rather than `git check-ignore` spawns. Inside a real repository they
+ *   were spawns.
+ *
+ * @returns whether the target is gitignored
  */
-function checkGitignored(
-  targetPath: string,
-  sourcePath: string,
-  targetExists: boolean,
-  link: ResourceLink,
-  options: WalkLinkGraphOptions,
-  excludedReferences: LinkResolution[],
-  deferredAssetSet: Set<string>,
-): boolean {
-  if (!targetExists) {
-    return false;
-  }
+function readGitignored(targetPath: string, options: WalkLinkGraphOptions, state: WalkState): boolean {
+  const cached = state.gitignoreFacts.get(targetPath);
+  if (cached !== undefined) return cached;
 
   const isIgnored = options.gitTracker === undefined
     ? isGitIgnored(targetPath, options.projectRoot)
     : options.gitTracker.isIgnoredByActiveSet(targetPath);
-  if (!isIgnored) {
-    return false;
-  }
-
-  recordGitignoredTarget(targetPath, sourcePath, link, options.deferredArtifacts, excludedReferences, deferredAssetSet);
-  return true;
+  state.gitignoreFacts.set(targetPath, isIgnored);
+  return isIgnored;
 }
 
 /**
- * Check if a target path should be excluded for structural reasons
- * (deferred build artifact, directory, outside project, navigation file, or
- * pattern match).
+ * The `exists` × `isDirectory` corner of the cascade — the only place the row's
+ * three-state `isDirectory` is read.
  *
- * @returns true if the link was excluded or deferred (caller should skip to next link)
+ * `null` (present to `existsSync`, unstattable anyway) skips **silently**: the
+ * classifier has no basis to say anything about the path, which is exactly what
+ * the pre-refactor `catch { return true }` did.
+ *
+ * ⚠️ That silence is a divergence worth knowing about rather than a bug fixed
+ * here: the resources lane turned this same class of read failure into a
+ * `RESOURCE_UNREADABLE` finding, while on this lane an unreadable link target
+ * vanishes from the report entirely — no exclusion, no bundling, no issue.
+ * Preserved because this refactor is held to byte-identical output; logged as
+ * D6 in the spec's deferred-fixes ledger so it is fixed deliberately, with its
+ * own golden movement.
+ *
+ * @returns a verdict when the path's kind decides the outcome, else `undefined`
  */
-function checkExclusions(
+function classifyPathKind(facts: PathFacts): ExclusionVerdict | undefined {
+  if (!facts.exists) return undefined;
+  if (facts.isDirectory === true) return { kind: 'excluded', reason: 'directory-target' };
+  if (facts.isDirectory === null) return { kind: 'skipped' };
+  return undefined;
+}
+
+/**
+ * The first-match-wins exclusion cascade, as a **pure function of the pass-1′
+ * row**. No filesystem access, no walk-state mutation, no recording.
+ *
+ * ⚠️ **The order IS the behaviour.** This is a cascade, not a set of
+ * independent predicates: a directory that is also pattern-matched is reported
+ * as `directory-target`, and rewriting it as `reasons.find(...)` over
+ * independently-evaluated conditions would silently repick which reason wins.
+ * Every branch below sits exactly where it sat when the classifier did its own
+ * I/O inline; only the source of the facts changed.
+ *
+ * The one branch that is not a column is the last one — see
+ * {@link readGitignored} for why the gitignore oracle is demand-read at the
+ * point the cascade reaches it rather than filled for every row.
+ *
+ * @returns the verdict, or `undefined` when nothing excludes the target
+ */
+function classifyExclusion(
   targetPath: string,
-  sourcePath: string,
-  link: ResourceLink,
   options: WalkLinkGraphOptions,
   excludeMatchers: ExcludeMatcher[],
-  state: WalkState,
-): boolean {
-  const { excludedReferences, deferredAssetSet } = state;
-
-  // ONE existence probe for the whole classifier. Several branches below are
-  // meaningful only for a target that is actually there, and one of them
-  // (gitignore) is actively WRONG without it — see the comment on that branch.
-  //
-  // The probe also memoizes across links (pass 1′): the two syscalls are made
-  // once per distinct target, not once per reference to it.
-  const { exists: targetExists, isDirectory } = state.pathProbe.probe(targetPath);
-
+  facts: PathFacts,
+): ExclusionVerdict | undefined {
   // The deferred check is the FIRST discriminator: a not-yet-materialized target
   // must be classified before any check that would read it off disk.
-  if (options.deferredArtifacts && checkDeferred(targetPath, targetExists, options.deferredArtifacts, deferredAssetSet)) {
-    return true;
+  if (options.deferredArtifacts && checkDeferred(targetPath, facts.exists, options.deferredArtifacts)) {
+    return { kind: 'deferred' };
   }
 
   // Check if target is a directory
-  if (targetExists) {
-    if (isDirectory === true) {
-      excludedReferences.push(makeExclusion(targetPath, sourcePath, targetExists, 'directory-target', link));
-      return true;
-    }
-    if (isDirectory === null) {
-      // Present to `existsSync` but unstattable — the classifier has no basis
-      // to say anything about it, so it skips exactly as it always has.
-      return true;
-    }
-  }
+  const kindVerdict = classifyPathKind(facts);
+  if (kindVerdict) return kindVerdict;
 
   // Check project boundary
-  if (isOutsideProject(targetPath, options.projectRoot)) {
-    excludedReferences.push(makeExclusion(targetPath, sourcePath, targetExists, 'outside-project', link));
-    return true;
-  }
+  if (!facts.insideProject) return { kind: 'excluded', reason: 'outside-project' };
 
   // Check navigation file exclusion
   if (options.excludeNavigationFiles && isNavigationBasename(basename(targetPath))) {
-    excludedReferences.push(makeExclusion(targetPath, sourcePath, targetExists, 'navigation-file', link));
-    return true;
+    return { kind: 'excluded', reason: 'navigation-file' };
   }
 
   // Repo-internal agent-instruction files — see {@link refusesAgentInstructionFile}
   // for why they cannot travel, and for the explicit-`files:` escape hatch.
   if (refusesAgentInstructionFile(targetPath, options)) {
-    excludedReferences.push(makeExclusion(targetPath, sourcePath, targetExists, 'agent-instruction-file', link));
-    return true;
+    return { kind: 'excluded', reason: 'agent-instruction-file' };
   }
 
   // Check for cross-skill SKILL.md links — a SKILL.md is a skill definition marker,
@@ -532,23 +637,101 @@ function checkExclusions(
   // prevents re-traversal, and the duplicate-definition risk does not apply to the
   // current skill itself.
   if (basename(targetPath) === 'SKILL.md') {
-    if (safePath.resolve(targetPath) !== safePath.resolve(options.skillRootPath)) {
-      excludedReferences.push(makeExclusion(targetPath, sourcePath, targetExists, 'skill-definition', link));
-    }
-    return true;
+    return safePath.resolve(targetPath) === safePath.resolve(options.skillRootPath)
+      ? { kind: 'skipped' }
+      : { kind: 'excluded', reason: 'skill-definition' };
   }
 
   // Check exclude patterns (relative to projectRoot)
   const relativePath = toForwardSlash(safePath.relative(options.projectRoot, targetPath));
   const matchedExclude = excludeMatchers.find((m) => m.isMatch(relativePath));
   if (matchedExclude) {
-    excludedReferences.push(makeExclusion(targetPath, sourcePath, targetExists, 'pattern-matched', link, matchedExclude.rule));
-    return true;
+    return { kind: 'excluded', reason: 'pattern-matched', matchedRule: matchedExclude.rule };
   }
 
-  // Check if the file is gitignored (prevents leaking data from ignored
-  // directories) — existence-gated; see {@link checkGitignored}.
-  return checkGitignored(targetPath, sourcePath, targetExists, link, options, excludedReferences, deferredAssetSet);
+  // Falls through to the cascade's final branch, which is the one that needs an
+  // oracle rather than a column — see {@link classifyGitignored}.
+  return undefined;
+}
+
+/**
+ * The cascade's LAST branch, kept out of {@link classifyExclusion} so that
+ * function can stay a pure function of the row.
+ *
+ * Its position at the end is not an implementation detail — it is why the
+ * demand-read is safe. Every earlier discriminator has already declined, so the
+ * set of paths this asks the oracle about is exactly the set the shipped
+ * classifier asked about, link for link.
+ *
+ * Existence-gated, and the gate is the point: a path that is not there cannot
+ * leak anything, and neither oracle can be trusted to say so — see
+ * {@link readGitignored}.
+ */
+function classifyGitignored(
+  targetPath: string,
+  options: WalkLinkGraphOptions,
+  facts: PathFacts,
+  state: WalkState,
+): ExclusionVerdict | undefined {
+  if (!facts.exists) return undefined;
+  if (!readGitignored(targetPath, options, state)) return undefined;
+  return classifyGitignoredTarget(targetPath, options.deferredArtifacts);
+}
+
+/**
+ * Apply a verdict to the walk state — the only place the classifier's decision
+ * becomes a mutation.
+ *
+ * @returns true if the caller should stop processing this link
+ */
+function applyExclusionVerdict(
+  verdict: ExclusionVerdict,
+  targetPath: string,
+  sourcePath: string,
+  link: ResourceLink,
+  facts: PathFacts,
+  state: WalkState,
+): boolean {
+  switch (verdict.kind) {
+    case 'deferred': {
+      state.deferredAssetSet.add(toForwardSlash(targetPath));
+      return true;
+    }
+    case 'excluded': {
+      state.excludedReferences.push(
+        makeExclusion(targetPath, sourcePath, facts.exists, verdict.reason, link, verdict.matchedRule),
+      );
+      return true;
+    }
+    case 'skipped': {
+      return true;
+    }
+  }
+}
+
+/**
+ * Check if a target path should be excluded for structural reasons
+ * (deferred build artifact, directory, outside project, navigation file, or
+ * pattern match).
+ *
+ * Pass 1′ fills the row, pass 4 judges it, and the recording is a third step —
+ * the three used to be one interleaved function that stat'ed paths mid-cascade.
+ *
+ * @returns true if the link was excluded or deferred (caller should skip to next link)
+ */
+function checkExclusions(
+  targetPath: string,
+  sourcePath: string,
+  link: ResourceLink,
+  options: WalkLinkGraphOptions,
+  excludeMatchers: ExcludeMatcher[],
+  state: WalkState,
+): boolean {
+  const facts = fillPathFacts(targetPath, options, state);
+  const verdict = classifyExclusion(targetPath, options, excludeMatchers, facts)
+    ?? classifyGitignored(targetPath, options, facts, state);
+  if (verdict === undefined) return false;
+  return applyExclusionVerdict(verdict, targetPath, sourcePath, link, facts, state);
 }
 
 /**
@@ -589,8 +772,11 @@ function processLink(
 
   if (targetResource) {
     processRegistryResource(targetResource, targetPath, currentResource.filePath, link, currentDepth, options, state);
-    // Same answer `checkExclusions` already recorded a few lines up — this used
-    // to be a second `existsSync` of the identical path in the same tick.
+    // Straight to the probe, not through `fillPathFacts`: this site wants one
+    // column, and building a whole row to read it would compute an
+    // `insideProject` the caller immediately discards. The probe memo is what
+    // makes it free — this used to be a second `existsSync` of the identical
+    // path in the same tick.
   } else if (state.pathProbe.probe(targetPath).exists) {
     // Not in registry — non-markdown asset that exists on disk
     state.bundledAssetSet.add(toForwardSlash(targetPath));
@@ -745,6 +931,7 @@ export function walkLinkGraph(
     queue: [[skillResource, 0]],
     unfollowedFromNonRoutable: [],
     pathProbe: options.pathProbe ?? new FsLookupCache(),
+    gitignoreFacts: new Map<string, boolean>(),
   };
 
   while (state.queue.length > 0) {
