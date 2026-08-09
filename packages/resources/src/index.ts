@@ -99,7 +99,6 @@ export { parseMarkdown, classifyLink, isLocalFileLink, type ParseResult } from '
 // Parse identity: which parser a path routes to, and the key a parse result is
 // filed under. Path-independent by construction — see content-key.ts.
 export {
-  CONTENT_KEY_SCHEMA_VERSION,
   computeContentKey,
   parserKindForPath,
   readContentWithKey,
@@ -113,7 +112,7 @@ export {
 // in its output), and a test or embedder that wants the registry pointed at a
 // private directory via `ResourceRegistryOptions.parseCache`.
 //
-// `dehydrate` / `rehydrate` / `ParseFacts` / `PARSE_CACHE_SCHEMA_VERSION` are
+// `dehydrate` / `rehydrate` / `ParseFacts` are
 // deliberately NOT re-exported here: they are the on-disk serialization, the
 // same category as the link-parser internals this file already withholds (see
 // the note further down). Nothing outside the cache should be able to mint or
@@ -129,6 +128,8 @@ export {
   parseCacheDirectory,
   parseFileCached,
   parseKeyed,
+  vatCacheNamespace,
+  vatCacheNamespaceRoot,
   vatCacheRoot,
   type ParseCacheOptions,
   type ParseCacheStats,

@@ -109,7 +109,7 @@ function makeManifest(overrides: Partial<SnapshotManifest> = {}): SnapshotManife
   return {
     formatVersion: SNAPSHOT_FORMAT_VERSION,
     vatVersion: '0.0.0-test',
-    contentKeySchemaVersion: 2,
+    cacheNamespace: '0.1.42',
     capturedAtIso: '2026-01-01T00:00:00.000Z',
     corpusRoot: '/corpus',
     corpusLabel: 'fixture',

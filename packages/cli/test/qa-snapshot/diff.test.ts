@@ -37,15 +37,14 @@ const LANE_SELECTOR = 'enumeration.resources';
 const DOC_A_ROW = '0\tdocs/a.md';
 const DOC_B_ROW = '1\tdocs/b.md';
 
-/** A content key as `content-key.ts` renders it, under schema 2 then schema 3. */
-const KEY_UNDER_SCHEMA_2 = 'k2.markdown.deadbeef12345678';
-const KEY_UNDER_SCHEMA_3 = 'k3.markdown.0123456789abcdef';
+/** A content key as `content-key.ts` renders it — no schema version in it. */
+const CONTENT_KEY = 'markdown.deadbeef12345678';
 
 /** Only what a test actually varies; everything else gets a fixed default. */
 interface SnapshotOverrides {
   dir?: string;
   formatVersion?: number;
-  contentKeySchemaVersion?: number;
+  cacheNamespace?: string;
   platform?: string;
   corpusRoot?: string;
   parseFactArtifact?: string | null;
@@ -62,7 +61,7 @@ function loadedSnapshot(overrides: SnapshotOverrides = {}): LoadedSnapshot {
   const manifest: SnapshotManifest = {
     formatVersion: overrides.formatVersion ?? SNAPSHOT_FORMAT_VERSION,
     vatVersion: '0.1.42',
-    contentKeySchemaVersion: overrides.contentKeySchemaVersion ?? 2,
+    cacheNamespace: overrides.cacheNamespace ?? '0.1.42',
     capturedAtIso: '2026-08-08T00:00:00.000Z',
     corpusRoot: overrides.corpusRoot ?? CORPUS_ROOT,
     corpusLabel: 'vat',
@@ -238,21 +237,23 @@ describe('headlineChanges', () => {
 });
 
 describe('compareSnapshots constraints', () => {
-  it('masks the content-key column when the key schema moved, and says so', () => {
-    const parseBefore = ['# parse-fact-snapshot', 'blobCount: 1', '', `## blob ${KEY_UNDER_SCHEMA_2}`, ''].join('\n');
-    const parseAfter = ['# parse-fact-snapshot', 'blobCount: 1', '', `## blob ${KEY_UNDER_SCHEMA_3}`, ''].join('\n');
+  it('compares content keys directly across builds — there is nothing to mask', () => {
+    // Keys no longer carry a schema version, so the same bytes key identically
+    // under any build of VAT. A key that DOES move is therefore real signal,
+    // and must show up as a change rather than being masked away.
+    const parseBefore = ['# parse-fact-snapshot', 'blobCount: 1', '', `## blob ${CONTENT_KEY}`, ''].join('\n');
+    const parseAfter = ['# parse-fact-snapshot', 'blobCount: 1', '', '## blob markdown.0123456789abcdef', ''].join('\n');
     const lane = oracleText(2, [DOC_A_ROW]);
 
     const report = comparePair(
       { [LANE_ARTIFACT]: lane, [PARSE_ARTIFACT]: parseBefore },
       { [LANE_ARTIFACT]: lane, [PARSE_ARTIFACT]: parseAfter },
-      { contentKeySchemaVersion: 2, parseFactArtifact: PARSE_ARTIFACT },
-      { contentKeySchemaVersion: 3, parseFactArtifact: PARSE_ARTIFACT },
+      { cacheNamespace: '0.1.42', parseFactArtifact: PARSE_ARTIFACT },
+      { cacheNamespace: '0.1.43-dev-abc123', parseFactArtifact: PARSE_ARTIFACT },
     );
 
-    expect(rowFor(report, 'parse-facts').status).toBe('same');
-    expect(report.changedCount).toBe(0);
-    expect(report.constraints.some((note) => note.startsWith('MASKED:'))).toBe(true);
+    expect(rowFor(report, 'parse-facts').status).toBe('changed');
+    expect(report.constraints.some((note) => note.startsWith('MASKED:'))).toBe(false);
   });
 
   it('refuses across format versions, returning no deltas and a stated reason', () => {

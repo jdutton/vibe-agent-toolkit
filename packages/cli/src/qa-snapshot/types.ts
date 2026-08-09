@@ -39,7 +39,7 @@ import type { EnumerationRoute, LaneId } from '../pipeline-oracles/types.js';
  * across two different format versions is refused rather than attempted: the
  * failure mode of guessing is a confidently wrong "nothing changed".
  */
-export const SNAPSHOT_FORMAT_VERSION = 1;
+export const SNAPSHOT_FORMAT_VERSION = 2;
 
 /** Manifest filename inside a snapshot directory. */
 export const MANIFEST_FILENAME = 'manifest.json';
@@ -140,13 +140,14 @@ export interface SnapshotManifest {
   /** `packages/cli/package.json`'s version — which VAT produced this. */
   vatVersion: string;
   /**
-   * `CONTENT_KEY_SCHEMA_VERSION` at capture time.
+   * The cache namespace this capture ran under — `<version>` installed, or
+   * `<version>-dev-<hash>` from a checkout.
    *
-   * A bump churns 100% of the content-key column in every artifact, so a
-   * comparison across two values masks that column and says it did. Without the
-   * mask the diff is total and carries no information.
+   * Provenance only; it is **never compared**. Content keys no longer carry a
+   * schema version, so two builds of VAT produce identical keys for identical
+   * bytes and there is nothing here that needs masking.
    */
-  contentKeySchemaVersion: number;
+  cacheNamespace: string;
   /** ISO-8601. Recorded for the human; **never compared**. */
   capturedAtIso: string;
   /** Absolute corpus root as given. Informational; every artifact path is relative. */

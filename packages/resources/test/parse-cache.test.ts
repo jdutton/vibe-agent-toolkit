@@ -7,7 +7,6 @@ import { computeContentKey, type KeyedContent, type ParserKind } from '../src/co
 import { parseHtmlContent } from '../src/html-link-parser.js';
 import { type ParseResult, parseMarkdownContent } from '../src/link-parser.js';
 import {
-  PARSE_CACHE_SCHEMA_VERSION,
   ParseCache,
   type ParseCacheOptions,
   defaultParseCache,
@@ -15,6 +14,9 @@ import {
   parseCacheDirectory,
   parseKeyed,
   rehydrate,
+  vatCacheNamespace,
+  vatCacheNamespaceRoot,
+  vatCacheRoot,
 } from '../src/parse-cache.js';
 
 // ---------------------------------------------------------------------------
@@ -279,10 +281,10 @@ const MISS_ROUTES: readonly MissRoute[] = [
     },
   },
   {
-    name: 'an entry stamped with another schema version',
+    name: 'an entry whose facts are structurally wrong',
     arrange: async (suite) => {
       const keyed = keyedFromText(SIMPLE_DOC);
-      await reseatEntry(suite, keyed, (entry) => ({ ...entry, v: PARSE_CACHE_SCHEMA_VERSION + 1 }));
+      await reseatEntry(suite, keyed, () => ({ facts: { links: 'not-an-array' } }));
       return { cache: suite.makeCache(), keyed };
     },
   },
@@ -349,10 +351,18 @@ describe('fixture distinguishability', () => {
 // ---------------------------------------------------------------------------
 
 describe('parseCacheDirectory', () => {
-  it('is a parse/ level beside the other .vat-cache tenants', () => {
+  it('sits under a per-build namespace, not directly beside the other tenants', () => {
     expect(parseCacheDirectory()).toBe(
-      safePath.join(normalizedTmpdir(), '.vat-cache', 'parse'),
+      safePath.join(normalizedTmpdir(), '.vat-cache', vatCacheNamespace(), 'parse'),
     );
+  });
+
+  it('leaves the build-independent tenants OUTSIDE the namespace', () => {
+    // URL reachability and fetched link content are facts about the world, not
+    // about this build. Namespacing them would re-fetch on every VAT upgrade.
+    expect(vatCacheRoot()).toBe(safePath.join(normalizedTmpdir(), '.vat-cache'));
+    expect(parseCacheDirectory().startsWith(vatCacheRoot())).toBe(true);
+    expect(vatCacheNamespaceRoot()).not.toBe(vatCacheRoot());
   });
 });
 
@@ -463,13 +473,15 @@ describe('ParseCache round trip', () => {
     expect(cached?.content).toBe(keyed.content);
   });
 
-  it('files the entry under <shard>/<key>.json with the schema envelope', async () => {
+  it('files the entry under <shard>/<key>.json carrying facts and no version', async () => {
     const keyed = keyedFromText(SIMPLE_DOC);
     await suite.makeCache().set(keyed, freshParse(keyed));
 
     const entry = await readEntry(suite.expectedEntryPath(keyed.key));
 
-    expect(entry['v']).toBe(PARSE_CACHE_SCHEMA_VERSION);
+    // No `v`: the namespace directory separates builds, so an envelope version
+    // would be a second, hand-maintained answer to the same question.
+    expect('v' in entry).toBe(false);
     expect('content' in (entry['facts'] as Record<string, unknown>)).toBe(false);
   });
 
@@ -531,33 +543,11 @@ describe('ParseCache misses', () => {
     expect(await suite.makeCache().get(keyedFromText(SIMPLE_DOC))).toBeNull();
   });
 
-  it('reads a version mismatch as a miss, not a misparse', async () => {
-    const keyed = keyedFromText(SIMPLE_DOC);
-    // Everything else about this entry stays valid — only the version moved.
-    await reseatEntry(suite, keyed, (entry) => ({ ...entry, v: PARSE_CACHE_SCHEMA_VERSION + 1 }));
-
-    expect(await suite.makeCache().get(keyed)).toBeNull();
-  });
-
-  it('reads a missing version as a miss', async () => {
-    const keyed = keyedFromText(SIMPLE_DOC);
-    await reseatEntry(suite, keyed, (entry) => ({ facts: entry['facts'] }));
-
-    expect(await suite.makeCache().get(keyed)).toBeNull();
-  });
-
-  it('reads corrupt JSON as a miss', async () => {
-    const keyed = keyedFromText(SIMPLE_DOC);
-    await writeEntry(suite.expectedEntryPath(keyed.key), '{ "v": 1, "facts": {');
-
-    expect(await suite.makeCache().get(keyed)).toBeNull();
-  });
-
   it('reads a structurally wrong payload as a miss', async () => {
     const keyed = keyedFromText(SIMPLE_DOC);
     await writeEntry(
       suite.expectedEntryPath(keyed.key),
-      JSON.stringify({ v: PARSE_CACHE_SCHEMA_VERSION, facts: { links: 'not-an-array' } }),
+      JSON.stringify({ facts: { links: 'not-an-array' } }),
     );
 
     expect(await suite.makeCache().get(keyed)).toBeNull();

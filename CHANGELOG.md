@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- **The parse cache is namespaced per build of VAT, and both hand-bumped version constants are
+  gone.** `CONTENT_KEY_SCHEMA_VERSION` and `PARSE_CACHE_SCHEMA_VERSION` are removed from
+  `@vibe-agent-toolkit/resources`. Entries now live under
+  `<tmpdir>/.vat-cache/<namespace>/parse/<shard>/<key>.json`, where `<namespace>` is the package
+  version when installed and `<version>-dev-<6 hex>` from a source checkout — the hex covering the
+  package path *and* a fingerprint of the emitted parser modules, so a rebuild re-namespaces
+  automatically. A content-addressed cache cannot see a change to the parser itself, and the
+  previous answer to that was a constant someone had to remember to bump; this one is a mechanism.
+  New exports: `vatCacheNamespace()`, `vatCacheNamespaceRoot()`. `parquet/` is reserved as a sibling
+  of `parse/` under the same namespace.
+
+  Two consequences worth knowing. **Content keys are now stable across VAT versions** — they are
+  `<parserKind>.<sha256>` with no version component — so upgrading no longer churns every recorded
+  key, and `vat pipeline`'s key-masking machinery is deleted rather than left as dead weight
+  (snapshot `formatVersion` is 2; older snapshots are refused, not mis-compared). And the
+  external-link and linkAuth caches deliberately stay *outside* the namespace: URL reachability is a
+  fact about the world, not about this build, so it survives upgrades.
+
 - **`@vibe-agent-toolkit/resource-compiler`'s `parseMarkdown` is now `toMarkdownResource`.** The
   monorepo exported two functions named `parseMarkdown` with opposite argument domains — this one
   takes markdown *content* and returns a `MarkdownResource` for the type/codegen compiler, while

@@ -24,7 +24,7 @@
 import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 
-import { CONTENT_KEY_SCHEMA_VERSION } from '@vibe-agent-toolkit/resources';
+import { vatCacheNamespace } from '@vibe-agent-toolkit/resources';
 import { safeExecResult, safePath } from '@vibe-agent-toolkit/utils';
 
 import { resolveBinPath } from '../commands/phase-utils.js';
@@ -131,7 +131,7 @@ export async function captureSnapshot(request: CaptureRequest): Promise<CaptureR
   const manifest: SnapshotManifest = {
     formatVersion: SNAPSHOT_FORMAT_VERSION,
     vatVersion: version,
-    contentKeySchemaVersion: CONTENT_KEY_SCHEMA_VERSION,
+    cacheNamespace: vatCacheNamespace(),
     capturedAtIso: new Date().toISOString(),
     corpusRoot,
     corpusLabel: request.corpusLabel,

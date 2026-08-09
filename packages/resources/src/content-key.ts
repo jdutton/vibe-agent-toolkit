@@ -71,20 +71,6 @@ import { readFile } from 'node:fs/promises';
  */
 export type ParserKind = 'markdown' | 'html';
 
-/**
- * Bumped by hand when a change to the parsers alters the facts they produce
- * from unchanged bytes.
- *
- * This is the only invalidation lever a content-addressed cache has. Deriving
- * it from the package version sounds cleaner and does not work: every worktree
- * on a machine reads the same version out of the same manifest, so parser edits
- * on a branch — precisely when invalidation is needed — would share a namespace
- * with `main` and with the published release of the same number. Matches the
- * `CACHE_VERSION` discipline already used by `external-link-cache.ts` and
- * `content-cache.ts`.
- */
-export const CONTENT_KEY_SCHEMA_VERSION = 2;
-
 /** Domain separator, so this keyspace can never be confused with a git SHA-1. */
 const KEY_DOMAIN = 'vat-content-key';
 
@@ -123,10 +109,10 @@ export function parserKindForPath(filePath: string): ParserKind {
  */
 export function computeContentKey(bytes: Uint8Array, parserKind: ParserKind): string {
   const digest = createHash('sha256')
-    .update(`${KEY_DOMAIN}\0${String(CONTENT_KEY_SCHEMA_VERSION)}\0${parserKind}\0`, 'utf-8')
+    .update(`${KEY_DOMAIN}\0${parserKind}\0`, 'utf-8')
     .update(bytes)
     .digest('hex');
-  return `k${String(CONTENT_KEY_SCHEMA_VERSION)}.${parserKind}.${digest}`;
+  return `${parserKind}.${digest}`;
 }
 
 /** A document's bytes and the key they were hashed under, from one read. */

@@ -66,12 +66,22 @@ const EMPTY_USAGE: TreeUsage = { entries: 0, bytes: 0 };
  * only check standing between a shape change and a recursive delete of
  * `<tmpdir>` itself. Deriving-then-verifying is the point.
  *
+ * ✅ **It has now earned that keep.** When the cache gained a per-build
+ * namespace, the layout went from `.vat-cache/parse` to
+ * `.vat-cache/<namespace>/parse` and the old single-`dirname` derivation
+ * started returning `.vat-cache/<namespace>`. The name check turned a silent
+ * change of delete target into a loud refusal. Anyone tempted to simplify this
+ * into an import should read that sentence twice.
+ *
  * @returns Absolute path to the cache root
- * @throws {Error} If the derived parent is not named `.vat-cache`
+ * @throws {Error} If the derived ancestor is not named `.vat-cache`
  */
 export function vatCacheRoot(): string {
   const parseDir = parseCacheDirectory();
-  const root = dirname(parseDir);
+  // Up two: `<root>/<namespace>/parse` → `<root>`. The namespace level is what
+  // makes this two rather than one; see the note above about why it is still
+  // derived and verified rather than imported.
+  const root = dirname(dirname(parseDir));
 
   if (basename(root) !== VAT_CACHE_DIR_NAME) {
     throw new Error(

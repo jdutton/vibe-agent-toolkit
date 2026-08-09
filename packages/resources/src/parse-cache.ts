@@ -68,24 +68,29 @@
  *
  * ## Versioning
  *
- * The content key covers the parser's *inputs*; it cannot detect a change to
- * the *shape of what is stored here*. {@link PARSE_CACHE_SCHEMA_VERSION} rides
- * in the entry envelope for that. A missing or non-matching `v` is read as a
- * miss rather than misparsed — same discipline as `content-cache.ts` and
- * `external-link-cache.ts`.
+ * There is none here, on purpose. The content key covers the parser's *inputs*
+ * and cannot see a change to the parser itself or to the shape stored here —
+ * so both are handled one level up, by the namespace directory in
+ * `cache-namespace.ts`, which is derived automatically from the running build
+ * of VAT. A hand-bumped constant in this file would be a discipline that
+ * nothing enforces; a directory that moves when the build moves is a mechanism.
  *
  * ## Layout
  *
- * `<normalizedTmpdir()>/.vat-cache/parse/<shard>/<key>.json`, where `<shard>`
- * is the last two characters of the key. Those are hex, so this is a clean
+ * `<normalizedTmpdir()>/.vat-cache/<namespace>/parse/<shard>/<key>.json`, where
+ * `<namespace>` identifies the build of VAT (see `cache-namespace.ts`) and
+ * `<shard>` is the last two characters of the key. Those are hex, so this is a clean
  * 256-way fan-out that needs no parsing of the key's internal structure. The
  * `parse/` level exists so a future `vat cache clear` — and the OS's own temp
  * purge — have a coarse handle on this tenant alone.
  *
  * `<tmpdir>/.vat-cache/` is **shared**: the external-link validation cache
- * already lives at `<tmpdir>/.vat-cache/external-links.json`, and linkAuth's
- * content cache at `<tmpdir>/.vat-cache/auth-<user>/`. This is a new tenant
- * beside them, not a replacement for either.
+ * lives at `<tmpdir>/.vat-cache/external-links.json`, and linkAuth's content
+ * cache at `<tmpdir>/.vat-cache/auth-<user>/`. Those two stay OUTSIDE the
+ * namespace deliberately — URL reachability and fetched link content are facts
+ * about the world, not about this build, so re-fetching them on every VAT
+ * upgrade would be waste. Only tenants whose contents VAT's own code determines
+ * (this one, and `parquet/` when it lands) sit under the namespace.
  *
  * ## Failure model
  *
@@ -104,23 +109,14 @@
 
 import { promises as fs } from 'node:fs';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
 
+import { parseCacheDirectory } from './cache-namespace.js';
 import { type KeyedContent, type ParserKind, readContentWithKey } from './content-key.js';
 import { parseHtmlContent } from './html-link-parser.js';
 import { type ParseResult, parseFrontmatterSource, parseMarkdownContent } from './link-parser.js';
 import type { HtmlParseError } from './schemas/resource-metadata.js';
 import type { HeadingNode, ResourceLink, UnresolvedReference } from './types.js';
-
-/**
- * On-disk payload schema version.
- *
- * Bump by hand whenever {@link ParseFacts} or the entry envelope changes shape.
- * Deliberately separate from `CONTENT_KEY_SCHEMA_VERSION`: that one invalidates
- * when the parser's *output for given bytes* changes, this one when the
- * *serialization of that output* changes. They move independently.
- */
-export const PARSE_CACHE_SCHEMA_VERSION = 1;
 
 /**
  * Directory mode for every directory this cache creates.
@@ -174,9 +170,15 @@ export interface ParseFacts {
   frontmatterError?: string;
 }
 
-/** The entry envelope. `v` is checked before `facts` is trusted. */
+/**
+ * The entry envelope.
+ *
+ * No version field: the namespace directory (see `cache-namespace.ts`) already
+ * separates every build of VAT, so a serialization change cannot meet an entry
+ * written under the old shape. What remains is corruption, which `isParseFacts`
+ * rejects structurally.
+ */
 interface StoredEntry {
-  v: number;
   facts: ParseFacts;
 }
 
@@ -212,29 +214,8 @@ export interface ParseCacheOptions {
   env?: NodeJS.ProcessEnv;
 }
 
-/**
- * The shared cache root, `<tmpdir>/.vat-cache` — parse entries, the external-URL
- * validation cache and linkAuth's content cache are all tenants beneath it.
- *
- * THE one definition of where that tree lives. It was three: this module, the
- * registry's external-URL cache directory, and `vat cache clear`. Three copies
- * of a path literal that a recursive delete is pointed at is exactly the sort of
- * agreement that holds until it doesn't.
- *
- * @returns Absolute path, forward slashes (via `safePath.join`)
- */
-export function vatCacheRoot(): string {
-  return safePath.join(normalizedTmpdir(), '.vat-cache');
-}
+export { parseCacheDirectory, vatCacheNamespace, vatCacheNamespaceRoot, vatCacheRoot } from './cache-namespace.js';
 
-/**
- * The default parse-cache root: `<tmpdir>/.vat-cache/parse`.
- *
- * @returns Absolute path, forward slashes (via `safePath.join`)
- */
-export function parseCacheDirectory(): string {
-  return safePath.join(vatCacheRoot(), 'parse');
-}
 
 /**
  * Reduce a parse result to the facts an entry may hold.
@@ -426,7 +407,7 @@ export class ParseCache {
       shardDir,
       `${keyed.key}.${String(process.pid)}.${String(tempFileCounter)}.tmp`,
     );
-    const entry: StoredEntry = { v: PARSE_CACHE_SCHEMA_VERSION, facts: dehydrate(result) };
+    const entry: StoredEntry = { facts: dehydrate(result) };
 
     try {
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is cacheDir + a charset-validated content key
@@ -584,7 +565,6 @@ function readFacts(raw: string): ParseFacts | null {
 
   if (typeof value !== 'object' || value === null) return null;
   const entry = value as Partial<StoredEntry>;
-  if (entry.v !== PARSE_CACHE_SCHEMA_VERSION) return null;
   return isParseFacts(entry.facts) ? entry.facts : null;
 }
 

@@ -19,7 +19,6 @@ import { canCreateSymlinks, mkdirSyncReal, normalizedTmpdir, safePath } from '@v
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
-  CONTENT_KEY_SCHEMA_VERSION,
   computeContentKey,
   parserKindForPath,
   readContentWithKey,
@@ -130,13 +129,16 @@ describe('computeContentKey', () => {
     expect(computeContentKey(bytes('markdown x'), 'html')).not.toBe(computeContentKey(bytes('x'), 'markdown'));
   });
 
-  it('carries the schema version, so a parser change has an invalidation lever', () => {
-    expect(computeContentKey(bytes('x'), 'markdown')).toContain(`k${String(CONTENT_KEY_SCHEMA_VERSION)}.`);
+  it('carries no schema version — invalidation is the cache namespace\'s job', () => {
+    // No schema version in the key: invalidation is the cache NAMESPACE's job
+    // (one directory per build of VAT), so keys stay stable across releases and
+    // a version bump no longer churns every recorded key.
+    expect(computeContentKey(bytes('x'), 'markdown').startsWith('markdown.')).toBe(true);
   });
 
   it('is domain-tagged so it can never be read as a git SHA-1', () => {
     const key = computeContentKey(bytes('x'), 'markdown');
-    expect(key).toMatch(/^k\d+\.(markdown|html)\.[0-9a-f]{64}$/);
+    expect(key).toMatch(/^(markdown|html)\.[0-9a-f]{64}$/);
     // 64 hex chars, and never bare hex — a git blob SHA-1 is 40 bare hex chars,
     // so the two keyspaces cannot be mixed by accidental hex length.
     expect(key).not.toMatch(/^[0-9a-f]+$/);

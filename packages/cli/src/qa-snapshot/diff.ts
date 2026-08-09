@@ -31,18 +31,6 @@ import type {
   SnapshotManifest,
 } from './types.js';
 
-/**
- * Matches a content key as `content-key.ts` renders it: `k<schema>.<parser>.<digest>`.
- *
- * Used to mask the key column when the two snapshots were captured under
- * different `CONTENT_KEY_SCHEMA_VERSION` values, where every key churns and the
- * churn carries no information.
- */
-const CONTENT_KEY_PATTERN = /\bk\d+\.[a-z]+\.[0-9a-f]{8,}\b/gu;
-
-/** Replacement token for a masked content key. Visible in any rendered diff. */
-const MASKED_KEY = '<KEY>';
-
 /** Leading `key: value` line of an oracle artifact header. */
 const ORACLE_HEADER_LINE = /^([A-Za-z][A-Za-z0-9]*): (.*)$/u;
 
@@ -338,19 +326,14 @@ export function compareSnapshots(before: LoadedSnapshot, after: LoadedSnapshot):
     };
   }
 
-  const maskKeys =
-    before.manifest.contentKeySchemaVersion !== after.manifest.contentKeySchemaVersion;
   const constraints: string[] = [];
-  if (maskKeys) {
-    constraints.push(maskConstraint(before.manifest, after.manifest));
-  }
   constraints.push(
     ...corpusConstraints(before.manifest, after.manifest),
     ...platformConstraints(before.manifest, after.manifest),
   );
 
   const pairs = pairArtifacts(before.manifest, after.manifest);
-  const deltas = pairs.map((pair) => toDelta(pair, before, after, maskKeys));
+  const deltas = pairs.map((pair) => toDelta(pair, before, after));
   constraints.push(...presenceConstraints(deltas));
 
   return {
@@ -361,22 +344,6 @@ export function compareSnapshots(before: LoadedSnapshot, after: LoadedSnapshot):
     constraints,
     provenanceNotes,
   };
-}
-
-/**
- * The constraint emitted when the content-key column had to be masked.
- *
- * @param before - Earlier manifest
- * @param after - Later manifest
- * @returns The masking notice
- */
-function maskConstraint(before: SnapshotManifest, after: SnapshotManifest): string {
-  return (
-    `MASKED: contentKeySchemaVersion differs (${String(before.contentKeySchemaVersion)} → ` +
-    `${String(after.contentKeySchemaVersion)}). Every content key would churn, so key tokens were replaced with ` +
-    `${MASKED_KEY} on BOTH sides of every oracle artifact before comparing — a change to a key itself is NOT ` +
-    'visible in this comparison.'
-  );
 }
 
 /**
@@ -604,17 +571,15 @@ function orderedKeys<T>(first: ReadonlyMap<string, T>, second: ReadonlyMap<strin
  * @param pair - The selector and its artifact path on each side
  * @param before - Earlier snapshot
  * @param after - Later snapshot
- * @param maskKeys - Whether to mask content keys before comparing oracle text
  * @returns The delta row
  */
 function toDelta(
   pair: ArtifactPair,
   before: LoadedSnapshot,
   after: LoadedSnapshot,
-  maskKeys: boolean,
 ): ArtifactDelta {
-  const beforeText = readArtifact(before, pair.beforeArtifact, pair.kind, maskKeys);
-  const afterText = readArtifact(after, pair.afterArtifact, pair.kind, maskKeys);
+  const beforeText = readArtifact(before, pair.beforeArtifact);
+  const afterText = readArtifact(after, pair.afterArtifact);
   const artifact = pair.afterArtifact ?? pair.beforeArtifact ?? pair.name;
 
   if (beforeText === null || afterText === null) {
@@ -664,7 +629,7 @@ function onePresentDelta(
 }
 
 /**
- * Fetch one artifact's text, masked when the key schema moved under us.
+ * Fetch one artifact's text.
  *
  * A path named by the manifest but missing from the loaded map is treated as
  * absent rather than as empty: "the capture did not produce this" and "the
@@ -672,15 +637,11 @@ function onePresentDelta(
  *
  * @param snapshot - The snapshot to read from
  * @param artifact - Relative artifact path, or `null` when this side has none
- * @param kind - Artifact kind; only oracle text is key-masked
- * @param maskKeys - Whether masking is in force
  * @returns The text, or `null` when this side has no such artifact
  */
 function readArtifact(
   snapshot: LoadedSnapshot,
   artifact: string | null,
-  kind: ArtifactKind,
-  maskKeys: boolean,
 ): string | null {
   if (artifact === null) {
     return null;
@@ -689,7 +650,7 @@ function readArtifact(
   if (text === undefined) {
     return null;
   }
-  return maskKeys && kind === 'oracle' ? text.replaceAll(CONTENT_KEY_PATTERN, MASKED_KEY) : text;
+  return text;
 }
 
 /**
