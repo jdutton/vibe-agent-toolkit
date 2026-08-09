@@ -43,6 +43,17 @@ const N_PLUS_ONE = ioSite({
 });
 
 /**
+ * The row that made this defect visible — a spawn site, on the real `vat audit`
+ * report. Argument 0 is the binary, so no distinct-argument set is kept.
+ */
+const SPAWN_NO_READING = ioSite({
+  method: 'child_process.spawnSync',
+  site: 'packages/utils/dist/git-utils.js:60',
+  count: 8,
+  distinctArgs: null,
+});
+
+/**
  * Render a one-command report.
  *
  * @param over - What the case varies about the command
@@ -190,6 +201,30 @@ describe('renderIoReport — call sites and the N+1 finding', () => {
     expect(text).toContain('>=14 distinct args');
     expect(text).toContain('CAPPED');
     expect(text).not.toContain('2.0x repeated');
+  });
+
+  it('never renders a ratio for a site that kept no distinct-argument reading', () => {
+    // MEASURED on the real report for `vat audit .`: this exact row read
+    // `count=8 distinctArgs=1 argsCapped=false` and rendered as an 8.00x
+    // redundancy row. Argument 0 is the binary — `which.sync('git')` hands back
+    // the same absolute path every time — so the row was structurally
+    // guaranteed to look maximally redundant whatever the spawns did.
+    const text = render({ userCalls: 8, sites: [SPAWN_NO_READING] });
+
+    expect(text).toContain('child_process.spawnSync');
+    expect(text).toContain('NOT TRACKED');
+    expect(text).not.toContain('repeated');
+    // And no invented number: a `0` here would read as a measurement.
+    expect(text).not.toContain('0 distinct args');
+  });
+
+  it('CONTROL: the same row WITH a reading of 1 does render 8.0x, so the case above can fail', () => {
+    const text = render({
+      userCalls: 8,
+      sites: [ioSite({ ...SPAWN_NO_READING, distinctArgs: 1 })],
+    });
+
+    expect(text).toContain('8.0x repeated');
   });
 
   it('caps the site list but says how many it withheld and that the total includes them', () => {

@@ -26,7 +26,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { compareIo, type IoCommandVerdict } from '../src/facets/io/compare.js';
-import { IO_FACET, IO_FACET_VERSION, type IoCommandStats } from '../src/facets/io/types.js';
+import {
+  IO_FACET,
+  IO_FACET_VERSION,
+  type IoCommandStats,
+  type IoSite,
+} from '../src/facets/io/types.js';
 
 import {
   BUSY_LOAD,
@@ -320,6 +325,98 @@ describe('compareIo — distinctArgs is a bound, not an exact number', () => {
 
     expect(movement?.unreadableDistinctArgs).toBe(1);
     expect(movement?.distinctArgsCaveat).toContain('processes');
+  });
+});
+
+/** The real spawn site the defect was found on. */
+const GIT_UTILS_SITE = 'packages/utils/dist/git-utils.js:60';
+
+/** The phrase the caveat must carry when no reading was taken at a site. */
+const NO_READING_PHRASE = 'does not identify the work';
+
+/**
+ * A spawn site, as the counter now reports one: counted, but never identified.
+ *
+ * @param over - What the case varies
+ * @returns The site row
+ */
+function spawnSite(over: Partial<IoSite> = {}): IoSite {
+  return ioSite({
+    method: 'child_process.spawnSync',
+    site: GIT_UTILS_SITE,
+    count: 8,
+    distinctArgs: null,
+    ...over,
+  });
+}
+
+describe('compareIo — a body this build does not read', () => {
+  it('refuses two reports that AGREE on a facet version this build has moved past', () => {
+    // The version gate in the envelope is two-sided: it asks whether the two
+    // reports agree with each other, not whether they agree with the build
+    // reading them. Two reports captured before `distinctArgs` became nullable
+    // agree perfectly — and every spawn row in them says `distinctArgs: 1`,
+    // which this build would render as a redundancy ratio. Same rule the dump
+    // reader already applies to `dumpVersion`.
+    const stale = { facetVersion: IO_FACET_VERSION - 1 };
+    const result = compareIo(ioReport([ioCommand()], stale), ioReport([ioCommand()], stale));
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('unreachable');
+    expect(result.refusal).toMatch(/^REFUSED:/);
+    expect(result.refusal).toContain('facetVersion');
+  });
+});
+
+describe('compareIo — a site that kept no distinct-argument reading', () => {
+  it('subtracts the counts but withholds the distinctArgs delta, and says why', () => {
+    const before = ioCommand({ userCalls: 8, sites: [spawnSite()] });
+    const after = ioCommand({ userCalls: 2, sites: [spawnSite({ count: 2 })] });
+
+    const verdict = verdictFor(before, after);
+    const movement = verdict.kind === 'changed' ? verdict.movement : null;
+
+    expect(movement?.sites[0]?.count.delta).toBe(-6);
+    expect(movement?.sites[0]?.distinctArgs).toBeNull();
+    expect(movement?.unreadableDistinctArgs).toBe(1);
+    expect(movement?.distinctArgsCaveat).toContain(NO_READING_PHRASE);
+  });
+
+  it('does not read a missing reading as zero when only one side has one', () => {
+    // The dangerous coercion: `null ?? 0` against a real 3 would report a
+    // distinct-argument delta of +3 — a fabricated N+1 disappearing.
+    const before = ioCommand({ userCalls: 8, sites: [spawnSite()] });
+    const after = ioCommand({ userCalls: 8, sites: [spawnSite({ distinctArgs: 3 })] });
+
+    const verdict = verdictFor(before, after);
+    const movement = verdict.kind === 'unchanged' ? verdict.movement : null;
+
+    // Under `null ?? 0` the pair reads 0 -> 3, the site is reported as moved and
+    // the verdict flips to `changed` on a distinct-argument delta that nobody
+    // measured. Nothing moved, and the row says why it could not be checked.
+    expect(verdict.kind).toBe('unchanged');
+    expect(movement?.sites).toEqual([]);
+    expect(movement?.unreadableDistinctArgs).toBe(1);
+    expect(movement?.distinctArgsCaveat).toContain(NO_READING_PHRASE);
+  });
+
+  it('names every reason when sites are unreadable for different reasons', () => {
+    // One site has no reading at all, another capped its tracking. A caveat that
+    // named only the first would send a reader looking for the wrong thing at
+    // the second.
+    const before = ioCommand({
+      sites: [spawnSite(), ioSite({ site: 'b.js:2', argsCapped: true })],
+    });
+    const after = ioCommand({
+      sites: [spawnSite({ count: 2 }), ioSite({ site: 'b.js:2', argsCapped: true })],
+    });
+
+    const verdict = verdictFor(before, after);
+    const movement = verdict.kind === 'changed' ? verdict.movement : null;
+
+    expect(movement?.unreadableDistinctArgs).toBe(2);
+    expect(movement?.distinctArgsCaveat).toContain(NO_READING_PHRASE);
+    expect(movement?.distinctArgsCaveat).toContain('capped');
   });
 });
 

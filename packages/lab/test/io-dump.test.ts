@@ -185,6 +185,26 @@ async function expectRefusal(
   expect(result.refusal).toMatch(pattern);
 }
 
+/**
+ * Read a directory of well-formed dumps, failing loudly if it refused.
+ *
+ * The mirror of {@link expectRefusal}, and extracted for the same reason: every
+ * success case otherwise repeats the same four lines of ok-checking, which is
+ * both noise and a duplication-gate failure.
+ *
+ * @param name - Directory name under the temp root
+ * @param dumps - The dumps to write into it
+ * @returns The merged numbers
+ * @throws When the read refused, which no caller of this helper expects
+ */
+async function expectMerge(name: string, dumps: readonly IoDump[]): Promise<MergedDumps> {
+  const directory = await dumpDirOf(name, dumps);
+  const result = await readDumps(directory, ROOTS);
+  expect(result.ok).toBe(true);
+  if (!result.ok) throw new Error(result.refusal);
+  return result.merged;
+}
+
 describe('mergeDumps', () => {
   /**
    * Two processes reporting the SAME site with DIFFERENT numbers.
@@ -213,6 +233,25 @@ describe('mergeDumps', () => {
 
   it('sums distinctArgs as an upper bound', () => {
     expect(twoProcessesOneSite().sites[0]?.distinctArgs).toBe(73);
+  });
+
+  it('keeps an absent distinct-argument reading absent when merging processes', () => {
+    // Summing is only defined over readings. Treating a missing one as 0 would
+    // turn two spawn rows into "0 distinct args", which reads as a measurement.
+    const result = merged(
+      dump(1, [row({ count: 8, distinctArgs: null })]),
+      dump(2, [row({ count: 3, distinctArgs: null })]),
+    );
+    expect(result.sites[0]?.count).toBe(11);
+    expect(result.sites[0]?.distinctArgs).toBeNull();
+  });
+
+  it('refuses to invent a total when only one process took a reading', () => {
+    const result = merged(
+      dump(1, [row({ count: 8, distinctArgs: null })]),
+      dump(2, [row({ count: 3, distinctArgs: 3 })]),
+    );
+    expect(result.sites[0]?.distinctArgs).toBeNull();
   });
 
   it('ORs argsCapped across processes', () => {
@@ -246,7 +285,7 @@ describe('mergeDumps', () => {
   it('reports loader calls in aggregate and keeps them out of sites', () => {
     const result = merged(
       dump(1, [
-        row({ cls: 'loader', method: 'fs.realpathSync', site: '', count: 3731, distinctArgs: 0 }),
+        row({ cls: 'loader', method: 'fs.realpathSync', site: '', count: 3731, distinctArgs: null }),
         row({ count: 40 }),
       ]),
     );
@@ -288,15 +327,13 @@ describe('mergeDumps', () => {
 
 describe('readDumps', () => {
   it('merges every dump in the directory, not just the first', async () => {
-    const directory = await dumpDirOf('merge-all', [
+    const merge = await expectMerge('merge-all', [
       dump(1, [row({ count: 66, distinctArgs: 66 })]),
       dump(2, [row({ count: 7, distinctArgs: 7 })]),
     ]);
-    const result = await readDumps(directory, ROOTS);
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error(result.refusal);
-    expect(result.merged.processes).toBe(2);
-    expect(result.merged.userCalls).toBe(73);
+
+    expect(merge.processes).toBe(2);
+    expect(merge.userCalls).toBe(73);
   });
 
   it('refuses a directory it cannot read', async () => {
@@ -338,9 +375,45 @@ describe('readDumps', () => {
   it('refuses a loader row that carries a site', async () => {
     await expectRefusal(
       'loader-site',
-      { 'io-1.json': JSON.stringify(dump(1, [row({ cls: 'loader', site: '/repo/vat/x.js:1' })])) },
+      {
+        'io-1.json': JSON.stringify(
+          dump(1, [row({ cls: 'loader', site: '/repo/vat/x.js:1', distinctArgs: null })]),
+        ),
+      },
       /^REFUSED:/,
     );
+  });
+
+  it('refuses a loader row that claims a distinct-argument reading', async () => {
+    // Loader calls are bucketed in aggregate and no distinct set is kept for
+    // them, so a number here describes a measurement that was never taken.
+    await expectRefusal(
+      'loader-reading',
+      { 'io-1.json': JSON.stringify(dump(1, [row({ cls: 'loader', site: '', distinctArgs: 4 })])) },
+      /^REFUSED:/,
+    );
+  });
+
+  it('refuses a row that claims to have capped a reading it never took', async () => {
+    // `argsCapped` describes a set that filled up. With no set there is nothing
+    // to cap, and a `true` here would make an absent reading look like an exact
+    // one that merely overflowed.
+    await expectRefusal(
+      'capped-without-reading',
+      {
+        'io-1.json': JSON.stringify(dump(1, [row({ distinctArgs: null, argsCapped: true })])),
+      },
+      /^REFUSED:/,
+    );
+  });
+
+  it('accepts a row with no distinct-argument reading', async () => {
+    const merge = await expectMerge('no-reading', [
+      dump(1, [row({ method: 'child_process.spawnSync', count: 8, distinctArgs: null })]),
+    ]);
+
+    expect(merge.sites[0]?.count).toBe(8);
+    expect(merge.sites[0]?.distinctArgs).toBeNull();
   });
 
   it('ignores non-dump files in the directory', async () => {
@@ -395,8 +468,8 @@ describe('sameBuckets', () => {
   });
 
   it('sees loader movement, which no site row would show', () => {
-    const a = merged(dump(1, [row({ cls: 'loader', site: '', count: 10, distinctArgs: 0 })]));
-    const b = merged(dump(1, [row({ cls: 'loader', site: '', count: 11, distinctArgs: 0 })]));
+    const a = merged(dump(1, [row({ cls: 'loader', site: '', count: 10, distinctArgs: null })]));
+    const b = merged(dump(1, [row({ cls: 'loader', site: '', count: 11, distinctArgs: null })]));
     expect(a.sites).toHaveLength(0);
     expect(b.sites).toHaveLength(0);
     expect(sameBuckets(a, b)).toBe(false);

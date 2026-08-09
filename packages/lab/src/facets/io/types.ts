@@ -31,7 +31,7 @@ export const IO_FACET = 'io';
  * versions are refused against each other, because differences across a schema
  * change belong to the schema rather than to the subject.
  */
-export const IO_FACET_VERSION = 1;
+export const IO_FACET_VERSION = 2;
 
 /** One call site, with everything needed to judge whether its work was necessary. */
 export interface IoSite {
@@ -50,13 +50,28 @@ export interface IoSite {
   /** How many calls this site made. */
   readonly count: number;
   /**
-   * How many *distinct first arguments* this site was called with.
+   * How many *distinct first arguments* this site was called with, or `null`
+   * when no such reading was taken.
    *
    * The whole point of the facet. `count: 66, distinctArgs: 66` is 66 reads of
    * 66 different files — necessary work. `count: 66, distinctArgs: 1` is 66
    * reads of the same file — an N+1, and a cache that is missing or being
    * defeated. A bare count cannot tell those apart, which is why the two travel
    * together and never separately.
+   *
+   * **`null` means no reading, and it is not a small number.** That argument
+   * holds exactly while argument 0 identifies the work, which it does not for
+   * `child_process` methods (argument 0 is the *binary*; every vat spawn of git
+   * passes the one path `which.sync('git')` returned) nor for two-path `fs`
+   * operations (`copyFile`, `rename`, …, where argument 0 is only the source)
+   * nor for `mkdtemp` (argument 0 is a prefix, and every call makes a new
+   * directory). Measured on the real `vat audit .` report at `119f4d5b`,
+   * `child_process.spawnSync` at `packages/utils/dist/git-utils.js:60` read
+   * `count=8, distinctArgs=1` — a structurally guaranteed 8.00x "redundancy"
+   * that said nothing about whether the spawns were redundant. The counter now
+   * takes no reading there, and this field says so out loud rather than through
+   * a `0` or a `1` that a reader would take for a measurement. Same distinction
+   * {@link IoCommandStats.stable} draws with its own `null`.
    *
    * **Merged across processes it is an UPPER BOUND.** Each process counts its
    * own distinct arguments, and two processes reading the same file each count
@@ -68,12 +83,15 @@ export interface IoSite {
    * counter stopped tracking new arguments at that site, so the true count is at
    * least this. Reading a capped value as exact would report a fake N+1.
    */
-  readonly distinctArgs: number;
+  readonly distinctArgs: number | null;
   /**
    * True when the counter hit its per-site argument limit and stopped tracking.
    *
    * Recorded rather than silently dropped, because {@link IoSite.distinctArgs}
-   * changes meaning when it is set — see there.
+   * changes meaning when it is set — see there. Necessarily `false` when that
+   * field is `null`: there is no set to have filled up, and a `true` would make
+   * an absent reading look like an exact one that merely overflowed. Both
+   * schemas below enforce that.
    */
   readonly argsCapped: boolean;
 }
@@ -92,9 +110,32 @@ export const ioSiteShape = {
   method: z.string().min(1),
   site: z.string(),
   count: z.number().int().nonnegative(),
-  distinctArgs: z.number().int().nonnegative(),
+  distinctArgs: z.number().int().nonnegative().nullable(),
   argsCapped: z.boolean(),
 } as const;
+
+/** What {@link cappedNeedsAReading} rejects, said the way a reader needs it. */
+export const CAPPED_WITHOUT_READING_MESSAGE =
+  "a row with no distinct-argument reading cannot be 'capped' — there is no set to have filled up, " +
+  'and a true here would make an absent reading look like an exact one that overflowed';
+
+/**
+ * Refuse a row that claims to have capped a reading it never took.
+ *
+ * Shared by both schemas that validate this shape — the dump reader's row and
+ * the report body's site. Two copies would be free to disagree, and the
+ * disagreement would show up as a dump that parses on the way in and fails on
+ * the way out.
+ *
+ * @param row - The row being validated
+ * @returns True when the row is coherent
+ */
+export function cappedNeedsAReading(row: {
+  readonly distinctArgs: number | null;
+  readonly argsCapped: boolean;
+}): boolean {
+  return row.distinctArgs !== null || !row.argsCapped;
+}
 
 /** The measured result for one command. */
 export interface IoCommandStats {
@@ -225,7 +266,11 @@ export const IoBodySchema = z
           processes: z.number().int().nonnegative(),
           loaderCalls: z.number().int().nonnegative(),
           userCalls: z.number().int().nonnegative(),
-          sites: z.array(z.object(ioSiteShape).strict()),
+          sites: z.array(
+            z.object(ioSiteShape).strict().refine(cappedNeedsAReading, {
+              message: CAPPED_WITHOUT_READING_MESSAGE,
+            }),
+          ),
         })
         .strict(),
     ),

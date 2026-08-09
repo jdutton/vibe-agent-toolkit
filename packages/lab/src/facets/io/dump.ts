@@ -28,7 +28,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
-import { ioSiteShape } from './types.js';
+import { CAPPED_WITHOUT_READING_MESSAGE, cappedNeedsAReading, ioSiteShape } from './types.js';
 import type { IoSite } from './types.js';
 
 /**
@@ -37,9 +37,11 @@ import type { IoSite } from './types.js';
  * A fixed contract between the injected counter and this reader. Bumped when
  * the row shape changes; a dump at any other version is refused, because
  * reading it with this build's assumptions would produce numbers whose meaning
- * nobody can state.
+ * nobody can state. `2` since `distinctArgs` became nullable: a version-1 dump
+ * writes `1` for a spawn site where this build writes `null`, and those two say
+ * opposite things about the same row.
  */
-export const IO_DUMP_VERSION = 1;
+export const IO_DUMP_VERSION = 2;
 
 /** Extension the counter writes its dumps with. Anything else in the directory is ignored. */
 const DUMP_EXTENSION = '.json';
@@ -91,8 +93,12 @@ export interface IoDumpRow {
   /** Absolute call site with a line number, or `''` for a loader row. */
   readonly site: string;
   readonly count: number;
-  /** Distinct first arguments seen at this site in this process. */
-  readonly distinctArgs: number;
+  /**
+   * Distinct first arguments seen at this site in this process, or `null` when
+   * the counter took no reading — a loader row, or a method whose first argument
+   * does not identify the work. See {@link IoSite.distinctArgs}.
+   */
+  readonly distinctArgs: number | null;
   /** True when the counter stopped tracking new arguments at this site. */
   readonly argsCapped: boolean;
 }
@@ -116,7 +122,14 @@ const IoDumpRowSchema = z
   // normalizes, and it would do it silently.
   .refine((row) => row.cls !== 'loader' || row.site === '', {
     message: "a 'loader' row must carry an empty site — loader calls are bucketed, not located",
-  });
+  })
+  // The other half of the same contract: no distinct-argument set is kept for
+  // loader calls, so a number there would report a measurement never taken.
+  .refine((row) => row.cls !== 'loader' || row.distinctArgs === null, {
+    message:
+      "a 'loader' row must carry no distinct-argument reading — loader calls are counted, not identified",
+  })
+  .refine(cappedNeedsAReading, { message: CAPPED_WITHOUT_READING_MESSAGE });
 
 /** Runtime schema for {@link IoDump}. Strict: the counter is ours, so an unknown field is a bug. */
 export const IoDumpSchema = z
@@ -185,7 +198,7 @@ interface Bucket {
   readonly method: string;
   readonly site: string;
   count: number;
-  distinctArgs: number;
+  distinctArgs: number | null;
   argsCapped: boolean;
 }
 
@@ -309,7 +322,14 @@ function accumulate(byKey: Map<string, Bucket>, row: IoDumpRow, site: string): v
   // reading one file each count it. Documented on `IoSite.distinctArgs`; that
   // direction of error can only make repeated work look more necessary than it
   // was, never less, so the N+1 detector never fires on it falsely.
-  existing.distinctArgs += row.distinctArgs;
+  //
+  // Summing is defined over READINGS only. A missing one stays missing rather
+  // than contributing a zero: `null + 3` is not 3, it is "one of these processes
+  // never looked", and a total built on that would read as a measurement.
+  existing.distinctArgs =
+    existing.distinctArgs === null || row.distinctArgs === null
+      ? null
+      : existing.distinctArgs + row.distinctArgs;
   existing.argsCapped ||= row.argsCapped;
 }
 

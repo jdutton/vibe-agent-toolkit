@@ -32,6 +32,12 @@
  * `436 calls / 436 distinct args` is necessary work. A bare count cannot tell
  * those apart. A capped site is rendered as a floor rather than an exact number,
  * because reading a floor as exact would report an N+1 that may not exist.
+ *
+ * A site with NO reading (`distinctArgs: null` — a spawn, a two-path `fs`
+ * operation, `mkdtemp`) gets neither a number nor a ratio, and says which it is.
+ * That row used to render as `8 calls / 1 distinct args  >=8.0x repeated`, sitting
+ * beside genuine redundancy rows and structurally guaranteed to look that way for
+ * every spawn site — the most convincing wrong finding this renderer has produced.
  */
 
 import type { Coordinate, SubjectVersion } from '../../envelope/coordinate.js';
@@ -70,6 +76,16 @@ const COUNTING_LEGEND =
 const PROPAGATION_WARNING =
   '      ⚠ COUNTER DID NOT PROPAGATE — only one process was counted, so these numbers ' +
   "describe vat's launcher rather than the command it spawned.";
+
+/**
+ * Said where a distinct-argument count would otherwise go.
+ *
+ * Not `0 distinct args`, which is a real and different measurement (fd-based
+ * work, where a reading WAS taken and no call carried a path).
+ */
+const NO_READING_NOTE =
+  'distinct args NOT TRACKED (the first argument does not identify the work here — ' +
+  'a spawn names the binary, not the command it ran)';
 
 /** Said at the top of a comparison when either capture was contaminated. */
 const CONTAMINATION_NOTE =
@@ -190,11 +206,29 @@ function loadLine(load: LoadReadings): string {
  * @returns A suffix, or the empty string when the work was not repeated
  */
 function repetitionNote(site: IoSite): string {
+  // No reading, no ratio. There is nothing to divide by, and a row that made a
+  // repetition claim from an absent reading would be the defect this guards.
+  if (site.distinctArgs === null) return '';
   if (site.distinctArgs === 0 || site.count <= site.distinctArgs) return '';
   if (site.argsCapped) {
     return '  (repetition ratio unreadable — distinct args is a floor here)';
   }
   return `  >=${(site.count / site.distinctArgs).toFixed(RATIO_PRECISION)}x repeated`;
+}
+
+/**
+ * How a site's distinct-argument reading is stated, including its absence.
+ *
+ * @param site - The site row
+ * @returns The clause that follows the call count
+ */
+function distinctNote(site: IoSite): string {
+  if (site.distinctArgs === null) {
+    return NO_READING_NOTE;
+  }
+  return site.argsCapped
+    ? `>=${tally(site.distinctArgs)} distinct args (CAPPED — a floor, not an exact count)`
+    : `${tally(site.distinctArgs)} distinct args`;
 }
 
 /**
@@ -204,10 +238,7 @@ function repetitionNote(site: IoSite): string {
  * @returns A single line
  */
 function siteLine(site: IoSite): string {
-  const distinct = site.argsCapped
-    ? `>=${tally(site.distinctArgs)} distinct args (CAPPED — a floor, not an exact count)`
-    : `${tally(site.distinctArgs)} distinct args`;
-  return `      ${site.method}  ${site.site}  ${tally(site.count)} calls / ${distinct}${repetitionNote(site)}`;
+  return `      ${site.method}  ${site.site}  ${tally(site.count)} calls / ${distinctNote(site)}${repetitionNote(site)}`;
 }
 
 /**

@@ -45,7 +45,8 @@ interface DumpRow {
   method: string;
   site: string;
   count: number;
-  distinctArgs: number;
+  /** `null` when no distinct set was kept — see the counter's own docs. */
+  distinctArgs: number | null;
   argsCapped: boolean;
 }
 
@@ -77,6 +78,8 @@ interface CounterInternals {
   readonly FS_CALLBACK_METHODS: readonly string[];
   readonly FS_PROMISE_METHODS: readonly string[];
   readonly CHILD_PROCESS_METHODS: readonly string[];
+  readonly FS_OPS_WITHOUT_ARG_IDENTITY: readonly string[];
+  readonly UNTRACKED_ARG_LABELS: ReadonlySet<string>;
   createState(logDir: string, selfFile: string): CounterState;
   parseFrameLocation(frame: string): string | null;
   classifyStack(stack: string, selfFile: string): { cls: 'user' | 'loader'; site: string };
@@ -125,6 +128,7 @@ const FS_READ_FILE_SYNC = 'fs.readFileSync';
 const FS_OPEN_SYNC = 'fs.openSync';
 const FS_REALPATH_SYNC = 'fs.realpathSync';
 const FS_PROMISES_READ_FILE = 'fs.promises.readFile';
+const CP_SPAWN_SYNC = 'child_process.spawnSync';
 
 /** A stand-in for the real `fs` surface, so unit tests never patch this process. */
 function makeFixtureObject(): { readFile: AnyFunction; calls: string[] } {
@@ -518,6 +522,105 @@ describe('distinctArgs — the N+1 detector', () => {
   });
 });
 
+/**
+ * Two calls that differ in everything except the first argument.
+ *
+ * The production shape exactly: every vat spawn of git goes through
+ * `which.sync('git')`, so argument 0 is the identical absolute path however
+ * different the argv and the cwd are. A fixture that called once could not tell
+ * a suppressed distinct set from a tracked one — both would look like "one
+ * distinct value" — so it calls twice.
+ *
+ * @param label - The method label to wrap the fixture under
+ * @returns The single row those two calls produced
+ */
+function twoCallsUnder(label: string): DumpRow {
+  const shared = makeFixtureObject();
+  const state = internals.createState('/unused', COUNTER_DIST);
+  internals.wrapFunction(state, shared, 'readFile', label);
+
+  shared.readFile('/usr/bin/git', ['status']);
+  shared.readFile('/usr/bin/git', ['rev-parse', 'HEAD']);
+
+  const rows = internals.toRows(state);
+  const only = rows[0];
+  if (only === undefined) throw new Error(`no row recorded for ${label}`);
+  expect(rows).toHaveLength(1);
+  expect(only.count).toBe(2);
+  return only;
+}
+
+describe('distinctArgs — methods whose first argument is NOT the work', () => {
+  it('records NO distinct-argument reading for a spawn, rather than a misleading 1', () => {
+    // MEASURED, on the real report for `vat audit .`:
+    //   packages/utils/dist/git-utils.js:60  child_process.spawnSync
+    //   count=8  distinctArgs=1  argsCapped=false
+    // which renders as an 8.00x redundancy row sitting next to genuine ones. It
+    // is structurally guaranteed for ANY spawn site and says nothing at all
+    // about whether the spawns were redundant.
+    const row = twoCallsUnder(CP_SPAWN_SYNC);
+
+    expect(row.distinctArgs).toBeNull();
+    // No set was kept, so there is nothing that could have been capped. A
+    // `true` here would restate the same lie in the other field.
+    expect(row.argsCapped).toBe(false);
+  });
+
+  it('CONTROL: the IDENTICAL fixture reports 1 under a path method, so the null is the method', () => {
+    // The two answers are distinguishable with this fixture, which is what
+    // makes the assertion above worth anything: same object, same two calls,
+    // same first argument — only the label differs.
+    expect(twoCallsUnder(FS_READ_FILE).distinctArgs).toBe(1);
+  });
+
+  it.for([
+    { label: CP_SPAWN_SYNC, why: 'argument 0 is the binary, not the work' },
+    { label: 'child_process.execFileSync', why: 'argument 0 is the binary' },
+    { label: 'child_process.exec', why: 'the cwd is in the options, not in argument 0' },
+    { label: 'child_process.fork', why: 'argument 0 is the module, not the argv' },
+    { label: 'fs.copyFile', why: 'argument 0 is the source of a two-path operation' },
+    { label: 'fs.copyFileSync', why: 'same, on the sync entry point' },
+    { label: 'fs.promises.rename', why: 'same, on the promise entry point' },
+    { label: 'fs.symlink', why: 'argument 0 is the target, and many links share one' },
+    { label: 'fs.linkSync', why: 'argument 0 is the existing path' },
+    { label: 'fs.cp', why: 'argument 0 is the source' },
+    { label: 'fs.mkdtempSync', why: 'argument 0 is a PREFIX; every call makes a new directory' },
+  ] as const)('keeps no reading for $label — $why', ({ label }) => {
+    expect(twoCallsUnder(label).distinctArgs).toBeNull();
+  });
+
+  it.for([
+    { label: FS_READ_FILE },
+    { label: FS_READ_FILE_SYNC },
+    { label: 'fs.promises.readdir' },
+    { label: FS_REALPATH_SYNC },
+  ] as const)('still tracks $label, where argument 0 IS the work', ({ label }) => {
+    expect(twoCallsUnder(label).distinctArgs).toBe(1);
+  });
+
+  it('names only labels the counter actually wraps — a typo would suppress nothing', () => {
+    const wrapped = new Set([
+      ...internals.FS_SYNC_METHODS.map((method) => `fs.${method}`),
+      ...internals.FS_CALLBACK_METHODS.map((method) => `fs.${method}`),
+      ...internals.FS_PROMISE_METHODS.map((method) => `fs.promises.${method}`),
+      ...internals.CHILD_PROCESS_METHODS.map((method) => `child_process.${method}`),
+    ]);
+
+    expect([...internals.UNTRACKED_ARG_LABELS].filter((label) => !wrapped.has(label))).toEqual([]);
+    // Control: the set is not empty, so the filter above is not vacuous.
+    expect(internals.UNTRACKED_ARG_LABELS.size).toBeGreaterThan(
+      internals.CHILD_PROCESS_METHODS.length,
+    );
+  });
+
+  it('suppresses EVERY child_process method, not a hand-picked few', () => {
+    const missing = internals.CHILD_PROCESS_METHODS.filter(
+      (method) => !internals.UNTRACKED_ARG_LABELS.has(`child_process.${method}`),
+    );
+    expect(missing).toEqual([]);
+  });
+});
+
 describe('nextDumpPath', () => {
   it('takes the first free index so a recycled pid cannot clobber an earlier dump', () => {
     const taken = new Set(['io-77-0.json', 'io-77-1.json']);
@@ -587,13 +690,19 @@ async function readAllAsync(list) {
   for (const file of list) { await fsp.readFile(file); }
 }
 
+function spawnAll(list) {
+  // One call site, one binary, DIFFERENT work each time — the shape that makes
+  // a first-argument distinct set meaningless.
+  return list.map((code) => cp.spawnSync(process.execPath, ['-e', code]));
+}
+
 async function main() {
   readAllSync([a, a, a, b, c]);
   await readAllAsync([a, a, b]);
   await fs.promises.readFile(c);
   fs.realpathSync(a);
   fs.realpathSync.native(a);
-  const grandchild = cp.spawnSync(process.execPath, ['-e', '0']);
+  const [grandchild] = spawnAll(['0', 'process.exitCode = 0']);
   process.stdout.write(JSON.stringify({
     promisesAreOneObject: require('node:fs').promises === require('node:fs/promises'),
     fspRealpathNative: typeof fsp.realpath.native,
@@ -737,10 +846,17 @@ describe('end to end: injected into a real node process', () => {
     expect(userRows(dump, FS_REALPATH_SYNC).map((row) => row.count)).toEqual([1]);
     expect(userRows(dump, 'fs.realpathSync.native').map((row) => row.count)).toEqual([1]);
 
-    const spawnRows = userRows(dump, 'child_process.spawnSync');
+    // TRAP 3: two spawns of the SAME binary doing DIFFERENT work. Argument 0 is
+    // `process.execPath` both times, so a first-argument distinct set reports
+    // `2 calls / 1 distinct` — a 2.00x redundancy claim that is structurally
+    // guaranteed for every spawn site and says nothing about these two spawns.
+    // No reading is taken instead, and `null` says that rather than implying a
+    // measurement.
+    const spawnRows = userRows(dump, CP_SPAWN_SYNC);
     expect(spawnRows).toHaveLength(1);
-    expect(spawnRows[0]?.count).toBe(1);
-    expect(spawnRows[0]?.distinctArgs).toBe(1);
+    expect(spawnRows[0]?.count).toBe(2);
+    expect(spawnRows[0]?.distinctArgs).toBeNull();
+    expect(spawnRows[0]?.argsCapped).toBe(false);
   });
 
   it('counts the descriptor-level work a high-level read decomposes into', () => {
@@ -795,9 +911,11 @@ describe('end to end: injected into a real node process', () => {
     // right response is to say so in the facet docs, not to delete the gate.
     expect(loaderRows.length).toBeGreaterThan(0);
 
-    // Every loader row aggregates per method (empty site) and tracks no args.
+    // Every loader row aggregates per method (empty site) and takes no
+    // distinct-argument reading at all — `null`, not the `0` that would read as
+    // "a reading was taken and nothing was distinct".
     expect(loaderRows.every((row) => row.site === '')).toBe(true);
-    expect(loaderRows.every((row) => row.distinctArgs === 0)).toBe(true);
+    expect(loaderRows.every((row) => row.distinctArgs === null)).toBe(true);
     expect(loaderRows.every((row) => row.argsCapped === false)).toBe(true);
     expect(new Set(loaderRows.map((row) => row.method)).size).toBe(loaderRows.length);
 
@@ -817,10 +935,10 @@ describe('end to end: injected into a real node process', () => {
     const dir = safePath.join(scratch, 'descendant-logs');
     const { pid } = runChild(true, dir);
 
-    // The child spawns one grandchild, which inherits NODE_OPTIONS. Both dump.
-    // The harness doc claims this; here it is measured.
+    // The child spawns two grandchildren, both of which inherit NODE_OPTIONS.
+    // All three dump. The harness doc claims propagation; here it is measured.
     const names = readdirSync(dir).filter((name) => name.endsWith('.json'));
-    expect(names.length).toBe(2);
+    expect(names.length).toBe(3);
     expect(names.some((name) => name.startsWith(`io-${pid}-`))).toBe(true);
   });
 });

@@ -57,8 +57,12 @@
  * `argsCapped` is set it is instead a FLOOR (the counter stopped tracking). A
  * bound minus a floor, or a floor minus a floor, is a number with no direction,
  * and reporting it as an N+1 appearing or disappearing would be a fabricated
- * finding. So the delta is withheld — and *counted*, so the renderer can say how
- * many sites went unchecked instead of implying they were clean.
+ * finding. And where the field is `null` there is no reading at all — a spawn, a
+ * two-path `fs` call — so the only honest subtraction is none: treating that as a
+ * zero would turn "we did not look" into "we looked and found nothing". So the
+ * delta is withheld — and *counted*, with every distinct reason named, so the
+ * renderer can say how many sites went unchecked and why instead of implying they
+ * were clean.
  */
 
 import {
@@ -69,7 +73,14 @@ import {
 } from '../../envelope/coordinate.js';
 import { refuseIncomparableSchemas, type ReportEnvelope } from '../../envelope/envelope.js';
 
-import { IO_FACET, type IoBody, IoBodySchema, type IoCommandStats, type IoSite } from './types.js';
+import {
+  IO_FACET,
+  IO_FACET_VERSION,
+  type IoBody,
+  IoBodySchema,
+  type IoCommandStats,
+  type IoSite,
+} from './types.js';
 
 /** A before/after pair of counts with the difference already taken. */
 export interface IoCountDelta {
@@ -217,6 +228,19 @@ const CAPPED_CAVEAT =
   'rather than an exact count — subtracting it would report an N+1 that may not exist';
 
 /**
+ * Why a `distinctArgs` subtraction was withheld because no reading exists.
+ *
+ * The counter keeps no distinct set where argument 0 is not the work — every
+ * `child_process` method, the two-path `fs` operations, `mkdtemp`. There is
+ * nothing to subtract, and a `null ?? 0` here would manufacture a delta out of
+ * two absences.
+ */
+const NO_READING_CAVEAT =
+  'at least one side took no distinct-argument reading at this site, because the first argument ' +
+  'of that call does not identify the work (a spawn names the binary, a copy or rename names only ' +
+  'its source) — there is nothing to subtract';
+
+/**
  * Read an envelope's body as an `io` body.
  *
  * @param envelope - A report whose header already says it is `io`
@@ -227,6 +251,22 @@ function readIoBody(
   envelope: ReportEnvelope<unknown>,
   side: string,
 ): { body: IoBody } | { refusal: string } {
+  // Checked against THIS BUILD, not only between the two sides. The envelope's
+  // gate asks whether the reports agree with each other, and two reports
+  // captured before a schema move agree perfectly — while every row in them
+  // means what the older build meant. A pair of pre-nullable reports would put
+  // `distinctArgs: 1` on every spawn row and this build would render it as a
+  // redundancy ratio. Same rule the dump reader applies to `dumpVersion`.
+  if (envelope.facetVersion !== IO_FACET_VERSION) {
+    return {
+      refusal:
+        `REFUSED: the ${side} report is an '${IO_FACET}' body at facetVersion ` +
+        `${String(envelope.facetVersion)}, and this build reads ` +
+        `${String(IO_FACET_VERSION)}. Re-capture it; reading rows whose meaning has moved ` +
+        'would produce numbers nobody can state.',
+    };
+  }
+
   const parsed = IoBodySchema.safeParse(envelope.body);
   if (parsed.success) return { body: parsed.data as IoBody };
   const problems = parsed.error.issues
@@ -386,6 +426,14 @@ function pairByKey<T>(
 interface DescribedSite extends IoSiteMovement {
   /** True when this row belongs in the reported movement. */
   readonly moved: boolean;
+  /**
+   * Why this site's `distinctArgs` could not be subtracted, or `null`.
+   *
+   * Carried per site rather than decided once per command: a command can have
+   * one site with no reading and another that capped, and a caveat naming only
+   * the first sends a reader looking for the wrong thing at the second.
+   */
+  readonly withheld: string | null;
 }
 
 /**
@@ -401,6 +449,40 @@ function siteKindOf(pair: Pairing<IoSite>): IoSiteMovementKind {
 }
 
 /**
+ * One side's distinct-argument reading, with an absent side contributing zero.
+ *
+ * Only ever reached once {@link withholdingReason} has ruled out a `null`
+ * reading, so the zero here means "this site made no calls on that side" and
+ * never "no reading was taken".
+ *
+ * @param site - The site as it appears on one side, or `null` when absent
+ * @returns The reading
+ */
+function readingOf(site: IoSite | null): number {
+  return site?.distinctArgs ?? 0;
+}
+
+/**
+ * Why this site's `distinctArgs` may not be subtracted, or `null` when it may.
+ *
+ * Ordered most-structural first: an absent reading is a property of the method
+ * itself and will never become readable, where a cap is a property of the run.
+ *
+ * @param pair - The site as it appears on each side
+ * @param blocked - A command-wide reason, or `null`
+ * @returns The reason, or `null`
+ */
+function withholdingReason(pair: Pairing<IoSite>, blocked: string | null): string | null {
+  if (pair.before?.distinctArgs === null || pair.after?.distinctArgs === null) {
+    return NO_READING_CAVEAT;
+  }
+  if ((pair.before?.argsCapped ?? false) || (pair.after?.argsCapped ?? false)) {
+    return CAPPED_CAVEAT;
+  }
+  return blocked;
+}
+
+/**
  * Describe one site pairing.
  *
  * @param pair - The site as it appears on each side
@@ -412,12 +494,9 @@ function describeSite(pair: Pairing<IoSite>, blocked: string | null): DescribedS
   const identity = pair.after ?? pair.before;
   if (identity === null) throw new Error(`site pairing ${pair.key} has no side`);
   const count = difference(pair.before?.count ?? 0, pair.after?.count ?? 0);
-  const capped = (pair.before?.argsCapped ?? false) || (pair.after?.argsCapped ?? false);
-  const withheld = capped ? CAPPED_CAVEAT : blocked;
+  const withheld = withholdingReason(pair, blocked);
   const distinctArgs =
-    withheld === null
-      ? difference(pair.before?.distinctArgs ?? 0, pair.after?.distinctArgs ?? 0)
-      : null;
+    withheld === null ? difference(readingOf(pair.before), readingOf(pair.after)) : null;
   const present = pair.before !== null && pair.after !== null;
   return {
     method: identity.method,
@@ -425,6 +504,7 @@ function describeSite(pair: Pairing<IoSite>, blocked: string | null): DescribedS
     kind: siteKindOf(pair),
     count,
     distinctArgs,
+    withheld,
     moved: !present || count.delta !== 0 || (distinctArgs?.delta ?? 0) !== 0,
   };
 }
@@ -450,7 +530,11 @@ function buildMovement(before: IoCommandStats, after: IoCommandStats): IoMovemen
   const described = pairByKey(before.sites, after.sites, siteKey).map((pair) =>
     describeSite(pair, blocked),
   );
-  const unreadable = described.filter((site) => site.distinctArgs === null);
+  const unreadable = described.filter((site) => site.withheld !== null);
+  // Every distinct reason, not the first one found: the sites can be unreadable
+  // for different reasons, and a caveat that named one of them would send a
+  // reader to check the wrong thing at the others.
+  const reasons = [...new Set(unreadable.map((site) => site.withheld))];
 
   return {
     totals: {
@@ -460,7 +544,7 @@ function buildMovement(before: IoCommandStats, after: IoCommandStats): IoMovemen
     },
     sites: described.filter((site) => site.moved),
     unreadableDistinctArgs: unreadable.length,
-    distinctArgsCaveat: unreadable.length === 0 ? null : (blocked ?? CAPPED_CAVEAT),
+    distinctArgsCaveat: reasons.length === 0 ? null : reasons.join('; and '),
   };
 }
 

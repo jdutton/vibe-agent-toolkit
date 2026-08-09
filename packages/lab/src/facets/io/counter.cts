@@ -79,8 +79,15 @@ import type * as FsModule from 'node:fs';
 import type * as FsPromisesModule from 'node:fs/promises';
 import path = require('node:path');
 
-/** Body-schema version of the dump file. The dump reader refuses others. */
-const DUMP_VERSION = 1;
+/**
+ * Body-schema version of the dump file. The dump reader refuses others.
+ *
+ * `2` since `distinctArgs` became nullable — see {@link UNTRACKED_ARG_LABELS}.
+ * A version-1 dump carries a `1` where this build writes `null`, and those two
+ * say opposite things about the same site, so the reader must refuse it rather
+ * than read it.
+ */
+const DUMP_VERSION = 2;
 
 /**
  * Largest distinct-argument set kept per bucket.
@@ -144,9 +151,10 @@ interface Bucket {
   readonly site: string;
   count: number;
   /**
-   * Distinct string first-arguments seen here, or `null` when args are not
-   * tracked (loader rows). Only the SIZE is ever reported — the values are
-   * absolute machine-specific paths and would make two reports incomparable.
+   * Distinct string first-arguments seen here, or `null` when no set is kept —
+   * loader rows, and the methods in {@link UNTRACKED_ARG_LABELS}. Only the SIZE
+   * is ever reported: the values are absolute machine-specific paths and would
+   * make two reports incomparable.
    */
   readonly args: Set<string> | null;
   argsCapped: boolean;
@@ -159,15 +167,23 @@ interface DumpRow {
   readonly site: string;
   readonly count: number;
   /**
-   * How many distinct string first-arguments this bucket saw.
+   * How many distinct string first-arguments this bucket saw, or `null` when no
+   * set was kept at all.
    *
    * The N+1 detector, and the reason this facet exists: 66 reads of 66 files is
-   * necessary work; 66 reads of the *same* file is a bug. `0` on a `user` row
-   * with a non-zero count means no call had a string first argument (fd-based
-   * work); on a `loader` row it means args are not tracked at all. A `true`
-   * `argsCapped` makes this number a floor.
+   * necessary work; 66 reads of the *same* file is a bug. That reasoning holds
+   * only where argument 0 IS the work, which is why
+   * {@link UNTRACKED_ARG_LABELS} exists and why this field is nullable.
+   *
+   * - **`null`** — no reading was taken here. Nothing about repetition may be
+   *   read off this row, in either direction. Loader rows and the untracked
+   *   methods land here.
+   * - **`0`** on a `user` row with a non-zero count — a reading WAS taken and no
+   *   call had a string first argument (fd-based work). That is a measurement,
+   *   which is why it is not the same value as the case above.
+   * - A `true` {@link DumpRow.argsCapped} makes a non-null number a floor.
    */
-  readonly distinctArgs: number;
+  readonly distinctArgs: number | null;
   readonly argsCapped: boolean;
 }
 
@@ -274,7 +290,12 @@ const FS_CALLBACK_METHODS: readonly string[] = [
  */
 const FS_PROMISE_METHODS: readonly string[] = [...FS_SHARED_OPS, 'watch'];
 
-/** `child_process` entry points. Their first argument is the command. */
+/**
+ * `child_process` entry points.
+ *
+ * Every one of them is in {@link UNTRACKED_ARG_LABELS}: their first argument is
+ * a program, not the work it was asked to do.
+ */
 const CHILD_PROCESS_METHODS: readonly string[] = [
   'exec',
   'execFile',
@@ -284,6 +305,71 @@ const CHILD_PROCESS_METHODS: readonly string[] = [
   'spawn',
   'spawnSync',
 ];
+
+/**
+ * `fs` operations whose first argument does not identify the work either.
+ *
+ * Two shapes, both of which make a distinct-argument count meaningless:
+ *
+ * - **Two-path operations** (`copyFile`, `cp`, `link`, `rename`, `symlink`)
+ *   name a source and a destination, and only the source is argument 0. Copying
+ *   one template to five destinations is five distinct pieces of work and would
+ *   report one distinct argument.
+ * - **`mkdtemp` takes a PREFIX**, not a path. Every call creates a *different*
+ *   directory by design, so an identical argument 0 is the expected case rather
+ *   than evidence of anything.
+ *
+ * Names must appear in {@link FS_SHARED_OPS}, or the labels built from them
+ * would suppress nothing; `test/io-counter.test.ts` pins that.
+ */
+const FS_OPS_WITHOUT_ARG_IDENTITY: readonly string[] = [
+  'copyFile',
+  'cp',
+  'link',
+  'mkdtemp',
+  'rename',
+  'symlink',
+];
+
+/**
+ * Method labels for which NO distinct-argument set is kept.
+ *
+ * The bucket's `distinctArgs` is `null` for these, and `null` is not `0` and
+ * emphatically not `1`: it says no reading was taken.
+ *
+ * **Why this exists.** `distinctArgs` is sold as the N+1 detector — 66 reads of
+ * 66 files is necessary work, 66 reads of one file is a bug — and that argument
+ * holds exactly while argument 0 is the work. For a spawn it is the *binary*:
+ * vat resolves git once through `which.sync('git')` and passes that same
+ * absolute path forever, so the distinct set is permanently `{'/usr/bin/git'}`
+ * however different the argv and the cwd are. Measured on the real `vat audit .`
+ * report at `119f4d5b`:
+ *
+ * ```
+ * packages/utils/dist/git-utils.js:60  child_process.spawnSync
+ * count=8  distinctArgs=1  argsCapped=false
+ * ```
+ *
+ * — an 8.00x redundancy row, structurally guaranteed for any spawn site,
+ * carrying no information about whether those spawns were redundant, and sitting
+ * in the report beside rows where the same shape means something real. The
+ * uncapped flag made it look exact, which made it worse.
+ *
+ * **Why not key the set on something better** (command + argv + cwd)? Because
+ * the counter would then be *guessing* at an identity: cwd is optional and
+ * defaults to the process's, `shell`/`env` change what a command means, and
+ * argv can carry buffers. A composed key that is subtly wrong is a redundancy
+ * claim that is subtly wrong, which is the failure being fixed. Refusing to
+ * take a reading is the honest option, and the type says so.
+ */
+const UNTRACKED_ARG_LABELS: ReadonlySet<string> = new Set<string>([
+  ...CHILD_PROCESS_METHODS.map((method) => `child_process.${method}`),
+  ...FS_OPS_WITHOUT_ARG_IDENTITY.flatMap((op) => [
+    `fs.${op}`,
+    `fs.${op}Sync`,
+    `fs.promises.${op}`,
+  ]),
+]);
 
 /**
  * Fresh, empty counter state.
@@ -398,7 +484,8 @@ function classifyStack(stack: string, selfFile: string): { cls: CallClass; site:
  *
  * @param state - Counter state
  * @param method - Stable method label, e.g. `fs.promises.readFile`
- * @param args - The call's arguments; only a string first argument is inspected
+ * @param args - The call's arguments; only a string first argument is inspected,
+ *   and only for methods where argument 0 identifies the work
  */
 function record(state: CounterState, method: string, args: readonly unknown[]): void {
   if (state.inside) {
@@ -418,7 +505,7 @@ function record(state: CounterState, method: string, args: readonly unknown[]): 
         method,
         site,
         count: 0,
-        args: cls === 'user' ? new Set<string>() : null,
+        args: cls === 'user' && !UNTRACKED_ARG_LABELS.has(method) ? new Set<string>() : null,
         argsCapped: false,
       };
       state.buckets.set(key, bucket);
@@ -528,7 +615,7 @@ function toRows(state: CounterState): DumpRow[] {
       method: bucket.method,
       site: bucket.site,
       count: bucket.count,
-      distinctArgs: bucket.args === null ? 0 : bucket.args.size,
+      distinctArgs: bucket.args === null ? null : bucket.args.size,
       argsCapped: bucket.argsCapped,
     });
   }
@@ -656,10 +743,12 @@ export = {
     ARG_CAP,
     CHILD_PROCESS_METHODS,
     DUMP_VERSION,
+    FS_OPS_WITHOUT_ARG_IDENTITY,
     FS_CALLBACK_METHODS,
     FS_PROMISE_METHODS,
     FS_SYNC_METHODS,
     LOG_DIR_ENV,
+    UNTRACKED_ARG_LABELS,
     WRAPPED_TAG,
     classifyStack,
     createState,

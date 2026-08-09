@@ -61,7 +61,7 @@ deterministic where wall time is not**:
   when the measurement is not known to be repeatable. `--runs 3` is the smallest run that tests it at
   all — one warm-up plus two compared.
 
-Five measured facts shape it, and each one is a way the number can be a confident lie:
+Six measured facts shape it, and each one is a way the number can be a confident lie:
 
 - **The loader dominates, so attribution is not optional.** On `vat resources scan docs/`, 6,371 of
   6,411 recorded calls come from Node's own ESM module loader. A raw total measures Node, not vat.
@@ -89,6 +89,38 @@ Five measured facts shape it, and each one is a way the number can be a confiden
   contributing 331 calls and none of them. The 2.00× rows were real — **but the report was not what
   established that.** Until a per-process view exists, treat any ratio near the process count as
   unproven and drop to the dumps. Do not fix code on the strength of a merged ratio alone.
+- ⚠️ **`distinctArgs` reads the FIRST argument, and for some methods the first argument is not the
+  work.** The N+1 argument — 66 reads of 66 files is necessary, 66 reads of one file is a bug —
+  holds exactly while argument 0 identifies what was done. For `child_process` it never does: for
+  `spawnSync(command, args, options)` argument 0 is the *binary*, and vat resolves git once through
+  `which.sync('git')` and passes that same absolute path forever, so the distinct set is permanently
+  `{'/usr/bin/git'}` however different the argv and the cwd. Measured on `vat audit .` at
+  `119f4d5b`:
+
+  ```
+  packages/utils/dist/git-utils.js:60  child_process.spawnSync  count=8  distinctArgs=1  argsCapped=false
+  ```
+
+  — rendered as an 8.00× redundancy row, sitting beside rows where that shape means something real,
+  and **structurally guaranteed to look that way for every spawn site whatever those spawns did**.
+  `argsCapped: false` made it look exact, which made it worse; the row was very nearly reported as a
+  vat defect on its own strength. The same shape reaches three `fs` cases where argument 0
+  under-identifies the call: the two-path operations (`copyFile`, `cp`, `link`, `rename`, `symlink`
+  — argument 0 is only the source, so one template copied to five destinations reads as 5×) and
+  `mkdtemp`, whose argument 0 is a *prefix* every call shares by design.
+
+  **The fix is to take no reading rather than a bad one.** `distinctArgs` is now `number | null`,
+  and `null` means no reading was taken — the same distinction `stable` draws, and deliberately not
+  the `0` that already means something else (a reading was taken, and no call carried a path).
+  Neither the renderer nor the comparator will produce a ratio or a delta from it. Keying the set on
+  a composed identity instead (command + argv + cwd) was rejected: the counter would be *guessing*
+  at what identifies a spawn — cwd is optional, `shell` and `env` change what a command means — and
+  a subtly wrong identity is a subtly wrong redundancy claim, which is the failure being fixed.
+  Costs: the dump format is at `dumpVersion: 2` and the body at `facetVersion: 2`, so **every report
+  captured before this change must be re-captured**. Two refusals enforce that — the envelope's
+  existing gate when the two sides disagree on the version, and a new one in the `io` comparator when
+  a side disagrees with the *build reading it*. The second is what stops a pair of pre-change reports,
+  which agree with each other perfectly, from being read with the new meaning.
 
 It counts **Node `fs` and `child_process` calls, not kernel syscalls** — dtrace is blocked by SIP for
 system binaries on macOS and `strace` is Linux-only, so the Node boundary is the portable place to

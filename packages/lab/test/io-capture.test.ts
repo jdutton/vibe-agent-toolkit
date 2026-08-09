@@ -45,6 +45,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { SubjectVersion } from '../src/envelope/coordinate.js';
 import { REPORT_FORMAT_VERSION, type ReportEnvelope } from '../src/envelope/envelope.js';
 import { captureIo, type CaptureIoOptions } from '../src/facets/io/capture.js';
+import { IO_DUMP_VERSION } from '../src/facets/io/dump.js';
 import {
   IO_FACET,
   IO_FACET_VERSION,
@@ -148,7 +149,7 @@ const COUNTER_SOURCE = [
   '    writeFileSync(',
   '      join(dir, `io-${process.pid}-${index}.json`),',
   '      JSON.stringify({',
-  '        dumpVersion: 1,',
+  `        dumpVersion: ${String(IO_DUMP_VERSION)},`,
   '        pid: process.pid + index,',
   '        rows: [',
   `          { cls: 'user', method: ${JSON.stringify(METHOD)}, site, count, distinctArgs: 1, argsCapped: false },`,
