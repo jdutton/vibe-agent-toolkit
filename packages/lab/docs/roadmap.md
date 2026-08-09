@@ -61,7 +61,7 @@ deterministic where wall time is not**:
   when the measurement is not known to be repeatable. `--runs 3` is the smallest run that tests it at
   all — one warm-up plus two compared.
 
-Four measured facts shape it, and each one is a way the number can be a confident lie:
+Five measured facts shape it, and each one is a way the number can be a confident lie:
 
 - **The loader dominates, so attribution is not optional.** On `vat resources scan docs/`, 6,371 of
   6,411 recorded calls come from Node's own ESM module loader. A raw total measures Node, not vat.
@@ -79,6 +79,16 @@ Four measured facts shape it, and each one is a way the number can be a confiden
   a sevenfold undercount reported with total confidence**. Attribution saturates at 16; the counter
   uses 24 for headroom. Any stack-walking attributor must raise the limit and prove where it
   saturates, or its bucketing silently depends on how deep the call was.
+- ⚠️ **A report merges every process, so `distinctArgs` cannot prove redundancy on its own.** The
+  report states a `processes` count and nothing more, so a site reading `32 calls / 16 distinct` is
+  ambiguous exactly when it matters most: one process reading each path twice, and two processes
+  reading each path once, produce the identical row. That is the confound `distinctArgs` exists to
+  detect, and the rendered report cannot resolve it. Measured on `vat audit .` at `119f4d5b`: five
+  sites looked redundant, and only the raw per-PID dumps (`io-<pid>-<n>.json` under
+  `VAT_LAB_IO_LOG`) showed all five living entirely in the worker process, with the launcher
+  contributing 331 calls and none of them. The 2.00× rows were real — **but the report was not what
+  established that.** Until a per-process view exists, treat any ratio near the process count as
+  unproven and drop to the dumps. Do not fix code on the strength of a merged ratio alone.
 
 It counts **Node `fs` and `child_process` calls, not kernel syscalls** — dtrace is blocked by SIP for
 system binaries on macOS and `strace` is Linux-only, so the Node boundary is the portable place to
