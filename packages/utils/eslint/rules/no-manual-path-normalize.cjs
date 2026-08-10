@@ -14,13 +14,20 @@
  */
 
 const {
+  DEAD_UNSAFE_IMPORT,
+  DEAD_UNSAFE_IMPORT_MESSAGE,
+  reportDeadUnsafeImports,
+} = require('./dead-import.cjs');
+const {
   SAFE_MODULE_ONLY_SCHEMA,
   SAFE_PATH_MODULE,
+  insertAboveWithComments,
   isNameAlreadyBound,
   resolveSafeModule,
 } = require('./safe-import.cjs');
 
 const SAFE_FN = 'toForwardSlash';
+const PATH_MODULES = new Set(['node:path', 'path']);
 
 module.exports = {
   meta: {
@@ -35,6 +42,7 @@ module.exports = {
       useToForwardSlash:
         'Use toForwardSlash() from {{safeModule}} instead of manual path normalization. ' +
         'Manual normalization is error-prone and less maintainable.',
+      [DEAD_UNSAFE_IMPORT]: DEAD_UNSAFE_IMPORT_MESSAGE,
     },
     schema: [SAFE_MODULE_ONLY_SCHEMA],
   },
@@ -46,10 +54,24 @@ module.exports = {
     // barrel must have the call rewritten WITHOUT gaining a second binding of
     // the same name — that is a SyntaxError. See `safe-import.cjs`.
     let hasToForwardSlashImport = isNameAlreadyBound(sourceCode, SAFE_FN);
+    // Never mutated — the dead-import leg must not be armed by a flag that a
+    // suppressed report's `fix()` can spend. See `dead-import.cjs`.
+    const safeBoundInSource = hasToForwardSlashImport;
     let utilsImportNode = null;
+    // `path.sep` is the last `path.*` reference in plenty of files, and
+    // `toForwardSlash(raw)` consumes it — leaving the same dead `node:path`
+    // binding the `safePath` rules used to leave.
+    const pathImportNodes = [];
 
     return {
+      'Program:exit'() {
+        reportDeadUnsafeImports(context, sourceCode, pathImportNodes, safeBoundInSource);
+      },
+
       ImportDeclaration(node) {
+        if (PATH_MODULES.has(node.source.value)) {
+          pathImportNodes.push(node);
+        }
         if (node.source.value === targetModule) {
           utilsImportNode = node;
           for (const spec of node.specifiers) {
@@ -110,12 +132,21 @@ module.exports = {
                       // Create new import at the top
                       const firstNode = sourceCode.ast.body[0];
                       const newImport = `import { ${SAFE_FN} } from '${targetModule}';\n`;
-                      fixes.push(fixer.insertTextBefore(firstNode, newImport));
+                      fixes.push(insertAboveWithComments(fixer, sourceCode, firstNode, newImport));
                     }
-                    // Multiple reports in one pass share this closure; without
-                    // this, a second occurrence in the same file inserts the
-                    // import a second time.
-                    hasToForwardSlashImport = true;
+                    // NOT latched. The comment here used to claim that without a
+                    // `hasToForwardSlashImport = true` a second occurrence would
+                    // insert the import twice; an adversarial run could not
+                    // reproduce that at any occurrence count. It cannot happen:
+                    // both reports insert identical text at the identical anchor,
+                    // so the ranges coincide and ESLint applies one and drops the
+                    // other as overlapping.
+                    //
+                    // Latching it is not free, either. ESLint runs `fix()` for a
+                    // SUPPRESSED problem before the `eslint-disable` filter
+                    // discards it, so the first report could spend the flag and
+                    // then be thrown away — leaving later occurrences rewritten
+                    // to a `toForwardSlash` nothing imports.
                   }
 
                   return fixes;

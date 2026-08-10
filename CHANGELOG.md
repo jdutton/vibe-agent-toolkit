@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.42] - 2026-08-08
+
 ### Breaking
 
 - **Library-only, type-level: `ValidationConfigSchema` is now typed `z.ZodType<ValidationConfig>` rather than the inferred `ZodObject`.** No CLI behaviour changes and no runtime change — it is the same strict object, so `safeParse` still rejects unknown codes and unknown top-level keys, and the generated `schemas/validation-config.json` is byte-identical. **What to do:** nothing, unless you called `ZodObject`-only methods on it (`.shape`, `.extend`, `.merge`, `.pick`); those are no longer available at the type level. The `ValidationConfig` type itself is unchanged.
@@ -44,6 +46,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   `ValidateLinkOptions` in `@vibe-agent-toolkit/resources` gains a matching **required** `fsCache`
   field, so anything constructing that options object must supply the run's cache.
+
+- **The vestigial `zod` peerDependency is gone from `@vibe-agent-toolkit/utils`.** It was a
+  *required* peer, so anyone importing only `./path` was still told by their package manager to
+  install `zod`. The package imports `zod` nowhere: all six occurrences of `from 'zod'` in the
+  shipped `dist` are inside JSDoc `@example` blocks, and the version-introspection helpers
+  deliberately duck-type `_def.typeName` rather than importing the library — which is exactly what
+  makes them work across v3 and v4. The declared range (`^3.25.0 || ^4.0.0`) would additionally have
+  rejected a future major that the duck typing handles by design. `zod` remains a devDependency, so
+  the test that exercises the introspection against a real `zod` is unaffected.
+
+  **Listed as breaking, not merely removed**, because of who it breaks: not anyone importing from
+  `utils`, but a consumer that was relying on this package to pull `zod` into *their* tree and now
+  finds it absent. If you import `zod` yourself, declare it yourself. (Reported twice by an adopter
+  who went looking for this under Breaking and did not find it — it was filed under Added, beside
+  the subpath work that prompted it.)
 
 ### Added
 
@@ -102,6 +119,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Requires ESLint 9+ (flat config) and Node >= 22. Full rule table
   in [the subpath's README](https://github.com/jdutton/vibe-agent-toolkit/blob/main/packages/utils/eslint/README.md).
 
+  `--fix` is safe to run across a whole migration: every rule that rewrites a call and edits
+  imports fixes all of a file's call sites without leaving a reference to something it just
+  un-imported, never deletes a `type`-only, aliased or re-exported specifier, and leaves a
+  suppressed call site working. Enforced by a suite that runs `--fix` to its fixpoint per rule and
+  checks the result with `no-undef`.
+
+  It also **finishes the job**, which matters in a repo gating at `--max-warnings=0`. Rewriting the
+  last `path.*` call in a file leaves `import path from 'node:path'` bound to nothing — not a
+  dangling reference, so a `no-undef` check cannot see it, and an adopter measured **536 such errors
+  surviving a converged `--fix` across 232 files**. The rules now report that orphaned binding
+  themselves, as a separate finding on the import line with its own fix, so it is visible and
+  suppressible rather than a rewrite quietly deleting a declaration. Deliberately narrow: a closed
+  list of Node builtins (`node:path`, `node:os`, `node:fs`, `node:fs/promises`,
+  `node:child_process`, and their bare spellings), only in a file where the safe symbol is already
+  bound, only whole declarations with no references left. Bare `import 'node:path'` side-effect
+  imports, `type` specifiers and partially-used declarations are left alone. This is not a general
+  unused-import rule and will not become one — the ecosystem's rules abstain here for good reason,
+  and in any case cannot help: `@typescript-eslint/no-unused-vars` declares `meta.fixable: 'code'`
+  yet emits only a *suggestion* for an unused import, which `--fix` never applies.
+
+  The member-call rules (`no-os-tmpdir` and friends) check the receiver rather than the method name,
+  and now recognise a namespace bound by `const os = require('node:os')` or
+  `const os = await import('node:os')` as well as by a static `import * as os`. An unrelated object
+  with a same-named method is still not a finding.
+
   **There is no separate plugin package to install**, and `eslint` is declared as an *optional* peer
   dependency, so nothing changes for consumers who take `utils` for `safePath.join()` alone: they
   get no unmet-peer warning and no new dependency. An ESLint plugin is data rather than code that
@@ -153,15 +195,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Node floor before this release, so an adopter installing on an older Node got no install-time
   signal from any of the other 20 — they simply failed later, at a syntax or API error, with nothing
   pointing at the Node version.
-
-- **The vestigial `zod` peerDependency is gone from `@vibe-agent-toolkit/utils`.** It was a
-  *required* peer, so anyone importing only `./path` was still told by their package manager to
-  install `zod`. The package imports `zod` nowhere: all six occurrences of `from 'zod'` in the
-  shipped `dist` are inside JSDoc `@example` blocks, and the version-introspection helpers
-  deliberately duck-type `_def.typeName` rather than importing the library — which is exactly what
-  makes them work across v3 and v4. The declared range (`^3.25.0 || ^4.0.0`) would additionally have
-  rejected a future major that the duck typing handles by design. `zod` remains a devDependency, so
-  the test that exercises the introspection against a real `zod` is unaffected.
 
 - **A `./crawl` subpath**, promoting `crawlDirectory`/`crawlDirectorySync` and the crawl-exclusion
   glob constants. It is deliberately kept out of `./glob`: it is the only subpath that
@@ -226,11 +259,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **15 advisories cleared from the dependency tree** by advancing the patched pins in the root
-  `overrides` block: `undici` 7.28.0 → 7.29.0 (5 advisories), `ip-address` 10.1.1 → 10.3.1 (3),
-  `hono` 4.12.27 → 4.12.34, `fast-uri` 3.1.4 → 3.1.5, `js-yaml` 4.3.0 → 4.3.1, and `postcss`
-  8.5.18 → 8.5.23. All are within-major bumps of transitive packages; no declared dependency
-  changed and no consumer-facing API is affected.
+- **16 advisories cleared from the dependency tree** via the root `overrides` block: `undici`
+  7.28.0 → 7.29.0 (5 advisories), `ip-address` 10.1.1 → 10.3.1 (3), `hono` 4.12.27 → 4.12.34,
+  `fast-uri` 3.1.4 → 3.1.5, `js-yaml` 4.3.0 → 4.3.1, and `postcss` 8.5.18 → 8.5.23, plus a new
+  `nanoid` 3.3.16 → 3.3.17 pin closing GHSA-2v37-7h3g-55p8 (CVSS 8.2). `nanoid` reaches the tree
+  only through `postcss`, whose `^3.3.16` range the patched version satisfies, so no other pin
+  moved. All are within-major bumps of transitive packages; no declared dependency changed and no
+  consumer-facing API is affected.
 
   One advisory is **accepted rather than fixed** and recorded in `osv-scanner.toml` with its
   reasoning: `brace-expansion` (GHSA-rgw5-rvv9-x895) resolves to 1.x, 2.x, and 5.x simultaneously
@@ -289,15 +324,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cache of copies). Turborepo is common enough for this to matter: every package in this repo has a
   `.turbo/`.
 
-- **`buildWindowsShellLine('')` accepted an empty command token and promoted the caller's first
-  argument into the command position.** `isSingleShellToken` guards against a `commandToken` that
-  cmd.exe could split or partly re-execute, but `''` tripped neither of its branches — it does not
-  start with a quote, and the metacharacter regex cannot match a string with no characters — so
-  `buildWindowsShellLine('', ['calc', 'b'])` returned `" calc b"`, a line whose command is `calc`.
-  Not reachable from either of the current call sites (both resolve the command through
-  `which.sync` first, which throws on `''`), but that is a property of today's callers rather than
-  of the function, and this guard's whole purpose is to hold independently of them.
-
 - **`windowsShellQuote` produced command lines that `CommandLineToArgvW` mis-parses, corrupting
   arguments and silently merging them with the argument that follows.** The function knew none of
   Windows' backslash-escaping rules: a backslash run preceding a quote — or preceding the closing
@@ -318,29 +344,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chosen because it is understood identically by every known implementation, whereas `""` is absent
   from `CommandLineToArgvW`'s documented rules and CRT variants disagree about it. The residual cost
   is bounded and stated in the code: cmd's quote tracking desyncs only for an argument containing
-  both a quote *and* a shell metacharacter. Found by an adversarial review of the first, incomplete
-  attempt at this fix.
+  both a quote *and* a shell metacharacter.
 
-- **`buildWindowsShellLine`'s new command-token check failed open.** It accepted any string starting
-  and ending with a quote, so a whole crafted command line (`"a b" && calc "x"`) passed validation
-  while reading, in its own JSDoc, as a general assertion. It now requires a single shell token.
+  Two safety claims in the same module were also overstated and are now documented honestly rather
+  than changed. `%` and `!` trigger quoting but are **not neutralized** by it — `cmd.exe` still
+  expands `%VAR%` inside double quotes, which also corrupts a literal `%` in a filename (legal on
+  Windows). And `shouldUseShell`'s JSDoc asserted "arguments passed as array, preventing injection"
+  and "never concatenate user input into command strings" while the Windows shell branch does
+  exactly that concatenation. Both now name `shell: false` as the escape hatch.
 
-- **`shouldUseShell`'s documentation claimed safety properties this module does not have** —
-  "Arguments passed as array, preventing injection" and "Never concatenate user input into command
-  strings" — while the Windows shell branch does exactly that concatenation. Replaced with an honest
-  two-mode description and a named escape hatch.
+- **`buildWindowsShellLine` silently produced a broken command line when handed a command path it
+  could not safely place in the command position — it now throws instead.** Two shapes reached it:
+  an unquoted path containing spaces, which `cmd.exe` splits at the first space; and `''`, which
+  promoted the caller's *first argument* into the command position, so
+  `buildWindowsShellLine('', ['calc', 'b'])` returned `" calc b"` — a line whose command is `calc`.
+  It now requires a single shell token and throws with a message naming the offending token.
+  Separately, `safeExecSync`/`safeExecResult` now quote a path-like command the way `spawnHardened`
+  already did; the sibling paths previously disagreed and only one was correct.
 
-- **`buildWindowsShellLine` silently produced a broken command line when handed an unquoted command
-  path containing spaces**, because `cmd.exe` splits it at the first space. It now throws with a
-  message naming the offending token, and `safeExecSync`/`safeExecResult` now quote a path-like
-  command the same way `spawnHardened` already did — previously the two sibling paths disagreed, and
-  only one was correct.
-
-- **`windowsShellQuote`'s character class implied more safety than it delivered.** `%` and `!` were
-  in the set that triggers quoting, but wrapping in double quotes does not neutralize them —
-  `cmd.exe` still expands `%VAR%` inside quotes, which also corrupts literal `%` in filenames (legal
-  on Windows). Documented explicitly as *quoted, not neutralized*, with the `shell: false` escape
-  hatch named.
+  **What changes for you:** a call that used to return a subtly wrong command line now raises. If
+  you pass a command path through these helpers, resolve it first (both of VAT's own call sites go
+  through `which.sync`, which is why neither could reach the empty-token case).
 
 - **`@vibe-agent-toolkit/utils/package.json` was not exported**, so
   `require('@vibe-agent-toolkit/utils/package.json')` threw `ERR_PACKAGE_PATH_NOT_EXPORTED`. Version
@@ -352,6 +376,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subpath. A `../../docs/` link that resolved to nothing on npm is now absolute.
 
 - **`NON_PORTABLE_ASSET_REFERENCE` no longer advises an impossible fix for `CLAUDE_PROJECT_DIR`.** The family emitted one shared remediation — *"reference bundled files by a path relative to the skill directory"* — for every variant. That is right for `CLAUDE_PLUGIN_ROOT` and absolute script paths, and **wrong** for `CLAUDE_PROJECT_DIR`, which denotes the *user's repository* rather than a bundled asset: no skill-relative path can express it, and substituting one silently re-anchors user artifacts onto the plugin install directory. An adopter reported the rule advising them to revert a fix for exactly that bug. The `claude-project-dir` variant now carries its own remediation (take the location as an explicit parameter with `$CLAUDE_PROJECT_DIR` as fallback; make declared `targets` reflect the Claude Code coupling), and the shared headline no longer asserts the skill-relative advice.
+
 - **`NON_PORTABLE_ASSET_REFERENCE` over-captured a closing brace in nested shell expansion.** The variant patterns used `\$\{?NAME\}?`, whose optional trailing `\}?` consumed the closing brace of an **enclosing** expansion — `"${VAR:-$CLAUDE_PROJECT_DIR}"` was reported as `` "$CLAUDE_PROJECT_DIR}" ``. The malformed token reads exactly like the typo `$FOO}`, sending reviewers to source that was in fact valid shell. Matching is now brace-balanced via alternation. *(Adopter-reported; independently reproduced.)*
 
 ## [0.1.41] - 2026-08-03
