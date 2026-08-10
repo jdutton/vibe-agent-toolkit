@@ -69,6 +69,28 @@ function isNameAlreadyBound(sourceCode, name) {
 }
 
 /**
+ * Insert `text` above `node`, ABOVE its leading comments.
+ *
+ * `fixer.insertTextBefore(node)` uses the node's own start offset, which is
+ * after any comment attached to it — so inserting an import before the first
+ * statement dropped it BETWEEN an `eslint-disable-next-line` and the line that
+ * directive protects. The directive then applies to the inserted import, and
+ * the statement the developer had deliberately suppressed silently becomes
+ * fixable. A fixer that can revoke a suppression is a fixer that edits code
+ * nobody asked it to touch.
+ *
+ * @param {object} fixer - ESLint rule fixer.
+ * @param {object} sourceCode - ESLint `SourceCode` for the file being fixed.
+ * @param {object} node - The node to insert above.
+ * @param {string} text - Text to insert, including its own trailing newline.
+ */
+function insertAboveWithComments(fixer, sourceCode, node, text) {
+  const comments = sourceCode.getCommentsBefore(node);
+  const start = (comments[0] ?? node).range[0];
+  return fixer.insertTextBeforeRange([start, start], text);
+}
+
+/**
  * The `safeModule` rule option: point the fixer at YOUR re-export seam.
  *
  * The narrow-subpath defaults above are right for a consumer importing this
@@ -135,6 +157,7 @@ module.exports = {
   SAFE_MODULE_ONLY_SCHEMA,
   SAFE_PATH_MODULE,
   SAFE_PROCESS_MODULE,
+  insertAboveWithComments,
   isNameAlreadyBound,
   resolveSafeModule,
   withSafeModuleOption,

@@ -291,12 +291,13 @@ describe('the ./eslint subpath ships', () => {
     expect(project.packedFiles).toContain('eslint/rules/no-os-tmpdir.cjs');
     // 21 registered rules + three shared factories (`eslint-rule-factory`,
     // `path-function-rule-factory`, `no-command-direct-factory`) + `exempt-path-matcher`
-    // + `safe-import` (the autofix target and the already-bound check).
+    // + `safe-import` (the autofix target and the already-bound check)
+    // + `dead-import` (removing the binding a fixer orphaned).
     // Exact, not a floor: a floor lets rules silently fall out of the tarball.
     // npm reports manifest paths POSIX-style; normalize anyway so the count cannot
     // quietly become zero on a platform that reports them otherwise.
     const rules = project.packedFiles.filter((file) => toForwardSlash(file).startsWith('eslint/rules/'));
-    expect(rules.length).toBe(26);
+    expect(rules).toHaveLength(27);
   });
 
   it('ships the hand-written types alongside them', () => {
