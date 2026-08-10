@@ -31,7 +31,7 @@
     }
   },
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsx ../dev-tools/src/tsc-clean-build.ts --build",
     "build:clean": "tsc --build --clean && tsc --build",
     "test:unit": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",

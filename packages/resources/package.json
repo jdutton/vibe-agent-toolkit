@@ -17,7 +17,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsx ../dev-tools/src/tsc-clean-build.ts",
     "test:unit": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:system": "vitest run --config vitest.system.config.ts",

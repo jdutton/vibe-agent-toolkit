@@ -19,7 +19,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc --build && bun run generate:schemas",
+    "build": "tsx ../dev-tools/src/tsc-clean-build.ts --build && bun run generate:schemas",
     "build:watch": "tsc --build --watch",
     "clean": "rm -rf dist *.tsbuildinfo schemas/",
     "generate:schemas": "tsx scripts/generate-json-schemas.ts",

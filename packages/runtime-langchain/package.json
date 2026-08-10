@@ -13,7 +13,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsx ../dev-tools/src/tsc-clean-build.ts",
     "test:unit": "vitest run",
     "test:watch": "vitest",
     "test:llm-regression": "RUN_LLM_TESTS=true bun test test/llm-regression.test.ts",

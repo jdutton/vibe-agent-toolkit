@@ -23,7 +23,7 @@
     "!dist/qa-snapshot"
   ],
   "scripts": {
-    "build": "tsx src/utils/validate-help-files.ts && tsc && tsx ../dev-tools/src/prepare-bin.ts",
+    "build": "tsx src/utils/validate-help-files.ts && tsx ../dev-tools/src/tsc-clean-build.ts && tsx ../dev-tools/src/prepare-bin.ts",
     "test:unit": "vitest run",
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",

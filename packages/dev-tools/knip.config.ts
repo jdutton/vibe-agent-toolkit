@@ -110,7 +110,12 @@ const config: KnipConfig = {
     // vat-development-agents has standalone agent files + TS compiler plugin
     'packages/vat-development-agents': {
       entry: ['src/agents/*.ts'],
-      ignoreDependencies: ['@vibe-agent-toolkit/agent-schema'],
+      ignoreDependencies: [
+        '@vibe-agent-toolkit/agent-schema',
+        // Invoked as `tspc` via `--compiler=tspc` passed to tsc-clean-build.ts — knip's
+        // script-token scanner only matches a bin name as its own token, not inside a flag value.
+        'ts-patch',
+      ],
       // tsconfig includes resources/**/*.md which knip can't resolve as imports
       ignoreUnresolved: ['.*'],
     },

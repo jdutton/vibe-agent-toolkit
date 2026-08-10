@@ -13,7 +13,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsx ../dev-tools/src/tsc-clean-build.ts",
     "llm-demo": "tsx examples/llm-agent-demo.ts",
     "test:unit": "vitest run",
     "test:watch": "vitest",
