@@ -161,7 +161,14 @@ describe('command-error utilities', () => {
       const debugged = vi.mocked(mockLogger.debug).mock.calls.map((call) => call[0]).join('\n');
       expect(debugged).toContain("Cannot read properties of undefined (reading 'readdir')");
       // A frame is the whole point — the message alone was already on stderr.
-      expect(debugged).toContain(`${import.meta.url.replace('file://', '')}:`);
+      //
+      // Matched as `<basename>:<line>` rather than against a path built from
+      // `import.meta.url`. Stripping the `file://` prefix leaves `/D:/a/repo/...`
+      // on Windows — forward slashes AND a leading slash — while the stack frame
+      // carries the native `D:\a\repo\...`, so the two could never match there and
+      // the test was green only on POSIX. This form also asserts strictly MORE
+      // than the original did: a line number has to be present, not just a path.
+      expect(debugged).toMatch(/command-error\.test\.ts:\d+/);
     });
 
     it('names a non-Error throw on the debug channel, which the envelope calls "Unknown error"', () => {
