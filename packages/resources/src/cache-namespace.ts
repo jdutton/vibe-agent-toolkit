@@ -64,8 +64,24 @@ const DEV_FINGERPRINT_LENGTH = 6;
  * Deliberately a short, explicit list rather than a directory walk: the walk
  * would fingerprint unrelated churn (declaration maps, sourcemaps) and make the
  * dev namespace move for edits that cannot change a single parse fact.
+ *
+ * `link-parser.js` imports `unresolved-references.js` (the `unresolvedReferences`
+ * fact), and `parse-cache.js` defines the `ParseFacts` shape (`dehydrate`/
+ * `rehydrate`) that determines what a cache entry even contains -- both are
+ * listed explicitly rather than assumed to move whenever `link-parser.js` does,
+ * since a fingerprint over an import graph is exactly the kind of walk this
+ * module deliberately avoids.
+ *
+ * Exported for {@link buildFingerprint}'s tests, not because callers outside
+ * this module have a legitimate use for the list.
  */
-const PARSER_MODULES = ['link-parser.js', 'html-link-parser.js', 'content-key.js'] as const;
+export const PARSER_MODULES = [
+  'link-parser.js',
+  'html-link-parser.js',
+  'content-key.js',
+  'unresolved-references.js',
+  'parse-cache.js',
+] as const;
 
 /** Resolved once — neither the version nor the install location changes mid-process. */
 let cached: string | undefined;
@@ -109,6 +125,29 @@ function isInstalled(moduleDir: string): boolean {
 }
 
 /**
+ * Stat a module's emitted `.js`, falling back to its `.ts` source.
+ *
+ * Under Vitest/tsx the code runs straight from `packages/*\/src/*.ts` -- there
+ * is no emitted `.js` beside it to stat, so without this fallback every entry
+ * in {@link PARSER_MODULES} reads as absent regardless of what a developer
+ * actually edited, and the fingerprint (and therefore the dev cache namespace)
+ * never moves while iterating on the parser from source. Dist-mode behavior is
+ * unchanged: when the `.js` exists, it wins and the `.ts` is never consulted.
+ */
+function statModuleFile(moduleDir: string, jsName: string): ReturnType<typeof statSync> | undefined {
+  const candidates = [jsName, jsName.replace(/\.js$/u, '.ts')];
+  for (const candidate of candidates) {
+    try {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixed basenames beside this module
+      return statSync(safePath.join(moduleDir, candidate));
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return undefined;
+}
+
+/**
  * Fingerprint the emitted parser modules by size and mtime.
  *
  * Size+mtime rather than content: this runs on every process start, and reading
@@ -117,17 +156,17 @@ function isInstalled(moduleDir: string): boolean {
  * failure mode it trades away (identical mtime AND size after a real change) is
  * not reachable through `tsc --build`.
  */
-function buildFingerprint(moduleDir: string): string {
+export function buildFingerprint(moduleDir: string): string {
   const parts: string[] = [];
   for (const name of PARSER_MODULES) {
-    try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixed basenames beside this module
-      const stat = statSync(safePath.join(moduleDir, name));
-      parts.push(`${name}:${String(stat.size)}:${String(stat.mtimeMs)}`);
-    } catch {
-      // Absent (running from src via a loader, or a partial build). Recorded as
-      // such so its absence is itself part of the fingerprint.
+    const stat = statModuleFile(moduleDir, name);
+    if (stat === undefined) {
+      // Absent under both extensions (a partial build, or a module removed
+      // entirely). Recorded as such so its absence is itself part of the
+      // fingerprint.
       parts.push(`${name}:absent`);
+    } else {
+      parts.push(`${name}:${String(stat.size)}:${String(stat.mtimeMs)}`);
     }
   }
   return parts.join('\0');

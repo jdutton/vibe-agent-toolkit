@@ -95,9 +95,11 @@
  * ## Failure model
  *
  * Fail-soft, in both directions: any read failure (ENOENT, EACCES, corrupt
- * JSON, version mismatch, structurally wrong payload) is a **miss**; any write
- * failure (EACCES, ENOSPC, EROFS) is a **no-op**. A non-persisted entry costs
- * one cold parse on the next run; an exception costs the whole current run.
+ * JSON, structurally wrong payload) is a **miss**; any write failure (EACCES,
+ * ENOSPC, EROFS, or an unsafe pre-existing shard directory) is a **no-op**,
+ * counted in {@link ParseCacheStats.writeFailures} so it stays distinguishable
+ * from a legitimately cold cache. A non-persisted entry costs one cold parse
+ * on the next run; an exception costs the whole current run.
  *
  * Be precise about what that does *not* cover: fail-soft catches **corruption,
  * not wrongness**. A well-formed entry filed under the wrong key is
@@ -107,7 +109,7 @@
  * fussy.
  */
 
-import { promises as fs } from 'node:fs';
+import { promises as fs, type Stats } from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 
@@ -132,11 +134,15 @@ const SHARD_LENGTH = 2;
 
 /**
  * Keys are produced by `computeContentKey`, but `get`/`set` take them from a
- * caller-supplied struct. Rejecting anything outside this charset means a key
- * can never contain a path separator or `..`, so the joins below cannot escape
- * the cache directory. An unexpected shape is treated as a miss/no-op.
+ * caller-supplied struct. Pinned to the exact shape `computeContentKey`
+ * produces — `<parserKind>.<64 lowercase hex chars>` — rather than a loose
+ * charset: a charset like `[\w.-]+` still accepts `..` (both characters are
+ * in it, and two in a row are not specially excluded), which would let a key
+ * of exactly `..` escape the cache directory by one level in the joins below.
+ * Pinning to the real shape rules that out structurally. An unexpected shape
+ * is treated as a miss/no-op.
  */
-const SAFE_KEY = /^[\w.-]+$/;
+const SAFE_KEY = /^(?:markdown|html)\.[0-9a-f]{64}$/;
 
 /**
  * Disambiguates concurrent temp files within one process. Combined with
@@ -194,11 +200,19 @@ export interface ParseCacheStats {
   /** Lookups that returned an entry — the parser never ran. */
   hits: number;
   /**
-   * Lookups that returned nothing, for any reason: no entry, a corrupt or
-   * wrong-version entry, an unusable key, or a disabled cache. Every one of them
-   * costs the caller a parse, which is what makes them one number.
+   * Lookups that returned nothing, for any reason: no entry, a corrupt entry,
+   * an unusable key, or a disabled cache. Every one of them costs the caller a
+   * parse, which is what makes them one number.
    */
   misses: number;
+  /**
+   * `set()` calls that could not persist an entry: a write error (EACCES,
+   * ENOSPC, EROFS, ...) or a pre-existing shard directory that failed the
+   * ownership/permission check (see `set`). Tracked separately from `misses`
+   * so a persistent write failure cannot masquerade as a legitimately cold
+   * cache — both would otherwise report the exact same `{hits: 0, misses: N}`.
+   */
+  writeFailures: number;
 }
 
 /** Options for {@link ParseCache}. Every one of them is injectable for tests. */
@@ -335,6 +349,7 @@ export class ParseCache {
    */
   private hitCount = 0;
   private missCount = 0;
+  private writeFailureCount = 0;
 
   constructor(options: ParseCacheOptions = {}) {
     // Read the env per construction, never at module load: a module-level read
@@ -351,7 +366,7 @@ export class ParseCache {
    * @returns A snapshot of the counters, cumulative since construction
    */
   get stats(): ParseCacheStats {
-    return { hits: this.hitCount, misses: this.missCount };
+    return { hits: this.hitCount, misses: this.missCount, writeFailures: this.writeFailureCount };
   }
 
   /**
@@ -402,6 +417,17 @@ export class ParseCache {
     if (!this.enabled || !SAFE_KEY.test(keyed.key)) return;
 
     const shardDir = this.shardDir(keyed.key);
+
+    // POSIX hardening: a predictable, world-readable cache root means another
+    // local user on a shared box could pre-create `shardDir` before VAT ever
+    // touches it. `mkdir` below does NOT chmod a directory that already
+    // exists, so without this check a hostile pre-created directory would be
+    // silently written into. Meaningless on Windows — see the class docblock.
+    if (process.platform !== 'win32' && !(await isSafeShardDir(shardDir))) {
+      this.writeFailureCount += 1;
+      return;
+    }
+
     tempFileCounter += 1;
     const tempPath = safePath.join(
       shardDir,
@@ -421,6 +447,7 @@ export class ParseCache {
       // read-only mount. The current run already holds the fresh result; only
       // the persistence is lost. Best-effort sweep of a temp file that was
       // written but never renamed, so a failing write cannot accumulate litter.
+      this.writeFailureCount += 1;
       await removeQuietly(tempPath);
     }
   }
@@ -549,11 +576,13 @@ export async function parseFileCached(
 
 /**
  * Parse an on-disk entry, returning `null` for anything that is not a
- * well-formed entry of the current schema version.
+ * well-formed entry.
  *
- * Deliberately checks the version BEFORE the payload: an entry from a future
- * (or past) schema is a miss, not an error, and must never reach
- * {@link rehydrate}.
+ * There is no version field to check — see the {@link StoredEntry} docblock.
+ * Validation is purely structural, via {@link isParseFacts}: a `JSON.parse`
+ * failure, a missing/malformed `facts`, or a `facts` whose `links`, `headings`
+ * or `estimatedTokenCount` are the wrong shape are all misses, so a mangled or
+ * foreign payload can never reach {@link rehydrate}.
  */
 function readFacts(raw: string): ParseFacts | null {
   let value: unknown;
@@ -584,6 +613,44 @@ function isParseFacts(value: unknown): value is ParseFacts {
     Array.isArray(facts.headings) &&
     typeof facts.estimatedTokenCount === 'number'
   );
+}
+
+/**
+ * Bits that make a directory writable by anyone other than its owner:
+ * group-write (`0o020`) and other-write (`0o002`).
+ */
+const UNSAFE_WRITE_BITS = 0o022;
+
+/**
+ * POSIX-only hardening for `set()` (see the note at its call site): decide
+ * whether an EXISTING shard directory is safe to write into.
+ *
+ * A directory that does not exist yet is always safe — `mkdir` will create it
+ * fresh, owned by this process, at {@link CACHE_DIR_MODE}. One that already
+ * exists is safe only if this process owns it AND it is not writable by
+ * group or other; anything else could have been pre-created by another local
+ * user on a shared box.
+ *
+ * Callers MUST guard with `process.platform !== 'win32'` — `stats.uid` and
+ * `mode`'s write bits carry no meaningful security guarantee on Windows (see
+ * the class docblock).
+ *
+ * @param dir - The shard directory `set()` is about to `mkdir`/write into
+ * @returns `true` if `dir` is absent, or present and safe to reuse
+ */
+async function isSafeShardDir(dir: string): Promise<boolean> {
+  let stats: Stats;
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is cacheDir + a charset-validated content key
+    stats = await fs.lstat(dir);
+  } catch {
+    return true;
+  }
+
+  const uid = process.getuid?.();
+  const ownedByThisProcess = uid === undefined || stats.uid === uid;
+  const notGroupOrOtherWritable = (stats.mode & UNSAFE_WRITE_BITS) === 0;
+  return ownedByThisProcess && notGroupOrOtherWritable;
 }
 
 /** `fs.rm` that swallows everything — used only on paths this module created. */

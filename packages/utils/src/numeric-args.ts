@@ -22,11 +22,20 @@
  * @throws Error when the value is not a whole number at or above the floor
  */
 export function parseWholeNumberAtLeast(value: string, floor: number, flag: string): number {
+  const invalid = new Error(
+    `${flag} expects a whole number of at least ${String(floor)}; got '${value}'.`,
+  );
+
+  // Number() coercion accepts far more than decimal digits — '' -> 0,
+  // '0x10' -> 16, '1e21' -> a value Number.isInteger still calls whole.
+  // Require plain ASCII digits before ever calling Number() on it.
+  if (!/^\d+$/.test(value)) {
+    throw invalid;
+  }
+
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < floor) {
-    throw new Error(
-      `${flag} expects a whole number of at least ${String(floor)}; got '${value}'.`,
-    );
+    throw invalid;
   }
   return parsed;
 }

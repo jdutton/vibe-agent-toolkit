@@ -16,11 +16,33 @@ import {
   realpathFrom,
   siblingNamesFrom,
 } from '../src/fs-utils.js';
-import type { RealpathTable, SiblingNames, SiblingNamesTable } from '../src/fs-utils.js';
+import type {
+  FilenameCaseVerdict,
+  RealpathTable,
+  SiblingNames,
+  SiblingNamesTable,
+} from '../src/fs-utils.js';
 import { toForwardSlash } from '../src/path-core.js';
 import { canCreateSymlinks, setupAsyncTempDirSuite } from '../src/test-helpers.js';
 
 import { setupNestedDirectory } from './test-helpers.js';
+
+/**
+ * Ledger D7 — the same visible filename in two Unicode normalization forms.
+ *
+ * **The fixture is code-generated for a reason.** A file committed to git with an
+ * accented name cannot be trusted to arrive decomposed: macOS editors and git
+ * checkouts routinely re-normalize, so a committed fixture can silently be NFC on
+ * both sides and pin nothing. Both forms are written as escape sequences so no
+ * editor, formatter, or checkout can renormalize the literal out from under the
+ * test.
+ *
+ * Module scope because TWO blocks need them now: the pure judge (hand-written
+ * rows, where the fold-only verdict is decided) and the fill+judge pair over a
+ * real directory (where the raw listing has to survive the fill to reach it).
+ */
+const NFD_NAME = 'cafe\u0301.txt';
+const NFC_NAME = 'caf\u00E9.txt';
 
 describe('fs-utils', () => {
   const SUBDIR = 'subdir';
@@ -258,13 +280,16 @@ describe('fs-utils', () => {
       // case-insensitive filesystem. See the method's docblock.
       const spy = vi.spyOn(nodeFs, 'realpath');
 
-      const real = await cache.realpath(tempDir);
-      expect(await cache.realpath(tempDir)).toBe(real);
-      expect(spy).toHaveBeenCalledTimes(1);
+      try {
+        const real = await cache.realpath(tempDir);
+        expect(await cache.realpath(tempDir)).toBe(real);
+        expect(spy).toHaveBeenCalledTimes(1);
 
-      const missing = safePath.join(tempDir, 'no-such-path');
-      expect(await cache.realpath(missing)).toBe(safePath.resolve(missing));
-      spy.mockRestore();
+        const missing = safePath.join(tempDir, 'no-such-path');
+        expect(await cache.realpath(missing)).toBe(safePath.resolve(missing));
+      } finally {
+        spy.mockRestore();
+      }
     });
 
     it('probes a path once however many times it is asked about', async () => {
@@ -533,12 +558,12 @@ describe('fs-utils', () => {
     const CASES: ReadonlyArray<{
       label: string;
       row: SiblingNames;
-      expected: { exists: boolean; actualName: string | null };
+      expected: FilenameCaseVerdict;
     }> = [
       {
         label: 'an unreadable parent as absent with no name to suggest',
         row: { expectedName: 'README.md', names: null },
-        expected: { exists: false, actualName: null },
+        expected: { exists: false, actualName: null, match: 'absent' },
       },
       {
         // Deliberately the same verdict as the `null` row above: the judge
@@ -547,7 +572,7 @@ describe('fs-utils', () => {
         // distinction survives only in the row, for a future judge that wants it.
         label: 'an empty listing the same way as an unreadable one',
         row: { expectedName: 'README.md', names: [] },
-        expected: { exists: false, actualName: null },
+        expected: { exists: false, actualName: null, match: 'absent' },
       },
       {
         // `''` is falsy, so a truthiness test on the exact match would fall
@@ -556,27 +581,57 @@ describe('fs-utils', () => {
         // is this function's advertised input now that it is pure.
         label: 'an empty basename against an empty entry as an exact match',
         row: { expectedName: '', names: [''] },
-        expected: { exists: true, actualName: '' },
+        expected: { exists: true, actualName: '', match: 'exact' },
       },
       {
         label: 'an exact match as present',
         row: { expectedName: 'README.md', names: ['README.md'] },
-        expected: { exists: true, actualName: 'README.md' },
+        expected: { exists: true, actualName: 'README.md', match: 'exact' },
       },
       {
         label: 'a case-only mismatch as absent, naming the entry that is really there',
         row: { expectedName: 'readme.md', names: ['README.md'] },
-        expected: { exists: false, actualName: 'README.md' },
+        expected: { exists: false, actualName: 'README.md', match: 'case_mismatch' },
       },
       {
         label: 'an unrelated listing as absent with no name',
         row: { expectedName: 'README.md', names: ['CHANGELOG.md'] },
-        expected: { exists: false, actualName: null },
+        expected: { exists: false, actualName: null, match: 'absent' },
+      },
+      {
+        // The one verdict that did not exist before: byte-different, equal only
+        // after NFC folding. It stays `exists: true` (D7 — an accented file that
+        // is really there must never be reported missing), but `match` separates
+        // it from a byte-identical hit, because on a byte-exact filesystem
+        // (Linux/ext4, and therefore CI and most deploy targets) opening the
+        // asked-for spelling fails. `actualName` is the entry's own bytes, so a
+        // caller can show the author what is actually on disk.
+        label: 'a fold-only match as present but NOT byte-exact',
+        row: { expectedName: NFC_NAME, names: [NFD_NAME] },
+        expected: { exists: true, actualName: NFD_NAME, match: 'normalized' },
+      },
+      {
+        // Both a case difference AND a normalization difference. Case-folding
+        // alone cannot reconcile NFC/NFD, so the case-insensitive pass has to
+        // fold first or this row reports `absent` and the author loses the hint.
+        label: 'a case mismatch that also differs by normalization',
+        row: { expectedName: NFC_NAME.toUpperCase(), names: [NFD_NAME] },
+        expected: { exists: false, actualName: NFD_NAME, match: 'case_mismatch' },
       },
     ];
 
     it.each(CASES)('classifies $label', ({ row, expected }) => {
       expect(classifyFilenameCase(row)).toEqual(expected);
+    });
+
+    it('lets the byte-exact match win even when a fold-only candidate comes first', () => {
+      // Entry order is the only thing separating these two, and no filesystem
+      // hands you a chosen order. A judge that folded both sides before
+      // comparing (the shape this replaced) cannot tell them apart at all: it
+      // would answer `exact` for whichever entry `find` reached first.
+      expect(
+        classifyFilenameCase({ expectedName: NFC_NAME, names: [NFD_NAME, NFC_NAME] })
+      ).toEqual({ exists: true, actualName: NFC_NAME, match: 'exact' });
     });
 
     it('lets the exact match win even when a differently-cased entry comes first', () => {
@@ -585,7 +640,7 @@ describe('fs-utils', () => {
       // above still passes with the two branches reversed, this one does not.
       expect(
         classifyFilenameCase({ expectedName: 'README.md', names: ['readme.md', 'README.md'] })
-      ).toEqual({ exists: true, actualName: 'README.md' });
+      ).toEqual({ exists: true, actualName: 'README.md', match: 'exact' });
     });
   });
 
@@ -622,14 +677,9 @@ describe('fs-utils', () => {
     });
 
     /**
-     * Ledger D7 — the same visible filename in two Unicode normalization forms.
-     *
-     * **The fixture is code-generated for a reason.** A file committed to git
-     * with an accented name cannot be trusted to arrive decomposed: macOS
-     * editors and git checkouts routinely re-normalize, so a committed fixture
-     * can silently be NFC on both sides and pin nothing. Both forms are written
-     * as escape sequences so no editor, formatter, or checkout can renormalize
-     * the literal out from under the test.
+     * Ledger D7 over a real directory. The module-scope fixture constants explain
+     * why both forms are escape sequences; what this block adds is the round trip
+     * through `readdir`.
      *
      * `readdir` hands back exactly the bytes written (APFS preserves the form),
      * so the on-disk entry is decomposed while the path being asked about is
@@ -638,36 +688,66 @@ describe('fs-utils', () => {
      * ⚠️ This must NOT be written as an `existsSync` test. macOS is
      * normalization-*insensitive* at the syscall level, so `existsSync` on the
      * composed form returns `true` even here and would report the bug as
-     * absent. The comparison under test is pure string equality over the
-     * listing, which behaves identically on every platform.
-     */
-    const NFD_NAME = 'cafe\u0301.txt';
-    const NFC_NAME = 'caf\u00E9.txt';
-
-    /**
-     * ⚠️ **Both directions, deliberately.** The fill normalizes the listing and
-     * `siblingNamesFrom` normalizes `expectedName`; a one-directional case
-     * exercises only the first, because once the listing is NFC a composed query
-     * matches it without the query ever being normalized. Swapping which side is
-     * decomposed is what pins the other half — drop either normalization and
-     * exactly one row goes red.
+     * absent. The comparison under test is string equality over the listing,
+     * which behaves identically on every platform.
+     *
+     * ⚠️ **Both directions, deliberately.** Which side is decomposed decides
+     * nothing about the verdict, and a one-directional case would leave that
+     * unproven — the older shape folded the listing in the fill and the query in
+     * the row lookup, so exactly one direction exercised each half.
      */
     const NORMALIZATION_PAIRS: readonly { label: string; onDisk: string; asked: string }[] = [
       { label: 'a composed query against a decomposed listing', onDisk: NFD_NAME, asked: NFC_NAME },
       { label: 'a decomposed query against a composed listing', onDisk: NFC_NAME, asked: NFD_NAME },
     ];
 
-    it.each(NORMALIZATION_PAIRS)('judges $label as present (D7)', async ({ onDisk, asked }) => {
-      // Guard the premise: if these ever became the same string the test would
-      // pass while demonstrating nothing.
-      expect(onDisk).not.toBe(asked);
+    it.each(NORMALIZATION_PAIRS)(
+      'judges $label as present but fold-only, never byte-exact (D7)',
+      async ({ onDisk, asked }) => {
+        // Guard the premise twice: different as bytes, identical once folded. If
+        // either ever stopped holding, the test would pass while demonstrating
+        // nothing.
+        expect(onDisk).not.toBe(asked);
+        expect(onDisk.normalize('NFC')).toBe(asked.normalize('NFC'));
 
-      await fs.writeFile(safePath.join(tempDir, onDisk), '');
-      const askedPath = safePath.join(tempDir, asked);
+        await fs.writeFile(safePath.join(tempDir, onDisk), '');
+        const askedPath = safePath.join(tempDir, asked);
+
+        const table = await fillSiblingNames([askedPath], new FsLookupCache());
+
+        // The fill no longer folds, so the entry's own bytes reach the judge.
+        // Fold in the fill and this row goes red — and with it the only evidence
+        // that could ever separate the two verdicts below.
+        expect(siblingNamesFrom(table, askedPath).names).toContain(onDisk);
+
+        // D7 still holds: an accented file that is really there is present, not
+        // missing. What is new is the second field — the link resolves ONLY
+        // because both sides were folded, so on ext4 (CI, and most deploy
+        // targets) the asked-for spelling opens nothing.
+        expect(classifyFilenameCaseFrom(table, askedPath)).toEqual({
+          exists: true,
+          actualName: onDisk,
+          match: 'normalized',
+        });
+      }
+    );
+
+    it('judges a byte-identical accented name as exact, not as a fold (control)', async () => {
+      // The negative control for the row above: same fixture, same code path,
+      // and the ONE difference is that the link spells the file the way disk
+      // does. Without it, `match: 'normalized'` could be what this judge answers
+      // for every accented filename, and the warning it drives would fire on
+      // files that are perfectly fine.
+      await fs.writeFile(safePath.join(tempDir, NFC_NAME), '');
+      const askedPath = safePath.join(tempDir, NFC_NAME);
 
       const table = await fillSiblingNames([askedPath], new FsLookupCache());
 
-      expect(classifyFilenameCaseFrom(table, askedPath).exists).toBe(true);
+      expect(classifyFilenameCaseFrom(table, askedPath)).toEqual({
+        exists: true,
+        actualName: NFC_NAME,
+        match: 'exact',
+      });
     });
 
     it('lists a directory ONCE however many of its files are asked about', async () => {
@@ -766,10 +846,12 @@ describe('fs-utils', () => {
       expect(classifyFilenameCaseFrom(table, filePath)).toEqual({
         exists: true,
         actualName: JUDGED,
+        match: 'exact',
       });
       expect(classifyFilenameCaseFrom(table, safePath.join(tempDir, 'judged.txt'))).toEqual({
         exists: false,
         actualName: JUDGED,
+        match: 'case_mismatch',
       });
 
       expect(counts()).toEqual(beforeJudging);
@@ -825,7 +907,7 @@ describe('fs-utils', () => {
      * caller with many paths that loops over this shape is the serialized
      * `readdir` the pair exists to remove.
      */
-    const judge = async (filePath: string): Promise<{ exists: boolean; actualName: string | null }> =>
+    const judge = async (filePath: string): Promise<FilenameCaseVerdict> =>
       classifyFilenameCaseFrom(await fillSiblingNames([filePath], new FsLookupCache()), filePath);
 
     // Real listings, unlike the hand-written rows the pure judge is tested with
@@ -835,7 +917,7 @@ describe('fs-utils', () => {
       label: string;
       /** Create the fixture under `dir`; returns the path to judge. */
       setup: (dir: string) => Promise<string>;
-      expected: { exists: boolean; actualName: string | null };
+      expected: FilenameCaseVerdict;
     }> = [
       {
         label: 'an exact-case file as present',
@@ -844,7 +926,7 @@ describe('fs-utils', () => {
           await fs.writeFile(filePath, 'content');
           return filePath;
         },
-        expected: { exists: true, actualName: TEST_FILE },
+        expected: { exists: true, actualName: TEST_FILE, match: 'exact' },
       },
       {
         // Holds on both kinds of filesystem, for different reasons: a
@@ -856,14 +938,14 @@ describe('fs-utils', () => {
           await fs.writeFile(safePath.join(dir, TEST_FILE), 'content');
           return safePath.join(dir, 'testfile.txt');
         },
-        expected: { exists: false, actualName: TEST_FILE },
+        expected: { exists: false, actualName: TEST_FILE, match: 'case_mismatch' },
       },
       {
         // Distinct from the unreadable-parent case above: the directory lists
         // fine, the name is simply not in it, so there is nothing to suggest.
         label: 'a missing file in a readable directory as absent with no name to suggest',
         setup: (dir) => Promise.resolve(safePath.join(dir, 'NonExistent.txt')),
-        expected: { exists: false, actualName: null },
+        expected: { exists: false, actualName: null, match: 'absent' },
       },
       {
         // Nested, so the fill's own `path.dirname` derivation is what has to
@@ -876,7 +958,7 @@ describe('fs-utils', () => {
           await fs.writeFile(filePath, 'content');
           return filePath;
         },
-        expected: { exists: true, actualName: 'File.txt' },
+        expected: { exists: true, actualName: 'File.txt', match: 'exact' },
       },
       {
         label: 'a case-only mismatch one directory down',
@@ -886,7 +968,7 @@ describe('fs-utils', () => {
           await fs.writeFile(safePath.join(subDir, 'File.txt'), 'content');
           return safePath.join(subDir, 'file.txt');
         },
-        expected: { exists: false, actualName: 'File.txt' },
+        expected: { exists: false, actualName: 'File.txt', match: 'case_mismatch' },
       },
     ];
 

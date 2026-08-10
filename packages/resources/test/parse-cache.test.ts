@@ -135,6 +135,7 @@ const SHARD_LENGTH = 2;
 const MODE_RO_OWNER = 0o500;
 const MODE_RW_OWNER = 0o700;
 const PERMISSION_BITS = 0o777;
+const MODE_WORLD_WRITABLE = 0o777;
 
 const isWindows = process.platform === 'win32';
 
@@ -531,7 +532,7 @@ describe('ParseCache aliasing (D3: never hand out shared objects)', () => {
     // passes the assertion below for the wrong reason — `second` is `null`, so
     // the optional chain yields `undefined` and the mutation is "not visible"
     // because nothing was returned at all. Verified against that mutant.
-    expect(cache.stats).toStrictEqual({ hits: 2, misses: 0 });
+    expect(cache.stats).toStrictEqual({ hits: 2, misses: 0, writeFailures: 0 });
     expect(second?.links[0]?.resolvedId).toBeUndefined();
   });
 });
@@ -554,6 +555,37 @@ describe('ParseCache misses', () => {
   });
 });
 
+describe('ParseCache SAFE_KEY rejects traversal (not just separators)', () => {
+  const suite = setupParseCacheTestSuite();
+
+  // A charset like `[\w.-]+` accepts the string '..' outright — `.` and `-`
+  // are both in it, and two dots in a row are not specially excluded. Unlike
+  // UNSAFE_KEY above (which already contains a `/` and so is rejected by even
+  // the loosest separator check), this key is chosen to pass a charset-only
+  // regex and prove the traversal case specifically.
+  const DOT_DOT_KEY = '..';
+
+  it('treats a key of exactly ".." as unsafe, never escaping the cache directory', async () => {
+    const cacheDir = safePath.join(suite.dir(), 'nested', 'cache');
+    const cache = suite.makeCache({ cacheDir });
+    const keyed = { ...keyedFromText(SIMPLE_DOC), key: DOT_DOT_KEY };
+
+    await cache.set(keyed, freshParse(keyed));
+
+    // A safe implementation never touches the filesystem for an unsafe key —
+    // not even the parent of `cacheDir` should have been created, let alone a
+    // file escaping one level above it (`shardDir` for key '..' computes to
+    // `cacheDir/..`, i.e. `nested/`, one level outside `cacheDir` itself).
+    expect(await exists(safePath.join(suite.dir(), 'nested'))).toBe(false);
+  });
+
+  it('reads a key of exactly ".." as a miss', async () => {
+    const keyed = { ...keyedFromText(SIMPLE_DOC), key: DOT_DOT_KEY };
+
+    expect(await suite.makeCache().get(keyed)).toBeNull();
+  });
+});
+
 describe('ParseCache fail-soft writes', () => {
   const suite = setupParseCacheTestSuite();
 
@@ -567,6 +599,45 @@ describe('ParseCache fail-soft writes', () => {
     await expect(cache.set(keyed, freshParse(keyed))).resolves.toBeUndefined();
     expect(await cache.get(keyed)).toBeNull();
   });
+
+  it.skipIf(isWindows)(
+    'counts a failed write in writeFailures, so it stays distinguishable from a cold cache',
+    async () => {
+      const keyed = keyedFromText(SIMPLE_DOC);
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only: self-created tempDir
+      await fs.chmod(suite.dir(), MODE_RO_OWNER);
+
+      const cache = suite.makeCache();
+      await cache.set(keyed, freshParse(keyed));
+
+      // Without a separate counter, this looks byte-identical to a
+      // legitimately-cold cache that has simply never been written to.
+      expect(cache.stats).toStrictEqual({ hits: 0, misses: 0, writeFailures: 1 });
+    },
+  );
+
+  it.skipIf(isWindows)(
+    'refuses to persist into a pre-existing world/group-writable shard directory',
+    async () => {
+      const keyed = keyedFromText(SIMPLE_DOC);
+      const cacheDir = safePath.join(suite.dir(), 'cache');
+      const cache = suite.makeCache({ cacheDir });
+      const shardDir = safePath.join(cacheDir, keyed.key.slice(-SHARD_LENGTH));
+
+      // Simulate another local user pre-creating the shard directory, wide
+      // open, before VAT ever touches it. `mkdir`'s mode is masked by the
+      // process umask, so force it with an explicit `chmod`.
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only: path under self-created tempDir
+      await fs.mkdir(shardDir, { recursive: true, mode: MODE_WORLD_WRITABLE });
+      // eslint-disable-next-line security/detect-non-literal-fs-filename, sonarjs/file-permissions -- test-only: intentionally world-writable to simulate a hostile pre-created shard dir
+      await fs.chmod(shardDir, MODE_WORLD_WRITABLE);
+
+      await cache.set(keyed, freshParse(keyed));
+
+      expect(cache.stats).toStrictEqual({ hits: 0, misses: 0, writeFailures: 1 });
+      expect(await cache.get(keyed)).toBeNull();
+    },
+  );
 });
 
 describe('ParseCache enable toggle', () => {
@@ -631,7 +702,7 @@ describe('ParseCache stats', () => {
   const suite = setupParseCacheTestSuite();
 
   it('starts at zero on a fresh instance', () => {
-    expect(suite.makeCache().stats).toStrictEqual({ hits: 0, misses: 0 });
+    expect(suite.makeCache().stats).toStrictEqual({ hits: 0, misses: 0, writeFailures: 0 });
   });
 
   it('counts the miss first, then counts the hit that follows it', async () => {
@@ -639,21 +710,21 @@ describe('ParseCache stats', () => {
     const cache = suite.makeCache();
 
     expect(await cache.get(keyed)).toBeNull();
-    expect(cache.stats).toStrictEqual({ hits: 0, misses: 1 });
+    expect(cache.stats).toStrictEqual({ hits: 0, misses: 1, writeFailures: 0 });
 
     await cache.set(keyed, freshParse(keyed));
 
     expect(await cache.get(keyed)).not.toBeNull();
     // The miss is still on the board: the counters are cumulative, not a
     // per-lookup verdict.
-    expect(cache.stats).toStrictEqual({ hits: 1, misses: 1 });
+    expect(cache.stats).toStrictEqual({ hits: 1, misses: 1, writeFailures: 0 });
   });
 
   it.each(MISS_ROUTES)('counts $name as a miss', async ({ arrange }) => {
     const { cache, keyed } = await arrange(suite);
 
     expect(await cache.get(keyed)).toBeNull();
-    expect(cache.stats).toStrictEqual({ hits: 0, misses: 1 });
+    expect(cache.stats).toStrictEqual({ hits: 0, misses: 1, writeFailures: 0 });
   });
 
   it('counts per instance, not per process', async () => {
@@ -663,8 +734,8 @@ describe('ParseCache stats', () => {
     const reader = suite.makeCache();
     await reader.get(keyed);
 
-    expect(reader.stats).toStrictEqual({ hits: 1, misses: 0 });
-    expect(suite.makeCache().stats).toStrictEqual({ hits: 0, misses: 0 });
+    expect(reader.stats).toStrictEqual({ hits: 1, misses: 0, writeFailures: 0 });
+    expect(suite.makeCache().stats).toStrictEqual({ hits: 0, misses: 0, writeFailures: 0 });
   });
 });
 
@@ -678,7 +749,7 @@ describe('parseKeyed', () => {
     const result = await parseKeyed(keyed, cache);
 
     expect(result).toStrictEqual(freshParse(keyed));
-    expect(cache.stats).toStrictEqual({ hits: 0, misses: 1 });
+    expect(cache.stats).toStrictEqual({ hits: 0, misses: 1, writeFailures: 0 });
   });
 
   it('serves the second call from the entry the first one filed', async () => {
@@ -690,7 +761,7 @@ describe('parseKeyed', () => {
 
     expect(warm).toStrictEqual(cold);
     // Without this line the assertion above holds under an always-miss cache.
-    expect(cache.stats).toStrictEqual({ hits: 1, misses: 1 });
+    expect(cache.stats).toStrictEqual({ hits: 1, misses: 1, writeFailures: 0 });
   });
 
   it('round-trips exotic frontmatter through a warm lookup', async () => {
@@ -700,7 +771,7 @@ describe('parseKeyed', () => {
     const cold = await parseKeyed(keyed, cache);
     const warm = await parseKeyed(keyed, cache);
 
-    expect(cache.stats).toStrictEqual({ hits: 1, misses: 1 });
+    expect(cache.stats).toStrictEqual({ hits: 1, misses: 1, writeFailures: 0 });
     expect(warm.frontmatter?.['inf']).toBe(Number.POSITIVE_INFINITY);
     expect(Number.isNaN(warm.frontmatter?.['nan'])).toBe(true);
     expect(Buffer.isBuffer(warm.frontmatter?.['bin'])).toBe(true);
@@ -721,7 +792,7 @@ describe('parseKeyed', () => {
     expect(htmlResult).toStrictEqual(parseHtmlContent(asHtml.content, asHtml.byteLength));
     // Same bytes, different kind — so different keys, and neither read the
     // other's entry.
-    expect(cache.stats).toStrictEqual({ hits: 0, misses: 2 });
+    expect(cache.stats).toStrictEqual({ hits: 0, misses: 2, writeFailures: 0 });
   });
 
   it('keeps the two kinds in separate entries across a warm run', async () => {
@@ -734,7 +805,7 @@ describe('parseKeyed', () => {
     const warmMarkdown = await parseKeyed(asMarkdown, cache);
     const warmHtml = await parseKeyed(asHtml, cache);
 
-    expect(cache.stats).toStrictEqual({ hits: 2, misses: 2 });
+    expect(cache.stats).toStrictEqual({ hits: 2, misses: 2, writeFailures: 0 });
     expect(hrefsOf(warmMarkdown)).toContain(MARKDOWN_ONLY_HREF);
     expect(hrefsOf(warmHtml)).toContain(HTML_ONLY_HREF);
     expect(hrefsOf(warmMarkdown)).not.toContain(HTML_ONLY_HREF);
@@ -754,7 +825,7 @@ describe('parseKeyed', () => {
     const secondHit = await parseKeyed(keyed, cache);
 
     // Both reads really were hits — a miss would re-parse and hide the aliasing.
-    expect(cache.stats).toStrictEqual({ hits: 2, misses: 1 });
+    expect(cache.stats).toStrictEqual({ hits: 2, misses: 1, writeFailures: 0 });
     expect(secondHit.links[0]?.resolvedId).toBeUndefined();
     expect(secondHit.links).not.toBe(firstHit.links);
     expect(secondHit.links[0]).not.toBe(firstHit.links[0]);
@@ -769,7 +840,7 @@ describe('parseKeyed', () => {
 
     expect(second).toStrictEqual(first);
     expect(second).not.toBe(first);
-    expect(cache.stats).toStrictEqual({ hits: 0, misses: 2 });
+    expect(cache.stats).toStrictEqual({ hits: 0, misses: 2, writeFailures: 0 });
   });
 });
 

@@ -31,6 +31,8 @@ export {
   realpathFrom,
 } from './fs-utils.js';
 export type {
+  FilenameCaseVerdict,
+  FilenameMatch,
   PathProbe,
   PathProbeStats,
   RealpathTable,

@@ -488,7 +488,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * @returns A snapshot of the counters
    */
   getParseCacheStats(): ParseCacheStats {
-    return this.parseCacheInstance?.stats ?? { hits: 0, misses: 0 };
+    return this.parseCacheInstance?.stats ?? { hits: 0, misses: 0, writeFailures: 0 };
   }
 
   /**
@@ -877,12 +877,18 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * @private
    */
   private collectUnreadableResourceErrors(): ValidationIssue[] {
-    return this.unreadableResources.map(({ filePath, reason, code }) => {
+    return this.unreadableResources.map(({ filePath, code }) => {
       const where = issueLocation(filePath, locationRoot(this.baseDir));
       const errno = code === undefined ? '' : ` (${code})`;
       return createRegistryIssue(
         'RESOURCE_UNREADABLE',
-        `'${where}' was enumerated but could not be read, so it was skipped and is absent from every count in this report${errno}: ${reason}`,
+        // `reason` (the raw fs error message) is deliberately omitted: Node's fs
+        // errors embed the absolute path (e.g. "ENOENT: ... open '/Users/...'"),
+        // which would leak the developer's home directory into CI logs -- the
+        // same class of leak `where` was computed to avoid. The errno code is
+        // signal enough; see the ValidationIssue docstring's `location` contract.
+        `'${where}' was enumerated but could not be read, so it was skipped and is absent from every count in this report${errno}.`,
+        { location: where },
       );
     });
   }

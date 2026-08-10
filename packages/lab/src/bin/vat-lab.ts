@@ -7,6 +7,8 @@
  * vat config at all.
  */
 
+import { pathToFileURL } from 'node:url';
+
 import { parseWholeNumberAtLeast } from '@vibe-agent-toolkit/utils';
 import { Command, InvalidArgumentError } from 'commander';
 
@@ -20,13 +22,29 @@ import { renderPerfComparison, renderPerfReport } from '../facets/perf/render.js
 import { DEFAULT_MEASURED_COMMANDS } from '../harness/commands.js';
 import { resolveInstrument } from '../harness/instrument.js';
 import { resolveSubject } from '../harness/subject.js';
-import type { CaptureRequest, InstrumentSource } from '../harness/types.js';
+import type { CacheMode, CaptureRequest, InstrumentSource } from '../harness/types.js';
 import { readReport, writeReport } from '../store.js';
 
-/** Exit code used when a comparison is refused rather than merely negative. */
-const EXIT_REFUSED = 2;
+/**
+ * Exit code used when a comparison is refused rather than merely negative.
+ *
+ * Exported (with the other two exit codes) so a test can assert against the
+ * real constant instead of a duplicated literal.
+ */
+export const EXIT_REFUSED = 2;
 /** Exit code used when a comparison found a significant change. */
-const EXIT_CHANGED = 1;
+export const EXIT_CHANGED = 1;
+/**
+ * Exit code used when the comparison completed but at least one command could
+ * not be measured.
+ *
+ * Distinct from both other codes on purpose: `EXIT_REFUSED` means the whole
+ * comparison could not be attempted, and a run where every command is
+ * `unmeasurable` still produces a rendered, per-command comparison — it is not
+ * a refusal. But it is not a clean run either, and defaulting to exit `0`
+ * would let a CI job read "nothing could be measured" as "nothing changed".
+ */
+export const EXIT_UNMEASURABLE = 3;
 
 /**
  * Parse an instrument specifier into a source.
@@ -85,17 +103,43 @@ export function wholeNumberAtLeast(flag: string, floor: number): (value: string)
   };
 }
 
+/**
+ * A Commander parser for `--cache`.
+ *
+ * A synchronous per-option callback, matching {@link parseInstrument} and
+ * {@link wholeNumberAtLeast} above, and deliberately NOT a check inside the
+ * async `run` action. Commander only recognises an `InvalidArgumentError` as a
+ * usage error when it comes out of an option's own parser, where it prints the
+ * normal `error: option '--cache <mode>' argument '...' is invalid` message and
+ * exits cleanly. The same error thrown from inside an async action handler is
+ * just a rejected promise Commander does not special-case: with no top-level
+ * catch around `parseAsync`, it surfaces as an unhandled rejection and a raw
+ * Node stack trace instead of a CLI usage message.
+ *
+ * @param value - Raw value Commander parsed
+ * @returns The validated cache mode
+ * @throws {InvalidArgumentError} when the value is neither 'warm' nor 'cold'
+ */
+export function parseCacheMode(value: string): CacheMode {
+  if (value !== 'warm' && value !== 'cold') {
+    throw new InvalidArgumentError(`--cache expects 'warm' or 'cold'; got '${value}'.`);
+  }
+  return value;
+}
+
 /** Options Commander collects for a facet's `run`. */
 interface RunOptions {
   readonly instrument: InstrumentSource;
   readonly runs: number;
-  readonly cache: string;
+  readonly cache: CacheMode;
   readonly out: string;
   readonly id?: string;
 }
 
 /** The verdict kind that means a real, attributable difference was found. */
 const CHANGED_VERDICT = 'changed';
+/** The verdict kind that means no usable measurement exists for a command. */
+const UNMEASURABLE_VERDICT = 'unmeasurable';
 
 /**
  * The least a comparison must expose for the CLI to report it.
@@ -175,14 +219,19 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
       wholeNumberAtLeast('--runs', 1),
       wiring.defaultRuns,
     )
-    .option('--cache <mode>', "'warm' or 'cold' (cold clears vat's caches before every repeat)", 'warm')
+    .option(
+      '--cache <mode>',
+      "'warm' or 'cold' (cold clears vat's caches before every repeat)",
+      parseCacheMode,
+      'warm',
+    )
     .option('--out <dir>', 'Directory to write the report into', '.vat-lab')
-    .option('--id <name>', 'Subject id recorded in the report (default: the directory name)')
+    .option(
+      '--id <name>',
+      'Subject id recorded in the report (default: the <subject> argument exactly as given)',
+    )
     .description(wiring.runSummary)
     .action(async (subjectPath: string, options: RunOptions) => {
-      if (options.cache !== 'warm' && options.cache !== 'cold') {
-        throw new InvalidArgumentError(`--cache expects 'warm' or 'cold'; got '${options.cache}'.`);
-      }
       const instrument = await resolveInstrument(options.instrument);
       const subject = await resolveSubject({ id: options.id ?? subjectPath, path: subjectPath });
       const report = await wiring.capture({
@@ -222,6 +271,14 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
         process.stdout.write(`${wiring.renderComparison(comparison)}\n`);
         if (comparison.commands.some((command) => command.verdict.kind === CHANGED_VERDICT)) {
           process.exitCode = EXIT_CHANGED;
+        } else if (
+          comparison.commands.some((command) => command.verdict.kind === UNMEASURABLE_VERDICT)
+        ) {
+          // No real change, but not a clean run either — at least one command
+          // produced no usable measurement. Exiting 0 here would be
+          // indistinguishable from a genuinely clean comparison to anything
+          // reading `$?`.
+          process.exitCode = EXIT_UNMEASURABLE;
         }
       },
     );
@@ -284,4 +341,10 @@ export function createProgram(): Command {
     );
 }
 
-await createProgram().parseAsync(process.argv);
+// Run only when this is the invoked script, not merely imported — the same
+// guard `packages/dev-tools/src/tsc-clean-build.ts` uses. Without it, a test
+// that imports `createProgram` for its own argv would also trigger this
+// module's own `process.argv`-driven run as an import side effect.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await createProgram().parseAsync(process.argv);
+}

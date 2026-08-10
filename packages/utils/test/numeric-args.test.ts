@@ -34,4 +34,25 @@ describe('parseWholeNumberAtLeast', () => {
     // every test above and still be useless to whoever typed the other option.
     expect(() => parseWholeNumberAtLeast('0', 1, '--timeout')).toThrow(/--timeout/);
   });
+
+  // Number() coercion quirks: none of these are 'a whole number as typed on
+  // a command line,' but Number() accepts them all before Number.isInteger
+  // ever gets a say.
+  it('rejects an empty string even when the floor is 0', () => {
+    // Number('') is 0, not NaN — a floor of 0 would otherwise let it through.
+    expect(() => parseWholeNumberAtLeast('', 0, '--runs')).toThrow(/--runs/);
+  });
+
+  it('rejects hex notation', () => {
+    // Number('0x10') is 16, and Number.isInteger(16) is true — hex slips
+    // through as if it were decimal.
+    expect(() => parseWholeNumberAtLeast('0x10', 1, '--runs')).toThrow(/--runs/);
+  });
+
+  it('rejects exponential notation', () => {
+    // Number('1e21') is a float with no fractional part at that magnitude,
+    // so Number.isInteger(1e21) is true despite being nowhere near what a
+    // user typed as a whole number.
+    expect(() => parseWholeNumberAtLeast('1e21', 1, '--runs')).toThrow(/--runs/);
+  });
 });

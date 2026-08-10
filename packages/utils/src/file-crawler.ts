@@ -368,6 +368,20 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
       return;
     }
 
+    // Two passes, not one: `readdirSync` order is filesystem-defined (see
+    // the comment on `alreadyWalked`), and both a real directory and a
+    // symlink alias pointing at it go through the same `alreadyWalked` gate,
+    // keyed only on realpath. Whichever spelling is dispatched FIRST claims
+    // that realpath in `visitedRealDirs`, and the second is then skipped as
+    // "already walked" — so if the alias happened to sort first, the
+    // directory's contents would be recorded under the alias's name and the
+    // real directory would be skipped entirely. Walking every non-symlink
+    // entry to completion before any symlink entry guarantees a real
+    // directory always claims its own realpath first; an alias reaching the
+    // same realpath afterward is correctly skipped by `alreadyWalked`. Only
+    // the ORDER of dispatch changes here — per-entry logic is unchanged.
+    const symlinkEntries: fs.Dirent[] = [];
+
     for (const entry of entries) {
       const fullPath = safePath.join(currentDir, entry.name);
       const relativePath = safePath.relative(resolvedBaseDir, fullPath);
@@ -378,14 +392,21 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
         continue;
       }
 
-      // Dispatch to appropriate handler based on entry type
+      // Defer symlinks to the second pass; dispatch everything else now.
       if (entry.isSymbolicLink()) {
-        processSymlink(fullPath, normalizedPath, relativePath);
+        symlinkEntries.push(entry);
       } else if (entry.isDirectory()) {
         processDirectory(fullPath, normalizedPath, relativePath);
       } else if (entry.isFile()) {
         processFile(normalizedPath, fullPath, relativePath);
       }
+    }
+
+    for (const entry of symlinkEntries) {
+      const fullPath = safePath.join(currentDir, entry.name);
+      const relativePath = safePath.relative(resolvedBaseDir, fullPath);
+      const normalizedPath = toForwardSlash(relativePath);
+      processSymlink(fullPath, normalizedPath, relativePath);
     }
   }
 

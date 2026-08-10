@@ -513,6 +513,17 @@ export const CODE_REGISTRY = {
     'Fix the path or create the target.',
     'link_broken_file',
   ),
+  // The narrow companion to LINK_BROKEN_FILE: the target IS on disk, so this is
+  // not a broken link on the author's machine — it is a link that resolves only
+  // because macOS/Windows reconcile Unicode normalization forms and Linux does
+  // not. `warning`, because it is genuinely fine where it was written and only
+  // fails where the corpus is deployed or CI-checked.
+  LINK_NORMALIZATION_MISMATCH: entry(
+    'warning',
+    'A local file link resolves only after Unicode normalization: the link text and the filename on disk are the same visible characters in different normalization forms (NFC vs NFD). It opens on macOS and Windows and fails on a byte-exact filesystem such as Linux/ext4.',
+    'Make the two spellings byte-identical — rename the file on disk to its NFC form and write the link in NFC, which is the form editors and git produce. Or set severity.LINK_NORMALIZATION_MISMATCH to ignore if the corpus is only ever read on a normalization-insensitive filesystem.',
+    'link_normalization_mismatch',
+  ),
   LINK_BROKEN_ANCHOR: entry(
     'error',
     'Anchor link points to a non-existent heading/id.',

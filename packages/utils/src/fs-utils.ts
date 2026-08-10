@@ -320,10 +320,17 @@ export async function copyDirectory(src: string, dest: string): Promise<void> {
  * filesystem will hand you on demand, entry ORDER in particular.
  */
 export interface SiblingNames {
-  /** Basename being asked about, i.e. `path.basename(filePath)`. */
+  /**
+   * Basename being asked about, i.e. `path.basename(filePath)` — **verbatim, in
+   * whatever Unicode normalization form the path carries**. Nothing folds it on
+   * the way in; {@link classifyFilenameCase} owns every comparison rule there is.
+   */
   readonly expectedName: string;
   /**
-   * The parent directory's entry names, or `null` when it could not be read.
+   * The parent directory's entry names **exactly as `readdir` returned them**,
+   * or `null` when it could not be read. Raw, unfolded bytes — which is what
+   * makes "this link only resolves after normalization" a question the judge can
+   * still answer. See {@link classifyFilenameCase}.
    *
    * `null` is not `[]` — an unreadable or absent directory versus a readable
    * empty one. {@link classifyFilenameCase} deliberately collapses them (both
@@ -383,14 +390,23 @@ export async function fillSiblingNames(
   const table = new Map<string, readonly string[] | null>();
   await Promise.all(
     [...parentDirs].map(async (parentDir) => {
-      const names = await fsCache.readdir(parentDir);
-      // Unicode normalization is reconciled HERE, in the fill, so that
-      // `classifyFilenameCase` stays a pure string comparison and the row it
-      // judges already holds comparable strings. `siblingNamesFrom` normalizes
-      // the other side (`expectedName`) for the same reason. A fresh array,
-      // never a mutation: `fsCache.readdir` memoizes and shares its listing
-      // across fills, so the cached value must not be rewritten under it.
-      table.set(parentDir, names === null ? null : names.map(toNfc));
+      // Stored EXACTLY as `readdir` returned it — no Unicode folding, no copy.
+      //
+      // The fill used to fold every entry to NFC here (and `siblingNamesFrom`
+      // folded `expectedName` to match), which left the judge a pure `===` over
+      // pre-reconciled strings. It also destroyed the only evidence that could
+      // distinguish "these two spellings are the same bytes" from "these two
+      // spellings are equal only after folding" — and those are different facts
+      // on a byte-exact filesystem. Comparison semantics now live entirely in
+      // {@link classifyFilenameCase}, so the fill has no opinion to disagree
+      // with, and a hand-written row is raw `readdir` output rather than a form
+      // only the fill knew how to produce.
+      //
+      // The array is the cache's own and is deliberately not copied: the table
+      // type is `readonly string[]`, several tables may share one listing, and
+      // copying every listing per fill is exactly the per-run cost this pair
+      // exists to avoid. Treat it as immutable.
+      table.set(parentDir, await fsCache.readdir(parentDir));
     })
   );
 
@@ -426,78 +442,139 @@ export function siblingNamesFrom(table: SiblingNamesTable, filePath: string): Si
     );
   }
 
-  // NFC on this side too — the fill normalized the listing, and a comparison is
-  // only reconciled when BOTH sides are. See {@link toNfc}.
-  return { expectedName: toNfc(path.basename(filePath)), names };
+  // Raw on this side too. This lookup reads a row; it does not judge, and
+  // folding here would be judging — see {@link classifyFilenameCase}, which
+  // needs the spelling the caller actually asked for in order to tell a
+  // byte-exact hit from a fold-only one.
+  return { expectedName: path.basename(filePath), names };
 }
 
 /**
- * Decide whether `row.expectedName` names a real entry, at the exact case asked for.
+ * Which pass of {@link classifyFilenameCase} produced the answer.
+ *
+ * The three that are not `absent` are ordered by how faithfully the asked-for
+ * spelling matches disk, and every consumer that reports to a human needs the
+ * distinction: only `exact` opens on every filesystem.
+ */
+export type FilenameMatch =
+  /** The asked-for name and a directory entry are the same bytes. Opens anywhere. */
+  | 'exact'
+  /**
+   * They are different bytes that are equal after Unicode NFC folding — the same
+   * visible filename in two normalization forms. Opens on macOS/APFS and
+   * Windows; **does not open on a byte-exact filesystem** (Linux/ext4, i.e. CI
+   * and most deploy targets), where the two forms simply name different files.
+   */
+  | 'normalized'
+  /** They differ by letter case (after folding). Opens only on a case-insensitive filesystem. */
+  | 'case_mismatch'
+  /** Nothing in the listing matches, or the directory could not be read. */
+  | 'absent';
+
+/** What {@link classifyFilenameCase} decided about one asked-for filename. */
+export interface FilenameCaseVerdict {
+  /**
+   * Whether the name resolves to an entry at all — `true` for both `exact` and
+   * `normalized`, i.e. exactly where the author's own machine opens the file.
+   * Derivable from {@link FilenameCaseVerdict.match}; kept because "does this
+   * path resolve" is the question most callers are actually asking.
+   */
+  exists: boolean;
+  /**
+   * The entry actually on disk, **verbatim as `readdir` returned it**, or
+   * `null` when nothing matched. Raw rather than folded on purpose: this is the
+   * string a caller suggests writing, and a folded reconstruction of an NFD
+   * entry is a spelling that does not open the file on Linux.
+   */
+  actualName: string | null;
+  /** Which pass matched. See {@link FilenameMatch}. */
+  match: FilenameMatch;
+}
+
+/**
+ * Decide whether `row.expectedName` names a real entry, and how faithfully.
  *
  * Pure: no filesystem, no cache, no path parsing — it reads only the columns it
  * is handed, which is what makes hand-written listings a legitimate test input.
+ * Both columns arrive **raw**, exactly as `readdir` and `path.basename` produced
+ * them; this function owns every comparison rule, so nothing upstream can
+ * disagree with it about what "the same filename" means.
  *
- * **First match wins, and the exact-match pass runs first — that order IS the
- * contract.** On a case-insensitive filesystem a listing can hold both
- * `readme.md` and `README.md`, in either order; asking for `README.md` must
- * report it present regardless of which one `readdir` happened to return first.
- * Searching case-insensitively first would report the very file that exists as a
- * case mismatch, purely on directory-entry order.
+ * **Three passes, strictly in this order, first match wins — the order IS the
+ * contract**, because each pass accepts a strictly weaker notion of sameness and
+ * a weaker pass reached first would mislabel a file that is genuinely there:
  *
- * **Comparison is raw string equality, and that is only correct because both
- * sides arrive pre-normalized.** `é` has two encodings (NFC `U+00E9` vs NFD
- * `e` + `U+0301`) that are `!==` and that case-folding does not reconcile, so an
- * accented file that exists used to be reported flatly missing — without even
- * the case-mismatch hint, which needs the case-insensitive branch to match
- * (ledger entry D7). {@link fillSiblingNames} now NFC-normalizes the listing and
- * {@link siblingNamesFrom} the expected name, which keeps this function pure.
- * Do not reintroduce normalization here: a hand-written row is this function's
- * advertised input, and normalizing inside the judge would quietly make the fill
- * optional and let a raw row disagree with a filled one.
+ * 1. **byte-exact** `entry === expectedName`. On a case-insensitive filesystem a
+ *    listing can hold both `readme.md` and `README.md`, in either order; asking
+ *    for `README.md` must report it present regardless of which one `readdir`
+ *    happened to return first. Same argument, one form weaker, for pass 2.
+ * 2. **NFC-folded** `toNfc(entry) === toNfc(expectedName)`. `é` has two encodings
+ *    (NFC `U+00E9` vs NFD `e` + `U+0301`) that are `!==` and that case-folding
+ *    does not reconcile, so without this pass an accented file that plainly
+ *    exists was reported flatly *missing* — not even a case-mismatch hint, since
+ *    that needs pass 3 to match (ledger entry D7).
+ * 3. **case-insensitive, on the folded forms.** Folding first is required, not
+ *    tidy: `toLowerCase()` does not reconcile NFC against NFD, so a name that
+ *    differs in *both* case and normalization falls out as `absent` and the
+ *    author loses the suggestion.
  *
- * A consequence worth knowing: `actualName` is therefore the NFC form of the
- * entry, not the raw bytes `readdir` returned. For the case-mismatch hint that
- * is the better answer — it is the form to write into a link — but it is not a
- * faithful echo of the directory entry.
+ * ⚠️ **Passes 1 and 2 are not the same verdict, and collapsing them is a
+ * silently-wrong answer rather than a lost nicety.** The fix for D7 originally
+ * folded both sides *before* comparing, which repaired the false "missing" on
+ * macOS/APFS — and over-corrected into the opposite error on Linux/ext4, where
+ * the filesystem is byte-exact: a markdown link spelling a filename NFD while
+ * disk holds NFC genuinely 404s there, and the folded judge answered "exists,
+ * exact match, no issue". `match` is what keeps both facts: the link resolves
+ * (so it must not be reported broken), *and* it resolves only by folding (so a
+ * caller can warn). {@link classifyFilenameCaseFrom}'s consumer in
+ * `@vibe-agent-toolkit/resources` turns `'normalized'` into
+ * `LINK_NORMALIZATION_MISMATCH`.
+ *
+ * **Folding is deferred to the miss path, and that is a real saving.** Pass 1
+ * calls `toNfc` zero times, so a corpus whose links all resolve byte-exactly —
+ * every pure-ASCII corpus, i.e. nearly all of them — normalizes nothing at all.
+ * The older shape folded every entry of every directory in the fill,
+ * unconditionally.
  *
  * @param row - The listing row, read out of a filled table by {@link siblingNamesFrom}
- * @returns Whether the exact name exists, and the entry actually on disk (or `null`)
+ * @returns The verdict: whether it resolves, the entry really on disk, and which pass matched
  */
-export function classifyFilenameCase(row: SiblingNames): {
-  exists: boolean;
-  actualName: string | null;
-} {
+export function classifyFilenameCase(row: SiblingNames): FilenameCaseVerdict {
   const { expectedName, names } = row;
 
   if (names === null) {
-    // Parent directory doesn't exist (or can't be read)
-    return { exists: false, actualName: null };
+    // Parent directory doesn't exist (or can't be read).
+    return { exists: false, actualName: null, match: 'absent' };
   }
 
-  // Find the actual filename (case-sensitive exact match).
+  // Pass 1 — byte-exact.
   // Tested against `undefined` rather than for truthiness: `readdir` never
   // yields an empty entry name, but hand-written rows are this function's
   // advertised input now that it is pure, and `''` is falsy — it would fall
-  // through to the case-insensitive branch and come back as `actualName: ''`.
+  // through to a later pass and come back as `actualName: ''` with the wrong
+  // `match`.
   const exactMatch = names.find(entry => entry === expectedName);
-
   if (exactMatch !== undefined) {
-    // Found exact case match - file exists with correct case
-    return { exists: true, actualName: exactMatch };
+    return { exists: true, actualName: exactMatch, match: 'exact' };
   }
 
-  // No exact match - check for case-insensitive match
+  // Pass 2 — equal only after NFC folding. Reached only when pass 1 missed, so
+  // an all-ASCII corpus never pays for it.
+  const foldedExpected = toNfc(expectedName);
+  const normalizedMatch = names.find(entry => toNfc(entry) === foldedExpected);
+  if (normalizedMatch !== undefined) {
+    return { exists: true, actualName: normalizedMatch, match: 'normalized' };
+  }
+
+  // Pass 3 — case-insensitive over the folded forms.
+  const loweredExpected = foldedExpected.toLowerCase();
   const caseInsensitiveMatch = names.find(
-    entry => entry.toLowerCase() === expectedName.toLowerCase()
+    entry => toNfc(entry).toLowerCase() === loweredExpected
   );
 
-  // Return result:
-  // - If case-insensitive match found: exists=false (wrong case), actualName=<actual>
-  // - If no match at all: exists=false, actualName=null
-  return {
-    exists: false,
-    actualName: caseInsensitiveMatch ?? null,
-  };
+  return caseInsensitiveMatch === undefined
+    ? { exists: false, actualName: null, match: 'absent' }
+    : { exists: false, actualName: caseInsensitiveMatch, match: 'case_mismatch' };
 }
 
 /**
@@ -523,14 +600,14 @@ export function classifyFilenameCase(row: SiblingNames): {
  *
  * @param table - Table filled by {@link fillSiblingNames}
  * @param filePath - Absolute path to judge
- * @returns Whether the exact name exists, and the entry actually on disk (or `null`)
+ * @returns The verdict — see {@link FilenameCaseVerdict}
  * @throws If `table` holds no entry for the path's parent directory — see
  *   {@link siblingNamesFrom}
  */
 export function classifyFilenameCaseFrom(
   table: SiblingNamesTable,
   filePath: string
-): { exists: boolean; actualName: string | null } {
+): FilenameCaseVerdict {
   return classifyFilenameCase(siblingNamesFrom(table, filePath));
 }
 

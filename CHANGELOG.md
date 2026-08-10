@@ -290,7 +290,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PACKAGED_UNREFERENCED_FILE`; and the fragment index silently skipped anchor checking. All three
   now key on NFC via the new `toNfc()` helper (`@vibe-agent-toolkit/utils/path`). Paths handed to
   the filesystem are deliberately left alone — on Linux the normalized form of a decomposed filename
-  names no file at all.
+  names no file at all. Because folding can paper over a genuine cross-platform break — the link
+  resolves only after normalizing, which macOS/APFS and Windows tolerate but Linux/ext4 does not —
+  a fold-only match (not byte-identical) now also emits the new **`LINK_NORMALIZATION_MISMATCH`**
+  (`warning`), naming both spellings and recommending the file and link both move to NFC. A
+  byte-identical match is unaffected.
 
 - **`--debug` produced no debug output from any command, and an unexpected failure printed no stack
   under it either.** `--debug` is declared on the root program *and* on 47 subcommands; Commander
@@ -424,6 +428,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   drops from **668 ms to 168 ms**; measured over the schema-bearing collections alone, 655 ms to
   94 ms. The cache is discarded when the run returns, so a schema edited between runs is picked up.
   Reported issues are unchanged, including the wording of schema-load failures.
+
+- **A tracked file with a non-ASCII filename vanished from every git-aware command, and was
+  separately misreported as gitignored.** `gitLsFiles` ran `git ls-files` without `-z`, so git's
+  default path-quoting wrapped any non-ASCII filename in a quoted, octal-escaped string (`café.md`
+  came back as `"caf\303\251.md"`) instead of the real name — every exact-match consumer missed it
+  outright. `GitTracker`'s O(1) gitignore oracle is built from that same output, so the same file was
+  also misclassified as ignored. Fixed by adding `-z` and splitting on NUL, the idiom this repo's own
+  build tooling already uses.
+
+- **Two published ESLint autofixers could rewrite or delete code that had nothing to do with
+  `node:path`.** The `no-path-join`/`no-path-resolve`/`no-path-relative` repair leg (recovering a
+  half-migrated file after a partial `--fix`) and the shared dead-import cleanup those rules and
+  `no-manual-path-normalize` rely on both used "is `safePath` bound anywhere in this file" as a proxy
+  for "did THIS rule's own rewrite just orphan this import / consume this call." A coincidence — a
+  sibling function's migration elsewhere in the same file, or a same-named ambient-global function
+  ESLint's scope analysis cannot see (`declare global`, a bundler shim) — was enough to arm either
+  rule against unrelated code, silently redirecting a call to VAT's `safePath` or deleting an
+  always-dead, unrelated import with a false "this rule's autofix orphaned it" message. Both are now
+  gated on positive, per-declaration evidence that this rule's own replacement actually runs in the
+  file. A narrow residual remains — a file with two same-module imports where one was already fully
+  dead before this rule pack ever touched it can still be deleted with an inaccurate message — but it
+  can only produce a redundant, harmless deletion, never a rewrite to the wrong function.
+
+- **`prefer-startswith-over-regex` missed some patterns ending in an escaped backslash before an
+  anchor, and `no-manual-path-normalize` could autofix a literal two-backslash split to
+  `toForwardSlash()` — not equivalent, and a behavior change.** The first judged whether a trailing
+  `$` was an anchor or an escaped literal dollar sign by checking only the pattern's last two
+  characters, which misreads `/\\$/` (an escaped backslash followed by a genuine anchor) as the
+  reverse. The second treated `.split('\\')` (one backslash, `path.sep`-equivalent, safe to rewrite)
+  and `.split('\\\\')` (a literal two-backslash sequence — a different, rarer operation) as the same
+  case. Fixed with a proper trailing-backslash-parity count, and by dropping the two-backslash case
+  from what the rule treats as safe to autofix.
 
 ## [0.1.42] - 2026-08-08
 

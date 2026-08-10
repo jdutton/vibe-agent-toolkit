@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, resetProjectRootCaches, safePath } from '@vibe-agent-toolkit/utils';
 import { expect, type Assertion } from 'vitest';
 
 import { ExternalLinkValidator } from '../src/external-link-validator.js';
@@ -35,6 +35,11 @@ import type { HeadingNode, ResourceLink, ValidationIssue } from '../src/types.js
 export function createGitRepo(directory: string): string {
   // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
   spawnSync('git', ['init'], { cwd: directory, stdio: 'pipe' });
+  // `gitFindRoot()` memoizes `null` for any directory a prior walk climbed
+  // through (e.g. before this repo existed). Without this reset, a later
+  // crawl in the same process silently keeps answering from that stale
+  // memo instead of seeing the repo we just created.
+  resetProjectRootCaches();
   return directory;
 }
 

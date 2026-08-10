@@ -261,8 +261,8 @@ describe('parse cache — cold/warm equivalence', () => {
     // The gate on the gate: without these two the equality below would pass
     // just as happily over a cache that never hit anything. Verified — an
     // always-miss mutant leaves the `toStrictEqual` green and fails only here.
-    expect(cold.stats).toStrictEqual({ hits: 0, misses: MIXED_FILES.length });
-    expect(warm.stats).toStrictEqual({ hits: MIXED_FILES.length, misses: 0 });
+    expect(cold.stats).toStrictEqual({ hits: 0, misses: MIXED_FILES.length, writeFailures: 0 });
+    expect(warm.stats).toStrictEqual({ hits: MIXED_FILES.length, misses: 0, writeFailures: 0 });
 
     expect(warm.resources).toStrictEqual(cold.resources);
   });
@@ -312,13 +312,13 @@ describe('parse cache — resources sharing one content key', () => {
     // because `set` is awaited before the next file is read.
     expect(cold.resources).toHaveLength(2);
     expect(await entryFiles(cacheDir)).toHaveLength(1);
-    expect(cold.stats).toStrictEqual({ hits: 1, misses: 1 });
+    expect(cold.stats).toStrictEqual({ hits: 1, misses: 1, writeFailures: 0 });
   });
 
   it('never hands two resources the same links array', async () => {
     const { warm } = await suite.coldThenWarm(suite.twin());
 
-    expect(warm.stats).toStrictEqual({ hits: 2, misses: 0 });
+    expect(warm.stats).toStrictEqual({ hits: 2, misses: 0, writeFailures: 0 });
 
     const [left, right] = warm.resources;
     expect(left).toBeDefined();
@@ -355,7 +355,7 @@ describe('parse cache — degraded modes', () => {
     const disabled = await build(suite.mixed(), new ParseCache({ cacheDir, enabled: false }));
 
     // A disabled cache reads nothing even though the directory is populated…
-    expect(disabled.stats).toStrictEqual({ hits: 0, misses: MIXED_FILES.length });
+    expect(disabled.stats).toStrictEqual({ hits: 0, misses: MIXED_FILES.length, writeFailures: 0 });
     // …and writes nothing either, so the entry count is unchanged.
     expect(await entryFiles(cacheDir)).toHaveLength(MIXED_FILES.length);
     expect(disabled.resources).toStrictEqual(cold.resources);
@@ -370,12 +370,12 @@ describe('parse cache — degraded modes', () => {
     const afterCorruption = await build(suite.mixed(), new ParseCache({ cacheDir }));
 
     // Every read is a miss, so the run is a full cold parse wearing a warm hat.
-    expect(afterCorruption.stats).toStrictEqual({ hits: 0, misses: MIXED_FILES.length });
+    expect(afterCorruption.stats).toStrictEqual({ hits: 0, misses: MIXED_FILES.length, writeFailures: 0 });
     expect(afterCorruption.resources).toStrictEqual(cold.resources);
 
     // …and the run repaired what it found broken, so the next one hits.
     const repaired = await build(suite.mixed(), new ParseCache({ cacheDir }));
-    expect(repaired.stats).toStrictEqual({ hits: MIXED_FILES.length, misses: 0 });
+    expect(repaired.stats).toStrictEqual({ hits: MIXED_FILES.length, misses: 0, writeFailures: 0 });
     expect(repaired.resources).toStrictEqual(cold.resources);
   });
 });

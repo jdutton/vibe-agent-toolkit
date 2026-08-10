@@ -124,18 +124,61 @@ describe('validateLink target lookups', () => {
   });
 
   /**
-   * Ledger D7 — the user-facing half. The target exists; only its Unicode
-   * normalization form differs from the href's, so the listing comparison finds
-   * no match and the link is reported flatly broken (not even with the
-   * case-mismatch hint, which needs the case-insensitive branch to match).
+   * Ledger D7 — the user-facing half, and the whole verdict in one place.
+   *
+   * The target exists. Only its Unicode normalization form differs from the
+   * href's. Three answers are possible and only the third is true:
+   *
+   * 1. `LINK_BROKEN_FILE` — what VAT emitted before D7, when the listing
+   *    comparison found no match at all (not even the case-mismatch hint, which
+   *    needs the case-insensitive branch to match). A false positive: the file
+   *    is plainly there.
+   * 2. `null` — what VAT emitted after D7 folded both sides before comparing.
+   *    Also wrong, in the opposite direction and far more quietly: on
+   *    Linux/ext4 (CI, and most deploy targets) that href opens nothing, and the
+   *    run was silent about it. This assertion USED to read `.toBeNull()`.
+   * 3. `LINK_NORMALIZATION_MISMATCH`, a warning — both facts at once: the link
+   *    resolves where it was written, and it resolves only by folding.
    *
    * ⚠️ The premise guard matters: if the two literals ever collapsed to one
    * string this test would pass while demonstrating nothing.
    */
-  it('reports no issue for a composed href naming a decomposed file on disk', async () => {
+  it('warns, rather than passing silently, for a composed href naming a decomposed file', async () => {
     expect(ACCENTED_ON_DISK).not.toBe(ACCENTED_IN_HREF);
 
-    expect(await validateHref(tempDir, `./${ACCENTED_IN_HREF}`, fsCache)).toBeNull();
+    const issue = await validateHref(tempDir, `./${ACCENTED_IN_HREF}`, fsCache);
+
+    expect(issue?.code).toBe('LINK_NORMALIZATION_MISMATCH');
+    expect(issue?.severity).toBe('warning');
+    // Not broken: D7's fix must survive. An error here is the pre-D7 regression.
+    expect(issue?.severity).not.toBe('error');
+    // Both spellings, escaped — quoted verbatim they are the same glyphs.
+    expect(issue?.message).toContain(String.raw`ref\u{E9}rence.md`);
+    expect(issue?.message).toContain(String.raw`refe\u{301}rence.md`);
+  });
+
+  /**
+   * The negative control for the row above, over the SAME code path: an
+   * accented filename whose href spells it exactly as disk does is silent.
+   * Without it, the warning could fire on every non-ASCII filename and this
+   * suite would report that as success.
+   *
+   * ⚠️ **The control needs its own directory, and that is not tidiness.** APFS
+   * is normalization-*insensitive*: writing the composed name into the fixture
+   * root, which already holds the decomposed twin, opens that same file instead
+   * of creating a second entry — the listing would still hold only the
+   * decomposed name and this control would silently become a second copy of the
+   * positive case. A fresh directory is the only place the composed spelling is
+   * genuinely the one on disk.
+   */
+  it('stays silent for an accented href that matches the on-disk bytes', async () => {
+    const composedDir = safePath.join(tempDir, 'composed');
+    await fs.mkdir(composedDir, { recursive: true });
+    await fs.writeFile(safePath.join(composedDir, ACCENTED_IN_HREF), '# Composed\n', 'utf-8');
+
+    expect(
+      await validateHref(tempDir, `./composed/${ACCENTED_IN_HREF}`, fsCache)
+    ).toBeNull();
   });
 
   /**

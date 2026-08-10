@@ -180,7 +180,7 @@ async function expectWarmBothKinds(
 ): Promise<void> {
   const warmCache = new ParseCache({ cacheDir });
   const [warmMarkdown, warmHtml] = await bothKinds(filePath, warmCache);
-  expect(warmCache.stats).toStrictEqual({ hits: 2, misses: 0 });
+  expect(warmCache.stats).toStrictEqual({ hits: 2, misses: 0, writeFailures: 0 });
   expect(warmMarkdown).toStrictEqual(cold[0]);
   expect(warmHtml).toStrictEqual(cold[1]);
 }
@@ -201,8 +201,8 @@ async function entryCount(cacheDir: string): Promise<number> {
  * throughout, which is exactly the theatre this helper exists to prevent.
  */
 function expectOneMissThenOneHit(pair: ColdWarm): void {
-  expect(pair.coldStats).toStrictEqual({ hits: 0, misses: 1 });
-  expect(pair.warmStats).toStrictEqual({ hits: 1, misses: 0 });
+  expect(pair.coldStats).toStrictEqual({ hits: 0, misses: 1, writeFailures: 0 });
+  expect(pair.warmStats).toStrictEqual({ hits: 1, misses: 0, writeFailures: 0 });
 }
 
 /** First link of a result, failing loudly instead of returning `undefined`. */
@@ -299,7 +299,7 @@ describe('parseFileCached — cross-kind key separation', () => {
     const coldCache = new ParseCache({ cacheDir });
     const [asMarkdown, asHtml] = await bothKinds(filePath, coldCache);
 
-    expect(coldCache.stats).toStrictEqual({ hits: 0, misses: 2 });
+    expect(coldCache.stats).toStrictEqual({ hits: 0, misses: 2, writeFailures: 0 });
 
     // The extension says html; the caller said markdown. The caller wins — this
     // is the shape `lancedb-rag-provider.ts` relies on.
@@ -334,7 +334,7 @@ describe('parseFileCached — fail-soft and failure propagation', () => {
     expect(await parseFileCached(page, 'html', disabled)).toStrictEqual(await parseHtml(page));
 
     // Every lookup is a miss, including the ones that short-circuit…
-    expect(disabled.stats).toStrictEqual({ hits: 0, misses: 2 });
+    expect(disabled.stats).toStrictEqual({ hits: 0, misses: 2, writeFailures: 0 });
     // …and nothing reached disk. Asserted against a nonzero twin below, because
     // "zero entries" is also what a cache pointed at the wrong directory reports.
     expect(await entryCount(cacheDir)).toBe(0);
@@ -353,7 +353,7 @@ describe('parseFileCached — fail-soft and failure propagation', () => {
     // A read failure is the caller's, exactly as it was with `parseMarkdown`:
     // the cache is never consulted, so it cannot silently answer for a file it
     // has no bytes for.
-    expect(cache.stats).toStrictEqual({ hits: 0, misses: 0 });
+    expect(cache.stats).toStrictEqual({ hits: 0, misses: 0, writeFailures: 0 });
 
     // The positive twin: the same cache on a real path resolves, so the
     // rejection above is about the missing file and not about the setup.
@@ -373,7 +373,7 @@ describe('parseFileCached — no aliasing across hits', () => {
     // Populate, then take two independent hits over the same entry.
     const cold = new ParseCache({ cacheDir });
     await parseFileCached(filePath, 'markdown', cold);
-    expect(cold.stats).toStrictEqual({ hits: 0, misses: 1 });
+    expect(cold.stats).toStrictEqual({ hits: 0, misses: 1, writeFailures: 0 });
 
     const warm = new ParseCache({ cacheDir });
     const first = await parseFileCached(filePath, 'markdown', warm);
@@ -389,8 +389,8 @@ describe('parseFileCached — no aliasing across hits', () => {
     // Both reads were hits — a miss would re-parse and produce a fresh graph for
     // reasons that have nothing to do with the cache's aliasing behaviour, which
     // is precisely how this assertion would go vacuous.
-    expect(firstHitStats).toStrictEqual({ hits: 1, misses: 0 });
-    expect(warm.stats).toStrictEqual({ hits: 2, misses: 0 });
+    expect(firstHitStats).toStrictEqual({ hits: 1, misses: 0, writeFailures: 0 });
+    expect(warm.stats).toStrictEqual({ hits: 2, misses: 0, writeFailures: 0 });
 
     // The positive twin for the negative below: the mutation did land somewhere.
     expect(firstLink(first).resolvedId).toBe('first-only');

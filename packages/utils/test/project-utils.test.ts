@@ -13,10 +13,28 @@ import {
 } from '../src/project-utils.js';
 import { setupAsyncTempDirSuite } from '../src/test-helpers.js';
 
+import { createGitRepo } from './test-helpers.js';
+
 const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
 const PACKAGE_JSON = 'package.json';
 const SEPARATOR = '/';
 const CONFIG_CONTENT = 'version: 1\n';
+
+/**
+ * Wires the standard `setupAsyncTempDirSuite` hooks plus a `resetProjectRootCaches()`
+ * per test — shared by every describe block below whose tests need both a fresh
+ * temp dir AND a clean git-root/project-root memo each time.
+ */
+function wireTempDirSuiteWithRootCacheReset(name: string, onReady: (dir: string) => void): void {
+  const suite = setupAsyncTempDirSuite(name);
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+  beforeEach(async () => {
+    await suite.beforeEach();
+    onReady(suite.getTempDir());
+    resetProjectRootCaches();
+  });
+}
 
 describe('findConfigFile', () => {
   const suite = setupAsyncTempDirSuite('find-config-file');
@@ -256,16 +274,9 @@ describe('findProjectRoot Layer 1 cache (spec §8 / §13.5)', () => {
   // ESM, so we verify cache behavior by mutating the filesystem between calls
   // and asserting the cached result wins. If a call returned the cached value
   // it could not have re-executed the filesystem walk.
-  const suite = setupAsyncTempDirSuite('find-project-root-cache');
   let tempDir: string;
-
-  beforeAll(suite.beforeAll);
-  afterAll(suite.afterAll);
-
-  beforeEach(async () => {
-    await suite.beforeEach();
-    tempDir = suite.getTempDir();
-    resetProjectRootCaches();
+  wireTempDirSuiteWithRootCacheReset('find-project-root-cache', (dir) => {
+    tempDir = dir;
   });
 
   afterEach(() => {
@@ -339,5 +350,39 @@ describe('findProjectRoot Layer 1 cache (spec §8 / §13.5)', () => {
     // null or a git/config ancestor above tempDir, but NOT `proj`.
     const fresh = findProjectRoot(skill);
     expect(fresh).not.toBe(proj);
+  });
+});
+
+describe('createGitRepo() test helper (git-root memo reset)', () => {
+  let tempDir: string;
+  wireTempDirSuiteWithRootCacheReset('create-git-repo-memo', (dir) => {
+    tempDir = dir;
+  });
+
+  /**
+   * Reproduces a real test flow: `mkdtempSync()` gives a bare directory, some
+   * code (a crawler, a link resolver) walks it and memoizes `null` for it (and
+   * its ancestors) in the git-root cache *before* the test turns it into a
+   * repo. If `createGitRepo()` does not reset that memo, a later crawl in the
+   * SAME test/process silently keeps answering from the stale `null` —
+   * falling back to a manual filesystem walk instead of `git ls-files`, with
+   * no error.
+   *
+   * `tempDir` here is a fresh subdir under `normalizedTmpdir()` with no `.git`
+   * ancestor (same assumption `git-utils.test.ts`'s `ORPHAN_CWD` fixture relies
+   * on), so the pre-`createGitRepo` walk is expected to answer `null`.
+   */
+  it('createGitRepo() resets the git-root memo, so a stale null does not survive it', () => {
+    // Trigger a walk BEFORE the directory is a git repo. This memoizes `null`
+    // for tempDir (and every ancestor climbed) in the shared git-root cache.
+    expect(gitFindRoot(tempDir)).toBeNull();
+
+    // Turn tempDir into a real git repo via the shared test helper — the fix
+    // under test is that this call resets the git-root memo internally.
+    createGitRepo(tempDir);
+
+    // A later crawl in the SAME test/process must observe the new repo, not
+    // the stale memoized `null` from before `git init`.
+    expect(gitFindRoot(tempDir)).toBe(tempDir);
   });
 });

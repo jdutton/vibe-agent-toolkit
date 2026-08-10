@@ -49,6 +49,7 @@ import path from 'node:path';
 import { createRegistryIssue, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import {
   classifyFilenameCaseFrom,
+  type FilenameMatch,
   fillRealpaths,
   fillSiblingNames,
   FsLookupCache,
@@ -641,6 +642,97 @@ export function fileExistenceIssue(
 }
 
 /**
+ * What {@link validateResolvedFile} learned about one link target, read by every
+ * downstream issue builder. The helpers below each take the narrowest slice of
+ * it they actually use, so a unit test hands only the fields under test.
+ */
+export interface FileVerification {
+  /** Does the target resolve at all — on the machine running validation. */
+  exists: boolean;
+  /** Absolute filesystem path the link resolved to. */
+  resolvedPath: string;
+  /** How the asked-for basename matched a directory entry. */
+  match: FilenameMatch;
+  /** The entry really on disk, verbatim, when it differs from what was asked for. */
+  actualName?: string;
+}
+
+/**
+ * Render a filename with every non-ASCII code point escaped (`caf\u{E9}.txt`).
+ *
+ * ⚠️ **Mandatory for {@link normalizationMismatchIssue}, not decoration.** The
+ * whole finding is that two strings which render as the *same glyphs* are
+ * different bytes. A message quoting both verbatim shows the reader two
+ * identical-looking names and asserts they differ — which reads as a VAT bug,
+ * not as a finding. Escaping is what makes the difference legible in a terminal
+ * or a CI log.
+ *
+ * @param name - A filename
+ * @returns The same text with non-ASCII code points as `\u{...}` escapes
+ */
+export function escapeNonAscii(name: string): string {
+  return [...name]
+    .map((char) => {
+      const codePoint = char.codePointAt(0) ?? 0;
+      return codePoint < 0x80 ? char : String.raw`\u{` + `${codePoint.toString(16).toUpperCase()}}`;
+    })
+    .join('');
+}
+
+/**
+ * Convert a **fold-only** match into a `LINK_NORMALIZATION_MISMATCH` warning:
+ * the target is on disk, but the link's spelling and the filename's spelling are
+ * the same visible characters in different Unicode normalization forms.
+ *
+ * Returns null for every other {@link FilenameMatch} — `'exact'` is the healthy
+ * case, and `'case_mismatch'`/`'absent'` are already reported (as errors) by
+ * {@link fileExistenceIssue}, which runs first.
+ *
+ * ⚠️ **Why this is a warning and not `LINK_BROKEN_FILE`.** The file genuinely
+ * exists and the link genuinely opens where it was written: macOS/APFS and
+ * Windows reconcile NFC against NFD at the syscall level. Reporting it as broken
+ * would reinstate the exact false positive that folding fixed (ledger entry D7 —
+ * an accented file that plainly exists reported as missing). What folding *also*
+ * did was hide the converse: on Linux/ext4 the two forms are simply different
+ * filenames, so the link 404s on CI and on most deploy targets while the author's
+ * machine says everything is fine. Warning is the honest severity for a finding
+ * whose verdict depends on which machine asks.
+ *
+ * ⚠️ **The remedy names NFC on both sides, deliberately — do not "simplify" it
+ * to *use the name on disk*.** Rewriting the link to match an NFD filename does
+ * produce a byte-identical pair, but editors, browsers and git checkouts
+ * routinely re-normalize typed text to NFC, so that spelling is liable to be
+ * silently rewritten and break again. Normalizing the file's own name is the
+ * stable end of the pair.
+ */
+export function normalizationMismatchIssue(
+  fileResult: Pick<FileVerification, 'match' | 'resolvedPath' | 'actualName'>,
+  link: ResourceLink,
+  sourceFilePath: string,
+  projectRoot?: string,
+): ValidationIssue | null {
+  if (fileResult.match !== 'normalized' || fileResult.actualName === undefined) return null;
+
+  const askedName = path.basename(fileResult.resolvedPath);
+  const nfcName = toNfc(fileResult.actualName);
+
+  return createRegistryIssue(
+    'LINK_NORMALIZATION_MISMATCH',
+    `Link resolves only after Unicode normalization: the link spells the filename ` +
+      `"${escapeNonAscii(askedName)}" but the file on disk is named ` +
+      `"${escapeNonAscii(fileResult.actualName)}". Same visible name, different bytes — ` +
+      `this resolves on macOS and Windows and fails on a byte-exact filesystem (Linux).`,
+    linkExtras(
+      link,
+      sourceFilePath,
+      projectRoot,
+      `Normalize both to NFC: name the file "${escapeNonAscii(nfcName)}" on disk and ` +
+        `write the link with that same spelling.`,
+    ),
+  );
+}
+
+/**
  * Convert a missing-file result into a `LINK_DEFERRED_ARTIFACT` info issue when
  * the target is a declared-but-not-yet-materialized `files:` build artifact.
  *
@@ -813,7 +905,12 @@ function validateLocalFileLink(
     }
   }
 
-  return null;
+  // LAST, and that position is load-bearing: this function returns at most one
+  // issue, so anything placed above an error would mask it. Every link that
+  // produced an issue before still produces the same one; only links that
+  // previously produced `null` can reach this line. The change is additive to
+  // the gate, never a weakening of it.
+  return normalizationMismatchIssue(fileResult, link, sourceFilePath, options.projectRoot);
 }
 
 /**
@@ -862,26 +959,34 @@ function validateAnchorLink(
  * **Deliberately does not report whether the target is a directory.** It used
  * to, at the cost of an `fs.stat` for every link target that exists — and no
  * caller ever read the answer. {@link validateLocalFileLink} reads this result
- * at four sites ({@link deferredArtifactIssue}, {@link fileExistenceIssue},
- * {@link gitIgnoreSafetyIssue} and the anchor check), and every one of them
- * takes only `exists`, `resolvedPath` or `actualName`. A future
+ * at five sites ({@link deferredArtifactIssue}, {@link fileExistenceIssue},
+ * {@link gitIgnoreSafetyIssue}, the anchor check and
+ * {@link normalizationMismatchIssue}), and every one of them takes only
+ * `exists`, `resolvedPath`, `actualName` or `match`. A future
  * link-points-at-a-directory check belongs in the same pass-1′ table this now
  * reads — widen the table with a directory-kind column filled over the paths it
  * needs, never re-stat one target at judgement time.
  *
+ * ⚠️ **`match` is not redundant with `exists`**, even though `exists` is
+ * derivable from it. Two of the four kinds are "the file resolves"
+ * (`'exact'` and `'normalized'`), and only the first of those resolves on a
+ * byte-exact filesystem — see {@link normalizationMismatchIssue}. Dropping the
+ * field is how the Linux-only breakage became invisible in the first place.
+ *
  * @param resolvedPath - Absolute filesystem path produced by {@link resolveLocalHref}.
  * @param siblingNames - Pass-1′ table, filled over exactly these target paths.
- * @returns Object with exists flag, the path, and optional case-mismatch info.
+ * @returns Object with exists flag, the path, the match kind, and optional case-mismatch info.
  */
 function validateResolvedFile(
   resolvedPath: string,
   siblingNames: SiblingNamesTable,
-): { exists: boolean; resolvedPath: string; actualName?: string } {
+): FileVerification {
   const verification = classifyFilenameCaseFrom(siblingNames, resolvedPath);
 
-  const result: { exists: boolean; resolvedPath: string; actualName?: string } = {
+  const result: FileVerification = {
     exists: verification.exists,
     resolvedPath,
+    match: verification.match,
   };
 
   if (verification.actualName) {

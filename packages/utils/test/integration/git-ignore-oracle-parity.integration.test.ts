@@ -169,6 +169,16 @@ const PATH_CLASSES: readonly PathClassCase[] = [
     expected: agreeOn(false),
     outsideRoot: true,
   },
+  // 7b. Non-ASCII tracked filename: `git ls-files` quotes any path containing
+  //     non-ASCII bytes by default (wraps it in double quotes with octal
+  //     escapes). Without `-z`, the active set built from `gitLsFiles` would
+  //     contain the mangled quoted string instead of the real name, so this
+  //     genuinely-tracked file would be misclassified as ignored.
+  {
+    label: 'tracked file with a non-ASCII filename',
+    relativePath: 'café.md',
+    expected: agreeOn(false),
+  },
 
   // -------------------------------------------------------------- DIVERGE ----
   // 8. `link/ -> real/`, so `link/deep.md` is a real, tracked blob under a path
@@ -314,11 +324,12 @@ function createFixtureRepo(root: string, outsideDir: string, submoduleOrigin: st
   writeFileSync(safePath.join(root, 'dist', 'bundle.js'), 'export {};\n');
   writeFileSync(safePath.join(root, 'real', 'deep.md'), '# Reached through a symlink\n');
   writeFileSync(safePath.join(outsideDir, 'notes.md'), '# Outside the repo\n');
+  writeFileSync(safePath.join(root, 'café.md'), '# Non-ASCII filename\n');
   /* eslint-enable security/detect-non-literal-fs-filename */
 
   initRepoWithIdentity(root);
 
-  const trackedPaths = ['.gitignore', 'docs/tracked.md', 'real/deep.md'];
+  const trackedPaths = ['.gitignore', 'docs/tracked.md', 'real/deep.md', 'café.md'];
   if (tryCreateDirectorySymlink(root)) {
     trackedPaths.push('link');
   } else {

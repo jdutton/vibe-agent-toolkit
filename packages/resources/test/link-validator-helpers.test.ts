@@ -12,9 +12,11 @@ import { describe, expect, it } from 'vitest';
 import { DeferredArtifacts } from '../src/deferred-artifacts.js';
 import {
   checkAnchor,
+  escapeNonAscii,
   fileExistenceIssue,
   fragmentIndex,
   gitIgnoreSafetyIssue,
+  normalizationMismatchIssue,
   resolutionFailureIssue,
   type GitIgnoreCheckOptions,
 } from '../src/link-validator.js';
@@ -124,6 +126,107 @@ describe('resolutionFailureIssue', () => {
       SOURCE,
     );
     expect(issue?.message).toContain('"/some/path.md"');
+  });
+});
+
+/**
+ * The fold-only verdict — the one link outcome whose truth depends on which
+ * machine asks.
+ *
+ * **The fixture is code-generated, and both forms are escape sequences.** A
+ * committed accented filename cannot be trusted to arrive decomposed: macOS
+ * editors and git checkouts re-normalize, so a literal would silently be NFC on
+ * both sides and the test would pin nothing.
+ *
+ * This block drives the ISSUE layer with a hand-written verdict. The judge that
+ * produces `match: 'normalized'` from a real directory listing is pinned
+ * separately, in `packages/utils/test/fs-utils.test.ts` — the two halves are in
+ * different packages, and one `match` field is the whole seam between them.
+ */
+describe('normalizationMismatchIssue', () => {
+  const NFD_NAME = 'cafe\u0301.md';
+  const NFC_NAME = 'caf\u00E9.md';
+  const NFC_TARGET = `${PROJECT_ROOT}/${NFC_NAME}`;
+
+  it('has a fixture that differs as bytes and agrees only after folding', () => {
+    // Guard the premise. Both assertions have to hold or every case below is
+    // demonstrating something other than what it claims.
+    expect(NFD_NAME).not.toBe(NFC_NAME);
+    expect(NFD_NAME.normalize('NFC')).toBe(NFC_NAME);
+  });
+
+  it('warns when the link resolves only by NFC folding', () => {
+    // Disk holds the DECOMPOSED name; the link asks for the composed one. The
+    // file opens on the author's macOS box and 404s on Linux — and before this
+    // code existed the run was silent, because the folded judge answered
+    // "exists, exact match".
+    const issue = normalizationMismatchIssue(
+      { match: 'normalized', resolvedPath: NFC_TARGET, actualName: NFD_NAME },
+      makeLink(NFC_NAME),
+      SOURCE,
+    );
+
+    expect(issue?.code).toBe('LINK_NORMALIZATION_MISMATCH');
+    expect(issue?.severity).toBe('warning');
+  });
+
+  it('escapes both spellings so the difference is visible at all', () => {
+    const issue = normalizationMismatchIssue(
+      { match: 'normalized', resolvedPath: NFC_TARGET, actualName: NFD_NAME },
+      makeLink(NFC_NAME),
+      SOURCE,
+    );
+
+    // Quoted verbatim these two render as the same glyphs, so a message that
+    // did not escape them would show the reader two identical strings and
+    // assert they differ. Both code points must appear.
+    expect(issue?.message).toContain(String.raw`caf\u{E9}.md`);
+    expect(issue?.message).toContain(String.raw`cafe\u{301}.md`);
+    expect(issue?.message).not.toContain(NFD_NAME);
+  });
+
+  it('suggests the NFC spelling for BOTH sides, not the raw name on disk', () => {
+    // Telling the author to "use the name on disk" would hand them an NFD link
+    // that an editor or a git checkout is liable to renormalize straight back.
+    // The stable fix renames the file.
+    const issue = normalizationMismatchIssue(
+      { match: 'normalized', resolvedPath: NFC_TARGET, actualName: NFD_NAME },
+      makeLink(NFC_NAME),
+      SOURCE,
+    );
+
+    expect(issue?.suggestion).toContain(String.raw`caf\u{E9}.md`);
+    expect(issue?.suggestion).not.toContain(String.raw`cafe\u{301}.md`);
+  });
+
+  it.each([
+    // The healthy case. A byte-identical accented filename is not a finding —
+    // without this row the warning could fire on every accented name and the
+    // suite would not notice.
+    { label: 'a byte-exact match', match: 'exact' as const, actualName: NFC_NAME },
+    // Already reported, as an error, by fileExistenceIssue — which runs first.
+    { label: 'a case mismatch', match: 'case_mismatch' as const, actualName: 'CAFE.md' },
+    { label: 'an absent target', match: 'absent' as const, actualName: undefined },
+  ])('stays silent for $label', ({ match, actualName }) => {
+    const fileResult = actualName === undefined
+      ? { match, resolvedPath: NFC_TARGET }
+      : { match, resolvedPath: NFC_TARGET, actualName };
+
+    expect(normalizationMismatchIssue(fileResult, makeLink(NFC_NAME), SOURCE)).toBeNull();
+  });
+});
+
+describe('escapeNonAscii', () => {
+  it('leaves ASCII alone and escapes the rest by code point', () => {
+    expect(escapeNonAscii('README.md')).toBe('README.md');
+    expect(escapeNonAscii('caf\u00E9')).toBe(String.raw`caf\u{E9}`);
+    expect(escapeNonAscii('cafe\u0301')).toBe(String.raw`cafe\u{301}`);
+  });
+
+  it('escapes an astral code point as one unit, not as a surrogate pair', () => {
+    // Iterating a string by index would split this into two lone surrogates and
+    // print two meaningless escapes. Filenames really do contain emoji.
+    expect(escapeNonAscii('\u{1F600}.md')).toBe(String.raw`\u{1F600}.md`);
   });
 });
 

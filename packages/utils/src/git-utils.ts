@@ -78,7 +78,11 @@ export function gitLsFiles(options: {
     // Resolve git path using which for security (avoids PATH manipulation)
     const gitPath = which.sync('git');
 
-    const args = ['ls-files'];
+    // -z emits NUL-separated, UNQUOTED paths regardless of byte content. Without
+    // it, git quotes any path containing non-ASCII bytes (wraps it in double
+    // quotes with octal escapes, e.g. `café.md` -> `"caf\303\251.md"`), which is
+    // unusable to any exact-string lookup against the real filename.
+    const args = ['ls-files', '-z'];
 
     // Include untracked files that aren't gitignored
     if (options.includeUntracked) {
@@ -106,11 +110,10 @@ export function gitLsFiles(options: {
       return null;
     }
 
-    // Parse output into array of file paths
-    return result.stdout
-      .split('\n')
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0);
+    // Parse output into array of file paths. NUL-separated (from -z above), so
+    // no path can ever need trimming or quote-unescaping — a trailing NUL just
+    // produces one empty string at the end, which the filter below drops.
+    return result.stdout.split('\0').filter((line) => line.length > 0);
   } catch {
     // Git not available or other error
     return null;

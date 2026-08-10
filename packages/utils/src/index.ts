@@ -49,7 +49,9 @@ export * from './asset-reference.js';
 // The `SiblingNames` row type is withheld for the same reason its judge is: it is
 // only ever that judge's parameter, so publishing it would advertise a shape no
 // consumer can hand anywhere. `SiblingNamesTable` and `RealpathTable` — what the
-// fills return and the judges consume — are the ones a caller can name.
+// fills return and the judges consume — are the ones a caller can name, as are
+// `FilenameCaseVerdict`/`FilenameMatch`, which a consumer does not hand in but
+// does receive and branch on.
 //
 // The cost of that decision, stated so it is not a surprise: a new *type* added
 // to `fs-utils.ts` no longer reaches consumers automatically, and
@@ -65,6 +67,8 @@ export {
   realpathFrom,
 } from './fs-utils.js';
 export type {
+  FilenameCaseVerdict,
+  FilenameMatch,
   PathProbe,
   PathProbeStats,
   RealpathTable,
