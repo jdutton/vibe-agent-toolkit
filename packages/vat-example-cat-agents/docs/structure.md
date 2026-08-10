@@ -10,6 +10,7 @@ packages/vat-example-cat-agents/
 │   ├── types/                     # Shared Zod schemas
 │   ├── pure-function-tool/        # Archetype: Pure function agents
 │   ├── one-shot-llm-analyzer/     # Archetype: LLM analyzer agents
+│   ├── conversational-assistant/  # Archetype: Multi-turn conversational agents
 │   ├── external-event-integrator/ # Archetype: External event integrators
 │   ├── utils/                     # Shared utilities
 │   └── index.ts                   # Public exports
@@ -43,6 +44,7 @@ Contains all agent implementations organized by archetype:
 - **types/**: Shared Zod schemas (CatCharacteristics, Haiku, etc.)
 - **pure-function-tool/**: Deterministic, stateless agents (validators)
 - **one-shot-llm-analyzer/**: Single LLM call agents (photo analyzer, parsers)
+- **conversational-assistant/**: Multi-turn conversation agents with session state (breed advisor)
 - **external-event-integrator/**: Agents that emit events and wait for responses (HITL)
 - **utils/**: Shared helper functions
 - **index.ts**: Public API exports

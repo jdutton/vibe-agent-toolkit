@@ -27,149 +27,6 @@ While this project is in v0.1.x (pre-1.0):
 
 ## Project-Specific Technical Principles
 
-### Postel's Law (Robustness Principle)
-
-> *"Be conservative in what you send, be liberal in what you accept."*
-
-Apply this consistently across all schema validation in VAT:
-
-**When reading/auditing external data** (files we don't control — Claude settings, user plugins,
-third-party manifests): use `z.object({...}).passthrough()`. Unknown fields are silently passed
-through. We validate what we understand and ignore the rest. This prevents false-positive errors
-against undocumented or future fields.
-
-**When producing/validating data our agents generate** (SKILL.md frontmatter, plugin manifests,
-agent configs, any output VAT writes or emits): use strict schemas with no passthrough. Unknown
-fields are errors — they indicate a typo or bug in our own code that should be caught early.
-
-**Quick rule:** Reading outside world → liberal. Writing from our agents → conservative.
-
-```typescript
-// ✅ Reading external settings (liberal)
-const ExternalSchema = z.object({ model: z.string() }).passthrough();
-
-// ✅ Validating our own output (conservative)
-const OurSchema = z.object({ model: z.string() }).strict();
-```
-
-This principle applies specifically to:
-- Claude settings files (`managed-settings.json`, `settings.json`) → passthrough
-- Third-party plugin manifests during audit → passthrough
-- VAT-generated SKILL.md frontmatter → strict
-- VAT-generated plugin.json / marketplace.json → strict
-
-### Schema Strategy
-
-**JSON Schema for Agentic Interfaces and Metadata**
-- Use JSON Schema for all agent inputs, outputs, and resource metadata
-- JSON Schema provides language-agnostic validation and documentation
-- Enables interoperability across different tools and platforms
-- Supports both JSON and YAML validation
-
-**Zod for Type Safety**
-- Use Zod to define schemas in TypeScript
-- Zod ensures TypeScript types and JSON schemas remain perfectly synchronized
-- Convert Zod schemas to JSON Schema using `zod-to-json-schema` when needed
-- Single source of truth: define schema once in Zod, get both TypeScript types and JSON Schema
-
-**Example**: See `packages/resources/src/schemas/metadata.ts` for reference implementation.
-
-### JSON Schema Validation vs Zod
-
-**Use Zod for**: All TypeScript validation, internal schemas, runtime type safety
-**Use AJV for**: Validating arbitrary user-provided JSON Schemas (e.g., frontmatter validation)
-
-Why:
-- Zod provides TypeScript types + runtime validation for our code
-- AJV validates data against standard JSON Schema files (what users provide)
-- Each tool has a specific purpose
-
-**Location**: `packages/resources/src/frontmatter-validator.ts` (only place using AJV)
-
-**Pattern**: When users need to validate their data:
-- Users provide JSON Schema file (industry standard)
-- We use AJV to validate their data against their schema
-- We use Zod for our own internal validation needs
-
-### Zod Version Compatibility (CRITICAL)
-
-**VAT supports both Zod v3.25.0+ and v4.0.0+ via duck typing.**
-
-**The Problem**: When your code uses `instanceof` to check Zod types, it **breaks** when library and user Zod versions differ:
-
-```typescript
-// ❌ WRONG - Fails when user has Zod v4, library has v3
-import { z } from 'zod';
-if (zodType instanceof z.ZodString) {
-  // Never executes across version boundaries!
-}
-```
-
-**The Solution**: Use duck typing via `_def.typeName`:
-
-```typescript
-// ✅ CORRECT - Works across all Zod versions
-import { getZodTypeName, ZodTypeNames } from '@vibe-agent-toolkit/utils';
-
-const typeName = getZodTypeName(zodType);
-if (typeName === ZodTypeNames.STRING) {
-  // Always works!
-}
-```
-
-**When to Use Duck Typing**:
-- ✅ Introspecting user-provided Zod schemas (custom metadata, agent configs, etc.)
-- ✅ Runtime type detection for serialization/deserialization
-- ✅ Building SQL filters, validation logic, or any code that inspects schema structure
-- ❌ NOT needed for simple `.parse()` or `.safeParse()` validation
-
-**Available Utilities** (`@vibe-agent-toolkit/utils`):
-- `getZodTypeName(zodType)` - Extract type name safely
-- `isZodType(zodType, ZodTypeNames.STRING)` - Check type
-- `unwrapZodType(zodType)` - Unwrap optional/nullable
-- `ZodTypeNames` - Constants for all Zod types
-
-**Full Documentation**: [docs/zod-compatibility.md](docs/zod-compatibility.md)
-
-**Real-World Impact**: PR #34 fixed metadata filtering that returned 0 results when user's Zod v4 met library's Zod v3.
-
-### Frontmatter Validation
-
-Resources package parses and stores YAML frontmatter from markdown files. Users can optionally validate frontmatter against JSON Schemas.
-
-**Common Use Case**: Define minimum required fields, allow extras
-
-Most projects have files (README.md, etc.) without frontmatter - this is fine. Validation only enforces requirements when frontmatter is present.
-
-**Schema Design Pattern**:
-- Use `"required": [...]` for must-have fields
-- Omit or set `"additionalProperties": true` to allow custom fields
-- Files without frontmatter: No error unless schema requires fields
-
-**Example Usage**:
-```bash
-# Parse frontmatter, report YAML errors only
-vat resources validate docs/
-
-# Validate against schema
-vat resources validate docs/ --frontmatter-schema schema.json
-```
-
-**Example Schema** (knowledge base pattern):
-```json
-{
-  "type": "object",
-  "required": ["title", "description"],
-  "properties": {
-    "title": { "type": "string", "minLength": 1 },
-    "description": { "type": "string" },
-    "category": { "enum": ["guide", "reference", "tutorial", "api"] },
-    "keywords": { "type": "array", "items": { "type": "string" } },
-    "source_url": { "type": "string", "format": "uri" }
-  }
-}
-```
-
 ### Skill Distribution Architecture
 
 Skills, config, and packaging each have a distinct role. These boundaries are intentional:
@@ -192,39 +49,7 @@ Skills, config, and packaging each have a distinct role. These boundaries are in
 
 ### Resource Collections and Per-Directory Schema Validation
 
-**The `collections` key in `vibe-agent-toolkit.config.yaml` enables per-directory (or per-pattern) frontmatter schema validation.** This is the primary tool for projects with multiple document types, each requiring different frontmatter.
-
-**Config format:**
-```yaml
-version: 1
-
-resources:
-  collections:
-    systems:                                  # collection name (used in reports)
-      include: ["docs/systems/**/*.md"]
-      exclude: ["docs/systems/README.md"]     # README.md files are human ToCs
-      validation:
-        frontmatterSchema: "schemas/system.schema.json"
-        mode: permissive   # permissive = required fields enforced, extras allowed
-                           # strict = no extra fields beyond schema
-
-    adrs:
-      include: ["docs/architecture/adr/**/*.md"]
-      validation:
-        frontmatterSchema: "schemas/adr.schema.json"
-        mode: permissive
-```
-
-**Key rules:**
-- A file can belong to multiple collections (all schemas validated)
-- `permissive` mode: required fields must be present, extra fields OK — use for docs with project-specific extras
-- `strict` mode: respects `additionalProperties: false` in the schema — use for SKILL.md or API specs
-- Schema paths: relative to config file, or npm package reference (`@vibe-agent-toolkit/agent-skills/schemas/...`)
-- `vat resources validate` automatically applies all collection schemas — no extra flags needed
-- `--collection <id>` flag filters validation to a single collection (requires config mode — no path argument)
-- Full docs: [docs/guides/collection-validation.md](docs/guides/collection-validation.md)
-
-**Why this matters:** Without collections, you get one schema for all files. With collections, each doc type enforces its own contract. This is essential for multi-type knowledge bases (systems, teams, ADRs, processes, etc.).
+For per-directory frontmatter schema validation (multiple document types, each with its own JSON Schema), see [docs/guides/collection-validation.md](docs/guides/collection-validation.md).
 
 ### Asset References — The Canonical Pattern for Config-Supplied File References
 
@@ -235,8 +60,11 @@ The helper supports both filesystem paths (relative to `baseDir`, or absolute) a
 **Existing call sites (templates for new ones):**
 
 - `packages/resources/src/resource-registry.ts` — `validateAgainstCollectionSchema` (collection `frontmatterSchema`)
-- `packages/cli/src/commands/resources/validate.ts` — `loadSchema` (`--frontmatter-schema` flag)
+- `packages/agent-skills/src/skill-packager.ts` — schema path resolution during packaging
+- `packages/agent-skills/src/skill-source/sources/path-source.ts` — filesystem skill source location
+- `packages/agent-skills/src/skill-source/sources/npm-source.ts` — npm skill source location
 - `packages/cli/src/commands/doctor.ts` — `checkSchemaFiles` (doctor schema existence checks)
+- `packages/cli/src/commands/resources/validate.ts` — `loadSchema` (`--frontmatter-schema` flag)
 
 **When adding a new config-supplied file reference, route through `resolveAssetReference` from day one.** Don't write a parallel path-only resolver and plan to consolidate later — the consolidation never happens.
 
@@ -246,32 +74,6 @@ The helper supports both filesystem paths (relative to `baseDir`, or absolute) a
 - Dynamic JS imports (use `dynamicImportPath()` from utils)
 - `node_modules` enumeration walks (different concern: listing, not resolving a known specifier)
 - CJS interop shims
-
-### Skill References — The Canonical Pattern for Resolving a Skill by Name or Path
-
-When a command takes a skill by reference (a bare name or a path), route it through
-`resolveSkillReference(ref, cwd)` from `packages/cli/src/skill-resolution/`. It is
-**project-aware**: a config-declared skill resolves to `buildable` (build with the real
-entry points, then test the built dist — because **source ≠ dist** for every declared
-skill: link-following, reference-rewriting, nav-stripping, and `files:` injection all
-happen at build); everything else resolves to `source` (test the tree as-is). It accepts
-the full reference grammar (`<name>` | `<path>` | `workspace:` | `npm:` | `url:` |
-`path:` | `vendored`), shared with `--with`.
-
-**Do not write a parallel path-only resolver** — that is the exact bug this module exists
-to prevent (a path-only subject staged raw source and tested something that never ships).
-Mirrors the `resolveAssetReference` rule above. Model: `docs/architecture/skill-packaging.md`
-→ "Skill Reference Resolution".
-
-### CLI Development
-
-**Commander.js for Command-Line Interface**
-- Use Commander.js for all CLI commands and argument parsing
-- Provides consistent, well-documented CLI patterns
-- Supports subcommands, options, help text, and validation
-- Industry standard with excellent TypeScript support
-
-**Example**: See `packages/cli/src/index.ts` for reference implementation.
 
 ### Package-Specific Guidelines
 
@@ -293,25 +95,6 @@ Mirrors the `resolveAssetReference` rule above. Model: `docs/architecture/skill-
 - Uses Commander.js for all command parsing
 - Orchestrates other packages (don't duplicate logic)
 - User-facing entry point for the toolkit
-
-### Schema Organization
-
-Each package defines its own schemas:
-
-```
-packages/resources/
-  src/
-    schemas/
-      metadata.ts           # Zod schema + types
-      metadata.schema.json  # Generated JSON Schema (git-tracked)
-    types.ts                # Re-export types from schemas
-    index.ts
-```
-
-**Build process**:
-- Generate JSON Schema files from Zod schemas during build
-- Commit generated JSON Schema files to git (for external tools)
-- TypeScript types are always derived from Zod schemas (never manually written)
 
 ### TypeScript Monorepo Build System
 
@@ -340,49 +123,21 @@ This is a TypeScript monorepo using:
 vibe-agent-toolkit/
 ├── packages/          # Published packages
 │   ├── utils/        # Core shared utilities (no package deps)
-│   ├── resources/    # Resource parsing & validation (planned)
-│   ├── rag/          # Document chunking & embeddings (planned)
+│   ├── resources/    # Resource parsing & validation
+│   ├── rag/          # Document chunking & embeddings
 │   ├── agent-skills/ # Agent skill packaging
-│   ├── cli/          # Command-line interface (planned)
+│   ├── cli/          # Command-line interface
 │   └── dev-tools/    # Build and development tools (private)
 ├── docs/             # Documentation
 ├── .github/          # CI/CD workflows
 └── [config files]    # Root-level configuration
 ```
 
+(25 packages ship today; this tree shows the core set — see `packages/` for the full list.)
+
 ### Test Fixtures Convention
 
-Large test data for system/integration tests should be stored as compressed archives to avoid SonarQube analyzing third-party code:
-
-**Pattern**: `packages/X/test/fixtures/*.zip` (committed)
-**Extraction**: Use cross-platform libraries (e.g., `adm-zip` npm package) in test setup
-**Location**: Extract to temp directories during test execution (gitignored)
-
-**Why compressed archives?**
-- SonarQube treats raw third-party code as production code
-- Users don't see walls of foreign code in the repo
-- Smaller repo size (~65% compression for plugins snapshot)
-- Single binary file vs 1,000+ text files
-
-**Why ZIP instead of TAR.GZ?**
-- ZIP extraction is significantly faster on Windows (3-5s vs 100+ seconds)
-- `adm-zip` is pure JavaScript and works consistently across platforms
-- Similar compression ratio to TAR.GZ (~7% larger, acceptable trade-off)
-
-**Example**: `packages/cli/test/fixtures/claude-plugins-snapshot.zip`
-- Contains snapshot of real ~/.claude/plugins directory
-- Extracted by `test-fixture-loader.ts` during test setup using `adm-zip`
-- Tests run against extracted version in temp directory
-
-For small test data (<10 files), raw files in `test/fixtures/` are fine.
-
-**CRITICAL: Never use gitignored directory names in committed fixtures.** Directory names like `dist/`, `node_modules/`, `coverage/`, and `build/` are gitignored at the repo root. Files committed under these names silently disappear in CI (clean clone) while appearing to work locally. Instead:
-
-- Store committed artifact sources under a non-gitignored name (e.g., `build-artifacts/`)
-- Have test `beforeAll` copy them to `tempDir/dist/` — simulating a real build step
-- This mirrors how real projects work: build produces `dist/`, then tools consume it
-
-**Example**: `packages/agent-skills/test/fixtures/skill-files/build-artifacts/bin/cli.mjs` is the committed source. The integration test copies it to `tempDir/dist/bin/cli.mjs` during setup, and the `files` config references `source: 'dist/bin/cli.mjs'`.
+**CRITICAL: Never use gitignored directory names (`dist/`, `node_modules/`, `coverage/`, `build/`) in committed test fixtures.** Files committed under these names silently disappear in CI (clean clone) while appearing to work locally. Store committed artifact sources under a non-gitignored name (e.g., `build-artifacts/`) and have test `beforeAll` copy them to `tempDir/dist/` to simulate a real build step. See [docs/writing-tests.md](docs/writing-tests.md) for fixture-storage conventions (compressed archives, extraction, examples).
 
 ## Coding Standards
 
@@ -535,8 +290,6 @@ bun run test:coverage      # Unit tests with coverage report
 - Pre-commit hooks enforce these checks, but you must run them BEFORE asking to commit
 - Running validate after each fix catches cascading failures early
 
-**CRITICAL - Do NOT use `bun test`**: This repository uses `bun run validate` as the authoritative test suite. Direct `bun test` has known issues with parallel execution. Always use `bun run validate` which runs tests through vibe-validate orchestration.
-
 ### Subagent-Driven Execution: Batch the Work, Validate ONCE at the End
 
 **This section governs how to run multi-task plans via the `superpowers:subagent-driven-development` skill (the preferred execution method in this repo).** It overrides the per-task "commit at each boundary" rhythm that skill assumes, because of how this repo's gates are wired:
@@ -566,26 +319,6 @@ Before committing, ensure:
 Pre-commit hooks via Husky will enforce these automatically.
 
 **IMPORTANT**: If `duplication-check` fails, refactor to eliminate duplication. Never update the baseline without explicit permission.
-
-### Dogfooding: Best-Effort Audit Before Commit
-
-**For AI assistants (optional, not a hard gate):** After validation passes but before committing, run `vat audit --user` to dogfood the audit command against the user's installed skills and plugins. This is a best-effort QA check, not a blocking gate — it helps detect regressions in real-world usability (false errors, unexpected warnings, crashes on valid skills).
-
-```bash
-# Dogfood: audit the user's installed skills/plugins
-bun run vat audit --user --verbose 2>&1 | head -20
-
-# Check for unexpected errors in our own dist skills
-bun run vat audit packages/vat-development-agents/dist/skills/
-```
-
-**What to look for:**
-- New errors or warnings that weren't there before (regression)
-- Crashes or unhandled exceptions (bug in audit code)
-- False positives on valid skills (overly strict validation)
-- Skills that scan 0 linked files when they should scan more (link traversal not triggering)
-
-**This is not enforced by vibe-validate or pre-commit hooks.** It's agentic guidance — run it when you've changed audit, skill validation, or link traversal code to catch regressions before they ship. If something looks wrong, investigate before committing.
 
 ### Pre-Pull-Request Checklist (MANDATORY)
 
@@ -617,31 +350,7 @@ bun run vat audit packages/vat-development-agents/dist/skills/
 
 ### Running vat CLI During Development
 
-**In this monorepo**, use the convenience script to run vat commands:
-
-```bash
-# From repository root
-bun run vat <command> <args>
-
-# Examples:
-bun run vat skills build
-bun run vat resources validate docs/
-bun run vat skills audit ~/.claude/plugins
-```
-
-**For package build scripts** that need to invoke vat, use relative path to the built CLI:
-
-```json
-{
-  "scripts": {
-    "build": "bun run build:code && node ../cli/dist/bin/vat.js skills build"
-  }
-}
-```
-
-**Why not use bunx/npx?** Workspace bin linking doesn't work reliably across package managers (Bun/npm/pnpm) in monorepos. Direct paths and convenience scripts work everywhere.
-
-**Note**: End users who self-host VAT in their own projects can use standard commands like `vat skills build` or `npx vat skills build`.
+Run vat commands from the repo root via `bun run vat <command> <args>` — workspace bin linking is unreliable across package managers (Bun/npm/pnpm) in monorepos, so avoid `bunx`/`npx` here. See [packages/cli/CLAUDE.md](packages/cli/CLAUDE.md) for package build script invocation and skill-resolution mechanics.
 
 **Three "validate"-flavored commands — don't conflate them:**
 
@@ -652,8 +361,6 @@ bun run vat skills audit ~/.claude/plugins
 | `vat verify` | A **vat CLI command** — validates the *built* `dist/` artifacts (adds marketplace + consistency). | After `vat build`, before publish. |
 
 So when this repo's docs say "run `bun run validate`," that's the orchestrator, not the `vat validate` CLI subcommand. `vat validate` ⊂ `vat verify` in scope; both are vat product commands, distinct from the repo's own `bun run validate` gate.
-
-See [packages/cli/CLAUDE.md](packages/cli/CLAUDE.md) for more CLI development guidance.
 
 ### Adding New Packages
 
@@ -771,25 +478,7 @@ Tools follow same quality standards as packages (linted, typed, tested).
 
 ## Custom ESLint Rules - Agentic Code Safety Pattern
 
-**For AI-Heavy Development**: Create custom ESLint rules for dangerous patterns to prevent AI from reintroducing them.
-
-The 21 rules live in `packages/utils/eslint/` and **ship publicly** on the
-`@vibe-agent-toolkit/utils/eslint` subpath — inside the package whose helpers they enforce, so the
-two can never be installed at different versions. This repo dogfoods them by that same public
-specifier: the root `eslint.config.js` imports it (registered under the `local` namespace, which is
-why every `eslint-disable-next-line local/…` directive still works).
-
-They are `.cjs` in an ESM package on purpose (Node keys module format off the extension), and they
-`require()` nothing outside `eslint/` — not even `eslint`, which is why it is an **optional** peer
-dependency and the other twelve subpaths are unaffected. `packages/utils/test/eslint/subpath-purity.test.ts`
-enforces that.
-
-Because it is published, **no rule may hardcode a repo-specific exemption path** — exemptions are a
-rule option (`['error', { exemptFiles: ['packages/utils/src/path-utils.ts'] }]`) declared by the
-consuming config, and this repo declares its own.
-
-See [docs/custom-eslint-rules.md](docs/custom-eslint-rules.md) for how to add a rule, and
-[packages/utils/eslint/README.md](packages/utils/eslint/README.md) for the full rule table.
+Custom ESLint rules for dangerous AI-generated patterns live in `packages/utils/eslint/` and ship publicly on the `@vibe-agent-toolkit/utils/eslint` subpath. See [docs/custom-eslint-rules.md](docs/custom-eslint-rules.md) for how to add a rule, and [packages/utils/eslint/README.md](packages/utils/eslint/README.md) for the full rule table.
 
 ## Demo Guidelines
 
@@ -834,13 +523,13 @@ Material for developers working on VAT itself (not for users of VAT) lives under
 
 - [vat-debugging.md](docs/contributing/vat-debugging.md) — reproducing VAT bugs, `VAT_ROOT_DIR` adopter testing, failing-test-first fixes before landing changes
 - [vat-install-architecture.md](docs/contributing/vat-install-architecture.md) — design landscape for VAT's install/uninstall surfaces; read before proposing new install methods
+- [command-lane-table.md](docs/contributing/command-lane-table.md) — which of the 64 commands enumerate the filesystem, through which of the three entry points, and which three only do so by spawning child processes; read before changing enumeration or the crawl routes
+- [packages/lab/README.md](packages/lab/README.md) — the **quality lab**: a separate CLI that reports on a project and compares along one of three axes (which project, which version of it, which vat build). Read before adding any dev/QA/profiling verb — it owns that scope, and its [scope doc](packages/lab/docs/scope.md) decides what belongs there versus in `vat`
 - [plugin-distribution-findings.md](docs/contributing/plugin-distribution-findings.md) — running evidence log behind VAT's plugin-shape rules (what's DOCUMENTED vs merely OBSERVED), the silent hosted-sync divergence class, and a "rules NOT to add" list; read before proposing or promoting any plugin-shape rule
 
 ## External Documentation Cache
 
-Cached copies of external guidance (e.g., Anthropic's skill-authoring best-practices doc) live under `docs/external/` — see [`anthropic-skill-authoring-best-practices.md`](docs/external/anthropic-skill-authoring-best-practices.md). Each cached file names its source URL and fetch date in its preamble.
-
-**Refresh policy for AI assistants and maintainers:** When a cached doc's fetch date is more than ~90 days old, or when a new Claude Code release changes Skill behavior, re-fetch the source, diff against the cache, and update the cache plus any VAT tooling that depends on it (primarily `packages/vat-development-agents/resources/skills/vat-skill-review.md`). The cache exists so VAT's opinions stay diffable against Anthropic's — do not let them silently drift.
+Cached copies of external guidance (e.g., Anthropic's skill-authoring best-practices doc) live under [`docs/external/`](docs/external/), each naming its source URL and fetch date in its preamble. See [`.claude/rules/external-doc-cache-refresh.md`](.claude/rules/external-doc-cache-refresh.md) for the refresh policy.
 
 ## Questions?
 

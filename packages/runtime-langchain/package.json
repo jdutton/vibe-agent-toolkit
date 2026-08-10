@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/runtime-langchain",
-  "version": "0.1.42",
+  "version": "0.2.0-rc.1",
   "description": "LangChain.js runtime adapter for VAT agents",
   "type": "module",
   "exports": {
@@ -13,7 +13,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsx ../dev-tools/src/tsc-clean-build.ts",
     "test:unit": "vitest run",
     "test:watch": "vitest",
     "test:llm-regression": "RUN_LLM_TESTS=true bun test test/llm-regression.test.ts",

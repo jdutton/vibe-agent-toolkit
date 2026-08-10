@@ -52,6 +52,13 @@ const SCENARIOS: Scenario[] = [
     expect: 'LINK_TARGETS_DIRECTORY',
   },
   {
+    // The target is there; the walker just could not read it. Reported outright
+    // rather than skipped, mirroring the resources lane's RESOURCE_UNREADABLE.
+    intent: 'edge target exists but is unreadable (unstattable)',
+    ctx: { subject: 'edge', unreadable: true },
+    expect: 'LINK_TARGET_UNREADABLE',
+  },
+  {
     intent: "link to another skill's SKILL.md",
     ctx: { subject: 'edge', crossSkillDefinition: true },
     expect: 'LINK_TO_SKILL_DEFINITION',
@@ -213,6 +220,7 @@ describe('rule-engine: anti-workaround invariant', () => {
     'LINK_TO_NAVIGATION_FILE',
     'LINK_TO_GITIGNORED_FILE',
     'LINK_MISSING_TARGET',
+    'LINK_TARGET_UNREADABLE',
     'LINK_DEFERRED_ARTIFACT',
     'LINK_TO_SKILL_DEFINITION',
     'LINK_DROPPED_BY_DEPTH',

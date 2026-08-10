@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import { basename, dirname } from 'node:path';
 
 import { calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
-import { isLocalFileLink, parseMarkdown, resolveLocalHref, type LinkType } from '@vibe-agent-toolkit/resources';
+import { isLocalFileLink, parseFileCached, resolveLocalHref, type LinkType } from '@vibe-agent-toolkit/resources';
 import { findProjectRoot, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
 
@@ -311,7 +311,7 @@ async function traverseLinks(
 
     let parseResult;
     try {
-      parseResult = await parseMarkdown(currentPath);
+      parseResult = await parseFileCached(currentPath, 'markdown');
     } catch {
       issues.push({
         severity: 'warning',

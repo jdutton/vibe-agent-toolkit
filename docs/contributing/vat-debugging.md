@@ -34,6 +34,12 @@ details. Use it to confirm which config file and which binary are actually being
 Other useful env vars:
 - `VAT_TEST_ROOT=/path` — Override the project root VAT uses (skips `.git` detection)
 - `VAT_TEST_CONFIG=/path/to/config.yaml` — Override the config file path
+- `VAT_CACHE=0` — Disable VAT's on-disk caches, including in spawned child phases (the root
+  `--no-cache` flag sets this). **Set this before you trust any reproduction.** Parsing is served
+  from a cross-process cache under `<tmpdir>/.vat-cache/`, so a second run of "the same" command
+  can take a different code path from the first. If a bug appears only on the first run, or only
+  on a colleague's machine, suspect the cache before you suspect the input. `vat cache clear`
+  discards what is already stored.
 
 ## Step 3: Reproduce With the Local Monorepo Build
 

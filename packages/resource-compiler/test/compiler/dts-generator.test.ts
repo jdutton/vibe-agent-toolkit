@@ -5,7 +5,7 @@
 import { describe, it, expect } from 'vitest';
 
 import { generateTypeScriptDeclarations } from '../../src/compiler/dts-generator.js';
-import { parseMarkdown } from '../../src/compiler/markdown-parser.js';
+import { toMarkdownResource } from '../../src/compiler/markdown-parser.js';
 import type { MarkdownResource } from '../../src/compiler/types.js';
 
 // Constants for commonly used test strings
@@ -315,7 +315,7 @@ describe('generateTypeScriptDeclarations', () => {
     });
   });
 
-  describe('integration with parseMarkdown', () => {
+  describe('integration with toMarkdownResource', () => {
     it('should generate valid declarations from parsed markdown', () => {
       const markdown = `---
 title: Integration Test
@@ -337,7 +337,7 @@ Content for section one.
 More content here.
 `;
 
-      const resource = parseMarkdown(markdown);
+      const resource = toMarkdownResource(markdown);
       const result = generateTypeScriptDeclarations(resource);
 
       // Should have proper structure
@@ -369,7 +369,7 @@ Basic content.
 
 Final thoughts.`;
 
-      const resource = parseMarkdown(markdown);
+      const resource = toMarkdownResource(markdown);
       const result = generateTypeScriptDeclarations(resource);
 
       expect(result).toContain(EXPORT_CONST_META_EMPTY);

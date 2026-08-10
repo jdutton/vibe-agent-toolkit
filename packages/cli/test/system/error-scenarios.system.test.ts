@@ -11,6 +11,9 @@ import {
 
 const binPath = getBinPath(import.meta.url);
 
+/** How V8 indents every stack frame — a literal, so no regex backtracks over stderr. */
+const V8_STACK_FRAME = '\n    at ';
+
 describe('Error scenarios (system test)', () => {
   let tempDir: string;
 
@@ -44,6 +47,43 @@ describe('Error scenarios (system test)', () => {
 
     expect(result.status).toBe(2);
     expect(result.stderr).toContain('config');
+  });
+
+  it('--debug reaches the subcommand and names the throw site of an exit-2 failure', () => {
+    // Two defects, one line of evidence.
+    //
+    // 1. `--debug` is declared on the root program AND on 47 subcommands, and
+    //    Commander resolves the root's definition first — so every action ran
+    //    with `options.debug === undefined` and every `logger.debug(...)` in the
+    //    CLI was unreachable through its own documented flag, wherever the flag
+    //    sat on the command line.
+    // 2. Exit 2 is the UNEXPECTED failure, and its envelope carried
+    //    `error.message` alone. An internal `TypeError` reached users as one
+    //    line with no file and no frames; the throw site was only ever found by
+    //    hand-patching the built `dist`.
+    const nonExistentPath = safePath.join(tempDir, 'never-created');
+
+    const result = executeCli(binPath, ['resources', 'validate', nonExistentPath, '--debug']);
+
+    expect(result.status).toBe(2);
+    // NOT a bare `[DEBUG]`: `bin.ts` writes one such line from raw `process.argv`
+    // before Commander parses, so that substring was present even when the flag
+    // reached nothing. This line can only come from the subcommand's own logger.
+    expect(result.stderr).toContain('[DEBUG] GitTracker initialized');
+    // ...and the failure now carries frames, not just its message.
+    expect(result.stderr).toContain('Error: Path does not exist');
+    expect(result.stderr).toContain(V8_STACK_FRAME);
+  });
+
+  it('leaves stderr free of debug noise and stack frames without --debug', () => {
+    const nonExistentPath = safePath.join(tempDir, 'never-created');
+
+    const result = executeCli(binPath, ['resources', 'validate', nonExistentPath]);
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('Path does not exist');
+    expect(result.stderr).not.toContain('[DEBUG]');
+    expect(result.stderr).not.toContain(V8_STACK_FRAME);
   });
 
   it('should handle non-existent directory path', () => {
@@ -130,7 +170,13 @@ describe('Error scenarios (system test)', () => {
     // output the guard never fired, so an assertion that could never have
     // matched sat green. A conditional whose condition is always false is not
     // a test; the run WITHOUT --debug is what makes this one able to fail.
-    expect(result.stderr).toContain('[DEBUG]');
+    //
+    // A bare `[DEBUG]` still could not fail. `bin.ts` writes one `[DEBUG] stdio:`
+    // line straight from `process.argv`, BEFORE Commander parses anything — so
+    // that substring was present even while the flag never reached the command
+    // and every logger.debug in the run was silent (measured: 1 line then, 5
+    // now). Assert on a line only the SUBCOMMAND's own logger can write.
+    expect(result.stderr).toContain('[DEBUG] Crawling ');
 
     const withoutDebug = spawnSync('node', [binPath, 'resources', 'scan', projectDir], {
       encoding: 'utf-8',

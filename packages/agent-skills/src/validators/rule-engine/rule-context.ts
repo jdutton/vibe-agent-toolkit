@@ -107,6 +107,13 @@ export interface RuleContext {
   /** Edge target is gitignored (only meaningful when it exists on disk). */
   gitignored: boolean;
   /**
+   * Edge target exists but could not be stat'ed (permissions, a race, or
+   * similar) — so nothing else about the target is knowable. Distinct from
+   * `!existsAtSource`: the file IS there, which is why it reports as unreadable
+   * rather than as a broken link.
+   */
+  unreadable: boolean;
+  /**
    * The edge is a **typed single-file slot** (e.g. a packaging `files:` source
    * entry) — a directory target is an error here, whereas a navigational edge
    * accepts a directory. #126's "typed single-file slot" ≡ this flag.
@@ -118,6 +125,16 @@ export interface RuleContext {
   droppedByDepth: boolean;
   /** Edge target was excluded by an excludeReferencesFromBundle pattern. */
   patternExcluded: boolean;
+  /**
+   * The edge ORIGINATES in a bundled file the walker does not route through
+   * (HTML — see `isRoutable` in `walk-link-graph.ts`), so its target was never
+   * enqueued.
+   *
+   * A source-side property, unlike every other field here: the target may be a
+   * perfectly ordinary file that simply had no markdown referrer. That is why
+   * it cannot be expressed as a `fileKind` on the target.
+   */
+  nonRoutableSource: boolean;
 }
 
 /**
@@ -140,10 +157,12 @@ export function makeRuleContext(overrides: Partial<RuleContext> = {}): RuleConte
     subject: 'edge',
     outsideProject: false,
     gitignored: false,
+    unreadable: false,
     typedSingleFileSlot: false,
     crossSkillDefinition: false,
     droppedByDepth: false,
     patternExcluded: false,
+    nonRoutableSource: false,
     ...overrides,
   };
 }

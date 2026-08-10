@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/cli",
-  "version": "0.1.42",
+  "version": "0.2.0-rc.1",
   "description": "Command-line interface for vibe-agent-toolkit",
   "type": "module",
   "bin": {
@@ -18,10 +18,12 @@
   "files": [
     "dist",
     "docs",
-    "README.md"
+    "README.md",
+    "!dist/pipeline-oracles",
+    "!dist/qa-snapshot"
   ],
   "scripts": {
-    "build": "tsx src/utils/validate-help-files.ts && tsc && tsx ../dev-tools/src/prepare-bin.ts",
+    "build": "tsx src/utils/validate-help-files.ts && tsx ../dev-tools/src/tsc-clean-build.ts && tsx ../dev-tools/src/prepare-bin.ts",
     "test:unit": "vitest run",
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",

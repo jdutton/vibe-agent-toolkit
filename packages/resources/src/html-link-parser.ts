@@ -106,18 +106,25 @@ function visitElement(
 }
 
 /**
- * Parse an HTML file into a `ParseResult`.
+ * Parse HTML source text into a `ParseResult`.
  *
- * @param filePath - Absolute path to the HTML file.
+ * This is the content-addressable half of `parseHtml`: a pure function of its
+ * two arguments with no filesystem access, no path handling and no I/O, so the
+ * same `(content, sizeBytes)` pair always yields the same result and callers may
+ * cache it keyed on the content.
+ *
+ * `sizeBytes` is a **parameter rather than something derived from `content`**
+ * because the two are not interchangeable. The on-disk byte count
+ * (`stat().size`) is what reaches packaged output; `Buffer.byteLength(content)`
+ * and `content.length` are computed from the *decoded* string and diverge from
+ * it on malformed UTF-8 (lone surrogates decode to U+FFFD, changing the byte
+ * count). Making it a parameter keeps the choice of authority with the caller
+ * that actually has the file — see `parseHtml`, which passes `stat().size`.
+ *
+ * @param content - The HTML source text.
+ * @param sizeBytes - Byte size to report; the caller owns where it comes from.
  */
-export async function parseHtml(filePath: string): Promise<ParseResult> {
-  const [content, stats] = await Promise.all([
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath is a user-provided path parameter
-    readFile(filePath, 'utf-8'),
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath is a user-provided path parameter
-    stat(filePath),
-  ]);
-
+export function parseHtmlContent(content: string, sizeBytes: number): ParseResult {
   const { document, parseErrors } = parseHtmlDocument(content);
 
   const links: ResourceLink[] = [];
@@ -132,9 +139,25 @@ export async function parseHtml(filePath: string): Promise<ParseResult> {
     links,
     headings: [],
     content,
-    sizeBytes: stats.size,
+    sizeBytes,
     estimatedTokenCount: Math.ceil(content.length / 4),
     ...(anchorList.length > 0 && { anchors: anchorList }),
     ...(parseErrors.length > 0 && { parseErrors }),
   };
+}
+
+/**
+ * Parse an HTML file into a `ParseResult`.
+ *
+ * @param filePath - Absolute path to the HTML file.
+ */
+export async function parseHtml(filePath: string): Promise<ParseResult> {
+  const [content, stats] = await Promise.all([
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath is a user-provided path parameter
+    readFile(filePath, 'utf-8'),
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath is a user-provided path parameter
+    stat(filePath),
+  ]);
+
+  return parseHtmlContent(content, stats.size);
 }

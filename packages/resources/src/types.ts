@@ -64,15 +64,6 @@ export {
   normalizeProjectPath,
 } from './types/resource-path-utils.js';
 
-// Resource parsing
-export {
-  detectResourceType,
-  parseJsonResource,
-  parseJsonSchemaResource,
-  parseMarkdownResource,
-  parseYamlResource,
-} from './types/resource-parser.js';
-
 // Project configuration
 export type {
   ValidationMode,

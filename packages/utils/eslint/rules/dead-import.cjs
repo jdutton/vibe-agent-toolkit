@@ -63,9 +63,16 @@ const REMOVABLE_MODULES = new Set([
 ]);
 
 const DEAD_UNSAFE_IMPORT = 'deadUnsafeImport';
+// States what the rule can actually observe, and no more. The earlier wording —
+// "this rule's autofix rewrote the last call that referenced it" — asserted a
+// CAUSE, and the leg cannot see causes: by the time a binding reads as dead the
+// rewrite that killed it is a pass in the past and left no trace naming which
+// import it drew on. On a file with two imports of the same module, one of them
+// dead since before the pack ever ran, that sentence was simply false about one
+// of the two. See `reportDeadUnsafeImports` for what the gate does prove.
 const DEAD_UNSAFE_IMPORT_MESSAGE =
-  "'{{local}}' is no longer used — this rule's autofix rewrote the last call that " +
-  "referenced it. Remove the '{{module}}' import.";
+  "'{{local}}' has no remaining references, and this file already calls the safe " +
+  "replacement this rule's autofix writes. Remove the '{{module}}' import.";
 
 /**
  * Does this declaration bring in anything the type checker alone can see?
@@ -128,12 +135,46 @@ function isDeadRemovableImport(sourceCode, node) {
  * reported. The removal therefore lands on a later pass, after the rewrite that
  * consumed the last reference — never speculatively alongside it.
  *
- * `migrated` gates the whole leg on the safe symbol being bound in the file, and
- * is what keeps this a REPAIR leg rather than a general unused-import rule. It
- * must be read from the SOURCE and never from a flag a `fix()` can flip: ESLint
- * runs `fix()` for a suppressed problem before the `eslint-disable` filter
- * discards it, so any mutable "did I add the import?" flag is already spent and
- * lying by the time this runs.
+ * ## The two-part gate, and the evidence it cannot get
+ *
+ * Both gates keep this a REPAIR leg rather than a general unused-import rule,
+ * and both must be read from the SOURCE, never from a flag a `fix()` can flip:
+ * ESLint runs `fix()` for a suppressed problem before the `eslint-disable`
+ * filter discards it, so any mutable "did I add the import?" flag is already
+ * spent and lying by the time this runs.
+ *
+ * - `safeBoundInSource` — the safe symbol is in scope at all.
+ * - `replacementCalled` — THIS rule's own replacement is actually CALLED in this
+ *   file (`safePath.join(…)`, `normalizedTmpdir()`, `toForwardSlash(…)`), which
+ *   is the text its fixer writes and nothing else does.
+ *
+ * The first alone was the whole gate once, and it let an unrelated coincidence
+ * arm the leg: `safePath` reaches scope for reasons that have nothing to do with
+ * a call this pack consumed, and any `node:path` import that happened to be dead
+ * already — dead before the pack ever ran, for somebody else's reason — was then
+ * deleted under a message claiming this fixer had orphaned it. That is the
+ * general unused-import rule the module docstring above declines to be, reached
+ * by accident. The second gate closes it: no call to this rule's replacement
+ * means this rule rewrote nothing here, whatever else is in scope.
+ *
+ * It does NOT get down to the individual declaration, and it cannot. Per-import
+ * evidence has to name WHICH import a consumed reference belonged to, and the
+ * only pass that knows is the one doing the rewrite — where every reference is
+ * still live and nothing is dead to report. Removing speculatively in that pass
+ * instead is the trap the rest of this pack is built around: a suppressed call
+ * report still runs its `fix()`, so the removal lands while the call it was
+ * paired with survives, and the file is left with a dangling reference (146 of
+ * them, measured, in the defect this file exists to prevent). Latching state
+ * across passes to carry the answer forward is the rejected `WeakMap` approach
+ * for the same reason, one layer worse. So a file holding two imports of one
+ * module, one of them dead all along, still gets both removed and one true
+ * message plus one that merely describes the file rather than the history. The
+ * message is worded to stay true of both; the residual is a redundant deletion,
+ * never a broken one.
+ *
+ * Being over-strict here is cheap by construction: a gate that declines leaves
+ * an unused import, which is a lint finding a human reads. Only firing wrongly
+ * costs anything, and only the CALL rewrite can break a file.
  *
  * Its own report, with its own `fix`, deliberately — so the deletion appears in
  * lint output and can be suppressed at the import line, rather than a rewrite
@@ -161,10 +202,19 @@ function isDeadRemovableImport(sourceCode, node) {
  * @param {object} context - ESLint rule context.
  * @param {object} sourceCode - ESLint `SourceCode` for the file being linted.
  * @param {object[]} importNodes - Unsafe-module `ImportDeclaration`s seen this pass.
- * @param {boolean} migrated - Was the safe symbol already bound in the SOURCE?
+ * @param {boolean} safeBoundInSource - Was the safe symbol already bound in the SOURCE?
+ * @param {boolean} replacementCalled - Does the SOURCE call this rule's own safe
+ *   replacement? Both are required, and both are the caller's to compute from
+ *   source — see the gate discussion above for why neither may be defaulted.
  */
-function reportDeadUnsafeImports(context, sourceCode, importNodes, migrated) {
-  if (!migrated) {
+function reportDeadUnsafeImports(
+  context,
+  sourceCode,
+  importNodes,
+  safeBoundInSource,
+  replacementCalled,
+) {
+  if (!safeBoundInSource || !replacementCalled) {
     return;
   }
   for (const node of importNodes) {

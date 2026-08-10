@@ -92,7 +92,7 @@
 
 import { type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { detectPackagedAgentInstructionFiles, materializeIssue } from '@vibe-agent-toolkit/agent-skills';
-import { getClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
+import { getClaudeUserPaths, type GitTrackerSource } from '@vibe-agent-toolkit/claude-marketplace';
 import {
   gitFindRoot,
   GitTracker,
@@ -122,6 +122,74 @@ export async function getOrCreateGitTracker(gitRoot: string): Promise<GitTracker
   gitTrackerCache.set(gitRoot, tracker);
   return tracker;
 }
+
+/**
+ * The {@link GitTrackerSource} both CLI inventory lanes hand to the extractors,
+ * backed by the cache above.
+ *
+ * `walkLinkGraph` asks "is this link target gitignored?" once per distinct
+ * target, and with no tracker each question is a `git check-ignore` subprocess.
+ * Deep-frame stack attribution of a `vat audit` run over a 1,484-document
+ * adopter monorepo put **786 of 786** such spawns in this one lane — the
+ * inventory extractors were the only `walkLinkGraph` call site passing no
+ * tracker — at 9,242 ms of a 16,295 ms command. One `GitTracker.initialize()`
+ * plus the same 785 `isIgnoredByActiveSet` lookups cost 147 ms + 1 ms and
+ * disagreed with the subprocess on nothing.
+ *
+ * ## Why it takes a project root and answers with a GIT root
+ *
+ * The extractors call this with each skill's own `projectRoot`
+ * (`findProjectRoot(dirname(SKILL.md)) ?? dirname(SKILL.md)`), which is a VAT
+ * project root — a config file, or a `.git` — and is therefore usually a
+ * SUBDIRECTORY of the repository, and different for every skill in a monorepo.
+ * A tracker is only useful shared, so the root is normalized to its repository
+ * before the cache is consulted: N skills in one repository then pay for one
+ * `git ls-files`, and the same trackers `resolveScanContext` built for the scan
+ * are reused rather than rebuilt.
+ *
+ * ## Both failure modes answer `undefined`, and neither costs anything
+ *
+ * - **Not a repository** (`gitFindRoot` → `null`): no tracker. Nothing is lost —
+ *   `isGitIgnored` settles "is there a repository here?" from the filesystem and
+ *   returns `false` with zero spawns, so the un-tracked path is already cheap.
+ * - **The tracker could not be built** (`git ls-files` unavailable, `.git`
+ *   unreadable): swallowed to `undefined`, so the walk degrades to the
+ *   subprocess route it used before rather than failing an inventory. The
+ *   extractor's own wrapper also swallows a throwing source, but this is where
+ *   the contract is kept, not there.
+ *
+ * ## Staleness
+ *
+ * A cached tracker snapshots `git ls-files` at `initialize()`, so a file created
+ * after it exists on disk but reads as ignored. Safe for the shipped CLI: each
+ * invocation is a fresh process, and `vat audit` / `vat inventory` only read.
+ *
+ * ⚠️ **The in-process bound is NOT enforced — this paragraph used to claim it
+ * was, and that was wrong twice over.** `resetAuditCaches()` is called from
+ * `auditCommand`, **not** from `buildAuditReport` — and `buildAuditReport` is the
+ * entry point in-process callers actually use (it is marked
+ * `@internal Exported for integration testing only`). Worse, `vat inventory`,
+ * which the old text named as protected, has **no reset path at all**:
+ * `routeInventory` never calls `resetAuditCaches()`.
+ *
+ * So an in-process caller doing *inventory → write files → inventory*, or a
+ * vitest worker sharing this module registry across tests, CAN inherit a prior
+ * snapshot and see a newly-written file reported as gitignored. This is a
+ * documented bound, not a guarantee: any such caller must invoke
+ * {@link resetGitTrackerCache} itself between phases, exactly as this module's
+ * own tests do in `beforeEach`.
+ */
+export const gitTrackerForProjectRoot: GitTrackerSource = async (projectRoot) => {
+  const gitRoot = gitFindRoot(projectRoot);
+  if (gitRoot === null) {
+    return undefined;
+  }
+  try {
+    return await getOrCreateGitTracker(gitRoot);
+  } catch {
+    return undefined;
+  }
+};
 
 /**
  * Cache of (canonical SKILL.md path → verdict).

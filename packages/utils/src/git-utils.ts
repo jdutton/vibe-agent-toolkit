@@ -9,11 +9,23 @@ import { dirname, parse } from 'node:path';
 
 import which from 'which';
 
+import { lookupGitRoot, rememberGitRoot } from './git-root-cache.js';
 import { safePath } from './path-utils.js';
 
 
 /**
  * Find the git repository root by walking up from the given directory.
+ *
+ * Memoized module-wide via `git-root-cache.ts`: the walk seeds an entry for
+ * every directory it climbs, not just for `startDir`, because the redundancy
+ * this removes is overlapping walks from *different* start directories rather
+ * than repeated calls with the same one. A `null` answer is memoized too — that
+ * is the case that costs a walk to the filesystem root.
+ *
+ * The memo therefore does NOT see a `.git` directory created or removed after
+ * the fact. Anything that mutates repositories in-process (tests; a host that
+ * re-enters a command) must call `resetProjectRootCaches()`, which clears this
+ * cache along with the project-root one.
  *
  * @param startDir - Directory to start searching from
  * @returns Path to git root, or null if not in a git repository
@@ -21,17 +33,22 @@ import { safePath } from './path-utils.js';
 export function gitFindRoot(startDir: string): string | null {
   let currentDir = safePath.resolve(startDir);
   const root = parse(currentDir).root;
+  const climbed: string[] = [];
 
   while (currentDir !== root) {
+    const memoized = lookupGitRoot(currentDir);
+    if (memoized !== undefined) return rememberGitRoot(climbed, memoized);
+    climbed.push(currentDir);
+
     const gitDir = safePath.join(currentDir, '.git');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- walking up from validated startDir
     if (existsSync(gitDir)) {
-      return currentDir;
+      return rememberGitRoot(climbed, currentDir);
     }
     currentDir = dirname(currentDir);
   }
 
-  return null;
+  return rememberGitRoot(climbed, null);
 }
 
 /**
@@ -61,7 +78,11 @@ export function gitLsFiles(options: {
     // Resolve git path using which for security (avoids PATH manipulation)
     const gitPath = which.sync('git');
 
-    const args = ['ls-files'];
+    // -z emits NUL-separated, UNQUOTED paths regardless of byte content. Without
+    // it, git quotes any path containing non-ASCII bytes (wraps it in double
+    // quotes with octal escapes, e.g. `café.md` -> `"caf\303\251.md"`), which is
+    // unusable to any exact-string lookup against the real filename.
+    const args = ['ls-files', '-z'];
 
     // Include untracked files that aren't gitignored
     if (options.includeUntracked) {
@@ -89,11 +110,10 @@ export function gitLsFiles(options: {
       return null;
     }
 
-    // Parse output into array of file paths
-    return result.stdout
-      .split('\n')
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0);
+    // Parse output into array of file paths. NUL-separated (from -z above), so
+    // no path can ever need trimming or quote-unescaping — a trailing NUL just
+    // produces one empty string at the end, which the filter below drops.
+    return result.stdout.split('\0').filter((line) => line.length > 0);
   } catch {
     // Git not available or other error
     return null;

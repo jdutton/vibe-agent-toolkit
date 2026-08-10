@@ -26,10 +26,13 @@ import { resolveTestInputDirs } from '../../src/test-input.js';
 let tempDir: string;
 
 /** Build a skill dir; optionally give it the conventional suite and/or decoy dirs. */
-function makeSkillDir(opts: { suite?: boolean; rootEvalsNoSuite?: boolean; nestedEvals?: boolean }): string {
-  const skillDir = safePath.join(tempDir, 'skills', 'demo');
+function makeSkillDir(
+  opts: { suite?: boolean; rootEvalsNoSuite?: boolean; nestedEvals?: boolean },
+  name = 'demo',
+): string {
+  const skillDir = safePath.join(tempDir, 'skills', name);
   mkdirSyncReal(skillDir, { recursive: true });
-  writeTestFile(safePath.join(skillDir, 'SKILL.md'), '---\nname: demo\ndescription: d\n---\n\n# demo\n');
+  writeTestFile(safePath.join(skillDir, 'SKILL.md'), `---\nname: ${name}\ndescription: d\n---\n\n# ${name}\n`);
 
   if (opts.suite === true) {
     mkdirSyncReal(safePath.join(skillDir, 'evals'), { recursive: true });
@@ -94,5 +97,90 @@ describe('implicit eval-suite convention (integration)', () => {
     // An explicit declaration is still the instruction, suite file present or not.
     expect(resolveTestInputDirs({ test: { evals: 'suites/demo/evals.json' } }, skillDir, []))
       .toEqual([safePath.join(skillDir, 'suites', 'demo')]);
+  });
+});
+
+/** The conventional suite's content — the file whose EXISTENCE is the whole signal. */
+const SUITE_JSON = '{"skill_name":"demo","evals":[]}';
+
+/** Give an existing skill dir the conventional suite, after the fact. */
+function addConventionalSuite(skillDir: string): void {
+  mkdirSyncReal(safePath.join(skillDir, 'evals'), { recursive: true });
+  writeTestFile(safePath.join(skillDir, 'evals', 'evals.json'), SUITE_JSON);
+}
+
+/**
+ * The conventional-suite probe is the module's ONE filesystem touch, and
+ * `resolveTestInputDirs` reaches it once for the subject and once per entry in
+ * `projectSkills`. Every skill in a package that keeps its skills in one
+ * directory therefore names the SAME directory, so a single call asked the
+ * filesystem the identical question N+1 times (measured on `vat audit .`: 14
+ * probes over 2 distinct paths).
+ *
+ * These cases pin "at most one probe per directory per call" — and, just as
+ * load-bearing, "the answer does not outlive the call".
+ *
+ * HOW THE COUNT IS OBSERVED: it cannot be counted directly. test-input.ts
+ * imports `existsSync` as a live ESM binding, so patching `node:fs` from a test
+ * is invisible (measured here: 0 calls traced through both the default export
+ * and the CJS module object). The count is made observable instead by changing
+ * the ANSWER while the call is in flight — reading element 1 of the
+ * `projectSkills` array creates the suite file. A second probe of the same
+ * directory would see the new file and return a dir; a deduplicated one keeps
+ * the answer it already has.
+ */
+describe('conventional-suite probing (integration)', () => {
+  afterEach(() => {
+    cleanupTestTempDir(tempDir);
+  });
+
+  it('asks the filesystem about one skill dir at most ONCE per call', () => {
+    tempDir = createTestTempDir('vat-implicit-suite-dedupe-');
+    const skillDir = makeSkillDir({});
+
+    const projectSkills = [
+      { skillDir, config: {} },
+      { skillDir, config: {} },
+    ];
+    // Reading index 1 — which only happens if the loop probes a SECOND time for a
+    // directory it has already asked about — creates the suite the first probe
+    // did not find.
+    Object.defineProperty(projectSkills, 1, {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        addConventionalSuite(skillDir);
+        return { skillDir, config: {} };
+      },
+    });
+
+    // The suite did not exist when the call began, so the call must not report it.
+    expect(resolveTestInputDirs({}, skillDir, projectSkills)).toEqual([]);
+  });
+
+  it('still answers per DIRECTORY — a different skill dir gets its own probe', () => {
+    tempDir = createTestTempDir('vat-implicit-suite-perdir-');
+    const bare = makeSkillDir({}, 'bare');
+    const withSuite = makeSkillDir({ suite: true }, 'with-suite');
+
+    // The fixture can tell the two answers apart: one dir has the suite, one does
+    // not. A memo keyed on anything coarser than the directory would hand the
+    // second skill the first skill's `false` and ship its answer key.
+    expect(resolveTestInputDirs({}, bare, [
+      { skillDir: bare, config: {} },
+      { skillDir: withSuite, config: {} },
+    ])).toEqual([safePath.join(withSuite, 'evals')]);
+  });
+
+  it('re-probes on a LATER call — the answer dies with the call', () => {
+    tempDir = createTestTempDir('vat-implicit-suite-scope-');
+    const skillDir = makeSkillDir({});
+
+    expect(resolveTestInputDirs({}, skillDir, [])).toEqual([]);
+
+    // A module-level cache would still be answering `false` here — in a
+    // long-lived process, and across every later test in the same worker.
+    addConventionalSuite(skillDir);
+    expect(resolveTestInputDirs({}, skillDir, [])).toEqual([safePath.join(skillDir, 'evals')]);
   });
 });

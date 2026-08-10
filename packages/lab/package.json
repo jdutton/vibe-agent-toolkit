@@ -1,0 +1,46 @@
+{
+  "name": "@vibe-agent-toolkit/lab",
+  "version": "0.2.0-rc.1",
+  "description": "Quality lab: generate and compare analyzable reports across projects, project versions, and vat versions",
+  "type": "module",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "docs/"
+  ],
+  "scripts": {
+    "build": "tsx ../dev-tools/src/tsc-clean-build.ts",
+    "test:unit": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "keywords": [
+    "vat",
+    "lab",
+    "benchmarking",
+    "profiling"
+  ],
+  "dependencies": {
+    "@vibe-agent-toolkit/utils": "workspace:*",
+    "commander": "^12.1.0",
+    "which": "^5.0.0",
+    "zod": "^3.23.8"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@types/which": "^3.0.4"
+  },
+  "bin": {
+    "vat-lab": "./dist/bin/vat-lab.js"
+  }
+}

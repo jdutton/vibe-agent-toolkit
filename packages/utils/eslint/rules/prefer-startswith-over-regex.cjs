@@ -93,6 +93,29 @@ function literalEquivalent(patternBody) {
 }
 
 /**
+ * Count the run of consecutive `\\` characters immediately preceding `index`
+ * in `text`.
+ *
+ * Used to decide whether a trailing `$` is an anchor or an escaped literal
+ * dollar sign: an EVEN run (including zero) means the `$` itself is
+ * unescaped — a genuine end-of-string anchor. An ODD run means the last of
+ * those backslashes escapes the `$`, making it a literal character. Looking
+ * only at the last two characters of the pattern (`\\$`) gets this wrong for
+ * two or more consecutive backslashes: `/\\\\$/` (an escaped backslash `\\\\`
+ * followed by an unescaped `$` anchor) also ends in the two characters `\\$`,
+ * but the `$` there IS an anchor.
+ */
+function countTrailingBackslashes(text, index) {
+  let count = 0;
+  let position = index - 1;
+  while (position >= 0 && text[position] === '\\') {
+    count += 1;
+    position -= 1;
+  }
+  return count;
+}
+
+/**
  * Find the variable `identifier` resolves to, searching outward from its scope.
  */
 function findVariable(sourceCode, identifier) {
@@ -245,7 +268,7 @@ module.exports = {
           }
         }
 
-        if (pattern.endsWith('$') && !pattern.endsWith(String.raw`\$`)) {
+        if (pattern.endsWith('$') && countTrailingBackslashes(pattern, pattern.length - 1) % 2 === 0) {
           const literal = literalEquivalent(pattern.slice(0, -1));
           if (literal !== null && literal !== '') {
             report('preferEndsWith', literal);

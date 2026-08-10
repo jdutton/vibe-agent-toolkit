@@ -8,7 +8,11 @@ import GithubSlugger from 'github-slugger';
 import type { MarkdownResource, MarkdownFragment } from './types.js';
 
 /**
- * Parse markdown file content into a MarkdownResource
+ * Convert markdown file content into a MarkdownResource
+ *
+ * Takes raw markdown *content* (not a path) and produces the `MarkdownResource`
+ * consumed by the type/codegen compiler. Distinct from `@vibe-agent-toolkit/resources`'
+ * `parseMarkdown`, which takes a file path and produces a link `ParseResult`.
  *
  * @param content - Raw markdown file content
  * @returns Parsed resource with frontmatter and fragments
@@ -27,13 +31,13 @@ import type { MarkdownResource, MarkdownFragment } from './types.js';
  * More content
  * `;
  *
- * const resource = parseMarkdown(content);
+ * const resource = toMarkdownResource(content);
  * console.log(resource.frontmatter.title); // "My Document"
  * console.log(resource.fragments.length); // 2
  * console.log(resource.fragments[0].slug); // "first-section"
  * ```
  */
-export function parseMarkdown(content: string): MarkdownResource {
+export function toMarkdownResource(content: string): MarkdownResource {
   // Parse frontmatter (openFrontmatter preserves comments and supports round-trip).
   const editor = openFrontmatter(content);
   const frontmatter = (editor.get([]) ?? {}) as Record<string, unknown>;

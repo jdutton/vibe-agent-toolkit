@@ -30,8 +30,15 @@
 export {
   ResourceRegistry,
   DEFAULT_RESOURCE_INCLUDE,
+  // Exported so a caller can catch it BY TYPE. `addResource` (singular) signals
+  // a first-added-wins collision only by throwing, and the one consumer that
+  // handles it was sniffing `error.message.startsWith('Duplicate resource ID')`
+  // — a check that silently stops matching the day the message is reworded.
+  DuplicateResourceIdError,
   generateIdFromPath,
   type CrawlOptions,
+  type DuplicateIdCollision,
+  type UnreadableResource,
   type ResourceRegistryOptions,
   type RegistryStats,
   type CollectionStats,
@@ -89,13 +96,59 @@ export {
 // Export parser interface for advanced use cases
 export { parseMarkdown, classifyLink, isLocalFileLink, type ParseResult } from './link-parser.js';
 
+// Parse identity: which parser a path routes to, and the key a parse result is
+// filed under. Path-independent by construction — see content-key.ts.
+export {
+  computeContentKey,
+  parserKindForPath,
+  readContentWithKey,
+  type KeyedContent,
+  type ParserKind,
+} from './content-key.js';
+
+// Parse cache: the disk-backed store `ResourceRegistry` files parse facts in,
+// and where it puts them. Exported for two callers only — an operator surface
+// that reclaims the space (`vat cache clear` needs `clear()` and a path to name
+// in its output), and a test or embedder that wants the registry pointed at a
+// private directory via `ResourceRegistryOptions.parseCache`.
+//
+// `dehydrate` / `rehydrate` / `ParseFacts` are
+// deliberately NOT re-exported here: they are the on-disk serialization, the
+// same category as the link-parser internals this file already withholds (see
+// the note further down). Nothing outside the cache should be able to mint or
+// read an entry payload — a well-formed entry filed under the wrong key is the
+// one failure mode fail-soft IO handling cannot catch.
+//
+// `parseFileCached` IS exported, and is the one every caller outside
+// `ResourceRegistry` should reach for: `parseMarkdown`/`parseHtml` read the file
+// and hand the bytes straight to a parser, so they bypass the cache entirely.
+export {
+  ParseCache,
+  defaultParseCache,
+  parseCacheDirectory,
+  parseFileCached,
+  parseKeyed,
+  vatCacheNamespace,
+  vatCacheNamespaceRoot,
+  vatCacheRoot,
+  type ParseCacheOptions,
+  type ParseCacheStats,
+} from './parse-cache.js';
+
 export { parseHtml } from './html-link-parser.js';
 // HtmlParseError is Zod-sourced (single source of truth) — see schemas/resource-metadata.ts.
 export type { HtmlParseError } from './schemas/resource-metadata.js';
 export { rewriteHtmlLinks, type UnappliedRewrite } from './html-transform.js';
 
-// Export frontmatter validation
-export { validateFrontmatter } from './frontmatter-validator.js';
+// Export frontmatter validation. `compileFrontmatterSchema` +
+// `validateCompiledFrontmatter` is the form to use when validating many
+// documents against one schema — `validateFrontmatter` compiles per call.
+export {
+  compileFrontmatterSchema,
+  validateCompiledFrontmatter,
+  validateFrontmatter,
+  type CompiledFrontmatterSchema,
+} from './frontmatter-validator.js';
 
 // Public Ajv factory for adopters consuming VAT-generated schemas. Registers
 // URI-family formats (uri, uri-reference, iri, iri-reference) so schemas

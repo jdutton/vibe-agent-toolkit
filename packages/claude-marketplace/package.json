@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/claude-marketplace",
-  "version": "0.1.42",
+  "version": "0.2.0-rc.1",
   "description": "Claude plugin marketplace tools: compatibility analysis, provenance tracking, enterprise config",
   "type": "module",
   "main": "./dist/index.js",
@@ -16,7 +16,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsx ../dev-tools/src/tsc-clean-build.ts --build",
     "build:watch": "tsc --build --watch",
     "clean": "rm -rf dist *.tsbuildinfo",
     "test:unit": "vitest run",

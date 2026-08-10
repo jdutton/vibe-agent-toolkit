@@ -1,25 +1,24 @@
 # VAT Plugin Skills — Development Guide
 
-This directory ships the `vibe-agent-toolkit` Claude Code plugin. When editing
-or creating skills here, follow the boundaries and rules below. The goal is
-that each sub-skill has a single, sharp trigger and that they collectively
-cover VAT's user-facing surface without overlap.
+This directory ships the `vibe-agent-toolkit` Claude Code plugin. Follow the
+boundaries below so each sub-skill keeps a single, sharp trigger and the set
+covers VAT's user-facing surface without overlap.
 
 ## Skill inventory and boundaries
 
 | Skill | Owns | Does NOT own | CLI |
 |---|---|---|---|
-| `vibe-agent-toolkit` (router, `SKILL.md`) | What VAT is, when to use it, routing to sub-skills | Any deep content — keep ≤150 lines, prose-only references to sub-skills | — |
-| `vat-adoption-and-configuration` | Project setup, `vibe-agent-toolkit.config.yaml` orientation, repo structure, vibe-validate integration, npm postinstall hook | Per-section config depth (each owning skill covers its own slice) | — |
-| `vat-skill-authoring` | `SKILL.md` files: frontmatter, body structure, references, packagingOptions (linkFollowDepth, excludeReferencesFromBundle), validation overrides | TypeScript agent functions, plugin packaging, RAG | — |
-| `vat-agent-authoring` | TypeScript portable agents: archetypes (Pure Function Tool, One-Shot LLM Analyzer, Conversational Assistant, External Event Integrator), `agent.yaml`, result envelopes, runtime adapters (Vercel/LangChain/OpenAI/Claude Agent SDK) | SKILL.md authoring, plugin/marketplace config | — |
-| `vat-audit` | `vat audit` on plugins/marketplaces/skills/settings; `--compat`, `--exclude`, `--user`, CI usage | What to fix (defer to other skills) | `vat audit` |
-| `vat-knowledge-resources` | Markdown collections, `vibe-agent-toolkit.config.yaml` `resources` section, frontmatter schemas, validation modes | RAG indexing (separate skill) | `vat resources validate` |
-| `vat-skill-distribution` | `vat validate` (source: resources + skills), `vat build`, `vat verify` (built artifacts: + marketplace + consistency), plugin/marketplace config, npm publishing, postinstall hooks, `vat.skills` field | Authoring the SKILL.md itself | `vat validate`, `vat build`, `vat verify` |
-| `vat-rag` | `vat rag index`, `vat rag query`, native embedding/vector store support, extension points, "contributions welcome" callout | Markdown collection authoring (knowledge-resources owns) | `vat rag` |
-| `vat-skill-review` | Pre-publication review rubric, validation-code reference, Anthropic best-practices integration, `vat skill review` command | The validators themselves (live in code) | `vat skill review` |
+| `vibe-agent-toolkit` (router, `SKILL.md`) | What VAT is, when to use it, routing to sub-skills | Any deep content (see "Router skill" rules below) | — |
+| `vat-adoption-and-configuration` | Project setup, `vibe-agent-toolkit.config.yaml` orientation, repo structure, vibe-validate integration, npm postinstall | Per-section config depth (see below) | — |
+| `vat-skill-authoring` | `SKILL.md` files: frontmatter, body structure, references, packagingOptions, validation overrides | TypeScript agent functions, plugin packaging, RAG | — |
+| `vat-agent-authoring` | TypeScript portable agents: archetypes, `agent.yaml`, result envelopes, runtime adapters | SKILL.md authoring, plugin/marketplace config | — |
+| `vat-audit` | `vat audit` on plugins/marketplaces/skills/settings: `--compat`, `--exclude`, `--user`, CI usage | What to fix (defer elsewhere) | `vat audit` |
+| `vat-knowledge-resources` | Markdown collections, `resources:` config section, frontmatter schemas, validation modes | RAG indexing (separate skill) | `vat resources validate` |
+| `vat-skill-distribution` | `vat validate`, `vat build`, `vat verify`, plugin/marketplace config, npm publishing, `vat.skills` field | Authoring the SKILL.md itself | `vat validate`, `vat build`, `vat verify` |
+| `vat-rag` | `vat rag index`, `vat rag query`, native embedding/vector store support, extension points | Markdown collection authoring (knowledge-resources owns) | `vat rag` |
+| `vat-skill-review` | Pre-publication review rubric, validation-code reference, best-practices integration | The validators themselves (live in code) | `vat skill review` |
 | `vat-enterprise-org` | Anthropic Admin API: org users, cost/usage, workspace skills, `ANTHROPIC_ADMIN_API_KEY` | Per-user runtime auth | `vat claude org` |
-| `coherence-audit` | The METHOD for auditing a subsystem's internal consistency: the one-contract question, the failure-direction tell, bounding a class honestly, auditing the tests themselves, vendor-claim staleness | Any VAT-specific validation rule or CLI behavior — the method is deliberately generic, which is why the name drops the `vat-` prefix | — |
+| `coherence-audit` | Auditing a subsystem's internal consistency: one-contract question, failure-direction tell, bounding a class honestly, testing the tests, vendor-claim staleness | VAT-specific rules or CLI behavior (deliberately generic) | — |
 
 ## Cross-cutting: `vibe-agent-toolkit.config.yaml`
 
@@ -32,50 +31,44 @@ This file is multi-skill. Each section is owned by one skill:
 | `resources:` (collections, schemas, validation modes) | `vat-knowledge-resources` |
 | `claude:` (marketplaces, plugins, publish, owner) | `vat-skill-distribution` |
 
-When a skill needs to mention a section it doesn't own, link to the owning skill rather than re-explaining the section.
+When a skill mentions a section it doesn't own, link to the owning skill rather than re-explain it.
 
-## Naming rules (programmatic + advisory)
+## Naming rules
 
-- **Forbidden words in `name`**: `claude`, `anthropic`. Claude Code rejects skills containing these words unless they are official certified skills. Enforced by validator code `RESERVED_WORD_IN_NAME` (warning severity).
-- **Prefer CLI-name alignment**: when a skill primarily covers a CLI command, use the same root word (`vat-audit` → `vat audit`, `vat-skill-review` → `vat skill review`). Discovery hook for users running `--help`.
-- **Kebab-case**, lowercase letters, digits, hyphens. Matches `^[a-z][a-z0-9-]*$`.
-- **No vague nouns**: `vat-resources` was renamed to `vat-knowledge-resources` because "resources" alone could mean anything. Each name should carry its subject.
-- **No platform names** unless certified: see forbidden words rule above. Say "enterprise" not "claude" / "anthropic".
+- **Forbidden words in `name`**: `claude`, `anthropic` (say "enterprise" instead). Claude Code rejects non-certified skills using them; `RESERVED_WORD_IN_NAME` (warning) enforces it.
+- **Prefer CLI-name alignment**: reuse the CLI command's root word (`vat-audit` → `vat audit`) for `--help` discovery.
+- **Kebab-case**: lowercase letters, digits, hyphens — `^[a-z][a-z0-9-]*$`.
+- **No vague nouns**: name should carry its subject (`vat-resources` → `vat-knowledge-resources`).
 
 ## Description quality
 
-A description must let Claude Code trigger correctly. Required elements:
+Required elements for reliable triggering:
 - **Action verb or "Use when..."** opener
-- **Subject** (what kind of work fires this skill)
-- **2-4 trigger keywords** (the words a user is likely to use)
+- **Subject** — what work fires this skill
+- **2-4 trigger keywords** a user is likely to type
 - **What it covers** (one short clause)
-- ≤250 chars total (Claude Code listing truncates at 250)
+- ≤250 chars total (Claude Code truncates at 250)
 
-Example (`vat-audit`):
-> Use when running `vat audit` to validate Claude plugins, marketplaces, or skills. Covers the audit command, `--compat` for surface compatibility, `--exclude` for noise filtering, and interpreting findings.
-
-Triggers on: "audit my plugin", "validate plugin compatibility", "what does this audit warning mean".
+Example (`vat-audit`): "Use when running `vat audit` to validate Claude plugins or skills. Covers `--compat`, `--exclude`, and interpreting findings."
 
 ## Router skill (`SKILL.md` / `vibe-agent-toolkit`) — special rules
 
 The router exists for **discovery + routing**, not content. Strict rules:
 
 1. **≤150 lines total**
-2. **Prose references to sub-skills** — never markdown links: write `vibe-agent-toolkit:vat-audit`, not `[vat-audit](./vat-audit.md)`. Markdown links cause VAT's packager to transclude the sibling, bloating the bundle.
+2. **Prose references to sub-skills**, never markdown links: `vibe-agent-toolkit:vat-audit`, not `[vat-audit](./vat-audit.md)` — markdown links make the packager transclude the sibling, bloating the bundle.
 3. **No code examples beyond a 5-line CLI overview** — depth lives in sub-skills
-4. **Description triggers entry questions** ("what is VAT", "how do I get started"), not specific tasks
+4. **Description triggers entry questions** ("what is VAT?"), not specific tasks
 
-Verify after edits: `vat skill review packages/vat-development-agents/resources/skills` should report `fileCount: 1` (no transclusion).
+Verify: `vat skill review packages/vat-development-agents/resources/skills` should report `fileCount: 1` (no transclusion).
 
 ## Single-responsibility — when to split
 
-Split a skill when its description must list two unrelated subjects to trigger correctly. Example: the original `vat-authoring` covered both SKILL.md files and TypeScript agent functions — two distinct mental models, hence the split into `vat-skill-authoring` and `vat-agent-authoring`.
+Split a skill when its description must list two unrelated subjects to trigger correctly — e.g. `vat-authoring` (SKILL.md files + TypeScript agents) split into `vat-skill-authoring` and `vat-agent-authoring`.
 
 ## Contributor vs user content
 
-This plugin is for **users of VAT**. Contributor-facing material (debugging VAT internals, designing install architecture, working on the codebase) belongs in `docs/contributing/`, not in a SKILL.md here. The root CLAUDE.md routes contributors to those docs.
-
-If a skill description says "use when developing/contributing to VAT", it doesn't belong in this directory.
+This plugin is for **users of VAT**, not contributors — debugging internals, install architecture, and codebase work belong in `docs/contributing/`. A description like "use when developing/contributing to VAT" doesn't belong here.
 
 ## This area moves fast — verify current standards
 
@@ -104,7 +97,7 @@ When `vat-skill-review` lists a checklist item that is currently a `[ ]` manual 
 Before committing a skill change:
 
 ```bash
-# Review the specific skill you touched
+# Review the touched skill
 bun run vat skill review packages/vat-development-agents/resources/skills/<skill>.md
 
 # Audit the whole plugin
@@ -118,6 +111,6 @@ Watch for:
 - `RESERVED_WORD_IN_NAME` (warning) — naming policy violation
 - `SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT` — trim to ≤250 chars
 - `SKILL_DESCRIPTION_FILLER_OPENER` — start with action verb or "Use when"
-- `SKILL_NAME_MISMATCHES_DIR` (should not fire — generic-container exemption applies here)
+- `SKILL_NAME_MISMATCHES_DIR` — shouldn't fire here (generic-container exemption applies)
 - `LINK_TO_NAVIGATION_FILE` — link to specific files, not READMEs
-- `LINK_TARGETS_DIRECTORY` — point a `files:` source (typed single-file slot) at a file, not a directory; navigational directory links are valid
+- `LINK_TARGETS_DIRECTORY` — `files:` sources must be a file, not a directory (other directory links are fine)

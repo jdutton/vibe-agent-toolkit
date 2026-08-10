@@ -10,7 +10,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
-import { parseHtml } from '@vibe-agent-toolkit/resources';
+import { parseFileCached } from '@vibe-agent-toolkit/resources';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { normalizeRelPath } from './files-config.js';
@@ -91,12 +91,12 @@ function extractLocalLinks(content: string): string[] {
  * Extract local file hrefs from a content file — markdown or HTML.
  *
  * For markdown: regex-matches `[text](href)` links, skipping code blocks.
- * For HTML/HTM: uses `parseHtml` (parse5-based) and returns `local_file` hrefs only.
+ * For HTML/HTM: uses the parse5-based HTML parser and returns `local_file` hrefs only.
  * Fragments are stripped from all returned hrefs.
  */
 async function extractLocalHrefs(filePath: string): Promise<string[]> {
   if (filePath.endsWith('.html') || filePath.endsWith('.htm')) {
-    const result = await parseHtml(filePath);
+    const result = await parseFileCached(filePath, 'html');
     return result.links
       .filter(link => link.type === 'local_file')
       .map(link => {

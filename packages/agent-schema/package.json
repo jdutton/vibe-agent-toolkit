@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/agent-schema",
-  "version": "0.1.42",
+  "version": "0.2.0-rc.1",
   "description": "JSON Schema definitions and TypeScript types for VAT agent manifest format",
   "type": "module",
   "main": "./dist/index.js",
@@ -18,7 +18,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc && bun run generate:schemas",
+    "build": "tsx ../dev-tools/src/tsc-clean-build.ts && bun run generate:schemas",
     "generate:schemas": "tsx scripts/generate-json-schemas.ts",
     "test:unit": "vitest run",
     "test:watch": "vitest",

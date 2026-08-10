@@ -59,6 +59,43 @@ describe.skipIf(!!process.env.CI)('ExternalLinkValidator (integration)', () => {
 });
 ```
 
+## Test Fixtures
+
+Large test data for system/integration tests should be stored as compressed archives to avoid
+SonarQube analyzing third-party code:
+
+**Pattern**: `packages/X/test/fixtures/*.zip` (committed)
+**Extraction**: Use cross-platform libraries (e.g., `adm-zip` npm package) in test setup
+**Location**: Extract to temp directories during test execution (gitignored)
+
+**Why compressed archives?**
+- SonarQube treats raw third-party code as production code
+- Users don't see walls of foreign code in the repo
+- Smaller repo size (~65% compression for plugins snapshot)
+- Single binary file vs 1,000+ text files
+
+**Why ZIP instead of TAR.GZ?**
+- ZIP extraction is significantly faster on Windows (3-5s vs 100+ seconds)
+- `adm-zip` is pure JavaScript and works consistently across platforms
+- Similar compression ratio to TAR.GZ (~7% larger, acceptable trade-off)
+
+**Example**: `packages/cli/test/fixtures/claude-plugins-snapshot.zip`
+- Contains snapshot of real ~/.claude/plugins directory
+- Extracted by `test-fixture-loader.ts` during test setup using `adm-zip`
+- Tests run against extracted version in temp directory
+
+For small test data (<10 files), raw files in `test/fixtures/` are fine.
+
+**Never use gitignored directory names (`dist/`, `node_modules/`, `coverage/`, `build/`) in
+committed fixtures.** Files committed under these names silently disappear in CI (clean clone)
+while appearing to work locally — see the guard in root [`CLAUDE.md`](../CLAUDE.md#test-fixtures-convention).
+Store committed artifact sources under a non-gitignored name (e.g., `build-artifacts/`) and have
+test `beforeAll` copy them to `tempDir/dist/`, simulating a real build step.
+
+**Example**: `packages/agent-skills/test/fixtures/skill-files/build-artifacts/bin/cli.mjs` is the
+committed source. The integration test copies it to `tempDir/dist/bin/cli.mjs` during setup, and
+the `files` config references `source: 'dist/bin/cli.mjs'`.
+
 ## Vitest Pool Compatibility
 
 Unit tests run with **threads pool on Mac/Unix** (shared module cache, ~20% faster) and **forks pool on Windows** (required for native module isolation). This affects what you can do in tests.

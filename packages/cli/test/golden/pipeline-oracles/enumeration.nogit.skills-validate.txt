@@ -1,0 +1,86 @@
+# enumeration-snapshot
+lane: skills-validate
+corpus: trap/non-git
+route: walk
+gitAvailable: false
+enumeratedCount: 34
+admittedCount: 33
+collisionCount: 1
+buildError: -
+
+## enumerated (SORTED BY PATH — walk route, order is filesystem-dependent)
+# ordinal	path	exists	isDirectory	gitignored	isSymlink	symlinkResolves	targetInsideRoot	aliasesEnumeratedPath	contentKey
+0	broken/bad-frontmatter.md	true	false	false	false	-	true	false	markdown.5e45492f336bc8b5ed1e6177b80234caf81eb827acfb30516c5d7199f1e3daaa
+1	broken/dangling-reference.md	true	false	false	false	-	true	false	markdown.b6a9ed367a5a006e521cdd78defb21a9c7b40225a935f8dc91394fbd305cc43b
+2	broken/exotic-frontmatter.md	true	false	false	false	-	true	false	markdown.68bfa37399960337f2025aabb4e9866b54128469077e37ad3b2b3bafb3144a64
+3	broken/two-conditions.md	true	false	false	false	-	true	false	markdown.756574f8dcc73b255e750d9eff7737cedb32f7fbf7c737521b77ee74131efe59
+4	docs/anchored.md	true	false	false	false	-	true	false	markdown.0ea192a5df37b3fd0f3cf7be5e84194656890ff1a83590cdae8f4dd1248851d5
+5	docs/Case.md	true	false	false	false	-	true	false	markdown.4c7bc36326639f83b7a7d343cce8315318990ca88cf97fd9b86dcbebbc58fd6e
+6	docs/deep-headings.md	true	false	false	false	-	true	false	markdown.6e441626017ecf4bc9c69e37ca3202a9c1139b356f01dec032c8f308449abf8b
+7	docs/empty-frontmatter.md	true	false	false	false	-	true	false	markdown.1fd770cc28573fbee9803fd6c849f31e2adf4433c0e12035df2758f9bfa63177
+8	docs/frontmatter-shapes.md	true	false	false	false	-	true	false	markdown.bfbc4a2b9d42d7dbb7459a380b2229f0b3d998780217a4fbdad3660ed5a5ec6e
+9	docs/guide.md	true	false	false	false	-	true	false	markdown.fbb352a705f5cc8e22d83f8f15337a298afeb16b771753bb70c24dc2555e5c75
+10	docs/sibling.md	true	false	false	false	-	true	false	markdown.db748c3e5b2ad1875398400986dd139a0bae49e919e0c299b484e65f18ba3374
+11	dup-hyphen/note.md	true	false	false	false	-	true	false	markdown.6db5eb570abcd913af501408641dc737b1bca9e394b21a4ac5405220419aff5e
+12	dup/hyphen-note.md	true	false	false	false	-	true	false	markdown.36fed748ce7ba9fbdf91d1de57631626964b3072777312e17271f827b24db245
+13	empty.md	true	false	false	false	-	true	false	markdown.7ecdc77c77d5ffa65b5fa30cd25fbca313bfcdaaf2464e1d5a90a0170b13cae0
+14	ignored/secret.md	true	false	false	false	-	true	false	markdown.e200d673fc18a9d3b2221ee540b81c25771ad7709793b54b656c02f6f86f0f54
+15	links/every-type.md	true	false	false	false	-	true	false	markdown.022056a6665df008a3518e631df60758a63ebda759b429367cc2902299f84eb8
+16	links/to-anchor.md	true	false	false	false	-	true	false	markdown.662e1d22c2d9a51fce8c89d5615b1e2ecb6de07208bcf2e3757741b250413023
+17	links/to-case.md	true	false	false	false	-	true	false	markdown.8031b9b364b9632c10d0c8f4999daccee7e2bb542241ae87f5db37a001fc2727
+18	links/to-dir.md	true	false	false	false	-	true	false	markdown.1e8ee9ffecab8e8c6b4b9d3227187f7c0a16ff1f87b13dd9d866f9f2373d3f0e
+19	links/to-ignored.md	true	false	false	false	-	true	false	markdown.6f1bc344fd6c87b6c242f62ff15c67f4e8b434ab5861cac52013506b6eaf6d3b
+20	links/to-missing.md	true	false	false	false	-	true	false	markdown.cd76114fabff2f7e953542eb7f20fd5db1cca11cbab98a868b99c00337aa3b9f
+21	parse/duplicate-definition.md	true	false	false	false	-	true	false	markdown.91d8b1997300816e46abbc915331037111bcc581b27478801d1868cf9c37e473
+22	parse/frontmatter-delimited-empty.md	true	false	false	false	-	true	false	markdown.ba2905f27de96e27c8c708c184da19c4e0d891aeeb0b6c4ba733a481f61462fc
+23	parse/html-anchors.md	true	false	false	false	-	true	false	markdown.63b800a9a7f205bf823e4701e4166ccf5c4702d83afc0a85322543bbede68984
+24	parse/interleaved-kinds.md	true	false	false	false	-	true	false	markdown.c880e9b66747c90ba12470866596145b8a5dcd9f57970ad54660f3d0f368e59a
+25	parse/kitchen-sink.md	true	false	false	false	-	true	false	markdown.bf798e047abfa6f1c1d3a509e5fc1147814ef3faa240c759afd8c99d3f240229
+26	parse/masked-references.md	true	false	false	false	-	true	false	markdown.5195703e66147cd8876b5a3eebc701c0f5318a1339cb0456078a777f06bbedc8
+27	parse/nested-links.md	true	false	false	false	-	true	false	markdown.45e58cf06c1ac1f4f6c9761df8f17978340f7094c669f372a16ed89a838c79c9
+28	parse/repeated-headings.md	true	false	false	false	-	true	false	markdown.6e4dd38ea55b70879520c4d16ffad0b02e73b40f3f7181485893a18b7e838d39
+29	README.md	true	false	false	false	-	true	false	markdown.0f7c22dafbc94e54cd6dc27c7e26211b717ed5e50bba7407c4afd4b80a3c37a2
+30	symlinks/a/target.md	true	false	false	false	-	true	false	markdown.0515644a301962595aa300141e63ec34db5489a0e7ac075f7a358d75a2527bfb
+31	symlinks/b/target.md	true	false	false	false	-	true	false	markdown.226826d2beb52a81a162c65601363ead7d9108a616dde6c2f5cdcd4687ca9727
+32	twins/left/same.md	true	false	false	false	-	true	false	markdown.24a32039623465bcbaadbfad91511d09a4f4de2dd71256cb528fc8395c90b5e2
+33	twins/right/same.md	true	false	false	false	-	true	false	markdown.24a32039623465bcbaadbfad91511d09a4f4de2dd71256cb528fc8395c90b5e2
+
+## admitted (ordered, post-deduplication)
+0	broken/bad-frontmatter.md
+1	broken/dangling-reference.md
+2	broken/exotic-frontmatter.md
+3	broken/two-conditions.md
+4	docs/anchored.md
+5	docs/Case.md
+6	docs/deep-headings.md
+7	docs/empty-frontmatter.md
+8	docs/frontmatter-shapes.md
+9	docs/guide.md
+10	docs/sibling.md
+11	dup/hyphen-note.md
+12	empty.md
+13	ignored/secret.md
+14	links/every-type.md
+15	links/to-anchor.md
+16	links/to-case.md
+17	links/to-dir.md
+18	links/to-ignored.md
+19	links/to-missing.md
+20	parse/duplicate-definition.md
+21	parse/frontmatter-delimited-empty.md
+22	parse/html-anchors.md
+23	parse/interleaved-kinds.md
+24	parse/kitchen-sink.md
+25	parse/masked-references.md
+26	parse/nested-links.md
+27	parse/repeated-headings.md
+28	README.md
+29	symlinks/a/target.md
+30	symlinks/b/target.md
+31	twins/left/same.md
+32	twins/right/same.md
+
+## collisions (first-added-wins drops, in arrival order)
+dup-hyphen-note-md	won=dup/hyphen-note.md	dropped=dup-hyphen/note.md
+
+## restatementDrift

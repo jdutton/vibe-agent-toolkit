@@ -94,6 +94,9 @@ const PREFER_STARTSWITH_OVER_REGEX_CASES: RuleCases = {
     { code: String.raw`const s = 'x'; if (/^\tab/.test(s)) {}` },
     // No anchor — not a prefix/suffix check.
     { code: "const s = 'x'; if (/foo/.test(s)) {}" },
+    // An escaped `$` at the end is a LITERAL dollar sign, not an anchor —
+    // there is no end-of-string check to flatten, so this must not flag.
+    { code: String.raw`const s = 'x'; if (/price\$/.test(s)) {}` },
     // Method calls that aren't .test() — must not flag.
     { code: "const s = 'x'; const m = /^foo/.exec(s);" },
     // A const that does not hold a regex literal, and one reassigned after
@@ -110,6 +113,12 @@ const PREFER_STARTSWITH_OVER_REGEX_CASES: RuleCases = {
     { code: String.raw`const s = 'x'; if (/^ssh:\/\//.test(s)) {}`, errors: [{ messageId: 'preferStartsWith' }] },
     { code: "const s = 'x'; if (/^foo/.test(s)) {}", errors: [{ messageId: 'preferStartsWith' }] },
     { code: "const s = 'x'; if (/bar$/.test(s)) {}", errors: [{ messageId: 'preferEndsWith' }] },
+    // BACKSLASH-PARITY at the trailing anchor. `/\\$/`'s pattern is the
+    // 3-char string `\\$` — an escaped backslash (`\\`) followed by an
+    // UNESCAPED `$` anchor. Looking only at the literal last two characters
+    // (`\$`) misreads this as an escaped dollar and skips it; the fix counts
+    // the run of backslashes immediately before `$` and checks its parity.
+    { code: String.raw`const s = 'x'; if (/\\$/.test(s)) {}`, errors: [{ messageId: 'preferEndsWith' }] },
     { code: "const s = 'x'; if (/^abc-def/.test(s)) {}", errors: [{ messageId: 'preferStartsWith' }] },
     // ESCAPED NON-SPECIAL CHARACTER. `\*` is an unambiguous literal asterisk,
     // and accepting only `\/` skipped it — an adopter's SonarCloud raised the
@@ -227,6 +236,25 @@ function pathFunctionRuleCases(fn: 'join' | 'relative' | 'resolve'): RuleCases {
       // cannot see a `globals.d.ts`, an `@types` package, or a bundler-injected
       // global, and `resolve`/`relative` are entirely plausible as those.
       { code: `const p = ${fn}(a, b);`, filename: LINTED_FILE, options },
+      // …and `safePath` merely BEING bound is not the licence either. A sibling
+      // rule in this pack supplies that binding for free: `no-path-resolve`
+      // rewrites a `path.resolve(...)` and imports `safePath`, which flips
+      // `safePathBoundInSource` for the `join` instance too. What the repair leg
+      // needs is evidence that THIS function is mid-migration in THIS file — a
+      // `safePath.<fn>(...)` call already in the source. `joinUnderRoot` is a real
+      // `safePath` member and is deliberately not one of them.
+      //
+      // 'a sibling rule binding safePath does not arm the repair leg' below runs
+      // the same hazard end to end, through two rules and a real `--fix` sweep.
+      {
+        code: [
+          SAFE_IMPORT,
+          'export const root = safePath.joinUnderRoot(base, name);',
+          `export const p = ${fn}(a, b);`,
+        ].join('\n'),
+        filename: LINTED_FILE,
+        options,
+      },
       // A TYPE-ONLY specifier is not a call site. Tracking it made the fixer
       // DELETE it, and because `typeof join` is a TYPE reference, `no-undef` —
       // and so the fixpoint suite below — cannot see the damage.
@@ -331,12 +359,23 @@ function pathFunctionRuleCases(fn: 'join' | 'relative' | 'resolve'): RuleCases {
       // unbound `join(` elsewhere in the file classified as "named", and the
       // fixer removed the ALIAS, breaking every working `pathJoin` call site.
       // The pinned output below is the proof the alias survives.
+      //
+      // The last line carries the repair leg's evidence, and this fixture is why
+      // it has to be spelled out rather than assumed: the bare `join(c, d)` here
+      // is UNBOUND and `safePath` IS in scope, which is the exact shape an
+      // ambient global takes — the comment above has always called it
+      // "unrelated". Without a `safePath.${fn}(...)` in the file it now goes
+      // unreported, and the alias guard would have gone with it. The mutation the
+      // guard exists to catch still fails here: track the aliased specifier and
+      // `join(c, d)` classifies as NAMED, which removes the alias and breaks the
+      // pinned `aliased(a, b)` line.
       {
         code: [
           SAFE_IMPORT,
           `import { ${fn} as aliased } from 'node:path';`,
           'export const p = aliased(a, b);',
           `export const q = ${fn}(c, d);`,
+          `export const r = safePath.${fn}(e, f);`,
         ].join('\n'),
         filename: LINTED_FILE,
         options,
@@ -345,6 +384,7 @@ function pathFunctionRuleCases(fn: 'join' | 'relative' | 'resolve'): RuleCases {
           `import { ${fn} as aliased } from 'node:path';`,
           'export const p = aliased(a, b);',
           `export const q = safePath.${fn}(c, d);`,
+          `export const r = safePath.${fn}(e, f);`,
         ].join('\n'),
         errors,
       },
@@ -468,6 +508,9 @@ const RULE = {
 } as const;
 
 const NODE_FS = 'node:fs';
+/** The path module AS IT APPEARS IN SOURCE, quotes and all — several suites assert on
+ * whether the import survived a fix, and that is a substring check against the output. */
+const QUOTED_NODE_PATH = "'node:path'";
 const NODE_CHILD_PROCESS = 'node:child_process';
 
 /** `import { name } from 'module';` — spelled once, so the tables stay readable. */
@@ -870,11 +913,27 @@ const SUITES: readonly RuleSuite[] = [
   },
   {
     name: 'no-manual-path-normalize',
-    cases: safeModuleCases(
-      "const n = p.split(path.sep).join('/');",
-      `import { toForwardSlash } from '${SEAM}';\nconst n = toForwardSlash(p);`,
-      [{ messageId: 'useToForwardSlash' }],
-    ),
+    cases: (() => {
+      const cases = safeModuleCases(
+        "const n = p.split(path.sep).join('/');",
+        `import { toForwardSlash } from '${SEAM}';\nconst n = toForwardSlash(p);`,
+        [{ messageId: 'useToForwardSlash' }],
+      );
+      return {
+        ...cases,
+        valid: [
+          ...cases.valid,
+          // Splitting on a TWO-backslash SEQUENCE — source literal
+          // String.raw`'\\\\'`, decoded value: two backslash characters —
+          // is a different, rarer operation (e.g. collapsing a UNC path's
+          // leading double-backslash server prefix) than splitting on
+          // path.sep. toForwardSlash() is not equivalent to it, so this must
+          // NOT be treated as the path.sep-style split the rule autofixes —
+          // it stays valid (unflagged).
+          { code: String.raw`const n = p.split('\\\\').join('/');`, filename: LINTED_FILE },
+        ],
+      };
+    })(),
   },
   // The unanchored-`exemptFiles` advisory, once per factory: `no-path-join`
   // covers `path-function-rule-factory`, `no-os-tmpdir` the other one.
@@ -1430,6 +1489,95 @@ describe('a suppressed first report does not strand the file', () => {
 });
 
 /**
+ * `safePath` being bound is a fact about the FILE, not about this function.
+ *
+ * The bare-call repair leg finishes a file a partial `--fix` left half-migrated,
+ * and its gate used to be "`unsafeFn` is unbound in scope AND `safePath` is bound
+ * somewhere in the source". Neither half is specific to `unsafeFn`, and the
+ * second is supplied for free by a SIBLING rule: `no-path-resolve` rewrites a
+ * `path.resolve(...)` and imports `safePath`, so on the next `--fix` pass
+ * `no-path-join` sees a file with `safePath` bound and a bare, unbound
+ * `join(...)` — which, as the factory's own comment conceded, is not reliably our
+ * `join`. ESLint scope analysis cannot see a `declare global`, a `globals.d.ts`,
+ * an `@types` package, or a bundler-injected global.
+ *
+ * Measured before the fix, with both rules enabled over the source below: the
+ * ambient `join('hello', 'world')` came back as `safePath.join('hello', 'world')`
+ * — a published autofixer silently redirecting a call to a different function.
+ *
+ * The gate is now positive evidence that THIS function is mid-migration in THIS
+ * file. Every real strand carries that evidence: the specifier removal ships in
+ * the same all-or-nothing merged fix as the callee rewrite that produced it, so a
+ * file cannot lose its `node:path` specifier without gaining a
+ * `safePath.<fn>(...)` call. The second case below is that claim, executed.
+ */
+describe('a sibling rule binding safePath does not arm the repair leg', () => {
+  const languageOptions = { ecmaVersion: 2024, sourceType: 'module' } as const;
+  const pathRules = {
+    [RULE.join]: loadLocalRule(`${RULE.join}.cjs`),
+    [RULE.resolve]: loadLocalRule(`${RULE.resolve}.cjs`),
+  };
+  const cfgFor = (enabled: string[]): Linter.Config[] => [
+    {
+      files: ['**/*.ts'],
+      plugins: { local: { rules: pathRules } },
+      rules: Object.fromEntries(enabled.map((id) => [`local/${id}`, 'error'])),
+      languageOptions,
+    },
+  ];
+
+  /** An ambient global from a `globals.d.ts` this linter cannot see. */
+  const AMBIENT = "export const banner = join('hello', 'world');";
+
+  it('leaves an unrelated ambient global alone while the sibling migrates', () => {
+    const source = [PATH_NAMESPACE_IMPORT, AMBIENT, 'export const p = path.resolve(a, b);'].join('\n');
+    const cfg = cfgFor([RULE.join, RULE.resolve]);
+
+    // Negative control: on the source as written only the SIBLING reports. The
+    // hazard is reachable only across passes, once its fix has bound safePath.
+    expect(
+      new Linter().verify(source, cfg, { filename: LINTED_FILE }).map(({ ruleId }) => ruleId),
+    ).toStrictEqual([`local/${RULE.resolve}`]);
+
+    const { output } = new Linter().verifyAndFix(source, cfg, { filename: LINTED_FILE });
+
+    // The sibling really did migrate — without this, the assertions below would
+    // pass just as happily on a file nothing ever touched.
+    expect(output).toContain('safePath.resolve(a, b)');
+    expect(output).toContain(AMBIENT);
+    expect(output).not.toContain('safePath.join(');
+  });
+
+  it("still finishes what an editor's single-fix left half-migrated", () => {
+    const source = [
+      namedImport('join', 'node:path'),
+      "export const a = join('1', '2');",
+      "export const b = join('3', '4');",
+    ].join('\n');
+    const cfg = cfgFor([RULE.join]);
+
+    // An editor's "fix this problem" applies ONE report's fix. The first
+    // report's is the self-sufficient one — it rewrites its own callee, inserts
+    // the `safePath` import AND removes the `node:path` specifier — which strands
+    // every other call site as a bare, unbound `join(...)`.
+    const fix = new Linter().verify(source, cfg, { filename: LINTED_FILE })[0]?.fix;
+    if (!fix) {
+      throw new Error('the first report carries no fix; this fixture no longer builds a strand');
+    }
+    const stranded = source.slice(0, fix.range[0]) + fix.text + source.slice(fix.range[1]);
+    // The strand, and the evidence that comes with it, spelled out rather than
+    // assumed: no `node:path` left, a bare `join`, and a migrated sibling call.
+    expect(stranded).not.toContain("from 'node:path'");
+    expect(stranded).toContain("export const b = join('3', '4');");
+    expect(stranded).toContain("export const a = safePath.join('1', '2');");
+
+    const { output } = new Linter().verifyAndFix(stranded, cfg, { filename: LINTED_FILE });
+    expect(output).toContain("export const b = safePath.join('3', '4');");
+    expect(new Linter().verify(output, cfg, { filename: LINTED_FILE })).toStrictEqual([]);
+  });
+});
+
+/**
  * The same suppression hazard, across every OTHER import-inserting rule.
  *
  * These rules do not key detection on the import, so they recover across passes
@@ -1599,12 +1747,61 @@ describe('bindings the fixer consumes and the bindings it can see', () => {
       // unused-import rule: with nothing from the safe module in scope, this
       // fixer never ran here, so the dead import is somebody else's business.
       [RULE.join, 'file was never migrated', `${PATH_NAMESPACE_IMPORT}\nexport const x = 1;`],
+      // …and "the safe symbol is bound" is NOT on its own evidence that THIS
+      // rule migrated anything. `safePath` reaches scope for plenty of reasons
+      // that have nothing to do with a `path.join()` this fixer consumed, and a
+      // `node:path` import that was ALREADY dead before the pack ever ran is not
+      // something this rule orphaned. Reporting it as one is a false causal
+      // claim, and removing it is precisely the general unused-import rule the
+      // module docstring declines to be.
+      [
+        RULE.join,
+        'the safe symbol is bound but nothing in the file calls it',
+        `${SAFE_IMPORT}\n${PATH_NAMESPACE_IMPORT}\nexport const x = safePath;`,
+      ],
+      // The same gap one step subtler: the file really was migrated, but by a
+      // SIBLING rule. `no-path-join` rewrote nothing here, so whatever happened
+      // to this import is not its finding to make. Declining strands nothing —
+      // the rule that DID the rewrite still reaches the same declaration, which
+      // the single-member convergence test below pins with the whole pack on.
+      [
+        RULE.join,
+        'only a sibling rule replacement is in use',
+        `${SAFE_IMPORT}\n${PATH_NAMESPACE_IMPORT}\nexport const p = safePath.resolve('a', 'b');`,
+      ],
     ];
 
     it.each(IMPORT_MUST_SURVIVE)('%s keeps the import when %s', (name, _label, source) => {
       const output = fix(name, source);
-      expect(output).toContain("'node:path'");
+      expect(output).toContain(QUOTED_NODE_PATH);
       expect(lint(name, output)).toStrictEqual([]);
+    });
+
+    /**
+     * The same gate, through the other two callers of the shared helper.
+     *
+     * `dead-import.cjs` is reached from three factories, and a gate living in
+     * the helper is only as good as the evidence each caller computes for it.
+     * The three spell "did I rewrite anything here?" three different ways —
+     * `safePath.join(…)` is a member call, `normalizedTmpdir()` a free one, and
+     * `toForwardSlash(…)` belongs to a rule that never tracked the path import
+     * at all — so a table covering only the path factory would leave two of the
+     * three untested against exactly the coincidence this closes.
+     */
+    it.each([
+      [
+        RULE.tmpdir,
+        'node:os',
+        `import { normalizedTmpdir } from '${SAFE_FS_MODULE}';\nimport os from 'node:os';\nexport const x = normalizedTmpdir;`,
+      ],
+      [
+        RULE.normalize,
+        'node:path',
+        `import { toForwardSlash } from '${SAFE_PATH_MODULE}';\n${PATH_NAMESPACE_IMPORT}\nexport const x = toForwardSlash;`,
+      ],
+    ])('%s keeps a dead %s import when its own replacement is never called', (name, module, source) => {
+      expect(lint(name, source)).toStrictEqual([]);
+      expect(fix(name, source)).toContain(`'${module}'`);
     });
 
     /**
@@ -1730,6 +1927,40 @@ describe('bindings the fixer consumes and the bindings it can see', () => {
    * the same range — so the question is whether ESLint's overlap handling
    * converges or starves, and no single-rule fixture asks it.
    */
+  /**
+   * The same pack, on a file that exercises only ONE of its members.
+   *
+   * The two rules with nothing to rewrite here must not report the import —
+   * they orphaned nothing — and the one that did must still remove it. Run the
+   * rules in isolation and this cannot fail either way; only the whole pack on
+   * one file asks whether a per-rule gate strands the declaration that no rule
+   * claims, which is the failure mode of narrowing the dead-import leg at all.
+   */
+  it('a rule that rewrote nothing leaves the removal to the one that did', () => {
+    const source = [PATH_NAMESPACE_IMPORT, "export const b = path.resolve('c');"].join('\n');
+    const names = [RULE.join, RULE.resolve, RULE.relative];
+    const config = [
+      {
+        files: ['**/*.ts'],
+        plugins: {
+          local: { rules: Object.fromEntries(names.map((name) => [name, loadLocalRule(`${name}.cjs`)])) },
+        },
+        rules: Object.fromEntries(names.map((name) => [`local/${name}`, 'error' as const])),
+        languageOptions,
+      },
+    ];
+
+    // Negative control: exactly one rule has anything to say about this file.
+    expect(new Linter().verify(source, config, { filename: LINTED_FILE })).toHaveLength(1);
+
+    const { output } = new Linter().verifyAndFix(source, config, { filename: LINTED_FILE });
+
+    expect(new Linter().verify(output, config, { filename: LINTED_FILE })).toStrictEqual([]);
+    expect(unusedIn(output)).toStrictEqual([]);
+    expect(output).not.toContain(QUOTED_NODE_PATH);
+    expect(output).toContain('safePath.resolve(');
+  });
+
   it('the three safePath rules together converge on one import in a single pass', () => {
     const source = [
       PATH_NAMESPACE_IMPORT,
@@ -1755,7 +1986,7 @@ describe('bindings the fixer consumes and the bindings it can see', () => {
 
     expect(new Linter().verify(output, config, { filename: LINTED_FILE })).toStrictEqual([]);
     expect(unusedIn(output)).toStrictEqual([]);
-    expect(output).not.toContain("'node:path'");
+    expect(output).not.toContain(QUOTED_NODE_PATH);
     for (const fn of ['join', 'resolve', 'relative']) {
       expect(output).toContain(`safePath.${fn}(`);
     }
@@ -1777,7 +2008,8 @@ describe('reportDeadUnsafeImports only ever removes a listed module', () => {
       context: unknown,
       sourceCode: unknown,
       importNodes: unknown[],
-      migrated: boolean,
+      safeBoundInSource: boolean,
+      replacementCalled: boolean,
     ) => void;
   }>('dead-import.cjs');
 
@@ -1799,6 +2031,7 @@ describe('reportDeadUnsafeImports only ever removes a listed module', () => {
             context,
             sourceCode,
             sourceCode.ast.body.filter((node) => node.type === 'ImportDeclaration'),
+            true,
             true,
           );
         },

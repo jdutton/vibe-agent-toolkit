@@ -33,7 +33,7 @@ const cache = new Map<string, CacheEntry>();
  * ```typescript
  * const resource = getMarkdownResource('/path/to/file.md', () => {
  *   const content = readFileSync('/path/to/file.md', 'utf-8');
- *   return parseMarkdown(content);
+ *   return toMarkdownResource(content);
  * });
  * ```
  */
