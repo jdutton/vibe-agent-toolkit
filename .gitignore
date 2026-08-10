@@ -101,5 +101,11 @@ docs/superpowers/
 .turbo/
 .rag-db/
 
+# Default output dir for `vat-lab <facet> run --out`. Must stay ignored AND stay
+# out of the subject tree's tracked set: the io facet counts filesystem calls, so
+# lab output landing inside the project it is measuring moves the next run's
+# numbers. See packages/lab/docs/roadmap.md on untracked content and the coordinate.
+.vat-lab/
+
 # Contraband token list for the adopter-name gate — must never be committed
 .contraband-tokens

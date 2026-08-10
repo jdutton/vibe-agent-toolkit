@@ -302,9 +302,9 @@ export function headlineChanges(before: string, after: string, kind: ArtifactKin
  *
  * Refuses outright on a `formatVersion` mismatch: the failure mode of guessing
  * across layouts is a confidently wrong "nothing changed". Everything else it
- * cannot do — a masked key column, a different corpus, a cross-platform
- * walk-route comparison, a half captured on one side only — is stated in
- * `constraints`, and the comparison continues.
+ * cannot do — a different corpus, a cross-platform walk-route comparison, a
+ * half captured on one side only — is stated in `constraints`, and the
+ * comparison continues.
  *
  * `capturedAtIso` and each command's `wallMs` are never compared as content.
  *

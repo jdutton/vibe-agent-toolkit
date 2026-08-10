@@ -299,9 +299,6 @@ the line counts are the authoritative signal.
   changed" — which would let a reader conclude a refactor moved nothing when in
   fact nothing was compared. A caller that ignores `constraints` re-opens exactly
   that hole.
-- **A `CONTENT_KEY_SCHEMA_VERSION` bump masks the key column** on both sides and
-  says so, because that bump churns 100% of it and an unmasked diff would be
-  total and carry no information.
 - **Walk-route lanes never claim portable ordering.** They are rendered sorted
   and the manifest records `orderPortable: false`.
 

@@ -179,8 +179,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`--no-cache` on the root command** disables VAT's on-disk caches for the run by setting
   `VAT_CACHE=0`. An environment variable rather than a plumbed flag because the commands that need
-  it most spawn child processes, and only the environment crosses that boundary. The existing
-  `vat resources validate --no-cache` keeps working and now covers both caches.
+  it most spawn child processes, and only the environment crosses that boundary. The pre-existing
+  `vat resources validate --no-cache` now covers both caches — and now works at all; see Fixed.
 
 ### Changed
 
@@ -314,7 +314,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   emits, so the flags parsed, appeared in `--help`, and had no effect:
 
   - **`vat resources validate --no-cache`** read `options.noCache`. The external-URL cache was never
-    disabled. It now is.
+    disabled. It now is — and it now covers the parse cache too (see Added). This one shipped
+    non-functional in **every stable release from `0.1.35` through `0.1.42`**, so if you have been
+    passing it to force fresh link checks, you have been reading cached results for eight releases;
+    expect your first run after upgrading to surface external-link failures that stale cache entries
+    were masking. That is the fix working, not a new regression.
   - **`vat skills package --no-rewrite-links`** read `options['no-rewrite-links']`, so relative links
     in copied files were **always** rewritten. ⚠️ Behaviour change: a user who passed this flag as
     documented was getting rewritten links, and their packaged output will now differ.

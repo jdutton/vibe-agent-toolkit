@@ -13,6 +13,29 @@ axis at a time — so a delta always has one thing to attribute it to.
 > CLI contract, docs — but carrying `"private": true` while the interface still moves. Graduating it
 > is the intent, not keeping it private. See [Roadmap](docs/roadmap.md).
 
+## Using it
+
+The binary is **`vat-lab`**, and every facet exposes the same two verbs — `run` produces a report,
+`compare` diffs two of them:
+
+```bash
+vat-lab <facet> run <subject> [--out <dir>] [--repeat <n>] [--cache warm|cold] [--id <name>]
+vat-lab <facet> compare <baseline> <candidate>
+```
+
+Facets today are **`io`** (filesystem-call counts) and **`perf`** (wall time). A minimal
+vary-the-instrument comparison — the same project, measured by two builds of vat:
+
+```bash
+vat-lab io run ../some-project --id some-project --out ./before
+# ...change vat, rebuild...
+vat-lab io run ../some-project --id some-project --out ./after
+vat-lab io compare ./before/<report>.json ./after/<report>.json
+```
+
+Reports default to `.vat-lab/`, which this repo gitignores — keep it that way, since lab output
+landing inside the tree being measured changes the next run's numbers.
+
 ## The three axes
 
 Every report is a measurement at a coordinate, and carries the whole triple or it is comparable to

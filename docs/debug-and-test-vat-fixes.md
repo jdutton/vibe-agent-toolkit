@@ -37,6 +37,13 @@ Other env vars:
 | `VAT_ROOT_DIR=/path` | Redirect to a local monorepo build (see below) |
 | `VAT_TEST_ROOT=/path` | Override project root (skips `.git` detection) |
 | `VAT_TEST_CONFIG=/path` | Override config file path |
+| `VAT_CACHE=0` | Disable all on-disk caches, child phases included (same switch as `--no-cache`) |
+
+**Set `VAT_CACHE=0` before you trust a reproduction.** Markdown parsing is served from a
+cross-process cache under `<tmpdir>/.vat-cache/`, so the second run of a command may not do the
+same work as the first. A bug that only reproduces on a cold machine — or only *stops*
+reproducing after one run — is a cache-state difference until proven otherwise. `vat cache clear`
+removes what is already stored.
 
 ## Test With a Local Monorepo Build
 

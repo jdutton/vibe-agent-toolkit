@@ -286,6 +286,9 @@ vat rag search "agent deployment" --limit 5
 - `--help --verbose` - Show comprehensive help (this output)
 - `--cwd <dir>` - Change working directory before running any command
 - `--debug` - Enable debug logging
+- `--no-cache` - Disable VAT's on-disk caches for this run, including in spawned child phases
+  (equivalent to `VAT_CACHE=0`; see [Environment Variables](#vat_cache)). Clear what is already
+  stored with `vat cache clear`.
 
 ## Environment Variables
 

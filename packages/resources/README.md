@@ -856,18 +856,28 @@ const jsonSchema = zodToJsonSchema(ResourceMetadataSchema);
 
 ### Parse Individual Files
 
-For advanced use cases, you can use the `parseMarkdown` function directly:
+For advanced use cases, parse a single file with `parseFileCached`:
 
 ```typescript
-import { parseMarkdown } from '@vibe-agent-toolkit/resources';
+import { parseFileCached } from '@vibe-agent-toolkit/resources';
 
-const result = await parseMarkdown('./document.md');
+const result = await parseFileCached('./document.md', 'markdown');
 console.log('Links:', result.links);
 console.log('Headings:', result.headings);
 console.log('Content:', result.content);
 console.log('Size:', result.sizeBytes);
 console.log('Estimated tokens:', result.estimatedTokenCount);
 ```
+
+`parseFileCached(filePath, parserKind, cache?)` is content-addressed: it keys on the file's bytes
+plus the parser they route to, so a second call for unchanged content is served from
+`<tmpdir>/.vat-cache/` instead of re-parsing. Omit `cache` to use the process-wide instance
+(`defaultParseCache()`). Set `VAT_CACHE=0` to disable it.
+
+`parseMarkdown(path)` and `parseHtml(path)` are still exported, but they read the file and hand the
+bytes straight to a parser — they **bypass the cache entirely**. That is deliberate (VAT's own
+parse-fact oracle uses them, since an oracle that consults the cache cannot verify it), so treat
+them as the explicit uncached escape hatch rather than the default choice.
 
 ### Query Patterns
 
