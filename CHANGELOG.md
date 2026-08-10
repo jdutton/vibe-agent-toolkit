@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`vat` now runs the version your lockfile pinned when you install with pnpm.** It was silently running a different one. The wrapper looked for a locally installed CLI at a single hardcoded path that only exists in npm's flat `node_modules` layout; under pnpm that path is absent, so the lookup failed and `vat` quietly fell back to whichever globally installed copy it could find — no warning, and the version it printed looked plausible. If you adopted VAT through the umbrella `vibe-agent-toolkit` package, this affected you on every invocation.
+
+  Resolution now goes through Node's own module resolver, which works across npm, bun, pnpm and yarn PnP. **What to do:** nothing. If you are on pnpm, check that `vat --version` now matches your lockfile — it may change, because it was previously wrong.
+
+
 ## [0.1.42] - 2026-08-08
 
 ### Breaking
@@ -272,19 +279,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `minimatch` and `picomatch` entries.
 
 ### Fixed
-
-- **The `vat` wrapper now finds the CLI an adopter pinned under pnpm (issue #172).** Its "local
-  install" priority probed exactly one hardcoded path,
-  `node_modules/@vibe-agent-toolkit/cli/dist/bin.js`, which assumes npm's flat layout. Under pnpm's
-  isolated layout that path does not exist, so the priority never fired, resolution fell through to
-  the global install, and whichever copy of `vat.js` happened to be invoked won — **silently ignoring
-  the version in the adopter's lockfile**, with no warning. The lookup now goes through Node's own
-  resolver, which handles npm, bun, pnpm and yarn PnP without enumerating any of their layouts. It
-  resolves from the adopter *and* from the umbrella `vibe-agent-toolkit` package, because pnpm
-  symlinks only direct dependencies at top level — so for the documented adoption path (depend on the
-  umbrella) the CLI is transitive and reachable only from inside that package. The target is still
-  `dist/bin.js`; only how it is located changed. It was invisible on npm/bun, where the flat layout
-  makes the old probe succeed, which is why VAT's own tree could not catch it.
 
 - **`isGitIgnored()` spawned a git subprocess per ancestor directory when the path was not in a git
   repository at all — `vat resources validate` on a 3,437-document tree outside any repository went
