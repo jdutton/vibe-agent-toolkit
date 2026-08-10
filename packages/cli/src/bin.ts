@@ -101,7 +101,6 @@ Environment:
 
 For command details: vat resources --help
 For comprehensive help: vat --help --verbose
-For agent guidance: docs/cli/CLAUDE.md
 `
   );
 
@@ -206,5 +205,5 @@ program.on('command:*', (operands) => {
 program.parse();
 
 function showVerboseHelp(): void {
-  writeHelpSync(loadVerboseHelp()); // Loads from docs/cli/index.md
+  writeHelpSync(loadVerboseHelp()); // Loads from packages/cli/docs/index.md
 }

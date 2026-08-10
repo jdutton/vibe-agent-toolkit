@@ -23,6 +23,8 @@ Markdown resource scanning, link validation, and frontmatter validation (run bef
 5. **Validates frontmatter against JSON Schemas** (per-collection)
 6. Reports broken links and validation errors to stderr
 
+**Note:** External URLs are not validated (by design — avoids flaky network checks). Only internal file links and anchors are checked.
+
 **Per-collection frontmatter validation:**
 
 Define collections in `vibe-agent-toolkit.config.yaml` to validate frontmatter fields, types, and patterns using JSON Schemas. Collections support strict mode (no extra fields) or permissive mode (extra fields allowed).
@@ -475,6 +477,5 @@ vat rag search "markdown validation"
 
 ## More Information
 
-- **Agent guidance:** `docs/cli/CLAUDE.md` (strategic patterns for AI agents)
 - **Documentation:** https://github.com/jdutton/vibe-agent-toolkit
 - **Issues:** https://github.com/jdutton/vibe-agent-toolkit/issues

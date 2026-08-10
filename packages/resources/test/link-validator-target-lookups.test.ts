@@ -57,6 +57,17 @@ const DIR_ENTRY = 'reference-dir';
 const DANGLING_ENTRY = 'dangling-link.md';
 
 /**
+ * The same visible filename in two Unicode normalization forms — the on-disk
+ * entry decomposed (`e` + U+0301), the href composed (U+00E9). Written as
+ * escape sequences so no editor, formatter, or git checkout can renormalize
+ * either literal, and created by code rather than committed for the same
+ * reason: a committed accented fixture can silently arrive NFC on both sides
+ * and pin nothing.
+ */
+const ACCENTED_ON_DISK = 'refe\u0301rence.md';
+const ACCENTED_IN_HREF = 'ref\u00E9rence.md';
+
+/**
  * Materialize the fixture tree: a source doc, a real file target, a real
  * directory target, and a dangling symlink (the one case where the parent
  * listing says "present" while the path itself does not resolve).
@@ -65,6 +76,7 @@ async function createFixture(tempDir: string): Promise<void> {
   await fs.writeFile(safePath.join(tempDir, SOURCE_ENTRY), '# Source\n', 'utf-8');
   await fs.writeFile(safePath.join(tempDir, FILE_ENTRY), '# Reference\n', 'utf-8');
   await fs.mkdir(safePath.join(tempDir, DIR_ENTRY), { recursive: true });
+  await fs.writeFile(safePath.join(tempDir, ACCENTED_ON_DISK), '# Accented\n', 'utf-8');
   if (canCreateSymlinks(tempDir)) {
     // No `try`/`catch`: guarded by the same probe that skips the only test that
     // needs the link, so a throw here is a real fixture failure and must
@@ -109,6 +121,69 @@ describe('validateLink target lookups', () => {
 
   it('reports no issue for a link resolving to a file', async () => {
     expect(await validateHref(tempDir, `./${FILE_ENTRY}`, fsCache)).toBeNull();
+  });
+
+  /**
+   * Ledger D7 — the user-facing half. The target exists; only its Unicode
+   * normalization form differs from the href's, so the listing comparison finds
+   * no match and the link is reported flatly broken (not even with the
+   * case-mismatch hint, which needs the case-insensitive branch to match).
+   *
+   * ⚠️ The premise guard matters: if the two literals ever collapsed to one
+   * string this test would pass while demonstrating nothing.
+   */
+  it('reports no issue for a composed href naming a decomposed file on disk', async () => {
+    expect(ACCENTED_ON_DISK).not.toBe(ACCENTED_IN_HREF);
+
+    expect(await validateHref(tempDir, `./${ACCENTED_IN_HREF}`, fsCache)).toBeNull();
+  });
+
+  /**
+   * The anchor half of the same normalization split, and the reason it must be
+   * fixed alongside the existence check rather than after it. The fragment index
+   * is keyed by *enumerated* paths and queried with a path *derived from link
+   * text*; a `Map` miss there is silent — {@link checkAnchor} answers `'skip'`,
+   * so the anchor is simply never checked. Once the existence check stopped
+   * reporting these links broken, that silence is the only thing left standing
+   * between a wrong anchor and a report.
+   */
+  it('checks anchors in a decomposed file reached by a composed href', async () => {
+    const fragments = fragmentIndex([
+      [safePath.join(tempDir, ACCENTED_ON_DISK), new Set(['section-a'])],
+    ]);
+
+    const issue = await validateLink(
+      createLink('local_file', `./${ACCENTED_IN_HREF}#nope`),
+      safePath.join(tempDir, SOURCE_ENTRY),
+      fragments,
+      { fsCache, projectRoot: tempDir, skipGitIgnoreCheck: true },
+    );
+
+    expect(issue?.code).toBe('LINK_BROKEN_ANCHOR');
+  });
+
+  /**
+   * The *lookup* side of the fragment index, and the only test that pins it.
+   *
+   * An anchor-only link is judged against the source file's OWN path, which is
+   * an enumerated path — decomposed here — while the index key is normalized.
+   * Normalizing only where the index is built would therefore have been a
+   * regression rather than a fix: today both sides of this particular lookup are
+   * raw and happen to agree, and anchors in an accented file are checked. The
+   * companion test above pins the build side; remove either normalization and
+   * exactly one of the two goes red.
+   */
+  it('checks an anchor-only link inside a decomposed filename', async () => {
+    const onDiskPath = safePath.join(tempDir, ACCENTED_ON_DISK);
+    const fragments = fragmentIndex([[onDiskPath, new Set(['section-a'])]]);
+
+    const issue = await validateLink(createLink('anchor', '#nope'), onDiskPath, fragments, {
+      fsCache,
+      projectRoot: tempDir,
+      skipGitIgnoreCheck: true,
+    });
+
+    expect(issue?.code).toBe('LINK_BROKEN_ANCHOR');
   });
 
   it('still reports LINK_BROKEN_FILE for a link resolving to nothing', async () => {

@@ -164,6 +164,39 @@ export function toForwardSlash(p: string): string {
 }
 
 /**
+ * Normalize text to Unicode NFC — the form in which two *visually identical*
+ * filenames compare equal.
+ *
+ * `é` has two encodings: precomposed NFC (`U+00E9`) and decomposed NFD
+ * (`e` + `U+0301`). They render identically and name the same file, yet they are
+ * different strings, so `===`, `toLowerCase()`, `Map.get()` and `Set.has()` all
+ * report them as different. `readdir` hands back whichever form is on disk —
+ * APFS preserves what was written, and decomposed names are common on macOS —
+ * while a markdown link typed in an editor almost always carries the composed
+ * form. The two sides of a filename comparison therefore disagree about a file
+ * that plainly exists.
+ *
+ * ⚠️ **This produces a COMPARISON KEY, never a path to open.** Do not normalize
+ * a path on its way to `fs.*`. macOS would not notice — it is
+ * normalization-*insensitive* at the syscall level, so `existsSync` answers the
+ * same for either form — but Linux is not: on ext4 the two forms are simply
+ * different byte sequences naming different files, so opening the normalized
+ * form of a decomposed filename fails outright. That asymmetry is exactly why
+ * this is not folded into {@link safePath.resolve}: its output is handed
+ * straight to the filesystem. Normalize where two strings are *compared*, and
+ * leave the string the filesystem receives alone.
+ *
+ * @param value - A filename, path segment, or whole path
+ * @returns The same text in NFC. Pure ASCII is returned unchanged.
+ *
+ * @example
+ * toNfc('cafe\u0301.md') === toNfc('caf\u00e9.md')  // true — same file, two encodings
+ */
+export function toNfc(value: string): string {
+  return value.normalize('NFC');
+}
+
+/**
  * Cross-platform safe path operations.
  *
  * Wraps Node's `path.join()`, `path.resolve()`, and `path.relative()` to always

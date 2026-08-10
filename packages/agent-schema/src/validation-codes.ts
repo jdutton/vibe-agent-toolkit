@@ -85,6 +85,12 @@ export const CODE_REGISTRY = {
     'Fix the link path, create the file, or declare it under skills.config.<name>.files as a build artifact.',
     'link_missing_target',
   ),
+  LINK_TARGET_UNREADABLE: entry(
+    'error',
+    'Markdown link target exists on disk but could not be read, so it was neither classified nor bundled. Most often permissions; also a change racing the walk.',
+    'Fix the permissions on the target, or investigate what changed it mid-walk, then re-run. Set severity.LINK_TARGET_UNREADABLE to warning if a corpus is expected to contain entries the walk cannot read.',
+    'link_target_unreadable',
+  ),
   LINK_DEFERRED_ARTIFACT: entry(
     'info',
     'Link targets a deferred build artifact declared in the skill files: config; it will exist after the build materializes it.',

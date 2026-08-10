@@ -12,7 +12,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { createRegistryIssue, type IssueCode, runSingleUnitValidation, type ValidationConfig, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
-import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, FsLookupCache, type GitTracker, issueLocation, resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, FsLookupCache, type GitTracker, issueLocation, resolveAssetReference, safePath, toForwardSlash, toNfc } from '@vibe-agent-toolkit/utils';
 
 import { calculateChecksumFromContent } from './checksum.js';
 import { getCollectionsForFile } from './collection-matcher.js';
@@ -29,7 +29,7 @@ import {
   type CompiledFrontmatterSchema,
 } from './frontmatter-validator.js';
 import { buildLinkAuthEngineConfig } from './link-auth-config-build.js';
-import { fillLinkFacts, fragmentIndexEntry, judgeLink, resolveLinkEntries, type FragmentIndex, type JudgeLinkOptions, type LinkEntry, type ValidateLinkOptions } from './link-validator.js';
+import { fillLinkFacts, fragmentIndex, judgeLink, resolveLinkEntries, type FragmentIndex, type JudgeLinkOptions, type LinkEntry, type ValidateLinkOptions } from './link-validator.js';
 import { ParseCache, type ParseCacheStats, parseKeyed, vatCacheRoot } from './parse-cache.js';
 import type { ResourceCollectionInterface } from './resource-collection-interface.js';
 import type { SHA256 } from './schemas/checksum.js';
@@ -363,6 +363,30 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    */
   private parseCacheInstance?: ParseCache;
 
+  /**
+   * Resources indexed by file path — **keyed in Unicode NFC (`toNfc`), not by
+   * the raw path.**
+   *
+   * The two sides of this lookup come from different places and, on macOS,
+   * routinely arrive in different Unicode normalization forms: a key is a
+   * *enumerated* path (`readdir`/`git ls-files` hand back whatever is on disk,
+   * commonly decomposed), while a query is a path *derived from markdown link
+   * text* (`resolveLocalHref`, composed as an editor writes it). `Map.get` is
+   * exact string equality, so `café.md` misses `café.md` and the link to a file
+   * that plainly exists gets no `resolvedId` — see {@link resolveLinks} for what
+   * a missing `resolvedId` then costs at packaging time. Ledger entry D7.
+   *
+   * ⚠️ Only the KEY is normalized. `resource.filePath` keeps the on-disk form,
+   * because that is the string handed to the filesystem, and on Linux the
+   * normalized form of a decomposed filename names no file at all
+   * (see {@link toNfc}).
+   *
+   * The one behaviour this trades away: two files in one directory whose names
+   * differ *only* by normalization form now collide on one key. APFS cannot
+   * produce that pair (its lookup is normalization-insensitive); ext4 can, but
+   * only pathologically, and shadowing one of them is a better answer than
+   * reporting every link to either as broken.
+   */
   private readonly resourcesByPath: Map<string, ResourceMetadata> = new Map();
   private readonly resourcesById: Map<string, ResourceMetadata> = new Map();
   private readonly resourcesByName: Map<string, ResourceMetadata[]> = new Map();
@@ -511,28 +535,19 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   ): ResourceRegistry {
     const registry = new ResourceRegistry({ ...options, baseDir });
 
-    // Add all resources to indexes
+    // Indexing goes through `indexResource`, not a second copy of the four
+    // index writes, so every index has exactly ONE key derivation. That matters
+    // most for `resourcesByPath`, whose key is normalized (see the field's
+    // docblock): a duplicated write here could silently key one construction
+    // path differently from the other, and every lookup through the divergent
+    // path would miss.
     for (const resource of resources) {
-      // Check for duplicate ID
       const existingById = registry.resourcesById.get(resource.id);
       if (existingById) {
         throw new DuplicateResourceIdError(resource.id, resource.filePath, existingById.filePath);
       }
 
-      // Add to path index
-      registry.resourcesByPath.set(resource.filePath, resource);
-
-      // Add to ID index
-      registry.resourcesById.set(resource.id, resource);
-
-      // Add to name index
-      const filename = path.basename(resource.filePath);
-      const existingByName = registry.resourcesByName.get(filename) ?? [];
-      registry.resourcesByName.set(filename, [...existingByName, resource]);
-
-      // Add to checksum index
-      const existingByChecksum = registry.resourcesByChecksum.get(resource.checksum) ?? [];
-      registry.resourcesByChecksum.set(resource.checksum, [...existingByChecksum, resource]);
+      registry.indexResource(resource);
     }
 
     return registry;
@@ -1479,8 +1494,11 @@ export class ResourceRegistry implements ResourceCollectionInterface {
           const targetPath = this.resolveRelativeLinkPath(link.href, resource.filePath);
           if (targetPath === undefined) continue;
 
-          // Look up resource by path
-          const targetResource = this.resourcesByPath.get(targetPath);
+          // Look up resource by path. `targetPath` comes from markdown link
+          // text and the keys come from filesystem enumeration, so the two can
+          // differ in Unicode normalization form for the very same file — hence
+          // the NFC key on both sides (see the field's docblock).
+          const targetResource = this.resourcesByPath.get(toNfc(targetPath));
 
           if (targetResource) {
             link.resolvedId = targetResource.id;
@@ -1506,7 +1524,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    */
   getResource(filePath: string): ResourceMetadata | undefined {
     const absolutePath = safePath.resolve(filePath);
-    return this.resourcesByPath.get(absolutePath);
+    return this.resourcesByPath.get(toNfc(absolutePath));
   }
 
   /**
@@ -1837,17 +1855,20 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * heading slugs (lowercased); HTML contributes its `id`/`name` anchors.
    */
   private buildFragmentIndex(): FragmentIndex {
-    const map: FragmentIndex = new Map();
+    // Built through `fragmentIndex()` rather than `map.set` so that the index's
+    // key derivation — NFC-normalized, see that function — has exactly one home
+    // and cannot drift from what `checkAnchor` looks up. The per-entry policy
+    // (case-sensitive ids vs folded slugs) is derived from the file type there.
+    const entries: [string, Set<string>][] = [];
     for (const resource of this.resourcesByPath.values()) {
       const fragments = new Set<string>();
       collectHeadingSlugs(resource.headings, fragments);
       for (const anchor of resource.anchors ?? []) {
         fragments.add(anchor);
       }
-      // Policy (case-sensitive ids vs folded slugs) is derived from the file type.
-      map.set(resource.filePath, fragmentIndexEntry(resource.filePath, fragments));
+      entries.push([resource.filePath, fragments]);
     }
-    return map;
+    return fragmentIndex(entries);
   }
 
   /**
@@ -1862,8 +1883,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * @param resource - Resource to index
    */
   private indexResource(resource: ResourceMetadata): void {
-    // Index by path (1:1)
-    this.resourcesByPath.set(resource.filePath, resource);
+    // Index by path (1:1) — NFC key, see the field's docblock
+    this.resourcesByPath.set(toNfc(resource.filePath), resource);
 
     // Index by ID (1:1)
     this.resourcesById.set(resource.id, resource);

@@ -47,6 +47,11 @@ function exclusionToContext(
       return makeRuleContext({ subject: 'edge', fileKind: 'agent-instruction' });
     case 'missing-target':
       return makeRuleContext({ subject: 'edge', phase: 'source', existsAtSource: targetExists });
+    case 'unreadable-target':
+      // Present on disk, unstattable anyway. `existsAtSource` stays true (the
+      // walker found it) — the edge is not broken, it is unreadable, and the two
+      // send an author to different places.
+      return makeRuleContext({ subject: 'edge', unreadable: true });
     case 'pattern-matched':
       return makeRuleContext({ subject: 'edge', patternExcluded: true });
     case 'non-routable-source':

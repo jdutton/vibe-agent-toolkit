@@ -71,7 +71,7 @@ export interface LinkResolution {
   /** Whether the file will be bundled */
   bundled: boolean;
   /** Reason it was excluded (only set when bundled is false) */
-  excludeReason?: 'depth-exceeded' | 'pattern-matched' | 'directory-target' | 'outside-project' | 'navigation-file' | 'agent-instruction-file' | 'skill-definition' | 'gitignored' | 'missing-target' | 'non-routable-source' | undefined;
+  excludeReason?: 'depth-exceeded' | 'pattern-matched' | 'directory-target' | 'outside-project' | 'navigation-file' | 'agent-instruction-file' | 'skill-definition' | 'gitignored' | 'missing-target' | 'unreadable-target' | 'non-routable-source' | undefined;
   /** The rule that matched (only set for pattern-matched exclusions) */
   matchedRule?: ExcludeRule | undefined;
   /** Link text from the source markdown */
@@ -560,24 +560,28 @@ function readGitignored(targetPath: string, options: WalkLinkGraphOptions, state
  * The `exists` × `isDirectory` corner of the cascade — the only place the row's
  * three-state `isDirectory` is read.
  *
- * `null` (present to `existsSync`, unstattable anyway) skips **silently**: the
- * classifier has no basis to say anything about the path, which is exactly what
- * the pre-refactor `catch { return true }` did.
+ * `null` means *no answer about the kind*: the path is present to `existsSync`
+ * and unstattable anyway (a permissions problem, or a change racing the two
+ * calls). The classifier can say nothing about WHAT the target is — but it can
+ * say that the target is there and could not be read, and that is the report.
  *
- * ⚠️ That silence is a divergence worth knowing about rather than a bug fixed
- * here: the resources lane turned this same class of read failure into a
- * `RESOURCE_UNREADABLE` finding, while on this lane an unreadable link target
- * vanishes from the report entirely — no exclusion, no bundling, no issue.
- * Preserved because this refactor is held to byte-identical output; logged as
- * D6 in the spec's deferred-fixes ledger so it is fixed deliberately, with its
- * own golden movement.
+ * ✅ **This used to skip silently, and that was D6 in the spec's deferred-fixes
+ * ledger — now fixed.** `{ kind: 'skipped' }` recorded nothing at all, so an
+ * unreadable link target vanished from the report entirely: no exclusion, no
+ * bundling, no issue. It survived the pass-1′ refactor only because that
+ * refactor was held to byte-identical output (it is what the pre-refactor
+ * `catch { return true }` did). Meanwhile the resources lane turned the
+ * IDENTICAL class of read failure into a `RESOURCE_UNREADABLE` finding, so one
+ * unreadable file got two answers depending on which lane found it. It is now
+ * an `unreadable-target` exclusion, which the verdict engine reports as
+ * `LINK_TARGET_UNREADABLE` — the resources code's skill-packaging sibling.
  *
  * @returns a verdict when the path's kind decides the outcome, else `undefined`
  */
 function classifyPathKind(facts: PathFacts): ExclusionVerdict | undefined {
   if (!facts.exists) return undefined;
   if (facts.isDirectory === true) return { kind: 'excluded', reason: 'directory-target' };
-  if (facts.isDirectory === null) return { kind: 'skipped' };
+  if (facts.isDirectory === null) return { kind: 'excluded', reason: 'unreadable-target' };
   return undefined;
 }
 

@@ -5,6 +5,7 @@ import { dirname } from 'node:path';
 import { DeferredArtifacts } from '@vibe-agent-toolkit/resources';
 import type { ResourceLink, ResourceMetadata, SkillFileEntry } from '@vibe-agent-toolkit/resources';
 import { FsLookupCache, mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import type { PathProbe } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { walkerExclusionsToIssues } from '../src/validators/walker-to-issues.js';
@@ -307,6 +308,31 @@ function createMockResource(
     modifiedAt: new Date('2024-01-01'),
     checksum: MOCK_CHECKSUM,
   };
+}
+
+/**
+ * A probe that answers "present, but unstattable" for ONE path — the exact
+ * `{ exists: true, isDirectory: null }` pair {@link FsLookupCache.probe} records
+ * when `existsSync` succeeds and `statSync` throws anyway (a permission change,
+ * or a delete racing between the two calls).
+ *
+ * Injected rather than produced by mocking `node:fs`: the probe is the walk's
+ * ONE oracle for both of those questions, so overriding it reproduces the state
+ * the classifier branches on without mocking a module every other fixture in
+ * this file uses for real.
+ */
+class UnstattableProbe extends FsLookupCache {
+  readonly #unstattable: string;
+
+  constructor(unstattable: string) {
+    super();
+    this.#unstattable = unstattable;
+  }
+
+  override probe(targetPath: string): PathProbe {
+    if (targetPath === this.#unstattable) return { exists: true, isDirectory: null };
+    return super.probe(targetPath);
+  }
 }
 
 function createLocalLink(text: string, href: string, resolvedId?: string): ResourceLink {
@@ -1357,6 +1383,39 @@ describe('walkLinkGraph', () => {
       // And they were asked about more often than that — otherwise the memo
       // would be collapsing nothing and this test would prove nothing.
       expect(probes).toBeGreaterThan(misses);
+    });
+
+    /**
+     * A target that `existsSync` finds but `statSync` cannot answer for used to
+     * VANISH: the classifier returned `{ kind: 'skipped' }`, so the link was
+     * neither bundled, nor excluded, nor reported — the report simply had one
+     * fewer edge in it than the corpus did.
+     *
+     * The resources lane has always turned this identical read failure into a
+     * `RESOURCE_UNREADABLE` finding. This lane now reports it too, so the two
+     * lanes no longer disagree about the same unreadable file.
+     */
+    it('reports a present-but-unstattable target instead of dropping the link', () => {
+      const tmpDir = getTempDir();
+      const targetRel = 'docs/unreadable.md';
+      const target = safePath.resolve(tmpDir, targetRel);
+      mkdirSyncReal(dirname(target), { recursive: true });
+      writeFileSync(target, '# Unreadable\n');
+
+      const result = walkOnDiskLink({
+        tmpDir,
+        linkText: 'unreadable',
+        linkRel: targetRel,
+        overrides: { pathProbe: new UnstattableProbe(target) },
+      });
+
+      expect(result.excludedReferences).toHaveLength(1);
+      expect(result.excludedReferences[0]?.excludeReason).toBe('unreadable-target');
+      // ...and it must survive translation, not be recorded and then dropped by
+      // the issue front-end — which is where the silence used to be replaced by
+      // a second, quieter silence.
+      const issues = walkerExclusionsToIssues(result.excludedReferences, tmpDir);
+      expect(issues.map(i => i.code)).toEqual(['LINK_TARGET_UNREADABLE']);
     });
 
     it('builds its own probe when the caller supplies none', () => {

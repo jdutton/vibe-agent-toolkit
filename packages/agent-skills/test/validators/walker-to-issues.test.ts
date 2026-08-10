@@ -34,6 +34,7 @@ describe('walkerExclusionsToIssues', () => {
       resolution('navigation-file', '/root/README.md'),
       resolution('agent-instruction-file', '/root/packages/core/CLAUDE.md'),
       resolution('missing-target', '/root/nope.md', false),
+      resolution('unreadable-target', '/root/docs/locked.md'),
       resolution('pattern-matched', '/root/docs/x.md'),
     ];
     const issues = walkerExclusionsToIssues(input, '/root');
@@ -50,6 +51,7 @@ describe('walkerExclusionsToIssues', () => {
       'LINK_TO_NAVIGATION_FILE',
       'LINK_TO_AGENT_INSTRUCTION_FILE',
       'LINK_MISSING_TARGET',
+      'LINK_TARGET_UNREADABLE',
       // pattern-matched emits no issue
     ]);
   });

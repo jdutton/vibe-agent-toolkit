@@ -38,6 +38,14 @@ const EXCLUDED_FILE_KIND_CODES: Partial<Record<FileKind, IssueCode>> = {
  * link).
  */
 function evaluateEdge(ctx: RuleContext): IssueCode | null {
+  // An unreadable target (present on disk, unstattable anyway) is reported
+  // outright — the same failure class the resources lane reports as
+  // RESOURCE_UNREADABLE. FIRST, mirroring the walker's own cascade, where
+  // classifyPathKind runs ahead of the project-boundary check: nothing else
+  // about a file that cannot be read is knowable, so no later branch could be
+  // answering from evidence.
+  if (ctx.unreadable) return 'LINK_TARGET_UNREADABLE';
+
   // A target outside the project boundary is the strongest signal — it can
   // never be bundled regardless of anything else about the edge.
   if (ctx.outsideProject) return 'LINK_OUTSIDE_PROJECT';

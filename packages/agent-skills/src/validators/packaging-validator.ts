@@ -1153,7 +1153,12 @@ export function getResolvedMarkdownLinks(
  * Reasons that are reported as validation errors instead of excluded references.
  * These are filtered out of the excluded references list.
  */
-const VALIDATION_ERROR_REASONS: ReadonlySet<string> = new Set([EXCLUDE_REASON_DIRECTORY, EXCLUDE_REASON_OUTSIDE_PROJECT]);
+const EXCLUDE_REASON_UNREADABLE = 'unreadable-target' as const;
+const VALIDATION_ERROR_REASONS: ReadonlySet<string> = new Set([
+  EXCLUDE_REASON_DIRECTORY,
+  EXCLUDE_REASON_OUTSIDE_PROJECT,
+  EXCLUDE_REASON_UNREADABLE,
+]);
 
 /**
  * Deduplicate excluded references by path, preserving detail from first occurrence.
@@ -1204,6 +1209,7 @@ function mapExcludeReason(
     case 'depth-exceeded':
     case EXCLUDE_REASON_DIRECTORY:
     case EXCLUDE_REASON_OUTSIDE_PROJECT:
+    case EXCLUDE_REASON_UNREADABLE:
     case 'missing-target':
     case undefined:
     default:

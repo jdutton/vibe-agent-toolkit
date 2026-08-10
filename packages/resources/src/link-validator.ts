@@ -57,6 +57,7 @@ import {
   issueLocation,
   type RealpathTable,
   type SiblingNamesTable,
+  toNfc,
 } from '@vibe-agent-toolkit/utils';
 
 import type { DeferredArtifacts } from './deferred-artifacts.js';
@@ -925,12 +926,21 @@ export function fragmentIndexEntry(filePath: string, fragments: Set<string> = ne
 /**
  * Build a {@link FragmentIndex} from `[path, fragments]` pairs, deriving each
  * entry's matching policy from its path. Single construction path shared by the
- * registry and tests.
+ * registry and tests — which is what lets the key normalization below live in
+ * exactly one place.
+ *
+ * **Keys are Unicode NFC (`toNfc`), not the raw path.** The index is built from
+ * *enumerated* paths and queried by {@link checkAnchor} with a path *derived
+ * from markdown link text*; on macOS those routinely differ in normalization
+ * form for the same file, and an exact-string miss here is silent — a miss
+ * answers `'skip'`, so the anchor is simply never checked. Ledger entry D7.
+ * Only the key is normalized: the entry's matching policy still derives from the
+ * raw path, and `isHtmlPath` is extension-based and normalization-agnostic.
  */
 export function fragmentIndex(entries: Iterable<readonly [string, Set<string>]> = []): FragmentIndex {
   const map: FragmentIndex = new Map();
   for (const [filePath, fragments] of entries) {
-    map.set(filePath, fragmentIndexEntry(filePath, fragments));
+    map.set(toNfc(filePath), fragmentIndexEntry(filePath, fragments));
   }
   return map;
 }
@@ -996,7 +1006,8 @@ export function checkAnchor(
   fragmentsByFile: FragmentIndex,
   checkHtmlAnchors = false,
 ): AnchorCheck {
-  const entry = fragmentsByFile.get(targetFilePath);
+  // NFC on both sides — see {@link fragmentIndex} for why the key is normalized.
+  const entry = fragmentsByFile.get(toNfc(targetFilePath));
   if (!entry) {
     return 'skip';
   }

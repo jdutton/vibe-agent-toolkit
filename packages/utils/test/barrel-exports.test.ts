@@ -109,6 +109,7 @@ const BARREL_EXPORTS = [
   'staticGlobBase',
   'toAbsolutePath',
   'toForwardSlash',
+  'toNfc',
   'UnknownMacroError',
   'unwrapZodType',
   'updateYamlIn',

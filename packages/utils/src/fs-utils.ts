@@ -16,7 +16,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
-import { toForwardSlash } from './path-core.js';
+import { toForwardSlash, toNfc } from './path-core.js';
 import { safePath } from './path-utils.js';
 
 /**
@@ -383,7 +383,14 @@ export async function fillSiblingNames(
   const table = new Map<string, readonly string[] | null>();
   await Promise.all(
     [...parentDirs].map(async (parentDir) => {
-      table.set(parentDir, await fsCache.readdir(parentDir));
+      const names = await fsCache.readdir(parentDir);
+      // Unicode normalization is reconciled HERE, in the fill, so that
+      // `classifyFilenameCase` stays a pure string comparison and the row it
+      // judges already holds comparable strings. `siblingNamesFrom` normalizes
+      // the other side (`expectedName`) for the same reason. A fresh array,
+      // never a mutation: `fsCache.readdir` memoizes and shares its listing
+      // across fills, so the cached value must not be rewritten under it.
+      table.set(parentDir, names === null ? null : names.map(toNfc));
     })
   );
 
@@ -419,7 +426,9 @@ export function siblingNamesFrom(table: SiblingNamesTable, filePath: string): Si
     );
   }
 
-  return { expectedName: path.basename(filePath), names };
+  // NFC on this side too — the fill normalized the listing, and a comparison is
+  // only reconciled when BOTH sides are. See {@link toNfc}.
+  return { expectedName: toNfc(path.basename(filePath)), names };
 }
 
 /**
@@ -435,13 +444,21 @@ export function siblingNamesFrom(table: SiblingNamesTable, filePath: string): Si
  * Searching case-insensitively first would report the very file that exists as a
  * case mismatch, purely on directory-entry order.
  *
- * ⚠️ **Comparison is raw UTF-16, so Unicode normalization is not handled** — and
- * neither did the code this was extracted from. macOS hands back decomposed
- * names (`e` + U+0301) where a markdown link usually carries the composed form
- * (`é`); the two are `!==` and case-folding does not reconcile them, so an
- * accented file that exists is reported as flatly missing, without even the
- * case-mismatch hint. Ledger entry D7. Fixing it means normalizing both sides in
- * the fill, which moves output and so wants its own commit.
+ * **Comparison is raw string equality, and that is only correct because both
+ * sides arrive pre-normalized.** `é` has two encodings (NFC `U+00E9` vs NFD
+ * `e` + `U+0301`) that are `!==` and that case-folding does not reconcile, so an
+ * accented file that exists used to be reported flatly missing — without even
+ * the case-mismatch hint, which needs the case-insensitive branch to match
+ * (ledger entry D7). {@link fillSiblingNames} now NFC-normalizes the listing and
+ * {@link siblingNamesFrom} the expected name, which keeps this function pure.
+ * Do not reintroduce normalization here: a hand-written row is this function's
+ * advertised input, and normalizing inside the judge would quietly make the fill
+ * optional and let a raw row disagree with a filled one.
+ *
+ * A consequence worth knowing: `actualName` is therefore the NFC form of the
+ * entry, not the raw bytes `readdir` returned. For the case-mismatch hint that
+ * is the better answer — it is the form to write into a link — but it is not a
+ * faithful echo of the directory entry.
  *
  * @param row - The listing row, read out of a filled table by {@link siblingNamesFrom}
  * @returns Whether the exact name exists, and the entry actually on disk (or `null`)

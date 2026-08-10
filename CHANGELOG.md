@@ -184,6 +184,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A markdown link whose target exists but cannot be read is now reported instead of silently
+  dropped — new `LINK_TARGET_UNREADABLE` code (error).** When `existsSync` found a link target and
+  `statSync` then threw anyway (a permissions problem, or a change racing the walk), the skill
+  link-graph walker classified it as "skipped": no exclusion, no bundle entry, no finding. The link
+  simply vanished, so the report described a corpus with one fewer edge in it than the tree on disk.
+  The resources lane has always reported the identical read failure as `RESOURCE_UNREADABLE`; the
+  two lanes now give one answer to one situation. Configurable like any other code
+  (`validation.severity.LINK_TARGET_UNREADABLE`), and documented in `docs/validation-codes.md`.
+
 - **`vat audit` and `vat inventory` stopped spawning a `git check-ignore` process per link target.**
   The skill link walk asks whether each link target is gitignored. `walkLinkGraph` has always
   accepted a `GitTracker` — which answers that in O(1) from a single `git ls-files` — but the
@@ -263,6 +272,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not be cited as a cross-platform guarantee.
 
 ### Fixed
+
+- **A link to a file whose name carries an accent was reported broken even though the file was right
+  there.** The same visible filename has two Unicode encodings — precomposed `é` (NFC) and
+  decomposed `e` + combining acute (NFD) — and the two sides of every filename comparison come from
+  different places: `readdir` and `git ls-files` hand back whatever form is on disk (commonly
+  decomposed on macOS), while a link href carries whatever an editor typed (almost always composed).
+  Nothing reconciled them, so three lookups in the link pipeline missed on files that plainly exist:
+  the parent-directory listing check emitted `LINK_BROKEN_FILE`; the registry's path index withheld
+  `resolvedId`, which strips the href during packaging and fails the build with
+  `PACKAGED_UNREFERENCED_FILE`; and the fragment index silently skipped anchor checking. All three
+  now key on NFC via the new `toNfc()` helper (`@vibe-agent-toolkit/utils/path`). Paths handed to
+  the filesystem are deliberately left alone — on Linux the normalized form of a decomposed filename
+  names no file at all.
 
 - **`--debug` produced no debug output from any command, and an unexpected failure printed no stack
   under it either.** `--debug` is declared on the root program *and* on 47 subcommands; Commander

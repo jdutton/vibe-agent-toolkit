@@ -106,6 +106,7 @@ once in each code's section below (linked from the `Code` cell).
 | [`LINK_TO_AGENT_INSTRUCTION_FILE`](#link_to_agent_instruction_file) | error | Markdown link targets a repo-internal agent-instruction file (CLAUDE.md, AGENTS.md, GEMINI.md) that no explicit files: entry declares; it is not bundled and the link is stripped from the packaged content. | Link the specific content the file describes; point the link at the file's canonical home as an absolute URL; or extract the shared part into a document intended for distribution. To ship the file deliberately, name it in an explicit (non-glob) skills.config.<name>.files entry — the file is then bundled and this link is rewritten to the declared dest. |
 | [`LINK_TO_GITIGNORED_FILE`](#link_to_gitignored_file) | error | Markdown link targets a gitignored file; risks leaking ignored data into the bundle. | Link to a non-ignored file or adjust .gitignore. Allow the specific path via validation.allow if the risk has been reviewed. If the target is a build artifact, declare it under skills.config.<name>.files instead. |
 | [`LINK_MISSING_TARGET`](#link_missing_target) | error | Markdown link target does not exist on disk and is not a declared build artifact. | Fix the link path, create the file, or declare it under skills.config.<name>.files as a build artifact. |
+| [`LINK_TARGET_UNREADABLE`](#link_target_unreadable) | error | Markdown link target exists on disk but could not be read, so it was neither classified nor bundled. Most often permissions; also a change racing the walk. | Fix the permissions on the target, or investigate what changed it mid-walk, then re-run. Set severity.LINK_TARGET_UNREADABLE to warning if a corpus is expected to contain entries the walk cannot read. |
 | [`LINK_DEFERRED_ARTIFACT`](#link_deferred_artifact) | info | Link targets a deferred build artifact declared in the skill files: config; it will exist after the build materializes it. | No action needed if the files: entry is correct. To silence, set validation.severity.LINK_DEFERRED_ARTIFACT: ignore. |
 | [`LINK_TO_SKILL_DEFINITION`](#link_to_skill_definition) | error | Markdown link targets another skill's SKILL.md; bundling it creates duplicate skill definitions. | Link to a specific resource inside the other skill, or reference the other skill by name. |
 | [`LINK_FROM_NON_ROUTABLE_FILE`](#link_from_non_routable_file) | warning | A bundled non-routable file (HTML) links to a file the walker did not follow, so the target is not in the bundle and the packaged link points at nothing. | Link the target from a markdown file in the bundle, declare it under skills.config.<name>.files, or set severity.LINK_FROM_NON_ROUTABLE_FILE to ignore if the packaged link is meant to resolve outside the bundle. |
@@ -132,6 +133,7 @@ and shows the `files:` edge as the resolving state once `DeferredArtifacts` is w
 | Broken link | Build artifact declared in `files:` (not yet materialized) | `LINK_DEFERRED_ARTIFACT` (info — resolves after build) |
 | Broken link | Typo / wrong path at source | `LINK_MISSING_TARGET` |
 | Broken link | `files:` **dest** VAT declined to package (its source is declared test input) | `LINK_MISSING_TARGET` + a `PACKAGED_TEST_INPUT` receipt — never deferred, because nothing will materialize it |
+| Broken link | Present at source, but the walk could not read it (permissions, or a change racing the walk) | `LINK_TARGET_UNREADABLE` (the file is there — this is not a missing target) |
 | Broken link | Present in source but missing in **built** output | `PACKAGED_BROKEN_LINK` (link-rewriter bug — the issue's `fix` says to report it) |
 | Broken link | Target a glob `files:` entry matched and the never-package filter dropped | `PACKAGED_BROKEN_LINK` (deliberate policy — same code, still blocking, but the issue's `fix` names this cause instead of blaming VAT) |
 | Orphan file | Runtime asset loaded by a script | Declare in `files:` → no code (declaration is the resolution; the build's orphan check is given the dests it copied and exempts them) |
@@ -207,6 +209,14 @@ Static-analysis codes that fire anywhere markdown is analyzed — `vat resources
 - **What:** Markdown link target does not exist on disk and is not a declared build artifact.
 - **Why it matters:** Broken links in skill documentation mean agents hit dead ends when they follow references. This usually indicates a typo, a removed file, or a build-artifact path that needs declaring under `skills.config.<name>.files`.
 - **Fix:** Fix the link path, create the file, or declare it under `skills.config.<name>.files` as a build artifact.
+
+### `LINK_TARGET_UNREADABLE`
+
+- **Default:** `error`
+- **What:** Markdown link target exists on disk but could not be read, so it was neither classified nor bundled. Most often permissions; also a change racing the walk. The walk found the path (`existsSync` succeeded) and then could not `stat` it, so it could not tell what the target even is — file, directory, or anything else.
+- **Not a missing target:** the distinction is the whole point of this code. [`LINK_MISSING_TARGET`](#link_missing_target) says *the path is not there*, and sends the author to fix a typo or create the file. This one says *the path is there and the tooling cannot read it*, which is an environment or permissions problem — following the missing-target remedy would have the author "create" a file that already exists.
+- **Why it matters:** Before this code existed the link simply **vanished**: an unstattable target was skipped silently, producing no exclusion, no bundle entry and no finding, so the report described a corpus with one fewer edge in it than the one on disk. The same read failure has always been reported on the resources lane as [`RESOURCE_UNREADABLE`](#resource_unreadable) — this is that code's skill-packaging sibling, and the two lanes now agree about the same unreadable file.
+- **Fix:** Fix the permissions on the target, or investigate what changed it mid-walk, then re-run. Set `severity.LINK_TARGET_UNREADABLE` to `warning` if a corpus is expected to contain entries the walk cannot read.
 
 ### `LINK_DEFERRED_ARTIFACT`
 

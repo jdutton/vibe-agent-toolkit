@@ -621,6 +621,55 @@ describe('fs-utils', () => {
       });
     });
 
+    /**
+     * Ledger D7 — the same visible filename in two Unicode normalization forms.
+     *
+     * **The fixture is code-generated for a reason.** A file committed to git
+     * with an accented name cannot be trusted to arrive decomposed: macOS
+     * editors and git checkouts routinely re-normalize, so a committed fixture
+     * can silently be NFC on both sides and pin nothing. Both forms are written
+     * as escape sequences so no editor, formatter, or checkout can renormalize
+     * the literal out from under the test.
+     *
+     * `readdir` hands back exactly the bytes written (APFS preserves the form),
+     * so the on-disk entry is decomposed while the path being asked about is
+     * composed — the shape a markdown link takes in practice.
+     *
+     * ⚠️ This must NOT be written as an `existsSync` test. macOS is
+     * normalization-*insensitive* at the syscall level, so `existsSync` on the
+     * composed form returns `true` even here and would report the bug as
+     * absent. The comparison under test is pure string equality over the
+     * listing, which behaves identically on every platform.
+     */
+    const NFD_NAME = 'cafe\u0301.txt';
+    const NFC_NAME = 'caf\u00E9.txt';
+
+    /**
+     * ⚠️ **Both directions, deliberately.** The fill normalizes the listing and
+     * `siblingNamesFrom` normalizes `expectedName`; a one-directional case
+     * exercises only the first, because once the listing is NFC a composed query
+     * matches it without the query ever being normalized. Swapping which side is
+     * decomposed is what pins the other half — drop either normalization and
+     * exactly one row goes red.
+     */
+    const NORMALIZATION_PAIRS: readonly { label: string; onDisk: string; asked: string }[] = [
+      { label: 'a composed query against a decomposed listing', onDisk: NFD_NAME, asked: NFC_NAME },
+      { label: 'a decomposed query against a composed listing', onDisk: NFC_NAME, asked: NFD_NAME },
+    ];
+
+    it.each(NORMALIZATION_PAIRS)('judges $label as present (D7)', async ({ onDisk, asked }) => {
+      // Guard the premise: if these ever became the same string the test would
+      // pass while demonstrating nothing.
+      expect(onDisk).not.toBe(asked);
+
+      await fs.writeFile(safePath.join(tempDir, onDisk), '');
+      const askedPath = safePath.join(tempDir, asked);
+
+      const table = await fillSiblingNames([askedPath], new FsLookupCache());
+
+      expect(classifyFilenameCaseFrom(table, askedPath).exists).toBe(true);
+    });
+
     it('lists a directory ONCE however many of its files are asked about', async () => {
       const filePaths = await writeSiblings(tempDir);
       const cache = new FsLookupCache();
