@@ -758,20 +758,25 @@ async function copyGlobEntry(
     const relDest = normalizeRelPath(safePath.join(entry.dest, rel));
     const absDest = safePath.joinUnderRoot(skillOutputDir, entry.dest, rel);
 
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dest path from validated config
-    await mkdir(dirname(absDest), { recursive: true });
     // Attributed, because the raw errno alone is what made this class of failure
     // expensive to diagnose in the first place. `isCopyableFile` classifies the
     // TYPE of the match; it deliberately does not assert readability, because a
     // permission can change between the check and the copy and a guard that
-    // pretended otherwise would just move the race. So the copy itself is where
+    // pretended otherwise would just move the race. So the write itself is where
     // an IO failure is caught and given the entry, the path, and a remedy.
+    //
+    // The `mkdir` is INSIDE the guard, not above it: it fails on an unwritable
+    // output directory, a full disk, or a dest whose parent is an existing file,
+    // and each of those escaped as exactly the same bare errno this exists to
+    // replace.
     //
     // Still a hard failure, unlike a non-regular match: an unreadable file is one
     // the author DECLARED and expects in the bundle, so shipping silently without
     // it would change the artifact behind their back. A non-regular match can
     // never be packaged at all, which is why that one degrades instead.
     try {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- dest path from validated config
+      await mkdir(dirname(absDest), { recursive: true });
       await copyFile(absSource, absDest);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
