@@ -94,6 +94,31 @@ const COUNTER_SRC = fileURLToPath(new URL('../src/facets/io/counter.cts', import
 const COUNTER_DIST = fileURLToPath(new URL('../dist/facets/io/counter.cjs', import.meta.url));
 
 /**
+ * The counter as `NODE_OPTIONS` must spell it — forward-slashed, and *only*
+ * here.
+ *
+ * `fileURLToPath` yields native separators, so on Windows this path arrives as
+ * `C:\...\counter.cjs`. Node's `NODE_OPTIONS` parser treats a backslash inside
+ * double quotes as an escape, and the quotes are not optional either — an
+ * unquoted path containing a space parses as two arguments. So the quoted
+ * native path is silently rewritten to one that does not exist and the measured
+ * child dies in the CJS loader before it runs a line: reproduced on macOS,
+ * where a backslash is a legal filename character, as
+ * `--require "/tmp/bsprobe/back\dir/counter.cjs"` → `Cannot find module
+ * '/tmp/bsprobe/backdir/counter.cjs'`. It is the same trap `capture.ts`
+ * documents on `nodeOptionsWith`, which production avoids because
+ * `resolveCounterPath` runs the path through `safePath.resolve`; this file
+ * resolved its own and so did not.
+ *
+ * `COUNTER_DIST` itself stays native on purpose. It is also the `selfFile` fed
+ * to `createState`, and the counter matches that against V8 stack frames on the
+ * documented invariant that both sides come from V8 and their separators are
+ * therefore identical by construction. Forward-slashing it globally would fix
+ * the preload and break the frame matching, on Windows only.
+ */
+const COUNTER_PRELOAD = toForwardSlash(COUNTER_DIST);
+
+/**
  * Load the built counter.
  *
  * It is inert without `VAT_LAB_IO_LOG`, and `vitest.setup.js` deletes every
@@ -736,7 +761,7 @@ let files: string[] = [];
 function runChild(activate: boolean, dir: string): { report: ChildReport; pid: number } {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    NODE_OPTIONS: `--require "${COUNTER_DIST}"`,
+    NODE_OPTIONS: `--require "${COUNTER_PRELOAD}"`,
   };
   if (activate) {
     env[internals.LOG_DIR_ENV] = dir;
