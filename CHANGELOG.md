@@ -9,50 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
-- **Library-only, type-level: `ValidationConfigSchema` is now typed `z.ZodType<ValidationConfig>` rather than the inferred `ZodObject`.** No CLI behaviour changes and no runtime change — it is the same strict object, so `safeParse` still rejects unknown codes and unknown top-level keys, and the generated `schemas/validation-config.json` is byte-identical. **What to do:** nothing, unless you called `ZodObject`-only methods on it (`.shape`, `.extend`, `.merge`, `.pick`); those are no longer available at the type level. The `ValidationConfig` type itself is unchanged.
+- **Library-only, type-level: `ValidationConfigSchema` is now typed `z.ZodType<ValidationConfig>` instead of an inferred `ZodObject`.** No CLI behaviour change, no runtime change: it is the same strict object, `safeParse` still rejects unknown codes and unknown top-level keys, and `schemas/validation-config.json` is byte-identical. The `ValidationConfig` type is unchanged.
 
-  **Why:** `z.record(IssueCodeSchema, …)` inlined the entire code-name union into the inferred type, twice, and every downstream `.d.ts` carried both copies verbatim — `resources`' `project-config.d.ts` held 98 copies of the union, with a longest line of 4,780 characters. Past a certain width TypeScript's declaration printer starts attaching leading JSDoc to the wrong node and emits **syntactically invalid** `.d.ts`, which then fails every package that consumes it (1,341 errors from that one file). Annotating collapses those to a named `IssueCode` reference: the same file now has 0 inlined copies and a longest line of 133 characters, and the emitted declarations stay small however long the registry grows.
+  **What to do:** nothing, unless you called `ZodObject`-only methods on the schema value — `.shape`, `.extend`, `.merge`, `.pick` are no longer available at the type level. Needed because the inferred type inlined the full validation-code union into every downstream `.d.ts`, which had grown large enough to make TypeScript emit invalid declarations.
 
 ### Fixed
 
-- **A `files:` glob matching a symlink-to-directory no longer kills the build with an unattributed `ENOTSUP` (issue #183).** The new **`FILES_GLOB_SKIPPED_NON_REGULAR_FILE` (`warning`)** covers a glob matching something that
-  is not a regular file (a symlink to a **directory**, a dangling symlink, a FIFO, a socket, a
-  device node). It cannot be packaged, so it is skipped and the rest of the entry still ships.
-  `glob`'s `nodir: true` cannot exclude these: glob does not follow symlinks, so a link pointing
-  at a directory is never a directory *to it*. **A symlink to a regular FILE is still copied by
-  content** — the predicate is "does this resolve to a regular file, without throwing", not "is
-  this a symlink", so that legitimate and widely-used case is untouched. Reported by the
-  pre-build gates (`vat skills validate`, `vat audit`) and by the build, from one shared
-  expansion.
+- **`vat skills build` no longer dies on a `files:` glob that matches a symlink to a directory.** The build failed with a raw `ENOTSUP` that named neither the `files:` entry nor the path — and on macOS it renders as "operation not supported on socket", describing the object as something it is not. Anything a glob matches that cannot be packaged (a symlink to a directory, a dangling symlink, a FIFO, a socket, a device node) is now skipped and reported as **`FILES_GLOB_SKIPPED_NON_REGULAR_FILE`** (`warning`), and the rest of the entry ships. `vat skills validate` and `vat audit` report it before a build too.
 
-  Scoped to the *type* of the match, not to permissions. A regular file that cannot be **read**
-  is not skipped — it is one the author declared and expects in the bundle, so shipping without
-  it would change the artifact behind their back. That case still fails the build, but the error
-  now names the `files:` entry, the path and a remedy instead of surfacing a bare `EACCES` from
-  `copyfile` — the same unattributed-errno defect this code was added to fix, reached through
-  permissions rather than through file type.
+  **A symlink to a regular file is still copied by content** — that case is unchanged.
 
-- **One unreadable path no longer aborts an entire `vat audit` run (issue #180).** An
-  `EACCES` anywhere under the audited tree used to propagate out of the walk and end the
-  command with `status: error`, exit code 2, and **zero findings** — discarding everything already
-  collected from readable siblings. A single root-owned or quarantined entry under
-  `~/.claude/plugins` killed the flagship `vat audit --user` invocation outright. The walk now scopes
-  the failure to the path that caused it: siblings are still scanned, findings already collected
-  survive, and the gap is reported as the new `SCAN_PATH_UNREADABLE` (`warning`) naming the path and
-  the OS message. Silence was not an option — a scan reporting `success` while having skipped part of
-  the tree is the same failure shape as a detector that quietly disables itself.
+  A file that exists but cannot be *read* still fails the build, deliberately: you declared it and expect it in the bundle, so shipping without it would change your artifact silently. That error now names the entry, the path and what to do, instead of a bare `EACCES`.
 
-  **Both an unreadable directory and an unreadable file are covered.** Guarding only the directory
-  walk left the flagship scenario half-broken while appearing fixed: under `~/.claude/plugins` —
-  populated by `sudo` installs and macOS quarantine — a root-owned `SKILL.md` is at least as likely
-  as a root-owned directory, and it reproduced the identical total failure.
+- **`vat audit` no longer throws away every finding when it hits one unreadable file or directory.** A single path it could not read — most likely a root-owned or quarantined entry under `~/.claude/plugins` — ended the whole run with `status: error`, exit code 2, and **zero findings**, including everything already collected from parts of the tree that scanned fine. This hit `vat audit --user` hardest, where sudo-installed and quarantined files are normal.
 
-  Only filesystem access errnos degrade; anything else is rethrown and still fails the run, so a
-  defect in VAT's own validators cannot be laundered into a `warning` about the file it happened on.
+  The scan now continues past the path it could not read, keeps every other finding, and reports the gap as **`SCAN_PATH_UNREADABLE`** (`warning`) naming the path and the OS message. Exit code is no longer 2 for this, so a run that previously died now reports what it found.
 
-  Note for anyone tracing this from the issue: the cause recorded there (`crawlDirectorySync` in
-  `agent-instruction-presence.ts`) is not the one. That crawl already guards each directory
-  individually; the unguarded reads were `scanDirectory`'s own, in `commands/audit.ts`.
+  **What to do:** nothing required. Fix the path's permissions to scan it, or pass `--exclude` to skip it deliberately.
 
 
 ## [0.1.42] - 2026-08-08
