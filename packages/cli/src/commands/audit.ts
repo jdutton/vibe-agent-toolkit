@@ -2255,6 +2255,60 @@ function unreadablePathResult(
   };
 }
 
+/** Everything one directory entry needs, threaded through unchanged from its parent walk. */
+interface ScanEntryContext {
+  recursive: boolean;
+  options: AuditCommandOptions;
+  logger: ReturnType<typeof createLogger>;
+  scanCtx: ScanContext;
+  /** This level's own skill (if any) owns everything below — used for subdirectories. */
+  descendCtx: ScanContext;
+  baseDir: string;
+  nestedConfigLog: Set<string>;
+}
+
+/**
+ * Scan ONE directory entry, degrading to a finding if the filesystem refuses it.
+ *
+ * Guarded per ENTRY, not just per directory: wrapping only the parent `readdir`
+ * left the other half of the same defect live — an unreadable FILE (a root-owned
+ * `SKILL.md`, a quarantined bundle) threw out of `validateSkill` and still
+ * aborted the whole run with `status: error` and zero findings. Under
+ * `~/.claude/plugins` — the flagship `vat audit --user` target, populated by sudo
+ * installs and macOS quarantine — a root-owned FILE is at least as likely as a
+ * root-owned directory (issue #180).
+ *
+ * Extracted from `scanDirectory` rather than inlined because the added branch put
+ * that function over the cognitive-complexity ceiling; the walk keeps the
+ * bookkeeping, this keeps the per-entry decision.
+ */
+async function scanEntry(
+  entry: Dirent,
+  fullPath: string,
+  ctx: ScanEntryContext,
+): Promise<ValidationResult[]> {
+  try {
+    if (entry.isFile()) {
+      const result = await handleFileEntry(entry, fullPath, ctx.options, ctx.logger, ctx.scanCtx);
+      return result === null ? [] : [result];
+    }
+    if (entry.isDirectory()) {
+      return await handleDirectoryEntry(
+        fullPath, ctx.recursive, ctx.options, ctx.logger, ctx.baseDir, ctx.descendCtx, ctx.nestedConfigLog,
+      );
+    }
+    return [];
+  } catch (error) {
+    // ONLY filesystem-access errors degrade. Anything else is rethrown, because
+    // turning a genuine VAT bug into a `warning` about the file it happened on is
+    // the same "detector silently disables itself" shape this guard exists to
+    // prevent — it would make the tool quietest exactly when it is most wrong.
+    if (!isFilesystemAccessError(error)) throw error;
+    ctx.logger.debug(`Unreadable entry: ${fullPath}`);
+    return [unreadablePathResult(fullPath, error, ctx.scanCtx.locationRoot)];
+  }
+}
+
 async function scanDirectory(
   dirPath: string,
   recursive: boolean,
@@ -2343,34 +2397,13 @@ async function scanDirectory(
       continue;
     }
 
-    // Per ENTRY, not just per directory. Guarding only the `readdir` above left
-    // the other half of the same defect live: an unreadable FILE (a root-owned
-    // `SKILL.md`, a quarantined bundle) threw out of `validateSkill` and still
-    // aborted the whole run with `status: error` and zero findings. Under
-    // `~/.claude/plugins` — the flagship `vat audit --user` target, populated by
-    // sudo installs and macOS quarantine — a root-owned FILE is at least as
-    // likely as a root-owned directory.
-    try {
-      if (entry.isFile()) {
-        const result = await handleFileEntry(entry, fullPath, options, logger, resolvedScanCtx);
-        if (result !== null) {
-          results.push(result);
-        }
-      } else if (entry.isDirectory()) {
-        // `descendCtx`, not `resolvedScanCtx`: this level's own skill (if any)
-        // owns everything below, including this subdirectory.
-        const dirResults = await handleDirectoryEntry(fullPath, recursive, options, logger, resolvedBaseDir, descendCtx, resolvedNestedLog);
-        results.push(...dirResults);
-      }
-    } catch (error) {
-      // ONLY filesystem-access errors degrade. Anything else is rethrown, because
-      // turning a genuine VAT bug into a `warning` about the file it happened on
-      // is the same "detector silently disables itself" shape this guard exists to
-      // prevent — it would make the tool quietest exactly when it is most wrong.
-      if (!isFilesystemAccessError(error)) throw error;
-      logger.debug(`Unreadable entry: ${fullPath}`);
-      results.push(unreadablePathResult(fullPath, error, resolvedScanCtx.locationRoot));
-    }
+    results.push(...await scanEntry(entry, fullPath, {
+      recursive, options, logger,
+      scanCtx: resolvedScanCtx,
+      descendCtx,
+      baseDir: resolvedBaseDir,
+      nestedConfigLog: resolvedNestedLog,
+    }));
   }
 
   return results;

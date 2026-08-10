@@ -7,13 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.42] - 2026-08-08
-
 ### Breaking
 
 - **Library-only, type-level: `ValidationConfigSchema` is now typed `z.ZodType<ValidationConfig>` rather than the inferred `ZodObject`.** No CLI behaviour changes and no runtime change — it is the same strict object, so `safeParse` still rejects unknown codes and unknown top-level keys, and the generated `schemas/validation-config.json` is byte-identical. **What to do:** nothing, unless you called `ZodObject`-only methods on it (`.shape`, `.extend`, `.merge`, `.pick`); those are no longer available at the type level. The `ValidationConfig` type itself is unchanged.
 
   **Why:** `z.record(IssueCodeSchema, …)` inlined the entire code-name union into the inferred type, twice, and every downstream `.d.ts` carried both copies verbatim — `resources`' `project-config.d.ts` held 98 copies of the union, with a longest line of 4,780 characters. Past a certain width TypeScript's declaration printer starts attaching leading JSDoc to the wrong node and emits **syntactically invalid** `.d.ts`, which then fails every package that consumes it (1,341 errors from that one file). Annotating collapses those to a named `IssueCode` reference: the same file now has 0 inlined copies and a longest line of 133 characters, and the emitted declarations stay small however long the registry grows.
+
+### Fixed
+
+- **A `files:` glob matching a symlink-to-directory no longer kills the build with an unattributed `ENOTSUP` (issue #183).** The new **`FILES_GLOB_SKIPPED_NON_REGULAR_FILE` (`warning`)** covers a glob matching something that
+  is not a regular file (a symlink to a **directory**, a dangling symlink, a FIFO, a socket, a
+  device node). It cannot be packaged, so it is skipped and the rest of the entry still ships.
+  `glob`'s `nodir: true` cannot exclude these: glob does not follow symlinks, so a link pointing
+  at a directory is never a directory *to it*. **A symlink to a regular FILE is still copied by
+  content** — the predicate is "does this resolve to a regular file, without throwing", not "is
+  this a symlink", so that legitimate and widely-used case is untouched. Reported by the
+  pre-build gates (`vat skills validate`, `vat audit`) and by the build, from one shared
+  expansion.
+
+  Scoped to the *type* of the match, not to permissions. A regular file that cannot be **read**
+  is not skipped — it is one the author declared and expects in the bundle, so shipping without
+  it would change the artifact behind their back. That case still fails the build, but the error
+  now names the `files:` entry, the path and a remedy instead of surfacing a bare `EACCES` from
+  `copyfile` — the same unattributed-errno defect this code was added to fix, reached through
+  permissions rather than through file type.
+
+- **One unreadable path no longer aborts an entire `vat audit` run (issue #180).** An
+  `EACCES` anywhere under the audited tree used to propagate out of the walk and end the
+  command with `status: error`, exit code 2, and **zero findings** — discarding everything already
+  collected from readable siblings. A single root-owned or quarantined entry under
+  `~/.claude/plugins` killed the flagship `vat audit --user` invocation outright. The walk now scopes
+  the failure to the path that caused it: siblings are still scanned, findings already collected
+  survive, and the gap is reported as the new `SCAN_PATH_UNREADABLE` (`warning`) naming the path and
+  the OS message. Silence was not an option — a scan reporting `success` while having skipped part of
+  the tree is the same failure shape as a detector that quietly disables itself.
+
+  **Both an unreadable directory and an unreadable file are covered.** Guarding only the directory
+  walk left the flagship scenario half-broken while appearing fixed: under `~/.claude/plugins` —
+  populated by `sudo` installs and macOS quarantine — a root-owned `SKILL.md` is at least as likely
+  as a root-owned directory, and it reproduced the identical total failure.
+
+  Only filesystem access errnos degrade; anything else is rethrown and still fails the run, so a
+  defect in VAT's own validators cannot be laundered into a `warning` about the file it happened on.
+
+  Note for anyone tracing this from the issue: the cause recorded there (`crawlDirectorySync` in
+  `agent-instruction-presence.ts`) is not the one. That crawl already guards each directory
+  individually; the unguarded reads were `scanDirectory`'s own, in `commands/audit.ts`.
+
+
+## [0.1.42] - 2026-08-08
+
+### Breaking
 
 - **`@vibe-agent-toolkit/utils/fs` no longer re-exports the pure path-string helpers.** Seven
   symbols moved from `./fs` to the new `./path` entry: `safePath`, `toForwardSlash`,
@@ -277,28 +321,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **One unreadable path no longer aborts an entire `vat audit` run (issue #180).** An
-  `EACCES` anywhere under the audited tree used to propagate out of the walk and end the
-  command with `status: error`, exit code 2, and **zero findings** — discarding everything already
-  collected from readable siblings. A single root-owned or quarantined entry under
-  `~/.claude/plugins` killed the flagship `vat audit --user` invocation outright. The walk now scopes
-  the failure to the path that caused it: siblings are still scanned, findings already collected
-  survive, and the gap is reported as the new `SCAN_PATH_UNREADABLE` (`warning`) naming the path and
-  the OS message. Silence was not an option — a scan reporting `success` while having skipped part of
-  the tree is the same failure shape as a detector that quietly disables itself.
-
-  **Both an unreadable directory and an unreadable file are covered.** Guarding only the directory
-  walk left the flagship scenario half-broken while appearing fixed: under `~/.claude/plugins` —
-  populated by `sudo` installs and macOS quarantine — a root-owned `SKILL.md` is at least as likely
-  as a root-owned directory, and it reproduced the identical total failure.
-
-  Only filesystem access errnos degrade; anything else is rethrown and still fails the run, so a
-  defect in VAT's own validators cannot be laundered into a `warning` about the file it happened on.
-
-  Note for anyone tracing this from the issue: the cause recorded there (`crawlDirectorySync` in
-  `agent-instruction-presence.ts`) is not the one. That crawl already guards each directory
-  individually; the unguarded reads were `scanDirectory`'s own, in `commands/audit.ts`.
-
 - **`isGitIgnored()` spawned a git subprocess per ancestor directory when the path was not in a git
   repository at all — `vat resources validate` on a 3,437-document tree outside any repository went
   from 196 s to 20.6 s, with a byte-identical report.** `git check-ignore` exits 128 for two
@@ -486,22 +508,6 @@ exhibited them. Every fix below ships with a regression test.
   - **`LINK_TO_AGENT_INSTRUCTION_FILE` (`error`)**, **`PACKAGED_AGENT_INSTRUCTION_FILE` (`warning`)**,
     **`FILES_GLOB_DROPPED_NEVER_PACKAGED` (`warning`)**, **`FILES_GLOB_MATCHED_NOTHING` (`info`)**
     and **`FILES_GLOB_MATCHED_ONLY_NEVER_PACKAGED` (`warning`)** — see Changed.
-  - **`FILES_GLOB_SKIPPED_NON_REGULAR_FILE` (`warning`)** — a `files:` glob matched something that
-    is not a regular file (a symlink to a **directory**, a dangling symlink, a FIFO, a socket, a
-    device node). It cannot be packaged, so it is skipped and the rest of the entry still ships.
-    `glob`'s `nodir: true` cannot exclude these: glob does not follow symlinks, so a link pointing
-    at a directory is never a directory *to it*. **A symlink to a regular FILE is still copied by
-    content** — the predicate is "does this resolve to a regular file, without throwing", not "is
-    this a symlink", so that legitimate and widely-used case is untouched. Reported by the
-    pre-build gates (`vat skills validate`, `vat audit`) and by the build, from one shared
-    expansion.
-
-    Scoped to the *type* of the match, not to permissions. A regular file that cannot be **read**
-    is not skipped — it is one the author declared and expects in the bundle, so shipping without
-    it would change the artifact behind their back. That case still fails the build, but the error
-    now names the `files:` entry, the path and a remedy instead of surfacing a bare `EACCES` from
-    `copyfile` — the same unattributed-errno defect this code was added to fix, reached through
-    permissions rather than through file type.
 - **User-facing documentation for `vat skill test` and its config surface**
   (`packages/cli/docs/skill-test.md`), covering the per-skill `skills.config.<skill>.test` block and
   the global `test:` node.
