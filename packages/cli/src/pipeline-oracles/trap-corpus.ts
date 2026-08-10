@@ -191,15 +191,12 @@ export const TRAP_CORPUS_FILES: CorpusFiles = Object.freeze({
     '',
   ].join('\n'),
 
-  // ⛔ PINS A KNOWN DEFECT. A label declared twice resolves to the LAST
-  // definition here; CommonMark says the FIRST wins, and every renderer follows
-  // CommonMark. So VAT validates a target the reader never visits.
-  //
-  // Recorded as today's behaviour deliberately: the fix is one line
-  // (`if (!definitions.has(id))`) but it CHANGES OUTPUT, so it belongs in its
-  // own commit with its own golden movement rather than riding along with the
-  // fixture that makes it visible. When it is fixed, this row's `href` flips
-  // from `./last-wins.md` to `./first-wins.md`.
+  // Pins the CommonMark first-wins contract for a label declared twice: the
+  // `linkReference` resolves to the FIRST definition (`./first-wins.md`), not
+  // the last. This used to pin a real defect (last-wins), fixed by making
+  // `collectNode`'s `definition` case only `.set()` when the identifier is
+  // not already present — see the `AstWalkState.definitions` docblock in
+  // `packages/resources/src/link-parser.ts`.
   'parse/duplicate-definition.md': [
     '# Duplicate definition label',
     '',

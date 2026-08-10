@@ -82,12 +82,14 @@ type UnaccountedParseResultFields = Exclude<
 /**
  * Compile-time assertion that every `ParseResult` field is accounted for.
  *
- * When this line errors, the type of `PARSE_RESULT_FIELDS_ACCOUNTED_FOR` names
- * the unlisted field(s). Add each to `CapturedParseResultField` **and record it
- * in `toRow`**, or to `UnrecordedParseResultField` **with the assertion that
- * replaces it**. Do not widen the union to silence the error.
+ * When this line errors, the error message names the unaccounted-for field(s)
+ * directly (e.g. "Type 'newField' does not satisfy the constraint 'never'").
+ * Add each to `CapturedParseResultField` **and record it in `toRow`**, or to
+ * `UnrecordedParseResultField` **with the assertion that replaces it**. Do
+ * not widen the union to silence the error.
  */
-export const PARSE_RESULT_FIELDS_ACCOUNTED_FOR: UnaccountedParseResultFields extends never ? true : never = true;
+type AssertNoUnaccountedParseResultFields<T extends never> = T;
+export const PARSE_RESULT_FIELDS_ACCOUNTED_FOR: AssertNoUnaccountedParseResultFields<UnaccountedParseResultFields> extends never ? true : never = true;
 
 /**
  * Capture parse facts for a set of absolute paths.

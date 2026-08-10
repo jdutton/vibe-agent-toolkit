@@ -218,21 +218,24 @@ interface AstWalkState {
   /**
    * `[ref]: url` targets. Complete only once the walk finishes.
    *
-   * ⚠️ KNOWN DEFECT, pre-existing and deliberately preserved by the traversal
-   * collapse (which was held to byte-identical output): when a document
-   * declares the same label twice, this map keeps the LAST definition, but
-   * CommonMark resolves a reference to the FIRST one. So for
+   * FIXED (was a known defect): a duplicated `[ref]: url` label used to keep
+   * the LAST definition, but CommonMark resolves a reference to the FIRST
+   * one. For
    *
    *     A [ref][dup].
    *     [dup]: ./first.md
    *     [dup]: ./last.md
    *
-   * VAT reports the `linkReference`'s href as `./last.md` while every renderer
-   * links to `./first.md` — meaning link validation checks a target the reader
-   * never visits. Verified by probe, 2026-08-08. The fix is one line here
-   * (`if (!definitions.has(id))` before the set), but it CHANGES OUTPUT, so it
-   * belongs in its own commit with its own golden movement, not folded into a
-   * refactor whose entire safety story is that nothing moved.
+   * every renderer links `[ref][dup]` to `./first.md`, so a LAST-wins map
+   * made VAT check a target the reader never visits. Fixed by making this
+   * write first-write-wins: `case 'definition'` only calls
+   * `definitions.set(id, url)` when `!definitions.has(id)`, so the first
+   * occurrence of a label sticks and later re-declarations of the same label
+   * are ignored for resolution purposes (each still gets its own
+   * `definitionLinks` entry — see below). Kept as documentation of the
+   * CommonMark first-wins contract this map must uphold: a future refactor
+   * that reintroduces an unconditional `.set()` here would silently regress
+   * to last-wins.
    */
   definitions: Map<string, string>;
   /** `[text](href)` and autolinks. */
@@ -328,7 +331,9 @@ function collectNode(
       break;
     }
     case 'definition': {
-      state.definitions.set(node.identifier, node.url);
+      if (!state.definitions.has(node.identifier)) {
+        state.definitions.set(node.identifier, node.url);
+      }
       state.definitionLinks.push(toResourceLink(node, node.identifier, node.url, 'definition'));
       break;
     }

@@ -905,6 +905,20 @@ tags: test
       await expectUnresolved(tempDir, 'unresolved-collapsed.md', '[nope][]\n', [{ label: 'nope', line: 1 }]);
     });
 
+    it('resolves a duplicated definition label to the FIRST declaration (CommonMark first-wins)', async () => {
+      await writeAndParse({
+        filePath: safePath.join(tempDir, 'duplicate-definition-label.md'),
+        content:
+          'A [ref][dup] pointing at a twice-declared label.\n\n[dup]: ./first.md\n[dup]: ./last.md\n',
+        assertions: (result) => {
+          expect(result.unresolvedReferences).toEqual([]);
+          const linkRefs = result.links.filter((l) => l.nodeType === 'linkReference');
+          expect(linkRefs).toHaveLength(1);
+          expect(linkRefs[0]).toMatchObject({ href: './first.md', type: 'local_file' });
+        },
+      });
+    });
+
     it('reports the outer label of a nested image reference (no under-reporting)', async () => {
       // `[![badge](i.png)][ci]`: the outer label is the one that dangles.
       await expectUnresolved(tempDir, 'nested-outer.md', '[![badge](i.png)][ci-nope]\n', [

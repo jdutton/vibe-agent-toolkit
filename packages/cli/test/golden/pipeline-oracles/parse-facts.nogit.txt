@@ -471,7 +471,7 @@ optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty
 frontmatterFields: -
 anchors: -
 links: 3
-  0	local_file	linkReference	line=3	resolvedId=-	href=./last-wins.md	text=ref
+  0	local_file	linkReference	line=3	resolvedId=-	href=./first-wins.md	text=ref
   1	local_file	definition	line=5	resolvedId=-	href=./first-wins.md	text=dup
   2	local_file	definition	line=6	resolvedId=-	href=./last-wins.md	text=dup
 headings: 1

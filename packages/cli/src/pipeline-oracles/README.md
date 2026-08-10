@@ -469,15 +469,17 @@ flip in the change that fixes it.
    path pays no `realpath`. Latent rather than live — nothing in production sets
    the flag — which is exactly why it had to be fixed *before* any convergence,
    not after. (`file-crawler.integration.test.ts`)
-4. **A duplicated definition label resolves to the LAST definition; CommonMark
+4. **A duplicated definition label resolved to the LAST definition; CommonMark
    says the first.** `[dup]: ./first-wins.md` followed by `[dup]: ./last-wins.md`
-   makes VAT report `./last-wins.md` for the reference, while every renderer
-   links to `./first-wins.md` — so link validation checks a target the reader
-   never visits. Pre-existing, and the fix is one line
-   (`if (!definitions.has(id))`), but it changes output, so it belongs in its own
-   commit with its own golden movement. Pinned as today's behaviour by
-   `parse/duplicate-definition.md` and annotated at the code site in
-   `link-parser.ts`.
+   made VAT report `./last-wins.md` for the reference, while every renderer
+   links to `./first-wins.md` — so link validation checked a target the reader
+   never visited. **Fixed**: `collectNode`'s `definition` case now only calls
+   `definitions.set(id, url)` when `!definitions.has(id)`, so the first
+   occurrence of a label wins resolution (each declaration still gets its own
+   `definitionLinks` entry). `parse/duplicate-definition.md` and the golden it
+   drives now pin `./first-wins.md` for the `linkReference` row; the docblock
+   at the code site in `link-parser.ts` documents the CommonMark contract this
+   guards against regressing.
 5. **The built lane's link graph is empty.** Packaged output landing under the
    project's `dist/` is excluded from the crawl that the post-build validator
    uses, so `fileCount`, `maxLinkDepth`, the size rules and — not just metrics —

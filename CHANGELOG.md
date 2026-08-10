@@ -273,6 +273,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A markdown document that declares the same reference-definition label twice resolved every
+  `[ref][label]` to the LAST declaration; CommonMark resolves it to the FIRST.** `[dup]: ./a.md`
+  followed by `[dup]: ./b.md` made VAT report `./b.md` for every `[ref][dup]`, while every renderer
+  links to `./a.md` — so link validation was checking a target the reader never actually visits.
+  Fixed with first-write-wins resolution in the link parser.
+
 - **A link to a file whose name carries an accent was reported broken even though the file was right
   there.** The same visible filename has two Unicode encodings — precomposed `é` (NFC) and
   decomposed `e` + combining acute (NFD) — and the two sides of every filename comparison come from
