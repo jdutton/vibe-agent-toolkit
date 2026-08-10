@@ -1,5 +1,5 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- test sandbox paths derived from tmp dirs */
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -981,6 +981,35 @@ describe('applyFilesConfig', () => {
     },
   );
 
+  // The permission half of the same defect. `isCopyableFile` classifies the TYPE
+  // of a match and deliberately does not assert readability, so an unreadable
+  // REGULAR file reaches `copyFile` and fails there. What must not happen is the
+  // raw `EACCES` becoming the build's whole explanation — that is the exact
+  // failure #183 set out to eliminate, reached by permissions instead of by type.
+  it.skipIf(process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0))(
+    'names the files: entry and the path when a matched file cannot be read',
+    async () => {
+      const { projectRoot, skillOutputDir } = makeNonRegularSandbox();
+      const locked = safePath.join(projectRoot, NON_REGULAR_SRC_DIR, 'locked.mjs');
+      writeFileSync(locked, 'export const secret = 2;\n');
+      chmodSync(locked, 0o000);
+
+      try {
+        await expect(
+          applyFilesConfig({ filesConfig: [nonRegularGlob], projectRoot, skillOutputDir }),
+        ).rejects.toThrow(
+          // All three, in one message: which entry caught it, which path failed,
+          // and what to do. The bare errno gave none of them.
+          /files: source 'gen\/assets\/\*'[\s\S]*locked\.mjs[\s\S]*permissions and ownership/,
+        );
+      } finally {
+        // Restore before cleanup — `rm -rf` copes with a 000 FILE, but leaving it
+        // would make a failure here cascade into the next test's teardown.
+        chmodSync(locked, 0o644);
+      }
+    },
+  );
+
   // The one path where the throw is the LAST word about the entry — it aborts the
   // build, so the `skipped` findings never reach a report. A message listing only
   // the policy drops would assert "all of them are never packaged" while silently
@@ -998,6 +1027,32 @@ describe('applyFilesConfig', () => {
       await expect(
         applyFilesConfig({ filesConfig: [nonRegularGlob], projectRoot, skillOutputDir }),
       ).rejects.toThrow(/never packaged[\s\S]*CLAUDE\.md[\s\S]*not regular files[\s\S]*linkdir/);
+    },
+  );
+
+  // The third throw in `copyGlobEntry`, and the one with no coverage until now:
+  // the glob matched, nothing it matched was a file, and nothing was refused by
+  // policy. It must NOT reuse the never-package message — that would name the
+  // wrong cause and its remedy ("declare an explicit source: entry") would not
+  // work if followed, since an explicit entry cannot package a directory link
+  // either.
+  it.skipIf(process.platform === 'win32')(
+    'raises its own error when a glob matches only non-files, not the never-package one',
+    async () => {
+      const { projectRoot, skillOutputDir } = makeNonRegularSandbox();
+      const assets = safePath.join(projectRoot, NON_REGULAR_SRC_DIR);
+      // Leave `linkdir` as the ONLY match: no regular file, nothing policy-refused.
+      rmSync(safePath.join(assets, 'ok.mjs'));
+      rmSync(safePath.join(assets, 'sub'), { recursive: true, force: true });
+
+      const attempt = applyFilesConfig({
+        filesConfig: [nonRegularGlob],
+        projectRoot,
+        skillOutputDir,
+      });
+
+      await expect(attempt).rejects.toThrow(/none of them is a regular file[\s\S]*linkdir/);
+      await expect(attempt).rejects.not.toThrow(/never packaged/);
     },
   );
 

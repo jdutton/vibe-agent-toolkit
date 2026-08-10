@@ -760,7 +760,27 @@ async function copyGlobEntry(
 
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- dest path from validated config
     await mkdir(dirname(absDest), { recursive: true });
-    await copyFile(absSource, absDest);
+    // Attributed, because the raw errno alone is what made this class of failure
+    // expensive to diagnose in the first place. `isCopyableFile` classifies the
+    // TYPE of the match; it deliberately does not assert readability, because a
+    // permission can change between the check and the copy and a guard that
+    // pretended otherwise would just move the race. So the copy itself is where
+    // an IO failure is caught and given the entry, the path, and a remedy.
+    //
+    // Still a hard failure, unlike a non-regular match: an unreadable file is one
+    // the author DECLARED and expects in the bundle, so shipping silently without
+    // it would change the artifact behind their back. A non-regular match can
+    // never be packaged at all, which is why that one degrades instead.
+    try {
+      await copyFile(absSource, absDest);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `files: source '${entry.source}' (glob) matched ${anchoredPath(absSource, projectRoot)}, ` +
+        `but it could not be copied into the bundle: ${reason}. ` +
+        `Check the file's permissions and ownership, or narrow the glob so it stops matching this path.`,
+      );
+    }
 
     copied.push(relDest);
     pairs.push({ absSource, absDest });

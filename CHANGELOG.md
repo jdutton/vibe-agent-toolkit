@@ -242,19 +242,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **One unreadable subdirectory no longer aborts an entire `vat audit` run (issue #180).** An
-  `EACCES` anywhere under the audited tree used to propagate out of the directory walk and end the
+- **One unreadable path no longer aborts an entire `vat audit` run (issue #180).** An
+  `EACCES` anywhere under the audited tree used to propagate out of the walk and end the
   command with `status: error`, exit code 2, and **zero findings** — discarding everything already
-  collected from readable siblings. A single root-owned or quarantined directory under
+  collected from readable siblings. A single root-owned or quarantined entry under
   `~/.claude/plugins` killed the flagship `vat audit --user` invocation outright. The walk now scopes
-  the failure to the subtree that caused it: siblings are still scanned, findings already collected
+  the failure to the path that caused it: siblings are still scanned, findings already collected
   survive, and the gap is reported as the new `SCAN_PATH_UNREADABLE` (`warning`) naming the path and
-  the OS message. Silence was not an option — a scan reporting `success` while having skipped a
-  subtree is the same failure shape as a detector that quietly disables itself.
+  the OS message. Silence was not an option — a scan reporting `success` while having skipped part of
+  the tree is the same failure shape as a detector that quietly disables itself.
+
+  **Both an unreadable directory and an unreadable file are covered.** Guarding only the directory
+  walk left the flagship scenario half-broken while appearing fixed: under `~/.claude/plugins` —
+  populated by `sudo` installs and macOS quarantine — a root-owned `SKILL.md` is at least as likely
+  as a root-owned directory, and it reproduced the identical total failure.
+
+  Only filesystem access errnos degrade; anything else is rethrown and still fails the run, so a
+  defect in VAT's own validators cannot be laundered into a `warning` about the file it happened on.
 
   Note for anyone tracing this from the issue: the cause recorded there (`crawlDirectorySync` in
   `agent-instruction-presence.ts`) is not the one. That crawl already guards each directory
-  individually; the unguarded `readdir` was `scanDirectory`'s own, in `commands/audit.ts`.
+  individually; the unguarded reads were `scanDirectory`'s own, in `commands/audit.ts`.
 
 - **`isGitIgnored()` spawned a git subprocess per ancestor directory when the path was not in a git
   repository at all — `vat resources validate` on a 3,437-document tree outside any repository went
@@ -462,6 +470,13 @@ exhibited them. Every fix below ships with a regression test.
     this a symlink", so that legitimate and widely-used case is untouched. Reported by the
     pre-build gates (`vat skills validate`, `vat audit`) and by the build, from one shared
     expansion.
+
+    Scoped to the *type* of the match, not to permissions. A regular file that cannot be **read**
+    is not skipped — it is one the author declared and expects in the bundle, so shipping without
+    it would change the artifact behind their back. That case still fails the build, but the error
+    now names the `files:` entry, the path and a remedy instead of surfacing a bare `EACCES` from
+    `copyfile` — the same unattributed-errno defect this code was added to fix, reached through
+    permissions rather than through file type.
 - **User-facing documentation for `vat skill test` and its config surface**
   (`packages/cli/docs/skill-test.md`), covering the per-skill `skills.config.<skill>.test` block and
   the global `test:` node.

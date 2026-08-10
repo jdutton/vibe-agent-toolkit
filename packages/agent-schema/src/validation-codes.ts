@@ -170,8 +170,13 @@ export const CODE_REGISTRY = {
   // an environment fact rather than a defect in the audited tree.
   SCAN_PATH_UNREADABLE: entry(
     'warning',
-    'A directory under the audited tree could not be read, so its contents were not scanned; findings from every readable sibling are still reported.',
-    'Make the path readable — check its permissions and ownership — then re-run the audit, or pass --exclude to drop it from the scan deliberately. Set severity.SCAN_PATH_UNREADABLE to ignore if the path is expected to be unreadable in this environment.',
+    'A path under the audited tree could not be read — a directory the scan could not enter, or a file it could not open — so it was not scanned; findings from every readable sibling are still reported.',
+    // `--exclude` leads, and the severity override is qualified, because the
+    // override is NOT reachable in the case that produces this finding most
+    // often: `applySeverityFilter` early-returns unless a VAT config is found
+    // above the scan path, and there is normally none above `~/.claude/plugins`.
+    // Advertising a remedy an adopter cannot apply is worse than not offering it.
+    'Make the path readable — check its permissions and ownership — then re-run the audit, or pass --exclude to drop it from the scan deliberately. Set severity.SCAN_PATH_UNREADABLE to ignore if the path is expected to be unreadable and the scan runs inside a project whose config VAT can find.',
     'scan_path_unreadable',
   ),
   FILES_GLOB_DROPPED_NEVER_PACKAGED: entry(

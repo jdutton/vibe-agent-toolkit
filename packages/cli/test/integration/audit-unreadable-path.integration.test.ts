@@ -144,3 +144,78 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit with an unreadable subdirectory', 
     expect(instructionFindings[0]?.location).toBe(AGENT_INSTRUCTION_FILE);
   });
 });
+
+/**
+ * The other half of the same defect, and the one the first fix missed: guarding
+ * only `readdir` left an unreadable FILE aborting the whole run exactly as
+ * before. Under `~/.claude/plugins` — the flagship `vat audit --user` target,
+ * populated by sudo installs and macOS quarantine — a root-owned FILE is at
+ * least as likely as a root-owned directory.
+ *
+ * A separate tree from the suite above so the two failures cannot mask each
+ * other: here every directory is readable and only a SKILL.md is not.
+ */
+describe.skipIf(CANNOT_DENY_READS)('vat audit with an unreadable file', () => {
+  let fileTempDir: string;
+  let scanRoot: string;
+  let lockedSkillMd: string;
+
+  beforeAll(() => {
+    fileTempDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-audit-unreadable-file-'));
+    scanRoot = safePath.join(fileTempDir, 'skills');
+    const goodDir = safePath.join(scanRoot, 'good');
+    const badDir = safePath.join(scanRoot, 'bad');
+    fs.mkdirSync(goodDir, { recursive: true });
+    fs.mkdirSync(badDir, { recursive: true });
+    fs.writeFileSync(
+      safePath.join(goodDir, 'SKILL.md'),
+      '---\nname: good\ndescription: A readable skill that must survive an unreadable sibling.\n---\n\n# Good\n',
+    );
+    // The finding that must survive — the load-bearing half, exactly as above.
+    fs.writeFileSync(safePath.join(goodDir, AGENT_INSTRUCTION_FILE), '# guidance\n');
+    lockedSkillMd = safePath.join(badDir, 'SKILL.md');
+    fs.writeFileSync(
+      lockedSkillMd,
+      '---\nname: bad\ndescription: A skill whose SKILL.md cannot be opened by the scan.\n---\n\n# Bad\n',
+    );
+  });
+
+  afterAll(() => {
+    if (fs.existsSync(lockedSkillMd)) fs.chmodSync(lockedSkillMd, 0o644);
+    fs.rmSync(fileTempDir, { recursive: true, force: true });
+  });
+
+  async function auditScanRoot() {
+    resetAuditCaches();
+    return getValidationResults(scanRoot, true, {}, silentLogger, deriveScanRoot(scanRoot));
+  }
+
+  it('baseline: both skills scan while the file is readable', async () => {
+    fs.chmodSync(lockedSkillMd, 0o644);
+    const results = await auditScanRoot();
+
+    expect(results.flatMap(r => r.issues.map(i => i.code))).not.toContain('SCAN_PATH_UNREADABLE');
+    expect(results.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('keeps the readable siblings findings instead of aborting the run', async () => {
+    fs.chmodSync(lockedSkillMd, UNREADABLE);
+    const results = await auditScanRoot();
+
+    const codes = results.flatMap(r => r.issues.map(i => i.code));
+    // THE regression: this came from the readable sibling and used to be
+    // destroyed along with every other finding the run had collected.
+    expect(codes).toContain('PACKAGED_AGENT_INSTRUCTION_FILE');
+    expect(codes).toContain('SCAN_PATH_UNREADABLE');
+    expect(results.some(r => r.status === 'error')).toBe(false);
+  });
+
+  it('anchors the finding at the unreadable file itself', async () => {
+    fs.chmodSync(lockedSkillMd, UNREADABLE);
+    const results = await auditScanRoot();
+
+    const issue = results.flatMap(r => r.issues).find(i => i.code === 'SCAN_PATH_UNREADABLE');
+    expect(issue?.location).toBe('bad/SKILL.md');
+    expect(issue?.message).toMatch(/EACCES|permission denied/i);
+  });
+});

@@ -2194,10 +2194,34 @@ function getSkipReason(
 }
 
 /**
- * The one finding a subtree the walk could not enter produces.
+ * Errno codes that mean "the filesystem refused this path", as opposed to a
+ * defect in VAT's own code.
+ *
+ * The list is deliberately explicit rather than a catch-all `err instanceof
+ * Error`: the guard's whole purpose is to degrade on trees the audit does not
+ * own, and a `TypeError` from a validator is not that. `ENOENT` is included
+ * because a bulk scan races real filesystems — an entry listed by `readdir` can
+ * be gone by the time it is opened, and that is the environment changing under
+ * the scan, not a bug in it.
+ */
+const FILESYSTEM_ACCESS_ERRNOS = new Set([
+  'EACCES', 'EPERM', 'ENOENT', 'ELOOP', 'ENOTDIR', 'EISDIR', 'ENAMETOOLONG', 'EIO', 'EBUSY',
+]);
+
+function isFilesystemAccessError(error: unknown): boolean {
+  return (
+    typeof error === 'object' && error !== null && 'code' in error &&
+    typeof (error as { code: unknown }).code === 'string' &&
+    FILESYSTEM_ACCESS_ERRNOS.has((error as { code: string }).code)
+  );
+}
+
+/**
+ * The one finding a path the walk could not read produces — a directory it could
+ * not enter, or a file it could not open.
  *
  * A synthetic result rather than an issue appended to some neighbour: nothing
- * about the unreadable directory was validated, so it has no host result to hang
+ * about the unreadable path was validated, so it has no host result to hang
  * off, and attaching it to a sibling would attribute the condition to a tree that
  * scanned fine. Typed `unknown` for the same reason — the whole point is that its
  * contents were never seen, so any more specific type would be a claim the scan
@@ -2208,7 +2232,7 @@ function getSkipReason(
  * is no longer the ONLY thing the run says — the code, the location and the fix
  * come from the registry.
  */
-function unreadableDirectoryResult(
+function unreadablePathResult(
   dirPath: string,
   error: unknown,
   locationRoot: string,
@@ -2297,8 +2321,11 @@ async function scanDirectory(
   try {
     entries = await fs.readdir(dirPath, { withFileTypes: true });
   } catch (error) {
+    // Same predicate as the per-entry guard below — see it for why a non-IO
+    // throw must not be degraded into a finding.
+    if (!isFilesystemAccessError(error)) throw error;
     logger.debug(`Unreadable directory: ${dirPath}`);
-    return [unreadableDirectoryResult(dirPath, error, resolvedScanCtx.locationRoot)];
+    return [unreadablePathResult(dirPath, error, resolvedScanCtx.locationRoot)];
   }
 
   const descendCtx = await contextForDescendants(dirPath, entries, resolvedScanCtx);
@@ -2316,16 +2343,33 @@ async function scanDirectory(
       continue;
     }
 
-    if (entry.isFile()) {
-      const result = await handleFileEntry(entry, fullPath, options, logger, resolvedScanCtx);
-      if (result !== null) {
-        results.push(result);
+    // Per ENTRY, not just per directory. Guarding only the `readdir` above left
+    // the other half of the same defect live: an unreadable FILE (a root-owned
+    // `SKILL.md`, a quarantined bundle) threw out of `validateSkill` and still
+    // aborted the whole run with `status: error` and zero findings. Under
+    // `~/.claude/plugins` — the flagship `vat audit --user` target, populated by
+    // sudo installs and macOS quarantine — a root-owned FILE is at least as
+    // likely as a root-owned directory.
+    try {
+      if (entry.isFile()) {
+        const result = await handleFileEntry(entry, fullPath, options, logger, resolvedScanCtx);
+        if (result !== null) {
+          results.push(result);
+        }
+      } else if (entry.isDirectory()) {
+        // `descendCtx`, not `resolvedScanCtx`: this level's own skill (if any)
+        // owns everything below, including this subdirectory.
+        const dirResults = await handleDirectoryEntry(fullPath, recursive, options, logger, resolvedBaseDir, descendCtx, resolvedNestedLog);
+        results.push(...dirResults);
       }
-    } else if (entry.isDirectory()) {
-      // `descendCtx`, not `resolvedScanCtx`: this level's own skill (if any)
-      // owns everything below, including this subdirectory.
-      const dirResults = await handleDirectoryEntry(fullPath, recursive, options, logger, resolvedBaseDir, descendCtx, resolvedNestedLog);
-      results.push(...dirResults);
+    } catch (error) {
+      // ONLY filesystem-access errors degrade. Anything else is rethrown, because
+      // turning a genuine VAT bug into a `warning` about the file it happened on
+      // is the same "detector silently disables itself" shape this guard exists to
+      // prevent — it would make the tool quietest exactly when it is most wrong.
+      if (!isFilesystemAccessError(error)) throw error;
+      logger.debug(`Unreadable entry: ${fullPath}`);
+      results.push(unreadablePathResult(fullPath, error, resolvedScanCtx.locationRoot));
     }
   }
 
