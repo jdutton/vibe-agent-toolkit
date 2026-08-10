@@ -145,4 +145,51 @@ describe('assertSafeWorkdir', () => {
     writeFileSync(safePath.join(dir, 'CLAUDE.md'), 'x', 'utf8');
     try { assertSafeWorkdir(dir, tmpBoundary); } catch (e) { expect((e as HarnessLocationError).exitCode).toBe(2); }
   });
+
+  /**
+   * The Windows profile layout, reproduced on any platform.
+   *
+   * On Windows the OS temp dir lives INSIDE the user's home
+   * (`C:\Users\<name>\AppData\Local\Temp`), so an unbounded ancestry walk out of a
+   * temp workdir reaches the ambient `~/.claude` that every Claude Code user has —
+   * and `runSkillTestHarness` refuses the run with "Use an OS-tmp location", which
+   * is the thing the user just did.
+   *
+   * Found on a real Windows dev box, not in CI: the GitHub runner's `runneradmin`
+   * profile has no `~/.claude`, so the walk finds nothing and the suite is green
+   * over the defect. Built here as a directory shape rather than a platform check,
+   * so it reproduces everywhere and cannot silently skip.
+   */
+  describe('home-directory boundary (the Windows ~/.claude hazard)', () => {
+    let fakeHome: string;
+    let workdir: string;
+
+    beforeEach(() => {
+      fakeHome = mkdtempSync(safePath.join(tmpBoundary, 'vat-fakehome-'));
+      // The ambient global config every Claude Code user has — NOT a project.
+      mkdirSyncReal(safePath.join(fakeHome, '.claude'));
+      // …/AppData/Local/Temp/work — the Windows temp location, inside the profile.
+      workdir = safePath.join(fakeHome, 'AppData', 'Local', 'Temp', 'work');
+      mkdirSyncReal(workdir, { recursive: true });
+    });
+    afterEach(() => { rmSync(fakeHome, { recursive: true, force: true }); });
+
+    it('accepts a temp workdir nested under a home that carries an ambient .claude', () => {
+      expect(() => assertSafeWorkdir(workdir, fakeHome)).not.toThrow();
+    });
+
+    it('POSITIVE CONTROL: the same fixture DOES throw unbounded, so the test above cannot pass vacuously', () => {
+      // This is the shipped Windows behaviour, and the reason the boundary exists.
+      expect(() => assertSafeWorkdir(workdir)).toThrow(HarnessLocationError);
+    });
+
+    it('still refuses a real project below the home boundary', () => {
+      // The boundary stops AT home, exclusive — anything beneath it is still a project.
+      const project = safePath.join(fakeHome, 'dev', 'proj');
+      mkdirSyncReal(safePath.join(project, 'sub'), { recursive: true });
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture setup, controlled directory
+      writeFileSync(safePath.join(project, 'CLAUDE.md'), '# real project', 'utf8');
+      expect(() => assertSafeWorkdir(safePath.join(project, 'sub'), fakeHome)).toThrow(HarnessLocationError);
+    });
+  });
 });

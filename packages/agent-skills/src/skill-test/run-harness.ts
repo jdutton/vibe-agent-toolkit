@@ -13,6 +13,7 @@
 
 import { randomBytes } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { basename, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -1485,7 +1486,22 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
   // §7 workdir safety: refuse a --workdir whose ancestry contains CLAUDE.md/.claude
   // BEFORE deriving the harness root from it (defense in depth with --setting-sources "").
   if (opts.workdir !== undefined) {
-    assertSafeWorkdir(opts.workdir);
+    // Bounded at the user's home directory, which the walk stops BEFORE inspecting.
+    //
+    // Unbounded, this refuses every `--workdir` on Windows for every Claude Code
+    // user: the OS temp dir there lives INSIDE the profile
+    // (`C:\Users\<name>\AppData\Local\Temp`), so the ancestry walk climbs out of tmp
+    // and finds the ambient `~/.claude` — and the resulting message, "Use an OS-tmp
+    // location", names the thing the user just did. Unsatisfiable advice. It cannot
+    // reproduce on POSIX, where tmp is never under `$HOME`, nor on the GitHub Windows
+    // runner, whose `runneradmin` profile has no `~/.claude`; it needs a real Windows
+    // developer machine, which is where it was found.
+    //
+    // Not a relaxation of the threat model: the gate refuses a workdir inside a
+    // PROJECT, and `$HOME/.claude` is global config that every Claude Code user has on
+    // every platform — it was never the target. A project at `$HOME/proj` is still
+    // caught, because the walk inspects `$HOME/proj` and stops only at `$HOME` itself.
+    assertSafeWorkdir(opts.workdir, homedir());
   }
 
   const harnessRoot = opts.out ?? resolveHarnessRoot([opts.subject], opts.workdir);
