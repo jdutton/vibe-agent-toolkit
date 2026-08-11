@@ -455,3 +455,5 @@ When using `--user` flag:
 
 - [Skill Packaging Shapes](./skill-packaging.md) — the four recognized artifact shapes (standalone skill, skill-claude-plugin, claude-plugin, claude-marketplace) with layouts and applicable validation.
 - [CLI Architecture](./cli.md) — command structure, output conventions, why the CLI layer stays "dumb," and CLI-specific testing patterns.
+- [Resource Scanning and Object Caching](./resource-scanning-and-caching.md) — how VAT discovers and reads resource bytes: the git-tracked vs. non-git scanning taxonomy, the two-lane cost model, symlink handling, and the object-level content cache.
+- [Resource Projection](./resource-projection.md) — the shipped parse-cache output shape, the proposed blob-keyed and path-dependent schema targeted for stage 3, tree-shape caching, and the parse cache's threat model.
