@@ -283,6 +283,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`vat verify`, `vat build`, `vat validate`, and `vat skills validate`/`build` pointed a
+  no-path-scope refusal at `vat audit <path>`, which exits 0 unconditionally — including when
+  it reports `status: error`.** An operator who followed the recommended fallback to inspect a
+  single skill or bundle got a command whose exit code carries no pass/fail signal at all.
+  All five now point at `vat skill review <path>`, whose exit code is 1 iff status is
+  `warning` or `error` by construction.
+
 - **A markdown document that declares the same reference-definition label twice resolved every
   `[ref][label]` to the LAST declaration; CommonMark resolves it to the FIRST.** `[dup]: ./a.md`
   followed by `[dup]: ./b.md` made VAT report `./b.md` for every `[ref][dup]`, while every renderer

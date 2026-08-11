@@ -176,8 +176,8 @@ describe.each(SCOPED_COMMANDS)(
       expect(stderr).toContain(missing);
       expect(stderr).toContain(spelling);
       expect(stderr).toContain(CONFIG_FILENAME);
-      // The command that DOES take an arbitrary path.
-      expect(stderr).toContain('vat audit <path>');
+      // The command that DOES take an arbitrary path and gates on it.
+      expect(stderr).toContain('vat skill review <path>');
     });
 
     it('quotes back the silent success it replaced, so the message names the real defect', async () => {
