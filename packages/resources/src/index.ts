@@ -77,6 +77,7 @@ export type {
   ClaudeConfig,
   ClaudeMarketplaceConfig,
   ClaudeMarketplacePluginEntry,
+  ExternalPluginSource,
 } from './types.js';
 
 // Export schemas for external use (e.g., JSON Schema generation, runtime validation)
