@@ -70,8 +70,8 @@ describe.each([
     expect(stderr).toContain(label);
     // What it actually operates on, so the reader learns why a path is meaningless here.
     expect(stderr).toContain('vibe-agent-toolkit.config.yaml');
-    // The command that DOES take a path.
-    expect(stderr).toContain('vat audit <path>');
+    // The command that DOES take a path and gates on it.
+    expect(stderr).toContain('vat skill review <path>');
   });
 
   it('reports every discarded argument, not just the first', async () => {

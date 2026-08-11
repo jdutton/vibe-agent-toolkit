@@ -10,6 +10,7 @@ import { dirname as pathDirname, join as pathJoin, resolve as pathResolve } from
 import { fileURLToPath as urlFileURLToPath } from 'node:url';
 
 import { mkdirSyncReal, normalizedTmpdir, safeExecSync, safePath } from '@vibe-agent-toolkit/utils';
+import { expect } from 'vitest';
 import * as yaml from 'yaml';
 
 // Re-export commonly used functions
@@ -310,6 +311,24 @@ export async function executeCliAndParseYaml(
   const parsed = docs[0] ?? {};
 
   return { result, parsed };
+}
+
+/**
+ * Run `vat skills build` then `vat claude plugin build` for a prepared temp
+ * project, asserting both exit 0, and return the parsed plugin-build result.
+ * Shared by every `claude-plugin-build-*.system.test.ts` fixture — they all
+ * need the skills pool built before the plugin build can select from it.
+ */
+export async function buildSkillsThenPlugin(
+  binPath: string,
+  tempDir: string,
+): Promise<{ result: SpawnSyncReturns<string>; parsed: Record<string, unknown> }> {
+  const sb = await executeCliAndParseYaml(binPath, ['skills', 'build'], { cwd: tempDir });
+  expect(sb.result.status).toBe(0);
+
+  const pb = await executeCliAndParseYaml(binPath, ['claude', 'plugin', 'build'], { cwd: tempDir });
+  expect(pb.result.status).toBe(0);
+  return pb;
 }
 
 /**
