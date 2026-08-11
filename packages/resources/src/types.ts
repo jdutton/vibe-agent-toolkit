@@ -77,6 +77,7 @@ export type {
   ClaudeConfig,
   ClaudeMarketplaceConfig,
   ClaudeMarketplacePluginEntry,
+  ExternalPluginSource,
 } from './schemas/project-config.js';
 
 // Config parsing

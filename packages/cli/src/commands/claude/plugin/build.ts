@@ -13,7 +13,7 @@ import { basename } from 'node:path';
 
 import { countBySeverity, type SeverityCounts, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { createProjectRegistry, getPluginOutputDir, getPluginSourceDir, listPluginSourceSkillDirs, listUntrackedPluginSkillDirs, materializeIssue, packageSkill, packagingConfigToPackageOptions, skillNameToFsPath, type DeclaredEvalSuite, type PackageSkillResult } from '@vibe-agent-toolkit/agent-skills';
-import type { ClaudeMarketplaceConfig, ClaudeMarketplacePluginEntry, ResourceRegistry, SkillsConfig } from '@vibe-agent-toolkit/resources';
+import type { ClaudeMarketplaceConfig, ClaudeMarketplacePluginEntry, ExternalPluginSource, ResourceRegistry, SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
@@ -34,7 +34,7 @@ import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../../u
 import { discoverSkillsFromConfig } from '../../skills/skill-discovery.js';
 import { loadClaudeProjectConfig } from '../claude-config.js';
 
-import { buildMarketplaceJson } from './marketplace-json.js';
+import { buildMarketplaceJson, type MarketplaceJsonPluginEntry } from './marketplace-json.js';
 import { resolvePluginChangelogPath } from './plugin-changelog.js';
 import { applyPluginFiles } from './plugin-files.js';
 import { mergePluginJson, resolveVersion } from './plugin-json-merge.js';
@@ -90,11 +90,26 @@ interface PluginBuildResult {
   issueCounts: SeverityCounts;
 }
 
+/**
+ * A plugin entry that references another marketplace/repo's plugin instead of
+ * being built locally (`pluginDef.externalSource` is set). VAT never creates a
+ * directory or writes a plugin.json for it — the empty-plugin guard, tree-copy,
+ * skills packaging, and files[] mapping in {@link buildPlugin} all assume local
+ * content, none of which applies here.
+ */
+export interface ExternalPluginBuildResult {
+  pluginName: string;
+  pluginVersion: string | undefined;
+  source: ExternalPluginSource;
+}
+
 export interface MarketplaceBuildResult {
   name: string;
   status: 'built' | 'error';
   reason?: string;
   plugins: PluginBuildResult[];
+  /** Plugins referenced via `externalSource` — see {@link ExternalPluginBuildResult}. */
+  externalPlugins: ExternalPluginBuildResult[];
 }
 
 export function createPluginBuildCommand(): Command {
@@ -123,6 +138,12 @@ Description:
   - Applies explicit files: source→dest mappings for compiled artifacts
   - Merges plugin.json with author, description, and VAT-supplied metadata
   - Generates marketplace.json with plugin registry and relative source paths
+
+  A plugin entry with externalSource is REFERENCED, not built: no local dir,
+  tree-copy, or skills packaging — its externalSource object (github/url/npm/pip)
+  is emitted verbatim as that entry's marketplace.json source, so it resolves to
+  wherever the other marketplace/repo actually publishes it. Use this to
+  cherry-pick a plugin from one marketplace into another without vendoring it.
 
 Output structure:
   dist/.claude/plugins/marketplaces/<marketplace>/
@@ -317,6 +338,7 @@ async function pluginBuildCommand(options: PluginBuildCommandOptions): Promise<v
 
     const duration = Date.now() - startTime;
     const totalPlugins = results.flatMap((r) => r.plugins).length;
+    const totalExternalPlugins = results.flatMap((r) => r.externalPlugins).length;
     const totalSkills = results.flatMap((r) => r.plugins).flatMap((p) => p.skillsCopied).length;
 
     const allPlugins = results.flatMap((r) => r.plugins);
@@ -340,6 +362,7 @@ async function pluginBuildCommand(options: PluginBuildCommandOptions): Promise<v
       issueCounts: sumSeverityCounts(allPlugins.map((p) => p.issueCounts)),
       marketplacesBuilt: results.filter((r) => r.status === 'built').length,
       pluginsBuilt: totalPlugins,
+      pluginsReferenced: totalExternalPlugins,
       skillsPackaged: totalSkills,
       marketplaces: results.map((r) => ({
         name: r.name,
@@ -367,6 +390,14 @@ async function pluginBuildCommand(options: PluginBuildCommandOptions): Promise<v
           explicitFilesCopied: p.explicitFilesCopied,
           localSkillsPackaged: p.localSkillsPackaged,
           issueCounts: p.issueCounts,
+        })),
+        // Referenced, not built — no dir, no counts to report. `source` is the
+        // same object emitted verbatim into marketplace.json, so the report and
+        // the artifact can never disagree about what a reference points at.
+        externalPlugins: r.externalPlugins.map((p) => ({
+          name: p.pluginName,
+          ...(p.pluginVersion ? { version: p.pluginVersion } : {}),
+          source: p.source,
         })),
       })),
       duration: `${duration}ms`,
@@ -433,6 +464,7 @@ interface BuildMarketplaceInput {
 async function buildMarketplace(input: BuildMarketplaceInput): Promise<MarketplaceBuildResult> {
   const { name, config, availableSkills, configDir, skillsConfig, rootVersion, registry, projectSkills, logger, verbose } = input;
   const plugins: PluginBuildResult[] = [];
+  const externalPlugins: ExternalPluginBuildResult[] = [];
 
   // Clean stale marketplace directory before rebuilding — removes orphaned plugins
   const marketplaceBaseDir = safePath.join(
@@ -452,6 +484,24 @@ async function buildMarketplace(input: BuildMarketplaceInput): Promise<Marketpla
   const marketplaceAvailable = resolveMarketplaceAvailableSkills(config, availableSkills);
 
   for (const pluginDef of config.plugins) {
+    // externalSource plugins are never built or copied — they route straight
+    // to a marketplace.json entry referencing the other repo. Every phase
+    // buildPlugin runs (empty-plugin guard, tree-copy, skills packaging,
+    // plugin.json merge) assumes local content, none of which exists here.
+    if (pluginDef.externalSource) {
+      logger.info(`      Referencing external plugin: ${pluginDef.name} (${pluginDef.externalSource.source})`);
+      // No rootVersion fallback here (unlike a built plugin): this marketplace
+      // does not own or build the referenced plugin, so tagging it with THIS
+      // repo's package.json version would misrepresent what version the other
+      // repo actually publishes. Only an explicit config version applies.
+      externalPlugins.push({
+        pluginName: pluginDef.name,
+        pluginVersion: pluginDef.version,
+        source: pluginDef.externalSource,
+      });
+      continue;
+    }
+
     const pluginResult = await buildPlugin({
       marketplaceName: name,
       pluginDef,
@@ -474,17 +524,28 @@ async function buildMarketplace(input: BuildMarketplaceInput): Promise<Marketpla
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
   await mkdir(claudePluginDir, { recursive: true });
 
-  // Each entry's author is the plugin's own MERGED author (see marketplace-json.ts),
-  // so marketplace.json and that plugin's plugin.json cannot disagree.
+  // Each BUILT entry's author is the plugin's own MERGED author (see
+  // marketplace-json.ts), so marketplace.json and that plugin's plugin.json
+  // cannot disagree. External entries carry no author — see marketplace-json.ts.
   const marketplaceJson = buildMarketplaceJson({
     name,
     owner: config.owner,
-    plugins: plugins.map((p) => ({
-      name: p.pluginName,
-      description: config.plugins.find((pd) => pd.name === p.pluginName)?.description,
-      version: p.pluginVersion,
-      author: p.pluginAuthor,
-    })),
+    plugins: [
+      ...plugins.map((p): MarketplaceJsonPluginEntry => ({
+        kind: 'built',
+        name: p.pluginName,
+        description: config.plugins.find((pd) => pd.name === p.pluginName)?.description,
+        version: p.pluginVersion,
+        author: p.pluginAuthor,
+      })),
+      ...externalPlugins.map((p): MarketplaceJsonPluginEntry => ({
+        kind: 'external',
+        name: p.pluginName,
+        description: config.plugins.find((pd) => pd.name === p.pluginName)?.description,
+        version: p.pluginVersion,
+        source: p.source,
+      })),
+    ],
   });
 
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
@@ -493,7 +554,7 @@ async function buildMarketplace(input: BuildMarketplaceInput): Promise<Marketpla
 
   await copyDistributionFiles(marketplaceDir, configDir, config, logger);
 
-  return { name, status: 'built', plugins };
+  return { name, status: 'built', plugins, externalPlugins };
 }
 
 /**

@@ -22,6 +22,8 @@ const SKILL_GLOB_INCLUDE = 'skills/**/SKILL.md';
 const GRADER_MODEL = 'claude-sonnet-5';
 const CSVSUM_PATH = 'scripts/csvsum.py';
 const CSVSUM_HOW_INVOKED = 'uv run csvsum.py';
+const SCRATCH_GLOB = 'scratch/**';
+const EXAMPLE_REPO = 'example-org/example-repo';
 
 const VAT_DEV_AGENTS_CONFIG = fileURLToPath(
   new URL('../../../vat-development-agents/vibe-agent-toolkit.config.yaml', import.meta.url),
@@ -430,7 +432,7 @@ describe('ClaudeMarketplacePluginEntrySchema (full plugin support)', () => {
   // and its trailing-slash form to cover the subtree), so the schema must not
   // narrow those away either.
   it.each([
-    { shape: 'globs', exclude: ['scratch/**', 'docs/internal/**'] },
+    { shape: 'globs', exclude: [SCRATCH_GLOB, 'docs/internal/**'] },
     { shape: 'directory-shaped spellings', exclude: ['scratch', 'docs/internal/', 'notes.md'] },
   ])('round-trips exclude $shape unchanged', ({ exclude }) => {
     const result = ClaudeMarketplacePluginEntrySchema.safeParse({
@@ -448,7 +450,7 @@ describe('ClaudeMarketplacePluginEntrySchema (full plugin support)', () => {
     const result = ClaudeMarketplacePluginEntrySchema.safeParse({
       name: 'my-plugin',
       skills: '*',
-      exclude: 'scratch/**',
+      exclude: SCRATCH_GLOB,
     });
     expect(result.success).toBe(false);
   });
@@ -589,6 +591,82 @@ describe('ClaudeMarketplacePluginEntrySchema (full plugin support)', () => {
       if (result.success) {
         expect(result.data.changelog).toBeUndefined();
       }
+    });
+  });
+
+  describe('externalSource field', () => {
+    it('accepts a github external source with skills: []', () => {
+      const result = ClaudeMarketplacePluginEntrySchema.safeParse({
+        name: 'p',
+        skills: [],
+        externalSource: { source: 'github', repo: EXAMPLE_REPO, ref: 'main' },
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.externalSource).toEqual({
+          source: 'github',
+          repo: EXAMPLE_REPO,
+          ref: 'main',
+        });
+      }
+    });
+
+    it.each(['url', 'npm', 'pip'] as const)('accepts a %s external source', (kind) => {
+      const bySource = {
+        url: { source: 'url', url: 'https://example.com/plugin.git' },
+        npm: { source: 'npm', package: '@example/plugin' },
+        pip: { source: 'pip', package: 'example-plugin' },
+      } as const;
+      const result = ClaudeMarketplacePluginEntrySchema.safeParse({
+        name: 'p',
+        skills: [],
+        externalSource: bySource[kind],
+      });
+      expect(result.success).toBe(true);
+    });
+
+    // Every combination below is rejected by the SAME superRefine, so one
+    // table-driven case carries them all: only `overrides` and (for the
+    // fields the refine names explicitly) `issuePath` differ per row.
+    const EXTERNAL_SOURCE_CONFLICTS: ReadonlyArray<{
+      label: string;
+      overrides: Record<string, unknown>;
+      issuePath?: string;
+    }> = [
+      { label: 'skills: "*"', overrides: { skills: '*' }, issuePath: 'skills' },
+      { label: 'a non-empty skills array', overrides: { skills: ['some-skill'] }, issuePath: 'skills' },
+      { label: 'source', overrides: { skills: [], source: 'plugins/other-dir' }, issuePath: 'source' },
+      { label: 'exclude', overrides: { skills: [], exclude: [SCRATCH_GLOB] }, issuePath: 'exclude' },
+      { label: 'changelog', overrides: { skills: [], changelog: 'CHANGELOG.md' }, issuePath: 'changelog' },
+      {
+        label: 'files',
+        overrides: { skills: [], files: [{ source: 'dist/hook.mjs', dest: 'hooks/hook.mjs' }] },
+        issuePath: 'files',
+      },
+    ];
+
+    it.each(EXTERNAL_SOURCE_CONFLICTS)(
+      'rejects $label alongside externalSource',
+      ({ overrides, issuePath }) => {
+        const result = ClaudeMarketplacePluginEntrySchema.safeParse({
+          name: 'p',
+          ...overrides,
+          externalSource: { source: 'github', repo: EXAMPLE_REPO },
+        });
+        expect(result.success).toBe(false);
+        if (!result.success && issuePath) {
+          expect(result.error.issues.some((i) => i.path.join('.') === issuePath)).toBe(true);
+        }
+      },
+    );
+
+    it('rejects an unknown externalSource discriminant', () => {
+      const result = ClaudeMarketplacePluginEntrySchema.safeParse({
+        name: 'p',
+        skills: [],
+        externalSource: { source: 'ftp', host: 'example.com' },
+      });
+      expect(result.success).toBe(false);
     });
   });
 });

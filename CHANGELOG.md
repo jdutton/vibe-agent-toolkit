@@ -53,6 +53,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`externalSource` on a marketplace plugin entry** — reference a plugin published in
+  *another* marketplace/repo (`github`, `url`, `npm`, or `pip`, matching Claude Code's
+  official marketplace source shapes) instead of building one locally. `vat claude plugin
+  build` writes the source object straight into `marketplace.json` and never builds or
+  copies the referenced plugin's content, so one marketplace can cherry-pick a plugin
+  published elsewhere without vendoring it. Set `skills: []` and omit
+  `source`/`files`/`exclude`/`changelog` on the entry — the config schema rejects the
+  combination otherwise. See "Referencing Another Marketplace's Plugin" in
+  `docs/guides/marketplace-distribution.md`.
+
 - **`fillRealpaths(paths, fsCache)` + `realpathFrom(table, path)`** in `@vibe-agent-toolkit/utils` —
   the canonical-path column, a second fill/judge pair alongside `fillSiblingNames` +
   `classifyFilenameCaseFrom`. Link validation asked `fs.realpathSync` twice per *existing* link
