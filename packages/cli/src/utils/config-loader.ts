@@ -80,7 +80,13 @@ export function loadConfig(projectRoot: string): ProjectConfig | undefined {
     return result.data;
   } catch (error) {
     if (error instanceof Error) {
-      throw new Error(`Failed to load config: ${error.message}`);
+      // `cause` is load-bearing, not decoration: callers decide whether to
+      // degrade or abort by asking `isFilesystemAccessError`, which reads the
+      // errno off the error. Re-wrapping without it produced a plain Error with
+      // no `code`, so an unreadable config read as "a bug in VAT" and aborted the
+      // whole run — the exact failure `vat audit`'s guard exists to prevent,
+      // reintroduced by a message-formatting layer.
+      throw new Error(`Failed to load config: ${error.message}`, { cause: error });
     }
     throw error;
   }

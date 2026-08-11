@@ -1010,6 +1010,86 @@ describe('applyFilesConfig', () => {
     },
   );
 
+  // The same class on the OTHER copy path. Attribution was added to the glob loop
+  // first and this one was missed entirely — an explicit entry is the spelling
+  // that unambiguously says "ship this file", so a bare errno here is if anything
+  // worse: the author named the path and got back an errno that did not.
+  it.skipIf(process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0))(
+    'names a NON-GLOB entry and its path when the declared file cannot be read',
+    async () => {
+      const { projectRoot, skillOutputDir } = makeApplySandbox();
+      const locked = safePath.join(projectRoot, DATA_SOURCE);
+      chmodSync(locked, 0o000);
+
+      try {
+        await expect(
+          applyFilesConfig({
+            filesConfig: [{ source: DATA_SOURCE, dest: DATA_DEST }],
+            projectRoot,
+            skillOutputDir,
+          }),
+          // Literal, not a RegExp built from the constant: escaping the path's
+          // separators back into a pattern is noise, and the point of the case is
+          // that the ENTRY's own `source:` string appears verbatim in the message.
+        ).rejects.toThrow(`files: source '${DATA_SOURCE}'`);
+      } finally {
+        chmodSync(locked, 0o644);
+      }
+    },
+  );
+
+  // An unwritable OUTPUT directory is the same class reached from the write side
+  // rather than the read side — it fails in `mkdir`, which sat outside the guard
+  // when the guard was first added.
+  it.skipIf(process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0))(
+    'names the entry when the output directory cannot be written',
+    async () => {
+      const { projectRoot, skillOutputDir } = makeApplySandbox();
+      chmodSync(skillOutputDir, 0o500); // r-x: traversable, not writable
+
+      try {
+        await expect(
+          applyFilesConfig({
+            filesConfig: [{ source: DATA_SOURCE, dest: DATA_DEST }],
+            projectRoot,
+            skillOutputDir,
+          }),
+        ).rejects.toThrow(/could not be copied into the bundle[\s\S]*output directory is writable/);
+      } finally {
+        chmodSync(skillOutputDir, 0o755);
+      }
+    },
+  );
+
+  // The EMITTED finding, not the internal record.
+  //
+  // Every other case here inspects `skipped: DroppedGlobMatch[]` — source, dest,
+  // absFile — and none of them touches the `ValidationIssue` that actually reaches
+  // a report. That gap was demonstrated by mutation: changing the emitted code to
+  // `FILES_GLOB_DROPPED_NEVER_PACKAGED` left the entire 1,667-test suite green,
+  // so the headline claim of this fix — "reported as
+  // FILES_GLOB_SKIPPED_NON_REGULAR_FILE" — rested on nothing. The two codes are a
+  // union in `globMatchesToIssues`, so a swap typechecks.
+  it.skipIf(process.platform === 'win32')(
+    'emits FILES_GLOB_SKIPPED_NON_REGULAR_FILE, anchored at the source path',
+    async () => {
+      const { projectRoot } = makeNonRegularSandbox();
+      const issues = preBuildGlobFindingsToIssues(
+        await collectPreBuildGlobFindings([nonRegularGlob], projectRoot),
+        projectRoot,
+      );
+
+      const skipped = issues.filter(i => i.code === 'FILES_GLOB_SKIPPED_NON_REGULAR_FILE');
+      expect(skipped).toHaveLength(1);
+      expect(skipped[0]?.severity).toBe('warning');
+      expect(skipped[0]?.location).toBe(NON_REGULAR_LINK_SOURCE);
+      // Names the entry that caught it — the second question a reader asks.
+      expect(skipped[0]?.message).toContain(NON_REGULAR_GLOB_SOURCE);
+      // And is NOT laundered as the policy drop, whose remedy would not work here.
+      expect(issues.map(i => i.code)).not.toContain('FILES_GLOB_DROPPED_NEVER_PACKAGED');
+    },
+  );
+
   // The one path where the throw is the LAST word about the entry — it aborts the
   // build, so the `skipped` findings never reach a report. A message listing only
   // the policy drops would assert "all of them are never packaged" while silently

@@ -16,4 +16,4 @@ export {
   dynamicImportPath,
 } from './path-utils.js';
 
-export { copyDirectory, FsLookupCache, verifyCaseSensitiveFilename } from './fs-utils.js';
+export { copyDirectory, FsLookupCache, isFilesystemAccessError, verifyCaseSensitiveFilename } from './fs-utils.js';

@@ -218,4 +218,37 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit with an unreadable file', () => {
     expect(issue?.location).toBe('bad/SKILL.md');
     expect(issue?.message).toMatch(/EACCES|permission denied/i);
   });
+
+  // The lane the first fix missed entirely. Guarding the directory walk left every
+  // OTHER way into a validator unprotected — naming a `SKILL.md` directly is the
+  // simplest of them, and it still ended the run with `status: error`, exit 2 and
+  // zero findings. The suite could not have caught it: every case above scans a
+  // DIRECTORY, so none of them reaches the dispatch path at all.
+  it('degrades when the unreadable path is named directly, not reached by the walk', async () => {
+    fs.chmodSync(lockedSkillMd, UNREADABLE);
+    resetAuditCaches();
+
+    const results = await getValidationResults(
+      lockedSkillMd, true, {}, silentLogger, deriveScanRoot(lockedSkillMd),
+    );
+
+    expect(results.flatMap(r => r.issues).map(i => i.code)).toContain('SCAN_PATH_UNREADABLE');
+    expect(results.some(r => r.status === 'error')).toBe(false);
+  });
+
+  // `issueLocation` is `path.relative`, so it answers '' when the subject IS the
+  // anchor — which is the ordinary shape of `vat audit <that-path>`. It reached the
+  // report as `location: ""` and rendered the detail as a bare ": EACCES …".
+  it('never publishes an empty location, even when the scan target is the unreadable path', async () => {
+    fs.chmodSync(lockedSkillMd, UNREADABLE);
+    resetAuditCaches();
+
+    const results = await getValidationResults(
+      lockedSkillMd, true, {}, silentLogger, deriveScanRoot(lockedSkillMd),
+    );
+
+    const issue = results.flatMap(r => r.issues).find(i => i.code === 'SCAN_PATH_UNREADABLE');
+    expect(issue?.location).toBeTruthy();
+    expect(issue?.message).not.toMatch(/\(: /);
+  });
 });

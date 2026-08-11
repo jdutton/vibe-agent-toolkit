@@ -1257,9 +1257,25 @@ function applyFilesEntriesToPathMap(
     // defense-in-depth beyond the schema refine on SkillFileEntry.dest.
     const absoluteDest = safePath.joinUnderRoot(outputPath, fileEntry.dest);
 
-    // Validate source exists at build time
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- source path from validated config
-    if (!existsSync(absoluteSource)) {
+    // Validate source exists at build time.
+    //
+    // `statSync` in a guard, not `existsSync`: `existsSync` swallows EACCES and
+    // answers FALSE, so a source the process cannot REACH — one under a directory
+    // it may not traverse — was reported as "does not exist", and for a `dist/`
+    // path `buildArtifactHint` then told the author to run a build that would not
+    // have helped. A wrong diagnosis with a confident wrong remedy attached.
+    // Only ENOENT is absence; a refusal is reported as itself, naming the entry.
+    try {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- source path from validated config
+      statSync(absoluteSource);
+    } catch (error) {
+      if ((error as { code?: string }).code !== 'ENOENT') {
+        const reason = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `files entry for skill '${skillName}': source '${fileEntry.source}' could not be read: ${reason}. ` +
+          `Check the file's permissions and ownership, and that every directory above it is traversable.`,
+        );
+      }
       throw new Error(
         `files entry for skill '${skillName}': source '${fileEntry.source}' does not exist.${buildArtifactHint(fileEntry.source)}`,
       );

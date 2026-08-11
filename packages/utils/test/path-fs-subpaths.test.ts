@@ -32,6 +32,10 @@ describe('./fs subpath entry', () => {
     expect(typeof mod.copyDirectory).toBe('function');
     expect(typeof mod.verifyCaseSensitiveFilename).toBe('function');
     expect(typeof mod.FsLookupCache).toBe('function');
+    // The CHANGELOG advertises this on `./fs` specifically, not only on the `.`
+    // barrel, so the subpath is what has to be pinned — the barrel guard would
+    // stay green if the `./fs` re-export were dropped.
+    expect(typeof mod.isFilesystemAccessError).toBe('function');
   });
 
   it('does NOT re-export the pure path helpers', async () => {

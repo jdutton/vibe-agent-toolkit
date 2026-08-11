@@ -11,7 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Library-only, type-level: `ValidationConfigSchema` is now typed `z.ZodType<ValidationConfig>` instead of an inferred `ZodObject`.** No CLI behaviour change, no runtime change: it is the same strict object, `safeParse` still rejects unknown codes and unknown top-level keys, and `schemas/validation-config.json` is byte-identical. The `ValidationConfig` type is unchanged.
 
+  It is re-exported by `@vibe-agent-toolkit/resources`, so consumers of either package see the change.
+
   **What to do:** nothing, unless you called `ZodObject`-only methods on the schema value — `.shape`, `.extend`, `.merge`, `.pick` are no longer available at the type level. Needed because the inferred type inlined the full validation-code union into every downstream `.d.ts`, which had grown large enough to make TypeScript emit invalid declarations.
+
+### Added
+
+- **`isFilesystemAccessError(err)`**, exported from `@vibe-agent-toolkit/utils` and its `./fs` subpath. Answers whether an error is the filesystem refusing a path (`EACCES`, `ENOENT`, `ENOSPC`, …) rather than a bug, which is the question a tool has to answer before deciding to carry on over a tree it does not own. VAT uses it in `vat audit` and in skill packaging so both agree on what counts as the environment's fault.
 
 ### Fixed
 
@@ -19,7 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   **A symlink to a regular file is still copied by content** — that case is unchanged.
 
-  A file that exists but cannot be *read* still fails the build, deliberately: you declared it and expect it in the bundle, so shipping without it would change your artifact silently. That error now names the entry, the path and what to do, instead of a bare `EACCES`.
+- **A `files:` entry that cannot be copied now tells you which entry it was.** Any failure copying a declared file — it cannot be read, the output directory is not writable, the disk is full — used to surface as a bare OS error naming a path and nothing else, leaving you to work out which line of your config produced it. The message now names the `files:` entry, the resolved path, the OS reason, and what to check. This covers glob and explicit entries in `skills.config.<name>.files`, on the read and the write side, and the `integrity:` verification that follows a copy. The plugin lane (`claude.marketplaces.<mp>.plugins[].files`) is a separate copier and is **not** covered yet.
+
+  These still fail the build rather than shipping a partial bundle, deliberately: you declared the file and expect it in the artifact, so quietly shipping without it would change what you publish.
+
+- **`vat audit` no longer aborts when its own config cannot be read.** A config file it could not open or parse ended the command with `status: error` and no report — after the scan had already run and collected every finding, and over a file whose only job is deciding which findings to *hide*. It now reports what it found, warns on stderr that the config could not be read, and applies no severity overrides. **What to do:** if you see that warning, fix the config — your `validation.severity` settings are not being applied until you do.
 
 - **`vat audit` no longer throws away every finding when it hits one unreadable file or directory.** A single path it could not read — most likely a root-owned or quarantined entry under `~/.claude/plugins` — ended the whole run with `status: error`, exit code 2, and **zero findings**, including everything already collected from parts of the tree that scanned fine. This hit `vat audit --user` hardest, where sudo-installed and quarantined files are normal.
 

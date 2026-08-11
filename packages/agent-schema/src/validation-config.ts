@@ -42,6 +42,11 @@ export interface ValidationConfig {
   allow?: Partial<Record<IssueCode, AllowEntry[]>> | undefined;
 }
 
+// The `unknown` INPUT parameter is deliberate, not a leftover from satisfying the
+// compiler. This schema's job is to validate a `validation:` block parsed out of a
+// YAML file, which is `unknown` by construction — a caller that already had a
+// typed value would have no reason to parse it. Typing the input narrower would
+// only let a caller skip the check the schema exists to perform.
 export const ValidationConfigSchema: z.ZodType<ValidationConfig, z.ZodTypeDef, unknown> = z.object({
   severity: z.record(IssueCodeSchema, SeverityLevelSchema).optional(),
   allow: z.record(IssueCodeSchema, z.array(AllowEntrySchema)).optional(),

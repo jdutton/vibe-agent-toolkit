@@ -24,7 +24,7 @@ import { CODE_REGISTRY, type IssueCode, type IssueSeverity } from './validation-
 import type { AllowEntry, ValidationConfig } from './validation-config.js';
 import type { ValidationIssue } from './validation-issue.js';
 
-// The Zod-inferred `ValidationConfig` (from validation-config.ts) is the single
+// The hand-written `ValidationConfig` (from validation-config.ts) is the single
 // canonical config type. The framework's narrower input types derive from it so
 // a parsed config is directly assignable to `runValidationFramework`.
 export type { ValidationConfig } from './validation-config.js';
