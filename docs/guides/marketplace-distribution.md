@@ -103,10 +103,12 @@ mechanism, `externalSource`, covered next.
 A plugin entry doesn't have to be built by the marketplace that lists it. Set
 `externalSource` instead of `skills`/`source`/`files`, and `vat claude plugin build` never
 builds or copies anything for that entry — it writes the source object straight into
-`marketplace.json`, matching the official Claude Code marketplace source shapes
-(`github`, `url`, `npm`, `pip`). Claude Code resolves it at install time from wherever the
-other repo actually publishes, so the referenced plugin has exactly one home and cannot
-drift out of sync with a vendored copy.
+`marketplace.json`, matching the plugin `source` shapes in Anthropic's official
+[Plugin marketplaces](https://code.claude.com/docs/en/plugin-marketplaces) docs
+(`github`, `url`, `npm`, `pip` — see that page for the authoritative field list, since it is
+the spec VAT is implementing here, not the other way around). Claude Code resolves the
+reference at install time from wherever the other repo actually publishes, so the
+referenced plugin has exactly one home and cannot drift out of sync with a vendored copy.
 
 This is how an enterprise assembles its own marketplace out of plugins it maintains
 *plus* plugins it wants to adopt from elsewhere — including a public one like this
