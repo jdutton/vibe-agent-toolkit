@@ -53,7 +53,7 @@ export function rejectPositionalArguments(
       `\n` +
       `  Fix: run '${command}' with no arguments, and scope it in\n` +
       `  vibe-agent-toolkit.config.yaml.\n` +
-      `  To inspect ONE skill or bundle by path, use: vat audit <path>\n`,
+      `  To inspect ONE skill or bundle by path, use: vat skill review <path>\n`,
   );
   process.exit(2);
 }

@@ -62,7 +62,7 @@ export function createBuildTopLevelCommand(): Command {
 Arguments:
   None. 'vat build' builds what the config declares; it takes no path and
   rejects one (exit 2) rather than discarding it and building everything.
-  To inspect a single skill or bundle by path, use 'vat audit <path>'.
+  To inspect a single skill or bundle by path, use 'vat skill review <path>'.
 
 Description:
   Builds all project artifacts in dependency order.
