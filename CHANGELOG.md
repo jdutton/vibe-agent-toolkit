@@ -53,6 +53,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`externalSource` on a marketplace plugin entry** — reference a plugin published in
+  *another* marketplace/repo (`github`, `url`, `npm`, or `pip`, matching Claude Code's
+  official marketplace source shapes) instead of building one locally. `vat claude plugin
+  build` writes the source object straight into `marketplace.json` and never builds or
+  copies the referenced plugin's content, so one marketplace can cherry-pick a plugin
+  published elsewhere without vendoring it. Set `skills: []` and omit
+  `source`/`files`/`exclude`/`changelog` on the entry — the config schema rejects the
+  combination otherwise. See "Referencing Another Marketplace's Plugin" in
+  `docs/guides/marketplace-distribution.md`.
+
 - **`fillRealpaths(paths, fsCache)` + `realpathFrom(table, path)`** in `@vibe-agent-toolkit/utils` —
   the canonical-path column, a second fill/judge pair alongside `fillSiblingNames` +
   `classifyFilenameCaseFrom`. Link validation asked `fs.realpathSync` twice per *existing* link
@@ -272,6 +282,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not be cited as a cross-platform guarantee.
 
 ### Fixed
+
+- **`vat verify`, `vat build`, `vat validate`, and `vat skills validate`/`build` pointed a
+  no-path-scope refusal at `vat audit <path>`, which exits 0 unconditionally — including when
+  it reports `status: error`.** An operator who followed the recommended fallback to inspect a
+  single skill or bundle got a command whose exit code carries no pass/fail signal at all.
+  All five now point at `vat skill review <path>`, whose exit code is 1 iff status is
+  `warning` or `error` by construction.
 
 - **A markdown document that declares the same reference-definition label twice resolved every
   `[ref][label]` to the LAST declaration; CommonMark resolves it to the FIRST.** `[dup]: ./a.md`
