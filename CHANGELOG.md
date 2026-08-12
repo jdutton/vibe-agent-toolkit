@@ -53,6 +53,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `@vibe-agent-toolkit/resources` now exports versioned Zod schemas (and generated JSON Schema) for
+  the ten proposed resource-projection tables — `blobs`, `blob_links`, `blob_sections`,
+  `blob_conditions`, `roots`, `resources`, `resource_realizations`, `resource_zones`,
+  `resource_tags`, `edges`. Schema only; population from live scans lands in a follow-up.
+
 - **`externalSource` on a marketplace plugin entry** — reference a plugin published in
   *another* marketplace/repo (`github`, `url`, `npm`, or `pip`, matching Claude Code's
   official marketplace source shapes) instead of building one locally. `vat claude plugin

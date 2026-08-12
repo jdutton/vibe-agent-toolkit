@@ -44,6 +44,17 @@ introduced by them, are proposed.) The tables are keyed on content, not path: th
 anywhere in the corpus — same file at two paths, same file at two points in history, same file
 across two adopters — would produce one row, computed once, reused everywhere.
 
+**Update, stage 3 in progress:** the table *shapes* below are now ✅ shipped as Zod schemas with
+generated JSON Schema — `packages/resources/src/schemas/projection-blobs.ts` and
+`projection-resources.ts`, versioned via `PROJECTION_SCHEMA_VERSION`. **Population is still 🔷
+proposed** for all ten tables: nothing yet derives real rows from `ParseFacts` or
+`ResourceRegistry` at runtime. Four tables (`blobs`, `blob_links`, `blob_sections`,
+`blob_conditions`) and three (`roots`, `resources`, `edges`) have a clear source to populate from
+already; `resource_realizations`, `resource_zones` beyond a single default "tree" zone, and
+zone-sourced `resource_tags` additionally depend on zone modeling (skill/plugin/marketplace
+boundaries) that does not exist anywhere in the codebase yet — a separate, larger integration into
+`agent-skills`/`claude-marketplace`, not a natural extension of schema definition.
+
 | table (🔷 proposed) | contents |
 |---|---|
 | `blobs` | content key, bytes, token estimate, frontmatter (JSON), `frontmatter_error`, word count, prose vs. code-block bytes, link/heading/section counts |
@@ -205,8 +216,12 @@ cache, not a replacement for either layer.
 
 - ✅ **Shipped** (stages 1b/2): the pipeline restructure and the object-level, content-addressed parse
   cache described in §5.
-- 🔷 **Proposed** (stage 3 and beyond): schema publication and export with a versioned contract; the
-  git-lane and non-git-lane change-detection manifests from the scanning doc; the blob-SHA memo.
+- ✅ **Shipped** (stage 3, schema only): the ten projection table shapes as versioned Zod schemas
+  with generated JSON Schema (`PROJECTION_SCHEMA_VERSION`).
+- 🔷 **Proposed** (stage 3 continuation and beyond): population of those tables from `ParseFacts`/
+  `ResourceRegistry` at runtime; the zone-modeling work `resource_realizations`/`resource_zones`/
+  zone-sourced `resource_tags` need; the git-lane and non-git-lane change-detection manifests from
+  the scanning doc; the blob-SHA memo.
 
 ## Related
 
