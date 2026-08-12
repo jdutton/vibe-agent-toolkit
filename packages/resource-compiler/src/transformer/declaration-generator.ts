@@ -19,7 +19,7 @@ import type { MarkdownResource } from '../compiler/types.js';
  *
  * @example
  * ```typescript
- * const resource = parseMarkdown(content);
+ * const resource = toMarkdownResource(content);
  * const declaration = generateMarkdownDeclarationFile('/path/to/prompts.md', resource);
  * // Outputs:
  * // export interface Fragment {

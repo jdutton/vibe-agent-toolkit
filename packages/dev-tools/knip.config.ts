@@ -43,6 +43,19 @@ const config: KnipConfig = {
       entry: [SRC_TS, 'scripts/**/*.ts'],
     },
 
+    // lab: the `vat-lab` binary is a second entry point alongside the barrel,
+    // and it is the only thing that imports Commander. Its package.json `bin`
+    // points at `dist/`, which knip cannot map back to source — so without this
+    // the CLI's whole import graph is invisible and commander reads as unused.
+    //
+    // The io facet's counter is a THIRD entry point, and an invisible one: it is
+    // loaded into the measured process via `NODE_OPTIONS=--require`, so nothing
+    // in this repo ever imports it. Without it listed here knip reads a
+    // load-bearing file as dead and deletes it on the next cleanup.
+    'packages/lab': {
+      entry: ['src/index.ts', 'src/bin/vat-lab.ts', 'src/facets/io/counter.cts'],
+    },
+
     // CLI: Commander.js wires commands from bin.ts, not index.ts
     'packages/cli': {
       entry: ['src/bin.ts'],
@@ -97,7 +110,12 @@ const config: KnipConfig = {
     // vat-development-agents has standalone agent files + TS compiler plugin
     'packages/vat-development-agents': {
       entry: ['src/agents/*.ts'],
-      ignoreDependencies: ['@vibe-agent-toolkit/agent-schema'],
+      ignoreDependencies: [
+        '@vibe-agent-toolkit/agent-schema',
+        // Invoked as `tspc` via `--compiler=tspc` passed to tsc-clean-build.ts — knip's
+        // script-token scanner only matches a bin name as its own token, not inside a flag value.
+        'ts-patch',
+      ],
       // tsconfig includes resources/**/*.md which knip can't resolve as imports
       ignoreUnresolved: ['.*'],
     },

@@ -98,6 +98,7 @@ import {
   crawlOwnsSubtree,
   distributedTreeFindings,
   getOrCreateGitTracker,
+  gitTrackerForProjectRoot,
   isWithin,
   resetGitTrackerCache,
 } from './audit/distributed-tree.js';
@@ -2185,12 +2186,19 @@ async function getOrCreateInventoryRegistry(
  *    per-skill fallback is each skill's OWN directory, so a registry rooted at the plugin
  *    matches nothing: it would be crawled, compared, discarded, and re-crawled per skill.
  *    No root, no provider.
+ *
+ * The third argument is unconditional where the second is not: a
+ * {@link gitTrackerForProjectRoot} is asked per skill, about that skill's own root, and
+ * answers `undefined` for a root it cannot serve — so there is no "no root, no source"
+ * case to encode here. This is the call site that carried all 786 measured
+ * `git check-ignore` spawns.
  */
 async function pluginInventoryAt(dir: string): Promise<Awaited<ReturnType<typeof extractClaudePluginInventory>>> {
   const projectRoot = findProjectRoot(dir);
   return extractClaudePluginInventory(
     dir,
     projectRoot === null ? undefined : () => getOrCreateInventoryRegistry(projectRoot),
+    gitTrackerForProjectRoot,
   );
 }
 

@@ -51,4 +51,9 @@ export const PUBLISHED_PACKAGES = [
 export const SKIP_PACKAGES = [
   'dev-tools', // Private development tools package
   'test-agents', // Private test utilities for runtime adapters
+  // Quality lab. Built publish-shaped (real exports, a versioned CLI contract,
+  // docs) but held back from npm while the interface still moves — the intent
+  // is to graduate it to PUBLISHED_PACKAGES once it stops changing shape, not
+  // to keep it private forever.
+  'lab',
 ] as const;

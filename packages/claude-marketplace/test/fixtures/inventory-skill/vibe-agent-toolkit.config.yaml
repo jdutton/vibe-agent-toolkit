@@ -1,0 +1,8 @@
+# Not a real project — an ANCHOR. See the identical file under `inventory-plugin/`
+# for the full rationale: without it, `findProjectRoot` walks out of the fixtures
+# and the skill link-walk crawls the entire vibe-agent-toolkit monorepo.
+#
+# This fixture had not yet grown slow enough to blow the 60s timeout the way
+# extract-plugin.test.ts did, but it is the same latent bug — the cost is a
+# function of the repo it happens to sit in, so it gets worse on its own.
+version: 1

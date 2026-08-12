@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import fs from 'node:fs/promises';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from './path-utils.js';
@@ -186,4 +186,31 @@ export function setupSyncTempDirSuite(prefix: string): {
     },
     getTempDir: () => tempDir,
   };
+}
+
+/**
+ * Probe whether this host can create symbolic links inside `dir`.
+ *
+ * On Windows, `symlink()` needs either Developer Mode or
+ * `SeCreateSymbolicLinkPrivilege`; CI agents frequently have neither. Fixtures
+ * that depend on symlinks must therefore ask rather than assume — and, having
+ * asked, must SAY they skipped. A symlink case that silently no-ops reads as a
+ * passing test for a property nobody exercised.
+ *
+ * The probe creates and removes one link, because the privilege cannot be
+ * inferred from `process.platform` alone.
+ *
+ * @param dir - An existing directory to probe in (the probe cleans up after itself)
+ * @returns True when a symlink was created successfully
+ */
+export function canCreateSymlinks(dir: string): boolean {
+  const probe = safePath.join(dir, `.vat-symlink-probe-${randomBytes(4).toString('hex')}`);
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied dir plus a random basename generated here
+    symlinkSync('.', probe);
+  } catch {
+    return false;
+  }
+  rmSync(probe, { force: true });
+  return true;
 }

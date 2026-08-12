@@ -17,6 +17,7 @@ describe('buildMarketplaceJson', () => {
       owner,
       plugins: [
         {
+          kind: 'built',
           name: 'a',
           description: 'Plugin A',
           version: '1.2.3',
@@ -41,12 +42,57 @@ describe('buildMarketplaceJson', () => {
     const json = buildMarketplaceJson({
       name: 'mp1',
       owner: { name: 'Org' },
-      plugins: [{ name: 'b', author: { name: 'Org' } }],
+      plugins: [{ kind: 'built', name: 'b', author: { name: 'Org' } }],
     });
 
     expect(json['owner']).toEqual({ name: 'Org' });
     expect(json['plugins']).toEqual([
       { name: 'b', source: './plugins/b', author: { name: 'Org' } },
+    ]);
+  });
+
+  it('emits an external entry\'s source object verbatim and omits author', () => {
+    // An external entry has no local plugin.json to merge an author from — see
+    // the module doc. Fabricating one would misattribute someone else's plugin.
+    const json = buildMarketplaceJson({
+      name: 'mp1',
+      owner: { name: 'Org' },
+      plugins: [
+        {
+          kind: 'external',
+          name: 'vibe-agent-toolkit',
+          description: 'Upstream VAT plugin, referenced not vendored',
+          source: { source: 'github', repo: 'jdutton/vibe-agent-toolkit', ref: 'claude-marketplace' },
+        },
+      ],
+    });
+
+    expect(json['plugins']).toEqual([
+      {
+        name: 'vibe-agent-toolkit',
+        description: 'Upstream VAT plugin, referenced not vendored',
+        source: { source: 'github', repo: 'jdutton/vibe-agent-toolkit', ref: 'claude-marketplace' },
+      },
+    ]);
+  });
+
+  it('mixes built and external plugins in one marketplace, each with its own source shape', () => {
+    const json = buildMarketplaceJson({
+      name: 'mp1',
+      owner: { name: 'Org' },
+      plugins: [
+        { kind: 'built', name: 'local-plugin', author: { name: 'Org' } },
+        {
+          kind: 'external',
+          name: 'remote-plugin',
+          source: { source: 'npm', package: '@example/remote-plugin' },
+        },
+      ],
+    });
+
+    expect(json['plugins']).toEqual([
+      { name: 'local-plugin', source: './plugins/local-plugin', author: { name: 'Org' } },
+      { name: 'remote-plugin', source: { source: 'npm', package: '@example/remote-plugin' } },
     ]);
   });
 });

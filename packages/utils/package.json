@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/utils",
-  "version": "0.1.42",
+  "version": "0.2.0-rc.2",
   "type": "module",
   "description": "Core utility functions shared across the vibe-agent-toolkit packages",
   "sideEffects": false,
@@ -84,7 +84,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc && tsx ../dev-tools/src/copy-yaml-assets.ts",
+    "build": "rimraf --glob dist \"*.tsbuildinfo\" && tsc && tsx ../dev-tools/src/copy-yaml-assets.ts",
     "test:unit": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:system": "vitest run --config vitest.system.config.ts",

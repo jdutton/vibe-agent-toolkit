@@ -6,7 +6,7 @@
 
 import { readFileSync } from 'node:fs';
 
-import { parseMarkdown } from '../compiler/markdown-parser.js';
+import { toMarkdownResource } from '../compiler/markdown-parser.js';
 import { resolveMarkdownPath as resolveMarkdownPathFromTransformer } from '../transformer/path-resolver.js';
 import type { MarkdownResource } from '../compiler/types.js';
 
@@ -214,7 +214,7 @@ export function loadMarkdownResource(filePath: string): MarkdownResource {
   return getMarkdownResource(filePath, () => {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Using validated path from TypeScript Language Service
     const content = readFileSync(filePath, 'utf-8');
-    return parseMarkdown(content);
+    return toMarkdownResource(content);
   });
 }
 

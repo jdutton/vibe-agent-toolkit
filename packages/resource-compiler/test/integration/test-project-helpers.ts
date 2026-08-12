@@ -8,7 +8,7 @@ import { writeFileSync } from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 
-import { parseMarkdown } from '../../src/compiler/markdown-parser.js';
+import { toMarkdownResource } from '../../src/compiler/markdown-parser.js';
 import { generateMarkdownDeclarationFile, getDeclarationPath } from '../../src/transformer/declaration-generator.js';
 
 /**
@@ -23,7 +23,7 @@ export function setupMarkdownFiles(
     writeFileSync(mdPath, content, 'utf-8');
 
     // Generate and write declaration file
-    const resource = parseMarkdown(content);
+    const resource = toMarkdownResource(content);
     const declaration = generateMarkdownDeclarationFile(mdPath, resource);
     const dtsPath = getDeclarationPath(mdPath);
     writeFileSync(dtsPath, declaration, 'utf-8');

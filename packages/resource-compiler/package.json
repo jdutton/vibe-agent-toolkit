@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/resource-compiler",
-  "version": "0.1.42",
+  "version": "0.2.0-rc.2",
   "description": "Compile markdown resources to TypeScript with full IDE support",
   "type": "module",
   "main": "./dist/index.js",
@@ -31,7 +31,7 @@
     }
   },
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsx ../dev-tools/src/tsc-clean-build.ts --build",
     "build:clean": "tsc --build --clean && tsc --build",
     "test:unit": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",

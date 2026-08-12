@@ -19,6 +19,8 @@ import { Command } from 'commander';
 import { handleCommandError } from '../utils/command-error.js';
 import { createLogger } from '../utils/logger.js';
 
+import { gitTrackerForProjectRoot } from './audit/distributed-tree.js';
+
 export interface InventoryCommandOptions {
 	user?: boolean;
 	system?: boolean;
@@ -105,7 +107,11 @@ export async function routeInventory(
 		// same root from the same skill path and crawls it exactly once, so handing it a
 		// registry here would only duplicate that derivation — and get it wrong the moment
 		// the two rules drift.
-		return extractClaudeSkillInventory(absolute);
+		//
+		// A git-tracker source IS worth handing over even for one skill: the saving is per
+		// LINK TARGET, not per skill. One `git ls-files` replaces one `git check-ignore`
+		// spawn for every distinct target this skill's link graph reaches.
+		return extractClaudeSkillInventory(absolute, undefined, gitTrackerForProjectRoot);
 	}
 	const claudePluginDir = safePath.join(absolute, '.claude-plugin');
 	// eslint-disable-next-line security/detect-non-literal-fs-filename -- absolute is caller-resolved, used for presence check only
@@ -123,8 +129,14 @@ export async function routeInventory(
 		return extractClaudeMarketplaceInventory(absolute);
 	}
 	// Lazy, not eager: the extractor calls this only when it is about to walk its first
-	// skill, so a plugin of commands/ and agents/ alone crawls nothing.
-	return extractClaudePluginInventory(absolute, linkRegistryProviderFor(absolute));
+	// skill, so a plugin of commands/ and agents/ alone crawls nothing. The tracker source
+	// is unconditional — it is asked per skill, about that skill's own root, and answers
+	// `undefined` for any root it cannot serve.
+	return extractClaudePluginInventory(
+		absolute,
+		linkRegistryProviderFor(absolute),
+		gitTrackerForProjectRoot,
+	);
 }
 
 /**

@@ -7,7 +7,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { crawlDirectory, crawlDirectorySync } from '../../src/file-crawler.js';
 import { mkdirSyncReal, toForwardSlash } from '../../src/path-utils.js';
-import { setupSyncTempDirSuite } from '../../src/test-helpers.js';
+import { canCreateSymlinks, setupSyncTempDirSuite } from '../../src/test-helpers.js';
 import { createGitRepo } from '../test-helpers.js';
 
 const GITIGNORE = '.gitignore';
@@ -269,6 +269,64 @@ describe('file-crawler', () => {
 
         // Should find README.md and link.md (followed symlink)
         expect(files.length).toBe(2);
+      });
+
+      it('should enumerate each real file once when a directory symlink loops', () => {
+        if (!canCreateSymlinks(testDir)) {
+          console.warn('SKIPPED: host cannot create symlinks (needs Developer Mode on Windows)');
+          return;
+        }
+
+        // a/note.md, plus a/loop -> a. Walking `loop` re-enters `a`.
+        const dir = safePath.join(testDir, 'a');
+        mkdirSyncReal(dir);
+        // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is a controlled temp directory
+        writeFileSync(safePath.join(dir, 'note.md'), '# note');
+        // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is a controlled temp directory
+        symlinkSync(dir, safePath.join(dir, 'loop'), 'dir');
+
+        const files = crawlDirectorySync({
+          baseDir: testDir,
+          include: ['**/*.md'],
+          followSymlinks: true,
+        });
+
+        // Before the visited-realpath guard this returned 16 rows for one file:
+        // `a/loop/loop/.../note.md` at every depth, terminating only when the
+        // kernel refused further symlink resolution (MAXSYMLINKS). That bound is
+        // an OS constant — 32 on macOS, 40 on Linux — so the population differed
+        // by platform, and the walk ended inside the `catch` that exists to skip
+        // BROKEN symlinks, so nothing reported it.
+        expect(files).toHaveLength(1);
+        expect(files[0]).toMatch(/note\.md$/);
+        expect(files[0]).not.toContain('loop');
+      });
+
+      it('should enumerate a directory reached by two symlinks once', () => {
+        if (!canCreateSymlinks(testDir)) {
+          console.warn('SKIPPED: host cannot create symlinks (needs Developer Mode on Windows)');
+          return;
+        }
+
+        // Two names for one directory is the aliasing case a loop guard must
+        // also cover: no cycle exists, yet the blob is enumerated twice.
+        const real = safePath.join(testDir, 'real');
+        mkdirSyncReal(real);
+        // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is a controlled temp directory
+        writeFileSync(safePath.join(real, 'doc.md'), '# doc');
+        // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is a controlled temp directory
+        symlinkSync(real, safePath.join(testDir, 'alias-one'), 'dir');
+        // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is a controlled temp directory
+        symlinkSync(real, safePath.join(testDir, 'alias-two'), 'dir');
+
+        const files = crawlDirectorySync({
+          baseDir: testDir,
+          include: ['**/*.md'],
+          followSymlinks: true,
+        });
+
+        expect(files).toHaveLength(1);
+        expect(files[0]).toMatch(/doc\.md$/);
       });
     });
   });

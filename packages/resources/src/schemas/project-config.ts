@@ -315,6 +315,49 @@ export type SkillsConfig = z.infer<typeof SkillsConfigSchema>;
 // ---------------------------------------------------------------------------
 
 /**
+ * A plugin entry's `externalSource` — a reference to a plugin published in
+ * ANOTHER marketplace/repo, never built or copied by VAT. Emitted verbatim as
+ * the `source` object in the generated marketplace.json, matching the official
+ * Claude Code marketplace source shapes (see
+ * `packages/agent-skills/src/schemas/marketplace-manifest.ts`, the reading
+ * side of this same union, confirmed against real entries from
+ * `anthropics/claude-plugins-official`).
+ *
+ * This is how one marketplace cherry-picks a plugin out of another without
+ * vendoring its files: Claude Code resolves `source` at install time, so the
+ * referenced plugin stays a single source of truth wherever it is actually
+ * maintained.
+ */
+export const ExternalPluginSourceSchema = z.discriminatedUnion('source', [
+  z.object({
+    source: z.literal('github'),
+    repo: z.string().min(1).describe('owner/repo'),
+    ref: z.string().optional().describe('Branch or tag (default: the repo default branch)'),
+    sha: z.string().optional().describe('Pin to an exact commit (overrides ref for reproducibility)'),
+  }).strict(),
+  z.object({
+    source: z.literal('url'),
+    url: z.string().url(),
+    ref: z.string().optional(),
+    sha: z.string().optional(),
+  }).strict(),
+  z.object({
+    source: z.literal('npm'),
+    package: z.string().min(1),
+    version: z.string().optional(),
+    registry: z.string().optional(),
+  }).strict(),
+  z.object({
+    source: z.literal('pip'),
+    package: z.string().min(1),
+    version: z.string().optional(),
+    registry: z.string().optional(),
+  }).strict(),
+]).describe('External plugin source, passed through verbatim to marketplace.json');
+
+export type ExternalPluginSource = z.infer<typeof ExternalPluginSourceSchema>;
+
+/**
  * A plugin entry within a Claude marketplace configuration.
  *
  * Supports full Claude plugin bundling:
@@ -327,6 +370,10 @@ export type SkillsConfig = z.infer<typeof SkillsConfigSchema>;
  *   both crawl lanes. Additive to the built-in exclusions (`.claude-plugin/`,
  *   agent-instruction files); for project-specific junk only. A pattern that matches
  *   nothing is warned about, never silently ignored.
+ * - `externalSource` (optional): reference a plugin published in another marketplace/repo
+ *   instead of building one locally. Mutually exclusive with `source`/`files`/`exclude`/
+ *   `changelog`, and `skills` must be `[]` — an external plugin is never built or copied by
+ *   VAT, only referenced.
  */
 export const ClaudeMarketplacePluginEntrySchema = z.object({
   name: z.string()
@@ -335,20 +382,48 @@ export const ClaudeMarketplacePluginEntrySchema = z.object({
   description: z.string().optional()
     .describe('Plugin description'),
   skills: z.union([z.literal('*'), z.array(z.string())])
-    .describe('Skills to include: "*" for all, or array of skill name selectors'),
+    .describe('Skills to include: "*" for all, or array of skill name selectors. Must be [] when externalSource is set'),
   source: z.string().optional()
-    .describe('Path to plugin directory (default: plugins/<name>)'),
+    .describe('Path to plugin directory (default: plugins/<name>). Incompatible with externalSource'),
   files: z.array(SkillFileEntrySchema).optional()
-    .describe('Explicit source→dest file mappings for compiled artifacts outside the plugin directory'),
+    .describe('Explicit source→dest file mappings for compiled artifacts outside the plugin directory. Incompatible with externalSource'),
   exclude: z.array(z.string()).optional()
-    .describe('Patterns (relative to the plugin source dir) to leave out of the verbatim tree-copy: a glob ("scratch/**"), or a directory name with or without a trailing slash ("scratch", "scratch/") which covers that directory and everything under it'),
+    .describe('Patterns (relative to the plugin source dir) to leave out of the verbatim tree-copy: a glob ("scratch/**"), or a directory name with or without a trailing slash ("scratch", "scratch/") which covers that directory and everything under it. Incompatible with externalSource'),
   version: z.string().regex(SEMVER_REGEX, {
     message: 'version must be a valid semver string (e.g., "1.2.3" or "1.0.0-rc.1")',
   }).optional()
     .describe('Per-plugin semver version (overrides root package.json:version for this plugin)'),
   changelog: z.string().optional()
-    .describe('Path to per-plugin CHANGELOG (relative to plugin source dir; default: <source>/CHANGELOG.md if it exists)'),
-}).strict().describe('Plugin entry within a marketplace configuration');
+    .describe('Path to per-plugin CHANGELOG (relative to plugin source dir; default: <source>/CHANGELOG.md if it exists). Incompatible with externalSource'),
+  externalSource: ExternalPluginSourceSchema.optional()
+    .describe('Reference a plugin published in another marketplace/repo. VAT never builds or copies it — the source object is emitted verbatim into marketplace.json. See ExternalPluginSourceSchema'),
+}).strict().superRefine((entry, ctx) => {
+  if (entry.externalSource === undefined) return;
+  const skillsIsEmpty = entry.skills !== '*' && entry.skills.length === 0;
+  if (!skillsIsEmpty) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['skills'],
+      message: 'skills must be [] when externalSource is set — an external plugin is never built locally',
+    });
+  }
+  for (const field of ['source', 'exclude', 'changelog'] as const) {
+    if (entry[field] !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [field],
+        message: `${field} is incompatible with externalSource — an external plugin is never built locally`,
+      });
+    }
+  }
+  if (entry.files !== undefined && entry.files.length > 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['files'],
+      message: 'files is incompatible with externalSource — an external plugin is never built locally',
+    });
+  }
+}).describe('Plugin entry within a marketplace configuration');
 
 export type ClaudeMarketplacePluginEntry = z.infer<typeof ClaudeMarketplacePluginEntrySchema>;
 

@@ -106,8 +106,10 @@ once in each code's section below (linked from the `Code` cell).
 | [`LINK_TO_AGENT_INSTRUCTION_FILE`](#link_to_agent_instruction_file) | error | Markdown link targets a repo-internal agent-instruction file (CLAUDE.md, AGENTS.md, GEMINI.md) that no explicit files: entry declares; it is not bundled and the link is stripped from the packaged content. | Link the specific content the file describes; point the link at the file's canonical home as an absolute URL; or extract the shared part into a document intended for distribution. To ship the file deliberately, name it in an explicit (non-glob) skills.config.<name>.files entry — the file is then bundled and this link is rewritten to the declared dest. |
 | [`LINK_TO_GITIGNORED_FILE`](#link_to_gitignored_file) | error | Markdown link targets a gitignored file; risks leaking ignored data into the bundle. | Link to a non-ignored file or adjust .gitignore. Allow the specific path via validation.allow if the risk has been reviewed. If the target is a build artifact, declare it under skills.config.<name>.files instead. |
 | [`LINK_MISSING_TARGET`](#link_missing_target) | error | Markdown link target does not exist on disk and is not a declared build artifact. | Fix the link path, create the file, or declare it under skills.config.<name>.files as a build artifact. |
+| [`LINK_TARGET_UNREADABLE`](#link_target_unreadable) | error | Markdown link target exists on disk but could not be read, so it was neither classified nor bundled. Most often permissions; also a change racing the walk. | Fix the permissions on the target, or investigate what changed it mid-walk, then re-run. Set severity.LINK_TARGET_UNREADABLE to warning if a corpus is expected to contain entries the walk cannot read. |
 | [`LINK_DEFERRED_ARTIFACT`](#link_deferred_artifact) | info | Link targets a deferred build artifact declared in the skill files: config; it will exist after the build materializes it. | No action needed if the files: entry is correct. To silence, set validation.severity.LINK_DEFERRED_ARTIFACT: ignore. |
 | [`LINK_TO_SKILL_DEFINITION`](#link_to_skill_definition) | error | Markdown link targets another skill's SKILL.md; bundling it creates duplicate skill definitions. | Link to a specific resource inside the other skill, or reference the other skill by name. |
+| [`LINK_FROM_NON_ROUTABLE_FILE`](#link_from_non_routable_file) | warning | A bundled non-routable file (HTML) links to a file the walker did not follow, so the target is not in the bundle and the packaged link points at nothing. | Link the target from a markdown file in the bundle, declare it under skills.config.<name>.files, or set severity.LINK_FROM_NON_ROUTABLE_FILE to ignore if the packaged link is meant to resolve outside the bundle. |
 | [`LINK_DROPPED_BY_DEPTH`](#link_dropped_by_depth) | warning | Walker stopped following links at the configured linkFollowDepth; this link was not bundled. | Raise linkFollowDepth, bundle the file via files config, declare the drop intentional with validation.allow, or exclude via excludeReferencesFromBundle.rules. |
 | [`PACKAGED_UNREFERENCED_FILE`](#packaged_unreferenced_file) | error | File in the packaged output is not referenced from any packaged markdown. | Add a markdown link or code-block mention in SKILL.md or a linked resource. A file consumed programmatically belongs in skills.config.<name>.files as a source/dest pair — a declared dest is exempt, so do NOT restate it in validation.allow. |
 | [`PACKAGED_AGENT_INSTRUCTION_FILE`](#packaged_agent_instruction_file) | warning | A repo-internal agent-instruction file (CLAUDE.md, AGENTS.md, GEMINI.md) is present in the scanned tree — a built skill bundle, an installed plugin, or a plugin source directory. | In a distributed tree (a built bundle or an installed plugin) remove the file, or move it outside the directory that is packaged. In a repo source tree, confirm first whether it ships: the build excludes agent-instruction files from the plugin tree-copy and from files: globs, so only an explicit files: entry naming it puts it in the output. If it must ship, set severity.PACKAGED_AGENT_INSTRUCTION_FILE to ignore so the exception is recorded in config. If an explicit files: entry already names this dest, vat build and vat verify honour it and stay silent; vat audit reports it anyway because a path-addressed scan cannot see the config that declared it. |
@@ -133,6 +135,7 @@ and shows the `files:` edge as the resolving state once `DeferredArtifacts` is w
 | Broken link | Build artifact declared in `files:` (not yet materialized) | `LINK_DEFERRED_ARTIFACT` (info — resolves after build) |
 | Broken link | Typo / wrong path at source | `LINK_MISSING_TARGET` |
 | Broken link | `files:` **dest** VAT declined to package (its source is declared test input) | `LINK_MISSING_TARGET` + a `PACKAGED_TEST_INPUT` receipt — never deferred, because nothing will materialize it |
+| Broken link | Present at source, but the walk could not read it (permissions, or a change racing the walk) | `LINK_TARGET_UNREADABLE` (the file is there — this is not a missing target) |
 | Broken link | Present in source but missing in **built** output | `PACKAGED_BROKEN_LINK` (link-rewriter bug — the issue's `fix` says to report it) |
 | Broken link | Target a glob `files:` entry matched and the never-package filter dropped | `PACKAGED_BROKEN_LINK` (deliberate policy — same code, still blocking, but the issue's `fix` names this cause instead of blaming VAT) |
 | Orphan file | Runtime asset loaded by a script | Declare in `files:` → no code (declaration is the resolution; the build's orphan check is given the dests it copied and exempts them) |
@@ -209,6 +212,14 @@ Static-analysis codes that fire anywhere markdown is analyzed — `vat resources
 - **Why it matters:** Broken links in skill documentation mean agents hit dead ends when they follow references. This usually indicates a typo, a removed file, or a build-artifact path that needs declaring under `skills.config.<name>.files`.
 - **Fix:** Fix the link path, create the file, or declare it under `skills.config.<name>.files` as a build artifact.
 
+### `LINK_TARGET_UNREADABLE`
+
+- **Default:** `error`
+- **What:** Markdown link target exists on disk but could not be read, so it was neither classified nor bundled. Most often permissions; also a change racing the walk. The walk found the path (`existsSync` succeeded) and then could not `stat` it, so it could not tell what the target even is — file, directory, or anything else.
+- **Not a missing target:** the distinction is the whole point of this code. [`LINK_MISSING_TARGET`](#link_missing_target) says *the path is not there*, and sends the author to fix a typo or create the file. This one says *the path is there and the tooling cannot read it*, which is an environment or permissions problem — following the missing-target remedy would have the author "create" a file that already exists.
+- **Why it matters:** Before this code existed the link simply **vanished**: an unstattable target was skipped silently, producing no exclusion, no bundle entry and no finding, so the report described a corpus with one fewer edge in it than the one on disk. The same read failure has always been reported on the resources lane as [`RESOURCE_UNREADABLE`](#resource_unreadable) — this is that code's skill-packaging sibling, and the two lanes now agree about the same unreadable file.
+- **Fix:** Fix the permissions on the target, or investigate what changed it mid-walk, then re-run. Set `severity.LINK_TARGET_UNREADABLE` to `warning` if a corpus is expected to contain entries the walk cannot read.
+
 ### `LINK_DEFERRED_ARTIFACT`
 
 - **Default:** `info`
@@ -227,8 +238,15 @@ Static-analysis codes that fire anywhere markdown is analyzed — `vat resources
 
 - **Default:** `error`
 - **What:** A local file link points to a non-existent file.
-- **Why it matters:** A broken local link is a dead reference — an agent or human following it lands on nothing. In a resources-path document this almost always means a typo, a renamed file, or a target that was deleted without updating the link. Fires in the `vat resources validate` path (the packaging-oriented equivalent is [`LINK_MISSING_TARGET`](#link_missing_target)). A missing target declared under `skills.config.<name>.files` is downgraded to [`LINK_DEFERRED_ARTIFACT`](#link_deferred_artifact) instead — `vat resources validate` reuses the same skill discovery and `files:` config merge as `vat skills validate`, so the two lanes agree on a given link's verdict.
+- **Why it matters:** A broken local link is a dead reference — an agent or human following it lands on nothing. In a resources-path document this almost always means a typo, a renamed file, or a target that was deleted without updating the link. Fires in the `vat resources validate` path (the packaging-oriented equivalent is [`LINK_MISSING_TARGET`](#link_missing_target)). A missing target declared under `skills.config.<name>.files` is downgraded to [`LINK_DEFERRED_ARTIFACT`](#link_deferred_artifact) instead — `vat resources validate` reuses the same skill discovery and `files:` config merge as `vat skills validate`, so the two lanes agree on a given link's verdict. A target that exists but whose *Unicode normalization form* differs from the link's is deliberately not this code — it is the warning [`LINK_NORMALIZATION_MISMATCH`](#link_normalization_mismatch), because the file is really there and the link really opens on the author's machine.
 - **Fix:** Fix the path or create the target file.
+
+### `LINK_NORMALIZATION_MISMATCH`
+
+- **Default:** `warning`
+- **What:** A local file link resolves only after Unicode normalization. The link text and the filename on disk are the *same visible characters* stored in different normalization forms — precomposed NFC (`é` = `U+00E9`) versus decomposed NFD (`e` + `U+0301`). The two are different byte sequences, so they are different filenames to a byte-exact filesystem, but identical to a reader and to any tool that folds before comparing.
+- **Why it matters:** This is the one link finding whose verdict depends on *which machine asks*. macOS/APFS and Windows reconcile the two forms at the syscall level, so the link opens on the author's machine, in their editor, and in a local preview — while on Linux/ext4 (CI, and most deploy targets) opening that exact spelling returns nothing at all. VAT reports it as a **warning rather than an error** for that reason: the file genuinely exists, the link genuinely works where it was written, and nothing about the target is missing. It is also why VAT does *not* report it as [`LINK_BROKEN_FILE`](#link_broken_file) — calling an existing accented file "not found" was a real false positive VAT used to emit, and folding both sides of the comparison fixed it; this code exists so that fix does not silently swallow the Linux-only breakage in the other direction. The message names both spellings with their non-ASCII characters escaped as code points, because printed literally the two are visually indistinguishable.
+- **Fix:** Make the two spellings byte-identical. Prefer normalizing **both** sides to NFC — rename the file on disk to its NFC name and write the link in NFC — rather than rewriting the link to match an NFD name on disk: editors, browsers, and git checkouts routinely re-normalize typed text to NFC, so an NFD link is liable to be silently rewritten back and break again. Set `severity.LINK_NORMALIZATION_MISMATCH` to `ignore` if the corpus is only ever read on a normalization-insensitive filesystem.
 
 ### `LINK_BROKEN_ANCHOR`
 
@@ -393,6 +411,15 @@ Codes that fire when `vat resources validate` checks external links whose host i
 *Stance: see [Packaging](./skill-quality-and-compatibility.md#packaging).*
 
 Only meaningful when a skill is actually being bundled. Most fire from `vat skills build` (and its pre-flight in `vat skills validate`), but not all of them do — a few belong to the post-build and scan lanes instead (`vat verify`, `vat audit`, `vat claude plugin build`). **Each code's own section names the verbs that emit it; read that rather than assuming this heading.**
+
+### `LINK_FROM_NON_ROUTABLE_FILE`
+
+- **Default:** `warning`
+- **What:** A bundled **non-routable** file — currently HTML — links to a file the walker did not follow, so the target is not in the bundle and the packaged link points at nothing.
+- **Membership vs. routability:** VAT parses HTML, so a bundled `.html` page *is* a registry member: its links are known and the packager rewrites them to point at bundled copies. It is not **routable** — VAT does not walk *through* it to pull its link targets into the bundle. HTML is a leaf you can read, not a door you walk through. Routing is markdown-only, matching Anthropic's skill guidance.
+- **Why it matters:** `SKILL.md → guide.html → diagram.svg` bundles `guide.html` and drops `diagram.svg`. Because the referring page *did* ship, the missing image reads as a link-rewriter bug rather than a routing boundary, and before this code existed the drop was entirely silent.
+- **Fix:** Link the target from a markdown file in the bundle, declare it under `skills.config.<name>.files`, or set `severity.LINK_FROM_NON_ROUTABLE_FILE` to ignore if the packaged link is meant to resolve outside the bundle.
+- **Not this code:** if the HTML page's link target does not exist on disk at all, that is an author's broken link and reports as [`LINK_MISSING_TARGET`](#link_missing_target). This code fires only for a target that exists and simply had no markdown referrer.
 
 ### `LINK_DROPPED_BY_DEPTH`
 
@@ -560,6 +587,14 @@ Reported like every other packaging finding — a located, coded issue on the bu
 - **What:** Two files resolve to the same resource id after path normalization (e.g. `My Guide.md` and `my-guide.md` both produce `my-guide-md`).
 - **Why it matters:** Resource ids must be unique — a collision means one file silently shadows the other in lookups, link resolution, and bundling. This surfaces as a reported issue rather than aborting the whole run with an uncaught error.
 - **Fix:** Rename one of the files so they produce distinct resource ids.
+
+### `RESOURCE_UNREADABLE`
+
+- **Default:** `error`
+- **What:** A file the crawl enumerated could not be read, so it was skipped. Most often a committed symlink whose target is missing; also permissions, or a file deleted between enumeration and parse.
+- **Why it matters:** The file is absent from every count in the report — `filesScanned`, link totals, bundle contents — while the crawl found it. Before this code existed, an unreadable file terminated `vat resources scan`/`validate` and `vat audit` with a raw `ENOENT` stack trace; the alternative of skipping it quietly would have traded a loud crash for a silent population change, which is worse. The finding names the file so the gap between "enumerated" and "validated" is accounted for rather than inferred.
+- **Scope:** Only recognized filesystem errno codes (`ENOENT`, `EACCES`, `ELOOP`, `EISDIR`, …) are reported this way. A parse or indexing defect still throws, so a bug in VAT cannot disguise itself as a per-file warning.
+- **Fix:** Repoint or delete the dangling symlink, restore the missing target, or fix the permissions. Set `severity.RESOURCE_UNREADABLE` to `warning` if a corpus is expected to contain unresolvable entries.
 
 ## Quality Codes
 

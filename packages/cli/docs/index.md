@@ -23,6 +23,8 @@ Markdown resource scanning, link validation, and frontmatter validation (run bef
 5. **Validates frontmatter against JSON Schemas** (per-collection)
 6. Reports broken links and validation errors to stderr
 
+**Note:** External URLs are not validated (by design — avoids flaky network checks). Only internal file links and anchors are checked.
+
 **Per-collection frontmatter validation:**
 
 Define collections in `vibe-agent-toolkit.config.yaml` to validate frontmatter fields, types, and patterns using JSON Schemas. Collections support strict mode (no extra fields) or permissive mode (extra fields allowed).
@@ -286,8 +288,27 @@ vat rag search "agent deployment" --limit 5
 - `--help --verbose` - Show comprehensive help (this output)
 - `--cwd <dir>` - Change working directory before running any command
 - `--debug` - Enable debug logging
+- `--no-cache` - Disable VAT's on-disk caches for this run, including in spawned child phases
+  (equivalent to `VAT_CACHE=0`; see [Environment Variables](#vat_cache)). Clear what is already
+  stored with `vat cache clear`.
 
 ## Environment Variables
+
+### VAT_CACHE
+Set to `0` to disable VAT's on-disk caches for the run — the parse cache and the external-URL
+validation caches, which share `<tmpdir>/.vat-cache/`:
+
+```bash
+VAT_CACHE=0 vat validate
+```
+
+The root `--no-cache` flag is the same switch: it sets this variable. The variable is what makes it
+work, because `vat validate`, `vat verify` and `vat build` do their parsing in spawned child
+processes, and only the environment crosses that boundary — a flag parsed in the parent would never
+reach them.
+
+Caching is a pure optimisation: a run with it off produces identical results, only slower. Use
+`vat cache clear` to discard what is already stored.
 
 ### VAT_DEBUG
 Enable detailed wrapper diagnostics showing context detection and resolution:
@@ -456,6 +477,5 @@ vat rag search "markdown validation"
 
 ## More Information
 
-- **Agent guidance:** `docs/cli/CLAUDE.md` (strategic patterns for AI agents)
 - **Documentation:** https://github.com/jdutton/vibe-agent-toolkit
 - **Issues:** https://github.com/jdutton/vibe-agent-toolkit/issues

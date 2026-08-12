@@ -62,6 +62,68 @@ packages/cli/
 - Zod schemas for validation
 - Cross-platform Node.js APIs
 
+## Why the CLI Layer Stays Dumb
+
+The CLI package sits at the top of the dependency chain — no other package can depend on it.
+Putting logic in the CLI that other packages need creates an impossible dependency situation:
+
+- Other packages can't depend on CLI (circular dependency)
+- Logic gets duplicated across packages (DRY violation)
+- Changes require coordinating multiple packages
+
+The rule itself (what CLI should/shouldn't contain) lives in
+[`packages/cli/CLAUDE.md`](../../packages/cli/CLAUDE.md#the-cli-must-remain-dumb) — this section
+is the rationale and worked example behind it.
+
+### The Right Place for Logic
+
+| Logic Type | Wrong Place | Right Place | Why |
+|------------|-------------|-------------|-----|
+| Find agent's package root | CLI | agent-skills or utils | Other runtimes (langchain, etc.) will need this |
+| Determine default output path | CLI | agent-skills | Each runtime knows where its bundles should go |
+| Validate agent manifest | CLI | agent-config | Validation used by all consumers |
+| Parse YAML | CLI | utils or agent-config | Common across many packages |
+| Format user messages | CLI | ✅ CLI is fine | This is CLI-specific UX |
+
+### Example: Agent Build Command
+
+**Before (WRONG)** - Logic in CLI:
+```typescript
+// packages/cli/src/commands/agent/build.ts
+function findAgentPackageRoot(agentPath: string): string {
+  // 50 lines of path-walking logic...
+  // ❌ This belongs elsewhere!
+}
+
+function determineOutputPath(target: string, agentPath: string): string {
+  const packageRoot = findAgentPackageRoot(agentPath);
+  return path.join(packageRoot, 'dist', 'vat-bundles', target);
+}
+```
+
+**After (CORRECT)** - Logic in runtime package:
+```typescript
+// packages/cli/src/commands/agent/build.ts
+const buildOptions = options.output
+  ? { agentPath, target, outputPath: options.output }
+  : { agentPath, target };
+// ✅ CLI just passes options, runtime figures out the rest
+result = await buildAgentSkill(buildOptions);
+```
+
+```typescript
+// packages/agent-skills/src/builder.ts
+function getDefaultOutputPath(manifestPath: string, target: string): string {
+  const agentPackageRoot = findAgentPackageRoot(manifestPath);
+  return path.join(agentPackageRoot, 'dist', 'vat-bundles', target);
+}
+// ✅ Logic lives where it can be reused by other runtimes
+```
+
+### Self-Hosting Consideration
+
+Remember: **Other agent repos won't have packages/cli/**. If an agent package needs to build itself, it can depend on `@vibe-agent-toolkit/agent-skills` directly. The CLI is just one convenient way to invoke the build - not the only way.
+
 ## Context Detection
 
 ### Hybrid Approach
@@ -129,6 +191,35 @@ Walk up directory tree until finding:
 - `vibe-agent-toolkit.config.yaml`
 
 Either indicates project root.
+
+### Command File Structure
+
+```typescript
+// commands/mycommand.ts
+export interface MyCommandOptions {
+  debug?: boolean;
+  // ... other options
+}
+
+export async function myCommand(
+  pathArg: string | undefined,
+  options: MyCommandOptions
+): Promise<void> {
+  const logger = createLogger(options.debug ? { debug: true } : {});
+  const startTime = Date.now();
+
+  try {
+    // 1. Validate inputs
+    // 2. Process
+    // 3. Output results (YAML to stdout)
+    // 4. Exit with appropriate code
+
+    process.exit(0);
+  } catch (error) {
+    handleCommandError(error, logger, startTime, 'MyCommand');
+  }
+}
+```
 
 ## Configuration
 
@@ -466,6 +557,55 @@ issues:
 - Exit code 2: System errors (unexpected failures)
 - Always flush stdout before writing to stderr
 - Test format errors must include file:line:column
+
+Use the `handleCommandError` helper for consistent error handling:
+
+```typescript
+try {
+  // Command implementation
+} catch (error) {
+  handleCommandError(error, logger, startTime, 'CommandName');
+  // handleCommandError calls process.exit() internally
+}
+```
+
+This ensures a consistent error format, duration logging, and the exit codes above (1 for
+expected errors, 2 for unexpected).
+
+## Testing Patterns
+
+### System Tests
+
+Create system tests in `test/system/` for end-to-end CLI testing:
+
+```typescript
+describe('MyCommand (system test)', () => {
+  let tempDir: string;
+
+  beforeAll(() => {
+    tempDir = createTestTempDir('vat-mycommand-test-');
+  });
+
+  afterAll(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('should handle basic usage', () => {
+    const { result, parsed } = executeCommandAndParse(binPath, projectDir);
+
+    expect(result.status).toBe(0);
+    expect(parsed.status).toBe('success');
+  });
+
+  it('should handle errors correctly', () => {
+    // Test error scenarios with exit code 1 or 2
+  });
+});
+```
+
+Help-text test patterns (verifying `--help` output) are covered by
+[`.claude/rules/cli-help-text.md`](../../.claude/rules/cli-help-text.md), which fires whenever
+you touch a command file.
 
 ## References
 

@@ -75,7 +75,7 @@ Examples:
     .option('--collection <id>', 'Filter by collection ID')
     .option('--check-external-urls', 'Validate external URLs (default: false, slow operation)')
     .option('--check-html-anchors', 'Strictly validate HTML fragment anchors against element ids (default: false; HTML fragments are often runtime-defined by JS)')
-    .option('--no-cache', 'Disable cache for external URL validation (forces fresh checks)')
+    .option('--no-cache', 'Disable every disk cache for this run: the parse cache and the external URL cache (forces fresh parses and fresh checks)')
     .option('--no-check-frontmatter-links', 'Skip frontmatter URI-reference link validation across all collections (default: enabled)')
     .action(validateCommand)
     .addHelpText(
@@ -163,7 +163,12 @@ External URL Validation:
   or silence them via resources.validation.severity in your config.
   Results are cached in system temp directory (24h alive, 1h dead).
   Cache is shared across all projects (URLs are universal).
-  Use --no-cache to force fresh checks (ignores cache).
+
+Caching:
+  Two disk caches sit under <tmpdir>/.vat-cache: parse results (keyed by file
+  content, so a changed file is never served stale) and external-URL checks.
+  --no-cache turns BOTH off for this run — it is not external-URL-specific.
+  'vat cache clear' deletes them.
 
 HTML Fragment Anchor Validation:
   By default, HTML fragment anchors (#id) are NOT validated against the

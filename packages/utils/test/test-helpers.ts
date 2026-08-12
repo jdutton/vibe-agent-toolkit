@@ -7,6 +7,8 @@ import fs from 'node:fs/promises';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 
+import { resetProjectRootCaches } from '../src/project-utils.js';
+
 /**
  * Drop comment lines before scanning source for `import`/`require` specifiers.
  *
@@ -51,6 +53,11 @@ export function stripCommentLines(source: string): string {
 export function createGitRepo(directory: string): string {
   // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
   spawnSync('git', ['init'], { cwd: directory, stdio: 'pipe' });
+  // `gitFindRoot()` memoizes `null` for any directory a prior walk climbed
+  // through (e.g. before this repo existed). Without this reset, a later
+  // crawl in the same process silently keeps answering from that stale
+  // memo instead of seeing the repo we just created.
+  resetProjectRootCaches();
   return directory;
 }
 

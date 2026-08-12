@@ -1,8 +1,14 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
-import { findProjectRoot, mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import {
+  findProjectRoot,
+  mkdirSyncReal,
+  normalizedTmpdir,
+  safeExecSync,
+  safePath,
+} from '@vibe-agent-toolkit/utils';
 import type * as UtilsModule from '@vibe-agent-toolkit/utils';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * `vat inventory` and `vat audit` must each crawl the surrounding project's markdown
@@ -45,6 +51,30 @@ const crawlBaseDirs = vi.hoisted(() => [] as string[]);
 const failingCrawlRoots = vi.hoisted(() => [] as string[]);
 const CRAWL_FAILURE_MESSAGE = vi.hoisted(() => 'simulated corpus crawl failure');
 
+/**
+ * Every path the link walk asked `git check-ignore` about, in order.
+ *
+ * `walkLinkGraph`'s `readGitignored` calls `isGitIgnored` — one subprocess per
+ * distinct link target — whenever it holds no `GitTracker`. Only consumers that
+ * import the `@vibe-agent-toolkit/utils` PACKAGE are intercepted here.
+ *
+ * ⚠️ **Read what that does and does not buy you, because the obvious reading is
+ * wrong.** `GitTracker` reaches `isGitIgnored` through a relative intra-package
+ * import, so this mock **cannot see** the tracker's own fallback. That makes the
+ * counter BLIND to those spawns — it is not evidence they did not happen, and an
+ * earlier version of this comment claimed exactly that.
+ *
+ * A zero here is still sound, but for a stronger reason that has nothing to do
+ * with the mock's reach: **the tracker's two spawning fallbacks are both
+ * unreachable from this lane.** `classifyGitignored` (`walk-link-graph.ts`) is
+ * gated on `facts.exists`, so the `!existsSync` fallback never fires; and
+ * `classifyExclusion` returns `outside-project` before the gitignore branch, so
+ * the outside-root fallback never fires either. In-project ⊆ in-repo, because
+ * the tracker's root is `gitFindRoot(projectRoot)`, always an ancestor of
+ * `projectRoot`. State the guarantee, not the mock's coverage.
+ */
+const gitIgnoreQueries = vi.hoisted(() => [] as string[]);
+
 vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) => {
   const actual = await importOriginal<typeof UtilsModule>();
   return {
@@ -57,11 +87,19 @@ vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) => {
       }
       return actual.crawlDirectory(options);
     },
+    isGitIgnored: (filePath: string, cwd?: string) => {
+      gitIgnoreQueries.push(filePath);
+      return cwd === undefined ? actual.isGitIgnored(filePath) : actual.isGitIgnored(filePath, cwd);
+    },
   };
 });
 
 const { routeInventory } = await import('../../src/commands/inventory.js');
 const { buildAuditReport, resetAuditCaches } = await import('../../src/commands/audit.js');
+const { gitTrackerForProjectRoot, resetGitTrackerCache } = await import(
+  '../../src/commands/audit/distributed-tree.js'
+);
+const { extractClaudePluginInventory } = await import('@vibe-agent-toolkit/claude-marketplace');
 const { silentLogger } = await import('../test-helpers.js');
 
 const SKILL_NAMES = ['alpha', 'beta', 'gamma'];
@@ -81,6 +119,14 @@ function writeFixtureFile(absolutePath: string, content: string): void {
   mkdirSyncReal(safePath.join(absolutePath, '..'), { recursive: true });
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture setup, temp directory
   writeFileSync(absolutePath, content, 'utf8');
+}
+
+/** The file that anchors `findProjectRoot` at `dir` deterministically (no `.git` needed). */
+const PROJECT_CONFIG_FILE = 'vibe-agent-toolkit.config.yaml';
+
+/** Anchor `findProjectRoot` at `dir`. */
+function writeProjectConfig(dir: string): void {
+  writeFixtureFile(safePath.join(dir, PROJECT_CONFIG_FILE), 'version: 1\n');
 }
 
 /** A plugin manifest plus one skill per {@link SKILL_NAMES}, each linking one sibling doc. */
@@ -117,6 +163,22 @@ async function auditPlugin(dir: string): Promise<unknown[]> {
   return results;
 }
 
+/** The link targets under `root` that the walk asked git about directly. */
+function linkTargetQueries(root: string): string[] {
+  const base = safePath.resolve(root);
+  return gitIgnoreQueries
+    .map((queried) => safePath.resolve(queried))
+    .filter((queried) => queried.startsWith(`${base}/`) && queried.endsWith('/reference.md'));
+}
+
+/** Every skill in a plugin inventory still resolved its one linked reference. */
+function expectLinksFound(inventory: PluginInventoryShape): void {
+  expect(inventory.discovered.skills).toHaveLength(SKILL_NAMES.length);
+  for (const skill of inventory.discovered.skills) {
+    expect(skill.files.linked).toHaveLength(1);
+  }
+}
+
 describe('shared link registry — one corpus crawl per invocation', () => {
   let projectRoot: string;
   let pluginDir: string;
@@ -128,8 +190,7 @@ describe('shared link registry — one corpus crawl per invocation', () => {
     projectRoot = safePath.resolve(
       mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-inv-registry-')),
     );
-    // A config file anchors findProjectRoot deterministically (no .git needed).
-    writeFixtureFile(safePath.join(projectRoot, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n');
+    writeProjectConfig(projectRoot);
     // Corpus documents outside the plugin — the cost a per-skill crawl re-pays.
     for (const doc of ['one', 'two', 'three']) {
       writeFixtureFile(safePath.join(projectRoot, 'docs', `${doc}.md`), `# ${doc}\n`);
@@ -344,5 +405,121 @@ describe('shared link registry — one corpus crawl per invocation', () => {
         new Set(SKILL_NAMES.map((name) => safePath.join(rootlessPluginDir, 'skills', name))),
       );
     });
+  });
+});
+
+/**
+ * `walkLinkGraph` asks "is this link target gitignored?" once per distinct target, and with
+ * no {@link GitTracker} each question is a `git check-ignore` subprocess. Deep-frame stack
+ * attribution of a `vat audit` run over a 1,484-document adopter monorepo put **786 of 786**
+ * such spawns in this one lane — the inventory extractors were the only `walkLinkGraph` call
+ * site passing no tracker — costing 9,242 ms of a 16,295 ms command. One
+ * `GitTracker.initialize()` plus the same 785 active-set lookups cost 147 ms + 1 ms and
+ * disagreed with the subprocess on nothing.
+ *
+ * Both CLI lanes therefore hand the extractors `gitTrackerForProjectRoot`, and all three
+ * call sites are pinned below. They need a REAL repository to be pinnable at all:
+ * `isGitIgnored` settles "is there a repository here?" from the filesystem and returns
+ * `false` with zero spawns outside one, so the `mkdtemp` fixtures above cannot tell a wired
+ * lane from an unwired one — which is what the control case exists to demonstrate.
+ *
+ * Two-sided on purpose. Zero queries alone would also be satisfied by a tracker that called
+ * everything ignored — a live failure mode, since a path inside the project root but absent
+ * from the active set reads as ignored — and that would silently empty `files.linked`. So
+ * every case asserts the links are still found.
+ */
+describe('git tracker source — the link walk stops spawning `git check-ignore` per target', () => {
+  let gitRoot: string;
+  let gitPluginDir: string;
+
+  beforeAll(() => {
+    gitRoot = safePath.resolve(mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-inv-git-')));
+    // No commit needed: the active set comes from `git ls-files --cached --others
+    // --exclude-standard`, which already reports untracked-but-not-ignored files.
+    safeExecSync('git', ['init', '-q'], { cwd: gitRoot });
+    writeProjectConfig(gitRoot);
+    gitPluginDir = safePath.join(gitRoot, 'plugins', 'demo');
+    writeSkillPlugin(gitPluginDir, 'git-demo');
+  });
+
+  afterAll(() => {
+    rmSync(gitRoot, { recursive: true, force: true });
+  });
+
+  beforeEach(() => {
+    resetGitTrackerCache();
+    gitIgnoreQueries.length = 0;
+  });
+
+  it('spawns check-ignore per link target when no source is supplied — the control', async () => {
+    // The extractor called exactly as the CLI called it BEFORE this wiring. Without this
+    // case the zeros below are unfalsifiable: they would also hold for a fixture the
+    // counter can never see.
+    const inventory = (await extractClaudePluginInventory(
+      gitPluginDir,
+    )) as unknown as PluginInventoryShape;
+
+    expectLinksFound(inventory);
+    expect(linkTargetQueries(gitRoot).length).toBeGreaterThan(0);
+  });
+
+  it('asks git nothing about link targets in the audit lane', async () => {
+    // `pluginInventoryAt` — the call site that carried all 786 measured spawns.
+    const results = await auditPlugin(gitPluginDir);
+    expect(results.length).toBeGreaterThanOrEqual(SKILL_NAMES.length + 1);
+
+    expect(linkTargetQueries(gitRoot)).toEqual([]);
+  });
+
+  it('asks git nothing about link targets in the `vat inventory` plugin lane', async () => {
+    const inventory = (await routeInventory(gitPluginDir, {})) as unknown as PluginInventoryShape;
+
+    expectLinksFound(inventory);
+    expect(linkTargetQueries(gitRoot)).toEqual([]);
+  });
+
+  it('asks git nothing about link targets in the `vat inventory` single-SKILL.md lane', async () => {
+    const skillMd = safePath.join(gitPluginDir, 'skills', 'alpha', 'SKILL.md');
+    const inventory = (await routeInventory(skillMd, {})) as unknown as SkillInventoryShape;
+
+    // One skill still benefits: the saving is per LINK TARGET, not per skill.
+    expect(inventory.files.linked).toHaveLength(1);
+    expect(linkTargetQueries(gitRoot)).toEqual([]);
+  });
+
+  it('keys the shared cache on the GIT root, so nested project roots share one tracker', async () => {
+    // The extractors call the source with each skill's own project root — anchored by a
+    // config file or a `.git`, so usually a SUBDIRECTORY of the repository and a different
+    // one per skill. Keyed on that root rather than on the repository, an N-skill monorepo
+    // would pay N `git ls-files` for one repo's answer.
+    writeProjectConfig(gitPluginDir);
+
+    const fromNested = await gitTrackerForProjectRoot(gitPluginDir);
+    const fromRepoRoot = await gitTrackerForProjectRoot(gitRoot);
+
+    expect(fromNested).toBeDefined();
+    // Same OBJECT, not merely an equal one: two trackers would be two `git ls-files`.
+    expect(fromNested).toBe(fromRepoRoot);
+
+    rmSync(safePath.join(gitPluginDir, PROJECT_CONFIG_FILE), { force: true });
+  });
+
+  it('answers undefined outside a repository, where there is nothing to win', async () => {
+    // `isGitIgnored` already returns `false` with zero spawns when `gitFindRoot` finds no
+    // repository, so a tracker there would be cost without benefit.
+    //
+    // ⚠️ Not "because a non-repository tracker would call every path ignored" — that was
+    // written here and is INVERTED. Measured: `gitLsFiles` returns null ⇒
+    // `activeSetPopulated` stays false ⇒ `isIgnoredByActiveSet` delegates to `isIgnored`
+    // ⇒ `isGitIgnored` ⇒ `gitFindRoot === null` ⇒ **false**. Such a tracker calls every
+    // path NOT ignored, i.e. it degrades to exactly the pre-change behaviour. That makes
+    // the no-repository case safe rather than dangerous; returning `undefined` here is a
+    // cost decision, not a correctness one.
+    const outside = safePath.resolve(mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-inv-nogit-')));
+    try {
+      expect(await gitTrackerForProjectRoot(outside)).toBeUndefined();
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });

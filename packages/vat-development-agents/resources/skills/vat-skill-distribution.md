@@ -356,6 +356,16 @@ plugins:
 
 Marketplaces with no per-plugin version anywhere are unaffected. The root `package.json` version flows through to every plugin, and the published `marketplace.json` either omits per-plugin `version` or includes the same value for all plugins.
 
+### Referencing another marketplace's plugin (`externalSource`)
+
+A plugin entry can point at a plugin published elsewhere (`github`/`url`/`npm`/`pip`,
+matching Anthropic's official [Plugin marketplaces](https://code.claude.com/docs/en/plugin-marketplaces)
+source shapes) instead of being built here — set `externalSource` with `skills: []` and
+omit `source`/`files`/`exclude`/`changelog`; VAT never fetches or vendors it, only writes
+the reference into `marketplace.json`. See "Referencing Another Marketplace's Plugin" in
+[docs/guides/marketplace-distribution.md](../../../../docs/guides/marketplace-distribution.md)
+for the field reference and a worked example.
+
 ## Step 5: User Install
 
 ### Recommended: npm global install (postinstall runs automatically)

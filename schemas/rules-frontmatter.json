@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Claude Code Rule Frontmatter",
+  "description": "Frontmatter for .claude/rules/*.md guard files. `paths` is the only field Claude Code reads to decide when the rule fires — a typo'd or missing key means the guard silently never activates.",
+  "type": "object",
+  "required": ["paths"],
+  "properties": {
+    "paths": {
+      "type": "array",
+      "description": "Glob patterns, relative to the repo root, that trigger this rule when a matching file is read",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    }
+  },
+  "additionalProperties": false
+}

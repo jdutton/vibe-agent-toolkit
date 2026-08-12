@@ -839,8 +839,17 @@ const DECLARED_STATUS_VOCABULARY = new RegExp(
   String.raw`^[ \t]*(?:export[ \t]+)?type[ \t]+\w*Status\b[^;]{0,200}?'(?:${STATUS_VOCABULARY})'`,
   'm',
 );
-/** A collection of findings, which is what makes a status a *validation* verdict. */
-const FINDINGS_COLLECTION = /\b(?:issues|allErrors|activeErrors|activeWarnings|errors|warnings|findings)\b\s*[:.]/;
+/**
+ * A collection of findings, which is what makes a status a *validation* verdict.
+ *
+ * This list is the recogniser's weak point, and it has already failed twice for
+ * the same reason: a lane names its findings something the list does not know,
+ * and silently leaves the population. `audit.ts` escaped via its *status* (see
+ * `classifySeverityCountsLane`); `pipeline/check.ts` escaped via its findings,
+ * which it calls `violations`. When adding a lane, either reuse a noun already
+ * here or add yours — a lane the scan cannot see is a lane no one is ratcheting.
+ */
+const FINDINGS_COLLECTION = /\b(?:issues|allErrors|activeErrors|activeWarnings|errors|warnings|findings|violations)\b\s*[:.]/;
 /**
  * A call to the ONE shared issues→status/counts pair.
  *

@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/transports",
-  "version": "0.1.42",
+  "version": "0.2.0-rc.2",
   "description": "Transport adapters for VAT conversational agents",
   "type": "module",
   "main": "./dist/index.js",
@@ -13,7 +13,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsx ../dev-tools/src/tsc-clean-build.ts",
     "test:unit": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"

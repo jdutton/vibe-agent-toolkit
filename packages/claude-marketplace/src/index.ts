@@ -164,7 +164,11 @@ export {
   ClaudeSkillInventory,
 } from './inventory/index.js';
 export { crawlSkillLinkRegistry, extractClaudeSkillInventory } from './inventory/index.js';
-export { extractClaudePluginInventory, type SharedRegistrySource } from './inventory/index.js';
+export {
+  extractClaudePluginInventory,
+  type GitTrackerSource,
+  type SharedRegistrySource,
+} from './inventory/index.js';
 export { extractClaudeMarketplaceInventory } from './inventory/index.js';
 export { extractClaudeInstallInventory } from './inventory/index.js';
 export { detectSkillClaudePluginNameMismatch } from './inventory/index.js';

@@ -7,6 +7,7 @@ export {
 export {
 	crawlSkillLinkRegistry,
 	extractClaudeSkillInventory,
+	type GitTrackerSource,
 	type SharedRegistrySource,
 } from './extract-skill.js';
 export { extractClaudePluginInventory } from './extract-plugin.js';

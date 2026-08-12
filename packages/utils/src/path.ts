@@ -12,6 +12,7 @@
 export {
   safePath,
   toForwardSlash,
+  toNfc,
   isAbsolutePath,
   isAbsoluteAnyPlatform,
   hasParentTraversalSegment,

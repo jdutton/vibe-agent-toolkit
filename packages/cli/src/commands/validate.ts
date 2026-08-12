@@ -134,7 +134,8 @@ Exit Codes:
 Arguments:
   None. Scope comes from vibe-agent-toolkit.config.yaml, never from the command
   line — a path argument is rejected (exit 2) rather than discarded. For a
-  path-scoped run use 'vat resources validate <path>' or 'vat audit <path>'.
+  path-scoped run use 'vat resources validate <path>' for resources, or
+  'vat skill review <path>' for a single skill.
 
 Requirements:
   projectRoot: required (errors if no vibe-agent-toolkit.config.yaml or .git/ ancestor)

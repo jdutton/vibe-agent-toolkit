@@ -85,7 +85,7 @@ function generateMetaType(frontmatter: Record<string, unknown>): string {
  *
  * @example
  * ```typescript
- * const resource = parseMarkdown(content);
+ * const resource = toMarkdownResource(content);
  * const dtsCode = generateTypeScriptDeclarations(resource);
  * // Outputs:
  * // export interface Fragment {

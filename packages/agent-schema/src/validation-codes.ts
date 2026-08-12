@@ -85,6 +85,12 @@ export const CODE_REGISTRY = {
     'Fix the link path, create the file, or declare it under skills.config.<name>.files as a build artifact.',
     'link_missing_target',
   ),
+  LINK_TARGET_UNREADABLE: entry(
+    'error',
+    'Markdown link target exists on disk but could not be read, so it was neither classified nor bundled. Most often permissions; also a change racing the walk.',
+    'Fix the permissions on the target, or investigate what changed it mid-walk, then re-run. Set severity.LINK_TARGET_UNREADABLE to warning if a corpus is expected to contain entries the walk cannot read.',
+    'link_target_unreadable',
+  ),
   LINK_DEFERRED_ARTIFACT: entry(
     'info',
     'Link targets a deferred build artifact declared in the skill files: config; it will exist after the build materializes it.',
@@ -96,6 +102,15 @@ export const CODE_REGISTRY = {
     "Markdown link targets another skill's SKILL.md; bundling it creates duplicate skill definitions.",
     'Link to a specific resource inside the other skill, or reference the other skill by name.',
     'link_to_skill_definition',
+  ),
+  LINK_FROM_NON_ROUTABLE_FILE: entry(
+    'warning',
+    // States the mechanism, because the author cannot infer it: the referring
+    // file WAS bundled, which makes the missing target look like a rewriter bug
+    // rather than a deliberate routing boundary.
+    'A bundled non-routable file (HTML) links to a file the walker did not follow, so the target is not in the bundle and the packaged link points at nothing.',
+    'Link the target from a markdown file in the bundle, declare it under skills.config.<name>.files, or set severity.LINK_FROM_NON_ROUTABLE_FILE to ignore if the packaged link is meant to resolve outside the bundle.',
+    'link_from_non_routable_file',
   ),
   LINK_DROPPED_BY_DEPTH: entry(
     'warning',
@@ -289,6 +304,12 @@ export const CODE_REGISTRY = {
     'Two files resolve to the same resource id after path normalization.',
     'Rename one of the files so they produce distinct resource ids.',
     'duplicate_resource_id',
+  ),
+  RESOURCE_UNREADABLE: entry(
+    'error',
+    'A file the crawl enumerated could not be read, so it was skipped. Most often a committed symlink whose target is missing; also permissions, or a file deleted between enumeration and parse.',
+    'Repoint or delete the dangling symlink, restore the missing target, or fix the permissions. Set severity.RESOURCE_UNREADABLE to warning if a corpus is expected to contain unresolvable entries.',
+    'resource_unreadable',
   ),
   SKILL_LENGTH_EXCEEDS_RECOMMENDED: entry(
     'warning',
@@ -536,6 +557,17 @@ export const CODE_REGISTRY = {
     'Fix the path or create the target.',
     'link_broken_file',
   ),
+  // The narrow companion to LINK_BROKEN_FILE: the target IS on disk, so this is
+  // not a broken link on the author's machine — it is a link that resolves only
+  // because macOS/Windows reconcile Unicode normalization forms and Linux does
+  // not. `warning`, because it is genuinely fine where it was written and only
+  // fails where the corpus is deployed or CI-checked.
+  LINK_NORMALIZATION_MISMATCH: entry(
+    'warning',
+    'A local file link resolves only after Unicode normalization: the link text and the filename on disk are the same visible characters in different normalization forms (NFC vs NFD). It opens on macOS and Windows and fails on a byte-exact filesystem such as Linux/ext4.',
+    'Make the two spellings byte-identical — rename the file on disk to its NFC form and write the link in NFC, which is the form editors and git produce. Or set severity.LINK_NORMALIZATION_MISMATCH to ignore if the corpus is only ever read on a normalization-insensitive filesystem.',
+    'link_normalization_mismatch',
+  ),
   LINK_BROKEN_ANCHOR: entry(
     'error',
     'Anchor link points to a non-existent heading/id.',
@@ -708,5 +740,4 @@ export type NonOverridableCode =
   | 'UNKNOWN_FORMAT'
   | 'SKILL_TOO_LONG'
   | 'REFERENCE_MISSING_TOC'
-  | 'DESCRIPTION_FIRST_PERSON'
-  | 'RESOURCE_UNREACHABLE';
+  | 'DESCRIPTION_FIRST_PERSON';

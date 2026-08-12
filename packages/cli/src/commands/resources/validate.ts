@@ -490,7 +490,7 @@ function flattenIssuesForDisplay(issues: ValidationResult['issues'], projectRoot
   });
 }
 
-interface ValidateOptions {
+export interface ValidateOptions {
   debug?: boolean;
   /** Show all scanned resources, including those without issues (per-issue detail). */
   verbose?: boolean;
@@ -500,8 +500,24 @@ interface ValidateOptions {
   collection?: string; // Filter by collection ID
   checkExternalUrls?: boolean; // NEW: Validate external URLs
   checkHtmlAnchors?: boolean; // Strictly validate HTML fragment anchors against element ids
-  noCache?: boolean; // NEW: Disable cache for external URL validation
+  cache?: boolean; // Commander negates this when --no-cache is passed; absent = true (cache enabled)
   checkFrontmatterLinks?: boolean; // Commander negates this when --no-check-frontmatter-links is passed; absent = true
+}
+
+/**
+ * Translate `--no-cache` into the `noCache` input `ResourceRegistry.validate()`
+ * takes.
+ *
+ * Commander represents a `--no-x` boolean as the POSITIVE key `x` — defaulted to
+ * `true`, set to `false` only when the negated flag is passed. It never emits a
+ * `noX` key. This site used to read `options.noCache`, typed against an
+ * interface that itself declared `noCache?: boolean`, so the compiler validated
+ * a read of a key Commander cannot produce: `--no-cache` was a silent no-op and
+ * the external-URL cache was never disabled. Declaring the key Commander really
+ * emits is what makes the type an ally here rather than an accomplice.
+ */
+export function resolveNoCache(options: Pick<ValidateOptions, 'cache'>): boolean {
+  return options.cache === false;
 }
 
 /**
@@ -619,7 +635,7 @@ export async function validateCommand(
       validationMode,
       checkExternalUrls: options.checkExternalUrls ?? false,
       checkHtmlAnchors: options.checkHtmlAnchors ?? false,
-      noCache: options.noCache ?? false,
+      noCache: resolveNoCache(options),
       // Thread the project's resources.validation config in. The CLI does NOT
       // resolve severity itself — ResourceRegistry.validate() runs the framework.
       validationConfig: config?.resources?.validation ?? {},

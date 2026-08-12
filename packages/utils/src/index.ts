@@ -23,8 +23,58 @@ export * from './stdio-blocking.js';
 // Asset reference resolution (paths + npm bare specifiers)
 export * from './asset-reference.js';
 
-// Filesystem utilities
-export * from './fs-utils.js';
+// Filesystem utilities.
+//
+// Named rather than `export *` on purpose: `classifyFilenameCase` (the pure
+// judge over a hand-held row) and `siblingNamesFrom` (the table lookup that
+// throws on a miss) are internal members of the fill+judge pairs below, and a
+// star re-export would publish them on this barrel the moment they were written.
+// (The `./fs` subpath was already an explicit list and was never at risk.) The
+// public surface is a decision, not a side effect of module layout.
+//
+// TWO materialized columns are published, both shaped fill-first-then-judge:
+//
+//   - sibling names — `fillSiblingNames` (every listing, once, up front) plus
+//     `classifyFilenameCaseFrom` (pure judgement over the filled table). Its row
+//     lookup `siblingNamesFrom` stays internal because a row there is not yet an
+//     answer: it still needs a judge, and that judge is what we export.
+//   - realpaths — `fillRealpaths` (every canonicalization, once, up front) plus
+//     `realpathFrom`. Here the row lookup IS the judge: the canonical path is the
+//     answer, so there is nothing left to keep internal.
+//
+// There is deliberately no one-call wrapper composing either pair: handed one, a
+// caller with many paths loops over it, which reinstates the per-path `await` the
+// pairs exist to remove.
+//
+// The `SiblingNames` row type is withheld for the same reason its judge is: it is
+// only ever that judge's parameter, so publishing it would advertise a shape no
+// consumer can hand anywhere. `SiblingNamesTable` and `RealpathTable` — what the
+// fills return and the judges consume — are the ones a caller can name, as are
+// `FilenameCaseVerdict`/`FilenameMatch`, which a consumer does not hand in but
+// does receive and branch on.
+//
+// The cost of that decision, stated so it is not a surprise: a new *type* added
+// to `fs-utils.ts` no longer reaches consumers automatically, and
+// `barrel-exports.test.ts` pins runtime names only, so nothing will fail. The
+// symptom is a type that cannot be imported, which surfaces the first time
+// someone tries — not a silent break in existing code.
+export {
+  classifyFilenameCaseFrom,
+  copyDirectory,
+  fillRealpaths,
+  fillSiblingNames,
+  FsLookupCache,
+  isFilesystemAccessError,
+  realpathFrom,
+} from './fs-utils.js';
+export type {
+  FilenameCaseVerdict,
+  FilenameMatch,
+  PathProbe,
+  PathProbeStats,
+  RealpathTable,
+  SiblingNamesTable,
+} from './fs-utils.js';
 
 // Directory crawling with glob patterns
 export * from './file-crawler.js';
@@ -83,3 +133,5 @@ export * from './fs/file-hash.js';
 
 // Byte-surgical YAML value updater (replace/insert without reflowing the doc)
 export * from './yaml/surgical-yaml.js';
+
+export { parseWholeNumberAtLeast } from './numeric-args.js';

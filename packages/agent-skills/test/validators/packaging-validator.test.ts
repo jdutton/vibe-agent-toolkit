@@ -980,6 +980,28 @@ describe('validateSkillForPackaging - Metadata reporting', () => {
 		expect(result.metadata.excludedReferences).toEqual([]);
 	});
 
+	it('counts directFileCount by distinct target, not by link occurrence', async () => {
+		const tempDir = getTempDir();
+		const files = {
+			'ref1.md': '# Ref 1\n\nContent.',
+			'ref2.md': '# Ref 2\n\nContent.',
+		};
+		// ref1 is linked FIVE times and ref2 once — the shape of a routing table that
+		// points many rows at one document. A fixture whose links are all distinct
+		// cannot tell an occurrence count from a file count.
+		const skillContent = createSkillContent(
+			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
+			'\n# Test\n\n' + '- See [ref1](./ref1.md)\n'.repeat(5) + '- See [ref2](./ref2.md)\n',
+		);
+		const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
+
+		const result = await validateSkillForPackaging(skillPath);
+
+		expect(result.metadata.fileCount).toBe(3); // SKILL.md + ref1.md + ref2.md
+		expect(result.metadata.directFileCount).toBe(2); // ref1.md + ref2.md, not 6 link occurrences
+		expect(result.metadata.directFileCount).toBeLessThanOrEqual(result.metadata.fileCount);
+	});
+
 	it('should extract skill name from frontmatter', async () => {
 		const tempDir = getTempDir();
 		const content = createSkillContent(

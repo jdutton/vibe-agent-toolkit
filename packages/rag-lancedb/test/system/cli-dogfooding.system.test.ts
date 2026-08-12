@@ -112,6 +112,18 @@ describe('RAG CLI (Node.js dogfooding)', () => {
       binPath,
       ['rag', 'index', docsPath, '--db', testDbPath],
       projectRoot,
+      // ⚠️ This budget has ~3% of headroom, not the comfortable margin
+      // "only 5 docs" implies. Measured 2026-08-07 on an idle macOS host:
+      // 58,161ms against 60,000ms. Under `bun run validate`, where other
+      // packages' system suites are running concurrently, it exceeds the budget
+      // and `spawnSync` returns `status: null` — which surfaces as the
+      // thoroughly misleading "expected null to be +0" at executeCliCommand's
+      // `expect(result.status).toBe(0)`, three frames away from the timeout.
+      //
+      // The cost is dominated by loading the onnxruntime-web WASM backend in a
+      // fresh process, not by the 5 documents. Raising the number would hide
+      // the flake; making the embedding backend warm-startable, or asserting on
+      // `result.signal`/`error` so a timeout reports itself as one, would fix it.
       60000 // 1 minute - only indexing 5 architecture docs
     );
 

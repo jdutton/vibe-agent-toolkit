@@ -158,6 +158,7 @@ export default [
       'generated/',
       '**/generated/',
       '**/*.d.ts',
+      '**/*.d.cts',  // same intent as *.d.ts — a `.cts` declaration file is still a declaration file
       'vitest.config.ts',
       'vitest.*.config.ts',
       'vitest.shared.ts',
@@ -179,7 +180,13 @@ export default [
 
   // Main configuration - applies to ALL TypeScript files
   {
-    files: ['**/*.ts', '**/*.tsx'],
+    // `.cts` is included deliberately. It is TypeScript that Node keys as
+    // CommonJS off the extension, which is the only way to author a
+    // `--require` preload in an ESM package — and a glob of `**/*.ts` does NOT
+    // match it, so a `.cts` file is silently unlinted. That is the same hole
+    // the `.cjs` block below was added to close; the CommonJS-specific
+    // overrides at the end of this file re-apply to `.cts` for the same reason.
+    files: ['**/*.ts', '**/*.tsx', '**/*.cts'],
     languageOptions: {
       parser: tsparser,
       parserOptions: {
@@ -293,10 +300,13 @@ export default [
     },
   },
 
-  // CommonJS-specific overrides — `.cjs` files are CJS by intent, so
-  // module-syntax rules don't apply.
+  // CommonJS-specific overrides — `.cjs` and `.cts` files are CJS by intent, so
+  // module-syntax rules don't apply. `.cts` is here as well as in the TS block
+  // above: it needs the type-aware TS rules AND this CommonJS treatment, or
+  // `unicorn/prefer-module` fires on a file whose whole purpose is to be
+  // `require`-able.
   {
-    files: ['**/*.cjs'],
+    files: ['**/*.cjs', '**/*.cts'],
     languageOptions: {
       sourceType: 'commonjs',
       globals: {
@@ -311,6 +321,11 @@ export default [
       'unicorn/prefer-module': 'off',
       'unicorn/prefer-export-from': 'off',
       'unicorn/prefer-top-level-await': 'off',
+      // `require()` IS the module system in these files. In a `.cts` preload it
+      // is also the only way to reach a module after deciding at runtime to
+      // activate — a static ESM import would load it whether or not the counter
+      // is switched on.
+      '@typescript-eslint/no-require-imports': 'off',
     },
   },
 

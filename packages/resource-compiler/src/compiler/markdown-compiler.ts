@@ -10,7 +10,7 @@ import { glob } from 'glob';
 
 import { generateTypeScriptDeclarations } from './dts-generator.js';
 import { generateJavaScript } from './javascript-generator.js';
-import { parseMarkdown } from './markdown-parser.js';
+import { toMarkdownResource } from './markdown-parser.js';
 import type { CompileOptions, CompileResult } from './types.js';
 
 /**
@@ -96,7 +96,7 @@ async function compileSingleFile(
     }
 
     // Parse markdown
-    const resource = parseMarkdown(markdownContent);
+    const resource = toMarkdownResource(markdownContent);
 
     // Generate JavaScript code
     const jsCode = generateJavaScript(resource);

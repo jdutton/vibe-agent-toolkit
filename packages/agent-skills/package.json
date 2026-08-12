@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/agent-skills",
-  "version": "0.1.42",
+  "version": "0.2.0-rc.2",
   "description": "Build, validate, and package agent skills in the Agent Skills format",
   "type": "module",
   "main": "./dist/index.js",
@@ -19,7 +19,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc --build && bun run generate:schemas",
+    "build": "tsx ../dev-tools/src/tsc-clean-build.ts --build && bun run generate:schemas",
     "build:watch": "tsc --build --watch",
     "clean": "rm -rf dist *.tsbuildinfo schemas/",
     "generate:schemas": "tsx scripts/generate-json-schemas.ts",

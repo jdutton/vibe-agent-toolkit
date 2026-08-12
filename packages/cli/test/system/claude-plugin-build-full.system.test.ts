@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { createTempDirTracker, executeCliAndParseYaml, getBinPath, writeTestFile } from './test-common.js';
+import { buildSkillsThenPlugin, createTempDirTracker, getBinPath, writeTestFile } from './test-common.js';
 
 const binPath = getBinPath(import.meta.url);
 const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-plugin-full-');
@@ -91,19 +91,6 @@ Uses the bundled [engine](lib/engine.mjs).
   writeTestFile(safePath.join(tempDir, 'dist', 'gen', 'engine.mjs'), 'export const engine = 3;');
 }
 
-// Run `vat skills build` then `vat claude plugin build` for a prepared temp
-// project, asserting both exit 0, and return the parsed plugin-build result.
-async function buildSkillsThenPlugin(
-  tempDir: string,
-): ReturnType<typeof executeCliAndParseYaml> {
-  const sb = await executeCliAndParseYaml(binPath, ['skills', 'build'], { cwd: tempDir });
-  expect(sb.result.status).toBe(0);
-
-  const pb = await executeCliAndParseYaml(binPath, ['claude', 'plugin', 'build'], { cwd: tempDir });
-  expect(pb.result.status).toBe(0);
-  return pb;
-}
-
 describe('vat claude plugin build (full plugin support)', () => {
   afterEach(() => cleanupTempDirs());
 
@@ -111,7 +98,7 @@ describe('vat claude plugin build (full plugin support)', () => {
     const tempDir = createTempDir();
     buildFixture(tempDir);
 
-    const pb = await buildSkillsThenPlugin(tempDir);
+    const pb = await buildSkillsThenPlugin(binPath, tempDir);
 
     const outDir = safePath.join(
       tempDir,
@@ -162,7 +149,7 @@ describe('vat claude plugin build (full plugin support)', () => {
     const tempDir = createTempDir();
     buildFixture(tempDir, ['local-b']);
 
-    const pb = await buildSkillsThenPlugin(tempDir);
+    const pb = await buildSkillsThenPlugin(binPath, tempDir);
 
     const outDir = safePath.join(
       tempDir, 'dist', '.claude', 'plugins', 'marketplaces', 'mp1', 'plugins', 'full-plugin',
@@ -218,7 +205,7 @@ claude:
       '---\nname: foo:bar\ndescription: colon-bearing skill name for fs-safe enumeration testing\n---\n\n# foo:bar\n',
     );
 
-    const pb = await buildSkillsThenPlugin(tempDir);
+    const pb = await buildSkillsThenPlugin(binPath, tempDir);
 
     const mps = pb.parsed['marketplaces'] as Array<Record<string, unknown>>;
     const plugins = mps[0]?.['plugins'] as Array<Record<string, unknown>>;
