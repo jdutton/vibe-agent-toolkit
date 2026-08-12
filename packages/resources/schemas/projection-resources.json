@@ -121,7 +121,7 @@
         "symlinkResolves"
       ],
       "additionalProperties": false,
-      "description": "A row of the path-dependent `resources` table"
+      "description": "A row of the path-dependent `resources` table. Note: symlinkResolves must be null when isSymlink is false; this constraint is enforced by the Zod schema but not encoded in the generated JSON Schema."
     }
   },
   "$schema": "http://json-schema.org/draft-07/schema#"

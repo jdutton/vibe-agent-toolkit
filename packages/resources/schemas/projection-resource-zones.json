@@ -46,7 +46,7 @@
         "role"
       ],
       "additionalProperties": false,
-      "description": "A row of the path-dependent `resource_zones` table"
+      "description": "A row of the path-dependent `resource_zones` table. Note: role is only meaningful when zoneKind is \"tree\"; this constraint is enforced by the Zod schema but not encoded in the generated JSON Schema."
     }
   },
   "$schema": "http://json-schema.org/draft-07/schema#"

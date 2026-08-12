@@ -87,9 +87,13 @@ export const BlobSectionRowSchema = z.object({
 export type BlobSectionRow = z.infer<typeof BlobSectionRowSchema>;
 
 /**
- * Severity for a `blob_conditions` row. A fresh, local definition — no
- * shared severity schema exists yet anywhere in the monorepo to reuse
- * (checked `resources` and `agent-schema`, its only upward dependency).
+ * Severity for a `blob_conditions` row. A fresh, local definition, not a
+ * reuse of `agent-schema`'s `SeverityLevelSchema` (`'error' | 'warning' |
+ * 'info' | 'ignore'`): that schema's fourth member, `'ignore'`, is a
+ * config-resolution state and doesn't apply to a parse-time condition —
+ * something that already happened during parsing can't retroactively be
+ * "ignored" the way a resolved config value can. Hence the narrower,
+ * purpose-built enum here.
  */
 export const BlobConditionSeveritySchema = z.enum(['error', 'warning', 'info']);
 

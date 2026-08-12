@@ -3,7 +3,7 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": ["dist/**", "**/*.schema.json"],
+      "outputs": ["dist/**", "**/*.schema.json", "schemas/**"],
       "cache": true
     },
     // --- Adopter packages ---

@@ -36,7 +36,7 @@ export const ResourceRowSchema = z.object({
   dir: z.string().describe('Root-relative directory containing this path'),
   depth: z.number().int().nonnegative().describe('Path segment count below the root'),
   ext: z.string().describe('Lowercased extension including the leading dot, or "" when none'),
-  mtime: z.date().nullable().describe('Last modification time, or null when the node has never been observed on disk'),
+  mtime: z.coerce.date().nullable().describe('Last modification time, or null when the node has never been observed on disk'),
   vatId: z.string().nullable().describe('VAT-assigned resource id (frontmatter id, or a generated fallback), or null when not yet assigned'),
   origin: z.string().min(1)
     .describe('Where this row\'s content-key knowledge came from. Deliberately an open string, not an enum: resource-scanning-and-caching.md has not yet settled the full non-git-lane taxonomy this column needs to cover.'),
@@ -47,7 +47,7 @@ export const ResourceRowSchema = z.object({
   gitignored: z.boolean(),
   isSymlink: z.boolean(),
   symlinkResolves: z.boolean().nullable().describe('Null when isSymlink is false'),
-}).strict().describe('A row of the path-dependent `resources` table')
+}).strict().describe('A row of the path-dependent `resources` table. Note: symlinkResolves must be null when isSymlink is false; this constraint is enforced by the Zod schema but not encoded in the generated JSON Schema.')
   .superRefine((row, ctx) => {
     if (!row.isSymlink && row.symlinkResolves !== null) {
       ctx.addIssue({
@@ -88,7 +88,7 @@ export const ResourceZoneRowSchema = z.object({
   zoneKind: ZoneKindSchema,
   zoneId: z.string().min(1),
   role: TreeZoneRoleSchema.nullable(),
-}).strict().describe('A row of the path-dependent `resource_zones` table')
+}).strict().describe('A row of the path-dependent `resource_zones` table. Note: role is only meaningful when zoneKind is "tree"; this constraint is enforced by the Zod schema but not encoded in the generated JSON Schema.')
   .superRefine((row, ctx) => {
     if (row.zoneKind !== 'tree' && row.role !== null) {
       ctx.addIssue({

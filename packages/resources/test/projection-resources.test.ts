@@ -57,6 +57,16 @@ describe('ResourceRowSchema', () => {
     expect(ResourceRowSchema.safeParse(row).success).toBe(true);
   });
 
+  it('coerces an ISO date string for mtime (as published by the generated JSON Schema)', () => {
+    const row = { ...base, mtime: '2026-01-01T00:00:00.000Z' };
+    const result = ResourceRowSchema.safeParse(row);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.mtime).toBeInstanceOf(Date);
+      expect(result.data.mtime?.toISOString()).toBe('2026-01-01T00:00:00.000Z');
+    }
+  });
+
   it('rejects symlinkResolves set on a non-symlink', () => {
     const row = { ...base, isSymlink: false, symlinkResolves: true };
     expect(ResourceRowSchema.safeParse(row).success).toBe(false);

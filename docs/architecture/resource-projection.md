@@ -49,8 +49,10 @@ generated JSON Schema — `packages/resources/src/schemas/projection-blobs.ts` a
 `projection-resources.ts`, versioned via `PROJECTION_SCHEMA_VERSION`. **Population is still 🔷
 proposed** for all ten tables: nothing yet derives real rows from `ParseFacts` or
 `ResourceRegistry` at runtime. Four tables (`blobs`, `blob_links`, `blob_sections`,
-`blob_conditions`) and three (`roots`, `resources`, `edges`) have a clear source to populate from
-already; `resource_realizations`, `resource_zones` beyond a single default "tree" zone, and
+`blob_conditions`) and three (`roots`, `resources`, `edges`) have a partial source to populate
+from already — several columns (e.g. `wordCount`, `proseBytes`, `codeBlockBytes`, `sectionCount`,
+`slugOccurrence`, `column`, `inCodeSpan`, `inFence`) require new parser output that `ParseFacts`
+does not yet carry; `resource_realizations`, `resource_zones` beyond a single default "tree" zone, and
 zone-sourced `resource_tags` additionally depend on zone modeling (skill/plugin/marketplace
 boundaries) that does not exist anywhere in the codebase yet — a separate, larger integration into
 `agent-skills`/`claude-marketplace`, not a natural extension of schema definition.

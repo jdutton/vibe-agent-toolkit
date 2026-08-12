@@ -94,9 +94,10 @@ export {
   ValidationResultSchema,
 } from './schemas/validation-result.js';
 
-// Projection schema (proposed, stage 3 — resource-projection.md): the
+// Projection schema (shipped shapes, stage 3 — resource-projection.md): the
 // blob-keyed and path-dependent tables that make up VAT's queryable
-// resource projection contract.
+// resource projection contract. Population from ParseFacts/ResourceRegistry
+// is still proposed.
 export {
   ContentKeySchema,
   JsonValueSchema,
