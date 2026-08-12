@@ -88,7 +88,7 @@ export type BlobSectionRow = z.infer<typeof BlobSectionRowSchema>;
 
 /**
  * Severity for a `blob_conditions` row. A fresh, local definition, not a
- * reuse of `agent-schema`'s `SeverityLevelSchema` (`'error' | 'warning' |
+ * reuse of `schema`'s `SeverityLevelSchema` (`'error' | 'warning' |
  * 'info' | 'ignore'`): that schema's fourth member, `'ignore'`, is a
  * config-resolution state and doesn't apply to a parse-time condition —
  * something that already happened during parsing can't retroactively be

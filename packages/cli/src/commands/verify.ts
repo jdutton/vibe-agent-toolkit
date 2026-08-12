@@ -22,7 +22,7 @@ import {
   countBySeverity,
   type SeverityCounts,
   type ValidationIssue,
-} from '@vibe-agent-toolkit/agent-schema';
+} from '@vibe-agent-toolkit/schema';
 import {
   computeTreeCopiedSkillLocations,
   detectPackagedAgentInstructionFiles,
@@ -379,7 +379,7 @@ export function checkFilesConfigDests(
  * whose usage is only answerable across a whole run, and this phase would have to
  * drain a ledger it is not the run of — reporting ALLOW_UNUSED for every entry the
  * project declares for other lanes. Severity is answerable per unit of work; allow
- * is not. See `AllowUsageLedger` in `@vibe-agent-toolkit/agent-schema`.
+ * is not. See `AllowUsageLedger` in `@vibe-agent-toolkit/schema`.
  *
  * Locations anchor at `cwd`, the run's stated root, so a reader can open them.
  *
@@ -674,7 +674,7 @@ interface FindingsPhaseResult extends PhaseResult {
  * `ConsistencyIssue` speaks the same severity vocabulary as `ValidationIssue`
  * but carries a free-form `code`, so it is counted through this projection —
  * there must be exactly ONE issues→status/counts collapse in the codebase, and
- * it lives in `@vibe-agent-toolkit/agent-schema`.
+ * it lives in `@vibe-agent-toolkit/schema`.
  */
 function asValidationIssues(issues: readonly ConsistencyIssue[]): ValidationIssue[] {
   return issues.map((issue) => ({

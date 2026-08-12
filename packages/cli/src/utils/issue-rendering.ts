@@ -20,7 +20,7 @@ import {
   countBySeverity,
   type SeverityCounts,
   type ValidationIssue,
-} from '@vibe-agent-toolkit/agent-schema';
+} from '@vibe-agent-toolkit/schema';
 import type { PackageSkillResult } from '@vibe-agent-toolkit/agent-skills';
 
 import { formatIssueAnchor } from './issue-anchor.js';

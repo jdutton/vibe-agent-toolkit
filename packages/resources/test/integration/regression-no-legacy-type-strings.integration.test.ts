@@ -6,7 +6,7 @@
  * values (`broken_file`, `frontmatter_schema_error`, `external_url_dead`, …). These
  * were promoted into the unified code registry and are now emitted via
  * `createRegistryIssue('SCREAMING_CASE', …)`. The lowercase forms still legitimately
- * exist as the `entry()` reference slugs in agent-schema and as doc anchors — but a
+ * exist as the `entry()` reference slugs in schema and as doc anchors — but a
  * LIVE emitter must never set one as an issue `code`.
  *
  * This test runs a real `ResourceRegistry.validate()` over a fixture that exercises
@@ -17,7 +17,7 @@
 
 import { promises as fs } from 'node:fs';
 
-import { CODE_REGISTRY } from '@vibe-agent-toolkit/agent-schema';
+import { CODE_REGISTRY } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 

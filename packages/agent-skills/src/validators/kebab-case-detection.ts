@@ -12,7 +12,7 @@
  * provides a more actionable second message at info severity.
  */
 
-import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 
 // eslint-disable-next-line security/detect-unsafe-regex -- Simple pattern with bounded length, safe from ReDoS (mirrors the regex in ClaudePluginSchema)

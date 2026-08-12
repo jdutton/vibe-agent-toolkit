@@ -2,14 +2,14 @@
  * Rendering for the four `ValidationIssue` anchors.
  *
  * `location` / `line` / `field` are independent fields on the issue (see the
- * anchor contract on `ValidationIssue` in `@vibe-agent-toolkit/agent-schema`).
+ * anchor contract on `ValidationIssue` in `@vibe-agent-toolkit/schema`).
  * Splitting them apart in the producers only pays off if the renderers put
  * them back together — a `line` that no output surface prints is a `line` that,
  * from the user's side, was deleted. This is the one place that join happens,
  * so every command spells an anchor the same way.
  */
 
-import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 /**
  * Render an issue's anchor as a single human/tool-readable string.

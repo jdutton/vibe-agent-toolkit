@@ -24,7 +24,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
-    "@vibe-agent-toolkit/agent-schema": "workspace:*",
+    "@vibe-agent-toolkit/schema": "workspace:*",
     "zod": "^3.24.1"
   },
   "devDependencies": {

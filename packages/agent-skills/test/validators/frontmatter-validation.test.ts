@@ -8,7 +8,7 @@
  * - Schema validation for VAT-generated skills
  */
 
-import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
 import {

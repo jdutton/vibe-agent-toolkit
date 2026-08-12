@@ -19,7 +19,7 @@
  * The last package (umbrella) depends on all others.
  */
 export const PUBLISHED_PACKAGES = [
-  'agent-schema',
+  'schema',
   'utils',
   'discovery',
   'resources',

@@ -822,7 +822,7 @@ if (profile.musicPreference === breed.musicAlignment) {
 ## Related Documentation
 
 - [VAT Architecture Overview](./README.md) - Package structure and evolution
-- [Agent Schema Documentation](../../packages/agent-schema/README.md) - Manifest format
+- [Agent Schema Documentation](../../packages/schema/README.md) - Manifest format
 - [Breed Advisor Source](../../packages/vat-example-cat-agents/src/conversational-assistant/breed-advisor.ts) - Reference implementation
 - [Conversational Demo](../../packages/vat-example-cat-agents/examples/conversational-demo.ts) - Multi-turn example
 - [Agent Runtime API](../../packages/agent-runtime/src/index.ts) - Runtime framework exports

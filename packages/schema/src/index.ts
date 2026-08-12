@@ -1,5 +1,5 @@
 /**
- * @vibe-agent-toolkit/agent-schema
+ * @vibe-agent-toolkit/schema
  *
  * JSON Schema definitions and TypeScript types for VAT agent manifest format.
  */

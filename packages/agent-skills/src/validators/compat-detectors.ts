@@ -10,7 +10,7 @@
  * is called against every emitted record).
  */
 
-import { CODE_REGISTRY, type IssueCode, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { CODE_REGISTRY, type IssueCode, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
 import {

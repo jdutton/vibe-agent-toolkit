@@ -120,7 +120,7 @@ Output structured data with these file contents:
    - prompts/user.md - Template with {{variables}}
    - README.md - Purpose, usage, architecture, testing
 
-3. **validationResults** - Parse agentYaml through @vibe-agent-toolkit/agent-schema
+3. **validationResults** - Parse agentYaml through @vibe-agent-toolkit/schema
 
 4. **summary** - Human-readable next steps
 

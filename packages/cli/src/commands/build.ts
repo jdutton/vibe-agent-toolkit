@@ -13,7 +13,7 @@ import {
   calculateValidationStatus,
   countBySeverity,
   type ValidationIssue,
-} from '@vibe-agent-toolkit/agent-schema';
+} from '@vibe-agent-toolkit/schema';
 import { checkBrokenPackagedLinks } from '@vibe-agent-toolkit/agent-skills';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';

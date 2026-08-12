@@ -18,7 +18,7 @@ import {
   type AllowUsageLedger,
   type SeverityCounts,
   type ValidationIssue,
-} from '@vibe-agent-toolkit/agent-schema';
+} from '@vibe-agent-toolkit/schema';
 import {
   packageSkills,
   packagingConfigToPackageOptions,

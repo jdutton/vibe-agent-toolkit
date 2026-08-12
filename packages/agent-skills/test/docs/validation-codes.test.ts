@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { CODE_REGISTRY } from '@vibe-agent-toolkit/agent-schema';
+import { CODE_REGISTRY } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import GithubSlugger from 'github-slugger';
 import { describe, expect, it } from 'vitest';

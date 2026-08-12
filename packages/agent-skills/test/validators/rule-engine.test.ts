@@ -14,7 +14,7 @@
  *  3. **Anti-workaround invariant** — every registry `fix` for a skill-resource
  *     code names a sanctioned action BEFORE any "ignore / allow" escape hatch.
  */
-import { CODE_REGISTRY, type IssueCode } from '@vibe-agent-toolkit/agent-schema';
+import { CODE_REGISTRY, type IssueCode } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
 import {

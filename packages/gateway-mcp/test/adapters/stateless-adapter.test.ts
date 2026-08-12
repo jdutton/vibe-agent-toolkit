@@ -1,6 +1,6 @@
 
-import type { Agent, OneShotAgentOutput } from '@vibe-agent-toolkit/agent-schema';
-import { RESULT_SUCCESS } from '@vibe-agent-toolkit/agent-schema';
+import type { Agent, OneShotAgentOutput } from '@vibe-agent-toolkit/schema';
+import { RESULT_SUCCESS } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
 import { StatelessAdapter } from '../../src/adapters/stateless-adapter.js';

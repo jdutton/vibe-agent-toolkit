@@ -179,7 +179,7 @@ All VAT agents return standardized result envelopes following Railway-Oriented P
 
 ### Core Concepts
 
-**Result Types** (`@vibe-agent-toolkit/agent-schema`):
+**Result Types** (`@vibe-agent-toolkit/schema`):
 - `AgentResult<T, E>` - Success/error discriminated union for single-execution agents
 - `StatefulAgentResult<T, E, M>` - Adds "in-progress" state for multi-turn conversational agents
 - `LLMError` - Standard error types for LLM-related failures

@@ -12,7 +12,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-import { createRegistryIssue } from '@vibe-agent-toolkit/agent-schema';
+import { createRegistryIssue } from '@vibe-agent-toolkit/schema';
 import { issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
 import { validateFrontmatter } from './frontmatter-validator.js';

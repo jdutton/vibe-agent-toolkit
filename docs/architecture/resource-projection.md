@@ -128,7 +128,7 @@ built-in with smarter detection.
 ### `routable` — membership is not traversability
 
 **Partially shipped today, independent of the projection schema.** `LINK_FROM_NON_ROUTABLE_FILE` is a
-real, shipped validation code (`LINK_FROM_NON_ROUTABLE_FILE`, `packages/agent-schema/src/validation-codes.ts:106-114`), and
+real, shipped validation code (`LINK_FROM_NON_ROUTABLE_FILE`, `packages/schema/src/validation-codes.ts:106-114`), and
 `walk-link-graph.ts:74` already carries a `non-routable-source` exclusion reason. What's proposed
 (🔷) is *modeling* that behavior as a clean projection property rather than logic embedded in the
 walker:

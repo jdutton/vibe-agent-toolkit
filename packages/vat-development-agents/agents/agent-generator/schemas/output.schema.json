@@ -59,7 +59,7 @@
     },
     "validationResults": {
       "type": "object",
-      "description": "Validation results from @vibe-agent-toolkit/agent-schema",
+      "description": "Validation results from @vibe-agent-toolkit/schema",
       "properties": {
         "valid": {
           "type": "boolean",

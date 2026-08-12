@@ -11,7 +11,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { createRegistryIssue, type IssueCode, runSingleUnitValidation, type ValidationConfig, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { createRegistryIssue, type IssueCode, runSingleUnitValidation, type ValidationConfig, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, FsLookupCache, type GitTracker, issueLocation, resolveAssetReference, safePath, toForwardSlash, toNfc } from '@vibe-agent-toolkit/utils';
 
 import { calculateChecksumFromContent } from './checksum.js';

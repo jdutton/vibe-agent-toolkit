@@ -16,7 +16,7 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { scan } from '@vibe-agent-toolkit/discovery';
 import { isGitUrl, parseGitUrl, safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';

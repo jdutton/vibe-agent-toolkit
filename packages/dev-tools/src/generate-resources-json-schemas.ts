@@ -4,7 +4,7 @@
  *
  * Lives in dev-tools rather than packages/resources/scripts/ because this
  * repo's structure validation restricts /scripts directories to dev-tools,
- * agent-schema, and agent-skills (see validate-repo-structure.ts) — every
+ * schema, and agent-skills (see validate-repo-structure.ts) — every
  * other package's generation utilities live here instead. Invoked by
  * resources' own `generate:schemas` script via a relative tsx path, the same
  * pattern resources already uses for `build` (tsx ../dev-tools/src/tsc-clean-build.ts).

@@ -2,7 +2,7 @@
  * Test helpers for asserting on agent results.
  */
 
-import type { AgentResult, StatefulAgentResult } from '@vibe-agent-toolkit/agent-schema';
+import type { AgentResult, StatefulAgentResult } from '@vibe-agent-toolkit/schema';
 import { expect } from 'vitest';
 
 /**

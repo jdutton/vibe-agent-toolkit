@@ -12,7 +12,7 @@ import {
   createAllowUsageLedger,
   type SeverityCounts,
   type ValidationIssue,
-} from '@vibe-agent-toolkit/agent-schema';
+} from '@vibe-agent-toolkit/schema';
 import {
   validateSkillForPackaging,
   type DeclaredEvalSuite,
@@ -316,7 +316,7 @@ const STATUS_GLYPHS: Record<ValidationStatus, string> = {
  * expected pre-build state and must not fail CI); only the claim was wrong. It
  * is dropped rather than made conditional because the code registry carries no
  * build-blocking fact to condition it on — `CodeRegistryEntry` in
- * agent-schema/src/validation-codes.ts is exactly `defaultSeverity` /
+ * schema/src/validation-codes.ts is exactly `defaultSeverity` /
  * `description` / `fix` / `reference` — and keying the claim
  * on a hardcoded list of code names would assert a cause this renderer cannot
  * observe, and would go stale the next time a code is added.

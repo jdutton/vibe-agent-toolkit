@@ -4,7 +4,7 @@ import {
   calculateValidationStatus,
   countBySeverity,
   type ValidationIssue,
-} from '@vibe-agent-toolkit/agent-schema';
+} from '@vibe-agent-toolkit/schema';
 import type { ValidationResult } from '@vibe-agent-toolkit/agent-skills';
 import { issueLocation, toForwardSlash } from '@vibe-agent-toolkit/utils';
 

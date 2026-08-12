@@ -26,7 +26,7 @@ import {
   type IssueCode,
   type ValidationConfig,
   type ValidationIssue,
-} from '@vibe-agent-toolkit/agent-schema';
+} from '@vibe-agent-toolkit/schema';
 import { DeferredArtifacts, parseFileCached, ResourceRegistry, type SkillExecutableEntry } from '@vibe-agent-toolkit/resources';
 import { findProjectRoot, issueLocation, normalizedTmpdir, toForwardSlash, safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
 
@@ -116,7 +116,7 @@ export interface PackagingValidationResult {
    *
    * It therefore says NOTHING about warnings or info. Read {@link
    * PackagingValidationResult.allErrors} for the distribution — via
-   * `countBySeverity(result.allErrors)` from `@vibe-agent-toolkit/agent-schema`,
+   * `countBySeverity(result.allErrors)` from `@vibe-agent-toolkit/schema`,
    * which is the same collapse every other lane uses.
    */
   status: 'success' | 'error';
@@ -134,7 +134,7 @@ export interface PackagingValidationResult {
    * including its paragraph-length `fix` and `reference` prose — was written to
    * the output document twice. Derive the partition instead:
    * {@link activeErrorsOf} / {@link activeWarningsOf}, or `countBySeverity` /
-   * `calculateValidationStatus` from `@vibe-agent-toolkit/agent-schema`.
+   * `calculateValidationStatus` from `@vibe-agent-toolkit/schema`.
    */
   allErrors: ValidationIssue[];
 
@@ -244,7 +244,7 @@ function validateFilesConfig(
  * reference come from the single CODE_REGISTRY source (issue #129 dedup); the
  * caller supplies a fully-formed `message`.
  *
- * Deliberately NOT named `createRegistryIssue`: `@vibe-agent-toolkit/agent-schema`
+ * Deliberately NOT named `createRegistryIssue`: `@vibe-agent-toolkit/schema`
  * exports a function by that name whose third parameter is an EXTRAS OBJECT, not
  * a location string. Two same-named functions with incompatible third arguments
  * is a trap for anyone reading a call site.

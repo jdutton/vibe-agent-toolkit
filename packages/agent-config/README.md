@@ -4,7 +4,7 @@ Agent manifest loading and validation for vibe-agent-toolkit.
 
 ## Features
 
-- Load and validate agent manifests (using `@vibe-agent-toolkit/agent-schema`)
+- Load and validate agent manifests (using `@vibe-agent-toolkit/schema`)
 - Validate tool prerequisites (RAG databases exist, etc.)
 - Validate resource file existence (prompts, docs, templates)
 - Foundation for future agent execution (no LLM integration in this phase)

@@ -3,7 +3,7 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 
 
-import { allowUnusedIssues, createAllowUsageLedger, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { allowUnusedIssues, createAllowUsageLedger, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 

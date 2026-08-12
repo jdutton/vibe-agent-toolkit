@@ -17,7 +17,7 @@ import {
   calculateValidationStatus,
   countBySeverity,
   type ValidationIssue,
-} from '@vibe-agent-toolkit/agent-schema';
+} from '@vibe-agent-toolkit/schema';
 import {
   resolveAnchorRoot,
   validateSkillForPackaging,
@@ -128,7 +128,7 @@ function renderHumanReport(
   grouped: Map<ChecklistSection, ValidationIssue[]>,
   logger: Logger,
 ): void {
-  // One collapse, from agent-schema: `allErrors` carries info issues despite the
+  // One collapse, from schema: `allErrors` carries info issues despite the
   // name, and there is no `activeInfo` bucket to read them from.
   const counts = countBySeverity(result.allErrors);
 

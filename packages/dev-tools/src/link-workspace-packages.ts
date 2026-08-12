@@ -38,7 +38,7 @@ const NODE_MODULES_DIR = join(REPO_ROOT, 'node_modules');
 const WORKSPACE_PACKAGES = [
   'agent-config',
   'agent-runtime',
-  'agent-schema',
+  'schema',
   'agent-skills',
   'cli',
   'dev-tools',

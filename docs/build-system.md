@@ -48,8 +48,8 @@ bun run typecheck
 ```
 
 These scripts map to:
-- `build`: `tsc --build && cd packages/agent-schema && bun run generate:schemas`
-- `build:clean`: `tsc --build --clean && tsc --build && cd packages/agent-schema && bun run generate:schemas`
+- `build`: `tsc --build && cd packages/schema && bun run generate:schemas`
+- `build:clean`: `tsc --build --clean && tsc --build && cd packages/schema && bun run generate:schemas`
 - `typecheck`: `tsc --build --dry --force`
 
 ## How It Works

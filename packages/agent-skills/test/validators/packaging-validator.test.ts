@@ -5,7 +5,7 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 import * as fs from 'node:fs';
 
-import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 import * as yaml from 'yaml';

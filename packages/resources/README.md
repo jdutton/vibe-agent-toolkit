@@ -553,7 +553,7 @@ interface ValidationResult {
 A single validation issue found during link validation.
 
 `ValidationIssue` is the unified issue shape every VAT validator emits (defined
-in `@vibe-agent-toolkit/agent-schema`). Each issue carries a registry `code`
+in `@vibe-agent-toolkit/schema`). Each issue carries a registry `code`
 (see [Validation Codes](../../docs/validation-codes.md)) and a resolved
 `severity`.
 

@@ -1,7 +1,7 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- test code writes into its own temp dirs */
 import { mkdir, writeFile } from 'node:fs/promises';
 
-import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import type { SkillPackagingConfig } from '@vibe-agent-toolkit/agent-skills';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';

@@ -1,5 +1,5 @@
 {
-  "name": "@vibe-agent-toolkit/agent-schema",
+  "name": "@vibe-agent-toolkit/schema",
   "version": "0.2.0-rc.2",
   "description": "JSON Schema definitions and TypeScript types for VAT agent manifest format",
   "type": "module",
@@ -47,7 +47,7 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/jdutton/vibe-agent-toolkit.git",
-    "directory": "packages/agent-schema"
+    "directory": "packages/schema"
   },
   "author": "Jeff Dutton",
   "license": "MIT",

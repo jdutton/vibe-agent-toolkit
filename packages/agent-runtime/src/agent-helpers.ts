@@ -7,7 +7,7 @@ import type {
   ExternalEventError,
   LLMError,
   OneShotAgentOutput,
-} from '@vibe-agent-toolkit/agent-schema';
+} from '@vibe-agent-toolkit/schema';
 
 /**
  * Default LLM error for unknown failures.

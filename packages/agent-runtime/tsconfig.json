@@ -6,7 +6,7 @@
     "rootDir": "./src"
   },
   "references": [
-    { "path": "../agent-schema" },
+    { "path": "../schema" },
     { "path": "../utils" }
   ],
   "include": [

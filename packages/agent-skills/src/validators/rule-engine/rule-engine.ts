@@ -15,7 +15,7 @@
  * intents may share a context signature while expecting different codes.
  */
 
-import { CODE_REGISTRY, type IssueCode, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { CODE_REGISTRY, type IssueCode, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 import type { FileKind, RuleContext } from './rule-context.js';
 

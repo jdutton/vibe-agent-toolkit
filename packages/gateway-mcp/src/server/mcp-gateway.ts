@@ -1,4 +1,4 @@
-import type { Agent, OneShotAgentOutput } from '@vibe-agent-toolkit/agent-schema';
+import type { Agent, OneShotAgentOutput } from '@vibe-agent-toolkit/schema';
 
 import { StatelessAdapter } from '../adapters/stateless-adapter.js';
 import { NoOpObservabilityProvider } from '../observability/no-op-provider.js';

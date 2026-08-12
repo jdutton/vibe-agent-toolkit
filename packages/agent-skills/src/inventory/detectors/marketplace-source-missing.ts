@@ -7,7 +7,7 @@
  * and are silently skipped.
  */
 
-import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { issueLocation } from '@vibe-agent-toolkit/utils';
 
 import type { MarketplaceInventory } from '../types.js';

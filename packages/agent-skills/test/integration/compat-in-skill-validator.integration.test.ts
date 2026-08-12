@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 
-import { runSingleUnitValidation } from '@vibe-agent-toolkit/agent-schema';
+import { runSingleUnitValidation } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 

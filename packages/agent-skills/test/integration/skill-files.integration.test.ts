@@ -2,7 +2,7 @@
 import { existsSync, cpSync, readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 
-import { countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { normalizedTmpdir, safeExecSync, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { globSync } from 'glob';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';

@@ -74,7 +74,7 @@ export function hasParentTraversalSegment(p: string): boolean {
  *
  * This is the ONE relativizer every VAT validation lane uses. `location` is
  * contractually project-relative (see `ValidationIssue` in
- * `@vibe-agent-toolkit/agent-schema`), so producers must route through here
+ * `@vibe-agent-toolkit/schema`), so producers must route through here
  * rather than emitting `skillPath` directly — absolute locations leak the
  * developer's home directory into CI logs and make `validation.allow` globs,
  * which match against `location`, unwritable.

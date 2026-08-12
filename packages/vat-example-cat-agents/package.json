@@ -37,7 +37,7 @@
   },
   "dependencies": {
     "@vibe-agent-toolkit/agent-runtime": "workspace:*",
-    "@vibe-agent-toolkit/agent-schema": "workspace:*",
+    "@vibe-agent-toolkit/schema": "workspace:*",
     "@vibe-agent-toolkit/transports": "workspace:*",
     "syllable": "^5.0.1",
     "zod": "^3.24.1"

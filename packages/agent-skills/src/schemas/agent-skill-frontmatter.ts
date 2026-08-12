@@ -1,4 +1,4 @@
-import { SKILL_NAME_REGEX, SKILL_NAME_REGEX_MESSAGE } from '@vibe-agent-toolkit/agent-schema';
+import { SKILL_NAME_REGEX, SKILL_NAME_REGEX_MESSAGE } from '@vibe-agent-toolkit/schema';
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 

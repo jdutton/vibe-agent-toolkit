@@ -15,7 +15,7 @@
  */
 import * as fs from 'node:fs';
 
-import { ValidationIssueSchema, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { ValidationIssueSchema, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { GitTracker, isAbsoluteAnyPlatform, mkdirSyncReal, normalizedTmpdir, safeExecSync, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 

@@ -287,7 +287,7 @@ lens/resolver vocabulary is expected work.
 
 Two shipped behaviours are zone facts written as bespoke rules, and become derived under this model:
 
-- **`NON_PORTABLE_ASSET_REFERENCE`** (`packages/agent-schema/src/validation-codes.ts:348`) flags a
+- **`NON_PORTABLE_ASSET_REFERENCE`** (`packages/schema/src/validation-codes.ts:348`) flags a
   skill document referencing a bundled asset via `CLAUDE_PLUGIN_ROOT`, because it "points at the
   plugin, not the skill, so the path breaks when the skill is mounted standalone" (`:350`). That is
   exactly *resolves in the plugin extent, unresolvable in the standalone-skill extent*.

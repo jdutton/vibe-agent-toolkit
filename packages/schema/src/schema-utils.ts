@@ -44,7 +44,7 @@ export interface JsonSchemaOptions extends Partial<Options> {
  * @example
  * ```typescript
  * import { z } from 'zod';
- * import { toJsonSchema } from '@vibe-agent-toolkit/agent-schema';
+ * import { toJsonSchema } from '@vibe-agent-toolkit/schema';
  *
  * const MySchema = z.object({
  *   name: z.string().describe('User name'),

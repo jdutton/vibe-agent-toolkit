@@ -13,7 +13,7 @@
  * options).
  */
 
-import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import {
   type Observation,
   type PackagingValidationResult,

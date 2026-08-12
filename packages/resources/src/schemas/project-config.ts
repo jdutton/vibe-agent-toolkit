@@ -1,4 +1,4 @@
-import { ValidationConfigSchema } from '@vibe-agent-toolkit/agent-schema';
+import { ValidationConfigSchema } from '@vibe-agent-toolkit/schema';
 import { globMagicRemainder, hasParentTraversalSegment, isAbsoluteAnyPlatform } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
@@ -17,7 +17,7 @@ import { LinkAuthConfigSchema } from './link-auth.js';
 const SEMVER_REGEX = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
 
 // Re-export for downstream consumers (unicorn/prefer-export-from satisfied by the import above)
-export { ValidationConfigSchema } from '@vibe-agent-toolkit/agent-schema';
+export { ValidationConfigSchema } from '@vibe-agent-toolkit/schema';
 
 /**
  * Validation mode for frontmatter schema validation.
@@ -108,7 +108,7 @@ export const ResourcesConfigSchema = z.object({
 export type ResourcesConfig = z.infer<typeof ResourcesConfigSchema>;
 
 // ---------------------------------------------------------------------------
-// Skill packaging configuration (self-contained — no agent-schema dependency)
+// Skill packaging configuration (self-contained — no schema dependency)
 // ---------------------------------------------------------------------------
 
 /**

@@ -12,7 +12,7 @@
 
 import { pathToFileURL } from 'node:url';
 
-import type { Agent, OneShotAgentOutput } from '@vibe-agent-toolkit/agent-schema';
+import type { Agent, OneShotAgentOutput } from '@vibe-agent-toolkit/schema';
 
 export interface AgentRegistration {
   name: string;

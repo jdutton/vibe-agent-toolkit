@@ -13,7 +13,7 @@
  * This is the ONLY place in the codebase that should use AJV.
  */
 
-import { createRegistryIssue, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { createRegistryIssue, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { issueLocation } from '@vibe-agent-toolkit/utils';
 import type { ValidateFunction } from 'ajv';
 

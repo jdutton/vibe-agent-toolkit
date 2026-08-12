@@ -1,11 +1,11 @@
-# @vibe-agent-toolkit/agent-schema
+# @vibe-agent-toolkit/schema
 
 JSON Schema definitions and TypeScript types for VAT agent manifest format.
 
 ## Installation
 
 ```bash
-bun add @vibe-agent-toolkit/agent-schema
+bun add @vibe-agent-toolkit/schema
 ```
 
 ## Usage
@@ -13,7 +13,7 @@ bun add @vibe-agent-toolkit/agent-schema
 ### TypeScript (Zod Schemas)
 
 ```typescript
-import { AgentManifestSchema, type AgentManifest } from '@vibe-agent-toolkit/agent-schema';
+import { AgentManifestSchema, type AgentManifest } from '@vibe-agent-toolkit/schema';
 
 // Validate agent.yaml data
 const result = AgentManifestSchema.safeParse(data);
@@ -31,7 +31,7 @@ if (result.success) {
 JSON Schema files are available in the `schemas/` directory:
 
 ```typescript
-import agentManifestSchema from '@vibe-agent-toolkit/agent-schema/schemas/agent-manifest.json';
+import agentManifestSchema from '@vibe-agent-toolkit/schema/schemas/agent-manifest.json';
 ```
 
 Available schemas:
@@ -79,7 +79,7 @@ import type {
   LLMConfig,
   Tool,
   AgentInterface,
-} from '@vibe-agent-toolkit/agent-schema';
+} from '@vibe-agent-toolkit/schema';
 ```
 
 ## Validation Examples
@@ -87,7 +87,7 @@ import type {
 ### Validate agent.yaml
 
 ```typescript
-import { AgentManifestSchema } from '@vibe-agent-toolkit/agent-schema';
+import { AgentManifestSchema } from '@vibe-agent-toolkit/schema';
 import { readFileSync } from 'node:fs';
 import YAML from 'yaml';
 
@@ -112,7 +112,7 @@ console.log('✅ Valid agent manifest');
 ### Validate package.json VAT metadata
 
 ```typescript
-import { VatPackageMetadataSchema } from '@vibe-agent-toolkit/agent-schema';
+import { VatPackageMetadataSchema } from '@vibe-agent-toolkit/schema';
 import { readFileSync } from 'node:fs';
 
 // Load package.json

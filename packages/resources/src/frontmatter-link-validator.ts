@@ -18,7 +18,7 @@
  *   anchor-only (validated as anchor in current file via judgeLink)
  */
 
-import { createRegistryIssue, type IssueCode } from '@vibe-agent-toolkit/agent-schema';
+import { createRegistryIssue, type IssueCode } from '@vibe-agent-toolkit/schema';
 import { FsLookupCache } from '@vibe-agent-toolkit/utils';
 
 import { classifyLink } from './link-parser.js';

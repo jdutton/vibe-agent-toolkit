@@ -45,7 +45,7 @@ export type ValidationIssueCode = IssueCode | InfoCode | NonOverridableCode;
 
 /**
  * Host-independent absolute-path test, mirroring `isAbsoluteAnyPlatform` in
- * `@vibe-agent-toolkit/utils`. Inlined because `agent-schema` is the bottom of
+ * `@vibe-agent-toolkit/utils`. Inlined because `schema` is the bottom of
  * the dependency graph and carries no workspace runtime dependencies; a
  * Windows-absolute `location` must be rejected even when validating on POSIX CI.
  */

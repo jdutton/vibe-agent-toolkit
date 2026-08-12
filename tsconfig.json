@@ -11,7 +11,7 @@
     { "path": "./packages/resource-compiler" },
     { "path": "./packages/rag" },
     { "path": "./packages/rag-lancedb" },
-    { "path": "./packages/agent-schema" },
+    { "path": "./packages/schema" },
     { "path": "./packages/agent-config" },
     { "path": "./packages/agent-runtime" },
     { "path": "./packages/agent-skills" },

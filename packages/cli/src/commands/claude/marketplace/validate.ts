@@ -19,7 +19,7 @@ import {
   type SeverityCounts,
   type ValidationConfig,
   type ValidationIssue,
-} from '@vibe-agent-toolkit/agent-schema';
+} from '@vibe-agent-toolkit/schema';
 import {
   validateMarketplace,
   validateSkill,

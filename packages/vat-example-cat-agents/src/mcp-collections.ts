@@ -5,8 +5,8 @@
  * Discoverable by: vat mcp serve @vibe-agent-toolkit/vat-example-cat-agents
  */
 
-import type { Agent, OneShotAgentOutput } from '@vibe-agent-toolkit/agent-schema';
-import { createSuccess } from '@vibe-agent-toolkit/agent-schema';
+import type { Agent, OneShotAgentOutput } from '@vibe-agent-toolkit/schema';
+import { createSuccess } from '@vibe-agent-toolkit/schema';
 
 import { photoAnalyzerAgent } from './one-shot-llm-analyzer/photo-analyzer.js';
 import { haikuValidatorAgent } from './pure-function-tool/haiku-validator.js';

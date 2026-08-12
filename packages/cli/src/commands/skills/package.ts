@@ -8,7 +8,7 @@ import { existsSync, statSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
 
-import type { SeverityCounts } from '@vibe-agent-toolkit/agent-schema';
+import type { SeverityCounts } from '@vibe-agent-toolkit/schema';
 import {
   packageSkill,
   validateSkill,

@@ -1,6 +1,6 @@
 import * as os from 'node:os';
 
-import { countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import type { ValidationResult } from '@vibe-agent-toolkit/agent-skills';
 import { describe, expect, it } from 'vitest';
 

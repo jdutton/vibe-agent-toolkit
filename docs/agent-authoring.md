@@ -12,7 +12,7 @@ The simplest agent is a pure function that validates or transforms data:
 
 ```typescript
 import { z } from 'zod';
-import { defineAgent, type OneShotAgentOutput } from '@vibe-agent-toolkit/agent-schema';
+import { defineAgent, type OneShotAgentOutput } from '@vibe-agent-toolkit/schema';
 
 // 1. Define input schema
 const InputSchema = z.object({
@@ -89,7 +89,7 @@ Add LLM calls with error handling:
 
 ```typescript
 import { z } from 'zod';
-import { defineAgent, type OneShotAgentOutput, type LLMError } from '@vibe-agent-toolkit/agent-schema';
+import { defineAgent, type OneShotAgentOutput, type LLMError } from '@vibe-agent-toolkit/schema';
 
 const InputSchema = z.object({
   text: z.string(),
@@ -168,7 +168,7 @@ Multi-turn conversation with session state:
 
 ```typescript
 import { z } from 'zod';
-import { defineAgent, type ConversationalAgentOutput } from '@vibe-agent-toolkit/agent-schema';
+import { defineAgent, type ConversationalAgentOutput } from '@vibe-agent-toolkit/schema';
 
 const ProfileSchema = z.object({
   name: z.string().optional(),
@@ -493,7 +493,7 @@ import {
   LLM_TIMEOUT,
   LLM_RATE_LIMIT,
   LLM_INVALID_OUTPUT,
-} from '@vibe-agent-toolkit/agent-schema';
+} from '@vibe-agent-toolkit/schema';
 
 // ✅ GOOD - Error as data with constants
 return {
@@ -534,7 +534,7 @@ import {
   // Types
   type LLMError,
   type ExternalEventError,
-} from '@vibe-agent-toolkit/agent-schema';
+} from '@vibe-agent-toolkit/schema';
 
 // LLM-based agents use LLM error constants
 type MyError = LLMError;
@@ -633,7 +633,7 @@ const result = nameValidatorAgent.execute({ name: 'Duke Sterling III' });
 Catch exceptions and map to error constants:
 
 ```typescript
-import { RESULT_ERROR, LLM_TIMEOUT, LLM_RATE_LIMIT, LLM_UNAVAILABLE } from '@vibe-agent-toolkit/agent-schema';
+import { RESULT_ERROR, LLM_TIMEOUT, LLM_RATE_LIMIT, LLM_UNAVAILABLE } from '@vibe-agent-toolkit/schema';
 
 async execute(input, context) {
   try {
@@ -661,7 +661,7 @@ async execute(input, context) {
 Use Zod for input/output validation with error constants:
 
 ```typescript
-import { RESULT_SUCCESS, RESULT_ERROR, LLM_INVALID_OUTPUT } from '@vibe-agent-toolkit/agent-schema';
+import { RESULT_SUCCESS, RESULT_ERROR, LLM_INVALID_OUTPUT } from '@vibe-agent-toolkit/schema';
 
 async execute(input) {
   // Validate input (automatic with schemas)

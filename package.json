@@ -54,9 +54,9 @@
   },
   "scripts": {
     "build": "turbo run build && turbo run build:skills",
-    "build:packages": "tsc --build && cd packages/agent-schema && bun run generate:schemas",
+    "build:packages": "tsc --build && cd packages/schema && bun run generate:schemas",
     "build:cli": "bun --filter @vibe-agent-toolkit/cli run build",
-    "build:clean": "tsc --build --clean && tsc --build && cd packages/agent-schema && bun run generate:schemas",
+    "build:clean": "tsc --build --clean && tsc --build && cd packages/schema && bun run generate:schemas",
     "test": "echo \"❌ Direct test execution not supported. Use: vv validate (full validation) or bun run test:unit / test:integration / test:system\" && exit 1",
     "test:unit": "turbo run test:unit",
     "test:cli": "bun --filter @vibe-agent-toolkit/cli run test:unit",

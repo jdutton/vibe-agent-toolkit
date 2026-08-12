@@ -11,7 +11,7 @@ import {
   type IssueSeverity,
   type SeverityCounts,
   type ValidationIssueCode,
-} from '@vibe-agent-toolkit/agent-schema';
+} from '@vibe-agent-toolkit/schema';
 import { packagedFileEntries } from '@vibe-agent-toolkit/agent-skills';
 import {
   DeferredArtifacts,
@@ -298,7 +298,7 @@ export function buildIssuesOutputData(
     context.collectionStats,
     summary.collectionErrorStats
   );
-  // ONE answer to "issues → status", from the shared collapse in agent-schema —
+  // ONE answer to "issues → status", from the shared collapse in schema —
   // the worst ACTIONABLE severity, so an info-only run is `success`. That is
   // honest only because `issueCounts` rides beside it, naming what was found.
   const issueCounts = countBySeverity(issueData);
