@@ -1,0 +1,18 @@
+# Not a real project — an ANCHOR, and the only thing it does is bound a crawl.
+#
+# `extractClaudeSkillInventory` link-walks each skill against a registry rooted at
+# `findProjectRoot(<skill dir>)`. With no config anywhere between a fixture and the
+# filesystem root, that walk escaped the fixtures entirely and resolved to the
+# vibe-agent-toolkit repo root — so every test in extract-plugin.test.ts crawled and
+# parsed the WHOLE monorepo, once per skill, to compute a `files.linked` value no
+# assertion reads.
+#
+# That is what made the suite look flaky: cost scaled with the repo, the disk cache
+# and CPU contention, so a different test blew the 60s timeout on each run and the
+# file could take minutes. `findProjectRoot` checks for this filename before it
+# looks for `.git/`, so placing it here stops the walk at the fixtures directory.
+#
+# Deliberately at the fixtures PARENT rather than inside each plugin fixture: a file
+# added inside one would show up in that plugin's own inventory and break the
+# `unexpected`-assets assertions.
+version: 1
