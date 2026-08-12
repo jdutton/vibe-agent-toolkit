@@ -1,0 +1,33 @@
+{
+  "$ref": "#/definitions/projection-resource-realizations",
+  "definitions": {
+    "projection-resource-realizations": {
+      "type": "object",
+      "properties": {
+        "resourceId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The shared identity across realizations"
+        },
+        "zoneId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Foreign key to resource_zones.zoneId"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Root-relative path this realization lives at"
+        }
+      },
+      "required": [
+        "resourceId",
+        "zoneId",
+        "path"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the path-dependent `resource_realizations` table"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

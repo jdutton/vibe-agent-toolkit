@@ -1,0 +1,53 @@
+{
+  "$ref": "#/definitions/projection-resource-zones",
+  "definitions": {
+    "projection-resource-zones": {
+      "type": "object",
+      "properties": {
+        "resourceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "zoneKind": {
+          "type": "string",
+          "enum": [
+            "skill",
+            "plugin",
+            "marketplace",
+            "collection",
+            "package",
+            "tree"
+          ]
+        },
+        "zoneId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "source",
+                "dist",
+                "vendored"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "resourceId",
+        "zoneKind",
+        "zoneId",
+        "role"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the path-dependent `resource_zones` table"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

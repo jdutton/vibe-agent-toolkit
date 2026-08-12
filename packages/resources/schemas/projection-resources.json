@@ -1,0 +1,128 @@
+{
+  "$ref": "#/definitions/projection-resources",
+  "definitions": {
+    "projection-resources": {
+      "type": "object",
+      "properties": {
+        "rootId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Foreign key to roots.id"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Root-relative path, forward-slash separated"
+        },
+        "pathLower": {
+          "type": "string",
+          "description": "path, lowercased — case-insensitive matching as a column, not a function call"
+        },
+        "basenameLower": {
+          "type": "string",
+          "description": "The final path segment, lowercased"
+        },
+        "contentKey": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(?:markdown|html)\\.[0-9a-f]{64}$",
+              "description": "A parser-kind-qualified content key: \"<markdown|html>.<sha256>\""
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Foreign key to blobs.contentKey, or null for a declared-but-unwritten node"
+        },
+        "dir": {
+          "type": "string",
+          "description": "Root-relative directory containing this path"
+        },
+        "depth": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Path segment count below the root"
+        },
+        "ext": {
+          "type": "string",
+          "description": "Lowercased extension including the leading dot, or \"\" when none"
+        },
+        "mtime": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Last modification time, or null when the node has never been observed on disk"
+        },
+        "vatId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "VAT-assigned resource id (frontmatter id, or a generated fallback), or null when not yet assigned"
+        },
+        "origin": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Where this row's content-key knowledge came from. Deliberately an open string, not an enum: resource-scanning-and-caching.md has not yet settled the full non-git-lane taxonomy this column needs to cover."
+        },
+        "observed": {
+          "type": "boolean",
+          "description": "False for a synthetic node declared by config (e.g. a packaging files: target) that has not been written yet"
+        },
+        "fromEnumeration": {
+          "type": "boolean",
+          "description": "False for a node first discovered during parse (e.g. a resolved link target) and back-filled afterward"
+        },
+        "exists": {
+          "type": "boolean"
+        },
+        "isDirectory": {
+          "type": "boolean"
+        },
+        "gitignored": {
+          "type": "boolean"
+        },
+        "isSymlink": {
+          "type": "boolean"
+        },
+        "symlinkResolves": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Null when isSymlink is false"
+        }
+      },
+      "required": [
+        "rootId",
+        "path",
+        "pathLower",
+        "basenameLower",
+        "contentKey",
+        "dir",
+        "depth",
+        "ext",
+        "mtime",
+        "vatId",
+        "origin",
+        "observed",
+        "fromEnumeration",
+        "exists",
+        "isDirectory",
+        "gitignored",
+        "isSymlink",
+        "symlinkResolves"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the path-dependent `resources` table"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

@@ -1,0 +1,52 @@
+{
+  "$ref": "#/definitions/projection-blob-conditions",
+  "definitions": {
+    "projection-blob-conditions": {
+      "type": "object",
+      "properties": {
+        "blob": {
+          "type": "string",
+          "pattern": "^(?:markdown|html)\\.[0-9a-f]{64}$",
+          "description": "Foreign key to blobs.contentKey"
+        },
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "description": "An enum member, or \"PARSE_ODDITY\" for an unclassified oddity"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "error",
+            "warning",
+            "info"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "line": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "blob",
+        "code",
+        "severity",
+        "message",
+        "line"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the blob-keyed `blob_conditions` table"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

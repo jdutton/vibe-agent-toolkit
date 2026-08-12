@@ -13,17 +13,19 @@
   },
   "files": [
     "dist",
+    "schemas/",
     "src",
     "README.md"
   ],
   "scripts": {
-    "build": "tsx ../dev-tools/src/tsc-clean-build.ts",
+    "build": "tsx ../dev-tools/src/tsc-clean-build.ts && bun run generate:schemas",
+    "generate:schemas": "tsx ../dev-tools/src/generate-resources-json-schemas.ts",
     "test:unit": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:system": "vitest run --config vitest.system.config.ts",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "clean": "rimraf dist *.tsbuildinfo"
+    "clean": "rimraf dist *.tsbuildinfo schemas/"
   },
   "keywords": [
     "markdown",

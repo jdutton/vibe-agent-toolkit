@@ -1,0 +1,69 @@
+{
+  "$ref": "#/definitions/projection-edges",
+  "definitions": {
+    "projection-edges": {
+      "type": "object",
+      "properties": {
+        "src": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Source resource id"
+        },
+        "linkOrdinal": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Matches blob_links.ordinal for the src blob"
+        },
+        "zoneId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Which zone this resolution applies to"
+        },
+        "dstResource": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Resolved target resource id, or null when unresolved/external"
+        },
+        "dstAnchor": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Fragment target, or null"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "local_file",
+            "local_directory",
+            "anchor",
+            "external",
+            "email",
+            "embedded",
+            "unknown"
+          ],
+          "description": "Type of link found in markdown resources"
+        },
+        "resolution": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Resolution state — open vocabulary, e.g. \"resolved\", \"unresolved\", \"excluded\""
+        }
+      },
+      "required": [
+        "src",
+        "linkOrdinal",
+        "zoneId",
+        "dstResource",
+        "dstAnchor",
+        "kind",
+        "resolution"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the path-dependent `edges` table"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}
