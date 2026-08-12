@@ -94,6 +94,81 @@ This keeps your source code and SDLC on the original repo while the marketplace 
 }
 ```
 
+That pins *your* marketplace add for every managed Claude Code install — it does not, on
+its own, let one marketplace cherry-pick a plugin published by another. That's a separate
+mechanism, `externalSource`, covered next.
+
+## Referencing Another Marketplace's Plugin (`externalSource`)
+
+A plugin entry doesn't have to be built by the marketplace that lists it. Set
+`externalSource` instead of `skills`/`source`/`files`, and `vat claude plugin build` never
+builds or copies anything for that entry — it writes the source object straight into
+`marketplace.json`, matching the plugin `source` shapes in Anthropic's official
+[Plugin marketplaces](https://code.claude.com/docs/en/plugin-marketplaces) docs
+(`github`, `url`, `npm`, `pip` — see that page for the authoritative field list, since it is
+the spec VAT is implementing here, not the other way around). Claude Code resolves the
+reference at install time from wherever the other repo actually publishes, so the
+referenced plugin has exactly one home and cannot drift out of sync with a vendored copy.
+
+This is how an enterprise assembles its own marketplace out of plugins it maintains
+*plus* plugins it wants to adopt from elsewhere — including a public one like this
+project's own. A company marketplace that wants to redistribute VAT's `vibe-agent-toolkit`
+plugin to every builder, without forking or copying its skills, adds one entry:
+
+```yaml
+# vibe-agent-toolkit.config.yaml, in an enterprise's own marketplace source repo
+claude:
+  marketplaces:
+    enterprise-marketplace:
+      owner:
+        name: Example Enterprise
+      publish:
+        remote: https://github.com/example-enterprise/enterprise-claude-marketplace.git
+        branch: main   # a dedicated marketplace repo, so Cowork/Enterprise sync can read it too
+      plugins:
+        - name: internal-tools
+          description: This enterprise's own plugin, built normally
+          skills: "*"
+        - name: vibe-agent-toolkit
+          description: Upstream skill-authoring toolkit, referenced not vendored
+          skills: []                      # required: an externalSource plugin is never built
+          externalSource:
+            source: github
+            repo: jdutton/vibe-agent-toolkit
+            ref: claude-marketplace       # the STABLE branch — never claude-marketplace-next
+```
+
+`vat claude plugin build && vat claude marketplace publish` then produces an
+`enterprise-marketplace` whose `plugins[]` mixes a built entry and a referenced one, and an
+admin can mandate the whole marketplace org-wide (Cowork/Claude Enterprise GitHub sync) the
+same way regardless of which plugins in it are built locally versus referenced.
+
+**Field reference** (`claude.marketplaces.<mp>.plugins[].externalSource`, one of):
+
+| Shape | Fields |
+|---|---|
+| `{ source: github, repo, ref?, sha? }` | `repo` is `owner/name`; `ref` a branch/tag (default: the repo's default branch); `sha` pins an exact commit |
+| `{ source: url, url, ref?, sha? }` | Any git-cloneable URL |
+| `{ source: npm, package, version?, registry? }` | An npm-published plugin |
+| `{ source: pip, package, version?, registry? }` | A pip-published plugin |
+
+**Mutual exclusivity:** `externalSource` cannot be combined with `source`, `files`,
+`exclude`, or `changelog` (all imply local content VAT would have to build), and `skills`
+must be `[]` (an external plugin is never given pool skills — it has no local bundle for
+VAT to import them into). The config schema rejects any of these combinations at parse
+time rather than silently ignoring the conflicting field.
+
+**`version` and `author`:** an external entry's `version` comes ONLY from an explicit
+`version:` in that plugin's config — it never falls back to this marketplace's own
+version, since this marketplace doesn't own or build the referenced plugin and tagging it
+with an unrelated version number would misrepresent what the other repo actually ships.
+For the same reason, no `author` is written for an external entry; the referenced repo's
+own manifest is the source of truth for that.
+
+**Reading**: `vat audit`/`vat claude marketplace validate` already validate an
+`externalSource`-shaped entry when auditing someone else's marketplace.json — the source
+schemas here are the authoring (write) side of a union VAT already read leniently.
+
 ## Configuration
 
 In `vibe-agent-toolkit.config.yaml`:
