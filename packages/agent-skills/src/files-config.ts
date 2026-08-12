@@ -28,6 +28,7 @@ import {
 import { glob } from 'glob';
 import picomatch from 'picomatch';
 
+import { withFsAttribution } from './fs-attribution.js';
 import { materializeIssue } from './validators/rule-engine/index.js';
 import { isNeverPackagedBasename } from './validators/validation-rules.js';
 
@@ -188,27 +189,13 @@ async function attributed<T>(
   absPath: string,
   projectRoot: string,
   work: () => Promise<T>,
-  // What the entry was having done to it. The default covers the copy lanes; the
-  // integrity lane passes its own, because telling an author a file "could not be
-  // copied" when the copy succeeded and the VERIFY failed sends them to look at
-  // the wrong step.
-  action = 'copied into the bundle',
+  action?: string,
 ): Promise<T> {
-  try {
-    return await work();
-  } catch (error) {
-    // A non-filesystem throw is a bug in VAT, not a fact about the author's
-    // tree; re-wrapping it as "check your permissions" would send them to fix
-    // something that is not theirs to fix.
-    if (!isFilesystemAccessError(error)) throw error;
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `files: source '${entry.source}' resolved to ${anchoredPath(absPath, projectRoot)}, ` +
-      `but it could not be ${action}: ${reason}. ` +
-      `Check the file's permissions and ownership, that the output directory is writable, ` +
-      `and that there is space on the device.`,
-    );
-  }
+  return withFsAttribution(
+    `files: source '${entry.source}' resolved to ${anchoredPath(absPath, projectRoot)}`,
+    work,
+    action,
+  );
 }
 
 /** One file a GLOB `files:` entry matched and the never-package list refused. */
