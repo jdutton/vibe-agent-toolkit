@@ -114,7 +114,7 @@ import { promises as fs, type Stats } from 'node:fs';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { parseCacheDirectory } from './cache-namespace.js';
-import { type KeyedContent, type ParserKind, readContentWithKey } from './content-key.js';
+import { CONTENT_KEY_PATTERN, type KeyedContent, type ParserKind, readContentWithKey } from './content-key.js';
 import { parseHtmlContent } from './html-link-parser.js';
 import { type ParseResult, parseFrontmatterSource, parseMarkdownContent } from './link-parser.js';
 import type { HtmlParseError } from './schemas/resource-metadata.js';
@@ -142,7 +142,7 @@ const SHARD_LENGTH = 2;
  * Pinning to the real shape rules that out structurally. An unexpected shape
  * is treated as a miss/no-op.
  */
-const SAFE_KEY = /^(?:markdown|html)\.[0-9a-f]{64}$/;
+const SAFE_KEY = CONTENT_KEY_PATTERN;
 
 /**
  * Disambiguates concurrent temp files within one process. Combined with

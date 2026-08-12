@@ -75,6 +75,15 @@ export type ParserKind = 'markdown' | 'html';
 const KEY_DOMAIN = 'vat-content-key';
 
 /**
+ * The exact shape {@link computeContentKey} produces — `<parserKind>.<64
+ * lowercase hex chars>`. Exported so every consumer that must recognize a
+ * well-formed key (the parse cache's on-disk safety check, the projection
+ * schema's `ContentKeySchema`) shares one definition instead of two regexes
+ * that can silently drift apart.
+ */
+export const CONTENT_KEY_PATTERN = /^(?:markdown|html)\.[0-9a-f]{64}$/;
+
+/**
  * Decide which parser a path routes to.
  *
  * THE discriminator. `ResourceRegistry.addResource` calls this rather than
