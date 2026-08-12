@@ -94,6 +94,46 @@ export {
   ValidationResultSchema,
 } from './schemas/validation-result.js';
 
+// Projection schema (proposed, stage 3 — resource-projection.md): the
+// blob-keyed and path-dependent tables that make up VAT's queryable
+// resource projection contract.
+export {
+  ContentKeySchema,
+  JsonValueSchema,
+  PROJECTION_SCHEMA_VERSION,
+  type JsonValue,
+} from './schemas/projection-shared.js';
+
+export {
+  BlobConditionRowSchema,
+  BlobConditionSeveritySchema,
+  BlobLinkRowSchema,
+  BlobRowSchema,
+  BlobSectionRowSchema,
+  type BlobConditionRow,
+  type BlobLinkRow,
+  type BlobRow,
+  type BlobSectionRow,
+} from './schemas/projection-blobs.js';
+
+export {
+  EdgeRowSchema,
+  ResourceRealizationRowSchema,
+  ResourceRowSchema,
+  ResourceTagRowSchema,
+  ResourceTagSourceSchema,
+  ResourceZoneRowSchema,
+  RootRowSchema,
+  TreeZoneRoleSchema,
+  ZoneKindSchema,
+  type EdgeRow,
+  type ResourceRealizationRow,
+  type ResourceRow,
+  type ResourceTagRow,
+  type ResourceZoneRow,
+  type RootRow,
+} from './schemas/projection-resources.js';
+
 // Export parser interface for advanced use cases
 export { parseMarkdown, classifyLink, isLocalFileLink, type ParseResult } from './link-parser.js';
 
