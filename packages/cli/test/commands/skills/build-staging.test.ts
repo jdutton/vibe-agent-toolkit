@@ -2,12 +2,12 @@
 import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 
-import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import type {
   PackageSkillResult,
   PackagingValidationResult,
   SkillPackagingConfig,
 } from '@vibe-agent-toolkit/agent-skills';
+import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 

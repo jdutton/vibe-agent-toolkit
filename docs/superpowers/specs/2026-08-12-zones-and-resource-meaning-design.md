@@ -5,7 +5,9 @@
 > serious findings against the model, and 5 false factual claims. All are folded in; §18 records what
 > changed and what survived, because the failure pattern is itself evidence.
 >
-> **Supersedes** §6 and §12 of [`2026-08-06-resource-projection-and-parse-cache-design.md`](./2026-08-06-resource-projection-and-parse-cache-design.md).
+> **Supersedes** §6 and §12 of `2026-08-06-resource-projection-and-parse-cache-design.md` (same
+> directory; deliberately NOT a link — that spec was never committed, so a link to it is a
+> `LINK_TO_GITIGNORED` error that blocks every code commit on this branch).
 > That spec's stages 0–2 shipped; read it for the parse cache, the pipeline restructure, and the
 > correctness harness. Where the two disagree about the projection, this one is current.
 >

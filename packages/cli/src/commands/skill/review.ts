@@ -14,16 +14,16 @@ import { existsSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import {
-  calculateValidationStatus,
-  countBySeverity,
-  type ValidationIssue,
-} from '@vibe-agent-toolkit/schema';
-import {
   resolveAnchorRoot,
   validateSkillForPackaging,
   type PackagingValidationResult,
 } from '@vibe-agent-toolkit/agent-skills';
 import type { Target } from '@vibe-agent-toolkit/claude-marketplace';
+import {
+  calculateValidationStatus,
+  countBySeverity,
+  type ValidationIssue,
+} from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 import * as yaml from 'yaml';

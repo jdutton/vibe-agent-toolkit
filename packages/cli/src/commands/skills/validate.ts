@@ -6,14 +6,6 @@
  */
 
 import {
-  allowUnusedIssues,
-  calculateValidationStatus,
-  countBySeverity,
-  createAllowUsageLedger,
-  type SeverityCounts,
-  type ValidationIssue,
-} from '@vibe-agent-toolkit/schema';
-import {
   validateSkillForPackaging,
   type DeclaredEvalSuite,
   type PackagingValidationResult,
@@ -22,6 +14,14 @@ import {
 } from '@vibe-agent-toolkit/agent-skills';
 import type { Target } from '@vibe-agent-toolkit/claude-marketplace';
 import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
+import {
+  allowUnusedIssues,
+  calculateValidationStatus,
+  countBySeverity,
+  createAllowUsageLedger,
+  type SeverityCounts,
+  type ValidationIssue,
+} from '@vibe-agent-toolkit/schema';
 import { findProjectRoot, gitFindRoot, GitTracker, safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';
 

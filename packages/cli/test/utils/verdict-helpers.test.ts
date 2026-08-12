@@ -13,8 +13,8 @@
  * emit an absolute location.
  */
 
-import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import type { Observation } from '@vibe-agent-toolkit/agent-skills';
+import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { isAbsoluteAnyPlatform, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 

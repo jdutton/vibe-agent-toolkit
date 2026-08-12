@@ -90,9 +90,9 @@
  * {@link distributedTreeFindings}) rather than guessing in either direction.
  */
 
-import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { detectPackagedAgentInstructionFiles, materializeIssue } from '@vibe-agent-toolkit/agent-skills';
 import { getClaudeUserPaths, type GitTrackerSource } from '@vibe-agent-toolkit/claude-marketplace';
+import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import {
   gitFindRoot,
   GitTracker,

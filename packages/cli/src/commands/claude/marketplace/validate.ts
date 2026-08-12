@@ -14,18 +14,18 @@ import { existsSync, readdirSync } from 'node:fs';
 
 
 import {
+  validateMarketplace,
+  validateSkill,
+  type ValidationResult,
+} from '@vibe-agent-toolkit/agent-skills';
+import { validatePlugin } from '@vibe-agent-toolkit/claude-marketplace';
+import {
   calculateValidationStatus,
   countBySeverity,
   type SeverityCounts,
   type ValidationConfig,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import {
-  validateMarketplace,
-  validateSkill,
-  type ValidationResult,
-} from '@vibe-agent-toolkit/agent-skills';
-import { validatePlugin } from '@vibe-agent-toolkit/claude-marketplace';
 import { findProjectRoot, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 

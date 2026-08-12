@@ -11,15 +11,6 @@ import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, rename, rm } from 'node:fs/promises';
 
 import {
-  allowUnusedIssues,
-  calculateValidationStatus,
-  countBySeverity,
-  createAllowUsageLedger,
-  type AllowUsageLedger,
-  type SeverityCounts,
-  type ValidationIssue,
-} from '@vibe-agent-toolkit/schema';
-import {
   packageSkills,
   packagingConfigToPackageOptions,
   skillNameToFsPath,
@@ -31,6 +22,15 @@ import {
   type SkillPackagingConfig,
 } from '@vibe-agent-toolkit/agent-skills';
 import type { Target } from '@vibe-agent-toolkit/claude-marketplace';
+import {
+  allowUnusedIssues,
+  calculateValidationStatus,
+  countBySeverity,
+  createAllowUsageLedger,
+  type AllowUsageLedger,
+  type SeverityCounts,
+  type ValidationIssue,
+} from '@vibe-agent-toolkit/schema';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 import * as yaml from 'yaml';

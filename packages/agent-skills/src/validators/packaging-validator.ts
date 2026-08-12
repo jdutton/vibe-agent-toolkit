@@ -17,6 +17,7 @@ import { existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
+import { DeferredArtifacts, parseFileCached, ResourceRegistry, type SkillExecutableEntry } from '@vibe-agent-toolkit/resources';
 import {
   CODE_REGISTRY,
   runSingleUnitValidation,
@@ -27,7 +28,6 @@ import {
   type ValidationConfig,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { DeferredArtifacts, parseFileCached, ResourceRegistry, type SkillExecutableEntry } from '@vibe-agent-toolkit/resources';
 import { findProjectRoot, issueLocation, normalizedTmpdir, toForwardSlash, safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
 
 import type { EvidenceRecord, Observation } from '../evidence/index.js';

@@ -5,13 +5,6 @@
 import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 
-import {
-  calculateValidationStatus,
-  countBySeverity,
-  type IssueSeverity,
-  type SeverityCounts,
-  type ValidationIssueCode,
-} from '@vibe-agent-toolkit/schema';
 import { packagedFileEntries } from '@vibe-agent-toolkit/agent-skills';
 import {
   DeferredArtifacts,
@@ -21,6 +14,13 @@ import {
   type RegistryStats,
   type ValidationResult,
 } from '@vibe-agent-toolkit/resources';
+import {
+  calculateValidationStatus,
+  countBySeverity,
+  type IssueSeverity,
+  type SeverityCounts,
+  type ValidationIssueCode,
+} from '@vibe-agent-toolkit/schema';
 import type { GitTracker } from '@vibe-agent-toolkit/utils';
 import { resolveAssetReference, safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';

@@ -18,18 +18,18 @@ import { existsSync } from 'node:fs';
 import { basename } from 'node:path';
 
 import {
-  calculateValidationStatus,
-  countBySeverity,
-  type SeverityCounts,
-  type ValidationIssue,
-} from '@vibe-agent-toolkit/schema';
-import {
   computeTreeCopiedSkillLocations,
   detectPackagedAgentInstructionFiles,
   explicitFilesConfigDests,
   type SkillPackagingConfig,
 } from '@vibe-agent-toolkit/agent-skills';
 import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
+import {
+  calculateValidationStatus,
+  countBySeverity,
+  type SeverityCounts,
+  type ValidationIssue,
+} from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 

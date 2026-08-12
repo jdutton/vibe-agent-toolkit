@@ -8,12 +8,6 @@ import { existsSync as fsExistsSync } from 'node:fs';
 import { basename } from 'node:path';
 
 import {
-  calculateValidationStatus,
-  countBySeverity,
-  type SeverityCounts,
-  type ValidationIssue,
-} from '@vibe-agent-toolkit/schema';
-import {
   crawlAndResolveRegistry,
   detectDeclaredButMissing,
   detectMarketplacePluginSourceMissing,
@@ -51,6 +45,12 @@ import {
   type Target,
 } from '@vibe-agent-toolkit/claude-marketplace';
 import { detectFormat } from '@vibe-agent-toolkit/discovery';
+import {
+  calculateValidationStatus,
+  countBySeverity,
+  type SeverityCounts,
+  type ValidationIssue,
+} from '@vibe-agent-toolkit/schema';
 import {
   findProjectRoot,
   gitFindRoot,

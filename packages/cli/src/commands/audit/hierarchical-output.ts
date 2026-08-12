@@ -1,11 +1,11 @@
 import * as os from 'node:os';
 
+import type { ValidationResult } from '@vibe-agent-toolkit/agent-skills';
 import {
   calculateValidationStatus,
   countBySeverity,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import type { ValidationResult } from '@vibe-agent-toolkit/agent-skills';
 import { issueLocation, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 export interface HierarchicalOutput {

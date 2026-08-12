@@ -1,8 +1,8 @@
 import * as fs from 'node:fs';
 import { basename, dirname } from 'node:path';
 
-import { calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { isLocalFileLink, parseFileCached, resolveLocalHref, type LinkType } from '@vibe-agent-toolkit/resources';
+import { calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { findProjectRoot, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
 

@@ -12,8 +12,8 @@ import { existsSync, statSync } from 'node:fs';
 import { copyFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import type { SkillFileEntry } from '@vibe-agent-toolkit/resources';
+import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import {
   fileContentHash,
   globMagicRemainder,

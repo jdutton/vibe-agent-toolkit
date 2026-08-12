@@ -20,15 +20,6 @@ import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
 import {
-  allowUnusedIssues,
-  createAllowUsageLedger,
-  runValidationFramework,
-  type AllowUsageLedger,
-  type FrameworkResult,
-  type ValidationConfig,
-  type ValidationIssue,
-} from '@vibe-agent-toolkit/schema';
-import {
   DeferredArtifacts,
   DuplicateResourceIdError,
   ResourceRegistry,
@@ -45,6 +36,15 @@ import {
   type ResourceMetadata,
   parseFileCached,
 } from '@vibe-agent-toolkit/resources';
+import {
+  allowUnusedIssues,
+  createAllowUsageLedger,
+  runValidationFramework,
+  type AllowUsageLedger,
+  type FrameworkResult,
+  type ValidationConfig,
+  type ValidationIssue,
+} from '@vibe-agent-toolkit/schema';
 import {
   findProjectRoot,
   isGlob,

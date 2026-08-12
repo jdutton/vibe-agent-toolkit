@@ -13,7 +13,6 @@
  * options).
  */
 
-import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import {
   type Observation,
   type PackagingValidationResult,
@@ -24,6 +23,7 @@ import {
   type Target,
   type Verdict,
 } from '@vibe-agent-toolkit/claude-marketplace';
+import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { issueLocation } from '@vibe-agent-toolkit/utils';
 
 /**

@@ -8,7 +8,6 @@ import { existsSync, statSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
 
-import type { SeverityCounts } from '@vibe-agent-toolkit/schema';
 import {
   packageSkill,
   validateSkill,
@@ -18,6 +17,7 @@ import {
   type ValidationResult,
 } from '@vibe-agent-toolkit/agent-skills';
 import { parseFileCached, type ParseResult } from '@vibe-agent-toolkit/resources';
+import type { SeverityCounts } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 import * as yaml from 'yaml';

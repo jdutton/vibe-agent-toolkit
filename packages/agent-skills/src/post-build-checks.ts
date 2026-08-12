@@ -9,8 +9,8 @@ import { existsSync, readdirSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { parseFileCached } from '@vibe-agent-toolkit/resources';
+import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { normalizeRelPath } from './files-config.js';
