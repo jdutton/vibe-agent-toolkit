@@ -457,3 +457,4 @@ When using `--user` flag:
 - [CLI Architecture](./cli.md) — command structure, output conventions, why the CLI layer stays "dumb," and CLI-specific testing patterns.
 - [Resource Scanning and Object Caching](./resource-scanning-and-caching.md) — how VAT discovers and reads resource bytes: the git-tracked vs. non-git scanning taxonomy, the two-lane cost model, symlink handling, and the object-level content cache.
 - [Resource Projection](./resource-projection.md) — the shipped parse-cache output shape, the proposed blob-keyed and path-dependent schema targeted for stage 3, tree-shape caching, and the parse cache's threat model.
+- [Zones](./zones.md) — the proposed lens model the projection is read through: storage vs. viewer zones, visibility as extent, per-zone reference resolution, resource identity and realizations, and the contributor seam that lets higher packages contribute facts `resources` must not interpret.

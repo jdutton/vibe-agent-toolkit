@@ -221,12 +221,41 @@ cache, not a replacement for either layer.
 - ✅ **Shipped** (stage 3, schema only): the ten projection table shapes as versioned Zod schemas
   with generated JSON Schema (`PROJECTION_SCHEMA_VERSION`).
 - 🔷 **Proposed** (stage 3 continuation and beyond): population of those tables from `ParseFacts`/
-  `ResourceRegistry` at runtime; the zone-modeling work `resource_realizations`/`resource_zones`/
-  zone-sourced `resource_tags` need; the git-lane and non-git-lane change-detection manifests from
+  `ResourceRegistry` at runtime; the git-lane and non-git-lane change-detection manifests from
   the scanning doc; the blob-SHA memo.
+
+> ⚠️ **Several table shapes above are superseded — see [Zones](./zones.md).** Zone modelling was
+> originally deferred past population; it has been moved to the front, because the capabilities that
+> justify the projection are all *cross-zone* questions. The shapes documented above remain an
+> accurate description of what is in `packages/resources/src/schemas/` today; they are not the target.
+>
+> Revisions that follow, each forced by a concrete case rather than by taste:
+>
+> - **`resources` becomes an entity table** keyed by an opaque identity — `hash(rootId,
+>   canonicalPath at first observation)`. Zero realizations is legal, so a plugin known only from a
+>   marketplace manifest is a resource.
+> - **Twelve columns move to `resource_realizations`** — `contentKey`, `mtime`, `exists`,
+>   `isDirectory`, `gitignored`, `isSymlink`, `symlinkResolves`, `dir`, `depth`, `ext`, `pathLower`,
+>   `basenameLower`. All are properties of a path in a zone. `contentKey` forces it: the packager
+>   rewrites content into bundles, so a resource's source and dist realizations have different bytes.
+> - **`(extentId, path)` is unique**, with collisions emitted as condition rows — two source paths can
+>   flatten to one dist slug, and that diagnostic currently survives only inside a `catch`.
+> - **`blob_links` becomes `blob_references`**, recording syntactic shape and lexical features rather
+>   than classified link types. Classification needs the corpus, and the parse cache is
+>   content-addressed across corpora.
+> - **`edges` splits into `edges` + `edge_resolutions`** with a candidate ordinal and a score. A scalar
+>   target cannot express ambiguous resolution or scored inference, and collapsing candidates to one
+>   winner is the last-write-wins behaviour per-zone resolution exists to remove.
+> - **`edges` gains `origin`** (`authored` / `implicit` / `inferred`) and a nullable reference ordinal,
+>   because implicit edges have no blob row; `kind` opens.
+> - **`ZoneKindSchema` and `resource_tags.source` open**; `role` moves to the zone entity and loses its
+>   `tree` gating. `collection` is **retained** as a zone kind — a collection's `frontmatterSchema`
+>   determines which frontmatter values are references at all, which is the interpretation facet.
 
 ## Related
 
+- [Zones](./zones.md) — the lens model these tables are read through: storage vs. viewer zones,
+  per-zone resolution, resource identity and realizations, and the contributor seam.
 - [Resource Scanning and Object Caching](./resource-scanning-and-caching.md) — the input side: how
   bytes are discovered and read, and the object-level cache this document's tables are built from.
 - The design journey behind this document — rejected approaches, falsified claims, and the
