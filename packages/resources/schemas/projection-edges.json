@@ -9,60 +9,53 @@
           "minLength": 1,
           "description": "Source resource id"
         },
-        "linkOrdinal": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Matches blob_links.ordinal for the src blob"
+        "refOrdinal": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Matches blob_references.ordinal for the src blob. Null for an implicit edge, which has no authored reference."
         },
-        "zoneId": {
+        "contextId": {
           "type": "string",
           "minLength": 1,
-          "description": "Which zone this resolution applies to"
-        },
-        "dstResource": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "description": "Resolved target resource id, or null when unresolved/external"
-        },
-        "dstAnchor": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "description": "Fragment target, or null"
+          "description": "Foreign key to resolution_contexts.contextId — resolution is per-context"
         },
         "kind": {
           "type": "string",
+          "minLength": 1,
+          "description": "Edge kind — open vocabulary, e.g. \"local_file\", \"external\", \"ancestor-context\", \"rules-glob-match\""
+        },
+        "origin": {
+          "type": "string",
           "enum": [
-            "local_file",
-            "local_directory",
-            "anchor",
-            "external",
-            "email",
-            "embedded",
-            "unknown"
+            "authored",
+            "implicit",
+            "inferred"
           ],
-          "description": "Type of link found in markdown resources"
+          "description": "Whether this edge was authored, implied by the reader's rules, or inferred by a scoring lens"
         },
         "resolution": {
           "type": "string",
           "minLength": 1,
-          "description": "Resolution state — open vocabulary, e.g. \"resolved\", \"unresolved\", \"excluded\""
+          "description": "Resolution tier — open vocabulary, e.g. \"resolved\", \"same-marketplace\", \"auth-required\", \"nonexistent\""
         }
       },
       "required": [
         "src",
-        "linkOrdinal",
-        "zoneId",
-        "dstResource",
-        "dstAnchor",
+        "refOrdinal",
+        "contextId",
         "kind",
+        "origin",
         "resolution"
       ],
       "additionalProperties": false,
-      "description": "A row of the path-dependent `edges` table"
+      "description": "A row of the path-dependent `edges` table. Note: the implicit/refOrdinal correspondence is enforced by the Zod schema but not encoded in the generated JSON Schema."
     }
   },
   "$schema": "http://json-schema.org/draft-07/schema#"

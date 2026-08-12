@@ -17,18 +17,27 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 
 import {
   BlobConditionRowSchema,
-  BlobLinkRowSchema,
+  BlobReferenceRowSchema,
   BlobRowSchema,
   BlobSectionRowSchema,
 } from '../../resources/src/schemas/projection-blobs.js';
 import {
+  EdgeResolutionRowSchema,
   EdgeRowSchema,
+} from '../../resources/src/schemas/projection-edges.js';
+import {
+  RealizationConditionRowSchema,
+  ResourceExtentRowSchema,
   ResourceRealizationRowSchema,
   ResourceRowSchema,
   ResourceTagRowSchema,
-  ResourceZoneRowSchema,
   RootRowSchema,
 } from '../../resources/src/schemas/projection-resources.js';
+import {
+  LensEntryPointRowSchema,
+  ResolutionContextRowSchema,
+  ZoneProvenanceRowSchema,
+} from '../../resources/src/schemas/projection-zones.js';
 
 import { createJsonSchemaWriter } from './json-schema-writer.js';
 
@@ -41,14 +50,19 @@ const writeJsonSchema = createJsonSchemaWriter(SCHEMAS_DIR);
 console.log('🔨 Generating projection JSON Schemas from Zod...\n');
 
 writeJsonSchema('projection-blobs', BlobRowSchema);
-writeJsonSchema('projection-blob-links', BlobLinkRowSchema);
+writeJsonSchema('projection-blob-references', BlobReferenceRowSchema);
 writeJsonSchema('projection-blob-sections', BlobSectionRowSchema);
 writeJsonSchema('projection-blob-conditions', BlobConditionRowSchema);
 writeJsonSchema('projection-roots', RootRowSchema);
 writeJsonSchema('projection-resources', ResourceRowSchema);
 writeJsonSchema('projection-resource-realizations', ResourceRealizationRowSchema);
-writeJsonSchema('projection-resource-zones', ResourceZoneRowSchema);
+writeJsonSchema('projection-resource-extents', ResourceExtentRowSchema);
 writeJsonSchema('projection-resource-tags', ResourceTagRowSchema);
+writeJsonSchema('projection-realization-conditions', RealizationConditionRowSchema);
+writeJsonSchema('projection-resolution-contexts', ResolutionContextRowSchema);
+writeJsonSchema('projection-lens-entry-points', LensEntryPointRowSchema);
+writeJsonSchema('projection-zone-provenance', ZoneProvenanceRowSchema);
 writeJsonSchema('projection-edges', EdgeRowSchema);
+writeJsonSchema('projection-edge-resolutions', EdgeResolutionRowSchema);
 
 console.log('\n✨ Projection JSON Schema generation complete!');

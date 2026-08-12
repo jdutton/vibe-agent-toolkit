@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   BlobConditionRowSchema,
-  BlobLinkRowSchema,
+  BlobReferenceRowSchema,
   BlobRowSchema,
   BlobSectionRowSchema,
 } from '../src/schemas/projection-blobs.js';
@@ -56,50 +56,75 @@ describe('BlobRowSchema', () => {
   });
 });
 
-describe('BlobLinkRowSchema', () => {
-  it('accepts a link inside a fence, tagged rather than dropped', () => {
-    const row = {
-      blob: VALID_KEY,
-      ordinal: 0,
-      rawHref: './other.md',
-      text: 'other',
-      line: 12,
-      column: 3,
-      nodeType: 'link',
-      inCodeSpan: false,
-      inFence: true,
-    };
-    expect(BlobLinkRowSchema.safeParse(row).success).toBe(true);
+describe('BlobReferenceRowSchema', () => {
+  const markdownLink = {
+    blob: VALID_KEY,
+    ordinal: 0,
+    rawRef: './other.md',
+    text: 'Other',
+    line: 12,
+    column: null,
+    syntacticForm: 'markdown-link',
+    hasExtension: true,
+    leadingAt: false,
+    slashCount: 1,
+    variableExpansion: null,
+    inCodeSpan: false,
+    inFence: false,
+  };
+
+  it('accepts a markdown link with no column (AST-derived)', () => {
+    expect(BlobReferenceRowSchema.safeParse(markdownLink).success).toBe(true);
   });
 
-  it('accepts a bare autolink with null text', () => {
+  it('accepts an @-prefixed token with a column (lexer-derived)', () => {
     const row = {
-      blob: VALID_KEY,
+      ...markdownLink,
       ordinal: 1,
-      rawHref: 'https://example.com',
+      rawRef: '@README.md',
       text: null,
-      line: 1,
-      column: null,
-      nodeType: 'link',
-      inCodeSpan: false,
-      inFence: false,
+      column: 1,
+      syntacticForm: 'at-prefixed',
+      leadingAt: true,
+      slashCount: 0,
     };
-    expect(BlobLinkRowSchema.safeParse(row).success).toBe(true);
+    expect(BlobReferenceRowSchema.safeParse(row).success).toBe(true);
   });
 
-  it('rejects an invalid nodeType', () => {
+  it('accepts an @-prefixed token inside a fence — the fact the lens needs to NOT treat it as an import', () => {
+    const row = { ...markdownLink, rawRef: '@docs/x.md', syntacticForm: 'at-prefixed', leadingAt: true, inFence: true };
+    expect(BlobReferenceRowSchema.safeParse(row).success).toBe(true);
+  });
+
+  it('accepts each variable-expansion syntax', () => {
+    for (const syntax of ['brace', 'bare', 'percent', 'powershell']) {
+      const row = { ...markdownLink, syntacticForm: 'env-anchored', variableExpansion: syntax };
+      expect(BlobReferenceRowSchema.safeParse(row).success).toBe(true);
+    }
+  });
+
+  it('accepts a bare path-shaped token', () => {
     const row = {
-      blob: VALID_KEY,
-      ordinal: 0,
-      rawHref: './x.md',
-      text: 'x',
-      line: 1,
-      column: null,
-      nodeType: 'bogus',
-      inCodeSpan: false,
-      inFence: false,
+      ...markdownLink,
+      rawRef: 'packages/utils/src/index.ts',
+      text: null,
+      column: 34,
+      syntacticForm: 'bare-token',
+      slashCount: 3,
     };
-    expect(BlobLinkRowSchema.safeParse(row).success).toBe(false);
+    expect(BlobReferenceRowSchema.safeParse(row).success).toBe(true);
+  });
+
+  it('rejects a syntactic form outside the six', () => {
+    expect(BlobReferenceRowSchema.safeParse({ ...markdownLink, syntacticForm: 'wikilink' }).success).toBe(false);
+  });
+
+  it('rejects a nodeType column — syntacticForm subsumes it', () => {
+    expect(BlobReferenceRowSchema.safeParse({ ...markdownLink, nodeType: 'link' }).success).toBe(false);
+  });
+
+  it('rejects a resolved target — resolution is a lens question, never a blob fact', () => {
+    expect(BlobReferenceRowSchema.safeParse({ ...markdownLink, dstResource: 'r-other' }).success).toBe(false);
   });
 });
 

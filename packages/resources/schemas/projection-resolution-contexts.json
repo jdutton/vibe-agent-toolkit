@@ -1,0 +1,73 @@
+{
+  "$ref": "#/definitions/projection-resolution-contexts",
+  "definitions": {
+    "projection-resolution-contexts": {
+      "type": "object",
+      "properties": {
+        "contextId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable identifier for this context, unique within a federated query"
+        },
+        "species": {
+          "type": "string",
+          "enum": [
+            "extent",
+            "lens"
+          ],
+          "description": "Whether this context defines what exists (extent) or how a reader reads it (lens)"
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Zone kind — open vocabulary, e.g. \"git\", \"tree\", \"skill\", \"claude-context\""
+        },
+        "rootId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Foreign key to roots.id — the corpus root this context is scoped to"
+        },
+        "extentContextId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "For a lens, the contextId of the extent it reads over. Null for an extent, which is its own base."
+        },
+        "role": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "source",
+                "dist",
+                "vendored"
+              ],
+              "description": "Role of a tree extent"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Null unless kind is \"tree\""
+        }
+      },
+      "required": [
+        "contextId",
+        "species",
+        "kind",
+        "rootId",
+        "extentContextId",
+        "role"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the path-dependent `resolution_contexts` table. Note: the species/extentContextId correspondence and the tree/role gate are enforced by the Zod schema but not encoded in the generated JSON Schema."
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

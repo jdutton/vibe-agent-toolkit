@@ -1,0 +1,42 @@
+{
+  "$ref": "#/definitions/projection-lens-entry-points",
+  "definitions": {
+    "projection-lens-entry-points": {
+      "type": "object",
+      "properties": {
+        "entryPointId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable identifier for this entry point"
+        },
+        "contextId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Foreign key to resolution_contexts.contextId, species \"lens\""
+        },
+        "parameter": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The entry parameter — a root-relative directory for claude-context"
+        },
+        "ancestry": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Resource ids this entry point inherits, nearest ancestor first. May be empty."
+        }
+      },
+      "required": [
+        "entryPointId",
+        "contextId",
+        "parameter",
+        "ancestry"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the path-dependent `lens_entry_points` table"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

@@ -5,7 +5,12 @@ import { CONTENT_KEY_PATTERN } from '../content-key.js';
 /**
  * Contract version for VAT's queryable resource projection (the blob-keyed
  * and path-dependent tables documented in
- * `docs/architecture/resource-projection.md`).
+ * `docs/architecture/resource-projection.md`, read through the zone model in
+ * `docs/architecture/zones.md`).
+ *
+ * Version 2 is the zones revision: identity split from realization, zones
+ * factored into resolution contexts and entry points, edges split from their
+ * candidate resolutions, four vocabularies opened.
  *
  * Bump whenever a table gains, loses, or renames a column, or a column's
  * type narrows — the "late column-level change" the architecture doc names
@@ -13,7 +18,7 @@ import { CONTENT_KEY_PATTERN } from '../content-key.js';
  * new `resource_tags.tag` value, a new `blob_conditions.code`) is NOT a
  * version bump — see the doc's "facts are rows, not columns" rule.
  */
-export const PROJECTION_SCHEMA_VERSION = 1;
+export const PROJECTION_SCHEMA_VERSION = 2;
 
 /**
  * Any value YAML's core schema (and therefore JSON) can represent. Recursive
@@ -47,3 +52,19 @@ export const JsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
  */
 export const ContentKeySchema = z.string().regex(CONTENT_KEY_PATTERN)
   .describe('A parser-kind-qualified content key: "<markdown|html>.<sha256>"');
+
+/**
+ * Severity for a projection condition row — `blob_conditions` (parse-time)
+ * and `realization_conditions` (population-time) share it.
+ *
+ * A fresh, local definition, not a reuse of `schema`'s `SeverityLevelSchema`
+ * (`'error' | 'warning' | 'info' | 'ignore'`): that schema's fourth member,
+ * `'ignore'`, is a config-resolution state and doesn't apply to something
+ * that already happened. A parse that already produced an oddity, or a
+ * contributor that already refused to write a colliding realization, cannot
+ * retroactively be "ignored" the way a resolved config value can.
+ */
+export const ProjectionConditionSeveritySchema = z.enum(['error', 'warning', 'info'])
+  .describe('Severity of a projection condition row');
+
+export type ProjectionConditionSeverity = z.infer<typeof ProjectionConditionSeveritySchema>;

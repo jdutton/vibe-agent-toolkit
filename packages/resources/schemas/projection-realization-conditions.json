@@ -1,0 +1,60 @@
+{
+  "$ref": "#/definitions/projection-realization-conditions",
+  "definitions": {
+    "projection-realization-conditions": {
+      "type": "object",
+      "properties": {
+        "extentId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Foreign key to resolution_contexts.contextId, species \"extent\""
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Root-relative path the condition is about"
+        },
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "description": "An enum member, e.g. \"REALIZATION_PATH_COLLISION\" — open vocabulary"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "error",
+            "warning",
+            "info"
+          ],
+          "description": "Severity of a projection condition row"
+        },
+        "message": {
+          "type": "string"
+        },
+        "resourceId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The identity this condition concerns, or null"
+        }
+      },
+      "required": [
+        "extentId",
+        "path",
+        "code",
+        "severity",
+        "message",
+        "resourceId"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the path-dependent `realization_conditions` table"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

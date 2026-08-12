@@ -1,15 +1,17 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  EdgeRowSchema,
+  RealizationConditionRowSchema,
+  ResourceExtentRowSchema,
   ResourceRealizationRowSchema,
   ResourceRowSchema,
   ResourceTagRowSchema,
-  ResourceZoneRowSchema,
   RootRowSchema,
 } from '../src/schemas/projection-resources.js';
 
 const VALID_KEY = 'markdown.' + '0'.repeat(64);
+const GUIDE_PATH = 'docs/guide.md';
+const SOURCE_EXTENT = 'tree:source';
 
 describe('RootRowSchema', () => {
   it('accepts a valid root', () => {
@@ -23,19 +25,53 @@ describe('RootRowSchema', () => {
 
 describe('ResourceRowSchema', () => {
   const base = {
-    rootId: 'primary',
-    path: 'docs/guide.md',
-    pathLower: 'docs/guide.md',
-    basenameLower: 'guide.md',
-    contentKey: VALID_KEY,
-    dir: 'docs',
-    depth: 1,
-    ext: '.md',
-    mtime: new Date('2026-01-01T00:00:00Z'),
-    vatId: 'guide',
+    resourceId: 'r-8f3a',
+    kind: 'file',
     origin: 'git-tracked',
     observed: true,
     fromEnumeration: true,
+    vatId: 'guide',
+  };
+
+  it('accepts an observed file identity', () => {
+    expect(ResourceRowSchema.safeParse(base).success).toBe(true);
+  });
+
+  it('accepts an entity with no local path at all — a marketplace-declared, uninstalled plugin', () => {
+    const row = { ...base, kind: 'plugin', observed: false, fromEnumeration: false, vatId: null };
+    expect(ResourceRowSchema.safeParse(row).success).toBe(true);
+  });
+
+  it('accepts a kind VAT has no enum member for', () => {
+    expect(ResourceRowSchema.safeParse({ ...base, kind: 'sharepoint-document' }).success).toBe(true);
+  });
+
+  it('rejects a path column — paths belong to realizations, never to an identity', () => {
+    expect(ResourceRowSchema.safeParse({ ...base, path: GUIDE_PATH }).success).toBe(false);
+  });
+
+  it('rejects a contentKey column — the packager rewrites content, so two realizations of one identity have two content keys', () => {
+    const row = { ...base, contentKey: 'markdown.' + '0'.repeat(64) };
+    expect(ResourceRowSchema.safeParse(row).success).toBe(false);
+  });
+
+  it('rejects an empty resourceId', () => {
+    expect(ResourceRowSchema.safeParse({ ...base, resourceId: '' }).success).toBe(false);
+  });
+});
+
+describe('ResourceRealizationRowSchema', () => {
+  const base = {
+    resourceId: 'r-8f3a',
+    extentId: SOURCE_EXTENT,
+    path: GUIDE_PATH,
+    pathLower: GUIDE_PATH,
+    basenameLower: 'guide.md',
+    dir: 'docs',
+    depth: 1,
+    ext: '.md',
+    contentKey: VALID_KEY,
+    mtime: new Date('2026-01-01T00:00:00Z'),
     exists: true,
     isDirectory: false,
     gitignored: false,
@@ -43,23 +79,40 @@ describe('ResourceRowSchema', () => {
     symlinkResolves: null,
   };
 
-  it('accepts a normal tracked file', () => {
-    expect(ResourceRowSchema.safeParse(base).success).toBe(true);
+  it('accepts a source realization', () => {
+    expect(ResourceRealizationRowSchema.safeParse(base).success).toBe(true);
   });
 
-  it('accepts a declared-but-unwritten node with a null content key', () => {
-    const row = { ...base, contentKey: null, mtime: null, observed: false, exists: false };
-    expect(ResourceRowSchema.safeParse(row).success).toBe(true);
+  it('accepts a dist realization of the SAME identity with a DIFFERENT content key', () => {
+    const dist = {
+      ...base,
+      extentId: 'tree:dist',
+      path: 'dist/skills/x/docs-guide.md',
+      pathLower: 'dist/skills/x/docs-guide.md',
+      basenameLower: 'docs-guide.md',
+      dir: 'dist/skills/x',
+      depth: 3,
+      contentKey: 'markdown.' + '1'.repeat(64),
+    };
+    expect(ResourceRealizationRowSchema.safeParse(dist).success).toBe(true);
+    expect(dist.contentKey).not.toBe(base.contentKey);
+  });
+
+  it('accepts a declared-but-unwritten realization with a null content key', () => {
+    const row = { ...base, contentKey: null, mtime: null, exists: false };
+    expect(ResourceRealizationRowSchema.safeParse(row).success).toBe(true);
   });
 
   it('accepts a resolved symlink', () => {
-    const row = { ...base, isSymlink: true, symlinkResolves: true };
-    expect(ResourceRowSchema.safeParse(row).success).toBe(true);
+    expect(ResourceRealizationRowSchema.safeParse({ ...base, isSymlink: true, symlinkResolves: true }).success).toBe(true);
+  });
+
+  it('rejects symlinkResolves set on a non-symlink', () => {
+    expect(ResourceRealizationRowSchema.safeParse({ ...base, symlinkResolves: true }).success).toBe(false);
   });
 
   it('coerces an ISO date string for mtime (as published by the generated JSON Schema)', () => {
-    const row = { ...base, mtime: '2026-01-01T00:00:00.000Z' };
-    const result = ResourceRowSchema.safeParse(row);
+    const result = ResourceRealizationRowSchema.safeParse({ ...base, mtime: '2026-01-01T00:00:00.000Z' });
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.mtime).toBeInstanceOf(Date);
@@ -67,39 +120,49 @@ describe('ResourceRowSchema', () => {
     }
   });
 
-  it('rejects symlinkResolves set on a non-symlink', () => {
-    const row = { ...base, isSymlink: false, symlinkResolves: true };
-    expect(ResourceRowSchema.safeParse(row).success).toBe(false);
-  });
-
-  it('rejects a row with no rootId', () => {
+  it('rejects a row with no extentId — a path is meaningless without the zone it lives in', () => {
     // eslint-disable-next-line sonarjs/no-unused-vars
-    const { rootId: _rootId, ...withoutRoot } = base;
-    expect(ResourceRowSchema.safeParse(withoutRoot).success).toBe(false);
+    const { extentId: _extentId, ...withoutExtent } = base;
+    expect(ResourceRealizationRowSchema.safeParse(withoutExtent).success).toBe(false);
   });
 });
 
-describe('ResourceRealizationRowSchema', () => {
-  it('accepts a realization row', () => {
-    const row = { resourceId: 'skill-x', zoneId: 'skill-x', path: 'dist/skills/x/SKILL.md' };
-    expect(ResourceRealizationRowSchema.safeParse(row).success).toBe(true);
+describe('ResourceExtentRowSchema', () => {
+  it('accepts a membership row', () => {
+    expect(ResourceExtentRowSchema.safeParse({ resourceId: 'r1', extentId: 'git:primary' }).success).toBe(true);
+  });
+
+  it('rejects a zoneKind column — kind is a property of the zone entity, not of a membership', () => {
+    const row = { resourceId: 'r1', extentId: SOURCE_EXTENT, zoneKind: 'tree' };
+    expect(ResourceExtentRowSchema.safeParse(row).success).toBe(false);
+  });
+
+  it('rejects a role column — role moved to resolution_contexts', () => {
+    const row = { resourceId: 'r1', extentId: SOURCE_EXTENT, role: 'source' };
+    expect(ResourceExtentRowSchema.safeParse(row).success).toBe(false);
   });
 });
 
-describe('ResourceZoneRowSchema', () => {
-  it('accepts a tree zone with a role', () => {
-    const row = { resourceId: 'r1', zoneKind: 'tree', zoneId: 'root', role: 'source' };
-    expect(ResourceZoneRowSchema.safeParse(row).success).toBe(true);
+describe('RealizationConditionRowSchema', () => {
+  const collision = {
+    extentId: 'tree:dist',
+    path: 'skills/x/a-b-c-html',
+    code: 'REALIZATION_PATH_COLLISION',
+    severity: 'error',
+    message: 'a-b/c.html and a/b-c.html both flatten to a-b-c-html',
+    resourceId: 'r-second',
+  };
+
+  it('accepts a collision condition naming the identity that could not be realized', () => {
+    expect(RealizationConditionRowSchema.safeParse(collision).success).toBe(true);
   });
 
-  it('accepts a non-tree zone with a null role', () => {
-    const row = { resourceId: 'r1', zoneKind: 'skill', zoneId: 'skill-x', role: null };
-    expect(ResourceZoneRowSchema.safeParse(row).success).toBe(true);
+  it('accepts a condition with no identity attached', () => {
+    expect(RealizationConditionRowSchema.safeParse({ ...collision, resourceId: null }).success).toBe(true);
   });
 
-  it('rejects a role on a non-tree zone', () => {
-    const row = { resourceId: 'r1', zoneKind: 'skill', zoneId: 'skill-x', role: 'source' };
-    expect(ResourceZoneRowSchema.safeParse(row).success).toBe(false);
+  it('rejects "ignore" as a severity', () => {
+    expect(RealizationConditionRowSchema.safeParse({ ...collision, severity: 'ignore' }).success).toBe(false);
   });
 });
 
@@ -113,45 +176,14 @@ describe('ResourceTagRowSchema', () => {
     const row = { resourceId: 'r1', tag: 'archived', value: null, source: 'filename' };
     expect(ResourceTagRowSchema.safeParse(row).success).toBe(true);
   });
-});
 
-describe('EdgeRowSchema', () => {
-  it('accepts a resolved internal-file edge', () => {
-    const row = {
-      src: 'guide',
-      linkOrdinal: 0,
-      zoneId: 'root',
-      dstResource: 'other',
-      dstAnchor: null,
-      kind: 'local_file',
-      resolution: 'resolved',
-    };
-    expect(EdgeRowSchema.safeParse(row).success).toBe(true);
+  it('accepts a contributor id VAT ships no enum member for — source is open', () => {
+    const row = { resourceId: 'r1', tag: 'tenant', value: 'acme', source: 'adopter/sharepoint-classifier' };
+    expect(ResourceTagRowSchema.safeParse(row).success).toBe(true);
   });
 
-  it('accepts an unresolved edge with a null target', () => {
-    const row = {
-      src: 'guide',
-      linkOrdinal: 1,
-      zoneId: 'root',
-      dstResource: null,
-      dstAnchor: null,
-      kind: 'local_file',
-      resolution: 'unresolved',
-    };
-    expect(EdgeRowSchema.safeParse(row).success).toBe(true);
-  });
-
-  it('rejects an invalid kind', () => {
-    const row = {
-      src: 'guide',
-      linkOrdinal: 0,
-      zoneId: 'root',
-      dstResource: null,
-      dstAnchor: null,
-      kind: 'bogus',
-      resolution: 'unresolved',
-    };
-    expect(EdgeRowSchema.safeParse(row).success).toBe(false);
+  it('rejects an empty source', () => {
+    const row = { resourceId: 'r1', tag: 'kind', value: 'adr', source: '' };
+    expect(ResourceTagRowSchema.safeParse(row).success).toBe(false);
   });
 });

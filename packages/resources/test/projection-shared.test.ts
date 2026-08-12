@@ -1,11 +1,32 @@
 import { describe, expect, it } from 'vitest';
 
-import { ContentKeySchema, JsonValueSchema, PROJECTION_SCHEMA_VERSION } from '../src/schemas/projection-shared.js';
+import {
+  ContentKeySchema,
+  JsonValueSchema,
+  PROJECTION_SCHEMA_VERSION,
+  ProjectionConditionSeveritySchema,
+} from '../src/schemas/projection-shared.js';
 
 describe('PROJECTION_SCHEMA_VERSION', () => {
   it('is a positive integer', () => {
     expect(Number.isInteger(PROJECTION_SCHEMA_VERSION)).toBe(true);
     expect(PROJECTION_SCHEMA_VERSION).toBeGreaterThan(0);
+  });
+
+  it('is 2 — the zones revision', () => {
+    expect(PROJECTION_SCHEMA_VERSION).toBe(2);
+  });
+});
+
+describe('ProjectionConditionSeveritySchema', () => {
+  it('accepts the three parse/population-time severities', () => {
+    for (const severity of ['error', 'warning', 'info']) {
+      expect(ProjectionConditionSeveritySchema.safeParse(severity).success).toBe(true);
+    }
+  });
+
+  it('rejects "ignore" — a config-resolution state, not a condition severity', () => {
+    expect(ProjectionConditionSeveritySchema.safeParse('ignore').success).toBe(false);
   });
 });
 

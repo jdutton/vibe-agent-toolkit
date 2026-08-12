@@ -20,7 +20,8 @@
             "error",
             "warning",
             "info"
-          ]
+          ],
+          "description": "Severity of a projection condition row"
         },
         "message": {
           "type": "string"

@@ -21,13 +21,8 @@
         },
         "source": {
           "type": "string",
-          "enum": [
-            "filename",
-            "config",
-            "frontmatter",
-            "zone",
-            "harness-convention"
-          ]
+          "minLength": 1,
+          "description": "Contributor id that produced this tag — open vocabulary, e.g. \"filename\", \"config\", \"frontmatter\""
         }
       },
       "required": [

@@ -1,7 +1,6 @@
 import { z } from 'zod';
 
-import { ContentKeySchema, JsonValueSchema } from './projection-shared.js';
-import { LinkNodeTypeSchema } from './resource-metadata.js';
+import { ContentKeySchema, JsonValueSchema, ProjectionConditionSeveritySchema } from './projection-shared.js';
 
 const BLOB_FK_DESC = 'Foreign key to blobs.contentKey';
 
@@ -33,29 +32,115 @@ export const BlobRowSchema = z.object({
 export type BlobRow = z.infer<typeof BlobRowSchema>;
 
 /**
- * A row of the `blob_links` table — every link found in a blob, in document
- * order.
+ * The syntactic form of a reference candidate, as a **lexer** sees it —
+ * before any lens decides what it means.
  *
- * `inCodeSpan`/`inFence` are tracked as data rather than excluded at parse
- * time, deliberately: the kb-graph prototype's fence-handling defect (three
- * wrong numbers from a wikilink scanner that silently dropped links sitting
- * inside code spans) came from doing the exclusion in the scanner instead of
- * the schema. A row that carries the fact lets a query choose to exclude it;
- * a scanner that never emits the row cannot be second-guessed.
+ * The first three come from the markdown AST. The last three come from the
+ * raw-source lexer, because they are not markdown constructs at all:
+ *
+ * - `at-prefixed` — a whitespace-delimited token beginning `@`. This is where
+ *   the `@` collision lives and is *not* resolved here:
+ *   `@packages/foo/bar.md` is a Claude Code import and
+ *   `@vibe-agent-toolkit/utils` is an npm package specifier. Both are
+ *   `at-prefixed` at the blob layer; only a lens decides.
+ * - `env-anchored` — a token containing a variable expansion
+ *   (`${CLAUDE_PLUGIN_ROOT}/scripts/x.js`). Certain syntax,
+ *   lens-conditional resolution: the plugin extent can resolve it, the
+ *   standalone-skill extent cannot — which is exactly what the shipped
+ *   `NON_PORTABLE_ASSET_REFERENCE` code flags by hand today.
+ * - `bare-token` — a path-shaped token with no markup at all.
  */
-export const BlobLinkRowSchema = z.object({
-  blob: ContentKeySchema.describe(BLOB_FK_DESC),
-  ordinal: z.number().int().nonnegative().describe("0-based position among this blob's links"),
-  rawHref: z.string().describe('The href exactly as authored — unresolved'),
-  text: z.string().nullable().describe('Link text, or null for a bare autolink'),
-  line: z.number().int().positive(),
-  column: z.number().int().positive().nullable(),
-  nodeType: LinkNodeTypeSchema,
-  inCodeSpan: z.boolean().describe('True when the link sits inside an inline code span'),
-  inFence: z.boolean().describe('True when the link sits inside a fenced code block'),
-}).strict().describe('A row of the blob-keyed `blob_links` table');
+export const ReferenceSyntacticFormSchema = z.enum([
+  'markdown-link',
+  'markdown-link-reference',
+  'markdown-definition',
+  'at-prefixed',
+  'env-anchored',
+  'bare-token',
+]).describe('Syntactic form of a reference candidate, as a lexer sees it');
 
-export type BlobLinkRow = z.infer<typeof BlobLinkRowSchema>;
+export type ReferenceSyntacticForm = z.infer<typeof ReferenceSyntacticFormSchema>;
+
+/**
+ * Which variable-expansion syntax a token uses. Lexical, not semantic: the
+ * blob layer records that `${FOO}` is a brace expansion, never what `FOO`
+ * expands to — that is a binding environment, which is a lens's property.
+ *
+ * - `brace` — `${VAR}` (POSIX shell, and VAT's own asset references)
+ * - `bare` — `$VAR` (POSIX shell)
+ * - `percent` — `%VAR%` (cmd.exe)
+ * - `powershell` — `$env:VAR`
+ */
+export const VariableExpansionSyntaxSchema = z.enum(['brace', 'bare', 'percent', 'powershell'])
+  .describe('Variable-expansion syntax present in a reference token');
+
+export type VariableExpansionSyntax = z.infer<typeof VariableExpansionSyntaxSchema>;
+
+/**
+ * A row of the `blob_references` table — every reference **candidate** found
+ * in a blob.
+ *
+ * Renamed from `blob_links` because the name was a claim the data cannot
+ * make: a markdown link is certainly a link, and an `@`-prefixed token is
+ * not. What this table holds is candidates with their shape recorded.
+ *
+ * ## Only what a lexer can determine without leaving the file
+ *
+ * The parse cache is content-addressed, so **the same bytes share one entry
+ * across every corpus that contains them**. A cached fact like
+ * "`@vibe-agent-toolkit/utils` is an npm package" would be true in one
+ * repository and false in another and served confidently to both — the same
+ * defect class as a shared `ParseResult` letting one skill inherit another's
+ * id: *a cache entry carrying a fact that is not a function of its key*. The
+ * namespace directory protects against shape changes and offers nothing
+ * against this.
+ *
+ * So: position, syntactic form, lexical features, code context. Nothing
+ * else. `xxx/yyy` is simultaneously path-, package- and plugin/skill-shaped;
+ * only an extent can say which, and the answer may legitimately differ per
+ * lens. Even *"is this an import"* is path-dependent, because an `@` token
+ * means import only in a file named `CLAUDE.md`, `CLAUDE.local.md`, or under
+ * `.claude/rules/` — and a filename is not a blob fact.
+ *
+ * ## `inCodeSpan` / `inFence` are load-bearing
+ *
+ * Anthropic documents that import parsing **skips code spans and fenced
+ * blocks** (with a documented backtick workaround). So these two columns
+ * decide whether an `@` token is an import *at all*. They are tracked as data
+ * rather than excluded at lex time, deliberately: the kb-graph prototype's
+ * fence-handling defect — three wrong numbers from a wikilink scanner that
+ * silently dropped links inside code spans — came from doing the exclusion in
+ * the scanner instead of the schema. A row that carries the fact lets a query
+ * choose to exclude it; a scanner that never emits the row cannot be
+ * second-guessed.
+ *
+ * ## Ordinal ordering
+ *
+ * Markdown-derived references come first, in the existing kind-order contract
+ * the parse-fact goldens pin (all `link`s, then all `linkReference`s, then
+ * all `definition`s), followed by lexer-derived references in document order.
+ * Appending rather than interleaving is what keeps the shipped golden
+ * ordinals valid.
+ */
+export const BlobReferenceRowSchema = z.object({
+  blob: ContentKeySchema.describe(BLOB_FK_DESC),
+  ordinal: z.number().int().nonnegative().describe("0-based position among this blob's references"),
+  rawRef: z.string().describe('The reference exactly as authored — unresolved'),
+  text: z.string().nullable().describe('Link text for a markdown form, or null for a bare autolink or any lexer-derived form'),
+  line: z.number().int().positive(),
+  column: z.number().int().positive().nullable()
+    .describe('1-based column. Null for a markdown form derived from an AST node that carries no column.'),
+  syntacticForm: ReferenceSyntacticFormSchema,
+  hasExtension: z.boolean().describe('The token ends in a dot followed by a short alphanumeric run'),
+  leadingAt: z.boolean().describe('The token begins with "@"'),
+  slashCount: z.number().int().nonnegative().describe('Number of "/" characters in the token'),
+  variableExpansion: VariableExpansionSyntaxSchema.nullable()
+    .describe('Which expansion syntax the token uses, or null when it contains none'),
+  inCodeSpan: z.boolean().describe('True when the reference sits inside an inline code span'),
+  inFence: z.boolean().describe('True when the reference sits inside a fenced code block'),
+}).strict().describe('A row of the blob-keyed `blob_references` table');
+
+export type BlobReferenceRow = z.infer<typeof BlobReferenceRowSchema>;
 
 /**
  * A row of the `blob_sections` table — one row per heading, forming a flat
@@ -87,17 +172,6 @@ export const BlobSectionRowSchema = z.object({
 export type BlobSectionRow = z.infer<typeof BlobSectionRowSchema>;
 
 /**
- * Severity for a `blob_conditions` row. A fresh, local definition, not a
- * reuse of `schema`'s `SeverityLevelSchema` (`'error' | 'warning' |
- * 'info' | 'ignore'`): that schema's fourth member, `'ignore'`, is a
- * config-resolution state and doesn't apply to a parse-time condition —
- * something that already happened during parsing can't retroactively be
- * "ignored" the way a resolved config value can. Hence the narrower,
- * purpose-built enum here.
- */
-export const BlobConditionSeveritySchema = z.enum(['error', 'warning', 'info']);
-
-/**
  * A row of the `blob_conditions` table — parse-time oddities.
  *
  * `code = 'PARSE_ODDITY'` is the documented escape hatch
@@ -111,7 +185,7 @@ export const BlobConditionSeveritySchema = z.enum(['error', 'warning', 'info']);
 export const BlobConditionRowSchema = z.object({
   blob: ContentKeySchema.describe(BLOB_FK_DESC),
   code: z.string().min(1).describe('An enum member, or "PARSE_ODDITY" for an unclassified oddity'),
-  severity: BlobConditionSeveritySchema,
+  severity: ProjectionConditionSeveritySchema,
   message: z.string(),
   line: z.number().int().positive().nullable(),
 }).strict().describe('A row of the blob-keyed `blob_conditions` table');

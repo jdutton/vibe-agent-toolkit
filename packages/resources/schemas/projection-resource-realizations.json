@@ -7,26 +7,103 @@
         "resourceId": {
           "type": "string",
           "minLength": 1,
-          "description": "The shared identity across realizations"
+          "description": "Foreign key to resources.resourceId — the shared identity"
         },
-        "zoneId": {
+        "extentId": {
           "type": "string",
           "minLength": 1,
-          "description": "Foreign key to resource_zones.zoneId"
+          "description": "Foreign key to resolution_contexts.contextId, species \"extent\""
         },
         "path": {
           "type": "string",
           "minLength": 1,
-          "description": "Root-relative path this realization lives at"
+          "description": "Root-relative path, forward-slash separated"
+        },
+        "pathLower": {
+          "type": "string",
+          "description": "path, lowercased — case-insensitive matching as a column, not a function call"
+        },
+        "basenameLower": {
+          "type": "string",
+          "description": "The final path segment, lowercased"
+        },
+        "dir": {
+          "type": "string",
+          "description": "Root-relative directory containing this path"
+        },
+        "depth": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Path segment count below the root"
+        },
+        "ext": {
+          "type": "string",
+          "description": "Lowercased extension including the leading dot, or \"\" when none"
+        },
+        "contentKey": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(?:markdown|html)\\.[0-9a-f]{64}$",
+              "description": "A parser-kind-qualified content key: \"<markdown|html>.<sha256>\""
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Foreign key to blobs.contentKey for THIS realization's bytes, or null for a declared-but-unwritten node"
+        },
+        "mtime": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Last modification time, or null when this path has never been observed on disk"
+        },
+        "exists": {
+          "type": "boolean"
+        },
+        "isDirectory": {
+          "type": "boolean"
+        },
+        "gitignored": {
+          "type": "boolean"
+        },
+        "isSymlink": {
+          "type": "boolean"
+        },
+        "symlinkResolves": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Null when isSymlink is false"
         }
       },
       "required": [
         "resourceId",
-        "zoneId",
-        "path"
+        "extentId",
+        "path",
+        "pathLower",
+        "basenameLower",
+        "dir",
+        "depth",
+        "ext",
+        "contentKey",
+        "mtime",
+        "exists",
+        "isDirectory",
+        "gitignored",
+        "isSymlink",
+        "symlinkResolves"
       ],
       "additionalProperties": false,
-      "description": "A row of the path-dependent `resource_realizations` table"
+      "description": "A row of the path-dependent `resource_realizations` table. Note: symlinkResolves must be null when isSymlink is false; this constraint is enforced by the Zod schema but not encoded in the generated JSON Schema."
     }
   },
   "$schema": "http://json-schema.org/draft-07/schema#"
