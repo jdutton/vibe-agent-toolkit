@@ -6,16 +6,19 @@
  * counts for unit tests.
  */
 
+import type { RealpathTable } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { DeferredArtifacts } from '../src/deferred-artifacts.js';
 import {
   checkAnchor,
+  escapeNonAscii,
   fileExistenceIssue,
   fragmentIndex,
   gitIgnoreSafetyIssue,
+  normalizationMismatchIssue,
   resolutionFailureIssue,
-  type ValidateLinkOptions,
+  type GitIgnoreCheckOptions,
 } from '../src/link-validator.js';
 import type { ResourceLink } from '../src/types.js';
 
@@ -27,22 +30,39 @@ const PROJECT_ROOT = '/project';
 const SOURCE = `${PROJECT_ROOT}/docs/page.md`;
 const TARGET_FOO = `${PROJECT_ROOT}/foo.md`;
 const TARGET_SECRET = `${PROJECT_ROOT}/secret.md`;
+const TARGET_OUTSIDE = '/elsewhere/other.md';
 const LINK_FOO = 'foo.md';
 const LINK_ABSOLUTE_NO_ROOT = '/foo.md';
 
-function makeGitTrackerOptions(
-  tracker: { isIgnoredByActiveSet: (p: string) => boolean },
-  overrides: Partial<ValidateLinkOptions> = {},
-): ValidateLinkOptions {
-  return {
-    projectRoot: PROJECT_ROOT,
-    gitTracker: tracker as unknown as ValidateLinkOptions['gitTracker'],
-    ...overrides,
-  };
+/**
+ * The filled realpath column `gitIgnoreSafetyIssue` reads — hand-written, and
+ * covering the project root as well as every target these tests judge.
+ *
+ * Identity rows: none of these paths exist on disk, and the production fill
+ * answers a path it cannot canonicalize with `safePath.resolve()`, which is the
+ * identity for an already-absolute POSIX path. Writing the table by hand instead
+ * of calling `fillRealpaths` keeps these unit tests free of both I/O and a
+ * platform-dependent root — which is exactly what `realpathFrom` taking a table
+ * rather than a cache is for.
+ *
+ * ⚠️ A missing row THROWS, so every target below must be listed here.
+ */
+const REALPATHS: RealpathTable = new Map(
+  [PROJECT_ROOT, TARGET_FOO, TARGET_SECRET, TARGET_OUTSIDE].map((p) => [p, p]),
+);
+
+function makeOptions(overrides: Partial<GitIgnoreCheckOptions> = {}): GitIgnoreCheckOptions {
+  return { projectRoot: PROJECT_ROOT, realpaths: REALPATHS, ...overrides };
 }
 
-function makeOptions(overrides: Partial<ValidateLinkOptions> = {}): ValidateLinkOptions {
-  return { projectRoot: PROJECT_ROOT, ...overrides };
+function makeGitTrackerOptions(
+  tracker: { isIgnoredByActiveSet: (p: string) => boolean },
+  overrides: Partial<GitIgnoreCheckOptions> = {},
+): GitIgnoreCheckOptions {
+  return makeOptions({
+    gitTracker: tracker as unknown as GitIgnoreCheckOptions['gitTracker'],
+    ...overrides,
+  });
 }
 
 /** A DeferredArtifacts model whose only entry's `dest` is `relPath` (project-root-relative). */
@@ -106,6 +126,107 @@ describe('resolutionFailureIssue', () => {
       SOURCE,
     );
     expect(issue?.message).toContain('"/some/path.md"');
+  });
+});
+
+/**
+ * The fold-only verdict — the one link outcome whose truth depends on which
+ * machine asks.
+ *
+ * **The fixture is code-generated, and both forms are escape sequences.** A
+ * committed accented filename cannot be trusted to arrive decomposed: macOS
+ * editors and git checkouts re-normalize, so a literal would silently be NFC on
+ * both sides and the test would pin nothing.
+ *
+ * This block drives the ISSUE layer with a hand-written verdict. The judge that
+ * produces `match: 'normalized'` from a real directory listing is pinned
+ * separately, in `packages/utils/test/fs-utils.test.ts` — the two halves are in
+ * different packages, and one `match` field is the whole seam between them.
+ */
+describe('normalizationMismatchIssue', () => {
+  const NFD_NAME = 'cafe\u0301.md';
+  const NFC_NAME = 'caf\u00E9.md';
+  const NFC_TARGET = `${PROJECT_ROOT}/${NFC_NAME}`;
+
+  it('has a fixture that differs as bytes and agrees only after folding', () => {
+    // Guard the premise. Both assertions have to hold or every case below is
+    // demonstrating something other than what it claims.
+    expect(NFD_NAME).not.toBe(NFC_NAME);
+    expect(NFD_NAME.normalize('NFC')).toBe(NFC_NAME);
+  });
+
+  it('warns when the link resolves only by NFC folding', () => {
+    // Disk holds the DECOMPOSED name; the link asks for the composed one. The
+    // file opens on the author's macOS box and 404s on Linux — and before this
+    // code existed the run was silent, because the folded judge answered
+    // "exists, exact match".
+    const issue = normalizationMismatchIssue(
+      { match: 'normalized', resolvedPath: NFC_TARGET, actualName: NFD_NAME },
+      makeLink(NFC_NAME),
+      SOURCE,
+    );
+
+    expect(issue?.code).toBe('LINK_NORMALIZATION_MISMATCH');
+    expect(issue?.severity).toBe('warning');
+  });
+
+  it('escapes both spellings so the difference is visible at all', () => {
+    const issue = normalizationMismatchIssue(
+      { match: 'normalized', resolvedPath: NFC_TARGET, actualName: NFD_NAME },
+      makeLink(NFC_NAME),
+      SOURCE,
+    );
+
+    // Quoted verbatim these two render as the same glyphs, so a message that
+    // did not escape them would show the reader two identical strings and
+    // assert they differ. Both code points must appear.
+    expect(issue?.message).toContain(String.raw`caf\u{E9}.md`);
+    expect(issue?.message).toContain(String.raw`cafe\u{301}.md`);
+    expect(issue?.message).not.toContain(NFD_NAME);
+  });
+
+  it('suggests the NFC spelling for BOTH sides, not the raw name on disk', () => {
+    // Telling the author to "use the name on disk" would hand them an NFD link
+    // that an editor or a git checkout is liable to renormalize straight back.
+    // The stable fix renames the file.
+    const issue = normalizationMismatchIssue(
+      { match: 'normalized', resolvedPath: NFC_TARGET, actualName: NFD_NAME },
+      makeLink(NFC_NAME),
+      SOURCE,
+    );
+
+    expect(issue?.suggestion).toContain(String.raw`caf\u{E9}.md`);
+    expect(issue?.suggestion).not.toContain(String.raw`cafe\u{301}.md`);
+  });
+
+  it.each([
+    // The healthy case. A byte-identical accented filename is not a finding —
+    // without this row the warning could fire on every accented name and the
+    // suite would not notice.
+    { label: 'a byte-exact match', match: 'exact' as const, actualName: NFC_NAME },
+    // Already reported, as an error, by fileExistenceIssue — which runs first.
+    { label: 'a case mismatch', match: 'case_mismatch' as const, actualName: 'CAFE.md' },
+    { label: 'an absent target', match: 'absent' as const, actualName: undefined },
+  ])('stays silent for $label', ({ match, actualName }) => {
+    const fileResult = actualName === undefined
+      ? { match, resolvedPath: NFC_TARGET }
+      : { match, resolvedPath: NFC_TARGET, actualName };
+
+    expect(normalizationMismatchIssue(fileResult, makeLink(NFC_NAME), SOURCE)).toBeNull();
+  });
+});
+
+describe('escapeNonAscii', () => {
+  it('leaves ASCII alone and escapes the rest by code point', () => {
+    expect(escapeNonAscii('README.md')).toBe('README.md');
+    expect(escapeNonAscii('caf\u00E9')).toBe(String.raw`caf\u{E9}`);
+    expect(escapeNonAscii('cafe\u0301')).toBe(String.raw`cafe\u{301}`);
+  });
+
+  it('escapes an astral code point as one unit, not as a surrogate pair', () => {
+    // Iterating a string by index would split this into two lone surrogates and
+    // print two meaningless escapes. Filenames really do contain emoji.
+    expect(escapeNonAscii('\u{1F600}.md')).toBe(String.raw`\u{1F600}.md`);
   });
 });
 
@@ -241,19 +362,23 @@ describe('gitIgnoreSafetyIssue', () => {
   });
 
   it('returns null when projectRoot is undefined', () => {
+    // An EMPTY realpath table on purpose: with no project root the check must
+    // return before it reads the column, which is exactly what lets the fill
+    // leave it empty in this configuration. A throw here would mean the gate and
+    // the fill had drifted apart.
     expect(
-      gitIgnoreSafetyIssue(makeLink(LINK_FOO), SOURCE, TARGET_FOO, { skipGitIgnoreCheck: false }),
+      gitIgnoreSafetyIssue(makeLink(LINK_FOO), SOURCE, TARGET_FOO, {
+        skipGitIgnoreCheck: false,
+        realpaths: new Map(),
+      }),
     ).toBeNull();
   });
 
   it('returns null when target is outside the project root', () => {
+    // The table holds rows for BOTH the out-of-root target and the root — the
+    // containment answer is read, not recomputed, so both must be filled.
     expect(
-      gitIgnoreSafetyIssue(
-        makeLink('/other.md'),
-        SOURCE,
-        '/elsewhere/other.md',
-        makeOptions(),
-      ),
+      gitIgnoreSafetyIssue(makeLink('/other.md'), SOURCE, TARGET_OUTSIDE, makeOptions()),
     ).toBeNull();
   });
 

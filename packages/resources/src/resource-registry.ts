@@ -8,28 +8,32 @@
  * - Query capabilities (by path, ID, or glob pattern)
  */
 
-import type fs from 'node:fs/promises';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { createRegistryIssue, type IssueCode, runSingleUnitValidation, type ValidationConfig, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
-import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, FsLookupCache, type GitTracker, issueLocation, normalizedTmpdir, resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, FsLookupCache, type GitTracker, issueLocation, resolveAssetReference, safePath, toForwardSlash, toNfc } from '@vibe-agent-toolkit/utils';
 
-import { calculateChecksum } from './checksum.js';
+import { calculateChecksumFromContent } from './checksum.js';
 import { getCollectionsForFile } from './collection-matcher.js';
+import { parserKindForPath, readContentWithKey } from './content-key.js';
 import type { DeferredArtifacts } from './deferred-artifacts.js';
 import { ExternalLinkValidator } from './external-link-validator.js';
 import {
   validateFrontmatterLinks,
   type FrontmatterExternalUrl,
 } from './frontmatter-link-validator.js';
-import { validateFrontmatter } from './frontmatter-validator.js';
-import { parseHtml } from './html-link-parser.js';
+import {
+  compileFrontmatterSchema,
+  validateCompiledFrontmatter,
+  type CompiledFrontmatterSchema,
+} from './frontmatter-validator.js';
 import { buildLinkAuthEngineConfig } from './link-auth-config-build.js';
-import { parseMarkdown } from './link-parser.js';
-import { fragmentIndexEntry, validateLink, type FragmentIndex, type ValidateLinkOptions } from './link-validator.js';
+import { fillLinkFacts, fragmentIndex, judgeLink, resolveLinkEntries, type FragmentIndex, type JudgeLinkOptions, type LinkEntry, type ValidateLinkOptions } from './link-validator.js';
+import { ParseCache, type ParseCacheStats, parseKeyed, vatCacheRoot } from './parse-cache.js';
 import type { ResourceCollectionInterface } from './resource-collection-interface.js';
 import type { SHA256 } from './schemas/checksum.js';
-import type { ProjectConfig } from './schemas/project-config.js';
+import type { ProjectConfig, ValidationMode } from './schemas/project-config.js';
 import type { HeadingNode, ResourceMetadata } from './schemas/resource-metadata.js';
 import type { ValidationResult } from './schemas/validation-result.js';
 import { locationRoot, matchesGlobPattern, resolveLocalHref } from './utils.js';
@@ -41,6 +45,72 @@ import { locationRoot, matchesGlobPattern, resolveLocalHref } from './utils.js';
  * issue data without re-deriving the id from the file path (which would be
  * wrong when the id came from a frontmatter `idField` value).
  */
+/**
+ * One first-added-wins drop: two files produced the same resource id, and the
+ * later arrival was skipped.
+ */
+export interface DuplicateIdCollision {
+  /** The id both files claimed. */
+  id: string;
+  /** Absolute path of the file that arrived first and therefore won. */
+  existingPath: string;
+  /** Absolute path of the file that arrived later and was skipped. */
+  conflictingPath: string;
+}
+
+/**
+ * Filesystem errno codes that mean "this path could not be read", as opposed to
+ * "VAT is broken".
+ *
+ * Deliberately an allow-list rather than a catch-all. Demoting every non-
+ * duplicate error to a finding would silently convert a parser or indexing
+ * defect into a per-file warning, and the corpus-wide symptom of that is a
+ * quietly shrinking population — the exact failure mode this code exists to
+ * make loud.
+ *
+ * `ELOOP` is the symlink cycle; `ENOENT` the dangling symlink and the file
+ * deleted between enumeration and parse; `EISDIR`/`ENOTDIR` a path whose type
+ * changed underneath the crawl.
+ */
+const READ_FAILURE_CODES: ReadonlySet<string> = new Set([
+  'EACCES',
+  'EISDIR',
+  'ELOOP',
+  'EMFILE',
+  'ENAMETOOLONG',
+  'ENFILE',
+  'ENOENT',
+  'ENOTDIR',
+  'EPERM',
+]);
+
+/**
+ * Whether an error is a filesystem read failure rather than a defect.
+ *
+ * @param error - The thrown value
+ * @returns True when the error carries a recognized filesystem errno code
+ */
+function isReadFailure(error: unknown): error is Error & { code: string } {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const { code } = error as { code?: unknown };
+  return typeof code === 'string' && READ_FAILURE_CODES.has(code);
+}
+
+/**
+ * One enumerated file that could not be read, and so is absent from the
+ * registry despite the crawl having found it.
+ */
+export interface UnreadableResource {
+  /** Absolute path of the file that was enumerated but not admitted. */
+  filePath: string;
+  /** The underlying read failure, as reported by the filesystem. */
+  reason: string;
+  /** `ENOENT`, `EACCES`, … when the platform supplied one. */
+  code?: string;
+}
+
 export class DuplicateResourceIdError extends Error {
   readonly id: string;
   readonly existingPath: string;
@@ -93,6 +163,15 @@ export interface ResourceRegistryOptions {
   config?: ProjectConfig;
   /** Git tracker for efficient git-ignore checking (optional, improves performance) */
   gitTracker?: GitTracker;
+  /**
+   * Parse cache backing {@link ResourceRegistry.addResource} (optional).
+   *
+   * Omitted, a default {@link ParseCache} is created on first use — lazily, so
+   * the `VAT_CACHE` read happens when a document is actually parsed rather than
+   * when the registry is constructed. Supply one to point the cache at a
+   * private directory, or to disable it (`new ParseCache({ enabled: false })`).
+   */
+  parseCache?: ParseCache;
 }
 
 /**
@@ -175,6 +254,54 @@ function hasUnparseableFrontmatter(resource: ResourceMetadata): boolean {
 }
 
 /**
+ * The outcome of loading and compiling one collection schema, cached per
+ * (resolved schema file, validation mode) for the lifetime of a registry.
+ *
+ * Failures are cached alongside successes deliberately: a schema that cannot be
+ * read or compiled must still produce one FRONTMATTER_SCHEMA_ERROR per resource
+ * in the collection, carrying the same message the first attempt produced.
+ * Caching only successes would re-read and re-compile a broken schema once per
+ * resource — the exact N+1 this cache exists to remove, on the slowest path.
+ */
+type LoadedCollectionSchema =
+  | { readonly ok: true; readonly compiled: CompiledFrontmatterSchema }
+  | { readonly ok: false; readonly error: unknown };
+
+/**
+ * Cache key for a compiled collection schema.
+ *
+ * Keyed on the RESOLVED schema path, not the configured specifier: two
+ * collections may reference one schema file by different specifiers (a
+ * relative path in one, an npm bare specifier in another) and must share the
+ * compiled validator. The mode is part of the key because permissive mode
+ * compiles a rewritten clone of the schema.
+ *
+ * The mode leads the key: it is a closed two-value enum, so no (path, mode)
+ * pair can spell the same key as a different one however the path is written.
+ */
+function collectionSchemaCacheKey(resolvedSchemaPath: string, mode: ValidationMode): string {
+  return `${mode}:${resolvedSchemaPath}`;
+}
+
+/**
+ * Read a schema file and compile it for the given mode, capturing any failure
+ * as a value so it can be cached and replayed per resource.
+ */
+async function readAndCompileSchema(
+  resolvedSchemaPath: string,
+  mode: ValidationMode,
+  fsModule: typeof fs,
+): Promise<LoadedCollectionSchema> {
+  try {
+    const schemaContent = await fsModule.readFile(resolvedSchemaPath, 'utf-8');
+    const schema = JSON.parse(schemaContent) as object;
+    return { ok: true, compiled: compileFrontmatterSchema(schema, mode) };
+  } catch (error) {
+    return { ok: false, error };
+  }
+}
+
+/**
  * Resource registry for managing collections of markdown resources.
  *
  * Provides centralized management of markdown resources with:
@@ -225,6 +352,41 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    */
   private fsCache: FsLookupCache = new FsLookupCache();
 
+  /**
+   * Disk-backed parse cache, created on first parse unless injected.
+   *
+   * Lazy rather than constructed in the constructor: `ParseCache` reads
+   * `VAT_CACHE` once, per construction, so building it eagerly would bind the
+   * decision to registry-construction time — an ordering a caller has no reason
+   * to expect and a test cannot control without mutating the real `process.env`
+   * before every `new ResourceRegistry()`.
+   */
+  private parseCacheInstance?: ParseCache;
+
+  /**
+   * Resources indexed by file path — **keyed in Unicode NFC (`toNfc`), not by
+   * the raw path.**
+   *
+   * The two sides of this lookup come from different places and, on macOS,
+   * routinely arrive in different Unicode normalization forms: a key is a
+   * *enumerated* path (`readdir`/`git ls-files` hand back whatever is on disk,
+   * commonly decomposed), while a query is a path *derived from markdown link
+   * text* (`resolveLocalHref`, composed as an editor writes it). `Map.get` is
+   * exact string equality, so `café.md` misses `café.md` and the link to a file
+   * that plainly exists gets no `resolvedId` — see {@link resolveLinks} for what
+   * a missing `resolvedId` then costs at packaging time. Ledger entry D7.
+   *
+   * ⚠️ Only the KEY is normalized. `resource.filePath` keeps the on-disk form,
+   * because that is the string handed to the filesystem, and on Linux the
+   * normalized form of a decomposed filename names no file at all
+   * (see {@link toNfc}).
+   *
+   * The one behaviour this trades away: two files in one directory whose names
+   * differ *only* by normalization form now collide on one key. APFS cannot
+   * produce that pair (its lookup is normalization-insensitive); ext4 can, but
+   * only pathologically, and shadowing one of them is a better answer than
+   * reporting every link to either as broken.
+   */
   private readonly resourcesByPath: Map<string, ResourceMetadata> = new Map();
   private readonly resourcesById: Map<string, ResourceMetadata> = new Map();
   private readonly resourcesByName: Map<string, ResourceMetadata[]> = new Map();
@@ -238,10 +400,62 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   private readonly frontmatterExternalUrlsByResource: Map<string, FrontmatterExternalUrl[]> = new Map();
 
   /**
+   * Compiled collection schemas, keyed by {@link collectionSchemaCacheKey}.
+   *
+   * Ajv compilation dominates collection frontmatter validation and its result
+   * depends on nothing but the schema and the mode, so compiling per resource
+   * (the original shape of this code) recompiled the same handful of schemas
+   * once per document — on a 129-document corpus with two distinct schemas,
+   * ~400ms of pure repetition.
+   *
+   * Scoped to the registry instance rather than the module on purpose: a
+   * long-lived process that re-crawls after a schema file is edited gets a new
+   * registry and therefore a fresh read, never a stale validator. {@link clear}
+   * drops it for the same reason.
+   */
+  private readonly compiledCollectionSchemas: Map<string, Promise<LoadedCollectionSchema>> = new Map();
+
+  /**
    * Collisions recorded by addResources() when two files produce the same resource id.
    * Cleared by clear(). Surfaced as DUPLICATE_RESOURCE_ID issues in validate().
    */
-  private duplicateIdCollisions: Array<{ id: string; existingPath: string; conflictingPath: string }> = [];
+  private duplicateIdCollisions: DuplicateIdCollision[] = [];
+
+  /**
+   * Files `addResources()` enumerated but could not read.
+   * Cleared by clear(). Surfaced as RESOURCE_UNREADABLE issues in validate().
+   */
+  private unreadableResources: UnreadableResource[] = [];
+
+  /**
+   * Reads that failed, in the order `addResources` attempted them.
+   *
+   * Same rationale as {@link getDuplicateIdCollisions}: this is a population
+   * fact. A file that was enumerated and then skipped is absent from every
+   * downstream count, and an issue list says a read failed without letting a
+   * caller reconcile "enumerated" against "admitted".
+   *
+   * @returns A copy of the failure log, oldest first
+   */
+  getUnreadableResources(): UnreadableResource[] {
+    return [...this.unreadableResources];
+  }
+
+  /**
+   * Duplicate-id drops, in the order `addResources` made them.
+   *
+   * Exposed because arrival order is behaviour, not bookkeeping: the rule is
+   * first-added-wins, so which of two colliding files gets validated, bundled
+   * and rewritten is decided by enumeration order. `validate()` turns these
+   * into `DUPLICATE_RESOURCE_ID` issues; a caller that needs to compare
+   * populations across a refactor needs the raw drops, because an issue list
+   * says a collision happened without saying which file survived it.
+   *
+   * @returns A copy of the collision log, oldest first
+   */
+  getDuplicateIdCollisions(): DuplicateIdCollision[] {
+    return [...this.duplicateIdCollisions];
+  }
 
   constructor(options?: ResourceRegistryOptions) {
     if (options?.baseDir !== undefined) {
@@ -256,6 +470,25 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     if (options?.gitTracker !== undefined) {
       this.gitTracker = options.gitTracker;
     }
+    if (options?.parseCache !== undefined) {
+      this.parseCacheInstance = options.parseCache;
+    }
+  }
+
+  /**
+   * Parse-cache hit/miss counts for this registry.
+   *
+   * Read off the cache instance, so an INJECTED cache reports what it did for
+   * every one of its users rather than for this registry alone. That is the
+   * honest reading: the counters answer "did the cache serve anything", and a
+   * caller that shares one instance across registries is asking about the
+   * instance. A registry that has parsed nothing has no instance yet, and
+   * reports zeroes rather than constructing one as a side effect of being asked.
+   *
+   * @returns A snapshot of the counters
+   */
+  getParseCacheStats(): ParseCacheStats {
+    return this.parseCacheInstance?.stats ?? { hits: 0, misses: 0, writeFailures: 0 };
   }
 
   /**
@@ -302,28 +535,19 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   ): ResourceRegistry {
     const registry = new ResourceRegistry({ ...options, baseDir });
 
-    // Add all resources to indexes
+    // Indexing goes through `indexResource`, not a second copy of the four
+    // index writes, so every index has exactly ONE key derivation. That matters
+    // most for `resourcesByPath`, whose key is normalized (see the field's
+    // docblock): a duplicated write here could silently key one construction
+    // path differently from the other, and every lookup through the divergent
+    // path would miss.
     for (const resource of resources) {
-      // Check for duplicate ID
       const existingById = registry.resourcesById.get(resource.id);
       if (existingById) {
         throw new DuplicateResourceIdError(resource.id, resource.filePath, existingById.filePath);
       }
 
-      // Add to path index
-      registry.resourcesByPath.set(resource.filePath, resource);
-
-      // Add to ID index
-      registry.resourcesById.set(resource.id, resource);
-
-      // Add to name index
-      const filename = path.basename(resource.filePath);
-      const existingByName = registry.resourcesByName.get(filename) ?? [];
-      registry.resourcesByName.set(filename, [...existingByName, resource]);
-
-      // Add to checksum index
-      const existingByChecksum = registry.resourcesByChecksum.get(resource.checksum) ?? [];
-      registry.resourcesByChecksum.set(resource.checksum, [...existingByChecksum, resource]);
+      registry.indexResource(resource);
     }
 
     return registry;
@@ -360,7 +584,11 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   /**
    * Add a single resource to the registry.
    *
-   * Parses the markdown file, generates a unique ID, and stores the resource.
+   * Parses the file, generates a unique ID, and stores the resource. Costs
+   * exactly one `readFile` and one `stat` per file — the parse, the checksum and
+   * the size all come off that single pair. The parse itself may be served from
+   * the disk-backed cache ({@link parseCached}); the read and the stat happen
+   * either way, because the key and every non-parse field come from them.
    *
    * @param filePath - Path to the markdown file (will be normalized to absolute)
    * @returns The parsed resource metadata
@@ -376,28 +604,41 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // Normalize path to absolute
     const absolutePath = safePath.resolve(filePath);
 
-    // Parse the file — HTML or markdown depending on extension
-    const lowerPath = absolutePath.toLowerCase();
-    const isHtml = lowerPath.endsWith('.html') || lowerPath.endsWith('.htm');
-    const parseResult = isHtml
-      ? await parseHtml(absolutePath)
-      : await parseMarkdown(absolutePath);
+    // THE read. Everything below is a function of these bytes plus one stat —
+    // this used to be two whole-file reads (parse, then checksum) and two stats.
+    // The discriminator runs exactly ONCE here and its answer rides on `keyed`
+    // into both the content key and the parser selection in `parseKeyed`:
+    // parser selection is part of a document's parse identity (content-key.ts),
+    // and running the discriminator twice is how the parse route and the key's
+    // parse-route component drift apart.
+    const keyed = await readContentWithKey(absolutePath, parserKindForPath(absolutePath));
+
+    // Parse from the bytes already in hand — or from a cache entry filed under
+    // the key those bytes just produced. See `parseKeyed` for the interception.
+    this.parseCacheInstance ??= new ParseCache();
+    const parseResult = await parseKeyed(keyed, this.parseCacheInstance);
 
     // Generate ID using priority chain: frontmatter field → relative path → filename stem
     const id = this.generateId(absolutePath, parseResult.frontmatter);
 
-    // Check for duplicate ID (allow re-adding same file path)
+    // Check for duplicate ID (allow re-adding same file path). Deliberately
+    // ahead of the stat below, so a file that loses an id collision costs no
+    // syscall beyond the read it already paid for.
     const existingById = this.resourcesById.get(id);
     if (existingById && existingById.filePath !== absolutePath) {
       throw new DuplicateResourceIdError(id, absolutePath, existingById.filePath);
     }
 
-    // Get file modified time
-    const fs = await import('node:fs/promises');
+    // THE stat — one call serving both `modifiedAt` and `sizeBytes`.
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied path, same trust level as the read above
     const stats = await fs.stat(absolutePath);
 
-    // Calculate checksum eagerly
-    const checksum = await calculateChecksum(absolutePath);
+    // Checksum from the bytes already decoded, not a second read of the file.
+    // It hashes the DECODED STRING, which is a different keyspace from
+    // `keyed.key` — that one hashes the raw bytes on purpose (content-key.ts).
+    // Both must survive: this value is user-facing (`vat resources scan
+    // --verbose`, `audit/cache-detector.ts`, `getResourcesByChecksum`).
+    const checksum = calculateChecksumFromContent(keyed.content);
 
     // Determine collections if config is present
     const collections = this.config?.resources?.collections
@@ -417,7 +658,12 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       }),
       ...(parseResult.frontmatter !== undefined && { frontmatter: parseResult.frontmatter }),
       ...(parseResult.frontmatterError !== undefined && { frontmatterError: parseResult.frontmatterError }),
-      sizeBytes: parseResult.sizeBytes,
+      // `stat().size` — the on-disk byte count, exactly as before. Never
+      // `Buffer.byteLength(content)` or `content.length`: those measure the
+      // decoded string, and this number reaches packaged-output accounting
+      // (agent-skills/src/content-transform.ts) and adopter-visible rule
+      // variables.
+      sizeBytes: stats.size,
       estimatedTokenCount: parseResult.estimatedTokenCount,
       modifiedAt: stats.mtime,
       checksum,
@@ -461,7 +707,28 @@ export class ResourceRegistry implements ResourceCollectionInterface {
             conflictingPath: error.conflictingPath,
           });
           // First-added wins; skip conflicting file and continue crawling.
+        } else if (isReadFailure(error)) {
+          // A file the crawl handed us that we cannot read. Recorded, not
+          // thrown: previously this terminated `vat resources scan|validate`
+          // and `vat audit` with a raw ENOENT stack trace, which a committed
+          // dangling `*.md` symlink reaches on `crawlDirectory`'s git route
+          // (that route returns mode-120000 entries and does no symlink
+          // filtering).
+          //
+          // ⛔ Recorded rather than skipped, deliberately. Swallowing the read
+          // would trade a loud crash for a silent population change — the file
+          // would vanish from every downstream count with nothing said. It
+          // becomes a RESOURCE_UNREADABLE issue in validate().
+          this.unreadableResources.push({
+            filePath: fp,
+            reason: error.message,
+            ...(typeof (error as { code?: unknown }).code === 'string' && {
+              code: (error as { code: string }).code,
+            }),
+          });
         } else {
+          // Not a read failure and not a collision: a genuine defect in parsing
+          // or indexing, which must not be demoted to a finding.
           throw error;
         }
       }
@@ -602,7 +869,52 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
-   * Validate all links in all resources.
+   * Emit RESOURCE_UNREADABLE errors for reads that failed during addResources().
+   *
+   * The message states that the file was **skipped**, because the consequence
+   * a reader needs is not "a read failed" but "this file is in none of the
+   * counts you are about to read".
+   * @private
+   */
+  private collectUnreadableResourceErrors(): ValidationIssue[] {
+    return this.unreadableResources.map(({ filePath, code }) => {
+      const where = issueLocation(filePath, locationRoot(this.baseDir));
+      const errno = code === undefined ? '' : ` (${code})`;
+      return createRegistryIssue(
+        'RESOURCE_UNREADABLE',
+        // `reason` (the raw fs error message) is deliberately omitted: Node's fs
+        // errors embed the absolute path (e.g. "ENOENT: ... open '/Users/...'"),
+        // which would leak the developer's home directory into CI logs -- the
+        // same class of leak `where` was computed to avoid. The errno code is
+        // signal enough; see the ValidationIssue docstring's `location` contract.
+        `'${where}' was enumerated but could not be read, so it was skipped and is absent from every count in this report${errno}.`,
+        { location: where },
+      );
+    });
+  }
+
+  /**
+   * Validate all links in all resources, in two passes.
+   *
+   * Pass 1 resolves every link once, then materialises both judge columns over
+   * the corpus at once (`fillLinkFacts`): one listing per distinct target
+   * directory, and one canonical path per distinct target plus the project
+   * root. Pass 2 judges every link synchronously against those tables. The
+   * alternative — awaiting each link in turn — serialised every cold `readdir`
+   * and every `realpath` behind the previous link's `await`.
+   *
+   * ⚠️ **The judge loop is fully synchronous: it contains no `await`, so it
+   * never yields to the event loop.** On a large corpus it is one
+   * un-interruptible block, and it is not free — whenever `this.gitTracker` is
+   * undefined and `skipGitIgnoreCheck` is false, every *existing* local target
+   * still reaches `gitIgnoreSafetyIssue` → `isGitIgnored`, a `spawnSync` of
+   * `git check-ignore`. That is the one column pass 1 does not materialise
+   * (ledger entry D9); the listing and realpath columns both are.
+   *
+   * Both passes walk `entries` in the same order the single-pass version
+   * produced issues in (resources in insertion order, links in document order);
+   * issue order is part of this command's output contract.
+   *
    * @private
    */
   private async validateAllLinks(
@@ -613,24 +925,38 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   ): Promise<ValidationIssue[]> {
     const issues: ValidationIssue[] = [];
 
+    const entries: LinkEntry[] = [];
     for (const resource of this.resourcesByPath.values()) {
       for (const link of resource.links) {
-        // Only pass options if projectRoot is defined (exactOptionalPropertyTypes requirement)
-        const validateOptions = this.baseDir === undefined
-          ? { fsCache: this.fsCache, skipGitIgnoreCheck, checkHtmlAnchors }
-          : {
-              fsCache: this.fsCache,
-              projectRoot: this.baseDir,
-              skipGitIgnoreCheck,
-              checkHtmlAnchors,
-              ...(this.gitTracker !== undefined && { gitTracker: this.gitTracker }),
-              ...(deferredArtifacts !== undefined && { deferredArtifacts }),
-            };
+        entries.push({ link, sourceFilePath: resource.filePath });
+      }
+    }
 
-        const issue = await validateLink(link, resource.filePath, fragmentsByFile, validateOptions);
-        if (issue) {
-          issues.push(issue);
-        }
+    // Pass 1′: resolve each link exactly once, then fill both judge columns
+    // together over exactly those resolutions. The judge reads these very
+    // resolution objects — it never re-resolves.
+    const resolved = resolveLinkEntries(entries, this.baseDir);
+    const tables = await fillLinkFacts(resolved, this.fsCache, {
+      ...(this.baseDir !== undefined && { projectRoot: this.baseDir }),
+      skipGitIgnoreCheck,
+    });
+
+    // Only pass options if projectRoot is defined (exactOptionalPropertyTypes requirement)
+    const judgeOptions: JudgeLinkOptions = this.baseDir === undefined
+      ? { ...tables, skipGitIgnoreCheck, checkHtmlAnchors }
+      : {
+          ...tables,
+          projectRoot: this.baseDir,
+          skipGitIgnoreCheck,
+          checkHtmlAnchors,
+          ...(this.gitTracker !== undefined && { gitTracker: this.gitTracker }),
+          ...(deferredArtifacts !== undefined && { deferredArtifacts }),
+        };
+
+    for (const entry of resolved) {
+      const issue = judgeLink(entry, fragmentsByFile, judgeOptions);
+      if (issue) {
+        issues.push(issue);
       }
     }
 
@@ -646,15 +972,17 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     mode: 'strict' | 'permissive' = 'strict'
   ): ValidationIssue[] {
     const issues: ValidationIssue[] = [];
+    // One compile for the whole corpus — the schema and mode are the same for
+    // every resource, so compiling inside the loop was pure repetition.
+    const compiled = compileFrontmatterSchema(schema, mode);
     for (const resource of this.resourcesByPath.values()) {
       if (hasUnparseableFrontmatter(resource)) {
         continue;
       }
-      const frontmatterIssues = validateFrontmatter(
+      const frontmatterIssues = validateCompiledFrontmatter(
         resource.frontmatter,
-        schema,
+        compiled,
         resource.filePath,
-        mode,
         undefined,
         this.baseDir,
       );
@@ -678,8 +1006,6 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       return issues;
     }
 
-    const fsPromises = await import('node:fs/promises');
-
     for (const resource of this.resourcesByPath.values()) {
       // Skip if resource has no collections
       if (!resource.collections || resource.collections.length === 0) {
@@ -689,7 +1015,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       // Validate against each collection's schema
       const collectionIssues = await this.validateResourceCollectionSchemas(
         resource,
-        fsPromises,
+        fs,
         fragmentsByFile,
         skipGitIgnoreCheck,
       );
@@ -764,50 +1090,46 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       this.baseDir ?? process.cwd(),
     );
 
+    // Determine validation mode (default to permissive)
+    const mode = validation.mode ?? 'permissive';
+
+    // This `try` covers the schema load/compile and NOTHING else. Its `catch`
+    // blames the schema by name, so everything it can catch must genuinely be a
+    // failure to read, parse or compile that schema file.
+    //
+    // `validateCompiledFrontmatter` sits OUTSIDE it, argued from that message:
+    // running an already-compiled validator over a document is neither loading
+    // nor parsing a schema, and by that point the schema is proven good —
+    // `readAndCompileSchema` has read the file, `JSON.parse`d it and put it
+    // through `ajv.compile()`. A throw from the compiled validator is an Ajv
+    // runtime fault, and "Failed to load or parse frontmatter schema" would be a
+    // false statement about it. The same reasoning applies more sharply to
+    // `validateFrontmatterLinks` below: it is link validation, not schema
+    // handling, and the fact tables it reads throw ON PURPOSE
+    // (`realpathFrom`/`siblingNamesFrom` crash on a missing row so that a
+    // fill/judge divergence names its own remedy). That crash must reach the
+    // operator intact rather than be reworded into a schema complaint — do not
+    // re-wrap either call.
+    //
+    // ⚠️ **The widening is intended for ALL throws out of those two calls, not
+    // just the fill/judge one.** An Ajv runtime fault, an fs error inside link
+    // validation, anything else — each now escapes `registry.validate()` and
+    // aborts the run, where before it became one `FRONTMATTER_SCHEMA_ERROR` per
+    // resource in the collection. That is a real change in operator-visible
+    // behaviour and it is deliberate: none of those are a defect in the user's
+    // schema, and reporting them as one sends the reader to edit a file that is
+    // fine. A crash that names the real fault beats N findings that name the
+    // wrong one. Anything here that SHOULD become a finding must be caught at
+    // its own call site with its own code — never by widening this `try` back.
+    let compiled: CompiledFrontmatterSchema;
     try {
-      const schemaContent = await fsModule.readFile(schemaPath, 'utf-8');
-      const schema = JSON.parse(schemaContent) as object;
-
-      // Determine validation mode (default to permissive)
-      const mode = validation.mode ?? 'permissive';
-
-      // Validate frontmatter against JSON Schema
-      const issues = validateFrontmatter(
-        resource.frontmatter,
-        schema,
-        resource.filePath,
-        mode,
-        schemaPath,
-        this.baseDir,
-      );
-
-      // New: walk URI-family frontmatter values. Default-on; explicit `false` disables.
-      if (validation.checkFrontmatterLinks !== false && resource.frontmatter) {
-        const linkOptions: ValidateLinkOptions = this.baseDir === undefined
-          ? { fsCache: this.fsCache, skipGitIgnoreCheck }
-          : {
-              fsCache: this.fsCache,
-              projectRoot: this.baseDir,
-              skipGitIgnoreCheck,
-              ...(this.gitTracker !== undefined && { gitTracker: this.gitTracker }),
-            };
-
-        const { issues: linkIssues, externalUrls } = await validateFrontmatterLinks(
-          resource.frontmatter,
-          schema,
-          resource.filePath,
-          fragmentsByFile,
-          linkOptions,
-        );
-        issues.push(...linkIssues);
-
-        if (externalUrls.length > 0) {
-          const prior = this.frontmatterExternalUrlsByResource.get(resource.filePath) ?? [];
-          this.frontmatterExternalUrlsByResource.set(resource.filePath, [...prior, ...externalUrls]);
-        }
+      const loaded = await this.loadCollectionSchema(schemaPath, mode, fsModule);
+      if (!loaded.ok) {
+        // Rethrow the cached load/compile failure so every resource in the
+        // collection reports it identically, without re-reading the file.
+        throw loaded.error;
       }
-
-      return issues;
+      compiled = loaded.compiled;
     } catch (error) {
       // Handle missing or invalid schema files gracefully
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -819,6 +1141,68 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         ),
       ];
     }
+
+    // Validate frontmatter against JSON Schema
+    const issues = validateCompiledFrontmatter(
+      resource.frontmatter,
+      compiled,
+      resource.filePath,
+      schemaPath,
+      this.baseDir,
+    );
+
+    // Walk URI-family frontmatter values. Default-on; explicit `false` disables.
+    if (validation.checkFrontmatterLinks !== false && resource.frontmatter) {
+      const linkOptions: ValidateLinkOptions = this.baseDir === undefined
+        ? { fsCache: this.fsCache, skipGitIgnoreCheck }
+        : {
+            fsCache: this.fsCache,
+            projectRoot: this.baseDir,
+            skipGitIgnoreCheck,
+            ...(this.gitTracker !== undefined && { gitTracker: this.gitTracker }),
+          };
+
+      const { issues: linkIssues, externalUrls } = await validateFrontmatterLinks(
+        resource.frontmatter,
+        compiled.schema,
+        resource.filePath,
+        fragmentsByFile,
+        linkOptions,
+      );
+      issues.push(...linkIssues);
+
+      if (externalUrls.length > 0) {
+        const prior = this.frontmatterExternalUrlsByResource.get(resource.filePath) ?? [];
+        this.frontmatterExternalUrlsByResource.set(resource.filePath, [...prior, ...externalUrls]);
+      }
+    }
+
+    return issues;
+  }
+
+  /**
+   * Read, parse and compile a collection schema — at most once per
+   * (resolved path, mode) for this registry.
+   *
+   * The in-flight promise is what gets cached, so concurrent callers share one
+   * read and one compile rather than racing to populate the entry.
+   *
+   * @private
+   */
+  private async loadCollectionSchema(
+    schemaPath: string,
+    mode: ValidationMode,
+    fsModule: typeof fs,
+  ): Promise<LoadedCollectionSchema> {
+    const key = collectionSchemaCacheKey(schemaPath, mode);
+    const cached = this.compiledCollectionSchemas.get(key);
+    if (cached) {
+      return cached;
+    }
+
+    const pending = readAndCompileSchema(schemaPath, mode, fsModule);
+    this.compiledCollectionSchemas.set(key, pending);
+    return pending;
   }
 
   /**
@@ -876,6 +1260,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       ...this.collectHtmlParseErrors(),
       ...this.collectUnresolvedReferenceIssues(),
       ...this.collectDuplicateIdErrors(),
+      ...this.collectUnreadableResourceErrors(),
     );
 
     // Validate each link in each resource
@@ -990,7 +1375,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * @private
    */
   private getCacheDirectory(): string {
-    return safePath.join(normalizedTmpdir(), '.vat-cache');
+    // `vatCacheRoot()` rather than a second `normalizedTmpdir()` + literal join:
+    // one authority for where the shared cache tree lives (see parse-cache.ts).
+    return vatCacheRoot();
   }
 
   /**
@@ -1113,8 +1500,11 @@ export class ResourceRegistry implements ResourceCollectionInterface {
           const targetPath = this.resolveRelativeLinkPath(link.href, resource.filePath);
           if (targetPath === undefined) continue;
 
-          // Look up resource by path
-          const targetResource = this.resourcesByPath.get(targetPath);
+          // Look up resource by path. `targetPath` comes from markdown link
+          // text and the keys come from filesystem enumeration, so the two can
+          // differ in Unicode normalization form for the very same file — hence
+          // the NFC key on both sides (see the field's docblock).
+          const targetResource = this.resourcesByPath.get(toNfc(targetPath));
 
           if (targetResource) {
             link.resolvedId = targetResource.id;
@@ -1140,7 +1530,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    */
   getResource(filePath: string): ResourceMetadata | undefined {
     const absolutePath = safePath.resolve(filePath);
-    return this.resourcesByPath.get(absolutePath);
+    return this.resourcesByPath.get(toNfc(absolutePath));
   }
 
   /**
@@ -1253,6 +1643,10 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     this.resourcesByName.clear();
     this.resourcesByChecksum.clear();
     this.duplicateIdCollisions = [];
+    this.unreadableResources = [];
+    // Compiled schemas are snapshots of files on disk: a registry being reused
+    // for a fresh crawl must re-read them rather than trust a prior compile.
+    this.compiledCollectionSchemas.clear();
   }
 
   /**
@@ -1467,17 +1861,20 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * heading slugs (lowercased); HTML contributes its `id`/`name` anchors.
    */
   private buildFragmentIndex(): FragmentIndex {
-    const map: FragmentIndex = new Map();
+    // Built through `fragmentIndex()` rather than `map.set` so that the index's
+    // key derivation — NFC-normalized, see that function — has exactly one home
+    // and cannot drift from what `checkAnchor` looks up. The per-entry policy
+    // (case-sensitive ids vs folded slugs) is derived from the file type there.
+    const entries: [string, Set<string>][] = [];
     for (const resource of this.resourcesByPath.values()) {
       const fragments = new Set<string>();
       collectHeadingSlugs(resource.headings, fragments);
       for (const anchor of resource.anchors ?? []) {
         fragments.add(anchor);
       }
-      // Policy (case-sensitive ids vs folded slugs) is derived from the file type.
-      map.set(resource.filePath, fragmentIndexEntry(resource.filePath, fragments));
+      entries.push([resource.filePath, fragments]);
     }
-    return map;
+    return fragmentIndex(entries);
   }
 
   /**
@@ -1492,8 +1889,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * @param resource - Resource to index
    */
   private indexResource(resource: ResourceMetadata): void {
-    // Index by path (1:1)
-    this.resourcesByPath.set(resource.filePath, resource);
+    // Index by path (1:1) — NFC key, see the field's docblock
+    this.resourcesByPath.set(toNfc(resource.filePath), resource);
 
     // Index by ID (1:1)
     this.resourcesById.set(resource.id, resource);

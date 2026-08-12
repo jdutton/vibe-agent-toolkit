@@ -7,7 +7,7 @@ import {
 	type WalkableRegistry,
 } from '@vibe-agent-toolkit/agent-skills';
 import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
-import { crawlDirectory, findProjectRoot, safePath } from '@vibe-agent-toolkit/utils';
+import { crawlDirectory, findProjectRoot, safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
 
 import { ClaudeSkillInventory } from './types.js';
 
@@ -31,6 +31,55 @@ export type SharedRegistrySource =
 	| (() => Promise<ResourceRegistry | undefined>);
 
 /**
+ * A way to obtain the {@link GitTracker} covering one link walk's `projectRoot`.
+ *
+ * Handed to {@link walkLinkGraph}, a tracker turns each link target's gitignore
+ * question into an O(1) active-set lookup instead of a `git check-ignore`
+ * subprocess per distinct target.
+ *
+ * Measured 2026-08-09 — **two different corpora, kept apart on purpose, because
+ * quoting them side by side reads as one run:**
+ *
+ * - *A 1,484-document adopter monorepo.* `vat audit` spawned 786 `check-ignore`
+ *   processes, every one of them from this lane. Over that same 785-path
+ *   population the two oracles cost 9,242 ms and 148 ms respectively, and
+ *   disagreed on nothing.
+ * - *`vat audit --user`, real installed plugins.* 715 spawns → 0, with the
+ *   2,788,833-byte report byte-identical apart from its `duration:` line.
+ *
+ * ⚠️ Neither bullet is a whole-command speed claim: the after-runs were taken on
+ * a loaded machine and are not comparable to the before-runs. The defensible
+ * numbers are the spawn counts and the isolated oracle timing.
+ *
+ * ## Why a function of the root, not a tracker
+ *
+ * Each skill's `projectRoot` is discovered per skill (`findProjectRoot` from the
+ * SKILL.md's directory), and one run routinely spans many roots — `vat audit
+ * --user` reached at least 72 distinct root directories in a single measured run
+ * (counted as distinct resolved paths, so it is a lower bound on the number of
+ * distinct root *spellings*). A tracker answers only about the repository it was
+ * initialized for, so the extractor must be able to ask per root.
+ *
+ * ## The caller owns the cache
+ *
+ * This package never builds or caches trackers: initialization spawns
+ * `git ls-files`, and the caller already has the cache that must be shared with
+ * the rest of its scan (`getOrCreateGitTracker` in the CLI's audit lane). Return
+ * `undefined` for a root you cannot or do not want to answer for — the walk then
+ * behaves exactly as it does with no source at all.
+ *
+ * ## Staleness bound — safe for read-only lanes only
+ *
+ * A tracker snapshots `git ls-files` at `initialize()`. A file created AFTER
+ * that snapshot exists on disk but is absent from the active set, so
+ * `isIgnoredByActiveSet` reports it **ignored**. That is safe for inventory and
+ * audit, which only read; it is NOT safe for a lane that writes between walks
+ * (`packageSkill` writes `dist/` per skill), which must build a fresh tracker or
+ * pass none.
+ */
+export type GitTrackerSource = (projectRoot: string) => Promise<GitTracker | undefined>;
+
+/**
  * Build a SkillInventory for a single SKILL.md.
  *
  * Consumes existing link-graph and frontmatter machinery — does not
@@ -40,12 +89,13 @@ export type SharedRegistrySource =
 export async function extractClaudeSkillInventory(
 	skillMdPath: string,
 	sharedRegistry?: SharedRegistrySource,
+	gitTrackerSource?: GitTrackerSource,
 ): Promise<ClaudeSkillInventory> {
 	const absolute = safePath.resolve(skillMdPath);
 	const parseErrors: ParseErrors = [];
 
 	const { name, description } = await parseFrontmatterFields(absolute, parseErrors);
-	const linked = await walkLinkedFiles(absolute, parseErrors, sharedRegistry);
+	const linked = await walkLinkedFiles(absolute, parseErrors, sharedRegistry, gitTrackerSource);
 
 	return new ClaudeSkillInventory({
 		path: absolute,
@@ -106,6 +156,7 @@ async function walkLinkedFiles(
 	absolute: string,
 	parseErrors: ParseErrors,
 	sharedRegistry?: SharedRegistrySource,
+	gitTrackerSource?: GitTrackerSource,
 ): Promise<string[]> {
 	const linked: string[] = [];
 	try {
@@ -114,7 +165,8 @@ async function walkLinkedFiles(
 		const registry = await registryFor(projectRoot, sharedRegistry);
 		const skillResource = registry.getResource(absolute);
 		if (skillResource !== undefined) {
-			collectLinkedFiles(skillResource.id, registry, absolute, projectRoot, linked);
+			const gitTracker = await gitTrackerFor(projectRoot, gitTrackerSource);
+			collectLinkedFiles(skillResource.id, registry, absolute, projectRoot, linked, gitTracker);
 		}
 	} catch (e) {
 		parseErrors.push({ path: absolute, message: `link walk failed: ${(e as Error).message}` });
@@ -151,20 +203,57 @@ async function registryFor(
 	return crawlSkillLinkRegistry(projectRoot);
 }
 
+/**
+ * The tracker for this walk, or `undefined` when the caller supplied no source
+ * or the source could not answer.
+ *
+ * A source that fails is a MISSING OPTIMIZATION, not a bad skill: the walk still
+ * produces the same answer, one `git check-ignore` per link target instead of an
+ * active-set lookup. So the throw is swallowed here rather than allowed to reach
+ * `walkLinkedFiles`'s catch, which would file it as a `link walk failed`
+ * parseError against the skill's own path — a fabricated defect in a file that
+ * has none.
+ */
+async function gitTrackerFor(
+	projectRoot: string,
+	gitTrackerSource: GitTrackerSource | undefined,
+): Promise<GitTracker | undefined> {
+	if (gitTrackerSource === undefined) return undefined;
+	try {
+		return await gitTrackerSource(projectRoot);
+	} catch {
+		return undefined;
+	}
+}
+
 function collectLinkedFiles(
 	skillId: string,
 	registry: ResourceRegistry,
 	absolute: string,
 	projectRoot: string,
 	linked: string[],
+	gitTracker: GitTracker | undefined,
 ): void {
-	const result = walkLinkGraph(skillId, registry as WalkableRegistry, {
+	// Conditional assignment, not `gitTracker: undefined`. ⚠️ The reason is a TYPE
+	// reason, not a runtime one — an earlier version of this comment claimed the
+	// walker's no-tracker branch keys on the KEY'S ABSENCE, and it does not:
+	// `walk-link-graph.ts` reads `options.gitTracker === undefined`, which absence
+	// and an explicit `undefined` both satisfy, and it never uses `in`. What
+	// actually forbids the literal is `exactOptionalPropertyTypes`, under which
+	// assigning `undefined` to an optional property is a compile error. The object
+	// still ends up key-for-key identical to the pre-change one when no source is
+	// supplied, which is the property this bite is held to.
+	const walkOptions: Parameters<typeof walkLinkGraph>[2] = {
 		maxDepth: Infinity,
 		excludeRules: [],
 		projectRoot,
 		skillRootPath: absolute,
 		excludeNavigationFiles: true,
-	});
+	};
+	if (gitTracker !== undefined) {
+		walkOptions.gitTracker = gitTracker;
+	}
+	const result = walkLinkGraph(skillId, registry as WalkableRegistry, walkOptions);
 	for (const r of result.bundledResources) {
 		if (r.filePath !== absolute) linked.push(r.filePath);
 	}

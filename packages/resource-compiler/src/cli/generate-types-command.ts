@@ -10,7 +10,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import type { Command } from 'commander';
 import { glob } from 'glob';
 
-import { parseMarkdown } from '../compiler/markdown-parser.js';
+import { toMarkdownResource } from '../compiler/markdown-parser.js';
 import { generateMarkdownDeclarationFile, getDeclarationPath } from '../transformer/declaration-generator.js';
 
 import { exitWithResults, printOperationSummary } from './compile-utils.js';
@@ -50,7 +50,7 @@ function processMarkdownFile(
 
     // Read and parse markdown
     const content = readFileSync(filePath, 'utf-8');
-    const resource = parseMarkdown(content);
+    const resource = toMarkdownResource(content);
 
     // Generate declaration
     const declaration = generateMarkdownDeclarationFile(filePath, resource);

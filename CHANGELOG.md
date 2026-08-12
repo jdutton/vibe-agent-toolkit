@@ -7,12 +7,480 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- **The parse cache is namespaced per build of VAT, and both hand-bumped version constants are
+  gone.** `CONTENT_KEY_SCHEMA_VERSION` and `PARSE_CACHE_SCHEMA_VERSION` are removed from
+  `@vibe-agent-toolkit/resources`. Entries now live under
+  `<tmpdir>/.vat-cache/<namespace>/parse/<shard>/<key>.json`, where `<namespace>` is the package
+  version when installed and `<version>-dev-<6 hex>` from a source checkout — the hex covering the
+  package path *and* a fingerprint of the emitted parser modules, so a rebuild re-namespaces
+  automatically. A content-addressed cache cannot see a change to the parser itself, and the
+  previous answer to that was a constant someone had to remember to bump; this one is a mechanism.
+  New exports: `vatCacheNamespace()`, `vatCacheNamespaceRoot()`. `parquet/` is reserved as a sibling
+  of `parse/` under the same namespace.
+
+  Two consequences worth knowing. **Content keys are now stable across VAT versions** — they are
+  `<parserKind>.<sha256>` with no version component — so upgrading no longer churns every recorded
+  key, and the key-masking machinery in VAT's own pipeline-snapshot test instrument is deleted
+  rather than left as dead weight (snapshot `formatVersion` is 2; older snapshots are refused, not
+  mis-compared). And the
+  external-link and linkAuth caches deliberately stay *outside* the namespace: URL reachability is a
+  fact about the world, not about this build, so it survives upgrades.
+
+- **`@vibe-agent-toolkit/resource-compiler`'s `parseMarkdown` is now `toMarkdownResource`.** The
+  monorepo exported two functions named `parseMarkdown` with opposite argument domains — this one
+  takes markdown *content* and returns a `MarkdownResource` for the type/codegen compiler, while
+  `@vibe-agent-toolkit/resources`' takes a *file path* and returns a link `ParseResult`. The latter
+  keeps its name, and gained a content-only sibling (`parseMarkdownContent`), which made three
+  similarly-named parsers one rename away from a real mix-up. No alias is left behind, per the
+  pre-1.0 policy. Consumers importing `parseMarkdown` from `@vibe-agent-toolkit/resource-compiler`
+  (or its `/compiler` subpath) must rename the binding; nothing else about the function changed.
+
+- **`@vibe-agent-toolkit/utils` no longer exports `verifyCaseSensitiveFilename`; use
+  `fillSiblingNames` + `classifyFilenameCaseFrom`.** Answering "does this file exist at exactly this
+  case?" needs one filesystem fact — the target's parent directory listing — and the old helper took
+  that listing *per path, at the moment of judgement*. The replacement splits it into a fill pass
+  (`fillSiblingNames(filePaths, fsCache)`, which de-duplicates parents and lists them concurrently,
+  returning a `SiblingNamesTable`) and a pure judge (`classifyFilenameCaseFrom(table, filePath)`),
+  so a caller with many paths lists each directory once, up front, instead of serialising one
+  listing behind each previous answer. Removed from both the `.` barrel and the `./fs` subpath, with
+  no alias, per the pre-1.0 policy. A single ad-hoc check migrates as
+  `classifyFilenameCaseFrom(await fillSiblingNames([p], cache), p)`. Note the judge **throws** when
+  handed a table with no row for the path's parent: the fill is meant to be derived from exactly the
+  paths about to be judged, and answering a missing row as "unreadable directory" would silently
+  report every file under it as absent.
+
+### Added
+
+- **`externalSource` on a marketplace plugin entry** — reference a plugin published in
+  *another* marketplace/repo (`github`, `url`, `npm`, or `pip`, matching Claude Code's
+  official marketplace source shapes) instead of building one locally. `vat claude plugin
+  build` writes the source object straight into `marketplace.json` and never builds or
+  copies the referenced plugin's content, so one marketplace can cherry-pick a plugin
+  published elsewhere without vendoring it. Set `skills: []` and omit
+  `source`/`files`/`exclude`/`changelog` on the entry — the config schema rejects the
+  combination otherwise. See "Referencing Another Marketplace's Plugin" in
+  `docs/guides/marketplace-distribution.md`.
+
+- **`fillRealpaths(paths, fsCache)` + `realpathFrom(table, path)`** in `@vibe-agent-toolkit/utils` —
+  the canonical-path column, a second fill/judge pair alongside `fillSiblingNames` +
+  `classifyFilenameCaseFrom`. Link validation asked `fs.realpathSync` twice per *existing* link
+  target, at judgement time, inside a synchronous loop: once for the target and once for the
+  **run-constant project root**. On this repo's own corpus (770 links over 266 documents) that was
+  roughly 1,500 serialised `realpathSync` calls, about half of them re-canonicalizing the same root.
+  The column now canonicalizes each distinct path once, concurrently, before judging, and the
+  project root is a single row; the judge reads the table and makes no `realpath` call of either
+  kind. Output-neutral by design — verified with VAT's pipeline-snapshot oracles, all 12 artifacts
+  byte-identical.
+
+  ⚠️ **`FsLookupCache.realpath` now canonicalizes with `promisify(fs.realpath)` rather than
+  `fs/promises.realpath`, and the choice is load-bearing.** Node ships two different realpath
+  implementations and they do not agree: `fs.realpathSync` and the `fs.realpath` *callback* form run
+  Node's own JS lstat/readlink walk, which preserves the casing the caller asked for, while
+  `fs/promises.realpath` and `fs.realpath.native` call `uv_fs_realpath`, which reports the casing
+  **on disk**. On a case-insensitive filesystem — macOS and Windows — those return different
+  strings, so a column filled through the native route would flip containment verdicts against the
+  synchronous callers it replaces and report link problems the un-refactored code never reported.
+  Anyone who was calling `FsLookupCache.realpath` directly (it had no in-tree callers before this
+  change) now gets `realpathSync`-equivalent answers.
+
+- **`FsLookupCache.probe(path)`** in `@vibe-agent-toolkit/utils` — memoizes the `existsSync` +
+  `statSync` pair that link-target classification asks per link, so it is asked once per distinct
+  target instead. The two syscalls are deduplicated, not collapsed into one: the pair distinguishes
+  "absent" from "present but unstattable", and the link-graph walker branches differently on each.
+  Exposes `probeStats` (`{ probes, misses }`), and `walkLinkGraph` accepts an optional `pathProbe`
+  so callers can read those counters back. Output-neutral by design — verified with VAT's
+  pipeline-snapshot oracles (12/12 artifacts identical) and a byte-for-byte diff of the packaged
+  skill output.
+
+- **`parseMarkdownContent(content, sizeBytes)` and `parseHtmlContent(content, sizeBytes)`** in
+  `@vibe-agent-toolkit/resources` — the content-addressable halves of `parseMarkdown` / `parseHtml`,
+  pure functions of their arguments with no filesystem access. The path-taking originals are
+  unchanged and now delegate. `sizeBytes` is a parameter rather than derived from `content` because
+  the two genuinely differ: the on-disk byte count is the authority, and re-encoding a decoded
+  string diverges from it on malformed UTF-8 (each bad byte becomes a 3-byte U+FFFD).
+
+- **Content keys — `computeContentKey()`, `parserKindForPath()`, `readContentWithKey()`** are exported
+  from `@vibe-agent-toolkit/resources`. A content key names a parse result by the bytes the parser
+  read *and* which parser read them, with no path component, so the same document in two trees shares
+  one key. `parserKindForPath()` is now THE markdown-vs-HTML discriminator — `ResourceRegistry` calls
+  it rather than repeating the extension test — because parser selection is part of a document's parse
+  identity: identical bytes at `x.md` and `x.html` legitimately parse differently, which is realizable
+  on the *empty file*. `readContentWithKey(filePath, parserKind)` reads and keys in one step, so a
+  caller cannot key one read and parse another, and returns the raw `byteLength` alongside the decoded
+  content. Its `parserKind` is a **required argument, deliberately not defaulted to the extension**:
+  the key must name the parser that actually runs, and shipped code exists where those differ — the
+  LanceDB RAG lane hands every resource, including the `.html` ones the registry crawls, to the
+  markdown parser. A defaulted kind would file that lane's markdown facts under the key a genuine
+  HTML parse uses, and one lane would be served the other's facts. Callers that really do want the
+  extension rule pass `parserKindForPath(filePath)` explicitly.
+  `computeContentKey()` takes **raw bytes** (`Uint8Array`), not a decoded string: UTF-8 decoding is
+  many-to-one on invalid input, so keying the decoded form gave three distinct files
+  (`[c2]`, `[e2 82]`, `[ff]`) one key while `ParseResult.sizeBytes` — a raw byte count that reaches
+  rule variables and rewriting templates — differed between them. Mixing in the byte *length* would
+  not close it either, since two of those three are the same length.
+
+- **`ResourceRegistry.getDuplicateIdCollisions()`** returns the first-added-wins drops in arrival
+  order. `validate()` already reported *that* a collision happened; this reports *which file won*,
+  which is the part decided by enumeration order.
+
+- **`LINK_FROM_NON_ROUTABLE_FILE` (`warning`) — a link out of a bundled HTML page that VAT did not follow.** VAT parses HTML, so a bundled `.html` file is a registry *member* whose links get rewritten; it is not *routable* — VAT does not walk through it to pull its own link targets into the bundle. Routing is markdown-only, matching Anthropic's skill guidance. `SKILL.md → guide.html → diagram.svg` therefore bundles the page and drops the diagram, and because the referring page *did* ship, the missing image reads as a link-rewriter bug rather than a deliberate boundary. That drop is now reported instead of silent. Opt out with `severity.LINK_FROM_NON_ROUTABLE_FILE: ignore`. A target that does not exist on disk at all stays `LINK_MISSING_TARGET` — the author's broken link is the more actionable finding.
+
+- **`DuplicateResourceIdError`** is exported from `@vibe-agent-toolkit/resources`, so a caller of `addResource()` can catch a first-added-wins collision **by type**. The one in-tree consumer was matching on `error.message.startsWith('Duplicate resource ID')`, which stops working silently the day the message is reworded.
+
+- **`canCreateSymlinks(dir)`** is exported from `@vibe-agent-toolkit/utils`. Probes whether the host
+  permits symlink creation — Windows needs Developer Mode or `SeCreateSymbolicLinkPrivilege`, and the
+  privilege cannot be inferred from `process.platform` — so a fixture can say it skipped rather than
+  passing silently.
+
+- **`compileFrontmatterSchema()` and `validateCompiledFrontmatter()`** are exported from
+  `@vibe-agent-toolkit/resources`, splitting schema compilation from validation. Use them when
+  validating many documents against one schema; `validateFrontmatter()` is unchanged and still
+  compiles per call.
+
+- **A cross-process parse cache, on by default.** Parsing is 80.4% of `vat resources validate`'s
+  library time. Every document VAT parses is now filed under a content key — a hash of the exact
+  bytes plus the parser they route to — in `<tmpdir>/.vat-cache/parse/`, and a later run over
+  unchanged bytes reconstructs the parse instead of redoing it. Measured over this repo's 265
+  tracked markdown files: **1,177 ms cold versus 26 ms warm, a 45× reduction on the parse step**,
+  for entries totalling 21% of the corpus size.
+
+  It has to be cross-process rather than an in-memory memo because `vat validate`, `vat verify` and
+  `vat build` parse nothing themselves — they spawn the vat binary once per phase, so a per-process
+  cache could not help the three commands most worth speeding up.
+
+  Correctness properties worth knowing, because they constrain how it can be changed:
+
+  - **Entries never store the document text.** The key can only be computed by reading the file, so
+    the content is always in hand and is re-attached rather than stored. That is where the 21%
+    comes from, and it keeps the cache from being a full plaintext copy of a possibly-sensitive
+    corpus.
+  - **Frontmatter is stored as YAML source, never as the parsed object.** JSON cannot carry `.inf`,
+    `.nan` or `!!binary`, and it throws outright on cyclic anchors — those documents would have
+    silently never cached. Re-parsing the source is lossless because it is the same call the cold
+    path makes.
+  - **Every hit returns a freshly deserialized object graph.** Two resources served from one entry
+    never share a `links` array. Bundling mutates `resolvedId` on parsed links in place, so a
+    shared array would leak one skill's decisions into another's.
+  - **Fail-soft covers corruption, not wrongness.** A missing, unreadable, corrupt or
+    wrong-schema-version entry is a miss. A well-formed entry filed under a wrong key is not
+    something fail-soft can catch, which is why the key rules are strict.
+
+  A cold-versus-warm equivalence test asserts the two runs produce identical metadata **and** that
+  the warm run actually hit — verified against a mutant where the cache always misses, which leaves
+  a bare equality assertion perfectly green.
+
+- **`parseFileCached(filePath, parserKind, cache?)`** in `@vibe-agent-toolkit/resources` — the cached
+  replacement for `parseMarkdown(path)` / `parseHtml(path)`. Those two read the file and hand the
+  bytes straight to a parser, so they bypass the cache entirely; every VAT call site that does not go
+  through `ResourceRegistry` now uses this instead. Eight of them did: skill packaging, skill and
+  packaging validation, the post-build HTML href scan, skill-name discovery, `vat skills package`
+  (link collection and dry-run) and the LanceDB indexer. `parseKeyed(keyed, cache)` is the same
+  interception one step lower, for a caller that has already read and keyed the bytes.
+  `defaultParseCache()` is the process-wide instance used when no cache is supplied. `parseMarkdown`
+  and `parseHtml` remain exported and uncached — VAT's own parse-fact oracle uses them
+  deliberately, since an oracle that consults the cache cannot verify it.
+
+- **`vat cache clear`** removes VAT's on-disk caches — the parse cache and the external-URL
+  validation caches, which share `<tmpdir>/.vat-cache/`. Reports what it removed; exits 0 when
+  there is nothing there; works even when caching is disabled, since a no-op in that case would be
+  a trap. This is the user-invocable form of "recovery is rescan", which previously had none.
+
+- **`--no-cache` on the root command** disables VAT's on-disk caches for the run by setting
+  `VAT_CACHE=0`. An environment variable rather than a plumbed flag because the commands that need
+  it most spawn child processes, and only the environment crosses that boundary. The pre-existing
+  `vat resources validate --no-cache` now covers both caches — and now works at all; see Fixed.
+
+### Changed
+
+- **A markdown link whose target exists but cannot be read is now reported instead of silently
+  dropped — new `LINK_TARGET_UNREADABLE` code (error).** When `existsSync` found a link target and
+  `statSync` then threw anyway (a permissions problem, or a change racing the walk), the skill
+  link-graph walker classified it as "skipped": no exclusion, no bundle entry, no finding. The link
+  simply vanished, so the report described a corpus with one fewer edge in it than the tree on disk.
+  The resources lane has always reported the identical read failure as `RESOURCE_UNREADABLE`; the
+  two lanes now give one answer to one situation. Configurable like any other code
+  (`validation.severity.LINK_TARGET_UNREADABLE`), and documented in `docs/validation-codes.md`.
+
+- **`vat audit` and `vat inventory` stopped spawning a `git check-ignore` process per link target.**
+  The skill link walk asks whether each link target is gitignored. `walkLinkGraph` has always
+  accepted a `GitTracker` — which answers that in O(1) from a single `git ls-files` — but the
+  inventory extractor was the one call site that never passed one, so it fell back to a subprocess
+  per distinct target. Measured on a 1,484-document monorepo: **786 `check-ignore` spawns per
+  `vat audit`, 9.2 s of the run**; on a real `~/.claude/plugins` install, 715 spawns. The CLI now
+  supplies a tracker source backed by the per-git-root cache the audit lane already builds, so a
+  repository is listed once instead of interrogated hundreds of times. Both lanes now spawn **zero**,
+  and the whole `vat audit` command over that monorepo goes **12.5 s → 2.5 s (≈5×)** — measured as a
+  paired A/B on one tree with only that wiring toggled. Reports are byte-identical across the change
+  on both corpora (1,431,451 and 2,788,833 bytes; only the `duration:` line differs).
+
+  **One behavioural caveat, because the two oracles are not equivalent everywhere.** `git ls-files`
+  cannot list a path reached through a symlinked ancestor directory, a path inside a git submodule,
+  or a path under `.git/`; the active set therefore reports those as *ignored*, where
+  `git check-ignore` reports them as *not ignored*. In such a tree a link target of that kind moves
+  from bundled to excluded-as-gitignored in `vat inventory`'s reported `files.linked`. No `vat audit`
+  finding is computed from that array, and across 766 real skills (this repo's 54 plus 712 installed
+  plugin skills) **not one linked set changed**. The three divergent classes are pinned as
+  expected-to-differ rows in `git-ignore-oracle-parity.integration.test.ts`, alongside the seven
+  classes where the oracles are verified to agree, so the boundary is a test rather than a footnote.
+
+- **A frontmatter link-validation failure is no longer reported as a frontmatter *schema* error.**
+  `validateAgainstCollectionSchema` wrapped the schema load, the schema check and the frontmatter
+  link walk in one `try` whose `catch` blamed the schema by name, so any throw out of link validation
+  surfaced as `FRONTMATTER_SCHEMA_ERROR: Failed to load or parse frontmatter schema '<file>'` —
+  once per resource in the collection, against a schema that had loaded and compiled fine, with the
+  real cause buried in the tail of the message. The `try` now covers the schema load alone. This
+  widens what escapes: an Ajv runtime fault or an error inside link validation now aborts the run
+  instead of becoming N findings. That is deliberate — none of them are a defect in the user's
+  schema, and reporting them as one sends the reader to edit a file that is not broken.
+
+- **Skill validation and skill-name discovery stopped re-reading files they had just parsed.**
+  `validateSkillPackaging` read SKILL.md a second time to count its lines and to feed the
+  compatibility detectors, and `readSkillName` read it a second time for its H1 fallback — in both
+  cases the parse result already carried the identical raw source. Each now uses `parseResult.content`,
+  removing a whole-file read per skill and the window in which the two reads could disagree.
+
+- **`ResourceRegistry.addResource` now reads each file once and stats it once, instead of twice
+  each.** Every crawl-based command builds its registry through this method, and it was making four
+  filesystem round-trips per document: `parseMarkdown`/`parseHtml` read the file *and* stat'd it, a
+  second `stat` supplied `modifiedAt`, and `calculateChecksum` re-read the whole file to hash it. It
+  now performs one read and one stat, and derives the parse, the checksum, the byte size and the
+  modification time from that single pair.
+
+  **Output is unchanged, deliberately.** `sizeBytes` still comes from `stat().size` — never a byte
+  length re-derived from the decoded string, which diverges from the file's real size on malformed
+  UTF-8 — and `checksum` is still the SHA-256 of the *decoded* string, which is a different keyspace
+  from the raw-byte content key and is user-facing through `vat resources scan --verbose` and
+  `getResourcesByChecksum`. Both are now pinned by tests using a deliberately malformed-UTF-8
+  fixture, the only condition under which the alternatives are distinguishable.
+
+- **Markdown parsing walks the syntax tree twice per document instead of fifteen times.** Every
+  resource-reading command (`vat resources validate`, `vat audit`, `vat skills build`, …) parses the
+  project's markdown, and `parseMarkdown` was making seven full `visit()` passes over the tree in
+  `link-parser.ts` (definitions, links, link references, definitions *again*, raw HTML, headings,
+  frontmatter) plus eight more in `unresolved-references.ts` (seven mask kinds, then definition
+  identifiers) — fifteen complete traversals to collect facts that are all available from one. Each
+  file is now walked once for the link/heading/anchor/frontmatter facts and once for the
+  dangling-reference mask.
+
+  Measured over this repo's 265 tracked markdown files: traversal cost drops from 306 ms to 66 ms
+  (−78%), taking whole-corpus `parseMarkdown` from 1,155 ms to 979 ms (−15%). The floor is
+  micromark's own tokenization at 864 ms, which this does not touch. **No output change**: link
+  ordering (all `link`s, then all `linkReference`s, then all `definition`s), heading slug
+  deduplication order, and HTML-anchor emission order are all preserved, verified by diffing the
+  complete `ParseResult` of all 265 documents before and after — zero rows differ.
+
+### Security
+
+- **VAT's on-disk cache directory is now created owner-only (`0700`) on POSIX.**
+  `<tmpdir>/.vat-cache/` is a world-readable location shared by every user on the host, and it holds
+  the set of external URLs a project links to — including private hostnames. The per-OS-user cache
+  beside it (`auth-<user>/`) was scoped **by directory name alone**, with no permission backing that
+  separation at all. Both `mkdir` sites now pass `mode: 0o700`. On Windows the mode bits reduce to
+  the read-only flag, so this is a real mitigation on Linux and macOS and a no-op there; it should
+  not be cited as a cross-platform guarantee.
+
 ### Fixed
 
 - **`vat` now runs the version your lockfile pinned when you install with pnpm.** It was silently running a different one. The wrapper looked for a locally installed CLI at a single hardcoded path that only exists in npm's flat `node_modules` layout; under pnpm that path is absent, so the lookup failed and `vat` quietly fell back to whichever globally installed copy it could find — no warning, and the version it printed looked plausible. If you adopted VAT through the umbrella `vibe-agent-toolkit` package, this affected you on every invocation.
 
   Resolution now goes through Node's own module resolver, which works across npm, bun, pnpm and yarn PnP. **What to do:** nothing. If you are on pnpm, check that `vat --version` now matches your lockfile — it may change, because it was previously wrong.
 
+- **`vat verify`, `vat build`, `vat validate`, and `vat skills validate`/`build` pointed a
+  no-path-scope refusal at `vat audit <path>`, which exits 0 unconditionally — including when
+  it reports `status: error`.** An operator who followed the recommended fallback to inspect a
+  single skill or bundle got a command whose exit code carries no pass/fail signal at all.
+  All five now point at `vat skill review <path>`, whose exit code is 1 iff status is
+  `warning` or `error` by construction.
+
+- **A markdown document that declares the same reference-definition label twice resolved every
+  `[ref][label]` to the LAST declaration; CommonMark resolves it to the FIRST.** `[dup]: ./a.md`
+  followed by `[dup]: ./b.md` made VAT report `./b.md` for every `[ref][dup]`, while every renderer
+  links to `./a.md` — so link validation was checking a target the reader never actually visits.
+  Fixed with first-write-wins resolution in the link parser.
+
+- **A link to a file whose name carries an accent was reported broken even though the file was right
+  there.** The same visible filename has two Unicode encodings — precomposed `é` (NFC) and
+  decomposed `e` + combining acute (NFD) — and the two sides of every filename comparison come from
+  different places: `readdir` and `git ls-files` hand back whatever form is on disk (commonly
+  decomposed on macOS), while a link href carries whatever an editor typed (almost always composed).
+  Nothing reconciled them, so three lookups in the link pipeline missed on files that plainly exist:
+  the parent-directory listing check emitted `LINK_BROKEN_FILE`; the registry's path index withheld
+  `resolvedId`, which strips the href during packaging and fails the build with
+  `PACKAGED_UNREFERENCED_FILE`; and the fragment index silently skipped anchor checking. All three
+  now key on NFC via the new `toNfc()` helper (`@vibe-agent-toolkit/utils/path`). Paths handed to
+  the filesystem are deliberately left alone — on Linux the normalized form of a decomposed filename
+  names no file at all. Because folding can paper over a genuine cross-platform break — the link
+  resolves only after normalizing, which macOS/APFS and Windows tolerate but Linux/ext4 does not —
+  a fold-only match (not byte-identical) now also emits the new **`LINK_NORMALIZATION_MISMATCH`**
+  (`warning`), naming both spellings and recommending the file and link both move to NFC. A
+  byte-identical match is unaffected.
+
+- **`--debug` produced no debug output from any command, and an unexpected failure printed no stack
+  under it either.** `--debug` is declared on the root program *and* on 47 subcommands; Commander
+  resolves the root's definition first, so every command's action ran with `options.debug`
+  undefined and all 74 `logger.debug(...)` sites in the CLI were unreachable through the flag they
+  document — wherever it sat on the command line. Measured on `vat resources scan <dir> --debug`:
+  one `[DEBUG]` line before the fix (written by the launcher straight from `process.argv`, which is
+  why the existing test could not fail), five after. Separately, the exit-2 envelope — the
+  *unexpected* failure — carried `error.message` alone, so an internal `TypeError` reached users as
+  a single line with no file and no frames, and a thrown non-`Error` was flattened to the literal
+  string `Unknown error`. The root value is now copied to the dispatched command, and exit-2
+  failures write the stack (or an inspected rendering of a non-`Error`) to the debug channel.
+  Output without `--debug` is unchanged.
+
+- **A merely *broken* root-absolute link was reported as *escaping the project* whenever the project
+  root reaches the filesystem through a symlink** — macOS `/tmp → /private/tmp`, a bind mount, a
+  checkout under a symlinked path. Canonicalizing a path that does not exist fell back to a lexical
+  resolve, which keeps the link's spelling, while the root gained the symlink's target from a
+  successful `realpath` — so the two sides were compared in different namespaces and a missing file
+  under the root read as outside it. A non-existent path is now canonicalized from its deepest
+  *existing* ancestor, with the missing remainder re-appended, in both the live-syscall form and the
+  pre-filled column that the link judge reads (these are documented as answering byte for byte
+  identically, and now do again). Containment is not widened: a missing file behind a directory
+  symlink that leaves the root is still outside, because the ancestor the walk lands on is that
+  escaping link. Adopters on such a layout will see `/docs/gone.md`-style links change from a
+  traversal error to the correct "file not found".
+
+- **`directFileCount` counted link *occurrences*, not files, and could exceed the bundle's own file
+  count.** `getResolvedMarkdownLinks` walked `parseResult.links` — one entry per occurrence — and
+  probed each one, so a skill whose routing table pointed 14 rows at the same document contributed
+  14 "direct files". A skill in this repo reported `{ fileCount: 9, directFileCount: 41 }`. The
+  packaging validator now collapses to distinct targets before resolving, preserving first-seen
+  order. The existing `directFileCount <= fileCount` assertion had been passing over the violation
+  because its fixture links three *distinct* files and so could not distinguish the two answers.
+
+- **Repeated filesystem probes across `vat audit`.** Four call sites asked the OS the same question
+  many times in one run; measured on this repo, `vat audit .` drops from 5,505 to 5,373 Node `fs`
+  calls. `gitFindRoot` now memoizes its walk, seeding every ancestor it climbs and caching the
+  negative answer (89 `existsSync` → 21); `resetProjectRootCaches()` clears it, so there is still
+  exactly one public reset. Plugin extraction walks the tree once matching a list of filenames
+  instead of once per filename (`readdir` 35 → 19). The packaging validator resolves declared
+  test-input directories once per skill rather than twice (a term quadratic in project skill count),
+  and the implicit-eval-suite probe is memoized per resolution call (`existsSync` 14 → 2). No
+  behaviour changes: link resolution order, crawl order and audit output are unchanged.
+
+- **Three CLI options were silently doing nothing.** Commander represents `--no-x` as the *positive*
+  key `x` (true by default, false when the flag is passed) and camelCases every long name — it never
+  produces `noX`, and never a kebab-case key. Three option reads asked for keys Commander never
+  emits, so the flags parsed, appeared in `--help`, and had no effect:
+
+  - **`vat resources validate --no-cache`** read `options.noCache`. The external-URL cache was never
+    disabled. It now is — and it now covers the parse cache too (see Added). This one shipped
+    non-functional in **every stable release from `0.1.35` through `0.1.42`**, so if you have been
+    passing it to force fresh link checks, you have been reading cached results for eight releases;
+    expect your first run after upgrading to surface external-link failures that stale cache entries
+    were masking. That is the fix working, not a new regression.
+  - **`vat skills package --no-rewrite-links`** read `options['no-rewrite-links']`, so relative links
+    in copied files were **always** rewritten. ⚠️ Behaviour change: a user who passed this flag as
+    documented was getting rewritten links, and their packaged output will now differ.
+  - **`vat skills package -b, --base-path <path>`** read `options['base-path']`, so the base always
+    fell back to `dirname(SKILL.md)`. ⚠️ Behaviour change with the widest reach of the three: the
+    flag now feeds link resolution, the relative paths listed in a dry run, **and** the `rootDir`
+    passed to `validateSkill` — so a package run that validated clean against the implicit base may
+    now surface findings against an explicit one. That is what the flag has always documented.
+
+  The root cause was the option *interfaces*, which declared `'no-rewrite-links'?: boolean` and
+  `'base-path'?: string` — so TypeScript validated the broken reads against a type that itself
+  encoded the wrong shape. The interfaces now declare the keys Commander really emits, which makes
+  the compiler catch this class instead of endorsing it. All 88 declared options were audited; no
+  other instances were found.
+
+- **`crawlDirectory({ followSymlinks: true })` no longer enumerates a file once per symlink level.**
+  The recursive walk kept no record of which directories it had entered, so a directory symlink
+  pointing at its own ancestor (`a/loop -> a`) returned `a/note.md` **sixteen times** under sixteen
+  distinct paths — one per nesting depth. It did not hang: the walk ended when the *kernel* refused
+  to resolve further links, a limit that is 32 on macOS and 40 on Linux, so **the resulting file
+  count was a property of the operating system**. It ended inside the `catch` that exists to skip
+  broken symlinks, so nothing was reported. Two directory symlinks pointing at the same directory
+  produced the same duplication with no cycle involved at all.
+
+  The walk now keeps a set of visited real paths (`realpathSync.native`, so two names for one
+  directory collide) and enters each directory once. The set is maintained **only** when
+  `followSymlinks` is true, so the default path performs no additional `realpath` calls and its
+  behaviour is byte-for-byte unchanged. No VAT command sets the flag today, so nothing shipped was
+  affected — but `crawlDirectory` is a published export, and this had to be sound before the two
+  crawl routes can be converged on symlink handling.
+
+- **A file that cannot be read no longer kills the command.** `vat resources scan`/`validate` and
+  `vat audit` terminated with a raw `ENOENT` stack trace when the crawl handed them a file they
+  could not open — reachable from a plain `git clone`, because a committed dangling `*.md` symlink
+  is returned by `git ls-files` as an ordinary mode-120000 entry. The read failure is now recorded
+  and reported as the new **`RESOURCE_UNREADABLE`** (`error`), naming the file and stating that it
+  was skipped. **This is a population change:** the file is enumerated but not admitted, so it is
+  absent from `filesScanned`, link totals and bundle contents — previously nothing was absent
+  because nothing completed. Only recognized filesystem errno codes (`ENOENT`, `EACCES`, `ELOOP`,
+  `EISDIR`, …) are demoted to findings; a parse or indexing defect still throws, so a bug in VAT
+  cannot disguise itself as a per-file warning. Set `severity.RESOURCE_UNREADABLE` to `warning` for
+  corpora expected to contain unresolvable entries. `ResourceRegistry.getUnreadableResources()`
+  returns the raw log for callers reconciling enumerated-against-admitted.
+
+- **`vat audit` and post-build validation no longer expect files that `vat skills build` never
+  ships.** The two lanes disagreed about whether HTML is traversable. Audit's registry includes
+  `.html`/`.htm`, and the link walker treated *any* registry member as a door — so on
+  `SKILL.md → page.html → notes.md`, audit walked through the page and counted `notes.md` as
+  bundled, while the build treated the page as a leaf asset and shipped no `notes.md` at all.
+  Audit reported a bundle that did not exist. Routability is now a property of the file rather
+  than a side effect of which globs a registry happened to crawl: markdown is routable, HTML is
+  not, in every lane. Links out of a bundled HTML page that no other route bundles are reported
+  as the new `LINK_FROM_NON_ROUTABLE_FILE` rather than silently disappearing, and the walker's
+  `excludedReferences` gain a matching `non-routable-source` reason instead of being mislabelled
+  `depth-exceeded`. **Widening a registry's include globs no longer widens what the walker
+  follows** — the two are now independent.
+
+- **The verbatim-copy warning named a cause that cannot happen.** When a bundled file misses the
+  resource registry it is copied with its links unrewritten, and the warning attributed that to
+  "typically an ID collision with a same-named markdown file". Resource ids carry the extension
+  (`page.md` → `page-md`, `page.html` → `page-html`), so a same-named markdown file never
+  collides — the reachable collision is a *path-slug* one, where `a-b/c.html` and `a/b-c.html`
+  both flatten to `a-b-c-html`. The warning now looks the collision up instead of guessing, and
+  names the file that actually holds the id, so there is a real path to open. When no collision
+  is recorded it states the observed fact and asserts no cause. Two code comments carrying the
+  same impossible example (`config.yaml` + `config.md` → `resources-config`) were corrected.
+
+- **Collection frontmatter schemas are compiled once per validation run, not once per resource.**
+  Every resource belonging to a collection re-read its schema file, re-parsed the JSON, constructed a
+  fresh Ajv instance and recompiled the schema — on a repository with 129 collection-bearing
+  resources and 2 distinct schemas, that was 129 compilations of the same two schemas. Compiled
+  validators are now memoized for the span of one run, keyed on validation mode plus the *resolved*
+  schema path, so two collections naming one schema by different specifiers (a relative path and an
+  npm bare specifier) share a validator. On a ~1,100-document repository `ResourceRegistry.validate()`
+  drops from **668 ms to 168 ms**; measured over the schema-bearing collections alone, 655 ms to
+  94 ms. The cache is discarded when the run returns, so a schema edited between runs is picked up.
+  Reported issues are unchanged, including the wording of schema-load failures.
+
+- **A tracked file with a non-ASCII filename vanished from every git-aware command, and was
+  separately misreported as gitignored.** `gitLsFiles` ran `git ls-files` without `-z`, so git's
+  default path-quoting wrapped any non-ASCII filename in a quoted, octal-escaped string (`café.md`
+  came back as `"caf\303\251.md"`) instead of the real name — every exact-match consumer missed it
+  outright. `GitTracker`'s O(1) gitignore oracle is built from that same output, so the same file was
+  also misclassified as ignored. Fixed by adding `-z` and splitting on NUL, the idiom this repo's own
+  build tooling already uses.
+
+- **Two published ESLint autofixers could rewrite or delete code that had nothing to do with
+  `node:path`.** The `no-path-join`/`no-path-resolve`/`no-path-relative` repair leg (recovering a
+  half-migrated file after a partial `--fix`) and the shared dead-import cleanup those rules and
+  `no-manual-path-normalize` rely on both used "is `safePath` bound anywhere in this file" as a proxy
+  for "did THIS rule's own rewrite just orphan this import / consume this call." A coincidence — a
+  sibling function's migration elsewhere in the same file, or a same-named ambient-global function
+  ESLint's scope analysis cannot see (`declare global`, a bundler shim) — was enough to arm either
+  rule against unrelated code, silently redirecting a call to VAT's `safePath` or deleting an
+  always-dead, unrelated import with a false "this rule's autofix orphaned it" message. Both are now
+  gated on positive, per-declaration evidence that this rule's own replacement actually runs in the
+  file. A narrow residual remains — a file with two same-module imports where one was already fully
+  dead before this rule pack ever touched it can still be deleted with an inaccurate message — but it
+  can only produce a redundant, harmless deletion, never a rewrite to the wrong function.
+
+- **`prefer-startswith-over-regex` missed some patterns ending in an escaped backslash before an
+  anchor, and `no-manual-path-normalize` could autofix a literal two-backslash split to
+  `toForwardSlash()` — not equivalent, and a behavior change.** The first judged whether a trailing
+  `$` was an anchor or an escaped literal dollar sign by checking only the pattern's last two
+  characters, which misreads `/\\$/` (an escaped backslash followed by a genuine anchor) as the
+  reverse. The second treated `.split('\\')` (one backslash, `path.sep`-equivalent, safe to rewrite)
+  and `.split('\\\\')` (a literal two-backslash sequence — a different, rarer operation) as the same
+  case. Fixed with a proper trailing-backslash-parity count, and by dropping the two-backslash case
+  from what the rule treats as safe to autofix.
 
 ## [0.1.42] - 2026-08-08
 

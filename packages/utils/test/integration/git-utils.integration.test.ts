@@ -179,6 +179,23 @@ describe('gitLsFiles', () => {
     expect(result).not.toBeNull();
     expect(result).toEqual([]);
   });
+
+  it("should return exact non-ASCII filenames, not git's quoted/escaped form", () => {
+    // By default `git ls-files` quotes any path containing non-ASCII bytes
+    // (wraps it in double quotes with octal escapes), e.g. "café.md" comes
+    // back as `"caf\\303\\251.md"` unless the `-z` flag is used. Without `-z`,
+    // this filename is unusable to any exact-string lookup against it.
+    const nonAsciiFile = 'café.md';
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
+    fs.writeFileSync(safePath.join(tempDir, nonAsciiFile), '# Café\n');
+    // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
+    spawnSync('git', ['add', nonAsciiFile], { cwd: tempDir, stdio: 'pipe' });
+
+    const result = gitLsFiles({ cwd: tempDir });
+
+    expect(result).not.toBeNull();
+    expect(result).toContain(nonAsciiFile);
+  });
 });
 
 describe('isGitIgnored', () => {

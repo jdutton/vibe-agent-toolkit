@@ -153,7 +153,7 @@ Exit Codes:
 Arguments:
   None. Scope comes from vibe-agent-toolkit.config.yaml, never from the command
   line — a path argument is rejected (exit 2) rather than discarded. To inspect
-  ONE skill or bundle by path, use 'vat audit <path>'.
+  ONE skill or bundle by path, use 'vat skill review <path>'.
 
 Requirements:
   projectRoot: required (errors if no vibe-agent-toolkit.config.yaml or .git/ ancestor)

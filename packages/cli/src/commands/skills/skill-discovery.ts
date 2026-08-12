@@ -6,10 +6,9 @@
  */
 
 import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 
-import { parseMarkdown } from '@vibe-agent-toolkit/resources';
+import { parseFileCached } from '@vibe-agent-toolkit/resources';
 import type { SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { crawlDirectory, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
@@ -33,9 +32,10 @@ const DISCOVERY_EXCLUDE = [
  * config is keyed by name, so two answers would mean two effective configs.
  */
 export async function readSkillName(skillPath: string): Promise<string | undefined> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillPath from glob discovery
-  const content = await readFile(skillPath, 'utf-8');
-  const parsed = await parseMarkdown(skillPath);
+  const parsed = await parseFileCached(skillPath, 'markdown');
+  // The H1 fallback below reads the SAME bytes the parse already decoded, so it
+  // uses `parsed.content` rather than a second read of the same path.
+  const content = parsed.content;
   const name = parsed.frontmatter?.['name'];
   if (typeof name === 'string' && name.length > 0) {
     return name;

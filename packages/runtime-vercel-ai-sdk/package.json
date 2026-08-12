@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/runtime-vercel-ai-sdk",
-  "version": "0.1.42",
+  "version": "0.2.0-rc.2",
   "description": "Vercel AI SDK runtime adapter for VAT agents",
   "type": "module",
   "exports": {
@@ -13,7 +13,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsx ../dev-tools/src/tsc-clean-build.ts",
     "llm-demo": "tsx examples/llm-agent-demo.ts",
     "test:unit": "vitest run",
     "test:watch": "vitest",

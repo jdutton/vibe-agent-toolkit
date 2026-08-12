@@ -16,7 +16,7 @@
 import { readFile, stat } from 'node:fs/promises';
 
 import GithubSlugger from 'github-slugger';
-import type { Definition, Heading, Link, LinkReference, Root } from 'mdast';
+import type { Definition, Heading, Html, Link, LinkReference, Root, Yaml } from 'mdast';
 import { toString as mdastToString } from 'mdast-util-to-string';
 import remarkFrontmatter from 'remark-frontmatter';
 import remarkGfm from 'remark-gfm';
@@ -37,6 +37,35 @@ export interface ParseResult {
   headings: HeadingNode[];
   frontmatter?: Record<string, unknown>;
   frontmatterError?: string;
+  /**
+   * The frontmatter block's YAML **source**, delimiters excluded, exactly as
+   * the mdast `yaml` node carried it.
+   *
+   * Absent (key omitted) when the document has no frontmatter block at all;
+   * present-and-empty (`''`) for a block whose body is empty — so "empty block"
+   * stays distinguishable from "no block", which is a distinction neither
+   * {@link frontmatter} nor {@link frontmatterError} can make (an empty block
+   * leaves both absent, exactly as no block does).
+   *
+   * ## Why the source is carried next to the parsed object
+   *
+   * {@link frontmatter} cannot survive a JSON round trip, so nothing that
+   * stores a `ParseResult` as JSON — a disk-backed parse cache, chiefly — can
+   * reconstruct it from that field. Measured: `yaml` decodes `.inf` to
+   * `Infinity`, `.nan` to `NaN` and `!!binary` to a `Buffer`; `JSON.stringify`
+   * then maps the first two to `null` and mangles the third into an envelope
+   * object, and a cyclic YAML anchor makes it throw outright — meaning such a
+   * document could not be stored at all.
+   *
+   * Storing the source and re-running {@link parseFrontmatterSource} on a hit
+   * is lossless **by construction**, because it is literally the same
+   * computation the cold path runs. That is the only reason this field exists;
+   * it is not a convenience copy.
+   *
+   * HTML documents leave it undefined, exactly as they leave
+   * {@link frontmatter} undefined.
+   */
+  frontmatterSource?: string;
   content: string;
   sizeBytes: number;
   estimatedTokenCount: number;
@@ -60,6 +89,10 @@ export interface ParseResult {
 /**
  * Parse a markdown file and extract all links, headings, and metadata.
  *
+ * Reads the bytes, then delegates every parsing decision to
+ * {@link parseMarkdownContent}. The only thing decided here is the byte size
+ * attributed to the document: `stat().size`, the real size on disk.
+ *
  * @param filePath - Absolute path to the markdown file
  * @returns Parsed markdown data including links, headings, size, and token estimate
  * @throws Error if file cannot be read or parsed
@@ -80,7 +113,47 @@ export async function parseMarkdown(filePath: string): Promise<ParseResult> {
     stat(filePath),
   ]);
 
-  const sizeBytes = stats.size;
+  return parseMarkdownContent(content, stats.size);
+}
+
+/**
+ * Parse markdown **source** — the content-addressable half of
+ * {@link parseMarkdown}.
+ *
+ * This is a pure function of its two arguments: no filesystem access, no path,
+ * no ambient state. That is what makes it cacheable by content, and it is what
+ * a history replay needs — a historical blob read out of git is not on disk
+ * under any path, so anything that insists on a `filePath` cannot parse it.
+ * {@link parseMarkdown} is now just "read the bytes, then call this".
+ *
+ * ## Why `sizeBytes` is a parameter and NOT derived from `content`
+ *
+ * `content` is a **decoded** string; `sizeBytes` is a count of **bytes on
+ * disk**. Those are not recoverable from one another:
+ *
+ * - `content.length` is UTF-16 code units — wrong for anything non-ASCII.
+ * - `Buffer.byteLength(content, 'utf-8')` is the byte length of a *re-encoded*
+ *   string, which diverges from the file's real size whenever the source bytes
+ *   were not already well-formed UTF-8 (invalid sequences decode to U+FFFD and
+ *   re-encode to three bytes each, so the round trip does not preserve length)
+ *   — and it silently ignores a UTF-8 BOM the decoder stripped.
+ *
+ * The value reaches packaged-output accounting elsewhere in the toolkit, so it
+ * must stay the caller's decision rather than a guess made here.
+ * {@link parseMarkdown} passes `stat().size`, exactly as it always has; a
+ * caller replaying a git blob passes that blob's byte length.
+ *
+ * @param content - Decoded markdown source
+ * @param sizeBytes - Byte size the caller attributes to this content
+ * @returns Parsed markdown data including links, headings, size, and token estimate
+ *
+ * @example
+ * ```typescript
+ * const result = parseMarkdownContent('# Title\n', 8);
+ * console.log(`Found ${result.links.length} links`);
+ * ```
+ */
+export function parseMarkdownContent(content: string, sizeBytes: number): ParseResult {
   const estimatedTokenCount = Math.ceil(content.length / 4);
 
   // Parse markdown with unified/remark
@@ -91,17 +164,9 @@ export async function parseMarkdown(filePath: string): Promise<ParseResult> {
 
   const tree = processor.parse(content) as Root;
 
-  // Extract links
-  const links = extractLinks(tree);
-
-  // Extract headings with tree structure
-  const headings = extractHeadings(tree);
-
-  // Explicit `<a id="...">` / `name=` fragment targets declared in raw HTML
-  const htmlAnchors = extractHtmlAnchors(tree);
-
-  // Extract frontmatter
-  const { frontmatter, error: frontmatterError } = extractFrontmatter(tree);
+  // Links, headings, raw-HTML anchors and frontmatter, from ONE tree walk
+  const { links, headings, anchors, frontmatter, frontmatterError, frontmatterSource } =
+    collectAstFacts(tree);
 
   // Detect dangling reference-style links (full/collapsed forms with no
   // matching definition) — see findUnresolvedReferences for why this is a
@@ -114,9 +179,10 @@ export async function parseMarkdown(filePath: string): Promise<ParseResult> {
     links,
     headings,
     unresolvedReferences,
-    ...(htmlAnchors.length > 0 && { anchors: htmlAnchors }),
+    ...(anchors.length > 0 && { anchors }),
     ...(frontmatter !== undefined && { frontmatter }),
     ...(frontmatterError !== undefined && { frontmatterError }),
+    ...(frontmatterSource !== undefined && { frontmatterSource }),
     content,
     sizeBytes,
     estimatedTokenCount,
@@ -124,83 +190,229 @@ export async function parseMarkdown(filePath: string): Promise<ParseResult> {
 }
 
 /**
- * Extract all links from the markdown AST.
+ * Everything a single walk of the markdown AST yields.
  *
- * Handles:
- * - Regular links: [text](href)
- * - Reference-style links: [text][ref]
- * - Autolinks: <url>
+ * `anchors` is always an array here (possibly empty); `parseMarkdownContent`
+ * is what decides to omit the key entirely when a document declares none, so
+ * the "absent, not empty" distinction lives at exactly one place.
+ */
+interface MarkdownAstFacts {
+  links: ResourceLink[];
+  headings: HeadingNode[];
+  anchors: string[];
+  frontmatter?: Record<string, unknown>;
+  frontmatterError?: string;
+  frontmatterSource?: string;
+}
+
+/**
+ * Mutable state threaded through the single AST walk.
+ *
+ * The three link buckets exist because `links` is ordered **by node kind, not
+ * by document position** — all `link`s, then all `linkReference`s, then all
+ * `definition`s — a contract the parse-fact goldens pin by ordinal. A single
+ * walk sees the three kinds interleaved, so it buckets them and concatenates
+ * in kind order afterwards. Within a bucket, walk order IS document order.
+ */
+interface AstWalkState {
+  /**
+   * `[ref]: url` targets. Complete only once the walk finishes.
+   *
+   * FIXED (was a known defect): a duplicated `[ref]: url` label used to keep
+   * the LAST definition, but CommonMark resolves a reference to the FIRST
+   * one. For
+   *
+   *     A [ref][dup].
+   *     [dup]: ./first.md
+   *     [dup]: ./last.md
+   *
+   * every renderer links `[ref][dup]` to `./first.md`, so a LAST-wins map
+   * made VAT check a target the reader never visits. Fixed by making this
+   * write first-write-wins: `case 'definition'` only calls
+   * `definitions.set(id, url)` when `!definitions.has(id)`, so the first
+   * occurrence of a label sticks and later re-declarations of the same label
+   * are ignored for resolution purposes (each still gets its own
+   * `definitionLinks` entry — see below). Kept as documentation of the
+   * CommonMark first-wins contract this map must uphold: a future refactor
+   * that reintroduces an unconditional `.set()` here would silently regress
+   * to last-wins.
+   */
+  definitions: Map<string, string>;
+  /** `[text](href)` and autolinks. */
+  inlineLinks: ResourceLink[];
+  /** Deferred: resolving these needs the *completed* `definitions` map. */
+  linkReferenceNodes: LinkReference[];
+  /** `[ref]: url` definitions, as links in their own right. */
+  definitionLinks: ResourceLink[];
+  flatHeadings: HeadingNode[];
+  /** Stateful: dedupes slugs in document order, exactly as GitHub does. */
+  slugger: GithubSlugger;
+  anchors: Set<string>;
+  frontmatter?: Record<string, unknown>;
+  frontmatterError?: string;
+  frontmatterSource?: string;
+}
+
+/**
+ * Node kinds {@link collectAstFacts} reacts to.
+ *
+ * Passed to `visit` as its test so the walk is still ONE traversal while the
+ * visitor's parameter narrows to exactly these kinds — which is what lets
+ * {@link collectNode}'s switch be exhaustive (and therefore lets the compiler
+ * enforce that adding a kind here adds a case there).
+ */
+const COLLECTED_NODE_TYPES = [
+  'link',
+  'linkReference',
+  'definition',
+  'heading',
+  'html',
+  'yaml',
+] as const;
+
+/**
+ * Walk the markdown AST **once** and extract every fact `parseMarkdown` needs.
+ *
+ * Replaces seven separate `visit()` passes (definitions, links, link
+ * references, definitions again, raw HTML, headings, frontmatter) with a
+ * single traversal dispatching on `node.type`. Each pass was a full tree walk,
+ * so the tree was walked seven times per document to produce facts that are
+ * all available from one; parsing dominates every resource-reading command in
+ * the toolkit, and this is the cold path CI always pays.
+ *
+ * Output is byte-identical to the seven-pass version by construction: a
+ * filtered `visit` yields nodes of its type in the same relative order an
+ * unfiltered one does, so bucketing by kind and concatenating reproduces the
+ * previous ordering exactly (see {@link AstWalkState}).
  *
  * @param tree - Markdown AST from unified/remark
- * @returns Array of classified links with line numbers
+ * @returns Links, heading tree, raw-HTML anchors and frontmatter
  */
-function extractLinks(tree: Root): ResourceLink[] {
+function collectAstFacts(tree: Root): MarkdownAstFacts {
+  const state: AstWalkState = {
+    definitions: new Map<string, string>(),
+    inlineLinks: [],
+    linkReferenceNodes: [],
+    definitionLinks: [],
+    flatHeadings: [],
+    slugger: new GithubSlugger(),
+    anchors: new Set<string>(),
+  };
+
+  visit(tree, [...COLLECTED_NODE_TYPES], (node) => {
+    collectNode(state, node);
+  });
+
+  return {
+    links: [...state.inlineLinks, ...resolveLinkReferences(state), ...state.definitionLinks],
+    headings: buildHeadingTree(state.flatHeadings),
+    anchors: [...state.anchors],
+    ...(state.frontmatter !== undefined && { frontmatter: state.frontmatter }),
+    ...(state.frontmatterError !== undefined && { frontmatterError: state.frontmatterError }),
+    ...(state.frontmatterSource !== undefined && { frontmatterSource: state.frontmatterSource }),
+  };
+}
+
+/**
+ * Record whatever one AST node contributes. Node kinds with nothing to
+ * contribute (paragraphs, text, lists, tables, …) fall through untouched.
+ */
+function collectNode(
+  state: AstWalkState,
+  node: Definition | Heading | Html | Link | LinkReference | Yaml,
+): void {
+  switch (node.type) {
+    case 'link': {
+      state.inlineLinks.push(toResourceLink(node, extractLinkText(node), node.url, 'link'));
+      break;
+    }
+    case 'linkReference': {
+      state.linkReferenceNodes.push(node);
+      break;
+    }
+    case 'definition': {
+      if (!state.definitions.has(node.identifier)) {
+        state.definitions.set(node.identifier, node.url);
+      }
+      state.definitionLinks.push(toResourceLink(node, node.identifier, node.url, 'definition'));
+      break;
+    }
+    case 'heading': {
+      state.flatHeadings.push(toFlatHeading(state.slugger, node));
+      break;
+    }
+    case 'html': {
+      collectHtmlAnchors(state.anchors, node);
+      break;
+    }
+    case 'yaml': {
+      collectFrontmatter(state, node);
+      break;
+    }
+  }
+}
+
+/**
+ * Build a `ResourceLink` from any of the three link-bearing node kinds.
+ *
+ * `text` and `href` are passed in because each kind derives them differently
+ * (a `definition`'s text is its identifier and a `linkReference`'s href comes
+ * from the definitions map, not the node), while position and classification
+ * are shared.
+ *
+ * `line` is spread conditionally so the key is ABSENT rather than
+ * undefined-valued when a node carries no position. See
+ * {@link cleanupEmptyChildren} for why that distinction is load-bearing. This
+ * particular guard is **defensive and currently unreachable**: remark sets
+ * `position` on every node it produces, and a measured sweep of 265 tracked
+ * markdown documents found zero position-less nodes, so no test can turn it
+ * red. It is here to make "no own key of a `ParseResult` is ever valued
+ * `undefined`" true by construction rather than true by luck.
+ */
+function toResourceLink(
+  node: Definition | Link | LinkReference,
+  text: string,
+  href: string,
+  nodeType: NonNullable<ResourceLink['nodeType']>,
+): ResourceLink {
+  return {
+    text,
+    href,
+    type: classifyLink(href),
+    ...(node.position !== undefined && { line: node.position.start.line }),
+    nodeType,
+  };
+}
+
+/**
+ * Resolve the deferred `linkReference` nodes against the completed definitions
+ * map, in document order.
+ *
+ * Invariant: every `linkReference` node reaching this point already has a
+ * matching `definition` — CommonMark resolves link references at PARSE time,
+ * so micromark only ever emits a `linkReference` node when a definition
+ * matched. A reference with no matching definition never becomes a node at
+ * all; it degrades to literal bracketed text in the AST (and in the rendered
+ * document), which is exactly why an AST-based checker is structurally blind
+ * to it. That dangling case is detected separately, by
+ * `findUnresolvedReferences`'s raw-source scan (see `parseMarkdownContent` and
+ * `unresolved-references.ts`), which reports it as
+ * `LINK_UNRESOLVED_REFERENCE`.
+ *
+ * The `undefined` branch below is therefore NOT the dangling-reference case —
+ * it is unreachable unless micromark's own parse-time contract breaks. It
+ * degrades (skips the node) rather than throwing because `parseMarkdown` runs
+ * over third-party markdown on the `vat audit` / `vat skills validate` paths:
+ * a parser quirk must not abort a whole audit run (repo CLAUDE.md, "be liberal
+ * in what you accept" for data we do not control).
+ */
+function resolveLinkReferences(state: AstWalkState): ResourceLink[] {
   const links: ResourceLink[] = [];
-
-  // First pass: collect all definition nodes (identifier → url)
-  // This allows us to resolve linkReference nodes against their definitions
-  const definitions = new Map<string, string>();
-  visit(tree, 'definition', (node: Definition) => {
-    definitions.set(node.identifier, node.url);
-  });
-
-  // Visit link nodes (regular links and autolinks)
-  visit(tree, 'link', (node: Link) => {
-    const link: ResourceLink = {
-      text: extractLinkText(node),
-      href: node.url,
-      type: classifyLink(node.url),
-      line: node.position?.start.line,
-      nodeType: 'link',
-    };
-    links.push(link);
-  });
-
-  // Visit linkReference nodes (reference-style links).
-  //
-  // Invariant: every `linkReference` node visited here already has a matching
-  // `definition` — CommonMark resolves link references at PARSE time, so
-  // micromark only ever emits a `linkReference` node when a definition
-  // matched. A reference with no matching definition never reaches this
-  // visitor at all; it degrades to literal bracketed text in the AST (and in
-  // the rendered document), which is exactly why an AST-based checker is
-  // structurally blind to it. That dangling case is detected separately, by
-  // `findUnresolvedReferences`'s raw-source scan (see `parseMarkdown` and
-  // `unresolved-references.ts`), which reports it as
-  // `LINK_UNRESOLVED_REFERENCE`.
-  //
-  // The `undefined` branch below is therefore NOT the dangling-reference case
-  // — it is unreachable unless micromark's own parse-time contract breaks. It
-  // degrades (skips the node) rather than throwing because `parseMarkdown`
-  // runs over third-party markdown on the `vat audit` / `vat skills validate`
-  // paths: a parser quirk must not abort a whole audit run (repo CLAUDE.md,
-  // "be liberal in what you accept" for data we do not control).
-  visit(tree, 'linkReference', (node: LinkReference) => {
-    const resolvedUrl = definitions.get(node.identifier);
-    if (resolvedUrl === undefined) return;
-    const link: ResourceLink = {
-      text: extractLinkText(node),
-      href: resolvedUrl,
-      type: classifyLink(resolvedUrl),
-      line: node.position?.start.line,
-      nodeType: 'linkReference',
-    };
-    links.push(link);
-  });
-
-  // Visit definition nodes (reference-style link definitions: [ref]: url)
-  // These provide the actual URLs for linkReference nodes
-  visit(tree, 'definition', (node: Definition) => {
-    const link: ResourceLink = {
-      text: node.identifier,
-      href: node.url,
-      type: classifyLink(node.url),
-      line: node.position?.start.line,
-      nodeType: 'definition',
-    };
-    links.push(link);
-  });
-
+  for (const node of state.linkReferenceNodes) {
+    const resolvedUrl = state.definitions.get(node.identifier);
+    if (resolvedUrl === undefined) continue;
+    links.push(toResourceLink(node, extractLinkText(node), resolvedUrl, 'linkReference'));
+  }
   return links;
 }
 
@@ -331,43 +543,6 @@ export function isLocalFileLink(type: LinkType): boolean {
   return type === 'local_file' || type === 'local_directory';
 }
 
-/**
- * Extract headings from the markdown AST and build a nested tree structure.
- *
- * Builds a hierarchical structure where:
- * - h2 nodes are children of the preceding h1
- * - h3 nodes are children of the preceding h2
- * - etc.
- *
- * @param tree - Markdown AST from unified/remark
- * @returns Array of top-level heading nodes with nested children
- *
- * @example
- * For markdown:
- * ```
- * # Main
- * ## Sub
- * ### Deep
- * ## Sub2
- * ```
- *
- * Returns:
- * ```
- * [
- *   {
- *     level: 1,
- *     text: 'Main',
- *     slug: 'main',
- *     children: [
- *       { level: 2, text: 'Sub', slug: 'sub', children: [
- *         { level: 3, text: 'Deep', slug: 'deep', children: [] }
- *       ]},
- *       { level: 2, text: 'Sub2', slug: 'sub2', children: [] }
- *     ]
- *   }
- * ]
- * ```
- */
 /** `id="…"` / `name="…"` attribute, single- or double-quoted. */
 const HTML_ANCHOR_ATTRIBUTE = /\b(?:id|name)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
 
@@ -378,7 +553,7 @@ const HTML_ANCHOR_ATTRIBUTE = /\b(?:id|name)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
  * `#short`; GitHub renders that id into the DOM and the fragment resolves.
  * Indexing heading slugs alone therefore reports a working link as broken.
  *
- * Only mdast `html` nodes are visited, which is what keeps this honest: a
+ * Only mdast `html` nodes reach here, which is what keeps this honest: a
  * fenced block is a `code` node, an indented block is a `code` node, and a
  * backticked span is `inlineCode`, so an `<a id="…">` being *documented*
  * rather than *declared* is never indexed. That is the whole reason this
@@ -389,42 +564,38 @@ const HTML_ANCHOR_ATTRIBUTE = /\b(?:id|name)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
  * more permissive than a browser, which compares ids exactly; erring toward
  * resolving is deliberate, since the cost of the other direction is a false
  * `LINK_BROKEN_ANCHOR` on a link that works.
+ *
+ * @param anchors - Accumulator; insertion order becomes the emitted order
+ * @param node - A raw-HTML node encountered during the walk
  */
-function extractHtmlAnchors(tree: Root): string[] {
-  const anchors = new Set<string>();
-
-  visit(tree, 'html', (node: { value?: string }) => {
-    const raw = node.value ?? '';
-    for (const match of raw.matchAll(HTML_ANCHOR_ATTRIBUTE)) {
-      const value = (match[1] ?? match[2] ?? '').trim();
-      if (value !== '') {
-        anchors.add(value.toLowerCase());
-      }
+function collectHtmlAnchors(anchors: Set<string>, node: Html): void {
+  for (const match of node.value.matchAll(HTML_ANCHOR_ATTRIBUTE)) {
+    const value = (match[1] ?? match[2] ?? '').trim();
+    if (value !== '') {
+      anchors.add(value.toLowerCase());
     }
-  });
-
-  return [...anchors];
+  }
 }
 
-function extractHeadings(tree: Root): HeadingNode[] {
-  const flatHeadings: HeadingNode[] = [];
-  const slugger = new GithubSlugger();
-
-  // First pass: collect all headings in document order
-  // GithubSlugger processes headings in order, deduplicating exactly as GitHub does
-  visit(tree, 'heading', (node: Heading) => {
-    const text = extractHeadingText(node);
-    const heading: HeadingNode = {
-      level: node.depth,
-      text,
-      slug: slugger.slug(text),
-      line: node.position?.start.line,
-    };
-    flatHeadings.push(heading);
-  });
-
-  // Second pass: build tree structure using a stack
-  return buildHeadingTree(flatHeadings);
+/**
+ * Flatten one heading node, assigning its GitHub slug.
+ *
+ * `slugger` is stateful and MUST be fed headings in document order — that is
+ * how it reproduces GitHub's `-1`/`-2` suffixing for repeated heading text.
+ *
+ * `line` is spread conditionally for the same reason, and with the same
+ * caveat, as in {@link toResourceLink}: absent beats undefined-valued, and the
+ * guard is defensive — remark always sets `position`, so it is unreachable in
+ * practice and no test can falsify it.
+ */
+function toFlatHeading(slugger: GithubSlugger, node: Heading): HeadingNode {
+  const text = extractHeadingText(node);
+  return {
+    level: node.depth,
+    text,
+    slug: slugger.slug(text),
+    ...(node.position !== undefined && { line: node.position.start.line }),
+  };
 }
 
 /**
@@ -466,6 +637,33 @@ function extractHeadingText(node: Heading): string {
  *
  * @param flatHeadings - Array of headings in document order
  * @returns Array of top-level headings with nested children
+ *
+ * @example
+ * For markdown:
+ * ```
+ * # Main
+ * ## Sub
+ * ### Deep
+ * ## Sub2
+ * ```
+ *
+ * Returns (note that a LEAF carries no `children` key at all — not an empty
+ * array, and not an `undefined` value; see {@link cleanupEmptyChildren}):
+ * ```
+ * [
+ *   {
+ *     level: 1,
+ *     text: 'Main',
+ *     slug: 'main',
+ *     children: [
+ *       { level: 2, text: 'Sub', slug: 'sub', children: [
+ *         { level: 3, text: 'Deep', slug: 'deep' }
+ *       ]},
+ *       { level: 2, text: 'Sub2', slug: 'sub2' }
+ *     ]
+ *   }
+ * ]
+ * ```
  */
 function buildHeadingTree(flatHeadings: HeadingNode[]): HeadingNode[] {
   if (flatHeadings.length === 0) {
@@ -503,21 +701,37 @@ function buildHeadingTree(flatHeadings: HeadingNode[]): HeadingNode[] {
     stack.push(headingWithChildren);
   }
 
-  // Clean up empty children arrays (convert to undefined)
+  // Leaves are built with `children: []`; strip the key back off them.
   cleanupEmptyChildren(roots);
 
   return roots;
 }
 
 /**
- * Remove empty children arrays from heading tree (convert to undefined).
+ * Strip the `children` key off leaf headings — **deleting** it, never assigning
+ * `undefined`.
  *
- * @param headings - Array of headings to clean up
+ * ## Why `delete` and not `= undefined`
+ *
+ * The two are indistinguishable to every consumer (all of them use truthiness
+ * or optional chaining, and the Zod schema uses `.optional()`), but they are
+ * NOT indistinguishable to serialization: `JSON.stringify` drops an
+ * undefined-valued key entirely, so a heading that went through a JSON-backed
+ * parse cache comes back with the key ABSENT while a freshly parsed one has it
+ * PRESENT-but-`undefined`. `assert.deepStrictEqual` and vitest's
+ * `toStrictEqual` treat those as different values, so a cold-vs-warm
+ * equivalence gate would go red on essentially every document in a corpus over
+ * a difference nothing observes.
+ *
+ * Deleting makes the fresh result already equal to its own JSON round trip,
+ * which is the property such a cache needs.
+ *
+ * @param headings - Array of headings to clean up, mutated in place
  */
 function cleanupEmptyChildren(headings: HeadingNode[]): void {
   for (const heading of headings) {
     if (heading.children?.length === 0) {
-      heading.children = undefined;
+      delete heading.children;
     } else if (heading.children && heading.children.length > 0) {
       cleanupEmptyChildren(heading.children);
     }
@@ -525,41 +739,84 @@ function cleanupEmptyChildren(headings: HeadingNode[]): void {
 }
 
 /**
- * Extract and parse frontmatter from the markdown AST.
+ * What a frontmatter block's YAML source means — the single implementation of
+ * that decision.
  *
- * Uses remark-frontmatter which creates 'yaml' nodes for frontmatter blocks.
- * Parses YAML content and returns as plain object.
+ * ## Why this is exported
  *
- * @param tree - Markdown AST from unified/remark
- * @returns Object with parsed frontmatter and any error message
+ * A parse cache stores {@link ParseResult.frontmatterSource} (the source is
+ * JSON-safe; the parsed object is not) and must rebuild `frontmatter` /
+ * `frontmatterError` on a hit. If it re-implemented the decision below it would
+ * become a second implementation free to drift from this one — the same class
+ * of defect as any parallel resolver. It calls this instead, so cold and warm
+ * run *the same code*.
+ *
+ * The two properties that second caller depends on, and which must not be
+ * broken: it is **pure** (no state, no I/O, no AST) and **total** (never
+ * throws, for any string — a YAML failure comes back as `frontmatterError`).
+ *
+ * ## Acceptance rules (behaviour-preserving — do not "improve" these)
+ *
+ * - Empty or whitespace-only source → `{}`. No frontmatter, no error.
+ * - Parses to a non-null, non-array object → `{ frontmatter }`.
+ * - Parses to anything else (a bare scalar, `null`, a sequence) → `{}`. The
+ *   value is silently ignored, exactly as it always has been.
+ * - Throws → `{ frontmatterError }`.
+ *
+ * Keys are spread conditionally, so the result never carries an
+ * undefined-valued key (see {@link cleanupEmptyChildren} for why that matters).
+ *
+ * @param source - A frontmatter block's YAML body, delimiters excluded
+ * @returns The frontmatter object, the error message, or neither
  */
-function extractFrontmatter(tree: Root): {
+export function parseFrontmatterSource(source: string): {
   frontmatter?: Record<string, unknown>;
-  error?: string;
+  frontmatterError?: string;
 } {
-  let frontmatterData: Record<string, unknown> | undefined;
-  let errorMessage: string | undefined;
+  if (source.trim() === '') {
+    // Empty frontmatter block
+    return {};
+  }
 
-  visit(tree, 'yaml', (node: { value: string }) => {
-    if (node.value.trim() === '') {
-      // Empty frontmatter block
-      return;
+  try {
+    const parsed: unknown = yaml.parse(source);
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      return { frontmatter: parsed as Record<string, unknown> };
     }
+    return {};
+  } catch (error) {
+    // Capture YAML parsing error for validation reporting
+    return { frontmatterError: error instanceof Error ? error.message : String(error) };
+  }
+}
 
-    try {
-      const parsed = yaml.parse(node.value);
-      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-        frontmatterData = parsed as Record<string, unknown>;
-      }
-    } catch (error) {
-      // Capture YAML parsing error for validation reporting
-      errorMessage = error instanceof Error ? error.message : String(error);
-    }
-  });
+/**
+ * Record one frontmatter block on the walk state.
+ *
+ * `remark-frontmatter` emits a `yaml` node per frontmatter block, and it
+ * recognises frontmatter **only at the start of the document** — a later `---`
+ * fence is a thematic break, not a second block — so at most one such node is
+ * reachable here (verified by probe). Nothing in this function relies on that:
+ * each of the three fields independently keeps the last node that contributed
+ * to it, so a block that fails to parse leaves a previously parsed object in
+ * place, and vice versa. `frontmatterSource` follows the same rule and is set
+ * for **every** node, including an empty one — the source is what was there,
+ * regardless of what YAML made of it.
+ *
+ * The parse decision itself is {@link parseFrontmatterSource}'s, not this
+ * function's, so a cache rebuilding a hit reaches the identical logic.
+ *
+ * @param state - Walk state to record the result on
+ * @param node - A `yaml` frontmatter node encountered during the walk
+ */
+function collectFrontmatter(state: AstWalkState, node: Yaml): void {
+  state.frontmatterSource = node.value;
 
-  // With exactOptionalPropertyTypes: true, we must conditionally include properties
-  return {
-    ...(frontmatterData !== undefined && { frontmatter: frontmatterData }),
-    ...(errorMessage !== undefined && { error: errorMessage }),
-  };
+  const { frontmatter, frontmatterError } = parseFrontmatterSource(node.value);
+  if (frontmatter !== undefined) {
+    state.frontmatter = frontmatter;
+  }
+  if (frontmatterError !== undefined) {
+    state.frontmatterError = frontmatterError;
+  }
 }

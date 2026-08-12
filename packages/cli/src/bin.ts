@@ -12,6 +12,7 @@ import { Command } from 'commander';
 import { createAgentCommand, showAgentVerboseHelp } from './commands/agent/index.js';
 import { createAuditCommand } from './commands/audit.js';
 import { createBuildTopLevelCommand } from './commands/build.js';
+import { createCacheCommand, registerCacheControl } from './commands/cache/index.js';
 import { createClaudeCommand } from './commands/claude/index.js';
 import { createCorpusCommand } from './commands/corpus/index.js';
 import { doctorCommand } from './commands/doctor.js';
@@ -67,6 +68,21 @@ program
   .option('--cwd <dir>', 'Change working directory before running any command')
   .option('--debug', 'Enable debug logging')
   .helpCommand(false) // Disable redundant 'help' command, use --help instead
+  // `--debug` is declared BOTH here and, separately, on 47 subcommands. Commander
+  // resolves the root's definition first (the same precedence documented for the
+  // `-v` incident above), so the subcommand's own `--debug` was never populated:
+  // every action received `options.debug === undefined` no matter where the flag
+  // sat on the line, and every `logger.debug(...)` in the CLI — 59 read sites —
+  // was unreachable through its own documented flag. Measured, not inferred: with
+  // the root declaration removed the subcommand's option populates normally.
+  //
+  // Copying the root's value down at dispatch fixes all of them at once, and
+  // leaves a subcommand that sets `--debug` on its own (no root flag) untouched.
+  .hook('preAction', (thisCommand, actionCommand) => {
+    if (thisCommand.opts()['debug'] === true) {
+      actionCommand.setOptionValue('debug', true);
+    }
+  })
   .showHelpAfterError()
   .configureOutput({
     writeOut: (str) => process.stdout.write(str), // Help goes to stdout (pipeable)
@@ -81,12 +97,18 @@ Example:
 
 Environment:
   VAT_DEBUG=1                          # Show context detection details
+  VAT_CACHE=0                          # Disable disk caches (same as --no-cache)
 
 For command details: vat resources --help
 For comprehensive help: vat --help --verbose
-For agent guidance: docs/cli/CLAUDE.md
 `
   );
+
+// Root `--no-cache`, plus the preAction hook that exports it as VAT_CACHE=0 so
+// it survives into the child processes that actually parse. See
+// commands/cache/index.ts for why an env var and not a plumbed flag, and for
+// what this does about the identically-named flag on `vat resources validate`.
+registerCacheControl(program);
 
 // Change working directory before any subcommand runs (if --cwd flag provided)
 program.hook('preAction', () => {
@@ -162,6 +184,7 @@ program.addCommand(createMCPCommand());
 program.addCommand(createSkillsCommand());
 program.addCommand(createSkillCommand());
 program.addCommand(createClaudeCommand());
+program.addCommand(createCacheCommand());
 
 // Add top-level orchestration commands
 program.addCommand(createBuildTopLevelCommand());
@@ -182,5 +205,5 @@ program.on('command:*', (operands) => {
 program.parse();
 
 function showVerboseHelp(): void {
-  writeHelpSync(loadVerboseHelp()); // Loads from docs/cli/index.md
+  writeHelpSync(loadVerboseHelp()); // Loads from packages/cli/docs/index.md
 }

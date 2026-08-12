@@ -56,7 +56,7 @@
  * loosening the heuristics.
  */
 
-import type { Definition, Root } from 'mdast';
+import type { Root } from 'mdast';
 import { visit } from 'unist-util-visit';
 
 import type { UnresolvedReference } from './types.js';
@@ -233,6 +233,87 @@ function destinationMaskRange(node: OffsetPositioned, content: string): OffsetRa
 }
 
 /**
+ * Node kinds {@link collectMaskFacts} reacts to.
+ *
+ * Passed to `visit` as its test so the walk is still ONE traversal while the
+ * visitor's parameter narrows to exactly these kinds — which is what lets the
+ * switch inside be exhaustive, so adding a kind here forces a case there.
+ */
+const MASK_NODE_TYPES = [
+  'code',
+  'inlineCode',
+  'html',
+  'yaml',
+  'link',
+  'image',
+  'definition',
+] as const;
+
+/**
+ * The two things {@link findUnresolvedReferences} needs from the AST, gathered
+ * in a single walk.
+ */
+interface MaskFacts {
+  /** Ranges the raw scanner must ignore — see {@link collectMaskedRanges}. */
+  ranges: OffsetRange[];
+  /** Every normalized spelling of every `[label]: url` identifier. */
+  definedLabels: Set<string>;
+}
+
+/**
+ * Walk the AST **once** for both the masked ranges and the defined labels.
+ *
+ * Replaces eight separate `visit()` passes (four whole-node mask kinds, three
+ * destination-clause kinds, and the definition-identifier pass that used to
+ * live in {@link findUnresolvedReferences}) with one traversal dispatching on
+ * `node.type`. Each pass was a full tree walk over the same tree.
+ *
+ * Range ORDER changes from grouped-by-node-kind to document order, which is
+ * unobservable: the only consumer is {@link isRangeFullyMasked}, whose
+ * `.some()` is order-independent. Range CONTENT is unchanged.
+ */
+function collectMaskFacts(tree: Root, content: string): MaskFacts {
+  const ranges: OffsetRange[] = [];
+  const definedLabels = new Set<string>();
+
+  const pushRange = (node: OffsetPositioned): void => {
+    const start = node.position?.start.offset;
+    const end = node.position?.end.offset;
+    if (start !== undefined && end !== undefined) {
+      ranges.push([start, end]);
+    }
+  };
+  const pushDestinationRange = (node: OffsetPositioned): void => {
+    const range = destinationMaskRange(node, content);
+    if (range !== undefined) ranges.push(range);
+  };
+
+  visit(tree, [...MASK_NODE_TYPES], (node) => {
+    switch (node.type) {
+      case 'code':
+      case 'inlineCode':
+      case 'html':
+      case 'yaml': {
+        pushRange(node);
+        break;
+      }
+      case 'link':
+      case 'image': {
+        pushDestinationRange(node);
+        break;
+      }
+      case 'definition': {
+        pushDestinationRange(node);
+        for (const key of referenceLabelKeys(node.identifier)) definedLabels.add(key);
+        break;
+      }
+    }
+  });
+
+  return { ranges, definedLabels };
+}
+
+/**
  * Character-offset ranges covered by regions whose bracket content must never
  * be interpreted as markdown: fenced/indented code blocks, inline code spans,
  * raw HTML (block and inline — `<!-- [a][nope] -->` is commented-out
@@ -245,28 +326,11 @@ function destinationMaskRange(node: OffsetPositioned, content: string): OffsetRa
  * node, is masked.
  *
  * Reuses the AST's own node positions rather than running a second tokenizer.
+ *
+ * Ranges come back in document order, and are consumed as an unordered set.
  */
 export function collectMaskedRanges(tree: Root, content: string): OffsetRange[] {
-  const ranges: OffsetRange[] = [];
-  const pushRange = (node: OffsetPositioned): void => {
-    const start = node.position?.start.offset;
-    const end = node.position?.end.offset;
-    if (start !== undefined && end !== undefined) {
-      ranges.push([start, end]);
-    }
-  };
-  const pushDestinationRange = (node: OffsetPositioned): void => {
-    const range = destinationMaskRange(node, content);
-    if (range !== undefined) ranges.push(range);
-  };
-  visit(tree, 'code', pushRange);
-  visit(tree, 'inlineCode', pushRange);
-  visit(tree, 'html', pushRange);
-  visit(tree, 'yaml', pushRange);
-  visit(tree, 'link', pushDestinationRange);
-  visit(tree, 'image', pushDestinationRange);
-  visit(tree, 'definition', pushDestinationRange);
-  return ranges;
+  return collectMaskFacts(tree, content).ranges;
 }
 
 /**
@@ -459,12 +523,7 @@ export function findReferenceOccurrences(content: string): ReferenceOccurrence[]
  * @returns One finding per plausible dangling full/collapsed reference
  */
 export function findUnresolvedReferences(content: string, tree: Root): UnresolvedReference[] {
-  const definedLabels = new Set<string>();
-  visit(tree, 'definition', (node: Definition) => {
-    for (const key of referenceLabelKeys(node.identifier)) definedLabels.add(key);
-  });
-
-  const maskedRanges = collectMaskedRanges(tree, content);
+  const { ranges: maskedRanges, definedLabels } = collectMaskFacts(tree, content);
   const findings: UnresolvedReference[] = [];
 
   for (const occurrence of findReferenceOccurrences(content)) {

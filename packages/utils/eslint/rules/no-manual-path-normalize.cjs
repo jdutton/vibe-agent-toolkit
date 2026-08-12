@@ -57,6 +57,11 @@ module.exports = {
     // Never mutated — the dead-import leg must not be armed by a flag that a
     // suppressed report's `fix()` can spend. See `dead-import.cjs`.
     const safeBoundInSource = hasToForwardSlashImport;
+    // The dead-import leg's OTHER gate: a `toForwardSlash(…)` call is the text
+    // this fixer writes, and the only evidence available that it wrote it here.
+    // Without it, any file with `toForwardSlash` in scope armed the leg — see
+    // `dead-import.cjs`. Read from the source, never from a `fix()`.
+    let safeReplacementCalled = false;
     let utilsImportNode = null;
     // `path.sep` is the last `path.*` reference in plenty of files, and
     // `toForwardSlash(raw)` consumes it — leaving the same dead `node:path`
@@ -65,7 +70,13 @@ module.exports = {
 
     return {
       'Program:exit'() {
-        reportDeadUnsafeImports(context, sourceCode, pathImportNodes, safeBoundInSource);
+        reportDeadUnsafeImports(
+          context,
+          sourceCode,
+          pathImportNodes,
+          safeBoundInSource,
+          safeReplacementCalled,
+        );
       },
 
       ImportDeclaration(node) {
@@ -83,6 +94,10 @@ module.exports = {
       },
 
       CallExpression(node) {
+        if (node.callee.type === 'Identifier' && node.callee.name === SAFE_FN) {
+          safeReplacementCalled = true;
+        }
+
         // Check for .split(...).join('/') pattern
         if (
           node.callee.type === 'MemberExpression' &&
@@ -101,12 +116,18 @@ module.exports = {
           ) {
             const splitArg = splitCall.arguments[0];
 
-            // Check if splitting by path.sep, '\\', or '\\\\'
+            // Split on path.sep, or on a single backslash character
+            // (source literal '\\'). Splitting on a two-backslash SEQUENCE
+            // (source literal '\\\\', decoded value: two backslash characters)
+            // is a different, rarer operation -- e.g. collapsing a UNC path's
+            // leading double-backslash server prefix -- and toForwardSlash()
+            // is not equivalent to it. Autofixing that case would silently
+            // change program behavior, so it is deliberately excluded here.
             const isSplittingByPathSep =
               (splitArg.type === 'MemberExpression' &&
                 splitArg.object.name === 'path' &&
                 splitArg.property.name === 'sep') ||
-              (splitArg.type === 'Literal' && (splitArg.value === '\\' || splitArg.value === '\\\\'));
+              (splitArg.type === 'Literal' && splitArg.value === '\\');
 
             if (isSplittingByPathSep) {
               const variableBeingSplit = splitCall.callee.object;

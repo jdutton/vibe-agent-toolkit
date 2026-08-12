@@ -22,10 +22,10 @@ The last two columns are the ones that matter when choosing. **"Resolves with ze
 
 | Subpath | Contents | Node builtins reached | Third-party | Resolves with zero deps installed? |
 |---|---|---|---|---|
-| `./path` | `safePath`, `toForwardSlash`, `isAbsolutePath`, `isAbsoluteAnyPlatform`, `hasParentTraversalSegment`, `toAbsolutePath`, `getRelativePath`, `issueLocation` | `path` only | — | **yes** |
+| `./path` | `safePath`, `toForwardSlash`, `toNfc`, `isAbsolutePath`, `isAbsoluteAnyPlatform`, `hasParentTraversalSegment`, `toAbsolutePath`, `getRelativePath`, `issueLocation` | `path` only | — | **yes** |
 | `./zod` | `ZodTypeNames`, `getZodTypeName`, `isZodType`, `unwrapZodType`, `isZodOptional`, `isZodNullable` | **none** | — | **yes** |
 | `./glob` | `isGlob`, static base extraction, magic remainder | `path` only | — | **yes** |
-| `./fs` | `normalizePath`, `normalizedTmpdir`, `mkdirSyncReal`, `resolveFromImportMeta`, `dynamicImportPath`, `copyDirectory`, `verifyCaseSensitiveFilename`, `FsLookupCache` | `fs`, `fs/promises`, `os`, `path`, `url` | — | **yes** |
+| `./fs` | `normalizePath`, `normalizedTmpdir`, `mkdirSyncReal`, `resolveFromImportMeta`, `dynamicImportPath`, `copyDirectory`, `fillSiblingNames`, `classifyFilenameCaseFrom`, `FsLookupCache` | `fs`, `fs/promises`, `os`, `path`, `url` | — | **yes** |
 | `./testing` | `getTestOutputDir`, `getTestOutputBase`, `setupAsyncTempDirSuite`, `setupSyncTempDirSuite` | `crypto`, `fs`, `fs/promises`, `os`, `path`, `url` | — | **yes** |
 | `./asset` | `resolveAssetReference` — paths and npm bare specifiers | `fs`, `module`, `os`, `path`, `url` | — | **yes** |
 | `./yaml` | `updateYamlIn`, `verifyConfinedYamlEdit` — byte-surgical YAML edits | **none** | `yaml` | no — needs `yaml` |
@@ -120,11 +120,23 @@ These always return forward slashes on every platform, so they are safe for comp
 
 - `safePath.join()` / `.resolve()` / `.relative()` - forward-slash equivalents of the `node:path` functions
 - `toForwardSlash()` - explicit converter for any path string
+- `toNfc()` - Unicode-NFC normalizer for filename **comparison keys** (see the warning below)
 - `toAbsolutePath()` - resolve a path relative to a base directory
 - `getRelativePath()` - relative path between two absolute paths
 - `isAbsolutePath()` / `isAbsoluteAnyPlatform()` - absolute-path predicates
 - `hasParentTraversalSegment()` - detect `..` segments before using a caller-supplied path
 - `issueLocation()` - format a `file:line`-style location relative to a project root
+
+⚠️ **`toNfc()` produces a comparison key, never a path to open.** The same visible filename has two
+Unicode encodings — precomposed NFC (`é` = `U+00E9`) and decomposed NFD (`e` + `U+0301`). They are
+different strings, so `===`, `toLowerCase()`, `Map.get()` and `Set.has()` all call them different,
+and `readdir` returns whichever form is on disk (commonly decomposed on macOS) while a markdown link
+typed in an editor carries the composed one. Normalize wherever two such strings are **compared** —
+a `Map` key derived from enumeration and queried from link text, a basename checked against a
+directory listing. Do **not** normalize a path on its way to `fs.*`: macOS would not notice (its
+lookup is normalization-insensitive), but on Linux the two forms are different byte sequences naming
+different files, so opening the normalized form of a decomposed filename fails outright. That is why
+this is a separate helper rather than something `safePath.resolve()` does.
 
 ### Filesystem — `@vibe-agent-toolkit/utils/fs`
 
@@ -138,7 +150,11 @@ These return **OS-native** separators, because they resolve real filesystem iden
 - `resolveFromImportMeta()` - resolve paths relative to an `import.meta.url`
 - `dynamicImportPath()` - `import()` an absolute path (works on Windows, which rejects bare absolute paths)
 - `copyDirectory()`
-- `verifyCaseSensitiveFilename(filePath, fsCache)` - case-exact existence check; takes a per-run `FsLookupCache`
+- `fillSiblingNames(filePaths, fsCache)` - pass 1 of the case-exact existence check: list the parent
+  directory of every path, de-duplicated by directory and issued concurrently. The only I/O in the pair
+- `classifyFilenameCaseFrom(table, filePath)` - pass 2: pure judgement against the table pass 1 returned,
+  reporting the entry actually on disk when only the case differs. Fill **once** over the whole set and
+  then judge each path — a fill per path reinstates the serialized `readdir` this shape removes
 - `FsLookupCache` - per-run memo for `realpath`/`readdir`, sharing in-flight promises. Construct one per
   validation run and let it die with the run — never a module-level singleton, or a long-lived process
   answers from a stale directory listing.

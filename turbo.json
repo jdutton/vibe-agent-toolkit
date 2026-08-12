@@ -75,5 +75,5 @@
     "vitest.setup.js",
     "packages/dev-tools/src/copy-yaml-assets.ts"
   ],
-  "globalEnv": ["CI", "NET_AVAILABLE"]
+  "globalEnv": ["CI", "NET_AVAILABLE", "UPDATE_DRIFT_GOLDEN"]
 }

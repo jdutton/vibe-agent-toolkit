@@ -6,6 +6,18 @@ import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import { ResourceRegistry } from '../src/resource-registry.js';
 
+/**
+ * Register everything in `dir` by ENUMERATING it, the way a crawl does, rather
+ * than from the literals the fixture was written with. That is the whole point
+ * for the normalization cases below: the registry key must be whatever the
+ * filesystem actually stored, not what the test typed.
+ */
+async function registerCrawled(registry: ResourceRegistry, dir: string): Promise<void> {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename
+  const entries = await fs.readdir(dir);
+  await registry.addResources(entries.map((entry) => safePath.join(dir, entry)));
+}
+
 describe('ResourceRegistry indexes', () => {
   const suite = setupAsyncTempDirSuite('registry-indexes');
   let tempDir: string;
@@ -57,6 +69,68 @@ describe('ResourceRegistry indexes', () => {
 
       const resources = baseDirRegistry.getResourcesByName('README.md');
       expect(resources).toHaveLength(2);
+    });
+  });
+
+  /**
+   * Ledger D7 — the path index reconciles Unicode normalization forms.
+   *
+   * The two sides of `resourcesByPath` come from different places: keys from
+   * filesystem enumeration (`readdir` hands back whatever is on disk, commonly
+   * decomposed on macOS), queries from markdown link text (composed, as an
+   * editor writes it). Exact-string `Map.get` misses, and the link to a file
+   * that plainly exists gets no `resolvedId` — which strips the href and fails
+   * the build with `PACKAGED_UNREFERENCED_FILE` at packaging time.
+   *
+   * **The fixture is code-generated, and both forms are escape sequences.** A
+   * committed file with an accented name cannot be trusted to arrive
+   * decomposed — macOS editors and git checkouts re-normalize — so a committed
+   * fixture can silently be NFC on both sides and pin nothing. `readdir` is
+   * used to name the file rather than the literal, so the key really is
+   * whatever the filesystem stored.
+   */
+  describe('Unicode normalization of the path index', () => {
+    const ON_DISK = 'refe\u0301rence.md';
+    const IN_HREF = 'ref\u00E9rence.md';
+
+    beforeEach(async () => {
+      expect(ON_DISK).not.toBe(IN_HREF);
+      // eslint-disable-next-line security/detect-non-literal-fs-filename
+      await fs.writeFile(safePath.join(tempDir, ON_DISK), '# Target\n', 'utf-8');
+    });
+
+    /**
+     * ⚠️ **Both directions, deliberately.** Normalizing only where the key is
+     * written passes a one-directional test — the on-disk name becomes NFC and
+     * a composed href matches it without the query ever being normalized. It is
+     * the *decomposed href* that pins the lookup side, and a link href really
+     * can arrive decomposed (pasted from a macOS listing). Drop either
+     * normalization and exactly one row goes red.
+     */
+    const HREF_FORMS: readonly { label: string; href: string }[] = [
+      { label: 'composed', href: IN_HREF },
+      { label: 'decomposed', href: ON_DISK },
+    ];
+
+    it.each(HREF_FORMS)('resolves a $label link href to the same file', async ({ href }) => {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename
+      await fs.writeFile(safePath.join(tempDir, 'source.md'), `[t](./${href})\n`, 'utf-8');
+      const baseDirRegistry = new ResourceRegistry({ baseDir: tempDir });
+      await registerCrawled(baseDirRegistry, tempDir);
+
+      baseDirRegistry.resolveLinks();
+
+      const source = baseDirRegistry.getResource(safePath.join(tempDir, 'source.md'));
+      expect(source?.links[0]?.resolvedId).toBeDefined();
+    });
+
+    it.each(HREF_FORMS)('answers getResource() for the $label form', async ({ href }) => {
+      const baseDirRegistry = new ResourceRegistry({ baseDir: tempDir });
+      await registerCrawled(baseDirRegistry, tempDir);
+
+      expect(baseDirRegistry.getResource(safePath.join(tempDir, href))?.filePath).toBe(
+        safePath.join(tempDir, ON_DISK),
+      );
     });
   });
 

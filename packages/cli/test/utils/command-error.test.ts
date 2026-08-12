@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { validateCommand } from '../../src/commands/skills/validate.js';
 import {
+  errorDiagnostics,
   formatDuration,
   handleCommandError,
   handleValidationGateFailure,
@@ -48,6 +49,7 @@ describe('command-error utilities', () => {
     mockLogger = {
       error: vi.fn(),
       info: vi.fn(),
+      warn: vi.fn(),
       debug: vi.fn(),
     };
     mockProcessExit = vi
@@ -91,6 +93,28 @@ describe('command-error utilities', () => {
     });
   });
 
+  describe('errorDiagnostics', () => {
+    it('returns the stack of an Error, not just its message', () => {
+      const diagnostics = errorDiagnostics(new Error('boom'));
+      expect(diagnostics).toContain('Error: boom');
+      expect(diagnostics.split('\n').length).toBeGreaterThan(1);
+    });
+
+    it('falls back to name and message when an Error carries no stack', () => {
+      // Cross-realm and hand-built errors reach here with `stack` undefined;
+      // `stack` is optional in the type, so the fallback is not theoretical.
+      const stackless = new RangeError('out of range');
+      stackless.stack = undefined;
+      expect(errorDiagnostics(stackless)).toBe('RangeError: out of range');
+    });
+
+    it('inspects a thrown non-Error rather than discarding it', () => {
+      expect(errorDiagnostics({ code: 'ENOENT' })).toContain("code: 'ENOENT'");
+      expect(errorDiagnostics('a bare string')).toContain('a bare string');
+      expect(errorDiagnostics(undefined)).toContain('undefined');
+    });
+  });
+
   describe('handleCommandError', () => {
     it('should handle Error instances', () => {
       const error = new Error('Test error message');
@@ -122,6 +146,41 @@ describe('command-error utilities', () => {
       const yamlOutput = getYamlOutput(mockStdoutWrite);
       expect(yamlOutput).toContain(STATUS_ERROR_LINE);
       expect(yamlOutput).toContain('error: Unknown error');
+    });
+
+    it('sends the stack to the debug channel, so --debug can name the throw site', () => {
+      // The defect: exit 2 is the UNEXPECTED failure, and the envelope carried
+      // `error.message` and nothing else. A real internal `TypeError` reached a
+      // user as one line — no file, no frames — with no flag that would produce
+      // them; the throw site was only found by hand-patching the built `dist`.
+      const error = new TypeError("Cannot read properties of undefined (reading 'readdir')");
+      expect(() => handleCommandError(error, mockLogger, Date.now(), 'TestCommand')).toThrow(
+        PROCESS_EXIT_ERROR_MESSAGE,
+      );
+
+      const debugged = vi.mocked(mockLogger.debug).mock.calls.map((call) => call[0]).join('\n');
+      expect(debugged).toContain("Cannot read properties of undefined (reading 'readdir')");
+      // A frame is the whole point — the message alone was already on stderr.
+      //
+      // Matched as `<basename>:<line>` rather than against a path built from
+      // `import.meta.url`. Stripping the `file://` prefix leaves `/D:/a/repo/...`
+      // on Windows — forward slashes AND a leading slash — while the stack frame
+      // carries the native `D:\a\repo\...`, so the two could never match there and
+      // the test was green only on POSIX. This form also asserts strictly MORE
+      // than the original did: a line number has to be present, not just a path.
+      expect(debugged).toMatch(/command-error\.test\.ts:\d+/);
+    });
+
+    it('names a non-Error throw on the debug channel, which the envelope calls "Unknown error"', () => {
+      // `error: Unknown error` on stdout names neither the type nor the contents
+      // of what was thrown — for a bare object it is the entire diagnosis.
+      expect(() =>
+        handleCommandError({ code: 'ENOENT', path: '/gone' }, mockLogger, Date.now(), 'TestCommand'),
+      ).toThrow(PROCESS_EXIT_ERROR_MESSAGE);
+
+      const debugged = vi.mocked(mockLogger.debug).mock.calls.map((call) => call[0]).join('\n');
+      expect(debugged).toContain('ENOENT');
+      expect(debugged).toContain('/gone');
     });
 
     it('should include formatted duration in output', () => {

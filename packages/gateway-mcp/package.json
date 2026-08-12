@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/gateway-mcp",
-  "version": "0.1.42",
+  "version": "0.2.0-rc.2",
   "description": "MCP Gateway for exposing VAT agents through Model Context Protocol",
   "type": "module",
   "main": "./dist/index.js",
@@ -16,7 +16,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsx ../dev-tools/src/tsc-clean-build.ts",
     "test:unit": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:watch": "vitest",

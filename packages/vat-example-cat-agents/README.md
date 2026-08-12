@@ -711,14 +711,14 @@ This is a reference implementation that evolves with the VAT framework. Each new
 3. Add workflow orchestrator (multi-agent pipelines)
 4. Demonstrate event-driven patterns (consumers and handlers)
 
-See [CLAUDE.md](./CLAUDE.md) for technical navigation details when contributing.
+See [docs/structure.md](./docs/structure.md) for directory layout and conventions, and [CLAUDE.md](./CLAUDE.md) for the one AI-assistant-facing coding rule, when contributing.
 
 ---
 
 ## Documentation
 
 - **[structure.md](./docs/structure.md)** - Package organization and conventions
-- **[CLAUDE.md](./CLAUDE.md)** - Technical navigation for AI assistants
+- **[CLAUDE.md](./CLAUDE.md)** - Short AI-assistant orientation and local coding rule
 
 ---
 

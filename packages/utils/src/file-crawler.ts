@@ -196,6 +196,27 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
       });
 
       if (gitFiles !== null) {
+        // ⚠️ KNOWN DIVERGENCE: this branch ignores `followSymlinks`.
+        //
+        // `git ls-files` returns symlinks as mode-120000 entries like any other
+        // path, and nothing below filters them out — whereas the manual walk
+        // (see `processSymlink`) returns early unless `followSymlinks` is set.
+        // So the SAME tree with the SAME options has a different population
+        // depending only on whether a `.git` exists above it.
+        //
+        // A committed dangling `*.md` symlink returned from here no longer
+        // terminates the command: `ResourceRegistry.addResources` records the
+        // read failure and reports it as RESOURCE_UNREADABLE. The population
+        // divergence itself is still live.
+        //
+        // Pinned (as today's behaviour, deliberately) by
+        // packages/cli/test/integration/enumeration-symlink-divergence.integration.test.ts.
+        // Making the two routes agree changes enumeration on real corpora — in
+        // one of two opposite directions, since excluding symlinks here drops
+        // committed content while including them in the walk grows the off-git
+        // population — so it is a product decision with its own changelog
+        // entry, not a drive-by fix here.
+        //
         // Git ls-files succeeded - filter using glob patterns
         const isIncluded = picomatch(include, picoOptions);
         const isExcluded = exclude.length > 0 ? picomatch(exclude, picoOptions) : (): boolean => false;
@@ -223,6 +244,24 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
   const results: string[] = [];
 
   /**
+   * Real paths of directories already walked, maintained ONLY when following
+   * symlinks — it is what makes a directory symlink safe to traverse.
+   *
+   * A symlinked directory can be re-entered without limit (`a/loop -> a`) and
+   * can be reached under two names (`alias-one -> real`, `alias-two -> real`).
+   * Both enumerate one blob many times under distinct paths, so each row gets
+   * its own generated id and its own bundle entry. The loop terminated before
+   * this guard existed, but only because the kernel eventually refuses to
+   * resolve further symlinks — a limit that is 32 on macOS and 40 on Linux, so
+   * the POPULATION depended on the operating system, and the walk ended inside
+   * `processSymlink`'s catch for BROKEN links, which reported nothing.
+   *
+   * Left empty when `followSymlinks` is false: without symlink traversal a
+   * directory cannot be reached twice, so the default path pays no `realpath`.
+   */
+  const visitedRealDirs = new Set<string>();
+
+  /**
    * Check if a path should be excluded based on patterns
    */
   function shouldExclude(normalizedPath: string): boolean {
@@ -237,6 +276,33 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
     if (isIncluded(normalizedPath)) {
       results.push(absolute ? fullPath : relativePath);
     }
+  }
+
+  /**
+   * Record a directory as walked, reporting whether it had already been seen.
+   *
+   * Identity is `realpathSync.native`, not the traversal path: two names for
+   * one directory must collide here or the alias is enumerated twice. A
+   * directory whose real path cannot be read is treated as already-walked —
+   * refusing to descend into something we cannot identify is the safe side of
+   * a guard whose whole job is bounding traversal.
+   *
+   * @param dir - Directory about to be walked
+   * @returns True when this directory has been walked before
+   */
+  function alreadyWalked(dir: string): boolean {
+    let realPath: string;
+    try {
+      realPath = fs.realpathSync.native(dir);
+    } catch {
+      return true;
+    }
+
+    if (visitedRealDirs.has(realPath)) {
+      return true;
+    }
+    visitedRealDirs.add(realPath);
+    return false;
   }
 
   /**
@@ -288,6 +354,10 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
    * Recursively walk directory tree
    */
   function walkDirectory(currentDir: string): void {
+    if (followSymlinks && alreadyWalked(currentDir)) {
+      return;
+    }
+
     let entries: fs.Dirent[];
 
     try {
@@ -297,6 +367,20 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
       // Skip directories we don't have permission to read
       return;
     }
+
+    // Two passes, not one: `readdirSync` order is filesystem-defined (see
+    // the comment on `alreadyWalked`), and both a real directory and a
+    // symlink alias pointing at it go through the same `alreadyWalked` gate,
+    // keyed only on realpath. Whichever spelling is dispatched FIRST claims
+    // that realpath in `visitedRealDirs`, and the second is then skipped as
+    // "already walked" — so if the alias happened to sort first, the
+    // directory's contents would be recorded under the alias's name and the
+    // real directory would be skipped entirely. Walking every non-symlink
+    // entry to completion before any symlink entry guarantees a real
+    // directory always claims its own realpath first; an alias reaching the
+    // same realpath afterward is correctly skipped by `alreadyWalked`. Only
+    // the ORDER of dispatch changes here — per-entry logic is unchanged.
+    const symlinkEntries: fs.Dirent[] = [];
 
     for (const entry of entries) {
       const fullPath = safePath.join(currentDir, entry.name);
@@ -308,14 +392,21 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
         continue;
       }
 
-      // Dispatch to appropriate handler based on entry type
+      // Defer symlinks to the second pass; dispatch everything else now.
       if (entry.isSymbolicLink()) {
-        processSymlink(fullPath, normalizedPath, relativePath);
+        symlinkEntries.push(entry);
       } else if (entry.isDirectory()) {
         processDirectory(fullPath, normalizedPath, relativePath);
       } else if (entry.isFile()) {
         processFile(normalizedPath, fullPath, relativePath);
       }
+    }
+
+    for (const entry of symlinkEntries) {
+      const fullPath = safePath.join(currentDir, entry.name);
+      const relativePath = safePath.relative(resolvedBaseDir, fullPath);
+      const normalizedPath = toForwardSlash(relativePath);
+      processSymlink(fullPath, normalizedPath, relativePath);
     }
   }
 

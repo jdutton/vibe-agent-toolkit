@@ -7,6 +7,8 @@
  * contract, silently different behaviour. Every command family routes here.
  */
 
+import { inspect } from 'node:util';
+
 import { countBySeverity, type SeverityCounts, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 
 import type { Logger } from './logger.js';
@@ -28,6 +30,32 @@ export function formatDuration(ms: number): string {
 }
 
 /**
+ * Everything about a thrown value that `error.message` alone discards.
+ *
+ * Exit 2 is the UNEXPECTED failure — an internal bug, not a usage mistake — and
+ * the one thing a reader needs there is the frame that threw. A real `TypeError`
+ * arrived here as a single line (`Cannot read properties of undefined (reading
+ * 'readdir')`) with no file, no frames, and no flag that would produce them; the
+ * only way to find the throw site was to hand-patch the built `dist`. A value
+ * thrown that is not an `Error` fared worse still — the envelope flattens it to
+ * the literal string `Unknown error`, which names neither its type nor its
+ * contents.
+ *
+ * The result rides the logger's **debug** channel (`--debug`), so default output
+ * is unchanged and no golden moves.
+ *
+ * @param error - The value that was thrown
+ * @returns Stack trace for an `Error`, or an inspected rendering of a non-`Error`
+ */
+export function errorDiagnostics(error: unknown): string {
+  if (error instanceof Error) {
+    // `stack` is optional in the type and absent on some cross-realm errors.
+    return error.stack ?? `${error.name}: ${error.message}`;
+  }
+  return `Non-Error value thrown: ${inspect(error, { depth: 3 })}`;
+}
+
+/**
  * Handle command error with standard formatting and exit
  * @param error - The error that occurred
  * @param logger - Logger instance for error output
@@ -42,6 +70,7 @@ export function handleCommandError(
 ): never {
   const duration = Date.now() - startTime;
   logger.error(`${commandName} failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  logger.debug(errorDiagnostics(error));
 
   writeYamlOutput({
     status: 'error',

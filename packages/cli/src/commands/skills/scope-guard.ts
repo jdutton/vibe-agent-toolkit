@@ -91,7 +91,7 @@ export function unscopablePathMessage(
     `\n` +
     `  Fix: point '${command}' at a directory holding a ${CONFIG_FILENAME},\n` +
     `  or run it with no argument to use the current directory.\n` +
-    `  To inspect ONE skill or bundle by path, use: vat audit <path>\n`
+    `  To inspect ONE skill or bundle by path, use: vat skill review <path>\n`
   );
 }
 

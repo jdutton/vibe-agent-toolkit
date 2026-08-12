@@ -91,7 +91,11 @@ External URL validation uses a filesystem-based cache to minimize network reques
 ```
 
 **Cache Invalidation:**
-- CLI flag: Use `--no-cache` to bypass cache
+- CLI flag: `--no-cache` bypasses this cache — but note it is **not external-URL-specific**. It
+  disables *every* VAT on-disk cache for the run, including the markdown parse cache, so the run
+  also re-parses the whole corpus. Use it to force fresh URL checks; do not reach for it as a
+  general-purpose flag.
+- Command: `vat cache clear` removes VAT's on-disk caches, this one included
 - Automatic: Entries expire based on TTL
 - Per-URL: Cache is per-URL (hashed), not per-file
 
@@ -190,6 +194,11 @@ vat resources validate docs/ --check-external-urls
   run: vat resources validate docs/ --check-external-urls --no-cache
 ```
 
+> `--no-cache` disables **all** of VAT's on-disk caches, not just the external-URL one, so this job
+> also re-parses every markdown file from scratch. That is usually fine in CI (a fresh runner is
+> cold anyway), but it is a real cost on a warm machine — reach for it when you specifically want
+> fresh URL checks, not as a routine "be safe" flag.
+
 ### Ignore Patterns
 
 **Common Patterns:**
@@ -245,7 +254,8 @@ externalUrlValidation:
 **Solution:**
 1. Verify system temp is writable
 2. Check disk space
-3. Use `--no-cache` flag to bypass cache if needed
+3. Use `--no-cache` to run without any on-disk cache (this disables the parse cache too), or
+   `vat cache clear` to remove the cache directory and let it be recreated
 
 ### Issue: "Validation slow despite cache"
 

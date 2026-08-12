@@ -5,7 +5,7 @@
 import { describe, it, expect } from 'vitest';
 
 import { generateJavaScript } from '../../src/compiler/javascript-generator.js';
-import { parseMarkdown } from '../../src/compiler/markdown-parser.js';
+import { toMarkdownResource } from '../../src/compiler/markdown-parser.js';
 import type { MarkdownResource } from '../../src/compiler/types.js';
 
 // Constants for commonly used test strings
@@ -326,7 +326,7 @@ describe('generateJavaScript', () => {
     });
   });
 
-  describe('integration with parseMarkdown', () => {
+  describe('integration with toMarkdownResource', () => {
     it('should generate valid JavaScript from parsed markdown', () => {
       const markdown = `---
 title: Integration Test
@@ -346,7 +346,7 @@ Content for section one with "quotes" and special chars.
 More content here.
 `;
 
-      const resource = parseMarkdown(markdown);
+      const resource = toMarkdownResource(markdown);
       const result = generateJavaScript(resource);
 
       // Should be valid JavaScript structure
@@ -368,7 +368,7 @@ More content here.
 
 Basic content.`;
 
-      const resource = parseMarkdown(markdown);
+      const resource = toMarkdownResource(markdown);
       const result = generateJavaScript(resource);
 
       expect(result).toContain('export const meta = {};');

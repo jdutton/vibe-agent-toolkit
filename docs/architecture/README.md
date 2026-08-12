@@ -454,3 +454,4 @@ When using `--user` flag:
 ## Related references
 
 - [Skill Packaging Shapes](./skill-packaging.md) — the four recognized artifact shapes (standalone skill, skill-claude-plugin, claude-plugin, claude-marketplace) with layouts and applicable validation.
+- [CLI Architecture](./cli.md) — command structure, output conventions, why the CLI layer stays "dumb," and CLI-specific testing patterns.

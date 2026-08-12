@@ -148,10 +148,37 @@ function isIdentifierBound(sourceCode, node, name) {
 }
 
 /**
+ * Is this the call THIS rule's fixer writes — `safePath.<unsafeFn>(…)`?
+ *
+ * The evidence that this rule migrated something in this file, and the reason it
+ * is not enough to ask whether `safePath` is merely in scope. Read by BOTH legs
+ * that would otherwise mistake a file-wide fact for a claim about `unsafeFn`:
+ * the dead-import leg, and the bare-call repair leg in `classifyCall`.
+ * Matched whether or not `safePath` is bound: an ORPHANED `safePath.join(…)` —
+ * the repair leg's own subject — is still this fixer's handiwork.
+ *
+ * @param {object} node - A `CallExpression`.
+ * @param {string} unsafeFn - The member this rule migrates.
+ * @returns {boolean} True if the callee is `safePath.<unsafeFn>`.
+ */
+function isSafeReplacementCall(node, unsafeFn) {
+  return (
+    node.callee.type === 'MemberExpression' &&
+    node.callee.object.type === 'Identifier' &&
+    node.callee.object.name === SAFE_OBJECT &&
+    node.callee.property.type === 'Identifier' &&
+    node.callee.property.name === unsafeFn
+  );
+}
+
+/**
  * Check if a call expression is an unsafe path function call.
  *
  * Returns `{ isNamed }` — or `{ importOnly: true }` for a call that is already
- * correct and merely missing its import — or null if not a match.
+ * correct and merely missing its import — or `{ isRepair: true }` for a bare call
+ * that is ours only if the file also shows THIS function mid-migration, which
+ * `Program:exit` decides once the whole file has been seen — or null if not a
+ * match.
  */
 function classifyCall(node, unsafeFn, state, sourceCode) {
   const isMember = node.callee.type === 'MemberExpression' && node.callee.property.type === 'Identifier';
@@ -166,15 +193,33 @@ function classifyCall(node, unsafeFn, state, sourceCode) {
     // `--fix` reached a stable fixpoint over source that no longer compiles and
     // exited clean.
     //
-    // Gated on `safePath` already being bound, which is what makes it a repair
-    // rather than a second, sloppier detector. An unbound `join` is NOT reliably
-    // our `join`: ESLint scope analysis does not bind `declare global { function
-    // join() }`, and it cannot see an ambient global from a `globals.d.ts`, an
-    // `@types` package, or a bundler — `resolve` and `relative` are entirely
-    // plausible as those. Requiring `safePath` in scope narrows this to the
-    // half-migrated file it exists to finish, where the name really was ours.
+    // An unbound `join` is NOT reliably our `join`: ESLint scope analysis does
+    // not bind `declare global { function join() }`, and it cannot see an ambient
+    // global from a `globals.d.ts`, an `@types` package, or a bundler — `resolve`
+    // and `relative` are entirely plausible as those. So the leg needs a second
+    // condition, and `safePathBoundInSource` alone was the wrong one: it is a
+    // fact about the FILE, not about `unsafeFn`, and a SIBLING instance of this
+    // factory hands it over for free. `no-path-resolve` rewrites a
+    // `path.resolve(...)` and imports `safePath`; on the next `--fix` pass the
+    // `join` instance sees a file with `safePath` bound and an ambient-global
+    // `join(...)` that predates any of this pack's involvement, and rewrites it
+    // to a different function. Measured with both rules enabled over one file.
+    //
+    // So this is only a CANDIDATE. `Program:exit` admits it once the file has
+    // been seen to contain a `safePath.<unsafeFn>(...)` call — the same positive
+    // evidence the dead-import leg reads, and the only in-file signal that THIS
+    // function is mid-migration HERE. Every genuine strand carries it:
+    // `removeSpecifier` only ever ships inside the same report's fix as the
+    // callee rewrite that consumed the specifier, and ESLint merges a report's
+    // fixes into one all-or-nothing range — so a file cannot lose the `node:path`
+    // specifier without gaining a `safePath.<unsafeFn>(` call.
+    //
+    // What this gives up: a file a HUMAN half-migrated by hand — import deleted,
+    // not one call rewritten — is no longer finished by `--fix`. That file is a
+    // loud `no-undef`/`tsc` error rather than a silent one, and it was never this
+    // pack's doing. Silently redirecting a live call to another function is.
     if (state.safePathBoundInSource && !isIdentifierBound(sourceCode, node.callee, unsafeFn)) {
-      return { isNamed: false };
+      return { isNamed: false, isRepair: true };
     }
     return null;
   }
@@ -363,10 +408,32 @@ module.exports = function createPathFunctionRule(config) {
         // in any file that also has a `path.join()` to fix.
         safePathBoundInSource: isNameAlreadyBound(sourceCode, SAFE_OBJECT),
         safeImportNode: null,
+        // Set from the SOURCE as traversal walks it, and read only at
+        // `Program:exit` — so it is a fact about the text being linted, not
+        // about what a `fix()` intends to write. See `dead-import.cjs`, and the
+        // repair leg in `classifyCall`, which gates on the same flag.
+        safeReplacementCalled: false,
+        // Bare unbound calls awaiting that evidence. Held rather than reported,
+        // because a candidate can precede the migrated call that vouches for it.
+        deferredRepairs: [],
         // EVERY path-module declaration, not just the one carrying `unsafeFn`.
         // A file's dead binding is `import path from 'node:path'`, which
         // `trackPathImport` only ever recorded as a NAME. See `dead-import.cjs`.
         pathImportNodes: [],
+      };
+
+      const report = (node, classification) => {
+        context.report({
+          node,
+          messageId: 'noUnsafePathFn',
+          // The module name reaches the message through `{{safeModule}}` rather
+          // than being spelled out in each rule's string, so the advice cannot
+          // drift from where the fixer actually writes the import.
+          data: { safeModule: state.safeModule },
+          fix(fixer) {
+            return buildFix(fixer, node, unsafeFn, classification, sourceCode, state);
+          },
+        });
       };
 
       return {
@@ -375,11 +442,24 @@ module.exports = function createPathFunctionRule(config) {
         },
 
         'Program:exit'() {
+          // Holding these back cannot change any FIX, only when it is computed.
+          // A repair candidate is classified only when `safePath` is bound in the
+          // source, so `hasSafePathImport` starts true and `namedImportSpec` is
+          // null: the report carries no import insert and no specifier removal,
+          // and therefore nothing shared that an earlier report could have spent
+          // first. (`importOnly` is the mirror case — it requires `safePath`
+          // UNBOUND — so the two can never arise in the same file.)
+          if (state.safeReplacementCalled) {
+            for (const candidate of state.deferredRepairs) {
+              report(candidate, { isNamed: false });
+            }
+          }
           reportDeadUnsafeImports(
             context,
             sourceCode,
             state.pathImportNodes,
             state.safePathBoundInSource,
+            state.safeReplacementCalled,
           );
         },
 
@@ -394,22 +474,21 @@ module.exports = function createPathFunctionRule(config) {
         },
 
         CallExpression(node) {
+          if (isSafeReplacementCall(node, unsafeFn)) {
+            state.safeReplacementCalled = true;
+          }
+
           const classification = classifyCall(node, unsafeFn, state, sourceCode);
           if (!classification) {
             return;
           }
 
-          context.report({
-            node,
-            messageId: 'noUnsafePathFn',
-            // The module name reaches the message through `{{safeModule}}` rather
-            // than being spelled out in each rule's string, so the advice cannot
-            // drift from where the fixer actually writes the import.
-            data: { safeModule: state.safeModule },
-            fix(fixer) {
-              return buildFix(fixer, node, unsafeFn, classification, sourceCode, state);
-            },
-          });
+          if (classification.isRepair) {
+            state.deferredRepairs.push(node);
+            return;
+          }
+
+          report(node, classification);
         },
       };
     },

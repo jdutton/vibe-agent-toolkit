@@ -207,6 +207,11 @@ module.exports = function createNoUnsafeRule(config) {
       // not be armed by a flag a suppressed report can spend — ESLint runs
       // `fix()` before the `eslint-disable` filter discards the problem.
       const safeBoundInSource = hasSafeImport;
+      // The dead-import leg's OTHER gate: does this file actually call `safeFn`,
+      // the free function this fixer writes? "The safe symbol is in scope" alone
+      // let an unrelated coincidence arm the leg — see `dead-import.cjs`. Read
+      // from the source during traversal, never from a `fix()`.
+      let safeReplacementCalled = false;
       let unsafeImportNode = null;
       const unsafeImportNodes = [];
       let safeImportNode = null;
@@ -223,7 +228,13 @@ module.exports = function createNoUnsafeRule(config) {
         },
 
         'Program:exit'() {
-          reportDeadUnsafeImports(context, sourceCode, unsafeImportNodes, safeBoundInSource);
+          reportDeadUnsafeImports(
+            context,
+            sourceCode,
+            unsafeImportNodes,
+            safeBoundInSource,
+            safeReplacementCalled,
+          );
         },
 
         ImportDeclaration(node) {
@@ -281,6 +292,10 @@ module.exports = function createNoUnsafeRule(config) {
         },
 
         CallExpression(node) {
+          if (node.callee.type === 'Identifier' && node.callee.name === safeFn) {
+            safeReplacementCalled = true;
+          }
+
           let isUnsafeCall = false;
 
           // Check for direct function call: unsafeFn()

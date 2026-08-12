@@ -38,15 +38,36 @@ import { DEFAULT_EVALS_SUBPATH } from './skill-test/eval-suite-isolation.js';
 import { materializeIssue } from './validators/rule-engine/index.js';
 
 /**
- * Does this skill carry the conventional suite at `<skill-root>/evals/evals.json`?
+ * A probe for "does this skill carry the conventional suite at
+ * `<skill-root>/evals/evals.json`?", answering each directory from the filesystem
+ * at most once.
  *
  * The one filesystem touch in this module, and the reason the default convention can
  * be honored without guessing from a directory name. Everything else here is pure
  * path math over a config.
+ *
+ * Deduplicated because {@link resolveTestInputDirs} asks the question once for the
+ * subject and once per entry in `projectSkills` — and a package that keeps its
+ * skills in ONE directory (VAT's own `vat-development-agents` keeps thirteen there)
+ * makes every one of those the same question about the same path. Measured on
+ * `vat audit .`: 14 probes over 2 distinct paths.
+ *
+ * The memo is created per call and dies with it. It deliberately is NOT module-level:
+ * this module's answer is a snapshot of the filesystem, and a cache outliving the call
+ * would keep answering for a tree that has since changed — in a long-lived process,
+ * and across every later test in the same worker.
  */
-function hasConventionalSuite(skillDir: string): boolean {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillDir is VAT's own resolved skill directory
-  return existsSync(safePath.resolve(skillDir, DEFAULT_EVALS_SUBPATH));
+function conventionalSuiteProbe(): (skillDir: string) => boolean {
+  const answers = new Map<string, boolean>();
+  return (skillDir: string): boolean => {
+    const suitePath = safePath.resolve(skillDir, DEFAULT_EVALS_SUBPATH);
+    const cached = answers.get(suitePath);
+    if (cached !== undefined) return cached;
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillDir is VAT's own resolved skill directory
+    const found = existsSync(suitePath);
+    answers.set(suitePath, found);
+    return found;
+  };
 }
 
 /** True when `candidate` is inside (or equal to) `dir`. Both are absolute. */
@@ -81,6 +102,7 @@ function isInside(candidate: string, dir: string): boolean {
 function declaredTestInputDirs(
   config: Pick<SkillPackagingConfig, 'test'>,
   skillDir: string,
+  hasConventionalSuite: (skillDir: string) => boolean,
 ): string[] {
   if (config.test === undefined && !hasConventionalSuite(skillDir)) return [];
   const subpath = config.test?.evals ?? DEFAULT_EVALS_SUBPATH;
@@ -143,9 +165,10 @@ export function resolveTestInputDirs(
   skillDir: string,
   projectSkills: readonly DeclaredEvalSuite[],
 ): string[] {
-  const dirs = new Set(declaredTestInputDirs(config, skillDir));
+  const hasConventionalSuite = conventionalSuiteProbe();
+  const dirs = new Set(declaredTestInputDirs(config, skillDir, hasConventionalSuite));
   for (const skill of projectSkills) {
-    for (const dir of declaredTestInputDirs(skill.config, skill.skillDir)) {
+    for (const dir of declaredTestInputDirs(skill.config, skill.skillDir, hasConventionalSuite)) {
       if (isInside(dir, skill.skillDir)) dirs.add(dir);
     }
   }
