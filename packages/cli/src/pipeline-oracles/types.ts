@@ -162,6 +162,41 @@ export interface LinkFact {
   resolvedId: string | null;
 }
 
+/**
+ * One reference candidate the markdown AST cannot produce, with its ordinal.
+ *
+ * Recorded for the same reason `links` is, and with the same ordinal for the
+ * same reason: a token's `raw` text is not an identity, since one document may
+ * write `@docs/x.md` in ten places, and "candidate 7 moved" is a different
+ * finding from "a candidate changed target".
+ *
+ * Every column the lexer produces is here rather than a summary, because each
+ * one is a boolean or a small scalar that a lossy round-trip can silently
+ * default to a plausible value. `inCodeSpan` is the load-bearing one: Anthropic
+ * documents that Claude Code's import parser skips code spans and fenced
+ * blocks, so this column is what decides whether an `@` token is an import at
+ * all. A cache that lost it would not drop a row — it would hand back a row
+ * that quietly claims the opposite meaning.
+ */
+export interface LexicalReferenceFact {
+  ordinal: number;
+  /** The token as authored, with trailing sentence punctuation stripped. */
+  raw: string;
+  /** 1-based line. */
+  line: number;
+  /** 1-based column of the token's first character. */
+  column: number;
+  /** `at-prefixed` / `env-anchored` / `bare-token`. */
+  syntacticForm: string;
+  hasExtension: boolean;
+  leadingAt: boolean;
+  slashCount: number;
+  /** The expansion syntax the token uses, or `null` when it contains none. */
+  variableExpansion: string | null;
+  inCodeSpan: boolean;
+  inFence: boolean;
+}
+
 /** One heading, with the slug anchors resolve against. */
 export interface HeadingFact {
   ordinal: number;
@@ -219,6 +254,23 @@ export interface ParseFactRow {
   sizeBytes: number;
   estimatedTokenCount: number;
   links: LinkFact[];
+  /**
+   * Reference candidates the markdown AST cannot produce, or `null` when the
+   * field is absent from the parse result.
+   *
+   * Recorded because it is **carried in the parse cache**, and this snapshot's
+   * whole claim is that a cached parse differing from a fresh one moves a row
+   * here. A cache that dropped, reordered or mangled this list would otherwise
+   * change every `@`-import and variable-anchored reference VAT sees while
+   * `links`, `headings` and both frontmatter columns held perfectly still.
+   *
+   * `null` rather than `[]` when absent, on the {@link anchors} precedent:
+   * `ParseResult.lexicalReferences` is optional under
+   * `exactOptionalPropertyTypes` and the parsers omit the key rather than
+   * emitting an empty array, so a layer that normalises one into the other is a
+   * contract change and must show up as a diff.
+   */
+  lexicalReferences: LexicalReferenceFact[] | null;
   headings: HeadingFact[];
   /**
    * The frontmatter block **as written**, delimiters excluded, as

@@ -94,46 +94,84 @@ export {
   ValidationResultSchema,
 } from './schemas/validation-result.js';
 
-// Projection schema (shipped shapes, stage 3 — resource-projection.md): the
-// blob-keyed and path-dependent tables that make up VAT's queryable
-// resource projection contract. Population from ParseFacts/ResourceRegistry
-// is still proposed.
+// Projection schema v2 — the zones revision (docs/architecture/zones.md).
+// The blob-keyed and path-dependent tables that make up VAT's queryable
+// resource projection contract. Population is still proposed.
 export {
   ContentKeySchema,
   JsonValueSchema,
   PROJECTION_SCHEMA_VERSION,
+  ProjectionConditionSeveritySchema,
   type JsonValue,
+  type ProjectionConditionSeverity,
 } from './schemas/projection-shared.js';
 
 export {
   BlobConditionRowSchema,
-  BlobConditionSeveritySchema,
-  BlobLinkRowSchema,
+  BlobReferenceRowSchema,
   BlobRowSchema,
   BlobSectionRowSchema,
+  ReferenceSyntacticFormSchema,
+  VariableExpansionSyntaxSchema,
   type BlobConditionRow,
-  type BlobLinkRow,
+  type BlobReferenceRow,
   type BlobRow,
   type BlobSectionRow,
+  type ReferenceSyntacticForm,
+  type VariableExpansionSyntax,
 } from './schemas/projection-blobs.js';
 
 export {
-  EdgeRowSchema,
+  LensEntryPointRowSchema,
+  ResolutionContextRowSchema,
+  TreeRoleSchema,
+  ZoneKindSchema,
+  ZoneProvenanceRowSchema,
+  ZoneSpeciesSchema,
+  type LensEntryPointRow,
+  type ResolutionContextRow,
+  type TreeRole,
+  type ZoneProvenanceRow,
+  type ZoneSpecies,
+} from './schemas/projection-zones.js';
+
+export {
+  RealizationConditionRowSchema,
+  ResourceExtentRowSchema,
+  ResourceKindSchema,
   ResourceRealizationRowSchema,
   ResourceRowSchema,
   ResourceTagRowSchema,
   ResourceTagSourceSchema,
-  ResourceZoneRowSchema,
   RootRowSchema,
-  TreeZoneRoleSchema,
-  ZoneKindSchema,
-  type EdgeRow,
+  type RealizationConditionRow,
+  type ResourceExtentRow,
   type ResourceRealizationRow,
   type ResourceRow,
   type ResourceTagRow,
-  type ResourceZoneRow,
   type RootRow,
 } from './schemas/projection-resources.js';
+
+export {
+  EdgeKindSchema,
+  EdgeOriginSchema,
+  EdgeResolutionRowSchema,
+  EdgeRowSchema,
+  type EdgeOrigin,
+  type EdgeResolutionRow,
+  type EdgeRow,
+} from './schemas/projection-edges.js';
+
+// Lexical reference extraction: reference candidates the markdown AST cannot
+// see (@-prefixed tokens, variable-anchored paths, bounded bare tokens).
+export {
+  collectCodeContextRanges,
+  detectVariableExpansion,
+  findLexicalReferences,
+  type CodeContextRanges,
+  type LexicalReference,
+  type OffsetRange,
+} from './reference-lexer.js';
 
 // Export parser interface for advanced use cases
 export { parseMarkdown, classifyLink, isLocalFileLink, type ParseResult } from './link-parser.js';

@@ -25,6 +25,7 @@ import { unified } from 'unified';
 import { visit } from 'unist-util-visit';
 import * as yaml from 'yaml';
 
+import { findLexicalReferences, type LexicalReference } from './reference-lexer.js';
 import type { HtmlParseError } from './schemas/resource-metadata.js';
 import type { HeadingNode, LinkType, ResourceLink, UnresolvedReference } from './types.js';
 import { findUnresolvedReferences } from './unresolved-references.js';
@@ -84,6 +85,17 @@ export interface ParseResult {
    * leaves this undefined; markdown always populates it (possibly empty).
    */
   unresolvedReferences?: UnresolvedReference[];
+  /**
+   * Reference candidates the markdown AST cannot produce: `@`-prefixed tokens,
+   * variable-anchored paths, and bounded path-shaped bare tokens. See
+   * `reference-lexer.ts` for what qualifies and what is excluded.
+   *
+   * The key is **omitted** when a document has none, matching {@link anchors}:
+   * no own property of a `ParseResult` is ever valued `undefined`, which is
+   * what makes the cache's JSON round trip exact under `toStrictEqual`. HTML
+   * documents leave it undefined.
+   */
+  lexicalReferences?: LexicalReference[];
 }
 
 /**
@@ -173,12 +185,18 @@ export function parseMarkdownContent(content: string, sizeBytes: number): ParseR
   // raw-source scan rather than an AST visit.
   const unresolvedReferences = findUnresolvedReferences(content, tree);
 
+  // Reference candidates remark parses as plain text — `@`-prefixed tokens,
+  // variable-anchored paths, path-shaped bare tokens. Also a raw-source scan,
+  // and for the same structural reason.
+  const lexicalReferences = findLexicalReferences(content, tree);
+
   // With exactOptionalPropertyTypes: true, we must conditionally include the property
   // rather than assigning undefined to it
   return {
     links,
     headings,
     unresolvedReferences,
+    ...(lexicalReferences.length > 0 && { lexicalReferences }),
     ...(anchors.length > 0 && { anchors }),
     ...(frontmatter !== undefined && { frontmatter }),
     ...(frontmatterError !== undefined && { frontmatterError }),

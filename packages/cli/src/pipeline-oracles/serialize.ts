@@ -207,6 +207,13 @@ export function renderParseFactSnapshot(snapshot: ParseFactSnapshot): string {
       );
     }
 
+    lines.push(`lexicalReferences: ${countOrAbsent(row.lexicalReferences)}`);
+    for (const reference of row.lexicalReferences ?? []) {
+      lines.push(
+        `  ${String(reference.ordinal)}\t${reference.syntacticForm}\tline=${String(reference.line)}\tcol=${String(reference.column)}\text=${String(reference.hasExtension)}\tat=${String(reference.leadingAt)}\tslashes=${String(reference.slashCount)}\tvar=${reference.variableExpansion ?? '-'}\tcodeSpan=${String(reference.inCodeSpan)}\tfence=${String(reference.inFence)}\traw=${renderInline(reference.raw)}`,
+      );
+    }
+
     lines.push(`headings: ${String(row.headings.length)}`);
     for (const heading of row.headings) {
       lines.push(

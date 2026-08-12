@@ -9,6 +9,7 @@ import { type ParseResult, parseMarkdownContent } from '../src/link-parser.js';
 import {
   ParseCache,
   type ParseCacheOptions,
+  type ParseFacts,
   defaultParseCache,
   dehydrate,
   parseCacheDirectory,
@@ -79,6 +80,17 @@ cyc: &anchor
 
 [link](./x.md)
 `;
+
+/**
+ * Two reference candidates the markdown AST cannot produce: an `@`-prefixed
+ * token, and a variable-anchored path inside a code span.
+ *
+ * The code span is the load-bearing half for a *serialization* test: it makes
+ * `inCodeSpan` true and `variableExpansion` non-null on the second row, so a
+ * round trip that dropped or defaulted either boolean/enum column would be
+ * visible rather than coincidentally equal.
+ */
+const LEXICAL_DOC = '@docs/x.md\n\nUse `${CLAUDE_PLUGIN_ROOT}/s.js` here.\n';
 
 const MALFORMED_FRONTMATTER_DOC = `---
 title: [unclosed
@@ -433,6 +445,33 @@ describe('rehydrate', () => {
 
     expect(fresh.frontmatterError).toBeDefined();
     expect(result.frontmatterError).toBe(fresh.frontmatterError);
+  });
+});
+
+describe('dehydrate / rehydrate — lexical references', () => {
+  it('round-trips lexical references exactly', () => {
+    const keyed = keyedFromText(LEXICAL_DOC);
+    const parsed = freshParse(keyed);
+
+    // Through real JSON, not through the object. `structuredClone` would NOT
+    // do here even though it is the usual deep-copy answer: an entry on disk is
+    // a JSON *string*, and JSON is the encoding that drops undefined-valued
+    // keys. Naming the string is the point of the test, not an artifact of it.
+    const serialized = JSON.stringify(dehydrate(parsed));
+    const revived = rehydrate(JSON.parse(serialized) as ParseFacts, keyed);
+
+    // Not a vacuous pass: the fixture really does produce rows, and the second
+    // one really does carry the two columns a defaulting round trip would flip.
+    expect(parsed.lexicalReferences).toHaveLength(2);
+    expect(revived.lexicalReferences?.[1]?.inCodeSpan).toBe(true);
+    expect(revived.lexicalReferences?.[1]?.variableExpansion).toBe('brace');
+    expect(revived.lexicalReferences).toStrictEqual(parsed.lexicalReferences);
+  });
+
+  it('sets no own key valued undefined when a document has no lexical references', () => {
+    const facts = dehydrate(freshParse(keyedFromText('# Title\n')));
+
+    expect(Object.hasOwn(facts, 'lexicalReferences')).toBe(false);
   });
 });
 

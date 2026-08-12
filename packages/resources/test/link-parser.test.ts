@@ -1454,3 +1454,28 @@ description: "use [a][nope-fm]"
     });
   });
 });
+
+// ── lexical references ───────────────────────────────────────────────────────
+//
+// `parseMarkdownContent` delegates to `reference-lexer.ts` for the reference
+// candidates remark parses as plain text. What is asserted here is the WIRING —
+// that the field reaches `ParseResult`, that it is omitted rather than valued
+// `undefined` when empty, and that the lexer's exclusion of markdown link nodes
+// really stops a link being counted twice. The lexer's own classification rules
+// are covered by `reference-lexer.test.ts`.
+describe('parseMarkdownContent — lexical references', () => {
+  it('carries @-prefixed tokens that the AST cannot see', () => {
+    const result = parseMarkdownContent('@README.md\n\n[a](./b.md)\n', 24);
+
+    expect(result.lexicalReferences).toHaveLength(1);
+    expect(result.lexicalReferences?.[0]?.raw).toBe('@README.md');
+    // The markdown link is NOT duplicated into the lexical list.
+    expect(result.links).toHaveLength(1);
+  });
+
+  it('omits the key entirely for a document with none', () => {
+    const result = parseMarkdownContent('# Title\n\nJust prose.\n', 21);
+
+    expect(Object.hasOwn(result, 'lexicalReferences')).toBe(false);
+  });
+});

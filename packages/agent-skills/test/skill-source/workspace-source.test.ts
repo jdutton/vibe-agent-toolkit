@@ -34,13 +34,21 @@ describe('resolveWorkspaceSource', () => {
   });
 
   it('removes its build temp dir after staging (no vat-ws-build- leak) (M4)', async () => {
-    const before = readdirSync(normalizedTmpdir()).filter((n) => n.startsWith('vat-ws-build-'));
+    const before = new Set(
+      readdirSync(normalizedTmpdir()).filter((n) => n.startsWith('vat-ws-build-')),
+    );
     const result = await resolveWorkspaceSource('bar', suite.ctx, {
       skillPath: safePath.join(skillDir, 'SKILL.md'),
     });
     // Staged output survives; the build temp dir does not.
     expect(statSync(safePath.join(result.stagedDir, 'SKILL.md')).isFile()).toBe(true);
     const after = readdirSync(normalizedTmpdir()).filter((n) => n.startsWith('vat-ws-build-'));
-    expect(after).toEqual(before);
+    // Assert no NEW dir leaked, rather than `after === before`. The tmpdir is
+    // OS-wide and shared with every other process on the box, so a stale
+    // `vat-ws-build-` left by an earlier interrupted run can be cleaned up by
+    // someone else *during* this test — which fails an exact-equality check
+    // while proving nothing about a leak. Observed 2026-08-12: `before` held a
+    // stale entry, `after` was empty, and the subject had leaked nothing.
+    expect(after.filter((n) => !before.has(n))).toEqual([]);
   });
 });

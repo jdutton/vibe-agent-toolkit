@@ -36,7 +36,7 @@
  * | Field | Fate |
  * |---|---|
  * | `links`, `headings`, `estimatedTokenCount` | stored |
- * | `anchors`, `parseErrors`, `unresolvedReferences` | stored when present |
+ * | `anchors`, `parseErrors`, `unresolvedReferences`, `lexicalReferences` | stored when present |
  * | `frontmatterSource`, `frontmatterError` | stored when present |
  * | `content`, `sizeBytes` | **never stored** — re-attached from `KeyedContent` |
  * | `frontmatter` | **never stored** — re-derived from `frontmatterSource` |
@@ -117,6 +117,7 @@ import { parseCacheDirectory } from './cache-namespace.js';
 import { CONTENT_KEY_PATTERN, type KeyedContent, type ParserKind, readContentWithKey } from './content-key.js';
 import { parseHtmlContent } from './html-link-parser.js';
 import { type ParseResult, parseFrontmatterSource, parseMarkdownContent } from './link-parser.js';
+import type { LexicalReference } from './reference-lexer.js';
 import type { HtmlParseError } from './schemas/resource-metadata.js';
 import type { HeadingNode, ResourceLink, UnresolvedReference } from './types.js';
 
@@ -165,6 +166,8 @@ export interface ParseFacts {
   anchors?: string[];
   parseErrors?: HtmlParseError[];
   unresolvedReferences?: UnresolvedReference[];
+  /** See `ParseResult.lexicalReferences`. Omitted when the document has none. */
+  lexicalReferences?: LexicalReference[];
   /** Raw YAML of the frontmatter block, without the `---` delimiters. */
   frontmatterSource?: string;
   /**
@@ -252,6 +255,9 @@ export function dehydrate(result: ParseResult): ParseFacts {
     ...(result.unresolvedReferences !== undefined && {
       unresolvedReferences: result.unresolvedReferences,
     }),
+    ...(result.lexicalReferences !== undefined && {
+      lexicalReferences: result.lexicalReferences,
+    }),
     ...(result.frontmatterSource !== undefined && {
       frontmatterSource: result.frontmatterSource,
     }),
@@ -284,6 +290,9 @@ export function rehydrate(facts: ParseFacts, keyed: KeyedContent): ParseResult {
     ...(facts.parseErrors !== undefined && { parseErrors: facts.parseErrors }),
     ...(facts.unresolvedReferences !== undefined && {
       unresolvedReferences: facts.unresolvedReferences,
+    }),
+    ...(facts.lexicalReferences !== undefined && {
+      lexicalReferences: facts.lexicalReferences,
     }),
     ...(facts.frontmatterSource !== undefined && {
       frontmatterSource: facts.frontmatterSource,
@@ -604,6 +613,10 @@ function readFacts(raw: string): ParseFacts | null {
  * failure is truncation or foreign content, both of which this catches. It
  * exists so a mangled payload becomes a miss instead of a `ParseResult` whose
  * `links` is a string.
+ *
+ * An OPTIONAL field is checked as "absent, or the right shape" — never as "the
+ * right shape". Requiring it would reject every entry written from a document
+ * that legitimately has none, turning the common case into a permanent miss.
  */
 function isParseFacts(value: unknown): value is ParseFacts {
   if (typeof value !== 'object' || value === null) return false;
@@ -611,7 +624,8 @@ function isParseFacts(value: unknown): value is ParseFacts {
   return (
     Array.isArray(facts.links) &&
     Array.isArray(facts.headings) &&
-    typeof facts.estimatedTokenCount === 'number'
+    typeof facts.estimatedTokenCount === 'number' &&
+    (facts.lexicalReferences === undefined || Array.isArray(facts.lexicalReferences))
   );
 }
 

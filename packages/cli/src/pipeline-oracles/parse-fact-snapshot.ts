@@ -12,7 +12,13 @@
 import { createHash } from 'node:crypto';
 
 import { parseHtml, parseMarkdown, parserKindForPath, readContentWithKey } from '@vibe-agent-toolkit/resources';
-import type { HeadingNode, ParserKind, ParseResult, ResourceLink } from '@vibe-agent-toolkit/resources';
+import type {
+  HeadingNode,
+  LexicalReference,
+  ParserKind,
+  ParseResult,
+  ResourceLink,
+} from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { relativize } from './path-facts.js';
@@ -21,6 +27,7 @@ import type {
   FrontmatterFieldFact,
   HeadingFact,
   KeyDisagreement,
+  LexicalReferenceFact,
   LinkFact,
   OptionalArrayState,
   ParseFactRow,
@@ -61,7 +68,8 @@ type CapturedParseResultField =
   | 'estimatedTokenCount'
   | 'anchors'
   | 'parseErrors'
-  | 'unresolvedReferences';
+  | 'unresolvedReferences'
+  | 'lexicalReferences';
 
 /**
  * Fields deliberately not recorded verbatim, each with the assertion that
@@ -216,6 +224,9 @@ function toRow(contentKey: string, parserKind: ParserKind, parsed: ParseResult):
     sizeBytes: parsed.sizeBytes,
     estimatedTokenCount: parsed.estimatedTokenCount,
     links: parsed.links.map(toLinkFact),
+    // Same absent-is-not-empty rule as `anchors` below: the key is omitted
+    // rather than emitted as `[]` when a document has no candidates.
+    lexicalReferences: parsed.lexicalReferences?.map(toLexicalReferenceFact) ?? null,
     headings: flattenHeadings(parsed.headings),
     // Read off the parse result, not re-derived from the bytes. This module
     // used to carry its own regex delimiter — a second implementation of
@@ -233,6 +244,7 @@ function toRow(contentKey: string, parserKind: ParserKind, parsed: ParseResult):
       { field: 'anchors', state: arrayState(parsed.anchors) },
       { field: 'parseErrors', state: arrayState(parsed.parseErrors) },
       { field: 'unresolvedReferences', state: arrayState(parsed.unresolvedReferences) },
+      { field: 'lexicalReferences', state: arrayState(parsed.lexicalReferences) },
     ],
   };
 }
@@ -351,6 +363,30 @@ function toLinkFact(link: ResourceLink, index: number): LinkFact {
     line: link.line ?? null,
     nodeType: link.nodeType ?? null,
     resolvedId: link.resolvedId ?? null,
+  };
+}
+
+/**
+ * One lexical reference candidate with its ordinal.
+ *
+ * Every column is copied verbatim rather than summarised. They are all scalars
+ * a lossy round-trip can silently replace with a plausible default — and one of
+ * them, `inCodeSpan`, is what decides whether an `@` token counts as an import
+ * at all, so a wrong value is a changed meaning rather than a missing row.
+ */
+function toLexicalReferenceFact(reference: LexicalReference, index: number): LexicalReferenceFact {
+  return {
+    ordinal: index,
+    raw: reference.raw,
+    line: reference.line,
+    column: reference.column,
+    syntacticForm: reference.syntacticForm,
+    hasExtension: reference.hasExtension,
+    leadingAt: reference.leadingAt,
+    slashCount: reference.slashCount,
+    variableExpansion: reference.variableExpansion,
+    inCodeSpan: reference.inCodeSpan,
+    inFence: reference.inFence,
   };
 }
 
