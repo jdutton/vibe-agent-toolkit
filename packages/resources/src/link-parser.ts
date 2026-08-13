@@ -25,7 +25,8 @@ import { unified } from 'unified';
 import { visit } from 'unist-util-visit';
 import * as yaml from 'yaml';
 
-import { findLexicalReferences, type LexicalReference } from './reference-lexer.js';
+import { type ContentMeasures, measureContent } from './projection/blob-facts.js';
+import { collectCodeContextRanges, findLexicalReferences, type LexicalReference } from './reference-lexer.js';
 import type { HtmlParseError } from './schemas/resource-metadata.js';
 import type { HeadingNode, LinkType, ResourceLink, UnresolvedReference } from './types.js';
 import { findUnresolvedReferences } from './unresolved-references.js';
@@ -96,6 +97,39 @@ export interface ParseResult {
    * documents leave it undefined.
    */
   lexicalReferences?: LexicalReference[];
+  /**
+   * Word and byte accounting for this blob, split by code context —
+   * `BlobRow`'s `wordCount` / `proseBytes` / `codeBlockBytes`.
+   *
+   * Computed at parse time rather than at population time because
+   * `codeBlockBytes` needs the AST's `code` node offsets, which exist only
+   * while the tree is live. Both parsers currently always supply it, so the
+   * absent state is defensive rather than reachable; the key stays optional to
+   * match {@link anchors} and {@link lexicalReferences}, and because a
+   * `ParseResult` assembled by hand (tests, a future producer) legitimately has
+   * nothing to say here.
+   */
+  contentMeasures?: ContentMeasures;
+}
+
+/**
+ * VAT's token estimate for a span of text: one token per four characters.
+ *
+ * A deliberately crude, tokenizer-free approximation — no model's vocabulary is
+ * consulted, so the number is comparable across documents rather than accurate
+ * for any one model. It exists as a function because more than one caller needs
+ * it: {@link parseMarkdownContent} reports it per document as
+ * `estimatedTokenCount`, and `blobSectionsFor` reports it per section. Restating
+ * `Math.ceil(text.length / 4)` at each site is how an estimator drifts.
+ *
+ * The input is a **decoded** string, so this counts UTF-16 code units, not bytes
+ * on disk — the same caveat `ContentMeasures` carries.
+ *
+ * @param text - Decoded text to estimate
+ * @returns Estimated token count, rounded up
+ */
+export function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
 }
 
 /**
@@ -166,7 +200,7 @@ export async function parseMarkdown(filePath: string): Promise<ParseResult> {
  * ```
  */
 export function parseMarkdownContent(content: string, sizeBytes: number): ParseResult {
-  const estimatedTokenCount = Math.ceil(content.length / 4);
+  const estimatedTokenCount = estimateTokens(content);
 
   // Parse markdown with unified/remark
   const processor = unified()
@@ -185,10 +219,20 @@ export function parseMarkdownContent(content: string, sizeBytes: number): ParseR
   // raw-source scan rather than an AST visit.
   const unresolvedReferences = findUnresolvedReferences(content, tree);
 
+  // ONE walk for every consumer of code context. `findLexicalReferences` used
+  // to call `collectCodeContextRanges` itself; adding a second call here for
+  // the measures would have walked the tree twice on the cold path CI always
+  // pays — the very cost `collectAstFacts` exists to avoid.
+  const ranges = collectCodeContextRanges(tree);
+
   // Reference candidates remark parses as plain text — `@`-prefixed tokens,
   // variable-anchored paths, path-shaped bare tokens. Also a raw-source scan,
   // and for the same structural reason.
-  const lexicalReferences = findLexicalReferences(content, tree);
+  const lexicalReferences = findLexicalReferences(content, ranges);
+
+  // Fenced AND indented code blocks are both `code` nodes, so both count as
+  // code here — which is the useful reading: neither is prose.
+  const contentMeasures = measureContent(content, ranges.fences);
 
   // With exactOptionalPropertyTypes: true, we must conditionally include the property
   // rather than assigning undefined to it
@@ -201,6 +245,7 @@ export function parseMarkdownContent(content: string, sizeBytes: number): ParseR
     ...(frontmatter !== undefined && { frontmatter }),
     ...(frontmatterError !== undefined && { frontmatterError }),
     ...(frontmatterSource !== undefined && { frontmatterSource }),
+    contentMeasures,
     content,
     sizeBytes,
     estimatedTokenCount,

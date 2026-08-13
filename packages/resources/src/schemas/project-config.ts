@@ -3,6 +3,8 @@ import { globMagicRemainder, hasParentTraversalSegment, isAbsoluteAnyPlatform } 
 import { z } from 'zod';
 
 import { LinkAuthConfigSchema } from './link-auth.js';
+import { ReferenceSyntacticFormSchema } from './projection-blobs.js';
+import { ZoneKindSchema } from './projection-zones.js';
 
 /**
  * Official semver regex from https://semver.org/ (anchored).
@@ -115,7 +117,11 @@ export type ResourcesConfig = z.infer<typeof ResourcesConfigSchema>;
  * A rule for excluding references from a skill bundle.
  */
 export const ExcludeReferenceRuleSchema = z.object({
-  patterns: z.array(z.string()).describe('Glob patterns matched against path relative to skill root'),
+  // ⚠️ Relative to the PROJECT root, not the skill root — this said "skill root" and was wrong.
+  // `walk-link-graph.ts:650` matches against `safePath.relative(options.projectRoot, targetPath)`
+  // and `skill-packager.ts:607` passes the project root, so a pattern written against the skill
+  // root silently matches nothing.
+  patterns: z.array(z.string()).describe('Glob patterns matched against path relative to project root'),
   template: z.string().optional().describe('Handlebars template for rewriting links to matched files'),
 });
 
@@ -309,6 +315,80 @@ export const SkillsConfigSchema = z.object({
 }).strict().describe('Skills discovery and packaging configuration');
 
 export type SkillsConfig = z.infer<typeof SkillsConfigSchema>;
+
+// ---------------------------------------------------------------------------
+// Closure-defined extents (zones.md §7.3)
+// ---------------------------------------------------------------------------
+
+/**
+ * A **closure-defined extent**: everything reachable from one root document by
+ * following declared reference forms, bounded by a depth and narrowed by globs.
+ *
+ * ## Why this is config data rather than a plugin API
+ *
+ * zones.md §7.3's adequacy test is that a built-in extent must be expressible
+ * the way a config-declared one would be. Without this primitive, closure-shaped
+ * extents — which is what a *skill bundle* is — would need privileged code, and
+ * that test and the declarative-only rule could not both hold.
+ *
+ * The primitive is not new behaviour: `SkillPackagingConfigSchema`'s
+ * {@link SkillPackagingConfigSchema} `linkFollowDepth` and
+ * `excludeReferencesFromBundle` already *are* a closure declaration, spelled
+ * once for one privileged walker. The union of {@link maxDepth} and
+ * {@link exclude} here is the same pair, generalized and named.
+ *
+ * ## Declarative data only — never project-supplied code
+ *
+ * Patterns, bindings, metadata, a named resolver, and this primitive. A resolver
+ * *function* from config would be a code-execution surface and would break the
+ * promise that extensible tagging adds no plugin API. Every field below is inert
+ * data a contributor interprets.
+ *
+ * ```yaml
+ * extents:
+ *   my-skill-bundle:
+ *     kind: skill
+ *     closureFrom: skills/foo/SKILL.md
+ *     follow: [markdown-link, markdown-link-reference]
+ *     maxDepth: 3
+ *     exclude: ['*.test.md']
+ * ```
+ *
+ * ## Every optional field carries a default, deliberately
+ *
+ * The parsed shape is handed to a contributor through `PopulateOptions.parameters`,
+ * which is `JsonValue`-typed, and under `exactOptionalPropertyTypes` an optional
+ * property admits `undefined` — which `JsonValue` excludes. Defaulting rather
+ * than leaving fields optional makes the *output* type total, so a parsed
+ * declaration is assignable to `JsonValue` with no cast at the seam that records
+ * it verbatim on `zone_provenance.parameterSet`.
+ */
+export const ExtentDeclarationSchema = z.object({
+  kind: ZoneKindSchema
+    .describe('The resolution_contexts.kind this extent has, e.g. "skill". Open vocabulary; must match the kind the contributor is registered under.'),
+  closureFrom: z.string().min(1)
+    .describe('Root-relative path of the extent root — the one member admitted unconditionally, before any traversal'),
+  follow: z.array(ReferenceSyntacticFormSchema).default(['markdown-link', 'markdown-link-reference', 'markdown-definition'])
+    .describe('Which blob_references syntactic forms the closure traverses. Defaults to the three markdown forms; an @-prefixed or bare token is ambiguous at the blob layer, so following one is an explicit choice.'),
+  maxDepth: z.union([z.number().int().min(0), z.literal('full')]).default('full')
+    .describe('Reference hops from the root, or "full" for an unbounded closure. Same union as skills packaging linkFollowDepth, so one concept has one spelling.'),
+  exclude: z.array(z.string().min(1)).default([])
+    .describe('Globs (picomatch, dot: true) matched against a candidate member\'s root-relative path. An excluded file is neither admitted nor traversed through.'),
+}).strict().describe('A closure-defined extent declaration (zones.md §7.3)');
+
+export type ExtentDeclaration = z.infer<typeof ExtentDeclarationSchema>;
+
+/**
+ * Closure-defined extents, keyed by extent name.
+ *
+ * The key is the extent's within-root discriminator — it becomes the
+ * `resolution_contexts.contextId` suffix — so two declarations under one root
+ * cannot collide, and the same name under two federated roots stays distinct.
+ */
+export const ExtentsConfigSchema = z.record(z.string().min(1), ExtentDeclarationSchema)
+  .describe('Closure-defined extents, keyed by extent name');
+
+export type ExtentsConfig = z.infer<typeof ExtentsConfigSchema>;
 
 // ---------------------------------------------------------------------------
 // Claude marketplace configuration
@@ -511,6 +591,8 @@ export const ProjectConfigSchema = z.object({
     .describe('Resources configuration'),
   claude: ClaudeConfigSchema.optional()
     .describe('Claude-specific configuration (marketplaces, managed-settings)'),
+  extents: ExtentsConfigSchema.optional()
+    .describe('Closure-defined extents (zones.md §7.3), keyed by extent name'),
   test: SkillTestGlobalConfigSchema.optional()
     .describe('Global vat skill test configuration (graderModel, concurrency)'),
 }).strict().describe('vibe-agent-toolkit project configuration');

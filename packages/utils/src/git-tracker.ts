@@ -64,6 +64,12 @@ export class GitTracker {
   private readonly activeSet: Set<string> = new Set();
   /** Absolute paths of every directory that contains at least one active-set file. */
   private readonly activeAncestors: Set<string> = new Set();
+  /**
+   * Lowercased absolute path → the root-relative path spelled the way git
+   * spelled it. Built from the very same `git ls-files` output `activeSet`
+   * comes from, so it costs one extra `Map` and no extra git invocation.
+   */
+  private readonly indexPaths: Map<string, string> = new Map();
   private initialized = false;
   private activeSetPopulated = false;
   /** Whether `git ls-files` actually answered during {@link initialize}. */
@@ -103,6 +109,7 @@ export class GitTracker {
         const absolutePath = safePath.resolve(this.projectRoot, relativePath);
         this.cache.set(absolutePath, false); // false = not ignored
         this.activeSet.add(absolutePath);
+        this.indexPaths.set(absolutePath.toLowerCase(), toForwardSlash(relativePath));
       }
       this.populateAncestorSet();
     }
@@ -275,6 +282,31 @@ export class GitTracker {
   }
 
   /**
+   * The spelling git records for a path, or `null` if git has no record of it.
+   *
+   * This is the casing oracle, not another ignore check. On a case-insensitive
+   * filesystem `docs/Readme.md` and `docs/README.md` are one inode with two
+   * spellings, and Node's two `realpath` implementations disagree about which
+   * one they hand back — so anything that derives an identity from a path needs
+   * a single authoritative spelling, and git's is it wherever git has one.
+   *
+   * The lookup key is lowercased, which is the point: the caller asks with
+   * whatever casing it observed and gets back the casing git holds.
+   *
+   * Answers only from the pre-populated set — never spawns. A path git does not
+   * know (untracked-and-ignored, non-existent, outside the project root, or any
+   * path at all when `git ls-files` did not answer) returns `null`, and the
+   * caller falls back to the on-disk casing.
+   *
+   * @param absolutePath - Absolute path to look up
+   * @returns Root-relative, forward-slashed path as git spells it — relative to
+   *   THIS tracker's project root — or `null` when git has no record of it
+   */
+  indexPathFor(absolutePath: string): string | null {
+    return this.indexPaths.get(safePath.resolve(absolutePath).toLowerCase()) ?? null;
+  }
+
+  /**
    * Get cache statistics.
    */
   getStats(): { cacheSize: number; activeSetSize: number; activeAncestorsSize: number } {
@@ -292,6 +324,7 @@ export class GitTracker {
     this.cache.clear();
     this.activeSet.clear();
     this.activeAncestors.clear();
+    this.indexPaths.clear();
     this.initialized = false;
     this.activeSetPopulated = false;
     this.gitAnswered = false;

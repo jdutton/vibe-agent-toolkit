@@ -11,7 +11,14 @@
 
 import { createHash } from 'node:crypto';
 
-import { parseHtml, parseMarkdown, parserKindForPath, readContentWithKey } from '@vibe-agent-toolkit/resources';
+import {
+  flattenHeadings,
+  parseHtml,
+  parseMarkdown,
+  parserKindForPath,
+  readContentWithKey,
+  relativize,
+} from '@vibe-agent-toolkit/resources';
 import type {
   HeadingNode,
   LexicalReference,
@@ -21,7 +28,6 @@ import type {
 } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
-import { relativize } from './path-facts.js';
 import type {
   ConditionFact,
   FrontmatterFieldFact,
@@ -69,7 +75,8 @@ type CapturedParseResultField =
   | 'anchors'
   | 'parseErrors'
   | 'unresolvedReferences'
-  | 'lexicalReferences';
+  | 'lexicalReferences'
+  | 'contentMeasures';
 
 /**
  * Fields deliberately not recorded verbatim, each with the assertion that
@@ -227,7 +234,7 @@ function toRow(contentKey: string, parserKind: ParserKind, parsed: ParseResult):
     // Same absent-is-not-empty rule as `anchors` below: the key is omitted
     // rather than emitted as `[]` when a document has no candidates.
     lexicalReferences: parsed.lexicalReferences?.map(toLexicalReferenceFact) ?? null,
-    headings: flattenHeadings(parsed.headings),
+    headings: flattenHeadings(parsed.headings).map(toHeadingFact),
     // Read off the parse result, not re-derived from the bytes. This module
     // used to carry its own regex delimiter — a second implementation of
     // frontmatter delimiting, which existed only because `ParseResult` did not
@@ -238,6 +245,17 @@ function toRow(contentKey: string, parserKind: ParserKind, parsed: ParseResult):
     // Absent stays distinguishable from empty: both parsers omit the key rather
     // than emitting `[]`, so `null` and `[]` are different observations.
     anchors: parsed.anchors === undefined ? null : [...parsed.anchors],
+    // Copied column by column rather than by reference, so the row cannot
+    // alias the parse result, and `null` when absent on the `anchors`
+    // precedent.
+    contentMeasures:
+      parsed.contentMeasures === undefined
+        ? null
+        : {
+            wordCount: parsed.contentMeasures.wordCount,
+            proseBytes: parsed.contentMeasures.proseBytes,
+            codeBlockBytes: parsed.contentMeasures.codeBlockBytes,
+          },
     decodedLength: parsed.content.length,
     conditions: collectConditions(parsed),
     optionalArrays: [
@@ -391,31 +409,23 @@ function toLexicalReferenceFact(reference: LexicalReference, index: number): Lex
 }
 
 /**
- * Flatten the heading tree into document order with ordinals.
+ * One already-flattened heading, with its document-order ordinal.
  *
- * `HeadingNode` nests children, which is the right shape for a table of
- * contents and the wrong shape for diffing: a heading moving one level changes
- * the whole subtree's position in the nested rendering. Flat + explicit level
- * makes the diff say what actually changed.
+ * The flattening itself lives in `resources` (`flattenHeadings`) because the
+ * projection's `blob_sections` rows need the identical walk; duplicating it here
+ * would let the golden and the projection disagree about document order. What
+ * stays here is the golden's own shape: an explicit `ordinal`, and `line`
+ * widened from optional to `null` so an absent position is a recorded fact
+ * rather than a missing key.
  */
-function flattenHeadings(headings: readonly HeadingNode[]): HeadingFact[] {
-  const flat: HeadingFact[] = [];
-  const walk = (nodes: readonly HeadingNode[]): void => {
-    for (const node of nodes) {
-      flat.push({
-        ordinal: flat.length,
-        level: node.level,
-        text: node.text,
-        slug: node.slug,
-        line: node.line ?? null,
-      });
-      if (node.children !== undefined) {
-        walk(node.children);
-      }
-    }
+function toHeadingFact(node: HeadingNode, ordinal: number): HeadingFact {
+  return {
+    ordinal,
+    level: node.level,
+    text: node.text,
+    slug: node.slug,
+    line: node.line ?? null,
   };
-  walk(headings);
-  return flat;
 }
 
 /**

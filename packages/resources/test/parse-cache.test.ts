@@ -387,6 +387,7 @@ describe('dehydrate', () => {
 
     expect(Object.keys(facts).toSorted((a, b) => a.localeCompare(b))).toEqual([
       'anchors',
+      'contentMeasures',
       'estimatedTokenCount',
       'headings',
       'links',

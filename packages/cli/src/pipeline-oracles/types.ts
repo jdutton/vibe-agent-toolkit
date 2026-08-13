@@ -76,7 +76,7 @@ export interface EnumerationRow {
    * Does another enumerated path in this same lane resolve to the same file?
    *
    * A set-level fact, so it is filled in by a pass over the whole population
-   * rather than by {@link collectPathFacts}. Recorded rather than deduplicated
+   * rather than by the per-path `collectRealization`. Recorded rather than deduplicated
    * on purpose: collapsing aliases here would be judgement in phase 1, and the
    * measured reality is that every symlink divergence in Anthropic's own
    * shipped plugin trees is an alias — one blob, two names, two generated ids.
@@ -195,6 +195,20 @@ export interface LexicalReferenceFact {
   variableExpansion: string | null;
   inCodeSpan: boolean;
   inFence: boolean;
+}
+
+/**
+ * The three measure columns of one blob, as the parse reported them.
+ *
+ * Declared here rather than imported from `@vibe-agent-toolkit/resources` for
+ * the same reason {@link LexicalReferenceFact} is: a golden row is a record of
+ * what a version of the parser said, and it must keep its shape even if the
+ * producing interface changes underneath it.
+ */
+export interface ContentMeasuresFact {
+  wordCount: number;
+  proseBytes: number;
+  codeBlockBytes: number;
 }
 
 /** One heading, with the slug anchors resolve against. */
@@ -318,6 +332,22 @@ export interface ParseFactRow {
    * anchor validation across the whole corpus while every other fact held.
    */
   anchors: string[] | null;
+  /**
+   * Word and byte accounting split by code context, or `null` when the parse
+   * result omits the field.
+   *
+   * Recorded because it is **carried in the parse cache** and because it is the
+   * only fact in a row derived from the AST's `code` node offsets — a cache
+   * that dropped or mangled it would change `BlobRow`'s three measure columns
+   * for every document while `links`, `headings` and both frontmatter columns
+   * held perfectly still.
+   *
+   * It is also the one column that pairs with {@link decodedLength} to make the
+   * partition checkable from the golden alone: `wordCount` aside,
+   * `proseBytes + codeBlockBytes` must equal `decodedLength`, so a row that
+   * violates it is visibly wrong without re-running anything.
+   */
+  contentMeasures: ContentMeasuresFact | null;
   /**
    * Length of `ParseResult.content` in UTF-16 code units, as the parser
    * returned it.

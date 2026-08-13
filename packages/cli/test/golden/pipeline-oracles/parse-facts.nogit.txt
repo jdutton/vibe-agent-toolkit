@@ -1,6 +1,6 @@
 # parse-fact-snapshot
 corpus: trap/non-git
-blobCount: 37
+blobCount: 41
 keyDisagreementCount: 0
 
 ## blob html.0e14c14b58f404a15053e0e1f4ba6abf2c25e64a4cf19b4579db3b9e965c6b88
@@ -9,6 +9,7 @@ paths: docs/page.htm
 sizeBytes: 59
 estimatedTokenCount: 15
 decodedLength: 59
+contentMeasures: words=2 prose=59 code=0
 frontmatterSource: -
 optionalArrays: anchors=absent parseErrors=present unresolvedReferences=absent lexicalReferences=absent
 frontmatterFields: -
@@ -26,6 +27,7 @@ paths: docs/page.html
 sizeBytes: 126
 estimatedTokenCount: 32
 decodedLength: 126
+contentMeasures: words=6 prose=126 code=0
 frontmatterSource: -
 optionalArrays: anchors=present parseErrors=absent unresolvedReferences=absent lexicalReferences=absent
 frontmatterFields: -
@@ -43,6 +45,7 @@ paths: broken/malformed.html
 sizeBytes: 36
 estimatedTokenCount: 9
 decodedLength: 36
+contentMeasures: words=1 prose=36 code=0
 frontmatterSource: -
 optionalArrays: anchors=absent parseErrors=present unresolvedReferences=absent lexicalReferences=absent
 frontmatterFields: -
@@ -59,6 +62,7 @@ paths: empty.html
 sizeBytes: 0
 estimatedTokenCount: 0
 decodedLength: 0
+contentMeasures: words=0 prose=0 code=0
 frontmatterSource: -
 optionalArrays: anchors=absent parseErrors=present unresolvedReferences=absent lexicalReferences=absent
 frontmatterFields: -
@@ -75,6 +79,7 @@ paths: links/every-type.md
 sizeBytes: 456
 estimatedTokenCount: 114
 decodedLength: 456
+contentMeasures: words=37 prose=456 code=0
 frontmatterSource: -
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=absent
 frontmatterFields: -
@@ -101,6 +106,7 @@ paths: symlinks/a/target.md
 sizeBytes: 28
 estimatedTokenCount: 7
 decodedLength: 28
+contentMeasures: words=6 prose=28 code=0
 frontmatterSource: -
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=absent
 frontmatterFields: -
@@ -117,6 +123,7 @@ paths: docs/anchored.md
 sizeBytes: 127
 estimatedTokenCount: 32
 decodedLength: 127
+contentMeasures: words=11 prose=127 code=0
 frontmatterSource: -
 optionalArrays: anchors=present parseErrors=absent unresolvedReferences=empty lexicalReferences=absent
 frontmatterFields: -
@@ -137,6 +144,7 @@ paths: README.md
 sizeBytes: 105
 estimatedTokenCount: 27
 decodedLength: 105
+contentMeasures: words=11 prose=105 code=0
 frontmatterSource: -
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=absent
 frontmatterFields: -
@@ -156,6 +164,7 @@ paths: links/to-dir.md
 sizeBytes: 34
 estimatedTokenCount: 9
 decodedLength: 34
+contentMeasures: words=5 prose=34 code=0
 frontmatterSource: -
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=absent
 frontmatterFields: -
@@ -173,6 +182,7 @@ paths: docs/empty-frontmatter.md
 sizeBytes: 32
 estimatedTokenCount: 8
 decodedLength: 32
+contentMeasures: words=6 prose=32 code=0
 frontmatterSource: "{}"
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=absent
 frontmatterFields: 0
@@ -189,6 +199,7 @@ paths: symlinks/b/target.md
 sizeBytes: 68
 estimatedTokenCount: 17
 decodedLength: 68
+contentMeasures: words=12 prose=68 code=0
 frontmatterSource: -
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=absent
 frontmatterFields: -
@@ -205,6 +216,7 @@ paths: twins/left/same.md, twins/right/same.md
 sizeBytes: 60
 estimatedTokenCount: 15
 decodedLength: 60
+contentMeasures: words=10 prose=60 code=0
 frontmatterSource: -
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=absent
 frontmatterFields: -
@@ -221,6 +233,7 @@ paths: dup/hyphen-note.md
 sizeBytes: 43
 estimatedTokenCount: 11
 decodedLength: 43
+contentMeasures: words=8 prose=43 code=0
 frontmatterSource: "id: shared-note"
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=absent
 frontmatterFields: 1
@@ -238,6 +251,7 @@ paths: parse/nested-links.md
 sizeBytes: 166
 estimatedTokenCount: 42
 decodedLength: 166
+contentMeasures: words=12 prose=166 code=0
 frontmatterSource: -
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=absent
 frontmatterFields: -
@@ -259,6 +273,7 @@ paths: docs/Case.md
 sizeBytes: 62
 estimatedTokenCount: 16
 decodedLength: 62
+contentMeasures: words=9 prose=62 code=0
 frontmatterSource: -
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=present
 frontmatterFields: -
@@ -276,6 +291,7 @@ paths: parse/masked-references.md
 sizeBytes: 268
 estimatedTokenCount: 67
 decodedLength: 268
+contentMeasures: words=24 prose=238 code=30
 frontmatterSource: -
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=present lexicalReferences=absent
 frontmatterFields: -
@@ -288,12 +304,31 @@ headings: 1
 conditions: 1
   LINK_UNRESOLVED_REFERENCE	line=3	no-such-label
 
+## blob markdown.5b323f4a7ad9af39e3ed44c02ac23ea566ba2b575e1efab5d1c7a9116594b309
+parser: markdown
+paths: parse/lexical-bare-token.md
+sizeBytes: 53
+estimatedTokenCount: 14
+decodedLength: 53
+contentMeasures: words=7 prose=53 code=0
+frontmatterSource: -
+optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=present
+frontmatterFields: -
+anchors: -
+links: 0
+lexicalReferences: 1
+  0	bare-token	line=3	col=9	ext=true	at=false	slashes=2	var=-	codeSpan=false	fence=false	raw=docs/guides/setup.md
+headings: 1
+  0	h1	slug=bare-token	line=1	text=Bare token
+conditions: 0
+
 ## blob markdown.5e45492f336bc8b5ed1e6177b80234caf81eb827acfb30516c5d7199f1e3daaa
 parser: markdown
 paths: broken/bad-frontmatter.md
 sizeBytes: 35
 estimatedTokenCount: 9
 decodedLength: 35
+contentMeasures: words=6 prose=35 code=0
 frontmatterSource: "title: [unclosed"
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=absent
 frontmatterFields: -
@@ -311,6 +346,7 @@ paths: parse/html-anchors.md
 sizeBytes: 251
 estimatedTokenCount: 63
 decodedLength: 251
+contentMeasures: words=26 prose=214 code=37
 frontmatterSource: -
 optionalArrays: anchors=present parseErrors=absent unresolvedReferences=empty lexicalReferences=absent
 frontmatterFields: -
@@ -332,6 +368,7 @@ paths: links/to-anchor.md
 sizeBytes: 56
 estimatedTokenCount: 14
 decodedLength: 56
+contentMeasures: words=5 prose=56 code=0
 frontmatterSource: -
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=absent
 frontmatterFields: -
@@ -349,6 +386,7 @@ paths: broken/exotic-frontmatter.md
 sizeBytes: 97
 estimatedTokenCount: 25
 decodedLength: 97
+contentMeasures: words=13 prose=97 code=0
 frontmatterSource: "ceiling: .inf\nundefined_value: .nan\npayload: !!binary |\n  aGVsbG8="
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=absent
 frontmatterFields: 3
@@ -368,6 +406,7 @@ paths: dup-hyphen/note.md
 sizeBytes: 50
 estimatedTokenCount: 13
 decodedLength: 50
+contentMeasures: words=8 prose=50 code=0
 frontmatterSource: "id: shared-note"
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=absent
 frontmatterFields: 1
@@ -385,6 +424,7 @@ paths: docs/deep-headings.md
 sizeBytes: 154
 estimatedTokenCount: 39
 decodedLength: 154
+contentMeasures: words=31 prose=154 code=0
 frontmatterSource: -
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=absent
 frontmatterFields: -
@@ -407,6 +447,7 @@ paths: parse/repeated-headings.md
 sizeBytes: 43
 estimatedTokenCount: 11
 decodedLength: 43
+contentMeasures: words=10 prose=43 code=0
 frontmatterSource: -
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=absent
 frontmatterFields: -
@@ -427,6 +468,7 @@ paths: links/to-ignored.md
 sizeBytes: 53
 estimatedTokenCount: 14
 decodedLength: 53
+contentMeasures: words=6 prose=53 code=0
 frontmatterSource: -
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=absent
 frontmatterFields: -
@@ -444,6 +486,7 @@ paths: broken/two-conditions.md
 sizeBytes: 110
 estimatedTokenCount: 28
 decodedLength: 110
+contentMeasures: words=15 prose=110 code=0
 frontmatterSource: "title: [unclosed"
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=present lexicalReferences=absent
 frontmatterFields: -
@@ -462,6 +505,7 @@ paths: empty.md
 sizeBytes: 0
 estimatedTokenCount: 0
 decodedLength: 0
+contentMeasures: words=0 prose=0 code=0
 frontmatterSource: -
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=absent
 frontmatterFields: -
@@ -477,6 +521,7 @@ paths: links/to-case.md
 sizeBytes: 38
 estimatedTokenCount: 10
 decodedLength: 38
+contentMeasures: words=4 prose=38 code=0
 frontmatterSource: -
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=absent
 frontmatterFields: -
@@ -488,12 +533,32 @@ headings: 1
   0	h1	slug=wrong-case	line=1	text=Wrong case
 conditions: 0
 
+## blob markdown.8e8235d8e69f095d07a2a2d9f0e9fbb9ece438ee1edd7e3127abd9cf8316ede2
+parser: markdown
+paths: parse/lexical-code-context.md
+sizeBytes: 79
+estimatedTokenCount: 20
+decodedLength: 79
+contentMeasures: words=8 prose=53 code=26
+frontmatterSource: -
+optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=present
+frontmatterFields: -
+anchors: -
+links: 0
+lexicalReferences: 2
+  0	at-prefixed	line=3	col=9	ext=true	at=true	slashes=1	var=-	codeSpan=true	fence=false	raw=@docs/setup.md
+  1	at-prefixed	line=6	col=1	ext=true	at=true	slashes=1	var=-	codeSpan=false	fence=true	raw=@docs/setup.md
+headings: 1
+  0	h1	slug=code-context	line=1	text=Code context
+conditions: 0
+
 ## blob markdown.91d8b1997300816e46abbc915331037111bcc581b27478801d1868cf9c37e473
 parser: markdown
 paths: parse/duplicate-definition.md
 sizeBytes: 125
 estimatedTokenCount: 32
 decodedLength: 125
+contentMeasures: words=15 prose=125 code=0
 frontmatterSource: -
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=absent
 frontmatterFields: -
@@ -507,12 +572,32 @@ headings: 1
   0	h1	slug=duplicate-definition-label	line=1	text=Duplicate definition label
 conditions: 0
 
+## blob markdown.9e63ced7a9fff0628fdb6908bf6e66cd194bd0c6dd2cb0ab4a0040caf1a0d5d5
+parser: markdown
+paths: parse/lexical-env-anchored.md
+sizeBytes: 84
+estimatedTokenCount: 21
+decodedLength: 84
+contentMeasures: words=9 prose=84 code=0
+frontmatterSource: -
+optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=present
+frontmatterFields: -
+anchors: -
+links: 0
+lexicalReferences: 2
+  0	env-anchored	line=3	col=5	ext=true	at=false	slashes=2	var=brace	codeSpan=false	fence=false	raw=${CLAUDE_PLUGIN_ROOT}/scripts/run.mjs
+  1	env-anchored	line=3	col=52	ext=false	at=false	slashes=0	var=percent	codeSpan=false	fence=false	raw=%APPDATA%\\x
+headings: 1
+  0	h1	slug=env-anchored	line=1	text=Env anchored
+conditions: 0
+
 ## blob markdown.b6a9ed367a5a006e521cdd78defb21a9c7b40225a935f8dc91394fbd305cc43b
 parser: markdown
 paths: broken/dangling-reference.md
 sizeBytes: 37
 estimatedTokenCount: 10
 decodedLength: 37
+contentMeasures: words=5 prose=37 code=0
 frontmatterSource: -
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=present lexicalReferences=absent
 frontmatterFields: -
@@ -530,6 +615,7 @@ paths: parse/frontmatter-delimited-empty.md
 sizeBytes: 21
 estimatedTokenCount: 6
 decodedLength: 21
+contentMeasures: words=5 prose=21 code=0
 frontmatterSource: ""
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=absent
 frontmatterFields: -
@@ -546,6 +632,7 @@ paths: parse/kitchen-sink.md
 sizeBytes: 471
 estimatedTokenCount: 118
 decodedLength: 471
+contentMeasures: words=60 prose=471 code=0
 frontmatterSource: "title: kitchen sink"
 optionalArrays: anchors=present parseErrors=absent unresolvedReferences=empty lexicalReferences=absent
 frontmatterFields: 1
@@ -577,6 +664,7 @@ paths: docs/frontmatter-shapes.md
 sizeBytes: 127
 estimatedTokenCount: 32
 decodedLength: 127
+contentMeasures: words=19 prose=127 code=0
 frontmatterSource: "when: 2020-01-02T03:04:05Z\nflag: true\nnothing: null\nlist:\n  - one\n  - two\nnested:\n  inner: value"
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=absent
 frontmatterFields: 5
@@ -598,6 +686,7 @@ paths: parse/interleaved-kinds.md
 sizeBytes: 234
 estimatedTokenCount: 59
 decodedLength: 234
+contentMeasures: words=23 prose=234 code=0
 frontmatterSource: -
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=absent
 frontmatterFields: -
@@ -620,6 +709,7 @@ paths: links/to-missing.md
 sizeBytes: 41
 estimatedTokenCount: 11
 decodedLength: 41
+contentMeasures: words=4 prose=41 code=0
 frontmatterSource: -
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=absent
 frontmatterFields: -
@@ -637,6 +727,7 @@ paths: docs/sibling.md
 sizeBytes: 55
 estimatedTokenCount: 14
 decodedLength: 55
+contentMeasures: words=9 prose=55 code=0
 frontmatterSource: -
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=absent
 frontmatterFields: -
@@ -653,6 +744,7 @@ paths: ignored/secret.md
 sizeBytes: 64
 estimatedTokenCount: 16
 decodedLength: 64
+contentMeasures: words=11 prose=64 code=0
 frontmatterSource: -
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=absent
 frontmatterFields: -
@@ -663,12 +755,31 @@ headings: 1
   0	h1	slug=secret	line=1	text=Secret
 conditions: 0
 
+## blob markdown.e232b3cc1c2b3c0b3b466a4840b7d669d6b5d49814c198b3d65ff830579db6aa
+parser: markdown
+paths: parse/lexical-at-import.md
+sizeBytes: 57
+estimatedTokenCount: 15
+decodedLength: 57
+contentMeasures: words=7 prose=57 code=0
+frontmatterSource: -
+optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=present
+frontmatterFields: -
+anchors: -
+links: 0
+lexicalReferences: 1
+  0	at-prefixed	line=3	col=6	ext=true	at=true	slashes=1	var=-	codeSpan=false	fence=false	raw=@docs/setup.md
+headings: 1
+  0	h1	slug=at-prefixed-import	line=1	text=At-prefixed import
+conditions: 0
+
 ## blob markdown.fbb352a705f5cc8e22d83f8f15337a298afeb16b771753bb70c24dc2555e5c75
 parser: markdown
 paths: docs/guide.md
 sizeBytes: 344
 estimatedTokenCount: 86
 decodedLength: 344
+contentMeasures: words=52 prose=344 code=0
 frontmatterSource: "title: Guide\ndescription: An ordinary document, so the snapshot has a baseline to be unlike."
 optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=absent
 frontmatterFields: 2

@@ -32,6 +32,7 @@ const BARREL_EXPORTS = [
   'canCreateSymlinks',
   'classifyFilenameCaseFrom',
   'CommandExecutionError',
+  'compareCodeUnits',
   'copyDirectory',
   'crawlDirectory',
   'crawlDirectorySync',

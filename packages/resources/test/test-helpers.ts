@@ -15,7 +15,14 @@ import { ExternalLinkValidator } from '../src/external-link-validator.js';
 import { parseMarkdown } from '../src/link-parser.js';
 import type { FragmentIndex, ValidateLinkOptions as LinkValidatorOptions } from '../src/link-validator.js';
 import { validateLink } from '../src/link-validator.js';
+import type { ExtentContribution } from '../src/projection/contributor.js';
 import { ResourceRegistry } from '../src/resource-registry.js';
+import {
+  ResourceExtentRowSchema,
+  ResourceRealizationRowSchema,
+  ResourceRowSchema,
+} from '../src/schemas/projection-resources.js';
+import { ResolutionContextRowSchema } from '../src/schemas/projection-zones.js';
 import type { HeadingNode, ResourceLink, ValidationIssue } from '../src/types.js';
 
 /**
@@ -599,4 +606,33 @@ export async function createTwoFilesWithSameContent(
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- test helper
   await writeFile(file2, content, 'utf-8');
   return { file1, file2 };
+}
+
+/**
+ * Assert every row in an {@link ExtentContribution} parses against its shipped schema.
+ *
+ * Two extent-contributor test files independently wrote this same four-table
+ * loop, which is the shape jscpd counts as a clone. It is a genuinely shared
+ * assertion rather than a deliberate independent restatement, so it belongs in
+ * one place — unlike the pipeline oracle, whose duplication of production logic
+ * is the instrument itself.
+ *
+ * `contexts` is looped rather than indexed so a contributor declaring several
+ * extents at once (the package extent emits one per package) is fully covered.
+ *
+ * @param contribution - The rows a contributor returned
+ */
+export function expectContributionRowsValid(contribution: ExtentContribution): void {
+  for (const row of contribution.contexts) {
+    expect(() => ResolutionContextRowSchema.parse(row)).not.toThrow();
+  }
+  for (const row of contribution.resources) {
+    expect(() => ResourceRowSchema.parse(row)).not.toThrow();
+  }
+  for (const row of contribution.realizations) {
+    expect(() => ResourceRealizationRowSchema.parse(row)).not.toThrow();
+  }
+  for (const row of contribution.memberships) {
+    expect(() => ResourceExtentRowSchema.parse(row)).not.toThrow();
+  }
 }

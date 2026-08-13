@@ -63,8 +63,10 @@ export const PackagingOptionsSchema = z.object({
     ),
   excludeReferencesFromBundle: z.object({
     rules: z.array(z.object({
+      // ⚠️ Relative to the PROJECT root, not the skill root — see the same correction on
+      // `ExcludeReferenceRuleSchema` in `@vibe-agent-toolkit/resources`.
       patterns: z.array(z.string())
-        .describe('Glob patterns matched against path relative to skill root'),
+        .describe('Glob patterns matched against path relative to project root'),
       template: z.string()
         .optional()
         .describe(

@@ -191,11 +191,16 @@ const EXTENSION_SUFFIX = /\.[A-Za-z0-9]{1,8}$/u;
  * there — see `MAX_SCANNED_LINE_LENGTH` — so such a line simply contributes no
  * candidates.
  *
- * @param content - Raw markdown source (the same string parsed into `tree`)
- * @param tree - The parsed AST, used only for code context and exclusions
+ * Takes the ranges rather than the tree so the AST is walked **once** per
+ * parse: `parseMarkdownContent` needs the same {@link CodeContextRanges} for
+ * `measureContent`, and a function that took the tree would have to walk it
+ * again to get them.
+ *
+ * @param content - Raw markdown source (the same string the ranges came from)
+ * @param ranges - Code context and exclusions, from {@link collectCodeContextRanges}
+ * @returns Every candidate, in document order
  */
-export function findLexicalReferences(content: string, tree: Root): LexicalReference[] {
-  const ranges = collectCodeContextRanges(tree);
+export function findLexicalReferences(content: string, ranges: CodeContextRanges): LexicalReference[] {
   const found: LexicalReference[] = [];
 
   forEachScannableLine(content, (segment, lineStart, line) => {

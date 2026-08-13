@@ -23,6 +23,20 @@
       "outputs": ["dist/skills/**"],
       "cache": true
     },
+    // cat-agents runs the CLI *binary* from `build:skills`, not from `build`, so the
+    // adopter registration above does not cover it. Without this edge turbo is free to
+    // start `node ../cli/dist/bin/vat.js skills build` while a transitive dependency of
+    // the CLI is mid-rebuild — and every package here builds via `tsc-clean-build.ts`,
+    // which *deletes* `dist/` before emitting. Observed as a hard, repeating failure:
+    // gateway-mcp's `dist/` was removed at the instant the CLI tried to import it
+    // (`ERR_MODULE_NOT_FOUND` on gateway-mcp/dist/index.js), turbo then killed the
+    // gateway build (130) so nothing was cached, and the next run raced identically.
+    // Warm caches hid it until a change upstream of gateway-mcp forced a cache miss.
+    "@vibe-agent-toolkit/vat-example-cat-agents#build:skills": {
+      "dependsOn": ["@vibe-agent-toolkit/cli#build", "build"],
+      "outputs": ["dist/skills/**"],
+      "cache": true
+    },
     "typecheck": {
       "dependsOn": ["^build"],
       "outputs": [],

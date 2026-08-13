@@ -17,7 +17,8 @@ import { readFile, stat } from 'node:fs/promises';
 
 import { parse, type DefaultTreeAdapterMap } from 'parse5';
 
-import { classifyLink, type ParseResult } from './link-parser.js';
+import { classifyLink, estimateTokens, type ParseResult } from './link-parser.js';
+import { measureContent } from './projection/blob-facts.js';
 import type { HtmlParseError } from './schemas/resource-metadata.js';
 import type { ResourceLink } from './types.js';
 
@@ -140,7 +141,13 @@ export function parseHtmlContent(content: string, sizeBytes: number): ParseResul
     headings: [],
     content,
     sizeBytes,
-    estimatedTokenCount: Math.ceil(content.length / 4),
+    estimatedTokenCount: estimateTokens(content),
+    // No fences: HTML has no fenced-code construct, so an HTML blob is all
+    // prose. This is a modelling choice, not a stub — `<pre><code>` is markup
+    // with no offset range the parse5 tree exposes as "code context", and
+    // treating a `<pre>` block as code would need a second, HTML-specific
+    // definition of the column that markdown's `code` nodes already define.
+    contentMeasures: measureContent(content, []),
     ...(anchorList.length > 0 && { anchors: anchorList }),
     ...(parseErrors.length > 0 && { parseErrors }),
   };

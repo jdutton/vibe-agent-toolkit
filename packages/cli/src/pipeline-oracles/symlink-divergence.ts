@@ -41,6 +41,7 @@
 
 import { realpathSync } from 'node:fs';
 
+import { relativize } from '@vibe-agent-toolkit/resources';
 import {
   crawlDirectory,
   GitTracker,
@@ -51,7 +52,6 @@ import {
 } from '@vibe-agent-toolkit/utils';
 
 import type { LaneDefinition } from './lanes.js';
-import { relativize } from './path-facts.js';
 import type { LaneId } from './types.js';
 
 /** Why one path appears in some enumerations of a corpus and not others. */

@@ -21,7 +21,7 @@ function parse(source: string): Root {
 }
 
 function lex(source: string) {
-  return findLexicalReferences(source, parse(source));
+  return findLexicalReferences(source, collectCodeContextRanges(parse(source)));
 }
 
 describe('collectCodeContextRanges', () => {

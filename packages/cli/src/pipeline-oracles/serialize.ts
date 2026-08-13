@@ -10,7 +10,7 @@
  */
 
 import type { SymlinkDivergenceReport } from './symlink-divergence.js';
-import type { EnumerationSnapshot, ParseFactSnapshot } from './types.js';
+import type { ContentMeasuresFact, EnumerationSnapshot, ParseFactSnapshot } from './types.js';
 
 /** `true` / `false` / `-` for an unanswered column, so columns stay aligned in width. */
 function flag(value: boolean | null): string {
@@ -181,6 +181,7 @@ export function renderParseFactSnapshot(snapshot: ParseFactSnapshot): string {
     lines.push(`sizeBytes: ${String(row.sizeBytes)}`);
     lines.push(`estimatedTokenCount: ${String(row.estimatedTokenCount)}`);
     lines.push(`decodedLength: ${String(row.decodedLength)}`);
+    lines.push(`contentMeasures: ${renderContentMeasures(row.contentMeasures)}`);
     lines.push(`frontmatterSource: ${renderMultiline(row.frontmatterSource)}`);
     const optionalArrays = row.optionalArrays.map((fact) => `${fact.field}=${fact.state}`).join(' ');
     lines.push(`optionalArrays: ${optionalArrays}`);
@@ -280,6 +281,22 @@ function renderMultiline(value: string | null): string {
   if (value === null) return '-';
   const escaped = renderInline(value).replaceAll('"', String.raw`\"`);
   return `"${escaped}"`;
+}
+
+/**
+ * Render the three measure columns on one line, or `-` when absent.
+ *
+ * Named rather than positional (`words=… prose=… code=…`), because the three
+ * are all bare integers: a transposition of two of them would be invisible in a
+ * positional rendering, and `proseBytes`/`codeBlockBytes` are exactly the pair a
+ * mistake would swap.
+ *
+ * @param measures - The measures, or null when the field was absent
+ * @returns `-`, or the three counts labelled
+ */
+function renderContentMeasures(measures: ContentMeasuresFact | null): string {
+  if (measures === null) return '-';
+  return `words=${String(measures.wordCount)} prose=${String(measures.proseBytes)} code=${String(measures.codeBlockBytes)}`;
 }
 
 /**

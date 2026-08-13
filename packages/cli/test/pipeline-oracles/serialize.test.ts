@@ -6,15 +6,16 @@
  * argument that a restructure preserved each lane's population — rests on it.
  */
 
+import { relativize } from '@vibe-agent-toolkit/resources';
 import { describe, expect, it } from 'vitest';
 
-import { relativize } from '../../src/pipeline-oracles/path-facts.js';
 import {
   renderEnumerationSnapshot,
   renderEnumerationSnapshotUnordered,
   renderParseFactSnapshot,
 } from '../../src/pipeline-oracles/serialize.js';
 import type {
+  ContentMeasuresFact,
   EnumerationRow,
   EnumerationSnapshot,
   LexicalReferenceFact,
@@ -180,6 +181,7 @@ describe('renderParseFactSnapshot', () => {
           { key: 'value', typeName: 'number', valueDigest: 'bbbbbbbbbbbb' },
         ],
         anchors: ['top'],
+        contentMeasures: { wordCount: 7, proseBytes: 30, codeBlockBytes: 12 },
         decodedLength: 42,
         conditions: [{ code: 'PARSE_ODDITY', message: 'something\nmultiline', line: 2 }],
         optionalArrays: [
@@ -317,6 +319,35 @@ describe('renderParseFactSnapshot', () => {
     });
     expect(stamped).toContain('resolvedId=leaked-from-another-skill');
     expect(stamped).not.toBe(renderParseFactSnapshot(facts));
+  });
+
+  /** Render one row with `contentMeasures` replaced wholesale. */
+  const withContentMeasures = (measures: ContentMeasuresFact | null): string =>
+    renderParseFactSnapshot({
+      ...facts,
+      rows: facts.rows.map((entry) => ({ ...entry, contentMeasures: measures })),
+    });
+
+  it('labels each measure, so a transposition of two counts is visible', () => {
+    // All three are bare integers. Positionally, swapping proseBytes and
+    // codeBlockBytes renders identically to not swapping them — and those two
+    // are exactly the pair a mistake would swap.
+    expect(renderParseFactSnapshot(facts).split('\n')).toContain(
+      'contentMeasures: words=7 prose=30 code=12',
+    );
+    expect(withContentMeasures({ wordCount: 7, proseBytes: 12, codeBlockBytes: 30 })).not.toBe(
+      renderParseFactSnapshot(facts),
+    );
+  });
+
+  it('keeps absent measures distinct from an all-zero measurement', () => {
+    // An empty document measures {0,0,0}; a parse result that omitted the field
+    // measured nothing at all. Rendering both as zeros would make a parser that
+    // stopped producing the field indistinguishable from an empty corpus.
+    expect(withContentMeasures(null)).toContain('contentMeasures: -');
+    expect(withContentMeasures(null)).not.toBe(
+      withContentMeasures({ wordCount: 0, proseBytes: 0, codeBlockBytes: 0 }),
+    );
   });
 
   it('renders absent frontmatter as - rather than as an empty block', () => {

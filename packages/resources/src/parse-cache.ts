@@ -36,7 +36,7 @@
  * | Field | Fate |
  * |---|---|
  * | `links`, `headings`, `estimatedTokenCount` | stored |
- * | `anchors`, `parseErrors`, `unresolvedReferences`, `lexicalReferences` | stored when present |
+ * | `anchors`, `parseErrors`, `unresolvedReferences`, `lexicalReferences`, `contentMeasures` | stored when present |
  * | `frontmatterSource`, `frontmatterError` | stored when present |
  * | `content`, `sizeBytes` | **never stored** — re-attached from `KeyedContent` |
  * | `frontmatter` | **never stored** — re-derived from `frontmatterSource` |
@@ -117,6 +117,7 @@ import { parseCacheDirectory } from './cache-namespace.js';
 import { CONTENT_KEY_PATTERN, type KeyedContent, type ParserKind, readContentWithKey } from './content-key.js';
 import { parseHtmlContent } from './html-link-parser.js';
 import { type ParseResult, parseFrontmatterSource, parseMarkdownContent } from './link-parser.js';
+import type { ContentMeasures } from './projection/blob-facts.js';
 import type { LexicalReference } from './reference-lexer.js';
 import type { HtmlParseError } from './schemas/resource-metadata.js';
 import type { HeadingNode, ResourceLink, UnresolvedReference } from './types.js';
@@ -168,6 +169,13 @@ export interface ParseFacts {
   unresolvedReferences?: UnresolvedReference[];
   /** See `ParseResult.lexicalReferences`. Omitted when the document has none. */
   lexicalReferences?: LexicalReference[];
+  /**
+   * See `ParseResult.contentMeasures`. A function of the bytes alone, so it is
+   * storable by the same rule as {@link estimatedTokenCount} — and it must be
+   * stored, because recomputing `codeBlockBytes` needs the AST this cache
+   * exists to avoid building.
+   */
+  contentMeasures?: ContentMeasures;
   /** Raw YAML of the frontmatter block, without the `---` delimiters. */
   frontmatterSource?: string;
   /**
@@ -258,6 +266,9 @@ export function dehydrate(result: ParseResult): ParseFacts {
     ...(result.lexicalReferences !== undefined && {
       lexicalReferences: result.lexicalReferences,
     }),
+    ...(result.contentMeasures !== undefined && {
+      contentMeasures: result.contentMeasures,
+    }),
     ...(result.frontmatterSource !== undefined && {
       frontmatterSource: result.frontmatterSource,
     }),
@@ -293,6 +304,9 @@ export function rehydrate(facts: ParseFacts, keyed: KeyedContent): ParseResult {
     }),
     ...(facts.lexicalReferences !== undefined && {
       lexicalReferences: facts.lexicalReferences,
+    }),
+    ...(facts.contentMeasures !== undefined && {
+      contentMeasures: facts.contentMeasures,
     }),
     ...(facts.frontmatterSource !== undefined && {
       frontmatterSource: facts.frontmatterSource,
@@ -617,6 +631,10 @@ function readFacts(raw: string): ParseFacts | null {
  * An OPTIONAL field is checked as "absent, or the right shape" — never as "the
  * right shape". Requiring it would reject every entry written from a document
  * that legitimately has none, turning the common case into a permanent miss.
+ *
+ * Every optional field is checked, not just one: a truncated payload can end
+ * anywhere, and a field that goes unchecked is one whose corruption reaches
+ * {@link rehydrate} as a plausible-looking value.
  */
 function isParseFacts(value: unknown): value is ParseFacts {
   if (typeof value !== 'object' || value === null) return false;
@@ -625,7 +643,28 @@ function isParseFacts(value: unknown): value is ParseFacts {
     Array.isArray(facts.links) &&
     Array.isArray(facts.headings) &&
     typeof facts.estimatedTokenCount === 'number' &&
-    (facts.lexicalReferences === undefined || Array.isArray(facts.lexicalReferences))
+    isAbsentOrArray(facts.anchors) &&
+    isAbsentOrArray(facts.parseErrors) &&
+    isAbsentOrArray(facts.unresolvedReferences) &&
+    isAbsentOrArray(facts.lexicalReferences) &&
+    isAbsentOrMeasures(facts.contentMeasures)
+  );
+}
+
+/** An optional array field: absent, or an array. */
+function isAbsentOrArray(value: unknown): boolean {
+  return value === undefined || Array.isArray(value);
+}
+
+/** An optional {@link ContentMeasures}: absent, or an object carrying all three counts. */
+function isAbsentOrMeasures(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (typeof value !== 'object' || value === null) return false;
+  const measures = value as Partial<ContentMeasures>;
+  return (
+    typeof measures.wordCount === 'number' &&
+    typeof measures.proseBytes === 'number' &&
+    typeof measures.codeBlockBytes === 'number'
   );
 }
 

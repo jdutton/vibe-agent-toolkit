@@ -1,0 +1,162 @@
+/**
+ * The extent-contributor seam (zones §7.1, §7.4, §7.5).
+ *
+ * §7.1 fixes the whole signature: *"Contributors read the base projection and
+ * return rows; `resources` merges without interpreting. No contributor calls
+ * into `resources` internals."* That is `(base, parameters) → rows`, and
+ * nothing else. §7.4 fixes what each contributor is additionally accountable
+ * for — `(contributorId, parameterSet, extentDigest)`, the three columns
+ * `zone_provenance` already ships.
+ *
+ * Two consequences worth stating, because both look like gaps until you see
+ * why they are not:
+ *
+ * - **The fixpoint is a property of the driver, not of the contributor.** §7.2
+ *   iterates the closure stratum until digests stop moving. A contributor
+ *   called once and a contributor called five times have the same signature,
+ *   so iteration adds no method here.
+ * - **The closure primitive is a `parameterSet`, not a new interface.** §7.3's
+ *   `closureFrom` / `follow` / `maxDepth` / `exclude` are config data handed to
+ *   a *generic* closure contributor. Adding closure-defined extents adds an
+ *   instance, not a member.
+ */
+
+import type {
+  RealizationConditionRow,
+  ResourceExtentRow,
+  ResourceRealizationRow,
+  ResourceRow,
+  ResourceTagRow,
+} from '../schemas/projection-resources.js';
+import type { JsonValue } from '../schemas/projection-shared.js';
+import type { ResolutionContextRow } from '../schemas/projection-zones.js';
+
+import type { ProjectionBase } from './projection.js';
+
+export { extentDigest } from './digest.js';
+
+/**
+ * Which merge stratum a contributor belongs to (§7.2).
+ *
+ * `base` contributors are acyclic — what exists on disk, in git, in a package
+ * manifest — and run exactly once. `closure` contributors are defined by
+ * reachability *through* what other contributors found, so they re-run against
+ * the growing base until their {@link extentDigest} stops moving.
+ */
+export type ContributorStratum = 'base' | 'closure';
+
+/**
+ * What a contributor returns: rows only.
+ *
+ * `resources` merges these without interpreting them — no field here is read
+ * for meaning by the driver, which is what keeps "no contributor calls into
+ * `resources` internals" true in both directions.
+ *
+ * Blob-keyed tables are deliberately absent: blobs are derived from bytes by
+ * the parse layer and are path-independent, so an extent contributor has
+ * nothing to say about them. It says which resources exist, where they are
+ * realized, and which extents they belong to.
+ */
+export interface ExtentContribution {
+  /** `resolution_contexts` rows, species `extent` — the extents being declared. */
+  contexts: ResolutionContextRow[];
+  /** `resources` rows — identities, minted or re-observed. */
+  resources: ResourceRow[];
+  /** `resource_realizations` rows — one path in one extent. */
+  realizations: ResourceRealizationRow[];
+  /** `resource_extents` rows — membership, and nothing more. */
+  memberships: ResourceExtentRow[];
+  /** `resource_tags` rows — the open-vocabulary classification mechanism. */
+  tags: ResourceTagRow[];
+  /** `realization_conditions` rows — population-time conditions, e.g. a path collision. */
+  conditions: RealizationConditionRow[];
+}
+
+/**
+ * One source of extent membership.
+ *
+ * The filesystem, git and package extents are the first three instances; the
+ * generic closure contributor (§7.3) is the fourth, and skill / plugin /
+ * marketplace extents are that fourth one parameterised by config rather than
+ * new implementations.
+ */
+export interface ExtentContributor {
+  /** Stable identity — `zone_provenance.contributorId` keys on it, so it must be unique. */
+  readonly id: string;
+  /** The `resolution_contexts.kind` this contributor populates. Open vocabulary. */
+  readonly kind: string;
+  /** Which stratum the merge driver runs it in. */
+  readonly stratum: ContributorStratum;
+  /**
+   * Produce this contributor's rows against the projection built so far.
+   *
+   * @param base - Read-only view of everything merged before this invocation
+   * @param parameters - The parameter set this run is scoped by, verbatim from
+   *   config; recorded on `zone_provenance.parameterSet`
+   * @returns The rows to merge
+   */
+  contribute(base: ProjectionBase, parameters: JsonValue): Promise<ExtentContribution>;
+}
+
+/**
+ * The set of contributors a population run draws on.
+ *
+ * Two rules, both of which exist to make a wrong answer impossible rather than
+ * merely unlikely:
+ *
+ * - **{@link forKind} throws when nothing is registered** (§7.5). Returning an
+ *   empty array would let a caller ask for the marketplace extent, receive
+ *   nothing, and report a complete, empty extent — a confident wrong answer.
+ * - **{@link register} refuses a duplicate id.** Provenance keys on
+ *   `contributorId`, so two contributors sharing one id make two extents
+ *   indistinguishable in `zone_provenance` and silently collapse a digest
+ *   comparison.
+ */
+export class ContributorRegistry {
+  readonly #byId = new Map<string, ExtentContributor>();
+
+  /**
+   * Add a contributor.
+   *
+   * @param contributor - The contributor to register
+   * @throws When a contributor with the same id is already registered
+   */
+  register(contributor: ExtentContributor): void {
+    if (this.#byId.has(contributor.id)) {
+      throw new Error(
+        `Contributor id "${contributor.id}" is already registered. Ids are unique because zone_provenance.contributorId keys on them.`,
+      );
+    }
+    this.#byId.set(contributor.id, contributor);
+  }
+
+  /**
+   * Every contributor registered for a zone kind, in registration order.
+   *
+   * @param kind - A `resolution_contexts.kind` value
+   * @returns The contributors populating that kind — never empty
+   * @throws When no contributor is registered for the kind
+   */
+  forKind(kind: string): ExtentContributor[] {
+    const matches = [...this.#byId.values()].filter((contributor) => contributor.kind === kind);
+    if (matches.length === 0) {
+      throw new Error(
+        `No extent contributor is registered for kind "${kind}". An empty extent is a confident wrong answer, so this is an error rather than an empty result.`,
+      );
+    }
+    return matches;
+  }
+
+  /**
+   * Every contributor in a stratum, in registration order.
+   *
+   * The driver's partition: `base` runs once, `closure` iterates to a fixpoint.
+   *
+   * @param stratum - The stratum to select
+   * @returns The contributors in that stratum, possibly empty — a run with no
+   *   closure contributors is ordinary, unlike a kind with none
+   */
+  byStratum(stratum: ContributorStratum): ExtentContributor[] {
+    return [...this.#byId.values()].filter((contributor) => contributor.stratum === stratum);
+  }
+}

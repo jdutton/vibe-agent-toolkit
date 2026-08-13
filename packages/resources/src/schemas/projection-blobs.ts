@@ -116,11 +116,22 @@ export type VariableExpansionSyntax = z.infer<typeof VariableExpansionSyntaxSche
  *
  * ## Ordinal ordering
  *
- * Markdown-derived references come first, in the existing kind-order contract
- * the parse-fact goldens pin (all `link`s, then all `linkReference`s, then
- * all `definition`s), followed by lexer-derived references in document order.
- * Appending rather than interleaving is what keeps the shipped golden
- * ordinals valid.
+ * **One ordinal space, ordered by `(line, column)`** — the AST-derived and
+ * lexer-derived sequences are interleaved, not concatenated. `ordinal` is
+ * documented above as "0-based position among this blob's references", and two
+ * producer-scoped sequences would make that false: an ordinal would identify a
+ * row only in company with the producer that emitted it, which is not a column
+ * here. Edges keying on `(blob, ordinal)` need the pair to be sufficient.
+ *
+ * An AST-derived row carries **no** column — `ResourceLink` has none, which is
+ * why `column` is nullable — and a null column sorts before a real one on the
+ * same line, since "somewhere on this line" cannot be placed among known
+ * columns. `blob-references.ts` holds the full ordering rule and its tie-break.
+ *
+ * > This paragraph previously described the opposite (markdown first, lexer
+ * > appended) and justified it as preserving shipped golden ordinals. No golden
+ * > pins `blob_references` ordinals — the table is new — so that rationale was
+ * > false as well as contradicting the implementation.
  */
 export const BlobReferenceRowSchema = z.object({
   blob: ContentKeySchema.describe(BLOB_FK_DESC),

@@ -325,6 +325,63 @@ export const TRAP_CORPUS_FILES: CorpusFiles = Object.freeze({
   // (absent) or `0` (present and empty).
   'parse/frontmatter-delimited-empty.md': '---\n---\n\n# Body only\n',
 
+  // ⭐ The four fixtures below close a measured coverage hole: before them,
+  // 36 of the corpus's 37 blobs rendered `lexicalReferences: -`, and the one
+  // that did not (`docs/Case.md`) is a `bare-token` with `slashCount: 1`,
+  // `leadingAt: false`, `variableExpansion: null`, `inCodeSpan: false` and
+  // `inFence: false`. So a mutation that zeroed `leadingAt`, forced
+  // `syntacticForm` to `bare-token`, dropped variable-expansion detection
+  // outright, or stopped annotating code context could not have moved a single
+  // golden line — the lexer's most load-bearing columns were pinned on their
+  // default values only.
+
+  // `at-prefixed`, outside any code context: the Claude Code import shape, and
+  // the only place `leadingAt: true` is observable.
+  'parse/lexical-at-import.md': [
+    '# At-prefixed import',
+    '',
+    'Read @docs/setup.md before acting.',
+    '',
+  ].join('\n'),
+
+  // ⭐ The SAME token in both code contexts. Anthropic documents that import
+  // parsing skips code spans and fenced blocks, so `inCodeSpan`/`inFence`
+  // decide whether an `@` token is an import at all — and the lexer records
+  // them rather than dropping the token, precisely so a query can be
+  // second-guessed. Identical `raw` across all three rows in this corpus is
+  // deliberate: only the two context columns distinguish them, so nothing else
+  // can accidentally carry the assertion.
+  'parse/lexical-code-context.md': [
+    '# Code context',
+    '',
+    'Inline `@docs/setup.md` in a span.',
+    '',
+    '```text',
+    '@docs/setup.md',
+    '```',
+    '',
+  ].join('\n'),
+
+  // `env-anchored` in two of the four expansion syntaxes — the precedence rule
+  // (`env-anchored` beats a leading `@`) and the `percent` branch that a POSIX
+  // -only corpus never reaches. `%APPDATA%\x` also pins `hasExtension: false`
+  // on a token that a naive "contains a dot" test would call true.
+  'parse/lexical-env-anchored.md': [
+    '# Env anchored',
+    '',
+    'Run ${CLAUDE_PLUGIN_ROOT}/scripts/run.mjs and read %APPDATA%\\x too.',
+    '',
+  ].join('\n'),
+
+  // `bare-token` with TWO slashes. `docs/Case.md`'s incidental token has one,
+  // so `slashCount` was pinned to a value a hardcoded `1` would satisfy.
+  'parse/lexical-bare-token.md': [
+    '# Bare token',
+    '',
+    'Consult docs/guides/setup.md in prose.',
+    '',
+  ].join('\n'),
+
   // A row with MORE THAN ONE condition. Every other multi-condition path in the
   // corpus tops out at one, so `collectConditions`' three-key sort comparator
   // (code, then line, then message) never actually executed.

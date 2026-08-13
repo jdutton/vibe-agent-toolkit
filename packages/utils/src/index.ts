@@ -134,3 +134,6 @@ export * from './fs/file-hash.js';
 export * from './yaml/surgical-yaml.js';
 
 export { parseWholeNumberAtLeast } from './numeric-args.js';
+
+// Machine-independent string ordering for hashed/serialized output — never `localeCompare`.
+export { compareCodeUnits } from './compare-code-units.js';
