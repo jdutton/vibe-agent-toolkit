@@ -525,6 +525,20 @@ Material for developers working on VAT itself (not for users of VAT) lives under
 - [vat-install-architecture.md](docs/contributing/vat-install-architecture.md) — design landscape for VAT's install/uninstall surfaces; read before proposing new install methods
 - [command-lane-table.md](docs/contributing/command-lane-table.md) — which of the 64 commands enumerate the filesystem, through which of the three entry points, and which three only do so by spawning child processes; read before changing enumeration or the crawl routes
 - [packages/lab/README.md](packages/lab/README.md) — the **quality lab**: a separate CLI that reports on a project and compares along one of three axes (which project, which version of it, which vat build). Read before adding any dev/QA/profiling verb — it owns that scope, and its [scope doc](packages/lab/docs/scope.md) decides what belongs there versus in `vat`
+
+**⚠️ Measuring anything? The lab is the instrument — do not hand-roll a probe.** The trigger is
+**taking a measurement**, not adding a verb: "why is this slow", "how many files does it touch",
+"did this change regress", "how does it behave on a big adopter tree" all route here *first*.
+`vat-lab <facet> run <subject>` and `vat-lab <facet> compare <a> <b>` already exist, and
+`DEFAULT_MEASURED_COMMANDS` is explicitly "not a closed set" — a caller measuring something else
+passes its own specs.
+
+**If the lab cannot see the code you want to measure, that is the finding.** Do not route around it
+with a throwaway script: a hand-rolled probe measures once, is never reviewed, and dies with the
+session — and a wrong one reports a confident number, which is worse than no number
+([[measurement-that-did-not-run]], [[fixtures-that-cannot-distinguish]]). Extend the instrument, or
+say plainly that the code is unreachable from it. Code no instrument can reach is code whose
+regressions nobody will catch — that is a merge concern, not a tooling inconvenience.
 - [plugin-distribution-findings.md](docs/contributing/plugin-distribution-findings.md) — running evidence log behind VAT's plugin-shape rules (what's DOCUMENTED vs merely OBSERVED), the silent hosted-sync divergence class, and a "rules NOT to add" list; read before proposing or promoting any plugin-shape rule
 
 ## External Documentation Cache

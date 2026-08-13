@@ -436,7 +436,7 @@ describe('whole-corpus population', () => {
     const seen = new Set<string>();
     const duplicates: string[] = [];
     for (const row of probe.projection.resourceRealizations) {
-      const key = `${row.extentId} ${row.path}`;
+      const key = `${row.extentId}\0${row.path}`;
       if (seen.has(key)) duplicates.push(key);
       seen.add(key);
     }
@@ -452,7 +452,7 @@ describe('whole-corpus population', () => {
     for (const row of probe.projection.zoneProvenance) {
       expect(registered.has(row.contributorId)).toBe(true);
       expect(contexts.has(row.contextId)).toBe(true);
-      const key = `${row.contextId} ${row.contributorId}`;
+      const key = `${row.contextId}\0${row.contributorId}`;
       expect(keys.has(key)).toBe(false);
       keys.add(key);
       covered.add(row.contextId);

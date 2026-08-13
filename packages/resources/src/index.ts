@@ -388,6 +388,7 @@ export {
 export {
   ClosureNonConvergenceError,
   populate,
+  type ContributorTiming,
   type PopulateOptions,
 } from './projection/merge.js';
 

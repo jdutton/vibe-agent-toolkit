@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Projection population was rebuilding a whole-corpus index once per contributor, per pass —
+  measured at 98% of a run.** `ClosureExtentContributor.contribute` called `indexReferencesByBlob`
+  on every invocation, so a repository with 61 closure extents rebuilt and re-sorted a 44,000-row
+  index 122 times where once would do. The index is now memoized per run, which is sound because
+  `populate` derives blobs exactly once between the strata and no closure contributor can add a
+  `blob_references` row after that; the memo is keyed on row count as well as base identity, so a
+  future change that broke that invariant would rebuild rather than silently serve a stale answer.
+  **A whole-corpus population of this repository went from 170.2s to 33.6s**, same rows.
+
+### Added
+
+- **`populate` now reports what each contributor cost, through a new `onContributorTiming`
+  option** (`ContributorTiming` is exported from `@vibe-agent-toolkit/resources`). One record per
+  invocation, carrying the contributor id, its stratum, the fixpoint pass and elapsed milliseconds
+  — so a contributor that is cheap once but runs in every pass is distinguishable from one that is
+  expensive once. Previously `populate` was a single opaque await and locating a hot spot meant
+  re-running the whole corpus with contributor subsets; the two defects this seam was added for
+  each cost several such runs to find.
+
 ### Breaking
 
 - **The parse cache is namespaced per build of VAT, and both hand-bumped version constants are

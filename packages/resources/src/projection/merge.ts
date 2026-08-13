@@ -117,6 +117,37 @@ export interface PopulateOptions {
    * can carry (a row that was skipped is, definitionally, absent).
    */
   onBlobPopulation?: ((result: BlobPopulationResult) => void) | undefined;
+  /**
+   * Receives one record per contributor invocation, as it completes.
+   *
+   * The same kind of observation seam as {@link onBlobPopulation}, and it exists
+   * for the same reason that one does: the cost of a run is a fact about the
+   * *run*, and a projection is rows, so there is nowhere in the returned tables
+   * to put it.
+   *
+   * **This is the seam that makes a slow population diagnosable at all.** Without
+   * it `populate` is one opaque await, and locating a hot spot means bisecting by
+   * re-running with contributor subsets — which is how the two defects this seam
+   * was added for were found, at a cost of several whole-corpus runs each. A
+   * caller that prints these records gets the same answer from one run.
+   *
+   * `pass` is 1 for every base contributor and the fixpoint iteration number for
+   * a closure one, so a contributor that is cheap once but runs in every pass is
+   * distinguishable from one that is expensive once.
+   */
+  onContributorTiming?: ((timing: ContributorTiming) => void) | undefined;
+}
+
+/** What one contributor invocation cost. */
+export interface ContributorTiming {
+  /** The contributor's {@link ExtentContributor.id}. */
+  readonly contributorId: string;
+  /** Which stratum it ran in. */
+  readonly stratum: 'base' | 'closure';
+  /** 1 for a base contributor; the fixpoint iteration for a closure one. */
+  readonly pass: number;
+  /** Wall time this invocation took, in milliseconds. */
+  readonly elapsedMs: number;
 }
 
 /**
@@ -194,7 +225,14 @@ export async function populate(options: PopulateOptions): Promise<Projection> {
     // grew, and `ResourceIdentityMap` is a shared memo rather than a pure
     // function. Fanning these out with `Promise.all` would make the row set
     // depend on scheduling.
+    const startedAt = Date.now();
     await runContributor(contributor, builder, parameterSetFor(contributor));
+    options.onContributorTiming?.({
+      contributorId: contributor.id,
+      stratum: 'base',
+      pass: 1,
+      elapsedMs: Date.now() - startedAt,
+    });
   }
 
   // Between the strata, and exactly once. The base is what records `contentKey`
@@ -211,7 +249,13 @@ export async function populate(options: PopulateOptions): Promise<Projection> {
   const blobPopulation = await populateBlobs(builder);
   options.onBlobPopulation?.(blobPopulation);
 
-  await iterateClosure(registry.byStratum('closure'), builder, parameterSetFor, maxIterations);
+  await iterateClosure(
+    registry.byStratum('closure'),
+    builder,
+    parameterSetFor,
+    maxIterations,
+    options.onContributorTiming,
+  );
 
   return builder.build();
 }
@@ -223,6 +267,7 @@ export async function populate(options: PopulateOptions): Promise<Projection> {
  * @param builder - The builder every contribution merges into
  * @param parameterSetFor - Resolves a contributor's parameter set
  * @param maxIterations - Passes allowed before failing
+ * @param onTiming - Receives one record per contributor invocation, per pass
  * @throws {@link ClosureNonConvergenceError} when the cap is reached while moving
  * @throws {@link RangeError} when the cap is below one, which could only ever fail
  */
@@ -231,6 +276,7 @@ async function iterateClosure(
   builder: ProjectionBuilder,
   parameterSetFor: (contributor: ExtentContributor) => JsonValue,
   maxIterations: number,
+  onTiming?: ((timing: ContributorTiming) => void) | undefined,
 ): Promise<void> {
   // Ordinary and cheap, unlike a kind with no contributor: a corpus whose
   // configuration declares no closure-defined extents has nothing to iterate.
@@ -251,7 +297,14 @@ async function iterateClosure(
     moving = [];
     for (const contributor of closure) {
       // Sequential for the same reason as the base loop above.
+      const startedAt = Date.now();
       const digest = await runContributor(contributor, builder, parameterSetFor(contributor));
+      onTiming?.({
+        contributorId: contributor.id,
+        stratum: 'closure',
+        pass: iteration,
+        elapsedMs: Date.now() - startedAt,
+      });
       // Per-contributor comparison, not whole-projection: a whole-projection
       // digest would also move when a base row arrived, and cannot name which
       // contributor is responsible when it fails to settle.
