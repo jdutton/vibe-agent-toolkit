@@ -116,6 +116,10 @@ export class FilesystemExtentContributor implements ExtentContributor {
         root: base.root,
         extentId,
         ...(base.gitTracker !== undefined && { gitTracker: base.gitTracker }),
+        // The run's cache, never a local one: most of these paths are realized
+        // by the git extent too, and the point is that the second realization
+        // costs no read.
+        ...(base.contentCache !== undefined && { contentCache: base.contentCache }),
       });
       realizations.push(realization);
       if (!resources.has(resourceId)) {

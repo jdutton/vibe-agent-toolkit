@@ -328,8 +328,16 @@ The 170 extents are 1 `filesystem`, 1 `git`, 62 `package`, 61 `skill`, 37 `plugi
 each with exactly one `zone_provenance` row. **Every row count above is volatile**: a second run
 seven minutes later, on the same working tree with an editor open in it, gave 4,696 blobs / 44,572
 references / 5,785 sections and one `BLOB_CONTENT_CHANGED` condition — the stage recording that a
-file's bytes moved between enumeration and derivation, which is exactly what it is for. Quote these
-with the date, and do not assert them in a test.
+file's bytes moved between enumeration and derivation. Quote these with the date, and do not assert
+them in a test.
+
+That last condition is now **unreachable inside `populate()`**, and deliberately so. The per-run
+content cache (`content-cache.ts`) reads and keys each path once and hands the same bytes to every
+later stage, so a population describes one consistent instant rather than a smear across whichever
+contributor read first — a projection whose realization row names one blob while its `blobs` row
+describes different bytes is not more truthful, it is inconsistent. The guard remains for a
+`populateBlobs` call whose builder carries no cache, where the derivation-time read is genuinely a
+second read of the file.
 
 `edges`, `edge_resolutions` and `lens_entry_points` are **0** because nothing populates them — they
 are the derived-per-lens output of §2, not rows a contributor emits. §17 risk 4's naive pre-factoring

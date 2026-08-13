@@ -47,6 +47,7 @@ import type {
 } from '../schemas/projection-resources.js';
 import type { ResolutionContextRow, ZoneProvenanceRow } from '../schemas/projection-zones.js';
 
+import type { RunContentCache } from './content-cache.js';
 import { ResourceIdentityMap } from './identity.js';
 
 /**
@@ -132,6 +133,20 @@ export interface ProjectionBase extends Projection {
    * visible-to-you/invisible-to-CI rung the column exists for cannot be built.
    */
   readonly gitTracker?: GitTracker | undefined;
+  /**
+   * The run's content cache, or absent for a builder assembled without one.
+   *
+   * Shared for the same reason `gitTracker` is: most files are realized by
+   * several contributors, and every one of them keying the bytes again is a
+   * whole extra traversal of the corpus. It is on the base rather than passed to
+   * `contribute` because the blob-derivation stage — which is not a contributor
+   * — has to read through the *same* cache for its read to be the base's read.
+   *
+   * A contributor never constructs one: the lifetime is the population's, and a
+   * per-contributor cache would reintroduce exactly the cross-extent re-read it
+   * exists to remove.
+   */
+  readonly contentCache?: RunContentCache | undefined;
 }
 
 /** Derives a table's composite key from a row. */
@@ -244,15 +259,25 @@ export class ProjectionBuilder {
 
   readonly #gitTracker: GitTracker | undefined;
 
+  readonly #contentCache: RunContentCache | undefined;
+
   #base: ProjectionBase | undefined;
 
   /**
    * @param root - Absolute corpus root
    * @param gitTracker - Optional git oracle supplying index casing to identity minting
+   * @param contentCache - Optional per-run read-and-key memo, shared with every
+   *   contributor and with the blob-derivation stage. Omitted by a caller that
+   *   is assembling a builder by hand and wants each read to touch disk
    */
-  constructor(root: string, gitTracker?: GitTracker | undefined) {
+  constructor(
+    root: string,
+    gitTracker?: GitTracker | undefined,
+    contentCache?: RunContentCache | undefined,
+  ) {
     this.#root = root;
     this.#gitTracker = gitTracker;
+    this.#contentCache = contentCache;
     this.identities = new ResourceIdentityMap(root, gitTracker);
   }
 
@@ -413,6 +438,7 @@ export class ProjectionBuilder {
       // `exactOptionalPropertyTypes` distinguishes an absent key from one
       // holding `undefined`, and the field is declared optional.
       ...(this.#gitTracker !== undefined && { gitTracker: this.#gitTracker }),
+      ...(this.#contentCache !== undefined && { contentCache: this.#contentCache }),
       roots: this.#roots.rows,
       resources: this.#resources.rows,
       resourceRealizations: this.#realizations.rows,

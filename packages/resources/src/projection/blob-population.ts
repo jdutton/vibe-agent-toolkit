@@ -64,7 +64,7 @@
 
 import { compareCodeUnits, safePath } from '@vibe-agent-toolkit/utils';
 
-import { type KeyedContent, type ParserKind, readContentWithKey } from '../content-key.js';
+import type { KeyedContent, ParserKind } from '../content-key.js';
 import type { ParseResult } from '../link-parser.js';
 import { type ParseCache, defaultParseCache, parseKeyed } from '../parse-cache.js';
 import type { BlobConditionRow } from '../schemas/projection-blobs.js';
@@ -73,6 +73,7 @@ import type { ResourceRealizationRow } from '../schemas/projection-resources.js'
 import { blobConditionsFor, blobRowFor } from './blob-facts.js';
 import { blobReferencesFor } from './blob-references.js';
 import { blobSectionsFor, flattenHeadings } from './blob-sections.js';
+import { readKeyedContent } from './content-cache.js';
 import type { ProjectionBase, ProjectionBuilder } from './projection.js';
 
 /** A blob whose bytes could not be read at derivation time. */
@@ -240,8 +241,10 @@ export async function populateBlobs(
     // Sequential rather than fanned out with `Promise.all`: each iteration reads
     // and parses a whole file, and one file handle per corpus blob in flight is
     // how a large corpus meets EMFILE. `FilesystemExtentContributor` keys the
-    // same bytes under the same constraint for the same reason.
-    await deriveBlob(builder, target, base.root, cache, counts);
+    // same bytes under the same constraint for the same reason. (With a run
+    // cache present the read is usually a memo hit rather than a handle, but the
+    // parse still costs, and a builder with no cache is still reachable.)
+    await deriveBlob(builder, target, base, cache, counts);
   }
 
   return counts;
@@ -318,18 +321,19 @@ function blobTargets(base: ProjectionBase): BlobTarget[] {
  *
  * @param builder - The builder to add rows to
  * @param target - The blob and the path its bytes come from
- * @param root - Absolute corpus root the target's path is relative to
+ * @param base - The projection built so far, supplying the corpus root the
+ *   target's path is relative to and the run's content cache
  * @param cache - The parse cache to consult
  * @param counts - The accumulator
  */
 async function deriveBlob(
   builder: ProjectionBuilder,
   target: BlobTarget,
-  root: string,
+  base: ProjectionBase,
   cache: ParseCache,
   counts: MutableCounts,
 ): Promise<void> {
-  const keyed = await readTarget(builder, target, root, counts);
+  const keyed = await readTarget(builder, target, base, counts);
   if (keyed === null) return;
 
   const parsed = await parseTarget(builder, target, keyed, cache, counts);
@@ -348,21 +352,39 @@ async function deriveBlob(
  * bytes onto a realization that names *those* bytes is the same mistake one
  * layer up.
  *
+ * ## The read goes through the run's cache, so it is the base's read
+ *
+ * `content-cache.ts` holds what the base already read for this path, keyed on
+ * `(path, parserKind)` — and `parserKindOf` reads the routing back off the
+ * content key, which is the same answer `collectRealization` recorded it from.
+ * So inside `populate()` this is a memo hit, not a third traversal of the file.
+ *
+ * That makes both failure branches below **unreachable for a path this run
+ * already read**: the cached bytes are by construction the bytes the key names,
+ * and a file deleted mid-run is still held. Deliberate — see
+ * `RunContentCache.read`, which owns that decision and the argument for it. The
+ * branches stay because `populateBlobs` is also reachable from a builder with no
+ * cache, where the read is genuinely fresh and can genuinely disagree.
+ *
  * @param builder - The builder to record a condition on
  * @param target - The blob and its path
- * @param root - Absolute corpus root
+ * @param base - Supplies the absolute corpus root and the run's content cache
  * @param counts - The accumulator
  * @returns The read, or null when a condition was recorded instead
  */
 async function readTarget(
   builder: ProjectionBuilder,
   target: BlobTarget,
-  root: string,
+  base: ProjectionBase,
   counts: MutableCounts,
 ): Promise<KeyedContent | null> {
   let keyed: KeyedContent;
   try {
-    keyed = await readContentWithKey(safePath.join(root, target.path), parserKindOf(target.contentKey));
+    keyed = await readKeyedContent(
+      safePath.join(base.root, target.path),
+      parserKindOf(target.contentKey),
+      base.contentCache,
+    );
   } catch (error) {
     counts.blobsUnreadable += 1;
     builder.addBlobCondition(condition(

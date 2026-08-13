@@ -150,6 +150,9 @@ export class GitExtentContributor implements ExtentContributor {
           root: base.root,
           extentId,
           gitTracker: tracker,
+          // Shared with every other contributor: a tracked file is realized here
+          // and in the filesystem extent, and only one of those may read it.
+          ...(base.contentCache !== undefined && { contentCache: base.contentCache }),
         })),
     );
 

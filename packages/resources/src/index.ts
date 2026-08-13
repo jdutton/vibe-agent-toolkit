@@ -172,6 +172,17 @@ export {
   type RealizationContext,
 } from './projection/realizations.js';
 
+// The per-run content cache: one `readFile` + one SHA-256 per file per
+// population, however many extents realize it and whether or not the blob stage
+// then parses it. Threaded through the run and never a module global — its
+// lifetime is one `ProjectionBuilder`, because two populations of a changed tree
+// sharing bytes would describe the wrong corpus confidently.
+export {
+  RunContentCache,
+  readKeyedContent,
+  type ContentCacheStats,
+} from './projection/content-cache.js';
+
 // Blob-keyed section rows, and the heading-tree flattener they share with the
 // parse-fact oracle — exported so exactly one walk defines document order.
 export { blobSectionsFor, flattenHeadings } from './projection/blob-sections.js';

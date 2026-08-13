@@ -7,26 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **Projection population was rebuilding a whole-corpus index once per contributor, per pass —
-  measured at 98% of a run.** `ClosureExtentContributor.contribute` called `indexReferencesByBlob`
-  on every invocation, so a repository with 61 closure extents rebuilt and re-sorted a 44,000-row
-  index 122 times where once would do. The index is now memoized per run, which is sound because
-  `populate` derives blobs exactly once between the strata and no closure contributor can add a
-  `blob_references` row after that; the memo is keyed on row count as well as base identity, so a
-  future change that broke that invariant would rebuild rather than silently serve a stale answer.
-  **A whole-corpus population of this repository went from 170.2s to 33.6s**, same rows.
-
 ### Added
 
-- **`populate` now reports what each contributor cost, through a new `onContributorTiming`
-  option** (`ContributorTiming` is exported from `@vibe-agent-toolkit/resources`). One record per
-  invocation, carrying the contributor id, its stratum, the fixpoint pass and elapsed milliseconds
-  — so a contributor that is cheap once but runs in every pass is distinguishable from one that is
-  expensive once. Previously `populate` was a single opaque await and locating a hot spot meant
-  re-running the whole corpus with contributor subsets; the two defects this seam was added for
-  each cost several such runs to find.
+- **A population reads and keys each file exactly once, and says what it cost.**
+  `@vibe-agent-toolkit/resources` exports `RunContentCache` and `readKeyedContent`: `populate`
+  threads a per-run content cache through the builder to every contributor's realization context
+  *and* to the blob-derivation stage, so a path realized by several extents is read and SHA-256'd
+  once rather than once per extent plus once more to parse. The cache is never a module-level
+  singleton — its lifetime is one `ProjectionBuilder`, because two populations of a changed tree
+  sharing bytes would describe the wrong corpus with complete confidence.
+
+  **The semantics this fixes in place:** a population describes a single consistent instant — the
+  instant each path was first read — rather than re-observing files as later stages reach them. A
+  file rewritten or deleted *during* a run is not re-read, so blob derivation's
+  `BLOB_CONTENT_CHANGED` and `BLOB_UNREADABLE` conditions do not arise for a path the run already
+  read. Both guards remain live for a `populateBlobs` call whose builder carries no cache, where
+  the derivation-time read genuinely is a fresh one.
+
+  **A caveat worth knowing before pointing this at a large tree:** the cache holds each keyed
+  file's decoded content for the whole run, so peak memory scales with the bytes the extents
+  enumerate — not with the tracked corpus. `FilesystemExtentContributor` crawls with
+  `respectGitignore: false` by design, so on a project whose build output dwarfs its source that
+  is a much larger number than the repository size suggests.
+
+  `populate` also accepts `onContributorTiming` (`ContributorTiming` exported), one record per
+  contributor invocation carrying the contributor id, its stratum, the fixpoint pass and elapsed
+  milliseconds — so a contributor that is cheap once but runs in every pass is distinguishable
+  from one that is expensive once, without re-running the corpus with contributor subsets.
 
 ### Breaking
 

@@ -11,8 +11,10 @@ import { lstatSync, realpathSync, statSync } from 'node:fs';
 
 import { type GitTracker, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
-import { parserKindForPath, readContentWithKey } from '../content-key.js';
+import { parserKindForPath } from '../content-key.js';
 import type { ResourceRealizationRow } from '../schemas/projection-resources.js';
+
+import { readKeyedContent, type RunContentCache } from './content-cache.js';
 
 /**
  * Render an absolute path relative to a root, forward-slashed.
@@ -39,6 +41,16 @@ export interface RealizationContext {
   extentId: string;
   /** Absent (or unusable) when the root is not a git repository. */
   gitTracker?: GitTracker | undefined;
+  /**
+   * The run's content cache, so one path keyed in two extents is read once.
+   *
+   * Optional because this function is also called outside a population — the
+   * CLI's enumeration oracle keys a single path with no run to belong to — and a
+   * cache with a lifetime of one call would be a pure cost. Inside `populate` it
+   * is always present, threaded from the builder through
+   * {@link ProjectionBase.contentCache}.
+   */
+  contentCache?: RunContentCache | undefined;
 }
 
 /**
@@ -93,7 +105,7 @@ export async function collectRealization(
     : false;
 
   const contentKey = exists && !isDirectory && symlinkResolves !== false
-    ? await keyOrNull(absolutePath)
+    ? await keyOrNull(absolutePath, context.contentCache)
     : null;
 
   const rel = relativize(absolutePath, context.root);
@@ -151,10 +163,22 @@ export function realPathOrNull(absolutePath: string): string | null {
  * A read failure is a fact about the corpus, not an error in the harness — an
  * unreadable file must show up as a row with a null key, not abort the
  * population, or one permissions quirk on one CI host destroys the whole gate.
+ *
+ * The read goes through the run's cache when there is one, so the same file
+ * realized in the git extent, the filesystem extent and a package extent costs
+ * one `readFile` and one SHA-256 rather than three.
+ *
+ * @param absolutePath - Path to read and key
+ * @param cache - The run's content cache, or absent outside a population
+ * @returns The content key, or null when the bytes could not be read
  */
-async function keyOrNull(absolutePath: string): Promise<string | null> {
+async function keyOrNull(
+  absolutePath: string,
+  cache: RunContentCache | undefined,
+): Promise<string | null> {
   try {
-    return (await readContentWithKey(absolutePath, parserKindForPath(absolutePath))).key;
+    const keyed = await readKeyedContent(absolutePath, parserKindForPath(absolutePath), cache);
+    return keyed.key;
   } catch {
     return null;
   }

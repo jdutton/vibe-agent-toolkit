@@ -10,6 +10,7 @@ import {
   populateBlobs,
   type BlobPopulationResult,
 } from '../src/projection/blob-population.js';
+import { RunContentCache } from '../src/projection/content-cache.js';
 import { ContributorRegistry } from '../src/projection/contributor.js';
 import { ClosureExtentContributor } from '../src/projection/contributors/closure-extent.js';
 import { extentContextId } from '../src/projection/contributors/context-id.js';
@@ -106,9 +107,17 @@ async function rewriteCorpusFile(relativePath: string, content: string | null): 
  * The base stratum, run by hand so a test can disturb the corpus between
  * enumeration and derivation — which is exactly the race the stage has to
  * survive, and which `populate()` gives no seam to reproduce.
+ *
+ * `contentCache` is omitted by default on purpose: a builder with no cache is
+ * the configuration in which the derivation-time read is genuinely a second
+ * read, so it is the only one that can exercise the stage's disagreement
+ * branches at all. The tests that pin the *cached* semantics pass one in.
  */
-async function baseBuilderFor(order: RealizationOrder = IN_CRAWL_ORDER): Promise<ProjectionBuilder> {
-  const builder = new ProjectionBuilder(suite.tempDir);
+async function baseBuilderFor(
+  order: RealizationOrder = IN_CRAWL_ORDER,
+  contentCache?: RunContentCache,
+): Promise<ProjectionBuilder> {
+  const builder = new ProjectionBuilder(suite.tempDir, undefined, contentCache);
   const contribution = await new FilesystemExtentContributor().contribute(builder.base(), null);
   for (const row of contribution.contexts) builder.addContext(row);
   for (const row of contribution.resources) builder.addResource(row);
@@ -321,6 +330,44 @@ describe('populateBlobs', () => {
     expect(counts.blobsDerived).toBe(0);
     expect(projection.blobs).toHaveLength(0);
     expect(projection.blobConditions.map((row) => row.code)).toEqual([BLOB_CONTENT_CHANGED]);
+  });
+
+  // The two tests below pin the semantics the per-run content cache chose, and
+  // they are the deliberate counterpart to the two above: with a cache, a
+  // population describes ONE consistent instant — the instant each path was
+  // first read — rather than a smear across whichever stage read first. Both
+  // conditions above therefore become unreachable for a path the run already
+  // read, which is every path `populate()` derives a blob from. Without this
+  // pair, that behaviour change could be reverted or re-broken silently.
+  it('derives from the bytes the base read when a run cache holds them, not from a mid-run rewrite', async () => {
+    await writeCorpus([{ path: DOC_A, content: '# A\n' }]);
+    const builder = await baseBuilderFor(IN_CRAWL_ORDER, new RunContentCache());
+    const enumerated = builder.build().resourceRealizations
+      .find((row) => row.path === DOC_A)?.contentKey;
+    await rewriteCorpusFile(DOC_A, '# A, rewritten between enumeration and derivation\n');
+
+    const counts = await populateBlobs(builder, { parseCache: NO_CACHE });
+    const projection = builder.build();
+
+    expect(counts.blobsContentChanged).toBe(0);
+    expect(counts.blobsDerived).toBe(1);
+    expect(projection.blobConditions).toHaveLength(0);
+    // The blob describes the enumerated bytes, and the realization row that
+    // names it is still true of them — which is the whole property.
+    expect(projection.blobs.map((row) => row.contentKey)).toEqual([enumerated]);
+  });
+
+  it('derives from the bytes the base read when a run cache holds them, even after the file is deleted', async () => {
+    await writeCorpus([{ path: DOC_A, content: '# A\n' }]);
+    const builder = await baseBuilderFor(IN_CRAWL_ORDER, new RunContentCache());
+    await rewriteCorpusFile(DOC_A, null);
+
+    const counts = await populateBlobs(builder, { parseCache: NO_CACHE });
+
+    // Same instant, same answer: `BLOB_UNREADABLE` is about a read this run has
+    // to make, and with the bytes already held there is no such read.
+    expect(counts.blobsUnreadable).toBe(0);
+    expect(counts.blobsDerived).toBe(1);
   });
 
   it('produces byte-identical tables whatever order the crawl enumerated in', async () => {

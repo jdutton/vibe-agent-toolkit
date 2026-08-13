@@ -45,6 +45,7 @@ import { safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
 import type { JsonValue } from '../schemas/projection-shared.js';
 
 import { populateBlobs, type BlobPopulationResult } from './blob-population.js';
+import { RunContentCache } from './content-cache.js';
 import type { ContributorRegistry, ExtentContribution, ExtentContributor } from './contributor.js';
 import { extentDigest } from './digest.js';
 import { ProjectionBuilder, type Projection } from './projection.js';
@@ -209,7 +210,11 @@ export class ClosureNonConvergenceError extends Error {
  */
 export async function populate(options: PopulateOptions): Promise<Projection> {
   const { root, registry, parameters, maxIterations = DEFAULT_MAX_ITERATIONS } = options;
-  const builder = new ProjectionBuilder(root, options.gitTracker);
+  // Constructed here and nowhere else, so its lifetime is exactly this run's.
+  // A module-level cache would leak bytes across two populations in one process
+  // — including two populations of a tree that changed in between, which would
+  // describe the wrong corpus with complete confidence.
+  const builder = new ProjectionBuilder(root, options.gitTracker, new RunContentCache());
 
   // The `roots` row no contributor can produce: `ExtentContribution` has no
   // `roots` table, yet every `resolution_contexts.rootId` is a foreign key into

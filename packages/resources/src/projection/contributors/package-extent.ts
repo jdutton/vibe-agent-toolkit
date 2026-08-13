@@ -244,7 +244,13 @@ async function realization(
   resourceId: string,
   extentId: string,
 ): Promise<ResourceRealizationRow> {
-  return collectRealization(absolutePath, resourceId, { root: base.root, extentId });
+  return collectRealization(absolutePath, resourceId, {
+    root: base.root,
+    extentId,
+    // A package's files are also filesystem- and git-extent members, so this
+    // contributor should never be the one paying for the read.
+    ...(base.contentCache !== undefined && { contentCache: base.contentCache }),
+  });
 }
 
 /**
