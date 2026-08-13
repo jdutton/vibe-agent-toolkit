@@ -2,9 +2,14 @@
 
 **Status markers used throughout:** ✅ shipped — 🔷 proposed, not yet built.
 
-Everything here is 🔷 **proposed**. No zone machinery exists in code today. It is recorded because it
-changes the shape of the [resource projection](./resource-projection.md), and because several shipped
-behaviours turn out to be special-cased instances of it.
+**Partly built as of 2026-08-13.** The projection schema, resource identity and realizations, the
+blob layer, and the **contributor seam with its stratified fixpoint** (§6) are ✅ in code — six extent
+contributors ship and a whole-corpus population of this repository runs end to end. Everything on the
+*lens* side is still 🔷 proposed: `edges`, `edge_resolutions`, `lens_entry_points`, resolution tiers
+and the resolvers that grade them are the derived-per-lens column of §2's table and nothing populates
+them yet. The model is recorded here because it changes the shape of the
+[resource projection](./resource-projection.md), and because several shipped behaviours turn out to
+be special-cased instances of it.
 
 ## 1. What a zone is
 
@@ -66,10 +71,26 @@ population pass. Caching a lens's results is an optimisation with no data-model 
 
 ### Lens identity factors in two
 
-A naive "one context lens per directory" would give one instance per source directory — 466 in this
-repository. They differ **only in entry point**: same extent, same resolution semantics, same
-interpretation, same traversal policy but for the ancestry chain. Keying edges on the instance stores
-identical resolutions once per directory, growing as `O(references × directories)`.
+A naive "one context lens per directory" would give one instance per source directory — **468** in
+this repository (directories holding at least one tracked file, re-measured 2026-08-13; it was 466 on
+2026-08-12 and 452 before that, so quote it with its date or not at all). They differ **only in entry
+point**: same extent, same resolution semantics, same interpretation, same traversal policy but for
+the ancestry chain. Keying edges on the instance stores identical resolutions once per directory,
+growing as `O(references × directories)`.
+
+The always-loaded budget is what makes the entry point worth a row at all. Measured with the shipped
+estimator (`estimateTokens`, `Math.ceil(chars / 4)` — `packages/resources/src/link-parser.ts:131`)
+over each directory's CLAUDE.md ancestry chain plus its transitive `@` imports, on 2026-08-13:
+
+| chain | tokens |
+|---|---|
+| `./CLAUDE.md` | 7,701 |
+| `./docs/CLAUDE.md` + `@README.md` | 184 + 1,089 |
+| `./docs/architecture/CLAUDE.md` + `@README.md` | 360 + 4,233 |
+| **worst directory (`docs/architecture`)** | **13,567** |
+
+One directory of 468 is over 12,000 and 146 are over 8,000. The figure moves whenever the root
+CLAUDE.md does — it was 13,568 a day earlier — so **no threshold or flag rate is quoted from it**.
 
 So lens identity splits into a **resolution context** (extent + resolution + interpretation +
 reference-class policy), which edges and memberships key on, and an **entry point** (the directory or
@@ -121,6 +142,18 @@ matters; hashing a raw path defeats them, and Node's two `realpath` implementati
 which casing they return. Rule: **git-index casing where the path is tracked, otherwise on-disk casing
 with symlinks resolved.** A symlink and its target share one identity; a symlinked directory loop
 mints one identity per real file.
+
+> ⚠️ **Open — the rule is stated and only half tested.** The symlink half is covered on macOS: a
+> symlink and its target collapse to one identity, and a directory loop terminates. The **case-
+> insensitivity half is not**, and neither is Windows. Both matter here and nowhere else in the
+> model: `pathLower`/`basenameLower` exist *because* case matters, Node's two `realpath`
+> implementations disagree about which casing they return (`realpathSync` preserves the casing asked
+> for, `realpath` returns the casing on disk), and on APFS or NTFS a single file is reachable under
+> spellings that hash differently. The git-index-casing clause is what is supposed to make the answer
+> deterministic where a path is tracked — untracked paths on a case-insensitive filesystem have no
+> such anchor, and that case has no test. Windows is where a symlink test would actually exercise the
+> divergence, and VAT's symlink tests do not run there today. Resolve before any check depends on
+> two populations minting the same id for the same file.
 
 Consequences:
 
@@ -242,6 +275,123 @@ extent:
 
 `packagingOptions` (`linkFollowDepth`, `excludeReferencesFromBundle`) is already this in disguise.
 
+### The contributor seam, as built ✅
+
+One interface, and every contributor is an instance of it:
+
+```ts
+export interface ExtentContributor {
+  readonly id: string;
+  readonly kind: string;
+  readonly stratum: ContributorStratum;
+  contribute(base: ProjectionBase, parameters: JsonValue): Promise<ExtentContribution>;
+}
+```
+
+`contribute` returns rows and nothing else — `contexts`, `resources`, `realizations`, `memberships`,
+`tags`, `conditions` — and the merge driver never reads a field of them for meaning.
+`ContributorRegistry` keys on `id`, refuses a duplicate, and partitions by `stratum` *before* any
+`contribute` call, which is why `id` and `kind` are constructor arguments while everything that
+*shapes* an extent arrives in `parameters`. The driver resolves one parameter binding per contributor
+and writes that same value both into `contribute` and into `zone_provenance.parameterSet`, so a
+provenance row cannot describe a parameter set its extent did not run under.
+
+**Six contributors ship.** `filesystem`, `git` and `package` are `base`; `skill`, `plugin` and
+`marketplace` are `closure`. A skill extent is not a fourth walker — it is the generic closure
+primitive under a per-skill id, handed a declaration translated from that skill's packaging config.
+
+**Between the strata, exactly once**, blob derivation turns the base's `contentKey` columns into the
+four blob-keyed tables. It is deliberately *not* a contributor (it declares no extent, so it has no
+context to attach a digest to), and its position is forced: the base is what records content keys and
+the closure stratum is what reads `blob_references`. Without it every closure extent is its declared
+root and nothing else — and the run reports success.
+
+#### Convergence, measured 2026-08-13
+
+Populating **this repository** with all six contributors — 61 skill extents plus plugin and
+marketplace, 66 contributors in total — the closure stratum reaches its fixed point on **pass 2**:
+one productive pass, then one confirming pass in which no contributor's digest moves. Nothing needed
+a third. The run produced:
+
+| table | rows |
+|---|---|
+| `resources` | 5,721 |
+| `resource_realizations` | 8,001 |
+| `resource_extents` | 8,041 |
+| `resolution_contexts` | 170 |
+| `zone_provenance` | 170 |
+| `blobs` | 4,697 |
+| `blob_references` | 44,585 |
+| `blob_sections` | 5,805 |
+
+The 170 extents are 1 `filesystem`, 1 `git`, 62 `package`, 61 `skill`, 37 `plugin`, 8 `marketplace`,
+each with exactly one `zone_provenance` row. **Every row count above is volatile**: a second run
+seven minutes later, on the same working tree with an editor open in it, gave 4,696 blobs / 44,572
+references / 5,785 sections and one `BLOB_CONTENT_CHANGED` condition — the stage recording that a
+file's bytes moved between enumeration and derivation, which is exactly what it is for. Quote these
+with the date, and do not assert them in a test.
+
+`edges`, `edge_resolutions` and `lens_entry_points` are **0** because nothing populates them — they
+are the derived-per-lens output of §2, not rows a contributor emits. §17 risk 4's naive pre-factoring
+estimate was ~4 × 10⁵ edge rows for a whole-corpus context lens; after the resolution-context
+factoring the *materialised* substrate that a lens is evaluated over is the 44,585 reference
+candidates above, and the per-directory duplication the naive figure came from (§2's 468 instances)
+is gone by construction — one resolution context, not one per directory.
+
+**Depth 2 is structural, not a corpus-size fact.** A closure contributor's output is a function of
+the base's paths and its `blob_references`, and a closure pass can add neither: it only re-realizes
+paths the base already realized. So the *only* thing that can carry the stratum past pass 2 is one
+closure contributor reading another closure contributor's rows. Exactly one such dependency ships —
+`PluginExtentContributor` absorbs the members of any `skill` extent nested inside a plugin directory
+— and it costs a pass only when the plugin contributor is registered *before* the skill ones, which
+is registration order rather than corpus content. (Reasoned from the code, not separately measured.)
+
+The cap is therefore **8**, four times the measurement: headroom for depth in the *contributor
+graph*, which is the thing that could plausibly grow, while still failing a genuine cycle in seconds.
+Reaching it throws `ClosureNonConvergenceError` naming the contributors still moving — never a
+truncated extent reported as a complete one.
+
+#### The closure primitive, as declared
+
+The §6 sketch above is inert config data with one field added — the `kind` the contributor is
+registered under, which the declaration must agree with:
+
+```yaml
+extents:
+  my-skill-bundle:
+    kind: skill                          # open vocabulary; must match the registered kind
+    closureFrom: skills/foo/SKILL.md     # root-relative; admitted before any traversal
+    follow: [markdown-link, markdown-link-reference, markdown-definition]   # default
+    maxDepth: 2                          # number of hops, or "full"
+    exclude: ['**/*.test.md']            # picomatch, dot: true, over root-relative paths
+```
+
+Every optional field carries a default rather than staying optional, so a parsed declaration is
+total and assignable to the `JsonValue` that `zone_provenance.parameterSet` records verbatim.
+
+#### What the declaration expresses, and what it does not
+
+§7.3's adequacy test — *a built-in extent must be expressible the way a config-declared one would be*
+— was run against the hardest case VAT has, the skill bundle, whose privileged walker
+(`walk-link-graph.ts`) already computes the answer. Two features translate exactly, three do not, and
+one is blocked on a primitive the declaration does not have:
+
+| walker feature | verdict |
+|---|---|
+| `linkFollowDepth` | **expressible** — same union, same off-by-one |
+| `excludeReferencesFromBundle` *membership* | **expressible** — first-match-wins and any-match select the identical file set, so a flat union of every rule's patterns is exact |
+| `excludeReferencesFromBundle` *`template` payload* | **not expressible** — an excluded target emits no row at all, so `matchedRule` has nowhere to land |
+| `excludeNavigationFiles` | **needs a primitive extension** — a case-insensitive *basename* predicate, and a glob cannot enumerate the spellings a case-insensitive filesystem generates |
+| `deferredArtifacts` (`files:`) | **not expressible** — keyed on filesystem existence and on gitignore; the closure does no I/O by construction |
+| routable vs non-routable | **not expressible** — `follow` names a reference *form*, never the parser kind of the *target* |
+
+Set difference against `walkLinkGraph` on a real skill: **identical** on defaults, **1** path at
+`linkFollowDepth: 0`, **5** at depth 2.
+
+> ⚠️ Found while measuring that difference: **`walkLinkGraph`'s asset bundling ignores `maxDepth`
+> entirely** — assets are added by `processLink` unconditionally, so a depth bound narrows the
+> document closure and not the asset set. Observed in shipped code, not yet filed.
+
 ### Provenance is two-part
 
 Recording *which contributors ran* detects only total absence. Population divergence is a difference
@@ -300,7 +450,20 @@ Two shipped behaviours are zone facts written as bespoke rules, and become deriv
 > `--plugin-dir`. The plugin extent's resolution rule rests on that unverified assumption; resolve it
 > before shipping a check that depends on it.
 
-## 9. Related
+## 9. Open, not resolved
+
+Two questions the built seam rests on and neither of which is settled. Both are recorded as open
+rather than folded into the prose above, because each has a shipped consequence:
+
+1. **`canonicalPath` on case-insensitive filesystems, and on Windows** (§4). The rule is stated and
+   the symlink half is tested on macOS; the case-insensitivity half and Windows are not covered at
+   all. Identity is the join key every other table hangs off, so a wrong answer here is not a local
+   defect.
+2. **Does Claude Code set `CLAUDE_PLUGIN_ROOT` at skill-invocation time?** (§8, and
+   `packages/agent-skills/src/skill-test/plugin-env.ts:10`.) The plugin extent's resolution rule
+   assumes it does. Unverified against the vendor, so no check may depend on it yet.
+
+## 10. Related
 
 - [Resource Projection](./resource-projection.md) — the table shapes zones operate over
 - [Resource Scanning and Object Caching](./resource-scanning-and-caching.md) — the git/non-git

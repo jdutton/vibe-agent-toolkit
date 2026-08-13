@@ -53,10 +53,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `@vibe-agent-toolkit/resources` now exports versioned Zod schemas (and generated JSON Schema) for
-  the ten proposed resource-projection tables — `blobs`, `blob_links`, `blob_sections`,
-  `blob_conditions`, `roots`, `resources`, `resource_realizations`, `resource_zones`,
-  `resource_tags`, `edges`. Schema only; population from live scans lands in a follow-up.
+- **The resource projection is populated, not just declared.** `@vibe-agent-toolkit/resources`
+  exports versioned Zod schemas (and generated JSON Schema) for twelve resource-projection tables,
+  plus `populate()` — a stratified merge driver that fills them from a real tree. A *zone* is an
+  **extent** (which resources exist) plus a **lens** (how they are traversed and resolved);
+  visibility falls out of extent, so there is no visibility relation. Extents are data; lenses are
+  functions, which is why `edges`, `edge_resolutions` and `lens_entry_points` are deliberately
+  **not** materialized here — they are derived per lens.
+
+  Extents come from `ExtentContributor`s, and the contract is deliberately tiny — `contribute(base,
+  parameters)` returning rows, with the driver merging them without interpreting:
+
+  ```ts
+  export interface ExtentContributor {
+    readonly id: string;
+    readonly kind: string;
+    readonly stratum: ContributorStratum;
+    contribute(base: ProjectionBase, parameters: JsonValue): Promise<ExtentContribution>;
+  }
+  ```
+
+  Six ship: filesystem, git and package (the acyclic base stratum, one pass) and closure, skill and
+  plugin/marketplace (the closure stratum, iterated to a fixed point). The skill extent is the
+  evidence the seam is right — it is a pure delegation to the generic closure contributor, with no
+  bespoke walker, so a link-graph closure is expressible as *configuration*
+  (`closureFrom`/`follow`/`maxDepth`/`exclude`) rather than adopter code.
+
+  Resource identity is `hash(rootId, canonicalPath at first observation)` and deliberately does
+  **not** hash the origin zone: a file belongs to several extents at once, so there is no
+  precedence to pick, and `vat build` populates twice (dist does not exist pre-build), which would
+  otherwise mint two ids in one run. `canonicalPath` uses git-index casing where tracked, else
+  on-disk with symlinks resolved. The twelve columns that vary per zone — `contentKey` among them —
+  live on `resource_realizations`, because the packager rewrites content into bundles, so a source
+  and a dist realization of one resource have different bytes.
+
+  New: `exportProjection()` / `serializeProjection()` emit the projection as a document. Rows out —
+  no index, no join, no filter, no query. Every table is sorted by its primary key (one crawl route
+  enumerates in filesystem order, which differs across ext4, APFS and NTFS), and `roots.path`, the
+  model's only absolute path, is replaced with a placeholder.
 
 - **`externalSource` on a marketplace plugin entry** — reference a plugin published in
   *another* marketplace/repo (`github`, `url`, `npm`, or `pip`, matching Claude Code's
@@ -287,6 +321,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not be cited as a cross-platform guarantee.
 
 ### Fixed
+
+- **`excludeReferencesFromBundle`'s `patterns` were documented against the wrong root.** Both schema
+  copies — `ExcludeReferenceRuleSchema` in `@vibe-agent-toolkit/resources` and the `vat.skills`
+  package metadata in `@vibe-agent-toolkit/schema` — described the globs as "relative to skill
+  root". They are matched against the **project** root: `walk-link-graph.ts` compares
+  `safePath.relative(options.projectRoot, targetPath)` and the packager passes the project root. A
+  pattern written against the skill root silently matches nothing, which is the worst failure shape
+  for an exclusion rule — the file is bundled and no error is raised. Documentation only; matching
+  behaviour is unchanged.
 
 - **`vat verify`, `vat build`, `vat validate`, and `vat skills validate`/`build` pointed a
   no-path-scope refusal at `vat audit <path>`, which exits 0 unconditionally — including when

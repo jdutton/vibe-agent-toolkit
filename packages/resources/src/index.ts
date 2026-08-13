@@ -162,6 +162,29 @@ export {
   type EdgeRow,
 } from './schemas/projection-edges.js';
 
+// Projection substrate — population, not schema. `resource_realizations` rows
+// for one path in one extent, plus the two path primitives every population
+// pass and every enumeration instrument shares.
+export {
+  collectRealization,
+  realPathOrNull,
+  relativize,
+  type RealizationContext,
+} from './projection/realizations.js';
+
+// Blob-keyed section rows, and the heading-tree flattener they share with the
+// parse-fact oracle — exported so exactly one walk defines document order.
+export { blobSectionsFor, flattenHeadings } from './projection/blob-sections.js';
+
+// The projection container: twelve row tables, the builder that accumulates
+// them, and the read-only base view a contributor is handed.
+export {
+  ProjectionBuilder,
+  REALIZATION_PATH_COLLISION,
+  type Projection,
+  type ProjectionBase,
+} from './projection/projection.js';
+
 // Lexical reference extraction: reference candidates the markdown AST cannot
 // see (@-prefixed tokens, variable-anchored paths, bounded bare tokens).
 export {
@@ -306,3 +329,114 @@ export {
 // `LinkAuthConfig` (fully-expanded providers). Adopters carrying a parsed
 // config can hand it directly to `fetchAuthenticated` via this bridge.
 export { buildLinkAuthEngineConfig } from './link-auth-config-build.js';
+
+// The extent-contributor seam (zones §7.1/§7.4/§7.5): the interface every
+// extent contributor implements, the registry the merge driver partitions by
+// stratum, and the required extent digest that makes two populations
+// comparable. `ProjectionBase` is deliberately NOT re-exported on this line —
+// it belongs to the projection container's declaration.
+export {
+  ContributorRegistry,
+  extentDigest,
+  type ContributorStratum,
+  type ExtentContribution,
+  type ExtentContributor,
+} from './projection/contributor.js';
+
+// Blob-keyed reference rows — the markdown AST's links and the raw-source
+// lexer's tokens unified into one position-ordered ordinal space.
+export { blobReferencesFor } from './projection/blob-references.js';
+
+// The filesystem extent (zones §2): everything on disk under the root, files
+// AND directories, excluding NEVER_CRAWL_GLOBS but deliberately NOT build
+// output — this is the extent that sees what the git extent cannot.
+export { FilesystemExtentContributor } from './projection/contributors/filesystem-extent.js';
+
+// The git extent (zones §2): tracked ∪ (untracked ∧ ¬ignored) — what a clone
+// sees. Its disagreement with the filesystem extent over a gitignored path is
+// the visible-to-you/invisible-to-CI fact, not an inconsistency.
+export {
+  GIT_EXTENT_CONTRIBUTOR_ID,
+  GIT_EXTENT_KIND,
+  GIT_EXTENT_ORIGIN,
+  GitExtentContributor,
+} from './projection/contributors/git-extent.js';
+
+// The one spelling of an extent's `resolution_contexts.contextId`. Every extent
+// id carries its root, so two federated roots' same-kind (and same-package)
+// extents cannot collide in a table keyed on `contextId` alone.
+export { extentContextId } from './projection/contributors/context-id.js';
+
+// The package extent: the workspace's own packages plus declared dependencies,
+// located by resolution through each package's `exports` map — never by walking
+// `node_modules`. A dependency that is declared but not installed contributes a
+// resource with ZERO realizations, which is the "known but not present" case.
+export {
+  PACKAGE_NOT_INSTALLED,
+  PACKAGE_RESOLUTION_FAILED,
+  PACKAGE_SUBPATH_ABSENT,
+  PACKAGE_SUBPATH_NOT_EXPORTED,
+  PackageExtentContributor,
+  PackageExtentParametersSchema,
+  type PackageExtentParameters,
+} from './projection/contributors/package-extent.js';
+
+// The stratified merge driver (zones §7.2): base contributors run once, closure
+// contributors iterate to a fixed point under a declared cap, and a cap that is
+// reached while digests are still moving THROWS rather than returning the
+// truncated extent it had reached.
+export {
+  ClosureNonConvergenceError,
+  populate,
+  type PopulateOptions,
+} from './projection/merge.js';
+
+// The declarative closure primitive (zones §7.3): a closure-defined extent is a
+// GENERIC contributor handed an `ExtentDeclaration`, never new privileged code —
+// which is what makes "a built-in must be expressible the way a config-declared
+// one would be" satisfiable alongside the declarative-only rule. Identity (`id`,
+// `kind`) comes from the constructor because the registry partitions on it before
+// `contribute` runs; extent SHAPE arrives through `parameters`, so
+// `zone_provenance.parameterSet` records what actually shaped the extent.
+export {
+  CLOSURE_CONTRIBUTOR_ID_PREFIX,
+  CLOSURE_REFERENCE_UNRESOLVED,
+  CLOSURE_ROOT_ABSENT,
+  ClosureExtentContributor,
+} from './projection/contributors/closure-extent.js';
+export {
+  ExtentDeclarationSchema,
+  ExtentsConfigSchema,
+  type ExtentDeclaration,
+  type ExtentsConfig,
+} from './schemas/project-config.js';
+
+// The blob-derivation stage the merge driver runs between the base and closure
+// strata: the step that turns the base's `contentKey` columns into the four
+// blob-keyed tables. Not a contributor — it declares no extent — but without it
+// `blob_references` is empty, every closure extent is its declared root and
+// nothing else, and the run reports success. Every keyed blob is derived,
+// including the non-markdown ones, because the raw-source reference lexer is
+// what lets a skill's `.mjs` scripts be closure members at all.
+export {
+  BLOB_CONTENT_CHANGED,
+  BLOB_PARSE_FAILED,
+  BLOB_UNREADABLE,
+  populateBlobs,
+  type BlobPopulationOptions,
+  type BlobPopulationResult,
+} from './projection/blob-population.js';
+
+// Emitting the projection as a document — "no engine" (zones §15 step 6). Rows
+// out; no index, no join, no filter, no query. Two properties are load-bearing:
+// `roots.path` is the only absolute path in the model and is replaced with
+// ROOT_PATH_PLACEHOLDER (VAT has already shipped evidence leaking $HOME), and
+// every table is sorted by its primary key — one of `crawlDirectory`'s two
+// routes enumerates in FILESYSTEM order, so an export carrying insertion order
+// would make any golden differ between ext4, APFS and NTFS.
+export {
+  ROOT_PATH_PLACEHOLDER,
+  exportProjection,
+  serializeProjection,
+  type ProjectionDocument,
+} from './projection/export.js';
