@@ -175,5 +175,5 @@ function cacheKey(absolutePath: string, parserKind: ParserKind): string {
   // The space is a separator, not decoration — the same construction
   // `mintResourceId` uses. A parser kind is `markdown` or `html` and contains no
   // space, so no two distinct pairs can spell one key.
-  return `${parserKind} ${toForwardSlash(safePath.resolve(absolutePath))}`;
+  return `${parserKind} ${toForwardSlash(safePath.resolve(absolutePath))}`;
 }
