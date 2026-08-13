@@ -359,6 +359,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for an exclusion rule — the file is bundled and no error is raised. Documentation only; matching
   behaviour is unchanged.
 
+- **`vat` now runs the version your lockfile pinned when you install with pnpm.** It was silently
+  running a different one. The wrapper looked for a locally installed CLI at a single hardcoded path
+  that only exists in npm's flat `node_modules` layout; under pnpm that path is absent, so the
+  lookup failed and `vat` quietly fell back to whichever globally installed copy it could find — no
+  warning, and the version it printed looked plausible. If you adopted VAT through the umbrella
+  `vibe-agent-toolkit` package, this affected you on every invocation.
+
+  Resolution now goes through Node's own module resolver, which works across npm, bun, pnpm and yarn
+  PnP. **What to do:** nothing. If you are on pnpm, check that `vat --version` now matches your
+  lockfile — it may change, because it was previously wrong.
+
 - **`vat verify`, `vat build`, `vat validate`, and `vat skills validate`/`build` pointed a
   no-path-scope refusal at `vat audit <path>`, which exits 0 unconditionally — including when
   it reports `status: error`.** An operator who followed the recommended fallback to inspect a
