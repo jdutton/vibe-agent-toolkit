@@ -71,9 +71,15 @@
  * There is none here, on purpose. The content key covers the parser's *inputs*
  * and cannot see a change to the parser itself or to the shape stored here —
  * so both are handled one level up, by the namespace directory in
- * `cache-namespace.ts`, which is derived automatically from the running build
- * of VAT. A hand-bumped constant in this file would be a discipline that
- * nothing enforces; a directory that moves when the build moves is a mechanism.
+ * `cache-namespace.ts`. An installed VAT gets a namespace per release; a dev
+ * checkout gets one per (worktree path, `PARSER_BEHAVIOR_REVISION`) pair.
+ *
+ * ⚠ Read `cache-namespace.ts` before changing `dehydrate`/`rehydrate` or any
+ * parser behaviour: the dev namespace deliberately **survives a rebuild**, so a
+ * shape change that is not accompanied by a `PARSER_BEHAVIOR_REVISION` bump
+ * will meet entries written under the old shape. `isParseFacts` rejects a
+ * structurally wrong payload, but a shape change that stays structurally valid
+ * is invisible. `vat cache clear` is the local escape hatch.
  *
  * ## Layout
  *
@@ -190,10 +196,12 @@ export interface ParseFacts {
 /**
  * The entry envelope.
  *
- * No version field: the namespace directory (see `cache-namespace.ts`) already
- * separates every build of VAT, so a serialization change cannot meet an entry
- * written under the old shape. What remains is corruption, which `isParseFacts`
- * rejects structurally.
+ * No version field: the namespace directory (see `cache-namespace.ts`) carries
+ * the discrimination instead — per release when installed, and per
+ * `PARSER_BEHAVIOR_REVISION` in a dev checkout. A serialization change must
+ * therefore bump that constant; the namespace no longer moves on its own after
+ * a rebuild. What remains is corruption, which `isParseFacts` rejects
+ * structurally.
  */
 interface StoredEntry {
   facts: ParseFacts;

@@ -132,16 +132,21 @@ Description:
   A cache directory that does not exist is not an error — nothing to remove is
   a successful clear.
 
+  The tree is shared by every VAT on the machine, so another run writing into
+  it can make the delete stop part-way. That is reported as status: partial,
+  naming what went and what stayed, rather than failing with no account of it.
+
 Output:
   - cacheDir: absolute path that was targeted
   - existed: whether the directory was there at all
-  - removed: top-level entries that were deleted
-  - entriesRemoved / bytesRemoved: file count and total size, measured before
-    deletion
+  - removed: top-level entries that are now gone
+  - remaining / reason: what survived a partial clear, and why (partial only)
+  - entriesRemoved / bytesRemoved: file count and total size actually removed
 
 Exit Codes:
   0 - Cache cleared (or already absent)
-  2 - Could not remove the cache (permissions, busy file)
+  1 - Cleared only in part, because something else is using the tree
+  2 - Could not read or target the cache at all (permissions, unexpected layout)
 
 Example:
   $ vat cache clear                    # Reclaim the temp-directory cache tree

@@ -21,7 +21,7 @@ import { mkdtempSync, promises as fs, rmSync } from 'node:fs';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { clearCacheDirectory, vatCacheRoot } from '../../src/commands/cache/clear.js';
 import { applyCacheControl, registerCacheControl } from '../../src/commands/cache/index.js';
@@ -31,6 +31,8 @@ import { createResourcesCommand } from '../../src/commands/resources/index.js';
 const NO_CACHE_FLAG = '--no-cache';
 /** The value `--no-cache` writes into the environment. */
 const DISABLED = '0';
+/** The per-OS-user auth tenant directory, named once for fixture and assertions. */
+const AUTH_TENANT = 'auth-someuser';
 /** One tenant filename, reused by the fixture and by the expected report. */
 const EXTERNAL_LINKS = 'external-links.json';
 /** The shared cache root's directory name — the same one production derives. */
@@ -55,7 +57,7 @@ async function createFakeCache(parent: string): Promise<FakeCache> {
   const root = safePath.join(parent, CACHE_DIR_NAME);
   const relativeFiles = [
     ['parse', 'ab', 'deadbeefab.json'],
-    ['auth-someuser', EXTERNAL_LINKS],
+    [AUTH_TENANT, EXTERNAL_LINKS],
     [EXTERNAL_LINKS],
   ];
 
@@ -187,7 +189,7 @@ describe('clearCacheDirectory', () => {
     expect(report.existed).toBe(true);
     expect(report.entriesRemoved).toBe(fake.fileCount);
     expect(report.bytesRemoved).toBe(fake.totalBytes);
-    expect(report.removed).toEqual(['auth-someuser', EXTERNAL_LINKS, 'parse']);
+    expect(report.removed).toEqual([AUTH_TENANT, EXTERNAL_LINKS, 'parse']);
     await expect(fs.access(fake.root)).rejects.toThrow();
   });
 
@@ -216,6 +218,42 @@ describe('clearCacheDirectory', () => {
       expect(report.entriesRemoved).toBe(fake.fileCount);
       await expect(fs.access(fake.root)).rejects.toThrow();
     });
+  });
+
+  it('reports a partial clear by re-reading the tree, not by trusting the error', async () => {
+    // The shared cache root is written by every VAT on the machine, so a delete
+    // racing a concurrent run gives up part-way. The error names ONE path and
+    // says nothing about the rest, which is why the survivors are read back off
+    // disk. Injected here rather than provoked with permissions: a chmod-EACCES
+    // fixture is POSIX-only and no-ops as root, so it would be a test that
+    // silently stops testing on two of the three platforms this ships to.
+    const fake = await createFakeCache(workDir);
+    const stubborn = safePath.join(fake.root, 'parse');
+
+    const rm = vi.spyOn(fs, 'rm').mockImplementation(async () => {
+      rmSync(safePath.join(fake.root, AUTH_TENANT), { recursive: true, force: true });
+      rmSync(safePath.join(fake.root, EXTERNAL_LINKS), { force: true });
+      throw Object.assign(new Error(`ENOTEMPTY: directory not empty, rmdir '${stubborn}'`), {
+        code: 'ENOTEMPTY',
+      });
+    });
+
+    try {
+      const report = await clearCacheDirectory(fake.root);
+
+      expect(report.status).toBe('partial');
+      expect(report.removed).toEqual([AUTH_TENANT, EXTERNAL_LINKS]);
+      expect(report.remaining).toEqual(['parse']);
+      expect(report.reason).toContain('ENOTEMPTY');
+      // The counts describe what actually went. Reporting the pre-delete
+      // measurement here would claim the whole cache was reclaimed while most
+      // of it is still on disk — the failure this branch exists to prevent.
+      expect(report.entriesRemoved).toBeGreaterThan(0);
+      expect(report.entriesRemoved).toBeLessThan(fake.fileCount);
+      expect(report.bytesRemoved).toBeLessThan(fake.totalBytes);
+    } finally {
+      rm.mockRestore();
+    }
   });
 
   it('counts an empty cache root as existing, with nothing in it', async () => {

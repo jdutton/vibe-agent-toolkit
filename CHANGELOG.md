@@ -28,12 +28,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file's decoded content for the whole run, so peak memory scales with the bytes the extents
   enumerate — not with the tracked corpus. `FilesystemExtentContributor` crawls with
   `respectGitignore: false` by design, so on a project whose build output dwarfs its source that
-  is a much larger number than the repository size suggests.
+  is a much larger number than the repository size suggests. Which is what the next entry is for.
 
   `populate` also accepts `onContributorTiming` (`ContributorTiming` exported), one record per
   contributor invocation carrying the contributor id, its stratum, the fixpoint pass and elapsed
   milliseconds — so a contributor that is cheap once but runs in every pass is distinguishable
   from one that is expensive once, without re-running the corpus with contributor subsets.
+
+- **A population no longer hashes bytes nobody reads, and says so explicitly rather than by
+  omission.** `resource_realizations` gains a required **`contentState`** column —
+  `keyed` | `deferred` | `unreadable` | `none` — and `PROJECTION_SCHEMA_VERSION` bumps to **3**.
+  `contentKey: null` previously meant four unrelated things at once (a directory, an absent path, a
+  dangling symlink, a failed read); lazy keying would have added a fifth, *nobody asked yet*, and an
+  unreadable file becoming indistinguishable from an unvisited one is precisely the completeness
+  failure `zone_provenance.extentDigest` exists to prevent. A schema refinement now pins
+  `keyed` ⟺ a non-null key in both directions.
+
+  `FilesystemExtentContributor` crawls with `respectGitignore: false` so that output CI cannot see
+  is still representable — and **that argument is satisfied entirely by paths.** It never needed the
+  bytes. A gitignored path still gets a row reporting `exists`, `isDirectory` and `gitignored`; only
+  the hash is withheld, as `contentState: 'deferred'`. On a project whose build output dwarfs its
+  source this is the difference between hashing **1.19 GB and 40.8 MB**. The general rule is not
+  "gitignored" — it is *key eagerly where the bytes are already free from the discovery step* — and
+  `RealizationContext.contentDemand` (`eager` | `deferred` | `deferGitignored`, defaulting to
+  `eager`) is where a contributor declares which it is. Where there is no git repository nothing is
+  gitignored, so nothing defers and behaviour is unchanged.
+
+  **What this changes for a reader of the projection:** a deferred realization contributes no blob,
+  so its links do not appear in `blob_references` and it is not traversed by the closure stratum
+  until something asks for it. `ProjectionBuilder.ensureContentKey(path)` is that ask — it promotes
+  every deferred row at a path, reading once through the run cache. The new
+  `realizationsContentDeferred` counter is named outside the `realizationsSkipped*` family on
+  purpose: a nonzero value is the design working, not a warning.
 
 ### Breaking
 
@@ -41,12 +67,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gone.** `CONTENT_KEY_SCHEMA_VERSION` and `PARSE_CACHE_SCHEMA_VERSION` are removed from
   `@vibe-agent-toolkit/resources`. Entries now live under
   `<tmpdir>/.vat-cache/<namespace>/parse/<shard>/<key>.json`, where `<namespace>` is the package
-  version when installed and `<version>-dev-<6 hex>` from a source checkout — the hex covering the
-  package path *and* a fingerprint of the emitted parser modules, so a rebuild re-namespaces
-  automatically. A content-addressed cache cannot see a change to the parser itself, and the
-  previous answer to that was a constant someone had to remember to bump; this one is a mechanism.
-  New exports: `vatCacheNamespace()`, `vatCacheNamespaceRoot()`. `parquet/` is reserved as a sibling
-  of `parse/` under the same namespace.
+  version when installed and `<version>-dev-<6 hex>` from a source checkout, the hex covering the
+  package path so two worktrees never share a cache. New exports: `vatCacheNamespace()`,
+  `vatCacheNamespaceRoot()`. `parquet/` is reserved as a sibling of `parse/` under the same
+  namespace.
+
+  A content-addressed cache cannot see a change to the *parser itself*, and the namespace is what
+  answers that. **For a source checkout it is answered by a hand-bumped constant, not
+  automatically** — the alternative, fingerprinting the emitted parser modules so every rebuild
+  re-namespaced, was measured and rejected: it left **65 namespaces holding 267 MB** with nothing
+  evicting them, one day's rebuilds alone accounting for ~200 MB of near-duplicate content. So a
+  dev cache now survives `tsc --build`, and the cost is that changing what the parser *produces*
+  requires bumping the revision constant beside it, or running `vat cache clear`. Installed
+  releases are unaffected: the published version already discriminates parser behaviour, and two
+  machines on one release still share a namespace.
 
   Two consequences worth knowing. **Content keys are now stable across VAT versions** — they are
   `<parserKind>.<sha256>` with no version component — so upgrading no longer churns every recorded
@@ -253,6 +287,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   validation caches, which share `<tmpdir>/.vat-cache/`. Reports what it removed; exits 0 when
   there is nothing there; works even when caching is disabled, since a no-op in that case would be
   a trap. This is the user-invocable form of "recovery is rescan", which previously had none.
+
+  That directory is shared by every VAT on the machine — other worktrees, other sessions, and any
+  adopter running an installed copy — so a clear issued while one of them is mid-run walks a tree
+  growing underneath it, and the recursive delete can stop part-way on `ENOTEMPTY`. Short overlaps
+  are now absorbed by a bounded retry. A delete that still cannot finish reports **`status:
+  partial`** with exit 1, naming which top-level entries went, which survived, why, and the counts
+  actually reclaimed — re-read from disk rather than inferred, because the error names one path and
+  says nothing about the rest. It previously failed with no account of itself at all, which is the
+  worst moment to be silent: most of the cache was already gone.
 
 - **`--no-cache` on the root command** disables VAT's on-disk caches for the run by setting
   `VAT_CACHE=0`. An environment variable rather than a plumbed flag because the commands that need

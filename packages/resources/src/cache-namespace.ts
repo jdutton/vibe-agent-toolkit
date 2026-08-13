@@ -1,5 +1,6 @@
 /**
- * The cache namespace: one directory per *build of VAT*, derived automatically.
+ * The cache namespace: one directory per *release of VAT*, derived automatically,
+ * plus a hand-bumped revision for parser behaviour.
  *
  * ## Why this exists
  *
@@ -9,10 +10,6 @@
  * well-formed answer to the wrong question. Fail-soft does not help: a valid
  * entry filed under a key whose meaning has shifted is indistinguishable from a
  * correct hit.
- *
- * This used to be handled by a hand-bumped `CONTENT_KEY_SCHEMA_VERSION`. That is
- * a discipline, not a mechanism: nothing in the build fails when someone changes
- * the parser and forgets. The namespace replaces it with something automatic.
  *
  * ## Layout
  *
@@ -34,24 +31,46 @@
  *   the same release share a namespace, which is the point — identical bytes
  *   through identical code yield identical facts.
  * - **Dev checkout:** `0.1.42-dev-<6 hex>`, where the digits cover the package
- *   root path AND a fingerprint of the emitted parser modules.
+ *   root path AND {@link PARSER_BEHAVIOR_REVISION}.
  *
- * The path alone is not enough, and the reason is the whole design: every
- * worktree on a machine reads the same version out of the same manifest, so
- * branch A and branch B and the published release of that number would all share
- * one namespace — exactly when invalidation matters most. Adding the path
- * separates worktrees. Adding the build fingerprint separates *edits within one
- * worktree*, which is the case a path-only scheme still gets wrong, and it is
- * the common case while developing a parser.
+ * The path component is load-bearing and must survive any future change here:
+ * every worktree on a machine reads the same version out of the same manifest,
+ * so branch A and branch B and the published release of that number would
+ * otherwise all share one namespace — exactly when invalidation matters most.
  *
- * The cost is deliberate: after `tsc --build` the dev cache is cold. That is the
- * correct answer — the code that produced those entries no longer exists — and
- * it does not disturb measurement, since repeated runs without a rebuild share a
- * namespace and warm normally.
+ * ## What was traded away, deliberately
+ *
+ * The dev discriminator used to also mix in a fingerprint (size + mtime) of the
+ * emitted parser modules, so that any `tsc --build` moved the namespace and the
+ * dev cache went cold automatically. That is the strongest version of the
+ * guarantee above — it caught a parser edit whether or not the developer
+ * thought about it — and it is the option that was **rejected**, for a measured
+ * reason:
+ *
+ * > A rebuild is not a schema change. Fingerprinting the build made *every*
+ * > edit anywhere in the package — a comment, a log line, an unrelated
+ * > module — start a fresh, empty namespace, and nothing ever evicted the old
+ * > one. Measured on one developer machine: **65 namespaces, 267 MB**, of which
+ * > a single day of rebuilds accounted for ~200 MB of near-duplicate content.
+ * > A dev cache that is cold after every build is also a dev cache that is
+ * > never actually measured warm, and a cache directory that only grows is a
+ * > defect in its own right.
+ *
+ * So the automatic mechanism is gone and the hazard it covered is **back, on
+ * purpose**: within one worktree, editing parser behaviour and rebuilding will
+ * serve parse facts written by the previous build. Nothing detects that for
+ * you. The replacement is deliberate rather than automatic, and there are
+ * exactly two ways to exercise it:
+ *
+ * 1. Bump {@link PARSER_BEHAVIOR_REVISION} when you change what a parse means.
+ *    This is the durable answer — it moves the namespace for every developer
+ *    and every worktree, not just yours.
+ * 2. Run `vat cache clear` when you merely *suspect* staleness. This is the
+ *    local answer, and it costs nothing but a rescan.
  */
 
 import { createHash } from 'node:crypto';
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 
 import { normalizedTmpdir, resolveFromImportMeta, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
@@ -59,29 +78,39 @@ import { normalizedTmpdir, resolveFromImportMeta, safePath, toForwardSlash } fro
 const DEV_FINGERPRINT_LENGTH = 6;
 
 /**
- * Emitted modules whose contents determine the facts a parse produces.
+ * Hand-bumped revision of *what a cached parse fact means*.
  *
- * Deliberately a short, explicit list rather than a directory walk: the walk
- * would fingerprint unrelated churn (declaration maps, sourcemaps) and make the
- * dev namespace move for edits that cannot change a single parse fact.
+ * **If you change parser behaviour, increment this in the same change.** Nothing
+ * in the build will do it for you and nothing will fail if you forget — that is
+ * the accepted cost of a dev cache that survives a rebuild (see the module doc).
+ * A stale entry is a well-formed answer to a question the parser no longer asks;
+ * it looks exactly like a hit.
  *
- * `link-parser.js` imports `unresolved-references.js` (the `unresolvedReferences`
- * fact), and `parse-cache.js` defines the `ParseFacts` shape (`dehydrate`/
- * `rehydrate`) that determines what a cache entry even contains -- both are
- * listed explicitly rather than assumed to move whenever `link-parser.js` does,
- * since a fingerprint over an import graph is exactly the kind of walk this
- * module deliberately avoids.
+ * ### The modules this revision covers
  *
- * Exported for {@link buildFingerprint}'s tests, not because callers outside
- * this module have a legitimate use for the list.
+ * The boundary is behavioural, not a directory. Bump when you change what any of
+ * these produce — this is the same list the removed build fingerprint watched,
+ * carried over because it is precisely the "if you edit this, bump this" set:
+ *
+ * - **`link-parser`** — the markdown link/reference facts themselves.
+ * - **`html-link-parser`** — the HTML-embedded reference facts.
+ * - **`content-key`** — how input bytes map to a cache key. A change here
+ *   re-files every entry, so old entries are unreachable rather than wrong, but
+ *   the revision keeps the two keyspaces from sharing a directory.
+ * - **`unresolved-references`** — the `unresolvedReferences` fact, imported by
+ *   `link-parser` and therefore able to change a parse result without
+ *   `link-parser` itself being touched.
+ * - **`parse-cache`** — the `ParseFacts` shape (`dehydrate`/`rehydrate`). Adding
+ *   or removing a field changes what an entry even contains.
+ *
+ * ### When you only *suspect* staleness
+ *
+ * Do not bump speculatively — a bump discards every developer's cache, not just
+ * yours. Run **`vat cache clear`** instead: it removes the whole
+ * `<tmpdir>/.vat-cache/` tree, including the parse tenant under the current
+ * namespace, and the next run rebuilds it.
  */
-export const PARSER_MODULES = [
-  'link-parser.js',
-  'html-link-parser.js',
-  'content-key.js',
-  'unresolved-references.js',
-  'parse-cache.js',
-] as const;
+export const PARSER_BEHAVIOR_REVISION = 1;
 
 /** Resolved once — neither the version nor the install location changes mid-process. */
 let cached: string | undefined;
@@ -91,8 +120,9 @@ let cached: string | undefined;
  *
  * All packages in the monorepo share one version, so `@vibe-agent-toolkit/resources`
  * reporting `0.1.42` IS the VAT version. Read at runtime rather than compiled in,
- * because a constant would have to be maintained by hand — the failure mode this
- * whole module exists to remove.
+ * because a constant would have to be maintained by hand — and unlike
+ * {@link PARSER_BEHAVIOR_REVISION}, which tracks a meaning no file can observe,
+ * the version is already written down.
  */
 function readVersion(moduleDir: string): string {
   for (const relative of ['../package.json', '../../package.json']) {
@@ -125,51 +155,24 @@ function isInstalled(moduleDir: string): boolean {
 }
 
 /**
- * Stat a module's emitted `.js`, falling back to its `.ts` source.
+ * The dev discriminator: a pure digest of where this checkout lives and which
+ * parser revision it speaks.
  *
- * Under Vitest/tsx the code runs straight from `packages/*\/src/*.ts` -- there
- * is no emitted `.js` beside it to stat, so without this fallback every entry
- * in {@link PARSER_MODULES} reads as absent regardless of what a developer
- * actually edited, and the fingerprint (and therefore the dev cache namespace)
- * never moves while iterating on the parser from source. Dist-mode behavior is
- * unchanged: when the `.js` exists, it wins and the `.ts` is never consulted.
- */
-function statModuleFile(moduleDir: string, jsName: string): ReturnType<typeof statSync> | undefined {
-  const candidates = [jsName, jsName.replace(/\.js$/u, '.ts')];
-  for (const candidate of candidates) {
-    try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixed basenames beside this module
-      return statSync(safePath.join(moduleDir, candidate));
-    } catch {
-      // Try the next candidate.
-    }
-  }
-  return undefined;
-}
-
-/**
- * Fingerprint the emitted parser modules by size and mtime.
+ * Touches no filesystem and reads no module state, so it is stable across a
+ * rebuild by construction — a rebuild changes neither argument. That is exactly
+ * the property the namespace exists to have, and keeping it a pure function is
+ * what lets a test assert it without fighting the process-level memo in
+ * {@link vatCacheNamespace}.
  *
- * Size+mtime rather than content: this runs on every process start, and reading
- * three files to hash them costs more than the cache saves on a small corpus.
- * A rebuild always moves mtime, which is the event this needs to catch; the
- * failure mode it trades away (identical mtime AND size after a real change) is
- * not reachable through `tsc --build`.
+ * @param moduleDir - Directory this package's code was resolved from
+ * @param revision - Parser behaviour revision, normally {@link PARSER_BEHAVIOR_REVISION}
+ * @returns Six lowercase hex digits
  */
-export function buildFingerprint(moduleDir: string): string {
-  const parts: string[] = [];
-  for (const name of PARSER_MODULES) {
-    const stat = statModuleFile(moduleDir, name);
-    if (stat === undefined) {
-      // Absent under both extensions (a partial build, or a module removed
-      // entirely). Recorded as such so its absence is itself part of the
-      // fingerprint.
-      parts.push(`${name}:absent`);
-    } else {
-      parts.push(`${name}:${String(stat.size)}:${String(stat.mtimeMs)}`);
-    }
-  }
-  return parts.join('\0');
+export function devNamespaceDigest(moduleDir: string, revision: number): string {
+  return createHash('sha256')
+    .update(`vat-cache-namespace\0${toForwardSlash(moduleDir)}\0r${String(revision)}`, 'utf-8')
+    .digest('hex')
+    .slice(0, DEV_FINGERPRINT_LENGTH);
 }
 
 /**
@@ -180,7 +183,7 @@ export function buildFingerprint(moduleDir: string): string {
  * @example
  * ```typescript
  * vatCacheNamespace(); // '0.1.42'  (installed)
- * vatCacheNamespace(); // '0.1.42-dev-9f2c1a'  (worktree, re-derived after each build)
+ * vatCacheNamespace(); // '0.1.42-dev-9f2c1a'  (worktree, stable across rebuilds)
  * ```
  */
 export function vatCacheNamespace(): string {
@@ -194,12 +197,7 @@ export function vatCacheNamespace(): string {
     return cached;
   }
 
-  const digest = createHash('sha256')
-    .update(`vat-cache-namespace\0${toForwardSlash(moduleDir)}\0${buildFingerprint(moduleDir)}`, 'utf-8')
-    .digest('hex')
-    .slice(0, DEV_FINGERPRINT_LENGTH);
-
-  cached = `${version}-dev-${digest}`;
+  cached = `${version}-dev-${devNamespaceDigest(moduleDir, PARSER_BEHAVIOR_REVISION)}`;
   return cached;
 }
 
