@@ -94,7 +94,8 @@ export {
   ValidationResultSchema,
 } from './schemas/validation-result.js';
 
-// Projection schema v2 — the zones revision (docs/architecture/zones.md).
+// Projection schema v3 — zones (docs/architecture/zones.md) plus demand-driven
+// content keying (`contentState`).
 // The blob-keyed and path-dependent tables that make up VAT's queryable
 // resource projection contract. Population is still proposed.
 export {
@@ -136,6 +137,7 @@ export {
 } from './schemas/projection-zones.js';
 
 export {
+  ContentStateSchema,
   RealizationConditionRowSchema,
   ResourceExtentRowSchema,
   ResourceKindSchema,
@@ -144,6 +146,7 @@ export {
   ResourceTagRowSchema,
   ResourceTagSourceSchema,
   RootRowSchema,
+  type ContentState,
   type RealizationConditionRow,
   type ResourceExtentRow,
   type ResourceRealizationRow,
@@ -169,6 +172,7 @@ export {
   collectRealization,
   realPathOrNull,
   relativize,
+  type ContentDemand,
   type RealizationContext,
 } from './projection/realizations.js';
 
@@ -188,7 +192,9 @@ export {
 export { blobSectionsFor, flattenHeadings } from './projection/blob-sections.js';
 
 // The projection container: twelve row tables, the builder that accumulates
-// them, and the read-only base view a contributor is handed.
+// them, and the read-only base view a contributor is handed. The builder's
+// `ensureContentKey` is the demand half of demand-driven keying — the only way
+// a `deferred` realization's null `contentKey` ever becomes a real one.
 export {
   ProjectionBuilder,
   REALIZATION_PATH_COLLISION,
@@ -396,9 +402,15 @@ export {
 // contributors iterate to a fixed point under a declared cap, and a cap that is
 // reached while digests are still moving THROWS rather than returning the
 // truncated extent it had reached.
+//
+// It also owns the post-fixpoint re-run of the blob stage: demand-driven keying
+// means a `deferred` realization can become `keyed` during the closure stratum,
+// and `BlobPopulationReport` reports that second run as its own measurement
+// rather than summing counters that have no honest combination rule.
 export {
   ClosureNonConvergenceError,
   populate,
+  type BlobPopulationReport,
   type ContributorTiming,
   type PopulateOptions,
 } from './projection/merge.js';

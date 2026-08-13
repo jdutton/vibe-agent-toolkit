@@ -79,6 +79,8 @@ function realizationRow(resourceId: string, path: string, contentKey: string): R
     depth: path.split('/').length,
     ext: dot <= 0 ? '' : basename.slice(dot).toLowerCase(),
     contentKey,
+    // Non-null key, so the only state the schema's superRefine admits.
+    contentState: 'keyed',
     mtime: null,
     exists: true,
     isDirectory: false,

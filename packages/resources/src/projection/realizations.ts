@@ -12,7 +12,7 @@ import { lstatSync, realpathSync, statSync } from 'node:fs';
 import { type GitTracker, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { parserKindForPath } from '../content-key.js';
-import type { ResourceRealizationRow } from '../schemas/projection-resources.js';
+import type { ContentState, ResourceRealizationRow } from '../schemas/projection-resources.js';
 
 import { readKeyedContent, type RunContentCache } from './content-cache.js';
 
@@ -33,6 +33,23 @@ export function relativize(absolutePath: string, root: string): string {
   return rel === '' ? '.' : toForwardSlash(rel);
 }
 
+/**
+ * When a realization should pay to read and hash a path's bytes.
+ *
+ * Three literals rather than a predicate callback, deliberately: a policy has
+ * to stay inspectable and serializable — readable off the contributor that set
+ * it and reproducible from a recorded population — and a closure here would be
+ * a rule nobody can read back out of the projection.
+ *
+ * - `eager` — key the bytes now. The **default** when the field is absent, so
+ *   every caller that has not opted in (including `collectRealization`'s caller
+ *   outside any population, the CLI's enumeration-snapshot oracle) is unchanged.
+ * - `deferred` — never key here; the row lands as `deferred` and no read
+ *   happens.
+ * - `deferGitignored` — key unless the row's own `gitignored` column is true.
+ */
+export type ContentDemand = 'eager' | 'deferred' | 'deferGitignored';
+
 /** Everything needed to answer the realization questions for a path. */
 export interface RealizationContext {
   /** Root every `path` in the resulting rows is relative to. */
@@ -51,6 +68,12 @@ export interface RealizationContext {
    * {@link ProjectionBase.contentCache}.
    */
   contentCache?: RunContentCache | undefined;
+  /**
+   * Whether this extent wants the bytes keyed. Absent means {@link ContentDemand}
+   * `'eager'` — the historical behaviour, and the reason no existing caller had
+   * to change.
+   */
+  contentDemand?: ContentDemand | undefined;
 }
 
 /**
@@ -63,8 +86,9 @@ export interface RealizationContext {
  *
  * @param absolutePath - Path to describe
  * @param resourceId - The identity this path realizes, from `ResourceIdentityMap`
- * @param context - Root, extent and (optional) git oracle
- * @returns The realization row, with the content key filled in when readable
+ * @param context - Root, extent, (optional) git oracle, cache and demand policy
+ * @returns The realization row, with `contentKey` filled in when the bytes were
+ *   read and `contentState` always saying why it was or was not
  */
 export async function collectRealization(
   absolutePath: string,
@@ -104,9 +128,10 @@ export async function collectRealization(
     ? context.gitTracker.isIgnored(absolutePath)
     : false;
 
-  const contentKey = exists && !isDirectory && symlinkResolves !== false
-    ? await keyOrNull(absolutePath, context.contentCache)
-    : null;
+  const { contentKey, contentState } = await keyOrState(absolutePath, context, {
+    hasBytes: exists && !isDirectory && symlinkResolves !== false,
+    gitignored,
+  });
 
   const rel = relativize(absolutePath, context.root);
   const lastSlash = rel.lastIndexOf('/');
@@ -124,6 +149,7 @@ export async function collectRealization(
     depth: rel.split('/').length,
     ext: dot <= 0 ? '' : basename.slice(dot).toLowerCase(),
     contentKey,
+    contentState,
     mtime,
     exists,
     isDirectory,
@@ -157,8 +183,27 @@ export function realPathOrNull(absolutePath: string): string | null {
   }
 }
 
+/** What `lstat` already established about whether there are bytes to key. */
+interface ObservedPath {
+  /** False for an absent path, a directory, or a dangling symlink. */
+  hasBytes: boolean;
+  /** The row's own `gitignored` column — the input `deferGitignored` reads. */
+  gitignored: boolean;
+}
+
 /**
- * Key a path's contents, or report `null` if it cannot be read.
+ * Key a path's contents, or say why there is no key — the `(contentKey,
+ * contentState)` pair, computed together because they are one decision and two
+ * columns.
+ *
+ * Precedence is fixed and the order matters:
+ *
+ * 1. **No bytes** wins over everything. A directory is not "deferred", it is a
+ *    thing with no content, and no demand policy may relabel it — otherwise a
+ *    consumer could not tell a corpus of directories from one it declined to
+ *    read.
+ * 2. **The demand policy defers.** No read happens at all; that is the saving.
+ * 3. **Otherwise read.** Success keys it; a throw is `unreadable`.
  *
  * A read failure is a fact about the corpus, not an error in the harness — an
  * unreadable file must show up as a row with a null key, not abort the
@@ -169,17 +214,40 @@ export function realPathOrNull(absolutePath: string): string | null {
  * one `readFile` and one SHA-256 rather than three.
  *
  * @param absolutePath - Path to read and key
- * @param cache - The run's content cache, or absent outside a population
- * @returns The content key, or null when the bytes could not be read
+ * @param context - Supplies the demand policy and the run's cache
+ * @param observed - What `lstat` already established about this path
+ * @returns The content key (or null) and the state explaining it
  */
-async function keyOrNull(
+async function keyOrState(
   absolutePath: string,
-  cache: RunContentCache | undefined,
-): Promise<string | null> {
-  try {
-    const keyed = await readKeyedContent(absolutePath, parserKindForPath(absolutePath), cache);
-    return keyed.key;
-  } catch {
-    return null;
+  context: RealizationContext,
+  observed: ObservedPath,
+): Promise<{ contentKey: string | null; contentState: ContentState }> {
+  if (!observed.hasBytes) {
+    return { contentKey: null, contentState: 'none' };
   }
+  if (defers(context.contentDemand ?? 'eager', observed.gitignored)) {
+    return { contentKey: null, contentState: 'deferred' };
+  }
+  try {
+    const keyed = await readKeyedContent(
+      absolutePath,
+      parserKindForPath(absolutePath),
+      context.contentCache,
+    );
+    return { contentKey: keyed.key, contentState: 'keyed' };
+  } catch {
+    return { contentKey: null, contentState: 'unreadable' };
+  }
+}
+
+/**
+ * Whether a demand policy declines to key this row.
+ *
+ * @param demand - The extent's policy
+ * @param gitignored - The row's own `gitignored` column
+ * @returns True when the bytes must not be read
+ */
+function defers(demand: ContentDemand, gitignored: boolean): boolean {
+  return demand === 'deferred' || (demand === 'deferGitignored' && gitignored);
 }

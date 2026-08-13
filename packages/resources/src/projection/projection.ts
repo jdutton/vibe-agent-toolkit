@@ -29,8 +29,9 @@
  * *different* identity.
  */
 
-import type { GitTracker } from '@vibe-agent-toolkit/utils';
+import { safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
 
+import { type KeyedContent, parserKindForPath } from '../content-key.js';
 import type {
   BlobConditionRow,
   BlobReferenceRow,
@@ -38,6 +39,7 @@ import type {
   BlobSectionRow,
 } from '../schemas/projection-blobs.js';
 import type {
+  ContentState,
   RealizationConditionRow,
   ResourceExtentRow,
   ResourceRealizationRow,
@@ -47,7 +49,7 @@ import type {
 } from '../schemas/projection-resources.js';
 import type { ResolutionContextRow, ZoneProvenanceRow } from '../schemas/projection-zones.js';
 
-import type { RunContentCache } from './content-cache.js';
+import { readKeyedContent, type RunContentCache } from './content-cache.js';
 import { ResourceIdentityMap } from './identity.js';
 
 /**
@@ -195,19 +197,62 @@ class ProjectionTable<T> {
     if (!this.#replaceOnConflict) {
       return occupant;
     }
-    // Linear, but only the provenance table replaces, and it holds one row per
-    // (context, contributor). Replacing in place keeps insertion order stable.
-    const at = this.#rows.indexOf(occupant);
-    if (at !== -1) {
-      this.#rows[at] = row;
-    }
-    this.#byKey.set(key, row);
+    this.#replaceInPlace(key, occupant, row);
     return undefined;
+  }
+
+  /**
+   * Overwrite the row already filed under this row's key.
+   *
+   * Distinct from `add` on a `replaceOnConflict` table, and deliberately so: an
+   * absent key is a **failure** here rather than an insert. The only caller is
+   * {@link ProjectionBuilder.ensureContentKey}, which is rewriting a row it has
+   * already read out of this table — an insert there would mean it invented a
+   * realization at a path no contributor realized, which is precisely what the
+   * `(extentId, path)` invariant exists to make impossible.
+   *
+   * `resource_realizations` therefore stays `replaceOnConflict: false`: making
+   * it replace-on-add would silently turn every duplicate contribution into an
+   * overwrite and delete the collision diagnostic.
+   *
+   * @param row - The replacement row, whose key must already be occupied
+   * @returns True when a row was replaced, false when the key was vacant
+   */
+  replace(row: T): boolean {
+    const key = this.#keyOf(row);
+    const occupant = this.#byKey.get(key);
+    if (occupant === undefined) {
+      return false;
+    }
+    this.#replaceInPlace(key, occupant, row);
+    return true;
   }
 
   /** A frozen copy, for a built projection that must not change afterwards. */
   snapshot(): readonly T[] {
     return Object.freeze([...this.#rows]);
+  }
+
+  /**
+   * Swap `occupant` for `row` without disturbing insertion order.
+   *
+   * Linear in the table, which is affordable for its two callers: the
+   * provenance table holds one row per `(context, contributor)`, and content
+   * promotion touches one path's rows. Position is preserved rather than
+   * push-after-delete because the export layer's sort is by primary key, and a
+   * table whose insertion order moved under a rewrite would make two runs that
+   * promoted different paths produce different unsorted tables.
+   *
+   * @param key - The composite key both rows share
+   * @param occupant - The row currently held
+   * @param row - The row to hold instead
+   */
+  #replaceInPlace(key: string, occupant: T, row: T): void {
+    const at = this.#rows.indexOf(occupant);
+    if (at !== -1) {
+      this.#rows[at] = row;
+    }
+    this.#byKey.set(key, row);
   }
 }
 
@@ -217,6 +262,12 @@ class ProjectionTable<T> {
  *
  * Every `add*` method is idempotent: re-adding a row whose key is already
  * present changes nothing and reports `false`.
+ *
+ * {@link ProjectionBuilder.ensureContentKey} is the one method that **rewrites**
+ * a row rather than adding one, and it is confined to a single transition:
+ * `deferred` → `keyed`/`unreadable` on `resource_realizations`. No other column
+ * moves, and no row is created — so the `(extentId, path)` invariant above is
+ * untouched by it.
  */
 export class ProjectionBuilder {
   /** Shared identity minting for this root. */
@@ -262,6 +313,8 @@ export class ProjectionBuilder {
   readonly #contentCache: RunContentCache | undefined;
 
   #base: ProjectionBase | undefined;
+
+  #contentPromotions = 0;
 
   /**
    * @param root - Absolute corpus root
@@ -328,6 +381,87 @@ export class ProjectionBuilder {
       });
     }
     return false;
+  }
+
+  /**
+   * How many paths this builder has promoted from `deferred` to `keyed`.
+   *
+   * Monotonic, and counted **per path** rather than per row: promoting a path
+   * realized in three extents rewrites three rows but is one act of reading
+   * bytes, and the only consumer — the merge driver deciding whether the blob
+   * stage has new work — is asking about reads, not rows.
+   *
+   * A read that threw is not a promotion: it rewrites the rows to `unreadable`
+   * and leaves this untouched, because no new content key entered the
+   * projection and re-deriving blobs would find nothing.
+   */
+  get contentPromotions(): number {
+    return this.#contentPromotions;
+  }
+
+  /**
+   * Key a path's bytes on demand, promoting every `deferred` realization of it.
+   *
+   * The counterpart to `contentDemand` (see `realizations.ts`): a contributor
+   * that declines to hash a path still records the row, and this is the door
+   * through which a later consumer buys the hash it skipped. Nothing else in the
+   * projection can turn a null `contentKey` into a real one.
+   *
+   * ## What it does, exactly
+   *
+   * - `path` is **root-relative**, the same spelling `resource_realizations.path`
+   *   carries; `safePath.join(root, path)` is that column's total inverse, which
+   *   is what `blob-population.ts`'s `readTarget` already relies on.
+   * - **Every** row at that path is considered, not the first: a path realized
+   *   in the filesystem extent and a package extent is two rows, and promoting
+   *   one while leaving the other `deferred` would make the answer depend on
+   *   which extent a consumer happened to join through.
+   * - The read goes through the run's {@link RunContentCache} with
+   *   `parserKindForPath` choosing the kind — byte-for-byte the read
+   *   `collectRealization` would have made — so the bytes really are shared with
+   *   the rest of the run rather than being a second traversal wearing the same
+   *   key.
+   * - A read that throws rewrites the rows to `unreadable` with a null key. An
+   *   unreadable file is a fact about the corpus, and leaving the rows
+   *   `deferred` would claim nobody had asked yet, which would be false.
+   *
+   * ## Idempotent, and observably so
+   *
+   * A path with no `deferred` rows performs **no read at all** and returns the
+   * key it already has (or null when its rows are `none`/`unreadable`). Calling
+   * it twice therefore costs one read, which is asserted against
+   * `RunContentCache.stats.misses` rather than by inspection — a memo's
+   * correctness that nothing measures is a claim, not a property.
+   *
+   * @param path - Root-relative path, as `resource_realizations.path` spells it
+   * @returns The content key now on the rows at that path, or null when there is
+   *   none to have
+   */
+  async ensureContentKey(path: string): Promise<string | null> {
+    const rows = this.#realizations.rows.filter((row) => row.path === path);
+    const deferred = rows.filter((row) => row.contentState === 'deferred');
+    if (deferred.length === 0) {
+      // Already keyed, or definitively keyless. Either way there is nothing to
+      // buy, and buying it again is the read this method exists to avoid.
+      return rows.find((row) => row.contentState === 'keyed')?.contentKey ?? null;
+    }
+
+    const absolutePath = safePath.join(this.#root, path);
+    let keyed: KeyedContent;
+    try {
+      keyed = await readKeyedContent(
+        absolutePath,
+        parserKindForPath(absolutePath),
+        this.#contentCache,
+      );
+    } catch {
+      this.#rewriteRealizations(deferred, null, 'unreadable');
+      return null;
+    }
+
+    this.#rewriteRealizations(deferred, keyed.key, 'keyed');
+    this.#contentPromotions += 1;
+    return keyed.key;
   }
 
   /**
@@ -418,6 +552,27 @@ export class ProjectionBuilder {
    */
   addBlobCondition(row: BlobConditionRow): boolean {
     return this.#blobConditions.add(row) === undefined;
+  }
+
+  /**
+   * Restamp a set of realization rows with one `(contentKey, contentState)` pair.
+   *
+   * The two columns are written together and never separately: the schema pins
+   * `keyed` ⟺ non-null in both directions, so a helper that could set one
+   * without the other would be a way to build a row the schema rejects.
+   *
+   * @param rows - Rows already present in the table, to be replaced in place
+   * @param contentKey - The key to stamp, or null
+   * @param contentState - The state that key implies
+   */
+  #rewriteRealizations(
+    rows: readonly ResourceRealizationRow[],
+    contentKey: string | null,
+    contentState: ContentState,
+  ): void {
+    for (const row of rows) {
+      this.#realizations.replace({ ...row, contentKey, contentState });
+    }
   }
 
   /**

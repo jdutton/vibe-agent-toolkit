@@ -12,13 +12,18 @@ import { CONTENT_KEY_PATTERN } from '../content-key.js';
  * factored into resolution contexts and entry points, edges split from their
  * candidate resolutions, four vocabularies opened.
  *
+ * Version 3 is the demand-driven keying revision: `resource_realizations`
+ * gains `contentState`, so a null `contentKey` says which of "no bytes here",
+ * "nobody asked for these bytes yet" and "the read threw" it means, and an
+ * extent may decline to hash bytes no consumer has demanded.
+ *
  * Bump whenever a table gains, loses, or renames a column, or a column's
  * type narrows — the "late column-level change" the architecture doc names
  * as expected, not exceptional. Adding a new *row* to an open vocabulary (a
  * new `resource_tags.tag` value, a new `blob_conditions.code`) is NOT a
  * version bump — see the doc's "facts are rows, not columns" rule.
  */
-export const PROJECTION_SCHEMA_VERSION = 2;
+export const PROJECTION_SCHEMA_VERSION = 3;
 
 /**
  * Any value YAML's core schema (and therefore JSON) can represent. Recursive

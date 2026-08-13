@@ -23,6 +23,30 @@
  *   the one that sees `dist/`, so it passes {@link ProjectionBase.gitTracker}
  *   to `collectRealization`; without that, no row anywhere would ever be
  *   `gitignored: true` and the column would be dead.
+ *
+ * ## Why this extent keys lazily — `contentDemand: 'deferGitignored'`
+ *
+ * The argument above is fully satisfied by **paths**. It never needed the
+ * bytes: a gitignored path still gets a realization row, still reports
+ * `exists`, `isDirectory` and `gitignored`, and is still a member of this
+ * extent. Only the hash is withheld, and only until something asks for it.
+ * That matters because `respectGitignore: false` is what makes this the
+ * expensive extent — on a large adopter tree it enumerates 1.19 GB against
+ * 40.8 MB of tracked source, and SHA-256-ing bytes no consumer ever reads is
+ * the whole of that cost.
+ *
+ * **The general rule is not "gitignored".** It is: key eagerly where the bytes
+ * are already essentially free from the discovery step, and defer everywhere
+ * else. A source tree outside git entirely falls under the same rule.
+ * `gitignored` is merely how that rule is *evaluated* here today, because it is
+ * the only O(1) test available: `GitTracker` exposes no tracked-vs-ignored
+ * predicate distinct from ignored — under the default `includeUntracked: true`,
+ * tracked and untracked-not-ignored files share one active set.
+ *
+ * **The consequence, stated plainly:** with no git repository nothing is
+ * gitignored, so nothing defers and behaviour is unchanged. That is deliberate.
+ * Deferring in a non-git tree would leave the projection with almost no content
+ * at all — a capability loss dressed up as a saving.
  */
 
 import { crawlDirectory, NEVER_CRAWL_GLOBS } from '@vibe-agent-toolkit/utils';
@@ -120,6 +144,9 @@ export class FilesystemExtentContributor implements ExtentContributor {
         // by the git extent too, and the point is that the second realization
         // costs no read.
         ...(base.contentCache !== undefined && { contentCache: base.contentCache }),
+        // See the class docstring: paths carry this extent's whole argument, so
+        // the ignored half of the tree gets rows without getting hashed.
+        contentDemand: 'deferGitignored',
       });
       realizations.push(realization);
       if (!resources.has(resourceId)) {

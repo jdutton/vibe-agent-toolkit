@@ -16,8 +16,9 @@ import { ClosureExtentContributor } from '../src/projection/contributors/closure
 import { extentContextId } from '../src/projection/contributors/context-id.js';
 import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { rootIdFor } from '../src/projection/identity.js';
-import { populate } from '../src/projection/merge.js';
+import { afterClosurePromotion, populate } from '../src/projection/merge.js';
 import { ProjectionBuilder, type Projection } from '../src/projection/projection.js';
+import { collectRealization } from '../src/projection/realizations.js';
 import type { ResourceRealizationRow } from '../src/schemas/projection-resources.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
@@ -124,6 +125,57 @@ async function baseBuilderFor(
   for (const row of order(contribution.realizations)) builder.addRealization(row);
   return builder;
 }
+
+/** The extent the demand fixtures below realize their files in. */
+const DEFERRING_EXTENT = 'ctx-deferring';
+
+/**
+ * A base builder in which exactly one path was realized under
+ * `contentDemand: 'deferred'` and the rest eagerly.
+ *
+ * `FilesystemExtentContributor` defers only *gitignored* paths, which needs a
+ * real repository and a real `.gitignore` to reproduce; the policy itself is
+ * what these tests are about, so they set it directly on `collectRealization`.
+ *
+ * The fixture's two files are deliberately asymmetric: {@link DOC_A} carries an
+ * outbound link and {@link PAGE_MD} carries none, so "the deferred blob was
+ * derived" and "it was not" produce visibly different `blob_references` tables.
+ * A deferred file with no links would leave both outcomes identical.
+ */
+async function builderWithDeferredPath(
+  deferredPath: string,
+  files: readonly CorpusFile[],
+  cache: RunContentCache,
+): Promise<ProjectionBuilder> {
+  const builder = new ProjectionBuilder(suite.tempDir, undefined, cache);
+  for (const file of files) {
+    const absolute = safePath.join(suite.tempDir, file.path);
+    const resourceId = builder.identities.idFor(absolute);
+    builder.addResource({
+      resourceId,
+      kind: 'file',
+      origin: 'filesystem',
+      observed: true,
+      fromEnumeration: true,
+      vatId: null,
+    });
+    // Sequential: each row's read shares one cache, which is the point.
+    const row = await collectRealization(absolute, resourceId, {
+      root: suite.tempDir,
+      extentId: DEFERRING_EXTENT,
+      contentCache: cache,
+      contentDemand: file.path === deferredPath ? 'deferred' : 'eager',
+    });
+    builder.addRealization(row);
+  }
+  return builder;
+}
+
+/** The two-file corpus the demand fixtures use: one linking file, one leaf. */
+const DEMAND_CORPUS: readonly CorpusFile[] = [
+  { path: DOC_A, content: DOC_A_CONTENT },
+  { path: PAGE_MD, content: '# Leaf\n\nNothing links out of here.\n' },
+];
 
 /** The four blob-keyed tables, serialized for byte-identity comparison. */
 function blobTablesOf(projection: Projection): string {
@@ -424,5 +476,92 @@ describe('populateBlobs', () => {
     expect(first.blobsDerived).toBe(2);
     expect(second.blobsDerived).toBe(0);
     expect(second.blobsAlreadyPresent).toBe(2);
+  });
+});
+
+describe('populateBlobs, over deferred realizations', () => {
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+  beforeEach(suite.beforeEach);
+  beforeEach(async () => {
+    await writeCorpus(DEMAND_CORPUS);
+  });
+
+  it('derives no blob for a deferred realization and counts it apart from every skip', async () => {
+    const cache = new RunContentCache();
+    const builder = await builderWithDeferredPath(DOC_A, DEMAND_CORPUS, cache);
+
+    const counts = await populateBlobs(builder, { parseCache: NO_CACHE });
+    const projection = builder.build();
+
+    expect(counts.realizationsContentDeferred).toBe(1);
+    // The distinction the counter exists for: a deliberate non-read is not a
+    // read that failed, and folding it into the residue bucket would make the
+    // demand design indistinguishable from a corpus full of permissions errors.
+    expect(counts.realizationsSkippedUnkeyed).toBe(0);
+    expect(counts.realizationsSkippedAbsent).toBe(0);
+    // Only the eagerly keyed leaf got a blob, and the leaf has no links — so an
+    // empty reference table really does mean the deferred blob was not derived.
+    expect(counts.blobsDerived).toBe(1);
+    expect(projection.blobs).toHaveLength(1);
+    expect(projection.blobReferences).toHaveLength(0);
+  });
+
+  it('derives the promoted blob, and its references, on a second run', async () => {
+    const cache = new RunContentCache();
+    const builder = await builderWithDeferredPath(DOC_A, DEMAND_CORPUS, cache);
+    await populateBlobs(builder, { parseCache: NO_CACHE });
+
+    const key = await builder.ensureContentKey(DOC_A);
+    const second = await populateBlobs(builder, { parseCache: NO_CACHE });
+    const projection = builder.build();
+
+    expect(second.realizationsContentDeferred).toBe(0);
+    expect(second.blobsDerived).toBe(1);
+    expect(second.blobsAlreadyPresent).toBe(1);
+    expect(projection.blobs.map((row) => row.contentKey)).toContain(key);
+    // The edge the deferred blob was hiding. Without the second run the
+    // realization would name a blob with no rows — a dangling foreign key.
+    expect(projection.blobReferences.map((row) => row.rawRef)).toEqual(['./b.md']);
+  });
+});
+
+describe('afterClosurePromotion', () => {
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+  beforeEach(suite.beforeEach);
+  beforeEach(async () => {
+    await writeCorpus(DEMAND_CORPUS);
+  });
+
+  it('reports nothing at all when the closure stratum promoted no realization', async () => {
+    const cache = new RunContentCache();
+    const builder = await builderWithDeferredPath(DOC_A, DEMAND_CORPUS, cache);
+    await populateBlobs(builder, { parseCache: NO_CACHE });
+
+    const report = await afterClosurePromotion(builder, builder.contentPromotions);
+
+    // An ABSENT key, not a zeroed result: "the stage did not need to run again"
+    // and "it ran again and derived nothing" are different facts.
+    expect(report).toEqual({});
+    expect('afterClosurePromotion' in report).toBe(false);
+  });
+
+  it('reports the post-fixpoint run as its own result rather than merging counters', async () => {
+    const cache = new RunContentCache();
+    const builder = await builderWithDeferredPath(DOC_A, DEMAND_CORPUS, cache);
+    const first = await populateBlobs(builder, { parseCache: NO_CACHE });
+    const before = builder.contentPromotions;
+    await builder.ensureContentKey(DOC_A);
+
+    const report = await afterClosurePromotion(builder, before);
+
+    expect(report.afterClosurePromotion?.blobsDerived).toBe(1);
+    // The reason there is no honest sum: the second pass counts as "already
+    // present" nearly every blob the first pass derived, so adding the two
+    // reports a corpus larger than the corpus.
+    expect(first.blobsAlreadyPresent).toBe(0);
+    expect(report.afterClosurePromotion?.blobsAlreadyPresent).toBe(1);
+    expect(builder.build().blobs).toHaveLength(2);
   });
 });

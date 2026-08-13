@@ -18,6 +18,11 @@
  *    success. See `blob-population.ts`.
  * 3. Every `closure` contributor runs **repeatedly against the growing base**
  *    until no contributor's {@link extentDigest} moved during a whole pass.
+ * 4. If the closure stratum promoted any `deferred` realization to `keyed` —
+ *    demand-driven keying, `ProjectionBuilder.ensureContentKey` —
+ *    {@link populateBlobs} runs once more, so the newly keyed paths get the
+ *    `blobs` rows their realizations now name. Strictly after the fixpoint, and
+ *    reported as a separate measurement: see {@link BlobPopulationReport}.
  *
  * ## Non-convergence throws, and never returns what it reached
  *
@@ -76,6 +81,37 @@ import { ProjectionBuilder, type Projection } from './projection.js';
  */
 const DEFAULT_MAX_ITERATIONS = 8;
 
+/**
+ * What the blob-derivation stage did across a whole `populate()` — one run
+ * between the strata, and optionally a second after the closure fixpoint.
+ *
+ * ## Why the second run is a separate object and not added to the first
+ *
+ * There is no honest arithmetic between two runs of {@link populateBlobs}.
+ * `blobsAlreadyPresent` on the second pass counts nearly every blob the first
+ * pass derived, so summing it reports a corpus several times its own size;
+ * taking the later value instead misreports the first pass as having found
+ * nothing already present. The same objection applies to every
+ * `realizationsSkipped*` bucket: the second pass walks the same realizations,
+ * so adding them double-counts every directory in the corpus.
+ *
+ * The two runs are therefore two measurements of two different builder states,
+ * and they are reported as two measurements. A consumer that genuinely wants a
+ * total for one bucket knows which buckets are additive; this type declines to
+ * guess on its behalf.
+ */
+export interface BlobPopulationReport extends BlobPopulationResult {
+  /**
+   * The post-fixpoint run, present only when the closure stratum promoted at
+   * least one `deferred` realization to `keyed`.
+   *
+   * Absent — not a zeroed result — when no promotion happened, because "the
+   * stage did not need to run again" and "it ran again and derived nothing" are
+   * different facts and a zeroed object cannot tell them apart.
+   */
+  readonly afterClosurePromotion?: BlobPopulationResult | undefined;
+}
+
 /** What a population run needs to know. */
 export interface PopulateOptions {
   /** Absolute corpus root every contributor's paths are relative to. */
@@ -116,8 +152,11 @@ export interface PopulateOptions {
    * headings and references were dropped for want of a source line, both of
    * which are asserted at zero on a real corpus, and neither of which any row
    * can carry (a row that was skipped is, definitionally, absent).
+   *
+   * Called **once**, after the closure fixpoint, so the record can carry both
+   * runs of the stage — see {@link BlobPopulationReport}.
    */
-  onBlobPopulation?: ((result: BlobPopulationResult) => void) | undefined;
+  onBlobPopulation?: ((result: BlobPopulationReport) => void) | undefined;
   /**
    * Receives one record per contributor invocation, as it completes.
    *
@@ -240,19 +279,23 @@ export async function populate(options: PopulateOptions): Promise<Projection> {
     });
   }
 
-  // Between the strata, and exactly once. The base is what records `contentKey`
-  // columns; the closure stratum is what reads `blob_references`. A closure
-  // contributor only ever re-realizes a path the base already realized, so no
-  // new content key can appear once this has run.
+  // Between the strata. The base is what records `contentKey` columns; the
+  // closure stratum is what reads `blob_references`. A closure contributor only
+  // ever re-realizes a path the base already realized, so the *only* way a new
+  // content key can appear after this is an explicit demand promotion — which
+  // `afterClosurePromotion` below picks up, after the fixpoint.
   //
   // The stage is awaited into a binding *before* the optional call, never
   // inlined as `options.onBlobPopulation?.(await populateBlobs(builder))`:
   // optional chaining short-circuits the whole call expression, arguments
   // included, so the inlined form derives no blobs at all whenever no observer
   // is supplied — which is every caller that is not a test. Measured, not
-  // feared: it is how this stage first shipped as a no-op.
+  // feared: it is how this stage first shipped as a no-op. The post-fixpoint run
+  // below is awaited into its own binding for exactly the same reason: an
+  // `await` inside the optional call's argument list would be short-circuited
+  // away, so the promoted blobs would be derived only when someone was watching.
   const blobPopulation = await populateBlobs(builder);
-  options.onBlobPopulation?.(blobPopulation);
+  const promotionsBeforeClosure = builder.contentPromotions;
 
   await iterateClosure(
     registry.byStratum('closure'),
@@ -262,7 +305,74 @@ export async function populate(options: PopulateOptions): Promise<Projection> {
     options.onContributorTiming,
   );
 
+  const promoted = await afterClosurePromotion(builder, promotionsBeforeClosure);
+  options.onBlobPopulation?.({ ...blobPopulation, ...promoted });
+
   return builder.build();
+}
+
+/**
+ * Derive the blobs a demand promotion during the closure stratum made available,
+ * if any.
+ *
+ * ## Why a second run of the stage exists at all
+ *
+ * `FilesystemExtentContributor` defers gitignored paths, so their realizations
+ * arrive `contentState: 'deferred'` with no key and the first
+ * {@link populateBlobs} correctly derives no blob for them. Anything that then
+ * calls `ProjectionBuilder.ensureContentKey` — a closure declaration reaching
+ * into an ignored tree, a lens asking for bytes — turns those rows `keyed`,
+ * and without this the projection would carry a realization naming a blob that
+ * has no `blobs` row and no `blob_references`: a dangling foreign key, and
+ * precisely the silent-emptiness failure the stage was written to prevent.
+ *
+ * **Nothing shipped promotes yet.** `ProjectionBase` is the read-only view a
+ * contributor is handed and it exposes no mutator, so as of this commit no
+ * contributor *can* call `ensureContentKey` and `builder.contentPromotions` is
+ * always unchanged here. That is deliberate — the demand consumer is the next
+ * piece of work, and landing the driver blind to it would mean the first
+ * consumer silently produced dangling blob keys. The unit test below therefore
+ * drives this function directly rather than through {@link populate}, because a
+ * `populate()`-level test could not distinguish "correct" from "never ran".
+ *
+ * ## Why it is strictly after the fixpoint, and why that is safe
+ *
+ * `ClosureExtentContributor` memoizes a whole-corpus `blob_references` index
+ * per run (`referencesByBlobFor`, a `WeakMap` on the base — it cut 122 index
+ * rebuilds to 1). Its soundness rests on blobs being derived exactly once
+ * *between* the strata, so that no closure pass can observe the index changing
+ * under it. Running the stage here preserves that argument twice over:
+ *
+ * 1. Nothing reads the index after the fixpoint has converged, so a
+ *    `blob_references` row added now is observed by no closure contributor.
+ * 2. The memo key includes `base.blobReferences.length`, not just the base's
+ *    identity, so even a hypothetical later reader would be handed a rebuilt
+ *    index rather than the stale one.
+ *
+ * A future change that moves this call *inside* the loop invalidates both, and
+ * would have to invalidate the memo explicitly instead.
+ *
+ * Exported for the focused unit test that pins the two-run reporting rule —
+ * driving it through {@link populate} would mean walking a real tree to reach a
+ * decision that is a comparison of two integers. {@link populate} is its only
+ * production caller.
+ *
+ * @param builder - The builder whose closure stratum has just converged
+ * @param promotionsBefore - `contentPromotions` as it stood before the stratum
+ * @returns A one-key object to spread onto the report, empty when nothing was
+ *   promoted — an absent key, never a zeroed result, because `exactOptionalPropertyTypes`
+ *   makes those two different values and they mean different things
+ */
+export async function afterClosurePromotion(
+  builder: ProjectionBuilder,
+  promotionsBefore: number,
+): Promise<{ afterClosurePromotion?: BlobPopulationResult }> {
+  if (builder.contentPromotions === promotionsBefore) {
+    return {};
+  }
+  // Idempotent by construction: `blobsAlreadyPresent` skips every blob the
+  // first run derived, so only the newly keyed paths cost a parse.
+  return { afterClosurePromotion: await populateBlobs(builder) };
 }
 
 /**

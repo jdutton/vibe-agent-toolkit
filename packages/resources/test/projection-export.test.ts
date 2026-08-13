@@ -107,6 +107,7 @@ function contribute(builder: ProjectionBuilder, side: Side): void {
     depth: 2,
     ext: '.md',
     contentKey: side.blob,
+    contentState: 'keyed',
     mtime: null,
     exists: true,
     isDirectory: false,

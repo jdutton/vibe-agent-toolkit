@@ -51,7 +51,17 @@
               "type": "null"
             }
           ],
-          "description": "Foreign key to blobs.contentKey for THIS realization's bytes, or null for a declared-but-unwritten node"
+          "description": "Foreign key to blobs.contentKey for THIS realization's bytes, or null — read contentState for WHICH of the three null cases this is"
+        },
+        "contentState": {
+          "type": "string",
+          "enum": [
+            "keyed",
+            "deferred",
+            "unreadable",
+            "none"
+          ],
+          "description": "Why contentKey is or is not set. Pinned to contentKey in BOTH directions by a superRefine (keyed ⟺ non-null); like symlinkResolves, that constraint is NOT encoded in the generated JSON Schema"
         },
         "mtime": {
           "anyOf": [
@@ -95,6 +105,7 @@
         "depth",
         "ext",
         "contentKey",
+        "contentState",
         "mtime",
         "exists",
         "isDirectory",

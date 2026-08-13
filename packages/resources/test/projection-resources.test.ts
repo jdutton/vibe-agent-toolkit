@@ -71,6 +71,7 @@ describe('ResourceRealizationRowSchema', () => {
     depth: 1,
     ext: '.md',
     contentKey: VALID_KEY,
+    contentState: 'keyed',
     mtime: new Date('2026-01-01T00:00:00Z'),
     exists: true,
     isDirectory: false,
@@ -99,8 +100,37 @@ describe('ResourceRealizationRowSchema', () => {
   });
 
   it('accepts a declared-but-unwritten realization with a null content key', () => {
-    const row = { ...base, contentKey: null, mtime: null, exists: false };
+    const row = { ...base, contentKey: null, contentState: 'none', mtime: null, exists: false };
     expect(ResourceRealizationRowSchema.safeParse(row).success).toBe(true);
+  });
+
+  it.each(['deferred', 'unreadable', 'none'])(
+    'accepts a null content key explained by contentState "%s"',
+    (contentState) => {
+      expect(ResourceRealizationRowSchema.safeParse({ ...base, contentKey: null, contentState }).success).toBe(true);
+    },
+  );
+
+  it('rejects contentState "keyed" with no key — a row claiming bytes it cannot name', () => {
+    const row = { ...base, contentKey: null };
+    expect(ResourceRealizationRowSchema.safeParse(row).success).toBe(false);
+  });
+
+  it.each(['deferred', 'unreadable', 'none'])(
+    'rejects a non-null content key labelled "%s" — the read plainly happened',
+    (contentState) => {
+      expect(ResourceRealizationRowSchema.safeParse({ ...base, contentState }).success).toBe(false);
+    },
+  );
+
+  it('rejects a contentState outside the closed vocabulary', () => {
+    expect(ResourceRealizationRowSchema.safeParse({ ...base, contentState: 'pending' }).success).toBe(false);
+  });
+
+  it('rejects a row with no contentState — a null key that says nothing is the defect being fixed', () => {
+    // eslint-disable-next-line sonarjs/no-unused-vars
+    const { contentState: _contentState, ...withoutState } = base;
+    expect(ResourceRealizationRowSchema.safeParse({ ...withoutState, contentKey: null }).success).toBe(false);
   });
 
   it('accepts a resolved symlink', () => {

@@ -25,9 +25,16 @@
  * `zone_provenance` digest to, and inventing one would claim an extent that
  * does not exist.
  *
- * It runs **once**, not per closure iteration. A closure contributor only ever
- * re-realizes paths the base already realized (`{...first, extentId}`), so it
- * cannot introduce a content key this stage has not already seen.
+ * It runs **once per closure iteration — never**. A closure contributor only
+ * ever re-realizes paths the base already realized (`{...first, extentId}`), so
+ * it cannot introduce a content key this stage has not already seen.
+ *
+ * The merge driver does run it a **second** time, strictly after the fixpoint
+ * has converged, and only when something promoted a `deferred` realization
+ * during the closure stratum. That is the one way a content key can appear
+ * after the first run, and running the stage again is safe for the same reason
+ * running it twice always was: a blob already present is skipped outright. See
+ * `merge.ts` for why the two runs are reported separately rather than summed.
  *
  * ## Keyed on the blob, never on the path
  *
@@ -38,10 +45,16 @@
  *
  * ## What is NOT re-observed
  *
- * The skip rules read the realization row's own columns (`contentKey`,
+ * The skip rules read the realization row's own columns (`contentState`, then
  * `isDirectory`, `exists`, `symlinkResolves`) rather than issuing a fresh
  * `stat`. A second `stat` could legitimately disagree with the row the base
  * already carries, and two answers for one path is worse than either.
+ *
+ * `contentState` is read **first**, and is the reason the column exists: a
+ * null `contentKey` used to be re-explained here by reconstructing the cause
+ * from three other columns, which meant "the read threw" and "nobody asked for
+ * these bytes" were the same residue bucket. The base already decided; this
+ * stage reports its decision instead of re-deriving it.
  *
  * ## Every keyed blob is derived — including non-markdown
  *
@@ -117,22 +130,48 @@ export interface BlobPopulationResult {
   readonly blobsContentChanged: number;
   /** Blobs the parser threw on — a {@link BLOB_PARSE_FAILED} row each. */
   readonly blobsParseFailed: number;
-  /** Realization rows carrying no content key because they name a directory. */
+  /**
+   * `contentState: 'none'` rows that name a directory.
+   *
+   * The three `none` sub-buckets below are still derived from the row's own
+   * `isDirectory` / `exists` / `symlinkResolves` columns — `none` says *there
+   * are no bytes here*, and which of the three shapes produced it is a real
+   * distinction those columns already carry.
+   */
   readonly realizationsSkippedDirectory: number;
-  /** Realization rows carrying no content key because the path does not exist. */
+  /** `contentState: 'none'` rows whose path does not exist. */
   readonly realizationsSkippedAbsent: number;
-  /** Realization rows carrying no content key because the symlink dangles. */
+  /** `contentState: 'none'` rows whose symlink dangles. */
   readonly realizationsSkippedDanglingSymlink: number;
   /**
-   * Realization rows that exist, are not directories and resolve — yet still
-   * carry no content key.
+   * `contentState: 'unreadable'` rows — the read was attempted and it threw.
    *
-   * The residue: `collectRealization` reports a read failure at enumeration
-   * time as a null key. Kept as its own bucket rather than folded into the
-   * three explicable ones, because it is the only one that indicates something
-   * went wrong rather than something is not a blob.
+   * The only bucket here that indicates something went **wrong** rather than
+   * something is not a blob or was not asked for. Read off the state column
+   * rather than reconstructed from the absence of the other three explanations,
+   * which is what it used to be.
    */
   readonly realizationsSkippedUnkeyed: number;
+  /**
+   * `contentState: 'deferred'` rows — bytes that exist and were deliberately
+   * **not** read.
+   *
+   * Not a skip and not a warning: a nonzero value here is the demand-driven
+   * keying design doing its job. `FilesystemExtentContributor` passes
+   * `contentDemand: 'deferGitignored'` precisely so a gitignored path gets a
+   * realization row without anyone paying to SHA-256 it — measured at 1.19 GB
+   * of ignored tree against 40.8 MB of tracked source on a large adopter, which
+   * is the whole cost this counter reports as avoided.
+   *
+   * It is named apart from the `realizationsSkipped*` family on purpose: those
+   * describe bytes that could not be keyed, this describes bytes nobody has
+   * asked for **yet**. A consumer that wants them calls
+   * {@link ProjectionBuilder.ensureContentKey}, which promotes the row to
+   * `keyed`; a second {@link populateBlobs} then derives its blob. Folding this
+   * into a skip bucket would restore exactly the ambiguity `contentState` was
+   * added to remove.
+   */
+  readonly realizationsContentDeferred: number;
   /**
    * Headings dropped by `blobSectionsFor` for want of a source line.
    *
@@ -262,6 +301,7 @@ function emptyCounts(): MutableCounts {
     realizationsSkippedAbsent: 0,
     realizationsSkippedDanglingSymlink: 0,
     realizationsSkippedUnkeyed: 0,
+    realizationsContentDeferred: 0,
     headingsSkippedForMissingLine: 0,
     referencesSkippedForMissingLine: 0,
   };
@@ -270,21 +310,58 @@ function emptyCounts(): MutableCounts {
 /**
  * Attribute one content-key-less realization to the reason it has no blob.
  *
- * An `if`/`else if` chain rather than a `switch`: the buckets are derived from
- * four independent boolean columns, not from a union with members to enumerate.
+ * A `switch` on `contentState`, not a reconstruction: the base already decided
+ * why this row carries no key, and that decision is a column. The previous
+ * implementation re-derived it from `isDirectory`/`exists`/`symlinkResolves`
+ * and put everything it could not explain into one residue bucket — which meant
+ * a file the run failed to read and a file the run deliberately did not read
+ * were counted as the same thing.
  *
  * @param row - A realization whose `contentKey` is null
  * @param counts - The accumulator to attribute it to
  */
 function countUnkeyedRealization(row: ResourceRealizationRow, counts: MutableCounts): void {
+  switch (row.contentState) {
+    case 'none': {
+      countBytelessRealization(row, counts);
+      break;
+    }
+    case 'unreadable': {
+      counts.realizationsSkippedUnkeyed += 1;
+      break;
+    }
+    case 'deferred': {
+      counts.realizationsContentDeferred += 1;
+      break;
+    }
+    case 'keyed': {
+      // Filtered out by the caller: the schema pins keyed ⟺ a non-null key in
+      // both directions, so a keyed row cannot reach a null-key counter.
+      break;
+    }
+  }
+}
+
+/**
+ * Split a `contentState: 'none'` row into the three shapes that produce it.
+ *
+ * `keyOrState` emits `none` exactly when `lstat` said there are no bytes —
+ * absent, a directory, or a dangling symlink — so these three exhaust it. They
+ * stay separate because "the corpus has 2,000 directories" and "the corpus
+ * names 2,000 paths that are not there" are different facts about a run.
+ *
+ * @param row - A realization whose `contentState` is `none`
+ * @param counts - The accumulator to attribute it to
+ */
+function countBytelessRealization(row: ResourceRealizationRow, counts: MutableCounts): void {
   if (row.isDirectory) {
     counts.realizationsSkippedDirectory += 1;
-  } else if (!row.exists) {
-    counts.realizationsSkippedAbsent += 1;
-  } else if (row.symlinkResolves === false) {
+  } else if (row.exists) {
+    // Present, not a directory, and still byteless: the remaining shape
+    // `keyOrState` calls `none` is a symlink whose target does not resolve.
     counts.realizationsSkippedDanglingSymlink += 1;
   } else {
-    counts.realizationsSkippedUnkeyed += 1;
+    counts.realizationsSkippedAbsent += 1;
   }
 }
 
@@ -297,6 +374,14 @@ function countUnkeyedRealization(row: ResourceRealizationRow, counts: MutableCou
  * the path — but *choosing* it by enumeration order would make a read failure
  * on one of two identical copies depend on crawl order.
  *
+ * The filter is on `contentState === 'keyed'`, not on `contentKey !== null`.
+ * The schema's `superRefine` makes the two equivalent **today**, which is
+ * exactly why the choice has to be deliberate: a fourth null state added later
+ * would slip through a null check silently and become a blob target that has no
+ * bytes, whereas it cannot slip through a state check. (The `contentKey === null`
+ * arm below is the type system's requirement, not a second rule — the row type
+ * cannot express the invariant.)
+ *
  * @param base - The projection built so far
  * @returns One target per distinct content key, ordered by content key
  */
@@ -304,7 +389,7 @@ function blobTargets(base: ProjectionBase): BlobTarget[] {
   const pathByKey = new Map<string, string>();
 
   for (const row of base.resourceRealizations) {
-    if (row.contentKey === null) continue;
+    if (row.contentState !== 'keyed' || row.contentKey === null) continue;
     const chosen = pathByKey.get(row.contentKey);
     if (chosen === undefined || compareCodeUnits(row.path, chosen) < 0) {
       pathByKey.set(row.contentKey, row.path);
@@ -365,6 +450,12 @@ async function deriveBlob(
  * `RunContentCache.read`, which owns that decision and the argument for it. The
  * branches stay because `populateBlobs` is also reachable from a builder with no
  * cache, where the read is genuinely fresh and can genuinely disagree.
+ *
+ * **Demand promotion does not change that argument.** A row promoted by
+ * `ProjectionBuilder.ensureContentKey` had its key minted through this same run
+ * cache, so when this stage then reads the promoted path it is served the very
+ * bytes that key names — the identical position a row keyed at enumeration time
+ * is in, reached one stage later.
  *
  * @param builder - The builder to record a condition on
  * @param target - The blob and its path

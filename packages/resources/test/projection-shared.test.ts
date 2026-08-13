@@ -13,8 +13,12 @@ describe('PROJECTION_SCHEMA_VERSION', () => {
     expect(PROJECTION_SCHEMA_VERSION).toBeGreaterThan(0);
   });
 
-  it('is 2 — the zones revision', () => {
-    expect(PROJECTION_SCHEMA_VERSION).toBe(2);
+  it('is 3 — the demand-driven keying revision', () => {
+    // Pinned to a literal on purpose: `resource_realizations.contentState` is a
+    // new required column, so a consumer holding a version-2 export cannot read
+    // a version-3 one. A version that could drift silently would let exactly
+    // that happen without anything going red.
+    expect(PROJECTION_SCHEMA_VERSION).toBe(3);
   });
 });
 

@@ -24,7 +24,11 @@ function realization(resourceId: string, path: string): ResourceRealizationRow {
   return {
     resourceId, extentId: EXTENT_ID, path,
     pathLower: path.toLowerCase(), basenameLower: 'a.md', dir: 'docs', depth: 2, ext: '.md',
-    contentKey: null, mtime: null, exists: true, isDirectory: false,
+    // An existing, non-directory path with a null key: `deferred` is the state
+    // that describes it, and the only one the superRefine admits alongside a
+    // null key for a path that genuinely has bytes.
+    contentKey: null, contentState: 'deferred',
+    mtime: null, exists: true, isDirectory: false,
     gitignored: false, isSymlink: false, symlinkResolves: null,
   };
 }

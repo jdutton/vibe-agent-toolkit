@@ -87,12 +87,39 @@ export const ResourceRowSchema = z.object({
 export type ResourceRow = z.infer<typeof ResourceRowSchema>;
 
 /**
+ * Why {@link ResourceRealizationRowSchema.shape.contentKey} is null — a
+ * **closed** vocabulary, because the whole point of the column is that the
+ * four cases must never collapse into one another.
+ *
+ * Before this column, `contentKey: null` said "directory", "absent",
+ * "dangling symlink" and "the read threw" in one breath, and demand-driven
+ * keying was about to add a fifth reading, "nobody asked for these bytes yet".
+ * An unreadable file being indistinguishable from an un-visited one is exactly
+ * the completeness failure `zone_provenance.extentDigest` exists to prevent: a
+ * consumer counting null keys could no longer tell a corpus it failed to read
+ * from a corpus it deliberately did not read.
+ *
+ * - `keyed` — the bytes were read and hashed; `contentKey` holds that hash.
+ * - `deferred` — this path has bytes, but no consumer has asked for them yet,
+ *   so they were never read. **This is not a failure**, and it is the only
+ *   member that a later pass can legitimately turn into `keyed`.
+ * - `unreadable` — a read was attempted and it threw. A fact about the corpus
+ *   (a permissions quirk, a vanished file), never an error in the harness.
+ * - `none` — there are no bytes here to key at all: the path is absent, or a
+ *   directory, or a dangling symlink.
+ */
+export const ContentStateSchema = z.enum(['keyed', 'deferred', 'unreadable', 'none'])
+  .describe('Why this realization does or does not carry a content key');
+
+export type ContentState = z.infer<typeof ContentStateSchema>;
+
+/**
  * A row of the `resource_realizations` table — **one path in one extent**.
  *
  * One source file bundled into three skills is one identity and four
  * realizations. A file generated only into a build tree is minted there.
  *
- * ## Why twelve columns live here and not on the identity
+ * ## Why these columns live here and not on the identity
  *
  * `contentKey` forces the issue. The packager **rewrites content** on the way
  * into a bundle — `buildRewriteRules` / `transformContent`
@@ -137,7 +164,9 @@ export const ResourceRealizationRowSchema = z.object({
   depth: z.number().int().nonnegative().describe('Path segment count below the root'),
   ext: z.string().describe('Lowercased extension including the leading dot, or "" when none'),
   contentKey: ContentKeySchema.nullable()
-    .describe('Foreign key to blobs.contentKey for THIS realization\'s bytes, or null for a declared-but-unwritten node'),
+    .describe('Foreign key to blobs.contentKey for THIS realization\'s bytes, or null — read contentState for WHICH of the three null cases this is'),
+  contentState: ContentStateSchema
+    .describe('Why contentKey is or is not set. Pinned to contentKey in BOTH directions by a superRefine (keyed ⟺ non-null); like symlinkResolves, that constraint is NOT encoded in the generated JSON Schema'),
   mtime: z.coerce.date().nullable().describe('Last modification time, or null when this path has never been observed on disk'),
   exists: z.boolean(),
   isDirectory: z.boolean(),
@@ -151,6 +180,24 @@ export const ResourceRealizationRowSchema = z.object({
         code: z.ZodIssueCode.custom,
         message: 'symlinkResolves must be null when isSymlink is false',
         path: ['symlinkResolves'],
+      });
+    }
+    // Both directions, because either half alone leaves a lie representable: a
+    // `keyed` row with no key claims bytes it cannot name, and a keyed row
+    // labelled `deferred`/`unreadable`/`none` says the read never happened
+    // while carrying its result.
+    if (row.contentState === 'keyed' && row.contentKey === null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'contentState "keyed" requires a non-null contentKey',
+        path: ['contentState'],
+      });
+    }
+    if (row.contentState !== 'keyed' && row.contentKey !== null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `contentState must be "keyed" when contentKey is non-null, not "${row.contentState}"`,
+        path: ['contentState'],
       });
     }
   });

@@ -167,9 +167,16 @@ Consequences:
 
 ### Most columns belong to the realization
 
-`contentKey`, `mtime`, `exists`, `isDirectory`, `gitignored`, `isSymlink`, `symlinkResolves`, `dir`,
-`depth`, `ext`, `pathLower`, `basenameLower` are all properties of *a path in a zone*, not of an
-identity. `resources` keeps `(resourceId, kind, origin, observed, vatId)`.
+`contentKey`, `contentState`, `mtime`, `exists`, `isDirectory`, `gitignored`, `isSymlink`,
+`symlinkResolves`, `dir`, `depth`, `ext`, `pathLower`, `basenameLower` are all properties of *a path
+in a zone*, not of an identity. `resources` keeps `(resourceId, kind, origin, observed, vatId)`.
+
+`contentState` (`keyed` | `deferred` | `unreadable` | `none`) exists because a null `contentKey`
+answers four different questions at once, and demand-driven keying adds a fifth. A file that could
+not be read and a file nobody has asked about are not the same fact, and letting them share a
+spelling is the completeness failure `zone_provenance.extentDigest` exists to prevent. The pairing
+is pinned by a schema refinement in both directions, so a key without the state — or a state without
+the key — fails to parse rather than being merged into the projection.
 
 `contentKey` is the one that forces the issue: the packager **rewrites content** into the bundle
 (`skill-packager.ts:729-754` repoints bundled links at flattened dist paths), so a resource's source
@@ -300,11 +307,20 @@ provenance row cannot describe a parameter set its extent did not run under.
 `marketplace` are `closure`. A skill extent is not a fourth walker — it is the generic closure
 primitive under a per-skill id, handed a declaration translated from that skill's packaging config.
 
-**Between the strata, exactly once**, blob derivation turns the base's `contentKey` columns into the
-four blob-keyed tables. It is deliberately *not* a contributor (it declares no extent, so it has no
+**Between the strata**, blob derivation turns the base's `contentKey` columns into the four
+blob-keyed tables. It is deliberately *not* a contributor (it declares no extent, so it has no
 context to attach a digest to), and its position is forced: the base is what records content keys and
 the closure stratum is what reads `blob_references`. Without it every closure extent is its declared
 root and nothing else — and the run reports success.
+
+It derives from `keyed` realizations only, so demand-driven keying gives it a second occasion to run:
+if anything promoted a `deferred` row during the closure stratum, derivation repeats **after** the
+fixpoint, picking up only what is newly keyed. Re-running is safe because derivation skips blobs that
+already exist, and it cannot serve a stale reference index to the closure stratum — the memo
+`ClosureExtentContributor` keeps is keyed on `blob_references` row count as well as base identity, and
+nothing reads that index after the fixpoint has converged. The two runs are reported separately rather
+than summed: on a second pass `blobsAlreadyPresent` counts nearly everything the first pass derived,
+so there is no honest arithmetic that combines them.
 
 #### Convergence, measured 2026-08-13
 
