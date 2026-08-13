@@ -172,3 +172,15 @@ export {
 export { extractClaudeMarketplaceInventory } from './inventory/index.js';
 export { extractClaudeInstallInventory } from './inventory/index.js';
 export { detectSkillClaudePluginNameMismatch } from './inventory/index.js';
+
+// Resource-projection extent contributors (zones §7.1, closure stratum)
+export {
+  MANIFEST_UNREADABLE,
+  MARKETPLACE_CONTRIBUTOR_ID,
+  MARKETPLACE_KIND,
+  MarketplaceExtentContributor,
+  PLUGIN_CONTRIBUTOR_ID,
+  PLUGIN_KIND,
+  PLUGIN_NOT_INSTALLED,
+  PluginExtentContributor,
+} from './projection/plugin-extent.js';

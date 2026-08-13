@@ -29,6 +29,19 @@ export {
   type WalkLinkGraphOptions,
 } from './walk-link-graph.js';
 
+// The skill extent (zones §7.3): the closure primitive under a skill's name,
+// plus the translation of `SkillPackagingConfig` into the declaration that
+// shapes it. Deliberately NOT a second walker — see the module note for the
+// measured boundary between what the declaration expresses and what only
+// `walkLinkGraph`'s ordered cascade can.
+export {
+  SKILL_EXTENT_CONTRIBUTOR_ID_PREFIX,
+  skillExtentContributorId,
+  SKILL_EXTENT_KIND,
+  SkillExtentContributor,
+  skillExtentDeclaration,
+} from './projection/skill-extent.js';
+
 export {
   getTargetSubdir,
   CONTENT_TYPE_ROUTING_MAP,
