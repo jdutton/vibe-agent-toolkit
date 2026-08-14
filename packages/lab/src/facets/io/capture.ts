@@ -35,8 +35,8 @@
  * 1. **A dump directory reused across repeats.** Nothing downstream can tell a
  *    leftover dump from an earlier repeat apart from a descendant process of
  *    this one — both are files with distinct PIDs — so reuse inflates both the
- *    call counts and `processes`. Hence {@link makeDumpDirs}: a fresh `mkdtemp`
- *    per repeat, freshness by construction rather than by deleting first.
+ *    call counts and `processes`. Hence `withDumpDirs`: a fresh `mkdtemp` per
+ *    repeat, freshness by construction rather than by deleting first.
  * 2. **`NODE_OPTIONS` assigned instead of appended.** `runRepeats` merges the
  *    capture's environment OVER `process.env`, so an assignment silently drops
  *    whatever the surrounding shell or CI had set — changing the process being
@@ -51,11 +51,11 @@
  */
 
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
 
-import { normalizedTmpdir, resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
+import { resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { ReportEnvelope } from '../../envelope/envelope.js';
+import { withDumpDirs } from '../../harness/dumps.js';
 import { judgeLoad, readLoad } from '../../harness/load-guard.js';
 import { measureSpec, type SpecMeasurement } from '../../harness/repeat.js';
 import { buildReportEnvelope } from '../../harness/report.js';
@@ -164,22 +164,6 @@ function nodeOptionsWith(counterPath: string, base: string | undefined): string 
   const preload = `--require "${counterPath}"`;
   const existing = (base ?? '').trim();
   return existing === '' ? preload : `${existing} ${preload}`;
-}
-
-/**
- * One fresh dump directory per repeat.
- *
- * `mkdtemp` per repeat rather than one directory emptied between them: emptying
- * is a step that can fail, be skipped, or race a descendant process that has not
- * exited yet, and every one of those failures adds calls to the next repeat's
- * numbers without adding anything that says so.
- *
- * @param runs - How many repeats will run
- * @returns One directory per repeat, in repeat order
- */
-async function makeDumpDirs(runs: number): Promise<string[]> {
-  const prefix = safePath.join(normalizedTmpdir(), DUMP_DIR_PREFIX);
-  return Promise.all(Array.from({ length: Math.max(0, runs) }, () => mkdtemp(prefix)));
 }
 
 /**
@@ -327,21 +311,18 @@ export async function captureIo(options: CaptureIoOptions): Promise<ReportEnvelo
   for (const spec of options.commands) {
     // Sequential on purpose — see this function's doc. Awaiting inside the loop
     // is the mechanism, not an oversight.
-    const directories = await makeDumpDirs(options.runs);
-    try {
-      // Per repeat, and on `envFor` rather than `env`: only the measured run is
-      // instrumented, so `cold` mode's cache clear cannot contribute its own I/O.
-      const perRepeat = directories.map((directory) => ({
-        [COUNTER_LOG_DIR_ENV]: directory,
-        NODE_OPTIONS: nodeOptions,
-      }));
-      const measurement = measureSpec(options, spec, (index) => perRepeat[index]);
-      commands.push(await rowFromDumps(measurement, directories, roots));
-    } finally {
-      await Promise.all(
-        directories.map((directory) => rm(directory, { recursive: true, force: true })),
-      );
-    }
+    commands.push(
+      await withDumpDirs(options.runs, DUMP_DIR_PREFIX, async (directories) => {
+        // Per repeat, and on `envFor` rather than `env`: only the measured run is
+        // instrumented, so `cold` mode's cache clear cannot contribute its own I/O.
+        const perRepeat = directories.map((directory) => ({
+          [COUNTER_LOG_DIR_ENV]: directory,
+          NODE_OPTIONS: nodeOptions,
+        }));
+        const measurement = measureSpec(options, spec, (index) => perRepeat[index]);
+        return rowFromDumps(measurement, directories, roots);
+      }),
+    );
   }
   const loadAfter = readLoad();
 

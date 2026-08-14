@@ -233,6 +233,43 @@ describe('resolveInstrument — kind: tree', () => {
     );
   });
 
+  /**
+   * The shipped defect this pins: a run measured a build made from a tree with
+   * substantial uncommitted changes, and the header said
+   * `Instrument: vat 0.2.0-rc.2 (7b65ba86)` with nothing to indicate the bytes
+   * measured were not that commit's. The SUBJECT side had detected and printed
+   * `(DIRTY working tree)` all along; axis C never asked.
+   *
+   * The pair of assertions is the point. Asserting only that a dirty tree
+   * reports `true` would pass equally well for a resolver that hard-coded it, so
+   * the same fixture is measured clean first and dirtied afterwards — one tree,
+   * two answers.
+   */
+  it('reports the instrument checkout as clean, then as dirty once it is edited', async () => {
+    const root = await makeTree('dirty-instrument');
+
+    expect((await resolveInstrument({ kind: 'tree', path: root })).version.dirty).toBe(false);
+
+    await writeFile(safePath.join(root, CLI_BIN), '// edited, never committed\n');
+
+    const dirty = await resolveInstrument({ kind: 'tree', path: root });
+    expect(dirty.version.dirty).toBe(true);
+    // The commit is still stamped — a dirty build is measured, not refused. The
+    // label is what keeps the stamp honest.
+    expect(dirty.version.commit).toMatch(SHA1);
+  });
+
+  it('counts an untracked file as dirty, matching what the subject axis counts', async () => {
+    // Same definition on both axes, because it is literally the same function —
+    // see `harness/git-state.ts`. A resolver that only looked at tracked files
+    // would call a tree clean that the subject side calls dirty, and one report
+    // would then carry two meanings of the word.
+    const root = await makeTree('untracked-instrument');
+    await writeFile(safePath.join(root, 'scratch-note.txt'), 'not committed\n');
+
+    expect((await resolveInstrument({ kind: 'tree', path: root })).version.dirty).toBe(true);
+  });
+
   it('throws naming the path when the tree does not exist', async () => {
     const missing = safePath.join(scratch, 'no-such-checkout');
     await expectRejectionNaming({ kind: 'tree', path: missing }, missing);
@@ -304,6 +341,11 @@ describe('resolveInstrument — kind: dist', () => {
 
     expect(resolved.version.version).toBe('0.1.42');
     expect(resolved.version.commit).toBeNull();
+    // And no dirtiness claim either, even though a checkout is right there: the
+    // built artifact is what runs, and `dist:` deliberately does not ask the
+    // tree around it anything. A `false` here would be the confident wrong
+    // answer this null exists to prevent.
+    expect(resolved.version.dirty).toBeNull();
   });
 
   it('resolves a dist directory to bin.js, not to the wrapper beside it', async () => {
@@ -373,7 +415,9 @@ describe('resolveInstrument — kind: npx', () => {
     // the Windows `.cmd` shell decision.
     expect(resolved.command).toBe('npx');
     expect(resolved.leadingArgs).toEqual(['--yes', spec]);
-    expect(resolved.version).toEqual({ version, commit: null });
+    // `dirty: null`, never `false`: a published tarball has no checkout, so
+    // there is nothing that could have been dirty and nothing to claim clean.
+    expect(resolved.version).toEqual({ version, commit: null, dirty: null });
   });
 
   /**

@@ -40,7 +40,7 @@ import type { RepeatSpec } from '../src/harness/repeat.js';
 import type { ResolvedInstrument } from '../src/harness/types.js';
 
 /** Axis C is irrelevant to a probe run; every instrument here shares one. */
-export const PROBE_VERSION: InstrumentVersion = { version: '0.0.0-test', commit: null };
+export const PROBE_VERSION: InstrumentVersion = { version: '0.0.0-test', commit: null, dirty: null };
 
 /** Base-environment variable, expected in EVERY child including the cache clear. */
 export const PROBE_BASE_ENV = 'LAB_PROBE_BASE';

@@ -27,7 +27,10 @@ vat-lab <facet> compare <baseline> <candidate>
 (`--command validate --command verify`); see
 [Which commands get measured](docs/run-harness.md#which-commands-get-measured).
 
-Facets today are **`io`** (filesystem-call counts) and **`perf`** (wall time). A minimal
+Facets today are **`io`** (filesystem-call counts), **`perf`** (wall time) and **`parse`** (where
+the time inside vat's markdown parse goes, pass by pass). `parse` defaults to `--cache cold` because
+vat's parse cache short-circuits the parse function on a hit, so a warm run has nothing to
+attribute — see [Facets](docs/facets.md). A minimal
 vary-the-instrument comparison — the same project, measured by two builds of vat:
 
 ```bash

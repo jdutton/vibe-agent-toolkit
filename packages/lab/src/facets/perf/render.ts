@@ -13,6 +13,7 @@
  */
 
 import type { ReportEnvelope } from '../../envelope/envelope.js';
+import { coordinateLines } from '../../harness/render.js';
 
 import type { PerfComparisonResult } from './compare.js';
 import type { PerfBody, PerfCommandStats } from './types.js';
@@ -74,21 +75,11 @@ function loadLine(body: PerfBody): string {
  * @returns Text for a terminal
  */
 export function renderPerfReport(report: ReportEnvelope<PerfBody>): string {
-  const { subject, subjectVersion, instrument } = report.coordinate;
-  let versionLine: string;
-  if (subjectVersion.kind === 'git') {
-    // A dirty tree is measurable but says so — the bytes measured were not the
-    // bytes at that commit, and a reader comparing later must know that.
-    const dirty = subjectVersion.dirty ? ' (DIRTY working tree)' : '';
-    versionLine = `${subjectVersion.commit.slice(0, 8)}${dirty}`;
-  } else {
-    versionLine = `snapshot ${subjectVersion.fingerprint.slice(0, 8)} (${String(subjectVersion.fileCount)} files)`;
-  }
-  const build = instrument.commit === null ? 'released' : instrument.commit.slice(0, 8);
-
   return [
-    `Subject:    ${subject.id} @ ${versionLine}`,
-    `Instrument: vat ${instrument.version} (${build})`,
+    // The shared header, not a third hand-written copy of it. This one used to
+    // be its own, and so was the only renderer that would not have picked up the
+    // instrument's DIRTY label when axis C finally acquired one.
+    ...coordinateLines(report.coordinate),
     loadLine(report.body),
     '',
     ...report.body.commands.map((row) => rowLine(row)),

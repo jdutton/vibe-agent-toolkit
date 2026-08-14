@@ -10,6 +10,24 @@
 
 import type { Coordinate } from '../src/envelope/coordinate.js';
 import { REPORT_FORMAT_VERSION, type ReportEnvelope } from '../src/envelope/envelope.js';
+import type { LoadReadings } from '../src/harness/types.js';
+
+/**
+ * A quiet machine, so contamination is never an accidental variable.
+ *
+ * Shared by every facet's fixtures: load is the harness's reading, not any one
+ * facet's, and two copies would drift into two different ideas of "quiet".
+ */
+export const CLEAN_LOAD: LoadReadings = {
+  before: 1,
+  after: 1.2,
+  cpus: 8,
+  available: true,
+  contaminated: false,
+};
+
+/** The same readings, but taken while the machine was busy. */
+export const BUSY_LOAD: LoadReadings = { ...CLEAN_LOAD, before: 40, after: 44, contaminated: true };
 
 /** A clean git subject, measured by a dev build of a known version. */
 export const COORDINATE: Coordinate = {
@@ -21,7 +39,7 @@ export const COORDINATE: Coordinate = {
     dirty: false,
     workingFingerprint: null,
   },
-  instrument: { version: '0.1.42', commit: '1'.repeat(40) },
+  instrument: { version: '0.1.42', commit: '1'.repeat(40), dirty: false },
 };
 
 /**

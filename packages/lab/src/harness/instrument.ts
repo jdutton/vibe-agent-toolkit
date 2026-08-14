@@ -36,6 +36,17 @@
  * checkout to ask, and a published tarball does not carry its provenance. Null
  * there is a fact, not a guess.
  *
+ * ## A commit is not enough on its own
+ *
+ * A `tree` build made from a checkout with uncommitted changes was, until this
+ * was added, stamped with HEAD and nothing else — so the report claimed to
+ * describe a commit whose bytes never ran, and every A/B it took part in
+ * attributed the delta to a diff that was not the one under test. The subject
+ * side had detected and printed `(DIRTY working tree)` for exactly this since it
+ * was written; axis C simply did not ask. It asks now, with the *same* function
+ * (see `git-state.ts`), and {@link InstrumentVersion.dirty} carries the answer
+ * into every report and every rendered header.
+ *
  * The same failure has a second door, and it does not look like a fallback at
  * all: `dist/bin/vat.js` is not the CLI, it is a *wrapper* that re-resolves
  * which vat to run from `process.cwd()`. The harness runs every measured command
@@ -70,6 +81,7 @@ import { basename, dirname } from 'node:path';
 import { safeExecResult, safePath } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
+import { hasUncommittedChanges } from './git-state.js';
 import type { InstrumentSource, ResolvedInstrument } from './types.js';
 
 /**
@@ -381,11 +393,16 @@ async function resolveTree(path: string): Promise<ResolvedInstrument> {
     'tree',
   );
   const commit = await readTreeCommit(treeRoot);
+  // Asked with the SAME function the subject side asks with — see
+  // `harness/git-state.ts`. A second implementation here could count untracked
+  // files differently and label one report's two axes by two definitions of
+  // "dirty", which no reader could see.
+  const dirty = hasUncommittedChanges(treeRoot, `the instrument checkout at ${treeRoot}`);
 
   return {
     command: process.execPath,
     leadingArgs: [binPath],
-    version: { version, commit },
+    version: { version, commit, dirty },
     root: treeRoot,
   };
 }
@@ -444,7 +461,10 @@ async function resolveDist(path: string): Promise<ResolvedInstrument> {
   return {
     command: process.execPath,
     leadingArgs: [binPath],
-    version: { version, commit: null },
+    // `dirty: null` for the same reason `commit` is: there is no checkout to
+    // ask. A `false` here would be a confident claim of cleanliness over a build
+    // whose provenance nobody inspected.
+    version: { version, commit: null, dirty: null },
     // The package root, not the path the caller named: `dist:` accepts a bin
     // file as readily as a directory, and rooting sites at the file's own
     // directory would make every site outside `dist/bin` look foreign.
@@ -493,7 +513,9 @@ function resolveNpx(spec: string): ResolvedInstrument {
     // Bare on purpose — the spawn wrappers resolve it (and `npx.cmd` on Windows).
     command: 'npx',
     leadingArgs: ['--yes', trimmed],
-    version: { version, commit: null },
+    // A published tarball carries no provenance: no commit, and therefore
+    // nothing that could have been dirty.
+    version: { version, commit: null, dirty: null },
   };
 }
 

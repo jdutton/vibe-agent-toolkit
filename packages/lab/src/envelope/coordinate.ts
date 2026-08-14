@@ -90,6 +90,33 @@ export interface InstrumentVersion {
   readonly version: string;
   /** Its git commit, when the build was made from a checkout. */
   readonly commit: string | null;
+  /**
+   * Whether the checkout the build came from had uncommitted changes, or `null`
+   * when there was no checkout to ask.
+   *
+   * **The same honesty axis B has already had, arriving late on axis C.** A
+   * `tree:` instrument built from a working tree with substantial uncommitted
+   * changes used to be stamped with its HEAD and nothing else, so the report
+   * claimed to describe a commit whose bytes never ran. The subject side had
+   * detected and printed `(DIRTY working tree)` for exactly this since it was
+   * written; the instrument side simply did not ask.
+   *
+   * `null` is `commit === null` restated from the other end: a bare `dist/` and
+   * a published tarball have no checkout, so there is nothing to be dirty.
+   * {@link InstrumentVersionSchema} enforces the pairing, because a `false` on a
+   * `dist:` arm would be a confident claim of cleanliness nobody checked.
+   *
+   * **There is deliberately no instrument working-fingerprint**, and that is not
+   * an oversight of the kind {@link SubjectVersion.workingFingerprint} fixes.
+   * What ran is the *built* output, not the source tree: a fingerprint over the
+   * checkout would be a precise identifier for something that is not the thing
+   * measured — you can edit source and never rebuild, which is the very failure
+   * this field exists to disclose. So a dirty instrument is not identified by
+   * anything the harness can cheaply read, and the honest substitute is to say
+   * so loudly wherever two reports are held together. See `instrumentTrustNotes`
+   * in `harness/render.ts`.
+   */
+  readonly dirty: boolean | null;
 }
 
 /** A complete three-axis coordinate. */
@@ -148,12 +175,33 @@ export const SubjectVersionSchema = SubjectVersionVariants.superRefine((value, c
   });
 });
 
+/**
+ * Axis C, with the one cross-field rule the object shape cannot express alone.
+ *
+ * `dirty` is knowable exactly when `commit` is: both come from a checkout, and
+ * neither exists without one. Allowing them to disagree would let a `dist:` arm
+ * publish `dirty: false` — a confident claim of cleanliness over a build with no
+ * working tree to have inspected — which is the same shape of lie as the missing
+ * label this field was added to fix.
+ */
 export const InstrumentVersionSchema = z
   .object({
     version: z.string().min(1),
     commit: z.string().min(1).nullable(),
+    dirty: z.boolean().nullable(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    if ((value.commit === null) === (value.dirty === null)) return;
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['dirty'],
+      message:
+        value.commit === null
+          ? 'an instrument with no commit has no checkout to inspect, so dirty must be null'
+          : 'an instrument resolved from a checkout must say whether that checkout was dirty',
+    });
+  });
 
 export const CoordinateSchema = z
   .object({
@@ -204,12 +252,24 @@ function sameSubjectVersion(a: SubjectVersion, b: SubjectVersion): boolean {
 /**
  * Is this the same build of the instrument?
  *
+ * `dirty` participates because a dirty build and a clean build at one commit are
+ * not the same binary, however identical their stamps look otherwise.
+ *
+ * **Two dirty arms at one commit still compare equal here, and that is a known
+ * limit rather than a claim.** Nothing cheap identifies a dirty build's bytes —
+ * see {@link InstrumentVersion.dirty} — so equality is the only answer this
+ * function can honestly give, and it is `instrumentTrustNotes` in
+ * `harness/render.ts` that tells the reader not to lean on it. Silently
+ * returning `false` instead would break reflexivity and make a `--control` run
+ * (the same instrument entered as both arms, to measure the noise floor) report
+ * that the instrument axis moved.
+ *
  * @param a - One instrument version
  * @param b - The other
- * @returns `true` when version and commit both match
+ * @returns `true` when version, commit and dirtiness all match
  */
 function sameInstrument(a: InstrumentVersion, b: InstrumentVersion): boolean {
-  return a.version === b.version && a.commit === b.commit;
+  return a.version === b.version && a.commit === b.commit && a.dirty === b.dirty;
 }
 
 /**

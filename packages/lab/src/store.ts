@@ -80,6 +80,29 @@ function subjectVersionTag(coordinate: Coordinate): string {
 }
 
 /**
+ * The short identifier for axis C.
+ *
+ * A dirty build's identity is NOT its commit — the bytes measured were not the
+ * bytes at that commit — and unlike a dirty *subject* there is no fingerprint to
+ * fall back on, because what ran is the built output rather than the checkout
+ * (see `InstrumentVersion.dirty`). So a dirty instrument is pinned by *when it
+ * was observed* instead. That is weaker than an identity and it is meant to be:
+ * it cannot say two dirty runs measured the same build, but it does guarantee
+ * that a second dirty run never silently overwrites the first, which is the
+ * failure this whole naming scheme exists to prevent.
+ *
+ * @param envelope - The report being named
+ * @returns A short, stable string naming the instrument build
+ */
+function instrumentTag(envelope: ReportEnvelope<unknown>): string {
+  const instrument = envelope.coordinate.instrument;
+  const build =
+    instrument.commit === null ? 'release' : instrument.commit.slice(0, SHORT_ID_LENGTH);
+  const base = `vat-${slug(instrument.version)}-${build}`;
+  return instrument.dirty === true ? `${base}-dirty-${slug(envelope.capturedAt)}` : base;
+}
+
+/**
  * The filename a report is stored under.
  *
  * Encodes facet, subject, subject version and instrument — the whole coordinate
@@ -90,15 +113,12 @@ function subjectVersionTag(coordinate: Coordinate): string {
  * @returns A filename, without a directory
  */
 export function reportFileName(envelope: ReportEnvelope<unknown>): string {
-  const instrument = envelope.coordinate.instrument;
-  const build =
-    instrument.commit === null ? 'release' : instrument.commit.slice(0, SHORT_ID_LENGTH);
   return (
     [
       slug(envelope.facet),
       distinctSlug(envelope.coordinate.subject.id),
       slug(subjectVersionTag(envelope.coordinate)),
-      `vat-${slug(instrument.version)}-${build}`,
+      instrumentTag(envelope),
     ].join('__') + '.json'
   );
 }

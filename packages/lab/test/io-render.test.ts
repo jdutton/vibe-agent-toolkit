@@ -26,8 +26,8 @@ import { compareIo } from '../src/facets/io/compare.js';
 import { renderIoComparison, renderIoReport } from '../src/facets/io/render.js';
 import type { IoCommandStats } from '../src/facets/io/types.js';
 
-import { BUSY_LOAD, compareOneCommand, ioCommand, ioReport, ioSite } from './io-fixtures.js';
-import { COORDINATE } from './report-fixtures.js';
+import { compareOneCommand, ioCommand, ioReport, ioSite } from './io-fixtures.js';
+import { BUSY_LOAD, COORDINATE } from './report-fixtures.js';
 
 /**
  * The real N+1 this facet was built to surface.

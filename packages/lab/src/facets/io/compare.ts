@@ -72,6 +72,7 @@ import {
   type DecideComparisonOptions,
 } from '../../envelope/coordinate.js';
 import { refuseIncomparableSchemas, type ReportEnvelope } from '../../envelope/envelope.js';
+import { bothSides, pairByKey, type Pairing } from '../../harness/diff.js';
 
 import {
   IO_FACET,
@@ -291,30 +292,6 @@ function difference(before: number, after: number): IoCountDelta {
 }
 
 /**
- * Ask both sides the same question and join whatever they answer.
- *
- * Both gates below are two-sided, and both must name **every** side at fault
- * rather than the first one found. A reason that stopped at the baseline would
- * send a reader to re-capture one report and leave them puzzled when the second
- * capture refused for the same reason all over again.
- *
- * @param before - The baseline row
- * @param after - The compared row
- * @param caveat - What to ask of one side
- * @returns The joined clauses, or `null` when neither side had one
- */
-function bothSides(
-  before: IoCommandStats,
-  after: IoCommandStats,
-  caveat: (row: IoCommandStats, side: string) => string | null,
-): string | null {
-  const clauses = [caveat(before, 'baseline'), caveat(after, 'compared side')].filter(
-    (clause): clause is string => clause !== null,
-  );
-  return clauses.length === 0 ? null : clauses.join('; and ');
-}
-
-/**
  * What one side's failure costs the comparison, or `null` when it did not fail.
  *
  * @param row - That side's row
@@ -386,40 +363,6 @@ function unwarrantedReason(before: IoCommandStats, after: IoCommandStats): strin
  */
 function siteKey(site: IoSite): string {
   return `${String(site.method.length)}:${site.method}:${site.site}`;
-}
-
-/** One item as it appears on each side, either of which may be absent. */
-interface Pairing<T> {
-  readonly key: string;
-  readonly before: T | null;
-  readonly after: T | null;
-}
-
-/**
- * Line two collections up by key, in a stable order.
- *
- * Sorted so that two identical comparisons serialise identically; a pairing that
- * followed read order would make a diff differ from itself.
- *
- * @param before - The baseline collection
- * @param after - The compared collection
- * @param key - How to identify an item across the two sides
- * @returns One pairing per distinct key, ascending
- */
-function pairByKey<T>(
-  before: readonly T[],
-  after: readonly T[],
-  key: (item: T) => string,
-): readonly Pairing<T>[] {
-  const left = new Map(before.map((item) => [key(item), item] as const));
-  const right = new Map(after.map((item) => [key(item), item] as const));
-  const keys = [...new Set([...left.keys(), ...right.keys()])];
-  keys.sort((a, b) => a.localeCompare(b));
-  return keys.map((each) => ({
-    key: each,
-    before: left.get(each) ?? null,
-    after: right.get(each) ?? null,
-  }));
 }
 
 /** A site pairing, described whether or not it moved. */

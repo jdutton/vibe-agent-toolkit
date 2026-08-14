@@ -42,8 +42,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import type { SubjectVersion } from '../src/envelope/coordinate.js';
-import { REPORT_FORMAT_VERSION, type ReportEnvelope } from '../src/envelope/envelope.js';
+import type { ReportEnvelope } from '../src/envelope/envelope.js';
 import { captureIo, type CaptureIoOptions } from '../src/facets/io/capture.js';
 import { IO_DUMP_VERSION } from '../src/facets/io/dump.js';
 import {
@@ -56,12 +55,12 @@ import {
 import type { MeasuredCommandSpec } from '../src/harness/commands.js';
 import type { ResolvedSubject } from '../src/harness/types.js';
 
+import { expectBodyMatchesSchema, expectStamp, probeSubject } from './capture-fixtures.js';
 import {
   cleanupProbes,
   PROBE_DEFAULT_STDERR,
   PROBE_FAIL_EXIT,
   PROBE_FAIL_TOKEN,
-  PROBE_VERSION,
   setupProbe,
   type Probe,
 } from './command-probe.js';
@@ -196,17 +195,13 @@ function writeCounter(prefix: string): string {
 }
 
 /**
- * A subject literal pointing at the probe's directory.
- *
- * Constructed rather than resolved: `resolveSubject` runs git, and this suite is
- * about what happens to dumps, not about how axis B is discovered.
+ * This suite's subject, so two capture suites' reports stay distinguishable.
  *
  * @param path - The probe's working directory
  * @returns A snapshot-kind subject at that path
  */
 function subjectAt(path: string): ResolvedSubject {
-  const version: SubjectVersion = { kind: 'snapshot', fingerprint: 'a'.repeat(16), fileCount: 3 };
-  return { path, ref: { id: 'io-probe-subject', source: path }, version };
+  return probeSubject(path, 'io-probe-subject', 'a'.repeat(16));
 }
 
 /**
@@ -655,15 +650,12 @@ describe('captureIo — the envelope', () => {
 
     const report = await capture(probe, { runs: 1 });
 
-    expect(report.formatVersion).toBe(REPORT_FORMAT_VERSION);
-    expect(report.facet).toBe(IO_FACET);
-    expect(report.facetVersion).toBe(IO_FACET_VERSION);
-    expect(report.coordinate).toEqual({
-      subject: subject.ref,
-      subjectVersion: subject.version,
-      instrument: PROBE_VERSION,
+    expectStamp(report, {
+      facet: IO_FACET,
+      facetVersion: IO_FACET_VERSION,
+      subject,
+      capturedAt: CAPTURED_AT,
     });
-    expect(report.capturedAt).toBe(CAPTURED_AT);
   });
 
   it('produces a body that validates against the facet schema, failures included', async () => {
@@ -671,10 +663,7 @@ describe('captureIo — the envelope', () => {
 
     const report = await capture(probe, { runs: 2, commands: [PASSES, FAILS] });
 
-    // Reported through the assertion rather than as a bare boolean: a strict
-    // schema rejecting one field should say which one.
-    const parsed = IoBodySchema.safeParse(report.body);
-    expect(parsed.success ? null : parsed.error.message).toBeNull();
+    expectBodyMatchesSchema(IoBodySchema, report.body);
     expect(report.body.load.cpus).toBeGreaterThanOrEqual(1);
     // Rows are independent: a failing command must not take its neighbour with it.
     expect(report.body.commands.map((row) => row.failed)).toEqual([false, true]);

@@ -23,10 +23,10 @@
  *    house rule for the whole lab: refuse rather than coerce.
  */
 
-import { readdir, readFile } from 'node:fs/promises';
-
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
+
+import { type DumpKind, type DumpsRefusal, readDumpFiles } from '../../harness/dumps.js';
 
 import { CAPPED_WITHOUT_READING_MESSAGE, cappedNeedsAReading, ioSiteShape } from './types.js';
 import type { IoSite } from './types.js';
@@ -42,9 +42,6 @@ import type { IoSite } from './types.js';
  * opposite things about the same row.
  */
 export const IO_DUMP_VERSION = 2;
-
-/** Extension the counter writes its dumps with. Anything else in the directory is ignored. */
-const DUMP_EXTENSION = '.json';
 
 /** The `node_modules` boundary, matched on its LAST occurrence. See {@link normalizeSite}. */
 const NODE_MODULES_SEGMENT = '/node_modules/';
@@ -180,13 +177,6 @@ export interface MergedDumps {
 export interface DumpsAccepted {
   readonly ok: true;
   readonly merged: MergedDumps;
-}
-
-/** Why a directory of dumps could not be read. */
-export interface DumpsRefusal {
-  readonly ok: false;
-  /** Human-facing refusal, prefixed `REFUSED:`. */
-  readonly refusal: string;
 }
 
 /** The outcome of reading a directory of dumps. */
@@ -396,67 +386,24 @@ export function mergeDumps(dumps: readonly IoDump[], roots: SiteRoots): MergedDu
 }
 
 /**
- * Build a refusal.
+ * What the shared dump reader needs to know about an `io` dump.
  *
- * @param message - What went wrong, without the prefix
- * @returns The refusal
+ * Everything here is this facet's own: how one dump is spelled, what wrote it,
+ * and what an empty directory would be lying about. The plumbing around it —
+ * read every file, refuse a malformed or wrong-version one, refuse an empty
+ * directory — lives in `harness/dumps.ts`, because the `parse` facet needs the
+ * identical guarantees over a completely different payload.
  */
-function refuse(message: string): DumpsRefusal {
-  return { ok: false, refusal: `REFUSED: ${message}` };
-}
-
-/**
- * Render an unknown error as text.
- *
- * @param error - Whatever was thrown
- * @returns Its message
- */
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-/** One dump file, read and validated. */
-type OneDumpResult = { readonly ok: true; readonly dump: IoDump } | DumpsRefusal;
-
-/**
- * Read and validate one dump file.
- *
- * @param filePath - Path to a dump
- * @returns The dump, or a refusal naming the file and what was wrong with it
- */
-async function readOneDump(filePath: string): Promise<OneDumpResult> {
-  let raw: string;
-  try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dump directory chosen by the capture that wrote it
-    raw = await readFile(filePath, 'utf-8');
-  } catch (error) {
-    return refuse(`could not read I/O dump '${filePath}': ${messageOf(error)}`);
-  }
-
-  let value: unknown;
-  try {
-    value = JSON.parse(raw);
-  } catch (error) {
-    return refuse(`I/O dump '${filePath}' is not valid JSON: ${messageOf(error)}`);
-  }
-
-  const parsed = IoDumpSchema.safeParse(value);
-  if (!parsed.success) {
-    return refuse(
-      `I/O dump '${filePath}' is not the shape this build writes — ${parsed.error.issues
-        .map((issue) => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
-        .join('; ')}`,
-    );
-  }
-  if (parsed.data.dumpVersion !== IO_DUMP_VERSION) {
-    return refuse(
-      `I/O dump '${filePath}' claims dumpVersion ${String(parsed.data.dumpVersion)}, ` +
-        `this build reads ${String(IO_DUMP_VERSION)}. Re-capture with a matching counter; ` +
-        'reading rows whose meaning has moved would produce numbers nobody can state.',
-    );
-  }
-  return { ok: true, dump: parsed.data };
-}
+const IO_DUMP_KIND: DumpKind<IoDump> = {
+  noun: 'I/O dump',
+  producer: 'counter',
+  schema: IoDumpSchema,
+  version: IO_DUMP_VERSION,
+  versionOf: (dump) => dump.dumpVersion,
+  emptyDirectory: (directory) =>
+    `no I/O dumps in '${directory}'. The counter never wrote one, so there is no measurement — ` +
+    'reporting zero calls here would say vat touched nothing.',
+};
 
 /**
  * Read every dump in a directory and merge them.
@@ -476,33 +423,9 @@ async function readOneDump(filePath: string): Promise<OneDumpResult> {
  * @returns The merged numbers, or a refusal
  */
 export async function readDumps(directory: string, roots: SiteRoots): Promise<MergedDumpsResult> {
-  let entries: string[];
-  try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dump directory chosen by the capture that wrote it
-    entries = await readdir(directory);
-  } catch (error) {
-    return refuse(`could not read the I/O dump directory '${directory}': ${messageOf(error)}`);
-  }
-
-  // Sorted so a directory with two broken dumps refuses the same way twice.
-  const files = entries
-    .filter((name) => name.endsWith(DUMP_EXTENSION))
-    .sort((a, b) => a.localeCompare(b));
-  if (files.length === 0) {
-    return refuse(
-      `no I/O dumps in '${directory}'. The counter never wrote one, so there is no measurement — ` +
-        'reporting zero calls here would say vat touched nothing.',
-    );
-  }
-
-  const results = await Promise.all(files.map((name) => readOneDump(safePath.join(directory, name))));
-  const dumps: IoDump[] = [];
-  for (const result of results) {
-    if (!result.ok) return result;
-    dumps.push(result.dump);
-  }
-
-  return { ok: true, merged: mergeDumps(dumps, roots) };
+  const read = await readDumpFiles(directory, IO_DUMP_KIND);
+  if (!read.ok) return read;
+  return { ok: true, merged: mergeDumps(read.dumps, roots) };
 }
 
 /**

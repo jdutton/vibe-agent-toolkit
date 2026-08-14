@@ -25,7 +25,9 @@ import {
   collectMeasuredCommand,
   createProgram,
   EXIT_CHANGED,
+  EXIT_REFUSED,
   EXIT_UNMEASURABLE,
+  nonNegativeNumber,
   parseCacheMode,
 } from '../src/bin/vat-lab.js';
 import type { PerfBody, PerfCommandStats } from '../src/facets/perf/types.js';
@@ -172,8 +174,118 @@ describe('collectMeasuredCommand', () => {
   });
 });
 
+/**
+ * One option, as a facet's named subcommand declares it.
+ *
+ * @param facet - `perf`, `io` or `parse`
+ * @param subcommand - `run`, `compare` or `ab`
+ * @param long - The option's long spelling
+ * @returns The option, or `undefined` when the subcommand does not declare it
+ */
+function optionOf(facet: string, subcommand: string, long: string): Option | undefined {
+  const sub = createProgram()
+    .commands.find((group) => group.name() === facet)
+    ?.commands.find((candidate) => candidate.name() === subcommand);
+  return sub?.options.find((option) => option.long === long);
+}
+
+/**
+ * The `--cache` option as one facet's `run` subcommand declares it.
+ *
+ * @param facet - `perf`, `io` or `parse`
+ * @returns The option, or `undefined` when the facet does not declare it
+ */
+function cacheOption(facet: string): Option | undefined {
+  return optionOf(facet, 'run', '--cache');
+}
+
+/** Every facet the CLI exposes, so a new one cannot quietly skip a verb. */
+const FACETS = ['perf', 'io', 'parse'] as const;
+
+/** The flag naming arm A, spelled once. */
+const ARM_A_FLAG = '--instrument-a';
+
+/**
+ * Argv up to (not including) an `ab` run's options.
+ *
+ * Both refusal tests below must be refused *before* anything is resolved, so
+ * they pass instrument paths that do not exist; a run that got as far as
+ * resolution would throw rather than set an exit code.
+ *
+ * @returns The leading argv
+ */
+function abArgv(): readonly string[] {
+  return ['node', 'vat-lab', 'perf', 'ab', tempDir];
+}
+
+describe('nonNegativeNumber', () => {
+  const parse = nonNegativeNumber('--noise-floor');
+
+  it('accepts a fractional value rather than rounding a measurement', () => {
+    // A noise floor is a measurement, not a count: rounding it up would widen
+    // the band in which real effects are dismissed as noise.
+    expect(parse('12.4')).toBe(12.4);
+    expect(parse('0')).toBe(0);
+  });
+
+  it('throws a Commander InvalidArgumentError for anything else, naming the flag', () => {
+    // The empty string is the one worth spelling out: `Number('')` is 0, so
+    // coercion alone would turn a typo into "nothing counts as noise".
+    for (const bad of ['-1', 'abc', 'Infinity', '']) {
+      expect(() => parse(bad)).toThrow(InvalidArgumentError);
+    }
+  });
+});
+
+describe('vat-lab <facet> ab — every facet gets the verb, not just the one that needed it first', () => {
+  it.for(FACETS)('declares ab on %s', (facet) => {
+    const group = createProgram().commands.find((candidate) => candidate.name() === facet);
+
+    expect(group?.commands.map((sub) => sub.name())).toEqual(['run', 'compare', 'ab']);
+  });
+
+  it.for(FACETS)('gives %s ab both arms, the pair count and a control switch', (facet) => {
+    expect(optionOf(facet, 'ab', ARM_A_FLAG)?.required).toBe(true);
+    expect(optionOf(facet, 'ab', '--instrument-b')).toBeDefined();
+    expect(optionOf(facet, 'ab', '--pairs')?.defaultValue).toBe(6);
+    expect(optionOf(facet, 'ab', '--control')?.defaultValue).toBe(false);
+    expect(optionOf(facet, 'ab', '--noise-floor')).toBeDefined();
+  });
+
+  it.for([
+    { facet: 'perf', expected: 'warm' },
+    { facet: 'io', expected: 'warm' },
+    // Same rule as `run`: a warm `parse` A/B would attribute nothing on either
+    // arm and compare two breakdowns of zeroes.
+    { facet: 'parse', expected: 'cold' },
+  ] as const)('defaults $facet ab to the facet’s own cache mode, $expected', ({ facet, expected }) => {
+    expect(optionOf(facet, 'ab', '--cache')?.defaultValue).toBe(expected);
+  });
+
+  it('refuses --control alongside --instrument-b instead of ignoring one of them', async () => {
+    // Both flags are meaningful and they contradict each other. Silently
+    // dropping --instrument-b would run a control the caller thought was an A/B.
+    await createProgram().parseAsync([
+      ...abArgv(),
+      ARM_A_FLAG,
+      'tree:/nowhere-a',
+      '--instrument-b',
+      'tree:/nowhere-b',
+      '--control',
+    ]);
+
+    expect(process.exitCode).toBe(EXIT_REFUSED);
+  });
+
+  it('refuses an A/B with only one arm, pointing at --control', async () => {
+    await createProgram().parseAsync([...abArgv(), ARM_A_FLAG, 'tree:/nowhere-a']);
+
+    expect(process.exitCode).toBe(EXIT_REFUSED);
+  });
+});
+
 describe('vat-lab <facet> run — the --command flag is wired to that parser', () => {
-  for (const facet of ['perf', 'io']) {
+  for (const facet of ['perf', 'io', 'parse']) {
     it(`declares --command on ${facet} run, parsed by collectMeasuredCommand`, () => {
       const option = commandOption(facet);
 
@@ -188,6 +300,20 @@ describe('vat-lab <facet> run — the --command flag is wired to that parser', (
     });
   }
 
+});
+
+describe('vat-lab <facet> run — the cache default is per facet, not shared', () => {
+  it.for([
+    { facet: 'perf', expected: 'warm' },
+    { facet: 'io', expected: 'warm' },
+    // The one facet a warm default RUINS: vat's parse cache short-circuits the
+    // parse function on a hit, so a warm `parse` run attributes nothing at all
+    // and publishes a breakdown of zeroes that reads as "parsing is free". A
+    // single shared default made that the out-of-the-box experience.
+    { facet: 'parse', expected: 'cold' },
+  ] as const)('defaults $facet to $expected', ({ facet, expected }) => {
+    expect(cacheOption(facet)?.defaultValue).toBe(expected);
+  });
 });
 
 describe('vat-lab perf compare — exit codes', () => {

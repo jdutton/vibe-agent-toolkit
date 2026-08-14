@@ -40,15 +40,19 @@
  * every spawn site — the most convincing wrong finding this renderer has produced.
  */
 
-import type { Coordinate, SubjectVersion } from '../../envelope/coordinate.js';
 import type { ReportEnvelope } from '../../envelope/envelope.js';
-import type { LoadReadings } from '../../harness/types.js';
+import {
+  comparisonText,
+  coordinateLines,
+  type LoadPhrasing,
+  loadLine,
+  noMeasurementLines,
+  oneSidedLines,
+  tally,
+} from '../../harness/render.js';
 
 import type { IoComparisonResult, IoCountDelta, IoMovement, IoSiteMovement } from './compare.js';
 import type { IoBody, IoCommandStats, IoSite } from './types.js';
-
-/** How many characters of a hash identify it in a header. */
-const SHORT_HASH = 8;
 
 /** Decimal places used for a repetition ratio. */
 const RATIO_PRECISION = 1;
@@ -94,20 +98,6 @@ const CONTAMINATION_NOTE =
   'and any perf report from the same session is suspect.';
 
 /**
- * Group a count for reading.
- *
- * Explicitly `en-US` rather than the ambient locale: a report rendered on one
- * machine and pasted next to a report rendered on another must not differ by
- * thousands separator alone.
- *
- * @param value - A call count
- * @returns The grouped rendering
- */
-function tally(value: number): string {
-  return value.toLocaleString('en-US');
-}
-
-/**
  * Render a difference with its sign.
  *
  * @param delta - The signed difference
@@ -142,56 +132,17 @@ function quantity(value: number, singular: string, plural: string): string {
 }
 
 /**
- * Name a subject version for a header.
- *
- * @param version - Axis B
- * @returns A short label
- */
-function versionLabel(version: SubjectVersion): string {
-  if (version.kind === 'snapshot') {
-    return `snapshot ${version.fingerprint.slice(0, SHORT_HASH)} (${tally(version.fileCount)} files)`;
-  }
-  // A dirty tree is measurable but says so — the bytes measured were not the
-  // bytes at that commit, and a reader comparing later must know that.
-  return `${version.commit.slice(0, SHORT_HASH)}${version.dirty ? ' (DIRTY working tree)' : ''}`;
-}
-
-/**
- * The two coordinate lines at the top of a report.
- *
- * @param coordinate - Where the report was measured
- * @returns The subject line and the instrument line
- */
-function coordinateLines(coordinate: Coordinate): readonly string[] {
-  const { subject, subjectVersion, instrument } = coordinate;
-  const build = instrument.commit === null ? 'released' : instrument.commit.slice(0, SHORT_HASH);
-  return [
-    `Subject:    ${subject.id} @ ${versionLabel(subjectVersion)}`,
-    `Instrument: vat ${instrument.version} (${build})`,
-  ];
-}
-
-/**
- * Describe the machine the capture ran on.
+ * How this facet's numbers are qualified when the machine was not idle.
  *
  * Carried even though call counts do not move with load: a capture that was
  * fighting for CPU may also have been fighting for the filesystem, and a reader
  * holding this beside a `perf` report from the same session needs the same tell
  * on both.
- *
- * @param load - The readings taken around the capture
- * @returns A single line
  */
-function loadLine(load: LoadReadings): string {
-  const span = `${String(load.before)} -> ${String(load.after)} over ${tally(load.cpus)} CPUs`;
-  if (!load.available) {
-    return 'Machine load: NOT MEASURED on this platform — these counts carry no contamination check.';
-  }
-  if (load.contaminated) {
-    return `Machine load: CONTAMINATED (${span}) — the counts stand, but the run was competing for the machine.`;
-  }
-  return `Machine load: clean (${span}).`;
-}
+const LOAD_PHRASING: LoadPhrasing = {
+  unmeasured: 'these counts carry no contamination check.',
+  contaminated: 'the counts stand, but the run was competing for the machine.',
+};
 
 /**
  * Say how repetitive a site's calls were, when they were repetitive at all.
@@ -316,7 +267,7 @@ export function renderIoReport(
   const maxSites = options.maxSites ?? DEFAULT_MAX_SITES;
   return [
     ...coordinateLines(report.coordinate),
-    loadLine(report.body.load),
+    loadLine(report.body.load, LOAD_PHRASING),
     COUNTING_LEGEND,
     '',
     ...report.body.commands.flatMap((row) => commandLines(row, maxSites)),
@@ -414,13 +365,11 @@ function diffLines(diff: IoComparisonResult['commands'][number]): readonly strin
       ];
     }
     case 'unmeasurable': {
-      return [`  ${diff.name}: NO MEASUREMENT — ${verdict.reason}`];
+      return noMeasurementLines(diff.name, verdict.reason);
     }
-    case 'added': {
-      return [`  ${diff.name}: new, no baseline to compare against`];
-    }
+    case 'added':
     case 'removed': {
-      return [`  ${diff.name}: gone, present only in the baseline`];
+      return oneSidedLines(diff.name, verdict.kind);
     }
   }
 }
@@ -432,15 +381,10 @@ function diffLines(diff: IoComparisonResult['commands'][number]): readonly strin
  * @returns Text for a terminal
  */
 export function renderIoComparison(comparison: IoComparisonResult): string {
-  const heading =
-    comparison.axis === null
-      ? 'Comparing two reports at the same coordinate'
-      : `Comparing along one axis: ${comparison.axis}`;
-  return [
-    heading,
-    ...(comparison.contaminated ? [CONTAMINATION_NOTE] : []),
-    COUNTING_LEGEND,
-    '',
-    ...comparison.commands.flatMap((diff) => diffLines(diff)),
-  ].join('\n');
+  return comparisonText({
+    axis: comparison.axis,
+    notes: comparison.contaminated ? [CONTAMINATION_NOTE] : [],
+    legend: COUNTING_LEGEND,
+    blocks: comparison.commands.flatMap((diff) => diffLines(diff)),
+  });
 }

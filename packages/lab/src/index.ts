@@ -60,7 +60,6 @@ export {
 } from './facets/io/render.js';
 export {
   type DumpsAccepted,
-  type DumpsRefusal,
   IO_DUMP_VERSION,
   type IoClass,
   type IoDump,
@@ -82,6 +81,52 @@ export {
   type IoCommandStats,
   type IoSite,
 } from './facets/io/types.js';
+
+export { captureParse, type CaptureParseOptions } from './facets/parse/capture.js';
+export {
+  compareParse,
+  type CompareParseOptions,
+  type ParseCommandDiff,
+  type ParseCommandVerdict,
+  type ParseComparison,
+  type ParseComparisonRefused,
+  type ParseComparisonResult,
+  type ParseCountDelta,
+  type ParseMovement,
+  type ParseMsDelta,
+  type ParsePassMovement,
+  type ParsePassMovementKind,
+} from './facets/parse/compare.js';
+export {
+  attributionOf,
+  type MergedParseDumps,
+  type MergedParseDumpsResult,
+  type MergedParseKind,
+  mergeParseDumps,
+  PARSE_DUMP_VERSION,
+  PARSE_TIMING_DIR_ENV,
+  type ParseDump,
+  type ParseDumpKind,
+  type ParseDumpPass,
+  type ParseDumpProcess,
+  type ParseDumpsAccepted,
+  ParseDumpSchema,
+  parseTotalName,
+  readParseDumps,
+  sameParseWork,
+} from './facets/parse/dump.js';
+export { renderParseComparison, renderParseReport } from './facets/parse/render.js';
+export {
+  PARSE_FACET,
+  PARSE_FACET_VERSION,
+  type ParseAttribution,
+  type ParseBody,
+  ParseBodySchema,
+  type ParseCommandStats,
+  type ParseKindStats,
+  parsePassShape,
+  type ParsePassStats,
+} from './facets/parse/types.js';
 
 export { capturePerf, type CapturePerfOptions } from './facets/perf/capture.js';
 export {
@@ -112,6 +157,22 @@ export {
 } from './facets/perf/types.js';
 
 export {
+  type AbArmSummary,
+  type AbCommandResult,
+  abExitCondition,
+  type AbNoiseVerdict,
+  type AbResult,
+  type AbSpec,
+  CHANGED_VERDICT,
+  type ComparisonLike,
+  type FacetEstimate,
+  type FacetFunctions,
+  type RefusalLike,
+  renderAb,
+  runAb,
+  UNMEASURABLE_VERDICT,
+} from './harness/ab.js';
+export {
   completedExitCodesOf,
   DEFAULT_COMPLETED_EXIT_CODES,
   DEFAULT_MEASURED_COMMANDS,
@@ -120,6 +181,21 @@ export {
   measurableCommand,
   type MeasuredCommandSpec,
 } from './harness/commands.js';
+export { bothSides, pairByKey, type Pairing } from './harness/diff.js';
+export { type Estimate, estimate, quantile } from './harness/estimator.js';
+export {
+  describeIssues,
+  type DumpFilesAccepted,
+  type DumpFilesResult,
+  type DumpKind,
+  type DumpParser,
+  type DumpsRefusal,
+  messageOf,
+  readDumpFiles,
+  refuseDumps,
+  withDumpDirs,
+} from './harness/dumps.js';
+export { type GitOutcome, hasUncommittedChanges, runGit } from './harness/git-state.js';
 export { resolveInstrument } from './harness/instrument.js';
 export {
   DEFAULT_LOAD_PER_CPU_THRESHOLD,
@@ -139,6 +215,21 @@ export {
   SUBJECT_TOKEN,
   summarizeRepeatFailures,
 } from './harness/repeat.js';
+export {
+  type ComparisonFrame,
+  comparisonHeading,
+  comparisonText,
+  coordinateLines,
+  instrumentLabel,
+  instrumentTrustNotes,
+  type LoadPhrasing,
+  loadLine,
+  noMeasurementLines,
+  oneSidedLines,
+  SHORT_HASH,
+  tally,
+  versionLabel,
+} from './harness/render.js';
 export { buildReportEnvelope } from './harness/report.js';
 export { runCommand } from './harness/run.js';
 export { resolveSubject } from './harness/subject.js';
