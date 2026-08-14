@@ -9,6 +9,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The parse paths can now say where their own time goes, per parser kind.** Setting
+  **`VAT_PARSE_TIMING=<directory>`** makes every vat process that parses a document write a
+  `parse-timing-<pid>.json` file into that directory as it exits, attributing elapsed time and
+  invocation counts across the passes inside **both** parsers: the eight in `parseMarkdownContent`
+  (token estimation, remark processor construction, the remark parse itself, the single AST-facts
+  walk, unresolved references, code-context ranges, lexical references and content measures) and
+  the four in `parseHtmlContent` (the parse5 parse, the element walk, token estimation and content
+  measures). `vat validate` spawns the binary once per phase, so expect one dump per process.
+
+  **The dump is grouped by parser kind, and each group carries its own documents, its own passes
+  and its own bracketing total** — `markdown-total`, `html-total` — held in a field beside the pass
+  rows rather than as a row among them. So a group's unattributed overhead is
+  `<kind>-total - sum(that kind's passes)`, there is no arrangement of the rows that lets a reader
+  compute a remainder against the wrong bracket, and no kind's breakdown can be read as the whole.
+  The two parsers share no pipeline, so they are not forced into one pass list: HTML has no
+  frontmatter, no reference scan and no code fences, and four permanently-zero rows would be a
+  costume rather than a measurement.
+
+  Instrumenting only markdown would have been a generalisation from one corpus: on a
+  markdown-dominant tree the HTML parses are a rounding error, but on an HTML-heavy one the same
+  instrument attributes almost none of the real work while still emitting a confident, well-formed
+  breakdown. `vat-lab parse` therefore names the **dominant** parser kind before it shows any
+  breakdown at all, says "mixed corpus" when no kind owns 80% of the parse time, and states every
+  pass share against its own kind's total rather than the command's.
+
+  **Accumulators, not spans.** The parsers run well over a thousand times per command on a large
+  tree, so a span per file per pass would allocate its way into becoming the cost it set out to
+  measure. The seam keeps two fixed-size numeric accumulators covering both kinds and emits one
+  file per process. When the variable is unset it reads a module-level binding — never
+  `process.env`, whose access in Node is a native call — and registers no exit handler at all.
+
+  **The dump carries the parse-cache hit/miss split alongside the counts**, because VAT's parse
+  cache short-circuits the parsers entirely on a hit. On a warm tree the honest answer is "every
+  document was a cache hit, there is nothing to attribute", and that must never be readable as
+  "these passes are free". Sub-phase attribution is a cold-cache measurement. The cache counters
+  cover every parser kind, but several call sites reach a parser without consulting the cache at
+  all, so the document counts and `cache.misses` are related and not equal — the difference is
+  reported as an explicit remainder rather than left to a reader's arithmetic.
+
+  **The dump also carries process wall and CPU time** (`process.wallMs`, `cpuUserMs`,
+  `cpuSystemMs`), read once at exit — one syscall, where a per-pass CPU reading would be ~12,000
+  and would become the cost it measured. The passes are wall-timed, so a process whose CPU time is
+  far below its wall time was waiting rather than computing; the report says so in a sentence when
+  the divergence is large instead of printing two numbers for the reader to divide.
+
 - **A population reads and keys each file exactly once, and says what it cost.**
   `@vibe-agent-toolkit/resources` exports `RunContentCache` and `readKeyedContent`: `populate`
   threads a per-run content cache through the builder to every contributor's realization context

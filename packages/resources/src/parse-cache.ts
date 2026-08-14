@@ -123,6 +123,7 @@ import { parseCacheDirectory } from './cache-namespace.js';
 import { CONTENT_KEY_PATTERN, type KeyedContent, type ParserKind, readContentWithKey } from './content-key.js';
 import { parseHtmlContent } from './html-link-parser.js';
 import { type ParseResult, parseFrontmatterSource, parseMarkdownContent } from './link-parser.js';
+import { recordParseCacheHit, recordParseCacheMiss } from './parse-timing.js';
 import type { ContentMeasures } from './projection/blob-facts.js';
 import type { LexicalReference } from './reference-lexer.js';
 import type { HtmlParseError } from './schemas/resource-metadata.js';
@@ -535,7 +536,14 @@ export class ParseCache {
  */
 export async function parseKeyed(keyed: KeyedContent, cache: ParseCache): Promise<ParseResult> {
   const hit = await cache.get(keyed);
-  if (hit !== null) return hit;
+  if (hit !== null) {
+    // Feeds the sub-phase timing dump (`parse-timing.ts`), never this cache's
+    // own per-instance `ParseCacheStats`. Without it a dump from a fully warm
+    // run would show zero parse invocations and read as a dead seam.
+    recordParseCacheHit();
+    return hit;
+  }
+  recordParseCacheMiss();
 
   // The `sizeBytes` argument is `keyed.byteLength` — the raw byte count of what
   // was read — never a length derived from `keyed.content`, since decoding is

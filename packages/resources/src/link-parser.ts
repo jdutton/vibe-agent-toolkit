@@ -25,6 +25,13 @@ import { unified } from 'unified';
 import { visit } from 'unist-util-visit';
 import * as yaml from 'yaml';
 
+import {
+  ParsePass,
+  ParserKind,
+  parseTimingStart,
+  recordParsedDocument,
+  recordParsePass,
+} from './parse-timing.js';
 import { type ContentMeasures, measureContent } from './projection/blob-facts.js';
 import { collectCodeContextRanges, findLexicalReferences, type LexicalReference } from './reference-lexer.js';
 import type { HtmlParseError } from './schemas/resource-metadata.js';
@@ -200,43 +207,67 @@ export async function parseMarkdown(filePath: string): Promise<ParseResult> {
  * ```
  */
 export function parseMarkdownContent(content: string, sizeBytes: number): ParseResult {
-  const estimatedTokenCount = estimateTokens(content);
+  // Every `passStartedAt` / `recordParsePass` pair is the sub-phase timing seam
+  // (`parse-timing.ts`), off unless `VAT_PARSE_TIMING` names a dump directory.
+  // `totalStartedAt` brackets the whole body, so a reader can compute
+  // unattributed overhead as `markdown-total - sum(this kind's passes)`.
+  // `parseHtmlContent` is instrumented the same way, into its own group.
+  const totalStartedAt = parseTimingStart();
 
-  // Parse markdown with unified/remark
+  let passStartedAt = parseTimingStart();
+  const estimatedTokenCount = estimateTokens(content);
+  recordParsePass(ParsePass.EstimateTokens, passStartedAt);
+
+  // Parse markdown with unified/remark. The processor is rebuilt per document,
+  // so it is timed separately from the parse it feeds.
+  passStartedAt = parseTimingStart();
   const processor = unified()
     .use(remarkParse)
     .use(remarkGfm)
     .use(remarkFrontmatter);
+  recordParsePass(ParsePass.RemarkProcessor, passStartedAt);
 
+  passStartedAt = parseTimingStart();
   const tree = processor.parse(content) as Root;
+  recordParsePass(ParsePass.RemarkParse, passStartedAt);
 
   // Links, headings, raw-HTML anchors and frontmatter, from ONE tree walk
+  passStartedAt = parseTimingStart();
   const { links, headings, anchors, frontmatter, frontmatterError, frontmatterSource } =
     collectAstFacts(tree);
+  recordParsePass(ParsePass.AstFacts, passStartedAt);
 
   // Detect dangling reference-style links (full/collapsed forms with no
   // matching definition) — see findUnresolvedReferences for why this is a
   // raw-source scan rather than an AST visit.
+  passStartedAt = parseTimingStart();
   const unresolvedReferences = findUnresolvedReferences(content, tree);
+  recordParsePass(ParsePass.UnresolvedReferences, passStartedAt);
 
   // ONE walk for every consumer of code context. `findLexicalReferences` used
   // to call `collectCodeContextRanges` itself; adding a second call here for
   // the measures would have walked the tree twice on the cold path CI always
   // pays — the very cost `collectAstFacts` exists to avoid.
+  passStartedAt = parseTimingStart();
   const ranges = collectCodeContextRanges(tree);
+  recordParsePass(ParsePass.CodeContextRanges, passStartedAt);
 
   // Reference candidates remark parses as plain text — `@`-prefixed tokens,
   // variable-anchored paths, path-shaped bare tokens. Also a raw-source scan,
   // and for the same structural reason.
+  passStartedAt = parseTimingStart();
   const lexicalReferences = findLexicalReferences(content, ranges);
+  recordParsePass(ParsePass.LexicalReferences, passStartedAt);
 
   // Fenced AND indented code blocks are both `code` nodes, so both count as
   // code here — which is the useful reading: neither is prose.
+  passStartedAt = parseTimingStart();
   const contentMeasures = measureContent(content, ranges.fences);
+  recordParsePass(ParsePass.MeasureContent, passStartedAt);
 
   // With exactOptionalPropertyTypes: true, we must conditionally include the property
   // rather than assigning undefined to it
-  return {
+  const result: ParseResult = {
     links,
     headings,
     unresolvedReferences,
@@ -250,6 +281,11 @@ export function parseMarkdownContent(content: string, sizeBytes: number): ParseR
     sizeBytes,
     estimatedTokenCount,
   };
+
+  recordParsedDocument(ParserKind.Markdown, sizeBytes);
+  recordParsePass(ParsePass.MarkdownTotal, totalStartedAt);
+
+  return result;
 }
 
 /**
