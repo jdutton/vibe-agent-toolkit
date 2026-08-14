@@ -79,6 +79,16 @@
  * `process.wallMs` is the process's whole lifetime, not the parse's; it is a
  * denominator for the divergence, never a parse duration.
  *
+ * ⚠️ REVIEW FINDING 2026-08-14 — that denominator is only meaningful PER
+ * PROCESS, and the lab's reader currently SUMS it across the dumps of one run
+ * (`packages/lab/src/facets/parse/dump.ts`, `addDumpTotals`). Under `vat
+ * validate` the parent orchestrator is alive for the whole run and parses
+ * nothing, so its lifetime contains every child's and the sum double-counts real
+ * time while CPU adds correctly — deflating the ratio the reader trusts. Nothing
+ * in this dump says which pid is the parent, which is why the fix is a design
+ * call and not a one-liner. Single-process commands (`resources validate`) are
+ * unaffected. See that module's annotation.
+ *
  * ## Why the gate is read at module load — and why that does not contradict
  * `parse-cache.ts`
  *

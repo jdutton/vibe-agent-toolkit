@@ -371,6 +371,26 @@ function judgeNoise<TBody, TComparison extends ComparisonLike>(
 /**
  * Fold every pair into one row per command.
  *
+ * ⚠️ REVIEW FINDING 2026-08-14 — `effect = b.min - a.min` AGGREGATES PAIRED DATA
+ * UNPAIRED. Alternating arms exists to make drift cancel *within* a pair
+ * (property #1 in this module's header); taking a min over all A and a min over
+ * all B then throws that pairing away. Every per-pair value is already in
+ * `outcome.a`/`outcome.b` and is printed as `(per-pair: ...)`, so a paired
+ * estimator and its spread are free.
+ *
+ * It matters at the magnitudes in play. The branch-vs-main run's per-pair deltas
+ * were +1422, -193, +662, +342, +804, +824: the unpaired min-difference reported
+ * +803.9ms, while the paired mean is +643.5ms with a 95% CI of [77, 1210]. The
+ * same 668ms attribution is "83% explained" against the first and "104%" against
+ * the second. A control whose TRUE effect is zero (the seam compiled in but off,
+ * measured 2026-08-14) gave per-pair deltas +383, -506, -598, -35, -101, +222 —
+ * s = 388ms, a ~816ms-wide band around zero.
+ *
+ * So `--noise-floor` is the floor for THIS statistic (min-difference) only, and
+ * is ~4x finer than the per-pair spread. Quoting it against a paired claim
+ * overstates the resolution. Adding a paired estimator is a reporting change, so:
+ * Jeff's call.
+ *
  * @param spec - The A/B being run
  * @param outcomes - Every pair's outcome
  * @returns One row per command, sorted by name
@@ -524,6 +544,24 @@ function armLine(label: string, summary: AbArmSummary | null): string {
 
 /**
  * How one command's effect reads against the floor.
+ *
+ * ⚠️ REVIEW FINDING 2026-08-14 — this line is BLIND TO `command.stable`, and it
+ * is the last line a reader sees. A run whose pairs contradicted each other
+ * still prints a confident "exceeds the supplied noise floor of N", directly
+ * under the banner saying the row is not a result. That is what happened: the
+ * branch-vs-main A/B exited 3 with PAIRS DISAGREE and its effect line became the
+ * quoted headline anyway: an honest refusal and a confident number in one
+ * report, with the number last.
+ *
+ * Untested in both directions: every noise-floor test passes a STABLE script,
+ * and the instability test supplies no floor and asserts nothing about this
+ * line, so no fixture can tell "always print it" from "suppress when unstable".
+ *
+ * Also reachable with a measurable-looking zero: a non-`measured` parse row has
+ * `failed: false` and `totalMs: 0`, which `rowEstimates` publishes — `compare`
+ * refuses those rows but `estimate` does not, so the two halves of one facet
+ * disagree about whether a zero is a measurement. `estimator.ts` throws on an
+ * empty sample set for precisely this reason, one layer down.
  *
  * @param command - The folded row
  * @param noiseFloor - The floor this run was given, or `null`

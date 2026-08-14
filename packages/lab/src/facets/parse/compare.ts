@@ -411,6 +411,36 @@ function buildMovement(
  * appearing or disappearing counts too — the instrument's shape moved, which the
  * reader has to know before they read any share.
  *
+ * ⚠️ REVIEW FINDING 2026-08-14 — THIS VERDICT FALSE-POSITIVES AT SCALE, measured.
+ * The first real `parse ab --control` (6 pairs, cold, primary adopter, the SAME
+ * binary as both arms) returned `changed` on **2 of 6 pairs**. Comparing a
+ * disagreeing pair by hand shows exactly one row responsible:
+ *
+ *     ~ html/parse5-parse        16.0ms ->   25.6ms   (+9.5ms), calls 22 -> 22
+ *       markdown/remark-parse  8084.7ms -> 8309.0ms (+224.3ms)   (within noise)
+ *
+ * A 9.5ms wobble on a 22-document pass worth 0.17% of the parse budget flipped
+ * the whole command, while `remark-parse` — 83% of the measurement — moved 23x
+ * more in absolute terms and correctly stayed quiet.
+ *
+ * Cause: `msDelta`'s two gates are both scaled to THE PASS, never to the
+ * measurement (`|Δ| > 0.1 * min(before, after)` and `|Δ| > 2ms`), so a 16ms pass
+ * clears them by moving 2ms while an 8,085ms pass needs 808ms. This function
+ * then ORs across all 14 rows, giving every row an independent chance to flip
+ * the verdict. **The consequence is backwards: each new parser kind or split
+ * pass makes the verdict LESS reliable, and the least important passes are the
+ * likeliest to fire.**
+ *
+ * Note `DEFAULT_MIN_ABSOLUTE_MS`'s stated justification is bracket-accumulation
+ * noise; what actually bites is run-to-run variance of a small pass, which is a
+ * different and much larger quantity.
+ *
+ * NOT fixed here — the remedy is a policy choice (scale the absolute floor to
+ * the command total; require a significant row to also be a non-trivial share of
+ * the total; or bar sub-1% passes from flipping the command verdict). The
+ * MAGNITUDE side is sound and measured 6x tighter than perf's: use
+ * `--noise-floor 16.146` for `parse ab` on this machine.
+ *
  * @param movement - The movement for one command
  * @returns `true` when any duration cleared its gates, or any pass came or went
  */

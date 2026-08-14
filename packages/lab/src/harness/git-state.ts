@@ -55,6 +55,25 @@ export function runGit(args: readonly string[], cwd: string): GitOutcome {
  * unlike a dirty tree there is nothing the caller can do to make the answer
  * meaningful.
  *
+ * ⚠️ REVIEW FINDING 2026-08-14 — WHAT THIS CANNOT SEE, for the instrument axis.
+ * This samples the tree at RESOLVE time, not at BUILD time, and what an
+ * instrument actually runs is `dist/`. Two live false negatives follow, both
+ * stamping a confident `dirty: false` over a binary the commit does not
+ * describe:
+ *
+ *   1. build from a dirty tree → revert → measure.
+ *   2. build → `git checkout <other commit>` → measure WITHOUT rebuilding. The
+ *      tree is clean at the new commit; `dist/` still holds the old one's bytes.
+ *
+ * (2) is not hypothetical here — it is the trap already recorded as
+ * "stale dist in another checkout" — and `dist/` is GITIGNORED (`.gitignore:8`),
+ * so `git status --porcelain` can never see it. The risk this adds is that the
+ * flag reads as a provenance guarantee when it is only a working-tree
+ * observation. A real guarantee needs a fingerprint of the BUILT output, which
+ * `instrument.ts` deliberately declines for its own stated reasons — so the
+ * honest fix may be narrowing what the label claims rather than widening what it
+ * checks.
+ *
  * @param cwd - A directory inside the working tree
  * @param what - What is being labelled, for the error message — e.g.
  *   `the subject at /path` or `the instrument checkout at /path`

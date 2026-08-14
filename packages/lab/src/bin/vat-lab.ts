@@ -650,6 +650,24 @@ export function createProgram(): Command {
         compare: compareParse,
         renderReport: renderParseReport,
         renderComparison: renderParseComparison,
+        // ⚠️ REVIEW FINDING 2026-08-14 — `totalMs` IS THE MEDIAN REPEAT, and
+        // `FacetFunctions.estimate` explicitly forbids that: "a per-capture
+        // reduction that is already robust to a slow repeat — `perf` publishes a
+        // command's fastest repeat, not its median — because `ab` then takes a
+        // minimum of these, and a min over medians is not a min." `capture.ts`
+        // documents `totalMs` as "the one whose total is the median". So the one
+        // facet the mandatory-`estimate` contract was written to protect is the
+        // facet that violates it, and nothing caught it because `ab.test.ts`
+        // supplies a STUB estimate — no test exercises any real one.
+        //
+        // Measured cost, first real `parse ab`, pair 1 arm A on the primary
+        // adopter: samples [9381.952, 9085.774, 9258.195] → reported 9258.195,
+        // min 9085.774. That is +172.4ms (1.9%), ~1.8x the 97.561ms noise floor,
+        // injected into the number `ab` aggregates on every capture.
+        //
+        // Fix is one line — `Math.min(...row.totalMsSamples)`, already published
+        // on the row — but it moves a shipped estimator, so: Jeff's call.
+        //
         // Time inside a parser, summed ACROSS EVERY PARSER KIND — deliberately,
         // and the unit says so. The per-kind totals are the honest unit of
         // attribution, but `ab` compares exactly one number per command, and a

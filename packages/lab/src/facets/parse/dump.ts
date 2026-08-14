@@ -246,7 +246,17 @@ export interface MergedParseKind {
 
 /** Every dump from one command run, merged. */
 export interface MergedParseDumps {
-  /** Distinct PIDs that produced a dump. See this module's header on summing. */
+  /**
+   * Distinct PIDs that produced a dump. See this module's header on summing.
+   *
+   * ⚠️ REVIEW FINDING 2026-08-14 — this UNDER-COUNTS in exactly the case the
+   * writer was built for. `parse-timing.ts`'s `nextDumpPath` carries a collision
+   * counter precisely because "pids are reused across a long multi-phase run",
+   * and `parse-timing.test.ts` pins that one pid can file two dumps. Counting
+   * `pids.size` then reports those two as ONE process. The durations and counts
+   * still merge correctly; only this field lies. Counting dumps rather than pids
+   * is the obvious fix, but it changes a published field, so: Jeff's call.
+   */
   readonly processes: number;
   /** One entry per parser kind the dumps carried, in first-appearance order. */
   readonly kinds: readonly MergedParseKind[];
@@ -389,9 +399,30 @@ function addKindGroup(byKind: Map<string, KindBucket>, group: ParseDumpKind): vo
 /**
  * Add one process's non-parser scalars to the running totals.
  *
- * Durations are summed exactly as counts are — see this module's header. Wall
- * clock adds because a vat command spawns its phases one after another, so the
- * sum is the run's, not one process's.
+ * Durations are summed exactly as counts are — see this module's header.
+ *
+ * ⚠️ REVIEW FINDING 2026-08-14 — `wallMs` SUMMING IS WRONG, and the consumer of
+ * the sum is a trust signal. The justification that "wall clock adds because a
+ * vat command spawns its phases one after another" holds for *parse*
+ * milliseconds (disjoint work) but NOT for process *lifetimes*: the parent
+ * orchestrator is alive for the whole run, so its lifetime CONTAINS every
+ * child's, and summing double-counts real time. CPU genuinely does add (disjoint
+ * threads), so the ratio `cpu / wallMs` that `render.ts` divides — against
+ * `CPU_BOUND_FLOOR = 0.7` — is systematically DEFLATED, and the deflation grows
+ * without bound in the number of phases.
+ *
+ * Measured on `vat validate` (VAT's own repo, 2 processes): parent wall 3064ms
+ * with ZERO documents, child wall 2207ms, CPU 3822ms.
+ *   reported 3822/5272 = 0.725   ·   true 3822/3064 = 1.247
+ * A compute-bound run therefore sits 3.6% above a banner reading "THE PROCESS
+ * SPENT MOST OF ITS LIFE NOT RUNNING"; ~189ms more of child wall trips it.
+ *
+ * NOT fixed here because the right denominator is a design call: `max` is right
+ * only for a strictly-nested tree, parent-only needs a parent pid the dump does
+ * not carry, and per-process ratios trade one number for N. `resources-validate`
+ * is single-process, so no figure currently in the record is affected — this
+ * bites `validate`/`verify`. `parse-dump.test.ts`'s two-process fixture gives
+ * both processes equal, non-nested lifetimes, so it cannot tell sum from max.
  *
  * @param totals - The bag being accumulated into, mutated in place
  * @param dump - One process's dump
