@@ -40,9 +40,14 @@ function rowLine(row: PerfCommandStats): string {
   if (row.failed) {
     return `  ${row.name}: FAILED — ${row.failure ?? 'unknown'}`;
   }
+  // A completed run that exited non-zero says so. A command may declare a
+  // findings exit a completed run (see `MeasuredCommandSpec.completedExitCodes`),
+  // and two rows with the same median where one exited 0 and one exited 1 are
+  // not the same measurement — the second one also rendered its findings.
+  const exit = row.exitCode === 0 || row.exitCode === null ? '' : `, exit ${String(row.exitCode)}`;
   return (
     `  ${row.name}: ${ms(row.medianMs)} median ` +
-    `(±${ms(row.iqrMs)} IQR, ${ms(row.minMs)}–${ms(row.maxMs)}, ${String(row.runs)} runs, ${row.cache})`
+    `(±${ms(row.iqrMs)} IQR, ${ms(row.minMs)}–${ms(row.maxMs)}, ${String(row.runs)} runs, ${row.cache}${exit})`
   );
 }
 

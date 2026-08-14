@@ -19,7 +19,12 @@ import { renderIoComparison, renderIoReport } from '../facets/io/render.js';
 import { capturePerf } from '../facets/perf/capture.js';
 import { comparePerf } from '../facets/perf/compare.js';
 import { renderPerfComparison, renderPerfReport } from '../facets/perf/render.js';
-import { DEFAULT_MEASURED_COMMANDS } from '../harness/commands.js';
+import {
+  DEFAULT_MEASURED_COMMANDS,
+  MEASURABLE_COMMAND_NAMES,
+  measurableCommand,
+  type MeasuredCommandSpec,
+} from '../harness/commands.js';
 import { resolveInstrument } from '../harness/instrument.js';
 import { resolveSubject } from '../harness/subject.js';
 import type { CacheMode, CaptureRequest, InstrumentSource } from '../harness/types.js';
@@ -127,6 +132,39 @@ export function parseCacheMode(value: string): CacheMode {
   return value;
 }
 
+/**
+ * A Commander parser for `--command`, accumulating repeats into a list.
+ *
+ * Commander hands a repeatable option's parser the value plus whatever the
+ * option holds so far, which is how one flag given twice becomes two specs
+ * rather than the last one winning. `previous` is `undefined` on the first
+ * occurrence because the option carries no default — "no `--command` at all"
+ * has to stay distinguishable from "`--command` given", since the former means
+ * {@link DEFAULT_MEASURED_COMMANDS} and an empty-list default would silently
+ * mean "measure nothing".
+ *
+ * The unknown-name check lives here, in the option's own parser, for the reason
+ * {@link parseCacheMode} spells out: an `InvalidArgumentError` thrown from the
+ * async action is just a rejected promise and surfaces as a raw stack trace.
+ *
+ * @param value - Raw value Commander parsed
+ * @param previous - Specs collected from earlier occurrences of this flag
+ * @returns The accumulated specs, in the order the flags were given
+ * @throws {InvalidArgumentError} when no measurable command has that name
+ */
+export function collectMeasuredCommand(
+  value: string,
+  previous: readonly MeasuredCommandSpec[] | undefined,
+): MeasuredCommandSpec[] {
+  const spec = measurableCommand(value);
+  if (spec === undefined) {
+    throw new InvalidArgumentError(
+      `--command expects one of: ${MEASURABLE_COMMAND_NAMES.join(', ')}; got '${value}'.`,
+    );
+  }
+  return [...(previous ?? []), spec];
+}
+
 /** Options Commander collects for a facet's `run`. */
 interface RunOptions {
   readonly instrument: InstrumentSource;
@@ -134,6 +172,8 @@ interface RunOptions {
   readonly cache: CacheMode;
   readonly out: string;
   readonly id?: string;
+  /** Absent unless `--command` was given at least once. */
+  readonly command?: readonly MeasuredCommandSpec[];
 }
 
 /** The verdict kind that means a real, attributable difference was found. */
@@ -225,6 +265,11 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
       parseCacheMode,
       'warm',
     )
+    .option(
+      '--command <name>',
+      `Measure this command instead of the default set (repeatable). One of: ${MEASURABLE_COMMAND_NAMES.join(', ')}`,
+      collectMeasuredCommand,
+    )
     .option('--out <dir>', 'Directory to write the report into', '.vat-lab')
     .option(
       '--id <name>',
@@ -237,7 +282,9 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
       const report = await wiring.capture({
         instrument,
         subject,
-        commands: DEFAULT_MEASURED_COMMANDS,
+        // No `--command` means the default set, unchanged — the flag widens what
+        // can be asked for and never quietly narrows a bare run.
+        commands: options.command ?? DEFAULT_MEASURED_COMMANDS,
         runs: options.runs,
         cache: options.cache,
         capturedAt: new Date().toISOString(),

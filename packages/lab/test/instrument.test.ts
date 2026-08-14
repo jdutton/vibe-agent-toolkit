@@ -14,6 +14,11 @@
  * `commit` exists for. Every dev build in this repo carries the semver of the
  * release it branched from, so a resolver that dropped the commit would make
  * two genuinely different instruments compare equal.
+ *
+ * Third, and the reason every fixture here builds BOTH `dist/bin.js` and
+ * `dist/bin/vat.js`: resolving to the wrapper instead of the CLI shipped once
+ * already, and no assertion could have caught it while only one of the two files
+ * was on disk. A fixture that cannot make the two answers differ tests nothing.
  */
 
 /* eslint-disable security/detect-non-literal-fs-filename -- every path here is derived from a controlled mkdtemp scratch dir */
@@ -38,11 +43,14 @@ const REPO_ROOT = resolveFromImportMeta(import.meta.url, '../../..');
 
 const SEMVER = /^\d+\.\d+\.\d+/;
 const SHA1 = /^[0-9a-f]{40}$/;
-const VAT_BIN_SUFFIX = /packages\/cli\/dist\/bin\/vat\.js$/;
+const VAT_BIN_SUFFIX = /packages\/cli\/dist\/bin\.js$/;
 
 /** Layout a vat checkout is expected to have, mirrored by the fixtures below. */
 const CLI_DIST_DIR = 'packages/cli/dist';
-const CLI_BIN = 'packages/cli/dist/bin/vat.js';
+/** The CLI's own entry point — the only thing the harness may measure through. */
+const CLI_BIN = 'packages/cli/dist/bin.js';
+/** The context-detecting wrapper `package.json` maps `vat` to, sitting beside it. */
+const CLI_WRAPPER = 'packages/cli/dist/bin/vat.js';
 const CLI_MANIFEST = 'packages/cli/package.json';
 
 let scratch: string;
@@ -86,8 +94,10 @@ interface FakeTreeOptions {
   readonly version?: string;
   /** Body of the fake bin — varying it varies the commit. */
   readonly binBody?: string;
-  /** Omit the built bin. */
+  /** Omit dist/bin.js, leaving the wrapper as the only thing on disk. */
   readonly noBin?: boolean;
+  /** Omit dist/bin/vat.js, leaving nothing for a wrong resolver to find. */
+  readonly noWrapper?: boolean;
   /** Omit packages/cli/package.json. */
   readonly noManifest?: boolean;
   /** Skip `git init` + commit. */
@@ -96,6 +106,10 @@ interface FakeTreeOptions {
 
 /**
  * Build a directory that looks like a built vat checkout.
+ *
+ * Both entry points exist by default — see this file's header. Leaving the
+ * wrapper out would make every "resolves to bin.js" assertion pass for the wrong
+ * reason.
  *
  * @param name - Subdirectory of the scratch dir to create
  * @param options - Which pieces to leave out, and what to put in the rest
@@ -107,6 +121,9 @@ async function makeTree(name: string, options: FakeTreeOptions = {}): Promise<st
 
   if (options.noBin !== true) {
     await writeFile(safePath.join(root, CLI_BIN), options.binBody ?? '#!/usr/bin/env node\n');
+  }
+  if (options.noWrapper !== true) {
+    await writeFile(safePath.join(root, CLI_WRAPPER), '// context-detecting wrapper\n');
   }
   if (options.noManifest !== true) {
     await writeFile(
@@ -144,6 +161,30 @@ async function expectRejectionNaming(
   }
 }
 
+/**
+ * Assert which entry point an instrument resolves to, having first proved the
+ * fixture could have answered differently.
+ *
+ * The `alternative` check is the whole point: without a wrapper on disk, "it
+ * chose bin.js" is indistinguishable from "bin.js was all there was".
+ *
+ * @param source - The instrument source to resolve
+ * @param expected - The entry point it must choose
+ * @param alternative - The entry point it must NOT choose, which must exist
+ */
+async function expectEntryPoint(
+  source: InstrumentSource,
+  expected: string,
+  alternative: string,
+): Promise<void> {
+  expect(existsSync(alternative), 'fixture cannot distinguish the two answers').toBe(true);
+
+  const resolved = await resolveInstrument(source);
+
+  expect(resolved.leadingArgs).toHaveLength(1);
+  expect(toForwardSlash(resolved.leadingArgs[0] ?? '')).toBe(toForwardSlash(expected));
+}
+
 describe('resolveInstrument — kind: tree', () => {
   it('resolves this checkout to its built bin, its version, and its HEAD commit', async () => {
     const resolved = await resolveInstrument({ kind: 'tree', path: REPO_ROOT });
@@ -175,13 +216,35 @@ describe('resolveInstrument — kind: tree', () => {
     expect(second.version.commit).not.toBe(first.version.commit);
   });
 
+  /**
+   * The shipped bug: `dist/bin/vat.js` is the cwd-detecting wrapper, and the
+   * harness runs every command with cwd set to the SUBJECT. An A/B of two
+   * checkouts against an adopter therefore ran the adopter's own installed vat
+   * on both arms, agreed with itself, and stamped both reports with the two
+   * commits under test.
+   */
+  it('resolves the CLI entry point, not the cwd-detecting wrapper beside it', async () => {
+    const root = await makeTree('both-entry-points');
+
+    await expectEntryPoint(
+      { kind: 'tree', path: root },
+      safePath.join(safePath.resolve(root), CLI_BIN),
+      safePath.join(root, CLI_WRAPPER),
+    );
+  });
+
   it('throws naming the path when the tree does not exist', async () => {
     const missing = safePath.join(scratch, 'no-such-checkout');
     await expectRejectionNaming({ kind: 'tree', path: missing }, missing);
   });
 
   it('throws naming the expected bin when the tree was never built', async () => {
-    const root = await makeTree('unbuilt', { noBin: true });
+    const root = await makeTree('unbuilt', { noBin: true, noWrapper: true });
+    await expectRejectionNaming({ kind: 'tree', path: root }, safePath.join(root, CLI_BIN));
+  });
+
+  it('throws naming the missing bin.js when only the wrapper was built', async () => {
+    const root = await makeTree('wrapper-only-tree', { noBin: true });
     await expectRejectionNaming({ kind: 'tree', path: root }, safePath.join(root, CLI_BIN));
   });
 
@@ -243,6 +306,42 @@ describe('resolveInstrument — kind: dist', () => {
     expect(resolved.version.commit).toBeNull();
   });
 
+  it('resolves a dist directory to bin.js, not to the wrapper beside it', async () => {
+    const dist = safePath.join(await makeTree('dist-both-entry-points'), CLI_DIST_DIR);
+
+    await expectEntryPoint(
+      { kind: 'dist', path: dist },
+      safePath.join(dist, 'bin.js'),
+      safePath.join(dist, 'bin/vat.js'),
+    );
+  });
+
+  /**
+   * `dist:` takes a file path verbatim, so the wrapper is one plausible typo
+   * away from being measured — and it would run, and produce a complete report
+   * of a binary nobody chose.
+   */
+  it('refuses the wrapper named directly, and points at bin.js instead', async () => {
+    const root = await makeTree('dist-wrapper-named');
+
+    await expectRejectionNaming(
+      { kind: 'dist', path: safePath.join(root, CLI_WRAPPER) },
+      safePath.join(root, CLI_WRAPPER),
+      'wrapper',
+      safePath.join(root, CLI_BIN),
+    );
+  });
+
+  it('names the wrapper rather than reporting nothing when a dist holds only it', async () => {
+    const dist = safePath.join(await makeTree('dist-wrapper-only', { noBin: true }), CLI_DIST_DIR);
+
+    await expectRejectionNaming(
+      { kind: 'dist', path: dist },
+      safePath.join(dist, 'bin/vat.js'),
+      'wrapper',
+    );
+  });
+
   it('throws naming the path when nothing is there', async () => {
     const missing = safePath.join(scratch, 'no-such-dist');
     await expectRejectionNaming({ kind: 'dist', path: missing }, missing);
@@ -254,7 +353,7 @@ describe('resolveInstrument — kind: dist', () => {
     await expectRejectionNaming(
       { kind: 'dist', path: empty },
       empty,
-      safePath.join(empty, 'bin/vat.js'),
+      safePath.join(empty, 'bin.js'),
     );
   });
 });

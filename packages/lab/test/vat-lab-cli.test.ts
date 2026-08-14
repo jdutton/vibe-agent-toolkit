@@ -18,10 +18,11 @@
 import { mkdtemp } from 'node:fs/promises';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { InvalidArgumentError } from 'commander';
+import { InvalidArgumentError, type Option } from 'commander';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import {
+  collectMeasuredCommand,
   createProgram,
   EXIT_CHANGED,
   EXIT_UNMEASURABLE,
@@ -29,6 +30,7 @@ import {
 } from '../src/bin/vat-lab.js';
 import type { PerfBody, PerfCommandStats } from '../src/facets/perf/types.js';
 import { PERF_FACET, PERF_FACET_VERSION } from '../src/facets/perf/types.js';
+import { MEASURABLE_COMMAND_NAMES, MEASURABLE_COMMANDS } from '../src/harness/commands.js';
 import { writeReport } from '../src/store.js';
 
 import { makeReport } from './report-fixtures.js';
@@ -82,6 +84,23 @@ function cleanRow(name: string, medianMs: number): PerfCommandStats {
   };
 }
 
+/**
+ * The `--command` option as one facet's `run` subcommand declares it.
+ *
+ * Reaches into the built program rather than spawning a run: resolving an
+ * instrument and spawning vat is not what this asserts, and the two facets share
+ * `createFacetCommand`, so both must carry the identical option.
+ *
+ * @param facet - `perf` or `io`
+ * @returns The option, or `undefined` when the facet does not declare it
+ */
+function commandOption(facet: string): Option | undefined {
+  const run = createProgram()
+    .commands.find((group) => group.name() === facet)
+    ?.commands.find((sub) => sub.name() === 'run');
+  return run?.options.find((option) => option.long === '--command');
+}
+
 /** An unmeasured `perf` body, so tests never invent a reading with no source. */
 const NOT_MEASURED = { before: null, after: null, cpus: 1, available: false, contaminated: false };
 
@@ -120,6 +139,55 @@ describe('parseCacheMode', () => {
     expect(caught).toBeInstanceOf(InvalidArgumentError);
     expect((caught as Error).message).toContain("got 'bogus'");
   });
+});
+
+describe('collectMeasuredCommand', () => {
+  it('selects the named spec from the registry, exactly as declared', () => {
+    expect(collectMeasuredCommand('validate', undefined)).toEqual([MEASURABLE_COMMANDS.validate]);
+  });
+
+  it('accumulates repeats of the flag rather than letting the last one win', () => {
+    // Commander hands the parser what the option holds so far; a parser that
+    // returned `[spec]` would silently measure only `verify` here.
+    const first = collectMeasuredCommand('validate', undefined);
+    const both = collectMeasuredCommand('verify', first);
+
+    expect(both.map((spec) => spec.name)).toEqual(['validate', 'verify']);
+  });
+
+  it('throws a Commander InvalidArgumentError naming EVERY valid command', () => {
+    // Same mechanism as `parseCacheMode`: only an error out of the option's own
+    // parser becomes a usage message rather than a raw stack trace.
+    let caught: unknown;
+    try {
+      collectMeasuredCommand('nonesuch', undefined);
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(InvalidArgumentError);
+    const message = (caught as Error).message;
+    expect(message).toContain("got 'nonesuch'");
+    for (const name of MEASURABLE_COMMAND_NAMES) expect(message).toContain(name);
+  });
+});
+
+describe('vat-lab <facet> run — the --command flag is wired to that parser', () => {
+  for (const facet of ['perf', 'io']) {
+    it(`declares --command on ${facet} run, parsed by collectMeasuredCommand`, () => {
+      const option = commandOption(facet);
+
+      expect(option?.parseArg).toBe(collectMeasuredCommand);
+      // No default: "absent" has to stay distinguishable from "given", because
+      // absent means the default command set and an empty list would mean
+      // measuring nothing.
+      expect(option?.defaultValue).toBeUndefined();
+      for (const name of MEASURABLE_COMMAND_NAMES) {
+        expect(option?.description).toContain(name);
+      }
+    });
+  }
+
 });
 
 describe('vat-lab perf compare — exit codes', () => {

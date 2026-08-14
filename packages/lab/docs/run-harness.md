@@ -16,17 +16,38 @@ runs commands. A facet never sees a path.
 Three ways to name a vat, all resolving to the same thing: an executable plus an
 [`InstrumentVersion`](../src/envelope/coordinate.ts).
 
-**A working tree.** Point at a checkout; the harness uses its built `dist/bin/vat.js` and reads the
-version from its `package.json` and the commit from git. This is the dev-build case, and the reason
-`InstrumentVersion` carries a commit at all: every dev build in this repo shares the semver of the
-release it branched from, so a comparison keyed on version alone would read a dev build and a release
-as the same instrument.
+**A working tree.** Point at a checkout; the harness uses its built `packages/cli/dist/bin.js` and
+reads the version from its `package.json` and the commit from git. This is the dev-build case, and
+the reason `InstrumentVersion` carries a commit at all: every dev build in this repo shares the
+semver of the release it branched from, so a comparison keyed on version alone would read a dev build
+and a release as the same instrument.
 
 **A built artifact.** A path straight to a `dist/`, for comparing two builds without two checkouts.
+Prefer a working tree when you have one: a `dist/` has no checkout to ask, so its coordinate records
+`commit: null`, and two `dist:` arms carrying the same version are indistinguishable to
+`movedAxes` — it will report that *no* axis moved for what is genuinely a two-build comparison.
 
 **A released version.** `npx @vibe-agent-toolkit/cli@0.1.41` — the case that makes "did we get better
 since the last release?" a one-liner. The commit is unknown here and the coordinate records `null`
 rather than guessing.
+
+### Never the `vat` wrapper
+
+`packages/cli/dist/bin/vat.js` is a **context-detecting wrapper**, not the CLI: it re-resolves vat
+from `process.cwd()` and delegates to the dev build, local install, or global install it finds there.
+The harness always runs the measured command with `cwd` set to the **subject**, so measuring through
+the wrapper runs whatever vat the *subject* has installed — while the report is still stamped with
+the version and commit read from the checkout that was named. Both arms of an A/B can silently
+resolve to the same third binary and agree.
+
+So the tree and dist routes resolve `bin.js` and **refuse** the wrapper by name rather than falling
+back to it. The CLI reached the same conclusion independently for its own phase subprocesses — see
+`resolveBinPath()` in `packages/cli/src/commands/phase-utils.ts`.
+
+The `npx` route is the one exception, and a known limitation: `npx` runs the published package's
+`bin` entry, which *is* the wrapper. A subject with its own vat installed can therefore capture an
+`npx:` arm. Compare published versions on a subject that does not depend on vat, or use `dist:`
+against an unpacked tarball.
 
 ## Where the subject comes from
 
@@ -50,7 +71,33 @@ well-formed, still name their commands, and still disagree about what was measur
 It is also the only way a second facet can have defaults at all without importing the first, which
 the [facet contract](facets.md) forbids.
 
-The default is a default, not a definition — a caller measuring something else passes its own specs.
+The default is a default, not a definition. `MEASURABLE_COMMANDS` in the same file is the named
+registry — the three defaults plus `validate` and `verify` — and `vat-lab <facet> run --command
+<name>` selects from it. The flag is repeatable (`--command validate --command verify`), an unknown
+name is a usage error listing every valid one, and a run with no `--command` measures exactly the
+default set. A caller driving the library directly still passes whatever specs it likes.
+
+`validate` and `verify` take no `{subject}` argument: both **reject** a positional path and take
+their scope from the config at the working directory, which the harness has already set to the
+subject. `verify` reads the built `dist/` tree, so a subject measured with it must have been built.
+
+## Which exit codes mean the run finished
+
+A command declares its own, as `completedExitCodes`; absent means `[0]`. vat's convention is `0`
+success, `1` validation findings, `2` system error — so `validate`, `verify` and `resources-validate`
+accept `[0, 1]`, because a validator exiting 1 ran the whole corpus and merely had something to
+report at the end of it. Without that, those three were unmeasurable on any real project: every real
+project has findings, so every repeat "failed" and every row was poisoned. `resources-scan` and
+`audit` keep the `[0]` default — both are documented as exiting 0 whatever they find.
+
+Exit `2` is never accepted. That run did not complete, and its duration is the duration of giving
+up — fast enough that timing it reads as an improvement.
+
+Two rules then apply to a row's repeats, in `summarizeRepeatFailures`, shared so both facets phrase
+them alike: **any failure poisons the whole row**, and **the accepted codes must be uniform across
+the repeats**. The second is what stops a set where one repeat exited 0 and another exited 1 from
+being averaged: both completed, but they did different amounts of work, and a median over the mixture
+describes neither.
 
 ## Two properties the harness must preserve
 

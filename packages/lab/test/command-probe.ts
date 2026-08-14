@@ -15,6 +15,10 @@
  *
  * ## Two ways to ask for a failure, and why both exist
  *
+ * Either can be given a code with {@link PROBE_EXIT_CODE_ENV}: "failing" here
+ * means "exit non-zero", and whether that non-zero code is a *failure* is the
+ * measured command's own declaration.
+ *
  * 1. **{@link PROBE_FAIL_TOKEN} in the arguments** — this command always fails,
  *    every repeat. Keyed on argv, so within one capture it can fail one command
  *    while another passes, which is how "a failing command must not poison a
@@ -49,6 +53,18 @@ export const PROBE_STDERR_ENV = 'LAB_PROBE_STDERR';
 
 /** Set to a zero-based child index to fail exactly that one invocation. */
 export const PROBE_FAIL_AT_ENV = 'LAB_PROBE_FAIL_AT';
+
+/**
+ * Set to the code a "failing" child should exit with, instead of
+ * {@link PROBE_FAIL_EXIT}.
+ *
+ * Exists so a suite can fixture vat's *findings* exit. `1` is not a crash — a
+ * spec may declare it a completed run — and the difference between "every repeat
+ * exited 1 and the spec accepts 1" and "every repeat exited 3" is precisely what
+ * `completedExitCodes` decides. Without a controllable code, no fixture could
+ * make those two answers differ.
+ */
+export const PROBE_EXIT_CODE_ENV = 'LAB_PROBE_EXIT_CODE';
 
 /** An argument that makes every invocation of that command fail. */
 export const PROBE_FAIL_TOKEN = 'boom';
@@ -91,7 +107,8 @@ const PROBE_SOURCE = [
   'if (failed) {',
   `  process.stderr.write(process.env.${PROBE_STDERR_ENV} ?? ${JSON.stringify(PROBE_DEFAULT_STDERR)});`,
   '}',
-  `process.exit(failed ? ${String(PROBE_FAIL_EXIT)} : 0);`,
+  `const failExit = Number(process.env.${PROBE_EXIT_CODE_ENV} ?? ${String(PROBE_FAIL_EXIT)});`,
+  'process.exit(failed ? failExit : 0);',
   '',
 ].join('\n');
 

@@ -112,7 +112,12 @@ export {
 } from './facets/perf/types.js';
 
 export {
+  completedExitCodesOf,
+  DEFAULT_COMPLETED_EXIT_CODES,
   DEFAULT_MEASURED_COMMANDS,
+  MEASURABLE_COMMAND_NAMES,
+  MEASURABLE_COMMANDS,
+  measurableCommand,
   type MeasuredCommandSpec,
 } from './harness/commands.js';
 export { resolveInstrument } from './harness/instrument.js';
@@ -126,9 +131,11 @@ export {
 export {
   classifyRunFailure,
   materializeArgs,
+  measureSpec,
   type RepeatSpec,
   runRepeats,
   runRepeatsFor,
+  type SpecMeasurement,
   SUBJECT_TOKEN,
   summarizeRepeatFailures,
 } from './harness/repeat.js';

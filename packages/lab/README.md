@@ -19,9 +19,13 @@ The binary is **`vat-lab`**, and every facet exposes the same two verbs — `run
 `compare` diffs two of them:
 
 ```bash
-vat-lab <facet> run <subject> [--out <dir>] [--repeat <n>] [--cache warm|cold] [--id <name>]
+vat-lab <facet> run <subject> --instrument <spec> [--command <name>]... [--out <dir>] [--runs <n>] [--cache warm|cold] [--id <name>]
 vat-lab <facet> compare <baseline> <candidate>
 ```
+
+`--command` names one measurable vat command instead of the default set and may be repeated
+(`--command validate --command verify`); see
+[Which commands get measured](docs/run-harness.md#which-commands-get-measured).
 
 Facets today are **`io`** (filesystem-call counts) and **`perf`** (wall time). A minimal
 vary-the-instrument comparison — the same project, measured by two builds of vat:

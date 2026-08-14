@@ -22,6 +22,14 @@
  *    directly once, as a control, to prove the fixture does what it claims.
  * 3. **Rows are independent.** A failing command sits BETWEEN two passing ones,
  *    so a failure leaking either forward or backward is visible.
+ * 4. **"Failed" means did not COMPLETE, not "exited non-zero".** A vat validator
+ *    exits 1 whenever the project has findings — which is every real project —
+ *    having done all of its work, and a command may declare that code completed.
+ *    The pair of cases below runs byte-identical repeats under two specs that
+ *    differ only in what they accept, so the fixture can tell the two answers
+ *    apart. Exit 2 stays unacceptable to any spec, and repeats that completed
+ *    with DIFFERENT accepted codes are a failed row: both ran, neither ran the
+ *    same amount of work.
  *
  * No vat binary is spawned and no git is consulted: the instrument is the shared
  * probe from `command-probe.ts`, and the subject is a literal pointing at the
@@ -43,7 +51,7 @@ import type { MeasuredCommandSpec } from '../src/harness/commands.js';
 import { runRepeats } from '../src/harness/repeat.js';
 import type { ResolvedSubject } from '../src/harness/types.js';
 
-import { cleanupProbes, PROBE_DEFAULT_STDERR, PROBE_FAIL_AT_ENV, PROBE_FAIL_EXIT, PROBE_FAIL_TOKEN, PROBE_STDERR_ENV, PROBE_VERSION, probeSpec, setupProbe, type Probe } from './command-probe.js';
+import { cleanupProbes, PROBE_DEFAULT_STDERR, PROBE_EXIT_CODE_ENV, PROBE_FAIL_AT_ENV, PROBE_FAIL_EXIT, PROBE_FAIL_TOKEN, PROBE_STDERR_ENV, PROBE_VERSION, probeSpec, setupProbe, type Probe } from './command-probe.js';
 
 afterAll(cleanupProbes);
 
@@ -58,6 +66,36 @@ const PASSES: MeasuredCommandSpec = { name: 'audit', args: ['audit'] };
 
 /** A command that always fails, on every repeat, by argv. */
 const FAILS: MeasuredCommandSpec = { name: 'broken', args: [PROBE_FAIL_TOKEN] };
+
+/**
+ * The same always-non-zero command, declared to COMPLETE at 1 as well as 0.
+ *
+ * The one deliberate difference from {@link FAILS}: same name, same arguments,
+ * same probe behaviour. Pairing them is what makes the exit-code acceptance
+ * falsifiable — with one spec the row is a measurement and with the other it is
+ * a poisoned row, over byte-identical repeats.
+ */
+const FINDINGS: MeasuredCommandSpec = {
+  name: 'broken',
+  args: [PROBE_FAIL_TOKEN],
+  completedExitCodes: [0, 1],
+};
+
+/**
+ * A command that succeeds by argv but accepts a findings exit.
+ *
+ * Paired with {@link PROBE_FAIL_AT_ENV}, this is the only way to fixture repeats
+ * that ALL completed and still disagreed: the token-driven failure applies to
+ * every repeat of a command, which is uniform by construction.
+ */
+const PASSES_WITH_FINDINGS: MeasuredCommandSpec = {
+  name: 'audit',
+  args: ['audit'],
+  completedExitCodes: [0, 1],
+};
+
+/** Makes the probe's non-zero exit vat's findings code rather than a crash code. */
+const EXITS_ONE = { [PROBE_EXIT_CODE_ENV]: '1' };
 
 /** The whole failure suffix a `boom` command produces, at the default stderr. */
 const FAIL_REASON = `exited ${String(PROBE_FAIL_EXIT)}: ${PROBE_DEFAULT_STDERR}`;
@@ -206,6 +244,96 @@ describe('capturePerf — a failed repeat is never timed', () => {
     expect(row.failure).toBe(
       `1 of 1 repeats failed — exited ${String(PROBE_FAIL_EXIT)}: ${'x'.repeat(200)}`,
     );
+  });
+});
+
+describe('capturePerf — a findings exit is a completed run', () => {
+  it('CONTROL: the fixture really does exit 1 on every repeat, not 0 and not 3', () => {
+    // Without this the measurable row below could be produced by a probe that
+    // quietly exited 0, and "the spec accepted 1" would be untested.
+    const probe = setupProbe(PREFIX);
+
+    const results = runRepeats(
+      probeSpec(probe, { args: [PROBE_FAIL_TOKEN], runs: 3, env: EXITS_ONE }),
+    );
+
+    expect(results.map((run) => run.exitCode)).toEqual([1, 1, 1]);
+  });
+
+  it('measures a command whose every repeat exited 1, when 1 means completed', () => {
+    const probe = setupProbe(PREFIX);
+
+    const row = onlyRow(capture(probe, { runs: 3, commands: [FINDINGS], env: EXITS_ONE }));
+
+    expect(row.failed).toBe(false);
+    expect(row.failure).toBeNull();
+    expect(row.samplesMs).toHaveLength(3);
+    // The observed code, not a hard-coded 0: two rows with the same median but
+    // different codes are not the same measurement.
+    expect(row.exitCode).toBe(1);
+  });
+
+  it('poisons the identical repeats when the command did NOT declare 1 completed', () => {
+    // Same probe, same argv, same exit code — only the spec differs. This is the
+    // shipped behaviour, pinned so the change cannot widen past what it declared.
+    const probe = setupProbe(PREFIX);
+
+    const row = onlyRow(capture(probe, { runs: 3, commands: [FAILS], env: EXITS_ONE }));
+
+    expect(row.failed).toBe(true);
+    expect(row.exitCode).toBeNull();
+    expect(row.samplesMs).toEqual([]);
+    expect(row.failure).toBe(`3 of 3 repeats failed — exited 1: ${PROBE_DEFAULT_STDERR}`);
+  });
+
+  it('refuses exit 2 even for a command that accepts a findings exit', () => {
+    // vat's 2 is "system error" — a run that did not complete, whose duration is
+    // the duration of giving up. No spec may opt into timing that.
+    const probe = setupProbe(PREFIX);
+
+    const row = onlyRow(
+      capture(probe, {
+        runs: 2,
+        commands: [FINDINGS],
+        env: { [PROBE_EXIT_CODE_ENV]: '2' },
+      }),
+    );
+
+    expect(row.failed).toBe(true);
+    expect(row.exitCode).toBeNull();
+    expect(row.failure).toBe(`2 of 2 repeats failed — exited 2: ${PROBE_DEFAULT_STDERR}`);
+  });
+});
+
+describe('capturePerf — repeats that completed differently', () => {
+  it('CONTROL: the fixture makes repeat 1 exit 1 while the others exit 0', () => {
+    const probe = setupProbe(PREFIX);
+
+    const results = runRepeats(
+      probeSpec(probe, { runs: 3, env: { ...EXITS_ONE, [PROBE_FAIL_AT_ENV]: '1' } }),
+    );
+
+    // The repeats genuinely differ. A fixture where all three exited alike could
+    // not tell "uniformity is checked" from "uniformity is ignored".
+    expect(results.map((run) => run.exitCode)).toEqual([0, 1, 0]);
+  });
+
+  it('fails the row when accepted codes disagree, naming both codes', () => {
+    const probe = setupProbe(PREFIX);
+
+    const row = onlyRow(
+      capture(probe, {
+        runs: 3,
+        commands: [PASSES_WITH_FINDINGS],
+        env: { ...EXITS_ONE, [PROBE_FAIL_AT_ENV]: '1' },
+      }),
+    );
+
+    expect(row.failed).toBe(true);
+    expect(row.exitCode).toBeNull();
+    expect(row.samplesMs).toEqual([]);
+    expect(row.failure).toContain('exited 0 and 1');
+    expect(row.failure).toContain('not with the same amount of work done');
   });
 });
 
