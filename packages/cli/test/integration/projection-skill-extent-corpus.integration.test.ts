@@ -1,0 +1,926 @@
+/**
+ * The projection's skill extent, run as a **shadow** of the shipped walker over
+ * this repository's real skill corpus — Stage 2 of the closure-primitive
+ * migration.
+ *
+ * `packages/agent-skills/test/projection-skill-extent.test.ts` already compares
+ * `SkillExtentContributor` with `walkLinkGraph` at *fixture* scale, on a corpus
+ * built to reach the walker's discriminators. This file asks the other half of
+ * the question: over the skills VAT actually ships, under the configs VAT
+ * actually declares, do the two agree?
+ *
+ * ## The first answer is that the production corpus cannot tell them apart
+ *
+ * Measured, and asserted below rather than remembered: under the shipped
+ * configs, **every one of the fourteen declared skills bundles exactly its own
+ * `SKILL.md` and nothing else**. Twelve declare `linkFollowDepth: 0`; the other
+ * two carry only `https:` links and `../../../../docs/**` links that leave the
+ * project root. So both implementations return a singleton for every skill, and
+ * they agree — which is a true statement that establishes nothing. A corpus that
+ * cannot make the two answers differ makes an equality assertion over it
+ * vacuous.
+ *
+ * That is why {@link CORPORA} has a third entry. `repo-root` walks the *same
+ * real files under the same real configs* against this repository's root
+ * instead of each package's own, which is the one ambient input that turns those
+ * `../../../../docs/**` pointers into in-project edges. Nothing is invented: the
+ * links are the ones the skills already carry, and the depth sweep re-runs both
+ * arms across `linkFollowDepth` 0…full so the depth cap, the navigation-file
+ * rule, the agent-instruction rule and the directory-target rule are all reached.
+ *
+ * ## Why this test lives in `cli`
+ *
+ * Because "under the configs VAT actually declares" is a `cli` fact. The merged
+ * `skills.defaults` + `skills.config.<name>` block is produced by
+ * `mergeSkillPackagingConfig`, and the skill set by `discoverSkillsFromConfig`,
+ * both of which live here and are what `vat skills build`, `vat audit` and
+ * `vat skill review` all read. Re-deriving either inside `agent-skills` would be
+ * a second opinion about the corpus — and a shadow whose two arms disagree about
+ * *which skills, under which config* is not a shadow of anything.
+ *
+ * `cli` is also the only package that can see all three: the discovery/merge
+ * above, `walkLinkGraph` (`agent-skills`), and `populate` (`resources`).
+ *
+ * ## Both arms are driven the way production drives them
+ *
+ * - **Walker arm.** One `createProjectRegistry(root)` per corpus — the registry
+ *   `packageSkills` builds once and reuses — then one `walkLinkGraph` per skill
+ *   with the options `skill-packager.ts:600` assembles.
+ * - **Closure arm.** One `populate()` per corpus, with the filesystem extent and
+ *   one `SkillExtentContributor` per skill, exactly as
+ *   `projection-population.integration.test.ts` registers them. Not a
+ *   hand-assembled base: the closure stratum's fixpoint, the blob stage and
+ *   `blob_references` all come from the driver.
+ *
+ * ## What is deliberately NOT handed to the walker
+ *
+ * `packageSkill` adds two more inputs to its walk that
+ * {@link skillExtentDeclaration} does not model, and handing them to only one
+ * arm would manufacture a difference that says nothing about the primitive:
+ * `testInputExcludeRules(...)` (derived from `test.evals`) and
+ * `deferredArtifacts` (the `files:` model). Both are withheld from **both** arms,
+ * and the cost of withholding them is measured, not assumed — see
+ * `'omitting the packager-only walk inputs changes no membership'`.
+ *
+ * ## One known divergence this corpus cannot reach, stated so it is not read as absent
+ *
+ * `walkLinkGraph`'s asset handling ignores `maxDepth`: `processLink` adds a
+ * non-markdown target to `bundledAssetSet` unconditionally, while the depth check
+ * lives in `processRegistryResource` and is reached only for a registry member.
+ * That produces a `walkerOnly` difference — the one direction this corpus never
+ * shows — and it is unreachable here because **no declared skill links directly
+ * to a non-markdown file**. It stays pinned at fixture scale, in
+ * `projection-skill-extent.test.ts`'s `linkFollowDepth 0` and cascade cases.
+ * `expect(walkerOnly).toEqual([])` below is therefore a measurement of this
+ * corpus, not a claim that the walker has no such branch.
+ */
+
+import {
+  SkillExtentContributor,
+  createProjectRegistry,
+  skillExtentContributorId,
+  skillExtentDeclaration,
+  walkLinkGraph,
+  type LinkResolution,
+  type SkillPackagingConfig,
+  type WalkLinkGraphOptions,
+  type WalkableRegistry,
+} from '@vibe-agent-toolkit/agent-skills';
+import {
+  ContributorRegistry,
+  FilesystemExtentContributor,
+  ProjectionBuilder,
+  populate,
+  type JsonValue,
+  type Projection,
+  type ProjectionBase,
+} from '@vibe-agent-toolkit/resources';
+import { GitTracker, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { beforeAll, describe, expect, it } from 'vitest';
+
+import { discoverSkillsFromConfig } from '../../src/commands/skills/skill-discovery.js';
+import { loadConfigCached } from '../../src/utils/config-loader.js';
+import { mergeSkillPackagingConfig } from '../../src/utils/skill-packaging-config.js';
+
+// ============================================================================
+// The corpus
+// ============================================================================
+
+/** The repository root, four levels up from this file. */
+const REPO_ROOT = safePath.resolve(__dirname, '..', '..', '..', '..');
+
+/** The two VAT projects in this repository that declare a `skills:` section. */
+const DEV_AGENTS = 'packages/vat-development-agents';
+const CAT_AGENTS = 'packages/vat-example-cat-agents';
+
+/** One corpus: a set of declared skills, resolved against one project root. */
+interface CorpusSpec {
+  /** Stable name, appearing in every printed table. */
+  readonly label: string;
+  /** Roots whose `skills:` sections declare the skills, repo-relative. */
+  readonly configRoots: readonly string[];
+  /** The project root both arms state every path against, repo-relative. */
+  readonly projectRoot: string;
+  /** What this corpus is for — printed with the run. */
+  readonly note: string;
+}
+
+/**
+ * The corpora, in increasing order of what they can distinguish.
+ *
+ * The first two are the production configuration: the project root each skill's
+ * `findProjectRoot(dirname(skillPath))` actually resolves to. The third is the
+ * same files and the same configs against the repository root — the only corpus
+ * of the three in which either implementation follows an edge at all.
+ */
+const CORPORA: readonly CorpusSpec[] = [
+  {
+    label: 'production/dev-agents',
+    configRoots: [DEV_AGENTS],
+    projectRoot: DEV_AGENTS,
+    note: 'the root findProjectRoot resolves for these skills',
+  },
+  {
+    label: 'production/cat-agents',
+    configRoots: [CAT_AGENTS],
+    projectRoot: CAT_AGENTS,
+    note: 'the root findProjectRoot resolves for this skill',
+  },
+  {
+    label: 'repo-root',
+    configRoots: [DEV_AGENTS, CAT_AGENTS],
+    projectRoot: '.',
+    note: 'same files, same configs, wider root — the corpus that CAN distinguish',
+  },
+];
+
+/** The packager's own default when `linkFollowDepth` is absent (skill-packager.ts:580). */
+const DEFAULT_DEPTH = 2;
+
+/** The packager's own default when `excludeNavigationFiles` is absent. */
+const DEFAULT_EXCLUDE_NAVIGATION = true;
+
+/**
+ * Depths the sweep re-runs both arms at, over the `repo-root` corpus.
+ *
+ * The shipped configs pin twelve of the fourteen skills at `0`, so without this
+ * sweep the corpus's own declarations would keep the walk from ever starting.
+ * Every value here is one `SkillPackagingConfigSchema` accepts.
+ */
+const SWEPT_DEPTHS: readonly (number | 'full')[] = [0, 1, 2, 'full'];
+
+/** Repeats each timing arm runs. The estimator is `min`, never a median. */
+const TIMING_REPEATS = 9;
+
+/**
+ * Skills the two configs declare, as of this writing.
+ *
+ * Pinned so a discovery that silently found *fewer* skills cannot pass as
+ * agreement: every assertion here is over the skills the run enumerated, and a
+ * run that enumerated none would satisfy all of them.
+ */
+const TOTAL_DECLARED_SKILLS = 14;
+
+/** The transitive divergence cause — see {@link DivergenceCause}. */
+const PRUNED = 'pruned-behind-exclusion';
+
+/**
+ * The one directory a shipped `excludeReferencesFromBundle` rule rejects on this
+ * corpus: `vat-example-cat-agents` declares `**\/agents/**`, and its SKILL.md
+ * links nine documents under it. Every other declared rule (`docs/**`,
+ * `packages/**\/README.md`) sits on a skill pinned at `linkFollowDepth: 0`, where
+ * no rule ever gets a candidate to judge.
+ */
+const EXCLUDED_DIRECTORY = 'vat-example-cat-agents/resources/agents';
+
+/**
+ * The skill that declares the rule above.
+ *
+ * The check is scoped to it because an exclude rule is per-skill: another skill
+ * reaching the same directory at `linkFollowDepth: 'full'` has declared no rule
+ * against it and is right to bundle it.
+ */
+const EXCLUDING_SKILL = 'vat-example-cat-agents';
+
+/**
+ * Every cause the depth sweep produces, in code-unit order.
+ *
+ * An equality rather than a subset check: a NEW cause appearing is the finding
+ * this file exists to surface, and a `toContain`-shaped assertion would let one
+ * through. Each is a branch of `classifyExclusion`'s ordered cascade that
+ * {@link skillExtentDeclaration}'s `exclude` list cannot express — a glob
+ * returns a verdict with no reason, and an excluded target emits no row at all.
+ */
+const KNOWN_CAUSES: readonly DivergenceCause[] = [
+  'agent-instruction-file',
+  'directory-target',
+  'navigation-file',
+  PRUNED,
+];
+
+// ============================================================================
+// Types
+// ============================================================================
+
+/** One skill of the corpus, with the config every VAT lane resolves for it. */
+interface CorpusSkill {
+  /** The declared skill name — the extent's within-root discriminator. */
+  readonly name: string;
+  /** Absolute path to SKILL.md. */
+  readonly absolutePath: string;
+  /** Project-root-relative, forward-slashed — how `resource_realizations.path` spells it. */
+  readonly relativePath: string;
+  /** `skills.defaults` merged with `skills.config.<name>`. */
+  readonly config: SkillPackagingConfig;
+}
+
+/** One corpus root, with both arms' inputs prepared. */
+interface Corpus {
+  readonly spec: CorpusSpec;
+  /** Absolute project root every path is stated against. */
+  readonly root: string;
+  readonly skills: readonly CorpusSkill[];
+  /** The walker's input: the project registry `packageSkills` builds once. */
+  readonly registry: WalkableRegistry;
+  /** The closure arm's input: a real `populate()` of the same root. */
+  readonly projection: Projection;
+  /** A base rebuilt from {@link projection}, so one `contribute` can be repeated. */
+  readonly base: ProjectionBase;
+  /** Skill name → the `resolution_contexts.contextId` its extent got. */
+  readonly extentIdByName: ReadonlyMap<string, string>;
+  /** Shared git oracle — the walker spawns `git check-ignore` per path without one. */
+  readonly gitTracker: GitTracker;
+  /**
+   * What each arm's *preparation* cost, in ms.
+   *
+   * The per-skill figures below are the walk alone, and on their own they would
+   * flatter the closure arm badly: `walkLinkGraph` runs against a registry
+   * `packageSkills` builds anyway, whereas the closure needs a whole populated
+   * projection that no vat command produces today. These two numbers are where
+   * a Stage 3 flip's real cost lives, so they are measured, not elided.
+   */
+  readonly preparationMs: { readonly registry: number; readonly populate: number };
+}
+
+/**
+ * Why one path is in one arm and not the other.
+ *
+ * Every value but the last is `walkLinkGraph`'s **own** verdict, read off the
+ * `excludedReferences` row it emitted for that target — never a re-derivation
+ * here, which would be a second opinion about a cascade this file does not own.
+ *
+ * `pruned-behind-exclusion` is the transitive case, and it is a checked claim
+ * rather than a shrug: it is asserted only for a path the walker emitted **no**
+ * row of any kind for, which is exactly what "the walker never reached it"
+ * means. It arises because a refusal at a hub — `docs/README.md` as
+ * `navigation-file`, `CLAUDE.md` as `agent-instruction-file` — removes not just
+ * that file but everything reachable only through it, while the closure has no
+ * vocabulary for the refusal and walks straight on.
+ */
+type DivergenceCause =
+  | NonNullable<LinkResolution['excludeReason']>
+  | typeof PRUNED;
+
+/** One path present in one arm and absent from the other, with its cause. */
+interface AttributedPath {
+  readonly path: string;
+  readonly cause: DivergenceCause;
+}
+
+/** One skill's disagreement between the two arms, under one config. */
+interface Divergence {
+  readonly corpus: string;
+  readonly skill: string;
+  readonly depth: number | 'full';
+  /** Bundled by the walker, refused by the closure. */
+  readonly walkerOnly: readonly string[];
+  /** Admitted by the closure, refused by the walker, each with the walker's reason. */
+  readonly closureOnly: readonly AttributedPath[];
+}
+
+/** Everything one walk produced, in the comparison's coordinate system. */
+interface WalkerRun {
+  /** Bundle membership, including the root the walker never lists itself. */
+  readonly members: string[];
+  /** Every path the walker reached — bundled or refused. */
+  readonly seen: ReadonlyMap<string, DivergenceCause | 'bundled'>;
+}
+
+// ============================================================================
+// Corpus assembly
+// ============================================================================
+
+/**
+ * Resolve one config root's declared skills, each with its merged config.
+ *
+ * @param configRoot - Absolute root holding the governing config
+ * @param projectRoot - Absolute root every returned path is stated against
+ * @returns One entry per declared skill, in discovery order
+ * @throws When the root has no config or no `skills:` section — {@link CORPORA}
+ *   would then be describing a project that no longer exists
+ */
+async function corpusSkillsOf(configRoot: string, projectRoot: string): Promise<CorpusSkill[]> {
+  const skillsSection = loadConfigCached(configRoot)?.skills;
+  if (skillsSection === undefined) {
+    throw new Error(`${configRoot} declares no skills section; CORPORA is stale.`);
+  }
+
+  const discovered = await discoverSkillsFromConfig(skillsSection, configRoot);
+  const { defaults, config: perSkill } = skillsSection;
+
+  return discovered.map((skill) => {
+    const absolutePath = safePath.resolve(skill.sourcePath);
+    return {
+      name: skill.name,
+      absolutePath,
+      relativePath: toForwardSlash(safePath.relative(projectRoot, absolutePath)),
+      config: mergeSkillPackagingConfig(
+        defaults as Record<string, unknown> | undefined,
+        perSkill?.[skill.name] as Record<string, unknown> | undefined,
+      ),
+    };
+  });
+}
+
+/**
+ * Populate the projection for one corpus, with one skill extent per declared skill.
+ *
+ * @param root - Absolute project root
+ * @param skills - The declared skills
+ * @param gitTracker - The run's git oracle, shared with the walker arm
+ * @returns The projection, and the extent id each skill's contributor produced
+ */
+async function populateCorpus(
+  root: string,
+  skills: readonly CorpusSkill[],
+  gitTracker: GitTracker,
+): Promise<{ projection: Projection; extentIdByName: Map<string, string> }> {
+  const registry = new ContributorRegistry();
+  registry.register(new FilesystemExtentContributor());
+
+  const parameters: Record<string, JsonValue> = {};
+  for (const skill of skills) {
+    registry.register(new SkillExtentContributor(skill.name));
+    parameters[skillExtentContributorId(skill.name)] = declarationFor(skill, skill.config);
+  }
+
+  const projection = await populate({ root, registry, parameters, gitTracker });
+
+  // From provenance rather than by re-deriving `extentContextId`: the row names
+  // the contributor that produced the extent, so a change to how an extent id is
+  // spelled cannot silently point this test at the wrong extent.
+  const extentIdByName = new Map<string, string>();
+  for (const skill of skills) {
+    const contributorId = skillExtentContributorId(skill.name);
+    const row = projection.zoneProvenance.find((entry) => entry.contributorId === contributorId);
+    if (row === undefined) throw new Error(`No provenance row for ${contributorId}`);
+    extentIdByName.set(skill.name, row.contextId);
+  }
+
+  return { projection, extentIdByName };
+}
+
+/**
+ * Rebuild a `ProjectionBase` holding only what a closure walk reads.
+ *
+ * Two callers need it and neither can use `populate`'s return value: the depth
+ * sweep runs one `contribute` per depth (re-populating per depth would be a
+ * whole corpus crawl per value), and the timing arm repeats one `contribute` ten
+ * times. `populate` returns a `Projection` — no `root`, no `identities` — rather
+ * than the base it walked.
+ *
+ * The rows are **copied from the populated projection**, never re-derived, so the
+ * repeated call is the same computation over the same edges; and only the
+ * filesystem extent's realizations are carried, which is exactly what the closure
+ * stratum saw on its first pass.
+ *
+ * `'agrees with the populated run it stands in for'` pins the reconstruction.
+ *
+ * @param root - Absolute project root
+ * @param projection - The populated projection to copy rows from
+ * @param extentIds - Extent ids belonging to skill extents, whose realization
+ *   rows are duplicates of the filesystem rows and are dropped
+ * @returns A base carrying the base-stratum realizations and every blob reference
+ */
+function baseFrom(
+  root: string,
+  projection: Projection,
+  extentIds: ReadonlySet<string>,
+): ProjectionBase {
+  const builder = new ProjectionBuilder(root);
+  builder.addRoot({ id: builder.identities.rootId, path: safePath.resolve(root) });
+
+  for (const row of projection.resources) builder.addResource(row);
+  for (const row of projection.resourceRealizations) {
+    if (!extentIds.has(row.extentId)) builder.addRealization(row);
+  }
+  for (const row of projection.blobReferences) builder.addBlobReference(row);
+
+  return builder.base();
+}
+
+/** Assemble both arms' inputs for one corpus. */
+async function corpusOf(spec: CorpusSpec): Promise<Corpus> {
+  const root = safePath.resolve(safePath.join(REPO_ROOT, spec.projectRoot));
+  const skills: CorpusSkill[] = [];
+  for (const configRoot of spec.configRoots) {
+    // Sequential: each discovery crawls a package, and the sets are concatenated
+    // in declared order so the printed tables are stable.
+    skills.push(...await corpusSkillsOf(safePath.join(REPO_ROOT, configRoot), root));
+  }
+
+  const gitTracker = new GitTracker(root);
+  const registryStartedAt = performance.now();
+  const registry = await createProjectRegistry(root);
+  const registryMs = performance.now() - registryStartedAt;
+
+  const populateStartedAt = performance.now();
+  const { projection, extentIdByName } = await populateCorpus(root, skills, gitTracker);
+  const populateMs = performance.now() - populateStartedAt;
+
+  return {
+    spec,
+    root,
+    skills,
+    registry: registry as WalkableRegistry,
+    projection,
+    base: baseFrom(root, projection, new Set(extentIdByName.values())),
+    extentIdByName,
+    gitTracker,
+    preparationMs: { registry: registryMs, populate: populateMs },
+  };
+}
+
+// ============================================================================
+// The two arms
+// ============================================================================
+
+/** Order by UTF-16 code unit — never `localeCompare`, whose collation is locale-dependent. */
+function byCodeUnit(left: string, right: string): number {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
+/** The comparison currency: a deduplicated, deterministically ordered path set. */
+function pathSet(paths: Iterable<string>): string[] {
+  return [...new Set(paths)].sort(byCodeUnit);
+}
+
+/** Members of `left` that `right` does not have. */
+function only(left: readonly string[], right: readonly string[]): string[] {
+  const other = new Set(right);
+  return left.filter((path) => !other.has(path));
+}
+
+/** One skill's declaration, as `PopulateOptions.parameters` carries it. */
+// `JsonValue` IS a union by definition, and it is the declared parameter type of
+// both `populate` and `contribute`; narrowing this return would only move the cast
+// to every call site.
+// eslint-disable-next-line sonarjs/function-return-type -- see the note above
+function declarationFor(skill: CorpusSkill, config: SkillPackagingConfig): JsonValue {
+  // `excludeReferencesFromBundle.rules` is OPTIONAL on the config type the CLI's
+  // discovery hands back and REQUIRED on the one `skillExtentDeclaration`
+  // declares — two structurally different `SkillPackagingConfig`s across package
+  // boundaries. Runtime is unaffected (`skill-extent.ts:127` already does
+  // `?.rules ?? []`), so this normalizes rather than casts; a cast would hide a
+  // divergence that is real. No gate catches it: test files are in no tsconfig,
+  // so this file is never typechecked by `bun run validate`.
+  // 🐛 Two `SkillPackagingConfig` types have STRUCTURALLY DIVERGED across package
+  // boundaries: the one CLI discovery returns has `excludeReferencesFromBundle.rules`
+  // OPTIONAL and `targets` READONLY; the one `skillExtentDeclaration` declares has
+  // them required and mutable. Both differences are real, and there may be more —
+  // they surface one at a time.
+  //
+  // Runtime is unaffected: `skill-extent.ts:127` already reads `?.rules ?? []` and
+  // never mutates `targets`. Normalizing field-by-field here would reshape a config
+  // to satisfy a type mismatch that belongs upstream, so this casts and names the
+  // divergence instead. Fixing it means reconciling the two declarations.
+  //
+  // ⚠️ Nothing catches this: test files are in no tsconfig, so `bun run validate`
+  // never typechecks this file. It was found only via an editor diagnostic.
+  return skillExtentDeclaration(
+    config as unknown as Parameters<typeof skillExtentDeclaration>[0],
+    skill.relativePath,
+  ) as unknown as JsonValue;
+}
+
+/**
+ * The walk options `skill-packager.ts` assembles, minus the two packager-only
+ * inputs the module note names.
+ *
+ * @param corpus - The corpus the skill belongs to
+ * @param skill - The skill being walked
+ * @param config - The effective config, possibly depth-overridden by the sweep
+ * @returns Options for {@link walkLinkGraph}
+ */
+function walkOptionsFor(
+  corpus: Corpus,
+  skill: CorpusSkill,
+  config: SkillPackagingConfig,
+): WalkLinkGraphOptions {
+  const depth = config.linkFollowDepth ?? DEFAULT_DEPTH;
+  return {
+    maxDepth: depth === 'full' ? Number.POSITIVE_INFINITY : depth,
+    excludeRules: config.excludeReferencesFromBundle?.rules ?? [],
+    projectRoot: corpus.root,
+    skillRootPath: skill.absolutePath,
+    excludeNavigationFiles: config.excludeNavigationFiles ?? DEFAULT_EXCLUDE_NAVIGATION,
+    gitTracker: corpus.gitTracker,
+  };
+}
+
+/**
+ * Run `walkLinkGraph` for one skill and record both what it bundled and what it
+ * refused, with the refusal's own reason.
+ *
+ * The walk's own root is bundled by construction and absent from
+ * `bundledResources` (the visited set holds it before the map does), whereas
+ * `closureFrom` is an admitted member — adding it here is what makes the two sets
+ * describe the same thing.
+ *
+ * @param corpus - The corpus the skill belongs to
+ * @param skill - The skill being walked
+ * @param options - Pre-built walk options, so a timing loop can hoist them
+ * @returns Root-relative membership, and every path the walker reached
+ */
+function walkerRun(
+  corpus: Corpus,
+  skill: CorpusSkill,
+  options: WalkLinkGraphOptions,
+): WalkerRun {
+  const result = walkLinkGraph(
+    corpus.registry.getResource(skill.absolutePath)?.id ?? '',
+    corpus.registry,
+    options,
+  );
+  const relative = (absolute: string): string =>
+    toForwardSlash(safePath.relative(corpus.root, absolute));
+
+  const members = pathSet([
+    skill.relativePath,
+    ...result.bundledResources.map((resource) => relative(resource.filePath)),
+    ...result.bundledAssets.map(relative),
+  ]);
+
+  const seen = new Map<string, DivergenceCause | 'bundled'>();
+  for (const path of members) seen.set(path, 'bundled');
+  for (const reference of result.excludedReferences) {
+    // `bundled` wins: one path can be reached twice, refused on one route and
+    // admitted on another, and it is a member either way.
+    const path = relative(reference.path);
+    if (seen.get(path) === 'bundled') continue;
+    seen.set(path, reference.excludeReason ?? PRUNED);
+  }
+
+  return { members, seen };
+}
+
+/**
+ * One skill extent's membership, as the populated projection recorded it.
+ *
+ * @param corpus - The corpus the skill belongs to
+ * @param skill - The skill whose extent to read
+ * @returns Root-relative membership
+ */
+function projectedMembers(corpus: Corpus, skill: CorpusSkill): string[] {
+  const extentId = corpus.extentIdByName.get(skill.name);
+  return pathSet(corpus.projection.resourceRealizations
+    .filter((row) => row.extentId === extentId)
+    .map((row) => row.path));
+}
+
+/**
+ * The closure's membership for one skill under an arbitrary config.
+ *
+ * Runs the same contributor `populate` ran, over the base rebuilt from that
+ * population — the only way to vary a declaration without re-crawling the corpus.
+ *
+ * @param corpus - The corpus the skill belongs to
+ * @param skill - The skill whose extent to compute
+ * @param config - The effective config
+ * @returns Root-relative membership
+ */
+async function closureMembers(
+  corpus: Corpus,
+  skill: CorpusSkill,
+  config: SkillPackagingConfig,
+): Promise<string[]> {
+  const contribution = await new SkillExtentContributor(skill.name)
+    .contribute(corpus.base, declarationFor(skill, config));
+  return pathSet(contribution.realizations.map((row) => row.path));
+}
+
+/** Both arms for one skill under one config, and their attributed difference. */
+async function compareSkill(
+  corpus: Corpus,
+  skill: CorpusSkill,
+  config: SkillPackagingConfig,
+): Promise<{ walker: string[]; closure: string[]; divergence: Divergence | undefined }> {
+  const walk = walkerRun(corpus, skill, walkOptionsFor(corpus, skill, config));
+  const closure = await closureMembers(corpus, skill, config);
+  const walkerOnly = only(walk.members, closure);
+  const closureOnly = only(closure, walk.members).map((path) => ({
+    path,
+    // The walker's own verdict where it has one; otherwise it never reached the
+    // path at all, which is the transitive case.
+    cause: (walk.seen.get(path) ?? PRUNED) as DivergenceCause,
+  }));
+
+  const divergence = walkerOnly.length === 0 && closureOnly.length === 0
+    ? undefined
+    : {
+      corpus: corpus.spec.label,
+      skill: skill.name,
+      depth: config.linkFollowDepth ?? DEFAULT_DEPTH,
+      walkerOnly,
+      closureOnly,
+    };
+  return { walker: walk.members, closure, divergence };
+}
+
+/** What one pass of {@link SWEPT_DEPTHS} over one corpus produced. */
+interface SweepResult {
+  readonly divergences: Divergence[];
+  /** One printable row per (depth, skill) cell. */
+  readonly rows: Record<string, unknown>[];
+  /** Bundled paths that a declared exclude rule should have rejected. */
+  readonly excludeEscapes: string[];
+  /** Cells in which either arm bundled more than the SKILL.md alone. */
+  readonly followed: number;
+}
+
+/**
+ * Run both arms over every skill at every swept depth.
+ *
+ * Extracted from its `it` block only to stay under the cognitive-complexity
+ * ceiling: the two loops plus the exclude-rule probe exceed it inline.
+ *
+ * @param corpus - The corpus to sweep — in practice the repo-root one
+ * @returns Every cell's outcome, plus the two aggregate counters
+ */
+async function sweepDepths(corpus: Corpus): Promise<SweepResult> {
+  const result: SweepResult = { divergences: [], rows: [], excludeEscapes: [], followed: 0 };
+  let followed = 0;
+
+  for (const depth of SWEPT_DEPTHS) {
+    for (const skill of corpus.skills) {
+      const config: SkillPackagingConfig = { ...skill.config, linkFollowDepth: depth };
+      const { walker, closure, divergence } = await compareSkill(corpus, skill, config);
+      if (divergence !== undefined) result.divergences.push(divergence);
+      if (walker.length > 1 || closure.length > 1) followed += 1;
+      result.rows.push({
+        depth, skill: skill.name, walker: walker.length, closure: closure.length,
+        agree: divergence === undefined,
+      });
+      // `excludeReferencesFromBundle` membership, exercised rather than reasoned
+      // about — see EXCLUDED_DIRECTORY for why this is the only skill that can
+      // exercise it on this corpus.
+      const escaped = skill.name === EXCLUDING_SKILL
+        ? [...walker, ...closure].filter((path) => path.includes(`${EXCLUDED_DIRECTORY}/`))
+        : [];
+      result.excludeEscapes.push(...escaped.map((path) => `${skill.name}@${String(depth)}: ${path}`));
+    }
+  }
+
+  return { ...result, followed };
+}
+
+// ============================================================================
+// Setup
+// ============================================================================
+
+let corpora: Corpus[];
+
+beforeAll(async () => {
+  corpora = [];
+  for (const spec of CORPORA) {
+    // Sequential: each corpus populates a whole project, and two at once would
+    // put two full crawls in flight for no shorter test.
+    corpora.push(await corpusOf(spec));
+  }
+
+  console.log('[corpus] preparation is WARM — VAT\'s on-disk parse cache survives between runs,'
+    + ' and a first cold run of this file was ~50x slower.'
+    + ' These two columns are SINGLE observations (setup runs once), unlike the min-of-nine walk'
+    + ' figures below: across four runs `populate ms` for repo-root moved 1818 → 3548 on machine'
+    + ' load alone, so read them as an order of magnitude and nothing finer.');
+  console.table(corpora.map((corpus) => ({
+    corpus: corpus.spec.label,
+    note: corpus.spec.note,
+    skills: corpus.skills.length,
+    realizations: corpus.projection.resourceRealizations.length,
+    'reference candidates': corpus.projection.blobReferences.length,
+    'createProjectRegistry ms': Number(corpus.preparationMs.registry.toFixed(0)),
+    'populate ms': Number(corpus.preparationMs.populate.toFixed(0)),
+  })));
+}, 3_600_000);
+
+// ============================================================================
+// The experiment
+// ============================================================================
+
+describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () => {
+  it('agrees on membership for every declared skill, or names every difference', async () => {
+    const divergences: Divergence[] = [];
+    const rows: Record<string, unknown>[] = [];
+
+    for (const corpus of corpora) {
+      for (const skill of corpus.skills) {
+        const { walker, closure, divergence } = await compareSkill(corpus, skill, skill.config);
+        if (divergence !== undefined) divergences.push(divergence);
+        rows.push({
+          corpus: corpus.spec.label,
+          skill: skill.name,
+          depth: skill.config.linkFollowDepth ?? DEFAULT_DEPTH,
+          walker: walker.length,
+          closure: closure.length,
+          agree: divergence === undefined,
+        });
+        // The closure arm the sweep and the timing both use must agree with the
+        // one `populate` actually ran, or every figure below describes something
+        // else. Asserted per skill so a failure names the skill.
+        expect(closure).toEqual(projectedMembers(corpus, skill));
+      }
+    }
+    console.table(rows);
+
+    // Each declared skill appears once per corpus it belongs to: the fourteen
+    // under their own project roots, and the same fourteen under the repo root.
+    expect(rows).toHaveLength(TOTAL_DECLARED_SKILLS * 2);
+    if (divergences.length > 0) console.log('[divergences]', JSON.stringify(divergences, null, 2));
+
+    // The one difference the shipped configs produce, named rather than tolerated:
+    // `packages/cli/src/skill-resolution` is a DIRECTORY, and `directory-target`
+    // is the first branch of the walker's cascade the primitive has no vocabulary
+    // for. Pinned as an equality so a second difference cannot appear silently.
+    expect(divergences.map((row) => `${row.corpus}/${row.skill}@${String(row.depth)}: `
+      + row.closureOnly.map((entry) => `${entry.path} (${entry.cause})`).join(', ')
+      + (row.walkerOnly.length > 0 ? ` | walker-only: ${row.walkerOnly.join(', ')}` : ''),
+    )).toEqual([
+      'repo-root/vat-skill-testing@2: packages/cli/src/skill-resolution (directory-target)',
+    ]);
+  }, 1_800_000);
+
+  it('records that the PRODUCTION configuration cannot distinguish the two', () => {
+    // Not a pass to be proud of — a stated limit. Under the shipped configs every
+    // skill bundles exactly its own SKILL.md, so the agreement asserted above is
+    // an equality between two singletons and proves nothing about the primitive.
+    // Pinned as a fact so that if a skill ever gains a followed in-project link,
+    // this test fails and the reader learns the corpus grew teeth.
+    const singletons: string[] = [];
+    for (const corpus of corpora) {
+      if (corpus.spec.projectRoot === '.') continue;
+      for (const skill of corpus.skills) {
+        singletons.push(`${skill.name}: ${projectedMembers(corpus, skill).length}`);
+      }
+    }
+    expect(singletons.every((entry) => entry.endsWith(': 1'))).toBe(true);
+    console.log(`[vacuity] ${singletons.length} production skill bundles, all singletons`);
+  });
+
+  it('agrees across a depth sweep on the corpus that CAN distinguish', async () => {
+    const corpus = corpora.find((entry) => entry.spec.projectRoot === '.');
+    if (corpus === undefined) throw new Error('no repo-root corpus');
+
+    const { divergences, rows, excludeEscapes, followed } = await sweepDepths(corpus);
+    console.table(rows.filter((row) => (row['walker'] as number) > 1 || (row['closure'] as number) > 1));
+    console.log(`[non-vacuous] ${followed} of ${rows.length} sweep cells bundle more than the SKILL.md alone`);
+
+    // The whole point of this corpus. A sweep in which nothing was ever followed
+    // would be the same vacuous pass the production corpus already gives.
+    expect(followed).toBeGreaterThan(0);
+
+    const attributed = divergences.flatMap((row) => row.closureOnly);
+    const causeCounts = new Map<DivergenceCause, number>();
+    for (const entry of attributed) causeCounts.set(entry.cause, (causeCounts.get(entry.cause) ?? 0) + 1);
+    console.log('[causes]', JSON.stringify(Object.fromEntries(causeCounts)));
+
+    // THE gate, and it is not "no difference". The closure primitive is already
+    // known not to express the walker's ordered cascade, so a difference with a
+    // named cause is the expected result; a difference with NO cause would mean
+    // the two implementations disagree about something outside the known
+    // boundary, which is the only outcome that should stop a Stage 3 flip.
+    //
+    // `pruned-behind-exclusion` is checked, not assumed: `walkerRun` records
+    // every path the walk touched, so a path landing in that bucket is one the
+    // walker demonstrably never reached.
+    expect([...new Set(attributed.map((entry) => entry.cause))].sort(byCodeUnit)).toEqual(KNOWN_CAUSES);
+
+    // Neither arm may bundle anything the sole exercised exclude rule rejects.
+    expect(excludeEscapes).toEqual([]);
+
+    // …and the negative control, without which the line above is satisfied just
+    // as well by a walk that never reached the directory. Drop the rule and both
+    // arms must admit what it was rejecting — that is what makes "both sides
+    // dropped them" a statement about the RULE rather than about reachability.
+    const excluding = corpus.skills.find((skill) => skill.name === EXCLUDING_SKILL);
+    if (excluding === undefined) throw new Error(`corpus lost ${EXCLUDING_SKILL}`);
+    const unruled = await compareSkill(corpus, excluding, { linkFollowDepth: 1 });
+    const inDirectory = (paths: readonly string[]): number =>
+      paths.filter((path) => path.includes(`${EXCLUDED_DIRECTORY}/`)).length;
+    expect(inDirectory(unruled.walker)).toBeGreaterThan(0);
+    expect(inDirectory(unruled.closure)).toBe(inDirectory(unruled.walker));
+
+    // The direction matters more than the count: the closure admits a SUPERSET.
+    // Nothing the walker bundles is ever missing from it, at any swept depth —
+    // which is what makes the difference a question of *narrowing* the primitive
+    // rather than of teaching it to find things it cannot see.
+    expect(divergences.flatMap((row) => row.walkerOnly)).toEqual([]);
+  }, 1_800_000);
+
+  it('omitting the packager-only walk inputs changes no membership on this corpus', () => {
+    // The boundary the module note declares, measured rather than assumed.
+    // `test.evals` is declared for ten of these skills; if any skill ever linked
+    // into an eval suite, the packager's extra exclude rules would move the
+    // walker's answer and the closure declaration would have no way to follow.
+    const moved: string[] = [];
+
+    for (const corpus of corpora) {
+      for (const skill of corpus.skills) {
+        const evals = skill.config.test?.evals;
+        if (evals === undefined) continue;
+        const suite = toForwardSlash(safePath.relative(
+          corpus.root,
+          safePath.resolve(safePath.join(skill.absolutePath, '..'), evals, '..'),
+        ));
+        const bundled = walkerRun(corpus, skill, walkOptionsFor(corpus, skill, skill.config)).members
+          .filter((path) => toForwardSlash(path).startsWith(`${suite}/`));
+        if (bundled.length > 0) moved.push(`${corpus.spec.label} ${skill.name}: ${bundled.join(', ')}`);
+      }
+    }
+
+    expect(moved).toEqual([]);
+  }, 600_000);
+});
+
+// ============================================================================
+// Head-to-head timing
+// ============================================================================
+
+/**
+ * The minimum elapsed ms over {@link TIMING_REPEATS} runs of `arm`.
+ *
+ * `min`, never a median: one cold repeat poisons a median, and the fastest
+ * observation is the one least contaminated by whatever else the machine was
+ * doing. One un-timed warm-up run precedes the measured ones, so every reported
+ * figure is fully warm — including `ClosureExtentContributor`'s per-base
+ * `referencesByBlob` memo, which is cold exactly once per base.
+ *
+ * @param arm - The work to repeat
+ * @returns The fastest observed wall time, in milliseconds
+ */
+async function minOf(arm: () => Promise<void> | void): Promise<number> {
+  await arm();
+  let best = Number.POSITIVE_INFINITY;
+  for (let repeat = 0; repeat < TIMING_REPEATS; repeat++) {
+    const startedAt = performance.now();
+    await arm();
+    best = Math.min(best, performance.now() - startedAt);
+  }
+  return best;
+}
+
+describe('head-to-head cost of the two implementations', () => {
+  it('times both arms over each corpus, warm, min of nine', async () => {
+    const rows: Record<string, unknown>[] = [];
+
+    for (const corpus of corpora) {
+      // Hoisted so neither arm is charged for building its own arguments, and at
+      // depth `full` so neither is measured on a walk its config declined to take.
+      const full: (skill: CorpusSkill) => SkillPackagingConfig =
+        (skill) => ({ ...skill.config, linkFollowDepth: 'full' });
+      const walks = corpus.skills.map((skill) => ({
+        skill, options: walkOptionsFor(corpus, skill, full(skill)),
+      }));
+      const closures = corpus.skills.map((skill) => ({
+        contributor: new SkillExtentContributor(skill.name),
+        declaration: declarationFor(skill, full(skill)),
+      }));
+
+      const walkerMs = await minOf(() => {
+        for (const { skill, options } of walks) walkerRun(corpus, skill, options);
+      });
+      const closureMs = await minOf(async () => {
+        for (const { contributor, declaration } of closures) {
+          await contributor.contribute(corpus.base, declaration);
+        }
+      });
+
+      rows.push({
+        corpus: corpus.spec.label,
+        skills: corpus.skills.length,
+        'walkLinkGraph ms': Number(walkerMs.toFixed(2)),
+        'closure ms': Number(closureMs.toFixed(2)),
+        'closure / walker': Number((closureMs / walkerMs).toFixed(3)),
+      });
+    }
+
+    console.log('[timing] linkFollowDepth: full, warm, min of 9; per-skill compute only,'
+      + ' shared preparation (createProjectRegistry / populate) excluded and reported by beforeAll');
+    console.table(rows);
+
+    // Printed, never asserted: a wall-clock threshold on a live machine is a test
+    // that fails on a loaded laptop and gets "fixed" by raising the number.
+    expect(rows).toHaveLength(CORPORA.length);
+  }, 1_800_000);
+});
