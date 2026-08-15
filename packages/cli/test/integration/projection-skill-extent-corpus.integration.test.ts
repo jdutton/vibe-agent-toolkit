@@ -77,6 +77,27 @@
  * and the cost of withholding them is measured, not assumed — see
  * `'omitting the packager-only walk inputs changes no membership'`.
  *
+ * ⚠️ **That symmetry is no longer perfect, and the gap is stated rather than
+ * papered over.** Since Stage 3, {@link skillExtentDeclaration} derives
+ * `admitPaths` from `config.files` — so the closure arm models the one slice of
+ * the `files:` model that is a pure function of the config (which sources are
+ * explicit, non-glob agent-instruction files), while the walker arm is handed no
+ * `deferredArtifacts` at all and therefore short-circuits its escape hatch on
+ * `declaredSources === undefined`. A skill declaring an agent-instruction file
+ * in `files:` would be admitted by the closure and refused by the walker HERE,
+ * and that difference would be an artefact of this file's inputs rather than a
+ * fact about the primitive.
+ *
+ * It does not bite today: no declared skill has such an entry, which is why both
+ * arms still agree. It is left one-sided rather than fixed because handing the
+ * walker a `deferredArtifacts` built from `config.files` alone would still not
+ * match the packager — both production lanes build theirs from
+ * `partitionTestInputFileEntries(...).kept` — so the "equal inputs" this section
+ * promises would become a different inequality wearing a costume. The
+ * fixture-scale comparison in `projection-skill-extent.test.ts` DOES plumb it,
+ * per skill, exactly as `skill-packager.ts:599` does, and that is where the
+ * hatch is exercised as a genuine two-arm agreement.
+ *
  * ## One known divergence this corpus cannot reach, stated so it is not read as absent
  *
  * `walkLinkGraph`'s asset handling ignores `maxDepth`: `processLink` adds a
