@@ -435,10 +435,23 @@ function buildMovement(
  * noise; what actually bites is run-to-run variance of a small pass, which is a
  * different and much larger quantity.
  *
- * NOT fixed here — the remedy is a policy choice (scale the absolute floor to
- * the command total; require a significant row to also be a non-trivial share of
- * the total; or bar sub-1% passes from flipping the command verdict). The
- * MAGNITUDE side is sound and measured 6x tighter than perf's: use
+ * ⛔ DELIBERATELY LEFT AS IS — reviewed and decided 2026-08-14, not an oversight.
+ * The failure direction is SAFE: this over-reports `changed`, which inside `ab`
+ * surfaces as PAIRS DISAGREE, i.e. the tool refusing to answer. It never reports
+ * `unchanged` over a real movement, and nothing currently gates on the verdict.
+ * The only genuine bite is a single-shot `parse compare` printing CHANGED, which
+ * the standing "one A/B pair settles nothing" rule already covers.
+ *
+ * Revisit ONLY if something needs to gate on a parse verdict. The remedy is then
+ * a policy choice: scale the absolute floor to the command total, require a
+ * significant row to also be a non-trivial share of the total, or bar sub-1%
+ * passes from flipping the command verdict.
+ *
+ * (The 2-of-6 control rate above is a point estimate with a wide interval —
+ * roughly 5-75% — so read it as "a control failed to reach consensus", not as a
+ * measured rate.)
+ *
+ * The MAGNITUDE side is sound and measured 6x tighter than perf's: use
  * `--noise-floor 16.146` for `parse ab` on this machine.
  *
  * @param movement - The movement for one command
