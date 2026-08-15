@@ -27,6 +27,7 @@ import {
   EXIT_CHANGED,
   EXIT_REFUSED,
   EXIT_UNMEASURABLE,
+  fastestRepeat,
   nonNegativeNumber,
   parseCacheMode,
 } from '../src/bin/vat-lab.js';
@@ -234,6 +235,34 @@ describe('nonNegativeNumber', () => {
     for (const bad of ['-1', 'abc', 'Infinity', '']) {
       expect(() => parse(bad)).toThrow(InvalidArgumentError);
     }
+  });
+});
+
+describe('fastestRepeat — the reduction `parse` and `crawl` hand to ab', () => {
+  // Three DISTINCT values, ordered so that min, median and last-listed all
+  // differ. A fixture whose samples were symmetric (or whose median happened to
+  // equal its minimum) would pass against a median estimator too, which is the
+  // whole reason the median defect survived: no test exercised a real estimate.
+  const SAMPLES = [9258.195, 9085.774, 9381.952];
+  const MIN = 9085.774;
+
+  it('publishes the smallest repeat, not the reported median one', () => {
+    // `totalMs` is the median repeat the row reports whole. Handing that to `ab`
+    // is a min-over-medians, and it measured +172.4ms of phantom effect on the
+    // first real `parse ab` — ~1.8x that run's noise floor.
+    expect(fastestRepeat({ totalMs: SAMPLES[0] as number, totalMsSamples: SAMPLES })).toBe(MIN);
+  });
+
+  it('ignores the row total whenever samples exist, even a smaller one', () => {
+    // Pins the direction of the fallback: samples win because they are the
+    // per-repeat truth, not because they happen to be smaller. A reduction that
+    // took `Math.min(totalMs, ...samples)` would pass the test above and fail
+    // this one.
+    expect(fastestRepeat({ totalMs: 1, totalMsSamples: SAMPLES })).toBe(MIN);
+  });
+
+  it('falls back to the row total only when no repeat published a sample', () => {
+    expect(fastestRepeat({ totalMs: 42, totalMsSamples: [] })).toBe(42);
   });
 });
 

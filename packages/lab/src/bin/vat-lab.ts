@@ -575,6 +575,41 @@ function rowEstimates<TRow extends { readonly name: string; readonly failed: boo
 }
 
 /**
+ * The fastest repeat a row measured — the reduction `FacetEstimate` requires.
+ *
+ * `FacetFunctions.estimate` demands "a per-capture reduction that is already
+ * robust to a slow repeat", because `ab` then takes a minimum across captures
+ * and **a min over medians is not a min**: a median carries whichever repeat
+ * happened to land in the middle, so a single slow repeat inside an arm survives
+ * into the number `ab` compares and reads as a real effect.
+ *
+ * `perf` publishes `minMs` and needs no help. `parse` and `crawl` both report
+ * one repeat WHOLE — the one whose total is the median, so that every share on
+ * the row comes from a run that actually happened — and both carry the spread
+ * separately as `totalMsSamples`. This is where those two facets stop agreeing
+ * with their own row and start agreeing with the contract; keeping it in one
+ * place is what stops them diverging again.
+ *
+ * Falls back to `totalMs` only when no samples were published, which is a row
+ * that ran zero repeats.
+ *
+ * ⚠️ A degenerate capture reduces to its degenerate value, deliberately: `parse
+ * --cache warm` parses on repeat 0 and nothing afterwards, so its samples are
+ * `[x, 0, 0]` and the minimum is `0`. The median is `0` there too — this is the
+ * mode the row's `attribution` and `stable: false` exist to report, and neither
+ * reduction can rescue a measurement that was never taken.
+ *
+ * @param row - Any facet row publishing a total and its per-repeat samples
+ * @returns The smallest repeat, in the row's own unit
+ */
+export function fastestRepeat(row: {
+  readonly totalMs: number;
+  readonly totalMsSamples: readonly number[];
+}): number {
+  return row.totalMsSamples.length === 0 ? row.totalMs : Math.min(...row.totalMsSamples);
+}
+
+/**
  * Report a refusal and set the exit code that distinguishes it from a change.
  *
  * A refusal is not a negative result — it says the question could not be asked.
@@ -653,23 +688,17 @@ export function createProgram(): Command {
         compare: compareParse,
         renderReport: renderParseReport,
         renderComparison: renderParseComparison,
-        // ⚠️ REVIEW FINDING 2026-08-14 — `totalMs` IS THE MEDIAN REPEAT, and
-        // `FacetFunctions.estimate` explicitly forbids that: "a per-capture
-        // reduction that is already robust to a slow repeat — `perf` publishes a
-        // command's fastest repeat, not its median — because `ab` then takes a
-        // minimum of these, and a min over medians is not a min." `capture.ts`
-        // documents `totalMs` as "the one whose total is the median". So the one
-        // facet the mandatory-`estimate` contract was written to protect is the
-        // facet that violates it, and nothing caught it because `ab.test.ts`
+        // The MINIMUM repeat, via the shared `fastestRepeat` — not the median
+        // this row otherwise reports. Review finding 2026-08-14, now fixed: the
+        // one facet the mandatory-`estimate` contract was written to protect was
+        // the facet violating it, and nothing caught it because `ab.test.ts`
         // supplies a STUB estimate — no test exercises any real one.
         //
-        // Measured cost, first real `parse ab`, pair 1 arm A on the primary
-        // adopter: samples [9381.952, 9085.774, 9258.195] → reported 9258.195,
-        // min 9085.774. That is +172.4ms (1.9%), ~1.8x the 97.561ms noise floor,
-        // injected into the number `ab` aggregates on every capture.
-        //
-        // Fix is one line — `Math.min(...row.totalMsSamples)`, already published
-        // on the row — but it moves a shipped estimator, so: Jeff's call.
+        // Measured cost of the defect, first real `parse ab`, pair 1 arm A on
+        // the primary adopter: samples [9381.952, 9085.774, 9258.195] → reported
+        // 9258.195, min 9085.774. That is +172.4ms (1.9%), ~1.8x the 97.561ms
+        // noise floor, injected into the number `ab` aggregated on every
+        // capture. Numbers from `parse ab` runs before this change carry it.
         //
         // Time inside a parser, summed ACROSS EVERY PARSER KIND — deliberately,
         // and the unit says so. The per-kind totals are the honest unit of
@@ -682,7 +711,7 @@ export function createProgram(): Command {
         // any parse work does. A reader who needs to know WHICH kind moved reads
         // the compare output, where the passes are qualified by kind.
         estimate: (report) =>
-          rowEstimates(report.body.commands, 'ms parse (all kinds)', (row) => row.totalMs),
+          rowEstimates(report.body.commands, 'ms parse (all kinds)', fastestRepeat),
       }),
     )
     .addCommand(
@@ -702,17 +731,12 @@ export function createProgram(): Command {
         compare: compareCrawl,
         renderReport: renderCrawlReport,
         renderComparison: renderCrawlComparison,
-        // The MINIMUM repeat, not the median. `FacetFunctions.estimate` requires
-        // "a per-capture reduction that is already robust to a slow repeat",
-        // because `ab` then takes a minimum of these and a min over medians is
-        // not a min. `parse` publishes its median here and that is a known,
-        // measured defect (+172.4ms on the first real `parse ab`); this facet
-        // does not repeat it. `totalMsSamples` carries every repeat, so the
-        // reduction is available without re-reading anything.
+        // The MINIMUM repeat, not the median — via the same `fastestRepeat` the
+        // `parse` wiring uses, which is the point: these two facets report a
+        // median row and must reduce it identically for `ab`, and stating the
+        // rule twice is how they drifted apart the first time.
         estimate: (report) =>
-          rowEstimates(report.body.commands, 'ms crawl (all strata)', (row) =>
-            row.totalMsSamples.length === 0 ? row.totalMs : Math.min(...row.totalMsSamples),
-          ),
+          rowEstimates(report.body.commands, 'ms crawl (all strata)', fastestRepeat),
       }),
     );
 }

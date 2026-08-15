@@ -588,6 +588,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`vat-lab parse ab` compared medians, so a single slow repeat read as a real effect.** A facet's
+  `estimate` must be "a per-capture reduction already robust to a slow repeat", because `ab` then
+  takes a minimum across captures — and a min over medians is not a min. `parse` handed `ab` the
+  median repeat it reports whole; it now hands over the fastest, from the `totalMsSamples` the row
+  already published, sharing one reduction with `crawl` instead of stating the rule twice. Measured
+  on the first real `parse ab`: samples `[9381.952, 9085.774, 9258.195]` reduced to `9258.195`
+  rather than `9085.774`, injecting **+172.4ms (1.9%)** — about 1.8× that run's noise floor — into
+  every capture. **`parse ab` deltas from before this change carry that error**; `parse run` output
+  and every per-pass breakdown are unaffected, since those always came from one real repeat.
+
 - **`excludeReferencesFromBundle`'s `patterns` were documented against the wrong root.** Both schema
   copies — `ExcludeReferenceRuleSchema` in `@vibe-agent-toolkit/resources` and the `vat.skills`
   package metadata in `@vibe-agent-toolkit/schema` — described the globs as "relative to skill
