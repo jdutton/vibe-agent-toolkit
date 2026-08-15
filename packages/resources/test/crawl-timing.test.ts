@@ -27,9 +27,6 @@
 
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-
 import {
   __readCrawlTimingSnapshot,
   __setCrawlTimingForTest,
@@ -44,7 +41,10 @@ import {
   CRAWL_STRATA,
   type CrawlTimingDump,
   type CrawlTimingEntry,
-} from '../src/crawl-timing.js';
+  safePath,
+} from '@vibe-agent-toolkit/utils';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+
 import {
   ContributorRegistry,
   type ContributorStratum,

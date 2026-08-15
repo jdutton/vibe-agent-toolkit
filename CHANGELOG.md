@@ -36,11 +36,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the walk itself, so a walker's traversal, its exclude-rule evaluation and its gitignore reads
   previously showed up nowhere at all.
 
-  **Three strata make the two crawl implementations comparable from one dump**: `crawl` is
-  `walkLinkGraph`'s own work, recorded under named synthetic contributor ids; `base` and `closure`
-  are the projection's contributors, the latter charged per fixpoint pass. `pass: 0` is reserved for
-  a bracket placed *inside* the measured code, which cannot know the driver's fixpoint pass — the
-  driver numbers from 1, so the two never merge.
+  **Four strata make the two crawl implementations comparable from one dump**: `crawl` is the
+  incumbent — `walkLinkGraph`'s traversal plus the `ResourceRegistry` build that feeds it, recorded
+  under named synthetic contributor ids; `base` and `closure` are the projection's contributors, the
+  latter charged per fixpoint pass; and `shared` holds work **both** crawlers consume and neither
+  owns, so that it counts toward what a command spent and toward neither side of the comparison.
+  `pass: 0` is reserved for a bracket placed *inside* the measured code, which cannot know the
+  driver's fixpoint pass — the driver numbers from 1, so the two never merge.
+
+  Today `shared` holds one row, `git-tracker:initialize` — the `git ls-files` spawn behind every
+  gitignore answer. It is not a rounding error: measured on this repo's own agent-skills package it
+  is **39%** of `vat resources scan`'s crawl budget and **63%** of `vat audit`'s, where it costs more
+  than the entire incumbent crawl beside it. Because both crawlers are handed a tracker by their
+  caller, this cost cancels out of any comparison between them — which is exactly why it went
+  uncharged, and exactly why a symmetric omission still made the command totals wrong.
 
   **Each dump is one process and carries no cross-process total.** Under a verb that spawns the
   binary more than once, summing wall time across dumps would double-count the parent's lifetime,
@@ -164,6 +173,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fields**.
 
 ### Breaking
+
+- **The crawl-timing seam moved from `@vibe-agent-toolkit/resources` to
+  `@vibe-agent-toolkit/utils`.** Every `CRAWL_*` constant, `crawlTimingStart`, `recordCrawlPass`,
+  `recordRegistryPass`, `withContributorStratum`, `recordContributorInvocation`, the
+  `CrawlStratum` / `CrawlTiming*` types and the `__*ForTest` helpers now import from `utils`; they
+  are no longer exported from `resources`. No shim is provided.
+
+  The seam has to bracket `GitTracker.initialize()` — the `git ls-files` spawn both crawlers
+  consume — and `GitTracker` lives in `utils`, which may not import `resources`. Bracketing at each
+  of the six sites that construct a tracker would have left `@vibe-agent-toolkit/discovery`
+  permanently unmeasurable, since it depends on `utils` alone.
+
+  ⚠️ `@vibe-agent-toolkit/utils` therefore declares `"sideEffects": ["./dist/crawl-timing.js"]`
+  instead of `false`. That module registers a `process` exit listener when `VAT_CRAWL_TIMING` is
+  set, so declaring the package side-effect-free entitled a bundler to drop the dump.
 
 - **`extractClaudeSkillInventory` now takes an options object, and a git tracker source is
   REQUIRED.** The signature moves from

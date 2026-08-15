@@ -1,15 +1,13 @@
 import { writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
+import { type ResourceRegistry } from '@vibe-agent-toolkit/resources';
 import {
 	__readCrawlTimingSnapshot,
 	__setCrawlTimingForTest,
 	CRAWL_PASS_INSIDE,
 	CRAWL_REGISTRY_ADD_RESOURCE_ID,
 	CRAWL_REGISTRY_ENUMERATE_ID,
-	type ResourceRegistry,
-} from '@vibe-agent-toolkit/resources';
-import {
 	findProjectRoot,
 	GitTracker,
 	mkdirSyncReal,

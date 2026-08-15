@@ -132,11 +132,14 @@ export interface CrawlSeamRow {
   /** A contributor's id, or one of the seam's synthetic crawler ids. */
   readonly contributorId: string;
   /**
-   * Which layer the work belongs to — `base`, `closure`, `crawl`.
+   * Which layer the work belongs to — `base`, `closure`, `crawl`, `shared`.
    *
-   * A string and **not pinned** to the three this build knows: a vat that grows a
-   * fourth stratum must not make every dump unreadable. What is pinned is that
-   * rows carry one.
+   * A string and **not pinned** to the four this build knows: a vat that grows a
+   * fifth stratum must not make every dump unreadable. What is pinned is that
+   * rows carry one. (`shared` was that fifth-stratum case in practice, and the
+   * openness of this field is why adding it needed no dump-version bump — an
+   * older reader places its rows in `unclassified` and says the total is short,
+   * rather than refusing the file.)
    */
   readonly stratum: string;
   /**
@@ -186,6 +189,13 @@ export interface CrawlRoleTotals {
  * entries requires knowing which synthetic ids belong to which crawler — a
  * mapping the report would rather state once than expect every reader to
  * reconstruct.
+ *
+ * ⚠️ **Not every stratum is an arm.** `shared` holds preparation both crawlers
+ * consume and neither owns — the `GitTracker` initialization behind every
+ * gitignore answer. It is in the command's total because the command paid for
+ * it, and in neither arm because neither arm would stop paying for it if the
+ * other were flipped on. Comparing `crawl` against `closure` means comparing
+ * those two rows, not "everything that is not `closure`".
  *
  * `calls` and `elapsedMs` count the **additive** rows only, because those are
  * the numbers the side-by-side is taken over. The other two classes are beside

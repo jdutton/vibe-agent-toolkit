@@ -56,6 +56,7 @@ export {
 export {
   CRAWL_DUMP_VERSION,
   CRAWL_INCUMBENT_STRATUM,
+  CRAWL_SHARED_STRATUM,
   CRAWL_TIMING_DIR_ENV,
   crawlAttributionOf,
   type CrawlDump,

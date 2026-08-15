@@ -120,7 +120,7 @@ import {
   readTimingProcess,
   type TimingProcess,
   writeTimingDump,
-} from './timing-dump.js';
+} from '@vibe-agent-toolkit/utils';
 
 /**
  * The passes the instrumented parsers are bracketed at, as array indices.

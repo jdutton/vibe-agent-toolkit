@@ -101,16 +101,16 @@
  *   close it.
  */
 
-import { isAbsoluteAnyPlatform } from '@vibe-agent-toolkit/utils';
-import picomatch from 'picomatch';
-
 import {
   CRAWL_CLOSURE_CONTRIBUTE_ID,
   CRAWL_CLOSURE_RESOLVE_ID,
   CRAWL_PASS_INSIDE,
   crawlTimingStart,
+  isAbsoluteAnyPlatform,
   recordCrawlPass,
-} from '../../crawl-timing.js';
+} from '@vibe-agent-toolkit/utils';
+import picomatch from 'picomatch';
+
 import {
   ExtentDeclarationSchema,
   type ExtentDeclaration,

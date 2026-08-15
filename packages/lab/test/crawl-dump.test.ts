@@ -12,10 +12,12 @@
  *
  * 1. **The env-var literal is pinned.** `VAT_CRAWL_TIMING` is the whole contract
  *    with a vat that was built separately, and the lab deliberately does not
- *    import it from `@vibe-agent-toolkit/resources` — an A/B arm may be a build
+ *    import it from `@vibe-agent-toolkit/utils` — an A/B arm may be a build
  *    that has no seam at all, so the facet has to compile against, and refuse
  *    cleanly for, a vat that has never heard of it. That decision only holds if
- *    something pins the spelling.
+ *    something pins the spelling — and it matters more since the seam moved into
+ *    `utils`, which the lab depends on at runtime, putting the tempting import
+ *    within reach of every file in the facet.
  * 2. **Merging across PIDs.** One vat invocation spawns a child per phase, so a
  *    reader that took the first file it found would report one phase's timings
  *    and look perfectly healthy doing it. The fixtures give the two PIDs
@@ -46,14 +48,16 @@ import {
   CRAWL_PASS_INSIDE,
   CRAWL_SEAM_DUMP_VERSION,
   crawlTimingStart,
+  normalizedTmpdir,
   recordCrawlPass,
-} from '@vibe-agent-toolkit/resources';
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+  safePath,
+} from '@vibe-agent-toolkit/utils';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
   CRAWL_DUMP_VERSION,
   CRAWL_INCUMBENT_STRATUM,
+  CRAWL_SHARED_STRATUM,
   CRAWL_TIMING_DIR_ENV,
   crawlAttributionOf,
   type CrawlDump,
@@ -74,6 +78,7 @@ const GITIGNORE = 'walk-link-graph:gitignore';
 const CONTRIBUTE = 'closure-extent:contribute';
 const RESOLVE = 'closure-extent:resolve-reference';
 const REGISTRY_ENUMERATE = 'resource-registry:enumerate';
+const GIT_TRACKER = 'git-tracker:initialize';
 const CLOSURE = 'closure:my-bundle';
 const CRAWL_STRATUM = 'crawl';
 const CLOSURE_STRATUM = 'closure';
@@ -294,6 +299,24 @@ describe('crawlRowRole', () => {
     expect(crawlRowRole(entry(GITIGNORE, CRAWL_STRATUM, INSIDE, 7, 14))).toBe('nested');
   });
 
+  it('decides the shared stratum by id too, and its one row is additive', () => {
+    // `shared` holds work both crawlers consume and neither owns. It has no
+    // driver either, so it is placed by id on the same rule as the incumbent —
+    // which is why the two live in one table rather than in two branches.
+    expect(CRAWL_SHARED_STRATUM).toBe('shared');
+    expect(crawlRowRole(entry(GIT_TRACKER, CRAWL_SHARED_STRATUM, INSIDE, 1, 147))).toBe('additive');
+  });
+
+  it('refuses an unknown id in the shared stratum, rather than trusting the stratum', () => {
+    // A known stratum is not a licence to place an unknown bracket. `shared` is
+    // where a future cross-arm cost would go, and the first such bracket must
+    // announce itself as an under-count rather than being waved through as
+    // additive because its neighbour is.
+    expect(crawlRowRole(entry('git-tracker:something-new', CRAWL_SHARED_STRATUM, INSIDE, 1, 5))).toBe(
+      'unclassified',
+    );
+  });
+
   it('refuses to place a bracket it has never heard of', () => {
     // The honest answer, and the one that cannot be wrong. Guessing by
     // resemblance — "it looks like a walker row, call it additive" — is how the
@@ -420,12 +443,14 @@ describe('readCrawlDumps', () => {
    * and then a schema that still passes its own fixtures starts refusing every
    * real dump — the failure this whole file is otherwise blind to.
    *
-   * `@vibe-agent-toolkit/resources` is a **devDependency** of the lab for this
-   * test alone. `src/facets/crawl/dump.ts` still declares the env var and the
-   * dump shape as its own literals, so the published facet compiles against a
-   * vat that has never heard of the seam — which is the property that lets an
-   * A/B arm be an older build. This edge exists only so a test can produce a
-   * genuine artifact instead of a drawing of one.
+   * The seam is reached through `@vibe-agent-toolkit/utils`, which the lab
+   * already depends on. (It was a `resources` **devDependency** until the seam
+   * moved down on 2026-08-15; that edge is gone, and `dependency-check` is what
+   * noticed.) `src/facets/crawl/dump.ts` still declares the env var and the dump
+   * shape as its own literals, so the published facet compiles against a vat
+   * that has never heard of the seam — which is the property that lets an A/B
+   * arm be an older build. This test exists only so that claim is checked
+   * against a genuine artifact instead of a drawing of one.
    */
   it('accepts a dump the real seam wrote, not a drawing of one', async () => {
     const directory = safePath.join(root, 'from-the-real-seam');

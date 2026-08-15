@@ -10,13 +10,20 @@
  *
  * ## Why the env-var name and the dump shape are declared HERE
  *
- * Not imported from `@vibe-agent-toolkit/resources`, even though that package
- * writes the file, and for the same reason `parse/dump.ts` states: **an arm of an
- * A/B may be a vat build that has no seam at all**. A lab that imported the
- * contract from the package under measurement could not be built against a
- * version that predates it, and this facet has to be able to point at either arm
- * and refuse cleanly rather than fail to compile. `test/crawl-dump.test.ts` pins
- * the literal.
+ * Not imported from `@vibe-agent-toolkit/utils`, even though that package writes
+ * the file, and for the same reason `parse/dump.ts` states: **an arm of an A/B
+ * may be a vat build that has no seam at all**. A lab that imported the contract
+ * from the package under measurement could not be built against a version that
+ * predates it, and this facet has to be able to point at either arm and refuse
+ * cleanly rather than fail to compile. `test/crawl-dump.test.ts` pins the
+ * literal.
+ *
+ * ⚠️ That rule got HARDER to keep, not easier, when the seam moved from
+ * `resources` down into `utils` on 2026-08-15. `utils` is a runtime dependency
+ * of the lab, where `resources` was only a devDependency — so the seam's
+ * constants are now one import away in every file here, and reaching for them
+ * would compile perfectly and quietly destroy the ability to measure an older
+ * build. Every literal below stays a literal.
  *
  * ## An empty `entries` array is a reading; an empty DIRECTORY is not
  *
@@ -83,7 +90,7 @@ export const CRAWL_TIMING_DIR_ENV = 'VAT_CRAWL_TIMING';
  * numbers whose meaning nobody can state.
  *
  * ⚠️ This constant is one half of a CROSS-PACKAGE pair: the writing half is
- * `DUMP_VERSION` in `@vibe-agent-toolkit/resources`' `crawl-timing.ts`. They are
+ * `DUMP_VERSION` in `@vibe-agent-toolkit/utils`' `crawl-timing.ts`. They are
  * two literals in two packages with no type relating them, so they can drift
  * silently — and the symptom is not a subtle wrong number, it is that **every
  * dump this build writes gets refused** and the facet reports nothing. That is a
@@ -112,6 +119,19 @@ export type CrawlDumpEntry = CrawlSeamRow;
 export const CRAWL_INCUMBENT_STRATUM = 'crawl';
 
 /**
+ * The stratum holding work BOTH crawlers consume and NEITHER owns.
+ *
+ * Today that is one row: the `GitTracker` initialization behind every gitignore
+ * answer, which each arm is handed by its caller rather than building. It is part
+ * of what a COMMAND spent finding documents and no part of what either crawler
+ * spent, so it totals into {@link MergedCrawlDumps.totalMs} and belongs to
+ * neither side of the side-by-side {@link CrawlStratumStats} renders.
+ *
+ * A literal here rather than an import, for the same reason the two above are.
+ */
+export const CRAWL_SHARED_STRATUM = 'shared';
+
+/**
  * The strata the projection's merge driver places rows in.
  *
  * What matters about them is not their names but that a row in one of them was
@@ -121,27 +141,52 @@ export const CRAWL_INCUMBENT_STRATUM = 'crawl';
 const CRAWL_DRIVER_STRATA: ReadonlySet<string> = new Set(['base', 'closure']);
 
 /**
- * Incumbent-stratum ids that are top-level spans.
+ * How rows in a stratum with no driver behind it are placed.
  *
- * The three `ResourceRegistry` phases are mutually disjoint — enumeration,
- * admission and link resolution do not contain one another — and the walk is a
- * separate span that consumes what they built. Together they are the incumbent
- * arm's whole cost.
+ * Every row in such a stratum is pass 0 — there is no driver to number a pass —
+ * so the pass cannot discriminate and the id must. One entry per driverless
+ * stratum, rather than a branch each: the placement rule is identical between
+ * them and a second copy is a second place for it to drift.
  */
-const CRAWL_INCUMBENT_TOP_LEVEL_IDS: ReadonlySet<string> = new Set([
-  'resource-registry:enumerate',
-  'resource-registry:add-resource',
-  'resource-registry:resolve-links',
-  'walk-link-graph:walk',
-]);
+interface DriverlessStratumIds {
+  /** Ids that are top-level spans: nothing in the dump brackets them. */
+  readonly topLevel: ReadonlySet<string>;
+  /** Ids charged from inside one of the spans above. */
+  readonly nested: ReadonlySet<string>;
+}
 
 /**
- * Incumbent-stratum ids charged from inside one of the spans above.
+ * Every driverless stratum's ids, by stratum.
  *
- * The gitignore oracle is read from within the walk, so its milliseconds are
- * already inside `walk-link-graph:walk`.
+ * **Incumbent** — the three `ResourceRegistry` phases are mutually disjoint
+ * (enumeration, admission and link resolution do not contain one another) and
+ * the walk is a separate span that consumes what they built; together they are
+ * the incumbent arm's whole cost. Its gitignore oracle is read from within the
+ * walk, so its milliseconds are already inside `walk-link-graph:walk`.
+ *
+ * **Shared** — one top-level span, the tracker initialization, and nothing
+ * nested inside it. The empty set is written out rather than omitted so that
+ * "this stratum has no nested rows" is a statement, not an absence a future
+ * reader has to interpret.
  */
-const CRAWL_INCUMBENT_NESTED_IDS: ReadonlySet<string> = new Set(['walk-link-graph:gitignore']);
+const CRAWL_DRIVERLESS_IDS: ReadonlyMap<string, DriverlessStratumIds> = new Map([
+  [
+    CRAWL_INCUMBENT_STRATUM,
+    {
+      topLevel: new Set([
+        'resource-registry:enumerate',
+        'resource-registry:add-resource',
+        'resource-registry:resolve-links',
+        'walk-link-graph:walk',
+      ]),
+      nested: new Set(['walk-link-graph:gitignore']),
+    },
+  ],
+  [
+    CRAWL_SHARED_STRATUM,
+    { topLevel: new Set(['git-tracker:initialize']), nested: new Set<string>() },
+  ],
+]);
 
 /**
  * Where one row's time belongs: added to its stratum, or already inside it.
@@ -157,22 +202,29 @@ const CRAWL_INCUMBENT_NESTED_IDS: ReadonlySet<string> = new Set(['walk-link-grap
  *   invocation in — which is the same span the driver just timed at pass >= 1.
  *   That holds for a contributor's own bracket, for its per-reference
  *   resolution, and for a `ResourceRegistry` build reached from inside it.
- * - **`pass === 0` in the incumbent stratum is decided by id**, because the
- *   walker has no driver and every one of its rows is pass 0, so the pass
- *   cannot discriminate. Hence the two sets above.
+ * - **`pass === 0` in a DRIVERLESS stratum is decided by id**, because nothing
+ *   numbered a pass there and every one of its rows is pass 0, so the pass
+ *   cannot discriminate. Hence {@link CRAWL_DRIVERLESS_IDS}.
  * - **Anything else is `unclassified`** — a pass-0 row under an id and a
  *   stratum this build has never seen. It is counted in neither total, which is
  *   the only answer that cannot be wrong. Placing it by resemblance is how the
  *   defect this function exists to fix would be rebuilt one bracket at a time.
+ *
+ * ⚠️ **The rule places rows, it does not assign them to an ARM.** `shared` rows
+ * are additive — they are real time nothing else brackets — and they belong to
+ * neither crawler. A caller totalling one arm must select by stratum and not by
+ * role; a role of `additive` means "safe to add", never "part of the crawl this
+ * command was flipped onto".
  *
  * @param row - One row, as the seam dumped it
  * @returns Which class of row it is
  */
 export function crawlRowRole(row: CrawlSeamRow): CrawlRowRole {
   if (row.pass >= 1) return 'additive';
-  if (row.stratum === CRAWL_INCUMBENT_STRATUM) {
-    if (CRAWL_INCUMBENT_TOP_LEVEL_IDS.has(row.contributorId)) return 'additive';
-    return CRAWL_INCUMBENT_NESTED_IDS.has(row.contributorId) ? 'nested' : 'unclassified';
+  const driverless = CRAWL_DRIVERLESS_IDS.get(row.stratum);
+  if (driverless !== undefined) {
+    if (driverless.topLevel.has(row.contributorId)) return 'additive';
+    return driverless.nested.has(row.contributorId) ? 'nested' : 'unclassified';
   }
   return CRAWL_DRIVER_STRATA.has(row.stratum) ? 'nested' : 'unclassified';
 }

@@ -138,3 +138,61 @@ export { parseWholeNumberAtLeast } from './numeric-args.js';
 
 // Machine-independent string ordering for hashed/serialized output — never `localeCompare`.
 export { compareCodeUnits } from './compare-code-units.js';
+
+// The crawl-timing seam: which contributor, stratum and fixpoint pass owns the
+// time it takes to FIND documents.
+//
+// It lives HERE, at the bottom of the graph, because the work it measures is
+// spread across four packages above this one — `resources` builds the registry,
+// `agent-skills` walks the link graph, `claude-marketplace` enumerates an
+// inventory, and `utils` itself initializes the `GitTracker` both crawlers
+// consume. Both arms must record through ONE recorder or the two are not
+// comparable, and only `utils` is beneath all of them. See the module header.
+//
+// Named rather than `export *`: the accumulator internals (`addEntry`,
+// `keyOf`, `recordInheritedPass`) are not surface, and `timing-dump.ts` is
+// plumbing shared with `resources`' package-internal `parse-timing.ts` — a star
+// re-export would publish both the moment either grew a symbol.
+export {
+  CRAWL_CLOSURE_CONTRIBUTE_ID,
+  CRAWL_CLOSURE_RESOLVE_ID,
+  CRAWL_PASS_INSIDE,
+  CRAWL_REGISTRY_ADD_RESOURCE_ID,
+  CRAWL_REGISTRY_ENUMERATE_ID,
+  CRAWL_REGISTRY_ID_PREFIX,
+  CRAWL_REGISTRY_RESOLVE_LINKS_ID,
+  // Exported so the READER can pin itself against the WRITER. `@vibe-agent-toolkit/lab`
+  // hard-refuses a dump whose version it does not recognise, and the two constants
+  // used to be unrelated literals in two packages — drift was silent, and its symptom
+  // is every dump being refused rather than a subtly wrong number.
+  CRAWL_SEAM_DUMP_VERSION,
+  CRAWL_SHARED_GIT_TRACKER_ID,
+  CRAWL_STRATA,
+  CRAWL_WALKER_GITIGNORE_ID,
+  CRAWL_WALKER_ID,
+  crawlTimingStart,
+  recordContributorInvocation,
+  recordCrawlPass,
+  recordRegistryPass,
+  recordSharedPass,
+  withContributorStratum,
+  type CrawlDriverStratum,
+  type CrawlStratum,
+  type CrawlTimingDump,
+  type CrawlTimingEntry,
+  type CrawlTimingProcess,
+  __readCrawlTimingSnapshot,
+  __setCrawlTimingForTest,
+  __writeCrawlTimingDumpForTest,
+} from './crawl-timing.js';
+
+// The on-disk plumbing both timing seams share. Exported because
+// `resources`' `parse-timing.ts` is the other consumer and now sits a package
+// away; nothing else should reach for it.
+export {
+  ensureTimingDirectory,
+  normalizeTimingDirectory,
+  readTimingProcess,
+  type TimingProcess,
+  writeTimingDump,
+} from './timing-dump.js';

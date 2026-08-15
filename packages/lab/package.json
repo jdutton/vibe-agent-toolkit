@@ -38,8 +38,7 @@
   },
   "license": "MIT",
   "devDependencies": {
-    "@types/which": "^3.0.4",
-    "@vibe-agent-toolkit/resources": "workspace:*"
+    "@types/which": "^3.0.4"
   },
   "bin": {
     "vat-lab": "./dist/bin/vat-lab.js"

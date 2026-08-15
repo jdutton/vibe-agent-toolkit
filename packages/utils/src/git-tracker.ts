@@ -8,6 +8,11 @@
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
+import {
+  CRAWL_SHARED_GIT_TRACKER_ID,
+  crawlTimingStart,
+  recordSharedPass,
+} from './crawl-timing.js';
 import { gitLsFiles, isGitIgnored } from './git-utils.js';
 import { safePath, toForwardSlash } from './path-utils.js';
 
@@ -91,12 +96,31 @@ export class GitTracker {
    * With `includeUntracked: false`, only tracked files are pre-populated.
    * Untracked non-ignored files will miss the cache and fall through to
    * `git check-ignore` via {@link isIgnored}.
+   *
+   * ## This is the one bracket in the crawl-timing seam's `shared` stratum
+   *
+   * The `git ls-files` spawn below is preparation BOTH crawlers consume and
+   * NEITHER owns — the incumbent link walk and the projection's contributors are
+   * each handed a tracker by their caller — so it is charged to
+   * {@link CRAWL_SHARED_GIT_TRACKER_ID}, in a stratum belonging to no arm.
+   *
+   * The bracket is here, inside the class, and not at the six sites that build a
+   * tracker, for the reason `crawl-timing.ts` gives about `ResourceRegistry`: six
+   * copies are six chances to disagree, and a seventh site added later would
+   * silently go uncharged. Here, every caller is covered by construction — which
+   * includes `@vibe-agent-toolkit/discovery`, a package that could not have filed
+   * a row from its own call site at all, since it depends on `utils` alone.
+   *
+   * The early return above is deliberately OUTSIDE it: a re-entrant call does no
+   * work, and charging it would inflate `calls` with questions rather than
+   * spawns.
    */
   async initialize(options?: GitTrackerInitOptions): Promise<void> {
     if (this.initialized) {
       return;
     }
 
+    const startedAt = crawlTimingStart();
     const includeUntracked = options?.includeUntracked ?? true;
 
     const files = gitLsFiles({
@@ -117,6 +141,11 @@ export class GitTracker {
     this.gitAnswered = files !== null;
     this.activeSetPopulated = includeUntracked && files !== null;
     this.initialized = true;
+    // After the state above is settled, so a throw from the seam could never
+    // leave a half-initialized tracker; and charged even when git did not answer,
+    // because a failed `git ls-files` still spawned a process and still cost the
+    // command the time it took to fail.
+    recordSharedPass(CRAWL_SHARED_GIT_TRACKER_ID, startedAt);
   }
 
   /**

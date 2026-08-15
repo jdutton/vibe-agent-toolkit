@@ -29,9 +29,32 @@
  * ~12,000 parser-pass records. The one genuinely hot site — the closure's
  * per-reference resolution — is charged into a single pre-resolved key.
  *
- * ## What a `stratum` is here, and why the walker gets a third one
+ * ## Why this seam lives in `utils` and not in the package that owns a crawler
  *
- * Two of the three come straight from the merge driver: `base` contributors run
+ * Every id below names work in some *other* package — `resources` builds the
+ * registry, `agent-skills` walks the link graph, `claude-marketplace` enumerates
+ * an inventory. The seam has to sit underneath all of them, and `utils` is the
+ * only package that is underneath all of them.
+ *
+ * It shipped in `resources` and was moved here when {@link CRAWL_SHARED_GIT_TRACKER_ID}
+ * needed a bracket, because the code that row measures — `GitTracker.initialize`
+ * and its `git ls-files` spawn — is in *this* package, and `utils` may not import
+ * `resources`. The alternative was a bracket at each of the six call sites that
+ * construct a tracker, which is the arrangement the `ResourceRegistry` section
+ * below rejects for exactly the reason it gives; and it would have reached only
+ * five of them, because `@vibe-agent-toolkit/discovery` depends on `utils` alone
+ * and could not have filed a row at all.
+ *
+ * ⚠️ What that costs, stated rather than glossed: {@link CrawlStratum}'s `base`
+ * and `closure` are the merge driver's names, and the driver is two packages up.
+ * A module here now carries vocabulary from above it. That is a naming coupling
+ * and not a code one — nothing in this file or {@link timing-dump} imports
+ * anything but `node:` builtins and this package's own path helpers — but a
+ * reader looking for why `utils` knows the word "fixpoint" is owed the answer.
+ *
+ * ## What a `stratum` is here, and why the walker and the tracker get their own
+ *
+ * Two of the four come straight from the merge driver: `base` contributors run
  * once, `closure` contributors iterate to a fixed point. `walkLinkGraph` is
  * neither — it is not a projection contributor at all and the driver never sees
  * it — so it records under `crawl` with a **synthetic contributor id**
@@ -40,6 +63,12 @@
  * happened to pass: a synthetic id that arrives by accident is indistinguishable
  * in the dump from a real contributor, and the whole point of the dump is that
  * the two crawlers are legible side by side.
+ *
+ * The fourth, `shared`, is for work **neither arm owns and both consume** — see
+ * its own section below. It exists because the only honest place to charge such
+ * work is a stratum that belongs to nobody: charging it to `crawl` would put
+ * shared preparation on the incumbent's total, which is the same class of defect
+ * as the double-count described further down, with the arms swapped.
  *
  * ## The two arms are bracketed at the same DEPTH, and that took a fix
  *
@@ -79,6 +108,10 @@
  *   ({@link CRAWL_CLOSURE_CONTRIBUTE_ID}, {@link CRAWL_CLOSURE_RESOLVE_ID}, and a
  *   registry build reached from inside a contributor) are breakdowns of that same
  *   time, not additions to it.
+ * - **Neither arm** = the `shared` stratum. It is part of what the COMMAND cost
+ *   and no part of what either crawler cost, so it belongs in a command total and
+ *   in neither side of the side-by-side. A reader who adds it to one arm has
+ *   answered a different question than the one they asked.
  *
  * ⚠️ A rollup that sums a stratum's rows without regard to pass double-counts
  * every nested bracket. That is a real reading hazard, not a hypothetical: it is
@@ -114,6 +147,37 @@
  * contributor — would have removed the overlap by making real work invisible,
  * and an absent row is indistinguishable from code that never ran. Overlap that
  * a reader can see and the totalling rule above resolves beats a silent hole.
+ *
+ * ## `shared` is for preparation that CANCELS, and cancelling is not free
+ *
+ * A `GitTracker` is built once and handed to whichever crawler runs: both arms
+ * take one as a caller option, so the `git ls-files` spawn behind it is charged
+ * to the same side whichever way a verb is flipped. It is therefore invisible to
+ * the arm COMPARISON by construction — and it was, for four commits, invisible
+ * to the dump as well, which is a different and worse thing.
+ *
+ * The distinction the `shared` stratum draws is between two questions a reader
+ * asks with the same words:
+ *
+ * - *"Which crawler costs more?"* — `shared` is irrelevant, and adding it to
+ *   either arm makes the answer wrong.
+ * - *"What did this command spend finding documents?"* — `shared` is part of the
+ *   answer, and omitting it makes THAT answer wrong. On an adopter monorepo one
+ *   `GitTracker.initialize()` measured 147 ms; the whole incumbent crawl on VAT's
+ *   own tree measures ~75 ms. A term that can be twice the total it is missing
+ *   from is not a rounding error.
+ *
+ * Symmetric under-counting is still under-counting. The rule this seam keeps is
+ * that no measured work goes unrecorded, and where a row is placed is answered
+ * separately from whether it exists.
+ *
+ * ⚠️ `shared` is a FALLBACK, not a destination. {@link recordSharedPass} inherits
+ * {@link withContributorStratum} exactly as {@link recordRegistryPass} does, for
+ * the same reason: a projection contributor that built its own tracker would be
+ * paying for it out of its own time, and charging that to `shared` would move a
+ * cost off the arm that actually incurred it. Nothing shipped does — the base
+ * contributors are handed a tracker rather than building one — but "nothing does
+ * yet" is not an accounting rule, and it is the rule this whole file is about.
  *
  * ## `pass` 0 means "recorded from inside the work"
  *
@@ -178,11 +242,34 @@ import {
  * that consumes it, which together are the same span of work the projection's two
  * strata are. Neither is a projection contributor and neither has a stratum of its
  * own, so both record under synthetic ids; see this module's header.
+ *
+ * `shared` is the odd one out and is meant to be: it holds work that BOTH arms
+ * consume and NEITHER owns, so it belongs to a command's total and to no side of
+ * the side-by-side. See this module's `shared` section for why a stratum that
+ * cancels out of the comparison still has to exist.
  */
-export type CrawlStratum = 'base' | 'closure' | 'crawl';
+export type CrawlStratum = 'base' | 'closure' | 'crawl' | 'shared';
 
-/** Every stratum, in the order the dump and every report list them. */
-export const CRAWL_STRATA: readonly CrawlStratum[] = ['base', 'closure', 'crawl'];
+/**
+ * Every stratum, in the order the dump and every report list them.
+ *
+ * `shared` is appended rather than slotted next to `crawl`, so that adding it did
+ * not reorder a single existing row. Dump ordering is what makes two captures of
+ * one run comparable line by line, and a reordering is indistinguishable from a
+ * measurement change to anything diffing the text.
+ */
+export const CRAWL_STRATA: readonly CrawlStratum[] = ['base', 'closure', 'crawl', 'shared'];
+
+/**
+ * The strata the merge driver actually runs a contributor in.
+ *
+ * Spelled out rather than derived as `Exclude<CrawlStratum, 'crawl'>`, which is
+ * what it used to be: that subtraction was correct only while `crawl` was the one
+ * stratum with no driver behind it, and `shared` silently joined the set the day
+ * it was added. A type that grows a member every time an unrelated one is added
+ * is a type that will eventually admit a value nothing can produce.
+ */
+export type CrawlDriverStratum = 'base' | 'closure';
 
 /**
  * The `pass` a bracket placed INSIDE the measured code records.
@@ -275,6 +362,29 @@ export const CRAWL_REGISTRY_ADD_RESOURCE_ID = 'resource-registry:add-resource';
 export const CRAWL_REGISTRY_RESOLVE_LINKS_ID = 'resource-registry:resolve-links';
 
 /**
+ * Synthetic contributor id for one `GitTracker.initialize()` — the `git ls-files`
+ * spawn and the active-set, ancestor and index maps built from its output.
+ *
+ * The default stratum is `shared` because a tracker is preparation both crawlers
+ * consume and neither owns; see this module's `shared` section.
+ *
+ * **`calls` counts real initializations, not calls to the method.** `initialize`
+ * returns immediately once it has run, and a bracket around that early return
+ * would report a caller's re-entry as work. Same rule as
+ * {@link CRAWL_WALKER_GITIGNORE_ID}, which counts oracle reads rather than
+ * questions asked, and for the same reason: a `calls` column nobody can divide by
+ * is a column that misleads.
+ *
+ * ⚠️ **The `new GitTracker(...)` constructor is deliberately NOT charged.** It
+ * resolves one path and allocates four empty containers; a bracket around it
+ * would measure `performance.now()` twice and file the result as a finding. This
+ * row is named "initialize" rather than "build" so it does not imply otherwise.
+ * A tracker that is constructed and never initialized therefore files no row,
+ * which is correct — it also spawned nothing.
+ */
+export const CRAWL_SHARED_GIT_TRACKER_ID = 'git-tracker:initialize';
+
+/**
  * The stratum the merge driver is currently running a contributor under, or
  * absent outside a contributor invocation.
  *
@@ -284,7 +394,7 @@ export const CRAWL_REGISTRY_RESOLVE_LINKS_ID = 'resource-registry:resolve-links'
  * in between, and two populations in one process would corrupt each other's
  * attribution. See this module's header for why the inheritance exists at all.
  */
-const contributorStratum = new AsyncLocalStorage<Exclude<CrawlStratum, 'crawl'>>();
+const contributorStratum = new AsyncLocalStorage<CrawlDriverStratum>();
 
 /** One `(contributorId, stratum, pass)` row of the dump. */
 export interface CrawlTimingEntry {
@@ -336,6 +446,15 @@ export interface CrawlTimingDump {
  *     total is a total OF: traversal alone at v1, the registry build plus the
  *     traversal at v2. Holding a v1 dump against a v2 one reads that widening as
  *     a several-hundred-fold regression in the walker — see this module's header.
+ *
+ * ⚠️ The `shared` stratum did NOT bump this, and the reason is the rule above
+ * rather than an exception to it: no field changed and no existing row's meaning
+ * changed. A `crawl` total is a total of exactly what it was — `shared` holds
+ * work that was previously charged NOWHERE, so nothing moved out of an existing
+ * row into it. A reader that predates `shared` places its rows in `unclassified`,
+ * counts them in no total, and says the crawl cost is an under-count; that is the
+ * designed behaviour for a bracket a reader has never heard of, and it is a
+ * louder failure than a version refusal, not a quieter one.
  */
 export const CRAWL_SEAM_DUMP_VERSION = 2;
 
@@ -506,22 +625,62 @@ export function recordCrawlPass(
 }
 
 /**
- * Attribute elapsed time to one of the `ResourceRegistry` phases, under whichever
- * arm invoked it.
+ * Attribute elapsed time to whichever arm invoked this work, falling back to a
+ * stratum the work belongs to when no arm did.
  *
- * **No `stratum` parameter, deliberately.** A registry does not know whether it
- * is being built for the incumbent walker or from inside a projection
- * contributor, and a call site that names a stratum it cannot know is how the
- * work of one arm ends up on the other's total. The answer comes from
- * {@link withContributorStratum} instead, defaulting to `crawl`.
+ * **No `stratum` parameter from the CALL SITE, deliberately.** The measured code
+ * here — a registry build, a tracker initialization — does not know whether it is
+ * running for the incumbent walker or from inside a projection contributor, and a
+ * call site that names a stratum it cannot know is how the work of one arm ends up
+ * on the other's total. The answer comes from {@link withContributorStratum}
+ * instead.
+ *
+ * The `fallback` is what the work is when nobody claimed it, and it is per site
+ * rather than a constant: an unclaimed registry build was the incumbent preparing
+ * to walk (`crawl`), while an unclaimed tracker build was preparation for whoever
+ * runs (`shared`). One function with a parameter rather than two nearly identical
+ * ones — the branch is the only difference between them, and two copies would be
+ * two places for the inheritance rule to drift.
+ *
+ * @param contributorId - One of this module's synthetic ids
+ * @param startedAt - The value {@link crawlTimingStart} returned
+ * @param fallback - The stratum to charge when no contributor is on the stack
+ */
+function recordInheritedPass(
+  contributorId: string,
+  startedAt: number,
+  fallback: CrawlStratum,
+): void {
+  const stratum = contributorStratum.getStore() ?? fallback;
+  addEntry(contributorId, stratum, CRAWL_PASS_INSIDE, performance.now() - startedAt);
+}
+
+/**
+ * Attribute elapsed time to one of the `ResourceRegistry` phases, under whichever
+ * arm invoked it — the incumbent when none did.
  *
  * @param contributorId - One of this module's `resource-registry:` ids
  * @param startedAt - The value {@link crawlTimingStart} returned
  */
 export function recordRegistryPass(contributorId: string, startedAt: number): void {
   if (!timingEnabled) return;
-  const stratum = contributorStratum.getStore() ?? 'crawl';
-  addEntry(contributorId, stratum, CRAWL_PASS_INSIDE, performance.now() - startedAt);
+  recordInheritedPass(contributorId, startedAt, 'crawl');
+}
+
+/**
+ * Attribute elapsed time to preparation both arms consume, under whichever arm
+ * invoked it — `shared` when none did, which is the shipped case.
+ *
+ * See this module's `shared` section: the fallback is the point of this entry
+ * point, and the inheritance is what keeps it from becoming a place to hide a
+ * cost one arm really did incur.
+ *
+ * @param contributorId - One of this module's shared ids
+ * @param startedAt - The value {@link crawlTimingStart} returned
+ */
+export function recordSharedPass(contributorId: string, startedAt: number): void {
+  if (!timingEnabled) return;
+  recordInheritedPass(contributorId, startedAt, 'shared');
 }
 
 /**
@@ -537,7 +696,7 @@ export function recordRegistryPass(contributorId: string, startedAt: number): vo
  * @returns Whatever the invocation returns
  */
 export function withContributorStratum<T>(
-  stratum: Exclude<CrawlStratum, 'crawl'>,
+  stratum: CrawlDriverStratum,
   run: () => Promise<T>,
 ): Promise<T> {
   if (!timingEnabled) return run();

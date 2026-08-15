@@ -2,16 +2,19 @@
 import { writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
+import { DeferredArtifacts } from '@vibe-agent-toolkit/resources';
+import type { ResourceLink, ResourceMetadata, SkillFileEntry } from '@vibe-agent-toolkit/resources';
 import {
   __readCrawlTimingSnapshot,
   __setCrawlTimingForTest,
   CRAWL_PASS_INSIDE,
   CRAWL_WALKER_GITIGNORE_ID,
   CRAWL_WALKER_ID,
-  DeferredArtifacts,
-} from '@vibe-agent-toolkit/resources';
-import type { ResourceLink, ResourceMetadata, SkillFileEntry } from '@vibe-agent-toolkit/resources';
-import { FsLookupCache, mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+  FsLookupCache,
+  mkdirSyncReal,
+  safePath,
+  toForwardSlash,
+} from '@vibe-agent-toolkit/utils';
 import type { PathProbe } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 

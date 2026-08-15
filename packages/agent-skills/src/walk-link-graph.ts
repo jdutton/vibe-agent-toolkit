@@ -36,17 +36,12 @@
 import { basename, dirname } from 'node:path';
 
 import {
-  CRAWL_PASS_INSIDE,
-  CRAWL_WALKER_GITIGNORE_ID,
-  CRAWL_WALKER_ID,
-  crawlTimingStart,
   isLocalFileLink,
   parserKindForPath,
-  recordCrawlPass,
   resolveLocalHref,
 } from '@vibe-agent-toolkit/resources';
 import type { DeferredArtifacts, ResourceLink, ResourceMetadata } from '@vibe-agent-toolkit/resources';
-import { FsLookupCache, type GitTracker, isGitIgnored, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
+import { CRAWL_PASS_INSIDE, CRAWL_WALKER_GITIGNORE_ID, CRAWL_WALKER_ID, crawlTimingStart, FsLookupCache, type GitTracker, isGitIgnored, recordCrawlPass, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 
 import { isAgentInstructionBasename, isNavigationBasename } from './validators/validation-rules.js';

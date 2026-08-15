@@ -2,8 +2,11 @@
  * The on-disk plumbing every VAT timing seam shares.
  *
  * Two seams write per-process JSON dumps to an operator-named directory:
- * `parse-timing.ts` (which pass inside a parser owns the time) and
- * `crawl-timing.ts` (which contributor or crawler owns the time). What they
+ * `@vibe-agent-toolkit/resources`' `parse-timing.ts` (which pass inside a parser
+ * owns the time) and this package's `crawl-timing.ts` (which contributor or
+ * crawler owns the time). They sit in different packages because `crawl-timing`
+ * has to bracket `GitTracker`, which is here — so this module lives at the lower
+ * of the two and is exported for the higher one. What they
  * MEASURE could not be less alike — one axis is a closed enum of parser passes,
  * the other is an open set of contributor ids — but every property that makes
  * the *file* trustworthy is identical between them, and the lab's
@@ -30,7 +33,8 @@
 
 import { existsSync, writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from './path-core.js';
+import { mkdirSyncReal } from './path-utils.js';
 
 /**
  * Process-level wall and CPU time, read ONCE when a dump is written.

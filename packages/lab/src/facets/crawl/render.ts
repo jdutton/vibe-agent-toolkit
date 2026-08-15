@@ -45,7 +45,7 @@ import {
 } from '../../harness/render.js';
 
 import type { CrawlComparisonResult, CrawlMovement, CrawlRowMovement } from './compare.js';
-import { crawlRoleTotalOf } from './dump.js';
+import { CRAWL_SHARED_STRATUM, crawlRoleTotalOf } from './dump.js';
 import type {
   CrawlAttribution,
   CrawlBody,
@@ -113,14 +113,28 @@ const LOAD_PHRASING: LoadPhrasing = {
  * them would compare a walk against a walk-plus-its-oracle. The nested time is
  * on {@link nestingLine} beneath.
  *
+ * ⚠️ **Not every stratum on this line is an arm.** `shared` is preparation both
+ * crawlers consume and neither owns, so it is in the total and on neither side
+ * of the comparison. It is marked rather than hidden: dropping it would make the
+ * strata stop summing to the headline, and a reader who cannot reconcile a
+ * report trusts none of it.
+ *
  * @param row - The command's statistics
  * @returns One line
  */
 function strataLine(row: CrawlCommandStats): string {
   const split = row.strata
-    .map((stratum) => `${stratum.stratum} ${ms(stratum.elapsedMs)} (${share(stratum.elapsedMs, row.totalMs)})`)
+    .map((stratum) => {
+      const mark = stratum.stratum === CRAWL_SHARED_STRATUM ? '†' : '';
+      return `${stratum.stratum}${mark} ${ms(stratum.elapsedMs)} (${share(stratum.elapsedMs, row.totalMs)})`;
+    })
     .join(' / ');
-  return `      by stratum: ${split === '' ? 'none' : split}`;
+  const footnote = row.strata.some((stratum) => stratum.stratum === CRAWL_SHARED_STRATUM)
+    ? '\n      † preparation BOTH crawlers consume and NEITHER owns — in the total above, in ' +
+      'neither arm of the comparison. Flipping a verb from one crawler to the other does not ' +
+      'remove it.'
+    : '';
+  return `      by stratum: ${split === '' ? 'none' : split}${footnote}`;
 }
 
 /**

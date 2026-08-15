@@ -50,6 +50,12 @@ const CLOSURE_MS = 100;
 /** A bracket under an id this build has never heard of. */
 const UNKNOWN_MS = 7;
 
+/** The `GitTracker` initialization — in the command's total, in neither arm. */
+const TRACKER_MS = 20;
+
+/** The incumbent arm's rendered figure, asserted from more than one angle. */
+const CRAWL_ARM_LINE = 'crawl 30.0ms';
+
 /**
  * One process's dump, carrying one row of each role.
  *
@@ -123,7 +129,7 @@ describe('renderCrawlReport — nesting', () => {
     // 30, not 44. The oracle's milliseconds are real and are already inside the
     // walk; adding them would make the incumbent arm look half again as
     // expensive as it is, and would do so on only one of the two arms.
-    expect(render(NESTED_ROWS)).toContain('crawl 30.0ms');
+    expect(render(NESTED_ROWS)).toContain(CRAWL_ARM_LINE);
   });
 
   it('states the nested time rather than leaving the column unreconcilable', () => {
@@ -160,6 +166,51 @@ describe('renderCrawlReport — nesting', () => {
   });
 });
 
+describe('renderCrawlReport — a stratum that is not an arm', () => {
+  /** The same run, plus the tracker initialization both crawlers consume. */
+  const WITH_SHARED: CrawlDump['entries'] = [
+    ...NESTED_ROWS,
+    {
+      contributorId: 'git-tracker:initialize',
+      stratum: 'shared',
+      pass: 0,
+      calls: 1,
+      elapsedMs: TRACKER_MS,
+    },
+  ];
+
+  it('counts it in the command total, because the command paid for it', () => {
+    // 130 + 20. Leaving it out would be the under-count the `shared` stratum was
+    // introduced to end — and a symmetric under-count is still an under-count.
+    expect(render(WITH_SHARED)).toContain('150.0ms');
+  });
+
+  it('leaves BOTH arms exactly where they were', () => {
+    const text = render(WITH_SHARED);
+
+    // The whole hazard: charging shared preparation to `crawl` would put it on
+    // the incumbent's total and make the projection look better than it is, on a
+    // cost flipping a verb would not remove.
+    expect(text).toContain(CRAWL_ARM_LINE);
+    expect(text).toContain('closure 100.0ms');
+  });
+
+  it('marks it, so no reader adds it to an arm', () => {
+    const text = render(WITH_SHARED);
+
+    // A reader who reconciles 30 + 100 + 20 against the headline needs to be told
+    // which of the three is not a crawler, at the place they are reading it.
+    expect(text).toContain('shared† 20.0ms');
+    expect(text).toContain('preparation BOTH crawlers consume and NEITHER owns');
+  });
+
+  it('says none of that on a run with no shared row', () => {
+    // The footnote explains a mark. With nothing marked it is an answer to a
+    // question the reader did not ask.
+    expect(render(NESTED_ROWS)).not.toContain('preparation BOTH crawlers consume');
+  });
+});
+
 describe('renderCrawlReport — rows this build cannot place', () => {
   /** The same run, plus a bracket under an unrecognised id. */
   const WITH_UNKNOWN: CrawlDump['entries'] = [
@@ -188,7 +239,7 @@ describe('renderCrawlReport — rows this build cannot place', () => {
     // nested figure (which hides it if it does not).
     const text = render(WITH_UNKNOWN);
 
-    expect(text).toContain('crawl 30.0ms');
+    expect(text).toContain(CRAWL_ARM_LINE);
     expect(text).toContain('of which nested inside the rows above (NOT added): 14.0ms');
   });
 });

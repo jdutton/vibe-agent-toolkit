@@ -6,13 +6,16 @@ import {
 	walkLinkGraph,
 	type WalkableRegistry,
 } from '@vibe-agent-toolkit/agent-skills';
+import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
 import {
 	CRAWL_REGISTRY_ENUMERATE_ID,
+	crawlDirectory,
 	crawlTimingStart,
+	findProjectRoot,
+	type GitTracker,
 	recordRegistryPass,
-	ResourceRegistry,
-} from '@vibe-agent-toolkit/resources';
-import { crawlDirectory, findProjectRoot, safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
+	safePath,
+} from '@vibe-agent-toolkit/utils';
 
 import { ClaudeSkillInventory } from './types.js';
 

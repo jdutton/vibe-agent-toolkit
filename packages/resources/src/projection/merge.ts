@@ -45,9 +45,8 @@
  * loop ends on the first pass in which none of them moved.
  */
 
-import { safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
+import { recordContributorInvocation, safePath, withContributorStratum, type GitTracker } from '@vibe-agent-toolkit/utils';
 
-import { recordContributorInvocation, withContributorStratum } from '../crawl-timing.js';
 import type { JsonValue } from '../schemas/projection-shared.js';
 
 import { populateBlobs, type BlobPopulationResult } from './blob-population.js';
