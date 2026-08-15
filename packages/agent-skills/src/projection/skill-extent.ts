@@ -16,42 +16,43 @@
  *
  * The equality experiment lives in `test/projection-skill-extent.test.ts`, and
  * its result is that **membership** agrees exactly on a corpus whose every link
- * target is an ordinary reachable file, and — since `excludeBasenames`,
- * `excludeKinds` and `admitPaths` were added to the primitive — on three of the
- * cascade discriminators that used to diverge as well. What remains is listed
- * below. Stated here rather than in a report, because a reader reaching for this
- * translation needs the boundary, not the anecdote:
+ * target is an ordinary reachable file, and — since the primitive gained a
+ * labelled `refusals` cascade plus `admitPaths` — on three of the cascade
+ * discriminators that used to diverge, and now on their REASONS as well. What
+ * remains is listed below. Stated here rather than in a report, because a reader
+ * reaching for this translation needs the boundary, not the anecdote:
  *
  * | Walker feature | Verdict |
  * |---|---|
  * | `linkFollowDepth` | **expressible** — same union, same off-by-one (`depth < maxDepth`) |
- * | `excludeReferencesFromBundle` *membership* | **expressible** — first-match-wins and any-match select the same file set, so a flat union of every rule's `patterns` is exact |
- * | `excludeReferencesFromBundle` *`template` payload* | **not expressible** — an excluded target emits no row at all, so there is nowhere for `LinkResolution.matchedRule` to land |
- * | `excludeNavigationFiles` | **expressible** — via `excludeBasenames`, the primitive extension this row used to ask for; the basename set is `NAVIGATION_FILE_PATTERNS`, gated on the knob exactly as `classifyExclusion` gates its branch |
- * | `agent-instruction-file` *membership* | **expressible** — `excludeBasenames` carries `AGENT_INSTRUCTION_FILE_PATTERNS` unconditionally, and the explicit-`files:` escape hatch becomes `admitPaths` (see {@link declaredAgentInstructionSources}) |
- * | `directory-target` *membership* | **expressible** — via `excludeKinds: ['directory']`, which reads `resources.kind`; a path glob cannot express it, because a directory's path is shaped like a file's |
+ * | `excludeReferencesFromBundle` *membership* | **expressible** — first-match-wins and any-match select the same file set, so a flat union of every rule's `patterns` in ONE refusal rule is exact |
+ * | `excludeReferencesFromBundle` *`template` payload* | **not expressible** — `realization_conditions` has no column for it, and the translation flattens every rule into one, so which rule won is not even carried |
+ * | `excludeNavigationFiles` | **expressible** — a refusal rule over `NAVIGATION_FILE_PATTERNS`, gated on the knob exactly as `classifyExclusion` gates its branch |
+ * | `agent-instruction-file` *membership* | **expressible** — a refusal rule over `AGENT_INSTRUCTION_FILE_PATTERNS`, unconditionally, and the explicit-`files:` escape hatch becomes `admitPaths` (see {@link declaredAgentInstructionSources}) |
+ * | `directory-target` *membership* | **expressible** — a refusal rule over `kinds: ['directory']`, which reads `resources.kind`; a path glob cannot express it, because a directory's path is shaped like a file's |
+ * | the REASON of those four exclusions | **expressible** — each refusal rule carries a `label`, and the first-match-wins order is `classifyExclusion`'s own branch order, so the refusal reports `SKILL_REFUSED_DIRECTORY_TARGET` where the walker reports `directory-target`. Pinned by the corpus shadow's reason-mismatch bucket, not asserted here |
  * | `deferredArtifacts` (`files:`) | **not expressible** — its three-way classification is keyed on filesystem existence and on gitignore, and the closure does no I/O by construction. Only the ONE fact `admitPaths` needs — which sources are explicit, non-glob agent-instruction files — is a pure function of the config, which is why that much survives the translation |
  * | routable vs non-routable | **not expressible** (reasoned, not measured — the corpus has no HTML) — `follow` names a reference FORM, never the parser kind of the TARGET, so wherever HTML blob references are populated the closure walks THROUGH a page `isRoutable` treats as a leaf |
  * | `skill-definition` | **not expressible** — the verdict depends on comparing the target against THIS walk's `skillRootPath` (a self-link is silently skipped, a sibling's SKILL.md is refused), and the declaration has no vocabulary for "the same file as my own root" |
  * | `gitignored`, `outside-project`, `unreadable-target`, `missing-target` | **not expressible** — each needs an oracle the closure does not consult: git, the project boundary, and two distinct filesystem-read outcomes |
- * | every exclusion's REASON, and `template` | **still not expressible** — a refused candidate emits no row at all, so `directory-target` vs `navigation-file` vs `pattern-matched` collapses to one payload-free verdict, and `LinkResolution.matchedRule` has nowhere to land |
+ * | a refusal's PROVENANCE (`sourcePath`, `sourceLine`, `linkHref`, `targetExists`, `matchedRule`) | **not expressible yet** — the reason lands in `realization_conditions.code`, and that table has no column for the rest. Four of the five are already in scope at the refusal site; see the note in `closure-extent.ts`'s `hopFor` |
  *
- * Read the top three rows as membership-only. The primitive now *selects the
- * same files* for those three causes; it still cannot *say why*, and that
- * distinction is not cosmetic — `vat`'s verdict engine reports
- * `LINK_TO_NAVIGATION_FILE` and `LINK_TO_DIRECTORY` as distinct findings, and
- * nothing in the projection can reproduce that split.
+ * Read the membership rows and the reason row together: the primitive now
+ * selects the same files for those causes AND names the same cause. What it
+ * still cannot carry is the rest of `LinkResolution` — which is why `vat`'s
+ * verdict engine cannot yet be driven from a projection even though
+ * `LINK_TO_NAVIGATION_FILE` and `LINK_TO_DIRECTORY` are now distinguishable.
  *
  * The `excludeNavigationFiles` row is the one worth reading twice, because the
- * shape of its extension is the argument for why it is a THIRD matcher and not a
- * cleverer glob: `isNavigationBasename` matches a **case-insensitive basename
- * set** (`README.md`, `index.md`, …), while `exclude` is picomatch over a
- * root-relative path. A brace alternation over `README` / `readme` / `Readme`
- * enumerates spellings a case-insensitive filesystem generates freely, so the
- * approximation silently under-matches exactly where the walker's comment says
- * it must not (`Claude.md` is loaded as instructions on APFS just as `CLAUDE.md`
- * is). The honest extension was a declared basename set, and it is what
- * `excludeBasenames` is.
+ * shape of its extension is the argument for why a rule needs a basename matcher
+ * and not a cleverer glob: `isNavigationBasename` matches a **case-insensitive
+ * basename set** (`README.md`, `index.md`, …), while `patterns` is picomatch
+ * over a root-relative path. A brace alternation over `README` / `readme` /
+ * `Readme` enumerates spellings a case-insensitive filesystem generates freely,
+ * so the approximation silently under-matches exactly where the walker's comment
+ * says it must not (`Claude.md` is loaded as instructions on APFS just as
+ * `CLAUDE.md` is). The honest extension was a declared basename set, and it is
+ * what `ExtentRefusalRule.basenames` is.
  *
  * ## `closureFrom` is stated in projection coordinates
  *
@@ -71,6 +72,7 @@ import {
   type ExtentContribution,
   type ExtentContributor,
   type ExtentDeclaration,
+  type ExtentRefusalRule,
   type JsonValue,
   type ProjectionBase,
   type SkillPackagingConfig,
@@ -138,28 +140,90 @@ const DIRECTORY_KIND = 'directory';
 const DEFAULT_EXCLUDE_NAVIGATION_FILES = true;
 
 /**
- * The basenames this skill's closure refuses, in the walker's own cascade order
- * of *reasons* (which is unobservable here — see below — but is what a reader
- * comparing the two files will be looking for).
+ * The four refusal labels this translation supplies, one per `classifyExclusion`
+ * branch it can express.
  *
- * `AGENT_INSTRUCTION_FILE_PATTERNS` is unconditional, and that is not an
- * oversight: `refusesAgentInstructionFile` is deliberately NOT gated on
- * `excludeNavigationFiles`, because that knob is about content granularity and
- * these files are about distributability. `NAVIGATION_FILE_PATTERNS` is gated,
- * because `classifyExclusion`'s navigation branch is.
+ * SCREAMING_SNAKE because they land in `realization_conditions.code`, whose two
+ * existing members (`CLOSURE_REFERENCE_UNRESOLVED`, `CLOSURE_ROOT_ABSENT`) set
+ * that convention. Prefixed `SKILL_REFUSED_` because that column is an OPEN
+ * vocabulary shared by every contributor in a population: a bare
+ * `DIRECTORY_TARGET` would not say whose cascade decided it.
  *
- * Imported from `validation-rules.ts`, never re-spelled: that module is explicit
- * that ONE canonical spelling per name is the whole design, and a second copy
- * here would be the enumeration it warns against.
+ * The walker reason each one stands for is in its own doc line, and that mapping
+ * is asserted end-to-end by the corpus shadow's reason-mismatch bucket rather
+ * than trusted — see `projection-skill-extent-corpus.integration.test.ts`.
+ */
+/** `classifyPathKind`'s `directory-target`. */
+export const SKILL_REFUSED_DIRECTORY_TARGET = 'SKILL_REFUSED_DIRECTORY_TARGET';
+
+/** `classifyExclusion`'s `navigation-file`. */
+export const SKILL_REFUSED_NAVIGATION_FILE = 'SKILL_REFUSED_NAVIGATION_FILE';
+
+/** `classifyExclusion`'s `agent-instruction-file`. */
+export const SKILL_REFUSED_AGENT_INSTRUCTION_FILE = 'SKILL_REFUSED_AGENT_INSTRUCTION_FILE';
+
+/** `classifyExclusion`'s `pattern-matched`, from `excludeReferencesFromBundle`. */
+export const SKILL_REFUSED_PATTERN_MATCHED = 'SKILL_REFUSED_PATTERN_MATCHED';
+
+/**
+ * This skill's refusal cascade, **in `classifyExclusion`'s own branch order**.
+ *
+ * ⚠️ The order is load-bearing now that a refusal carries a label: the primitive
+ * is first-match-wins, so a directory that also matches an
+ * `excludeReferencesFromBundle` pattern must be attributed to `directory-target`
+ * — which is what the walker does, and which the previous flat encoding got
+ * backwards (its glob matcher ran before its kind matcher, harmlessly, because
+ * no verdict carried a reason to get wrong).
+ *
+ * The four rules, and why each sits where it does:
+ *
+ * 1. **kinds `['directory']`** — `classifyPathKind` is the FIRST thing
+ *    `classifyExclusion` consults after the deferred check, and no knob gates it.
+ * 2. **navigation basenames** — gated on `excludeNavigationFiles`, because
+ *    `classifyExclusion`'s navigation branch is. Omitted entirely rather than
+ *    emitted empty when the knob is off, so the declaration says "this branch
+ *    does not run" rather than "it runs and catches nothing".
+ * 3. **agent-instruction basenames** — unconditional, and that is not an
+ *    oversight: `refusesAgentInstructionFile` is deliberately NOT gated on
+ *    `excludeNavigationFiles`, because that knob is about content granularity
+ *    while these files are about distributability. Sitting AFTER navigation is
+ *    what makes a `files:`-declared `README.md` report `navigation-file` — see
+ *    {@link declaredAgentInstructionSources} for the other half of that rule.
+ * 4. **the flattened exclude patterns** — last, matching the cascade. Emitted
+ *    even when empty: an empty pattern list never matches, and a rule that is
+ *    always present keeps the four-branch shape legible.
+ *
+ * Basename lists are imported from `validation-rules.ts`, never re-spelled: that
+ * module is explicit that ONE canonical spelling per name is the whole design,
+ * and a second copy here would be the enumeration it warns against.
  *
  * @param config - The skill's packaging block
- * @returns The basenames to refuse, case-insensitively
+ * @returns The ordered refusal rules
  */
-function skillExcludeBasenames(config: SkillPackagingConfig): string[] {
+function skillRefusals(config: SkillPackagingConfig): ExtentRefusalRule[] {
   const excludeNavigation = config.excludeNavigationFiles ?? DEFAULT_EXCLUDE_NAVIGATION_FILES;
   return [
-    ...AGENT_INSTRUCTION_FILE_PATTERNS,
-    ...(excludeNavigation ? NAVIGATION_FILE_PATTERNS : []),
+    { label: SKILL_REFUSED_DIRECTORY_TARGET, patterns: [], basenames: [], kinds: [DIRECTORY_KIND] },
+    ...(excludeNavigation
+      ? [{
+        label: SKILL_REFUSED_NAVIGATION_FILE,
+        patterns: [],
+        basenames: [...NAVIGATION_FILE_PATTERNS],
+        kinds: [],
+      }]
+      : []),
+    {
+      label: SKILL_REFUSED_AGENT_INSTRUCTION_FILE,
+      patterns: [],
+      basenames: [...AGENT_INSTRUCTION_FILE_PATTERNS],
+      kinds: [],
+    },
+    {
+      label: SKILL_REFUSED_PATTERN_MATCHED,
+      patterns: (config.excludeReferencesFromBundle?.rules ?? []).flatMap((rule) => rule.patterns),
+      basenames: [],
+      kinds: [],
+    },
   ];
 }
 
@@ -185,16 +249,18 @@ function rootRelativeSource(source: string): string {
  * The `files:`-declared agent-instruction files this skill's closure must admit
  * despite {@link skillExcludeBasenames} refusing their basenames.
  *
- * ⚠️ **The asymmetry here is the walker's cascade ORDER, and it belongs in this
- * translation rather than in the primitive.** `walk-link-graph.ts`'s
- * `classifyExclusion` refuses `navigation-file` BEFORE it reaches the
- * agent-instruction branch, and only the agent-instruction branch carries the
- * explicit-`files:` escape hatch. A `files:`-declared `README.md` linked from a
- * SKILL.md is therefore STILL excluded by the walker, as `navigation-file` — the
- * hatch never gets a chance to run. The primitive has no cascade to encode that
- * in (its three refusal matchers are unordered by construction, because they all
- * return the same payload-free verdict), so the ordering fact is discharged HERE
- * by narrowing which declarations earn `admitPaths` at all.
+ * ⚠️ **The asymmetry here is the walker's cascade ORDER, and it stays in this
+ * translation even though the primitive now has a cascade of its own.**
+ * `walk-link-graph.ts`'s `classifyExclusion` refuses `navigation-file` BEFORE it
+ * reaches the agent-instruction branch, and only the agent-instruction branch
+ * carries the explicit-`files:` escape hatch. A `files:`-declared `README.md`
+ * linked from a SKILL.md is therefore STILL excluded by the walker, as
+ * `navigation-file` — the hatch never gets a chance to run. {@link skillRefusals}
+ * reproduces the ORDER, so the reported reason is right; it cannot reproduce the
+ * hatch's POSITION, because `admitPaths` outranks the whole cascade rather than
+ * sitting inside one branch of it. So the positional fact is discharged HERE, by
+ * narrowing which declarations earn `admitPaths` at all — a per-branch escape
+ * hatch is a primitive feature nothing else has asked for.
  *
  * "Explicit" is EXACT membership in `DeferredArtifacts.sourcePaths`, which is
  * why a GLOB source earns nothing: `DeferredArtifacts.from` registers a glob by
@@ -235,10 +301,11 @@ function declaredAgentInstructionSources(config: SkillPackagingConfig): string[]
  * This is the whole of the skill extent's behaviour: everything else is the
  * generic contributor. `linkFollowDepth` becomes `maxDepth` unchanged (same
  * `number | 'full'` union, same meaning of a hop), and every
- * `excludeReferencesFromBundle` rule's `patterns` flatten into one `exclude`
- * list — sound for membership because the walker's `find` and the primitive's
- * `some` select the same file set, and ordering is only observable through the
- * winning rule's `template`, which is not a membership fact.
+ * `excludeReferencesFromBundle` rule's `patterns` flatten into ONE labelled
+ * refusal rule — sound because the walker's `find` and the primitive's `some`
+ * select the same file set AND report the same reason (`pattern-matched` for all
+ * of them); which rule won is observable only through its `template`, which the
+ * primitive still has nowhere to put.
  *
  * `follow` is left to the schema default (the three markdown forms), matching
  * the walker: it processes only `isLocalFileLink` links off the markdown AST, so
@@ -257,11 +324,7 @@ export function skillExtentDeclaration(
     kind: SKILL_EXTENT_KIND,
     closureFrom: skillPath,
     maxDepth: config.linkFollowDepth ?? DEFAULT_LINK_FOLLOW_DEPTH,
-    exclude: (config.excludeReferencesFromBundle?.rules ?? []).flatMap((rule) => rule.patterns),
-    // `classifyPathKind`'s `directory-target` branch refuses a directory
-    // unconditionally — no knob gates it — so this list is unconditional too.
-    excludeKinds: [DIRECTORY_KIND],
-    excludeBasenames: skillExcludeBasenames(config),
+    refusals: skillRefusals(config),
     admitPaths: declaredAgentInstructionSources(config),
   });
 }

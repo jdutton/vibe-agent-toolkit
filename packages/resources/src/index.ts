@@ -430,8 +430,10 @@ export {
 } from './projection/contributors/closure-extent.js';
 export {
   ExtentDeclarationSchema,
+  ExtentRefusalRuleSchema,
   ExtentsConfigSchema,
   type ExtentDeclaration,
+  type ExtentRefusalRule,
   type ExtentsConfig,
 } from './schemas/project-config.js';
 

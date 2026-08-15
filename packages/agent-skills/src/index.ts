@@ -38,6 +38,10 @@ export {
   SKILL_EXTENT_CONTRIBUTOR_ID_PREFIX,
   skillExtentContributorId,
   SKILL_EXTENT_KIND,
+  SKILL_REFUSED_AGENT_INSTRUCTION_FILE,
+  SKILL_REFUSED_DIRECTORY_TARGET,
+  SKILL_REFUSED_NAVIGATION_FILE,
+  SKILL_REFUSED_PATTERN_MATCHED,
   SkillExtentContributor,
   skillExtentDeclaration,
 } from './projection/skill-extent.js';

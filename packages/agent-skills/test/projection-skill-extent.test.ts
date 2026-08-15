@@ -51,6 +51,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   SKILL_EXTENT_KIND,
+  SKILL_REFUSED_AGENT_INSTRUCTION_FILE,
+  SKILL_REFUSED_DIRECTORY_TARGET,
+  SKILL_REFUSED_NAVIGATION_FILE,
+  SKILL_REFUSED_PATTERN_MATCHED,
   SkillExtentContributor,
   skillExtentContributorId,
   skillExtentDeclaration,
@@ -305,33 +309,75 @@ describe('skillExtentDeclaration', () => {
       kind: SKILL_EXTENT_KIND,
       closureFrom: SKILL_REL,
       maxDepth: DEFAULT_DEPTH,
-      exclude: [],
       follow: ['markdown-link', 'markdown-link-reference', 'markdown-definition'],
-      // `skill-packager.ts:582` defaults `excludeNavigationFiles` to true, so a
-      // config-less skill refuses both lists.
-      excludeBasenames: [...AGENT_INSTRUCTION_FILE_PATTERNS, ...NAVIGATION_FILE_PATTERNS],
-      // `classifyPathKind` refuses a directory unconditionally — no knob gates it.
-      excludeKinds: ['directory'],
+      // In `classifyExclusion`'s own branch order — see the next test for why
+      // that order is now behaviour rather than presentation.
+      refusals: [
+        // `classifyPathKind` refuses a directory unconditionally — no knob gates it.
+        { label: SKILL_REFUSED_DIRECTORY_TARGET, patterns: [], basenames: [], kinds: ['directory'] },
+        // `skill-packager.ts:582` defaults `excludeNavigationFiles` to true, so a
+        // config-less skill refuses this list too.
+        {
+          label: SKILL_REFUSED_NAVIGATION_FILE,
+          patterns: [], basenames: [...NAVIGATION_FILE_PATTERNS], kinds: [],
+        },
+        {
+          label: SKILL_REFUSED_AGENT_INSTRUCTION_FILE,
+          patterns: [], basenames: [...AGENT_INSTRUCTION_FILE_PATTERNS], kinds: [],
+        },
+        { label: SKILL_REFUSED_PATTERN_MATCHED, patterns: [], basenames: [], kinds: [] },
+      ],
       admitPaths: [],
     });
   });
 
-  it('keeps the agent-instruction list when excludeNavigationFiles is false, and drops only navigation', () => {
+  it('orders the cascade exactly as classifyExclusion does — the order IS the label', () => {
+    // The primitive is first-match-wins and each rule carries a distinct label,
+    // so this sequence is what decides that a directory ALSO matching an exclude
+    // pattern reports `directory-target` rather than `pattern-matched` — which is
+    // `classifyExclusion`'s documented behaviour (`walk-link-graph.ts`: "the
+    // order IS the behaviour"). Asserted as a LIST rather than as membership: a
+    // set-shaped assertion would pass against any permutation, which is exactly
+    // the property under test.
+    expect(skillExtentDeclaration(DEFAULT_CONFIG, SKILL_REL).refusals.map((rule) => rule.label))
+      .toEqual([
+        SKILL_REFUSED_DIRECTORY_TARGET,
+        SKILL_REFUSED_NAVIGATION_FILE,
+        SKILL_REFUSED_AGENT_INSTRUCTION_FILE,
+        SKILL_REFUSED_PATTERN_MATCHED,
+      ]);
+  });
+
+  it('keeps the agent-instruction rule when excludeNavigationFiles is false, and drops only navigation', () => {
     // The walker's agent-instruction branch is deliberately NOT gated on this
     // knob (`refusesAgentInstructionFile`): the knob is about content
     // granularity, "this file is not distributable" is a different question. A
     // translation that gated both would ship every repo's CLAUDE.md the moment
     // an author asked for their READMEs back.
     const declaration = skillExtentDeclaration({ excludeNavigationFiles: false }, SKILL_REL);
-    expect(declaration.excludeBasenames).toEqual([...AGENT_INSTRUCTION_FILE_PATTERNS]);
-    expect(declaration.excludeBasenames).not.toContain('README.md');
+    // The navigation rule is OMITTED, not emptied: the declaration says the
+    // branch does not run, rather than that it runs and catches nothing.
+    expect(declaration.refusals.map((rule) => rule.label)).toEqual([
+      SKILL_REFUSED_DIRECTORY_TARGET,
+      SKILL_REFUSED_AGENT_INSTRUCTION_FILE,
+      SKILL_REFUSED_PATTERN_MATCHED,
+    ]);
+    const agentInstruction = declaration.refusals
+      .find((rule) => rule.label === SKILL_REFUSED_AGENT_INSTRUCTION_FILE);
+    expect(agentInstruction?.basenames).toEqual([...AGENT_INSTRUCTION_FILE_PATTERNS]);
+    expect(declaration.refusals.flatMap((rule) => rule.basenames)).not.toContain('README.md');
   });
 
   it('carries linkFollowDepth "full" through unchanged', () => {
     expect(skillExtentDeclaration({ linkFollowDepth: 'full' }, SKILL_REL).maxDepth).toBe('full');
   });
 
-  it('flattens every ordered rule\'s patterns into one exclude list', () => {
+  it('flattens every ordered rule\'s patterns into ONE labelled refusal rule', () => {
+    // One rule, not one per `ExcludeRule`: the walker reports `pattern-matched`
+    // for all of them, so splitting them would invent a distinction the reason
+    // vocabulary does not have. What is lost is *which* rule won — and that is
+    // only observable through its `template`, which the condition row has no
+    // column for either. See the module note's `template` row.
     const config: SkillPackagingConfig = {
       excludeReferencesFromBundle: {
         rules: [
@@ -340,7 +386,10 @@ describe('skillExtentDeclaration', () => {
         ],
       },
     };
-    expect(skillExtentDeclaration(config, SKILL_REL).exclude).toEqual(['**/*.mjs', 'docs/**', '**/*.json']);
+    const patternRule = skillExtentDeclaration(config, SKILL_REL).refusals
+      .filter((rule) => rule.label === SKILL_REFUSED_PATTERN_MATCHED);
+    expect(patternRule).toHaveLength(1);
+    expect(patternRule[0]?.patterns).toEqual(['**/*.mjs', 'docs/**', '**/*.json']);
   });
 
   it('admits an EXPLICIT files:-declared agent-instruction source, and nothing else', () => {
@@ -454,24 +503,52 @@ describe('membership against walkLinkGraph', () => {
     expect(difference(closure, walker)).toEqual([]);
   });
 
-  it('AGREES on the three cascade discriminators the refusal matchers now express', async () => {
+  it('AGREES on the three cascade discriminators, and now names each one', async () => {
     const root = cascadeCorpus();
-    const closure = await closureMembers(root, DEFAULT_CONFIG);
+    const contribution = await skillExtent(await populatedBase(root), DEFAULT_CONFIG);
+    const closure = sortedPaths(contribution.realizations.map((row) => row.path));
 
     // Each of these was in `difference(closure, walker)` before the primitive
-    // grew `excludeBasenames`, `excludeKinds` and `admitPaths`, and each is now
-    // refused by exactly one of them:
-    //   docs            → `excludeKinds: ['directory']`   (walker: `directory-target`)
-    //   docs/README.md  → NAVIGATION_FILE_PATTERNS        (walker: `navigation-file`)
-    //   CLAUDE.md       → AGENT_INSTRUCTION_FILE_PATTERNS (walker: `agent-instruction-file`)
+    // grew a labelled refusal cascade and `admitPaths`, and each is now refused
+    // by exactly one rule of it.
     expect(closure).not.toContain(DOCS_DIR_REL);
     expect(closure).not.toContain(README_REL);
     expect(closure).not.toContain(CLAUDE_REL);
 
+    // …and the REASON is reported, not just the membership. The right-hand
+    // column is `classifyExclusion`'s own verdict for the same file, which the
+    // corpus shadow asserts head-to-head; here the mapping is pinned at fixture
+    // scale so a translation that refused the right files under the wrong label
+    // fails in the package that owns the translation.
+    const codeFor = (path: string): string | undefined =>
+      contribution.conditions.find((row) => row.path === path)?.code;
+    expect(codeFor(DOCS_DIR_REL)).toBe(SKILL_REFUSED_DIRECTORY_TARGET); // walker: directory-target
+    expect(codeFor(README_REL)).toBe(SKILL_REFUSED_NAVIGATION_FILE); // walker: navigation-file
+    expect(codeFor(CLAUDE_REL)).toBe(SKILL_REFUSED_AGENT_INSTRUCTION_FILE); // walker: agent-instruction-file
+
     // …and the walk was narrowed, not stopped. Without this the three negatives
-    // above are satisfied just as well by a closure that admitted nothing.
+    // above are satisfied just as well by a closure that admitted nothing — and
+    // an admitted member must carry no refusal row.
     expect(closure).toContain(GUIDE_REL);
     expect(closure).toContain(CHAIN_REL);
+    expect(codeFor(GUIDE_REL)).toBeUndefined();
+  });
+
+  it('reports a pattern-matched refusal under its own label, not the basename one', async () => {
+    // The fourth branch, and the one the cascade order could silently mislabel:
+    // `skills/shared/helper.mjs` is neither a directory nor a navigation nor an
+    // agent-instruction basename, so only the LAST rule can catch it. Pinned
+    // alongside the other three so all four labels this translation supplies are
+    // exercised at fixture scale rather than three of four.
+    const root = fixtureCorpus('pattern-labelled');
+    const config: SkillPackagingConfig = {
+      excludeReferencesFromBundle: { rules: [{ patterns: ['skills/shared/*.mjs'], template: '{{path}}' }] },
+    };
+    const contribution = await skillExtent(await populatedBase(root), config);
+
+    expect(contribution.realizations.map((row) => row.path)).not.toContain(HELPER_REL);
+    expect(contribution.conditions.find((row) => row.path === HELPER_REL)?.code)
+      .toBe(SKILL_REFUSED_PATTERN_MATCHED);
   });
 
   it('pins resources.kind "directory" — the premise excludeKinds rests on', async () => {

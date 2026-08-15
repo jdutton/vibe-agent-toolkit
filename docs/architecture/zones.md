@@ -387,28 +387,42 @@ extents:
     closureFrom: skills/foo/SKILL.md     # root-relative; admitted before any traversal
     follow: [markdown-link, markdown-link-reference, markdown-definition]   # default
     maxDepth: 2                          # number of hops, or "full"
-    exclude: ['**/*.test.md']            # picomatch, dot: true, over root-relative paths
-    excludeBasenames: ['README.md']      # case-insensitive basename set
-    excludeKinds: ['directory']          # resources.kind values
-    admitPaths: ['notes/CLAUDE.md']      # exact paths that outrank every matcher above
+    refusals:                            # ORDERED cascade — first match wins
+      - label: DIRECTORY_TARGET          # opaque to the primitive; reported as the condition code
+        kinds: ['directory']             # resources.kind values
+      - label: NAVIGATION_FILE
+        basenames: ['README.md']         # case-insensitive basename set
+      - label: EXCLUDED_BY_PATTERN
+        patterns: ['**/*.test.md']       # picomatch, dot: true, over root-relative paths
+    admitPaths: ['notes/CLAUDE.md']      # exact paths that outrank the whole cascade
 ```
 
-**Three refusal matchers, one override, and a refusal is transitive.** `exclude`, `excludeBasenames`
-and `excludeKinds` return the *same* payload-free verdict, so the order they are consulted in is
-unobservable — unlike `walk-link-graph.ts`'s cascade, where each branch carries a distinct
-`excludeReason` and the order therefore *is* the behaviour. They exist as three because one predicate
+**An ordered, labelled cascade, one override, and a refusal is transitive.** `refusals` is a
+first-match-wins list, and **the order is behaviour**: each rule carries a `label`, the winner's
+label becomes the refused candidate's `realization_conditions.code`, so a directory that *also*
+matches a pattern is attributed to whichever rule comes first. That is the same property
+`walk-link-graph.ts`'s `classifyExclusion` has, and it is why the closure can now reproduce a
+domain cascade's *reasons* and not only its membership. Within one rule the three matchers are
+unordered — they yield that rule's single label — and they exist as three because one predicate
 cannot express the other two: a basename set is not a path glob (a case-insensitive filesystem
 generates spellings no alternation enumerates — `Readme.md`, `README.MD`), and an entity kind is not
 a path at all (a directory's path is shaped exactly like a file's).
 
 A refused candidate is not merely excluded from membership: **the closure does not traverse through
 it**, so the subtree reachable only via that candidate is refused with it. That transitivity is the
-whole reason a refusal is worth expressing — see the measurement below.
+whole reason a refusal is worth expressing — see the measurement below. Only the refused candidate
+gets a condition row; everything pruned behind it never reached a rule, and claiming otherwise would
+attribute a refusal that never happened.
 
-`admitPaths` is the one thing that outranks all three, for the same reason `closureFrom` does: an
-explicit declaration outranks a net, because a glob never named the file it caught. Exact string
-equality, never a prefix test — the explicit-vs-glob distinction is the entire content of the rule,
-and it is the same line `refusesAgentInstructionFile` draws for the `files:` escape hatch.
+The label is **opaque to the primitive** — it never interprets one. That is what keeps the primitive
+generic while letting the skill translation supply `SKILL_REFUSED_NAVIGATION_FILE` and friends, one
+per `classifyExclusion` branch it can express.
+
+`admitPaths` is the one thing that outranks the whole cascade, for the same reason `closureFrom`
+does: an explicit declaration outranks a net, because a glob never named the file it caught. Checked
+before any rule runs, so an admitted path reports no label either. Exact string equality, never a
+prefix test — the explicit-vs-glob distinction is the entire content of the rule, and it is the same
+line `refusesAgentInstructionFile` draws for the `files:` escape hatch.
 
 Every optional field carries a default rather than staying optional, so a parsed declaration is
 total and assignable to the `JsonValue` that `zone_provenance.parameterSet` records verbatim.
@@ -423,20 +437,22 @@ and each unexpressible one names the oracle or the payload it would need:
 | walker feature | verdict |
 |---|---|
 | `linkFollowDepth` | **expressible** — same union, same off-by-one |
-| `excludeReferencesFromBundle` *membership* | **expressible** — first-match-wins and any-match select the identical file set, so a flat union of every rule's patterns is exact |
-| `excludeNavigationFiles` | **expressible** — via `excludeBasenames`, the primitive extension this row used to ask for; gated on the knob exactly as `classifyExclusion` gates its branch |
-| `agent-instruction-file` *membership* | **expressible** — `excludeBasenames` unconditionally (that branch is deliberately not gated on the navigation knob), and the explicit-`files:` escape hatch becomes `admitPaths` |
-| `directory-target` *membership* | **expressible** — via `excludeKinds`, which reads `resources.kind`; a path glob cannot express it |
-| `excludeReferencesFromBundle` *`template` payload*, and every exclusion's REASON | **not expressible** — a refused candidate emits no row at all, so `directory-target` vs `navigation-file` vs `pattern-matched` collapses to one payload-free verdict and `matchedRule` has nowhere to land |
+| `excludeReferencesFromBundle` *membership* | **expressible** — first-match-wins and any-match select the identical file set, so a flat union of every rule's patterns in one refusal rule is exact |
+| `excludeNavigationFiles` | **expressible** — a refusal rule over the navigation basename set, gated on the knob exactly as `classifyExclusion` gates its branch |
+| `agent-instruction-file` *membership* | **expressible** — a refusal rule over the agent-instruction basename set, unconditionally (that branch is deliberately not gated on the navigation knob), and the explicit-`files:` escape hatch becomes `admitPaths` |
+| `directory-target` *membership* | **expressible** — a refusal rule over `kinds`, which reads `resources.kind`; a path glob cannot express it |
+| those four exclusions' REASON | **expressible** — each refusal rule carries a `label` reported as the condition code, and the cascade is declared in `classifyExclusion`'s own branch order. Pinned head-to-head against the walker's `excludeReason` by the corpus shadow's reason-mismatch bucket |
+| `excludeReferencesFromBundle` *`template` payload*, and a refusal's PROVENANCE (`sourcePath`, `sourceLine`, `linkHref`, `targetExists`, `matchedRule`) | **not expressible** — the reason lands in `realization_conditions.code` and that table has no column for the rest. Four of the five are already in scope at the refusal site, so this is a schema widening rather than a rethreading |
 | `deferredArtifacts` (`files:`) | **not expressible** — its three-way classification is keyed on filesystem existence and on gitignore, and the closure does no I/O by construction. Only the one fact `admitPaths` needs — which sources are explicit, non-glob agent-instruction files — is a pure function of the config |
 | `skill-definition` | **not expressible** — the verdict compares the target against *this walk's own* `skillRootPath`, and a declaration has no vocabulary for "the same file as my own root" |
 | `gitignored`, `outside-project`, `unreadable-target`, `missing-target` | **not expressible** — each needs an oracle the closure does not consult |
 | routable vs non-routable | **not expressible** — `follow` names a reference *form*, never the parser kind of the *target* |
 
-Read the expressible membership rows as membership-only: the primitive now selects the same files,
-and still cannot say *why*. That is not cosmetic — VAT's verdict engine reports
-`LINK_TO_NAVIGATION_FILE` and `LINK_TO_DIRECTORY` as distinct findings, and nothing in the projection
-reproduces that split.
+Read the membership rows and the reason row together: the primitive now selects the same files for
+those causes *and* names the same cause, so the `LINK_TO_NAVIGATION_FILE` / `LINK_TO_DIRECTORY` split
+VAT's verdict engine reports is reproducible from a projection. What is still missing is the rest of
+`LinkResolution` — the provenance row above — which is what a verdict *issue* needs in order to name
+a location an author can open.
 
 **Measured at corpus scale, with its own negative control.** Over this repository's fourteen declared
 skills, swept across `linkFollowDepth` 0/1/2/full (56 cells, 9 of which follow a real edge), the two

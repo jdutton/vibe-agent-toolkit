@@ -9,14 +9,27 @@
  * every difference to four causes ({@link KNOWN_CAUSES}) — three branches of
  * `classifyExclusion`'s cascade a glob `exclude` list cannot express, plus the
  * transitive subtree behind them. Stage 3 gave the primitive the vocabulary for a
- * **refusal at a hub** ({@link NARROWING_FIELDS}), and the swept comparison now
- * finds no difference at any depth.
+ * **refusal at a hub** ({@link NARROWING_LABELS} and {@link NARROWING_FIELDS}),
+ * and the swept comparison now finds no difference at any depth.
  *
  * A green "no difference" is the weakest kind of result, so it is not the only
  * one asserted. The sweep runs a **second time with that vocabulary stripped and
  * nothing else changed**, and must reproduce all four causes with pruning still
  * dominant. Agreement that survives its own negative control is a measurement;
  * agreement on its own is satisfied by a closure that returned nothing.
+ *
+ * ## Two comparisons, not one: membership AND the stated reason
+ *
+ * Membership agreement is the older half. The refusal cascade also makes the two
+ * arms comparable on WHY a candidate was turned away, so
+ * {@link compareReasons} takes every path BOTH arms refused and checks the
+ * closure's condition code against the walker's own `excludeReason` through an
+ * explicit four-entry table ({@link REASON_TO_REFUSAL_CODE}). The count of paths
+ * compared is asserted non-zero beside the mismatch list, because an empty
+ * mismatch list over an empty comparison is the same vacuous pass a zero-cell
+ * sweep would give. Demonstrated falsifiable rather than assumed: swapping two
+ * labels in the translation leaves membership untouched and turns 15 of the 59
+ * compared paths into mismatches.
  *
  * `packages/agent-skills/test/projection-skill-extent.test.ts` already compares
  * `SkillExtentContributor` with `walkLinkGraph` at *fixture* scale, on a corpus
@@ -112,6 +125,10 @@
  */
 
 import {
+  SKILL_REFUSED_AGENT_INSTRUCTION_FILE,
+  SKILL_REFUSED_DIRECTORY_TARGET,
+  SKILL_REFUSED_NAVIGATION_FILE,
+  SKILL_REFUSED_PATTERN_MATCHED,
   SkillExtentContributor,
   createProjectRegistry,
   skillExtentContributorId,
@@ -123,6 +140,8 @@ import {
   type WalkableRegistry,
 } from '@vibe-agent-toolkit/agent-skills';
 import {
+  CLOSURE_REFERENCE_UNRESOLVED,
+  CLOSURE_ROOT_ABSENT,
   ContributorRegistry,
   FilesystemExtentContributor,
   ProjectionBuilder,
@@ -245,13 +264,16 @@ const EXCLUDING_SKILL = 'vat-example-cat-agents';
  * These four were the whole of the difference measured in Stage 2: three direct
  * branches of `classifyExclusion`'s ordered cascade that a glob `exclude` list
  * could not express, plus the transitive subtree behind them. Stage 3 gave the
- * primitive `excludeBasenames`, `excludeKinds` and `admitPaths`, so the swept
- * comparison now agrees and this list is no longer an expected result.
+ * primitive a labelled refusal cascade and `admitPaths`, so the swept comparison
+ * now agrees and this list is no longer an expected result.
  *
  * ⚠️ It is retained as the **negative control's** expectation, not as history.
  * "Zero divergence" is satisfiable by a closure that returned nothing at all, so
  * the sweep is run a second time with the vocabulary stripped
- * ({@link NARROWING_FIELDS}) and must reproduce precisely these four. An
+ * ({@link NARROWING_LABELS}, {@link NARROWING_FIELDS}) and must reproduce
+ * precisely these four — 253 attributed paths, of which 239 are the transitive
+ * bucket, 9 `navigation-file`, 3 `directory-target` and 2
+ * `agent-instruction-file`. An
  * equality rather than a subset check on both arms: a NEW cause appearing is the
  * finding this file exists to surface, and a `toContain`-shaped assertion would
  * let one through.
@@ -264,7 +286,7 @@ const KNOWN_CAUSES: readonly DivergenceCause[] = [
 ];
 
 /**
- * The declaration fields Stage 3's narrowing added to the closure primitive.
+ * The declaration FIELDS Stage 3's narrowing added to the closure primitive.
  *
  * Named once so the negative control can remove exactly this vocabulary and
  * nothing else. Reconstructing a pre-Stage-3 declaration by hand would be a
@@ -274,8 +296,67 @@ const KNOWN_CAUSES: readonly DivergenceCause[] = [
  * Every name here is asserted PRESENT on a real declaration before the control
  * runs, so a rename cannot silently turn the control into a no-op — the failure
  * mode of an opt-out list that nothing checks.
+ *
+ * ⚠️ Only `admitPaths` is a field. The other three-quarters of the narrowing
+ * moved into {@link NARROWING_LABELS} when the flat `excludeBasenames` /
+ * `excludeKinds` pair became rules of an ordered, labelled `refusals` cascade —
+ * and the control cannot simply empty `refusals`, because that array ALSO
+ * carries the `excludeReferencesFromBundle` globs, which are pre-Stage-3 and
+ * must survive into the control or its numbers stop meaning what they meant.
  */
-const NARROWING_FIELDS = ['excludeBasenames', 'excludeKinds', 'admitPaths'] as const;
+const NARROWING_FIELDS = ['admitPaths'] as const;
+
+/**
+ * The refusal-rule LABELS Stage 3's narrowing added, as the control must strip
+ * them: by label, from the cascade the shipped translation actually produced.
+ *
+ * These are the three `classifyExclusion` branches a glob `exclude` list could
+ * not express. The fourth rule the translation emits —
+ * {@link SKILL_REFUSED_PATTERN_MATCHED} — is the pre-Stage-3 `exclude` list
+ * wearing a label, so it is deliberately NOT here: removing it would make the
+ * control weaker than the state it stands in for, and would add a fifth cause
+ * (`pattern-matched`) the historical measurement never contained.
+ *
+ * Imported from the translation rather than re-spelled, and each is asserted
+ * present in a real declaration's cascade before the control runs — a label
+ * typo would otherwise strip nothing and the control would agree with
+ * everything.
+ */
+const NARROWING_LABELS: readonly string[] = [
+  SKILL_REFUSED_DIRECTORY_TARGET,
+  SKILL_REFUSED_NAVIGATION_FILE,
+  SKILL_REFUSED_AGENT_INSTRUCTION_FILE,
+];
+
+/**
+ * The walker `excludeReason` each refusal label must reproduce, one entry per
+ * `classifyExclusion` branch the closure can express.
+ *
+ * An EXPLICIT table, not a string transform: `directory-target` →
+ * `SKILL_REFUSED_DIRECTORY_TARGET` is a mapping someone decided, and a
+ * mechanical `toUpperCase().replaceAll('-','_')` would keep agreeing after the
+ * translation started emitting a label that merely looks right. The other seven
+ * reasons are absent on purpose — the closure consults none of their oracles, so
+ * a closure refusal carrying one of them is a finding, not a gap.
+ */
+const REASON_TO_REFUSAL_CODE: ReadonlyMap<string, string> = new Map([
+  ['directory-target', SKILL_REFUSED_DIRECTORY_TARGET],
+  ['navigation-file', SKILL_REFUSED_NAVIGATION_FILE],
+  ['agent-instruction-file', SKILL_REFUSED_AGENT_INSTRUCTION_FILE],
+  ['pattern-matched', SKILL_REFUSED_PATTERN_MATCHED],
+]);
+
+/**
+ * The two condition codes the closure PRIMITIVE owns.
+ *
+ * Everything else in a closure contribution's condition table arrived as a
+ * refusal rule's label, so subtracting these two is how the refusal view is
+ * read off without hardcoding which labels the translation happens to supply.
+ */
+const PRIMITIVE_CONDITION_CODES: ReadonlySet<string> = new Set([
+  CLOSURE_REFERENCE_UNRESOLVED,
+  CLOSURE_ROOT_ABSENT,
+]);
 
 // ============================================================================
 // Types
@@ -363,6 +444,29 @@ interface WalkerRun {
   readonly members: string[];
   /** Every path the walker reached — bundled or refused. */
   readonly seen: ReadonlyMap<string, DivergenceCause | 'bundled'>;
+}
+
+/** Everything one closure contribution produced, in the same coordinate system. */
+interface ClosureRun {
+  /** Extent membership. */
+  readonly members: string[];
+  /** Root-relative path → the refusal label the closure reported for it. */
+  readonly refusals: ReadonlyMap<string, string>;
+}
+
+/**
+ * The reason half of the comparison, beside the membership half.
+ *
+ * `compared` exists so an empty {@link mismatches} cannot pass by being empty by
+ * CONSTRUCTION: a bucket that never compared a path agrees with everything, and
+ * is exactly the vacuous result the membership assertion already has to guard
+ * against ([[fixtures-that-cannot-distinguish]]).
+ */
+interface ReasonComparison {
+  /** How many paths BOTH arms refused, and whose reasons were therefore compared. */
+  readonly compared: number;
+  /** One rendered line per path the two arms refused for different stated reasons. */
+  readonly mismatches: readonly string[];
 }
 
 // ============================================================================
@@ -573,14 +677,24 @@ function declarationFor(
     skill.relativePath,
   ) as unknown as Record<string, unknown>;
   if (narrowing === 'on') return declaration as JsonValue;
-  // The control: every refusal matcher back to the schema default it had before
-  // Stage 3. Emptied rather than deleted, because the schema is `.strict()` with
-  // defaults — a missing key would be re-defaulted to the same `[]` anyway, and
-  // spelling it makes the control's intent legible at the failure site.
+  // The control: every refusal matcher Stage 3 added, back to the state it had
+  // before. `admitPaths` is emptied rather than deleted, because the schema is
+  // `.strict()` with defaults — a missing key would be re-defaulted to the same
+  // `[]` anyway, and spelling it makes the control's intent legible at the
+  // failure site. The cascade is FILTERED rather than emptied, so the
+  // pattern-matched rule (which predates Stage 3) survives into the control.
   return {
     ...declaration,
+    refusals: (declaration['refusals'] as readonly { readonly label: string }[])
+      .filter((rule) => !NARROWING_LABELS.includes(rule.label)),
     ...Object.fromEntries(NARROWING_FIELDS.map((field) => [field, []])),
   } as JsonValue;
+}
+
+/** The refusal labels a real declaration's cascade carries, in cascade order. */
+function refusalLabelsOf(declaration: JsonValue): string[] {
+  const refusals = (declaration as Record<string, unknown>)['refusals'];
+  return (refusals as readonly { readonly label: string }[]).map((rule) => rule.label);
 }
 
 /**
@@ -669,26 +783,80 @@ function projectedMembers(corpus: Corpus, skill: CorpusSkill): string[] {
 }
 
 /**
- * The closure's membership for one skill under an arbitrary config.
+ * The closure's membership AND its stated refusals for one skill under an
+ * arbitrary config.
  *
  * Runs the same contributor `populate` ran, over the base rebuilt from that
  * population — the only way to vary a declaration without re-crawling the corpus.
+ *
+ * The refusal view is every condition row whose code is not one of the
+ * primitive's own two, minus anything that is also a member. Both subtractions
+ * matter: the first keeps a broken link out of the refusal bucket (it is a fact
+ * about a reference, not a verdict about a file), and the second mirrors
+ * {@link walkerRun}'s "bundled wins" rule, so a path reached twice is compared
+ * as a member on both sides or as a refusal on both sides.
  *
  * @param corpus - The corpus the skill belongs to
  * @param skill - The skill whose extent to compute
  * @param config - The effective config
  * @param narrowing - Whether Stage 3's refusal vocabulary is in the declaration
- * @returns Root-relative membership
+ * @returns Root-relative membership and the refusal label per refused path
  */
-async function closureMembers(
+async function closureRun(
   corpus: Corpus,
   skill: CorpusSkill,
   config: SkillPackagingConfig,
   narrowing: Narrowing = 'on',
-): Promise<string[]> {
+): Promise<ClosureRun> {
   const contribution = await new SkillExtentContributor(skill.name)
     .contribute(corpus.base, declarationFor(skill, config, narrowing));
-  return pathSet(contribution.realizations.map((row) => row.path));
+  const members = pathSet(contribution.realizations.map((row) => row.path));
+
+  const memberSet = new Set(members);
+  const refusals = new Map<string, string>();
+  for (const row of contribution.conditions) {
+    if (PRIMITIVE_CONDITION_CODES.has(row.code) || memberSet.has(row.path)) continue;
+    refusals.set(row.path, row.code);
+  }
+
+  return { members, refusals };
+}
+
+/**
+ * The reason halves of the two arms, for every path BOTH of them refused.
+ *
+ * Only paths in both refusal views are compared: a path one arm bundled is a
+ * MEMBERSHIP difference, which {@link Divergence} already owns, and counting it
+ * here too would report one disagreement twice under two names.
+ *
+ * A walker reason with no {@link REASON_TO_REFUSAL_CODE} entry is a mismatch and
+ * not a skip. The four mapped reasons are the ones the closure claims; a closure
+ * refusal sitting on top of `skill-definition` or `gitignored` would mean it is
+ * reporting a reason it has no oracle for, which is the failure this bucket
+ * exists to catch rather than an out-of-scope case to wave through.
+ *
+ * @param walk - What the walker bundled and refused
+ * @param closure - What the closure admitted and refused
+ * @returns How many paths were compared, and every disagreement, rendered
+ */
+function compareReasons(walk: WalkerRun, closure: ClosureRun): ReasonComparison {
+  const mismatches: string[] = [];
+  let compared = 0;
+
+  for (const [path, code] of closure.refusals) {
+    const reason = walk.seen.get(path);
+    // Absent: the walker never reached it. `bundled`: a membership difference.
+    // `PRUNED`: the walker emitted a row with no reason, so there is no reason
+    // to compare against.
+    if (reason === undefined || reason === 'bundled' || reason === PRUNED) continue;
+    compared += 1;
+    const expected = REASON_TO_REFUSAL_CODE.get(reason);
+    if (expected !== code) {
+      mismatches.push(`${path}: walker=${reason} closure=${code} expected=${expected ?? '<unmapped>'}`);
+    }
+  }
+
+  return { compared, mismatches };
 }
 
 /** Both arms for one skill under one config, and their attributed difference. */
@@ -697,9 +865,15 @@ async function compareSkill(
   skill: CorpusSkill,
   config: SkillPackagingConfig,
   narrowing: Narrowing = 'on',
-): Promise<{ walker: string[]; closure: string[]; divergence: Divergence | undefined }> {
+): Promise<{
+  walker: string[];
+  closure: string[];
+  divergence: Divergence | undefined;
+  reasons: ReasonComparison;
+}> {
   const walk = walkerRun(corpus, skill, walkOptionsFor(corpus, skill, config));
-  const closure = await closureMembers(corpus, skill, config, narrowing);
+  const run = await closureRun(corpus, skill, config, narrowing);
+  const closure = run.members;
   const walkerOnly = only(walk.members, closure);
   const closureOnly = only(closure, walk.members).map((path) => ({
     path,
@@ -717,7 +891,8 @@ async function compareSkill(
       walkerOnly,
       closureOnly,
     };
-  return { walker: walk.members, closure, divergence };
+  const reasons = compareReasons(walk, run);
+  return { walker: walk.members, closure, divergence, reasons };
 }
 
 /** What one pass of {@link SWEPT_DEPTHS} over one corpus produced. */
@@ -729,6 +904,10 @@ interface SweepResult {
   readonly excludeEscapes: string[];
   /** Cells in which either arm bundled more than the SKILL.md alone. */
   readonly followed: number;
+  /** Paths BOTH arms refused, summed over every cell — the reason bucket's population. */
+  readonly reasonsCompared: number;
+  /** Every path the two arms refused for different stated reasons. */
+  readonly reasonMismatches: string[];
 }
 
 /**
@@ -742,15 +921,23 @@ interface SweepResult {
  * @returns Every cell's outcome, plus the two aggregate counters
  */
 async function sweepDepths(corpus: Corpus, narrowing: Narrowing = 'on'): Promise<SweepResult> {
-  const result: SweepResult = { divergences: [], rows: [], excludeEscapes: [], followed: 0 };
+  const result: SweepResult = {
+    divergences: [], rows: [], excludeEscapes: [], followed: 0,
+    reasonsCompared: 0, reasonMismatches: [],
+  };
   let followed = 0;
+  let reasonsCompared = 0;
 
   for (const depth of SWEPT_DEPTHS) {
     for (const skill of corpus.skills) {
       const config: SkillPackagingConfig = { ...skill.config, linkFollowDepth: depth };
-      const { walker, closure, divergence } = await compareSkill(corpus, skill, config, narrowing);
+      const { walker, closure, divergence, reasons } = await compareSkill(corpus, skill, config, narrowing);
       if (divergence !== undefined) result.divergences.push(divergence);
       if (walker.length > 1 || closure.length > 1) followed += 1;
+      reasonsCompared += reasons.compared;
+      result.reasonMismatches.push(
+        ...reasons.mismatches.map((line) => `${skill.name}@${String(depth)}: ${line}`),
+      );
       result.rows.push({
         depth, skill: skill.name, walker: walker.length, closure: closure.length,
         agree: divergence === undefined,
@@ -765,7 +952,7 @@ async function sweepDepths(corpus: Corpus, narrowing: Narrowing = 'on'): Promise
     }
   }
 
-  return { ...result, followed };
+  return { ...result, followed, reasonsCompared };
 }
 
 // ============================================================================
@@ -835,7 +1022,7 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
     // Stage 3: the two arms now agree under the shipped configs, with nothing
     // named and nothing tolerated. The one difference this used to pin —
     // `packages/cli/src/skill-resolution`, a DIRECTORY reached by
-    // `vat-skill-testing` at depth 2 — is what `excludeKinds: ['directory']`
+    // `vat-skill-testing` at depth 2 — is what the `kinds: ['directory']` rule
     // closes. Still an equality over the RENDERED divergence rather than a length
     // check, so a regression names the skill, the depth and the cause it failed on.
     expect(divergences.map((row) => `${row.corpus}/${row.skill}@${String(row.depth)}: `
@@ -865,13 +1052,27 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
     const corpus = corpora.find((entry) => entry.spec.projectRoot === '.');
     if (corpus === undefined) throw new Error('no repo-root corpus');
 
-    const { divergences, rows, excludeEscapes, followed } = await sweepDepths(corpus);
+    const {
+      divergences, rows, excludeEscapes, followed, reasonsCompared, reasonMismatches,
+    } = await sweepDepths(corpus);
     console.table(rows.filter((row) => (row['walker'] as number) > 1 || (row['closure'] as number) > 1));
     console.log(`[non-vacuous] ${followed} of ${rows.length} sweep cells bundle more than the SKILL.md alone`);
 
     // The whole point of this corpus. A sweep in which nothing was ever followed
     // would be the same vacuous pass the production corpus already gives.
     expect(followed).toBeGreaterThan(0);
+
+    // The REASON comparison, beside the membership one. Both arms refused these
+    // paths; the question is whether they say the same thing about why.
+    console.log(`[reasons] ${reasonsCompared} paths refused by BOTH arms,`
+      + ` ${reasonMismatches.length} with disagreeing reasons`);
+    if (reasonMismatches.length > 0) console.log('[reason mismatches]', reasonMismatches);
+    // Population FIRST: an empty mismatch list over an empty comparison is the
+    // same vacuous pass as an empty divergence list over an empty sweep, and a
+    // refactor that stopped emitting refusal conditions entirely would satisfy
+    // the equality below while saying nothing at all.
+    expect(reasonsCompared).toBeGreaterThan(0);
+    expect(reasonMismatches).toEqual([]);
 
     const attributed = divergences.flatMap((row) => row.closureOnly);
     const causeCounts = new Map<DivergenceCause, number>();
@@ -928,15 +1129,26 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
     const corpus = corpora.find((entry) => entry.spec.projectRoot === '.');
     if (corpus === undefined) throw new Error('no repo-root corpus');
 
-    // The opt-out list must name fields that exist, or the control silently
-    // becomes a no-op that agrees with everything — the failure mode of every
-    // unchecked exclusion list.
+    // The opt-out list must name fields and labels that exist, or the control
+    // silently becomes a no-op that agrees with everything — the failure mode of
+    // every unchecked exclusion list.
     const sample = corpus.skills[0];
     if (sample === undefined) throw new Error('no skills to sample a declaration from');
-    const declaration = declarationFor(sample, sample.config) as Record<string, unknown>;
+    const declaration = declarationFor(sample, sample.config);
     for (const field of NARROWING_FIELDS) {
-      expect(Object.keys(declaration)).toContain(field);
+      expect(Object.keys(declaration as Record<string, unknown>)).toContain(field);
     }
+    // The other three-quarters of the narrowing live inside `refusals` now, so
+    // the same "it must exist" check has to be made on the LABELS. A renamed
+    // label would otherwise strip nothing and the control would recover no cause
+    // at all — which the `KNOWN_CAUSES` equality below would then report as a
+    // narrowing failure rather than as the broken control it is.
+    const labels = refusalLabelsOf(declaration);
+    for (const label of NARROWING_LABELS) expect(labels).toContain(label);
+    // …and the control must be a NARROWING removal, not a cascade removal: the
+    // pre-Stage-3 `exclude` list, now the pattern-matched rule, has to survive.
+    expect(refusalLabelsOf(declarationFor(sample, sample.config, 'off')))
+      .toEqual([SKILL_REFUSED_PATTERN_MATCHED]);
 
     const { divergences, followed } = await sweepDepths(corpus, 'off');
     const attributed = divergences.flatMap((row) => row.closureOnly);

@@ -65,6 +65,23 @@ const DIRECTORY_KIND = 'directory';
 /** The canonical basename spelling the declaration is authored with. */
 const README_PATTERN = 'README.md';
 
+/**
+ * Labels the fixtures below hand the primitive.
+ *
+ * Deliberately NOT the skill translation's `SKILL_REFUSED_*` vocabulary: the
+ * primitive is supposed to treat a label as opaque, so a fixture that reused
+ * the one real caller's spellings could not tell "reported verbatim" apart from
+ * "recognised and re-emitted".
+ */
+const LABEL_BASENAME = 'FIXTURE_BASENAME_REFUSAL';
+const LABEL_KIND = 'FIXTURE_KIND_REFUSAL';
+const LABEL_GLOB = 'FIXTURE_GLOB_REFUSAL';
+
+/** One refusal rule, with the two matchers a case never names left empty. */
+function refusalRule(label: string, matchers: Record<string, JsonValue>): Record<string, JsonValue> {
+  return { label, ...matchers };
+}
+
 const MARKDOWN_LINK: ReferenceSyntacticForm = 'markdown-link';
 
 /** One reference candidate to plant in a fixture blob. */
@@ -220,6 +237,16 @@ function memberPaths(contribution: ExtentContribution): string[] {
   return contribution.realizations.map((row) => row.path);
 }
 
+/**
+ * The condition code recorded for one path, or undefined when none was.
+ *
+ * The refusal's whole payload, read the way a consumer would: `code` is where
+ * the matched rule's label lands.
+ */
+function conditionCodeFor(contribution: ExtentContribution, path: string): string | undefined {
+  return contribution.conditions.find((row) => row.path === path)?.code;
+}
+
 describe('ExtentDeclarationSchema', () => {
   it('rejects an unknown key', () => {
     expect(() => ExtentDeclarationSchema.parse({
@@ -242,14 +269,40 @@ describe('ExtentDeclarationSchema', () => {
     const parsed = ExtentDeclarationSchema.parse(declarationOf());
     expect(parsed.maxDepth).toBe('full');
     expect(parsed.follow).toContain(MARKDOWN_LINK);
-    expect(parsed.exclude).toEqual([]);
   });
 
-  it('defaults every refusal matcher to empty, so an undeclared one never bites', () => {
+  it('defaults the refusal cascade and the override to empty, so neither ever bites', () => {
     const parsed = ExtentDeclarationSchema.parse(declarationOf());
-    expect(parsed.excludeBasenames).toEqual([]);
-    expect(parsed.excludeKinds).toEqual([]);
+    expect(parsed.refusals).toEqual([]);
     expect(parsed.admitPaths).toEqual([]);
+  });
+
+  it('defaults every matcher of a declared rule, so naming one leaves the others inert', () => {
+    const parsed = ExtentDeclarationSchema.parse(declarationOf({
+      refusals: [refusalRule(LABEL_KIND, { kinds: [DIRECTORY_KIND] })],
+    }));
+    expect(parsed.refusals[0]).toEqual({
+      label: LABEL_KIND, patterns: [], basenames: [], kinds: [DIRECTORY_KIND],
+    });
+  });
+
+  it('REQUIRES a label on every refusal rule — a payload-free refusal is the old shape', () => {
+    expect(() => ExtentDeclarationSchema.parse(declarationOf({
+      refusals: [{ kinds: [DIRECTORY_KIND] }],
+    }))).toThrow();
+    expect(() => ExtentDeclarationSchema.parse(declarationOf({
+      refusals: [{ label: '', kinds: [DIRECTORY_KIND] }],
+    }))).toThrow();
+  });
+
+  it('rejects the pre-cascade flat fields outright — no alias, no compat shim', () => {
+    // Pre-1.0: `exclude`, `excludeBasenames` and `excludeKinds` were REPLACED by
+    // `refusals`, not deprecated alongside it. `.strict()` is what turns a stale
+    // config into an error instead of a silently ignored narrowing — the failure
+    // mode where an adopter's exclusions quietly stop applying.
+    for (const stale of ['exclude', 'excludeBasenames', 'excludeKinds']) {
+      expect(() => ExtentDeclarationSchema.parse(declarationOf({ [stale]: ['x'] }))).toThrow();
+    }
   });
 
   it('is reachable from ProjectConfigSchema as an extents record keyed by name', () => {
@@ -261,11 +314,12 @@ describe('ExtentDeclarationSchema', () => {
           closureFrom: ROOT_DOC,
           follow: [MARKDOWN_LINK, 'markdown-link-reference'],
           maxDepth: 3,
-          exclude: ['**/*.test.md'],
+          refusals: [refusalRule(LABEL_GLOB, { patterns: ['**/*.test.md'] })],
         },
       },
     });
     expect(config.extents?.[EXTENT_NAME]?.closureFrom).toBe(ROOT_DOC);
+    expect(config.extents?.[EXTENT_NAME]?.refusals[0]?.label).toBe(LABEL_GLOB);
   });
 });
 
@@ -301,7 +355,7 @@ describe('ClosureExtentContributor', () => {
     expect(memberPaths(contribution)).toEqual([ROOT_DOC]);
   });
 
-  it('drops a reachable file matched by an exclude glob', async () => {
+  it('drops a reachable file matched by a refusal rule\'s glob, and says which rule', async () => {
     const files: readonly FixtureFile[] = [
       { path: ROOT_DOC, refs: [{ rawRef: 'b.test.md' }, { rawRef: 'b.md' }] },
       { path: DOC_TEST, refs: [] },
@@ -309,9 +363,14 @@ describe('ClosureExtentContributor', () => {
     ];
     const withoutExclude = await contributeOver(files, declarationOf());
     expect(memberPaths(withoutExclude)).toContain(DOC_TEST);
+    expect(conditionCodeFor(withoutExclude, DOC_TEST)).toBeUndefined();
 
-    const contribution = await contributeOver(files, declarationOf({ exclude: ['**/*.test.md'] }));
+    const contribution = await contributeOver(files, declarationOf({
+      refusals: [refusalRule(LABEL_GLOB, { patterns: ['**/*.test.md'] })],
+    }));
     expect(memberPaths(contribution)).toEqual([ROOT_DOC, DOC_B]);
+    expect(conditionCodeFor(contribution, DOC_TEST)).toBe(LABEL_GLOB);
+    expectContributionRowsValid(contribution);
   });
 
   it('refuses a basename whose only difference from the declaration is CASE', async () => {
@@ -320,14 +379,14 @@ describe('ClosureExtentContributor', () => {
     const admitted = await contributeOver(HUB_CHAIN, declarationOf());
     expect(memberPaths(admitted)).toContain(DOC_HUB);
 
-    const contribution = await contributeOver(
-      HUB_CHAIN,
-      declarationOf({ excludeBasenames: [README_PATTERN] }),
-    );
+    const contribution = await contributeOver(HUB_CHAIN, declarationOf({
+      refusals: [refusalRule(LABEL_BASENAME, { basenames: [README_PATTERN] })],
+    }));
     expect(memberPaths(contribution)).not.toContain(DOC_HUB);
+    expect(conditionCodeFor(contribution, DOC_HUB)).toBe(LABEL_BASENAME);
   });
 
-  it('PRUNES the subtree behind a refused basename, not just the refused file', async () => {
+  it('PRUNES the subtree behind a refused basename, and records only the HUB', async () => {
     // The 239-path behaviour, at fixture scale: `behind.md` is reachable only
     // through the hub, so refusing the hub must take it too. An assertion that
     // only checked the hub could not tell a refusal that prunes from one that
@@ -335,31 +394,106 @@ describe('ClosureExtentContributor', () => {
     const admitted = await contributeOver(HUB_CHAIN, declarationOf());
     expect(memberPaths(admitted)).toContain(DOC_BEHIND);
 
-    const contribution = await contributeOver(
-      HUB_CHAIN,
-      declarationOf({ excludeBasenames: [README_PATTERN] }),
-    );
+    const contribution = await contributeOver(HUB_CHAIN, declarationOf({
+      refusals: [refusalRule(LABEL_BASENAME, { basenames: [README_PATTERN] })],
+    }));
     // `b.md` survives: the walk was narrowed, not stopped.
     expect(memberPaths(contribution)).toEqual([ROOT_DOC, DOC_B]);
+    // The pruned file gets NO condition, and that is the honest report: the walk
+    // never reached `behind.md`, so no rule ever judged it. A row claiming
+    // otherwise would attribute a refusal that never happened — the same
+    // distinction the corpus shadow spells `pruned-behind-exclusion`.
+    expect(conditionCodeFor(contribution, DOC_HUB)).toBe(LABEL_BASENAME);
+    expect(conditionCodeFor(contribution, DOC_BEHIND)).toBeUndefined();
   });
 
   it('refuses a candidate by resources.kind, which no path glob could express', async () => {
     const admitted = await contributeOver(DIRECTORY_FIXTURE, declarationOf());
     expect(memberPaths(admitted)).toContain(DOC_DIR);
 
-    const contribution = await contributeOver(
-      DIRECTORY_FIXTURE,
-      declarationOf({ excludeKinds: [DIRECTORY_KIND] }),
-    );
+    const contribution = await contributeOver(DIRECTORY_FIXTURE, declarationOf({
+      refusals: [refusalRule(LABEL_KIND, { kinds: [DIRECTORY_KIND] })],
+    }));
     // The file-kind sibling stays. Without it the assertion would be satisfied by
     // a matcher keyed on the extension-less PATH rather than on the entity kind.
     expect(memberPaths(contribution)).toEqual([ROOT_DOC, DOC_B]);
+    expect(conditionCodeFor(contribution, DOC_DIR)).toBe(LABEL_KIND);
   });
 
-  it('admits an admitPaths entry that BOTH exclude and excludeBasenames refuse', async () => {
+  it('reports the FIRST matching refusal rule — the ORDER of the cascade IS the behaviour', async () => {
+    // `nested` is a DIRECTORY that ALSO matches the glob, so it is caught by both
+    // rules and only their order decides which label it reports. Both directions
+    // are asserted: a single direction would still pass against an implementation
+    // that always picked the kind rule, or always picked the glob one.
+    //
+    // This is the assertion `walk-link-graph.ts`'s "the order IS the behaviour"
+    // note has and the closure primitive used to lack — its old comment claimed
+    // the matchers were unordered, which was true only while a refusal carried no
+    // payload.
+    const kindRule = refusalRule(LABEL_KIND, { kinds: [DIRECTORY_KIND] });
+    const globRule = refusalRule(LABEL_GLOB, { patterns: ['skills/foo/nested'] });
+
+    const kindFirst = await contributeOver(
+      DIRECTORY_FIXTURE,
+      declarationOf({ refusals: [kindRule, globRule] }),
+    );
+    const globFirst = await contributeOver(
+      DIRECTORY_FIXTURE,
+      declarationOf({ refusals: [globRule, kindRule] }),
+    );
+
+    expect(conditionCodeFor(kindFirst, DOC_DIR)).toBe(LABEL_KIND);
+    expect(conditionCodeFor(globFirst, DOC_DIR)).toBe(LABEL_GLOB);
+
+    // …and MEMBERSHIP is identical either way. Without this the test could not
+    // distinguish "the order picks the label" from "the order picks the answer",
+    // and a refactor that broke membership would be read as an ordering result.
+    expect(memberPaths(kindFirst)).toEqual(memberPaths(globFirst));
+    expect(memberPaths(kindFirst)).toEqual([ROOT_DOC, DOC_B]);
+  });
+
+  it('keeps a label OPAQUE: two rules may share matchers and differ only by name', async () => {
+    // The primitive must never interpret a label. Two declarations differing in
+    // nothing but the string prove the string is carried rather than recognised.
+    const first = await contributeOver(DIRECTORY_FIXTURE, declarationOf({
+      refusals: [refusalRule('a-lowercase-label with spaces', { kinds: [DIRECTORY_KIND] })],
+    }));
+    expect(conditionCodeFor(first, DOC_DIR)).toBe('a-lowercase-label with spaces');
+  });
+
+  it('emits ONE refusal row per refused reference, carrying the target\'s identity', async () => {
+    // Two documents link the same hub, so the refusal is reached twice. Both rows
+    // are emitted (matching `walkLinkGraph`'s per-reference `excludedReferences`)
+    // and they are IDENTICAL, which is what lets `ProjectionBuilder`'s
+    // `(extentId, path, code, resourceId)` key collapse them to one in a real
+    // population without losing anything.
+    const twoReferrers: readonly FixtureFile[] = [
+      { path: ROOT_DOC, refs: [{ rawRef: 'Readme.md' }, { rawRef: 'b.md' }] },
+      { path: DOC_B, refs: [{ rawRef: 'Readme.md' }] },
+      { path: DOC_HUB, refs: [] },
+    ];
+    const contribution = await contributeOver(twoReferrers, declarationOf({
+      refusals: [refusalRule(LABEL_BASENAME, { basenames: [README_PATTERN] })],
+    }));
+
+    const rows = contribution.conditions.filter((row) => row.path === DOC_HUB);
+    expect(rows).toHaveLength(2);
+    expect(rows[1]).toEqual(rows[0]);
+    expect(rows[0]?.severity).toBe('info');
+    // Anchored to the refused TARGET's identity, not the referrer's — the
+    // opposite of an unresolved reference, whose target has no identity at all.
+    const hub = contribution.realizations.find((row) => row.path === DOC_HUB);
+    expect(hub).toBeUndefined();
+    expect(rows[0]?.resourceId).not.toBeNull();
+    expectContributionRowsValid(contribution);
+  });
+
+  it('admits an admitPaths entry that TWO refusal rules refuse, and records nothing', async () => {
     const refusing = declarationOf({
-      exclude: ['skills/**/Readme.md'],
-      excludeBasenames: [README_PATTERN],
+      refusals: [
+        refusalRule(LABEL_GLOB, { patterns: ['skills/**/Readme.md'] }),
+        refusalRule(LABEL_BASENAME, { basenames: [README_PATTERN] }),
+      ],
     });
     const refused = await contributeOver(HUB_CHAIN, refusing);
     expect(memberPaths(refused)).toEqual([ROOT_DOC, DOC_B]);
@@ -372,14 +506,18 @@ describe('ClosureExtentContributor', () => {
     // restoring its subtree would be a different rule from the one `closureFrom`
     // gets, and `behind.md` is the only witness to the difference.
     expect(memberPaths(contribution)).toEqual([ROOT_DOC, DOC_HUB, DOC_B, DOC_BEHIND]);
+    // An admitted path is not a quiet refusal either: `admitPaths` is checked
+    // BEFORE the cascade, so no rule ever gets to label it.
+    expect(conditionCodeFor(contribution, DOC_HUB)).toBeUndefined();
   });
 
   it('matches admitPaths by exact path, never by prefix — a glob never named the file', async () => {
-    const contribution = await contributeOver(
-      HUB_CHAIN,
-      declarationOf({ excludeBasenames: [README_PATTERN], admitPaths: ['skills/foo'] }),
-    );
+    const contribution = await contributeOver(HUB_CHAIN, declarationOf({
+      refusals: [refusalRule(LABEL_BASENAME, { basenames: [README_PATTERN] })],
+      admitPaths: ['skills/foo'],
+    }));
     expect(memberPaths(contribution)).not.toContain(DOC_HUB);
+    expect(conditionCodeFor(contribution, DOC_HUB)).toBe(LABEL_BASENAME);
   });
 
   it('terminates on a cycle with three members rather than looping', async () => {

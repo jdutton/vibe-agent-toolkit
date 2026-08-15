@@ -335,7 +335,9 @@ export type SkillsConfig = z.infer<typeof SkillsConfigSchema>;
  * {@link SkillPackagingConfigSchema} `linkFollowDepth` and
  * `excludeReferencesFromBundle` already *are* a closure declaration, spelled
  * once for one privileged walker. The union of {@link maxDepth} and
- * {@link exclude} here is the same pair, generalized and named.
+ * {@link refusals} here is the same pair, generalized and named — including the
+ * `excludeReferencesFromBundle` property that made it a *list of rules* rather
+ * than one flat pattern set: first match wins, and the winner is named.
  *
  * ## Declarative data only — never project-supplied code
  *
@@ -351,25 +353,40 @@ export type SkillsConfig = z.infer<typeof SkillsConfigSchema>;
  *     closureFrom: skills/foo/SKILL.md
  *     follow: [markdown-link, markdown-link-reference]
  *     maxDepth: 3
- *     exclude: ['*.test.md']
- *     excludeBasenames: ['README.md']
- *     excludeKinds: ['directory']
+ *     refusals:
+ *       - label: DIRECTORY_TARGET          # opaque to the primitive; it only reports it
+ *         kinds: ['directory']
+ *       - label: NAVIGATION_FILE
+ *         basenames: ['README.md']
+ *       - label: EXCLUDED_BY_PATTERN
+ *         patterns: ['*.test.md']
  *     admitPaths: ['notes/CLAUDE.md']
  * ```
  *
- * ## Four refusal matchers and one override, not five independent filters
+ * ## An ORDERED refusal cascade, and one override that outranks all of it
  *
- * {@link exclude}, {@link excludeBasenames} and {@link excludeKinds} all produce
- * the SAME verdict — refused, with no payload — so the order in which they are
- * consulted is unobservable. {@link admitPaths} is not one of them: it outranks
- * all three, for the same reason `closureFrom` does. A refusal is not merely
- * "not a member": the closure does not traverse THROUGH a refused candidate, so
- * the subtree reachable only via that candidate is refused with it.
+ * ⚠️ **{@link refusals} is a cascade, not a set of independent filters: the order
+ * IS the behaviour.** Each rule carries a {@link ExtentRefusalRuleSchema.label},
+ * the first rule that matches wins, and that winner's label is what the closure
+ * reports as the refusal's `realization_conditions.code`. A candidate that
+ * matches two rules is therefore attributed to the EARLIER one, exactly as
+ * `walk-link-graph.ts`'s `classifyExclusion` attributes a directory that is also
+ * pattern-matched to `directory-target`. Reordering the array repicks which
+ * label a refusal reports, so this array must never be rewritten as a set, a
+ * record, or anything else whose iteration order is incidental.
  *
- * The three exist as three because one predicate cannot express the other two.
+ * {@link admitPaths} is not part of the cascade: it outranks every rule in it,
+ * for the same reason `closureFrom` does. A refusal is not merely "not a member":
+ * the closure does not traverse THROUGH a refused candidate, so the subtree
+ * reachable only via that candidate is refused with it.
+ *
+ * ## Three matchers per rule, because one predicate cannot express the other two
+ *
  * A basename set is not a path glob (case-insensitive filesystems generate
  * spellings no alternation enumerates), and an entity kind is not a path at all
- * (a directory's path is shaped exactly like a file's).
+ * (a directory's path is shaped exactly like a file's). WITHIN one rule the three
+ * are unordered — they all yield that rule's single label — so a caller that
+ * needs two matchers distinguished writes two rules.
  *
  * ## Every optional field carries a default, deliberately
  *
@@ -380,6 +397,19 @@ export type SkillsConfig = z.infer<typeof SkillsConfigSchema>;
  * declaration is assignable to `JsonValue` with no cast at the seam that records
  * it verbatim on `zone_provenance.parameterSet`.
  */
+export const ExtentRefusalRuleSchema = z.object({
+  label: z.string().min(1)
+    .describe('OPAQUE name for this refusal, reported verbatim as the realization_conditions.code of every candidate this rule refuses. The primitive never interprets it: a caller that wants the shipped skill walker\'s vocabulary supplies that vocabulary here, and a caller with its own supplies its own. Required, because a refusal with no label is the payload-free verdict this rule shape exists to replace.'),
+  patterns: z.array(z.string().min(1)).default([])
+    .describe('Globs (picomatch, dot: true) matched against a candidate member\'s root-relative path. A refused file is neither admitted nor traversed through.'),
+  basenames: z.array(z.string().min(1)).default([])
+    .describe('Basenames matched CASE-INSENSITIVELY against a candidate member\'s basename, e.g. "README.md". Deliberately NOT a glob: patterns matches a root-relative PATH, and a brace alternation over that path cannot enumerate the spellings a case-insensitive filesystem generates freely (Readme.md, README.MD, ReadMe.md), so the glob approximation silently under-matches exactly the spellings that occur in the wild. Folding is toLowerCase(), never toLocaleLowerCase() — see basenameMatcher in agent-skills/src/validators/validation-rules.ts.'),
+  kinds: z.array(z.string().min(1)).default([])
+    .describe('resources.kind values refused, e.g. "directory". This is the only way a declaration can refuse a DIRECTORY target: a directory\'s path is shaped like any other path, so no glob over the path can express the distinction — the entity kind can.'),
+}).strict().describe('One labelled refusal rule of a closure extent\'s ordered cascade. The three matchers are unordered WITHIN a rule (they share the one label); ACROSS rules the array order is behaviour.');
+
+export type ExtentRefusalRule = z.infer<typeof ExtentRefusalRuleSchema>;
+
 export const ExtentDeclarationSchema = z.object({
   kind: ZoneKindSchema
     .describe('The resolution_contexts.kind this extent has, e.g. "skill". Open vocabulary; must match the kind the contributor is registered under.'),
@@ -389,14 +419,10 @@ export const ExtentDeclarationSchema = z.object({
     .describe('Which blob_references syntactic forms the closure traverses. Defaults to the three markdown forms; an @-prefixed or bare token is ambiguous at the blob layer, so following one is an explicit choice.'),
   maxDepth: z.union([z.number().int().min(0), z.literal('full')]).default('full')
     .describe('Reference hops from the root, or "full" for an unbounded closure. Same union as skills packaging linkFollowDepth, so one concept has one spelling.'),
-  exclude: z.array(z.string().min(1)).default([])
-    .describe('Globs (picomatch, dot: true) matched against a candidate member\'s root-relative path. An excluded file is neither admitted nor traversed through.'),
-  excludeBasenames: z.array(z.string().min(1)).default([])
-    .describe('Basenames matched CASE-INSENSITIVELY against a candidate member\'s basename, e.g. "README.md". Same refusal semantics as exclude: neither admitted nor traversed through, so the subtree reachable only through the refused file goes with it. Deliberately NOT a glob: exclude matches a root-relative PATH, and a brace alternation over that path cannot enumerate the spellings a case-insensitive filesystem generates freely (Readme.md, README.MD, ReadMe.md), so the glob approximation silently under-matches exactly the spellings that occur in the wild. Folding is toLowerCase(), never toLocaleLowerCase() — see basenameMatcher in agent-skills/src/validators/validation-rules.ts.'),
-  excludeKinds: z.array(z.string().min(1)).default([])
-    .describe('resources.kind values refused, e.g. "directory". Same refusal semantics as exclude. This is the only way a declaration can refuse a DIRECTORY target: a directory\'s path is shaped like any other path, so no glob over the path can express the distinction — the entity kind can.'),
+  refusals: z.array(ExtentRefusalRuleSchema).default([])
+    .describe('ORDERED refusal cascade — FIRST MATCH WINS, and the winning rule\'s label is what the refusal reports as its condition code. THE ORDER IS BEHAVIOUR: a candidate matching two rules is attributed to the earlier one, the same way walk-link-graph.ts\'s classifyExclusion attributes a directory that is also pattern-matched to "directory-target" rather than to "pattern-matched". Never rewrite this as a set or a record. A refused candidate is neither admitted nor traversed through, so the subtree reachable only through it is refused with it.'),
   admitPaths: z.array(z.string().min(1)).default([])
-    .describe('Exact root-relative paths admitted even when exclude, excludeBasenames or excludeKinds match them. The same rule closureFrom already gets: an explicit declaration outranks a net, because a glob never named the file it caught. Matched by exact string equality against the root-relative, forward-slashed path — never a prefix or glob test, since the explicit-vs-glob distinction is the whole point of the field.'),
+    .describe('Exact root-relative paths admitted even when a refusals rule matches them. The same rule closureFrom already gets: an explicit declaration outranks a net, because a glob never named the file it caught. Checked BEFORE the cascade, so an admitted path never reports a refusal label. Matched by exact string equality against the root-relative, forward-slashed path — never a prefix or glob test, since the explicit-vs-glob distinction is the whole point of the field.'),
 }).strict().describe('A closure-defined extent declaration (zones.md §7.3)');
 
 export type ExtentDeclaration = z.infer<typeof ExtentDeclarationSchema>;

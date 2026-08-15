@@ -20,7 +20,7 @@
  * runtime argument. They are the constructor's whole job.
  *
  * Everything that shapes the extent — `closureFrom`, `follow`, `maxDepth`,
- * `exclude` — arrives through {@link ClosureExtentContributor.contribute}'s
+ * `refusals` — arrives through {@link ClosureExtentContributor.contribute}'s
  * `parameters`, because §7.4 requires `zone_provenance.parameterSet` to be *"the
  * parameters this contributor ran under, verbatim"*. The merge driver resolves
  * one binding per contributor and writes that same binding both into
@@ -59,18 +59,27 @@
  *   An AST-derived row is never in either context by construction, so this
  *   filter only ever bites lexer-derived forms — which is exactly where sample
  *   text lives.
- * - **An explicitly named path is admitted even when a refusal matcher catches
+ * - **An explicitly named path is admitted even when a refusal rule catches
  *   it.** An explicit declaration outranks a net: `closureFrom` and every entry
  *   in `admitPaths` name the file, whereas a glob, a basename set and a kind set
  *   never did. The same rule decides the `files:` escape hatch in
  *   `walk-link-graph.ts` (`refusesAgentInstructionFile`), which is why
  *   `admitPaths` is matched by exact string equality rather than by prefix — the
  *   explicit-vs-glob distinction is the whole content of the rule.
+ * - **A refusal is a condition row carrying the matched rule's LABEL**, not a
+ *   silent drop. The label is opaque here — the declaration supplies the
+ *   vocabulary, this module only reports it — which is what lets a caller
+ *   reproduce a domain cascade's reasons (`navigation-file`,
+ *   `directory-target`, …) without the primitive knowing any of them.
  */
 
 import picomatch from 'picomatch';
 
-import { ExtentDeclarationSchema, type ExtentDeclaration } from '../../schemas/project-config.js';
+import {
+  ExtentDeclarationSchema,
+  type ExtentDeclaration,
+  type ExtentRefusalRule,
+} from '../../schemas/project-config.js';
 import type { BlobReferenceRow } from '../../schemas/projection-blobs.js';
 import type {
   RealizationConditionRow,
@@ -109,17 +118,27 @@ interface WalkContext {
   /** `blobs.contentKey` → its reference rows, in ordinal order. */
   readonly byBlob: ReadonlyMap<string, readonly BlobReferenceRow[]>;
   /**
-   * True when the declaration refuses this candidate member.
+   * The FIRST `refusals` rule that catches this candidate, or `undefined` when
+   * the declaration admits it.
+   *
+   * The **rule**, not merely its label, and not a boolean. A boolean cannot say
+   * why; a bare label can say why but nothing more, and the refusal row is
+   * expected to grow provenance (which reference, at which line, matching which
+   * declared rule). Returning the declared rule object means every field a
+   * future `ExtentRefusalRuleSchema` gains is available at the refusal site
+   * without rethreading anything — the extension is additive by construction.
+   * It also costs no allocation: this is the object the declaration already
+   * holds.
    *
    * Takes the candidate's **realization row**, not its path, because two of the
-   * four matchers need a column the path does not carry: `excludeBasenames`
-   * reads `basenameLower` (already folded by `realizations.ts`, with the same
-   * `toLowerCase()` the declaration side uses) and `excludeKinds` reads
+   * three matchers need a column the path does not carry: `basenames` reads
+   * `basenameLower` (already folded by `realizations.ts`, with the same
+   * `toLowerCase()` the declaration side uses) and `kinds` reads
    * `resources.kind` via `resourceId`. Passing the row rather than a widening
    * tuple of columns keeps the one refusal point one argument wide, and every
    * column it reads is one the projection already computed.
    */
-  readonly isExcluded: (candidate: ResourceRealizationRow) => boolean;
+  readonly refusalOf: (candidate: ResourceRealizationRow) => ExtentRefusalRule | undefined;
 }
 
 /**
@@ -189,7 +208,7 @@ export class ClosureExtentContributor implements ExtentContributor {
       extentId,
       byPath: indexRealizationsByPath(base),
       byBlob: referencesByBlobFor(base),
-      isExcluded: refusalMatcher(declaration, base),
+      refusalOf: refusalMatcher(declaration, base),
     });
 
     return { contexts: [context], ...walk };
@@ -328,11 +347,33 @@ function hopFor(
     conditions.push(unresolvedCondition(walk.extentId, path, resourceId, reference));
     return undefined;
   }
-  // An excluded target is neither admitted nor walked through: it is not a
+  // A refused target is neither admitted nor walked through: it is not a
   // member, so its own references are not this extent's edges. That pruning is
   // the whole reason a refusal is worth expressing — refusing one navigation hub
   // drops everything reachable only through it.
-  if (walk.isExcluded(target)) return undefined;
+  //
+  // Unlike the three `return undefined`s above, this one is RECORDED. The three
+  // are not omissions: a reference whose form the declaration does not follow, a
+  // non-local URL, and (already condition-bearing) an unresolvable ref are all
+  // facts about the REFERENCE. A refusal is a fact about a real file that this
+  // projection realizes and that the declaration decided against, which is the
+  // one of the four an author can act on.
+  //
+  // 📌 Refusal PROVENANCE threads through exactly here, and four of the five
+  // fields `LinkResolution` carries are already in scope at this line: the
+  // referring path is `path`, the link's line is `reference.line`, the href as
+  // authored is `reference.rawRef`, and whether the target exists is
+  // `target.exists`. Only "which declared ExcludeRule matched" is absent, and it
+  // is absent by DECLARATION rather than by threading — `refusalOf` returns the
+  // matched `ExtentRefusalRule`, so a payload added to that schema arrives here
+  // with no rethreading; today the skill translation flattens every
+  // `excludeReferencesFromBundle` rule into one refusal rule, so which of them
+  // matched is information the declaration never carried.
+  const refusal = walk.refusalOf(target);
+  if (refusal !== undefined) {
+    conditions.push(refusedCondition(walk.extentId, target, refusal));
+    return undefined;
+  }
   return [target.path, depth + 1];
 }
 
@@ -431,10 +472,10 @@ function canDescend(depth: number, maxDepth: ExtentDeclaration['maxDepth']): boo
 }
 
 /**
- * Compile the declaration's exclude globs.
+ * Compile one refusal rule's globs.
  *
  * `dot: true`, because adopter paths traverse dotfile segments (`.claude/`)
- * and without it an exclude rule silently never matches them.
+ * and without it a refusal rule silently never matches them.
  *
  * @param patterns - Declared globs, possibly empty
  * @returns A matcher over root-relative paths — never matching when nothing was declared
@@ -444,29 +485,27 @@ function excludeMatcher(patterns: readonly string[]): (path: string) => boolean 
   return picomatch([...patterns], { dot: true });
 }
 
+/** One `refusals` entry with its three matchers compiled, paired with the rule. */
+interface CompiledRefusal {
+  /**
+   * The declared rule, carried through verbatim so the refusal can name it.
+   *
+   * The whole rule rather than just `label`: see {@link WalkContext.refusalOf}
+   * for why the refusal verdict is the rule object.
+   */
+  readonly rule: ExtentRefusalRule;
+  /** True when this rule catches the candidate — its three matchers OR'd. */
+  readonly matches: (candidate: ResourceRealizationRow) => boolean;
+}
+
 /**
- * The declaration's single refusal point — every exclusion matcher, plus the
- * `admitPaths` override that outranks all of them.
+ * Compile one refusal rule's three matchers into a single predicate.
  *
- * Compiled **once per `contribute`**, the way {@link excludeMatcher} precompiles
- * its globs. Building the sets per candidate would rebuild the same three sets
- * once per followed reference in the corpus, which is the shape of cost this
- * module already paid for once (see {@link referencesByBlobMemo}).
- *
- * ## `admitPaths` wins, and nothing else has a precedence
- *
- * An explicit declaration outranks a net, exactly as `closureFrom` does: a glob,
- * a basename set and a kind set never named the file they caught. Exact string
- * equality against the root-relative, forward-slashed path — never a prefix or a
- * glob test, because the explicit-vs-glob distinction IS the rule.
- *
- * Among the three exclusion matchers the order is **unobservable**: all three
- * return the same verdict with no payload, so the three `if`s below are a
- * short-circuit and not a cascade — reordering them changes no answer. Do not
- * read a precedence into them; there is none to read.
- * (`walk-link-graph.ts`'s `classifyExclusion` genuinely is an ordered cascade,
- * because each of its branches carries a distinct `excludeReason` — that is the
- * difference between a verdict with a reason and a verdict without one.)
+ * The three are OR'd and therefore **unordered within a rule** — that is sound
+ * here, and only here, for the reason the old flat design claimed globally: they
+ * yield the same verdict *with the same label*, so no answer depends on which
+ * one fired. A caller that needs two matchers told apart writes two rules, which
+ * is exactly what {@link refusalMatcher}'s cascade is for.
  *
  * ## Case folding is `toLowerCase()`, never `toLocaleLowerCase()`
  *
@@ -478,26 +517,83 @@ function excludeMatcher(patterns: readonly string[]): (path: string) => boolean 
  * (`realizations.ts`) — so only the declaration side is folded here, and the two
  * halves must stay on the same function or the matcher silently stops matching.
  *
+ * @param rule - One declared refusal rule
+ * @param kindById - The base's entity-kind index, or undefined when NO rule in
+ *   the whole declaration names a kind and the index was never built
+ * @returns The rule and its compiled predicate
+ */
+function compileRefusal(
+  rule: ExtentRefusalRule,
+  kindById: ReadonlyMap<string, string> | undefined,
+): CompiledRefusal {
+  const byGlob = excludeMatcher(rule.patterns);
+  const basenames = new Set(rule.basenames.map((name) => name.toLowerCase()));
+  const kinds = new Set(rule.kinds);
+
+  return {
+    rule,
+    matches: (candidate: ResourceRealizationRow): boolean => {
+      if (byGlob(candidate.path)) return true;
+      if (basenames.has(candidate.basenameLower)) return true;
+      if (kinds.size === 0) return false;
+      const kind = kindById?.get(candidate.resourceId);
+      return kind !== undefined && kinds.has(kind);
+    },
+  };
+}
+
+/**
+ * The declaration's single refusal point — the ordered `refusals` cascade, plus
+ * the `admitPaths` override that outranks all of it.
+ *
+ * Compiled **once per `contribute`**, the way {@link excludeMatcher} precompiles
+ * its globs. Building the sets per candidate would rebuild the same sets once
+ * per followed reference in the corpus, which is the shape of cost this module
+ * already paid for once (see {@link referencesByBlobMemo}).
+ *
+ * ## `admitPaths` wins, and is checked before the cascade runs
+ *
+ * An explicit declaration outranks a net, exactly as `closureFrom` does: a glob,
+ * a basename set and a kind set never named the file they caught. Exact string
+ * equality against the root-relative, forward-slashed path — never a prefix or a
+ * glob test, because the explicit-vs-glob distinction IS the rule. Checked
+ * first, so an admitted path can never report a refusal label either.
+ *
+ * ## ⚠️ Among the rules the order IS the behaviour
+ *
+ * This loop is a **cascade**, not a short-circuit over interchangeable
+ * predicates. Each rule carries a distinct label, so a candidate matching two
+ * rules is attributed to the EARLIER one and reordering the array repicks the
+ * reported reason — the same property `walk-link-graph.ts`'s `classifyExclusion`
+ * documents ("the order IS the behaviour"), and the reason this function returns
+ * a label instead of a boolean. This comment used to say the opposite, and it
+ * was true while a refusal carried no payload; a labelled refusal is what made
+ * it false. `'reports the FIRST matching refusal rule'` in
+ * `projection-closure-extent.test.ts` is the assertion that keeps it false.
+ *
  * @param declaration - The extent declaration
  * @param base - The projection built so far, for the `resources.kind` lookup
- * @returns A predicate over a candidate's realization row
+ * @returns The first matching rule for a refused candidate, else undefined
  */
 function refusalMatcher(
   declaration: ExtentDeclaration,
   base: ProjectionBase,
-): (candidate: ResourceRealizationRow) => boolean {
+): (candidate: ResourceRealizationRow) => ExtentRefusalRule | undefined {
   const admitted = new Set(declaration.admitPaths);
-  const byGlob = excludeMatcher(declaration.exclude);
-  const basenames = new Set(declaration.excludeBasenames.map((name) => name.toLowerCase()));
-  const kinds = new Set(declaration.excludeKinds);
-  const kindById = kinds.size === 0 ? undefined : kindByResourceIdFor(base);
+  // Built only when SOME rule names a kind, so a declaration that never asks
+  // does not pay for a whole-corpus index — the laziness the flat `excludeKinds`
+  // design had, preserved across the reshape.
+  const kindById = declaration.refusals.some((rule) => rule.kinds.length > 0)
+    ? kindByResourceIdFor(base)
+    : undefined;
+  const compiled = declaration.refusals.map((rule) => compileRefusal(rule, kindById));
 
-  return (candidate: ResourceRealizationRow): boolean => {
-    if (admitted.has(candidate.path)) return false;
-    if (byGlob(candidate.path)) return true;
-    if (basenames.has(candidate.basenameLower)) return true;
-    const kind = kindById?.get(candidate.resourceId);
-    return kind !== undefined && kinds.has(kind);
+  return (candidate: ResourceRealizationRow): ExtentRefusalRule | undefined => {
+    if (admitted.has(candidate.path)) return undefined;
+    for (const entry of compiled) {
+      if (entry.matches(candidate)) return entry.rule;
+    }
+    return undefined;
   };
 }
 
@@ -595,6 +691,58 @@ function unresolvedCondition(
     message: `Reference "${reference.rawRef}" at line ${reference.line} resolves to no realization in this projection,`
       + ' so the closure could not admit it as a member',
     resourceId,
+  };
+}
+
+/**
+ * The condition recording a candidate a `refusals` rule turned away.
+ *
+ * Anchored to the **refused target**, not to the referring file — the opposite
+ * of {@link unresolvedCondition}, and for that function's own reason read the
+ * other way round: an unresolved reference names a path nothing realizes, while
+ * a refused candidate is a real file this projection holds a realization for, so
+ * the row can name the file the decision was about.
+ *
+ * `code` is the matched rule's label **verbatim**. The primitive contributes no
+ * vocabulary of its own here: `realization_conditions.code` is an open
+ * vocabulary, and inventing a `CLOSURE_REFUSED_*` wrapper around the label would
+ * make a caller's cascade reasons unreadable without also knowing this module's
+ * prefix.
+ *
+ * Emitted **once per refused reference**, not once per refused path, matching
+ * both {@link unresolvedCondition} and `walkLinkGraph`'s own
+ * `excludedReferences` — a target linked from three documents was refused three
+ * times. The rows are identical, and `ProjectionBuilder`'s condition table keys
+ * on `(extentId, path, code, resourceId)`, so a population records one.
+ *
+ * ## Extending this row with refusal provenance
+ *
+ * The row is deliberately a plain {@link RealizationConditionRow} and not a new
+ * table: `code` is an open vocabulary and the label goes straight into it, which
+ * is all a REASON needs. Carrying `LinkResolution`'s provenance too
+ * (`sourcePath`, `sourceLine`, `linkHref`, `targetExists`, `matchedRule`) would
+ * need columns `RealizationConditionRowSchema` does not have — that is a schema
+ * widening, not a rewrite of this function, and `rule` is passed in whole so any
+ * payload a future `ExtentRefusalRuleSchema` gains needs no new parameter here.
+ *
+ * @param extentId - The closure extent
+ * @param target - The refused candidate's realization row
+ * @param rule - The refusal rule that matched, first-match-wins
+ * @returns The condition row
+ */
+function refusedCondition(
+  extentId: string,
+  target: ResourceRealizationRow,
+  rule: ExtentRefusalRule,
+): RealizationConditionRow {
+  return {
+    extentId,
+    path: target.path,
+    code: rule.label,
+    severity: 'info',
+    message: `Refused by the "${rule.label}" rule of this extent's refusal cascade,`
+      + ' so it is neither a member nor a path the closure traverses through',
+    resourceId: target.resourceId,
   };
 }
 
