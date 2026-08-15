@@ -431,28 +431,32 @@ total and assignable to the `JsonValue` that `zone_provenance.parameterSet` reco
 
 §7.3's adequacy test — *a built-in extent must be expressible the way a config-declared one would be*
 — was run against the hardest case VAT has, the skill bundle, whose privileged walker
-(`walk-link-graph.ts`) already computes the answer. Five features translate exactly; the rest do not,
-and each unexpressible one names the oracle or the payload it would need:
+(`walk-link-graph.ts`) already computes the answer. Most of the cascade translates exactly; what does
+not is listed below, and each unexpressible row names the oracle it would need:
 
 | walker feature | verdict |
 |---|---|
-| `linkFollowDepth` | **expressible** — same union, same off-by-one |
+| `linkFollowDepth` *membership* | **expressible** — same union, same off-by-one |
+| `depth-exceeded` *the REASON* | **expressible** — `maxDepth` bounds ADMISSION, not ENUMERATION: a member sitting at the bound still has its references resolved and judged, and one only the budget turns away becomes a `CLOSURE_DEPTH_EXCEEDED` condition carrying the same provenance a refusal does. The primitive's own verdict rather than a `refusals` label, so `matchedPattern` is null — which is what the walker's row says too (`makeExclusion` attaches `matchedRule` only for `pattern-matched`) |
 | `excludeReferencesFromBundle` *membership* | **expressible** — first-match-wins and any-match select the identical file set, so a flat union of every rule's patterns in one refusal rule is exact |
 | `excludeNavigationFiles` | **expressible** — a refusal rule over the navigation basename set, gated on the knob exactly as `classifyExclusion` gates its branch |
 | `agent-instruction-file` *membership* | **expressible** — a refusal rule over the agent-instruction basename set, unconditionally (that branch is deliberately not gated on the navigation knob), and the explicit-`files:` escape hatch becomes `admitPaths` |
 | `directory-target` *membership* | **expressible** — a refusal rule over `kinds`, which reads `resources.kind`; a path glob cannot express it |
 | those four exclusions' REASON | **expressible** — each refusal rule carries a `label` reported as the condition code, and the cascade is declared in `classifyExclusion`'s own branch order. Pinned head-to-head against the walker's `excludeReason` by the corpus shadow's reason-mismatch bucket |
-| `excludeReferencesFromBundle` *`template` payload*, and a refusal's PROVENANCE (`sourcePath`, `sourceLine`, `linkHref`, `targetExists`, `matchedRule`) | **not expressible** — the reason lands in `realization_conditions.code` and that table has no column for the rest. Four of the five are already in scope at the refusal site, so this is a schema widening rather than a rethreading |
+| a refusal's PROVENANCE (`sourcePath`, `sourceLine`, `linkHref`, `targetExists`, `matchedRule`) | **expressible** — `realization_conditions` gained the columns (projection schema v4) and the closure fills them at the refusal site; each of the five is compared field by field against the walker's own row by the corpus shadow |
+| `excludeReferencesFromBundle` *WHICH rule matched*, and its `template` payload | **expressible** — one refusal rule per declared rule, in declared order, so the primitive's first-match-wins scan is `excludeMatchers.find(...)`'s; the winner's first pattern lands in `matchedPattern` and its `template` rides in the rule's opaque `payload` |
 | `deferredArtifacts` (`files:`) | **not expressible** — its three-way classification is keyed on filesystem existence and on gitignore, and the closure does no I/O by construction. Only the one fact `admitPaths` needs — which sources are explicit, non-glob agent-instruction files — is a pure function of the config |
 | `skill-definition` | **not expressible** — the verdict compares the target against *this walk's own* `skillRootPath`, and a declaration has no vocabulary for "the same file as my own root" |
 | `gitignored`, `outside-project`, `unreadable-target`, `missing-target` | **not expressible** — each needs an oracle the closure does not consult |
 | routable vs non-routable | **not expressible** — `follow` names a reference *form*, never the parser kind of the *target* |
 
-Read the membership rows and the reason row together: the primitive now selects the same files for
-those causes *and* names the same cause, so the `LINK_TO_NAVIGATION_FILE` / `LINK_TO_DIRECTORY` split
-VAT's verdict engine reports is reproducible from a projection. What is still missing is the rest of
-`LinkResolution` — the provenance row above — which is what a verdict *issue* needs in order to name
-a location an author can open.
+Read the membership, reason and provenance rows together: the primitive now selects the same files
+for those causes, names the same cause, and carries the same `sourcePath` / `sourceLine` /
+`linkHref` / `targetExists` / matched-rule provenance a verdict *issue* needs in order to name a
+location an author can open — so the `LINK_TO_NAVIGATION_FILE` / `LINK_TO_DIRECTORY` split VAT's
+verdict engine reports is reproducible from a projection. What is still missing is the six reasons
+whose oracles a projection does not consult (git, the project boundary, two read outcomes, its own
+skill root, the target's parser kind).
 
 **Measured at corpus scale, with its own negative control.** Over this repository's fourteen declared
 skills, swept across `linkFollowDepth` 0/1/2/full (56 cells, 9 of which follow a real edge), the two
@@ -463,6 +467,19 @@ arms now differ on **nothing**. Stripping just the three refusal matchers out of
 agent-instruction hub removes everything reachable only through it. Nothing was ever walker-only at
 any depth, which is what made this a *narrowing* problem rather than a "teach it to see" one.
 See `packages/cli/test/integration/projection-skill-extent-corpus.integration.test.ts`.
+
+**The last difference was a SILENCE, not a disagreement.** With membership identical, the two arms
+still classified different *sets of references*: the walker runs `checkExclusions` before its depth
+check, so it records a verdict for a link out of a member sitting at `maxDepth`, while the closure
+stopped enumerating there and said nothing. Neither arm bundled those targets, so every
+membership-shaped comparison was structurally blind to it, and the comparison had grown a pairing
+rule that counted the unpaired walker rows instead of comparing them. Closing it in the primitive
+(bound admission, never enumeration) rather than in the test took the compared population from
+**59 paths to 94** and the per-field provenance population from 59 to 94 — 35 verdicts the closure
+had simply not had: **18 `depth-exceeded`, 14 `pattern-matched`, 2 `navigation-file`, 1
+`directory-target`**. The rule of thumb it leaves behind: *when two implementations differ because
+one is silent, teaching the comparison to tolerate the silence hides the gap in the test instead of
+closing it in the code.*
 
 > ⚠️ Found while measuring that difference: **`walkLinkGraph`'s asset bundling ignores `maxDepth`
 > entirely** — assets are added by `processLink` unconditionally, so a depth bound narrows the

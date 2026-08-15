@@ -425,6 +425,7 @@ export {
 // `zone_provenance.parameterSet` records what actually shaped the extent.
 export {
   CLOSURE_CONTRIBUTOR_ID_PREFIX,
+  CLOSURE_DEPTH_EXCEEDED,
   CLOSURE_REFERENCE_UNRESOLVED,
   CLOSURE_ROOT_ABSENT,
   ClosureExtentContributor,

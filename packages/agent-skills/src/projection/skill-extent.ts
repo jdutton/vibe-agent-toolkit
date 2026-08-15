@@ -24,7 +24,8 @@
  *
  * | Walker feature | Verdict |
  * |---|---|
- * | `linkFollowDepth` | **expressible** — same union, same off-by-one (`depth < maxDepth`) |
+ * | `linkFollowDepth` *membership* | **expressible** — same union, same off-by-one (`depth < maxDepth`) |
+ * | `depth-exceeded` *the REASON* | **expressible** — and it moved out of the not-expressible list once the primitive stopped guarding ENUMERATION on `maxDepth` and started guarding only ADMISSION. A member at the bound now has its references resolved and judged, and one the budget alone turns away becomes a `CLOSURE_DEPTH_EXCEEDED` condition carrying the same provenance a refusal does. This is the one verdict a DECLARATION states directly rather than through a `refusals` rule, so it carries no label and `matchedPattern` is null — which is exactly what the walker's own row says (`makeExclusion` attaches `matchedRule` only for `pattern-matched`) |
  * | `excludeReferencesFromBundle` *membership* | **expressible** — first-match-wins and any-match select the same file set; carried as ONE refusal rule per declared rule, in declared order, which selects the same set the flat union did |
  * | `excludeReferencesFromBundle` *WHICH rule matched* | **expressible** — one refusal rule apiece means the primitive's first-match-wins scan is `excludeMatchers.find(...)`'s scan, and the winner's first pattern lands in `realization_conditions.matchedPattern`, the column `packaging-validator.ts` reads as `matchedRule.patterns[0]` |
  * | `excludeReferencesFromBundle` *`template` payload* | **expressible** — carried verbatim in `ExtentRefusalRule.payload` (opaque to the primitive) and reported as `realization_conditions.matchedPayload`, beside the rule's declared index. ⚠️ Never MEASURED against the walker: no shipped config declares a `template`, so the corpus shadow synthesizes one to compare the two arms |
@@ -42,10 +43,10 @@
  * selects the same files for those causes, names the same cause, and carries the
  * same `sourcePath`/`sourceLine`/`linkHref`/`targetExists`/matched-rule
  * provenance the walker attaches to a refusal. What a projection still cannot
- * produce is the SEVEN reasons whose oracles it does not consult (git, the
- * project boundary, two read outcomes, its own skill root) — that, not the
- * payload, is what now stands between this and driving `vat`'s verdict engine
- * from a projection.
+ * produce is the SIX reasons whose oracles it does not consult (git, the project
+ * boundary, two read outcomes, its own skill root, the target's parser kind) —
+ * that, not the payload, is what now stands between this and driving `vat`'s
+ * verdict engine from a projection.
  *
  * The `excludeNavigationFiles` row is the one worth reading twice, because the
  * shape of its extension is the argument for why a rule needs a basename matcher

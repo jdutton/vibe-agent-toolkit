@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { ExtentContribution } from '../src/projection/contributor.js';
 import {
+  CLOSURE_DEPTH_EXCEEDED,
   CLOSURE_REFERENCE_UNRESOLVED,
   CLOSURE_ROOT_ABSENT,
   ClosureExtentContributor,
@@ -393,6 +394,74 @@ describe('ClosureExtentContributor', () => {
   it('admits only the root at maxDepth 0', async () => {
     const contribution = await contributeOver(CHAIN, declarationOf({ maxDepth: 0 }));
     expect(memberPaths(contribution)).toEqual([ROOT_DOC]);
+  });
+
+  it('REPORTS what the hop budget held back, instead of falling silent at the boundary', async () => {
+    // The boundary used to be the primitive's one silent verdict: `canDescend`
+    // stopped the ENUMERATION at a member sitting on `maxDepth`, so a reference
+    // out of it was indistinguishable from a reference nobody authored. The bound
+    // now gates ADMISSION only — the split `walk-link-graph.ts` has always had,
+    // where `checkExclusions` runs before `processRegistryResource`'s depth check
+    // and a link out of a frontier member is still classified and still recorded.
+    const contribution = await contributeOver(CHAIN, declarationOf({ maxDepth: 1 }));
+
+    // Membership FIRST, and unchanged: this is a reporting change, and a fixture
+    // that let `DOC_C` in would be measuring a different (broken) feature.
+    expect(memberPaths(contribution)).toEqual([ROOT_DOC, DOC_B]);
+
+    // …and the row, anchored to the TARGET, carrying the referring file's own
+    // provenance — the same five facts a refusal carries, because the question
+    // "what arrives if I widen maxDepth by one" needs the same answers.
+    expect(contribution.conditions).toHaveLength(1);
+    expect(contribution.conditions[0]).toMatchObject({
+      path: DOC_C,
+      code: CLOSURE_DEPTH_EXCEEDED,
+      sourcePath: DOC_B,
+      sourceLine: 1,
+      sourceRef: 'c.md',
+      targetExists: true,
+      // Null because no RULE decided this — the declaration's bound did. That is
+      // how a reader tells a budget verdict from a rule verdict without reading
+      // `code`, and it is what the walker's own row says too (`makeExclusion`
+      // attaches `matchedRule` only for `pattern-matched`).
+      matchedPattern: null,
+      matchedPayload: null,
+    });
+    expectContributionRowsValid(contribution);
+  });
+
+  it('emits NO depth row at maxDepth "full", where nothing is ever held back', async () => {
+    // The negative control for the case above. Without it, a contributor that
+    // emitted `CLOSURE_DEPTH_EXCEEDED` for every followed reference would satisfy
+    // every assertion there — and would be reporting a bound that never bit.
+    const contribution = await contributeOver(CHAIN, declarationOf({ maxDepth: 'full' }));
+    expect(memberPaths(contribution)).toEqual([ROOT_DOC, DOC_B, DOC_C]);
+    expect(contribution.conditions).toEqual([]);
+  });
+
+  it('lets a REFUSAL outrank the hop budget for a reference at the boundary', async () => {
+    // Both verdicts apply to `Readme.md`: a rule catches it AND the budget is
+    // spent. Only one reason gets reported, and it must be the rule's — the same
+    // order `walk-link-graph.ts` checks them in, and the reason the depth check
+    // sits last in `hopFor`. A frontier that answered `CLOSURE_DEPTH_EXCEEDED`
+    // here would tell an author to widen `maxDepth`, which would not help.
+    const files: readonly FixtureFile[] = [
+      { path: ROOT_DOC, refs: [{ rawRef: 'b.md' }] },
+      { path: DOC_B, refs: [{ rawRef: README_REF }, { rawRef: 'c.md' }] },
+      { path: DOC_HUB, refs: [] },
+      { path: DOC_C, refs: [] },
+    ];
+    const contribution = await contributeOver(files, declarationOf({
+      maxDepth: 1,
+      refusals: [refusalRule(LABEL_BASENAME, { basenames: [README_PATTERN] })],
+    }));
+
+    expect(memberPaths(contribution)).toEqual([ROOT_DOC, DOC_B]);
+    expect(conditionCodeFor(contribution, DOC_HUB)).toBe(LABEL_BASENAME);
+    // …and the sibling reference, which only the budget turns away, still gets
+    // the other verdict — so the case above is a statement about ORDER and not
+    // about a frontier that reports one code for everything.
+    expect(conditionCodeFor(contribution, DOC_C)).toBe(CLOSURE_DEPTH_EXCEEDED);
   });
 
   it('drops a reachable file matched by a refusal rule\'s glob, and says which rule', async () => {

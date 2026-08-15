@@ -22,13 +22,21 @@
  *
  * Membership agreement is the oldest half. The refusal cascade made the two arms
  * comparable on WHY a candidate was turned away, so {@link compareReasons} takes
- * every path BOTH arms refused and checks the closure's condition code against
- * the walker's own `excludeReason` through an explicit four-entry table
+ * every path BOTH arms turned away and checks the closure's condition code
+ * against the walker's own `excludeReason` through an explicit five-entry table
  * ({@link REASON_TO_REFUSAL_CODE}). The count of paths compared is asserted
- * non-zero beside the mismatch list, because an empty mismatch list over an empty
- * comparison is the same vacuous pass a zero-cell sweep would give. Demonstrated
- * falsifiable rather than assumed: swapping two labels in the translation leaves
- * membership untouched and turns 15 of the 59 compared paths into mismatches.
+ * non-zero PER REASON beside the mismatch list, because an empty mismatch list
+ * over an empty comparison is the same vacuous pass a zero-cell sweep would give,
+ * and a total would stay healthy while one class of verdict vanished.
+ * Demonstrated falsifiable rather than assumed: swapping two labels in the
+ * translation leaves membership untouched and turns 15 of the 59 compared paths
+ * into mismatches.
+ *
+ * {@link silentOnWalkerReason} is the same bucket run backwards, and it is the
+ * one a mute arm fails. Every path the WALKER turned away for a reason the table
+ * claims must have a closure verdict too — because "no disagreement" is exactly
+ * what an arm that stopped answering would report, and for one class of
+ * reference that is precisely what used to happen (see below).
  *
  * {@link compareProvenance} is the third, and it asks the question a consumer
  * actually has to answer: given a refusal, WHERE does an author look? Every field
@@ -54,6 +62,31 @@
  * rule is a decoy matching nothing, which is the answer a flat encoding gives
  * (measured: reverting the translation to the flat encoding turns that case red
  * with the decoy's pattern, and nothing else in this file moves).
+ *
+ * ## The depth boundary: closed in the CODE, not accounted for in the test
+ *
+ * ⚠️ This file used to pair provenance rows by REFERRING FILE and count the
+ * leftovers as `frontierRows` — 21 of them across the sweep, reported and never
+ * asserted. The cause was real and one-sided: `walkLinkGraph`'s `processLink`
+ * runs `checkExclusions` **before** `processRegistryResource` reaches the depth
+ * check, so a link out of a member sitting AT `maxDepth` was still classified and
+ * still recorded, while the closure's `canDescend` stopped the enumeration at
+ * that member and emitted nothing at all. Neither arm BUNDLED those targets, so
+ * membership was identical and every comparison before provenance was
+ * structurally blind to it.
+ *
+ * The fix went into the primitive, not into this file: `maxDepth` now bounds
+ * ADMISSION rather than ENUMERATION, so a frontier member's references are
+ * resolved and judged like any other — a refusal where a rule catches the target,
+ * `CLOSURE_DEPTH_EXCEEDED` where only the budget does. The pairing is gone, the
+ * comparison is a straight multiset equality per field, and `depth-exceeded`
+ * became the fifth entry of {@link REASON_TO_REFUSAL_CODE} rather than the sixth
+ * of the reasons the closure has no oracle for.
+ *
+ * The generalizable half: when two implementations differ because one is SILENT,
+ * teaching the comparison to tolerate the silence hides the gap in the test
+ * instead of closing it in the code — and a tolerance is invisible to every
+ * assertion downstream of it.
  *
  * `packages/agent-skills/test/projection-skill-extent.test.ts` already compares
  * `SkillExtentContributor` with `walkLinkGraph` at *fixture* scale, on a corpus
@@ -164,6 +197,7 @@ import {
   type WalkableRegistry,
 } from '@vibe-agent-toolkit/agent-skills';
 import {
+  CLOSURE_DEPTH_EXCEEDED,
   CLOSURE_REFERENCE_UNRESOLVED,
   CLOSURE_ROOT_ABSENT,
   ContributorRegistry,
@@ -379,31 +413,52 @@ const NARROWING_LABELS: readonly string[] = [
 ];
 
 /**
- * The walker `excludeReason` each refusal label must reproduce, one entry per
- * `classifyExclusion` branch the closure can express.
+ * The walker `excludeReason` each closure condition code must reproduce, one
+ * entry per verdict the closure can express.
  *
  * An EXPLICIT table, not a string transform: `directory-target` →
  * `SKILL_REFUSED_DIRECTORY_TARGET` is a mapping someone decided, and a
  * mechanical `toUpperCase().replaceAll('-','_')` would keep agreeing after the
- * translation started emitting a label that merely looks right. The other seven
- * reasons are absent on purpose — the closure consults none of their oracles, so
- * a closure refusal carrying one of them is a finding, not a gap.
+ * translation started emitting a label that merely looks right. The other six
+ * reasons are absent on purpose — the closure consults none of their oracles
+ * (git, the project boundary, two read outcomes, its own skill root, the target's
+ * parser kind), so a closure verdict carrying one of them is a finding, not a gap.
+ *
+ * ⚠️ **`depth-exceeded` is the fifth entry, and it is not a refusal LABEL.** The
+ * first four arrive as `ExtentRefusalRule.label`s the skill translation supplies;
+ * `CLOSURE_DEPTH_EXCEEDED` is the PRIMITIVE's own, because the hop budget is the
+ * one verdict a declaration states directly rather than through a rule. It became
+ * comparable when the closure stopped guarding ENUMERATION on `maxDepth` and
+ * started guarding only ADMISSION — which is the split `walk-link-graph.ts`
+ * already had (`checkExclusions` runs before `processRegistryResource`'s depth
+ * check), and the reason the walker always had a row here where the closure had
+ * silence.
  */
 const REASON_TO_REFUSAL_CODE: ReadonlyMap<string, string> = new Map([
   ['directory-target', SKILL_REFUSED_DIRECTORY_TARGET],
   ['navigation-file', SKILL_REFUSED_NAVIGATION_FILE],
   ['agent-instruction-file', SKILL_REFUSED_AGENT_INSTRUCTION_FILE],
   ['pattern-matched', SKILL_REFUSED_PATTERN_MATCHED],
+  ['depth-exceeded', CLOSURE_DEPTH_EXCEEDED],
 ]);
 
 /**
- * The two condition codes the closure PRIMITIVE owns.
+ * The closure condition codes that are NOT a verdict about a file, and are
+ * therefore subtracted before the two arms are compared.
  *
- * Everything else in a closure contribution's condition table arrived as a
- * refusal rule's label, so subtracting these two is how the refusal view is
- * read off without hardcoding which labels the translation happens to supply.
+ * Not "the codes the primitive owns" — {@link CLOSURE_DEPTH_EXCEEDED} is the
+ * primitive's too and is deliberately absent from this set, because it says the
+ * same thing about the same file the walker's `depth-exceeded` row says. What is
+ * subtracted here is the pair that has no counterpart to compare against at all:
+ * `CLOSURE_REFERENCE_UNRESOLVED` is a fact about a REFERENCE (nothing realizes
+ * the target, so there is no file to hold a verdict), and `CLOSURE_ROOT_ABSENT`
+ * is a fact about the DECLARATION.
+ *
+ * Everything left is either a refusal rule's label or the depth verdict, which is
+ * how the comparison view is read off without hardcoding which labels the
+ * translation happens to supply.
  */
-const PRIMITIVE_CONDITION_CODES: ReadonlySet<string> = new Set([
+const NON_VERDICT_CONDITION_CODES: ReadonlySet<string> = new Set([
   CLOSURE_REFERENCE_UNRESOLVED,
   CLOSURE_ROOT_ABSENT,
 ]);
@@ -535,10 +590,26 @@ interface ClosureRun {
  * against ([[fixtures-that-cannot-distinguish]]).
  */
 interface ReasonComparison {
-  /** How many paths BOTH arms refused, and whose reasons were therefore compared. */
-  readonly compared: number;
-  /** One rendered line per path the two arms refused for different stated reasons. */
+  /**
+   * How many paths BOTH arms turned away, keyed by the WALKER's reason.
+   *
+   * Per reason rather than one total, so a newly expressed verdict cannot hide
+   * inside a growing number: `depth-exceeded`'s own population is what says the
+   * depth boundary is being compared at all, and a total would stay comfortably
+   * non-zero if it collapsed to nothing.
+   */
+  readonly compared: ReadonlyMap<string, number>;
+  /** One rendered line per path the two arms turned away for different stated reasons. */
   readonly mismatches: readonly string[];
+  /**
+   * Paths the WALKER turned away for a reason this table claims the closure can
+   * express, and about which the closure said nothing at all.
+   *
+   * The direction that a silent arm passes. {@link mismatches} compares two
+   * answers and can only fire when both exist; this fires when one is missing,
+   * which is the failure the depth frontier actually was.
+   */
+  readonly silent: readonly string[];
 }
 
 /**
@@ -589,12 +660,6 @@ type ProvenanceField = typeof PROVENANCE_FIELDS[number];
 interface ProvenanceComparison {
   readonly compared: Record<ProvenanceField, number>;
   readonly mismatches: readonly string[];
-  /**
-   * Walker refusal rows the comparison could not pair, because the closure never
-   * enumerated that referring file's references at all — the depth-frontier
-   * asymmetry {@link compareProvenance} documents. Reported, not asserted zero.
-   */
-  readonly frontierRows: number;
 }
 
 // ============================================================================
@@ -958,7 +1023,7 @@ async function closureRun(
   const provenance = new Map<string, RefusalProvenance[]>();
   const conditions: RealizationConditionRow[] = [];
   for (const row of contribution.conditions) {
-    if (PRIMITIVE_CONDITION_CODES.has(row.code) || memberSet.has(row.path)) continue;
+    if (NON_VERDICT_CONDITION_CODES.has(row.code) || memberSet.has(row.path)) continue;
     refusals.set(row.path, row.code);
     conditions.push(row);
     const rows = provenance.get(row.path) ?? [];
@@ -995,135 +1060,119 @@ function fieldMultiset(rows: readonly RefusalProvenance[], field: ProvenanceFiel
 }
 
 /**
- * The provenance halves of the two arms, per field, for every path BOTH refused.
+ * The provenance halves of the two arms, per field, for every path BOTH turned
+ * away.
  *
  * Scoped to the same population {@link compareReasons} uses and for the same
  * reason: a path one arm bundled is a MEMBERSHIP difference, already owned by
  * {@link Divergence}, and reporting it here too would name one disagreement
  * twice.
  *
- * ## The one asymmetry this comparison had to be shaped around: the depth frontier
+ * ## Row for row, with nothing paired and nothing dropped
  *
- * MEASURED, not assumed, and it is a difference in which references get
- * CLASSIFIED — never in what either arm says about a reference they both
- * classified. `walkLinkGraph`'s `processLink` calls `checkExclusions` **before**
- * the depth check (`processRegistryResource` owns that), so a link out of a
- * member sitting AT `maxDepth` is still classified and still recorded as an
- * exclusion. The closure's `canDescend` returns false at that member and its
- * references are never enumerated at all. Neither arm bundles those targets, so
- * membership is untouched and the older half of this file never saw it.
- *
- * Concretely, at `linkFollowDepth: 1` the walker emits 34 refusal rows for
+ * ⚠️ This comparison used to pair rows by REFERRING FILE and count the
+ * leftovers, because of an asymmetry at the depth frontier: `walkLinkGraph`'s
+ * `processLink` calls `checkExclusions` **before** the depth check
+ * (`processRegistryResource` owns that), so a link out of a member sitting AT
+ * `maxDepth` was still classified and still recorded — while the closure's
+ * `canDescend` stopped the enumeration at that member and said nothing. Measured
+ * at `linkFollowDepth: 1`, the walker emitted 34 rows for
  * `…/agents/breed-advisor.md` (14 from the SKILL.md, 20 from the depth-1
- * `cat-breed-selection.md`) where the closure emits the 14 — and all 14 agree
- * field for field.
+ * `cat-breed-selection.md`) where the closure emitted the 14, and 21 rows across
+ * the whole sweep went counted-but-uncompared.
  *
- * So the rows are paired by REFERRING FILE and the unpaired walker rows are
- * counted rather than compared. Two guards keep that restriction from becoming a
- * place for a real disagreement to hide, and both are asserted, not commented:
- * a referring file the CLOSURE names and the walker does not is a mismatch, and
- * a dropped referring file that is not even a closure member is a mismatch.
+ * The gap is closed in the CODE now, not here: the closure bounds admission
+ * rather than enumeration, so it emits a row for every reference out of a
+ * frontier member too — a refusal where a rule catches the target, and
+ * `CLOSURE_DEPTH_EXCEEDED` where only the budget does. The two arms therefore
+ * classify the same set of references, and this is a straight multiset equality
+ * per field with no restriction to be sound about. The two guards that policed
+ * the restriction are gone with it: one is subsumed (a referring file only one
+ * arm names now makes the `sourcePath` multisets differ, which IS the mismatch),
+ * and the other guarded a population that no longer exists.
  *
  * @param walk - What the walker bundled and refused
  * @param closure - What the closure admitted and refused
  * @returns The per-field population and every disagreement, rendered
  */
-/**
- * Every way the frontier restriction could be hiding a real disagreement.
- *
- * ⚠️ Pairing rows by referring file is only sound while the restriction drops
- * rows for the ONE documented reason. These two guards are what make that a
- * checked claim rather than a hope: a referring file the CLOSURE names and the
- * walker does not is a wrong `sourcePath` wearing the restriction as a costume,
- * and a dropped referring file the closure never admitted as a member at all is
- * a membership difference rather than a frontier one.
- *
- * @param path - The refused path both arms are describing
- * @param walkerRows - Every refusal row the walker emitted for it
- * @param shared - The referring files the closure named
- * @param members - The closure extent's membership
- * @returns One rendered line per unsound drop, empty when the restriction is sound
- */
-function unsoundRestriction(
-  path: string,
-  walkerRows: readonly RefusalProvenance[],
-  shared: ReadonlySet<string | null>,
-  members: ReadonlySet<string>,
-): string[] {
-  const findings: string[] = [];
-  for (const source of shared) {
-    if (!walkerRows.some((row) => row.sourcePath === source)) {
-      findings.push(`${path} [source]: closure names referrer ${String(source)}, walker names none`);
-    }
-  }
-  for (const row of walkerRows) {
-    if (!shared.has(row.sourcePath) && !members.has(row.sourcePath ?? '')) {
-      findings.push(`${path} [source]: walker refers from ${String(row.sourcePath)},`
-        + ' which the closure did not admit as a member at all');
-    }
-  }
-  return findings;
-}
-
 function compareProvenance(walk: WalkerRun, closure: ClosureRun): ProvenanceComparison {
   const mismatches: string[] = [];
   const compared: Record<ProvenanceField, number> = {
     sourcePath: 0, sourceLine: 0, sourceRef: 0, targetExists: 0, matchedPattern: 0,
   };
-  const members = new Set(closure.members);
-  let frontierRows = 0;
 
   for (const [path, closureRows] of closure.provenance) {
     const walkerRows = walk.provenance.get(path);
     if (walkerRows === undefined) continue;
 
-    // The two arms classify a different SET of references at the depth frontier
-    // — see the block comment above — so the rows are restricted to referring
-    // files BOTH arms enumerated. The restriction is by SOURCE FILE and never by
-    // row, because for a shared source both arms enumerated all of its
-    // references, which is what keeps the multiset comparison exact.
-    const shared = new Set(closureRows.map((row) => row.sourcePath));
-    const paired = walkerRows.filter((row) => shared.has(row.sourcePath));
-    frontierRows += walkerRows.length - paired.length;
-
-    mismatches.push(...unsoundRestriction(path, walkerRows, shared, members));
-
     for (const field of PROVENANCE_FIELDS) {
-      const walker = fieldMultiset(paired, field);
+      const walker = fieldMultiset(walkerRows, field);
       const projected = fieldMultiset(closureRows, field);
       // Only a field SOME arm answered counts as compared — see
       // ProvenanceComparison for why null-against-null must not inflate a
       // population.
-      if ([...paired, ...closureRows].some((row) => row[field] !== null)) compared[field] += 1;
+      if ([...walkerRows, ...closureRows].some((row) => row[field] !== null)) compared[field] += 1;
       if (walker !== projected) {
         mismatches.push(`${path} [${field}]: walker=${walker} closure=${projected}`);
       }
     }
   }
 
-  return { compared, mismatches, frontierRows };
+  return { compared, mismatches };
 }
 
 /**
- * The reason halves of the two arms, for every path BOTH of them refused.
+ * Every path the WALKER turned away for a reason the closure claims to express,
+ * and about which the closure said nothing at all.
  *
- * Only paths in both refusal views are compared: a path one arm bundled is a
+ * The direction {@link compareReasons} structurally cannot see: it is driven by
+ * the closure's own verdicts, so an arm that stopped emitting a class of verdict
+ * would shrink its population rather than fail. That is exactly what the depth
+ * frontier was — the walker recorded, the closure was quiet, and no assertion in
+ * this file could tell the difference from a corpus that had no such references.
+ *
+ * A closure MEMBER is excluded: the walker refusing something the closure
+ * admitted is a membership difference, which {@link Divergence} owns.
+ *
+ * @param walk - What the walker bundled and refused
+ * @param closure - What the closure admitted and refused
+ * @returns One rendered line per silence, empty when the closure answered every one
+ */
+function silentOnWalkerReason(walk: WalkerRun, closure: ClosureRun): string[] {
+  const members = new Set(closure.members);
+  const silent: string[] = [];
+  for (const [path, reason] of walk.seen) {
+    if (reason === 'bundled' || reason === PRUNED) continue;
+    if (!REASON_TO_REFUSAL_CODE.has(reason)) continue;
+    if (members.has(path) || closure.refusals.has(path)) continue;
+    silent.push(`${path}: walker=${reason}, closure said nothing`);
+  }
+  return silent;
+}
+
+/**
+ * The reason halves of the two arms, in both directions.
+ *
+ * Only paths in both verdict views are COMPARED: a path one arm bundled is a
  * MEMBERSHIP difference, which {@link Divergence} already owns, and counting it
- * here too would report one disagreement twice under two names.
+ * here too would report one disagreement twice under two names. The paths only
+ * ONE arm spoke about are the other half, and they are
+ * {@link silentOnWalkerReason}'s job — because "no disagreement" is what a mute
+ * arm reports too.
  *
  * A walker reason with no {@link REASON_TO_REFUSAL_CODE} entry is a mismatch and
- * not a skip. The four mapped reasons are the ones the closure claims; a closure
- * refusal sitting on top of `skill-definition` or `gitignored` would mean it is
+ * not a skip. The five mapped reasons are the ones the closure claims; a closure
+ * verdict sitting on top of `skill-definition` or `gitignored` would mean it is
  * reporting a reason it has no oracle for, which is the failure this bucket
  * exists to catch rather than an out-of-scope case to wave through.
  *
  * @param walk - What the walker bundled and refused
  * @param closure - What the closure admitted and refused
- * @returns How many paths were compared, and every disagreement, rendered
+ * @returns The per-reason population, every disagreement, and every silence
  */
 function compareReasons(walk: WalkerRun, closure: ClosureRun): ReasonComparison {
   const mismatches: string[] = [];
-  let compared = 0;
+  const compared = new Map<string, number>();
 
   for (const [path, code] of closure.refusals) {
     const reason = walk.seen.get(path);
@@ -1131,14 +1180,14 @@ function compareReasons(walk: WalkerRun, closure: ClosureRun): ReasonComparison 
     // `PRUNED`: the walker emitted a row with no reason, so there is no reason
     // to compare against.
     if (reason === undefined || reason === 'bundled' || reason === PRUNED) continue;
-    compared += 1;
+    compared.set(reason, (compared.get(reason) ?? 0) + 1);
     const expected = REASON_TO_REFUSAL_CODE.get(reason);
     if (expected !== code) {
       mismatches.push(`${path}: walker=${reason} closure=${code} expected=${expected ?? '<unmapped>'}`);
     }
   }
 
-  return { compared, mismatches };
+  return { compared, mismatches, silent: silentOnWalkerReason(walk, closure) };
 }
 
 /** Both arms for one skill under one config, and their attributed difference. */
@@ -1188,16 +1237,49 @@ interface SweepResult {
   readonly excludeEscapes: string[];
   /** Cells in which either arm bundled more than the SKILL.md alone. */
   readonly followed: number;
-  /** Paths BOTH arms refused, summed over every cell — the reason bucket's population. */
-  readonly reasonsCompared: number;
-  /** Every path the two arms refused for different stated reasons. */
+  /**
+   * Paths BOTH arms turned away, summed over every cell, keyed by the walker's
+   * reason — the reason bucket's population, per verdict.
+   */
+  readonly reasonsCompared: Map<string, number>;
+  /** Every path the two arms turned away for different stated reasons. */
   readonly reasonMismatches: string[];
+  /** Every path the walker turned away for an expressible reason and the closure did not mention. */
+  readonly reasonSilent: string[];
   /** Per FIELD, how many (path, cell) pairs some arm answered — the provenance population. */
   readonly provenanceCompared: Record<ProvenanceField, number>;
   /** Every field of every path the two arms describe differently. */
   readonly provenanceMismatches: string[];
-  /** Walker refusal rows unpaired at the depth frontier — see {@link compareProvenance}. */
-  readonly frontierRows: number;
+}
+
+/**
+ * Fold one cell's reason and provenance comparison into the sweep's totals.
+ *
+ * Extracted from {@link sweepDepths} only to keep that function under the
+ * cognitive-complexity ceiling; every line here is accumulation, and each
+ * rendered line is prefixed with the cell it came from so a failure names the
+ * skill and the depth rather than only the path.
+ *
+ * @param result - The sweep totals, mutated in place
+ * @param cell - How this (skill, depth) cell is identified in a rendered line
+ * @param reasons - The cell's reason comparison
+ * @param provenance - The cell's provenance comparison
+ */
+function accumulateComparisons(
+  result: SweepResult,
+  cell: string,
+  reasons: ReasonComparison,
+  provenance: ProvenanceComparison,
+): void {
+  for (const [reason, count] of reasons.compared) {
+    result.reasonsCompared.set(reason, (result.reasonsCompared.get(reason) ?? 0) + count);
+  }
+  result.reasonMismatches.push(...reasons.mismatches.map((line) => `${cell}: ${line}`));
+  result.reasonSilent.push(...reasons.silent.map((line) => `${cell}: ${line}`));
+  for (const field of PROVENANCE_FIELDS) {
+    result.provenanceCompared[field] += provenance.compared[field];
+  }
+  result.provenanceMismatches.push(...provenance.mismatches.map((line) => `${cell}: ${line}`));
 }
 
 /**
@@ -1213,13 +1295,11 @@ interface SweepResult {
 async function sweepDepths(corpus: Corpus, narrowing: Narrowing = 'on'): Promise<SweepResult> {
   const result: SweepResult = {
     divergences: [], rows: [], excludeEscapes: [], followed: 0,
-    reasonsCompared: 0, reasonMismatches: [],
+    reasonsCompared: new Map<string, number>(), reasonMismatches: [], reasonSilent: [],
     provenanceCompared: { sourcePath: 0, sourceLine: 0, sourceRef: 0, targetExists: 0, matchedPattern: 0 },
-    provenanceMismatches: [], frontierRows: 0,
+    provenanceMismatches: [],
   };
   let followed = 0;
-  let reasonsCompared = 0;
-  let frontierRows = 0;
 
   for (const depth of SWEPT_DEPTHS) {
     for (const skill of corpus.skills) {
@@ -1229,17 +1309,7 @@ async function sweepDepths(corpus: Corpus, narrowing: Narrowing = 'on'): Promise
       } = await compareSkill(corpus, skill, config, narrowing);
       if (divergence !== undefined) result.divergences.push(divergence);
       if (walker.length > 1 || closure.length > 1) followed += 1;
-      reasonsCompared += reasons.compared;
-      result.reasonMismatches.push(
-        ...reasons.mismatches.map((line) => `${skill.name}@${String(depth)}: ${line}`),
-      );
-      for (const field of PROVENANCE_FIELDS) {
-        result.provenanceCompared[field] += provenance.compared[field];
-      }
-      frontierRows += provenance.frontierRows;
-      result.provenanceMismatches.push(
-        ...provenance.mismatches.map((line) => `${skill.name}@${String(depth)}: ${line}`),
-      );
+      accumulateComparisons(result, `${skill.name}@${String(depth)}`, reasons, provenance);
       result.rows.push({
         depth, skill: skill.name, walker: walker.length, closure: closure.length,
         agree: divergence === undefined,
@@ -1254,7 +1324,7 @@ async function sweepDepths(corpus: Corpus, narrowing: Narrowing = 'on'): Promise
     }
   }
 
-  return { ...result, followed, reasonsCompared, frontierRows };
+  return { ...result, followed };
 }
 
 // ============================================================================
@@ -1367,8 +1437,8 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
     const corpus = repoRootCorpus();
 
     const {
-      divergences, rows, excludeEscapes, followed, reasonsCompared, reasonMismatches,
-      provenanceCompared, provenanceMismatches, frontierRows,
+      divergences, rows, excludeEscapes, followed, reasonsCompared, reasonMismatches, reasonSilent,
+      provenanceCompared, provenanceMismatches,
     } = await sweepDepths(corpus);
     console.table(rows.filter((row) => (row['walker'] as number) > 1 || (row['closure'] as number) > 1));
     console.log(`[non-vacuous] ${followed} of ${rows.length} sweep cells bundle more than the SKILL.md alone`);
@@ -1377,17 +1447,25 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
     // would be the same vacuous pass the production corpus already gives.
     expect(followed).toBeGreaterThan(0);
 
-    // The REASON comparison, beside the membership one. Both arms refused these
-    // paths; the question is whether they say the same thing about why.
-    console.log(`[reasons] ${reasonsCompared} paths refused by BOTH arms,`
-      + ` ${reasonMismatches.length} with disagreeing reasons`);
+    // The REASON comparison, beside the membership one. Both arms turned these
+    // paths away; the question is whether they say the same thing about why.
+    console.log('[reasons]', JSON.stringify(Object.fromEntries(reasonsCompared)),
+      `paths turned away by BOTH arms, ${reasonMismatches.length} with disagreeing reasons,`
+      + ` ${reasonSilent.length} the closure said nothing about`);
     if (reasonMismatches.length > 0) console.log('[reason mismatches]', reasonMismatches);
-    // Population FIRST: an empty mismatch list over an empty comparison is the
-    // same vacuous pass as an empty divergence list over an empty sweep, and a
-    // refactor that stopped emitting refusal conditions entirely would satisfy
-    // the equality below while saying nothing at all.
-    expect(reasonsCompared).toBeGreaterThan(0);
+    if (reasonSilent.length > 0) console.log('[reason silences]', reasonSilent);
+    // Population FIRST, and PER REASON: an empty mismatch list over an empty
+    // comparison is the same vacuous pass as an empty divergence list over an
+    // empty sweep, and a refactor that stopped emitting one CLASS of verdict
+    // would leave a healthy-looking total behind.
+    expect([...REASON_TO_REFUSAL_CODE.keys()].filter((reason) => (reasonsCompared.get(reason) ?? 0) === 0))
+      .toEqual([]);
     expect(reasonMismatches).toEqual([]);
+    // …and the direction a silent arm passes. `depth-exceeded` is here because
+    // of it: the closure used to stop enumerating at `maxDepth` and emit nothing
+    // for a reference the walker classified and recorded, and no assertion in
+    // this file could distinguish that from a corpus with no such reference.
+    expect(reasonSilent).toEqual([]);
 
     // …and the PROVENANCE comparison, field by field, over the same population.
     // The reason bucket says the two arms agree about WHY; this one says they
@@ -1396,8 +1474,7 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
     // what `LinkResolution` carries, and the whole of what a consumer needs to
     // raise the walker's issue from a projection instead.
     console.log('[provenance]', JSON.stringify(provenanceCompared),
-      `${provenanceMismatches.length} disagreeing,`
-      + ` ${frontierRows} walker rows unpaired at the depth frontier`);
+      `${provenanceMismatches.length} disagreeing — every row compared, none paired away`);
     if (provenanceMismatches.length > 0) console.log('[provenance mismatches]', provenanceMismatches);
     // Population per FIELD first, and the strict one is `matchedPattern`: it is
     // counted only where an arm answered non-null, so a non-zero count is a
@@ -1610,47 +1687,64 @@ async function minOf(arm: () => Promise<void> | void): Promise<number> {
   return best;
 }
 
+/**
+ * The depths the timing arm prices, and why it is not one.
+ *
+ * `full` is where the two implementations do the most work and where the flip's
+ * steady-state cost lives. `1` is the only one that prices the depth BOUNDARY:
+ * at `full` nothing is ever held back, so the closure's frontier enumeration —
+ * resolving and judging the references out of a member at `maxDepth` — is
+ * structurally unreachable and a `full`-only table would report a zero cost for
+ * a change that is not free. The sweep's own configs bound most skills at 0–2,
+ * so a bounded row is the one an adopter actually pays.
+ */
+const TIMED_DEPTHS: readonly (number | 'full')[] = ['full', 1];
+
 describe('head-to-head cost of the two implementations', () => {
-  it('times both arms over each corpus, warm, min of nine', async () => {
+  it('times both arms over each corpus at a bounded and an unbounded depth, warm, min of nine', async () => {
     const rows: Record<string, unknown>[] = [];
 
-    for (const corpus of corpora) {
-      // Hoisted so neither arm is charged for building its own arguments, and at
-      // depth `full` so neither is measured on a walk its config declined to take.
-      const full: (skill: CorpusSkill) => SkillPackagingConfig =
-        (skill) => ({ ...skill.config, linkFollowDepth: 'full' });
-      const walks = corpus.skills.map((skill) => ({
-        skill, options: walkOptionsFor(corpus, skill, full(skill)),
-      }));
-      const closures = corpus.skills.map((skill) => ({
-        contributor: new SkillExtentContributor(skill.name),
-        declaration: declarationFor(skill, full(skill)),
-      }));
+    for (const depth of TIMED_DEPTHS) {
+      for (const corpus of corpora) {
+        // Hoisted so neither arm is charged for building its own arguments.
+        const at: (skill: CorpusSkill) => SkillPackagingConfig =
+          (skill) => ({ ...skill.config, linkFollowDepth: depth });
+        const walks = corpus.skills.map((skill) => ({
+          skill, options: walkOptionsFor(corpus, skill, at(skill)),
+        }));
+        const closures = corpus.skills.map((skill) => ({
+          contributor: new SkillExtentContributor(skill.name),
+          declaration: declarationFor(skill, at(skill)),
+        }));
 
-      const walkerMs = await minOf(() => {
-        for (const { skill, options } of walks) walkerRun(corpus, skill, options);
-      });
-      const closureMs = await minOf(async () => {
-        for (const { contributor, declaration } of closures) {
-          await contributor.contribute(corpus.base, declaration);
-        }
-      });
+        const walkerMs = await minOf(() => {
+          for (const { skill, options } of walks) walkerRun(corpus, skill, options);
+        });
+        const closureMs = await minOf(async () => {
+          for (const { contributor, declaration } of closures) {
+            await contributor.contribute(corpus.base, declaration);
+          }
+        });
 
-      rows.push({
-        corpus: corpus.spec.label,
-        skills: corpus.skills.length,
-        'walkLinkGraph ms': Number(walkerMs.toFixed(2)),
-        'closure ms': Number(closureMs.toFixed(2)),
-        'closure / walker': Number((closureMs / walkerMs).toFixed(3)),
-      });
+        rows.push({
+          depth,
+          corpus: corpus.spec.label,
+          skills: corpus.skills.length,
+          'walkLinkGraph ms': Number(walkerMs.toFixed(2)),
+          'closure ms': Number(closureMs.toFixed(2)),
+          'closure / walker': Number((closureMs / walkerMs).toFixed(3)),
+        });
+      }
     }
 
-    console.log('[timing] linkFollowDepth: full, warm, min of 9; per-skill compute only,'
-      + ' shared preparation (createProjectRegistry / populate) excluded and reported by beforeAll');
+    console.log('[timing] warm, min of 9; per-skill compute only, shared preparation'
+      + ' (createProjectRegistry / populate) excluded and reported by beforeAll.'
+      + ' The depth-1 rows are the ones that price the frontier enumeration —'
+      + ' at "full" the closure never reaches its own depth boundary.');
     console.table(rows);
 
     // Printed, never asserted: a wall-clock threshold on a live machine is a test
     // that fails on a loaded laptop and gets "fixed" by raising the number.
-    expect(rows).toHaveLength(CORPORA.length);
+    expect(rows).toHaveLength(CORPORA.length * TIMED_DEPTHS.length);
   }, 1_800_000);
 });

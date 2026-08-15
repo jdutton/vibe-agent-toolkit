@@ -75,6 +75,16 @@
  *   which href, against a target that did or did not exist, by which rule), so a
  *   consumer can raise the issue the shipped walker raises rather than only
  *   knowing that something was turned away — see {@link refusedCondition}.
+ * - **`maxDepth` bounds MEMBERSHIP, never enumeration.** A member sitting at the
+ *   bound still has its references resolved and judged; what the budget denies
+ *   is the hop. Each such reference becomes a
+ *   {@link CLOSURE_DEPTH_EXCEEDED} row carrying the same provenance a refusal
+ *   does. Stopping the enumeration instead was cheaper and quieter, and quieter
+ *   was the defect: two implementations that agree on membership but differ in
+ *   what they SAY at the boundary look identical to every membership test, so
+ *   the gap surfaces only once someone compares the reports — at which point the
+ *   temptation is to teach the comparison to tolerate the silence rather than to
+ *   close it.
  */
 
 import picomatch from 'picomatch';
@@ -116,6 +126,19 @@ export const CLOSURE_REFERENCE_UNRESOLVED = 'CLOSURE_REFERENCE_UNRESOLVED';
 
 /** The declared `closureFrom` names a path the base never realized. */
 export const CLOSURE_ROOT_ABSENT = 'CLOSURE_ROOT_ABSENT';
+
+/**
+ * A followed reference out of a member sitting AT `maxDepth`: resolved, not
+ * refused, and admitted by nothing because the hop budget is spent.
+ *
+ * The counterpart of `walk-link-graph.ts`'s `depth-exceeded`, and it exists for
+ * the same reason that one does — the bound is a fact about the DECLARATION, not
+ * about the file, so a reader who widens `maxDepth` by one wants to know what
+ * would arrive. Before this row the boundary was the primitive's one silent
+ * verdict: a refusal at depth 1 was reported, a refusal-by-budget at depth 1 was
+ * indistinguishable from a reference that was never authored.
+ */
+export const CLOSURE_DEPTH_EXCEEDED = 'CLOSURE_DEPTH_EXCEEDED';
 
 /** Where the walk currently is: a root-relative path and its hop count from the root. */
 type Hop = readonly [path: string, depth: number];
@@ -305,7 +328,18 @@ function walkClosure(walk: WalkContext): Omit<ExtentContribution, 'contexts'> {
       memberships.push({ resourceId: first.resourceId, extentId: walk.extentId });
     }
 
-    if (!canDescend(depth, walk.declaration.maxDepth)) continue;
+    // ⚠️ NO depth guard here, deliberately. A member at `maxDepth` still has its
+    // references ENUMERATED and EVALUATED — the hop budget decides what is
+    // ADMITTED, never what is looked at. That split is `walk-link-graph.ts`'s
+    // own: `processLink` runs `checkExclusions` before `processRegistryResource`
+    // reaches the depth check, so the walker records an exclusion for a link out
+    // of a member at the frontier and simply declines to bundle its target.
+    // Guarding here instead made the closure SILENT at the boundary — same
+    // membership, fewer facts — and a comparison against the walker had to
+    // tolerate the missing rows rather than the code closing the gap. The
+    // budget now lives at the single point that turns a candidate into a hop
+    // ({@link hopFor}), which is the only place it can bound membership without
+    // also bounding what gets reported.
     for (const next of outboundHops(path, rows, depth, walk, conditions)) {
       if (visited.has(next[0])) continue;
       visited.add(next[0]);
@@ -414,6 +448,16 @@ function hopFor(
   const refusal = walk.refusalOf(target);
   if (refusal !== undefined) {
     conditions.push(refusedCondition(walk.extentId, target, refusal, path, reference));
+    return undefined;
+  }
+  // The depth bound is checked LAST, and after the refusal — the order is
+  // `classifyExclusion`-before-`processRegistryResource`, which is the order
+  // `walk-link-graph.ts` checks them in. It matters because both can apply to
+  // one reference and only one reason gets reported: a navigation file linked
+  // from a member at `maxDepth` is a `navigation-file` refusal on both arms, not
+  // a depth verdict wearing the wrong label.
+  if (!canDescend(depth, walk.declaration.maxDepth)) {
+    conditions.push(depthExceededCondition(walk.extentId, target, path, reference));
     return undefined;
   }
   return [target.path, depth + 1];
@@ -932,6 +976,61 @@ function refusedCondition(
     targetExists: target.exists,
     matchedPattern: rule.patterns[0] ?? null,
     matchedPayload: rule.payload,
+  };
+}
+
+/**
+ * The condition recording a reference the hop budget — not a rule — turned away.
+ *
+ * Anchored to the **target**, like {@link refusedCondition} and unlike
+ * {@link unresolvedCondition}, and for that function's stated reason: the target
+ * is a real file this projection realizes, so the row can name the file the
+ * decision was about. It carries the same provenance a refusal does, because a
+ * consumer asking "what would arrive if I widened `maxDepth`" needs the same
+ * five answers as one asking "what did a rule turn away" — which reference, at
+ * which line, written how, against a target that did or did not exist.
+ *
+ * `matchedPattern` and `matchedPayload` are null and always will be: no rule
+ * matched. That is a **discriminating** null rather than an absent one — it is
+ * how a reader tells a budget verdict from a rule verdict without reading
+ * `code`, and it is exactly what the walker's own row says (`makeExclusion`
+ * attaches `matchedRule` only for `pattern-matched`).
+ *
+ * ⚠️ Emitted once per REFERENCE, like every other closure condition, and
+ * `ProjectionBuilder` keys the condition table on
+ * `(extentId, path, code, resourceId)` — so a target held back at the boundary
+ * through three references records one row carrying the first reference's
+ * provenance.
+ *
+ * A path can never carry both this code and a refusal label: {@link refusalOf}
+ * is a function of the candidate ROW, and {@link resolveReference} always
+ * returns the same first realization for a path, so a refused path is refused
+ * from every referrer and never reaches this branch.
+ *
+ * @param extentId - The closure extent
+ * @param target - The realization the reference resolved to
+ * @param fromPath - Root-relative path of the file holding the reference
+ * @param reference - The reference this boundary was reached through
+ * @returns The condition row
+ */
+function depthExceededCondition(
+  extentId: string,
+  target: ResourceRealizationRow,
+  fromPath: string,
+  reference: BlobReferenceRow,
+): RealizationConditionRow {
+  return {
+    extentId,
+    path: target.path,
+    code: CLOSURE_DEPTH_EXCEEDED,
+    severity: 'info',
+    message: 'Reachable, refused by no rule, and beyond this extent\'s maxDepth,'
+      + ' so it is reported rather than admitted — widening the bound would make it a member',
+    resourceId: target.resourceId,
+    ...referenceProvenance(fromPath, reference),
+    targetExists: target.exists,
+    matchedPattern: null,
+    matchedPayload: null,
   };
 }
 
