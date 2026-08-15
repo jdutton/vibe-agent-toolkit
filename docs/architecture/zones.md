@@ -388,7 +388,27 @@ extents:
     follow: [markdown-link, markdown-link-reference, markdown-definition]   # default
     maxDepth: 2                          # number of hops, or "full"
     exclude: ['**/*.test.md']            # picomatch, dot: true, over root-relative paths
+    excludeBasenames: ['README.md']      # case-insensitive basename set
+    excludeKinds: ['directory']          # resources.kind values
+    admitPaths: ['notes/CLAUDE.md']      # exact paths that outrank every matcher above
 ```
+
+**Three refusal matchers, one override, and a refusal is transitive.** `exclude`, `excludeBasenames`
+and `excludeKinds` return the *same* payload-free verdict, so the order they are consulted in is
+unobservable — unlike `walk-link-graph.ts`'s cascade, where each branch carries a distinct
+`excludeReason` and the order therefore *is* the behaviour. They exist as three because one predicate
+cannot express the other two: a basename set is not a path glob (a case-insensitive filesystem
+generates spellings no alternation enumerates — `Readme.md`, `README.MD`), and an entity kind is not
+a path at all (a directory's path is shaped exactly like a file's).
+
+A refused candidate is not merely excluded from membership: **the closure does not traverse through
+it**, so the subtree reachable only via that candidate is refused with it. That transitivity is the
+whole reason a refusal is worth expressing — see the measurement below.
+
+`admitPaths` is the one thing that outranks all three, for the same reason `closureFrom` does: an
+explicit declaration outranks a net, because a glob never named the file it caught. Exact string
+equality, never a prefix test — the explicit-vs-glob distinction is the entire content of the rule,
+and it is the same line `refusesAgentInstructionFile` draws for the `files:` escape hatch.
 
 Every optional field carries a default rather than staying optional, so a parsed declaration is
 total and assignable to the `JsonValue` that `zone_provenance.parameterSet` records verbatim.
@@ -397,20 +417,36 @@ total and assignable to the `JsonValue` that `zone_provenance.parameterSet` reco
 
 §7.3's adequacy test — *a built-in extent must be expressible the way a config-declared one would be*
 — was run against the hardest case VAT has, the skill bundle, whose privileged walker
-(`walk-link-graph.ts`) already computes the answer. Two features translate exactly, three do not, and
-one is blocked on a primitive the declaration does not have:
+(`walk-link-graph.ts`) already computes the answer. Five features translate exactly; the rest do not,
+and each unexpressible one names the oracle or the payload it would need:
 
 | walker feature | verdict |
 |---|---|
 | `linkFollowDepth` | **expressible** — same union, same off-by-one |
 | `excludeReferencesFromBundle` *membership* | **expressible** — first-match-wins and any-match select the identical file set, so a flat union of every rule's patterns is exact |
-| `excludeReferencesFromBundle` *`template` payload* | **not expressible** — an excluded target emits no row at all, so `matchedRule` has nowhere to land |
-| `excludeNavigationFiles` | **needs a primitive extension** — a case-insensitive *basename* predicate, and a glob cannot enumerate the spellings a case-insensitive filesystem generates |
-| `deferredArtifacts` (`files:`) | **not expressible** — keyed on filesystem existence and on gitignore; the closure does no I/O by construction |
+| `excludeNavigationFiles` | **expressible** — via `excludeBasenames`, the primitive extension this row used to ask for; gated on the knob exactly as `classifyExclusion` gates its branch |
+| `agent-instruction-file` *membership* | **expressible** — `excludeBasenames` unconditionally (that branch is deliberately not gated on the navigation knob), and the explicit-`files:` escape hatch becomes `admitPaths` |
+| `directory-target` *membership* | **expressible** — via `excludeKinds`, which reads `resources.kind`; a path glob cannot express it |
+| `excludeReferencesFromBundle` *`template` payload*, and every exclusion's REASON | **not expressible** — a refused candidate emits no row at all, so `directory-target` vs `navigation-file` vs `pattern-matched` collapses to one payload-free verdict and `matchedRule` has nowhere to land |
+| `deferredArtifacts` (`files:`) | **not expressible** — its three-way classification is keyed on filesystem existence and on gitignore, and the closure does no I/O by construction. Only the one fact `admitPaths` needs — which sources are explicit, non-glob agent-instruction files — is a pure function of the config |
+| `skill-definition` | **not expressible** — the verdict compares the target against *this walk's own* `skillRootPath`, and a declaration has no vocabulary for "the same file as my own root" |
+| `gitignored`, `outside-project`, `unreadable-target`, `missing-target` | **not expressible** — each needs an oracle the closure does not consult |
 | routable vs non-routable | **not expressible** — `follow` names a reference *form*, never the parser kind of the *target* |
 
-Set difference against `walkLinkGraph` on a real skill: **identical** on defaults, **1** path at
-`linkFollowDepth: 0`, **5** at depth 2.
+Read the expressible membership rows as membership-only: the primitive now selects the same files,
+and still cannot say *why*. That is not cosmetic — VAT's verdict engine reports
+`LINK_TO_NAVIGATION_FILE` and `LINK_TO_DIRECTORY` as distinct findings, and nothing in the projection
+reproduces that split.
+
+**Measured at corpus scale, with its own negative control.** Over this repository's fourteen declared
+skills, swept across `linkFollowDepth` 0/1/2/full (56 cells, 9 of which follow a real edge), the two
+arms now differ on **nothing**. Stripping just the three refusal matchers out of the same declaration
+— changing nothing else — brings back exactly the 253 differences measured before them:
+`pruned-behind-exclusion` **239**, `navigation-file` **9**, `directory-target` **3**,
+`agent-instruction-file` **2**. The 239 is the transitivity above: a refusal at one navigation or
+agent-instruction hub removes everything reachable only through it. Nothing was ever walker-only at
+any depth, which is what made this a *narrowing* problem rather than a "teach it to see" one.
+See `packages/cli/test/integration/projection-skill-extent-corpus.integration.test.ts`.
 
 > ⚠️ Found while measuring that difference: **`walkLinkGraph`'s asset bundling ignores `maxDepth`
 > entirely** — assets are added by `processLink` unconditionally, so a depth bound narrows the

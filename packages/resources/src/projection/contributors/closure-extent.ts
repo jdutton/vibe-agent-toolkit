@@ -59,9 +59,13 @@
  *   An AST-derived row is never in either context by construction, so this
  *   filter only ever bites lexer-derived forms — which is exactly where sample
  *   text lives.
- * - **The root is admitted even when an `exclude` glob matches it.** An explicit
- *   declaration outranks a net: `closureFrom` names the file, a glob never did.
- *   The same rule decides the `files:` escape hatch in `walk-link-graph.ts`.
+ * - **An explicitly named path is admitted even when a refusal matcher catches
+ *   it.** An explicit declaration outranks a net: `closureFrom` and every entry
+ *   in `admitPaths` name the file, whereas a glob, a basename set and a kind set
+ *   never did. The same rule decides the `files:` escape hatch in
+ *   `walk-link-graph.ts` (`refusesAgentInstructionFile`), which is why
+ *   `admitPaths` is matched by exact string equality rather than by prefix — the
+ *   explicit-vs-glob distinction is the whole content of the rule.
  */
 
 import picomatch from 'picomatch';
@@ -104,8 +108,18 @@ interface WalkContext {
   readonly byPath: ReadonlyMap<string, readonly ResourceRealizationRow[]>;
   /** `blobs.contentKey` → its reference rows, in ordinal order. */
   readonly byBlob: ReadonlyMap<string, readonly BlobReferenceRow[]>;
-  /** True when a candidate member's path is excluded by declaration. */
-  readonly isExcluded: (path: string) => boolean;
+  /**
+   * True when the declaration refuses this candidate member.
+   *
+   * Takes the candidate's **realization row**, not its path, because two of the
+   * four matchers need a column the path does not carry: `excludeBasenames`
+   * reads `basenameLower` (already folded by `realizations.ts`, with the same
+   * `toLowerCase()` the declaration side uses) and `excludeKinds` reads
+   * `resources.kind` via `resourceId`. Passing the row rather than a widening
+   * tuple of columns keeps the one refusal point one argument wide, and every
+   * column it reads is one the projection already computed.
+   */
+  readonly isExcluded: (candidate: ResourceRealizationRow) => boolean;
 }
 
 /**
@@ -175,7 +189,7 @@ export class ClosureExtentContributor implements ExtentContributor {
       extentId,
       byPath: indexRealizationsByPath(base),
       byBlob: referencesByBlobFor(base),
-      isExcluded: excludeMatcher(declaration.exclude),
+      isExcluded: refusalMatcher(declaration, base),
     });
 
     return { contexts: [context], ...walk };
@@ -315,9 +329,11 @@ function hopFor(
     return undefined;
   }
   // An excluded target is neither admitted nor walked through: it is not a
-  // member, so its own references are not this extent's edges.
+  // member, so its own references are not this extent's edges. That pruning is
+  // the whole reason a refusal is worth expressing — refusing one navigation hub
+  // drops everything reachable only through it.
   if (walk.isExcluded(target)) return undefined;
-  return [target, depth + 1];
+  return [target.path, depth + 1];
 }
 
 /**
@@ -358,7 +374,7 @@ function isNonLocalRef(rawRef: string): boolean {
 }
 
 /**
- * Resolve one `rawRef` to a root-relative path the base already realizes.
+ * Resolve one `rawRef` to a realization the base already holds.
  *
  * Resolution is relative to the **referring** file, so the referring path is
  * required rather than convenient. A target the base never realized resolves to
@@ -366,17 +382,26 @@ function isNonLocalRef(rawRef: string): boolean {
  * minting an identity for an unenumerated path would let a broken link invent a
  * member.
  *
+ * The ROW is returned rather than the path because the refusal matchers need
+ * columns the path does not carry (`basenameLower`, and `resourceId` for the
+ * kind lookup). The **first** realization in base order is the one returned,
+ * which is the same tie-break {@link walkClosure} applies when it admits a
+ * member — stated once here so the two cannot pick different rows.
+ *
  * @param rawRef - The reference exactly as authored
  * @param fromPath - Root-relative path of the file holding the reference
  * @param walk - The traversal's indexed inputs
- * @returns The target's root-relative path, or undefined when nothing realizes it
+ * @returns The target's first realization row, or undefined when nothing realizes it
  */
-function resolveReference(rawRef: string, fromPath: string, walk: WalkContext): string | undefined {
+function resolveReference(
+  rawRef: string,
+  fromPath: string,
+  walk: WalkContext,
+): ResourceRealizationRow | undefined {
   const { root } = walk.base;
   const resolution = resolveLocalHref(rawRef, joinRoot(root, fromPath), root);
   if (resolution.kind !== 'resolved') return undefined;
-  const candidate = relativize(resolution.resolvedPath, root);
-  return walk.byPath.has(candidate) ? candidate : undefined;
+  return walk.byPath.get(relativize(resolution.resolvedPath, root))?.[0];
 }
 
 /**
@@ -417,6 +442,104 @@ function canDescend(depth: number, maxDepth: ExtentDeclaration['maxDepth']): boo
 function excludeMatcher(patterns: readonly string[]): (path: string) => boolean {
   if (patterns.length === 0) return () => false;
   return picomatch([...patterns], { dot: true });
+}
+
+/**
+ * The declaration's single refusal point — every exclusion matcher, plus the
+ * `admitPaths` override that outranks all of them.
+ *
+ * Compiled **once per `contribute`**, the way {@link excludeMatcher} precompiles
+ * its globs. Building the sets per candidate would rebuild the same three sets
+ * once per followed reference in the corpus, which is the shape of cost this
+ * module already paid for once (see {@link referencesByBlobMemo}).
+ *
+ * ## `admitPaths` wins, and nothing else has a precedence
+ *
+ * An explicit declaration outranks a net, exactly as `closureFrom` does: a glob,
+ * a basename set and a kind set never named the file they caught. Exact string
+ * equality against the root-relative, forward-slashed path — never a prefix or a
+ * glob test, because the explicit-vs-glob distinction IS the rule.
+ *
+ * Among the three exclusion matchers the order is **unobservable**: all three
+ * return the same verdict with no payload, so the three `if`s below are a
+ * short-circuit and not a cascade — reordering them changes no answer. Do not
+ * read a precedence into them; there is none to read.
+ * (`walk-link-graph.ts`'s `classifyExclusion` genuinely is an ordered cascade,
+ * because each of its branches carries a distinct `excludeReason` — that is the
+ * difference between a verdict with a reason and a verdict without one.)
+ *
+ * ## Case folding is `toLowerCase()`, never `toLocaleLowerCase()`
+ *
+ * The same rule, for the same reason, as `basenameMatcher` in
+ * `packages/agent-skills/src/validators/validation-rules.ts`: the Turkish
+ * dotless-i rule would fold `INDEX.md` to something `index.md` does not match on
+ * a `tr-TR` host. The candidate side of the comparison is already folded —
+ * `resource_realizations.basenameLower` is `basename.toLowerCase()`
+ * (`realizations.ts`) — so only the declaration side is folded here, and the two
+ * halves must stay on the same function or the matcher silently stops matching.
+ *
+ * @param declaration - The extent declaration
+ * @param base - The projection built so far, for the `resources.kind` lookup
+ * @returns A predicate over a candidate's realization row
+ */
+function refusalMatcher(
+  declaration: ExtentDeclaration,
+  base: ProjectionBase,
+): (candidate: ResourceRealizationRow) => boolean {
+  const admitted = new Set(declaration.admitPaths);
+  const byGlob = excludeMatcher(declaration.exclude);
+  const basenames = new Set(declaration.excludeBasenames.map((name) => name.toLowerCase()));
+  const kinds = new Set(declaration.excludeKinds);
+  const kindById = kinds.size === 0 ? undefined : kindByResourceIdFor(base);
+
+  return (candidate: ResourceRealizationRow): boolean => {
+    if (admitted.has(candidate.path)) return false;
+    if (byGlob(candidate.path)) return true;
+    if (basenames.has(candidate.basenameLower)) return true;
+    const kind = kindById?.get(candidate.resourceId);
+    return kind !== undefined && kinds.has(kind);
+  };
+}
+
+/**
+ * Per-run memo of the `resourceId` → `resources.kind` index.
+ *
+ * Same premise and same guard as {@link referencesByBlobMemo}, for the same
+ * reason: a closure contributor is registered once per extent (61 of them on
+ * this repo, × 2 fixpoint passes), and rebuilding a whole-corpus index inside
+ * each one is the per-item-cost-proportional-to-the-corpus shape that measured
+ * as 98% of a run last time it went unnoticed. Keyed on row count as well as
+ * identity so an index cannot outlive its own premise — a closure contributor
+ * only ever re-selects entities the base stratum already enumerated, so the
+ * count is stable across the stratum, and if that ever stops being true the
+ * index is rebuilt rather than silently serving a stale kind.
+ */
+const kindByResourceIdMemo = new WeakMap<
+  ProjectionBase,
+  { readonly rowCount: number; readonly index: ReadonlyMap<string, string> }
+>();
+
+/**
+ * The base's entity-kind index, built once per run rather than once per call.
+ *
+ * First row per `resourceId` wins, matching `ProjectionBuilder`'s own key race —
+ * `resources` holds one row per identity, so this is a stated tie-break rather
+ * than a situation that arises.
+ *
+ * @param base - The projection built so far
+ * @returns `resources.resourceId` → its `kind`
+ */
+function kindByResourceIdFor(base: ProjectionBase): ReadonlyMap<string, string> {
+  const cached = kindByResourceIdMemo.get(base);
+  if (cached?.rowCount === base.resources.length) {
+    return cached.index;
+  }
+  const index = new Map<string, string>();
+  for (const row of base.resources) {
+    if (!index.has(row.resourceId)) index.set(row.resourceId, row.kind);
+  }
+  kindByResourceIdMemo.set(base, { rowCount: base.resources.length, index });
+  return index;
 }
 
 /**

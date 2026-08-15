@@ -352,7 +352,24 @@ export type SkillsConfig = z.infer<typeof SkillsConfigSchema>;
  *     follow: [markdown-link, markdown-link-reference]
  *     maxDepth: 3
  *     exclude: ['*.test.md']
+ *     excludeBasenames: ['README.md']
+ *     excludeKinds: ['directory']
+ *     admitPaths: ['notes/CLAUDE.md']
  * ```
+ *
+ * ## Four refusal matchers and one override, not five independent filters
+ *
+ * {@link exclude}, {@link excludeBasenames} and {@link excludeKinds} all produce
+ * the SAME verdict — refused, with no payload — so the order in which they are
+ * consulted is unobservable. {@link admitPaths} is not one of them: it outranks
+ * all three, for the same reason `closureFrom` does. A refusal is not merely
+ * "not a member": the closure does not traverse THROUGH a refused candidate, so
+ * the subtree reachable only via that candidate is refused with it.
+ *
+ * The three exist as three because one predicate cannot express the other two.
+ * A basename set is not a path glob (case-insensitive filesystems generate
+ * spellings no alternation enumerates), and an entity kind is not a path at all
+ * (a directory's path is shaped exactly like a file's).
  *
  * ## Every optional field carries a default, deliberately
  *
@@ -374,6 +391,12 @@ export const ExtentDeclarationSchema = z.object({
     .describe('Reference hops from the root, or "full" for an unbounded closure. Same union as skills packaging linkFollowDepth, so one concept has one spelling.'),
   exclude: z.array(z.string().min(1)).default([])
     .describe('Globs (picomatch, dot: true) matched against a candidate member\'s root-relative path. An excluded file is neither admitted nor traversed through.'),
+  excludeBasenames: z.array(z.string().min(1)).default([])
+    .describe('Basenames matched CASE-INSENSITIVELY against a candidate member\'s basename, e.g. "README.md". Same refusal semantics as exclude: neither admitted nor traversed through, so the subtree reachable only through the refused file goes with it. Deliberately NOT a glob: exclude matches a root-relative PATH, and a brace alternation over that path cannot enumerate the spellings a case-insensitive filesystem generates freely (Readme.md, README.MD, ReadMe.md), so the glob approximation silently under-matches exactly the spellings that occur in the wild. Folding is toLowerCase(), never toLocaleLowerCase() — see basenameMatcher in agent-skills/src/validators/validation-rules.ts.'),
+  excludeKinds: z.array(z.string().min(1)).default([])
+    .describe('resources.kind values refused, e.g. "directory". Same refusal semantics as exclude. This is the only way a declaration can refuse a DIRECTORY target: a directory\'s path is shaped like any other path, so no glob over the path can express the distinction — the entity kind can.'),
+  admitPaths: z.array(z.string().min(1)).default([])
+    .describe('Exact root-relative paths admitted even when exclude, excludeBasenames or excludeKinds match them. The same rule closureFrom already gets: an explicit declaration outranks a net, because a glob never named the file it caught. Matched by exact string equality against the root-relative, forward-slashed path — never a prefix or glob test, since the explicit-vs-glob distinction is the whole point of the field.'),
 }).strict().describe('A closure-defined extent declaration (zones.md §7.3)');
 
 export type ExtentDeclaration = z.infer<typeof ExtentDeclarationSchema>;

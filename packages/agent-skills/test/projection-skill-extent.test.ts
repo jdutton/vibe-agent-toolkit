@@ -36,6 +36,7 @@ import { cpSync, writeFileSync } from 'node:fs';
 import {
   CLOSURE_REFERENCE_UNRESOLVED,
   ContributorRegistry,
+  DeferredArtifacts,
   FilesystemExtentContributor,
   ProjectionBuilder,
   blobReferencesFor,
@@ -55,6 +56,7 @@ import {
   skillExtentDeclaration,
 } from '../src/projection/skill-extent.js';
 import { createProjectRegistry } from '../src/skill-packager.js';
+import { AGENT_INSTRUCTION_FILE_PATTERNS, NAVIGATION_FILE_PATTERNS } from '../src/validators/validation-rules.js';
 import { walkLinkGraph, type WalkableRegistry, type WalkLinkGraphOptions } from '../src/walk-link-graph.js';
 
 import { setupTempDir } from './test-helpers.js';
@@ -78,6 +80,9 @@ const CHAIN_REL = 'docs/chain.md';
 const README_REL = 'docs/README.md';
 const CLAUDE_REL = 'CLAUDE.md';
 const SIBLING_SKILL_REL = 'skills/tool-b/SKILL.md';
+
+/** An explicit, non-glob `files:` source naming an agent-instruction file. */
+const DECLARED_CLAUDE_SOURCE = 'notes/CLAUDE.md';
 const DOCS_DIR_REL = 'docs';
 const CONFIG_ASSET_REL = 'templates/config.json';
 
@@ -232,6 +237,14 @@ async function walkerBundle(root: string, config: SkillPackagingConfig): Promise
     projectRoot: root,
     skillRootPath: skillAbsolute,
     excludeNavigationFiles: config.excludeNavigationFiles ?? true,
+    // Built exactly as `skill-packager.ts:599` builds it — per skill, against
+    // the skill's own directory. Without it the walker's `files:` escape hatch
+    // is unreachable, and the `admitPaths` half of the translation would be
+    // compared against a walker that could never have granted it.
+    deferredArtifacts: DeferredArtifacts.from(
+      [{ files: config.files ?? [], skillDir: safePath.join(skillAbsolute, '..') }],
+      root,
+    ),
   };
 
   const result = walkLinkGraph(
@@ -294,7 +307,24 @@ describe('skillExtentDeclaration', () => {
       maxDepth: DEFAULT_DEPTH,
       exclude: [],
       follow: ['markdown-link', 'markdown-link-reference', 'markdown-definition'],
+      // `skill-packager.ts:582` defaults `excludeNavigationFiles` to true, so a
+      // config-less skill refuses both lists.
+      excludeBasenames: [...AGENT_INSTRUCTION_FILE_PATTERNS, ...NAVIGATION_FILE_PATTERNS],
+      // `classifyPathKind` refuses a directory unconditionally — no knob gates it.
+      excludeKinds: ['directory'],
+      admitPaths: [],
     });
+  });
+
+  it('keeps the agent-instruction list when excludeNavigationFiles is false, and drops only navigation', () => {
+    // The walker's agent-instruction branch is deliberately NOT gated on this
+    // knob (`refusesAgentInstructionFile`): the knob is about content
+    // granularity, "this file is not distributable" is a different question. A
+    // translation that gated both would ship every repo's CLAUDE.md the moment
+    // an author asked for their READMEs back.
+    const declaration = skillExtentDeclaration({ excludeNavigationFiles: false }, SKILL_REL);
+    expect(declaration.excludeBasenames).toEqual([...AGENT_INSTRUCTION_FILE_PATTERNS]);
+    expect(declaration.excludeBasenames).not.toContain('README.md');
   });
 
   it('carries linkFollowDepth "full" through unchanged', () => {
@@ -311,6 +341,37 @@ describe('skillExtentDeclaration', () => {
       },
     };
     expect(skillExtentDeclaration(config, SKILL_REL).exclude).toEqual(['**/*.mjs', 'docs/**', '**/*.json']);
+  });
+
+  it('admits an EXPLICIT files:-declared agent-instruction source, and nothing else', () => {
+    // The walker's escape hatch, mirrored. Three entries, one of which earns it:
+    //   notes/CLAUDE.md   — explicit + agent-instruction  → admitted
+    //   docs/README.md    — explicit, but the `navigation-file` branch sits
+    //                       EARLIER in the cascade and carries NO hatch, so the
+    //                       walker still refuses it and so must the closure
+    //   vendor/**\/AGENTS.md — a GLOB: `DeferredArtifacts.from` registers it by
+    //                       its static base, so `sourcePaths` never contains the
+    //                       matched file and exact membership refuses it
+    const config: SkillPackagingConfig = {
+      files: [
+        { source: DECLARED_CLAUDE_SOURCE, dest: DECLARED_CLAUDE_SOURCE },
+        { source: README_REL, dest: README_REL },
+        { source: 'vendor/**/AGENTS.md', dest: 'vendor/AGENTS.md' },
+      ],
+    };
+    expect(skillExtentDeclaration(config, SKILL_REL).admitPaths).toEqual([DECLARED_CLAUDE_SOURCE]);
+  });
+
+  it('normalizes a files: source into projection coordinates', () => {
+    // `DeferredArtifacts.from` resolves a source through
+    // `relative(projectRoot, resolve(join(projectRoot, source)))`, which strips a
+    // leading `./`. `admitPaths` is compared by EXACT equality against
+    // `resource_realizations.path`, so an unnormalized `./notes/CLAUDE.md` would
+    // match nothing at all — a silently dead escape hatch.
+    const config: SkillPackagingConfig = {
+      files: [{ source: `./${DECLARED_CLAUDE_SOURCE}`, dest: CLAUDE_REL }],
+    };
+    expect(skillExtentDeclaration(config, SKILL_REL).admitPaths).toEqual([DECLARED_CLAUDE_SOURCE]);
   });
 });
 
@@ -393,22 +454,56 @@ describe('membership against walkLinkGraph', () => {
     expect(difference(closure, walker)).toEqual([]);
   });
 
-  it('DIVERGES on every cascade discriminator the primitive has no vocabulary for', async () => {
+  it('AGREES on the three cascade discriminators the refusal matchers now express', async () => {
+    const root = cascadeCorpus();
+    const closure = await closureMembers(root, DEFAULT_CONFIG);
+
+    // Each of these was in `difference(closure, walker)` before the primitive
+    // grew `excludeBasenames`, `excludeKinds` and `admitPaths`, and each is now
+    // refused by exactly one of them:
+    //   docs            → `excludeKinds: ['directory']`   (walker: `directory-target`)
+    //   docs/README.md  → NAVIGATION_FILE_PATTERNS        (walker: `navigation-file`)
+    //   CLAUDE.md       → AGENT_INSTRUCTION_FILE_PATTERNS (walker: `agent-instruction-file`)
+    expect(closure).not.toContain(DOCS_DIR_REL);
+    expect(closure).not.toContain(README_REL);
+    expect(closure).not.toContain(CLAUDE_REL);
+
+    // …and the walk was narrowed, not stopped. Without this the three negatives
+    // above are satisfied just as well by a closure that admitted nothing.
+    expect(closure).toContain(GUIDE_REL);
+    expect(closure).toContain(CHAIN_REL);
+  });
+
+  it('pins resources.kind "directory" — the premise excludeKinds rests on', async () => {
+    // Verified against a real crawl rather than read off the producer: if a
+    // directory entity were kinded anything else, `excludeKinds: ['directory']`
+    // would be a silent no-op and the assertion above would still pass for the
+    // wrong reason (a directory has no markdown blob, so it contributes no
+    // further edges either way).
+    const base = await populatedBase(cascadeCorpus());
+    const kindOf = (path: string): string | undefined => {
+      const realization = base.resourceRealizations.find((row) => row.path === path);
+      return base.resources.find((row) => row.resourceId === realization?.resourceId)?.kind;
+    };
+
+    expect(kindOf(DOCS_DIR_REL)).toBe('directory');
+    // The discriminating half: the column would be useless if everything were a
+    // directory, and `excludeKinds` would then refuse the whole corpus.
+    expect(kindOf(GUIDE_REL)).toBe('file');
+  });
+
+  it('DIVERGES on the cascade discriminators the primitive still has no vocabulary for', async () => {
     const root = cascadeCorpus();
     const closure = await closureMembers(root, DEFAULT_CONFIG);
     const walker = await walkerBundle(root, DEFAULT_CONFIG);
 
-    // Admitted by the closure, refused by the walker. Each is a named branch of
-    // `classifyExclusion`'s ordered cascade, and each carries a REASON the
-    // primitive's `exclude` cannot express — a glob returns a verdict with no
-    // payload, and an excluded target emits no row at all:
-    //   docs            → `directory-target`
-    //   docs/README.md  → `navigation-file` (excludeNavigationFiles)
-    //   CLAUDE.md       → `agent-instruction-file`
-    //   skills/tool-b/SKILL.md → `skill-definition`
-    expect(difference(closure, walker)).toEqual(
-      [DOCS_DIR_REL, README_REL, CLAUDE_REL, SIBLING_SKILL_REL].sort(compareCodeUnits),
-    );
+    // Admitted by the closure, refused by the walker. `skill-definition` is the
+    // one left: its verdict depends on comparing the target against THIS walk's
+    // own `skillRootPath` (a self-link is skipped, a sibling's SKILL.md is
+    // refused), and a declaration has no vocabulary for "the same file as my own
+    // root". An equality, not a `toContain`: a NEW divergence appearing is the
+    // finding this file exists to surface.
+    expect(difference(closure, walker)).toEqual([SIBLING_SKILL_REL]);
 
     // Bundled by the walker, refused by the closure: `templates/config.json` is
     // an asset linked from a depth-2 document, so it is a depth-3 hop the
@@ -423,9 +518,39 @@ describe('membership against walkLinkGraph', () => {
     // common ground it is.
     expect(walker).toEqual(sortedPaths([SKILL_REL, GUIDE_REL, CHAIN_REL, HELPER_REL, CONFIG_ASSET_REL]));
     expect(closure).toEqual(sortedPaths([
-      SKILL_REL, GUIDE_REL, CHAIN_REL, HELPER_REL,
-      DOCS_DIR_REL, README_REL, CLAUDE_REL, SIBLING_SKILL_REL,
+      SKILL_REL, GUIDE_REL, CHAIN_REL, HELPER_REL, SIBLING_SKILL_REL,
     ]));
+  });
+
+  it('admits a files:-declared CLAUDE.md the same walk otherwise refuses', async () => {
+    // The escape hatch, end to end. Both arms are given the same `files:`
+    // declaration, so this is an agreement and not a claim about the closure
+    // alone — and the un-declared run beside it is what makes the admission a
+    // statement about `admitPaths` rather than about reachability.
+    const root = cascadeCorpus();
+    const declared: SkillPackagingConfig = {
+      files: [{ source: CLAUDE_REL, dest: 'CLAUDE.md' }],
+    };
+
+    expect(await closureMembers(root, DEFAULT_CONFIG)).not.toContain(CLAUDE_REL);
+    expect(await closureMembers(root, declared)).toContain(CLAUDE_REL);
+    expect(await walkerBundle(root, declared)).toContain(CLAUDE_REL);
+  });
+
+  it('does NOT admit a files:-declared README.md — the navigation branch has no hatch', async () => {
+    // The cascade-ORDER asymmetry, pinned on both arms. `classifyExclusion`
+    // refuses `navigation-file` BEFORE it reaches the agent-instruction branch
+    // that carries the hatch, so declaring a README in `files:` does not get the
+    // LINK to it bundled. The translation encodes that by admitting only
+    // agent-instruction sources; a translation that admitted every explicit
+    // `files:` source would diverge from the walker right here.
+    const root = cascadeCorpus();
+    const declared: SkillPackagingConfig = {
+      files: [{ source: README_REL, dest: 'README.md' }],
+    };
+
+    expect(await closureMembers(root, declared)).not.toContain(README_REL);
+    expect(await walkerBundle(root, declared)).not.toContain(README_REL);
   });
 
   it('AGREES with walkLinkGraph on external URLs: no condition, and local breaks still recorded', async () => {

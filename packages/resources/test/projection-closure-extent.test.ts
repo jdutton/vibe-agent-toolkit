@@ -43,6 +43,28 @@ const DOC_B = 'skills/foo/b.md';
 const DOC_C = 'skills/foo/c.md';
 const DOC_TEST = 'skills/foo/b.test.md';
 
+/**
+ * A navigation hub spelled in a case NO entry of any pattern list contains.
+ *
+ * `Readme.md` is the single most common real spelling and is deliberately
+ * neither `README.md` nor `readme.md`: a case-SENSITIVE implementation of
+ * `excludeBasenames` admits it, so this fixture is what makes the matcher's case
+ * folding falsifiable rather than merely asserted.
+ */
+const DOC_HUB = 'skills/foo/Readme.md';
+
+/** Reachable ONLY through {@link DOC_HUB} — the subtree a refusal must prune. */
+const DOC_BEHIND = 'skills/foo/behind.md';
+
+/** A DIRECTORY entity, whose path is shaped exactly like a file's. */
+const DOC_DIR = 'skills/foo/nested';
+
+/** The `resources.kind` a directory entity carries — see the empirical pin in agent-skills. */
+const DIRECTORY_KIND = 'directory';
+
+/** The canonical basename spelling the declaration is authored with. */
+const README_PATTERN = 'README.md';
+
 const MARKDOWN_LINK: ReferenceSyntacticForm = 'markdown-link';
 
 /** One reference candidate to plant in a fixture blob. */
@@ -56,6 +78,8 @@ interface FixtureRef {
 interface FixtureFile {
   path: string;
   refs: readonly FixtureRef[];
+  /** The `resources.kind` this entity gets. Defaults to `file`. */
+  kind?: string;
 }
 
 /** A schema-valid content key (`<parserKind>.<sha256>`) derived from a seed. */
@@ -115,7 +139,7 @@ function addFile(builder: ProjectionBuilder, file: FixtureFile): void {
   const contentKey = markdownKey(file.path);
   builder.addResource({
     resourceId,
-    kind: 'file',
+    kind: file.kind ?? 'file',
     origin: 'filesystem',
     observed: true,
     fromEnumeration: true,
@@ -141,6 +165,29 @@ const CHAIN: readonly FixtureFile[] = [
   { path: ROOT_DOC, refs: [{ rawRef: 'b.md' }] },
   { path: DOC_B, refs: [{ rawRef: 'c.md' }] },
   { path: DOC_C, refs: [] },
+];
+
+/**
+ * `SKILL.md → Readme.md → behind.md`, plus an ordinary sibling.
+ *
+ * The hub is the only route to {@link DOC_BEHIND}, so a fixture that checked
+ * only the hub could not see the pruning — which is the behaviour that accounts
+ * for the overwhelming majority of the shadow experiment's divergence.
+ * `DOC_B` is the control: it must survive every refusal below, or "the matcher
+ * refused something" would also be satisfied by a walk that refused everything.
+ */
+const HUB_CHAIN: readonly FixtureFile[] = [
+  { path: ROOT_DOC, refs: [{ rawRef: 'Readme.md' }, { rawRef: 'b.md' }] },
+  { path: DOC_HUB, refs: [{ rawRef: 'behind.md' }] },
+  { path: DOC_BEHIND, refs: [] },
+  { path: DOC_B, refs: [] },
+];
+
+/** `SKILL.md` linking a DIRECTORY and an ordinary file, side by side. */
+const DIRECTORY_FIXTURE: readonly FixtureFile[] = [
+  { path: ROOT_DOC, refs: [{ rawRef: 'nested' }, { rawRef: 'b.md' }] },
+  { path: DOC_DIR, refs: [], kind: DIRECTORY_KIND },
+  { path: DOC_B, refs: [] },
 ];
 
 /** A cycle `SKILL.md → b.md → c.md → SKILL.md`, which only the visited set can terminate. */
@@ -196,6 +243,13 @@ describe('ExtentDeclarationSchema', () => {
     expect(parsed.maxDepth).toBe('full');
     expect(parsed.follow).toContain(MARKDOWN_LINK);
     expect(parsed.exclude).toEqual([]);
+  });
+
+  it('defaults every refusal matcher to empty, so an undeclared one never bites', () => {
+    const parsed = ExtentDeclarationSchema.parse(declarationOf());
+    expect(parsed.excludeBasenames).toEqual([]);
+    expect(parsed.excludeKinds).toEqual([]);
+    expect(parsed.admitPaths).toEqual([]);
   });
 
   it('is reachable from ProjectConfigSchema as an extents record keyed by name', () => {
@@ -258,6 +312,74 @@ describe('ClosureExtentContributor', () => {
 
     const contribution = await contributeOver(files, declarationOf({ exclude: ['**/*.test.md'] }));
     expect(memberPaths(contribution)).toEqual([ROOT_DOC, DOC_B]);
+  });
+
+  it('refuses a basename whose only difference from the declaration is CASE', async () => {
+    // `Readme.md` against a declared `README.md`. A matcher that compared the two
+    // strings directly — or folded only one side — admits the hub and this fails.
+    const admitted = await contributeOver(HUB_CHAIN, declarationOf());
+    expect(memberPaths(admitted)).toContain(DOC_HUB);
+
+    const contribution = await contributeOver(
+      HUB_CHAIN,
+      declarationOf({ excludeBasenames: [README_PATTERN] }),
+    );
+    expect(memberPaths(contribution)).not.toContain(DOC_HUB);
+  });
+
+  it('PRUNES the subtree behind a refused basename, not just the refused file', async () => {
+    // The 239-path behaviour, at fixture scale: `behind.md` is reachable only
+    // through the hub, so refusing the hub must take it too. An assertion that
+    // only checked the hub could not tell a refusal that prunes from one that
+    // merely skips a member and keeps walking.
+    const admitted = await contributeOver(HUB_CHAIN, declarationOf());
+    expect(memberPaths(admitted)).toContain(DOC_BEHIND);
+
+    const contribution = await contributeOver(
+      HUB_CHAIN,
+      declarationOf({ excludeBasenames: [README_PATTERN] }),
+    );
+    // `b.md` survives: the walk was narrowed, not stopped.
+    expect(memberPaths(contribution)).toEqual([ROOT_DOC, DOC_B]);
+  });
+
+  it('refuses a candidate by resources.kind, which no path glob could express', async () => {
+    const admitted = await contributeOver(DIRECTORY_FIXTURE, declarationOf());
+    expect(memberPaths(admitted)).toContain(DOC_DIR);
+
+    const contribution = await contributeOver(
+      DIRECTORY_FIXTURE,
+      declarationOf({ excludeKinds: [DIRECTORY_KIND] }),
+    );
+    // The file-kind sibling stays. Without it the assertion would be satisfied by
+    // a matcher keyed on the extension-less PATH rather than on the entity kind.
+    expect(memberPaths(contribution)).toEqual([ROOT_DOC, DOC_B]);
+  });
+
+  it('admits an admitPaths entry that BOTH exclude and excludeBasenames refuse', async () => {
+    const refusing = declarationOf({
+      exclude: ['skills/**/Readme.md'],
+      excludeBasenames: [README_PATTERN],
+    });
+    const refused = await contributeOver(HUB_CHAIN, refusing);
+    expect(memberPaths(refused)).toEqual([ROOT_DOC, DOC_B]);
+
+    const contribution = await contributeOver(
+      HUB_CHAIN,
+      { ...refusing, admitPaths: [DOC_HUB] },
+    );
+    // Admitted AND traversed through: an override that let the file in without
+    // restoring its subtree would be a different rule from the one `closureFrom`
+    // gets, and `behind.md` is the only witness to the difference.
+    expect(memberPaths(contribution)).toEqual([ROOT_DOC, DOC_HUB, DOC_B, DOC_BEHIND]);
+  });
+
+  it('matches admitPaths by exact path, never by prefix — a glob never named the file', async () => {
+    const contribution = await contributeOver(
+      HUB_CHAIN,
+      declarationOf({ excludeBasenames: [README_PATTERN], admitPaths: ['skills/foo'] }),
+    );
+    expect(memberPaths(contribution)).not.toContain(DOC_HUB);
   });
 
   it('terminates on a cycle with three members rather than looping', async () => {

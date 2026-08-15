@@ -1,7 +1,22 @@
 /**
  * The projection's skill extent, run as a **shadow** of the shipped walker over
  * this repository's real skill corpus — Stage 2 of the closure-primitive
- * migration.
+ * migration, and now Stage 3's gate.
+ *
+ * ## Stage 3: the arms AGREE, and the control is what makes that mean something
+ *
+ * Stage 2 measured the closure as a strict SUPERSET of the walker and attributed
+ * every difference to four causes ({@link KNOWN_CAUSES}) — three branches of
+ * `classifyExclusion`'s cascade a glob `exclude` list cannot express, plus the
+ * transitive subtree behind them. Stage 3 gave the primitive the vocabulary for a
+ * **refusal at a hub** ({@link NARROWING_FIELDS}), and the swept comparison now
+ * finds no difference at any depth.
+ *
+ * A green "no difference" is the weakest kind of result, so it is not the only
+ * one asserted. The sweep runs a **second time with that vocabulary stripped and
+ * nothing else changed**, and must reproduce all four causes with pruning still
+ * dominant. Agreement that survives its own negative control is a measurement;
+ * agreement on its own is satisfied by a closure that returned nothing.
  *
  * `packages/agent-skills/test/projection-skill-extent.test.ts` already compares
  * `SkillExtentContributor` with `walkLinkGraph` at *fixture* scale, on a corpus
@@ -203,13 +218,22 @@ const EXCLUDED_DIRECTORY = 'vat-example-cat-agents/resources/agents';
 const EXCLUDING_SKILL = 'vat-example-cat-agents';
 
 /**
- * Every cause the depth sweep produces, in code-unit order.
+ * Every cause the depth sweep produced **before** the refusal vocabulary landed,
+ * in code-unit order — and therefore exactly what the narrowing closes.
  *
- * An equality rather than a subset check: a NEW cause appearing is the finding
- * this file exists to surface, and a `toContain`-shaped assertion would let one
- * through. Each is a branch of `classifyExclusion`'s ordered cascade that
- * {@link skillExtentDeclaration}'s `exclude` list cannot express — a glob
- * returns a verdict with no reason, and an excluded target emits no row at all.
+ * These four were the whole of the difference measured in Stage 2: three direct
+ * branches of `classifyExclusion`'s ordered cascade that a glob `exclude` list
+ * could not express, plus the transitive subtree behind them. Stage 3 gave the
+ * primitive `excludeBasenames`, `excludeKinds` and `admitPaths`, so the swept
+ * comparison now agrees and this list is no longer an expected result.
+ *
+ * ⚠️ It is retained as the **negative control's** expectation, not as history.
+ * "Zero divergence" is satisfiable by a closure that returned nothing at all, so
+ * the sweep is run a second time with the vocabulary stripped
+ * ({@link NARROWING_FIELDS}) and must reproduce precisely these four. An
+ * equality rather than a subset check on both arms: a NEW cause appearing is the
+ * finding this file exists to surface, and a `toContain`-shaped assertion would
+ * let one through.
  */
 const KNOWN_CAUSES: readonly DivergenceCause[] = [
   'agent-instruction-file',
@@ -217,6 +241,20 @@ const KNOWN_CAUSES: readonly DivergenceCause[] = [
   'navigation-file',
   PRUNED,
 ];
+
+/**
+ * The declaration fields Stage 3's narrowing added to the closure primitive.
+ *
+ * Named once so the negative control can remove exactly this vocabulary and
+ * nothing else. Reconstructing a pre-Stage-3 declaration by hand would be a
+ * second opinion about {@link skillExtentDeclaration}'s translation rather than
+ * a control over it, and would keep agreeing after the translation changed.
+ *
+ * Every name here is asserted PRESENT on a real declaration before the control
+ * runs, so a rename cannot silently turn the control into a no-op — the failure
+ * mode of an opt-out list that nothing checks.
+ */
+const NARROWING_FIELDS = ['excludeBasenames', 'excludeKinds', 'admitPaths'] as const;
 
 // ============================================================================
 // Types
@@ -472,12 +510,23 @@ function only(left: readonly string[], right: readonly string[]): string[] {
   return left.filter((path) => !other.has(path));
 }
 
+/**
+ * Whether a comparison runs with Stage 3's refusal vocabulary or without it.
+ *
+ * `off` is the negative control, not a supported configuration.
+ */
+type Narrowing = 'on' | 'off';
+
 /** One skill's declaration, as `PopulateOptions.parameters` carries it. */
 // `JsonValue` IS a union by definition, and it is the declared parameter type of
 // both `populate` and `contribute`; narrowing this return would only move the cast
 // to every call site.
 // eslint-disable-next-line sonarjs/function-return-type -- see the note above
-function declarationFor(skill: CorpusSkill, config: SkillPackagingConfig): JsonValue {
+function declarationFor(
+  skill: CorpusSkill,
+  config: SkillPackagingConfig,
+  narrowing: Narrowing = 'on',
+): JsonValue {
   // `excludeReferencesFromBundle.rules` is OPTIONAL on the config type the CLI's
   // discovery hands back and REQUIRED on the one `skillExtentDeclaration`
   // declares — two structurally different `SkillPackagingConfig`s across package
@@ -498,10 +547,19 @@ function declarationFor(skill: CorpusSkill, config: SkillPackagingConfig): JsonV
   //
   // ⚠️ Nothing catches this: test files are in no tsconfig, so `bun run validate`
   // never typechecks this file. It was found only via an editor diagnostic.
-  return skillExtentDeclaration(
+  const declaration = skillExtentDeclaration(
     config as unknown as Parameters<typeof skillExtentDeclaration>[0],
     skill.relativePath,
-  ) as unknown as JsonValue;
+  ) as unknown as Record<string, unknown>;
+  if (narrowing === 'on') return declaration as JsonValue;
+  // The control: every refusal matcher back to the schema default it had before
+  // Stage 3. Emptied rather than deleted, because the schema is `.strict()` with
+  // defaults — a missing key would be re-defaulted to the same `[]` anyway, and
+  // spelling it makes the control's intent legible at the failure site.
+  return {
+    ...declaration,
+    ...Object.fromEntries(NARROWING_FIELDS.map((field) => [field, []])),
+  } as JsonValue;
 }
 
 /**
@@ -598,15 +656,17 @@ function projectedMembers(corpus: Corpus, skill: CorpusSkill): string[] {
  * @param corpus - The corpus the skill belongs to
  * @param skill - The skill whose extent to compute
  * @param config - The effective config
+ * @param narrowing - Whether Stage 3's refusal vocabulary is in the declaration
  * @returns Root-relative membership
  */
 async function closureMembers(
   corpus: Corpus,
   skill: CorpusSkill,
   config: SkillPackagingConfig,
+  narrowing: Narrowing = 'on',
 ): Promise<string[]> {
   const contribution = await new SkillExtentContributor(skill.name)
-    .contribute(corpus.base, declarationFor(skill, config));
+    .contribute(corpus.base, declarationFor(skill, config, narrowing));
   return pathSet(contribution.realizations.map((row) => row.path));
 }
 
@@ -615,9 +675,10 @@ async function compareSkill(
   corpus: Corpus,
   skill: CorpusSkill,
   config: SkillPackagingConfig,
+  narrowing: Narrowing = 'on',
 ): Promise<{ walker: string[]; closure: string[]; divergence: Divergence | undefined }> {
   const walk = walkerRun(corpus, skill, walkOptionsFor(corpus, skill, config));
-  const closure = await closureMembers(corpus, skill, config);
+  const closure = await closureMembers(corpus, skill, config, narrowing);
   const walkerOnly = only(walk.members, closure);
   const closureOnly = only(closure, walk.members).map((path) => ({
     path,
@@ -656,16 +717,17 @@ interface SweepResult {
  * ceiling: the two loops plus the exclude-rule probe exceed it inline.
  *
  * @param corpus - The corpus to sweep — in practice the repo-root one
+ * @param narrowing - Whether Stage 3's refusal vocabulary is in the declaration
  * @returns Every cell's outcome, plus the two aggregate counters
  */
-async function sweepDepths(corpus: Corpus): Promise<SweepResult> {
+async function sweepDepths(corpus: Corpus, narrowing: Narrowing = 'on'): Promise<SweepResult> {
   const result: SweepResult = { divergences: [], rows: [], excludeEscapes: [], followed: 0 };
   let followed = 0;
 
   for (const depth of SWEPT_DEPTHS) {
     for (const skill of corpus.skills) {
       const config: SkillPackagingConfig = { ...skill.config, linkFollowDepth: depth };
-      const { walker, closure, divergence } = await compareSkill(corpus, skill, config);
+      const { walker, closure, divergence } = await compareSkill(corpus, skill, config, narrowing);
       if (divergence !== undefined) result.divergences.push(divergence);
       if (walker.length > 1 || closure.length > 1) followed += 1;
       result.rows.push({
@@ -749,16 +811,16 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
     expect(rows).toHaveLength(TOTAL_DECLARED_SKILLS * 2);
     if (divergences.length > 0) console.log('[divergences]', JSON.stringify(divergences, null, 2));
 
-    // The one difference the shipped configs produce, named rather than tolerated:
-    // `packages/cli/src/skill-resolution` is a DIRECTORY, and `directory-target`
-    // is the first branch of the walker's cascade the primitive has no vocabulary
-    // for. Pinned as an equality so a second difference cannot appear silently.
+    // Stage 3: the two arms now agree under the shipped configs, with nothing
+    // named and nothing tolerated. The one difference this used to pin —
+    // `packages/cli/src/skill-resolution`, a DIRECTORY reached by
+    // `vat-skill-testing` at depth 2 — is what `excludeKinds: ['directory']`
+    // closes. Still an equality over the RENDERED divergence rather than a length
+    // check, so a regression names the skill, the depth and the cause it failed on.
     expect(divergences.map((row) => `${row.corpus}/${row.skill}@${String(row.depth)}: `
       + row.closureOnly.map((entry) => `${entry.path} (${entry.cause})`).join(', ')
       + (row.walkerOnly.length > 0 ? ` | walker-only: ${row.walkerOnly.join(', ')}` : ''),
-    )).toEqual([
-      'repo-root/vat-skill-testing@2: packages/cli/src/skill-resolution (directory-target)',
-    ]);
+    )).toEqual([]);
   }, 1_800_000);
 
   it('records that the PRODUCTION configuration cannot distinguish the two', () => {
@@ -795,16 +857,19 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
     for (const entry of attributed) causeCounts.set(entry.cause, (causeCounts.get(entry.cause) ?? 0) + 1);
     console.log('[causes]', JSON.stringify(Object.fromEntries(causeCounts)));
 
-    // THE gate, and it is not "no difference". The closure primitive is already
-    // known not to express the walker's ordered cascade, so a difference with a
-    // named cause is the expected result; a difference with NO cause would mean
-    // the two implementations disagree about something outside the known
-    // boundary, which is the only outcome that should stop a Stage 3 flip.
+    // THE gate, and after Stage 3 it IS "no difference". The primitive now
+    // expresses the three cascade branches this corpus exercises — a
+    // case-insensitive basename refusal (`navigation-file`,
+    // `agent-instruction-file`) and a resource-kind refusal (`directory-target`)
+    // — and because an excluded target was already never walked THROUGH, closing
+    // those three closes the transitive `pruned-behind-exclusion` bucket with them.
     //
-    // `pruned-behind-exclusion` is checked, not assumed: `walkerRun` records
-    // every path the walk touched, so a path landing in that bucket is one the
-    // walker demonstrably never reached.
-    expect([...new Set(attributed.map((entry) => entry.cause))].sort(byCodeUnit)).toEqual(KNOWN_CAUSES);
+    // ⚠️ On its own this assertion is worth very little: it is satisfied just as
+    // well by a closure that returned nothing, or by a sweep that never followed
+    // an edge. `followed` above is the second guard, and the negative control in
+    // the next test is the third and the real one.
+    expect([...new Set(attributed.map((entry) => entry.cause))].sort(byCodeUnit)).toEqual([]);
+    expect(divergences).toEqual([]);
 
     // Neither arm may bundle anything the sole exercised exclude rule rejects.
     expect(excludeEscapes).toEqual([]);
@@ -825,6 +890,54 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
     // Nothing the walker bundles is ever missing from it, at any swept depth —
     // which is what makes the difference a question of *narrowing* the primitive
     // rather than of teaching it to find things it cannot see.
+    expect(divergences.flatMap((row) => row.walkerOnly)).toEqual([]);
+  }, 1_800_000);
+
+  it('NEGATIVE CONTROL: stripping the refusal vocabulary brings every cause back', async () => {
+    // Without this test the agreement above is unfalsifiable. "Zero divergence"
+    // is exactly what a closure that returned nothing would report, and exactly
+    // what a sweep that never followed an edge would report — so the question
+    // [[fixtures-that-cannot-distinguish]] asks has to be answered here: what
+    // result would have shown the narrowing did nothing? This one.
+    //
+    // The control removes the vocabulary and NOTHING else, from the declaration
+    // `skillExtentDeclaration` actually produced. It therefore keeps controlling
+    // the real translation after that translation changes, which a hand-rebuilt
+    // pre-Stage-3 declaration would not.
+    const corpus = corpora.find((entry) => entry.spec.projectRoot === '.');
+    if (corpus === undefined) throw new Error('no repo-root corpus');
+
+    // The opt-out list must name fields that exist, or the control silently
+    // becomes a no-op that agrees with everything — the failure mode of every
+    // unchecked exclusion list.
+    const sample = corpus.skills[0];
+    if (sample === undefined) throw new Error('no skills to sample a declaration from');
+    const declaration = declarationFor(sample, sample.config) as Record<string, unknown>;
+    for (const field of NARROWING_FIELDS) {
+      expect(Object.keys(declaration)).toContain(field);
+    }
+
+    const { divergences, followed } = await sweepDepths(corpus, 'off');
+    const attributed = divergences.flatMap((row) => row.closureOnly);
+    const causeCounts = new Map<DivergenceCause, number>();
+    for (const entry of attributed) causeCounts.set(entry.cause, (causeCounts.get(entry.cause) ?? 0) + 1);
+    console.log('[control causes]', JSON.stringify(Object.fromEntries(causeCounts)));
+    console.log(`[control] ${followed} following cells, ${attributed.length} attributed paths`);
+
+    // Every cause the narrowing closes, back — an equality, so a control that
+    // recovered only some of them is a failure and not a pass.
+    expect([...new Set(attributed.map((entry) => entry.cause))].sort(byCodeUnit)).toEqual(KNOWN_CAUSES);
+
+    // The transitive bucket must DOMINATE, because that is the structural claim
+    // the whole narrowing rests on: a refusal at a hub removes the subtree behind
+    // it, not just the hub. A control in which pruning were a handful of paths
+    // would mean the 239 measured in Stage 2 came from somewhere else. Bounded
+    // below rather than pinned exactly — the count moves whenever a doc gains a
+    // link, and a brittle equality would fail for reasons this file is not about.
+    expect(causeCounts.get(PRUNED) ?? 0).toBeGreaterThan(50);
+
+    // The superset property held BEFORE the narrowing too, which is what made
+    // Stage 3 a narrowing problem rather than a "teach it to see" problem.
     expect(divergences.flatMap((row) => row.walkerOnly)).toEqual([]);
   }, 1_800_000);
 
