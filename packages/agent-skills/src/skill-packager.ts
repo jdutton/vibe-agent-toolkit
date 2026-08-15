@@ -84,6 +84,9 @@ import { walkLinkGraph, type WalkableRegistry } from './walk-link-graph.js';
 
 const PACKAGE_JSON_FILENAME = 'package.json';
 
+/** `withFsAttribution` action for a write in `copyAndRewriteFile` — never a copy, since the bytes are rewritten first. */
+const WRITE_ACTION = 'written into the bundle';
+
 /**
  * Default template for excluded links when no explicit template is configured —
  * renders just the link text.
@@ -1877,8 +1880,12 @@ async function copyAndRewriteFile(
         : `Copied '${sourcePath}' verbatim without link rewriting: it lost a resource-id collision to ` +
             `'${winner}', which was registered first and holds the id. Source-relative links inside it are not rewritten.`,
     );
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetPath is constructed from validated paths
-    await writeFile(targetPath, content, 'utf-8');
+    await withFsAttribution(
+      subject,
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetPath is constructed from validated paths
+      () => writeFile(targetPath, content, 'utf-8'),
+      WRITE_ACTION,
+    );
     return;
   }
 
@@ -1897,8 +1904,12 @@ async function copyAndRewriteFile(
           `the original value was kept.`,
       );
     });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetPath is constructed from validated paths
-    await writeFile(targetPath, rewritten, 'utf-8');
+    await withFsAttribution(
+      subject,
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetPath is constructed from validated paths
+      () => writeFile(targetPath, rewritten, 'utf-8'),
+      WRITE_ACTION,
+    );
     return;
   }
 
@@ -1938,8 +1949,12 @@ async function copyAndRewriteFile(
     }
   }
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetPath is constructed from validated paths
-  await writeFile(targetPath, editor.toString(), 'utf-8');
+  await withFsAttribution(
+    subject,
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetPath is constructed from validated paths
+    () => writeFile(targetPath, editor.toString(), 'utf-8'),
+    WRITE_ACTION,
+  );
 }
 
 /**

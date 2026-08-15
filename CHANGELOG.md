@@ -293,6 +293,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   These still fail the build rather than shipping a partial bundle, deliberately: you declared the file and expect it in the artifact, so quietly shipping without it would change what you publish.
 
+- **An unreadable or unwritable linked file now tells you which file and what to check, on the most-travelled copy path in `vat skills build`.** Every ordinary markdown-linked asset — not a `files:` entry, just a link a skill's docs point to — used to surface a bare OS error (`EACCES: permission denied, open '/abs/path'`) with no skill named and no remedy, whether the failure hit while collecting the file's own links, while reading it to copy or rewrite it, or while writing the rewritten result (or an unlinked passthrough copy) into the bundle. All of these now report the project-relative path, what was being attempted, and what to check.
+
 - **`vat audit` no longer aborts when its own config cannot be read.** A config file it could not open or parse ended the command with `status: error` and no report — after the scan had already run and collected every finding, and over a file whose only job is deciding which findings to *hide*. It now reports what it found, warns on stderr that the config could not be read, and applies no severity overrides. **What to do:** if you see that warning, fix the config — your `validation.severity` settings are not being applied until you do.
 
 - **`vat audit` no longer throws away every finding when it hits one unreadable file or directory.** A single path it could not read — most likely a root-owned or quarantined entry under `~/.claude/plugins` — ended the whole run with `status: error`, exit code 2, and **zero findings**, including everything already collected from parts of the tree that scanned fine. This hit `vat audit --user` hardest, where sudo-installed and quarantined files are normal.
@@ -300,6 +302,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The scan now continues past the path it could not read, keeps every other finding, and reports the gap as **`SCAN_PATH_UNREADABLE`** (`warning`) naming the path and the OS message. Exit code is no longer 2 for this, so a run that previously died now reports what it found.
 
   **What to do:** nothing required. Fix the path's permissions to scan it, or pass `--exclude` to skip it deliberately.
+
+- **`vat` now runs the version your lockfile pinned when you install with pnpm.** It was silently running a different one. The wrapper looked for a locally installed CLI at a single hardcoded path that only exists in npm's flat `node_modules` layout; under pnpm that path is absent, so the lookup failed and `vat` quietly fell back to whichever globally installed copy it could find — no warning, and the version it printed looked plausible. If you adopted VAT through the umbrella `vibe-agent-toolkit` package, this affected you on every invocation.
+
+  Resolution now goes through Node's own module resolver, which works across npm, bun, pnpm and yarn PnP. **What to do:** nothing. If you are on pnpm, check that `vat --version` now matches your lockfile — it may change, because it was previously wrong.
 
 - **`vat verify`, `vat build`, `vat validate`, and `vat skills validate`/`build` pointed a
   no-path-scope refusal at `vat audit <path>`, which exits 0 unconditionally — including when
