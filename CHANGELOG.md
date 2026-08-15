@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The crawl paths can now say where their own time goes — including the link walker, whose own
+  work was never measured by anything.** Setting **`VAT_CRAWL_TIMING=<directory>`** makes every vat
+  process that crawls write a `crawl-timing-<pid>.json` file into that directory as it exits,
+  attributing elapsed time and invocation counts per `(contributorId, stratum, pass)`. The existing
+  `VAT_PARSE_TIMING` seam measures *parsing* — including the parsing that feeds the walk — but never
+  the walk itself, so a walker's traversal, its exclude-rule evaluation and its gitignore reads
+  previously showed up nowhere at all.
+
+  **Three strata make the two crawl implementations comparable from one dump**: `crawl` is
+  `walkLinkGraph`'s own work, recorded under named synthetic contributor ids; `base` and `closure`
+  are the projection's contributors, the latter charged per fixpoint pass. `pass: 0` is reserved for
+  a bracket placed *inside* the measured code, which cannot know the driver's fixpoint pass — the
+  driver numbers from 1, so the two never merge.
+
+  **Each dump is one process and carries no cross-process total.** Under a verb that spawns the
+  binary more than once, summing wall time across dumps would double-count the parent's lifetime,
+  so the reader publishes a record per process and no total. An empty `entries` array is a
+  reading — nothing was crawled; an empty *directory* means the build has no seam.
+
 - **The parse paths can now say where their own time goes, per parser kind.** Setting
   **`VAT_PARSE_TIMING=<directory>`** makes every vat process that parses a document write a
   `parse-timing-<pid>.json` file into that directory as it exits, attributing elapsed time and
