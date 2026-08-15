@@ -15,7 +15,7 @@ import { ClaudePluginSchema } from '../schemas/claude-plugin.js';
 
 import {
 	extractClaudeSkillInventory,
-	NO_GIT_TRACKER,
+	type ClaudeSkillInventoryOptions,
 	type GitTrackerSource,
 	type SharedRegistrySource,
 } from './extract-skill.js';
@@ -45,14 +45,29 @@ function memoizeSharedRegistry(
 }
 
 /**
+ * What {@link extractClaudePluginInventory} needs besides the plugin path.
+ *
+ * Structurally the skill extractor's options, and deliberately the same type
+ * rather than a copy of it: this lane's only job with either member is to hand
+ * it down, so a second declaration could only ever drift from the one that
+ * actually governs the walk.
+ *
+ * Its `gitTrackerSource` is REQUIRED for the reason the skill extractor's is —
+ * see {@link ClaudeSkillInventoryOptions}. A plugin lane that genuinely has no
+ * tracker to offer says {@link NO_GIT_TRACKER}, and the tracker-less walk is
+ * then a choice at the call site rather than an omission three functions away.
+ */
+export type ClaudePluginInventoryOptions = ClaudeSkillInventoryOptions;
+
+/**
  * Build a PluginInventory for a directory containing a .claude-plugin/plugin.json manifest
  * and/or a root SKILL.md. Never throws — all failures surface via parseErrors[].
  */
 export async function extractClaudePluginInventory(
 	pluginPath: string,
-	sharedRegistry?: SharedRegistrySource,
-	gitTrackerSource?: GitTrackerSource,
+	options: ClaudePluginInventoryOptions,
 ): Promise<ClaudePluginInventory> {
+	const { sharedRegistry, gitTrackerSource } = options;
 	const absolute = safePath.resolve(pluginPath);
 
 	// eslint-disable-next-line security/detect-non-literal-fs-filename -- absolute is resolved from caller-supplied path, safe for plugin extraction
@@ -236,7 +251,7 @@ async function buildDiscovered(
 	rootSkillMd: string,
 	parseErrors: ParseErrors,
 	resolveSharedRegistry: () => Promise<ResourceRegistry | undefined>,
-	gitTrackerSource: GitTrackerSource | undefined,
+	gitTrackerSource: GitTrackerSource,
 ): Promise<ClaudePluginInventory['discovered']> {
 	const skills = await discoverSkills(
 		absolute,
@@ -257,7 +272,7 @@ async function discoverSkills(
 	rootSkillMd: string,
 	parseErrors: ParseErrors,
 	resolveSharedRegistry: () => Promise<ResourceRegistry | undefined>,
-	gitTrackerSource: GitTrackerSource | undefined,
+	gitTrackerSource: GitTrackerSource,
 ): Promise<ClaudeSkillInventory[]> {
 	const skillInventories: ClaudeSkillInventory[] = [];
 
@@ -273,18 +288,20 @@ async function discoverSkills(
 	// different repositories), and the caller — not this package — owns the per-root
 	// cache behind it.
 	//
-	// ⚠️ THIS IS WHERE THE OBLIGATION CURRENTLY STOPS. `extractClaudeSkillInventory`
-	// requires a source, so the tracker-less walk must be NAMED — but this function's
-	// own parameter is still optional, and `?? NO_GIT_TRACKER` is what turns an
-	// omission back into that state. Callers that omit it today: `extract-install.ts`
-	// (the `vat inventory --user` lane, every cached plugin) and `extract-marketplace.ts`
-	// (which has no such parameter to pass on at all). Pushing required-ness up to them
-	// is the follow-up; until it lands, "the skill extractor requires a source" is a
-	// statement about THIS file, not about the plugin lane as a whole.
+	// It is passed STRAIGHT THROUGH, with no `?? NO_GIT_TRACKER` behind it. That
+	// coalesce used to live here, and it was the join where required-ness stopped:
+	// the skill extractor demanded a source, this function's own parameter was
+	// optional, and the fallback quietly turned every omission back into the
+	// tracker-less walk. The lanes that omitted it were the ones that matter —
+	// `extract-install.ts` (`vat inventory --user`, every cached plugin) and
+	// `extract-marketplace.ts` (which had no parameter to pass on at all) — so
+	// "the skill extractor requires a source" was a statement about one file
+	// rather than about the lane. Both now carry the obligation to their own
+	// callers, and a lane that wants no tracker names `NO_GIT_TRACKER`.
 	for (const skillMd of await collectSkillMdPaths(absolute, shape, rootSkillMd)) {
 		const inv = await extractClaudeSkillInventory(skillMd, {
 			sharedRegistry: resolveSharedRegistry,
-			gitTrackerSource: gitTrackerSource ?? NO_GIT_TRACKER,
+			gitTrackerSource,
 		});
 		for (const err of inv.parseErrors) parseErrors.push(err);
 		skillInventories.push(inv);

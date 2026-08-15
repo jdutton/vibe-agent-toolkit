@@ -25,7 +25,16 @@ export {
 	inventoryExtentDeclaration,
 	inventoryExtentName,
 } from './inventory-extent.js';
-export { extractClaudePluginInventory } from './extract-plugin.js';
-export { extractClaudeMarketplaceInventory } from './extract-marketplace.js';
-export { extractClaudeInstallInventory } from './extract-install.js';
+export {
+	extractClaudePluginInventory,
+	type ClaudePluginInventoryOptions,
+} from './extract-plugin.js';
+export {
+	extractClaudeMarketplaceInventory,
+	type ClaudeMarketplaceInventoryOptions,
+} from './extract-marketplace.js';
+export {
+	extractClaudeInstallInventory,
+	type ClaudeInstallInventoryOptions,
+} from './extract-install.js';
 export { detectSkillClaudePluginNameMismatch } from './detectors/index.js';

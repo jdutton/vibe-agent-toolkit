@@ -6,7 +6,12 @@ import {
 	walkLinkGraph,
 	type WalkableRegistry,
 } from '@vibe-agent-toolkit/agent-skills';
-import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
+import {
+	CRAWL_REGISTRY_ENUMERATE_ID,
+	crawlTimingStart,
+	recordRegistryPass,
+	ResourceRegistry,
+} from '@vibe-agent-toolkit/resources';
 import { crawlDirectory, findProjectRoot, safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
 
 import { ClaudeSkillInventory } from './types.js';
@@ -190,8 +195,30 @@ async function parseFrontmatterFields(
  * additionally pulls in every ignored tree AND abandons `git ls-files` for a
  * full recursive walk — 39.6 s versus 16 ms for the same file set on a
  * ~1,200-document monorepo.
+ *
+ * ## Why the enumeration is bracketed HERE and not inside `ResourceRegistry`
+ *
+ * The other five registry-construction routes go through `ResourceRegistry.crawl`,
+ * whose own `crawlDirectory` call the seam already brackets. This route does not:
+ * it enumerates for itself and hands the paths to `addResources`, so its
+ * enumeration sits outside the class and outside that bracket, and
+ * `resources/test/crawl-timing.test.ts` pins that absence at the class level
+ * deliberately.
+ *
+ * Left unbracketed, this is a ONE-SIDED under-count rather than a symmetric one:
+ * it is the registry the INCUMBENT walker consumes and the projection never
+ * builds, so every millisecond of it was missing from exactly the arm the flip
+ * decision is being taken against. It files the same `resource-registry:enumerate`
+ * row the class does — the same accounting unit, and the two never both run for
+ * one registry, so they cannot double-charge each other.
+ *
+ * `recordRegistryPass` rather than a stratum named here, for the reason that
+ * function states: this route is reachable from a projection contributor in
+ * principle, and a call site that names an arm it cannot know is how one arm's
+ * work lands on the other's total.
  */
 export async function crawlSkillLinkRegistry(projectRoot: string): Promise<ResourceRegistry> {
+	const enumerationStartedAt = crawlTimingStart();
 	const files = await crawlDirectory({
 		baseDir: projectRoot,
 		include: ['**/*.md'],
@@ -199,6 +226,7 @@ export async function crawlSkillLinkRegistry(projectRoot: string): Promise<Resou
 		filesOnly: true,
 		includeUntracked: true,
 	});
+	recordRegistryPass(CRAWL_REGISTRY_ENUMERATE_ID, enumerationStartedAt);
 	const registry = new ResourceRegistry({ baseDir: projectRoot });
 	await registry.addResources(files);
 	registry.resolveLinks();

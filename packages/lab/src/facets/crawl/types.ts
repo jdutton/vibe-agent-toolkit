@@ -30,6 +30,27 @@
  * a legitimate side-by-side: `crawl` is the incumbent walker's work, `closure` is
  * the projection's.
  *
+ * ## Not every row is additive with every other, and this facet used to add them
+ *
+ * Some brackets are placed INSIDE others. The link walker's gitignore oracle is
+ * charged from within the walk it belongs to; a closure contributor's own
+ * `contribute` bracket sits inside the driver's bracket for that same
+ * invocation, and its per-reference resolution sits inside `contribute`. Those
+ * rows are a BREAKDOWN of time already charged, not more of it.
+ *
+ * This facet shipped summing a stratum's rows regardless, which inflated both
+ * arms of the very comparison it exists to render — and inflated them by
+ * different factors, since the two arms nest to different depths. The numbers
+ * were individually true and the side-by-side was wrong, which is the shape of
+ * finding nobody catches by reading output.
+ *
+ * So every row now carries a {@link CrawlRowRole}, {@link CrawlStratumStats}
+ * totals only the additive ones, and the nested time is published beside them
+ * rather than dropped: an absent number is indistinguishable from code that
+ * never ran. A row this build cannot place goes to `unclassified` and is counted
+ * in neither, because guessing its nesting is how a silently wrong total gets
+ * built a second time. {@link crawlRowRole} states the rule.
+ *
  * ## What is deliberately NOT summed
  *
  * {@link CrawlCommandStats.processes} is a LIST, one entry per dump, and this
@@ -65,8 +86,12 @@ export const CRAWL_FACET = 'crawl';
  * change belong to the schema rather than to the subject.
  *
  * 1 — first version.
+ * 2 — rows carry a {@link CrawlRowRole}, and {@link CrawlStratumStats} and the
+ *     command totals count only the additive ones. A v1 report's `elapsedMs`
+ *     summed nested brackets into the same figure, so holding one against a v2
+ *     report reads the correction as a speed-up in whichever arm nests deepest.
  */
-export const CRAWL_FACET_VERSION = 1;
+export const CRAWL_FACET_VERSION = 2;
 
 /**
  * What a row's numbers actually describe.
@@ -85,8 +110,25 @@ export const CRAWL_FACET_VERSION = 1;
  */
 export type CrawlAttribution = 'measured' | 'nothing-crawled' | 'not-measured';
 
-/** One `(contributorId, stratum, pass)` row, as the report carries it. */
-export interface CrawlEntryStats {
+/**
+ * Whether a row's time adds to its stratum's total, or is already inside it.
+ *
+ * - **`additive`** — a top-level span. Nothing else in the dump brackets this
+ *   work, so it adds.
+ * - **`nested`** — charged from inside a bracket that is itself charged. Real
+ *   time, already counted once by the row containing it; adding it again
+ *   double-counts. Published so the breakdown stays visible.
+ * - **`unclassified`** — this build cannot say which of the two it is. Counted
+ *   in NEITHER total, and said out loud, because the alternative is a total
+ *   whose meaning depends on a guess. The realistic cause is a vat that grew a
+ *   bracket this lab has never heard of.
+ *
+ * See {@link crawlRowRole} for how a row is placed.
+ */
+export type CrawlRowRole = 'additive' | 'nested' | 'unclassified';
+
+/** One `(contributorId, stratum, pass)` row exactly as the seam dumped it. */
+export interface CrawlSeamRow {
   /** A contributor's id, or one of the seam's synthetic crawler ids. */
   readonly contributorId: string;
   /**
@@ -117,6 +159,25 @@ export interface CrawlEntryStats {
   readonly elapsedMs: number;
 }
 
+/** One `(contributorId, stratum, pass)` row, as the report carries it. */
+export interface CrawlEntryStats extends CrawlSeamRow {
+  /**
+   * Whether this row adds to its stratum's total or is already inside it.
+   *
+   * Derived by the reader, not dumped by the seam: nesting is a fact about how
+   * the brackets are placed in the vat under measurement, and the seam would
+   * have to carry it on every row of every dump for a reader that can work it
+   * out from `(stratum, pass, contributorId)`.
+   */
+  readonly role: CrawlRowRole;
+}
+
+/** A `(calls, elapsedMs)` pair for one class of row. */
+export interface CrawlRoleTotals {
+  readonly calls: number;
+  readonly elapsedMs: number;
+}
+
 /**
  * One stratum's rollup.
  *
@@ -125,11 +186,31 @@ export interface CrawlEntryStats {
  * entries requires knowing which synthetic ids belong to which crawler — a
  * mapping the report would rather state once than expect every reader to
  * reconstruct.
+ *
+ * `calls` and `elapsedMs` count the **additive** rows only, because those are
+ * the numbers the side-by-side is taken over. The other two classes are beside
+ * them rather than folded in or dropped — see {@link CrawlRowRole}.
  */
 export interface CrawlStratumStats {
   readonly stratum: string;
+  /** Additive invocations. See {@link CrawlRowRole}. */
   readonly calls: number;
+  /** Their summed wall time — **this stratum's cost**, with no row counted twice. */
   readonly elapsedMs: number;
+  /**
+   * Rows charged from inside an additive one.
+   *
+   * A breakdown of the time above, never an addition to it. Present so that
+   * "the walk spent 14 of its 30 ms in the gitignore oracle" stays answerable.
+   */
+  readonly nested: CrawlRoleTotals;
+  /**
+   * Rows this build could not place.
+   *
+   * In neither total. Non-zero here means the numbers above are an
+   * UNDER-count by an unknown amount, and the renderer says so.
+   */
+  readonly unclassified: CrawlRoleTotals;
 }
 
 /**
@@ -171,9 +252,17 @@ export interface CrawlCommandStats {
   readonly entries: readonly CrawlEntryStats[];
   /** Per-stratum rollups, in first-appearance order. See {@link CrawlStratumStats}. */
   readonly strata: readonly CrawlStratumStats[];
-  /** Invocations charged anywhere. */
+  /** Additive invocations, across every stratum. See {@link CrawlRowRole}. */
   readonly totalCalls: number;
-  /** Time inside a crawler, across every stratum — the whole crawl budget. */
+  /**
+   * Time inside a crawler, across every stratum — the whole crawl budget.
+   *
+   * Additive rows only, so no bracket is counted twice and the strata above sum
+   * to exactly this. Nested and unclassified time is per stratum, on
+   * {@link CrawlStratumStats}, and deliberately has no command-level total: a
+   * reader who wants one is asking for a number that is not a duration of
+   * anything.
+   */
   readonly totalMs: number;
   /**
    * Every repeat's `totalMs`, in capture order.
@@ -208,8 +297,8 @@ export interface CrawlBody {
   readonly load: LoadReadings;
 }
 
-/** The schema fields describing one entry, shared with the dump reader. */
-export const crawlEntryShape = {
+/** The schema fields describing one row as the seam dumped it. */
+export const crawlSeamRowShape = {
   contributorId: z.string().min(1),
   stratum: z.string().min(1),
   pass: z.number().int().nonnegative(),
@@ -218,6 +307,30 @@ export const crawlEntryShape = {
   // deltas and a schema that rounded them would move the numbers it validates.
   elapsedMs: z.number().nonnegative(),
 } as const;
+
+/** Every {@link CrawlRowRole}, as the schemas and the renderer need them. */
+export const CRAWL_ROW_ROLES = ['additive', 'nested', 'unclassified'] as const;
+
+/**
+ * The schema fields describing one entry as the REPORT carries it.
+ *
+ * The seam's row plus the role the reader placed it in. Deliberately not the
+ * same shape as {@link crawlSeamRowShape}: a dump that carried a role would be
+ * asserting a fact about bracket nesting that only the reader knows, and both
+ * schemas are strict, so the two cannot quietly become each other.
+ */
+export const crawlEntryShape = {
+  ...crawlSeamRowShape,
+  role: z.enum(CRAWL_ROW_ROLES),
+} as const;
+
+/** The schema fields describing one class of row's totals. */
+const crawlRoleTotalsShape = z
+  .object({
+    calls: z.number().int().nonnegative(),
+    elapsedMs: z.number().nonnegative(),
+  })
+  .strict();
 
 /** The schema fields describing one process's lifetime, shared with the dump reader. */
 export const crawlProcessShape = {
@@ -248,6 +361,8 @@ export const CrawlBodySchema = z
                 stratum: z.string().min(1),
                 calls: z.number().int().nonnegative(),
                 elapsedMs: z.number().nonnegative(),
+                nested: crawlRoleTotalsShape,
+                unclassified: crawlRoleTotalsShape,
               })
               .strict(),
           ),

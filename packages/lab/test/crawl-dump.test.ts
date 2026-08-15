@@ -1,7 +1,14 @@
 /**
  * The `crawl` facet's dump reader.
  *
- * Four of these guard against a *confident wrong number* rather than a crash:
+ * Five of these guard against a *confident wrong number* rather than a crash:
+ *
+ * 0. **Nested brackets are not added to the rows containing them.** The reader
+ *    summed a stratum's rows regardless until 2026-08-15, so the walk and the
+ *    gitignore oracle charged from inside it both landed in the `crawl` total.
+ *    Every figure was a real duration; the total was of nothing. The fixture
+ *    below makes the two readings differ (44 against 30), and the arms nest to
+ *    different depths, so the error was not even a constant factor.
  *
  * 1. **The env-var literal is pinned.** `VAT_CRAWL_TIMING` is the whole contract
  *    with a vat that was built separately, and the lab deliberately does not
@@ -46,12 +53,14 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
   CRAWL_DUMP_VERSION,
+  CRAWL_INCUMBENT_STRATUM,
   CRAWL_TIMING_DIR_ENV,
   crawlAttributionOf,
   type CrawlDump,
   type CrawlDumpEntry,
   crawlEntryKey,
   CrawlDumpSchema,
+  crawlRowRole,
   mergeCrawlDumps,
   readCrawlDumps,
   sameCrawlWork,
@@ -62,9 +71,13 @@ import { writeDumpDir } from './dump-fixtures.js';
 /** Fixture constants, named so the same string never appears twice. */
 const WALKER = 'walk-link-graph:walk';
 const GITIGNORE = 'walk-link-graph:gitignore';
+const CONTRIBUTE = 'closure-extent:contribute';
+const RESOLVE = 'closure-extent:resolve-reference';
+const REGISTRY_ENUMERATE = 'resource-registry:enumerate';
 const CLOSURE = 'closure:my-bundle';
 const CRAWL_STRATUM = 'crawl';
 const CLOSURE_STRATUM = 'closure';
+const BASE_STRATUM = 'base';
 
 /** The pass a bracket placed inside the measured work records. */
 const INSIDE = 0;
@@ -190,10 +203,28 @@ describe('mergeCrawlDumps', () => {
     const byStratum = new Map(merged.strata.map((row) => [row.stratum, row]));
     // The incumbent walker's own work against the projection closure's, from one
     // dump. This comparison is the reason the facet exists.
-    expect(byStratum.get(CRAWL_STRATUM)?.elapsedMs).toBe(44);
+    //
+    // 30, NOT 44: the gitignore oracle's 14 ms are charged from inside the walk
+    // and are already in the walk's row. This reader summed them anyway until
+    // 2026-08-15, which inflated both arms — and by different factors, since the
+    // two nest to different depths.
+    expect(byStratum.get(CRAWL_STRATUM)?.elapsedMs).toBe(30);
     expect(byStratum.get(CLOSURE_STRATUM)?.elapsedMs).toBe(140);
-    expect(merged.totalMs).toBe(184);
-    expect(merged.totalCalls).toBe(12);
+    expect(merged.totalMs).toBe(170);
+    expect(merged.totalCalls).toBe(5);
+  });
+
+  it('publishes the nested time beside the total rather than dropping it', () => {
+    const merged = mergeCrawlDumps([CHILD]);
+
+    const byStratum = new Map(merged.strata.map((row) => [row.stratum, row]));
+    // Excluded from the total, and still answerable: "the walk spent 14 of its
+    // 30 ms reading the gitignore oracle". An absent number here would be
+    // indistinguishable from an oracle that was never consulted.
+    expect(byStratum.get(CRAWL_STRATUM)?.nested).toEqual({ calls: 7, elapsedMs: 14 });
+    // And a stratum with no nested rows says zero rather than nothing, so the
+    // reader can tell "none" from "not looked for".
+    expect(byStratum.get(CLOSURE_STRATUM)?.nested).toEqual({ calls: 0, elapsedMs: 0 });
   });
 
   it('publishes one process record per DUMP and no total lifetime anywhere', () => {
@@ -223,6 +254,83 @@ describe('mergeCrawlDumps', () => {
   it('distinguishes a crawl that happened from one that did not', () => {
     expect(crawlAttributionOf(mergeCrawlDumps([CHILD]))).toBe('measured');
     expect(crawlAttributionOf(mergeCrawlDumps([PARENT]))).toBe('nothing-crawled');
+  });
+});
+
+describe('crawlRowRole', () => {
+  it('pins the incumbent stratum this build decides by id', () => {
+    // The one stratum name the lab asserts. Everywhere else `stratum` is an open
+    // string on purpose — a vat that grows a fourth stratum must not make every
+    // dump unreadable — so this is the single spelling that has to hold, and the
+    // consequence of it drifting is that every incumbent row falls to
+    // `unclassified` and both totals silently shrink.
+    expect(CRAWL_INCUMBENT_STRATUM).toBe('crawl');
+  });
+
+  it('calls a driver-placed row additive whatever stratum it is in', () => {
+    // Only the merge driver numbers passes, from 1, around a whole contributor
+    // invocation. Nothing in a dump can contain one.
+    expect(crawlRowRole(entry(CLOSURE, CLOSURE_STRATUM, 1, 1, 100))).toBe('additive');
+    expect(crawlRowRole(entry('git', BASE_STRATUM, 1, 1, 5))).toBe('additive');
+  });
+
+  it('calls a pass-0 row in a driver stratum nested, because the driver already timed it', () => {
+    // `contribute` and its per-reference resolution both sit inside the driver's
+    // bracket for the same invocation — reached through the AsyncLocalStorage the
+    // driver wraps that invocation in, which is exactly the span it timed.
+    expect(crawlRowRole(entry(CONTRIBUTE, CLOSURE_STRATUM, INSIDE, 4, 60))).toBe('nested');
+    expect(crawlRowRole(entry(RESOLVE, CLOSURE_STRATUM, INSIDE, 900, 20))).toBe('nested');
+    // Including a registry build reached from inside a contributor: the stratum
+    // it inherited is what places it, not its id.
+    expect(crawlRowRole(entry(REGISTRY_ENUMERATE, BASE_STRATUM, INSIDE, 1, 9))).toBe('nested');
+  });
+
+  it('decides the incumbent stratum by id, where every row is pass 0', () => {
+    // The walker has no driver, so its rows are all pass 0 and the pass cannot
+    // discriminate. The registry's three phases are disjoint spans that feed the
+    // walk; the gitignore oracle is read from within it.
+    expect(crawlRowRole(entry(REGISTRY_ENUMERATE, CRAWL_STRATUM, INSIDE, 1, 9))).toBe('additive');
+    expect(crawlRowRole(entry(WALKER, CRAWL_STRATUM, INSIDE, 3, 30))).toBe('additive');
+    expect(crawlRowRole(entry(GITIGNORE, CRAWL_STRATUM, INSIDE, 7, 14))).toBe('nested');
+  });
+
+  it('refuses to place a bracket it has never heard of', () => {
+    // The honest answer, and the one that cannot be wrong. Guessing by
+    // resemblance — "it looks like a walker row, call it additive" — is how the
+    // double-counting this function exists to fix gets rebuilt one bracket at a
+    // time.
+    expect(crawlRowRole(entry('walk-link-graph:something-new', CRAWL_STRATUM, INSIDE, 1, 5))).toBe(
+      'unclassified',
+    );
+    // And a pass-0 row in a stratum that is neither the incumbent's nor the
+    // driver's: a fourth stratum is allowed to exist, but this build cannot say
+    // how its brackets nest.
+    expect(crawlRowRole(entry('whatever', 'some-new-stratum', INSIDE, 1, 5))).toBe('unclassified');
+  });
+});
+
+describe('unclassified rows', () => {
+  /** A run whose walker filed a bracket this build does not model. */
+  const WITH_UNKNOWN = dump(404, 1000, [
+    entry(WALKER, CRAWL_STRATUM, INSIDE, 3, 30),
+    entry('walk-link-graph:something-new', CRAWL_STRATUM, INSIDE, 2, 7),
+  ]);
+
+  it('counts them in NEITHER total', () => {
+    const merged = mergeCrawlDumps([WITH_UNKNOWN]);
+
+    // Not folded into the total (which would double-count if it nests) and not
+    // folded into `nested` (which would hide it if it does not). 30, not 37.
+    expect(merged.totalMs).toBe(30);
+    expect(merged.strata[0]?.nested).toEqual({ calls: 0, elapsedMs: 0 });
+  });
+
+  it('publishes them, so the under-count is visible rather than silent', () => {
+    const merged = mergeCrawlDumps([WITH_UNKNOWN]);
+
+    // The row this facet must never produce is a total that is short by an
+    // unknown amount with nothing saying so.
+    expect(merged.strata[0]?.unclassified).toEqual({ calls: 2, elapsedMs: 7 });
   });
 });
 
@@ -268,7 +376,7 @@ describe('readCrawlDumps', () => {
     // A first-file reader would report `nothing-crawled` here — a perfectly
     // well-formed lie about a run that did real work.
     expect(read.merged.processes).toHaveLength(2);
-    expect(read.merged.totalMs).toBe(184);
+    expect(read.merged.totalMs).toBe(170);
   });
 
   it('refuses an empty directory rather than reporting zero', async () => {

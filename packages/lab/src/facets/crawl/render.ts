@@ -1,13 +1,18 @@
 /**
  * Human-readable rendering of `crawl` reports and comparisons.
  *
- * Four ways an honest measurement becomes a dishonest claim here, and what each
+ * Five ways an honest measurement becomes a dishonest claim here, and what each
  * costs:
  *
  * - **The per-stratum split is printed FIRST, and it is the line the facet
  *   exists for.** VAT has two crawlers live at once, and the question that has
  *   never had a number under it is which of them costs more to do its own work.
  *   A list of contributor rows sorted by id buries that answer inside itself.
+ * - **The entry column does not add up to the total, and must say so.** Some
+ *   brackets sit inside others, and those rows are excluded from every total
+ *   here. A reader who tries to reconcile the column against the headline and
+ *   fails will trust neither, so nested rows are marked `⊂` and the time they
+ *   account for is stated on its own line rather than left to be inferred.
  * - **Zeroes must never read as "free".** A command that never reached a crawler
  *   produces an empty entry list, which prints as nothing at all and reads as an
  *   instant crawl. Such a row renders as a sentence naming the state instead.
@@ -40,11 +45,13 @@ import {
 } from '../../harness/render.js';
 
 import type { CrawlComparisonResult, CrawlMovement, CrawlRowMovement } from './compare.js';
+import { crawlRoleTotalOf } from './dump.js';
 import type {
   CrawlAttribution,
   CrawlBody,
   CrawlCommandStats,
   CrawlProcessStats,
+  CrawlRowRole,
 } from './types.js';
 
 /**
@@ -64,7 +71,9 @@ const CPU_BOUND_FLOOR = 0.7;
  */
 const TIMING_LEGEND =
   'Timed: inside vat, per (contributor, stratum, pass), summed across every process that ' +
-  'dumped. Not wall time — a command spawns a child per phase and their milliseconds add.';
+  'dumped. Not wall time — a command spawns a child per phase and their milliseconds add. ' +
+  'Totals count only top-level brackets; a row marked ⊂ is charged from INSIDE one above it ' +
+  'and is already in its total.';
 
 /** Said at the top of a comparison when either capture was contaminated. */
 const CONTAMINATION_NOTE =
@@ -99,6 +108,11 @@ const LOAD_PHRASING: LoadPhrasing = {
  * before any per-contributor detail — so the incumbent walker and the projection
  * closure are read against each other rather than reconstructed from ids.
  *
+ * Additive rows only, which is what makes the two comparable at all: nested
+ * brackets sit at different depths on the two arms, so a figure that included
+ * them would compare a walk against a walk-plus-its-oracle. The nested time is
+ * on {@link nestingLine} beneath.
+ *
  * @param row - The command's statistics
  * @returns One line
  */
@@ -107,6 +121,38 @@ function strataLine(row: CrawlCommandStats): string {
     .map((stratum) => `${stratum.stratum} ${ms(stratum.elapsedMs)} (${share(stratum.elapsedMs, row.totalMs)})`)
     .join(' / ');
   return `      by stratum: ${split === '' ? 'none' : split}`;
+}
+
+/**
+ * What the line above deliberately left out, and whether anything was dropped.
+ *
+ * Printed unconditionally when there is any, rather than only when it is large:
+ * a reader who does not know a total excludes nested brackets will reconcile it
+ * against the entry rows below and conclude the report does not add up.
+ *
+ * Unclassified time gets its own sentence because it is not a breakdown — it is
+ * an admission that the total above is short by an unknown amount.
+ *
+ * @param row - The command's statistics
+ * @returns The line, or nothing when every row was additive
+ */
+function nestingLine(row: CrawlCommandStats): readonly string[] {
+  const nested = crawlRoleTotalOf(row.strata, (stratum) => stratum.nested);
+  const unplaced = crawlRoleTotalOf(row.strata, (stratum) => stratum.unclassified);
+  if (nested.calls === 0 && unplaced.calls === 0) return [];
+  const parts = [
+    `      of which nested inside the rows above (NOT added): ${ms(nested.elapsedMs)} in ` +
+      `${tally(nested.calls)} invocations`,
+  ];
+  if (unplaced.calls > 0) {
+    parts.push(
+      `      ⚠ ${tally(unplaced.calls)} invocations (${ms(unplaced.elapsedMs)}) could not be ` +
+        'placed as either — this build does not know whether they nest, so they are in NEITHER ' +
+        'total above and the crawl cost is an UNDER-count. A vat grew a bracket this lab has ' +
+        'never heard of; see `crawlRowRole`.',
+    );
+  }
+  return parts;
 }
 
 /**
@@ -145,12 +191,25 @@ function processLines(row: CrawlCommandStats): readonly string[] {
 }
 
 /**
+ * How each role is marked on an entry line.
+ *
+ * A marker rather than a column of words: the distinction only has to survive
+ * being read next to a number that would otherwise look additive, and `⊂` says
+ * "inside something above" more compactly than any label.
+ */
+const ROLE_MARKS: Readonly<Record<CrawlRowRole, string>> = {
+  additive: ' ',
+  nested: '⊂',
+  unclassified: '?',
+};
+
+/**
  * One `(contributorId, stratum, pass)` row.
  *
- * The share is of the command's whole crawl budget, which is the right
- * denominator here: unlike a parse pass, a contributor row is not bracketed
- * inside a larger row of its own stratum, so there is no smaller total it could
- * be a share of.
+ * The share is of the command's whole crawl budget, and for a row marked `⊂` it
+ * is a share of a total this row is not part of — that is the point. The mark is
+ * what keeps a reader from adding the column up: a nested row's milliseconds are
+ * real, and are already inside the row that brackets it.
  *
  * @param entry - The row
  * @param row - The command it belongs to, for the denominator
@@ -159,7 +218,7 @@ function processLines(row: CrawlCommandStats): readonly string[] {
 function entryLine(entry: CrawlCommandStats['entries'][number], row: CrawlCommandStats): string {
   const passLabel = entry.pass === 0 ? 'all' : String(entry.pass);
   return (
-    `        ${entry.stratum.padEnd(8)} ${entry.contributorId.padEnd(34)} ` +
+    `      ${ROLE_MARKS[entry.role]} ${entry.stratum.padEnd(8)} ${entry.contributorId.padEnd(34)} ` +
     `pass ${passLabel.padStart(3)}  ${ms(entry.elapsedMs).padStart(10)}  ` +
     `${share(entry.elapsedMs, row.totalMs).padStart(7)}  ${tally(entry.calls).padStart(8)} calls  ` +
     `${perUnit(entry.elapsedMs, entry.calls)} ms/call`
@@ -214,6 +273,7 @@ function commandLines(row: CrawlCommandStats): readonly string[] {
   return [
     summaryLine(row),
     strataLine(row),
+    ...nestingLine(row),
     stabilityLine(row),
     ...processLines(row),
     ...row.entries.map((entry) => entryLine(entry, row)),

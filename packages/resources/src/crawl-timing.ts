@@ -82,7 +82,12 @@
  *
  * ⚠️ A rollup that sums a stratum's rows without regard to pass double-counts
  * every nested bracket. That is a real reading hazard, not a hypothetical: it is
- * what `packages/lab/src/facets/crawl/dump.ts` does today.
+ * what `packages/lab/src/facets/crawl/dump.ts` did until 2026-08-15, and it
+ * inflated the two arms by DIFFERENT factors, because they nest to different
+ * depths. That reader now implements the rule above — `crawlRowRole` there is
+ * the executable copy of it — so anyone adding a bracket to this seam should
+ * expect to place it there too, and will see it land in `unclassified` if they
+ * do not.
  *
  * ## A registry built from inside a contributor belongs to the PROJECTION arm
  *
@@ -234,11 +239,19 @@ export const CRAWL_REGISTRY_ID_PREFIX = 'resource-registry:';
  * `crawl()` is enumeration THEN admission, and bracketing the whole method would
  * have produced a row that contains the admission row.
  *
- * A caller that enumerates for itself and hands paths to `addResources` — the
- * marketplace inventory's `crawlSkillLinkRegistry` does exactly that — files no
- * row here, because its `crawlDirectory` call is outside the registry and
- * therefore outside this seam. That is a known uncharged phase on that route, not
- * a claim that the route enumerated nothing.
+ * A caller that enumerates for itself and hands paths to `addResources` files no
+ * row from inside the class, because its `crawlDirectory` call is outside the
+ * registry and therefore outside this bracket. That is a property of the class,
+ * not a claim that such a route enumerated nothing, and it is pinned as such in
+ * `crawl-timing.test.ts`.
+ *
+ * One such route ships: the marketplace inventory's `crawlSkillLinkRegistry`,
+ * which is the registry `vat inventory` hands the incumbent walker. It brackets
+ * its own enumeration and files this same row — the same accounting unit, and the
+ * two can never both run for one registry, so they cannot double-charge. It has
+ * to, because that registry is built for the INCUMBENT and never for the
+ * projection: unbracketed, it is a one-sided under-count on exactly the arm the
+ * flip decision is taken against, which is worse than a symmetric one.
  */
 export const CRAWL_REGISTRY_ENUMERATE_ID = 'resource-registry:enumerate';
 

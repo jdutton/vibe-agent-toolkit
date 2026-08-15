@@ -1,7 +1,14 @@
 import { writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import type { ResourceRegistry } from '@vibe-agent-toolkit/resources';
+import {
+	__readCrawlTimingSnapshot,
+	__setCrawlTimingForTest,
+	CRAWL_PASS_INSIDE,
+	CRAWL_REGISTRY_ADD_RESOURCE_ID,
+	CRAWL_REGISTRY_ENUMERATE_ID,
+	type ResourceRegistry,
+} from '@vibe-agent-toolkit/resources';
 import {
 	findProjectRoot,
 	GitTracker,
@@ -261,5 +268,81 @@ describe('extractClaudeSkillInventory tracker-state divergence', () => {
 		expect(withoutTracker.linked).not.toContain(ignoredNoteMd);
 		// The disagreement is confined to the one post-snapshot file, not general noise.
 		expect(withoutTracker.linked).not.toEqual(withTracker.linked);
+	});
+});
+
+/**
+ * The enumeration this route performs for itself, and the seam that has to see it.
+ *
+ * `crawlSkillLinkRegistry` is the registry `vat inventory` hands the incumbent
+ * link walker, and it is the ONE registry-construction route that enumerates
+ * outside `ResourceRegistry` — `crawlDirectory` here, `addResources` there. The
+ * class's own bracket cannot reach it, and `resources/test/crawl-timing.test.ts`
+ * pins that absence at the class level on purpose.
+ *
+ * Left uncharged, the missing time is not symmetric between the two crawlers the
+ * `crawl` facet exists to compare: this registry is built for the incumbent and
+ * never for the projection, so every millisecond of it went missing from exactly
+ * the arm a flip decision is taken against, while the projection paid for its own
+ * preparation in full. The comparison would have been well-formed and wrong.
+ *
+ * The counts come from the fixture rather than from literals: a bracket in the
+ * wrong place — once per file instead of once per crawl — still produces a
+ * plausible-looking number, and only a count tied to the corpus separates them.
+ */
+describe('crawlSkillLinkRegistry crawl-timing', () => {
+	const suite = setupAsyncTempDirSuite('extract-skill-timing');
+	let timedRoot = '';
+
+	beforeAll(async () => {
+		await suite.beforeAll();
+		await suite.beforeEach();
+		timedRoot = safePath.join(suite.getTempDir(), 'repo');
+		writeRepoFile(timedRoot, SKILL_FILENAME, DIVERGENT_SKILL_MD);
+		writeRepoFile(timedRoot, REFERENCE_FILENAME, '# reference\n');
+		writeRepoFile(timedRoot, LATE_NOTE_FILENAME, '# late\n');
+		commitRepo(timedRoot);
+	});
+
+	afterAll(suite.afterAll);
+
+	it('charges its own enumeration, which sits outside the registry class', async () => {
+		__setCrawlTimingForTest(safePath.join(suite.getTempDir(), 'timing'));
+		try {
+			const registry = await crawlSkillLinkRegistry(timedRoot);
+			const snapshot = __readCrawlTimingSnapshot();
+			const rowFor = (id: string): number =>
+				snapshot.entries.find(
+					entry => entry.contributorId === id && entry.pass === CRAWL_PASS_INSIDE,
+				)?.calls ?? 0;
+
+			// Once per crawl, not once per file — the same accounting unit the
+			// class files under this id, which is why they share it.
+			expect(rowFor(CRAWL_REGISTRY_ENUMERATE_ID)).toBe(1);
+			// And the admission row still counts files, so the enumeration bracket
+			// did not swallow the phase after it.
+			expect(rowFor(CRAWL_REGISTRY_ADD_RESOURCE_ID)).toBe(registry.size());
+			expect(registry.size()).toBeGreaterThan(1);
+		} finally {
+			__setCrawlTimingForTest(null);
+		}
+	});
+
+	it('files it on the incumbent arm, which is the arm that builds this registry', async () => {
+		__setCrawlTimingForTest(safePath.join(suite.getTempDir(), 'timing-stratum'));
+		try {
+			await crawlSkillLinkRegistry(timedRoot);
+			const enumeration = __readCrawlTimingSnapshot().entries.find(
+				entry => entry.contributorId === CRAWL_REGISTRY_ENUMERATE_ID,
+			);
+
+			// `recordRegistryPass` inherits the stratum rather than naming one, so
+			// this row would follow a projection contributor if one ever called
+			// here. Outside a contributor it falls back to the walker's arm, which
+			// is where this route's work actually belongs.
+			expect(enumeration?.stratum).toBe('crawl');
+		} finally {
+			__setCrawlTimingForTest(null);
+		}
 	});
 });

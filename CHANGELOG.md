@@ -177,9 +177,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a tracker it was handed. Requiring the argument does not make those oracles agree — it makes
   choosing between them explicit and greppable instead of something a caller can omit by accident.
 
-  ⚠️ Scope: this is the skill extractor's own surface. `extractClaudePluginInventory` and
-  `extractClaudeMarketplaceInventory` still accept it optionally, so the `vat inventory --user` and
-  marketplace-root lanes continue to walk tracker-less.
+- **The same requirement now reaches the plugin, marketplace and install extractors — so
+  `vat inventory --user` no longer walks tracker-less.** All three move to options objects with a
+  REQUIRED `gitTrackerSource`:
+  `extractClaudePluginInventory(pluginPath, { gitTrackerSource, sharedRegistry? })`,
+  `extractClaudeMarketplaceInventory(marketplacePath, { gitTrackerSource })` and
+  `extractClaudeInstallInventory({ gitTrackerSource, pathsOrRoot? })` (whose install root moves
+  from a positional into the options object, because a required member cannot follow an optional
+  positional). Pass `NO_GIT_TRACKER` to choose the tracker-less walk.
+
+  Requiring it on the skill extractor alone had left the obligation stopping one call short:
+  `extractClaudePluginInventory` coalesced a missing source to `NO_GIT_TRACKER` on its callers'
+  behalf, so the `--user` lane — every cached plugin under `~/.claude/plugins/cache`, the largest
+  such population in the product — and the marketplace-root lane both walked with the
+  `git check-ignore` oracle without either end saying so. That coalesce is gone.
+
+  ⚠️ Behaviour change, not only a signature change: those two lanes now answer gitignore questions
+  from a tracker's active set where one is available. The two oracles are demonstrably
+  distinguishable, so a skill's `files.linked` can differ — a file created after the tracker's
+  `git ls-files` snapshot is *ignored* to the active set and *not ignored* to `git check-ignore`.
+  The marketplace extractor deliberately accepts **no** `sharedRegistry`: its plugins each sit in
+  their own directory, where one shared registry matches no skill's project root and was measured
+  1.5× slower than the N+1 crawl it would replace.
 
 - **The crawl-timing dump format is version 2, and `VAT_CRAWL_TIMING` now charges the link walker
   for building the registry its walk consumes.** No field changed; what a `crawl` total is a total
@@ -188,6 +207,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to render were not comparable — and the resulting numbers looked perfectly well-formed. Registry
   enumeration, admission and link resolution are now bracketed inside `ResourceRegistry` itself,
   under `resource-registry:*` ids. Version-1 dumps are refused rather than compared.
+
+  `crawlSkillLinkRegistry` — the registry `vat inventory` hands the walker, and the one
+  construction route that enumerates *outside* `ResourceRegistry` — now brackets its own
+  `crawlDirectory` call and files the same `resource-registry:enumerate` row. Left uncharged it was
+  a one-sided under-count: that registry is built for the incumbent and never for the projection.
 
 - **The parse cache is namespaced per build of VAT, and both hand-bumped version constants are
   gone.** `CONTENT_KEY_SCHEMA_VERSION` and `PARSE_CACHE_SCHEMA_VERSION` are removed from

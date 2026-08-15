@@ -99,7 +99,9 @@ const { buildAuditReport, resetAuditCaches } = await import('../../src/commands/
 const { gitTrackerForProjectRoot, resetGitTrackerCache } = await import(
   '../../src/commands/audit/distributed-tree.js'
 );
-const { extractClaudePluginInventory } = await import('@vibe-agent-toolkit/claude-marketplace');
+const { extractClaudePluginInventory, NO_GIT_TRACKER } = await import(
+  '@vibe-agent-toolkit/claude-marketplace'
+);
 const { silentLogger } = await import('../test-helpers.js');
 
 const SKILL_NAMES = ['alpha', 'beta', 'gamma'];
@@ -451,13 +453,19 @@ describe('git tracker source — the link walk stops spawning `git check-ignore`
     gitIgnoreQueries.length = 0;
   });
 
-  it('spawns check-ignore per link target when no source is supplied — the control', async () => {
-    // The extractor called exactly as the CLI called it BEFORE this wiring. Without this
+  it('spawns check-ignore per link target when the tracker-less walk is CHOSEN — the control', async () => {
+    // The extractor doing what the CLI's call did BEFORE this wiring. Without this
     // case the zeros below are unfalsifiable: they would also hold for a fixture the
     // counter can never see.
-    const inventory = (await extractClaudePluginInventory(
-      gitPluginDir,
-    )) as unknown as PluginInventoryShape;
+    //
+    // `NO_GIT_TRACKER`, not an omitted argument. This case used to omit the source
+    // entirely, and that made it two claims at once — "this lane spawns per target"
+    // and "a caller can reach that lane by forgetting something". The second is no
+    // longer true anywhere in the product, and pinning it here would have kept a
+    // dead shape alive in the one test whose job is to be the honest control.
+    const inventory = (await extractClaudePluginInventory(gitPluginDir, {
+      gitTrackerSource: NO_GIT_TRACKER,
+    })) as unknown as PluginInventoryShape;
 
     expectLinksFound(inventory);
     expect(linkTargetQueries(gitRoot).length).toBeGreaterThan(0);

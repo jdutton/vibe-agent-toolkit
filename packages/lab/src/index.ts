@@ -55,6 +55,7 @@ export {
 } from './facets/crawl/compare.js';
 export {
   CRAWL_DUMP_VERSION,
+  CRAWL_INCUMBENT_STRATUM,
   CRAWL_TIMING_DIR_ENV,
   crawlAttributionOf,
   type CrawlDump,
@@ -64,6 +65,8 @@ export {
   type CrawlDumpsAccepted,
   crawlEntryKey,
   type CrawlProcessRecord,
+  crawlRoleTotalOf,
+  crawlRowRole,
   type MergedCrawlDumps,
   type MergedCrawlDumpsResult,
   mergeCrawlDumps,
@@ -74,6 +77,7 @@ export { renderCrawlComparison, renderCrawlReport } from './facets/crawl/render.
 export {
   CRAWL_FACET,
   CRAWL_FACET_VERSION,
+  CRAWL_ROW_ROLES,
   type CrawlAttribution,
   type CrawlBody,
   CrawlBodySchema,
@@ -82,6 +86,10 @@ export {
   type CrawlEntryStats,
   crawlProcessShape,
   type CrawlProcessStats,
+  type CrawlRoleTotals,
+  type CrawlRowRole,
+  type CrawlSeamRow,
+  crawlSeamRowShape,
   type CrawlStratumStats,
 } from './facets/crawl/types.js';
 

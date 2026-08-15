@@ -93,7 +93,15 @@ export async function routeInventory(
 	options: InventoryCommandOptions,
 ): Promise<AnyInventory> {
 	if (options.user === true) {
-		return extractClaudeInstallInventory(getClaudeUserPaths());
+		// The tracker source is REQUIRED here now, and this is the lane it matters
+		// most on: `--user` walks every cached plugin under ~/.claude/plugins/cache,
+		// and until 2026-08-15 every one of those skills answered its gitignore
+		// questions with a `git check-ignore` spawn per link target because the
+		// obligation stopped at `extract-plugin.ts`.
+		return extractClaudeInstallInventory({
+			pathsOrRoot: getClaudeUserPaths(),
+			gitTrackerSource: gitTrackerForProjectRoot,
+		});
 	}
 	if (options.system === true) {
 		throw new Error('--system inventory is not implemented in this version');
@@ -124,22 +132,25 @@ export async function routeInventory(
 	// When both are present, the plugin extractor takes precedence (plugin is installed,
 	// marketplace.json is a cached metadata artifact alongside it).
 	if (hasMarketplace && !hasPlugin) {
-		// No shared registry and no tracker source here: `extractClaudeMarketplaceInventory`
-		// (like `extractClaudeInstallInventory` above) takes neither parameter, so every
-		// plugin it fans out to re-crawls AND walks its links with the `git check-ignore`
-		// oracle. Threading either through those two extractors is a claude-marketplace
-		// change, not a CLI one — this call site cannot fix it from here.
-		return extractClaudeMarketplaceInventory(absolute);
+		// A tracker source but deliberately NO shared registry: that extractor accepts
+		// only the former, because a marketplace fans out to plugins that each sit in
+		// their own directory, so one registry matches none of their skills' project
+		// roots and was measured 1.5x SLOWER than the N+1 crawl. The tracker source is
+		// the opposite case — asked per skill about its own root, `undefined` where it
+		// cannot serve — so it costs nothing where it does not apply.
+		return extractClaudeMarketplaceInventory(absolute, {
+			gitTrackerSource: gitTrackerForProjectRoot,
+		});
 	}
 	// Lazy, not eager: the extractor calls this only when it is about to walk its first
 	// skill, so a plugin of commands/ and agents/ alone crawls nothing. The tracker source
 	// is unconditional — it is asked per skill, about that skill's own root, and answers
 	// `undefined` for any root it cannot serve.
-	return extractClaudePluginInventory(
-		absolute,
-		linkRegistryProviderFor(absolute),
-		gitTrackerForProjectRoot,
-	);
+	const sharedRegistry = linkRegistryProviderFor(absolute);
+	return extractClaudePluginInventory(absolute, {
+		...(sharedRegistry !== undefined && { sharedRegistry }),
+		gitTrackerSource: gitTrackerForProjectRoot,
+	});
 }
 
 /**

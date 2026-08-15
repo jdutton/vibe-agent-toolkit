@@ -37,14 +37,35 @@
  *
  * Process LIFETIMES are the one thing that is never summed — see
  * {@link MergedCrawlDumps.processes}.
+ *
+ * ## Rows are summed across processes, but NOT all of them across each other
+ *
+ * Summing a stratum's rows regardless of how they nest is what this reader did
+ * until 2026-08-15, and it inflated both arms of the side-by-side by different
+ * factors: the incumbent's gitignore oracle sits inside its walk, and the
+ * projection's `contribute` bracket sits inside the driver's bracket for the
+ * same invocation with its per-reference resolution inside that. Every figure
+ * involved was a real duration, which is why the wrong total looked healthy.
+ *
+ * {@link crawlRowRole} places each row, the rollup totals only the additive
+ * ones, and the nested time is published beside them so the breakdown a reader
+ * wants is still there. A row this build cannot place is counted in neither and
+ * reported as such.
  */
 
 import { z } from 'zod';
 
 import { type DumpKind, type DumpsRefusal, readDumpFiles } from '../../harness/dumps.js';
 
-import type { CrawlAttribution, CrawlEntryStats, CrawlStratumStats } from './types.js';
-import { crawlEntryShape, crawlProcessShape } from './types.js';
+import type {
+  CrawlAttribution,
+  CrawlEntryStats,
+  CrawlRoleTotals,
+  CrawlRowRole,
+  CrawlSeamRow,
+  CrawlStratumStats,
+} from './types.js';
+import { crawlProcessShape, crawlSeamRowShape } from './types.js';
 
 /**
  * The variable that switches the seam on, and whose VALUE is the directory the
@@ -78,8 +99,83 @@ export const CRAWL_TIMING_DIR_ENV = 'VAT_CRAWL_TIMING';
  */
 export const CRAWL_DUMP_VERSION = 2;
 
-/** One row as the seam wrote it. */
-export type CrawlDumpEntry = CrawlEntryStats;
+/** One row as the seam wrote it. Carries no role — see {@link crawlRowRole}. */
+export type CrawlDumpEntry = CrawlSeamRow;
+
+/**
+ * The stratum the INCUMBENT crawler records under.
+ *
+ * A literal here rather than an import, for the same reason the env var is —
+ * and `stratum` is deliberately an open string everywhere else, so this is the
+ * one place a spelling is asserted. `crawl-dump.test.ts` pins it.
+ */
+export const CRAWL_INCUMBENT_STRATUM = 'crawl';
+
+/**
+ * The strata the projection's merge driver places rows in.
+ *
+ * What matters about them is not their names but that a row in one of them was
+ * produced by the DRIVER when its pass is at or above 1, and from inside a
+ * contributor when its pass is 0 — see {@link crawlRowRole}.
+ */
+const CRAWL_DRIVER_STRATA: ReadonlySet<string> = new Set(['base', 'closure']);
+
+/**
+ * Incumbent-stratum ids that are top-level spans.
+ *
+ * The three `ResourceRegistry` phases are mutually disjoint — enumeration,
+ * admission and link resolution do not contain one another — and the walk is a
+ * separate span that consumes what they built. Together they are the incumbent
+ * arm's whole cost.
+ */
+const CRAWL_INCUMBENT_TOP_LEVEL_IDS: ReadonlySet<string> = new Set([
+  'resource-registry:enumerate',
+  'resource-registry:add-resource',
+  'resource-registry:resolve-links',
+  'walk-link-graph:walk',
+]);
+
+/**
+ * Incumbent-stratum ids charged from inside one of the spans above.
+ *
+ * The gitignore oracle is read from within the walk, so its milliseconds are
+ * already inside `walk-link-graph:walk`.
+ */
+const CRAWL_INCUMBENT_NESTED_IDS: ReadonlySet<string> = new Set(['walk-link-graph:gitignore']);
+
+/**
+ * Where one row's time belongs: added to its stratum, or already inside it.
+ *
+ * The rule, and why each half of it is safe:
+ *
+ * - **`pass >= 1` is additive, whatever the stratum.** Only the merge driver
+ *   numbers passes, it numbers them from 1, and it brackets a whole contributor
+ *   invocation. Nothing in a dump can contain a driver-placed row.
+ * - **`pass === 0` in a driver stratum is nested.** A pass-0 row is a bracket
+ *   placed inside the measured work, and the only way one reaches `base` or
+ *   `closure` is through the `AsyncLocalStorage` the driver wraps a contributor
+ *   invocation in — which is the same span the driver just timed at pass >= 1.
+ *   That holds for a contributor's own bracket, for its per-reference
+ *   resolution, and for a `ResourceRegistry` build reached from inside it.
+ * - **`pass === 0` in the incumbent stratum is decided by id**, because the
+ *   walker has no driver and every one of its rows is pass 0, so the pass
+ *   cannot discriminate. Hence the two sets above.
+ * - **Anything else is `unclassified`** — a pass-0 row under an id and a
+ *   stratum this build has never seen. It is counted in neither total, which is
+ *   the only answer that cannot be wrong. Placing it by resemblance is how the
+ *   defect this function exists to fix would be rebuilt one bracket at a time.
+ *
+ * @param row - One row, as the seam dumped it
+ * @returns Which class of row it is
+ */
+export function crawlRowRole(row: CrawlSeamRow): CrawlRowRole {
+  if (row.pass >= 1) return 'additive';
+  if (row.stratum === CRAWL_INCUMBENT_STRATUM) {
+    if (CRAWL_INCUMBENT_TOP_LEVEL_IDS.has(row.contributorId)) return 'additive';
+    return CRAWL_INCUMBENT_NESTED_IDS.has(row.contributorId) ? 'nested' : 'unclassified';
+  }
+  return CRAWL_DRIVER_STRATA.has(row.stratum) ? 'nested' : 'unclassified';
+}
 
 /**
  * One process's wall and CPU time, as the seam read it at exit.
@@ -150,7 +246,7 @@ export const CrawlDumpSchema = z
         cpuSystemMs: crawlProcessShape.cpuSystemMs,
       })
       .strict(),
-    entries: z.array(z.object(crawlEntryShape).strict()),
+    entries: z.array(z.object(crawlSeamRowShape).strict()),
   })
   .strict()
   .refine(entryKeysAreUnique, { message: DUPLICATE_ENTRY_MESSAGE });
@@ -177,13 +273,23 @@ export interface MergedCrawlDumps {
    * parent, so rather than pick a wrong denominator this publishes all of them.
    */
   readonly processes: readonly CrawlProcessRecord[];
-  /** Every row, summed across processes, in the order the seam first emitted them. */
+  /**
+   * Every row, summed across processes, in the order the seam first emitted
+   * them, each stamped with the role {@link crawlRowRole} placed it in.
+   */
   readonly entries: readonly CrawlEntryStats[];
   /** Per-stratum rollups, in first-appearance order. */
   readonly strata: readonly CrawlStratumStats[];
-  /** Invocations charged anywhere. */
+  /** Additive invocations charged anywhere. */
   readonly totalCalls: number;
-  /** Time inside a crawler, across every stratum. */
+  /**
+   * Time inside a crawler, across every stratum.
+   *
+   * Additive rows only — see {@link crawlRowRole}. Summing every row instead
+   * would count each nested bracket twice, and it would do so unevenly across
+   * the two crawlers, which is the one comparison this whole facet exists to
+   * support.
+   */
   readonly totalMs: number;
 }
 
@@ -251,31 +357,73 @@ function addDumpEntries(byKey: Map<string, EntryBucket>, dump: CrawlDump): void 
   }
 }
 
+/** A stratum's three role buckets, mutable while they fill. */
+type StratumBuckets = Record<CrawlRowRole, { calls: number; elapsedMs: number }>;
+
 /**
- * Roll the merged rows up per stratum.
+ * A stratum's buckets, all at zero.
+ *
+ * All three exist from the start, so a stratum with no nested rows publishes a
+ * zero rather than an absence — `nested: {calls: 0}` says the reader looked.
+ *
+ * @returns Empty buckets
+ */
+function emptyStratumBuckets(): StratumBuckets {
+  return {
+    additive: { calls: 0, elapsedMs: 0 },
+    nested: { calls: 0, elapsedMs: 0 },
+    unclassified: { calls: 0, elapsedMs: 0 },
+  };
+}
+
+/**
+ * Roll the merged rows up per stratum, keeping the three roles apart.
  *
  * First-appearance order rather than by cost, so two reports of one run list
  * their rows identically and can be read side by side.
  *
- * @param entries - The merged rows
+ * @param entries - The merged rows, already stamped with their roles
  * @returns One rollup per stratum
  */
 function rollUpStrata(entries: readonly CrawlEntryStats[]): readonly CrawlStratumStats[] {
-  const byStratum = new Map<string, { stratum: string; calls: number; elapsedMs: number }>();
+  const byStratum = new Map<string, StratumBuckets>();
   for (const entry of entries) {
-    const bucket = byStratum.get(entry.stratum);
-    if (bucket === undefined) {
-      byStratum.set(entry.stratum, {
-        stratum: entry.stratum,
-        calls: entry.calls,
-        elapsedMs: entry.elapsedMs,
-      });
-      continue;
+    let buckets = byStratum.get(entry.stratum);
+    if (buckets === undefined) {
+      buckets = emptyStratumBuckets();
+      byStratum.set(entry.stratum, buckets);
     }
+    const bucket = buckets[entry.role];
     bucket.calls += entry.calls;
     bucket.elapsedMs += entry.elapsedMs;
   }
-  return [...byStratum.values()];
+  return [...byStratum].map(([stratum, buckets]) => ({
+    stratum,
+    calls: buckets.additive.calls,
+    elapsedMs: buckets.additive.elapsedMs,
+    nested: { ...buckets.nested },
+    unclassified: { ...buckets.unclassified },
+  }));
+}
+
+/**
+ * Sum one role's numbers across every stratum.
+ *
+ * @param strata - Every stratum's rollup
+ * @param pick - Which of the rollup's figures to add
+ * @returns The summed pair
+ */
+export function crawlRoleTotalOf(
+  strata: readonly CrawlStratumStats[],
+  pick: (stratum: CrawlStratumStats) => CrawlRoleTotals,
+): CrawlRoleTotals {
+  return strata.reduce<CrawlRoleTotals>(
+    (sum, stratum) => {
+      const totals = pick(stratum);
+      return { calls: sum.calls + totals.calls, elapsedMs: sum.elapsedMs + totals.elapsedMs };
+    },
+    { calls: 0, elapsedMs: 0 },
+  );
 }
 
 /**
@@ -293,13 +441,17 @@ export function mergeCrawlDumps(dumps: readonly CrawlDump[]): MergedCrawlDumps {
     addDumpEntries(byKey, dump);
   }
 
-  const entries = [...byKey.values()].map((bucket) => ({ ...bucket }));
+  const entries: CrawlEntryStats[] = [...byKey.values()].map((bucket) => ({
+    ...bucket,
+    role: crawlRowRole(bucket),
+  }));
+  const additive = entries.filter((entry) => entry.role === 'additive');
   return {
     processes,
     entries,
     strata: rollUpStrata(entries),
-    totalCalls: entries.reduce((sum, entry) => sum + entry.calls, 0),
-    totalMs: entries.reduce((sum, entry) => sum + entry.elapsedMs, 0),
+    totalCalls: additive.reduce((sum, entry) => sum + entry.calls, 0),
+    totalMs: additive.reduce((sum, entry) => sum + entry.elapsedMs, 0),
   };
 }
 

@@ -163,7 +163,12 @@ export {
   ClaudePluginInventory,
   ClaudeSkillInventory,
 } from './inventory/index.js';
-export { crawlSkillLinkRegistry, extractClaudeSkillInventory } from './inventory/index.js';
+export {
+  crawlSkillLinkRegistry,
+  extractClaudeSkillInventory,
+  NO_GIT_TRACKER,
+  type ClaudeSkillInventoryOptions,
+} from './inventory/index.js';
 export {
   INVENTORY_EXTENT_CONTRIBUTOR_ID_PREFIX,
   INVENTORY_EXTENT_KIND,
@@ -179,11 +184,18 @@ export {
 } from './inventory/index.js';
 export {
   extractClaudePluginInventory,
+  type ClaudePluginInventoryOptions,
   type GitTrackerSource,
   type SharedRegistrySource,
 } from './inventory/index.js';
-export { extractClaudeMarketplaceInventory } from './inventory/index.js';
-export { extractClaudeInstallInventory } from './inventory/index.js';
+export {
+  extractClaudeMarketplaceInventory,
+  type ClaudeMarketplaceInventoryOptions,
+} from './inventory/index.js';
+export {
+  extractClaudeInstallInventory,
+  type ClaudeInstallInventoryOptions,
+} from './inventory/index.js';
 export { detectSkillClaudePluginNameMismatch } from './inventory/index.js';
 
 // Resource-projection extent contributors (zones §7.1, closure stratum)

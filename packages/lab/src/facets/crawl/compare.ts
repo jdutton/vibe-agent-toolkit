@@ -150,6 +150,11 @@ const ATTRIBUTION_REASONS: Readonly<Record<CrawlAttribution, string | null>> = {
 /**
  * A command's per-stratum rollups as labelled rows.
  *
+ * The additive figures, which are the ones the stratum rollup publishes as its
+ * own — a stratum's nested time moves with the row that contains it, and is
+ * visible as that row's own movement in {@link entryRows} below. Diffing it here
+ * as well would report one regression twice, once in a total and once inside it.
+ *
  * @param row - The command's statistics
  * @returns One labelled row per stratum
  */
@@ -168,6 +173,10 @@ function stratumRows(row: CrawlCommandStats): readonly LabelledRow[] {
  * only unique within a `(stratum, pass)` — the seam charges the same contributor
  * once per fixpoint pass, and a comparator keyed on the bare id would add those
  * passes together and report the sum as one row's movement.
+ *
+ * **Every** entry, nested ones included: a nested row is where a regression is
+ * actually diagnosed, and dropping it would leave a stratum that got slower with
+ * nothing beneath it saying where.
  *
  * @param row - The command's statistics
  * @returns One labelled row per entry
