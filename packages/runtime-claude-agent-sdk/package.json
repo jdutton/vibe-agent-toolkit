@@ -19,18 +19,18 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.1.5",
-    "@anthropic-ai/sdk": "^0.37.0",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.228",
+    "@anthropic-ai/sdk": "^0.116.0",
     "@vibe-agent-toolkit/agent-runtime": "workspace:*",
     "@vibe-agent-toolkit/claude-marketplace": "workspace:*",
-    "zod": "^3.24.1"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/node": "^22.10.5",
+    "@types/node": "^26.2.0",
     "@vibe-agent-toolkit/dev-tools": "workspace:*",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.3",
-    "vitest": "^3.2.4",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10",
     "@vibe-agent-toolkit/test-agents": "workspace:*"
   },
   "keywords": [
