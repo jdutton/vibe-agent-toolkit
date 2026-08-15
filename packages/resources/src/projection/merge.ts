@@ -47,7 +47,7 @@
 
 import { safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
 
-import { recordContributorInvocation } from '../crawl-timing.js';
+import { recordContributorInvocation, withContributorStratum } from '../crawl-timing.js';
 import type { JsonValue } from '../schemas/projection-shared.js';
 
 import { populateBlobs, type BlobPopulationResult } from './blob-population.js';
@@ -307,7 +307,15 @@ export async function populate(options: PopulateOptions): Promise<Projection> {
     // function. Fanning these out with `Promise.all` would make the row set
     // depend on scheduling.
     const startedAt = performance.now();
-    await runContributor(contributor, builder, parameterSetFor(contributor));
+    // Wrapped so that any crawl-timing bracket reached from inside this
+    // contributor is attributed to the PROJECTION arm rather than to the
+    // incumbent's. Only `ResourceRegistry` currently records without naming its
+    // own stratum, and nothing under `projection/` builds one — but the rule has
+    // to be in place before the first commit that does, or that commit moves a
+    // whole registry build onto the walker's total. See `crawl-timing.ts`.
+    await withContributorStratum('base', () =>
+      runContributor(contributor, builder, parameterSetFor(contributor)),
+    );
     reportContributorTiming(options.onContributorTiming, {
       contributorId: contributor.id,
       stratum: 'base',
@@ -450,7 +458,10 @@ async function iterateClosure(
     for (const contributor of closure) {
       // Sequential for the same reason as the base loop above.
       const startedAt = performance.now();
-      const digest = await runContributor(contributor, builder, parameterSetFor(contributor));
+      // Same attribution wrapper as the base loop — see the comment there.
+      const digest = await withContributorStratum('closure', () =>
+        runContributor(contributor, builder, parameterSetFor(contributor)),
+      );
       reportContributorTiming(onTiming, {
         contributorId: contributor.id,
         stratum: 'closure',

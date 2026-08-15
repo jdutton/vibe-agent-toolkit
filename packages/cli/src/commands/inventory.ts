@@ -110,8 +110,10 @@ export async function routeInventory(
 		//
 		// A git-tracker source IS worth handing over even for one skill: the saving is per
 		// LINK TARGET, not per skill. One `git ls-files` replaces one `git check-ignore`
-		// spawn for every distinct target this skill's link graph reaches.
-		return extractClaudeSkillInventory(absolute, undefined, gitTrackerForProjectRoot);
+		// spawn for every distinct target this skill's link graph reaches. It is also not
+		// optional to hand over: the extractor requires a source, so a lane that wanted
+		// none would have to say `NO_GIT_TRACKER` out loud.
+		return extractClaudeSkillInventory(absolute, { gitTrackerSource: gitTrackerForProjectRoot });
 	}
 	const claudePluginDir = safePath.join(absolute, '.claude-plugin');
 	// eslint-disable-next-line security/detect-non-literal-fs-filename -- absolute is caller-resolved, used for presence check only
@@ -122,10 +124,11 @@ export async function routeInventory(
 	// When both are present, the plugin extractor takes precedence (plugin is installed,
 	// marketplace.json is a cached metadata artifact alongside it).
 	if (hasMarketplace && !hasPlugin) {
-		// No shared registry here: `extractClaudeMarketplaceInventory` (like
-		// `extractClaudeInstallInventory` above) takes no `sharedRegistry` parameter,
-		// so every plugin it fans out to still re-crawls. Threading one through those
-		// two extractors is a claude-marketplace change, not a CLI one.
+		// No shared registry and no tracker source here: `extractClaudeMarketplaceInventory`
+		// (like `extractClaudeInstallInventory` above) takes neither parameter, so every
+		// plugin it fans out to re-crawls AND walks its links with the `git check-ignore`
+		// oracle. Threading either through those two extractors is a claude-marketplace
+		// change, not a CLI one — this call site cannot fix it from here.
 		return extractClaudeMarketplaceInventory(absolute);
 	}
 	// Lazy, not eager: the extractor calls this only when it is about to walk its first

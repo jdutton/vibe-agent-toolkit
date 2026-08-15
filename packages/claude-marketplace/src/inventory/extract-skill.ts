@@ -66,7 +66,14 @@ export type SharedRegistrySource =
  * `git ls-files`, and the caller already has the cache that must be shared with
  * the rest of its scan (`getOrCreateGitTracker` in the CLI's audit lane). Return
  * `undefined` for a root you cannot or do not want to answer for — the walk then
- * behaves exactly as it does with no source at all.
+ * falls back to the `git check-ignore` oracle, exactly as {@link NO_GIT_TRACKER}
+ * does for every root.
+ *
+ * That is also why the source is REQUIRED rather than defaulted: the obligation
+ * belongs to the caller that owns the cache, and having the extractor build its
+ * own tracker would both reverse this decision and walk straight into the
+ * staleness hazard below. See {@link NO_GIT_TRACKER} for choosing the
+ * tracker-less walk on purpose.
  *
  * ## Staleness bound — safe for read-only lanes only
  *
@@ -75,9 +82,56 @@ export type SharedRegistrySource =
  * `isIgnoredByActiveSet` reports it **ignored**. That is safe for inventory and
  * audit, which only read; it is NOT safe for a lane that writes between walks
  * (`packageSkill` writes `dist/` per skill), which must build a fresh tracker or
- * pass none.
+ * pass {@link NO_GIT_TRACKER}.
+ *
+ * ⚠️ "Safe" here means the read-only lane cannot corrupt anything — NOT that the
+ * two oracles agree. They demonstrably do not: a post-snapshot file is `ignored`
+ * to the active set and not ignored to `git check-ignore`, so the same skill's
+ * `files.linked` differs by that file depending on which oracle answered. The
+ * divergence suite in `test/inventory/extract-skill.test.ts` pins exactly that
+ * pair of answers, and is the only thing in this package's tests that can.
  */
 export type GitTrackerSource = (projectRoot: string) => Promise<GitTracker | undefined>;
+
+/**
+ * The {@link GitTrackerSource} that answers for nothing — the explicit spelling
+ * of "walk this skill with no tracker".
+ *
+ * Naming it is the point. A caller that genuinely has no tracker to offer says
+ * so at the call site, in a form that greps, instead of arriving in that state
+ * by leaving an argument off.
+ */
+export const NO_GIT_TRACKER: GitTrackerSource = async () => undefined;
+
+/**
+ * What {@link extractClaudeSkillInventory} needs besides the skill path.
+ *
+ * An options object rather than two more positionals: both members are
+ * FUNCTIONS of similar shape, so a positional pair is exactly the arrangement a
+ * caller can silently transpose. It also lets the required member sit after the
+ * optional one, which positional parameters cannot express — `sharedRegistry`
+ * was already optional when `gitTrackerSource` had to become required.
+ */
+export interface ClaudeSkillInventoryOptions {
+	/**
+	 * REQUIRED. How to obtain the tracker for whatever project root this walk
+	 * lands on; pass {@link NO_GIT_TRACKER} to choose the tracker-less walk.
+	 *
+	 * ⚠️ Required-ness does not eliminate the tracker-less state, and is not
+	 * claimed to: this source may still return `undefined` for a root, and
+	 * `gitTrackerFor` deliberately swallows a source that throws (a failing
+	 * source is a missing optimization, not a defect in the skill). What it buys
+	 * is that the state is now CHOSEN rather than defaulted into — and, in
+	 * particular, that a test cannot land in it by omission. That omission is how
+	 * the divergence this parameter governs stayed hidden: a projection's
+	 * `gitignored` column is filled only from a tracker that was handed in, while
+	 * the incumbent walker falls back to `git check-ignore` per link target, so a
+	 * no-tracker fixture produced walker=3 against closure=5 linked files.
+	 */
+	gitTrackerSource: GitTrackerSource;
+	/** Optional pre-crawled registry (or a way to get one) — see {@link SharedRegistrySource}. */
+	sharedRegistry?: SharedRegistrySource;
+}
 
 /**
  * Build a SkillInventory for a single SKILL.md.
@@ -88,14 +142,13 @@ export type GitTrackerSource = (projectRoot: string) => Promise<GitTracker | und
  */
 export async function extractClaudeSkillInventory(
 	skillMdPath: string,
-	sharedRegistry?: SharedRegistrySource,
-	gitTrackerSource?: GitTrackerSource,
+	options: ClaudeSkillInventoryOptions,
 ): Promise<ClaudeSkillInventory> {
 	const absolute = safePath.resolve(skillMdPath);
 	const parseErrors: ParseErrors = [];
 
 	const { name, description } = await parseFrontmatterFields(absolute, parseErrors);
-	const linked = await walkLinkedFiles(absolute, parseErrors, sharedRegistry, gitTrackerSource);
+	const linked = await walkLinkedFiles(absolute, parseErrors, options);
 
 	return new ClaudeSkillInventory({
 		path: absolute,
@@ -155,17 +208,16 @@ export async function crawlSkillLinkRegistry(projectRoot: string): Promise<Resou
 async function walkLinkedFiles(
 	absolute: string,
 	parseErrors: ParseErrors,
-	sharedRegistry?: SharedRegistrySource,
-	gitTrackerSource?: GitTrackerSource,
+	options: ClaudeSkillInventoryOptions,
 ): Promise<string[]> {
 	const linked: string[] = [];
 	try {
 		// Library fallback to skill dir; see plan 2026-05-17 / spec §7.
 		const projectRoot = findProjectRoot(dirname(absolute)) ?? dirname(absolute);
-		const registry = await registryFor(projectRoot, sharedRegistry);
+		const registry = await registryFor(projectRoot, options.sharedRegistry);
 		const skillResource = registry.getResource(absolute);
 		if (skillResource !== undefined) {
-			const gitTracker = await gitTrackerFor(projectRoot, gitTrackerSource);
+			const gitTracker = await gitTrackerFor(projectRoot, options.gitTrackerSource);
 			collectLinkedFiles(skillResource.id, registry, absolute, projectRoot, linked, gitTracker);
 		}
 	} catch (e) {
@@ -204,21 +256,26 @@ async function registryFor(
 }
 
 /**
- * The tracker for this walk, or `undefined` when the caller supplied no source
- * or the source could not answer.
+ * The tracker for this walk, or `undefined` when the source could not answer.
  *
- * A source that fails is a MISSING OPTIMIZATION, not a bad skill: the walk still
- * produces the same answer, one `git check-ignore` per link target instead of an
- * active-set lookup. So the throw is swallowed here rather than allowed to reach
+ * There is no longer a "caller supplied no source" case — the source is a
+ * required option — but there are still two ways to end up without a tracker:
+ * the source returns `undefined` for this root, or it throws. A source that
+ * fails is a MISSING OPTIMIZATION, not a bad skill: the walk still produces its
+ * answer, one `git check-ignore` per link target instead of an active-set
+ * lookup. So the throw is swallowed here rather than allowed to reach
  * `walkLinkedFiles`'s catch, which would file it as a `link walk failed`
  * parseError against the skill's own path — a fabricated defect in a file that
  * has none.
+ *
+ * ⚠️ Both remaining routes produce the SAME walk the missing argument used to,
+ * so required-ness narrows who can arrive here by accident; it does not close
+ * the state. `NO_GIT_TRACKER` is the third, deliberate route.
  */
 async function gitTrackerFor(
 	projectRoot: string,
-	gitTrackerSource: GitTrackerSource | undefined,
+	gitTrackerSource: GitTrackerSource,
 ): Promise<GitTracker | undefined> {
-	if (gitTrackerSource === undefined) return undefined;
 	try {
 		return await gitTrackerSource(projectRoot);
 	} catch {
@@ -241,8 +298,9 @@ function collectLinkedFiles(
 	// and an explicit `undefined` both satisfy, and it never uses `in`. What
 	// actually forbids the literal is `exactOptionalPropertyTypes`, under which
 	// assigning `undefined` to an optional property is a compile error. The object
-	// still ends up key-for-key identical to the pre-change one when no source is
-	// supplied, which is the property this bite is held to.
+	// still ends up key-for-key identical to the pre-tracker one whenever no
+	// tracker is in hand — which, now that the source is required, means a source
+	// that declined or threw rather than an argument nobody passed.
 	const walkOptions: Parameters<typeof walkLinkGraph>[2] = {
 		maxDepth: Infinity,
 		excludeRules: [],

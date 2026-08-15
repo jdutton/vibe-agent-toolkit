@@ -1217,12 +1217,15 @@ describe('validateSkillForPackaging - Link collection integration', () => {
 		);
 		const { skillPath } = createTransitiveSkillStructure(tempDir, {}, skillContent);
 
-		// A navigational link to an existing directory is valid — directory is
-		// excluded from the bundle silently, but no LINK_TARGETS_DIRECTORY error
-		// is emitted. Status must not be 'error' from this cause.
+		// A navigational link to an existing directory is valid, so no
+		// LINK_TARGETS_DIRECTORY error and no 'error' status from this cause — but
+		// the drop is no longer SILENT. The directory does not travel, so the
+		// packaged link points at nothing, and the whole path (walker → engine →
+		// issue lane) must surface that as a warning rather than swallowing it.
 		const result = await validateSkillForPackaging(skillPath);
 
 		expect(activeErrorsOf(result).map(e => e.code)).not.toContain('LINK_TARGETS_DIRECTORY');
+		expect(activeWarningsOf(result).map(e => e.code)).toContain('LINK_TO_UNBUNDLED_DIRECTORY');
 	});
 
 	it('should report directFileCount <= fileCount when links are excluded by depth', async () => {

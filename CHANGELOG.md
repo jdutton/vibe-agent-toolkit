@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Two link exclusions that used to produce no output at all are now reported.** A markdown link
+  resolving to a **directory** raises `LINK_TO_UNBUNDLED_DIRECTORY` (**warning**), and a reference
+  dropped by an `excludeReferencesFromBundle` rule raises `LINK_EXCLUDED_BY_PATTERN` (**info**,
+  naming the patterns of the rule that matched). Previously both were classified, filtered to
+  `null`, and discarded — so an author asking "why did this file not ship?" got nothing back.
+
+  `LINK_TO_UNBUNDLED_DIRECTORY` is a *new* code rather than the existing `LINK_TARGETS_DIRECTORY`,
+  whose own fix text states it does not apply to navigational prose links. It is a **warning**, not
+  an error, matching the two existing codes for the same phenomenon (`LINK_TO_NAVIGATION_FILE`,
+  `LINK_FROM_NON_ROUTABLE_FILE`): the link resolves fine for a reader in the repo, so the defect is
+  in packaging rather than at source.
+
+  ⚠️ Projects declaring `excludeReferencesFromBundle` will see new **info** lines from `vat build`
+  and `vat verify`. Info is non-blocking and packaged output is unchanged.
+
+- **The projection's closure primitive gained `CLOSURE_REFERENCE_OUTSIDE_ROOT`**, distinguishing a
+  reference that escapes the extent root from one that simply did not resolve. Both used to report
+  `CLOSURE_REFERENCE_UNRESOLVED`, which conflated "outside the project" with "no such file".
+
 - **The crawl paths can now say where their own time goes — including the link walker, whose own
   work was never measured by anything.** Setting **`VAT_CRAWL_TIMING=<directory>`** makes every vat
   process that crawls write a `crawl-timing-<pid>.json` file into that directory as it exits,
@@ -145,6 +164,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fields**.
 
 ### Breaking
+
+- **`extractClaudeSkillInventory` now takes an options object, and a git tracker source is
+  REQUIRED.** The signature moves from
+  `(skillMdPath, sharedRegistry?, gitTrackerSource?)` to
+  `(skillMdPath, { gitTrackerSource, sharedRegistry? })`. Callers that genuinely want a
+  tracker-less walk pass the new exported `NO_GIT_TRACKER`.
+
+  The old optional parameter made "walk without a git tracker" the **silent default**, and the two
+  gitignore oracles do not agree: without a tracker the link walker falls back to a
+  `git check-ignore` spawn per target, while a projection's `gitignored` column is filled only from
+  a tracker it was handed. Requiring the argument does not make those oracles agree — it makes
+  choosing between them explicit and greppable instead of something a caller can omit by accident.
+
+  ⚠️ Scope: this is the skill extractor's own surface. `extractClaudePluginInventory` and
+  `extractClaudeMarketplaceInventory` still accept it optionally, so the `vat inventory --user` and
+  marketplace-root lanes continue to walk tracker-less.
+
+- **The crawl-timing dump format is version 2, and `VAT_CRAWL_TIMING` now charges the link walker
+  for building the registry its walk consumes.** No field changed; what a `crawl` total is a total
+  *of* did. At version 1 the projection arm was charged for its preparation (`base`) while the
+  incumbent arm was charged for traversal only, so the two arms of the side-by-side the seam exists
+  to render were not comparable — and the resulting numbers looked perfectly well-formed. Registry
+  enumeration, admission and link resolution are now bracketed inside `ResourceRegistry` itself,
+  under `resource-registry:*` ids. Version-1 dumps are refused rather than compared.
 
 - **The parse cache is namespaced per build of VAT, and both hand-bumped version constants are
   gone.** `CONTENT_KEY_SCHEMA_VERSION` and `PARSE_CACHE_SCHEMA_VERSION` are removed from

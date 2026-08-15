@@ -88,6 +88,33 @@
  * instead of closing it in the code — and a tolerance is invisible to every
  * assertion downstream of it.
  *
+ * ## Two verdicts that are expressed but UNMEASURABLE here, and one measured elsewhere
+ *
+ * `skill-extent.ts`'s boundary table was re-derived and shrank from six
+ * inexpressible reasons to two. Three of the four that moved are now compared by
+ * this file, and the honesty of that claim is uneven, so it is stated per verdict
+ * rather than in aggregate:
+ *
+ * - **`gitignored` and `skill-definition` are expressed and NOT measured against
+ *   the walker here.** This corpus reaches neither, which is not an assumption:
+ *   the sweep was green with both verdicts UNEXPRESSED, and a single link to a
+ *   gitignored file or to another skill's `SKILL.md` would have appeared as a
+ *   `closureOnly` divergence carrying a cause outside {@link KNOWN_CAUSES} — an
+ *   equality this file asserts. Their populations are therefore pinned at ZERO
+ *   ({@link REASONS_THIS_CORPUS_CANNOT_REACH}) rather than skipped, so the day a
+ *   declared skill gains such a link this test fails and the reader learns the
+ *   corpus grew teeth. The mechanisms are pinned where a fixture CAN distinguish
+ *   them, in `projection-closure-extent.test.ts`.
+ * - **`outside-project` IS measured**, in `'names every reference that LEAVES the
+ *   root'`, and on the PRODUCTION corpora rather than the sweep — under a
+ *   package root a skill's `../../../../docs/*.md` link escapes, and under the
+ *   repository root the same link is an ordinary edge. It gets its own bucket
+ *   instead of joining {@link REASON_TO_REFUSAL_CODE} because its row cannot
+ *   answer `targetExists`: the walker `stat`s the escaping path, and a projection
+ *   populated from one root observes nothing outside it. Folding it in would
+ *   force the provenance comparison to tolerate a null, which is the tolerance
+ *   the paragraph above says never to add.
+ *
  * `packages/agent-skills/test/projection-skill-extent.test.ts` already compares
  * `SkillExtentContributor` with `walkLinkGraph` at *fixture* scale, on a corpus
  * built to reach the walker's discriminators. This file asks the other half of
@@ -184,8 +211,10 @@
 import {
   SKILL_REFUSED_AGENT_INSTRUCTION_FILE,
   SKILL_REFUSED_DIRECTORY_TARGET,
+  SKILL_REFUSED_GITIGNORED,
   SKILL_REFUSED_NAVIGATION_FILE,
   SKILL_REFUSED_PATTERN_MATCHED,
+  SKILL_REFUSED_SKILL_DEFINITION,
   SkillExtentContributor,
   createProjectRegistry,
   skillExtentContributorId,
@@ -198,6 +227,7 @@ import {
 } from '@vibe-agent-toolkit/agent-skills';
 import {
   CLOSURE_DEPTH_EXCEEDED,
+  CLOSURE_REFERENCE_OUTSIDE_ROOT,
   CLOSURE_REFERENCE_UNRESOLVED,
   CLOSURE_ROOT_ABSENT,
   ContributorRegistry,
@@ -273,6 +303,20 @@ const DEFAULT_DEPTH = 2;
 
 /** The packager's own default when `excludeNavigationFiles` is absent. */
 const DEFAULT_EXCLUDE_NAVIGATION = true;
+
+/**
+ * Every corpus here populates with a `GitTracker`, so the gitignored column is
+ * filled and the declaration may carry the rule that reads it.
+ *
+ * A literal rather than a derivation, because {@link declarationFor} is called
+ * before a {@link Corpus} exists — but NOT an unchecked one:
+ * `'populates with a USABLE git oracle'` asserts `isUsable()` per corpus. Without
+ * that check the declaration would claim a branch it cannot run
+ * (`FilesystemExtentContributor` writes `gitignored: false` on every row when no
+ * usable tracker was supplied), and the `gitignored` row of the boundary table
+ * would be a statement about nothing.
+ */
+const CORPUS_HAS_GIT_TRACKER = true;
 
 /**
  * Depths the sweep re-runs both arms at, over the `repo-root` corpus.
@@ -419,10 +463,25 @@ const NARROWING_LABELS: readonly string[] = [
  * An EXPLICIT table, not a string transform: `directory-target` →
  * `SKILL_REFUSED_DIRECTORY_TARGET` is a mapping someone decided, and a
  * mechanical `toUpperCase().replaceAll('-','_')` would keep agreeing after the
- * translation started emitting a label that merely looks right. The other six
- * reasons are absent on purpose — the closure consults none of their oracles
- * (git, the project boundary, two read outcomes, its own skill root, the target's
- * parser kind), so a closure verdict carrying one of them is a finding, not a gap.
+ * translation started emitting a label that merely looks right.
+ *
+ * Seven entries now, not five. `gitignored` and `skill-definition` joined when
+ * the boundary table in `skill-extent.ts` was re-derived and four of its six
+ * "needs an oracle" verdicts turned out to be stale: gitignored is a boolean
+ * COLUMN of the realization row, and a cross-skill `SKILL.md` is an ordinary
+ * basename rule. They are mapped here even though this corpus reaches NEITHER —
+ * see {@link REASONS_THIS_CORPUS_CANNOT_REACH}, which is what keeps that from
+ * being a silent vacuity.
+ *
+ * The reasons still absent are `outside-project`, `missing-target`,
+ * `unreadable-target` and `non-routable-source`, and they are absent for three
+ * different reasons rather than one. `outside-project` is compared, just not
+ * here: the closure names the same target under
+ * `CLOSURE_REFERENCE_OUTSIDE_ROOT`, but that row is anchored outside the root and
+ * cannot answer `targetExists`, so it gets its own bucket
+ * (`'names every reference that LEAVES the root'`) instead of joining a
+ * provenance comparison it would fail on one field. The other three are the
+ * genuine residue.
  *
  * ⚠️ **`depth-exceeded` is the fifth entry, and it is not a refusal LABEL.** The
  * first four arrive as `ExtentRefusalRule.label`s the skill translation supplies;
@@ -438,8 +497,37 @@ const REASON_TO_REFUSAL_CODE: ReadonlyMap<string, string> = new Map([
   ['directory-target', SKILL_REFUSED_DIRECTORY_TARGET],
   ['navigation-file', SKILL_REFUSED_NAVIGATION_FILE],
   ['agent-instruction-file', SKILL_REFUSED_AGENT_INSTRUCTION_FILE],
+  ['skill-definition', SKILL_REFUSED_SKILL_DEFINITION],
   ['pattern-matched', SKILL_REFUSED_PATTERN_MATCHED],
+  ['gitignored', SKILL_REFUSED_GITIGNORED],
   ['depth-exceeded', CLOSURE_DEPTH_EXCEEDED],
+]);
+
+/**
+ * The mapped reasons this corpus **cannot exercise**, asserted to have a
+ * population of exactly ZERO rather than left to be discovered as a gap.
+ *
+ * Both are expressible and neither is measured against the walker here, and that
+ * is a fact about the corpus rather than about the translation. The proof it is
+ * the corpus is historical and exact: this file was GREEN with both verdicts
+ * unexpressed, and a single link to a gitignored file or to another skill's
+ * `SKILL.md` would have shown up as a `closureOnly` divergence carrying a cause
+ * outside {@link KNOWN_CAUSES} — which the sweep asserts as an equality.
+ *
+ * Pinned as zero, not skipped. A skipped reason is invisible; a zero that is
+ * asserted fails the day a declared skill gains such a link, and the reader
+ * learns the corpus grew teeth — the same move
+ * `'records that the PRODUCTION configuration cannot distinguish the two'`
+ * makes about singleton bundles ([[fixtures-that-cannot-distinguish]]).
+ *
+ * The mechanisms themselves are pinned where a fixture CAN distinguish them:
+ * `projection-closure-extent.test.ts` has a falsifying case for the `flags`
+ * conjunction the gitignore rule is, and for the self-link silence that is the
+ * other half of `skill-definition`.
+ */
+const REASONS_THIS_CORPUS_CANNOT_REACH: ReadonlySet<string> = new Set([
+  'gitignored',
+  'skill-definition',
 ]);
 
 /**
@@ -449,10 +537,21 @@ const REASON_TO_REFUSAL_CODE: ReadonlyMap<string, string> = new Map([
  * Not "the codes the primitive owns" — {@link CLOSURE_DEPTH_EXCEEDED} is the
  * primitive's too and is deliberately absent from this set, because it says the
  * same thing about the same file the walker's `depth-exceeded` row says. What is
- * subtracted here is the pair that has no counterpart to compare against at all:
+ * subtracted here is the set that has no counterpart to compare against at all:
  * `CLOSURE_REFERENCE_UNRESOLVED` is a fact about a REFERENCE (nothing realizes
  * the target, so there is no file to hold a verdict), and `CLOSURE_ROOT_ABSENT`
  * is a fact about the DECLARATION.
+ *
+ * ⚠️ `CLOSURE_REFERENCE_OUTSIDE_ROOT` is the third, and it is the one that is
+ * subtracted despite HAVING a counterpart (`walkLinkGraph`'s `outside-project`
+ * row names the same target). It is held out of these buckets because it cannot
+ * survive the PROVENANCE comparison on one field: the walker `stat`s the
+ * escaping path and answers `targetExists`, while a projection populated from
+ * one root observes nothing outside it and must answer null. Folding it in would
+ * either redden `targetExists` for a difference that is structural, or force the
+ * comparison to tolerate a null — and a tolerance is invisible to every assertion
+ * downstream of it. It gets its own bucket instead, comparing exactly what IS
+ * comparable: which paths escaped.
  *
  * Everything left is either a refusal rule's label or the depth verdict, which is
  * how the comparison view is read off without hardcoding which labels the
@@ -460,6 +559,7 @@ const REASON_TO_REFUSAL_CODE: ReadonlyMap<string, string> = new Map([
  */
 const NON_VERDICT_CONDITION_CODES: ReadonlySet<string> = new Set([
   CLOSURE_REFERENCE_UNRESOLVED,
+  CLOSURE_REFERENCE_OUTSIDE_ROOT,
   CLOSURE_ROOT_ABSENT,
 ]);
 
@@ -579,6 +679,16 @@ interface ClosureRun {
    * two arms are compared ON. The `template` case reads it from here instead.
    */
   readonly conditions: readonly RealizationConditionRow[];
+  /**
+   * Every path the closure reported as resolving OUT of the root.
+   *
+   * Kept as its own view because {@link NON_VERDICT_CONDITION_CODES} subtracts
+   * `CLOSURE_REFERENCE_OUTSIDE_ROOT` from the two comparison views — see that
+   * constant for the one field that makes it uncomparable there — so without it
+   * the bucket would have to re-filter the raw conditions at its call site, which
+   * is a second reading of the same rows.
+   */
+  readonly outsideRoot: ReadonlySet<string>;
 }
 
 /**
@@ -786,6 +896,22 @@ async function corpusOf(spec: CorpusSpec): Promise<Corpus> {
   }
 
   const gitTracker = new GitTracker(root);
+  // ⚠️ **`initialize()` is not optional, and its absence was a hole in this
+  // experiment.** `GitTracker` builds its active set lazily and only on demand:
+  // until this runs, `isUsable()` is false, and `FilesystemExtentContributor`
+  // passes the tracker to `collectRealization` only when it IS usable — so every
+  // `resource_realizations.gitignored` in the closure arm was `false` BY
+  // CONSTRUCTION, whatever the tree looked like. The walker arm was unaffected
+  // (`isIgnoredByActiveSet` falls back to a `git check-ignore` spawn when the
+  // active set is unpopulated, which is correct and merely slow), so the two arms
+  // were asymmetric in the one direction no assertion here could see: the
+  // projection could not have disagreed about gitignore even if the corpus had
+  // given it the chance ([[structurally-blind-producer]]).
+  //
+  // Found by the assertion that {@link CORPUS_HAS_GIT_TRACKER} is not a lie, and
+  // fixed the way the sibling `inventory-extent-corpus.integration.test.ts`
+  // already did it — before either arm runs, so both see one tree.
+  await gitTracker.initialize();
   const registryStartedAt = performance.now();
   const registry = await createProjectRegistry(root);
   const registryMs = performance.now() - registryStartedAt;
@@ -868,6 +994,7 @@ function declarationFor(
   const declaration = skillExtentDeclaration(
     config as unknown as Parameters<typeof skillExtentDeclaration>[0],
     skill.relativePath,
+    CORPUS_HAS_GIT_TRACKER,
   ) as unknown as Record<string, unknown>;
   if (narrowing === 'on') return declaration as JsonValue;
   // The control: every refusal matcher Stage 3 added, back to the state it had
@@ -1022,7 +1149,9 @@ async function closureRun(
   const refusals = new Map<string, string>();
   const provenance = new Map<string, RefusalProvenance[]>();
   const conditions: RealizationConditionRow[] = [];
+  const outsideRoot = new Set<string>();
   for (const row of contribution.conditions) {
+    if (row.code === CLOSURE_REFERENCE_OUTSIDE_ROOT) outsideRoot.add(row.path);
     if (NON_VERDICT_CONDITION_CODES.has(row.code) || memberSet.has(row.path)) continue;
     refusals.set(row.path, row.code);
     conditions.push(row);
@@ -1040,7 +1169,7 @@ async function closureRun(
     provenance.set(row.path, rows);
   }
 
-  return { members, refusals, provenance, conditions };
+  return { members, refusals, provenance, conditions, outsideRoot };
 }
 
 /**
@@ -1161,9 +1290,9 @@ function silentOnWalkerReason(walk: WalkerRun, closure: ClosureRun): string[] {
  * arm reports too.
  *
  * A walker reason with no {@link REASON_TO_REFUSAL_CODE} entry is a mismatch and
- * not a skip. The five mapped reasons are the ones the closure claims; a closure
- * verdict sitting on top of `skill-definition` or `gitignored` would mean it is
- * reporting a reason it has no oracle for, which is the failure this bucket
+ * not a skip. The seven mapped reasons are the ones the closure claims; a closure
+ * verdict sitting on top of `missing-target` or `unreadable-target` would mean it
+ * is reporting a reason it has no oracle for, which is the failure this bucket
  * exists to catch rather than an out-of-scope case to wave through.
  *
  * @param walk - What the walker bundled and refused
@@ -1202,6 +1331,8 @@ async function compareSkill(
   divergence: Divergence | undefined;
   reasons: ReasonComparison;
   provenance: ProvenanceComparison;
+  /** Every path the walker reached and what it decided — for the reason histogram. */
+  walkerSeen: ReadonlyMap<string, DivergenceCause | 'bundled'>;
 }> {
   const walk = walkerRun(corpus, skill, walkOptionsFor(corpus, skill, config));
   const run = await closureRun(corpus, skill, config, narrowing);
@@ -1225,7 +1356,58 @@ async function compareSkill(
     };
   const reasons = compareReasons(walk, run);
   const provenance = compareProvenance(walk, run);
-  return { walker: walk.members, closure, divergence, reasons, provenance };
+  return { walker: walk.members, closure, divergence, reasons, provenance, walkerSeen: walk.seen };
+}
+
+/**
+ * The escaping-reference comparison, accumulated over every (corpus, skill).
+ *
+ * Three lists rather than one, because the three failures are not the same
+ * finding: a path only the WALKER called escaping is the closure falling silent,
+ * a path only the CLOSURE called escaping is an ordering difference in the two
+ * cascades (and is printed, not asserted — see the case), and an escaping path
+ * that is also a member is a correctness break on either arm.
+ */
+interface EscapeComparison {
+  /** How many `outside-project` rows the walker emitted — the population. */
+  walkerEscapes: number;
+  /** Walker said `outside-project`; the closure named no escape for that path. */
+  readonly missing: string[];
+  /** The closure named an escape; the walker's own verdict for it was something else. */
+  readonly closureOnly: string[];
+  /** Named as escaping by the closure AND bundled by the walker — never legal. */
+  readonly bundledYetEscaping: string[];
+}
+
+/**
+ * Fold one (corpus, skill) pair's escaping references into the totals.
+ *
+ * Extracted from its `it` block only to keep that block under the
+ * cognitive-complexity ceiling; every line is accumulation, and each rendered
+ * line names the corpus and skill so a failure is locatable without a debugger.
+ *
+ * @param total - The comparison totals, mutated in place
+ * @param cell - How this (corpus, skill) pair is identified in a rendered line
+ * @param walk - What the walker bundled and refused
+ * @param closure - What the closure admitted, refused, and named as escaping
+ */
+function accumulateEscapes(
+  total: EscapeComparison,
+  cell: string,
+  walk: WalkerRun,
+  closure: ClosureRun,
+): void {
+  const members = new Set(walk.members);
+  for (const [path, reason] of walk.seen) {
+    if (reason !== 'outside-project') continue;
+    total.walkerEscapes += 1;
+    if (!closure.outsideRoot.has(path)) total.missing.push(`${cell}: ${path}`);
+  }
+  for (const path of closure.outsideRoot) {
+    const reason = walk.seen.get(path);
+    if (reason !== 'outside-project') total.closureOnly.push(`${cell}: ${path} (walker=${String(reason)})`);
+    if (members.has(path)) total.bundledYetEscaping.push(`${cell}: ${path}`);
+  }
 }
 
 /** What one pass of {@link SWEPT_DEPTHS} over one corpus produced. */
@@ -1250,6 +1432,18 @@ interface SweepResult {
   readonly provenanceCompared: Record<ProvenanceField, number>;
   /** Every field of every path the two arms describe differently. */
   readonly provenanceMismatches: string[];
+  /**
+   * Every verdict the WALKER reached, counted — its own reasons, not the mapped
+   * subset.
+   *
+   * Printed rather than asserted, and it is the answer to "which of
+   * `LinkResolution`'s eleven `excludeReason`s does this corpus produce at all?".
+   * That question used to be answerable only by reading the boundary table in
+   * `skill-extent.ts` and trusting it, which is how four of its six
+   * not-expressible verdicts stayed stale across three increments. A reason
+   * absent from this histogram is one no assertion in this file can be about.
+   */
+  readonly walkerReasons: Map<string, number>;
 }
 
 /**
@@ -1264,13 +1458,19 @@ interface SweepResult {
  * @param cell - How this (skill, depth) cell is identified in a rendered line
  * @param reasons - The cell's reason comparison
  * @param provenance - The cell's provenance comparison
+ * @param walkerSeen - Every path the walker reached in this cell, and its verdict
  */
 function accumulateComparisons(
   result: SweepResult,
   cell: string,
   reasons: ReasonComparison,
   provenance: ProvenanceComparison,
+  walkerSeen: ReadonlyMap<string, DivergenceCause | 'bundled'>,
 ): void {
+  for (const reason of walkerSeen.values()) {
+    if (reason === 'bundled') continue;
+    result.walkerReasons.set(reason, (result.walkerReasons.get(reason) ?? 0) + 1);
+  }
   for (const [reason, count] of reasons.compared) {
     result.reasonsCompared.set(reason, (result.reasonsCompared.get(reason) ?? 0) + count);
   }
@@ -1297,7 +1497,7 @@ async function sweepDepths(corpus: Corpus, narrowing: Narrowing = 'on'): Promise
     divergences: [], rows: [], excludeEscapes: [], followed: 0,
     reasonsCompared: new Map<string, number>(), reasonMismatches: [], reasonSilent: [],
     provenanceCompared: { sourcePath: 0, sourceLine: 0, sourceRef: 0, targetExists: 0, matchedPattern: 0 },
-    provenanceMismatches: [],
+    provenanceMismatches: [], walkerReasons: new Map<string, number>(),
   };
   let followed = 0;
 
@@ -1305,11 +1505,11 @@ async function sweepDepths(corpus: Corpus, narrowing: Narrowing = 'on'): Promise
     for (const skill of corpus.skills) {
       const config: SkillPackagingConfig = { ...skill.config, linkFollowDepth: depth };
       const {
-        walker, closure, divergence, reasons, provenance,
+        walker, closure, divergence, reasons, provenance, walkerSeen,
       } = await compareSkill(corpus, skill, config, narrowing);
       if (divergence !== undefined) result.divergences.push(divergence);
       if (walker.length > 1 || closure.length > 1) followed += 1;
-      accumulateComparisons(result, `${skill.name}@${String(depth)}`, reasons, provenance);
+      accumulateComparisons(result, `${skill.name}@${String(depth)}`, reasons, provenance, walkerSeen);
       result.rows.push({
         depth, skill: skill.name, walker: walker.length, closure: closure.length,
         agree: divergence === undefined,
@@ -1433,15 +1633,92 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
     console.log(`[vacuity] ${singletons.length} production skill bundles, all singletons`);
   });
 
+  it('populates with a USABLE git oracle, so the gitignored rule is not a claim about nothing', () => {
+    // {@link CORPUS_HAS_GIT_TRACKER} is a literal, and an unchecked literal is
+    // how a declaration comes to claim a branch that cannot run:
+    // `FilesystemExtentContributor` passes the tracker to `collectRealization`
+    // only when `isUsable()`, and writes `gitignored: false` on every row
+    // otherwise. A rule keyed on that column would then refuse nothing, silently,
+    // and the boundary table's `gitignored` row would be a statement about a
+    // matcher that never fires ([[eslint-linter-probe-dead-config]]).
+    expect(corpora.map((corpus) => `${corpus.spec.label}: ${String(corpus.gitTracker.isUsable())}`))
+      .toEqual(corpora.map((corpus) => `${corpus.spec.label}: true`));
+
+    // …and the cascade the translation actually produced carries both later
+    // rules, in the positions `classifyExclusion` puts them: the SKILL.md
+    // basename after the agent-instruction check and before the globs, the
+    // gitignore conjunction last. Asserted on a REAL declaration, because
+    // `REASONS_THIS_CORPUS_CANNOT_REACH` pins both populations at zero — and a
+    // zero produced by a MISSING rule is indistinguishable from a zero produced
+    // by a corpus with nothing to catch.
+    const sample = corpora[0]?.skills[0];
+    if (sample === undefined) throw new Error('no skills to sample a declaration from');
+    expect(refusalLabelsOf(declarationFor(sample, sample.config))).toEqual([
+      SKILL_REFUSED_DIRECTORY_TARGET,
+      SKILL_REFUSED_NAVIGATION_FILE,
+      SKILL_REFUSED_AGENT_INSTRUCTION_FILE,
+      SKILL_REFUSED_SKILL_DEFINITION,
+      SKILL_REFUSED_PATTERN_MATCHED,
+      SKILL_REFUSED_GITIGNORED,
+    ]);
+  });
+
+  it('names every reference that LEAVES the root, where it used to say only "unresolved"', async () => {
+    // The `outside-project` half of the boundary table, and the one verdict that
+    // turned out never to have needed an oracle at all: the closure resolves the
+    // href, `relativize` states the result against the root, and a path the root
+    // does not contain comes back `..`-prefixed. It reported
+    // `CLOSURE_REFERENCE_UNRESOLVED` — true, and indistinguishable from a broken
+    // link an author should fix.
+    //
+    // The PRODUCTION corpora are where this bites, which is why the loop is over
+    // all three rather than over the repo-root sweep: under
+    // `packages/vat-development-agents` a skill's `../../../../docs/*.md` link
+    // leaves the project root, and under the repository root the same link is an
+    // ordinary in-project edge. The corpus that makes the two answers differ is
+    // the narrow one, for once.
+    const total: EscapeComparison = { walkerEscapes: 0, missing: [], closureOnly: [], bundledYetEscaping: [] };
+    for (const corpus of corpora) {
+      for (const skill of corpus.skills) {
+        const walk = walkerRun(corpus, skill, walkOptionsFor(corpus, skill, skill.config));
+        accumulateEscapes(total, `${corpus.spec.label}/${skill.name}`, walk, await closureRun(corpus, skill, skill.config));
+      }
+    }
+    const { walkerEscapes, missing, closureOnly, bundledYetEscaping } = total;
+
+    console.log(`[escapes] ${walkerEscapes} walker outside-project rows,`
+      + ` ${missing.length} the closure did not name, ${closureOnly.length} named only by the closure`);
+    if (closureOnly.length > 0) console.log('[escapes closure-only]', closureOnly);
+
+    // Population first: without it every list below is empty by construction, on
+    // a corpus whose skills happened to link nothing outside their root.
+    expect(walkerEscapes).toBeGreaterThan(0);
+    // The SILENCE direction — the one a mute arm passes. Every path the walker
+    // called `outside-project` must be a path the closure named as escaping.
+    expect(missing).toEqual([]);
+    // …and the invariant that holds however the two arms label it: a path outside
+    // the root is never a bundle member. `closureOnly` is PRINTED and not
+    // asserted empty, deliberately — the walker's cascade reaches
+    // `directory-target` and `unreadable-target` BEFORE its boundary check, so an
+    // escaping path that is a directory carries a different reason there, and
+    // pinning that difference at zero would be pinning a corpus accident.
+    expect(bundledYetEscaping).toEqual([]);
+  }, 600_000);
+
   it('agrees across a depth sweep on the corpus that CAN distinguish', async () => {
     const corpus = repoRootCorpus();
 
     const {
       divergences, rows, excludeEscapes, followed, reasonsCompared, reasonMismatches, reasonSilent,
-      provenanceCompared, provenanceMismatches,
+      provenanceCompared, provenanceMismatches, walkerReasons,
     } = await sweepDepths(corpus);
     console.table(rows.filter((row) => (row['walker'] as number) > 1 || (row['closure'] as number) > 1));
     console.log(`[non-vacuous] ${followed} of ${rows.length} sweep cells bundle more than the SKILL.md alone`);
+    // Which of the walker's OWN eleven reasons this corpus produces at all —
+    // printed so a reader can see, without trusting a comment, which rows of the
+    // boundary table in `skill-extent.ts` this file is in a position to say
+    // anything about.
+    console.log('[walker reasons]', JSON.stringify(Object.fromEntries(walkerReasons)));
 
     // The whole point of this corpus. A sweep in which nothing was ever followed
     // would be the same vacuous pass the production corpus already gives.
@@ -1458,8 +1735,20 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
     // comparison is the same vacuous pass as an empty divergence list over an
     // empty sweep, and a refactor that stopped emitting one CLASS of verdict
     // would leave a healthy-looking total behind.
-    expect([...REASON_TO_REFUSAL_CODE.keys()].filter((reason) => (reasonsCompared.get(reason) ?? 0) === 0))
-      .toEqual([]);
+    //
+    // Split in two, because two of the seven mapped reasons are expressible and
+    // UNREACHABLE HERE. Asserting "every mapped reason has a population" would
+    // fail for a corpus limitation and read as a translation bug; asserting only
+    // the reachable ones would let a real regression hide in an unasserted zero.
+    // So the unreachable pair is pinned AT zero — see
+    // {@link REASONS_THIS_CORPUS_CANNOT_REACH}.
+    const mapped = [...REASON_TO_REFUSAL_CODE.keys()];
+    expect(mapped
+      .filter((reason) => !REASONS_THIS_CORPUS_CANNOT_REACH.has(reason))
+      .filter((reason) => (reasonsCompared.get(reason) ?? 0) === 0)).toEqual([]);
+    expect(mapped
+      .filter((reason) => REASONS_THIS_CORPUS_CANNOT_REACH.has(reason))
+      .filter((reason) => (reasonsCompared.get(reason) ?? 0) !== 0)).toEqual([]);
     expect(reasonMismatches).toEqual([]);
     // …and the direction a silent arm passes. `depth-exceeded` is here because
     // of it: the closure used to stop enumerating at `maxDepth` and emit nothing
@@ -1556,8 +1845,17 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
     for (const label of NARROWING_LABELS) expect(labels).toContain(label);
     // …and the control must be a NARROWING removal, not a cascade removal: the
     // pre-Stage-3 `exclude` list, now the pattern-matched rule, has to survive.
+    //
+    // The other two survivors are the LATER additions — a cross-skill `SKILL.md`
+    // and `gitignored ∧ exists` — and they are deliberately NOT in
+    // {@link NARROWING_LABELS}. That list is the Stage 3 vocabulary, and rewriting
+    // it to mean "everything added since" would silently redefine what the 253
+    // control paths below are a control FOR. Leaving them in costs nothing
+    // measurable, and the reason it costs nothing is itself asserted: both refuse
+    // zero paths on this corpus (see {@link REASONS_THIS_CORPUS_CANNOT_REACH}), so
+    // the control's causes are the same four either way.
     expect(refusalLabelsOf(declarationFor(sample, sample.config, 'off')))
-      .toEqual([SKILL_REFUSED_PATTERN_MATCHED]);
+      .toEqual([SKILL_REFUSED_SKILL_DEFINITION, SKILL_REFUSED_PATTERN_MATCHED, SKILL_REFUSED_GITIGNORED]);
 
     const { divergences, followed } = await sweepDepths(corpus, 'off');
     const attributed = divergences.flatMap((row) => row.closureOnly);

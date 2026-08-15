@@ -398,6 +398,16 @@ export type SkillsConfig = z.infer<typeof SkillsConfigSchema>;
  * hardcoded one caller's vocabulary into a primitive whose whole premise is that
  * the vocabulary belongs to the declaration.
  *
+ * ⚠️ **A column matcher can only be as good as its producer.** `flags` is what
+ * turned "the walker consults a git oracle and the closure cannot" into a plain
+ * column read — but `resource_realizations.gitignored` is filled only when the
+ * population was given a USABLE `GitTracker`, and `exists` is never `false` for a
+ * link target at all (a path that is not on disk is never enumerated, so no
+ * realization exists to match). A rule keyed on a column its producer never
+ * varies is a rule that cannot fire, and it fails SILENTLY — unlike a rule naming
+ * a column that does not exist, which the closure throws on. Check the producer
+ * before believing a matcher expresses something.
+ *
  * {@link ExtentRefusalRuleSchema.payload} is the other half of that premise. A
  * label names a refusal in the caller's vocabulary; a payload carries the rest of
  * it — anything about the rule the caller will want back at the refusal and the
@@ -435,7 +445,7 @@ export const ExtentDeclarationSchema = z.object({
   kind: ZoneKindSchema
     .describe('The resolution_contexts.kind this extent has, e.g. "skill". Open vocabulary; must match the kind the contributor is registered under.'),
   closureFrom: z.string().min(1)
-    .describe('Root-relative path of the extent root — the one member admitted unconditionally, before any traversal'),
+    .describe('Root-relative path of the extent root — the one member admitted unconditionally, before any traversal. A reference that resolves BACK to it is skipped in silence: the root is a member by declaration, so a self-link has nothing left to refuse and nothing for the hop budget to hold back, and a row about it would contradict the admission. That is the same verdict walk-link-graph.ts gives a link back to its own skillRootPath.'),
   follow: z.array(ReferenceSyntacticFormSchema).default(['markdown-link', 'markdown-link-reference', 'markdown-definition'])
     .describe('Which blob_references syntactic forms the closure traverses. Defaults to the three markdown forms; an @-prefixed or bare token is ambiguous at the blob layer, so following one is an explicit choice.'),
   maxDepth: z.union([z.number().int().min(0), z.literal('full')]).default('full')

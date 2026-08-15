@@ -41,6 +41,75 @@
  * in the dump from a real contributor, and the whole point of the dump is that
  * the two crawlers are legible side by side.
  *
+ * ## The two arms are bracketed at the same DEPTH, and that took a fix
+ *
+ * "Side by side" is a claim about depth, not just about presence. This seam
+ * shipped with the projection arm bracketed at its driver — `merge.ts` charges
+ * every `base` contributor, so the `base` stratum carries the projection's whole
+ * PREPARATION — while the incumbent arm was bracketed only at
+ * {@link CRAWL_WALKER_ID}, one `walkLinkGraph` call. But `walkLinkGraph` walks a
+ * `ResourceRegistry` somebody else already built, and building it is the crawl:
+ * `crawlDirectory` to enumerate, one read-parse-index per file to admit, then
+ * `resolveLinks` to wire the graph the walk then follows. None of that was
+ * charged anywhere. Measured on a real subject, the walker's traversal came in at
+ * **1.7 ms** against the projection's ~1,016 ms — and nothing in the output looked
+ * wrong, because both numbers were real and both arms reported. A ~600× ratio
+ * read off that dump would have been a comparison of a walk against a whole
+ * crawl.
+ *
+ * So the registry's own work is charged under `crawl` too
+ * ({@link CRAWL_REGISTRY_ENUMERATE_ID}, {@link CRAWL_REGISTRY_ADD_RESOURCE_ID},
+ * {@link CRAWL_REGISTRY_RESOLVE_LINKS_ID}), and the brackets live INSIDE
+ * `ResourceRegistry` rather than at the six sites that construct one. Six copies
+ * of the same bracket is six chances to disagree, and a seventh construction site
+ * added later would silently rot the gate — the one place all six converge is the
+ * class itself.
+ *
+ * ### How to total an arm from this dump
+ *
+ * Not every row is additive with every other, so the two totals a flip decision
+ * rests on are stated here rather than left to a reader's arithmetic:
+ *
+ * - **Incumbent arm** = the three `resource-registry:*` rows (mutually disjoint —
+ *   enumeration, admission and link resolution do not contain one another) plus
+ *   {@link CRAWL_WALKER_ID}. **Not** {@link CRAWL_WALKER_GITIGNORE_ID}, which is
+ *   charged from inside the walk and is therefore already inside the walk's row.
+ * - **Projection arm** = the driver-placed rows in `base` and `closure`, i.e.
+ *   every row at pass ≥ 1. The pass-0 rows in those strata
+ *   ({@link CRAWL_CLOSURE_CONTRIBUTE_ID}, {@link CRAWL_CLOSURE_RESOLVE_ID}, and a
+ *   registry build reached from inside a contributor) are breakdowns of that same
+ *   time, not additions to it.
+ *
+ * ⚠️ A rollup that sums a stratum's rows without regard to pass double-counts
+ * every nested bracket. That is a real reading hazard, not a hypothetical: it is
+ * what `packages/lab/src/facets/crawl/dump.ts` does today.
+ *
+ * ## A registry built from inside a contributor belongs to the PROJECTION arm
+ *
+ * Putting the bracket inside `ResourceRegistry` puts it under whoever calls it,
+ * and a projection contributor could call it. Nothing shipped does — no file
+ * under `src/projection/` imports the class; the base contributors reach for
+ * `crawlDirectory`, `GitTracker` and `node:fs` directly — but "nothing does yet"
+ * is not an accounting rule. If a contributor ever did, charging its registry
+ * build to `crawl` would move a whole crawl onto the incumbent's total on a run
+ * the incumbent took no part in: the same defect this section describes, with the
+ * arms swapped.
+ *
+ * So a registry bracket does not name its own stratum. It **inherits** the one
+ * the merge driver is running under ({@link withContributorStratum}, an
+ * `AsyncLocalStorage` so it survives the `await`s a contributor is full of and
+ * cannot be corrupted by a second population interleaving with the first), and
+ * falls back to `crawl` — the incumbent — when no contributor is on the stack.
+ * The row is then a pass-0 breakdown of the driver's own row for that
+ * contributor, exactly as {@link CRAWL_CLOSURE_CONTRIBUTE_ID} already is.
+ *
+ * **Failure mode of that choice, stated plainly:** the inherited row overlaps the
+ * driver's row for the same invocation, so an arm total that adds them
+ * double-counts. The alternative — dropping the bracket while inside a
+ * contributor — would have removed the overlap by making real work invisible,
+ * and an absent row is indistinguishable from code that never ran. Overlap that
+ * a reader can see and the totalling rule above resolves beats a silent hole.
+ *
  * ## `pass` 0 means "recorded from inside the work"
  *
  * The merge driver is the ONLY participant that knows which fixpoint pass is
@@ -86,6 +155,8 @@
  * what enables the seam. An empty-string value counts as absent.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
+
 import {
   ensureTimingDirectory,
   normalizeTimingDirectory,
@@ -98,8 +169,10 @@ import {
  * Which layer a recorded bracket belongs to.
  *
  * `base` and `closure` are the merge driver's two strata verbatim. `crawl` is the
- * incumbent link walker, which is not a projection contributor and has no
- * stratum of its own — see this module's header on synthetic ids.
+ * incumbent crawler — the `ResourceRegistry` build AND the `walkLinkGraph` call
+ * that consumes it, which together are the same span of work the projection's two
+ * strata are. Neither is a projection contributor and neither has a stratum of its
+ * own, so both record under synthetic ids; see this module's header.
  */
 export type CrawlStratum = 'base' | 'closure' | 'crawl';
 
@@ -143,6 +216,63 @@ export const CRAWL_CLOSURE_CONTRIBUTE_ID = 'closure-extent:contribute';
 /** Synthetic contributor id for the closure walk's per-reference resolution. */
 export const CRAWL_CLOSURE_RESOLVE_ID = 'closure-extent:resolve-reference';
 
+/**
+ * What every `ResourceRegistry` id starts with.
+ *
+ * Exported because "is this row registry preparation?" is a question a reader
+ * asks — the three phases are one accounting unit — and a caller answering it by
+ * restating the prefix would drift the moment a fourth phase is bracketed.
+ */
+export const CRAWL_REGISTRY_ID_PREFIX = 'resource-registry:';
+
+/**
+ * Synthetic contributor id for the enumeration inside `ResourceRegistry.crawl` —
+ * the `crawlDirectory` call, and nothing that follows it.
+ *
+ * Only the enumeration, so that this row and
+ * {@link CRAWL_REGISTRY_ADD_RESOURCE_ID} are additive rather than nested:
+ * `crawl()` is enumeration THEN admission, and bracketing the whole method would
+ * have produced a row that contains the admission row.
+ *
+ * A caller that enumerates for itself and hands paths to `addResources` — the
+ * marketplace inventory's `crawlSkillLinkRegistry` does exactly that — files no
+ * row here, because its `crawlDirectory` call is outside the registry and
+ * therefore outside this seam. That is a known uncharged phase on that route, not
+ * a claim that the route enumerated nothing.
+ */
+export const CRAWL_REGISTRY_ENUMERATE_ID = 'resource-registry:enumerate';
+
+/**
+ * Synthetic contributor id for one `ResourceRegistry.addResource` — the read, the
+ * content key, the parse, the stat, the checksum and the four index writes for
+ * one file.
+ *
+ * The per-file grain is deliberate. It is the only grain every construction route
+ * shares (`crawl` and a direct `addResources` both funnel through it), and it is
+ * the one that makes the row's ms/call comparable to a projection contributor's:
+ * this is what admitting a document costs the incumbent.
+ *
+ * Charged even when the admission FAILS — a duplicate-id drop and an unreadable
+ * file both cost the read and the parse before they are refused, and a seam that
+ * charged only successes would report a corpus of collisions as nearly free.
+ */
+export const CRAWL_REGISTRY_ADD_RESOURCE_ID = 'resource-registry:add-resource';
+
+/** Synthetic contributor id for one whole `ResourceRegistry.resolveLinks` call. */
+export const CRAWL_REGISTRY_RESOLVE_LINKS_ID = 'resource-registry:resolve-links';
+
+/**
+ * The stratum the merge driver is currently running a contributor under, or
+ * absent outside a contributor invocation.
+ *
+ * `AsyncLocalStorage` rather than a module-level variable because a contributor
+ * is a chain of `await`s: a plain flag set before the call and cleared after it
+ * would be observed by any other crawl that happened to resume on the event loop
+ * in between, and two populations in one process would corrupt each other's
+ * attribution. See this module's header for why the inheritance exists at all.
+ */
+const contributorStratum = new AsyncLocalStorage<Exclude<CrawlStratum, 'crawl'>>();
+
 /** One `(contributorId, stratum, pass)` row of the dump. */
 export interface CrawlTimingEntry {
   /** A contributor's id, or one of this module's synthetic ids. */
@@ -180,11 +310,34 @@ export interface CrawlTimingDump {
 }
 
 /**
- * Bumped whenever the dump layout changes in a way a reader must notice.
+ * Bumped whenever the dump's layout — **or the meaning of a row already in it** —
+ * changes in a way a reader must notice.
+ *
+ * The meaning half is not pedantry. A reader that refuses an unknown layout but
+ * accepts a silently redefined row is worse than one that refuses both: it
+ * produces numbers, and nobody can state what they are of.
  *
  * 1 — first version.
+ * 2 — the `crawl` stratum gained the incumbent's PREPARATION
+ *     (`resource-registry:*`). No field changed. What changed is what a `crawl`
+ *     total is a total OF: traversal alone at v1, the registry build plus the
+ *     traversal at v2. Holding a v1 dump against a v2 one reads that widening as
+ *     a several-hundred-fold regression in the walker — see this module's header.
  */
-const DUMP_VERSION = 1;
+export const CRAWL_SEAM_DUMP_VERSION = 2;
+
+/**
+ * Alias kept for this module's own readability at the write site.
+ *
+ * ⚠️ The exported spelling above exists so the READER can pin itself against the
+ * writer. `@vibe-agent-toolkit/lab`'s `CRAWL_DUMP_VERSION` refuses any dump whose
+ * version it does not recognise, and the two used to be unrelated literals in
+ * two packages — drift was silent, and its symptom is not a subtly wrong number
+ * but **every dump getting refused**, which a reader would sooner blame on their
+ * own invocation than on a constant. Now the lab pins equality against this
+ * export, so a bump here that is not mirrored there fails a test instead.
+ */
+const DUMP_VERSION = CRAWL_SEAM_DUMP_VERSION;
 
 /** Basename stem of a dump file; the pid (and any collision counter) follow. */
 const DUMP_BASENAME = 'crawl-timing';
@@ -337,6 +490,45 @@ export function recordCrawlPass(
 ): void {
   if (!timingEnabled) return;
   addEntry(contributorId, stratum, pass, performance.now() - startedAt);
+}
+
+/**
+ * Attribute elapsed time to one of the `ResourceRegistry` phases, under whichever
+ * arm invoked it.
+ *
+ * **No `stratum` parameter, deliberately.** A registry does not know whether it
+ * is being built for the incumbent walker or from inside a projection
+ * contributor, and a call site that names a stratum it cannot know is how the
+ * work of one arm ends up on the other's total. The answer comes from
+ * {@link withContributorStratum} instead, defaulting to `crawl`.
+ *
+ * @param contributorId - One of this module's `resource-registry:` ids
+ * @param startedAt - The value {@link crawlTimingStart} returned
+ */
+export function recordRegistryPass(contributorId: string, startedAt: number): void {
+  if (!timingEnabled) return;
+  const stratum = contributorStratum.getStore() ?? 'crawl';
+  addEntry(contributorId, stratum, CRAWL_PASS_INSIDE, performance.now() - startedAt);
+}
+
+/**
+ * Run one contributor invocation with its stratum on the async context, so any
+ * bracket reached from inside it is attributed to the projection arm.
+ *
+ * A pass-through when the seam is off: an `AsyncLocalStorage.run` per contributor
+ * is cheap, but the shipped default is "no instrumentation ran at all", and this
+ * keeps that literally true.
+ *
+ * @param stratum - The stratum the driver is running this contributor in
+ * @param run - The invocation
+ * @returns Whatever the invocation returns
+ */
+export function withContributorStratum<T>(
+  stratum: Exclude<CrawlStratum, 'crawl'>,
+  run: () => Promise<T>,
+): Promise<T> {
+  if (!timingEnabled) return run();
+  return contributorStratum.run(stratum, run);
 }
 
 /**

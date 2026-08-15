@@ -53,6 +53,20 @@
  *   one; dropping it silently would lose the only signal. It becomes a
  *   {@link CLOSURE_REFERENCE_UNRESOLVED} row anchored to the *referring* path,
  *   because that is the file an author can open.
+ * - **A reference that LEAVES the root is a different row from one that
+ *   resolves to nothing**, and telling them apart needs no oracle — only the
+ *   root, which is already in hand. Both are "no realization holds this", and
+ *   collapsing them made the useful half unreadable: a path inside the root that
+ *   nothing realizes is a defect an author can fix, while a path outside it is a
+ *   file the population was never defined over. See
+ *   {@link CLOSURE_REFERENCE_OUTSIDE_ROOT}, including the one fact that row
+ *   cannot carry.
+ * - **A reference back to `closureFrom` is silently skipped.** The root is a
+ *   member by declaration, admitted before any traversal, so a self-link has
+ *   nothing left to decide: refusing it would contradict the admission, and
+ *   holding it at the hop boundary would offer to admit a file that is already
+ *   in. This is the one place the primitive records nothing about a resolved,
+ *   in-root target, and it is `walk-link-graph.ts`'s own `skipped` verdict.
  * - **References inside a fence or a code span are never followed**, and that is
  *   not configurable. Anthropic documents that `@` import parsing skips code
  *   spans and fenced blocks; a path inside a fence is sample text, not a link.
@@ -87,6 +101,7 @@
  *   close it.
  */
 
+import { isAbsoluteAnyPlatform } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 
 import {
@@ -121,8 +136,42 @@ import { extentContextId } from './context-id.js';
 /** Every closure contributor's id begins here, so one prefix scan identifies them. */
 export const CLOSURE_CONTRIBUTOR_ID_PREFIX = 'closure:';
 
-/** A followed reference resolved to a path no realization in the base occupies. */
+/**
+ * A followed reference resolved to a path no realization in the base occupies,
+ * **and that path is inside the root**.
+ *
+ * The containment half is what {@link CLOSURE_REFERENCE_OUTSIDE_ROOT} split off,
+ * and it is what makes this code readable: a path inside the root that nothing
+ * realizes is a claim about the CORPUS — a broken link, or a file some crawl
+ * exclusion skipped — and an author can act on it. That reading was unavailable
+ * while the same code also covered every reference pointing at a perfectly
+ * healthy file in a sibling directory of the project.
+ */
 export const CLOSURE_REFERENCE_UNRESOLVED = 'CLOSURE_REFERENCE_UNRESOLVED';
+
+/**
+ * A followed reference that resolved to a path **outside the corpus root**.
+ *
+ * The counterpart of `walk-link-graph.ts`'s `outside-project`, and it needs no
+ * oracle: `relativize` already states every path against the root, and a path
+ * the root does not contain comes back `..`-prefixed. The closure has always
+ * *known* this — it simply said `CLOSURE_REFERENCE_UNRESOLVED` instead, which is
+ * true (nothing realizes it) and useless (nothing ever could; the population is
+ * defined by the root).
+ *
+ * ⚠️ **`targetExists` is null here and always will be**, which is the one place
+ * this row is weaker than the walker's. The walker `stat`s the escaping path and
+ * answers; a projection populated from one root observes nothing outside it, and
+ * this contributor does no filesystem I/O. So the two arms are comparable on
+ * WHICH paths escaped and not on whether they are there.
+ *
+ * The row names the target the way `relativize` spells it — `../…` — which is
+ * the only spelling available and the same one the walker's absolute path
+ * reduces to against the same root. `realization_conditions.path` is documented
+ * as root-relative, and a `..` prefix is that: relative to the root, and stating
+ * plainly that the target is not under it.
+ */
+export const CLOSURE_REFERENCE_OUTSIDE_ROOT = 'CLOSURE_REFERENCE_OUTSIDE_ROOT';
 
 /** The declared `closureFrom` names a path the base never realized. */
 export const CLOSURE_ROOT_ABSENT = 'CLOSURE_ROOT_ABSENT';
@@ -418,11 +467,31 @@ function hopFor(
   // document, and one that would fire on essentially every real skill.
   if (isNonLocalRef(reference.rawRef)) return undefined;
 
-  const target = resolveReference(reference.rawRef, path, walk);
-  if (target === undefined) {
+  const resolution = resolveReference(reference.rawRef, path, walk);
+  if (resolution.kind === 'outside-root') {
+    conditions.push(outsideRootCondition(walk.extentId, resolution.path, path, reference));
+    return undefined;
+  }
+  if (resolution.kind === 'unrealized') {
     conditions.push(unresolvedCondition(walk.extentId, path, resourceId, reference));
     return undefined;
   }
+  const target = resolution.row;
+  // A reference back to this extent's OWN root is a self-link, and the only
+  // honest report is silence. `closureFrom` is admitted before any traversal and
+  // outranks every rule — this module's docstring says so, and until this line
+  // that was true only because nothing ever asked: the root was seeded into the
+  // queue, so no rule ran against it, while a reference REACHING it went through
+  // the cascade like any other candidate. A rule naming the root's own basename
+  // therefore refused the extent's root, and a root reached from a member at
+  // `maxDepth` was reported as held back by a budget it was never subject to.
+  // Both rows say something false about a file that is already a member.
+  //
+  // Checked BEFORE the cascade and before the budget, which is the same
+  // precedence `admitPaths` gets and the same one `walk-link-graph.ts` gives its
+  // own self-link (`classifyExclusion` answers `skipped`, recording nothing, and
+  // never reaches the depth check in `processRegistryResource`).
+  if (target.path === walk.declaration.closureFrom) return undefined;
   // A refused target is neither admitted nor walked through: it is not a
   // member, so its own references are not this extent's edges. That pruning is
   // the whole reason a refusal is worth expressing — refusing one navigation hub
@@ -501,13 +570,29 @@ function isNonLocalRef(rawRef: string): boolean {
 }
 
 /**
+ * What one `rawRef` resolved to — three outcomes the closure must keep apart,
+ * because each is a different report.
+ *
+ * `unrealized` and `outside-root` were one case until the latter was split out:
+ * both are "no realization holds this", but only the first is a fact an author
+ * can act on. See {@link CLOSURE_REFERENCE_OUTSIDE_ROOT}.
+ */
+type ReferenceResolution =
+  /** A path the base realizes — the only outcome that can become a member. */
+  | { readonly kind: 'realized'; readonly row: ResourceRealizationRow }
+  /** A path outside the root, carried as `relativize` spells it (`../…`). */
+  | { readonly kind: 'outside-root'; readonly path: string }
+  /** Inside the root, and no realization holds it — or the href named no file. */
+  | { readonly kind: 'unrealized' };
+
+/**
  * Resolve one `rawRef` to a realization the base already holds.
  *
  * Resolution is relative to the **referring** file, so the referring path is
  * required rather than convenient. A target the base never realized resolves to
- * `undefined` — the closure is defined over what other contributors found, and
- * minting an identity for an unenumerated path would let a broken link invent a
- * member.
+ * one of the two non-member outcomes — the closure is defined over what other
+ * contributors found, and minting an identity for an unenumerated path would let
+ * a broken link invent a member.
  *
  * The ROW is returned rather than the path because the refusal matchers need
  * columns the path does not carry (`basenameLower`, and `resourceId` for the
@@ -515,16 +600,30 @@ function isNonLocalRef(rawRef: string): boolean {
  * which is the same tie-break {@link walkClosure} applies when it admits a
  * member — stated once here so the two cannot pick different rows.
  *
+ * ## Containment is decided on the RELATIVIZED path, not by a second resolver
+ *
+ * The escape test is `relativize`'s own output — the string this function was
+ * already computing to key `byPath` — because that is the one spelling the whole
+ * projection states paths in. Re-deriving containment from the absolute paths
+ * would be a parallel implementation of a rule `resolveLocalHref` and
+ * `relativize` already settle between them, which is exactly the split that once
+ * bundled a de-linked file.
+ *
+ * ⚠️ `resolveLocalHref`'s own `absolute_escapes_root` verdict is deliberately
+ * NOT reported as `outside-root`: that branch returns the href and no path, so
+ * naming a target would mean resolving the href a second time, here, against a
+ * rule this module does not own. It stays `unrealized`, which is what it was.
+ *
  * @param rawRef - The reference exactly as authored
  * @param fromPath - Root-relative path of the file holding the reference
  * @param walk - The traversal's indexed inputs
- * @returns The target's first realization row, or undefined when nothing realizes it
+ * @returns Which of the three outcomes this reference has
  */
 function resolveReference(
   rawRef: string,
   fromPath: string,
   walk: WalkContext,
-): ResourceRealizationRow | undefined {
+): ReferenceResolution {
   // The one genuinely hot bracket in this module, and the reason it is here: the
   // module docstring claims this contributor "performs no filesystem I/O of its
   // own" with ONE stated exception — `resolveLocalHref`'s root-absolute branch
@@ -535,11 +634,42 @@ function resolveReference(
   try {
     const { root } = walk.base;
     const resolution = resolveLocalHref(rawRef, joinRoot(root, fromPath), root);
-    if (resolution.kind !== 'resolved') return undefined;
-    return walk.byPath.get(relativize(resolution.resolvedPath, root))?.[0];
+    if (resolution.kind !== 'resolved') return { kind: 'unrealized' };
+    const relative = relativize(resolution.resolvedPath, root);
+    if (escapesRoot(relative)) return { kind: 'outside-root', path: relative };
+    const row = walk.byPath.get(relative)?.[0];
+    return row === undefined ? { kind: 'unrealized' } : { kind: 'realized', row };
   } finally {
     recordCrawlPass(CRAWL_CLOSURE_RESOLVE_ID, 'closure', CRAWL_PASS_INSIDE, startedAt);
   }
+}
+
+/**
+ * Does a path stated against the root fall OUTSIDE it?
+ *
+ * Two spellings, because `safePath.relative` has two ways of saying "not under
+ * this root": a `..`-prefixed relative path in the ordinary case, and an
+ * ABSOLUTE path when no relative route exists at all — which on Windows is what
+ * a different drive letter produces. Testing only the first would silently admit
+ * `D:/elsewhere/doc.md` as though it were a root-relative member, on the one
+ * platform where nobody would see it fail.
+ *
+ * `..` alone is the root's own parent directory and is outside by the same rule;
+ * it is spelled separately because it carries no trailing separator to match.
+ *
+ * The parameter is named `normalized…` for the same reason `isUnderRoot`'s are
+ * in `utils.ts`: the name states the precondition this function does not check,
+ * and it is what discharges `local/no-path-startswith`. `relativize` is the only
+ * producer of this argument and it forward-slashes on the way out.
+ *
+ * @param normalizedRelative - A forward-slashed path already stated against the
+ *   root by `relativize`
+ * @returns True when the root does not contain it
+ */
+function escapesRoot(normalizedRelative: string): boolean {
+  return normalizedRelative === '..'
+    || normalizedRelative.startsWith('../')
+    || isAbsoluteAnyPlatform(normalizedRelative);
 }
 
 /**
@@ -893,6 +1023,49 @@ function unresolvedCondition(
     message: `Reference "${reference.rawRef}" at line ${reference.line} resolves to no realization in this projection,`
       + ' so the closure could not admit it as a member',
     resourceId,
+    ...referenceProvenance(fromPath, reference),
+    targetExists: null,
+    matchedPattern: null,
+    matchedPayload: null,
+  };
+}
+
+/**
+ * The condition recording a reference that resolved OUT of the corpus root.
+ *
+ * Anchored to the **target**, unlike {@link unresolvedCondition} and for that
+ * function's own reason read the other way round: an escaping reference names a
+ * real place a reader can go and look, it is merely one this population does not
+ * cover. That anchoring is also what makes the row comparable with
+ * `walk-link-graph.ts`'s `outside-project` row, which names the same file.
+ *
+ * `resourceId` is **null**: the population never minted an identity for a path
+ * outside its own root, and minting one here would let a reference create a
+ * resource — the same rule {@link unresolvedCondition} follows and for the same
+ * reason. `targetExists` is null for the reason
+ * {@link CLOSURE_REFERENCE_OUTSIDE_ROOT} states: nothing observed it, and this
+ * contributor does no filesystem I/O.
+ *
+ * @param extentId - The closure extent
+ * @param targetPath - The escaping target, as `relativize` spells it against the root
+ * @param fromPath - Root-relative path of the file holding the reference
+ * @param reference - The reference that pointed out of the root
+ * @returns The condition row
+ */
+function outsideRootCondition(
+  extentId: string,
+  targetPath: string,
+  fromPath: string,
+  reference: BlobReferenceRow,
+): RealizationConditionRow {
+  return {
+    extentId,
+    path: targetPath,
+    code: CLOSURE_REFERENCE_OUTSIDE_ROOT,
+    severity: 'info',
+    message: `Reference "${reference.rawRef}" at line ${reference.line} resolves outside this projection's root,`
+      + ' so no contributor could ever realize it and the closure cannot admit it as a member',
+    resourceId: null,
     ...referenceProvenance(fromPath, reference),
     targetExists: null,
     matchedPattern: null,

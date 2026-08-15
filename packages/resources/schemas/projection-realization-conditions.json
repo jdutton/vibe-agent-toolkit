@@ -12,7 +12,7 @@
         "path": {
           "type": "string",
           "minLength": 1,
-          "description": "Root-relative path the condition is about"
+          "description": "Path the condition is about, stated against the root. Root-relative for every condition about something the projection realizes, and \"../\"-prefixed for the one class that is deliberately about a path OUTSIDE the root (CLOSURE_REFERENCE_OUTSIDE_ROOT): a reference may name a real file the population was never defined over, and the row has to be able to name it. Never a bare absolute path."
         },
         "code": {
           "type": "string",
@@ -79,7 +79,7 @@
             "boolean",
             "null"
           ],
-          "description": "Whether the referenced target existed when the contributor classified it. Null when nothing observed the target — including CLOSURE_REFERENCE_UNRESOLVED, where \"no realization holds this path\" is a statement about the projection and not about the filesystem."
+          "description": "Whether the referenced target existed when the contributor classified it. Null when nothing observed the target — including CLOSURE_REFERENCE_UNRESOLVED, where \"no realization holds this path\" is a statement about the projection and not about the filesystem, and CLOSURE_REFERENCE_OUTSIDE_ROOT, where the target lies outside the population entirely. A consumer comparing this column against a walker that stats the path must exclude those two codes rather than read the null as \"absent\"."
         },
         "matchedPattern": {
           "anyOf": [

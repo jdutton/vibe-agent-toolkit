@@ -37,6 +37,7 @@ import {
   __setCrawlTimingForTest,
   __writeCrawlTimingDumpForTest,
   CRAWL_PASS_INSIDE,
+  CRAWL_SEAM_DUMP_VERSION,
   crawlTimingStart,
   recordCrawlPass,
 } from '@vibe-agent-toolkit/resources';
@@ -126,6 +127,24 @@ describe('crawl dump contract', () => {
     // with no seam, so the lab must compile against a vat that has never heard
     // of this. That only holds if the spelling is pinned here.
     expect(CRAWL_TIMING_DIR_ENV).toBe('VAT_CRAWL_TIMING');
+  });
+
+  it('pins this reader to the version the seam actually writes', () => {
+    // The env var above is deliberately NOT imported from the writer, because an
+    // A/B arm may be a seamless build. The VERSION is the opposite case, and the
+    // difference is worth stating: the reader hard-refuses any version it does
+    // not recognise, so when these two drift the symptom is not a subtly wrong
+    // number — it is EVERY dump this build writes being rejected, which reads to
+    // the operator as a broken invocation rather than a stale constant. Two
+    // unrelated literals in two packages could drift silently and nothing would
+    // fail until someone tried to measure. So this one is pinned against the
+    // writer itself.
+    //
+    // ⚠️ This asserts the two are EQUAL, not that either equals a literal. A
+    // literal on both sides would still pass while both were wrong together, and
+    // would additionally have to be edited in two places on every bump — which
+    // is precisely the drift this exists to prevent.
+    expect(CRAWL_DUMP_VERSION).toBe(CRAWL_SEAM_DUMP_VERSION);
   });
 
   it('accepts a dump with no rows at all', () => {

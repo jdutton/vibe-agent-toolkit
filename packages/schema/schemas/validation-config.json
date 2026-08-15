@@ -19,6 +19,7 @@
             "enum": [
               "LINK_OUTSIDE_PROJECT",
               "LINK_TARGETS_DIRECTORY",
+              "LINK_TO_UNBUNDLED_DIRECTORY",
               "LINK_TO_NAVIGATION_FILE",
               "LINK_TO_AGENT_INSTRUCTION_FILE",
               "LINK_TO_GITIGNORED_FILE",
@@ -28,6 +29,7 @@
               "LINK_TO_SKILL_DEFINITION",
               "LINK_FROM_NON_ROUTABLE_FILE",
               "LINK_DROPPED_BY_DEPTH",
+              "LINK_EXCLUDED_BY_PATTERN",
               "PACKAGED_UNREFERENCED_FILE",
               "PACKAGED_AGENT_INSTRUCTION_FILE",
               "TREE_PROVENANCE_INDETERMINATE",
@@ -140,6 +142,7 @@
             "enum": [
               "LINK_OUTSIDE_PROJECT",
               "LINK_TARGETS_DIRECTORY",
+              "LINK_TO_UNBUNDLED_DIRECTORY",
               "LINK_TO_NAVIGATION_FILE",
               "LINK_TO_AGENT_INSTRUCTION_FILE",
               "LINK_TO_GITIGNORED_FILE",
@@ -149,6 +152,7 @@
               "LINK_TO_SKILL_DEFINITION",
               "LINK_FROM_NON_ROUTABLE_FILE",
               "LINK_DROPPED_BY_DEPTH",
+              "LINK_EXCLUDED_BY_PATTERN",
               "PACKAGED_UNREFERENCED_FILE",
               "PACKAGED_AGENT_INSTRUCTION_FILE",
               "TREE_PROVENANCE_INDETERMINATE",

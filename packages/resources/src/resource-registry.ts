@@ -17,6 +17,13 @@ import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, FsLookupCache, 
 import { calculateChecksumFromContent } from './checksum.js';
 import { getCollectionsForFile } from './collection-matcher.js';
 import { parserKindForPath, readContentWithKey } from './content-key.js';
+import {
+  CRAWL_REGISTRY_ADD_RESOURCE_ID,
+  CRAWL_REGISTRY_ENUMERATE_ID,
+  CRAWL_REGISTRY_RESOLVE_LINKS_ID,
+  crawlTimingStart,
+  recordRegistryPass,
+} from './crawl-timing.js';
 import type { DeferredArtifacts } from './deferred-artifacts.js';
 import { ExternalLinkValidator } from './external-link-validator.js';
 import {
@@ -515,6 +522,12 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * Initializes all indexes (by path, ID, name, checksum) from the provided resources.
    * Throws if any resources have duplicate IDs.
    *
+   * **Deliberately uncharged by the crawl-timing seam.** Unlike {@link crawl} and
+   * {@link addResource}, this reads nothing and parses nothing — the caller
+   * already paid for the resources it hands over, and its one shipped use is the
+   * packager's registry over *output* it has just written. Charging it would put
+   * post-build accounting on the incumbent crawler's total.
+   *
    * @param baseDir - Base directory for resources
    * @param resources - Array of resource metadata
    * @param options - Additional options
@@ -594,6 +607,23 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * @returns The parsed resource metadata
    * @throws Error if file cannot be read or parsed
    *
+   * ## Why this method is a wrapper
+   *
+   * It is one of the three points where **the incumbent crawler's preparation is
+   * charged to `crawl-timing.ts`** — building this registry is what
+   * `walkLinkGraph` consumes, and until that was bracketed the seam compared the
+   * projection's whole crawl against the walker's traversal alone (see that
+   * module's header). The bracket lives here, at the grain every construction
+   * route funnels through, rather than at the six call sites that build a
+   * registry: six copies would be six chances to disagree, and a seventh site
+   * would silently escape the gate.
+   *
+   * The work moved into {@link admitResource} so the bracket could wrap it
+   * whole without re-indenting it, and the `finally` charges a FAILED admission
+   * too: a duplicate-id drop has already paid the read and the parse by the time
+   * it is refused, and a seam that skipped it would report a corpus of collisions
+   * as nearly free.
+   *
    * @example
    * ```typescript
    * const resource = await registry.addResource('./docs/README.md');
@@ -601,6 +631,24 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * ```
    */
   async addResource(filePath: string): Promise<ResourceMetadata> {
+    const startedAt = crawlTimingStart();
+    try {
+      return await this.admitResource(filePath);
+    } finally {
+      recordRegistryPass(CRAWL_REGISTRY_ADD_RESOURCE_ID, startedAt);
+    }
+  }
+
+  /**
+   * Read, parse, key and index one file — {@link addResource} minus its timing
+   * bracket.
+   *
+   * @param filePath - Path to the markdown file (will be normalized to absolute)
+   * @returns The parsed resource metadata
+   * @throws Error if file cannot be read or parsed
+   * @private
+   */
+  private async admitResource(filePath: string): Promise<ResourceMetadata> {
     // Normalize path to absolute
     const absolutePath = safePath.resolve(filePath);
 
@@ -775,7 +823,13 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       filesOnly: true,
     };
 
+    // The enumeration ALONE is charged here, not the whole method: `addResources`
+    // below charges itself per file (see {@link addResource}), and a bracket
+    // around both would produce a row that contains the other one. The two are
+    // additive as written, which is what lets the incumbent arm be totalled.
+    const enumerationStartedAt = crawlTimingStart();
     const files = await crawlDirectory(crawlOptions);
+    recordRegistryPass(CRAWL_REGISTRY_ENUMERATE_ID, enumerationStartedAt);
 
     // Add all found files
     return await this.addResources(files);
@@ -1493,6 +1547,12 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * ```
    */
   resolveLinks(): void {
+    // The third of the incumbent's charged phases, and the last one before
+    // `walkLinkGraph` runs: the walk follows `resolvedId`, so this is the edge
+    // list being built. Bracketed linearly rather than in a `finally` — unlike an
+    // admission, a throw out of here is a defect that ends the run, so there is no
+    // "it failed but it cost something" case to account for.
+    const startedAt = crawlTimingStart();
     for (const resource of this.resourcesByPath.values()) {
       for (const link of resource.links) {
         if (link.type === 'local_file') {
@@ -1512,6 +1572,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         }
       }
     }
+    recordRegistryPass(CRAWL_REGISTRY_RESOLVE_LINKS_ID, startedAt);
   }
 
   /**

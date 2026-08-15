@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import type { ExtentContribution } from '../src/projection/contributor.js';
 import {
   CLOSURE_DEPTH_EXCEEDED,
+  CLOSURE_REFERENCE_OUTSIDE_ROOT,
   CLOSURE_REFERENCE_UNRESOLVED,
   CLOSURE_ROOT_ABSENT,
   ClosureExtentContributor,
@@ -254,6 +255,45 @@ const CYCLE: readonly FixtureFile[] = [
   { path: DOC_B, refs: [{ rawRef: 'c.md' }] },
   { path: DOC_C, refs: [{ rawRef: 'SKILL.md' }] },
 ];
+
+/**
+ * Another root document, under a DIFFERENT extent — the sibling that makes the
+ * self-link cases falsifiable.
+ *
+ * A fixture with only a self-link cannot tell "a reference to the extent's own
+ * root is skipped" from "the rule was dropped": both admit everything and record
+ * nothing. This path is caught by the very same basename rule, so every case
+ * below asserts one silence AND one refusal.
+ */
+const DOC_SIBLING_ROOT = 'skills/bar/SKILL.md';
+
+/** The basename both root documents share — what a `skill-definition` rule refuses. */
+const ROOT_BASENAME = 'SKILL.md';
+
+/**
+ * `SKILL.md → b.md`, and `b.md` links BACK to the root and ACROSS to a sibling
+ * root.
+ *
+ * The two references differ in exactly one respect — which root document they
+ * name — so any verdict that treats them alike is visible.
+ */
+const SELF_LINK: readonly FixtureFile[] = [
+  { path: ROOT_DOC, refs: [{ rawRef: 'b.md' }] },
+  { path: DOC_B, refs: [{ rawRef: 'SKILL.md' }, { rawRef: '../bar/SKILL.md' }] },
+  { path: DOC_SIBLING_ROOT, refs: [] },
+];
+
+/** A reference climbing out of {@link ROOT} entirely, as authored. */
+const OUTSIDE_REF = '../../../outside/x.md';
+
+/**
+ * The same target, as `relativize` spells it against the root — `..`-prefixed,
+ * because there is no root-relative spelling of a path outside the root.
+ *
+ * It is what `walkLinkGraph`'s `outside-project` row names too, once that row's
+ * absolute path is stated against the same root.
+ */
+const OUTSIDE_PATH = '../outside/x.md';
 
 /**
  * A declaration as it arrives from config: a plain JSON value, never a
@@ -715,6 +755,46 @@ describe('ClosureExtentContributor', () => {
     expect(memberPaths(contribution)).toEqual([ROOT_DOC, DOC_B, DOC_C]);
   });
 
+  it('says NOTHING about a reference back to its own closureFrom, and still refuses a SIBLING root', async () => {
+    // The docstring has always claimed `closureFrom` is admitted the way an
+    // `admitPaths` entry is — "an explicit declaration outranks a net". It was
+    // true only by accident: the root is seeded into the queue before any rule
+    // runs, so nothing ever asked. A reference back to it DID reach `refusalOf`,
+    // and a rule naming the root's basename refused the extent's own root — a
+    // condition row about a file that is already a member, which every consumer
+    // reads as a contradiction.
+    //
+    // The sibling root is the control. Both references name a `SKILL.md`; only
+    // one names THIS extent's root, and the rule must still catch the other —
+    // otherwise "no row for the root" would also be satisfied by a declaration
+    // whose rule matched nothing at all.
+    const contribution = await contributeOver(SELF_LINK, declarationOf({
+      refusals: [refusalRule(LABEL_BASENAME, { basenames: [ROOT_BASENAME] })],
+    }));
+
+    expect(memberPaths(contribution)).toEqual([ROOT_DOC, DOC_B]);
+    expect(conditionCodeFor(contribution, ROOT_DOC)).toBeUndefined();
+    expect(conditionCodeFor(contribution, DOC_SIBLING_ROOT)).toBe(LABEL_BASENAME);
+    expectContributionRowsValid(contribution);
+  });
+
+  it('holds no self-link at the hop boundary either — the root is a member, not a candidate', async () => {
+    // The second half, and the one only a BOUNDED declaration reaches. With
+    // `maxDepth: 1`, `b.md` sits on the frontier, so every reference out of it is
+    // resolved and judged (that is the whole of the admission-vs-enumeration
+    // split). The reference back to the root would then be reported as
+    // `CLOSURE_DEPTH_EXCEEDED` — "widen maxDepth and this arrives" — about the
+    // one file the declaration already named.
+    //
+    // The sibling root is the control again: it IS held back by the budget, so a
+    // frontier that fell silent for everything would fail here.
+    const contribution = await contributeOver(SELF_LINK, declarationOf({ maxDepth: 1 }));
+
+    expect(memberPaths(contribution)).toEqual([ROOT_DOC, DOC_B]);
+    expect(conditionCodeFor(contribution, ROOT_DOC)).toBeUndefined();
+    expect(conditionCodeFor(contribution, DOC_SIBLING_ROOT)).toBe(CLOSURE_DEPTH_EXCEEDED);
+  });
+
   it('follows only the syntactic forms the declaration names', async () => {
     const files: readonly FixtureFile[] = [
       { path: ROOT_DOC, refs: [{ rawRef: 'b.md', syntacticForm: 'at-prefixed' }] },
@@ -772,6 +852,67 @@ describe('ClosureExtentContributor', () => {
     // about this projection's population. The contributor did not stat anything,
     // so `false` would be a claim about the disk that nothing here checked.
     expect(row?.targetExists).toBeNull();
+    expect(row?.matchedPattern).toBeNull();
+    expect(row?.matchedPayload).toBeNull();
+  });
+
+  it('separates a reference that LEAVES THE ROOT from one that merely resolves to nothing', async () => {
+    // Two references, neither of which any realization holds, and the closure
+    // used to report both as `CLOSURE_REFERENCE_UNRESOLVED` — "no realization in
+    // this projection" — which is a true statement that hides the one fact the
+    // reader needs. `gone.md` is a broken link an author should fix; the other
+    // target may exist perfectly well and simply lies outside the corpus the
+    // projection was populated from. `walkLinkGraph` has always told them apart
+    // (`missing-target` vs `outside-project`), and the closure could too: the
+    // root is in hand and containment is path math, not an oracle.
+    //
+    // Both references sit in ONE fixture so the split is visible as a split. A
+    // case that asserted only the escaping reference could not tell a correct
+    // discrimination from a rename of every unresolved row.
+    const files: readonly FixtureFile[] = [
+      { path: ROOT_DOC, refs: [{ rawRef: OUTSIDE_REF }, { rawRef: 'gone.md' }] },
+    ];
+    const contribution = await contributeOver(files, declarationOf());
+
+    expect(memberPaths(contribution)).toEqual([ROOT_DOC]);
+    // The whole condition table, as `path → code` pairs, rather than two lookups.
+    // A lookup for a row that is not there returns `undefined`, and so does an
+    // unimplemented code constant — so `expect(lookup).toBe(CODE)` passes
+    // VACUOUSLY before the split exists. Comparing the table cannot: it names
+    // both rows, and the pre-split answer (two `CLOSURE_REFERENCE_UNRESOLVED`
+    // rows anchored on the referrer) is a different table.
+    expect(contribution.conditions.map((row) => `${row.path} -> ${row.code}`)).toEqual([
+      `${OUTSIDE_PATH} -> ${CLOSURE_REFERENCE_OUTSIDE_ROOT}`,
+      `${ROOT_DOC} -> ${CLOSURE_REFERENCE_UNRESOLVED}`,
+    ]);
+    expectContributionRowsValid(contribution);
+  });
+
+  it('anchors the outside-root row on the TARGET, and observes nothing about it', async () => {
+    // Anchored to the target, unlike `CLOSURE_REFERENCE_UNRESOLVED` and for that
+    // row's own reason read the other way round: an escaping reference names a
+    // real place on disk that this population simply does not cover, so the row
+    // CAN name the file the decision was about — which is also the file
+    // `walkLinkGraph`'s `outside-project` row names.
+    const files: readonly FixtureFile[] = [
+      { path: ROOT_DOC, refs: [{ rawRef: 'b.md' }, { rawRef: `${OUTSIDE_REF}#anchor` }] },
+      { path: DOC_B, refs: [] },
+    ];
+    const row = (await contributeOver(files, declarationOf())).conditions[0];
+
+    expect(row?.path).toBe(OUTSIDE_PATH);
+    expect(row?.sourcePath).toBe(ROOT_DOC);
+    expect(row?.sourceLine).toBe(2);
+    expect(row?.sourceRef).toBe(`${OUTSIDE_REF}#anchor`);
+    // Null, never false. Nothing outside the root is realized here, and this
+    // contributor stats nothing — so the projection has no answer, which is
+    // exactly what the column's null means. It is also why an outside-root row is
+    // NOT compared against the walker's `targetExists`: the walker DID stat it.
+    expect(row?.targetExists).toBeNull();
+    // No identity either: the population never minted one for a path it does not
+    // cover, and inventing one here would let a link outside the corpus create a
+    // resource.
+    expect(row?.resourceId).toBeNull();
     expect(row?.matchedPattern).toBeNull();
     expect(row?.matchedPayload).toBeNull();
   });

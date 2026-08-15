@@ -15,6 +15,7 @@ import { ClaudePluginSchema } from '../schemas/claude-plugin.js';
 
 import {
 	extractClaudeSkillInventory,
+	NO_GIT_TRACKER,
 	type GitTrackerSource,
 	type SharedRegistrySource,
 } from './extract-skill.js';
@@ -271,8 +272,20 @@ async function discoverSkills(
 	// function of each skill's own project root (skills under one plugin can sit in
 	// different repositories), and the caller — not this package — owns the per-root
 	// cache behind it.
+	//
+	// ⚠️ THIS IS WHERE THE OBLIGATION CURRENTLY STOPS. `extractClaudeSkillInventory`
+	// requires a source, so the tracker-less walk must be NAMED — but this function's
+	// own parameter is still optional, and `?? NO_GIT_TRACKER` is what turns an
+	// omission back into that state. Callers that omit it today: `extract-install.ts`
+	// (the `vat inventory --user` lane, every cached plugin) and `extract-marketplace.ts`
+	// (which has no such parameter to pass on at all). Pushing required-ness up to them
+	// is the follow-up; until it lands, "the skill extractor requires a source" is a
+	// statement about THIS file, not about the plugin lane as a whole.
 	for (const skillMd of await collectSkillMdPaths(absolute, shape, rootSkillMd)) {
-		const inv = await extractClaudeSkillInventory(skillMd, resolveSharedRegistry, gitTrackerSource);
+		const inv = await extractClaudeSkillInventory(skillMd, {
+			sharedRegistry: resolveSharedRegistry,
+			gitTrackerSource: gitTrackerSource ?? NO_GIT_TRACKER,
+		});
 		for (const err of inv.parseErrors) parseErrors.push(err);
 		skillInventories.push(inv);
 	}

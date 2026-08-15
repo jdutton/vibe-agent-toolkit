@@ -61,9 +61,22 @@ export const CRAWL_TIMING_DIR_ENV = 'VAT_CRAWL_TIMING';
  * is refused, because reading it with this build's assumptions would produce
  * numbers whose meaning nobody can state.
  *
+ * ⚠️ This constant is one half of a CROSS-PACKAGE pair: the writing half is
+ * `DUMP_VERSION` in `@vibe-agent-toolkit/resources`' `crawl-timing.ts`. They are
+ * two literals in two packages with no type relating them, so they can drift
+ * silently — and the symptom is not a subtle wrong number, it is that **every
+ * dump this build writes gets refused** and the facet reports nothing. That is a
+ * failure mode a reader would blame on their own invocation. `crawl-timing.test.ts`
+ * pins them equal for exactly that reason; do not delete that assertion.
+ *
  * 1 — first version.
+ * 2 — layout unchanged, MEANING changed: a `crawl` total is now the walker's
+ *     traversal *plus* the registry build that feeds it. Before this, the
+ *     projection arm was charged for its preparation (`base`) while the
+ *     incumbent arm was charged for traversal only, so the two arms of the
+ *     side-by-side this facet exists to render were not commensurable.
  */
-export const CRAWL_DUMP_VERSION = 1;
+export const CRAWL_DUMP_VERSION = 2;
 
 /** One row as the seam wrote it. */
 export type CrawlDumpEntry = CrawlEntryStats;

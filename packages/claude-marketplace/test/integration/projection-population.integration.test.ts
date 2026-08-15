@@ -178,7 +178,13 @@ function buildRegistry(skillPaths: readonly string[]): {
   for (const skillPath of skillPaths) {
     add(new SkillExtentContributor(skillPath));
     parameters[skillExtentContributorId(skillPath)] =
-      skillExtentDeclaration({}, skillPath) as unknown as JsonValue;
+      // `false`, stated rather than defaulted: the gitignore refusal rule is
+      // conditional on a usable `GitTracker`, and `zone_provenance.parameterSet`
+      // must record the declaration this population ACTUALLY ran under. A run
+      // that hands the base a usable tracker records `true` and a cascade one
+      // rule longer — so a silent default here would let the recorded parameters
+      // disagree with the extent they claim to describe.
+      skillExtentDeclaration({}, skillPath, false) as unknown as JsonValue;
   }
 
   // Registered AFTER the skill contributors on purpose: `PluginExtentContributor`

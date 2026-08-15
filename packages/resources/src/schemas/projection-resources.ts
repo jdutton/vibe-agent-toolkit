@@ -245,8 +245,9 @@ export type ResourceExtentRow = z.infer<typeof ResourceExtentRowSchema>;
  * ## The six provenance columns, and why they are columns rather than a table
  *
  * A condition that a **reference** provoked can say which reference. The
- * closure contributor's two reference-borne codes are the motivating pair —
- * `CLOSURE_REFERENCE_UNRESOLVED` and every refusal label a declaration
+ * closure contributor's reference-borne codes are the motivating set —
+ * `CLOSURE_REFERENCE_UNRESOLVED`, `CLOSURE_REFERENCE_OUTSIDE_ROOT`,
+ * `CLOSURE_DEPTH_EXCEEDED` and every refusal label a declaration
  * supplies — and they are exactly the facts `walk-link-graph.ts`'s
  * `LinkResolution` already carries (`sourcePath`, `sourceLine`, `linkHref`,
  * `targetExists`, `matchedRule`), which `walker-to-issues.ts` turns into an
@@ -287,7 +288,8 @@ export type ResourceExtentRow = z.infer<typeof ResourceExtentRowSchema>;
  */
 export const RealizationConditionRowSchema = z.object({
   extentId: z.string().min(1).describe(EXTENT_FK_DESC),
-  path: z.string().min(1).describe('Root-relative path the condition is about'),
+  path: z.string().min(1)
+    .describe('Path the condition is about, stated against the root. Root-relative for every condition about something the projection realizes, and "../"-prefixed for the one class that is deliberately about a path OUTSIDE the root (CLOSURE_REFERENCE_OUTSIDE_ROOT): a reference may name a real file the population was never defined over, and the row has to be able to name it. Never a bare absolute path.'),
   code: z.string().min(1).describe('An enum member, e.g. "REALIZATION_PATH_COLLISION" — open vocabulary'),
   severity: ProjectionConditionSeveritySchema,
   message: z.string(),
@@ -299,7 +301,7 @@ export const RealizationConditionRowSchema = z.object({
   sourceRef: z.string().nullable()
     .describe('The reference exactly as authored (blob_references.rawRef — anchor and all), or null when no reference provoked this condition. Not min(1): an empty href is authorable markdown.'),
   targetExists: z.boolean().nullable()
-    .describe('Whether the referenced target existed when the contributor classified it. Null when nothing observed the target — including CLOSURE_REFERENCE_UNRESOLVED, where "no realization holds this path" is a statement about the projection and not about the filesystem.'),
+    .describe('Whether the referenced target existed when the contributor classified it. Null when nothing observed the target — including CLOSURE_REFERENCE_UNRESOLVED, where "no realization holds this path" is a statement about the projection and not about the filesystem, and CLOSURE_REFERENCE_OUTSIDE_ROOT, where the target lies outside the population entirely. A consumer comparing this column against a walker that stats the path must exclude those two codes rather than read the null as "absent".'),
   matchedPattern: z.string().min(1).nullable()
     .describe('The FIRST glob declared by the refusal rule that matched — the rule\'s identifying pattern, read the same way packaging-validator.ts reads matchedRule.patterns[0]. Names WHICH rule, not which of its globs fired; the code column already says why. Null when the matching rule declares no patterns (it refused by basename, kind or flag), and for every condition no refusal rule produced.'),
   matchedPayload: JsonValueSchema

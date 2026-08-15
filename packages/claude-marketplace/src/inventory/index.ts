@@ -7,6 +7,8 @@ export {
 export {
 	crawlSkillLinkRegistry,
 	extractClaudeSkillInventory,
+	NO_GIT_TRACKER,
+	type ClaudeSkillInventoryOptions,
 	type GitTrackerSource,
 	type SharedRegistrySource,
 } from './extract-skill.js';

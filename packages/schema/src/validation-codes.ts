@@ -44,6 +44,35 @@ export const CODE_REGISTRY = {
     'Point the `files:` source (or other single-file reference) at a specific file, not a directory. Navigational prose links to a directory are valid and do not trigger this code.',
     'link_targets_directory',
   ),
+  // The prose-link sibling of LINK_TARGETS_DIRECTORY, and deliberately NOT that
+  // code. The walker classifies a link resolving to a directory as
+  // `directory-target`, and until now that classification reached no code at all:
+  // the verdict engine returned `null` for a non-typed-slot directory and the
+  // issue lane filtered it out, so an author whose link pointed at a directory
+  // got the directory dropped from the bundle and no finding of any kind.
+  //
+  // Reusing LINK_TARGETS_DIRECTORY was not available: its own `fix` says in as
+  // many words that navigational prose links to a directory do not trigger it,
+  // so emitting it here would hand a reader a finding that denies its own
+  // applicability — and its `error` default would fail exactly the builds #126
+  // (decision record D7) decided to allow.
+  //
+  // `warning`, which is the severity this family already uses for "the target is
+  // legitimate at source, but it did not travel, so the packaged link points at
+  // nothing" — LINK_TO_NAVIGATION_FILE and LINK_FROM_NON_ROUTABLE_FILE are the
+  // same shape and both warn. `error` is reserved here for edges that cannot be
+  // right at source (outside the project, a leak, a missing target); a directory
+  // link resolves perfectly well for a reader browsing the repo, which is why
+  // the report is about packaging, not about the link being malformed.
+  LINK_TO_UNBUNDLED_DIRECTORY: entry(
+    'warning',
+    'Markdown link targets a directory; directories are never bundled, so the target did not ship and the packaged link points at nothing.',
+    // Deliberately does NOT offer "point it at the directory's README.md": VAT
+    // does not resolve a directory to an index file (decision record D7), so
+    // advice phrased as if it did would describe a mechanism that is not there.
+    'Link the specific file inside the directory that the prose means — a directory cannot be packaged, and VAT does not resolve one to an index file. Set severity.LINK_TO_UNBUNDLED_DIRECTORY to ignore if the link is meant for a reader browsing the repository rather than for the packaged bundle.',
+    'link_to_unbundled_directory',
+  ),
   LINK_TO_NAVIGATION_FILE: entry(
     'warning',
     'Markdown link targets a navigation file (README.md, index.md, etc.) which was excluded from the bundle.',
@@ -117,6 +146,28 @@ export const CODE_REGISTRY = {
     'Walker stopped following links at the configured linkFollowDepth; this link was not bundled.',
     'Raise linkFollowDepth, bundle the file via files config, declare the drop intentional with validation.allow, or exclude via excludeReferencesFromBundle.rules.',
     'link_dropped_by_depth',
+  ),
+  // The receipt for an exclusion the author asked for. Its sibling
+  // LINK_DROPPED_BY_DEPTH reports a drop the author configured a NUMBER for and
+  // may not have meant; this one reports a drop they wrote a PATTERN for and
+  // almost certainly did. That is the whole severity argument.
+  //
+  // `info`, not `warning`: warning-level noise on a working configuration is how
+  // a report gets ignored, and every `excludeReferencesFromBundle` rule fires on
+  // every build by design. But silence was worse — the lane emitted nothing at
+  // all, so an author asking "why did this file not ship?" got no answer from
+  // the tool that knew. `info` is the posture this registry already uses for
+  // "true, and only interesting when you are looking" (LINK_DEFERRED_ARTIFACT,
+  // FILES_GLOB_MATCHED_NOTHING).
+  //
+  // The per-issue message names the patterns that matched, supplied by the
+  // emitting lane from the walker's own `matchedRule` record — with several
+  // rules configured, knowing that one of them fired is not an answer.
+  LINK_EXCLUDED_BY_PATTERN: entry(
+    'info',
+    'A reference was excluded from the bundle by an excludeReferencesFromBundle rule this project declared; the target did not ship.',
+    'No action needed if the exclusion is intended — the rule did exactly what it was configured to do. If the target should have shipped, narrow or remove the matching excludeReferencesFromBundle rule, or declare the file under skills.config.<name>.files. Set severity.LINK_EXCLUDED_BY_PATTERN to ignore to drop these from the report entirely.',
+    'link_excluded_by_pattern',
   ),
   PACKAGED_UNREFERENCED_FILE: entry(
     'error',

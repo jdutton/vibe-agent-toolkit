@@ -42,9 +42,14 @@ const SCENARIOS: Scenario[] = [
     expect: 'LINK_OUTSIDE_PROJECT',
   },
   {
-    intent: 'navigational prose link resolving to a directory (valid, #126)',
+    // Valid (#126) and REPORTED. The two are not in tension: the directory is a
+    // legitimate thing to link to and is never bundled, so the finding is about
+    // the packaged link pointing at nothing, at `warning` rather than `error`.
+    // This row expected `null` while the code returned `null`, which is exactly
+    // what a silence looks like from inside its own test.
+    intent: 'navigational prose link resolving to a directory (valid, #126, still reported)',
     ctx: { subject: 'edge', fileKind: 'directory' },
-    expect: null,
+    expect: 'LINK_TO_UNBUNDLED_DIRECTORY',
   },
   {
     intent: 'typed files: source slot resolving to a directory',
@@ -93,9 +98,12 @@ const SCENARIOS: Scenario[] = [
     expect: 'LINK_TO_AGENT_INSTRUCTION_FILE',
   },
   {
-    intent: 'reference excluded by an author-configured pattern (valid)',
+    // Intentional, hence `info` — but a receipt, not a silence. "The author
+    // asked for it" argues down the severity; it never argued for emitting
+    // nothing, which is what the engine did.
+    intent: 'reference excluded by an author-configured pattern (intentional, reported at info)',
     ctx: { subject: 'edge', patternExcluded: true },
-    expect: null,
+    expect: 'LINK_EXCLUDED_BY_PATTERN',
   },
   {
     intent: 'link dropped because it lay beyond linkFollowDepth',
@@ -217,6 +225,8 @@ describe('rule-engine: anti-workaround invariant', () => {
   const ENGINE_CODES: IssueCode[] = [
     'LINK_OUTSIDE_PROJECT',
     'LINK_TARGETS_DIRECTORY',
+    'LINK_TO_UNBUNDLED_DIRECTORY',
+    'LINK_EXCLUDED_BY_PATTERN',
     'LINK_TO_NAVIGATION_FILE',
     'LINK_TO_GITIGNORED_FILE',
     'LINK_MISSING_TARGET',

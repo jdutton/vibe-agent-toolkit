@@ -55,6 +55,7 @@ import {
   SKILL_REFUSED_DIRECTORY_TARGET,
   SKILL_REFUSED_NAVIGATION_FILE,
   SKILL_REFUSED_PATTERN_MATCHED,
+  SKILL_REFUSED_SKILL_DEFINITION,
   SkillExtentContributor,
   skillExtentContributorId,
   skillExtentDeclaration,
@@ -271,7 +272,7 @@ async function walkerBundle(root: string, config: SkillPackagingConfig): Promise
 /** Run the skill extent over a populated base. */
 async function skillExtent(base: ProjectionBase, config: SkillPackagingConfig): Promise<ExtentContribution> {
   const contributor = new SkillExtentContributor(SKILL_NAME);
-  return contributor.contribute(base, skillExtentDeclaration(config, SKILL_REL));
+  return contributor.contribute(base, skillExtentDeclaration(config, SKILL_REL, false));
 }
 
 /** The closure's membership, in the walker's currency. */
@@ -304,7 +305,7 @@ function cascadeCorpus(): string {
 
 describe('skillExtentDeclaration', () => {
   it('translates a config-less skill into the packager\'s own default depth', () => {
-    const declaration = skillExtentDeclaration(DEFAULT_CONFIG, SKILL_REL);
+    const declaration = skillExtentDeclaration(DEFAULT_CONFIG, SKILL_REL, false);
     expect(declaration).toEqual({
       kind: SKILL_EXTENT_KIND,
       closureFrom: SKILL_REL,
@@ -331,6 +332,18 @@ describe('skillExtentDeclaration', () => {
           label: SKILL_REFUSED_AGENT_INSTRUCTION_FILE,
           patterns: [], basenames: [...AGENT_INSTRUCTION_FILE_PATTERNS], kinds: [], flags: {}, payload: null,
         },
+        // A SIBLING skill's definition. An ordinary basename rule, sitting after
+        // agent-instruction and before the globs because that is where
+        // `classifyExclusion` checks it. ⚠️ This rule covers only the cross-skill
+        // half of the walker's `skill-definition` branch — a SELF-link is not a
+        // refusal on either arm and is handled in the primitive, which skips a
+        // reference resolving to `closureFrom` because the root is a member by
+        // declaration. Encoding the self case as a rule here would refuse the
+        // extent's own root.
+        {
+          label: SKILL_REFUSED_SKILL_DEFINITION,
+          patterns: [], basenames: ['SKILL.md'], kinds: [], flags: {}, payload: null,
+        },
       ],
       admitPaths: [],
     });
@@ -352,11 +365,12 @@ describe('skillExtentDeclaration', () => {
     const config: SkillPackagingConfig = {
       excludeReferencesFromBundle: { rules: [{ patterns: ['docs/**'] }] },
     };
-    expect(skillExtentDeclaration(config, SKILL_REL).refusals.map((rule) => rule.label))
+    expect(skillExtentDeclaration(config, SKILL_REL, false).refusals.map((rule) => rule.label))
       .toEqual([
         SKILL_REFUSED_DIRECTORY_TARGET,
         SKILL_REFUSED_NAVIGATION_FILE,
         SKILL_REFUSED_AGENT_INSTRUCTION_FILE,
+        SKILL_REFUSED_SKILL_DEFINITION,
         SKILL_REFUSED_PATTERN_MATCHED,
       ]);
   });
@@ -367,12 +381,13 @@ describe('skillExtentDeclaration', () => {
     // granularity, "this file is not distributable" is a different question. A
     // translation that gated both would ship every repo's CLAUDE.md the moment
     // an author asked for their READMEs back.
-    const declaration = skillExtentDeclaration({ excludeNavigationFiles: false }, SKILL_REL);
+    const declaration = skillExtentDeclaration({ excludeNavigationFiles: false }, SKILL_REL, false);
     // The navigation rule is OMITTED, not emptied: the declaration says the
     // branch does not run, rather than that it runs and catches nothing.
     expect(declaration.refusals.map((rule) => rule.label)).toEqual([
       SKILL_REFUSED_DIRECTORY_TARGET,
       SKILL_REFUSED_AGENT_INSTRUCTION_FILE,
+      SKILL_REFUSED_SKILL_DEFINITION,
     ]);
     const agentInstruction = declaration.refusals
       .find((rule) => rule.label === SKILL_REFUSED_AGENT_INSTRUCTION_FILE);
@@ -381,7 +396,7 @@ describe('skillExtentDeclaration', () => {
   });
 
   it('carries linkFollowDepth "full" through unchanged', () => {
-    expect(skillExtentDeclaration({ linkFollowDepth: 'full' }, SKILL_REL).maxDepth).toBe('full');
+    expect(skillExtentDeclaration({ linkFollowDepth: 'full' }, SKILL_REL, false).maxDepth).toBe('full');
   });
 
   it('expands each ordered rule into its OWN refusal rule, same label, declared order', () => {
@@ -403,7 +418,7 @@ describe('skillExtentDeclaration', () => {
         ],
       },
     };
-    const refusals = skillExtentDeclaration(config, SKILL_REL).refusals;
+    const refusals = skillExtentDeclaration(config, SKILL_REL, false).refusals;
     const patternRules = refusals.filter((rule) => rule.label === SKILL_REFUSED_PATTERN_MATCHED);
     expect(patternRules).toHaveLength(2);
     // A LIST, not a set: the declared order is the first-match-wins order.
@@ -423,6 +438,7 @@ describe('skillExtentDeclaration', () => {
       SKILL_REFUSED_DIRECTORY_TARGET,
       SKILL_REFUSED_NAVIGATION_FILE,
       SKILL_REFUSED_AGENT_INSTRUCTION_FILE,
+      SKILL_REFUSED_SKILL_DEFINITION,
       SKILL_REFUSED_PATTERN_MATCHED,
       SKILL_REFUSED_PATTERN_MATCHED,
     ]);
@@ -444,7 +460,7 @@ describe('skillExtentDeclaration', () => {
         { source: 'vendor/**/AGENTS.md', dest: 'vendor/AGENTS.md' },
       ],
     };
-    expect(skillExtentDeclaration(config, SKILL_REL).admitPaths).toEqual([DECLARED_CLAUDE_SOURCE]);
+    expect(skillExtentDeclaration(config, SKILL_REL, false).admitPaths).toEqual([DECLARED_CLAUDE_SOURCE]);
   });
 
   it('normalizes a files: source into projection coordinates', () => {
@@ -456,7 +472,7 @@ describe('skillExtentDeclaration', () => {
     const config: SkillPackagingConfig = {
       files: [{ source: `./${DECLARED_CLAUDE_SOURCE}`, dest: CLAUDE_REL }],
     };
-    expect(skillExtentDeclaration(config, SKILL_REL).admitPaths).toEqual([DECLARED_CLAUDE_SOURCE]);
+    expect(skillExtentDeclaration(config, SKILL_REL, false).admitPaths).toEqual([DECLARED_CLAUDE_SOURCE]);
   });
 });
 
@@ -605,34 +621,54 @@ describe('membership against walkLinkGraph', () => {
     expect(kindOf(GUIDE_REL)).toBe('file');
   });
 
-  it('DIVERGES on the cascade discriminators the primitive still has no vocabulary for', async () => {
+  it('AGREES on skill-definition now, and DIVERGES only where the asset path skips depth', async () => {
     const root = cascadeCorpus();
     const closure = await closureMembers(root, DEFAULT_CONFIG);
     const walker = await walkerBundle(root, DEFAULT_CONFIG);
 
-    // Admitted by the closure, refused by the walker. `skill-definition` is the
-    // one left: its verdict depends on comparing the target against THIS walk's
-    // own `skillRootPath` (a self-link is skipped, a sibling's SKILL.md is
-    // refused), and a declaration has no vocabulary for "the same file as my own
-    // root". An equality, not a `toContain`: a NEW divergence appearing is the
-    // finding this file exists to surface.
-    expect(difference(closure, walker)).toEqual([SIBLING_SKILL_REL]);
+    // ✅ THIS DIRECTION USED TO CARRY `SIBLING_SKILL_REL`, AND CLOSING IT IS THE
+    // TWO-ARM EVIDENCE FOR `skill-definition`. The old premise was that a
+    // declaration has no vocabulary for "the same file as my own root". That was
+    // wrong in two separable ways, and each half needed a different fix:
+    //
+    //   - a SIBLING's `SKILL.md` never needed root vocabulary at all — it is an
+    //     ordinary `basenames: ['SKILL.md']` refusal, placed after the
+    //     agent-instruction rule and before the globs, exactly where
+    //     `classifyExclusion` checks it;
+    //   - a SELF-link is not a refusal in either arm, so encoding it as a rule
+    //     would have been wrong even though it would have made this line pass.
+    //     The primitive skips a reference resolving to `closureFrom`, because the
+    //     root is a member BY DECLARATION in any closure — there is nothing to
+    //     refuse and nothing to admit.
+    //
+    // Kept as an equality rather than deleted: this is the assertion that fails
+    // if a future cascade change starts admitting a sibling skill again.
+    expect(difference(closure, walker)).toEqual([]);
+
+    // Named explicitly, because an empty difference is also what a corpus that
+    // never REACHED the sibling would produce. Both arms must positively refuse
+    // this path, and the walker's own refusal is what makes the closure's a
+    // match rather than a coincidence.
+    expect(closure).not.toContain(SIBLING_SKILL_REL);
+    expect(walker).not.toContain(SIBLING_SKILL_REL);
 
     // Bundled by the walker, refused by the closure: `templates/config.json` is
     // an asset linked from a depth-2 document, so it is a depth-3 hop the
     // declaration's `maxDepth: 2` refuses while the walker's asset path never
     // consults depth at all. Same feature as the depth-0 case above, reached
-    // through a chain rather than through the root.
+    // through a chain rather than through the root. ⚠️ This one is a genuine
+    // remaining difference, NOT a vocabulary gap — see the `unreadable-target`
+    // and routability rows in `skill-extent.ts`'s table for the two that are.
     expect(difference(walker, closure)).toEqual([CONFIG_ASSET_REL]);
 
-    // Both sides in full, so the two differences above cannot be read as a diff
+    // Both sides in full, so the difference above cannot be read as a diff
     // between sets nobody stated — and so the markdown chain both sides DO
     // agree on (`docs/guide.md` → `docs/chain.md`, depth 2) is visible as the
-    // common ground it is.
+    // common ground it is. The closure's set is now a strict SUBSET of the
+    // walker's, which it was not before: the only remaining gap is one the
+    // walker over-bundles, never one the closure over-admits.
     expect(walker).toEqual(sortedPaths([SKILL_REL, GUIDE_REL, CHAIN_REL, HELPER_REL, CONFIG_ASSET_REL]));
-    expect(closure).toEqual(sortedPaths([
-      SKILL_REL, GUIDE_REL, CHAIN_REL, HELPER_REL, SIBLING_SKILL_REL,
-    ]));
+    expect(closure).toEqual(sortedPaths([SKILL_REL, GUIDE_REL, CHAIN_REL, HELPER_REL]));
   });
 
   it('admits a files:-declared CLAUDE.md the same walk otherwise refuses', async () => {

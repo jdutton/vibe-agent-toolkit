@@ -94,6 +94,16 @@ export async function extractClaudeMarketplaceInventory(
 			// `findProjectRoot(...) === null` guard: with no project root each skill's root is
 			// its OWN directory, so a shared registry matches nothing and was measured 1.5x
 			// SLOWER than the N+1 it was meant to remove.
+			//
+			// The SAME omission covers the third argument, a `GitTrackerSource`, and it is not
+			// a performance footnote: `extractClaudeSkillInventory` requires that source, so
+			// `extract-plugin.ts` substitutes `NO_GIT_TRACKER` on this lane's behalf, and every
+			// skill under every plugin reached from here walks with the `git check-ignore`
+			// oracle rather than an active set. That decides a `gitignored` answer, not just
+			// its cost — the two oracles are demonstrably distinguishable (see the divergence
+			// suite in test/inventory/extract-skill.test.ts). This function has no parameter to
+			// thread either source through; giving it one is the follow-up, and it must land
+			// together with `extract-install.ts`, which omits both the same way.
 			discovered.push(await extractClaudePluginInventory(ref.resolvedPath));
 		}
 	}

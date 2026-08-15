@@ -34,19 +34,56 @@
  * | `directory-target` *membership* | **expressible** — a refusal rule over `kinds: ['directory']`, which reads `resources.kind`; a path glob cannot express it, because a directory's path is shaped like a file's |
  * | the REASON of those four exclusions | **expressible** — each refusal rule carries a `label`, and the first-match-wins order is `classifyExclusion`'s own branch order, so the refusal reports `SKILL_REFUSED_DIRECTORY_TARGET` where the walker reports `directory-target`. Pinned by the corpus shadow's reason-mismatch bucket, not asserted here |
  * | `deferredArtifacts` (`files:`) | **not expressible** — its three-way classification is keyed on filesystem existence and on gitignore, and the closure does no I/O by construction. Only the ONE fact `admitPaths` needs — which sources are explicit, non-glob agent-instruction files — is a pure function of the config, which is why that much survives the translation |
- * | routable vs non-routable | **not expressible** (reasoned, not measured — the corpus has no HTML) — `follow` names a reference FORM, never the parser kind of the TARGET, so wherever HTML blob references are populated the closure walks THROUGH a page `isRoutable` treats as a leaf |
- * | `skill-definition` | **not expressible** — the verdict depends on comparing the target against THIS walk's `skillRootPath` (a self-link is silently skipped, a sibling's SKILL.md is refused), and the declaration has no vocabulary for "the same file as my own root" |
- * | `gitignored`, `outside-project`, `unreadable-target`, `missing-target` | **not expressible** — each needs an oracle the closure does not consult: git, the project boundary, and two distinct filesystem-read outcomes |
+ * | `gitignored` | **expressible, CONDITIONALLY** — a COLUMN match, not an oracle: `resource_realizations.gitignored` is a first-class boolean the registry crawl fills, and `ExtentRefusalRule.flags` reads boolean columns. Carried as `{ gitignored: true, exists: true }` — a CONJUNCTION, because `classifyGitignored` is existence-gated — and emitted only when the population has a `GitTracker`, since without one the column is `false` on every row. ⚠️ Two bounds: the WALKER needs no tracker (it spawns `git check-ignore`), so the arms diverge in the no-tracker state; and `classifyGitignoredTarget` turns a gitignored `files:` DEST into a `deferred` verdict rather than a refusal, which no declaration can say (`admitPaths` would make it a member) |
+ * | `skill-definition` | **expressible**, as two halves that were always two verdicts under one `if`. The cross-skill half is an ordinary `basenames: ['SKILL.md']` rule, sitting between the agent-instruction rule and the globs exactly where `classifyExclusion` puts it. The self-link half is the walker's `{ kind: 'skipped' }`, and it is not a rule: the PRIMITIVE now skips a reference resolving to `closureFrom`, because the root is a member by declaration in any closure — see `closure-extent.ts`'s `hopFor`. ⚠️ The walker compares the basename with `===`; `basenames` folds case, so `Skill.md` diverges — see {@link SKILL_DEFINITION_BASENAME} |
+ * | `outside-project` | **expressible as a REASON, not as a full row** — and it never needed an oracle: `relativize` states every path against the root, and one the root does not contain comes back `..`-prefixed. It was a LABELLING gap, not a knowledge gap; the closure knew, and reported `CLOSURE_REFERENCE_UNRESOLVED`, which is true and useless. It is now `CLOSURE_REFERENCE_OUTSIDE_ROOT`, naming the same target the walker's row names. ⚠️ `targetExists` stays null: the walker `stat`s the escaping path, a projection populated from one root observes nothing outside it |
+ * | `missing-target` | **not expressible** — and NOT for the reason the column suggests. `exists` is a real column and `flags` reads it, but no rule can ever fire on it here: a path that is not on disk is never ENUMERATED, so it has no realization for a candidate to be, and the reference resolves to nothing long before the cascade runs. The producer is structurally blind, so the matcher is dead. The fact is still reported — as `CLOSURE_REFERENCE_UNRESOLVED` — but that code conflates "absent" with "present and not enumerated by any contributor", and only a filesystem probe separates them |
+ * | routable vs non-routable | **not expressible** (reasoned, not measured — the corpus has no HTML), and the earlier reason given here was wrong. The declaration is not short of a COLUMN: `resource_realizations.ext` carries the extension and `blobs.contentKey` is literally `<parserKind>.<sha256>`. What it is short of is a VERDICT: `isRoutable` makes an HTML page a member that is not traversed THROUGH, and the primitive has no admit-but-do-not-traverse outcome — a refusal would drop a file the walker bundles. Expressing it means a new verdict in the primitive, not a new matcher |
+ * | `unreadable-target` | **not expressible** — the one genuine oracle left. It is `existsSync` true AND `statSync` throwing anyway, a read outcome no column records: `contentState: 'unreadable'` is a *different* fact (a BYTE read that threw) and is demand-driven besides, so a path nobody asked to hash reads `deferred` whether or not it is stattable |
  * | a refusal's PROVENANCE (`sourcePath`, `sourceLine`, `linkHref`, `targetExists`, `matchedRule`) | **expressible** — `realization_conditions` gained the six columns (projection schema v4), the closure fills them at the refusal site, and every one of the five is compared field by field against the walker's own row by the corpus shadow's provenance bucket |
  *
  * Read the membership, reason and provenance rows together: the primitive now
  * selects the same files for those causes, names the same cause, and carries the
  * same `sourcePath`/`sourceLine`/`linkHref`/`targetExists`/matched-rule
- * provenance the walker attaches to a refusal. What a projection still cannot
- * produce is the SIX reasons whose oracles it does not consult (git, the project
- * boundary, two read outcomes, its own skill root, the target's parser kind) —
- * that, not the payload, is what now stands between this and driving `vat`'s
- * verdict engine from a projection.
+ * provenance the walker attaches to a refusal.
+ *
+ * ## The residue is TWO reasons, not six — and one of them is not an oracle problem
+ *
+ * The count above used to be six, and four of those six were stale. Three had
+ * gained the machinery to express them (`gitignored` became a boolean column of
+ * the realization row; `outside-project` was always path math the closure was
+ * already doing; `skill-definition` needed one basename rule plus a self-link
+ * rule the primitive owes every closure), and one — `missing-target` — was
+ * inexpressible for a completely different reason than "no oracle": its matcher
+ * exists and can never fire, because the producer never emits the row it would
+ * match.
+ *
+ * What is left is `unreadable-target`, a genuine filesystem read outcome, and
+ * routability, which needs a new VERDICT in the primitive rather than a new
+ * matcher. Both are stated above with the evidence for the claim, because a
+ * boundary list that is never re-derived is how four verdicts stayed wrong for
+ * three increments.
+ *
+ * ⚠️ **Neither new verdict is measured against the walker on the real corpus,
+ * and they are not equally unmeasured elsewhere. Stated per verdict, because an
+ * aggregate "verified" would be false for one of them.**
+ *
+ * - **`skill-definition` IS measured against the walker, at FIXTURE scale.**
+ *   `projection-skill-extent.test.ts` builds a corpus containing a sibling
+ *   `skills/tool-b/SKILL.md`, and that divergence — named there, as a
+ *   one-element equality — closes when this rule lands.
+ * - **`gitignored` is reasoned, not measured against the walker anywhere.** The
+ *   `flags` conjunction it is made of has its own falsifying case in
+ *   `projection-closure-extent.test.ts` (including the `exists: false` control
+ *   that separates AND from OR), but no fixture yet links a skill to a gitignored
+ *   file with both arms running, so no two-arm comparison has ever exercised it.
+ *
+ * Neither is reachable on the REAL corpus, and that is asserted rather than
+ * assumed: the corpus shadow was green with both verdicts unexpressed, which is
+ * possible only if no declared skill links to a gitignored file or to another
+ * skill's SKILL.md, and both populations are now pinned at zero there. The day a
+ * link appears the test fails and the reader learns the corpus grew teeth
+ * ([[fixtures-that-cannot-distinguish]]).
  *
  * The `excludeNavigationFiles` row is the one worth reading twice, because the
  * shape of its extension is the argument for why a rule needs a basename matcher
@@ -182,6 +219,53 @@ export const SKILL_REFUSED_AGENT_INSTRUCTION_FILE = 'SKILL_REFUSED_AGENT_INSTRUC
 export const SKILL_REFUSED_PATTERN_MATCHED = 'SKILL_REFUSED_PATTERN_MATCHED';
 
 /**
+ * `classifyExclusion`'s `skill-definition` — ANOTHER skill's SKILL.md.
+ *
+ * Only the cross-skill half. The walker's branch is two verdicts wearing one
+ * `if`: a link to a *sibling's* SKILL.md is this refusal, and a link back to the
+ * walk's OWN `skillRootPath` is `{ kind: 'skipped' }` — recorded nowhere. The
+ * declaration expresses the first as an ordinary basename rule; the second is
+ * not a rule at all, and it is the primitive that supplies it, because a
+ * reference to `closureFrom` is a self-link in any closure and not a fact about
+ * skills (see `closure-extent.ts`'s `hopFor`).
+ */
+export const SKILL_REFUSED_SKILL_DEFINITION = 'SKILL_REFUSED_SKILL_DEFINITION';
+
+/** `classifyGitignored`'s `gitignored`, existence-gated exactly as that branch is. */
+export const SKILL_REFUSED_GITIGNORED = 'SKILL_REFUSED_GITIGNORED';
+
+/**
+ * The basename that makes a markdown file a skill DEFINITION rather than a
+ * resource — the whole content of `classifyExclusion`'s SKILL.md branch.
+ *
+ * ⚠️ The walker compares it with `===`, so `Skill.md` on a case-insensitive
+ * filesystem is a skill definition Claude Code loads and the walker bundles.
+ * `ExtentRefusalRule.basenames` folds case, deliberately and for the reason its
+ * schema states, so the declaration refuses the spelling the walker admits. That
+ * is a difference in the WALKER's favour on no real corpus: this repository
+ * declares fourteen skills and every one of them spells the file `SKILL.md`. It
+ * is recorded here rather than papered over with a case-sensitive matcher
+ * variant, which would be a primitive feature added to reproduce an
+ * inconsistency — the walker's own navigation and agent-instruction branches
+ * fold case, and its comment says why they must.
+ */
+const SKILL_DEFINITION_BASENAME = 'SKILL.md';
+
+/**
+ * The realization columns {@link SKILL_REFUSED_GITIGNORED} refuses on.
+ *
+ * A CONJUNCTION, and both halves are load-bearing: `classifyGitignored` returns
+ * early on `!facts.exists` because neither ignore oracle can be trusted about a
+ * path that is not there (a `GitTracker`'s active set holds only existing paths,
+ * so every typo'd link would read as "absent, therefore ignored"). Read
+ * disjunctively, `{ gitignored: true, exists: true }` would refuse every existing
+ * file in the corpus. Spelled as one object so the conjunction is visible at the
+ * site that depends on it — the same shape, for the same reason, as
+ * `inventory-extent.ts`'s `GITIGNORED_FLAGS`.
+ */
+const GITIGNORED_FLAGS: Readonly<Record<string, boolean>> = { gitignored: true, exists: true };
+
+/**
  * This skill's refusal cascade, **in `classifyExclusion`'s own branch order**.
  *
  * ⚠️ The order is load-bearing now that a refusal carries a label: the primitive
@@ -191,7 +275,7 @@ export const SKILL_REFUSED_PATTERN_MATCHED = 'SKILL_REFUSED_PATTERN_MATCHED';
  * backwards (its glob matcher ran before its kind matcher, harmlessly, because
  * no verdict carried a reason to get wrong).
  *
- * The four rules, and why each sits where it does:
+ * The six rules, and why each sits where it does:
  *
  * 1. **kinds `['directory']`** — `classifyPathKind` is the FIRST thing
  *    `classifyExclusion` consults after the deferred check, and no knob gates it.
@@ -205,8 +289,30 @@ export const SKILL_REFUSED_PATTERN_MATCHED = 'SKILL_REFUSED_PATTERN_MATCHED';
  *    while these files are about distributability. Sitting AFTER navigation is
  *    what makes a `files:`-declared `README.md` report `navigation-file` — see
  *    {@link declaredAgentInstructionSources} for the other half of that rule.
- * 4. **one rule per `excludeReferencesFromBundle` rule**, in declared order,
- *    last — see below.
+ * 4. **the `SKILL.md` basename** — `classifyExclusion`'s cross-skill branch,
+ *    which sits exactly here: after the agent-instruction check and BEFORE the
+ *    glob rules, so a sibling's SKILL.md that also matches a declared
+ *    `excludeReferencesFromBundle` pattern reports `skill-definition`. Its other
+ *    half — a link back to this skill's OWN SKILL.md — is not a rule and cannot
+ *    be: the walker records nothing at all for it, and the primitive supplies
+ *    that silence for every closure by skipping a reference to `closureFrom`.
+ * 5. **one rule per `excludeReferencesFromBundle` rule**, in declared order —
+ *    see below.
+ * 6. **`gitignored ∧ exists`** — LAST, matching `classifyGitignored`'s position
+ *    at the end of the cascade, and present only when the population can answer
+ *    the question at all. `resource_realizations.gitignored` is filled by
+ *    `FilesystemExtentContributor` only when the population was given a
+ *    `GitTracker` (`realizations.ts` writes `false` on every row otherwise), so a
+ *    rule emitted without one would CLAIM a branch it cannot run — the same
+ *    dishonesty rule 2 avoids by omitting itself rather than emitting empty.
+ *
+ * ⚠️ **The gitignore rule is where the two arms stop being symmetric in the
+ * no-tracker state, and that is a fact about the WALKER.**
+ * `walkLinkGraph`'s branch needs no tracker: with none it spawns `git
+ * check-ignore` per target (`readGitignored`), so it refuses ignored targets
+ * anyway. The closure's only gitignore input is a column a tracker-less
+ * population never fills, so the two agree in that state only on a corpus with
+ * no gitignored link target.
  *
  * ## Why the exclude rules are ONE RULE EACH and not one flattened rule
  *
@@ -240,17 +346,16 @@ export const SKILL_REFUSED_PATTERN_MATCHED = 'SKILL_REFUSED_PATTERN_MATCHED';
  * and a second copy here would be the enumeration it warns against.
  *
  * @param config - The skill's packaging block
+ * @param hasGitTracker - Whether the population was given a usable git oracle
  * @returns The ordered refusal rules
  */
-function skillRefusals(config: SkillPackagingConfig): ExtentRefusalRule[] {
+function skillRefusals(config: SkillPackagingConfig, hasGitTracker: boolean): ExtentRefusalRule[] {
   const excludeNavigation = config.excludeNavigationFiles ?? DEFAULT_EXCLUDE_NAVIGATION_FILES;
   return [
-    // `flags: {}` on every rule: the packaging walk's own gitignore branch needs
-    // an ORACLE (`readGitignored` spawns `git check-ignore` when no tracker is
-    // plumbed), and `skill-extent.ts`'s table records it as inexpressible for
-    // that reason. The empty record is the schema default and never matches, so
-    // spelling it here declares "this translation refuses on no column" rather
-    // than leaving a reader to infer it from an absent key.
+    // `flags: {}` on every rule but the last: the empty record is the schema
+    // default and never matches, so spelling it declares "this rule refuses on
+    // no column" rather than leaving a reader to infer it from an absent key.
+    // Only the gitignore rule reads a column, and it reads two.
     {
       label: SKILL_REFUSED_DIRECTORY_TARGET,
       patterns: [],
@@ -277,7 +382,15 @@ function skillRefusals(config: SkillPackagingConfig): ExtentRefusalRule[] {
       flags: {},
       payload: null,
     },
-    // `payload: null` above, a payload here: the first three rules ARE the
+    {
+      label: SKILL_REFUSED_SKILL_DEFINITION,
+      patterns: [],
+      basenames: [SKILL_DEFINITION_BASENAME],
+      kinds: [],
+      flags: {},
+      payload: null,
+    },
+    // `payload: null` above, a payload here: the first four rules ARE the
     // walker's own branches, which carry no rule object for a consumer to read
     // back (`makeExclusion` sets `matchedRule` only for `pattern-matched`).
     ...(config.excludeReferencesFromBundle?.rules ?? []).map((rule, index) => ({
@@ -288,6 +401,16 @@ function skillRefusals(config: SkillPackagingConfig): ExtentRefusalRule[] {
       flags: {},
       payload: excludeRulePayload(rule, index),
     })),
+    ...(hasGitTracker
+      ? [{
+        label: SKILL_REFUSED_GITIGNORED,
+        patterns: [],
+        basenames: [],
+        kinds: [],
+        flags: { ...GITIGNORED_FLAGS },
+        payload: null,
+      }]
+      : []),
   ];
 }
 
@@ -385,12 +508,16 @@ function declaredAgentInstructionSources(config: SkillPackagingConfig): string[]
  *
  * This is the whole of the skill extent's behaviour: everything else is the
  * generic contributor. `linkFollowDepth` becomes `maxDepth` unchanged (same
- * `number | 'full'` union, same meaning of a hop), and every
- * `excludeReferencesFromBundle` rule's `patterns` flatten into ONE labelled
- * refusal rule — sound because the walker's `find` and the primitive's `some`
- * select the same file set AND report the same reason (`pattern-matched` for all
- * of them); which rule won is observable only through its `template`, which the
- * primitive still has nowhere to put.
+ * `number | 'full'` union, same meaning of a hop), and {@link skillRefusals}
+ * becomes the cascade — one rule per `classifyExclusion` branch this translation
+ * can express, in that function's own order.
+ *
+ * ⚠️ This paragraph used to say the `excludeReferencesFromBundle` rules
+ * "flatten into ONE labelled refusal rule". They have not since the increment
+ * that restored `matchedRule`: they expand to one rule EACH, in declared order,
+ * which is what lets `realization_conditions.matchedPattern` name WHICH rule
+ * caught a file. The `template` it also said the primitive had "nowhere to put"
+ * rides in that rule's opaque `payload`.
  *
  * `follow` is left to the schema default (the three markdown forms), matching
  * the walker: it processes only `isLocalFileLink` links off the markdown AST, so
@@ -398,18 +525,25 @@ function declaredAgentInstructionSources(config: SkillPackagingConfig): string[]
  *
  * @param config - The skill's `skills.config.<name>` packaging block
  * @param skillPath - The SKILL.md path **relative to the corpus root**, forward-slashed
+ * @param hasGitTracker - Whether the population this declaration will run in was
+ *   given a usable git oracle. Not "should gitignored files be refused": the
+ *   column that rule reads is unfilled without one, so declaring it anyway would
+ *   claim a branch that cannot run. REQUIRED rather than defaulted, because a
+ *   defaulted `false` would let a caller that does have a tracker silently ship a
+ *   declaration missing the last rule of the cascade — a no-op wearing a fix
  * @returns The declaration, schema-parsed so every default is materialized
  * @throws When the resulting declaration is not schema-valid — e.g. an empty `skillPath`
  */
 export function skillExtentDeclaration(
   config: SkillPackagingConfig,
   skillPath: string,
+  hasGitTracker: boolean,
 ): ExtentDeclaration {
   return ExtentDeclarationSchema.parse({
     kind: SKILL_EXTENT_KIND,
     closureFrom: skillPath,
     maxDepth: config.linkFollowDepth ?? DEFAULT_LINK_FOLLOW_DEPTH,
-    refusals: skillRefusals(config),
+    refusals: skillRefusals(config, hasGitTracker),
     admitPaths: declaredAgentInstructionSources(config),
   });
 }

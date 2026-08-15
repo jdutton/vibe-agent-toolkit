@@ -14,11 +14,19 @@ import { evaluate, makeRuleContext, materializeIssue, type RuleContext } from '.
  * decision and issue construction belong to the shared engine + materializer,
  * so the registry stays the single source of truth.
  *
- * A navigational link that resolves to a directory ('directory-target') is a
- * valid reference — the directory is excluded from the bundle but no issue is
- * emitted (the engine returns `null` for a non-typed-slot directory). A
- * `files:` typed-slot source resolving to a directory is an error, but that
- * check lives in packaging-validator, not here.
+ * **Every one of the walker's eleven reasons reaches a code.** Two did not: a
+ * navigational link resolving to a directory ('directory-target') and a
+ * reference refused by the author's own rule ('pattern-matched') both evaluated
+ * to `null` and were filtered out of the output below, so the author got no
+ * finding at all — not a quiet one, none. Both are now reported, at severities
+ * that say how much each matters: `LINK_TO_UNBUNDLED_DIRECTORY` (warning — the
+ * directory never travels, so the packaged link points at nothing) and
+ * `LINK_EXCLUDED_BY_PATTERN` (info — the author configured this, and the receipt
+ * only needs to be there when they come looking for it).
+ *
+ * `LINK_TARGETS_DIRECTORY` is a DIFFERENT code for a different situation: a
+ * `files:` typed-slot source that resolves to a directory, an error, owned by
+ * packaging-validator. The two never fire for the same edge.
  *
  * `existsAtSource` is READ FROM the walker's record, never assumed. The engine
  * gates `LINK_TO_GITIGNORED_FILE` on "gitignored AND exists"; hardcoding
@@ -72,9 +80,31 @@ function exclusionToContext(
 }
 
 /**
+ * The per-issue detail appended to the registry description.
+ *
+ * Always the link, because that is what identifies the edge. Plus, when the
+ * walker recorded WHICH rule refused the reference, the patterns of that rule:
+ * with several `excludeReferencesFromBundle` rules configured, learning that one
+ * of them fired is not an answer to "why did this file not ship?", and the
+ * walker already knows which. Keyed on the presence of `matchedRule` rather than
+ * on the code, because the walker only ever sets that field for the reason it
+ * describes — so this needs no branch on a code it does not own.
+ */
+function exclusionDetail(r: LinkResolution, target: string): string {
+  const link = `link: ${r.linkHref ?? target}`;
+  return r.matchedRule === undefined
+    ? link
+    : `${link}; matched excludeReferencesFromBundle pattern(s): ${r.matchedRule.patterns.join(', ')}`;
+}
+
+/**
  * Map walker exclusions to validation issues by routing each through the
- * intent-aware engine. Exclusions whose intent is acceptable (navigational
- * directory link, pattern-excluded reference) produce no issue.
+ * intent-aware engine.
+ *
+ * One exclusion in, one issue out: the engine no longer returns `null` for any
+ * reason the walker can record, so no exclusion is dropped on the floor here.
+ * The `null` branch remains because `evaluate` is shared with the file/orphan
+ * subject, where `null` is a real verdict.
  */
 export function walkerExclusionsToIssues(
   exclusions: readonly LinkResolution[],
@@ -94,7 +124,7 @@ export function walkerExclusionsToIssues(
       location: issueLocation(r.sourcePath, locationRoot),
       ...(r.sourceLine !== undefined && { line: r.sourceLine }),
       link: r.linkHref ?? target,
-      detail: `link: ${r.linkHref ?? target}`,
+      detail: exclusionDetail(r, target),
     }));
   }
   return issues;
