@@ -49,6 +49,7 @@ import {
   type CrawlAttribution,
   CrawlBodySchema,
   type CrawlCommandStats,
+  type CrawlDumpCharges,
 } from './types.js';
 
 /** This facet's body contract, as the shared comparison gates need it. */
@@ -198,6 +199,60 @@ function entryRows(row: CrawlCommandStats): readonly LabelledRow[] {
 const unmeasurableReason = unmeasurableReasonFor(ATTRIBUTION_REASONS);
 
 /**
+ * Why two arms measured by DIFFERENT instruments are not two measurements of one
+ * thing, or `null` when they carry the same brackets.
+ *
+ * ## The failure this exists to stop, stated concretely
+ *
+ * A bracket added to the seam charges work that was previously charged nowhere.
+ * No existing row changes, so every row lines up — and the command TOTAL grows,
+ * because it sums additive rows across every stratum. An A/B across that boundary
+ * therefore reads a widening of the instrument as a regression in the subject,
+ * and reads it CONSISTENTLY, so `ab` calls the pairs stable and prints a
+ * confident delta instead of refusing. That is not hypothetical: it is what the
+ * `shared` stratum did, and what the projection's blob stage would have done
+ * next.
+ *
+ * ⛔ **The dump version cannot catch this and never could.** It is an integer: it
+ * says "different", never "different how", and it only fires when a human
+ * remembers to bump it — which, for `shared`, nobody did, on an argument that was
+ * correct about rows and wrong about totals. This function reads what each build
+ * DECLARED it can charge, so a new bracket refuses the comparison it invalidates
+ * whether or not anyone remembered anything.
+ *
+ * Refusing rather than adjusting is deliberate. The missing term's size is
+ * knowable only on the arm that HAS the bracket, so "subtract it from the other
+ * side" would be an estimate presented as a measurement — the fabricated
+ * "everything got faster" `facet-compare.ts` exists to prevent.
+ *
+ * @param before - The baseline row
+ * @param after - The compared row
+ * @returns A reason naming what is missing on which side, or `null`
+ */
+function chargeCaveat(before: CrawlCommandStats, after: CrawlCommandStats): string | null {
+  const missing = (from: CrawlDumpCharges, present: CrawlDumpCharges): string[] => [
+    ...present.strata.filter((s) => !from.strata.includes(s)).map((s) => `stratum '${s}'`),
+    ...present.syntheticIds.filter((id) => !from.syntheticIds.includes(id)).map((id) => `'${id}'`),
+  ];
+  const missingFromBefore = missing(before.charges, after.charges);
+  const missingFromAfter = missing(after.charges, before.charges);
+  if (missingFromBefore.length === 0 && missingFromAfter.length === 0) return null;
+
+  const clauses: string[] = [];
+  if (missingFromBefore.length > 0) {
+    clauses.push(`the baseline build cannot charge ${missingFromBefore.join(', ')}`);
+  }
+  if (missingFromAfter.length > 0) {
+    clauses.push(`the compared build cannot charge ${missingFromAfter.join(', ')}`);
+  }
+  return (
+    `the two arms were measured by different instruments — ${clauses.join('; ')}. ` +
+    'A bracket one build lacks is work charged to one total and not the other, so the ' +
+    'difference between them is partly the instrument and cannot be attributed to the subject.'
+  );
+}
+
+/**
  * Did anything real move?
  *
  * A stratum or entry movement counts even when the total did not: work migrating
@@ -236,6 +291,12 @@ function verdictFor(
   after: CrawlCommandStats,
   options: CompareCrawlOptions,
 ): CrawlCommandVerdict {
+  // Before the attribution cascade, not after: "these are different instruments"
+  // is a better answer than "one side crawled nothing", and it is the true one
+  // when a build without the bracket produced no row for it.
+  const charges = chargeCaveat(before, after);
+  if (charges !== null) return { kind: 'unmeasurable', reason: charges };
+
   const unmeasurable = unmeasurableReason(before, after);
   if (unmeasurable !== null) return { kind: 'unmeasurable', reason: unmeasurable };
 

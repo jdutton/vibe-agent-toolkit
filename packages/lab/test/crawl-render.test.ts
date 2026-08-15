@@ -64,9 +64,10 @@ const CRAWL_ARM_LINE = 'crawl 30.0ms';
  */
 function dumpOf(entries: CrawlDump['entries']): CrawlDump {
   return {
-    dumpVersion: 2,
+    dumpVersion: 4,
     pid: 42,
     process: { wallMs: 1000, cpuUserMs: 800, cpuSystemMs: 100 },
+    charges: { strata: ['base', 'closure', 'crawl', 'shared'], syntheticIds: [] },
     entries,
   };
 }
@@ -105,6 +106,7 @@ function render(entries: CrawlDump['entries']): string {
     runs: 3,
     stable: true,
     attribution: 'measured',
+    charges: merged.charges,
     entries: merged.entries,
     strata: merged.strata,
     totalCalls: merged.totalCalls,

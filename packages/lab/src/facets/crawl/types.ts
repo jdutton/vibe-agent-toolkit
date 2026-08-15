@@ -75,6 +75,31 @@ import { z } from 'zod';
 import { LoadReadingsSchema, measuredCommandShape } from '../../harness/schemas.js';
 import type { CacheMode, LoadReadings } from '../../harness/types.js';
 
+/**
+ * What the build that wrote a dump is able to charge, whether or not it did.
+ *
+ * The seam's `CRAWL_CHARGEABLE_IDS` in `@vibe-agent-toolkit/utils` is the writing
+ * half and carries the argument for why this exists: an ABSENT row cannot
+ * distinguish "this build has no such bracket" from "the work did not happen",
+ * and only the first of those makes two arms incomparable.
+ *
+ * Declared here rather than in `dump.ts` because both the dump and the published
+ * report carry it, and `dump.ts` already reads its row shapes from this module —
+ * putting it the other way round would close a cycle between them.
+ */
+export interface CrawlDumpCharges {
+  /** Every stratum the build can file a row in. */
+  readonly strata: readonly string[];
+  /** Every synthetic id the build can file a row under. Never contributor ids. */
+  readonly syntheticIds: readonly string[];
+}
+
+/** The schema fields for {@link CrawlDumpCharges}, shared by the dump and the report. */
+export const crawlChargesShape = {
+  strata: z.array(z.string().min(1)),
+  syntheticIds: z.array(z.string().min(1)),
+} as const;
+
 /** Stable name of this facet, as it appears in the envelope header. */
 export const CRAWL_FACET = 'crawl';
 
@@ -258,6 +283,15 @@ export interface CrawlCommandStats {
   readonly stable: boolean | null;
   /** See {@link CrawlAttribution}. Read this before reading anything below it. */
   readonly attribution: CrawlAttribution;
+  /**
+   * What the MEASURED build can charge — not what this lab knows how to read.
+   *
+   * The one field that stays informative when every row is absent, and the one a
+   * comparison consults before subtracting: two arms whose instruments differ are
+   * not two measurements of one thing, however well their rows line up. Empty on
+   * a failed row, which is refused earlier and for a better reason.
+   */
+  readonly charges: CrawlDumpCharges;
   /** Every row, in the order the seam emitted them: stratum, then id, then pass. */
   readonly entries: readonly CrawlEntryStats[];
   /** Per-stratum rollups, in first-appearance order. See {@link CrawlStratumStats}. */
@@ -364,6 +398,7 @@ export const CrawlBodySchema = z
           ...measuredCommandShape,
           stable: z.boolean().nullable(),
           attribution: z.enum(['measured', 'nothing-crawled', 'not-measured']),
+          charges: z.object(crawlChargesShape).strict(),
           entries: z.array(z.object(crawlEntryShape).strict()),
           strata: z.array(
             z

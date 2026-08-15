@@ -64,15 +64,18 @@ import { z } from 'zod';
 
 import { type DumpKind, type DumpsRefusal, readDumpFiles } from '../../harness/dumps.js';
 
-import type {
-  CrawlAttribution,
-  CrawlEntryStats,
-  CrawlRoleTotals,
-  CrawlRowRole,
-  CrawlSeamRow,
-  CrawlStratumStats,
+import {
+  crawlChargesShape,
+  crawlProcessShape,
+  crawlSeamRowShape,
+  type CrawlAttribution,
+  type CrawlDumpCharges,
+  type CrawlEntryStats,
+  type CrawlRoleTotals,
+  type CrawlRowRole,
+  type CrawlSeamRow,
+  type CrawlStratumStats,
 } from './types.js';
-import { crawlProcessShape, crawlSeamRowShape } from './types.js';
 
 /**
  * The variable that switches the seam on, and whose VALUE is the directory the
@@ -113,8 +116,17 @@ export const CRAWL_TIMING_DIR_ENV = 'VAT_CRAWL_TIMING';
  *     failure v2 was cut for — and worse, it reads it CONSISTENTLY, so an `ab`
  *     calls the pairs stable and prints a confident delta instead of refusing.
  *     See `crawl-timing.ts`'s own entry for the numbers.
+ * 4 — the dump gained {@link CrawlDump.charges}, and this constant stops being
+ *     the mechanism that catches a widening. Versions 2 and 3 were both bumped
+ *     for meaning rather than layout, and version 3 was bumped LATE, after the
+ *     widening had already shipped — because an integer only moves when a human
+ *     moves it. A build now declares what it can charge and {@link chargeCaveat}
+ *     in `compare.ts` refuses two arms whose declarations differ, so the next
+ *     bracket invalidates the comparisons it should without anyone remembering.
+ *     This number goes back to guarding LAYOUT, which is all it was ever able to
+ *     guard.
  */
-export const CRAWL_DUMP_VERSION = 3;
+export const CRAWL_DUMP_VERSION = 4;
 
 /** One row as the seam wrote it. Carries no role — see {@link crawlRowRole}. */
 export type CrawlDumpEntry = CrawlSeamRow;
@@ -255,7 +267,34 @@ export interface CrawlDump {
   readonly dumpVersion: number;
   readonly pid: number;
   readonly process: CrawlDumpProcess;
+  readonly charges: CrawlDumpCharges;
   readonly entries: readonly CrawlDumpEntry[];
+}
+
+/**
+ * Merge two builds' charge sets — used across the dumps of ONE run, where every
+ * dump comes from one build and they are therefore identical.
+ *
+ * A union rather than an equality assertion, because a run whose processes
+ * somehow disagreed is a real (if unreachable) state, and the safe reading of
+ * "one process could charge this" is that the run could. Sorted so two reports of
+ * one run compare byte for byte.
+ *
+ * @param dumps - Every dump from one run
+ * @returns The union of what they declare
+ */
+function mergeCharges(dumps: readonly CrawlDump[]): CrawlDumpCharges {
+  const strata = new Set<string>();
+  const syntheticIds = new Set<string>();
+  for (const dump of dumps) {
+    for (const stratum of dump.charges.strata) strata.add(stratum);
+    for (const id of dump.charges.syntheticIds) syntheticIds.add(id);
+  }
+  const alphabetically = (left: string, right: string): number => left.localeCompare(right);
+  return {
+    strata: [...strata].sort(alphabetically),
+    syntheticIds: [...syntheticIds].sort(alphabetically),
+  };
 }
 
 /** What a dump naming one `(contributorId, stratum, pass)` twice is rejected with. */
@@ -308,6 +347,11 @@ export const CrawlDumpSchema = z
         cpuSystemMs: crawlProcessShape.cpuSystemMs,
       })
       .strict(),
+    // Required, not optional. The whole value of this field is that it is
+    // present when `entries` is empty, so a reader can tell an instrument that
+    // cannot see some work from work that did not happen; an optional field
+    // would reintroduce exactly the ambiguity it was added to remove.
+    charges: z.object(crawlChargesShape).strict(),
     entries: z.array(z.object(crawlSeamRowShape).strict()),
   })
   .strict()
@@ -335,6 +379,14 @@ export interface MergedCrawlDumps {
    * parent, so rather than pick a wrong denominator this publishes all of them.
    */
   readonly processes: readonly CrawlProcessRecord[];
+  /**
+   * What the build that produced these dumps can charge.
+   *
+   * Carried through the merge so a COMPARISON can refuse two arms whose
+   * instruments differ — see `compare.ts`'s charge caveat. This is the field
+   * that makes a widening self-announcing, which the dump version could not do.
+   */
+  readonly charges: CrawlDumpCharges;
   /**
    * Every row, summed across processes, in the order the seam first emitted
    * them, each stamped with the role {@link crawlRowRole} placed it in.
@@ -510,6 +562,7 @@ export function mergeCrawlDumps(dumps: readonly CrawlDump[]): MergedCrawlDumps {
   const additive = entries.filter((entry) => entry.role === 'additive');
   return {
     processes,
+    charges: mergeCharges(dumps),
     entries,
     strata: rollUpStrata(entries),
     totalCalls: additive.reduce((sum, entry) => sum + entry.calls, 0),

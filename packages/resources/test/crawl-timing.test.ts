@@ -436,7 +436,7 @@ describe('crawl timing seam', () => {
       // (`lab/src/facets/crawl/dump.ts`'s `CRAWL_DUMP_VERSION`). A bump that does
       // not move both numbers makes every dump unreadable, so it should cost a
       // failing test rather than a silent one.
-      expect(dump.dumpVersion).toBe(3);
+      expect(dump.dumpVersion).toBe(4);
       expect(dump.pid).toBe(process.pid);
       expect(keysOf(dump)).toEqual(keysOf(__readCrawlTimingSnapshot()));
       expect(entryOf(dump, CLOSURE_DRIVER_ID, 2).calls).toBe(1);
@@ -464,7 +464,7 @@ describe('crawl timing seam', () => {
       // seam. Folding the first into the second would report a real finding as an
       // instrument failure.
       expect(dump.entries).toEqual([]);
-      expect(dump.dumpVersion).toBe(3);
+      expect(dump.dumpVersion).toBe(4);
     });
 
     it('does not overwrite a dump already filed under this pid', async () => {

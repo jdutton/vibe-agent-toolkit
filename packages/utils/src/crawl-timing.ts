@@ -424,6 +424,62 @@ export const CRAWL_SHARED_GIT_TRACKER_ID = 'git-tracker:initialize';
  */
 const contributorStratum = new AsyncLocalStorage<CrawlDriverStratum>();
 
+/**
+ * Every synthetic id this BUILD is able to charge, whether or not it did.
+ *
+ * ## Why a dump has to say this, and why the version number could not
+ *
+ * An absent row is ambiguous in the one way that matters to a comparison: a dump
+ * with no `git-tracker:initialize` row is either a build that has no such bracket
+ * or a build that has one and never initialized a tracker. **The entries cannot
+ * distinguish those, and the difference decides whether two dumps are comparable
+ * at all** — the first case means one arm's total is missing a term the other
+ * arm's total contains, which is a widening read as a movement; the second means
+ * the arms agree and the work genuinely did not happen.
+ *
+ * {@link CRAWL_SEAM_DUMP_VERSION} was the previous answer and it is a poor one.
+ * An integer says "different", never "different how", so the remedy for a real
+ * widening and for a typo'd field is the same blunt refusal — and, worse, it only
+ * fires if a human remembers to bump it. The `shared` stratum shipped without a
+ * bump on an argument that was correct about rows and wrong about totals; nothing
+ * mechanical caught that, because nothing mechanical could.
+ *
+ * This list is derived from the module's own constants and travels in the dump,
+ * so a reader diffs CAPABILITIES rather than comparing an opaque number, and a
+ * bracket added here is announced without anyone remembering anything.
+ *
+ * ⚠️ **Synthetic ids only.** A contributor's own id comes out of a corpus's
+ * config (`closure:<name>`) and is not a property of the build, so it cannot go
+ * here — its absence really does mean "that extent was not declared", which is a
+ * corpus difference and not a build one. The strata are declared alongside, in
+ * {@link CRAWL_STRATA}, for the same reason and with no such caveat.
+ */
+export const CRAWL_CHARGEABLE_IDS: readonly string[] = [
+  CRAWL_BLOB_POPULATE_ID,
+  CRAWL_CLOSURE_CONTRIBUTE_ID,
+  CRAWL_CLOSURE_RESOLVE_ID,
+  CRAWL_REGISTRY_ADD_RESOURCE_ID,
+  CRAWL_REGISTRY_ENUMERATE_ID,
+  CRAWL_REGISTRY_RESOLVE_LINKS_ID,
+  CRAWL_SHARED_GIT_TRACKER_ID,
+  CRAWL_WALKER_GITIGNORE_ID,
+  CRAWL_WALKER_ID,
+];
+
+/**
+ * What a build can charge, as the dump carries it.
+ *
+ * Static per build — read from constants at write time, never accumulated — so
+ * it describes the INSTRUMENT and never the run. That is the whole point: it is
+ * the half of the dump that is still true when every row is absent.
+ */
+export interface CrawlTimingCharges {
+  /** Every stratum this build can file a row in. */
+  readonly strata: readonly string[];
+  /** Every synthetic id this build can file a row under. */
+  readonly syntheticIds: readonly string[];
+}
+
 /** One `(contributorId, stratum, pass)` row of the dump. */
 export interface CrawlTimingEntry {
   /** A contributor's id, or one of this module's synthetic ids. */
@@ -446,6 +502,15 @@ export interface CrawlTimingDump {
   pid: number;
   /** See {@link CrawlTimingProcess}. Never summed across processes by any reader. */
   process: CrawlTimingProcess;
+  /**
+   * What this build can charge — see {@link CRAWL_CHARGEABLE_IDS}.
+   *
+   * Present even when `entries` is empty, and that is the case it exists for: a
+   * dump with no rows still says which brackets the build carries, so a reader
+   * can tell "this instrument cannot see that work" from "that work did not
+   * happen".
+   */
+  charges: CrawlTimingCharges;
   /**
    * Every row, in a deterministic order: stratum first (declaration order),
    * then contributor id, then pass.
@@ -496,8 +561,19 @@ export interface CrawlTimingDump {
  *     so both get the same remedy. A reader that refuses the dump and says so is
  *     the loud failure; a reader that publishes a confident false delta is the
  *     quiet one, and the quiet one is what shipped between these two versions.
+ * 4 — the dump gained {@link CrawlTimingDump.charges}, and this number stops
+ *     being the mechanism. A layout change, so it costs one last bump; after it,
+ *     a reader diffs what two builds can CHARGE instead of comparing an integer,
+ *     and a widening announces itself without anyone remembering to bump
+ *     anything. Read {@link CRAWL_CHARGEABLE_IDS} for why the integer could never
+ *     have done that job — it says "different", never "different how", and the
+ *     v3 entry above exists precisely because a human did not notice in time.
+ *
+ * ⚠️ Keep bumping this for LAYOUT changes; it is still the only thing that can
+ * refuse a dump whose fields moved. What it is no longer responsible for is
+ * meaning, which the dump now states for itself.
  */
-export const CRAWL_SEAM_DUMP_VERSION = 3;
+export const CRAWL_SEAM_DUMP_VERSION = 4;
 
 /**
  * Alias kept for this module's own readability at the write site.
@@ -617,6 +693,7 @@ function buildDump(): CrawlTimingDump {
     dumpVersion: DUMP_VERSION,
     pid: process.pid,
     process: readTimingProcess(),
+    charges: { strata: [...CRAWL_STRATA], syntheticIds: [...CRAWL_CHARGEABLE_IDS] },
     entries: [...entries.values()].sort(compareEntries).map((entry) => ({ ...entry })),
   };
 }

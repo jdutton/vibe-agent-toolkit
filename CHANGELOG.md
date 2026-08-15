@@ -60,12 +60,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   biases the crawler-against-crawler comparison the seam exists to support, unlike the tracker
   spawn, whose omission at least fell on both sides equally.
 
-  **The dump format is at version 3, and a reader refuses any other.** Both the `shared` stratum and
-  the blob-stage row charge work that was previously charged nowhere, so a command's TOTAL grew
-  without any row changing meaning. Held against a version-2 dump, that widening reads as a
-  regression — and reads as a *consistent* one, so an A/B would have called the pairs stable and
-  printed a confident delta rather than refusing. A refused dump is the loud failure; a confident
-  false delta is the quiet one.
+  **A dump declares what its build can charge, and a comparison refuses two arms that disagree.**
+  Adding a bracket charges work that was previously charged nowhere: no existing row changes, every
+  row lines up, and the command TOTAL grows. An A/B across that boundary reads a widening of the
+  *instrument* as a regression in the *subject* — and reads it consistently, so the pairs look
+  stable and a confident delta gets printed instead of a refusal. Each dump therefore carries
+  `charges` (the strata and synthetic ids the build can file), `vat-lab crawl compare` names what is
+  missing on which side and declines to subtract, and the dump version goes back to guarding layout
+  alone. It was never able to do more: an integer says "different", never "different how", and it
+  only moves when somebody remembers to move it.
 
   **Each dump is one process and carries no cross-process total.** Under a verb that spawns the
   binary more than once, summing wall time across dumps would double-count the parent's lifetime,

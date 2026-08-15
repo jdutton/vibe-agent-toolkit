@@ -87,6 +87,12 @@ function failedRow(base: RowBase, runs: number, failure: string): CrawlCommandSt
     runs,
     stable: null,
     attribution: 'not-measured',
+    // Empty, not the running build's constants: a row that never produced a
+    // dump has no evidence of what the MEASURED build could charge, and filling
+    // it in from the lab's own imports would state the reader's capabilities as
+    // if they were the instrument's. The comparison refuses such a row on
+    // `failed` before it ever reads this.
+    charges: { strata: [], syntheticIds: [] },
     entries: [],
     strata: [],
     totalCalls: 0,
@@ -120,6 +126,7 @@ function measuredRow(
     runs,
     stable,
     attribution: crawlAttributionOf(reported),
+    charges: reported.charges,
     entries: reported.entries,
     strata: reported.strata,
     totalCalls: reported.totalCalls,

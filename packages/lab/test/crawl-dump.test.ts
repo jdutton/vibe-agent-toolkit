@@ -120,9 +120,23 @@ function dump(pid: number, wallMs: number, entries: readonly CrawlDumpEntry[]): 
     dumpVersion: CRAWL_DUMP_VERSION,
     pid,
     process: { wallMs, cpuUserMs: wallMs / 2, cpuSystemMs: wallMs / 4 },
+    charges: FIXTURE_CHARGES,
     entries,
   };
 }
+
+/**
+ * What the fixture build declares it can charge.
+ *
+ * Deliberately NOT the real seam's constants: this module refuses to import from
+ * the package under measurement (see `dump.ts`'s header), and a fixture that
+ * borrowed the reader's own idea of the instrument could not represent an arm
+ * whose instrument differs — which is the case the charge caveat exists for.
+ */
+const FIXTURE_CHARGES = {
+  strata: ['base', 'closure', 'crawl', 'shared'],
+  syntheticIds: ['git-tracker:initialize', 'resource-registry:enumerate', 'walk-link-graph:walk'],
+};
 
 /**
  * A long-lived parent that crawled nothing, and the child that did the work.
