@@ -40,6 +40,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
+import { CONDITION_WITHOUT_REFERENCE } from '../../schemas/projection-resources.js';
 import type {
   ResourceRealizationRow,
   ResourceRow,
@@ -188,6 +189,7 @@ async function contributePackage(
       severity: CONDITION_SEVERITY[located.failure] ?? 'warning',
       message: `Package "${spec.name}" is declared but was not located from the corpus root`,
       resourceId,
+      ...CONDITION_WITHOUT_REFERENCE,
     });
     return;
   }
@@ -219,6 +221,7 @@ async function contributeSubpath(
       severity: CONDITION_SEVERITY[located.failure] ?? 'warning',
       message: `Subpath "${specifier}" did not resolve through the package's declared surface`,
       resourceId: null,
+      ...CONDITION_WITHOUT_REFERENCE,
     });
     return;
   }

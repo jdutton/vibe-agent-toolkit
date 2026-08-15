@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  CONDITION_WITHOUT_REFERENCE,
   RealizationConditionRowSchema,
   ResourceExtentRowSchema,
   ResourceRealizationRowSchema,
@@ -181,6 +182,7 @@ describe('RealizationConditionRowSchema', () => {
     severity: 'error',
     message: 'a-b/c.html and a/b-c.html both flatten to a-b-c-html',
     resourceId: 'r-second',
+    ...CONDITION_WITHOUT_REFERENCE,
   };
 
   it('accepts a collision condition naming the identity that could not be realized', () => {
@@ -193,6 +195,60 @@ describe('RealizationConditionRowSchema', () => {
 
   it('rejects "ignore" as a severity', () => {
     expect(RealizationConditionRowSchema.safeParse({ ...collision, severity: 'ignore' }).success).toBe(false);
+  });
+
+  // The six provenance columns. They are REQUIRED and nullable rather than
+  // optional, so a producer states "no reference provoked this" instead of
+  // leaving a key out — an absent key and a null one would be two spellings of
+  // one fact, which is the failure ContentStateSchema exists to prevent.
+  const refusal = {
+    ...collision,
+    code: 'SKILL_REFUSED_PATTERN_MATCHED',
+    severity: 'info',
+    sourcePath: 'skills/x/SKILL.md',
+    sourceLine: 12,
+    sourceRef: '../agents/tabby.md',
+    targetExists: true,
+    matchedPattern: '**/agents/**',
+    matchedPayload: { ruleIndex: 1, template: 'see {{path}}' },
+  };
+
+  it('accepts a refusal condition carrying the reference that provoked it', () => {
+    expect(RealizationConditionRowSchema.safeParse(refusal).success).toBe(true);
+  });
+
+  it('accepts an empty sourceRef — an empty href is authorable markdown', () => {
+    expect(RealizationConditionRowSchema.safeParse({ ...refusal, sourceRef: '' }).success).toBe(true);
+  });
+
+  it('rejects a non-positive sourceLine — lines are 1-based', () => {
+    expect(RealizationConditionRowSchema.safeParse({ ...refusal, sourceLine: 0 }).success).toBe(false);
+  });
+
+  it('rejects a row that omits a provenance column rather than nulling it', () => {
+    // eslint-disable-next-line sonarjs/no-unused-vars
+    const { targetExists: _omitted, ...withoutColumn } = refusal;
+    expect(RealizationConditionRowSchema.safeParse(withoutColumn).success).toBe(false);
+  });
+
+  it('rejects an unknown column — our own output stays strict', () => {
+    expect(RealizationConditionRowSchema.safeParse({ ...refusal, matchedTemplate: 'x' }).success).toBe(false);
+  });
+});
+
+describe('CONDITION_WITHOUT_REFERENCE', () => {
+  it('nulls every provenance column and names no other', () => {
+    // Pinned as a SET, not spot-checked: the constant's whole job is to be the
+    // complete "no reference behind this" answer, so a column added to the row
+    // and forgotten here must fail rather than silently leave producers short
+    // one key.
+    // In DECLARATION order, not sorted: sorting to compare would need a
+    // comparator the lint config is opinionated about, and the constant's own
+    // order is deterministic and readable.
+    expect(Object.keys(CONDITION_WITHOUT_REFERENCE)).toEqual([
+      'sourcePath', 'sourceLine', 'sourceRef', 'targetExists', 'matchedPattern', 'matchedPayload',
+    ]);
+    expect(Object.values(CONDITION_WITHOUT_REFERENCE).every((value) => value === null)).toBe(true);
   });
 });
 

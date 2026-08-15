@@ -137,6 +137,7 @@ export {
 } from './schemas/projection-zones.js';
 
 export {
+  CONDITION_WITHOUT_REFERENCE,
   ContentStateSchema,
   RealizationConditionRowSchema,
   ResourceExtentRowSchema,

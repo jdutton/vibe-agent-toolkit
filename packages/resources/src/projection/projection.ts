@@ -38,6 +38,7 @@ import type {
   BlobRow,
   BlobSectionRow,
 } from '../schemas/projection-blobs.js';
+import { CONDITION_WITHOUT_REFERENCE } from '../schemas/projection-resources.js';
 import type {
   ContentState,
   RealizationConditionRow,
@@ -378,6 +379,7 @@ export class ProjectionBuilder {
         severity: 'error',
         message: collisionMessage(occupant.resourceId, row.resourceId, row.extentId, row.path),
         resourceId: row.resourceId,
+        ...CONDITION_WITHOUT_REFERENCE,
       });
     }
     return false;

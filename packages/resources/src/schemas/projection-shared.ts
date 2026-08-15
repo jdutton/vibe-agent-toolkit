@@ -17,13 +17,20 @@ import { CONTENT_KEY_PATTERN } from '../content-key.js';
  * "nobody asked for these bytes yet" and "the read threw" it means, and an
  * extent may decline to hash bytes no consumer has demanded.
  *
+ * Version 4 is the condition-provenance revision: `realization_conditions`
+ * gains the six columns that say which reference provoked a condition
+ * (`sourcePath`, `sourceLine`, `sourceRef`, `targetExists`, `matchedPattern`,
+ * `matchedPayload`), so a refusal carries the same provenance
+ * `walk-link-graph.ts`'s `LinkResolution` does and a consumer can raise the
+ * issue the shipped walker raises.
+ *
  * Bump whenever a table gains, loses, or renames a column, or a column's
  * type narrows — the "late column-level change" the architecture doc names
  * as expected, not exceptional. Adding a new *row* to an open vocabulary (a
  * new `resource_tags.tag` value, a new `blob_conditions.code`) is NOT a
  * version bump — see the doc's "facts are rows, not columns" rule.
  */
-export const PROJECTION_SCHEMA_VERSION = 3;
+export const PROJECTION_SCHEMA_VERSION = 4;
 
 /**
  * Any value YAML's core schema (and therefore JSON) can represent. Recursive

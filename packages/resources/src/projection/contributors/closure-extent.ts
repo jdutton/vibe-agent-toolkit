@@ -70,7 +70,11 @@
  *   silent drop. The label is opaque here — the declaration supplies the
  *   vocabulary, this module only reports it — which is what lets a caller
  *   reproduce a domain cascade's reasons (`navigation-file`,
- *   `directory-target`, …) without the primitive knowing any of them.
+ *   `directory-target`, …) without the primitive knowing any of them. The row
+ *   also carries the refusal's PROVENANCE (which reference, at which line, with
+ *   which href, against a target that did or did not exist, by which rule), so a
+ *   consumer can raise the issue the shipped walker raises rather than only
+ *   knowing that something was turned away — see {@link refusedCondition}.
  */
 
 import picomatch from 'picomatch';
@@ -88,6 +92,7 @@ import {
   type ExtentRefusalRule,
 } from '../../schemas/project-config.js';
 import type { BlobReferenceRow } from '../../schemas/projection-blobs.js';
+import { CONDITION_WITHOUT_REFERENCE } from '../../schemas/projection-resources.js';
 import type {
   RealizationConditionRow,
   ResourceExtentRow,
@@ -396,19 +401,19 @@ function hopFor(
   // projection realizes and that the declaration decided against, which is the
   // one of the four an author can act on.
   //
-  // 📌 Refusal PROVENANCE threads through exactly here, and four of the five
-  // fields `LinkResolution` carries are already in scope at this line: the
-  // referring path is `path`, the link's line is `reference.line`, the href as
-  // authored is `reference.rawRef`, and whether the target exists is
-  // `target.exists`. Only "which declared ExcludeRule matched" is absent, and it
-  // is absent by DECLARATION rather than by threading — `refusalOf` returns the
-  // matched `ExtentRefusalRule`, so a payload added to that schema arrives here
-  // with no rethreading; today the skill translation flattens every
-  // `excludeReferencesFromBundle` rule into one refusal rule, so which of them
-  // matched is information the declaration never carried.
+  // 📌 Refusal PROVENANCE threads through exactly here, and every fact
+  // `LinkResolution` carries is in scope at this line: the referring path is
+  // `path`, the link's line is `reference.line`, the href as authored is
+  // `reference.rawRef`, whether the target exists is `target.exists`, and which
+  // rule matched is the rule object `refusalOf` returns — including the opaque
+  // `payload` a caller hangs on it. The fifth was never a threading problem: it
+  // was a DECLARATION problem, and it closed when the skill translation stopped
+  // flattening every `excludeReferencesFromBundle` rule into one refusal rule and
+  // started emitting one rule apiece, in the same order `excludeMatchers.find`
+  // scans them.
   const refusal = walk.refusalOf(target);
   if (refusal !== undefined) {
-    conditions.push(refusedCondition(walk.extentId, target, refusal));
+    conditions.push(refusedCondition(walk.extentId, target, refusal, path, reference));
     return undefined;
   }
   return [target.path, depth + 1];
@@ -790,10 +795,39 @@ function memberResource(resourceId: string, walk: WalkContext): ResourceRow {
 }
 
 /**
+ * The reference that provoked a condition, in the columns
+ * `realization_conditions` carries it in.
+ *
+ * One helper for both reference-borne codes, because the four facts are read
+ * off the same two objects in both and a second spelling is a second place for
+ * the mapping to drift. `targetExists` is NOT here: it is the one fact the two
+ * codes answer differently — a refusal observed the target, an unresolved
+ * reference never found one — so each caller states it.
+ *
+ * @param fromPath - Root-relative path of the file holding the reference
+ * @param reference - The reference row
+ * @returns The three reference columns
+ */
+function referenceProvenance(
+  fromPath: string,
+  reference: BlobReferenceRow,
+): Pick<RealizationConditionRow, 'sourcePath' | 'sourceLine' | 'sourceRef'> {
+  return { sourcePath: fromPath, sourceLine: reference.line, sourceRef: reference.rawRef };
+}
+
+/**
  * The condition recording a reference that resolved to nothing.
  *
  * Anchored to the **referring** path: the target does not exist as far as this
  * projection is concerned, so a row naming it would name a file nobody can open.
+ * `sourcePath` therefore repeats `path` here, and that repetition is the point —
+ * the column always means "the referring file", so one reading serves both
+ * anchorings.
+ *
+ * `targetExists` is **null**, not false. Nothing observed the target: "no
+ * realization in this projection holds this path" is a statement about the
+ * projection's population, and this contributor does no filesystem I/O, so
+ * `false` would be a claim about the disk that nothing here checked.
  *
  * @param extentId - The closure extent
  * @param fromPath - Root-relative path of the file holding the reference
@@ -815,6 +849,10 @@ function unresolvedCondition(
     message: `Reference "${reference.rawRef}" at line ${reference.line} resolves to no realization in this projection,`
       + ' so the closure could not admit it as a member',
     resourceId,
+    ...referenceProvenance(fromPath, reference),
+    targetExists: null,
+    matchedPattern: null,
+    matchedPayload: null,
   };
 }
 
@@ -839,25 +877,48 @@ function unresolvedCondition(
  * times. The rows are identical, and `ProjectionBuilder`'s condition table keys
  * on `(extentId, path, code, resourceId)`, so a population records one.
  *
- * ## Extending this row with refusal provenance
+ * ## The refusal's PROVENANCE, which is the rest of what `LinkResolution` carries
  *
- * The row is deliberately a plain {@link RealizationConditionRow} and not a new
- * table: `code` is an open vocabulary and the label goes straight into it, which
- * is all a REASON needs. Carrying `LinkResolution`'s provenance too
- * (`sourcePath`, `sourceLine`, `linkHref`, `targetExists`, `matchedRule`) would
- * need columns `RealizationConditionRowSchema` does not have — that is a schema
- * widening, not a rewrite of this function, and `rule` is passed in whole so any
- * payload a future `ExtentRefusalRuleSchema` gains needs no new parameter here.
+ * `code` answers *why*; these five columns answer *where from* and *by which
+ * rule*, which is what a consumer needs to raise the issue `walker-to-issues.ts`
+ * raises (`sourcePath`/`sourceLine`/`linkHref`/`targetExists`) and the finding
+ * `packaging-validator.ts` renders (`matchedRule.patterns[0]`).
+ *
+ * - **`sourcePath` / `sourceLine` / `sourceRef`** come from the reference this
+ *   refusal was reached through, so the row names a file and a line an author
+ *   can open — never the refused target, which is where an author would find
+ *   nothing to change.
+ * - **`targetExists`** is `target.exists`, a COLUMN of the realization row and
+ *   not a probe. That is what keeps the module docstring's "no filesystem I/O of
+ *   its own" true while still answering the question the walker answers with a
+ *   `stat`.
+ * - **`matchedPattern`** is the matched rule's FIRST declared glob, read exactly
+ *   the way `packaging-validator.ts:1182` reads `matchedRule.patterns[0]` — the
+ *   rule's identifying pattern, not necessarily the glob that fired. A rule
+ *   refusing by basename, kind or flag declares no patterns and reports null.
+ * - **`matchedPayload`** is the rule's opaque payload, verbatim. The primitive
+ *   contributes no vocabulary here either: it neither reads nor validates it,
+ *   exactly as it neither reads nor validates `label`.
+ *
+ * ⚠️ One row per refused REFERENCE is emitted, but `ProjectionBuilder` keys the
+ * condition table on `(extentId, path, code, resourceId)` — so a target refused
+ * through three references records ONE row, carrying the FIRST reference's
+ * provenance. The witness is a witness, not the list; `blob_references` is where
+ * the list lives.
  *
  * @param extentId - The closure extent
  * @param target - The refused candidate's realization row
  * @param rule - The refusal rule that matched, first-match-wins
+ * @param fromPath - Root-relative path of the file whose reference reached it
+ * @param reference - The reference this refusal was reached through
  * @returns The condition row
  */
 function refusedCondition(
   extentId: string,
   target: ResourceRealizationRow,
   rule: ExtentRefusalRule,
+  fromPath: string,
+  reference: BlobReferenceRow,
 ): RealizationConditionRow {
   return {
     extentId,
@@ -867,11 +928,20 @@ function refusedCondition(
     message: `Refused by the "${rule.label}" rule of this extent's refusal cascade,`
       + ' so it is neither a member nor a path the closure traverses through',
     resourceId: target.resourceId,
+    ...referenceProvenance(fromPath, reference),
+    targetExists: target.exists,
+    matchedPattern: rule.patterns[0] ?? null,
+    matchedPayload: rule.payload,
   };
 }
 
 /**
  * The condition recording a `closureFrom` the base never realized.
+ *
+ * The one closure condition with **no reference behind it** — the root arrives
+ * from the declaration, not from a link — so it spreads
+ * {@link CONDITION_WITHOUT_REFERENCE} rather than naming a source it does not
+ * have.
  *
  * @param extentId - The closure extent
  * @param rootPath - The declared root path
@@ -886,6 +956,7 @@ function rootAbsentCondition(extentId: string, rootPath: string): RealizationCon
     message: `closureFrom "${rootPath}" is not realized anywhere in this projection,`
       + ' so this extent is empty for a declared reason rather than an observed one',
     resourceId: null,
+    ...CONDITION_WITHOUT_REFERENCE,
   };
 }
 

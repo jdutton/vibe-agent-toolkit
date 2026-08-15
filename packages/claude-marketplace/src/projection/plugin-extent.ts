@@ -65,6 +65,7 @@ import { readFileSync } from 'node:fs';
 
 import { MarketplaceManifestSchema, type MarketplaceManifest } from '@vibe-agent-toolkit/agent-skills';
 import {
+  CONDITION_WITHOUT_REFERENCE,
   extentContextId,
   type ContributorStratum,
   type ExtentContribution,
@@ -320,6 +321,7 @@ function contributeDeclaredPlugin(
     message: `Plugin "${entry.name}" is declared by this marketplace, but nothing in this projection`
       + ` realizes it at "${declaredPath}" — it is known without being present`,
     resourceId,
+    ...CONDITION_WITHOUT_REFERENCE,
   });
 }
 
@@ -586,6 +588,7 @@ function unreadableManifest(
     message: `"${manifestPath}" could not be read as a ${manifestKind} manifest,`
       + ' so this extent holds only what convention supplies',
     resourceId: null,
+    ...CONDITION_WITHOUT_REFERENCE,
   };
 }
 

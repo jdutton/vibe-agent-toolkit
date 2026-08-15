@@ -312,20 +312,25 @@ describe('skillExtentDeclaration', () => {
       follow: ['markdown-link', 'markdown-link-reference', 'markdown-definition'],
       // In `classifyExclusion`'s own branch order — see the next test for why
       // that order is now behaviour rather than presentation.
+      // A config-less skill declares no exclude rules, so the cascade's last
+      // branch contributes NO rule — one rule per declared rule, and there are
+      // none. It used to emit one empty rule that could never match.
       refusals: [
         // `classifyPathKind` refuses a directory unconditionally — no knob gates it.
-        { label: SKILL_REFUSED_DIRECTORY_TARGET, patterns: [], basenames: [], kinds: ['directory'], flags: {} },
+        {
+          label: SKILL_REFUSED_DIRECTORY_TARGET,
+          patterns: [], basenames: [], kinds: ['directory'], flags: {}, payload: null,
+        },
         // `skill-packager.ts:582` defaults `excludeNavigationFiles` to true, so a
         // config-less skill refuses this list too.
         {
           label: SKILL_REFUSED_NAVIGATION_FILE,
-          patterns: [], basenames: [...NAVIGATION_FILE_PATTERNS], kinds: [], flags: {},
+          patterns: [], basenames: [...NAVIGATION_FILE_PATTERNS], kinds: [], flags: {}, payload: null,
         },
         {
           label: SKILL_REFUSED_AGENT_INSTRUCTION_FILE,
-          patterns: [], basenames: [...AGENT_INSTRUCTION_FILE_PATTERNS], kinds: [], flags: {},
+          patterns: [], basenames: [...AGENT_INSTRUCTION_FILE_PATTERNS], kinds: [], flags: {}, payload: null,
         },
-        { label: SKILL_REFUSED_PATTERN_MATCHED, patterns: [], basenames: [], kinds: [], flags: {} },
       ],
       admitPaths: [],
     });
@@ -339,7 +344,15 @@ describe('skillExtentDeclaration', () => {
     // order IS the behaviour"). Asserted as a LIST rather than as membership: a
     // set-shaped assertion would pass against any permutation, which is exactly
     // the property under test.
-    expect(skillExtentDeclaration(DEFAULT_CONFIG, SKILL_REL).refusals.map((rule) => rule.label))
+    //
+    // Driven from a config that DECLARES an exclude rule, not from the empty
+    // one: the pattern branch now contributes a rule only when the config does,
+    // so a config-less declaration could not show that the pattern rules sit
+    // LAST — the position this test exists to pin.
+    const config: SkillPackagingConfig = {
+      excludeReferencesFromBundle: { rules: [{ patterns: ['docs/**'] }] },
+    };
+    expect(skillExtentDeclaration(config, SKILL_REL).refusals.map((rule) => rule.label))
       .toEqual([
         SKILL_REFUSED_DIRECTORY_TARGET,
         SKILL_REFUSED_NAVIGATION_FILE,
@@ -360,7 +373,6 @@ describe('skillExtentDeclaration', () => {
     expect(declaration.refusals.map((rule) => rule.label)).toEqual([
       SKILL_REFUSED_DIRECTORY_TARGET,
       SKILL_REFUSED_AGENT_INSTRUCTION_FILE,
-      SKILL_REFUSED_PATTERN_MATCHED,
     ]);
     const agentInstruction = declaration.refusals
       .find((rule) => rule.label === SKILL_REFUSED_AGENT_INSTRUCTION_FILE);
@@ -372,12 +384,17 @@ describe('skillExtentDeclaration', () => {
     expect(skillExtentDeclaration({ linkFollowDepth: 'full' }, SKILL_REL).maxDepth).toBe('full');
   });
 
-  it('flattens every ordered rule\'s patterns into ONE labelled refusal rule', () => {
-    // One rule, not one per `ExcludeRule`: the walker reports `pattern-matched`
-    // for all of them, so splitting them would invent a distinction the reason
-    // vocabulary does not have. What is lost is *which* rule won — and that is
-    // only observable through its `template`, which the condition row has no
-    // column for either. See the module note's `template` row.
+  it('expands each ordered rule into its OWN refusal rule, same label, declared order', () => {
+    // One rule apiece, NOT one flattened rule. Both encodings select the same
+    // files and report the same reason — the walker says `pattern-matched` for
+    // all of them, so the LABEL is deliberately shared and the condition code is
+    // unchanged. What one rule per rule buys is the thing the flat encoding threw
+    // away: WHICH declared rule caught the file, which is `matchedRule` on the
+    // walker's row and `matchedPattern` + `matchedPayload` on the closure's.
+    //
+    // The primitive is first-match-wins over this array, which is exactly
+    // `excludeMatchers.find(...)` over `options.excludeRules` — same order, same
+    // winner — so the expansion is a re-encoding, not a behaviour change.
     const config: SkillPackagingConfig = {
       excludeReferencesFromBundle: {
         rules: [
@@ -386,10 +403,29 @@ describe('skillExtentDeclaration', () => {
         ],
       },
     };
-    const patternRule = skillExtentDeclaration(config, SKILL_REL).refusals
-      .filter((rule) => rule.label === SKILL_REFUSED_PATTERN_MATCHED);
-    expect(patternRule).toHaveLength(1);
-    expect(patternRule[0]?.patterns).toEqual(['**/*.mjs', 'docs/**', '**/*.json']);
+    const refusals = skillExtentDeclaration(config, SKILL_REL).refusals;
+    const patternRules = refusals.filter((rule) => rule.label === SKILL_REFUSED_PATTERN_MATCHED);
+    expect(patternRules).toHaveLength(2);
+    // A LIST, not a set: the declared order is the first-match-wins order.
+    expect(patternRules.map((rule) => rule.patterns))
+      .toEqual([['**/*.mjs'], ['docs/**', '**/*.json']]);
+    // The payload is the channel for what the primitive has no column for: the
+    // rule's identity when two rules share a first pattern, and its `template`,
+    // which the flat encoding lost outright. `template: null` rather than an
+    // absent key — a consumer must not have to tell "no template" from "no key".
+    expect(patternRules.map((rule) => rule.payload)).toEqual([
+      { ruleIndex: 0, template: 'https://example.test/{{path}}' },
+      { ruleIndex: 1, template: null },
+    ]);
+    // …and they sit AFTER the basename rules. The expansion widens one cascade
+    // step into two; it must not move the step.
+    expect(refusals.map((rule) => rule.label)).toEqual([
+      SKILL_REFUSED_DIRECTORY_TARGET,
+      SKILL_REFUSED_NAVIGATION_FILE,
+      SKILL_REFUSED_AGENT_INSTRUCTION_FILE,
+      SKILL_REFUSED_PATTERN_MATCHED,
+      SKILL_REFUSED_PATTERN_MATCHED,
+    ]);
   });
 
   it('admits an EXPLICIT files:-declared agent-instruction source, and nothing else', () => {

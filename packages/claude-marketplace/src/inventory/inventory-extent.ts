@@ -190,21 +190,21 @@ function inventoryRefusals(hasGitTracker: boolean): ExtentRefusalRule[] {
   const rules: ExtentRefusalRule[] = [
     {
       label: INVENTORY_REFUSED_DIRECTORY_TARGET,
-      patterns: [], basenames: [], kinds: [DIRECTORY_KIND], flags: {},
+      patterns: [], basenames: [], kinds: [DIRECTORY_KIND], flags: {}, payload: null,
     },
     {
       label: INVENTORY_REFUSED_NAVIGATION_FILE,
-      patterns: [], basenames: [...NAVIGATION_FILE_PATTERNS], kinds: [], flags: {},
+      patterns: [], basenames: [...NAVIGATION_FILE_PATTERNS], kinds: [], flags: {}, payload: null,
     },
     {
       label: INVENTORY_REFUSED_AGENT_INSTRUCTION_FILE,
-      patterns: [], basenames: [...AGENT_INSTRUCTION_FILE_PATTERNS], kinds: [], flags: {},
+      patterns: [], basenames: [...AGENT_INSTRUCTION_FILE_PATTERNS], kinds: [], flags: {}, payload: null,
     },
   ];
   if (hasGitTracker) {
     rules.push({
       label: INVENTORY_REFUSED_GITIGNORED,
-      patterns: [], basenames: [], kinds: [], flags: { ...GITIGNORED_FLAGS },
+      patterns: [], basenames: [], kinds: [], flags: { ...GITIGNORED_FLAGS }, payload: null,
     });
   }
   return rules;

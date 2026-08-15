@@ -18,18 +18,42 @@
  * dominant. Agreement that survives its own negative control is a measurement;
  * agreement on its own is satisfied by a closure that returned nothing.
  *
- * ## Two comparisons, not one: membership AND the stated reason
+ * ## Three comparisons, not one: membership, the stated reason, and the PROVENANCE
  *
- * Membership agreement is the older half. The refusal cascade also makes the two
- * arms comparable on WHY a candidate was turned away, so
- * {@link compareReasons} takes every path BOTH arms refused and checks the
- * closure's condition code against the walker's own `excludeReason` through an
- * explicit four-entry table ({@link REASON_TO_REFUSAL_CODE}). The count of paths
- * compared is asserted non-zero beside the mismatch list, because an empty
- * mismatch list over an empty comparison is the same vacuous pass a zero-cell
- * sweep would give. Demonstrated falsifiable rather than assumed: swapping two
- * labels in the translation leaves membership untouched and turns 15 of the 59
- * compared paths into mismatches.
+ * Membership agreement is the oldest half. The refusal cascade made the two arms
+ * comparable on WHY a candidate was turned away, so {@link compareReasons} takes
+ * every path BOTH arms refused and checks the closure's condition code against
+ * the walker's own `excludeReason` through an explicit four-entry table
+ * ({@link REASON_TO_REFUSAL_CODE}). The count of paths compared is asserted
+ * non-zero beside the mismatch list, because an empty mismatch list over an empty
+ * comparison is the same vacuous pass a zero-cell sweep would give. Demonstrated
+ * falsifiable rather than assumed: swapping two labels in the translation leaves
+ * membership untouched and turns 15 of the 59 compared paths into mismatches.
+ *
+ * {@link compareProvenance} is the third, and it asks the question a consumer
+ * actually has to answer: given a refusal, WHERE does an author look? Every field
+ * `LinkResolution` carries beside its reason — `sourcePath`, `sourceLine`,
+ * `linkHref`, `targetExists` and `matchedRule.patterns[0]` — is compared against
+ * the `realization_conditions` column the closure fills, **one field at a time**,
+ * as a multiset per refused path. Per-field rather than as a tuple so that
+ * perturbing one emission reddens exactly one bucket and the failure names the
+ * field; per-field populations are asserted non-zero for the same reason the
+ * reason bucket's is.
+ *
+ * Every field is demonstrated falsifiable by MUTATION, not argued to be: off-by-
+ * one on the line, an emptied href, the target's path in place of the referrer's,
+ * a flipped `targetExists` and a nulled `matchedPattern` each turn the sweep red
+ * (59, 59, 354, 59 and 42 disagreements respectively) while membership and the
+ * reason bucket stay green.
+ *
+ * The `matchedPattern` half needs one more control, in
+ * `'names WHICH declared exclude rule matched'`: every shipped
+ * `excludeReferencesFromBundle` block on this corpus holds exactly ONE rule, so
+ * the corpus alone cannot tell a per-rule encoding from a flattened one — both
+ * report the same pattern. That case synthesizes a two-rule config whose FIRST
+ * rule is a decoy matching nothing, which is the answer a flat encoding gives
+ * (measured: reverting the translation to the flat encoding turns that case red
+ * with the decoy's pattern, and nothing else in this file moves).
  *
  * `packages/agent-skills/test/projection-skill-extent.test.ts` already compares
  * `SkillExtentContributor` with `walkLinkGraph` at *fixture* scale, on a corpus
@@ -149,6 +173,7 @@ import {
   type JsonValue,
   type Projection,
   type ProjectionBase,
+  type RealizationConditionRow,
 } from '@vibe-agent-toolkit/resources';
 import { GitTracker, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -256,6 +281,31 @@ const EXCLUDED_DIRECTORY = 'vat-example-cat-agents/resources/agents';
  * against it and is right to bundle it.
  */
 const EXCLUDING_SKILL = 'vat-example-cat-agents';
+
+/**
+ * A glob that matches NOTHING on this corpus, declared FIRST in the synthesized
+ * two-rule config of the which-rule case.
+ *
+ * Its whole job is to be the answer a FLAT translation would give: one refusal
+ * rule holding the union of every declared rule's patterns has a single
+ * identity, so `patterns[0]` is the first rule's pattern no matter which glob
+ * actually fired.
+ */
+const DECOY_PATTERN = '**/no-such-directory-on-this-corpus/**';
+
+/** The `template` the same case declares on the rule that DOES match. */
+const MATCHING_TEMPLATE = 'see https://example.test/{{path}}';
+
+/**
+ * The glob the shipped `vat-example-cat-agents` config declares against
+ * {@link EXCLUDED_DIRECTORY}, re-declared here as the SECOND rule of the
+ * synthesized two-rule config.
+ *
+ * Spelled once: it is both what that config declares and what both arms must
+ * report as the matched pattern, and two spellings would let the expectation
+ * drift away from the rule it stands for.
+ */
+const EXCLUDED_DIRECTORY_GLOB = '**/agents/**';
 
 /**
  * Every cause the depth sweep produced **before** the refusal vocabulary landed,
@@ -444,6 +494,17 @@ interface WalkerRun {
   readonly members: string[];
   /** Every path the walker reached — bundled or refused. */
   readonly seen: ReadonlyMap<string, DivergenceCause | 'bundled'>;
+  /**
+   * Root-relative refused path → one entry per EXCLUSION ROW the walker emitted
+   * for it.
+   *
+   * A list, not a single row: both arms emit one row per refused REFERENCE, so a
+   * hub linked from three documents is refused three times. Keeping the list is
+   * what lets the comparison be a multiset equality rather than a last-writer-
+   * wins peek, which would silently compare whichever row happened to arrive
+   * last on each side.
+   */
+  readonly provenance: ReadonlyMap<string, RefusalProvenance[]>;
 }
 
 /** Everything one closure contribution produced, in the same coordinate system. */
@@ -452,6 +513,17 @@ interface ClosureRun {
   readonly members: string[];
   /** Root-relative path → the refusal label the closure reported for it. */
   readonly refusals: ReadonlyMap<string, string>;
+  /** Root-relative refused path → one entry per refusal CONDITION ROW, as above. */
+  readonly provenance: ReadonlyMap<string, RefusalProvenance[]>;
+  /**
+   * The refusal condition rows themselves, unreduced.
+   *
+   * Carried because `matchedPayload` has NO counterpart on the walker's row — it
+   * is the channel for exactly what `LinkResolution` cannot hold — so it is
+   * deliberately not one of {@link PROVENANCE_FIELDS}, which are the fields the
+   * two arms are compared ON. The `template` case reads it from here instead.
+   */
+  readonly conditions: readonly RealizationConditionRow[];
 }
 
 /**
@@ -467,6 +539,62 @@ interface ReasonComparison {
   readonly compared: number;
   /** One rendered line per path the two arms refused for different stated reasons. */
   readonly mismatches: readonly string[];
+}
+
+/**
+ * The five facts a refusal carries BESIDE its reason, stated once so both arms
+ * are read into the same shape.
+ *
+ * These are `LinkResolution`'s own columns — `sourcePath`, `sourceLine`,
+ * `linkHref`, `targetExists` and `matchedRule` — and the projection's
+ * `realization_conditions` counterparts, which the closure fills at the refusal
+ * site. `matchedPattern` is `matchedRule.patterns[0]` on the walker side, which
+ * is exactly how `packaging-validator.ts:1182` reads it: the comparison must be
+ * against what a CONSUMER gets, not against a shape only one arm has.
+ */
+interface RefusalProvenance {
+  readonly sourcePath: string | null;
+  readonly sourceLine: number | null;
+  readonly sourceRef: string | null;
+  readonly targetExists: boolean | null;
+  readonly matchedPattern: string | null;
+}
+
+/**
+ * The fields compared one at a time, so a failure names the FIELD.
+ *
+ * A single tuple comparison would catch every disagreement too, and would say
+ * only "these rows differ" — leaving the reader to diff five values by eye and
+ * leaving no way to state, per field, that the comparison had a population at
+ * all. Mutating one field must turn exactly one bucket red; that is the property
+ * this list exists to make observable.
+ */
+const PROVENANCE_FIELDS = [
+  'sourcePath', 'sourceLine', 'sourceRef', 'targetExists', 'matchedPattern',
+] as const;
+
+type ProvenanceField = typeof PROVENANCE_FIELDS[number];
+
+/**
+ * The provenance half of the comparison, per field.
+ *
+ * `compared` counts a path for a field only when at least ONE arm carried a
+ * non-null value for it. Counting null-against-null would make
+ * `matchedPattern`'s population equal to every refused path while the
+ * pattern-matched branch went unreached — the exact vacuity the reason bucket
+ * already guards against, one column deeper. With this rule a non-zero
+ * `matchedPattern` count is a statement that a declared exclude rule actually
+ * caught something.
+ */
+interface ProvenanceComparison {
+  readonly compared: Record<ProvenanceField, number>;
+  readonly mismatches: readonly string[];
+  /**
+   * Walker refusal rows the comparison could not pair, because the closure never
+   * enumerated that referring file's references at all — the depth-frontier
+   * asymmetry {@link compareProvenance} documents. Reported, not asserted zero.
+   */
+  readonly frontierRows: number;
 }
 
 // ============================================================================
@@ -757,15 +885,28 @@ function walkerRun(
 
   const seen = new Map<string, DivergenceCause | 'bundled'>();
   for (const path of members) seen.set(path, 'bundled');
+  const provenance = new Map<string, RefusalProvenance[]>();
   for (const reference of result.excludedReferences) {
     // `bundled` wins: one path can be reached twice, refused on one route and
     // admitted on another, and it is a member either way.
     const path = relative(reference.path);
     if (seen.get(path) === 'bundled') continue;
     seen.set(path, reference.excludeReason ?? PRUNED);
+    const rows = provenance.get(path) ?? [];
+    rows.push({
+      sourcePath: relative(reference.sourcePath),
+      sourceLine: reference.sourceLine ?? null,
+      sourceRef: reference.linkHref ?? null,
+      targetExists: reference.targetExists,
+      // Read exactly as `packaging-validator.ts:1182` reads it. The rule OBJECT
+      // is not the comparison currency: only one arm has one, and a consumer
+      // gets this string.
+      matchedPattern: reference.matchedRule?.patterns[0] ?? null,
+    });
+    provenance.set(path, rows);
   }
 
-  return { members, seen };
+  return { members, seen, provenance };
 }
 
 /**
@@ -814,12 +955,153 @@ async function closureRun(
 
   const memberSet = new Set(members);
   const refusals = new Map<string, string>();
+  const provenance = new Map<string, RefusalProvenance[]>();
+  const conditions: RealizationConditionRow[] = [];
   for (const row of contribution.conditions) {
     if (PRIMITIVE_CONDITION_CODES.has(row.code) || memberSet.has(row.path)) continue;
     refusals.set(row.path, row.code);
+    conditions.push(row);
+    const rows = provenance.get(row.path) ?? [];
+    // Read straight off the condition row's own columns. Nothing is re-derived
+    // here: a comparison that recomputed the closure's answer from the base
+    // would be testing this file's arithmetic, not the contributor's.
+    rows.push({
+      sourcePath: row.sourcePath,
+      sourceLine: row.sourceLine,
+      sourceRef: row.sourceRef,
+      targetExists: row.targetExists,
+      matchedPattern: row.matchedPattern,
+    });
+    provenance.set(row.path, rows);
   }
 
-  return { members, refusals };
+  return { members, refusals, provenance, conditions };
+}
+
+/**
+ * One arm's multiset of values for one field of one path, rendered.
+ *
+ * Sorted by code unit and joined, so the comparison is order-independent: the
+ * two arms visit a document's references in their own orders, and an
+ * order-sensitive comparison would report a difference that is about iteration
+ * rather than about the fact.
+ *
+ * @param rows - Every refusal row one arm emitted for one path
+ * @param field - The field to read
+ * @returns The rendered multiset
+ */
+function fieldMultiset(rows: readonly RefusalProvenance[], field: ProvenanceField): string {
+  return rows.map((row) => String(row[field])).sort(byCodeUnit).join(' | ');
+}
+
+/**
+ * The provenance halves of the two arms, per field, for every path BOTH refused.
+ *
+ * Scoped to the same population {@link compareReasons} uses and for the same
+ * reason: a path one arm bundled is a MEMBERSHIP difference, already owned by
+ * {@link Divergence}, and reporting it here too would name one disagreement
+ * twice.
+ *
+ * ## The one asymmetry this comparison had to be shaped around: the depth frontier
+ *
+ * MEASURED, not assumed, and it is a difference in which references get
+ * CLASSIFIED — never in what either arm says about a reference they both
+ * classified. `walkLinkGraph`'s `processLink` calls `checkExclusions` **before**
+ * the depth check (`processRegistryResource` owns that), so a link out of a
+ * member sitting AT `maxDepth` is still classified and still recorded as an
+ * exclusion. The closure's `canDescend` returns false at that member and its
+ * references are never enumerated at all. Neither arm bundles those targets, so
+ * membership is untouched and the older half of this file never saw it.
+ *
+ * Concretely, at `linkFollowDepth: 1` the walker emits 34 refusal rows for
+ * `…/agents/breed-advisor.md` (14 from the SKILL.md, 20 from the depth-1
+ * `cat-breed-selection.md`) where the closure emits the 14 — and all 14 agree
+ * field for field.
+ *
+ * So the rows are paired by REFERRING FILE and the unpaired walker rows are
+ * counted rather than compared. Two guards keep that restriction from becoming a
+ * place for a real disagreement to hide, and both are asserted, not commented:
+ * a referring file the CLOSURE names and the walker does not is a mismatch, and
+ * a dropped referring file that is not even a closure member is a mismatch.
+ *
+ * @param walk - What the walker bundled and refused
+ * @param closure - What the closure admitted and refused
+ * @returns The per-field population and every disagreement, rendered
+ */
+/**
+ * Every way the frontier restriction could be hiding a real disagreement.
+ *
+ * ⚠️ Pairing rows by referring file is only sound while the restriction drops
+ * rows for the ONE documented reason. These two guards are what make that a
+ * checked claim rather than a hope: a referring file the CLOSURE names and the
+ * walker does not is a wrong `sourcePath` wearing the restriction as a costume,
+ * and a dropped referring file the closure never admitted as a member at all is
+ * a membership difference rather than a frontier one.
+ *
+ * @param path - The refused path both arms are describing
+ * @param walkerRows - Every refusal row the walker emitted for it
+ * @param shared - The referring files the closure named
+ * @param members - The closure extent's membership
+ * @returns One rendered line per unsound drop, empty when the restriction is sound
+ */
+function unsoundRestriction(
+  path: string,
+  walkerRows: readonly RefusalProvenance[],
+  shared: ReadonlySet<string | null>,
+  members: ReadonlySet<string>,
+): string[] {
+  const findings: string[] = [];
+  for (const source of shared) {
+    if (!walkerRows.some((row) => row.sourcePath === source)) {
+      findings.push(`${path} [source]: closure names referrer ${String(source)}, walker names none`);
+    }
+  }
+  for (const row of walkerRows) {
+    if (!shared.has(row.sourcePath) && !members.has(row.sourcePath ?? '')) {
+      findings.push(`${path} [source]: walker refers from ${String(row.sourcePath)},`
+        + ' which the closure did not admit as a member at all');
+    }
+  }
+  return findings;
+}
+
+function compareProvenance(walk: WalkerRun, closure: ClosureRun): ProvenanceComparison {
+  const mismatches: string[] = [];
+  const compared: Record<ProvenanceField, number> = {
+    sourcePath: 0, sourceLine: 0, sourceRef: 0, targetExists: 0, matchedPattern: 0,
+  };
+  const members = new Set(closure.members);
+  let frontierRows = 0;
+
+  for (const [path, closureRows] of closure.provenance) {
+    const walkerRows = walk.provenance.get(path);
+    if (walkerRows === undefined) continue;
+
+    // The two arms classify a different SET of references at the depth frontier
+    // — see the block comment above — so the rows are restricted to referring
+    // files BOTH arms enumerated. The restriction is by SOURCE FILE and never by
+    // row, because for a shared source both arms enumerated all of its
+    // references, which is what keeps the multiset comparison exact.
+    const shared = new Set(closureRows.map((row) => row.sourcePath));
+    const paired = walkerRows.filter((row) => shared.has(row.sourcePath));
+    frontierRows += walkerRows.length - paired.length;
+
+    mismatches.push(...unsoundRestriction(path, walkerRows, shared, members));
+
+    for (const field of PROVENANCE_FIELDS) {
+      const walker = fieldMultiset(paired, field);
+      const projected = fieldMultiset(closureRows, field);
+      // Only a field SOME arm answered counts as compared — see
+      // ProvenanceComparison for why null-against-null must not inflate a
+      // population.
+      if ([...paired, ...closureRows].some((row) => row[field] !== null)) compared[field] += 1;
+      if (walker !== projected) {
+        mismatches.push(`${path} [${field}]: walker=${walker} closure=${projected}`);
+      }
+    }
+  }
+
+  return { compared, mismatches, frontierRows };
 }
 
 /**
@@ -870,6 +1152,7 @@ async function compareSkill(
   closure: string[];
   divergence: Divergence | undefined;
   reasons: ReasonComparison;
+  provenance: ProvenanceComparison;
 }> {
   const walk = walkerRun(corpus, skill, walkOptionsFor(corpus, skill, config));
   const run = await closureRun(corpus, skill, config, narrowing);
@@ -892,7 +1175,8 @@ async function compareSkill(
       closureOnly,
     };
   const reasons = compareReasons(walk, run);
-  return { walker: walk.members, closure, divergence, reasons };
+  const provenance = compareProvenance(walk, run);
+  return { walker: walk.members, closure, divergence, reasons, provenance };
 }
 
 /** What one pass of {@link SWEPT_DEPTHS} over one corpus produced. */
@@ -908,6 +1192,12 @@ interface SweepResult {
   readonly reasonsCompared: number;
   /** Every path the two arms refused for different stated reasons. */
   readonly reasonMismatches: string[];
+  /** Per FIELD, how many (path, cell) pairs some arm answered — the provenance population. */
+  readonly provenanceCompared: Record<ProvenanceField, number>;
+  /** Every field of every path the two arms describe differently. */
+  readonly provenanceMismatches: string[];
+  /** Walker refusal rows unpaired at the depth frontier — see {@link compareProvenance}. */
+  readonly frontierRows: number;
 }
 
 /**
@@ -924,19 +1214,31 @@ async function sweepDepths(corpus: Corpus, narrowing: Narrowing = 'on'): Promise
   const result: SweepResult = {
     divergences: [], rows: [], excludeEscapes: [], followed: 0,
     reasonsCompared: 0, reasonMismatches: [],
+    provenanceCompared: { sourcePath: 0, sourceLine: 0, sourceRef: 0, targetExists: 0, matchedPattern: 0 },
+    provenanceMismatches: [], frontierRows: 0,
   };
   let followed = 0;
   let reasonsCompared = 0;
+  let frontierRows = 0;
 
   for (const depth of SWEPT_DEPTHS) {
     for (const skill of corpus.skills) {
       const config: SkillPackagingConfig = { ...skill.config, linkFollowDepth: depth };
-      const { walker, closure, divergence, reasons } = await compareSkill(corpus, skill, config, narrowing);
+      const {
+        walker, closure, divergence, reasons, provenance,
+      } = await compareSkill(corpus, skill, config, narrowing);
       if (divergence !== undefined) result.divergences.push(divergence);
       if (walker.length > 1 || closure.length > 1) followed += 1;
       reasonsCompared += reasons.compared;
       result.reasonMismatches.push(
         ...reasons.mismatches.map((line) => `${skill.name}@${String(depth)}: ${line}`),
+      );
+      for (const field of PROVENANCE_FIELDS) {
+        result.provenanceCompared[field] += provenance.compared[field];
+      }
+      frontierRows += provenance.frontierRows;
+      result.provenanceMismatches.push(
+        ...provenance.mismatches.map((line) => `${skill.name}@${String(depth)}: ${line}`),
       );
       result.rows.push({
         depth, skill: skill.name, walker: walker.length, closure: closure.length,
@@ -952,7 +1254,7 @@ async function sweepDepths(corpus: Corpus, narrowing: Narrowing = 'on'): Promise
     }
   }
 
-  return { ...result, followed, reasonsCompared };
+  return { ...result, followed, reasonsCompared, frontierRows };
 }
 
 // ============================================================================
@@ -988,6 +1290,19 @@ beforeAll(async () => {
 // ============================================================================
 // The experiment
 // ============================================================================
+
+/**
+ * The one corpus that can distinguish the two arms — the same files and configs
+ * against the repository root.
+ *
+ * @returns The repo-root corpus
+ * @throws When {@link CORPORA} no longer contains it
+ */
+function repoRootCorpus(): Corpus {
+  const corpus = corpora.find((entry) => entry.spec.projectRoot === '.');
+  if (corpus === undefined) throw new Error('no repo-root corpus');
+  return corpus;
+}
 
 describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () => {
   it('agrees on membership for every declared skill, or names every difference', async () => {
@@ -1049,11 +1364,11 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
   });
 
   it('agrees across a depth sweep on the corpus that CAN distinguish', async () => {
-    const corpus = corpora.find((entry) => entry.spec.projectRoot === '.');
-    if (corpus === undefined) throw new Error('no repo-root corpus');
+    const corpus = repoRootCorpus();
 
     const {
       divergences, rows, excludeEscapes, followed, reasonsCompared, reasonMismatches,
+      provenanceCompared, provenanceMismatches, frontierRows,
     } = await sweepDepths(corpus);
     console.table(rows.filter((row) => (row['walker'] as number) > 1 || (row['closure'] as number) > 1));
     console.log(`[non-vacuous] ${followed} of ${rows.length} sweep cells bundle more than the SKILL.md alone`);
@@ -1073,6 +1388,24 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
     // the equality below while saying nothing at all.
     expect(reasonsCompared).toBeGreaterThan(0);
     expect(reasonMismatches).toEqual([]);
+
+    // …and the PROVENANCE comparison, field by field, over the same population.
+    // The reason bucket says the two arms agree about WHY; this one says they
+    // agree about which reference, at which line, written how, against a target
+    // that did or did not exist, caught by which declared rule — the rest of
+    // what `LinkResolution` carries, and the whole of what a consumer needs to
+    // raise the walker's issue from a projection instead.
+    console.log('[provenance]', JSON.stringify(provenanceCompared),
+      `${provenanceMismatches.length} disagreeing,`
+      + ` ${frontierRows} walker rows unpaired at the depth frontier`);
+    if (provenanceMismatches.length > 0) console.log('[provenance mismatches]', provenanceMismatches);
+    // Population per FIELD first, and the strict one is `matchedPattern`: it is
+    // counted only where an arm answered non-null, so a non-zero count is a
+    // statement that a declared exclude rule actually caught a file. Without it
+    // the field's comparison would be null === null on every path and could not
+    // fail.
+    expect(PROVENANCE_FIELDS.filter((field) => provenanceCompared[field] === 0)).toEqual([]);
+    expect(provenanceMismatches).toEqual([]);
 
     const attributed = divergences.flatMap((row) => row.closureOnly);
     const causeCounts = new Map<DivergenceCause, number>();
@@ -1126,8 +1459,7 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
     // `skillExtentDeclaration` actually produced. It therefore keeps controlling
     // the real translation after that translation changes, which a hand-rebuilt
     // pre-Stage-3 declaration would not.
-    const corpus = corpora.find((entry) => entry.spec.projectRoot === '.');
-    if (corpus === undefined) throw new Error('no repo-root corpus');
+    const corpus = repoRootCorpus();
 
     // The opt-out list must name fields and labels that exist, or the control
     // silently becomes a no-op that agrees with everything — the failure mode of
@@ -1173,6 +1505,58 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
     // Stage 3 a narrowing problem rather than a "teach it to see" problem.
     expect(divergences.flatMap((row) => row.walkerOnly)).toEqual([]);
   }, 1_800_000);
+
+  it('names WHICH declared exclude rule matched, and recovers its template', async () => {
+    // The fifth provenance fact, and the only one the SHIPPED configs cannot
+    // exercise: every declared `excludeReferencesFromBundle` block on this
+    // corpus holds exactly ONE rule and no `template`, so a corpus-only
+    // comparison of "which rule matched" would be satisfied by any encoding at
+    // all — including the flat one this replaced ([[fixtures-that-cannot-distinguish]]).
+    //
+    // So the config is synthesized, exactly as the depth sweep synthesizes a
+    // depth: same skill, same real files, same real links, a rule list built to
+    // make the two encodings give DIFFERENT answers. The first rule is a decoy
+    // that matches nothing; a flattened translation would report ITS first
+    // pattern for everything, because the union has one identity. Both arms must
+    // report the second rule's.
+    const corpus = repoRootCorpus();
+    const skill = corpus.skills.find((entry) => entry.name === EXCLUDING_SKILL);
+    if (skill === undefined) throw new Error(`corpus lost ${EXCLUDING_SKILL}`);
+
+    const config: SkillPackagingConfig = {
+      ...skill.config,
+      linkFollowDepth: 1,
+      excludeReferencesFromBundle: {
+        rules: [
+          { patterns: [DECOY_PATTERN], template: 'FIRST {{path}}' },
+          { patterns: [EXCLUDED_DIRECTORY_GLOB], template: MATCHING_TEMPLATE },
+        ],
+      },
+    };
+
+    const walk = walkerRun(corpus, skill, walkOptionsFor(corpus, skill, config));
+    const walkerRules = [...walk.provenance.values()].flat()
+      .filter((row) => row.matchedPattern !== null);
+    const closure = await closureRun(corpus, skill, config);
+    const closureRows = closure.conditions.filter((row) => row.matchedPattern !== null);
+
+    // Population first. Both arms must actually have reached the pattern branch,
+    // or every equality below is between two empty lists.
+    expect(walkerRules.length).toBeGreaterThan(0);
+    expect(closureRows.length).toBeGreaterThan(0);
+
+    // WHICH rule: the second, on both sides. The decoy's pattern appearing here
+    // is precisely what a flattened encoding would produce.
+    expect([...new Set(walkerRules.map((row) => row.matchedPattern))]).toEqual([EXCLUDED_DIRECTORY_GLOB]);
+    expect([...new Set(closureRows.map((row) => row.matchedPattern))]).toEqual([EXCLUDED_DIRECTORY_GLOB]);
+    expect(closureRows.some((row) => row.matchedPattern === DECOY_PATTERN)).toBe(false);
+
+    // …and the TEMPLATE, which no `realization_conditions` column could hold
+    // without teaching the closure about skill packaging — so it rides in the
+    // rule's opaque payload, beside the rule's declared index.
+    expect([...new Set(closureRows.map((row) => JSON.stringify(row.matchedPayload)))])
+      .toEqual([JSON.stringify({ ruleIndex: 1, template: MATCHING_TEMPLATE })]);
+  }, 600_000);
 
   it('omitting the packager-only walk inputs changes no membership on this corpus', () => {
     // The boundary the module note declares, measured rather than assumed.

@@ -14,6 +14,7 @@ import { rootIdFor } from '../src/projection/identity.js';
 import { ProjectionBuilder, type ProjectionBase } from '../src/projection/projection.js';
 import { ExtentDeclarationSchema, ProjectConfigSchema } from '../src/schemas/project-config.js';
 import type { BlobReferenceRow, ReferenceSyntacticForm } from '../src/schemas/projection-blobs.js';
+import { CONDITION_WITHOUT_REFERENCE } from '../src/schemas/projection-resources.js';
 import type { ResourceRealizationRow } from '../src/schemas/projection-resources.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
@@ -64,6 +65,12 @@ const DIRECTORY_KIND = 'directory';
 
 /** The canonical basename spelling the declaration is authored with. */
 const README_PATTERN = 'README.md';
+
+/** The href the fixtures author for {@link DOC_HUB} — a DIFFERENT casing, deliberately. */
+const README_REF = 'Readme.md';
+
+/** A glob naming {@link DOC_HUB} by path, for the cases that refuse it by pattern. */
+const README_GLOB = 'skills/**/Readme.md';
 
 /**
  * Labels the fixtures below hand the primitive.
@@ -202,7 +209,7 @@ const CHAIN: readonly FixtureFile[] = [
  * refused something" would also be satisfied by a walk that refused everything.
  */
 const HUB_CHAIN: readonly FixtureFile[] = [
-  { path: ROOT_DOC, refs: [{ rawRef: 'Readme.md' }, { rawRef: 'b.md' }] },
+  { path: ROOT_DOC, refs: [{ rawRef: README_REF }, { rawRef: 'b.md' }] },
   { path: DOC_HUB, refs: [{ rawRef: 'behind.md' }] },
   { path: DOC_BEHIND, refs: [] },
   { path: DOC_B, refs: [] },
@@ -233,7 +240,7 @@ const LABEL_FLAG = 'FIXTURE_FLAG_REFUSAL';
  *   also refuses `DOC_B`, which exists); only a conjunctive reading admits it.
  */
 const FLAG_FIXTURE: readonly FixtureFile[] = [
-  { path: ROOT_DOC, refs: [{ rawRef: 'Readme.md' }, { rawRef: 'b.md' }, { rawRef: 'c.md' }] },
+  { path: ROOT_DOC, refs: [{ rawRef: README_REF }, { rawRef: 'b.md' }, { rawRef: 'c.md' }] },
   { path: DOC_HUB, refs: [{ rawRef: 'behind.md' }], columns: { gitignored: true } },
   { path: DOC_BEHIND, refs: [] },
   { path: DOC_B, refs: [] },
@@ -315,7 +322,7 @@ describe('ExtentDeclarationSchema', () => {
       refusals: [refusalRule(LABEL_KIND, { kinds: [DIRECTORY_KIND] })],
     }));
     expect(parsed.refusals[0]).toEqual({
-      label: LABEL_KIND, patterns: [], basenames: [], kinds: [DIRECTORY_KIND], flags: {},
+      label: LABEL_KIND, patterns: [], basenames: [], kinds: [DIRECTORY_KIND], flags: {}, payload: null,
     });
   });
 
@@ -494,15 +501,18 @@ describe('ClosureExtentContributor', () => {
     expect(conditionCodeFor(first, DOC_DIR)).toBe('a-lowercase-label with spaces');
   });
 
-  it('emits ONE refusal row per refused reference, carrying the target\'s identity', async () => {
-    // Two documents link the same hub, so the refusal is reached twice. Both rows
-    // are emitted (matching `walkLinkGraph`'s per-reference `excludedReferences`)
-    // and they are IDENTICAL, which is what lets `ProjectionBuilder`'s
-    // `(extentId, path, code, resourceId)` key collapse them to one in a real
-    // population without losing anything.
+  it('emits ONE refusal row per refused reference, each naming ITS OWN referrer', async () => {
+    // Two documents link the same hub, so the refusal is reached twice and both
+    // rows are emitted, matching `walkLinkGraph`'s per-reference
+    // `excludedReferences`. The rows agree on the VERDICT — same path, same code,
+    // same identity, which is `ProjectionBuilder`'s
+    // `(extentId, path, code, resourceId)` key — and differ on the PROVENANCE,
+    // because they were reached through different references. So a population
+    // collapses them to one row and that row names the FIRST referrer; the
+    // witness is a witness, not the list.
     const twoReferrers: readonly FixtureFile[] = [
-      { path: ROOT_DOC, refs: [{ rawRef: 'Readme.md' }, { rawRef: 'b.md' }] },
-      { path: DOC_B, refs: [{ rawRef: 'Readme.md' }] },
+      { path: ROOT_DOC, refs: [{ rawRef: README_REF }, { rawRef: 'b.md' }] },
+      { path: DOC_B, refs: [{ rawRef: README_REF }] },
       { path: DOC_HUB, refs: [] },
     ];
     const contribution = await contributeOver(twoReferrers, declarationOf({
@@ -511,7 +521,9 @@ describe('ClosureExtentContributor', () => {
 
     const rows = contribution.conditions.filter((row) => row.path === DOC_HUB);
     expect(rows).toHaveLength(2);
-    expect(rows[1]).toEqual(rows[0]);
+    expect(rows.map((row) => [row.extentId, row.path, row.code, row.resourceId]))
+      .toEqual([rows[0], rows[0]].map((row) => [row?.extentId, row?.path, row?.code, row?.resourceId]));
+    expect(rows.map((row) => row.sourcePath)).toEqual([ROOT_DOC, DOC_B]);
     expect(rows[0]?.severity).toBe('info');
     // Anchored to the refused TARGET's identity, not the referrer's — the
     // opposite of an unresolved reference, whose target has no identity at all.
@@ -524,7 +536,7 @@ describe('ClosureExtentContributor', () => {
   it('admits an admitPaths entry that TWO refusal rules refuse, and records nothing', async () => {
     const refusing = declarationOf({
       refusals: [
-        refusalRule(LABEL_GLOB, { patterns: ['skills/**/Readme.md'] }),
+        refusalRule(LABEL_GLOB, { patterns: [README_GLOB] }),
         refusalRule(LABEL_BASENAME, { basenames: [README_PATTERN] }),
       ],
     });
@@ -667,11 +679,93 @@ describe('ClosureExtentContributor', () => {
     expectContributionRowsValid(contribution);
   });
 
+  it('carries the unresolvable reference\'s own provenance, and observes NO target', async () => {
+    // `b.md` RESOLVES and sits first, so the row under test is the SECOND
+    // reference — a fixture whose only reference was the broken one could not
+    // tell a carried line number from a hardcoded 1.
+    const files: readonly FixtureFile[] = [
+      { path: ROOT_DOC, refs: [{ rawRef: 'b.md' }, { rawRef: 'gone.md#anchor' }] },
+      { path: DOC_B, refs: [] },
+    ];
+    const conditions = (await contributeOver(files, declarationOf())).conditions;
+    expect(conditions).toHaveLength(1);
+    const row = conditions[0];
+    // `sourcePath` repeats `path` here BECAUSE the row is anchored to the
+    // referring file — the target realizes nowhere, so a row naming it would
+    // name a file nobody can open. The column means "the referring file" in both
+    // anchorings, which is what makes one reading serve both.
+    expect(row?.sourcePath).toBe(ROOT_DOC);
+    expect(row?.sourceLine).toBe(2);
+    // The reference EXACTLY as authored, anchor and all — not the resolved path,
+    // which by construction does not exist.
+    expect(row?.sourceRef).toBe('gone.md#anchor');
+    // Null, never false: no realization holds the path, which is a statement
+    // about this projection's population. The contributor did not stat anything,
+    // so `false` would be a claim about the disk that nothing here checked.
+    expect(row?.targetExists).toBeNull();
+    expect(row?.matchedPattern).toBeNull();
+    expect(row?.matchedPayload).toBeNull();
+  });
+
+  it('carries a refusal\'s provenance: which reference, at which line, by which rule', async () => {
+    // The five facts `walk-link-graph.ts`'s `LinkResolution` carries beside its
+    // reason, which is what a consumer needs to raise the issue the walker
+    // raises rather than only knowing that something was turned away.
+    const contribution = await contributeOver(HUB_CHAIN, declarationOf({
+      refusals: [{
+        label: LABEL_GLOB,
+        patterns: [README_GLOB, 'never/**'],
+        payload: { ruleIndex: 7, template: 'see {{path}}' },
+      }],
+    }));
+    const row = contribution.conditions.find((entry) => entry.path === DOC_HUB);
+    // Anchored to the refused TARGET, and pointing back at the REFERRING file:
+    // the two are different files here, which a fixture whose referrer and
+    // target coincided could not show.
+    expect(row?.path).toBe(DOC_HUB);
+    expect(row?.sourcePath).toBe(ROOT_DOC);
+    expect(row?.sourceLine).toBe(1);
+    expect(row?.sourceRef).toBe(README_REF);
+    // A COLUMN of the realization row, not a probe — which is what keeps the
+    // module's "no filesystem I/O of its own" claim true.
+    expect(row?.targetExists).toBe(true);
+    // The matched rule's FIRST declared glob, read the way
+    // `packaging-validator.ts` reads `matchedRule.patterns[0]`: it names WHICH
+    // rule, not which of its globs fired.
+    expect(row?.matchedPattern).toBe(README_GLOB);
+    // Verbatim and uninterpreted — the primitive treats a payload exactly as it
+    // treats a label.
+    expect(row?.matchedPayload).toEqual({ ruleIndex: 7, template: 'see {{path}}' });
+    expectContributionRowsValid(contribution);
+  });
+
+  it('reports NO matchedPattern for a rule that refused by basename', async () => {
+    // The column names the rule through its identifying glob, so a rule that
+    // declares none has nothing to name. Null rather than an empty string: a
+    // consumer must be able to tell "this rule is not a pattern rule" from "its
+    // first pattern is empty", which no min(1) string could say.
+    const contribution = await contributeOver(HUB_CHAIN, declarationOf({
+      refusals: [refusalRule(LABEL_BASENAME, { basenames: [README_PATTERN] })],
+    }));
+    const row = contribution.conditions.find((entry) => entry.path === DOC_HUB);
+    expect(row?.code).toBe(LABEL_BASENAME);
+    expect(row?.matchedPattern).toBeNull();
+    expect(row?.matchedPayload).toBeNull();
+    // …but the reference provenance is unaffected: it comes from the walk, not
+    // from the matcher.
+    expect(row?.sourcePath).toBe(ROOT_DOC);
+    expect(row?.sourceRef).toBe(README_REF);
+  });
+
   it('reports an absent closureFrom as an error condition, not an unexplained empty extent', async () => {
     const contribution = await contributeOver([{ path: DOC_B, refs: [] }], declarationOf());
     expect(memberPaths(contribution)).toEqual([]);
     expect(contribution.conditions[0]?.code).toBe(CLOSURE_ROOT_ABSENT);
     expect(contribution.conditions[0]?.severity).toBe('error');
+    // No reference provoked it — the root arrives from the DECLARATION — so
+    // every provenance column is null rather than pointing at a link nobody
+    // wrote.
+    expect(contribution.conditions[0]).toMatchObject(CONDITION_WITHOUT_REFERENCE);
   });
 
   it('refuses a declaration whose kind disagrees with the registered kind', async () => {

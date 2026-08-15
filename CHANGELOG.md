@@ -125,6 +125,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `realizationsContentDeferred` counter is named outside the `realizationsSkipped*` family on
   purpose: a nonzero value is the design working, not a warning.
 
+- **A projection can now say WHERE a refusal came from, not just that one happened.**
+  `realization_conditions` gains six columns — `sourcePath`, `sourceLine`, `sourceRef`,
+  `targetExists`, `matchedPattern`, `matchedPayload` — and `PROJECTION_SCHEMA_VERSION` bumps to
+  **4**. They are the provenance the shipped link walker attaches to an excluded reference
+  (`LinkResolution`), so a consumer reading a closure extent's conditions can now raise the same
+  issue the walker raises: the file and line to open, the href as authored, whether the target
+  existed, and which declared rule turned it away. Null on every condition no reference provoked
+  (a path collision, an absent declared root); spread the exported `CONDITION_WITHOUT_REFERENCE`
+  at those producers rather than writing six nulls.
+
+  `ExtentRefusalRule` gains an opaque **`payload`**, copied verbatim to
+  `realization_conditions.matchedPayload` and never interpreted — the channel for rule vocabulary
+  the primitive has no column for. The skill translation now emits **one refusal rule per declared
+  `excludeReferencesFromBundle` rule** (same label, declared order, so first-match-wins is
+  unchanged) and puts each rule's index and its `template` in that payload, which is what makes
+  "which rule matched" answerable at all. Measured against `walkLinkGraph` over this repository's
+  real skill corpus: 59 paths refused by both implementations, **0 disagreements on any of the five
+  fields**.
+
 ### Breaking
 
 - **The parse cache is namespaced per build of VAT, and both hand-bumped version constants are

@@ -4,6 +4,7 @@ import { z } from 'zod';
 
 import { LinkAuthConfigSchema } from './link-auth.js';
 import { ReferenceSyntacticFormSchema } from './projection-blobs.js';
+import { JsonValueSchema } from './projection-shared.js';
 import { ZoneKindSchema } from './projection-zones.js';
 
 /**
@@ -397,6 +398,13 @@ export type SkillsConfig = z.infer<typeof SkillsConfigSchema>;
  * hardcoded one caller's vocabulary into a primitive whose whole premise is that
  * the vocabulary belongs to the declaration.
  *
+ * {@link ExtentRefusalRuleSchema.payload} is the other half of that premise. A
+ * label names a refusal in the caller's vocabulary; a payload carries the rest of
+ * it — anything about the rule the caller will want back at the refusal and the
+ * primitive has no column for. It rides through to
+ * `realization_conditions.matchedPayload` verbatim, uninterpreted, so extending a
+ * caller's rule vocabulary never becomes a change to this schema.
+ *
  * ## Every optional field carries a default, deliberately
  *
  * The parsed shape is handed to a contributor through `PopulateOptions.parameters`,
@@ -417,6 +425,8 @@ export const ExtentRefusalRuleSchema = z.object({
     .describe('resources.kind values refused, e.g. "directory". This is the only way a declaration can refuse a DIRECTORY target: a directory\'s path is shaped like any other path, so no glob over the path can express the distinction — the entity kind can.'),
   flags: z.record(z.string().min(1), z.boolean()).default({})
     .describe('BOOLEAN COLUMNS of the candidate\'s resource_realizations row, as column name → the value that refuses, e.g. { "gitignored": true } or { "gitignored": true, "exists": true }. CONJUNCTIVE within the record — every named column must equal its declared value — which is the only way to state a guarded rule such as walk-link-graph.ts\'s existence-gated gitignore branch; an empty record never matches. The column name is NOT an open vocabulary the way kinds is: a realization row has a fixed shape, so a name no boolean column carries is a rule that could never fire and the closure THROWS on it rather than silently refusing nothing.'),
+  payload: JsonValueSchema.default(null)
+    .describe('OPAQUE caller data about this rule, copied verbatim onto realization_conditions.matchedPayload for every candidate it refuses and NEVER interpreted by the primitive — the same contract label has, for facts that are not a name. It exists because a caller\'s rule carries vocabulary the primitive has no column for: the skill translation puts an excludeReferencesFromBundle rule\'s index and its template here, neither of which a closure could be taught without hardcoding one caller\'s domain. Null when the caller declares none.'),
 }).strict().describe('One labelled refusal rule of a closure extent\'s ordered cascade. The four matchers are unordered WITHIN a rule (they share the one label); ACROSS rules the array order is behaviour.');
 
 export type ExtentRefusalRule = z.infer<typeof ExtentRefusalRuleSchema>;

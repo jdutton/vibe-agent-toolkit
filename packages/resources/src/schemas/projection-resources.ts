@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { ContentKeySchema, ProjectionConditionSeveritySchema } from './projection-shared.js';
+import { ContentKeySchema, JsonValueSchema, ProjectionConditionSeveritySchema } from './projection-shared.js';
 
 const EXTENT_FK_DESC = 'Foreign key to resolution_contexts.contextId, species "extent"';
 
@@ -241,6 +241,49 @@ export type ResourceExtentRow = z.infer<typeof ResourceExtentRowSchema>;
  * `resourceId` is the identity that could NOT be realized at this path
  * (the loser of the collision), or null for a condition with no identity
  * attached.
+ *
+ * ## The six provenance columns, and why they are columns rather than a table
+ *
+ * A condition that a **reference** provoked can say which reference. The
+ * closure contributor's two reference-borne codes are the motivating pair —
+ * `CLOSURE_REFERENCE_UNRESOLVED` and every refusal label a declaration
+ * supplies — and they are exactly the facts `walk-link-graph.ts`'s
+ * `LinkResolution` already carries (`sourcePath`, `sourceLine`, `linkHref`,
+ * `targetExists`, `matchedRule`), which `walker-to-issues.ts` turns into an
+ * issue location and `packaging-validator.ts` reads `patterns[0]` off. Without
+ * them a projection can say *that* a file was turned away and *why*, but not
+ * *where the author should look* — so no consumer of the projection can produce
+ * the issue the shipped walker produces.
+ *
+ * **Columns, not a sibling table.** The relation is 1:1 with the row: the
+ * table's key is `(extentId, path, code, resourceId)`, so a target refused
+ * through three references records ONE row, and a sibling table would be a
+ * one-to-one join keyed on a four-column composite — a join that buys nothing
+ * and an FK no other table in the projection has. Sparsity is not an argument
+ * against: `symlinkResolves`, `resourceId` and `vatId` are all "null unless
+ * this row is that kind of row", and the alternative — an absent key — is the
+ * two-null-states failure {@link ContentStateSchema} exists to prevent.
+ *
+ * **Null is the answer for every condition no reference provoked**, and that
+ * is a documented reading rather than a gap: `REALIZATION_PATH_COLLISION` is a
+ * fact about two identities meeting at one path, and `CLOSURE_ROOT_ABSENT`
+ * about a declaration naming a path nothing realized. Neither has a referring
+ * file, a line, or an href to name. Spread
+ * {@link CONDITION_WITHOUT_REFERENCE} at those sites so the intent is stated
+ * rather than inferred from six null literals.
+ *
+ * ⚠️ **The provenance is ONE witness, not the list.** The table's grain is
+ * unchanged — the key does not include these columns, so `ProjectionBuilder`
+ * keeps the first row and drops the rest, and the surviving row names the
+ * first reference that provoked the condition (first in blob order, then
+ * `blob_references.ordinal`). A consumer that needs every reference to a
+ * refused path reads `blob_references`, which is where that list lives.
+ *
+ * `sourcePath` repeats `path` for a condition anchored to the referring file
+ * (`CLOSURE_REFERENCE_UNRESOLVED` names the file an author can open, since its
+ * target realizes nowhere), and differs from it for one anchored to the target
+ * (a refusal names the refused file). Both spellings stay readable without a
+ * join precisely because the column is always the *referring* file.
  */
 export const RealizationConditionRowSchema = z.object({
   extentId: z.string().min(1).describe(EXTENT_FK_DESC),
@@ -249,9 +292,41 @@ export const RealizationConditionRowSchema = z.object({
   severity: ProjectionConditionSeveritySchema,
   message: z.string(),
   resourceId: z.string().min(1).nullable().describe('The identity this condition concerns, or null'),
+  sourcePath: z.string().min(1).nullable()
+    .describe('Root-relative path of the file whose reference provoked this condition — the file an author opens. Null when no reference provoked it (a collision, an absent declared root).'),
+  sourceLine: z.number().int().positive().nullable()
+    .describe('1-based line of that reference within sourcePath, or null when no reference provoked this condition. The reference\'s column is deliberately NOT carried: nothing consumes it, and a column with no consumer and no counterpart to compare against cannot be shown to be right.'),
+  sourceRef: z.string().nullable()
+    .describe('The reference exactly as authored (blob_references.rawRef — anchor and all), or null when no reference provoked this condition. Not min(1): an empty href is authorable markdown.'),
+  targetExists: z.boolean().nullable()
+    .describe('Whether the referenced target existed when the contributor classified it. Null when nothing observed the target — including CLOSURE_REFERENCE_UNRESOLVED, where "no realization holds this path" is a statement about the projection and not about the filesystem.'),
+  matchedPattern: z.string().min(1).nullable()
+    .describe('The FIRST glob declared by the refusal rule that matched — the rule\'s identifying pattern, read the same way packaging-validator.ts reads matchedRule.patterns[0]. Names WHICH rule, not which of its globs fired; the code column already says why. Null when the matching rule declares no patterns (it refused by basename, kind or flag), and for every condition no refusal rule produced.'),
+  matchedPayload: JsonValueSchema
+    .describe('The matched refusal rule\'s OPAQUE payload, copied verbatim from the declaration and never interpreted — the channel for caller vocabulary the primitive has no column for (the skill translation carries an excludeReferencesFromBundle rule\'s index and its template here). Null when the rule declared none, and for every condition no refusal rule produced.'),
 }).strict().describe('A row of the path-dependent `realization_conditions` table');
 
 export type RealizationConditionRow = z.infer<typeof RealizationConditionRowSchema>;
+
+/**
+ * The six provenance columns, all null — a condition **no reference provoked**.
+ *
+ * Spread at every such producer (`REALIZATION_PATH_COLLISION`,
+ * `CLOSURE_ROOT_ABSENT`, the package and plugin extents' locate failures) so
+ * the row states "there is no reference behind this" once, by name, instead of
+ * repeating six null literals that a reader has to recognise as a set.
+ */
+export const CONDITION_WITHOUT_REFERENCE = {
+  sourcePath: null,
+  sourceLine: null,
+  sourceRef: null,
+  targetExists: null,
+  matchedPattern: null,
+  matchedPayload: null,
+} as const satisfies Pick<
+  RealizationConditionRow,
+  'sourcePath' | 'sourceLine' | 'sourceRef' | 'targetExists' | 'matchedPattern' | 'matchedPayload'
+>;
 
 /**
  * Where a tag came from — an **open** vocabulary that IS the contributor id.

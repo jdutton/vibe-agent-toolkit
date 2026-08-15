@@ -25,8 +25,9 @@
  * | Walker feature | Verdict |
  * |---|---|
  * | `linkFollowDepth` | **expressible** — same union, same off-by-one (`depth < maxDepth`) |
- * | `excludeReferencesFromBundle` *membership* | **expressible** — first-match-wins and any-match select the same file set, so a flat union of every rule's `patterns` in ONE refusal rule is exact |
- * | `excludeReferencesFromBundle` *`template` payload* | **not expressible** — `realization_conditions` has no column for it, and the translation flattens every rule into one, so which rule won is not even carried |
+ * | `excludeReferencesFromBundle` *membership* | **expressible** — first-match-wins and any-match select the same file set; carried as ONE refusal rule per declared rule, in declared order, which selects the same set the flat union did |
+ * | `excludeReferencesFromBundle` *WHICH rule matched* | **expressible** — one refusal rule apiece means the primitive's first-match-wins scan is `excludeMatchers.find(...)`'s scan, and the winner's first pattern lands in `realization_conditions.matchedPattern`, the column `packaging-validator.ts` reads as `matchedRule.patterns[0]` |
+ * | `excludeReferencesFromBundle` *`template` payload* | **expressible** — carried verbatim in `ExtentRefusalRule.payload` (opaque to the primitive) and reported as `realization_conditions.matchedPayload`, beside the rule's declared index. ⚠️ Never MEASURED against the walker: no shipped config declares a `template`, so the corpus shadow synthesizes one to compare the two arms |
  * | `excludeNavigationFiles` | **expressible** — a refusal rule over `NAVIGATION_FILE_PATTERNS`, gated on the knob exactly as `classifyExclusion` gates its branch |
  * | `agent-instruction-file` *membership* | **expressible** — a refusal rule over `AGENT_INSTRUCTION_FILE_PATTERNS`, unconditionally, and the explicit-`files:` escape hatch becomes `admitPaths` (see {@link declaredAgentInstructionSources}) |
  * | `directory-target` *membership* | **expressible** — a refusal rule over `kinds: ['directory']`, which reads `resources.kind`; a path glob cannot express it, because a directory's path is shaped like a file's |
@@ -35,13 +36,16 @@
  * | routable vs non-routable | **not expressible** (reasoned, not measured — the corpus has no HTML) — `follow` names a reference FORM, never the parser kind of the TARGET, so wherever HTML blob references are populated the closure walks THROUGH a page `isRoutable` treats as a leaf |
  * | `skill-definition` | **not expressible** — the verdict depends on comparing the target against THIS walk's `skillRootPath` (a self-link is silently skipped, a sibling's SKILL.md is refused), and the declaration has no vocabulary for "the same file as my own root" |
  * | `gitignored`, `outside-project`, `unreadable-target`, `missing-target` | **not expressible** — each needs an oracle the closure does not consult: git, the project boundary, and two distinct filesystem-read outcomes |
- * | a refusal's PROVENANCE (`sourcePath`, `sourceLine`, `linkHref`, `targetExists`, `matchedRule`) | **not expressible yet** — the reason lands in `realization_conditions.code`, and that table has no column for the rest. Four of the five are already in scope at the refusal site; see the note in `closure-extent.ts`'s `hopFor` |
+ * | a refusal's PROVENANCE (`sourcePath`, `sourceLine`, `linkHref`, `targetExists`, `matchedRule`) | **expressible** — `realization_conditions` gained the six columns (projection schema v4), the closure fills them at the refusal site, and every one of the five is compared field by field against the walker's own row by the corpus shadow's provenance bucket |
  *
- * Read the membership rows and the reason row together: the primitive now
- * selects the same files for those causes AND names the same cause. What it
- * still cannot carry is the rest of `LinkResolution` — which is why `vat`'s
- * verdict engine cannot yet be driven from a projection even though
- * `LINK_TO_NAVIGATION_FILE` and `LINK_TO_DIRECTORY` are now distinguishable.
+ * Read the membership, reason and provenance rows together: the primitive now
+ * selects the same files for those causes, names the same cause, and carries the
+ * same `sourcePath`/`sourceLine`/`linkHref`/`targetExists`/matched-rule
+ * provenance the walker attaches to a refusal. What a projection still cannot
+ * produce is the SEVEN reasons whose oracles it does not consult (git, the
+ * project boundary, two read outcomes, its own skill root) — that, not the
+ * payload, is what now stands between this and driving `vat`'s verdict engine
+ * from a projection.
  *
  * The `excludeNavigationFiles` row is the one worth reading twice, because the
  * shape of its extension is the argument for why a rule needs a basename matcher
@@ -140,6 +144,17 @@ const DIRECTORY_KIND = 'directory';
 const DEFAULT_EXCLUDE_NAVIGATION_FILES = true;
 
 /**
+ * One declared `excludeReferencesFromBundle` rule, read off the config type
+ * rather than off `walk-link-graph.ts`'s structurally identical `ExcludeRule`.
+ *
+ * The translation's input is the CONFIG, and deriving the type from it is what
+ * makes a config-side change (a third field, say) a compile error here instead of
+ * a silent drop.
+ */
+type DeclaredExcludeRule =
+  NonNullable<SkillPackagingConfig['excludeReferencesFromBundle']>['rules'][number];
+
+/**
  * The four refusal labels this translation supplies, one per `classifyExclusion`
  * branch it can express.
  *
@@ -189,9 +204,35 @@ export const SKILL_REFUSED_PATTERN_MATCHED = 'SKILL_REFUSED_PATTERN_MATCHED';
  *    while these files are about distributability. Sitting AFTER navigation is
  *    what makes a `files:`-declared `README.md` report `navigation-file` — see
  *    {@link declaredAgentInstructionSources} for the other half of that rule.
- * 4. **the flattened exclude patterns** — last, matching the cascade. Emitted
- *    even when empty: an empty pattern list never matches, and a rule that is
- *    always present keeps the four-branch shape legible.
+ * 4. **one rule per `excludeReferencesFromBundle` rule**, in declared order,
+ *    last — see below.
+ *
+ * ## Why the exclude rules are ONE RULE EACH and not one flattened rule
+ *
+ * They used to flatten into a single refusal rule holding every rule's patterns,
+ * which selected the same files and reported the same label but could not say
+ * WHICH declared rule caught a file — so `LinkResolution.matchedRule`, which
+ * `packaging-validator.ts:1182` reads `patterns[0]` off, had no counterpart.
+ *
+ * Expanding them restores it **without touching the reported reason**: every
+ * expanded rule carries the SAME {@link SKILL_REFUSED_PATTERN_MATCHED} label, so
+ * `realization_conditions.code` is unchanged, while the primitive's
+ * first-match-wins scan over them is exactly `excludeMatchers.find(...)`'s scan
+ * over `options.excludeRules` — same order, same winner. A label is a REASON and
+ * reasons are shared; identity rides on the rule's position and its `payload`.
+ *
+ * ⚠️ They all stay in the glob branch's position, AFTER the basename rules: the
+ * expansion widens one cascade step into N, it does not reorder the cascade. And
+ * a config declaring no rules now contributes NO rule rather than one empty one —
+ * an empty pattern list never matched anything, and "one rule per declared rule"
+ * is a shape a reader can check against the config, which "always exactly one"
+ * was not.
+ *
+ * Each expanded rule's `payload` carries what the primitive has no column for:
+ * the rule's INDEX in the declared array (identity, when two rules share a first
+ * pattern) and its `template` (the walker's own `ExcludeRule.template`, which no
+ * `realization_conditions` column could hold without teaching the closure about
+ * skill packaging).
  *
  * Basename lists are imported from `validation-rules.ts`, never re-spelled: that
  * module is explicit that ONE canonical spelling per name is the whole design,
@@ -209,7 +250,14 @@ function skillRefusals(config: SkillPackagingConfig): ExtentRefusalRule[] {
     // that reason. The empty record is the schema default and never matches, so
     // spelling it here declares "this translation refuses on no column" rather
     // than leaving a reader to infer it from an absent key.
-    { label: SKILL_REFUSED_DIRECTORY_TARGET, patterns: [], basenames: [], kinds: [DIRECTORY_KIND], flags: {} },
+    {
+      label: SKILL_REFUSED_DIRECTORY_TARGET,
+      patterns: [],
+      basenames: [],
+      kinds: [DIRECTORY_KIND],
+      flags: {},
+      payload: null,
+    },
     ...(excludeNavigation
       ? [{
         label: SKILL_REFUSED_NAVIGATION_FILE,
@@ -217,6 +265,7 @@ function skillRefusals(config: SkillPackagingConfig): ExtentRefusalRule[] {
         basenames: [...NAVIGATION_FILE_PATTERNS],
         kinds: [],
         flags: {},
+        payload: null,
       }]
       : []),
     {
@@ -225,15 +274,41 @@ function skillRefusals(config: SkillPackagingConfig): ExtentRefusalRule[] {
       basenames: [...AGENT_INSTRUCTION_FILE_PATTERNS],
       kinds: [],
       flags: {},
+      payload: null,
     },
-    {
+    // `payload: null` above, a payload here: the first three rules ARE the
+    // walker's own branches, which carry no rule object for a consumer to read
+    // back (`makeExclusion` sets `matchedRule` only for `pattern-matched`).
+    ...(config.excludeReferencesFromBundle?.rules ?? []).map((rule, index) => ({
       label: SKILL_REFUSED_PATTERN_MATCHED,
-      patterns: (config.excludeReferencesFromBundle?.rules ?? []).flatMap((rule) => rule.patterns),
+      patterns: [...rule.patterns],
       basenames: [],
       kinds: [],
       flags: {},
-    },
+      payload: excludeRulePayload(rule, index),
+    })),
   ];
+}
+
+/**
+ * One `excludeReferencesFromBundle` rule's identity, as opaque payload.
+ *
+ * `template` is the field the old flat encoding lost outright — the skill
+ * extent's own boundary table used to record it as "not expressible", and it is
+ * expressible now precisely because the payload is a channel the primitive never
+ * reads. `ruleIndex` is what distinguishes two rules that share a first pattern,
+ * which `matchedPattern` alone cannot.
+ *
+ * `template: null` rather than an omitted key, because the row this lands in is
+ * read as data: a consumer asking "did this rule declare a template" must not
+ * have to distinguish an absent key from a null one.
+ *
+ * @param rule - One declared exclude rule
+ * @param index - Its 0-based position in the declared array — first-match-wins order
+ * @returns The rule's payload, JSON-shaped
+ */
+function excludeRulePayload(rule: DeclaredExcludeRule, index: number): JsonValue {
+  return { ruleIndex: index, template: rule.template ?? null };
 }
 
 /**

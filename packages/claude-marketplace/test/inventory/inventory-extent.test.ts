@@ -46,7 +46,7 @@ function rule(
 	label: string,
 	matchers: Partial<Omit<ExtentRefusalRule, 'label'>>,
 ): ExtentRefusalRule {
-	return { label, patterns: [], basenames: [], kinds: [], flags: {}, ...matchers };
+	return { label, patterns: [], basenames: [], kinds: [], flags: {}, payload: null, ...matchers };
 }
 
 /** The labels of a declaration's cascade, in cascade order. */
