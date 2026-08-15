@@ -223,7 +223,7 @@ describe('compareParse — what counts as a change', () => {
     expect(verdict.kind).toBe('changed');
     if (verdict.kind !== 'changed') throw new Error('unreachable');
     const moved = verdict.movement.passes.filter((pass) => pass.elapsedMs.significant);
-    expect(moved.map((pass) => pass.pass)).toEqual([`markdown/${LEXER}`]);
+    expect(moved.map((pass) => pass.label)).toEqual([`markdown/${LEXER}`]);
     expect(moved[0]?.elapsedMs.delta).toBeCloseTo(-100, 6);
     expect(moved[0]?.elapsedMs.ratio).toBeCloseTo(302.7 / 402.7, 6);
   });
@@ -249,7 +249,7 @@ describe('compareParse — what counts as a change', () => {
     expect(verdict.movement.total.delta).toBe(0);
     expect(verdict.movement.total.significant).toBe(false);
     expect(
-      verdict.movement.passes.filter((pass) => pass.elapsedMs.significant).map((p) => p.pass),
+      verdict.movement.passes.filter((pass) => pass.elapsedMs.significant).map((p) => p.label),
     ).toEqual(
       [`markdown/${LEXER}`, `markdown/${REFERENCES}`].sort((a, b) => a.localeCompare(b)),
     );
@@ -286,7 +286,7 @@ describe('compareParse — what counts as a change', () => {
 
     expect(verdict.kind).toBe('changed');
     if (verdict.kind !== 'changed') throw new Error('unreachable');
-    const added = verdict.movement.passes.find((pass) => pass.pass === 'markdown/new-pass');
+    const added = verdict.movement.passes.find((pass) => pass.label === 'markdown/new-pass');
     expect(added?.kind).toBe('added');
     // Below both gates, and still reported: the appearance is the finding.
     expect(added?.elapsedMs.significant).toBe(false);

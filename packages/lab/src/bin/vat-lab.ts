@@ -13,6 +13,9 @@ import { parseWholeNumberAtLeast, safePath } from '@vibe-agent-toolkit/utils';
 import { Command, InvalidArgumentError } from 'commander';
 
 import type { ReportEnvelope } from '../envelope/envelope.js';
+import { captureCrawl } from '../facets/crawl/capture.js';
+import { compareCrawl } from '../facets/crawl/compare.js';
+import { renderCrawlComparison, renderCrawlReport } from '../facets/crawl/render.js';
 import { captureIo } from '../facets/io/capture.js';
 import { compareIo } from '../facets/io/compare.js';
 import { renderIoComparison, renderIoReport } from '../facets/io/render.js';
@@ -680,6 +683,36 @@ export function createProgram(): Command {
         // the compare output, where the passes are qualified by kind.
         estimate: (report) =>
           rowEstimates(report.body.commands, 'ms parse (all kinds)', (row) => row.totalMs),
+      }),
+    )
+    .addCommand(
+      createFacetCommand({
+        name: 'crawl',
+        summary:
+          "Attribute the time vat spends FINDING documents, per contributor, stratum and fixpoint pass",
+        runSummary: 'Capture a crawl-timing report for one project against one vat build',
+        compareSummary: 'Diff two crawl-timing reports along a single axis',
+        // Three repeats, so the middle one can be reported and the other two can
+        // disagree with it. No warm-up is discarded — see `crawl/capture.ts`.
+        defaultRuns: 3,
+        // Warm, unlike `parse`. There is no cache in front of a crawl, so the
+        // work happens on every repeat and the steady state is the honest one.
+        defaultCache: 'warm',
+        capture: captureCrawl,
+        compare: compareCrawl,
+        renderReport: renderCrawlReport,
+        renderComparison: renderCrawlComparison,
+        // The MINIMUM repeat, not the median. `FacetFunctions.estimate` requires
+        // "a per-capture reduction that is already robust to a slow repeat",
+        // because `ab` then takes a minimum of these and a min over medians is
+        // not a min. `parse` publishes its median here and that is a known,
+        // measured defect (+172.4ms on the first real `parse ab`); this facet
+        // does not repeat it. `totalMsSamples` carries every repeat, so the
+        // reduction is available without re-reading anything.
+        estimate: (report) =>
+          rowEstimates(report.body.commands, 'ms crawl (all strata)', (row) =>
+            row.totalMsSamples.length === 0 ? row.totalMs : Math.min(...row.totalMsSamples),
+          ),
       }),
     );
 }

@@ -38,6 +38,53 @@ export {
   ReportEnvelopeSchema,
 } from './envelope/envelope.js';
 
+export { captureCrawl, type CaptureCrawlOptions } from './facets/crawl/capture.js';
+export {
+  compareCrawl,
+  type CompareCrawlOptions,
+  type CrawlCommandDiff,
+  type CrawlCommandVerdict,
+  type CrawlComparison,
+  type CrawlComparisonRefused,
+  type CrawlComparisonResult,
+  type CrawlCountDelta,
+  type CrawlMovement,
+  type CrawlMsDelta,
+  type CrawlRowMovement,
+  type CrawlRowMovementKind,
+} from './facets/crawl/compare.js';
+export {
+  CRAWL_DUMP_VERSION,
+  CRAWL_TIMING_DIR_ENV,
+  crawlAttributionOf,
+  type CrawlDump,
+  type CrawlDumpEntry,
+  type CrawlDumpProcess,
+  CrawlDumpSchema,
+  type CrawlDumpsAccepted,
+  crawlEntryKey,
+  type CrawlProcessRecord,
+  type MergedCrawlDumps,
+  type MergedCrawlDumpsResult,
+  mergeCrawlDumps,
+  readCrawlDumps,
+  sameCrawlWork,
+} from './facets/crawl/dump.js';
+export { renderCrawlComparison, renderCrawlReport } from './facets/crawl/render.js';
+export {
+  CRAWL_FACET,
+  CRAWL_FACET_VERSION,
+  type CrawlAttribution,
+  type CrawlBody,
+  CrawlBodySchema,
+  type CrawlCommandStats,
+  crawlEntryShape,
+  type CrawlEntryStats,
+  crawlProcessShape,
+  type CrawlProcessStats,
+  type CrawlStratumStats,
+} from './facets/crawl/types.js';
+
 export { captureIo, type CaptureIoOptions } from './facets/io/capture.js';
 export {
   compareIo,
@@ -181,7 +228,39 @@ export {
   measurableCommand,
   type MeasuredCommandSpec,
 } from './harness/commands.js';
+export {
+  type CountDelta,
+  countDelta,
+  DEFAULT_MIN_ABSOLUTE_MS,
+  DEFAULT_MIN_RELATIVE,
+  type DeltaThresholds,
+  type LabelledRow,
+  labelledMovements,
+  type MsDelta,
+  msDelta,
+  type RowMovement,
+  type RowMovementKind,
+} from './harness/delta.js';
 export { bothSides, pairByKey, type Pairing } from './harness/diff.js';
+export { captureCommandRows } from './harness/dump-capture.js';
+export {
+  type BodyParser,
+  cacheModeCaveat,
+  type CommandBody,
+  type CommandDiff,
+  type CommandsCompared,
+  type ComparableRow,
+  compareCommandRows,
+  type ComparisonOpened,
+  type ComparisonOpening,
+  type ComparisonRefusal,
+  diffPairedCommand,
+  type FacetContract,
+  failureCaveat,
+  type OneSidedVerdict,
+  openComparison,
+  unmeasurableReasonFor,
+} from './harness/facet-compare.js';
 export { type Estimate, estimate, quantile } from './harness/estimator.js';
 export {
   describeIssues,
@@ -220,14 +299,28 @@ export {
   comparisonHeading,
   comparisonText,
   coordinateLines,
+  countMovement,
+  facetReportText,
   instrumentLabel,
   instrumentTrustNotes,
   type LoadPhrasing,
   loadLine,
+  movementMark,
+  type MovementMark,
+  ms,
+  msMovement,
+  msPair,
   noMeasurementLines,
   oneSidedLines,
+  perUnit,
+  renderFacetComparison,
+  renderFacetReport,
+  share,
   SHORT_HASH,
+  signedMs,
   tally,
+  unmeasuredBlock,
+  verdictBlock,
   versionLabel,
 } from './harness/render.js';
 export { buildReportEnvelope } from './harness/report.js';

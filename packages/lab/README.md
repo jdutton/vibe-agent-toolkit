@@ -27,11 +27,20 @@ vat-lab <facet> compare <baseline> <candidate>
 (`--command validate --command verify`); see
 [Which commands get measured](docs/run-harness.md#which-commands-get-measured).
 
-Facets today are **`io`** (filesystem-call counts), **`perf`** (wall time) and **`parse`** (where
-the time inside vat's markdown parse goes, pass by pass). `parse` defaults to `--cache cold` because
-vat's parse cache short-circuits the parse function on a hit, so a warm run has nothing to
-attribute — see [Facets](docs/facets.md). A minimal
-vary-the-instrument comparison — the same project, measured by two builds of vat:
+Facets today are **`io`** (filesystem-call counts), **`perf`** (wall time), **`parse`** (where the
+time inside vat's document parse goes, pass by pass) and **`crawl`** (where the time spent *finding*
+those documents goes, per contributor, stratum and fixpoint pass). `parse` defaults to
+`--cache cold` because vat's parse cache short-circuits the parse function on a hit, so a warm run
+has nothing to attribute; `crawl` defaults to warm, because nothing caches a crawl — see
+[Facets](docs/facets.md).
+
+`crawl` exists for one question `perf` cannot answer: VAT has **two crawlers live at once** — the
+incumbent `walkLinkGraph` and the projection's `ClosureExtentContributor` — and both now record
+through one seam, on one clock, into one dump. Its `by stratum` line is the two of them side by
+side (`crawl` is the incumbent walker, `closure` is the projection), which is what makes a flip
+decision a measurement rather than an argument.
+
+A minimal vary-the-instrument comparison — the same project, measured by two builds of vat:
 
 ```bash
 vat-lab io run ../some-project --id some-project --out ./before

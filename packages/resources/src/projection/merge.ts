@@ -47,6 +47,7 @@
 
 import { safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
 
+import { recordContributorInvocation } from '../crawl-timing.js';
 import type { JsonValue } from '../schemas/projection-shared.js';
 
 import { populateBlobs, type BlobPopulationResult } from './blob-population.js';
@@ -174,6 +175,14 @@ export interface PopulateOptions {
    * `pass` is 1 for every base contributor and the fixpoint iteration number for
    * a closure one, so a contributor that is cheap once but runs in every pass is
    * distinguishable from one that is expensive once.
+   *
+   * **Optional, and the seam does not depend on it.** Every record is also filed
+   * with `crawl-timing.ts`, which dumps them when `VAT_CRAWL_TIMING` is set —
+   * see {@link reportContributorTiming}. This option existed for two years' worth
+   * of commits with no observer anywhere in the repository (three grep hits, all
+   * inside this file), which meant both brackets below could have been deleted
+   * with nothing failing. A caller that wants the records in-process still gets
+   * them here; a caller that wants them on disk needs no caller at all.
    */
   onContributorTiming?: ((timing: ContributorTiming) => void) | undefined;
 }
@@ -186,8 +195,36 @@ export interface ContributorTiming {
   readonly stratum: 'base' | 'closure';
   /** 1 for a base contributor; the fixpoint iteration for a closure one. */
   readonly pass: number;
-  /** Wall time this invocation took, in milliseconds. */
+  /**
+   * Wall time this invocation took, in milliseconds.
+   *
+   * From `performance.now()`, not `Date.now()`. The difference is not cosmetic:
+   * the same figures are filed with `crawl-timing.ts` alongside the link
+   * walker's, and the point of putting them in one dump is that the two crawlers
+   * can be held against each other. `Date.now()`'s ~1ms granularity would have
+   * quantised every contributor invocation on one side of that comparison while
+   * the other side was sub-microsecond, which is precisely the resolution the
+   * comparison needs.
+   */
   readonly elapsedMs: number;
+}
+
+/**
+ * File one contributor invocation with the seam, and with the caller if it asked.
+ *
+ * One measurement, two destinations, and the SAME object handed to both — so an
+ * in-process observer and the on-disk dump can never report different numbers for
+ * one invocation.
+ *
+ * @param onTiming - The caller's observer, if any
+ * @param timing - What the invocation cost
+ */
+function reportContributorTiming(
+  onTiming: ((timing: ContributorTiming) => void) | undefined,
+  timing: ContributorTiming,
+): void {
+  recordContributorInvocation(timing);
+  onTiming?.(timing);
 }
 
 /**
@@ -269,13 +306,13 @@ export async function populate(options: PopulateOptions): Promise<Projection> {
     // grew, and `ResourceIdentityMap` is a shared memo rather than a pure
     // function. Fanning these out with `Promise.all` would make the row set
     // depend on scheduling.
-    const startedAt = Date.now();
+    const startedAt = performance.now();
     await runContributor(contributor, builder, parameterSetFor(contributor));
-    options.onContributorTiming?.({
+    reportContributorTiming(options.onContributorTiming, {
       contributorId: contributor.id,
       stratum: 'base',
       pass: 1,
-      elapsedMs: Date.now() - startedAt,
+      elapsedMs: performance.now() - startedAt,
     });
   }
 
@@ -412,13 +449,13 @@ async function iterateClosure(
     moving = [];
     for (const contributor of closure) {
       // Sequential for the same reason as the base loop above.
-      const startedAt = Date.now();
+      const startedAt = performance.now();
       const digest = await runContributor(contributor, builder, parameterSetFor(contributor));
-      onTiming?.({
+      reportContributorTiming(onTiming, {
         contributorId: contributor.id,
         stratum: 'closure',
         pass: iteration,
-        elapsedMs: Date.now() - startedAt,
+        elapsedMs: performance.now() - startedAt,
       });
       // Per-contributor comparison, not whole-projection: a whole-projection
       // digest would also move when a base row arrived, and cannot name which

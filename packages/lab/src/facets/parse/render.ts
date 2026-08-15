@@ -40,22 +40,22 @@
 
 import type { ReportEnvelope } from '../../envelope/envelope.js';
 import {
-  comparisonText,
-  coordinateLines,
+  countMovement,
   type LoadPhrasing,
-  loadLine,
-  noMeasurementLines,
-  oneSidedLines,
+  ms,
+  movementMark,
+  msMovement,
+  msPair,
+  perUnit,
+  renderFacetComparison,
+  renderFacetReport,
+  share,
   tally,
+  unmeasuredBlock,
+  verdictBlock,
 } from '../../harness/render.js';
 
-import type {
-  ParseComparisonResult,
-  ParseCountDelta,
-  ParseMovement,
-  ParseMsDelta,
-  ParsePassMovement,
-} from './compare.js';
+import type { ParseComparisonResult, ParseMovement, ParsePassMovement } from './compare.js';
 import type {
   ParseAttribution,
   ParseBody,
@@ -63,15 +63,6 @@ import type {
   ParseKindStats,
   ParsePassStats,
 } from './types.js';
-
-/** Decimal places for a millisecond figure. */
-const MS_PRECISION = 1;
-
-/** Decimal places for a per-document figure, which is often well under 1 ms. */
-const PER_DOCUMENT_PRECISION = 3;
-
-/** Decimal places for a percentage share. */
-const SHARE_PRECISION = 1;
 
 /**
  * Below this, a negative remainder is float noise rather than a broken bracket.
@@ -137,51 +128,6 @@ const ATTRIBUTION_NOTES: Readonly<Record<ParseAttribution, string>> = {
 };
 
 /**
- * Format a millisecond value.
- *
- * @param value - Milliseconds
- * @returns A fixed-precision rendering
- */
-function ms(value: number): string {
-  return `${value.toFixed(MS_PRECISION)}ms`;
-}
-
-/**
- * Render a signed millisecond difference.
- *
- * @param value - The signed difference
- * @returns `+12.3ms` or `-4.0ms`
- */
-function signedMs(value: number): string {
-  return `${value >= 0 ? '+' : '-'}${ms(Math.abs(value))}`;
-}
-
-/**
- * One quantity per unit of another, or a dash when there is no denominator.
- *
- * A dash rather than `0.000`: dividing by zero documents produces no reading,
- * and a zero there would read as "this pass is free per document".
- *
- * @param value - The numerator, in milliseconds
- * @param units - The denominator
- * @returns The per-unit figure, or `—`
- */
-function perUnit(value: number, units: number): string {
-  return units === 0 ? '—' : (value / units).toFixed(PER_DOCUMENT_PRECISION);
-}
-
-/**
- * A pass's share of the total, or a dash when the total is zero.
- *
- * @param value - The pass's milliseconds
- * @param total - The bracketing total
- * @returns `12.3%`, or `—`
- */
-function share(value: number, total: number): string {
-  return total === 0 ? '—' : `${((value / total) * 100).toFixed(SHARE_PRECISION)}%`;
-}
-
-/**
  * How this facet's numbers are qualified when the machine was not idle.
  *
  * These are durations, so unlike `io`'s counts they move with the machine —
@@ -200,7 +146,7 @@ const LOAD_PHRASING: LoadPhrasing = {
  */
 function cacheLine(row: ParseCommandStats): string {
   const looks = row.cacheHits + row.cacheMisses;
-  const rate = looks === 0 ? '—' : `${((row.cacheHits / looks) * 100).toFixed(SHARE_PRECISION)}%`;
+  const rate = share(row.cacheHits, looks);
   return (
     `      parse cache: ${tally(row.cacheHits)} hits / ${tally(row.cacheMisses)} misses ` +
     `(${rate} hit rate, ALL parser kinds — not a per-document rate; every kind counts here, ` +
@@ -413,15 +359,12 @@ function summaryLine(row: ParseCommandStats): string {
  * @returns The command's block
  */
 function commandLines(row: ParseCommandStats): readonly string[] {
-  if (row.failed) return [`  ${row.name}: FAILED — ${row.failure ?? 'unknown'}`];
-  if (row.attribution !== 'measured') {
-    return [
-      `  ${row.name} (${row.cache}, ${tally(row.runs)} runs): ${ATTRIBUTION_NOTES[row.attribution]}`,
-      cacheLine(row),
-      routesLine(row),
-      ...processLines(row),
-    ];
-  }
+  const empty = unmeasuredBlock(row, row.attribution === 'measured', ATTRIBUTION_NOTES[row.attribution], [
+    cacheLine(row),
+    routesLine(row),
+    ...processLines(row),
+  ]);
+  if (empty !== null) return empty;
   return [
     summaryLine(row),
     ...dominanceLines(row),
@@ -440,47 +383,7 @@ function commandLines(row: ParseCommandStats): readonly string[] {
  * @returns Text for a terminal
  */
 export function renderParseReport(report: ReportEnvelope<ParseBody>): string {
-  return [
-    ...coordinateLines(report.coordinate),
-    loadLine(report.body.load, LOAD_PHRASING),
-    TIMING_LEGEND,
-    '',
-    ...report.body.commands.flatMap((row) => commandLines(row)),
-  ].join('\n');
-}
-
-/**
- * Render one before/after duration, unlabelled.
- *
- * @param value - The pair and its difference
- * @returns `921.6ms -> 812.0ms (-109.6ms)`
- */
-function msPairOf(value: ParseMsDelta): string {
-  return `${ms(value.before)} -> ${ms(value.after)} (${signedMs(value.delta)})`;
-}
-
-/**
- * Render one before/after duration with a label.
- *
- * @param label - What is being timed
- * @param value - The pair and its difference
- * @returns `total 921.6ms -> 812.0ms (-109.6ms)`
- */
-function movementOf(label: string, value: ParseMsDelta): string {
-  return `${label} ${msPairOf(value)}`;
-}
-
-/**
- * Render one before/after count.
- *
- * @param label - What is being counted
- * @param value - The pair and its difference
- * @returns `documents 1,364 -> 1,364 (0)`
- */
-function countMovementOf(label: string, value: ParseCountDelta): string {
-  const direction = value.delta > 0 ? '+' : '-';
-  const signed = value.delta === 0 ? '0' : `${direction}${tally(Math.abs(value.delta))}`;
-  return `${label} ${tally(value.before)} -> ${tally(value.after)} (${signed})`;
+  return renderFacetReport(report, LOAD_PHRASING, TIMING_LEGEND, commandLines);
 }
 
 /**
@@ -494,15 +397,10 @@ function countMovementOf(label: string, value: ParseCountDelta): string {
  * @returns A single line
  */
 function passMovementLine(movement: ParsePassMovement): string {
-  // A pass that merely moved within the gates gets a blank marker rather than a
-  // `~`: the eye should land on the rows that are findings.
-  const quiet = movement.kind === 'changed' && !movement.elapsedMs.significant;
-  const changedMarker = quiet ? ' ' : '~';
-  const marker = { added: '+', removed: '-', changed: changedMarker }[movement.kind];
-  const noise = quiet ? '  (within noise)' : '';
+  const { marker, noise } = movementMark(movement.kind, movement.elapsedMs.significant);
   return (
-    `      ${marker} ${movement.pass.padEnd(22)} ${msPairOf(movement.elapsedMs)}, ` +
-    `${countMovementOf('calls', movement.calls)}${noise}`
+    `      ${marker} ${movement.label.padEnd(22)} ${msPair(movement.elapsedMs)}, ` +
+    `${countMovement('calls', movement.calls)}${noise}`
   );
 }
 
@@ -514,9 +412,9 @@ function passMovementLine(movement: ParsePassMovement): string {
  */
 function totalsLine(movement: ParseMovement): string {
   return [
-    movementOf('total', movement.total),
-    movementOf('unattributed', movement.unattributedMs),
-    countMovementOf('documents', movement.documents),
+    msMovement('total', movement.total),
+    msMovement('unattributed', movement.unattributedMs),
+    countMovement('documents', movement.documents),
   ].join(', ');
 }
 
@@ -541,20 +439,19 @@ function caveatLines(movement: ParseMovement): readonly string[] {
  * @returns That command's block
  */
 function diffLines(diff: ParseComparisonResult['commands'][number]): readonly string[] {
-  const { name, verdict } = diff;
-  if (verdict.kind === 'added' || verdict.kind === 'removed') {
-    return oneSidedLines(name, verdict.kind);
-  }
-  if (verdict.kind === 'unmeasurable') return noMeasurementLines(name, verdict.reason);
-
-  const changed = verdict.kind === 'changed';
-  const headline = changed
-    ? `  ${name}: CHANGED — ${totalsLine(verdict.movement)}`
-    : `  ${name}: unchanged — ${totalsLine(verdict.movement)}, every move within noise`;
-  // The per-pass lines are the finding when something moved; on an unchanged
-  // command they would be eight rows of "(within noise)" nobody reads.
-  const passes = changed ? verdict.movement.passes.map((pass) => passMovementLine(pass)) : [];
-  return [headline, ...passes, ...caveatLines(verdict.movement)];
+  const movementOf = (): ParseMovement => (diff.verdict as { movement: ParseMovement }).movement;
+  return verdictBlock(
+    diff.name,
+    diff.verdict,
+    () => totalsLine(movementOf()),
+    // The per-pass lines are the finding when something moved; on an unchanged
+    // command they would be eight rows of "(within noise)" nobody reads. The
+    // caveat qualifies both, so it is outside that choice.
+    (changed) => [
+      ...(changed ? movementOf().passes.map((pass) => passMovementLine(pass)) : []),
+      ...caveatLines(movementOf()),
+    ],
+  );
 }
 
 /**
@@ -564,10 +461,5 @@ function diffLines(diff: ParseComparisonResult['commands'][number]): readonly st
  * @returns Text for a terminal
  */
 export function renderParseComparison(comparison: ParseComparisonResult): string {
-  return comparisonText({
-    axis: comparison.axis,
-    notes: comparison.contaminated ? [CONTAMINATION_NOTE] : [],
-    legend: TIMING_LEGEND,
-    blocks: comparison.commands.flatMap((diff) => diffLines(diff)),
-  });
+  return renderFacetComparison(comparison, TIMING_LEGEND, CONTAMINATION_NOTE, diffLines);
 }

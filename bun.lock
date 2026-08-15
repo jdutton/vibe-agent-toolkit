@@ -216,6 +216,7 @@
       },
       "devDependencies": {
         "@types/which": "^3.0.4",
+        "@vibe-agent-toolkit/resources": "workspace:*",
       },
     },
     "packages/rag": {

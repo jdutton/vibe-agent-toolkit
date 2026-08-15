@@ -466,3 +466,28 @@ export {
   serializeProjection,
   type ProjectionDocument,
 } from './projection/export.js';
+
+// The crawl-timing seam: which contributor, stratum and fixpoint pass owns the
+// time it takes to FIND documents, as against `parse-timing.ts`'s account of the
+// time it takes to parse them. Exported from the barrel — unlike `parse-timing`,
+// which stays package-internal — because one of the two crawlers it measures
+// (`walkLinkGraph`) lives in `agent-skills`, and both arms must record through
+// ONE recorder or the two are not comparable.
+export {
+  CRAWL_CLOSURE_CONTRIBUTE_ID,
+  CRAWL_CLOSURE_RESOLVE_ID,
+  CRAWL_PASS_INSIDE,
+  CRAWL_STRATA,
+  CRAWL_WALKER_GITIGNORE_ID,
+  CRAWL_WALKER_ID,
+  crawlTimingStart,
+  recordContributorInvocation,
+  recordCrawlPass,
+  type CrawlStratum,
+  type CrawlTimingDump,
+  type CrawlTimingEntry,
+  type CrawlTimingProcess,
+  __readCrawlTimingSnapshot,
+  __setCrawlTimingForTest,
+  __writeCrawlTimingDumpForTest,
+} from './crawl-timing.js';

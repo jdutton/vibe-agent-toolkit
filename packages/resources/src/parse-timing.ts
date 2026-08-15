@@ -114,9 +114,13 @@
  * what enables the seam. An empty-string value counts as absent.
  */
 
-import { existsSync, writeFileSync } from 'node:fs';
-
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import {
+  ensureTimingDirectory,
+  normalizeTimingDirectory,
+  readTimingProcess,
+  type TimingProcess,
+  writeTimingDump,
+} from './timing-dump.js';
 
 /**
  * The passes the instrumented parsers are bracketed at, as array indices.
@@ -264,14 +268,7 @@ export interface ParseTimingKind {
  * correspondingly less trustworthy. CPU above wall is normal and not an error —
  * `process.cpuUsage()` sums every thread, including libuv's pool.
  */
-export interface ParseTimingProcess {
-  /** Wall clock since this process started. */
-  wallMs: number;
-  /** User CPU consumed by the process, across all its threads. */
-  cpuUserMs: number;
-  /** System CPU consumed by the process, across all its threads. */
-  cpuSystemMs: number;
-}
+export type ParseTimingProcess = TimingProcess;
 
 /** The on-disk dump shape. Versioned so a reader can refuse an unknown layout. */
 export interface ParseTimingDump {
@@ -295,21 +292,11 @@ export interface ParseTimingDump {
  */
 const DUMP_VERSION = 2;
 
-/** `process.cpuUsage()` reports microseconds; the dump reports milliseconds. */
-const MICROSECONDS_PER_MS = 1000;
-
-/** `process.uptime()` reports seconds; the dump reports milliseconds. */
-const MS_PER_SECOND = 1000;
-
 /** Basename stem of a dump file; the pid (and any collision counter) follow. */
 const DUMP_BASENAME = 'parse-timing';
 
-/**
- * Ceiling on the pid-collision search. A directory holding this many dumps for
- * one pid is a runaway, not a collision; overwriting the last slot is a better
- * outcome than spinning.
- */
-const MAX_DUMP_COLLISIONS = 1000;
+/** What this seam is called in a failure line. */
+const DUMP_NOUN = 'parse-timing';
 
 const passElapsedMs = new Float64Array(PASS_SLOT_COUNT);
 const passCalls = new Float64Array(PASS_SLOT_COUNT);
@@ -326,97 +313,13 @@ let cacheMisses = 0;
  * Read ONCE, here, from `process.env`. See the module docstring for why this
  * deliberately differs from `parse-cache.ts`'s per-construction rule.
  */
-let dumpDirectory: string | null = normalizeDumpDirectory(process.env['VAT_PARSE_TIMING']);
+let dumpDirectory: string | null = normalizeTimingDirectory(process.env['VAT_PARSE_TIMING']);
 
 /**
  * The hot path's gate. A plain boolean rather than `dumpDirectory !== null` so
  * every instrumented call site costs one predictable branch on a memory load.
  */
 let timingEnabled = dumpDirectory !== null;
-
-/**
- * Reduce a raw env value to a directory or `null`.
- *
- * @param raw - The env var's value, if set
- * @returns The dump directory, or `null` when the seam is off
- */
-function normalizeDumpDirectory(raw: string | undefined): string | null {
-  return raw === undefined || raw === '' ? null : raw;
-}
-
-/**
- * Create the dump directory, swallowing failure.
- *
- * Done once when the seam turns on rather than at exit, so a bad path is
- * reported while there is still a run to abandon — and so the exit handler does
- * the minimum possible work.
- *
- * @param directory - Directory dumps will be written to
- */
-function ensureDumpDirectory(directory: string): void {
-  try {
-    mkdirSyncReal(directory, { recursive: true });
-  } catch (error) {
-    reportDumpFailure(directory, error);
-  }
-}
-
-/**
- * Report a dump problem on stderr.
- *
- * Never throws and never touches stdout: vat's stdout carries a YAML report,
- * and an exit handler that throws would change the process's exit behaviour.
- *
- * @param target - Path the failure concerns
- * @param error - Whatever was caught
- */
-function reportDumpFailure(target: string, error: unknown): void {
-  const detail = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`vat: parse-timing dump failed for ${target}: ${detail}\n`);
-}
-
-/**
- * Pick a dump path that does not already exist.
- *
- * Pids are reused across a long multi-phase run (`vat validate` spawns the vat
- * binary once per phase), so `parse-timing-<pid>.json` genuinely collides. An
- * increasing counter is appended until the name is free.
- *
- * @param directory - Directory dumps are written to
- * @returns An unused path, or the last candidate tried
- */
-function nextDumpPath(directory: string): string {
-  const stem = `${DUMP_BASENAME}-${String(process.pid)}`;
-  let candidate = safePath.join(directory, `${stem}.json`);
-  for (
-    let collision = 1;
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- operator-supplied diagnostic directory from VAT_PARSE_TIMING
-    collision <= MAX_DUMP_COLLISIONS && existsSync(candidate);
-    collision += 1
-  ) {
-    candidate = safePath.join(directory, `${stem}-${String(collision)}.json`);
-  }
-  return candidate;
-}
-
-/**
- * Read this process's lifetime wall and CPU time.
- *
- * Called ONCE, from {@link buildDump} — two syscalls for the whole run, which is
- * why the process level can afford a CPU reading the per-pass level cannot.
- * Deliberately not an accumulator and deliberately not reset: it describes the
- * process, not the measurement window.
- *
- * @returns Wall clock and CPU since process start, in milliseconds
- */
-function readProcessTime(): ParseTimingProcess {
-  const cpu = process.cpuUsage();
-  return {
-    wallMs: process.uptime() * MS_PER_SECOND,
-    cpuUserMs: cpu.user / MICROSECONDS_PER_MS,
-    cpuSystemMs: cpu.system / MICROSECONDS_PER_MS,
-  };
-}
 
 /**
  * One pass row, read out of the flat accumulators.
@@ -457,7 +360,7 @@ function buildDump(): ParseTimingDump {
   return {
     dumpVersion: DUMP_VERSION,
     pid: process.pid,
-    process: readProcessTime(),
+    process: readTimingProcess(),
     cache: { hits: cacheHits, misses: cacheMisses },
     kinds: PARSE_KIND_SHAPES.map((shape, index) => kindGroup(shape, index)),
   };
@@ -472,17 +375,7 @@ function buildDump(): ParseTimingDump {
  * @returns The path written, or `null` when the seam is off or the write failed
  */
 function writeDump(): string | null {
-  if (dumpDirectory === null) return null;
-
-  const target = nextDumpPath(dumpDirectory);
-  try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- operator-supplied diagnostic directory from VAT_PARSE_TIMING
-    writeFileSync(target, `${JSON.stringify(buildDump(), null, 2)}\n`, 'utf-8');
-  } catch (error) {
-    reportDumpFailure(target, error);
-    return null;
-  }
-  return target;
+  return writeTimingDump(DUMP_NOUN, dumpDirectory, DUMP_BASENAME, buildDump);
 }
 
 /**
@@ -501,7 +394,7 @@ function resetAccumulators(): void {
 }
 
 if (dumpDirectory !== null) {
-  ensureDumpDirectory(dumpDirectory);
+  ensureTimingDirectory(DUMP_NOUN, dumpDirectory);
   // Registered ONLY when enabled: a disabled seam must not even add a listener.
   process.on('exit', () => {
     writeDump();
@@ -567,10 +460,10 @@ export function recordParseCacheMiss(): void {
  * @param directory - Where {@link __writeParseTimingDumpForTest} writes, or `null` to disable
  */
 export function __setParseTimingForTest(directory: string | null): void {
-  dumpDirectory = normalizeDumpDirectory(directory ?? undefined);
+  dumpDirectory = normalizeTimingDirectory(directory ?? undefined);
   timingEnabled = dumpDirectory !== null;
   resetAccumulators();
-  if (dumpDirectory !== null) ensureDumpDirectory(dumpDirectory);
+  if (dumpDirectory !== null) ensureTimingDirectory(DUMP_NOUN, dumpDirectory);
 }
 
 /**

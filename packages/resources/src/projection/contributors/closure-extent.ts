@@ -76,6 +76,13 @@
 import picomatch from 'picomatch';
 
 import {
+  CRAWL_CLOSURE_CONTRIBUTE_ID,
+  CRAWL_CLOSURE_RESOLVE_ID,
+  CRAWL_PASS_INSIDE,
+  crawlTimingStart,
+  recordCrawlPass,
+} from '../../crawl-timing.js';
+import {
   ExtentDeclarationSchema,
   type ExtentDeclaration,
   type ExtentRefusalRule,
@@ -184,6 +191,32 @@ export class ClosureExtentContributor implements ExtentContributor {
    *   than the one this contributor is registered under
    */
   async contribute(base: ProjectionBase, parameters: JsonValue): Promise<ExtentContribution> {
+    // Bracketed from the inside, under a synthetic id shared by every declared
+    // extent — see `crawl-timing.ts`. The merge driver already records this
+    // invocation per extent and per fixpoint pass; what only an inner bracket can
+    // say is how much of that is this body and how much is the merge, the digest
+    // and the provenance rows the driver wraps around it.
+    const startedAt = crawlTimingStart();
+    try {
+      return this.#contribute(base, parameters);
+    } finally {
+      recordCrawlPass(CRAWL_CLOSURE_CONTRIBUTE_ID, 'closure', CRAWL_PASS_INSIDE, startedAt);
+    }
+  }
+
+  /**
+   * The traversal itself, with no timing concern in it.
+   *
+   * Split out so the bracket in {@link ClosureExtentContributor.contribute} is a
+   * `try`/`finally` around ONE call rather than a pair of statements around a
+   * body with several exits — a bracket that has to be repeated at every `return`
+   * is one a later edit silently drops.
+   *
+   * @param base - Everything merged so far
+   * @param parameters - An {@link ExtentDeclarationSchema}-shaped declaration
+   * @returns The extent's context, members, realizations and conditions
+   */
+  #contribute(base: ProjectionBase, parameters: JsonValue): ExtentContribution {
     const declaration = ExtentDeclarationSchema.parse(parameters);
     if (declaration.kind !== this.kind) {
       throw new Error(
@@ -439,10 +472,21 @@ function resolveReference(
   fromPath: string,
   walk: WalkContext,
 ): ResourceRealizationRow | undefined {
-  const { root } = walk.base;
-  const resolution = resolveLocalHref(rawRef, joinRoot(root, fromPath), root);
-  if (resolution.kind !== 'resolved') return undefined;
-  return walk.byPath.get(relativize(resolution.resolvedPath, root))?.[0];
+  // The one genuinely hot bracket in this module, and the reason it is here: the
+  // module docstring claims this contributor "performs no filesystem I/O of its
+  // own" with ONE stated exception — `resolveLocalHref`'s root-absolute branch
+  // canonicalizes through `realpath`. A claim like that is exactly the kind that
+  // stops being true silently, and it is unfalsifiable while the step it
+  // describes is unmeasured.
+  const startedAt = crawlTimingStart();
+  try {
+    const { root } = walk.base;
+    const resolution = resolveLocalHref(rawRef, joinRoot(root, fromPath), root);
+    if (resolution.kind !== 'resolved') return undefined;
+    return walk.byPath.get(relativize(resolution.resolvedPath, root))?.[0];
+  } finally {
+    recordCrawlPass(CRAWL_CLOSURE_RESOLVE_ID, 'closure', CRAWL_PASS_INSIDE, startedAt);
+  }
 }
 
 /**

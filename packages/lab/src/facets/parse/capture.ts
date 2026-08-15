@@ -29,9 +29,9 @@
  */
 
 import type { ReportEnvelope } from '../../envelope/envelope.js';
-import { withDumpDirs } from '../../harness/dumps.js';
+import { captureCommandRows } from '../../harness/dump-capture.js';
 import { judgeLoad, readLoad } from '../../harness/load-guard.js';
-import { measureSpec, type SpecMeasurement } from '../../harness/repeat.js';
+import type { SpecMeasurement } from '../../harness/repeat.js';
 import { buildReportEnvelope } from '../../harness/report.js';
 import type { CaptureRequest } from '../../harness/types.js';
 
@@ -241,25 +241,7 @@ export async function captureParse(
   options: CaptureParseOptions,
 ): Promise<ReportEnvelope<ParseBody>> {
   const loadBefore = readLoad();
-  const commands: ParseCommandStats[] = [];
-
-  for (const spec of options.commands) {
-    // Sequential on purpose — see this function's doc. Awaiting inside the loop
-    // is the mechanism, not an oversight.
-    commands.push(
-      await withDumpDirs(options.runs, DUMP_DIR_PREFIX, async (directories) => {
-        // Per repeat, and on `envFor` rather than `env`: only the measured run
-        // is instrumented, so `cold` mode's cache clear cannot write dumps of
-        // its own into the repeat that is about to be read.
-        const perRepeat = directories.map((directory) => ({
-          [PARSE_TIMING_DIR_ENV]: directory,
-        }));
-        const measurement = measureSpec(options, spec, (index) => perRepeat[index]);
-        return rowFromDumps(measurement, directories);
-      }),
-    );
-  }
-
+  const commands = await captureCommandRows(options, DUMP_DIR_PREFIX, PARSE_TIMING_DIR_ENV, rowFromDumps);
   const loadAfter = readLoad();
 
   return buildReportEnvelope(PARSE_FACET, PARSE_FACET_VERSION, options, {

@@ -38,69 +38,50 @@
  * may be unchanged per document.
  */
 
+import type { Axis, DecideComparisonOptions } from '../../envelope/coordinate.js';
+import type { ReportEnvelope } from '../../envelope/envelope.js';
 import {
-  type Axis,
-  type Coordinate,
-  decideComparison,
-  type DecideComparisonOptions,
-} from '../../envelope/coordinate.js';
-import { refuseIncomparableSchemas, type ReportEnvelope } from '../../envelope/envelope.js';
-import { bothSides, pairByKey, type Pairing } from '../../harness/diff.js';
-import { describeIssues } from '../../harness/dumps.js';
+  compareCommandRows,
+  countDelta,
+  type DeltaThresholds,
+  type LabelledRow,
+  labelledMovements,
+  msDelta,
+  type RowMovement,
+  unmeasurableReasonFor,
+} from '../../harness/facet-compare.js';
 
 import {
   PARSE_FACET,
   PARSE_FACET_VERSION,
   type ParseAttribution,
-  type ParseBody,
   ParseBodySchema,
   type ParseCommandStats,
-  type ParsePassStats,
 } from './types.js';
 
-/** Fraction of the smaller side a duration must move by to count as real. */
-const DEFAULT_MIN_RELATIVE = 0.1;
+/** This facet's body contract, as the shared comparison gates need it. */
+const PARSE_CONTRACT = {
+  facet: PARSE_FACET,
+  version: PARSE_FACET_VERSION,
+  schema: ParseBodySchema,
+} as const;
 
-/**
- * Milliseconds a duration must move by to count as real.
- *
- * Lower than `perf`'s floor because these are not spawn-to-exit measurements: a
- * pass is bracketed inside the process with `performance.now()`, so there is no
- * process-startup jitter underneath it. It is not zero, because summing hundreds
- * of sub-millisecond brackets accumulates its own noise.
- */
-const DEFAULT_MIN_ABSOLUTE_MS = 2;
+/** A before/after pair of counts. Named here so a consumer needs one import. */
+export type ParseCountDelta = RowMovement['calls'];
 
-/** A before/after pair of counts with the difference already taken. */
-export interface ParseCountDelta {
-  readonly before: number;
-  readonly after: number;
-  /** `after - before`. Exact: these are counts. */
-  readonly delta: number;
-}
-
-/** A before/after pair of durations, with the verdict on whether the move is real. */
-export interface ParseMsDelta {
-  readonly before: number;
-  readonly after: number;
-  /** `after - before`, unrounded. */
-  readonly delta: number;
-  /** `after / before`, or `null` when the baseline is `0` and no ratio exists. */
-  readonly ratio: number | null;
-  /** True when the move cleared both the relative gate and the absolute floor. */
-  readonly significant: boolean;
-}
+/** A before/after pair of durations, with its significance verdict. */
+export type ParseMsDelta = RowMovement['elapsedMs'];
 
 /** Whether a pass is new, gone, or present on both sides. */
-export type ParsePassMovementKind = 'added' | 'removed' | 'changed';
+export type ParsePassMovementKind = RowMovement['kind'];
 
-/** What happened to one pass between two reports. */
-export interface ParsePassMovement {
-  readonly pass: string;
-  readonly kind: ParsePassMovementKind;
-  readonly elapsedMs: ParseMsDelta;
-  readonly calls: ParseCountDelta;
-}
+/**
+ * What happened to one pass between two reports.
+ *
+ * The label is `<kind>/<pass>` — see {@link qualifiedPasses} for why the bare
+ * pass name is not enough.
+ */
+export type ParsePassMovement = RowMovement;
 
 /** Everything that moved for one command, whatever verdict was drawn from it. */
 export interface ParseMovement {
@@ -173,13 +154,13 @@ export interface ParseComparisonResult {
 /** The outcome of comparing two parse reports. */
 export type ParseComparison = ParseComparisonResult | ParseComparisonRefused;
 
-/** Options for {@link compareParse}. */
-export interface CompareParseOptions extends DecideComparisonOptions {
-  /** Smallest fraction of the smaller side that counts as a real move. Defaults to `0.1`. */
-  readonly minRelative?: number;
-  /** Smallest millisecond move that counts. See {@link DEFAULT_MIN_ABSOLUTE_MS}. */
-  readonly minAbsoluteMs?: number;
-}
+/**
+ * Options for {@link compareParse}.
+ *
+ * The significance thresholds are the shared ones, so this facet cannot answer
+ * "did it move?" by a different rule from its siblings.
+ */
+export interface CompareParseOptions extends DecideComparisonOptions, DeltaThresholds {}
 
 /** How each non-measured state is named in a refusal reason. */
 const ATTRIBUTION_REASONS: Readonly<Record<ParseAttribution, string | null>> = {
@@ -192,125 +173,12 @@ const ATTRIBUTION_REASONS: Readonly<Record<ParseAttribution, string | null>> = {
 };
 
 /**
- * Read an envelope's body as a `parse` body.
+ * Why two rows cannot be compared, or `null` when they can.
  *
- * The build's own version is checked as well as the two sides against each
- * other. The envelope's gate asks whether the reports agree, and two reports
- * captured before a schema move agree perfectly while every row in them means
- * what the older build meant.
- *
- * @param envelope - A report whose header already says it is `parse`
- * @param side - Which side of the comparison this is, for the message
- * @returns The validated body, or a refusal string
+ * The cascade is shared so every facet refuses for the same reasons in the same
+ * order; only the vocabulary of the empty states is this facet's own.
  */
-function readParseBody(
-  envelope: ReportEnvelope<unknown>,
-  side: string,
-): { body: ParseBody } | { refusal: string } {
-  if (envelope.facetVersion !== PARSE_FACET_VERSION) {
-    return {
-      refusal:
-        `REFUSED: the ${side} report is a '${PARSE_FACET}' body at facetVersion ` +
-        `${String(envelope.facetVersion)}, and this build reads ` +
-        `${String(PARSE_FACET_VERSION)}. Re-capture it; reading rows whose meaning has moved ` +
-        'would produce numbers nobody can state.',
-    };
-  }
-
-  const parsed = ParseBodySchema.safeParse(envelope.body);
-  if (parsed.success) return { body: parsed.data as ParseBody };
-  return {
-    refusal:
-      `REFUSED: the ${side} report's header claims facet '${PARSE_FACET}', but its body is not a ` +
-      `'${PARSE_FACET}' body and re-capturing that side is the only fix — ${describeIssues(parsed.error)}`,
-  };
-}
-
-/**
- * Take one count difference.
- *
- * @param before - The baseline value
- * @param after - The compared value
- * @returns Both sides and the signed difference
- */
-function countDelta(before: number, after: number): ParseCountDelta {
-  return { before, after, delta: after - before };
-}
-
-/**
- * Take one duration difference and say whether it is real.
- *
- * Both gates are strict inequalities: a move exactly equal to its threshold has
- * not exceeded it. The relative gate is taken against the SMALLER side so that
- * "10% bigger" and "10% smaller" are the same size of claim.
- *
- * @param before - The baseline duration
- * @param after - The compared duration
- * @param options - Thresholds; see {@link CompareParseOptions}
- * @returns The delta, the ratio, and the verdict
- */
-function msDelta(before: number, after: number, options: CompareParseOptions): ParseMsDelta {
-  const delta = after - before;
-  const magnitude = Math.abs(delta);
-  const relative = (options.minRelative ?? DEFAULT_MIN_RELATIVE) * Math.min(before, after);
-  const absolute = options.minAbsoluteMs ?? DEFAULT_MIN_ABSOLUTE_MS;
-  return {
-    before,
-    after,
-    delta,
-    // `null` rather than `Infinity`: a formatter printing `Infinityx` has been
-    // handed something that was never a number.
-    ratio: before === 0 ? null : after / before,
-    significant: magnitude > relative && magnitude > absolute,
-  };
-}
-
-/**
- * What one side's failure costs the comparison, or `null` when it did not fail.
- *
- * @param row - That side's row
- * @param side - How to name it in the reason
- * @returns A clause, or `null`
- */
-function failureCaveat(row: ParseCommandStats, side: string): string | null {
-  return row.failed ? `the ${side} row failed: ${row.failure ?? 'unknown'}` : null;
-}
-
-/**
- * What one side's attribution state costs the comparison, or `null` when it is a
- * real measurement.
- *
- * @param row - That side's row
- * @param side - How to name it in the reason
- * @returns A clause, or `null`
- */
-function attributionCaveat(row: ParseCommandStats, side: string): string | null {
-  const reason = ATTRIBUTION_REASONS[row.attribution];
-  return reason === null ? null : `the ${side} row has no breakdown — ${reason}`;
-}
-
-/**
- * Why a pair of rows yields no comparable breakdown, or `null` when it does.
- *
- * The order is the content: a failure outranks an empty measurement, which
- * outranks a cache-mode mismatch the operator can simply re-run.
- *
- * @param before - The baseline row
- * @param after - The compared row
- * @returns A reason naming every side at fault, or `null`
- */
-function unmeasurableReason(before: ParseCommandStats, after: ParseCommandStats): string | null {
-  const failures = bothSides(before, after, failureCaveat);
-  if (failures !== null) return failures;
-  const empty = bothSides(before, after, attributionCaveat);
-  if (empty !== null) return empty;
-  if (before.cache !== after.cache) {
-    // A warm run and a cold run are not two measurements of one thing: warm
-    // parses nothing at all, so the delta would be the entire measurement.
-    return `cache mode differs (${before.cache} vs ${after.cache})`;
-  }
-  return null;
-}
+const unmeasurableReason = unmeasurableReasonFor(ATTRIBUTION_REASONS);
 
 /**
  * Every pass of every kind, under a name that says which kind it belongs to.
@@ -321,44 +189,15 @@ function unmeasurableReason(before: ParseCommandStats, after: ParseCommandStats)
  * one pass's movement.
  *
  * @param row - The command's statistics
- * @returns One row per pass, keyed `<kind>/<pass>`, in kind-then-pipeline order
+ * @returns One labelled row per pass, in kind-then-pipeline order
  */
-function qualifiedPasses(row: ParseCommandStats): readonly ParsePassStats[] {
+function passRows(row: ParseCommandStats): readonly LabelledRow[] {
   return row.kinds.flatMap((kind) =>
-    kind.passes.map((pass) => ({ ...pass, pass: `${kind.kind}/${pass.pass}` })),
-  );
-}
-
-/**
- * Pair the two sides' passes and describe each one.
- *
- * Every pass appears, moved or not: the report's subject is the *shape* of the
- * parse, and a list that dropped the unmoved passes would make a 5% shift in one
- * pass look like the whole story.
- *
- * @param before - The baseline row
- * @param after - The compared row
- * @param options - Thresholds; see {@link CompareParseOptions}
- * @returns One movement per pass, in a stable order
- */
-function passMovements(
-  before: ParseCommandStats,
-  after: ParseCommandStats,
-  options: CompareParseOptions,
-): readonly ParsePassMovement[] {
-  const identify = (pass: ParsePassStats): string => pass.pass;
-  return pairByKey(qualifiedPasses(before), qualifiedPasses(after), identify).map(
-    (pair): ParsePassMovement => {
-      let kind: ParsePassMovementKind = 'changed';
-      if (pair.before === null) kind = 'added';
-      else if (pair.after === null) kind = 'removed';
-      return {
-        pass: pair.key,
-        kind,
-        elapsedMs: msDelta(pair.before?.elapsedMs ?? 0, pair.after?.elapsedMs ?? 0, options),
-        calls: countDelta(pair.before?.calls ?? 0, pair.after?.calls ?? 0),
-      };
-    },
+    kind.passes.map((pass) => ({
+      label: `${kind.kind}/${pass.pass}`,
+      calls: pass.calls,
+      elapsedMs: pass.elapsedMs,
+    })),
   );
 }
 
@@ -397,7 +236,7 @@ function buildMovement(
     cacheMisses: countDelta(before.cacheMisses, after.cacheMisses),
     total: msDelta(before.totalMs, after.totalMs, options),
     unattributedMs: msDelta(before.unattributedMs, after.unattributedMs, options),
-    passes: passMovements(before, after, options),
+    passes: labelledMovements(passRows(before), passRows(after), options),
     caveat: movementCaveat(documents),
   };
 }
@@ -486,27 +325,6 @@ function verdictFor(
 }
 
 /**
- * Turn one command pairing into its diff row.
- *
- * @param pair - The command as it appears on each side
- * @param options - Thresholds; see {@link CompareParseOptions}
- * @returns The row, including the one-sided cases
- */
-function diffCommand(
-  pair: Pairing<ParseCommandStats>,
-  options: CompareParseOptions,
-): ParseCommandDiff {
-  const { key, before, after } = pair;
-  if (before === null || after === null) {
-    // A pairing key came from one of the two sides, so exactly one of these is
-    // null here; which one it is names the verdict.
-    const kind = before === null ? 'added' : 'removed';
-    return { name: key, verdict: { kind }, before, after };
-  }
-  return { name: key, verdict: verdictFor(before, after, options), before, after };
-}
-
-/**
  * Compare two `parse` reports.
  *
  * @param before - The baseline report
@@ -519,33 +337,11 @@ export function compareParse(
   after: ReportEnvelope<unknown>,
   options: CompareParseOptions = {},
 ): ParseComparison {
-  const schemaRefusal = refuseIncomparableSchemas(before, after);
-  if (schemaRefusal !== null) return { ok: false, refusal: schemaRefusal };
-
-  if (before.facet !== PARSE_FACET) {
-    return {
-      ok: false,
-      refusal: `REFUSED: compareParse was given '${before.facet}' reports, not '${PARSE_FACET}'.`,
-    };
-  }
-
-  const decision = decideComparison(
-    before.coordinate satisfies Coordinate,
-    after.coordinate,
+  return compareCommandRows<ParseCommandStats, ParseCommandVerdict>(
+    before,
+    after,
+    PARSE_CONTRACT,
     options,
+    (left, right) => verdictFor(left, right, options),
   );
-  if (!decision.ok) return { ok: false, refusal: decision.refusal };
-
-  const beforeBody = readParseBody(before, 'baseline');
-  if ('refusal' in beforeBody) return { ok: false, refusal: beforeBody.refusal };
-  const afterBody = readParseBody(after, 'compared');
-  if ('refusal' in afterBody) return { ok: false, refusal: afterBody.refusal };
-
-  const named = (command: ParseCommandStats): string => command.name;
-  const commands = pairByKey(beforeBody.body.commands, afterBody.body.commands, named).map(
-    (pair) => diffCommand(pair, options),
-  );
-  const contaminated = beforeBody.body.load.contaminated || afterBody.body.load.contaminated;
-
-  return { ok: true, axis: decision.axis, commands, contaminated };
 }
