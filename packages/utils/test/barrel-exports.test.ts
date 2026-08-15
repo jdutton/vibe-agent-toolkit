@@ -63,6 +63,7 @@ const BARREL_EXPORTS = [
   'hasShellSyntax',
   'isAbsoluteAnyPlatform',
   'isAbsolutePath',
+  'isFilesystemAccessError',
   'isGitIgnored',
   'isGitUrl',
   'isGlob',

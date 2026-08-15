@@ -97,7 +97,7 @@ export {
   type SeverityLevel,
   type ValidationConfig,
 } from './validation-config.js';
-// `ValidationConfig` is the single canonical config type: the Zod-inferred type
+// `ValidationConfig` is the single canonical config type: the hand-written type
 // from validation-config.ts. validation-framework.ts re-exports the same type
 // (and derives SeverityConfig/AllowConfig from it), so there is no collision —
 // `export *` from validation-framework.js surfaces the identical symbol.

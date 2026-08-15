@@ -4,7 +4,7 @@
  */
 
 import * as fs from 'node:fs';
-import { existsSync as fsExistsSync } from 'node:fs';
+import { existsSync as fsExistsSync, type Dirent } from 'node:fs';
 import { basename } from 'node:path';
 
 import {
@@ -22,6 +22,7 @@ import {
   detectReferenceTargetMissing,
   detectResourceFormat,
   enumerateSurfaces,
+  materializeIssue,
   validate,
   validateMarketplace,
   validateSkill,
@@ -56,6 +57,7 @@ import {
   gitFindRoot,
   type GitTracker,
   isAbsolutePath,
+  isFilesystemAccessError,
   isGitUrl,
   issueLocation,
   parseGitUrl,
@@ -779,6 +781,13 @@ function applySeverityFilter(
   const skillsConfig = config.skills;
   const defaultSeverity = skillsConfig.defaults?.validation?.severity ?? {};
 
+  // `.filter` after `.map`, not `.map` alone: a synthetic unreadable-path result
+  // exists ONLY to carry its finding, so once the adopter has set
+  // `severity.SCAN_PATH_UNREADABLE: ignore` the result has nothing left to say.
+  // Keeping it published `status: success` for a path the scan never read — the
+  // report positively asserting that an unread path PASSED, which is a stronger
+  // falsehood than the count inflation noted on `unreadablePathResult`. Dropping
+  // it is what "ignore" already means everywhere else.
   return results.map(result => {
     const skillName = SKILL_RESULT_TYPES.has(result.type) ? result.metadata?.name : undefined;
     const perSkillSeverity = skillName === undefined
@@ -808,7 +817,22 @@ function applySeverityFilter(
     }
 
     return buildFilteredResult(result, resolvedIssues);
-  });
+  }).filter(result => !isEmptiedUnreadablePathResult(result));
+}
+
+/**
+ * A synthetic unreadable-path result whose only finding was ignored away.
+ *
+ * Keyed on the shape this module itself produces — `type: 'unknown'`, no
+ * metadata, and now no issues — rather than on a marker field, because
+ * `ValidationResult` is a shared contract and this is the one producer that needs
+ * to be recognised. A genuinely-unknown resource from `unified-validator` carries
+ * metadata or issues and is unaffected.
+ */
+function isEmptiedUnreadablePathResult(result: ValidationResult): boolean {
+  return result.type === 'unknown'
+    && result.issues.length === 0
+    && result.metadata === undefined;
 }
 
 /**
@@ -862,7 +886,29 @@ export async function buildAuditReport(
   const rawResults = await getValidationResults(scanPath, recursive, options, logger, scanRoot);
 
   // Load config for severity filtering (audit ignores allow; only severity matters).
-  const config = loadConfig(deriveConfigRoot(scanPath));
+  //
+  // Guarded, and the ordering is why: the scan above has ALREADY run and collected
+  // every finding by this point. An unreadable or malformed config here threw past
+  // all of it and ended the command with `status: error` and zero findings —
+  // discarding completed work to report a problem with a file that only decides
+  // which findings to *hide*. Every other `loadConfig` in this file is already
+  // wrapped for the same reason; this one was missed.
+  //
+  // Falling back to no config means no severity overrides are applied, so findings
+  // are reported at their default severity. That is the safe direction: it can
+  // only show more than the adopter asked for, never less.
+  let config: ReturnType<typeof loadConfig> | undefined;
+  try {
+    config = loadConfig(deriveConfigRoot(scanPath));
+  } catch (err) {
+    // `warn`, not `debug`. Falling back to no config is the safe direction — it
+    // can only show more than the adopter asked for, never less — but it means
+    // every `validation.severity` override they wrote is silently inert. Before
+    // this guard the command failed loudly and told them; degrading without a word
+    // would trade a crash for a config that quietly stopped working, which is the
+    // harder problem to notice.
+    logger.warn(`Config could not be read; severity overrides are not applied: ${String(err)}`);
+  }
 
   // Apply severity filtering: hide codes whose effective severity is 'ignore'.
   // Allow is deliberately NOT applied — audit is advisory only.
@@ -1148,7 +1194,46 @@ function appendInventoryParseErrors(
  *   location reads, or a run spanning several configs emits one document in
  *   several coordinate systems. Recursion passes it through unchanged.
  */
+/**
+ * Validate ONE audit subject, degrading if the filesystem refuses it.
+ *
+ * THE boundary guard, and deliberately the only one of its kind. The first
+ * version of this fix guarded the directory walk alone, which left every other
+ * way into a validator unprotected: a `SKILL.md` named directly on the command
+ * line, a plugin directory, a marketplace, each surface of a multi-surface tree.
+ * All of them still ended the whole run with `status: error`, exit 2 and zero
+ * findings — the exact symptom of issue #180, in the lanes nobody had checked.
+ *
+ * Guarding the seven dispatch sites individually would have been the same mistake
+ * a seventh time. This function is what every one of them is reached through, so
+ * it is where "the environment refused this subject" becomes a finding instead of
+ * an abort. It is also the recursion point — `recurseIntoMarketplacePlugins` and
+ * the `--user` target loop both re-enter here — so an unreadable plugin costs its
+ * own subject and nothing else.
+ *
+ * The walk keeps its own per-entry guard: this one would answer at whole-subject
+ * granularity, discarding findings already collected from readable siblings, and
+ * degrading as narrowly as possible is the entire point.
+ */
 export async function getValidationResults(
+	scanPath: string,
+	recursive: boolean,
+	options: AuditCommandOptions,
+	logger: ReturnType<typeof createLogger>,
+	locationRoot: string,
+): Promise<ValidationResult[]> {
+	try {
+		return await validateAuditSubject(scanPath, recursive, options, logger, locationRoot);
+	} catch (error) {
+		// Only the filesystem refusing the subject degrades; a defect in a validator
+		// must still fail loudly rather than be reported as a permissions problem.
+		if (!isFilesystemAccessError(error)) throw error;
+		logger.debug(`Unreadable audit subject: ${scanPath}`);
+		return [unreadablePathResult(scanPath, error, locationRoot)];
+	}
+}
+
+async function validateAuditSubject(
 	scanPath: string,
 	recursive: boolean,
 	options: AuditCommandOptions,
@@ -1279,9 +1364,24 @@ async function validatePluginSkillsViaInventory(
 			continue;
 		}
 		logger.debug(`  Validating plugin-bundled skill (inventory): ${skill.files.skillMd}`);
-		// No crawl: `validatePlugin` already scanned the whole plugin tree, nested
-		// skill directories included, so this lane would duplicate its findings.
-		results.push(await validateSingleSkill(skill.files.skillMd, options, logger, locationRoot, false));
+		// Guarded PER SKILL, not left to the boundary. The boundary guard answers at
+		// whole-subject granularity, so one unreadable bundled `SKILL.md` discarded
+		// the plugin's own manifest findings and every readable sibling skill with
+		// it — 4 results down to 1 — and anchored the finding at the plugin root,
+		// which is perfectly readable. That contradicted this code's own promise
+		// that an unreadable path "costs its own subject and nothing else", and the
+		// documented promise that "a skill beside the unreadable path is validated
+		// exactly as if it were not there". Degrading as narrowly as the structure
+		// allows is the whole point; here the skill is the unit.
+		try {
+			// No crawl: `validatePlugin` already scanned the whole plugin tree, nested
+			// skill directories included, so this lane would duplicate its findings.
+			results.push(await validateSingleSkill(skill.files.skillMd, options, logger, locationRoot, false));
+		} catch (error) {
+			if (!isFilesystemAccessError(error)) throw error;
+			logger.debug(`  Unreadable plugin-bundled skill: ${skill.files.skillMd}`);
+			results.push(unreadablePathResult(skill.files.skillMd, error, locationRoot));
+		}
 	}
 	return results;
 }
@@ -2200,6 +2300,115 @@ function getSkipReason(
   return null;
 }
 
+/**
+ * The one finding a path the walk could not read produces — a directory it could
+ * not enter, or a file it could not open.
+ *
+ * A synthetic result rather than an issue appended to some neighbour: nothing
+ * about the unreadable path was validated, so it has no host result to hang
+ * off, and attaching it to a sibling would attribute the condition to a tree that
+ * scanned fine. Typed `unknown` for the same reason — the whole point is that its
+ * contents were never seen, so any more specific type would be a claim the scan
+ * cannot support.
+ *
+ * The OS message is carried through verbatim (it names the errno and the syscall,
+ * which is what distinguishes a permissions problem from a vanished mount), but it
+ * is no longer the ONLY thing the run says — the code, the location and the fix
+ * come from the registry.
+ *
+ * KNOWN, and deliberately not fixed here: this result counts toward
+ * `summary.filesScanned`, so a path the scan could not read is counted among the
+ * files it scanned. Dropping it from that denominator alone would be worse —
+ * `filesWithWarnings` counts the same results, so the summary would report more
+ * files with warnings than files scanned. Saying it honestly needs a field of its
+ * own, which is a change to the report's shape and belongs with issue #177
+ * ("report counts don't describe the artifact") rather than smuggled in here. The
+ * finding itself names the path, so nothing is hidden in the meantime.
+ */
+function unreadablePathResult(
+  dirPath: string,
+  error: unknown,
+  locationRoot: string,
+): ValidationResult {
+  // `issueLocation` is `path.relative`, so it answers `''` when the subject IS the
+  // anchor — and for this finding that is not exotic, it is `vat audit <path>`
+  // where the named path is the unreadable one. `''` reached the report as
+  // `location: ""` and rendered the detail as a bare `": EACCES …"`. `.` is that
+  // same path spelled as something a reader can act on. The identical fix, for the
+  // identical reason, already exists on the distributed-tree finding — see
+  // `anchoredTreeLocation` in ./audit/distributed-tree.ts.
+  const location = issueLocation(dirPath, locationRoot) || '.';
+  const issues = [
+    materializeIssue('SCAN_PATH_UNREADABLE', {
+      location,
+      detail: `${location}: ${error instanceof Error ? error.message : String(error)}`,
+    }),
+  ];
+  const issueCounts = countBySeverity(issues);
+  return {
+    path: dirPath,
+    type: 'unknown',
+    status: calculateValidationStatus(issues),
+    summary: formatCountsSummary(issueCounts),
+    issues,
+    issueCounts,
+  };
+}
+
+/** Everything one directory entry needs, threaded through unchanged from its parent walk. */
+interface ScanEntryContext {
+  recursive: boolean;
+  options: AuditCommandOptions;
+  logger: ReturnType<typeof createLogger>;
+  scanCtx: ScanContext;
+  /** This level's own skill (if any) owns everything below — used for subdirectories. */
+  descendCtx: ScanContext;
+  baseDir: string;
+  nestedConfigLog: Set<string>;
+}
+
+/**
+ * Scan ONE directory entry, degrading to a finding if the filesystem refuses it.
+ *
+ * Guarded per ENTRY, not just per directory: wrapping only the parent `readdir`
+ * left the other half of the same defect live — an unreadable FILE (a root-owned
+ * `SKILL.md`, a quarantined bundle) threw out of `validateSkill` and still
+ * aborted the whole run with `status: error` and zero findings. Under
+ * `~/.claude/plugins` — the flagship `vat audit --user` target, populated by sudo
+ * installs and macOS quarantine — a root-owned FILE is at least as likely as a
+ * root-owned directory (issue #180).
+ *
+ * Extracted from `scanDirectory` rather than inlined because the added branch put
+ * that function over the cognitive-complexity ceiling; the walk keeps the
+ * bookkeeping, this keeps the per-entry decision.
+ */
+async function scanEntry(
+  entry: Dirent,
+  fullPath: string,
+  ctx: ScanEntryContext,
+): Promise<ValidationResult[]> {
+  try {
+    if (entry.isFile()) {
+      const result = await handleFileEntry(entry, fullPath, ctx.options, ctx.logger, ctx.scanCtx);
+      return result === null ? [] : [result];
+    }
+    if (entry.isDirectory()) {
+      return await handleDirectoryEntry(
+        fullPath, ctx.recursive, ctx.options, ctx.logger, ctx.baseDir, ctx.descendCtx, ctx.nestedConfigLog,
+      );
+    }
+    return [];
+  } catch (error) {
+    // ONLY filesystem-access errors degrade. Anything else is rethrown, because
+    // turning a genuine VAT bug into a `warning` about the file it happened on is
+    // the same "detector silently disables itself" shape this guard exists to
+    // prevent — it would make the tool quietest exactly when it is most wrong.
+    if (!isFilesystemAccessError(error)) throw error;
+    ctx.logger.debug(`Unreadable entry: ${fullPath}`);
+    return [unreadablePathResult(fullPath, error, ctx.scanCtx.locationRoot)];
+  }
+}
+
 async function scanDirectory(
   dirPath: string,
   recursive: boolean,
@@ -2256,7 +2465,22 @@ async function scanDirectory(
     excludeMatchers.push(resolvedScanCtx.projectExcludes);
   }
 
-  const entries = await fs.readdir(dirPath, { withFileTypes: true });
+  // Guarded because `vat audit` is a bulk linter over trees it does not own, and
+  // an unreadable entry is an ordinary condition there — one root-owned directory
+  // under `~/.claude/plugins` used to abort the flagship `vat audit --user` run
+  // outright, losing every finding already collected (issue #180). The failure is
+  // scoped to the subtree that caused it: this returns instead of throwing, so the
+  // CALLER's loop keeps its readable siblings and the walk continues.
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(dirPath, { withFileTypes: true });
+  } catch (error) {
+    // Same predicate as the per-entry guard below — see it for why a non-IO
+    // throw must not be degraded into a finding.
+    if (!isFilesystemAccessError(error)) throw error;
+    logger.debug(`Unreadable directory: ${dirPath}`);
+    return [unreadablePathResult(dirPath, error, resolvedScanCtx.locationRoot)];
+  }
 
   const descendCtx = await contextForDescendants(dirPath, entries, resolvedScanCtx);
 
@@ -2273,17 +2497,13 @@ async function scanDirectory(
       continue;
     }
 
-    if (entry.isFile()) {
-      const result = await handleFileEntry(entry, fullPath, options, logger, resolvedScanCtx);
-      if (result !== null) {
-        results.push(result);
-      }
-    } else if (entry.isDirectory()) {
-      // `descendCtx`, not `resolvedScanCtx`: this level's own skill (if any)
-      // owns everything below, including this subdirectory.
-      const dirResults = await handleDirectoryEntry(fullPath, recursive, options, logger, resolvedBaseDir, descendCtx, resolvedNestedLog);
-      results.push(...dirResults);
-    }
+    results.push(...await scanEntry(entry, fullPath, {
+      recursive, options, logger,
+      scanCtx: resolvedScanCtx,
+      descendCtx,
+      baseDir: resolvedBaseDir,
+      nestedConfigLog: resolvedNestedLog,
+    }));
   }
 
   return results;

@@ -28,6 +28,7 @@ export {
   fillRealpaths,
   fillSiblingNames,
   FsLookupCache,
+  isFilesystemAccessError,
   realpathFrom,
 } from './fs-utils.js';
 export type {
