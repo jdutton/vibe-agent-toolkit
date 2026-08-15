@@ -45,7 +45,7 @@
  * loop ends on the first pass in which none of them moved.
  */
 
-import { recordContributorInvocation, safePath, withContributorStratum, type GitTracker } from '@vibe-agent-toolkit/utils';
+import { CRAWL_BLOB_POPULATE_ID, crawlTimingStart, recordContributorInvocation, recordCrawlPass, safePath, withContributorStratum, type GitTracker } from '@vibe-agent-toolkit/utils';
 
 import type { JsonValue } from '../schemas/projection-shared.js';
 
@@ -54,6 +54,19 @@ import { RunContentCache } from './content-cache.js';
 import type { ContributorRegistry, ExtentContribution, ExtentContributor } from './contributor.js';
 import { extentDigest } from './digest.js';
 import { ProjectionBuilder, type Projection } from './projection.js';
+
+/**
+ * The pass number every driver-placed row in the `base` stratum carries.
+ *
+ * Base contributors run exactly once — there is no fixpoint over them — so the
+ * driver numbers them 1 and never anything else, and the blob stage sits in the
+ * same round. Named rather than written as a literal at three sites because it is
+ * what makes those rows ADDITIVE to the reader: `crawlRowRole` treats pass >= 1 as
+ * "safe to add" whatever the stratum, and reserves pass 0 for a bracket placed
+ * inside a contributor invocation. A stray 0 here would silently reclassify real
+ * work as a nested breakdown of a row that does not contain it.
+ */
+const BASE_STRATUM_PASS = 1;
 
 /**
  * Closure passes allowed before {@link populate} gives up.
@@ -318,7 +331,7 @@ export async function populate(options: PopulateOptions): Promise<Projection> {
     reportContributorTiming(options.onContributorTiming, {
       contributorId: contributor.id,
       stratum: 'base',
-      pass: 1,
+      pass: BASE_STRATUM_PASS,
       elapsedMs: performance.now() - startedAt,
     });
   }
@@ -338,7 +351,14 @@ export async function populate(options: PopulateOptions): Promise<Projection> {
   // below is awaited into its own binding for exactly the same reason: an
   // `await` inside the optional call's argument list would be short-circuited
   // away, so the promoted blobs would be derived only when someone was watching.
+  // Charged to the projection arm. This stage reads and parses every path the
+  // base contributors keyed — the projection's analogue of the incumbent's
+  // `resource-registry:add-resource`, which IS charged. Leaving it out biased the
+  // one comparison the seam exists to support, and only on one side; see
+  // `CRAWL_BLOB_POPULATE_ID`.
+  const blobStartedAt = crawlTimingStart();
   const blobPopulation = await populateBlobs(builder);
+  recordCrawlPass(CRAWL_BLOB_POPULATE_ID, 'base', BASE_STRATUM_PASS, blobStartedAt);
   const promotionsBeforeClosure = builder.contentPromotions;
 
   await iterateClosure(
@@ -416,7 +436,13 @@ export async function afterClosurePromotion(
   }
   // Idempotent by construction: `blobsAlreadyPresent` skips every blob the
   // first run derived, so only the newly keyed paths cost a parse.
-  return { afterClosurePromotion: await populateBlobs(builder) };
+  //
+  // Files the SAME row as the pre-closure run — one accounting unit, so `calls`
+  // reads as "how many times the stage ran" and its ms/call stays divisible.
+  const startedAt = crawlTimingStart();
+  const result = await populateBlobs(builder);
+  recordCrawlPass(CRAWL_BLOB_POPULATE_ID, 'base', BASE_STRATUM_PASS, startedAt);
+  return { afterClosurePromotion: result };
 }
 
 /**

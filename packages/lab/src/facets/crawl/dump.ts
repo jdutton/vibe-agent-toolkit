@@ -103,8 +103,18 @@ export const CRAWL_TIMING_DIR_ENV = 'VAT_CRAWL_TIMING';
  *     projection arm was charged for its preparation (`base`) while the
  *     incumbent arm was charged for traversal only, so the two arms of the
  *     side-by-side this facet exists to render were not commensurable.
+ * 3 — layout unchanged again, and again the MEANING moved — but in the values
+ *     THIS module derives rather than in any row the seam wrote. The `shared`
+ *     stratum and the projection's blob stage both charge work that was
+ *     previously charged nowhere, so {@link MergedCrawlDumps.totalMs} grew (it
+ *     sums additive rows across every stratum) and {@link crawlAttributionOf}
+ *     can now say `measured` where it used to say `nothing-crawled`. A v2 dump
+ *     held against a v3 one therefore reads a widening as a movement — the same
+ *     failure v2 was cut for — and worse, it reads it CONSISTENTLY, so an `ab`
+ *     calls the pairs stable and prints a confident delta instead of refusing.
+ *     See `crawl-timing.ts`'s own entry for the numbers.
  */
-export const CRAWL_DUMP_VERSION = 2;
+export const CRAWL_DUMP_VERSION = 3;
 
 /** One row as the seam wrote it. Carries no role — see {@link crawlRowRole}. */
 export type CrawlDumpEntry = CrawlSeamRow;

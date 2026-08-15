@@ -45,11 +45,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   driver's fixpoint pass — the driver numbers from 1, so the two never merge.
 
   Today `shared` holds one row, `git-tracker:initialize` — the `git ls-files` spawn behind every
-  gitignore answer. It is not a rounding error: measured on this repo's own agent-skills package it
-  is **39%** of `vat resources scan`'s crawl budget and **63%** of `vat audit`'s, where it costs more
-  than the entire incumbent crawl beside it. Because both crawlers are handed a tracker by their
-  caller, this cost cancels out of any comparison between them — which is exactly why it went
-  uncharged, and exactly why a symmetric omission still made the command totals wrong.
+  gitignore answer. It is not a rounding error, and how large it is depends entirely on how much
+  else the command does: measured on this repository's own tree it is **35%** of
+  `vat resources scan`'s crawl budget and **27%** of `vat audit`'s, and on a directory with no VAT
+  config — where the crawlers find almost nothing to do — it rises to **62%** and **100%**
+  respectively. Because both crawlers are handed a tracker by their caller, this cost cancels out of
+  any comparison between them — which is exactly why it went uncharged, and exactly why a symmetric
+  omission still made the command totals wrong.
+
+- **The projection's blob stage is charged too, and it is the one omission that did NOT cancel.**
+  `populateBlobs` reads and parses every path the base contributors keyed — the projection's
+  analogue of the incumbent's `resource-registry:add-resource`, which was already charged. It is now
+  `blob-population:derive`, in the `base` stratum at the driver's pass. An omission on one arm
+  biases the crawler-against-crawler comparison the seam exists to support, unlike the tracker
+  spawn, whose omission at least fell on both sides equally.
+
+  **The dump format is at version 3, and a reader refuses any other.** Both the `shared` stratum and
+  the blob-stage row charge work that was previously charged nowhere, so a command's TOTAL grew
+  without any row changing meaning. Held against a version-2 dump, that widening reads as a
+  regression — and reads as a *consistent* one, so an A/B would have called the pairs stable and
+  printed a confident delta rather than refusing. A refused dump is the loud failure; a confident
+  false delta is the quiet one.
 
   **Each dump is one process and carries no cross-process total.** Under a verb that spawns the
   binary more than once, summing wall time across dumps would double-count the parent's lifetime,

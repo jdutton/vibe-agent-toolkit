@@ -37,6 +37,7 @@ const BARREL_EXPORTS = [
   'CommandExecutionError',
   'compareCodeUnits',
   'copyDirectory',
+  'CRAWL_BLOB_POPULATE_ID',
   'CRAWL_CLOSURE_CONTRIBUTE_ID',
   'CRAWL_CLOSURE_RESOLVE_ID',
   'CRAWL_PASS_INSIDE',

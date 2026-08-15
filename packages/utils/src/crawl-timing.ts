@@ -362,6 +362,34 @@ export const CRAWL_REGISTRY_ADD_RESOURCE_ID = 'resource-registry:add-resource';
 export const CRAWL_REGISTRY_RESOLVE_LINKS_ID = 'resource-registry:resolve-links';
 
 /**
+ * Synthetic contributor id for one run of the merge driver's blob stage —
+ * `populateBlobs`, which reads and parses every path the base contributors keyed
+ * and derives the four blob-keyed tables from it.
+ *
+ * **This is the projection's analogue of {@link CRAWL_REGISTRY_ADD_RESOURCE_ID},
+ * and it went uncharged while that one was charged.** The asymmetry is why the
+ * bracket exists: the seam's whole purpose is "which of the two crawlers costs
+ * more to do its own work", and an omission on ONE arm biases exactly that
+ * comparison — unlike {@link CRAWL_SHARED_GIT_TRACKER_ID}, whose omission at
+ * least cancelled. It is latent only while `populate()` has no production caller;
+ * the increment that gives it one is the increment that would have read a
+ * projection total with its own parse stage missing from it.
+ *
+ * Charged in `base` at the driver's pass, NOT at {@link CRAWL_PASS_INSIDE}: the
+ * stage is placed BY the driver, between the strata, and a pass-0 row in a driver
+ * stratum means "a bracket inside a contributor invocation", which this is not.
+ * Pass >= 1 is what makes it additive, and additive is correct — nothing else
+ * brackets this time.
+ *
+ * Both driver-placed runs file this one row: the stage before the closure
+ * iterates, and the post-promotion run after it. Same accounting unit and the
+ * same argument {@link CRAWL_REGISTRY_ENUMERATE_ID} makes for its two routes, so
+ * `calls` reads as "how many times the stage ran" (1, or 2 when a closure
+ * contributor promoted a demand) and stays divisible.
+ */
+export const CRAWL_BLOB_POPULATE_ID = 'blob-population:derive';
+
+/**
  * Synthetic contributor id for one `GitTracker.initialize()` — the `git ls-files`
  * spawn and the active-set, ancestor and index maps built from its output.
  *
@@ -447,16 +475,29 @@ export interface CrawlTimingDump {
  *     traversal at v2. Holding a v1 dump against a v2 one reads that widening as
  *     a several-hundred-fold regression in the walker — see this module's header.
  *
- * ⚠️ The `shared` stratum did NOT bump this, and the reason is the rule above
- * rather than an exception to it: no field changed and no existing row's meaning
- * changed. A `crawl` total is a total of exactly what it was — `shared` holds
- * work that was previously charged NOWHERE, so nothing moved out of an existing
- * row into it. A reader that predates `shared` places its rows in `unclassified`,
- * counts them in no total, and says the crawl cost is an under-count; that is the
- * designed behaviour for a bracket a reader has never heard of, and it is a
- * louder failure than a version refusal, not a quieter one.
+ * 3 — the `shared` stratum, and the projection's blob stage
+ *     ({@link CRAWL_BLOB_POPULATE_ID}). No field changed here either, and that
+ *     is exactly why the first attempt at this entry argued no bump was needed:
+ *     `shared` holds work previously charged NOWHERE, so nothing moved out of an
+ *     existing row, and a reader predating it buckets the rows in
+ *     `unclassified`. That argument was **right about rows and wrong about the
+ *     dump**, because the rule above says "the meaning of a row" and the values a
+ *     reader actually publishes are DERIVED:
+ *
+ *     - a command TOTAL sums every additive row across every stratum, so it grew
+ *       by the whole `git ls-files` spawn — 27% to 100% of the crawl budget
+ *       depending on the corpus. An A/B across the boundary sees that as a real,
+ *       and perfectly STABLE, regression: every pair says `changed` for the same
+ *       reason, which reads as agreement rather than as the tool refusing.
+ *     - `attribution` flips from `nothing-crawled` to `measured` for a command
+ *       that reached no crawler at all, because one shared row is now present.
+ *
+ *     Both are precisely the v1 -> v2 failure — a widening read as a movement —
+ *     so both get the same remedy. A reader that refuses the dump and says so is
+ *     the loud failure; a reader that publishes a confident false delta is the
+ *     quiet one, and the quiet one is what shipped between these two versions.
  */
-export const CRAWL_SEAM_DUMP_VERSION = 2;
+export const CRAWL_SEAM_DUMP_VERSION = 3;
 
 /**
  * Alias kept for this module's own readability at the write site.

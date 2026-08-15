@@ -31,6 +31,7 @@ import {
   __readCrawlTimingSnapshot,
   __setCrawlTimingForTest,
   __writeCrawlTimingDumpForTest,
+  CRAWL_BLOB_POPULATE_ID,
   CRAWL_CLOSURE_CONTRIBUTE_ID,
   CRAWL_CLOSURE_RESOLVE_ID,
   CRAWL_PASS_INSIDE,
@@ -62,6 +63,16 @@ import { setupSubdirTestSuite } from './test-helpers.js';
 // ---------------------------------------------------------------------------
 // Fixture
 // ---------------------------------------------------------------------------
+
+/**
+ * The pass every driver-placed `base` row carries — `merge.ts`'s
+ * `BASE_STRATUM_PASS`, restated here because it is package-internal.
+ *
+ * Written as a literal rather than imported on purpose: this is the wire value a
+ * reader in another package classifies on, so the test should fail if the driver
+ * changes it, not follow it.
+ */
+const BASE_STRATUM_PASS_IN_DUMP = 1;
 
 const SKILL_KIND = 'skill';
 const EXTENT_NAME = 'foo-bundle';
@@ -363,6 +374,31 @@ describe('crawl timing seam', () => {
       expect(snapshot.entries.some((entry) => entry.stratum === 'crawl')).toBe(false);
     });
 
+    it('charges the projection arm for its blob stage, additively', async () => {
+      await runPopulation();
+      const snapshot = __readCrawlTimingSnapshot();
+
+      // `populateBlobs` reads and parses every path the base contributors keyed.
+      // It is the projection's analogue of `resource-registry:add-resource`, which
+      // IS charged — so leaving it uncharged biased the crawler-against-crawler
+      // comparison on ONE side, unlike the `git ls-files` omission, which at least
+      // cancelled. Pinned here because the row has no other guard: `closure` is 0%
+      // on every shipped command, so no `vat-lab crawl run` can currently observe
+      // this stage at all.
+      const blob = entryOf(snapshot, CRAWL_BLOB_POPULATE_ID, BASE_STRATUM_PASS_IN_DUMP);
+      expect(blob.stratum).toBe('base');
+      expect(blob.calls).toBeGreaterThanOrEqual(1);
+      expect(blob.elapsedMs).toBeGreaterThan(0);
+
+      // The pass number is the assertion that matters, and it is not decoration:
+      // `crawlRowRole` treats pass >= 1 as additive and pass 0 in a driver stratum
+      // as a nested breakdown of a contributor row that does NOT contain this
+      // stage. A bracket filed at `CRAWL_PASS_INSIDE` would leave the number in
+      // the dump and out of every total — visible, uncounted, and far harder to
+      // notice than an absent row.
+      expect(blob.pass).not.toBe(CRAWL_PASS_INSIDE);
+    });
+
     it('feeds the caller AND the dump from one measurement', async () => {
       const observed: ContributorTiming[] = [];
       await runPopulation((timing) => observed.push(timing));
@@ -400,7 +436,7 @@ describe('crawl timing seam', () => {
       // (`lab/src/facets/crawl/dump.ts`'s `CRAWL_DUMP_VERSION`). A bump that does
       // not move both numbers makes every dump unreadable, so it should cost a
       // failing test rather than a silent one.
-      expect(dump.dumpVersion).toBe(2);
+      expect(dump.dumpVersion).toBe(3);
       expect(dump.pid).toBe(process.pid);
       expect(keysOf(dump)).toEqual(keysOf(__readCrawlTimingSnapshot()));
       expect(entryOf(dump, CLOSURE_DRIVER_ID, 2).calls).toBe(1);
@@ -428,7 +464,7 @@ describe('crawl timing seam', () => {
       // seam. Folding the first into the second would report a real finding as an
       // instrument failure.
       expect(dump.entries).toEqual([]);
-      expect(dump.dumpVersion).toBe(2);
+      expect(dump.dumpVersion).toBe(3);
     });
 
     it('does not overwrite a dump already filed under this pid', async () => {

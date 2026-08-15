@@ -154,6 +154,7 @@ export { compareCodeUnits } from './compare-code-units.js';
 // plumbing shared with `resources`' package-internal `parse-timing.ts` — a star
 // re-export would publish both the moment either grew a symbol.
 export {
+  CRAWL_BLOB_POPULATE_ID,
   CRAWL_CLOSURE_CONTRIBUTE_ID,
   CRAWL_CLOSURE_RESOLVE_ID,
   CRAWL_PASS_INSIDE,
