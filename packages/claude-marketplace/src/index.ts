@@ -165,6 +165,19 @@ export {
 } from './inventory/index.js';
 export { crawlSkillLinkRegistry, extractClaudeSkillInventory } from './inventory/index.js';
 export {
+  INVENTORY_EXTENT_CONTRIBUTOR_ID_PREFIX,
+  INVENTORY_EXTENT_KIND,
+  INVENTORY_MAX_DEPTH,
+  INVENTORY_REFUSED_AGENT_INSTRUCTION_FILE,
+  INVENTORY_REFUSED_DIRECTORY_TARGET,
+  INVENTORY_REFUSED_GITIGNORED,
+  INVENTORY_REFUSED_NAVIGATION_FILE,
+  InventorySkillExtentContributor,
+  inventoryExtentContributorId,
+  inventoryExtentDeclaration,
+  inventoryExtentName,
+} from './inventory/index.js';
+export {
   extractClaudePluginInventory,
   type GitTrackerSource,
   type SharedRegistrySource,

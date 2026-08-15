@@ -97,6 +97,14 @@ interface FixtureFile {
   refs: readonly FixtureRef[];
   /** The `resources.kind` this entity gets. Defaults to `file`. */
   kind?: string;
+  /**
+   * Boolean realization columns overriding the defaults, for `flags` rules.
+   *
+   * A `Partial` of the row rather than named booleans, so a column added to
+   * `ResourceRealizationRow` becomes fixture-settable without touching this
+   * type — the same reason the matcher itself is keyed by column name.
+   */
+  columns?: Partial<Pick<ResourceRealizationRow, 'exists' | 'gitignored' | 'isSymlink'>>;
 }
 
 /** A schema-valid content key (`<parserKind>.<sha256>`) derived from a seed. */
@@ -162,7 +170,7 @@ function addFile(builder: ProjectionBuilder, file: FixtureFile): void {
     fromEnumeration: true,
     vatId: null,
   });
-  builder.addRealization(realizationRow(resourceId, file.path, contentKey));
+  builder.addRealization({ ...realizationRow(resourceId, file.path, contentKey), ...file.columns });
   for (const [ordinal, ref] of file.refs.entries()) {
     builder.addBlobReference(referenceRow(contentKey, ordinal, ref));
   }
@@ -205,6 +213,31 @@ const DIRECTORY_FIXTURE: readonly FixtureFile[] = [
   { path: ROOT_DOC, refs: [{ rawRef: 'nested' }, { rawRef: 'b.md' }] },
   { path: DOC_DIR, refs: [], kind: DIRECTORY_KIND },
   { path: DOC_B, refs: [] },
+];
+
+/** Label for the boolean-column matcher's fixtures — opaque to the primitive, like the rest. */
+const LABEL_FLAG = 'FIXTURE_FLAG_REFUSAL';
+
+/**
+ * `SKILL.md → Readme.md → behind.md` with the HUB marked `gitignored`, plus two
+ * controls the conjunction depends on.
+ *
+ * The hub is spelled `Readme.md` only because {@link HUB_CHAIN} already reaches
+ * `behind.md` through it; NO declaration below names a basename, so the refusal
+ * under test is the column and nothing else.
+ *
+ * - `DOC_B` is `gitignored: false` — the control that keeps "refused something"
+ *   from also being satisfied by a walk that refused everything.
+ * - `DOC_C` is `gitignored: true, exists: false` — the control for the AND. A
+ *   disjunctive reading of `{ gitignored: true, exists: true }` refuses it (and
+ *   also refuses `DOC_B`, which exists); only a conjunctive reading admits it.
+ */
+const FLAG_FIXTURE: readonly FixtureFile[] = [
+  { path: ROOT_DOC, refs: [{ rawRef: 'Readme.md' }, { rawRef: 'b.md' }, { rawRef: 'c.md' }] },
+  { path: DOC_HUB, refs: [{ rawRef: 'behind.md' }], columns: { gitignored: true } },
+  { path: DOC_BEHIND, refs: [] },
+  { path: DOC_B, refs: [] },
+  { path: DOC_C, refs: [], columns: { gitignored: true, exists: false } },
 ];
 
 /** A cycle `SKILL.md → b.md → c.md → SKILL.md`, which only the visited set can terminate. */
@@ -282,7 +315,7 @@ describe('ExtentDeclarationSchema', () => {
       refusals: [refusalRule(LABEL_KIND, { kinds: [DIRECTORY_KIND] })],
     }));
     expect(parsed.refusals[0]).toEqual({
-      label: LABEL_KIND, patterns: [], basenames: [], kinds: [DIRECTORY_KIND],
+      label: LABEL_KIND, patterns: [], basenames: [], kinds: [DIRECTORY_KIND], flags: {},
     });
   });
 
@@ -518,6 +551,82 @@ describe('ClosureExtentContributor', () => {
     }));
     expect(memberPaths(contribution)).not.toContain(DOC_HUB);
     expect(conditionCodeFor(contribution, DOC_HUB)).toBe(LABEL_BASENAME);
+  });
+
+  it('refuses on a BOOLEAN COLUMN of the realization row, and prunes the subtree behind it', async () => {
+    // The column matcher's whole reason for existing: `gitignored` is a fact the
+    // projection already computed, so refusing on it is a column match and not
+    // an oracle the closure would have to consult. `behind.md` is the witness
+    // that a column refusal prunes exactly as a basename or kind refusal does.
+    const contribution = await contributeOver(FLAG_FIXTURE, declarationOf({
+      refusals: [refusalRule(LABEL_FLAG, { flags: { gitignored: true, exists: true } })],
+    }));
+    // `DOC_C` survives: it is gitignored but does not exist, and the guard is
+    // conjunctive — the next case is where that is the thing under test.
+    expect(memberPaths(contribution)).toEqual([ROOT_DOC, DOC_B, DOC_C]);
+    expect(conditionCodeFor(contribution, DOC_HUB)).toBe(LABEL_FLAG);
+    expect(memberPaths(contribution)).not.toContain(DOC_BEHIND);
+    expectContributionRowsValid(contribution);
+  });
+
+  it('reads a MULTI-COLUMN flags record as a CONJUNCTION, not as another OR', async () => {
+    // `DOC_C` is gitignored and does NOT exist. Under the disjunctive reading the
+    // other three matchers get, it is refused; under the conjunction the walker's
+    // existence-gated gitignore branch actually has, it is admitted. The two
+    // readings differ on exactly this row, which is what makes the choice
+    // falsifiable rather than a stated preference.
+    const conjunction = await contributeOver(FLAG_FIXTURE, declarationOf({
+      refusals: [refusalRule(LABEL_FLAG, { flags: { gitignored: true, exists: true } })],
+    }));
+    expect(memberPaths(conjunction)).toContain(DOC_C);
+    expect(conditionCodeFor(conjunction, DOC_C)).toBeUndefined();
+
+    // …and dropping the guard DOES refuse it, so the row above is a statement
+    // about the conjunction rather than about a fixture the rule never reached.
+    const unguarded = await contributeOver(FLAG_FIXTURE, declarationOf({
+      refusals: [refusalRule(LABEL_FLAG, { flags: { gitignored: true } })],
+    }));
+    expect(memberPaths(unguarded)).not.toContain(DOC_C);
+    expect(conditionCodeFor(unguarded, DOC_C)).toBe(LABEL_FLAG);
+  });
+
+  it('never matches on an EMPTY flags record, which every rule carries by default', async () => {
+    // `[].every(...)` is `true`, so without the emptiness guard the schema
+    // default would make every rule in every declaration refuse the whole corpus
+    // — including the four the skill translation emits.
+    const contribution = await contributeOver(FLAG_FIXTURE, declarationOf({
+      refusals: [refusalRule(LABEL_FLAG, { flags: {} })],
+    }));
+    expect(memberPaths(contribution)).toEqual([ROOT_DOC, DOC_HUB, DOC_B, DOC_C, DOC_BEHIND]);
+    expect(contribution.conditions).toEqual([]);
+  });
+
+  it('THROWS on a flags column no realization row carries, rather than refusing nothing', async () => {
+    // A misspelled column is the failure mode an open string key invites: it
+    // compiles to a matcher that can never fire, and the declaration then reports
+    // a confident zero refusals. The name space is closed precisely so this is an
+    // error — the asymmetry with `kinds`, whose vocabulary really is open.
+    await expect(contributeOver(FLAG_FIXTURE, declarationOf({
+      refusals: [refusalRule(LABEL_FLAG, { flags: { gitIgnored: true } })],
+    }))).rejects.toThrow(/gitIgnored/u);
+  });
+
+  it('lets an EARLIER rule outrank a flags rule, so the cascade order still decides the label', async () => {
+    // The fourth matcher joins the same cascade as the other three: the hub is
+    // both a navigation basename and gitignored, and the reported reason is
+    // whichever rule sits first — the property `classifyExclusion` has and the
+    // reason `refusals` is an array.
+    const basenameRule = refusalRule(LABEL_BASENAME, { basenames: [README_PATTERN] });
+    const flagRule = refusalRule(LABEL_FLAG, { flags: { gitignored: true, exists: true } });
+    const basenameFirst = await contributeOver(FLAG_FIXTURE, declarationOf({
+      refusals: [basenameRule, flagRule],
+    }));
+    const flagFirst = await contributeOver(FLAG_FIXTURE, declarationOf({
+      refusals: [flagRule, basenameRule],
+    }));
+    expect(conditionCodeFor(basenameFirst, DOC_HUB)).toBe(LABEL_BASENAME);
+    expect(conditionCodeFor(flagFirst, DOC_HUB)).toBe(LABEL_FLAG);
+    expect(memberPaths(basenameFirst)).toEqual(memberPaths(flagFirst));
   });
 
   it('terminates on a cycle with three members rather than looping', async () => {

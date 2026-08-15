@@ -380,13 +380,22 @@ export type SkillsConfig = z.infer<typeof SkillsConfigSchema>;
  * the closure does not traverse THROUGH a refused candidate, so the subtree
  * reachable only via that candidate is refused with it.
  *
- * ## Three matchers per rule, because one predicate cannot express the other two
+ * ## Four matchers per rule, because no one predicate expresses the other three
  *
  * A basename set is not a path glob (case-insensitive filesystems generate
- * spellings no alternation enumerates), and an entity kind is not a path at all
- * (a directory's path is shaped exactly like a file's). WITHIN one rule the three
- * are unordered — they all yield that rule's single label — so a caller that
- * needs two matchers distinguished writes two rules.
+ * spellings no alternation enumerates), an entity kind is not a path at all
+ * (a directory's path is shaped exactly like a file's), and a boolean column of
+ * the realization row — `gitignored`, `exists`, `isSymlink` — is not derivable
+ * from any of the three. WITHIN one rule the four are unordered — they all yield
+ * that rule's single label — so a caller that needs two matchers distinguished
+ * writes two rules.
+ *
+ * {@link ExtentRefusalRuleSchema.flags} is the generic one: it names a COLUMN,
+ * not a concept, so `{ gitignored: true }` and `{ isSymlink: true }` are the same
+ * feature and neither is privileged in the primitive. That is deliberate — the
+ * closure knows nothing about git, and a `refuseGitignored: true` knob would have
+ * hardcoded one caller's vocabulary into a primitive whose whole premise is that
+ * the vocabulary belongs to the declaration.
  *
  * ## Every optional field carries a default, deliberately
  *
@@ -406,7 +415,9 @@ export const ExtentRefusalRuleSchema = z.object({
     .describe('Basenames matched CASE-INSENSITIVELY against a candidate member\'s basename, e.g. "README.md". Deliberately NOT a glob: patterns matches a root-relative PATH, and a brace alternation over that path cannot enumerate the spellings a case-insensitive filesystem generates freely (Readme.md, README.MD, ReadMe.md), so the glob approximation silently under-matches exactly the spellings that occur in the wild. Folding is toLowerCase(), never toLocaleLowerCase() — see basenameMatcher in agent-skills/src/validators/validation-rules.ts.'),
   kinds: z.array(z.string().min(1)).default([])
     .describe('resources.kind values refused, e.g. "directory". This is the only way a declaration can refuse a DIRECTORY target: a directory\'s path is shaped like any other path, so no glob over the path can express the distinction — the entity kind can.'),
-}).strict().describe('One labelled refusal rule of a closure extent\'s ordered cascade. The three matchers are unordered WITHIN a rule (they share the one label); ACROSS rules the array order is behaviour.');
+  flags: z.record(z.string().min(1), z.boolean()).default({})
+    .describe('BOOLEAN COLUMNS of the candidate\'s resource_realizations row, as column name → the value that refuses, e.g. { "gitignored": true } or { "gitignored": true, "exists": true }. CONJUNCTIVE within the record — every named column must equal its declared value — which is the only way to state a guarded rule such as walk-link-graph.ts\'s existence-gated gitignore branch; an empty record never matches. The column name is NOT an open vocabulary the way kinds is: a realization row has a fixed shape, so a name no boolean column carries is a rule that could never fire and the closure THROWS on it rather than silently refusing nothing.'),
+}).strict().describe('One labelled refusal rule of a closure extent\'s ordered cascade. The four matchers are unordered WITHIN a rule (they share the one label); ACROSS rules the array order is behaviour.');
 
 export type ExtentRefusalRule = z.infer<typeof ExtentRefusalRuleSchema>;
 

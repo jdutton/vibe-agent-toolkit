@@ -203,13 +203,20 @@ export const SKILL_REFUSED_PATTERN_MATCHED = 'SKILL_REFUSED_PATTERN_MATCHED';
 function skillRefusals(config: SkillPackagingConfig): ExtentRefusalRule[] {
   const excludeNavigation = config.excludeNavigationFiles ?? DEFAULT_EXCLUDE_NAVIGATION_FILES;
   return [
-    { label: SKILL_REFUSED_DIRECTORY_TARGET, patterns: [], basenames: [], kinds: [DIRECTORY_KIND] },
+    // `flags: {}` on every rule: the packaging walk's own gitignore branch needs
+    // an ORACLE (`readGitignored` spawns `git check-ignore` when no tracker is
+    // plumbed), and `skill-extent.ts`'s table records it as inexpressible for
+    // that reason. The empty record is the schema default and never matches, so
+    // spelling it here declares "this translation refuses on no column" rather
+    // than leaving a reader to infer it from an absent key.
+    { label: SKILL_REFUSED_DIRECTORY_TARGET, patterns: [], basenames: [], kinds: [DIRECTORY_KIND], flags: {} },
     ...(excludeNavigation
       ? [{
         label: SKILL_REFUSED_NAVIGATION_FILE,
         patterns: [],
         basenames: [...NAVIGATION_FILE_PATTERNS],
         kinds: [],
+        flags: {},
       }]
       : []),
     {
@@ -217,12 +224,14 @@ function skillRefusals(config: SkillPackagingConfig): ExtentRefusalRule[] {
       patterns: [],
       basenames: [...AGENT_INSTRUCTION_FILE_PATTERNS],
       kinds: [],
+      flags: {},
     },
     {
       label: SKILL_REFUSED_PATTERN_MATCHED,
       patterns: (config.excludeReferencesFromBundle?.rules ?? []).flatMap((rule) => rule.patterns),
       basenames: [],
       kinds: [],
+      flags: {},
     },
   ];
 }

@@ -137,13 +137,17 @@ interface WalkContext {
    * It also costs no allocation: this is the object the declaration already
    * holds.
    *
-   * Takes the candidate's **realization row**, not its path, because two of the
-   * three matchers need a column the path does not carry: `basenames` reads
+   * Takes the candidate's **realization row**, not its path, because three of
+   * the four matchers need a column the path does not carry: `basenames` reads
    * `basenameLower` (already folded by `realizations.ts`, with the same
-   * `toLowerCase()` the declaration side uses) and `kinds` reads
-   * `resources.kind` via `resourceId`. Passing the row rather than a widening
-   * tuple of columns keeps the one refusal point one argument wide, and every
-   * column it reads is one the projection already computed.
+   * `toLowerCase()` the declaration side uses), `kinds` reads `resources.kind`
+   * via `resourceId`, and `flags` reads the row's own boolean columns
+   * (`gitignored`, `exists`, …). Passing the row rather than a widening tuple of
+   * columns keeps the one refusal point one argument wide, and every column it
+   * reads is one the projection already computed — which is what makes a
+   * `gitignored` refusal a COLUMN MATCH rather than an oracle the closure would
+   * have had to consult, and so keeps the "no filesystem I/O of its own" claim
+   * in this module's docstring true.
    */
   readonly refusalOf: (candidate: ResourceRealizationRow) => ExtentRefusalRule | undefined;
 }
@@ -543,13 +547,85 @@ interface CompiledRefusal {
 }
 
 /**
- * Compile one refusal rule's three matchers into a single predicate.
+ * The boolean columns of `resource_realizations` an
+ * {@link ExtentRefusalRule.flags} entry may name, and how each is read.
  *
- * The three are OR'd and therefore **unordered within a rule** — that is sound
+ * A **closed table**, unlike `kinds`' open `resources.kind` vocabulary, and the
+ * asymmetry is the point: a kind VAT has not minted yet is a value that may
+ * legitimately appear later, whereas a realization row has a fixed shape and a
+ * column name it does not carry is a rule that can never fire. Naming the
+ * columns here is what lets {@link compileFlags} reject such a name loudly
+ * instead of compiling a matcher that silently refuses nothing —
+ * [[eslint-linter-probe-dead-config]]: a probe matching no config returns a
+ * confident zero.
+ *
+ * `symlinkResolves` is deliberately absent: it is `boolean | null`, and a
+ * two-valued matcher cannot say which of the two falsy answers it meant.
+ */
+const REALIZATION_FLAG_COLUMNS: Readonly<Record<string, (row: ResourceRealizationRow) => boolean>> = {
+  exists: (row) => row.exists,
+  isDirectory: (row) => row.isDirectory,
+  gitignored: (row) => row.gitignored,
+  isSymlink: (row) => row.isSymlink,
+};
+
+/** One compiled `flags` entry: how to read the column, and the value that refuses. */
+type CompiledFlag = readonly [read: (row: ResourceRealizationRow) => boolean, refusesWhen: boolean];
+
+/**
+ * Compile one rule's `flags` record into readers, rejecting an unknown column.
+ *
+ * Compiled once per `contribute` — the analogue of {@link excludeMatcher}'s
+ * precompiled globs, and of `kindByResourceIdFor`'s once-per-run index. There is
+ * no lazy index to build here, because a flag is a column the projection already
+ * computed and carries on the row itself; the laziness that matters is simply
+ * that a rule declaring no flags compiles to an empty list and costs nothing per
+ * candidate.
+ *
+ * @param flags - One rule's declared column → refusing-value record
+ * @returns One reader per named column, in declaration order
+ * @throws When a name is not a boolean column of `resource_realizations`
+ */
+function compileFlags(flags: ExtentRefusalRule['flags']): CompiledFlag[] {
+  return Object.entries(flags).map(([column, refusesWhen]) => {
+    const read = Object.hasOwn(REALIZATION_FLAG_COLUMNS, column)
+      ? REALIZATION_FLAG_COLUMNS[column]
+      : undefined;
+    if (read === undefined) {
+      throw new Error(
+        `Refusal rule flag "${column}" is not a boolean column of resource_realizations.`
+        + ` Known columns: ${Object.keys(REALIZATION_FLAG_COLUMNS).join(', ')}.`
+        + ' A rule keyed on a column that does not exist could never refuse anything, so it is rejected'
+        + ' rather than compiled into a matcher that silently admits everything.',
+      );
+    }
+    return [read, refusesWhen] as const;
+  });
+}
+
+/**
+ * Compile one refusal rule's four matchers into a single predicate.
+ *
+ * The four are OR'd and therefore **unordered within a rule** — that is sound
  * here, and only here, for the reason the old flat design claimed globally: they
  * yield the same verdict *with the same label*, so no answer depends on which
  * one fired. A caller that needs two matchers told apart writes two rules, which
  * is exactly what {@link refusalMatcher}'s cascade is for.
+ *
+ * ## `flags` is the one matcher that is AND inside and OR outside
+ *
+ * A `flags` record is CONJUNCTIVE across its own entries and contributes one
+ * OR'd term to the rule. That is not an inconsistency, it is the only shape that
+ * can express a GUARDED column rule, and the shipped cascade this primitive
+ * shadows has one: `walk-link-graph.ts`'s gitignore branch refuses on
+ * `gitignored ∧ exists`, having declined for a path that is not there because
+ * neither ignore oracle can be trusted about a path it cannot see. Read
+ * disjunctively, `{ gitignored: true, exists: true }` would refuse every
+ * existing file in the corpus.
+ *
+ * An EMPTY record never matches, for the same reason an empty `patterns` list
+ * never matches: `[].every(...)` is `true`, so without the guard every rule
+ * carrying the schema default would refuse the whole corpus.
  *
  * ## Case folding is `toLowerCase()`, never `toLocaleLowerCase()`
  *
@@ -573,12 +649,16 @@ function compileRefusal(
   const byGlob = excludeMatcher(rule.patterns);
   const basenames = new Set(rule.basenames.map((name) => name.toLowerCase()));
   const kinds = new Set(rule.kinds);
+  const flags = compileFlags(rule.flags);
 
   return {
     rule,
     matches: (candidate: ResourceRealizationRow): boolean => {
       if (byGlob(candidate.path)) return true;
       if (basenames.has(candidate.basenameLower)) return true;
+      if (flags.length > 0 && flags.every(([read, refusesWhen]) => read(candidate) === refusesWhen)) {
+        return true;
+      }
       if (kinds.size === 0) return false;
       const kind = kindById?.get(candidate.resourceId);
       return kind !== undefined && kinds.has(kind);

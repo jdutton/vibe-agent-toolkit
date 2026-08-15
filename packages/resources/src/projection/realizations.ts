@@ -124,8 +124,29 @@ export async function collectRealization(
     // its "we could not look" default rather than a guess.
   }
 
+  // `isIgnoredByActiveSet`, NOT `isIgnored`, and the difference is 59× on this
+  // repository. `GitTracker.initialize()` primes its cache with the ACTIVE files
+  // only, so `isIgnored` is an O(1) cache hit for every path that is NOT ignored
+  // and a `git check-ignore` SPAWN for every path that is — i.e. it spawns once
+  // per ignored path, which for the filesystem extent (`respectGitignore: false`,
+  // so it enumerates all of `dist/`) is most of the tree. Measured by
+  // `claude-marketplace`'s `inventory-extent-corpus.integration.test.ts`, whose
+  // `populate ms` column is the observation: repo root, tracker supplied,
+  // 59,870 ms → 1,016 ms; one VAT package, 5,203 ms → 65 ms. Neither the
+  // realization count (5,903) nor the reference-candidate count (31,264) moved,
+  // so the column's ANSWERS are unchanged on that corpus.
+  //
+  // It is the same question, asked of a set instead of a subprocess: for a path
+  // that exists inside the root, active-set membership is authoritative, and
+  // `isIgnoredByActiveSet` falls back to `isIgnored` for the two cases where it
+  // is not (a path that does not exist, and a path outside the root). The one
+  // real difference is the tracker's documented STALENESS BOUND — a file created
+  // after `initialize()` exists but is absent from the active set, so it reads as
+  // ignored. A population is a read-only snapshot, which is exactly the lane that
+  // bound is documented as safe for; a lane that WRITES between walks must hand
+  // in a fresh tracker, as `walkLinkGraph`'s callers already must.
   const gitignored = context.gitTracker?.isUsable() === true
-    ? context.gitTracker.isIgnored(absolutePath)
+    ? context.gitTracker.isIgnoredByActiveSet(absolutePath)
     : false;
 
   const { contentKey, contentState } = await keyOrState(absolutePath, context, {

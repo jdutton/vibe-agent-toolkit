@@ -314,18 +314,18 @@ describe('skillExtentDeclaration', () => {
       // that order is now behaviour rather than presentation.
       refusals: [
         // `classifyPathKind` refuses a directory unconditionally — no knob gates it.
-        { label: SKILL_REFUSED_DIRECTORY_TARGET, patterns: [], basenames: [], kinds: ['directory'] },
+        { label: SKILL_REFUSED_DIRECTORY_TARGET, patterns: [], basenames: [], kinds: ['directory'], flags: {} },
         // `skill-packager.ts:582` defaults `excludeNavigationFiles` to true, so a
         // config-less skill refuses this list too.
         {
           label: SKILL_REFUSED_NAVIGATION_FILE,
-          patterns: [], basenames: [...NAVIGATION_FILE_PATTERNS], kinds: [],
+          patterns: [], basenames: [...NAVIGATION_FILE_PATTERNS], kinds: [], flags: {},
         },
         {
           label: SKILL_REFUSED_AGENT_INSTRUCTION_FILE,
-          patterns: [], basenames: [...AGENT_INSTRUCTION_FILE_PATTERNS], kinds: [],
+          patterns: [], basenames: [...AGENT_INSTRUCTION_FILE_PATTERNS], kinds: [], flags: {},
         },
-        { label: SKILL_REFUSED_PATTERN_MATCHED, patterns: [], basenames: [], kinds: [] },
+        { label: SKILL_REFUSED_PATTERN_MATCHED, patterns: [], basenames: [], kinds: [], flags: {} },
       ],
       admitPaths: [],
     });
