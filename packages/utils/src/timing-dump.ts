@@ -26,6 +26,18 @@
  *    its value is the RATIO, which tells a reader whether the wall-timed
  *    brackets above it were competing with a loaded machine.
  *
+ *    ⚠️ **A reader must never SUM these across dumps.** Point 3 means one
+ *    command routinely files several, and a vat command's phase processes
+ *    overlap in time — so summing their lifetimes counts the same wall clock
+ *    more than once and produces a "total" longer than the command took. The
+ *    figure is per process, and the only honest aggregate over several is the
+ *    per-process ratio read one dump at a time. The `crawl` facet keeps one
+ *    record per dump and publishes no total for exactly this reason; `parse`
+ *    still sums, which is review finding F2 (2026-08-14) and is annotated at
+ *    `facets/parse/dump.ts`. This list is where both seams learn what makes a
+ *    dump trustworthy, so the hazard belongs here rather than only beside the
+ *    consumer that already fixed it.
+ *
  * Writing that twice would give two seams two chances to diverge on the one
  * thing a reader has to be able to trust identically. What each seam keeps for
  * itself is its accumulator shape, its dump body and the noun it is called by.

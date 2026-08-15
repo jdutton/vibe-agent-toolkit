@@ -153,8 +153,79 @@ const SCENARIOS: Scenario[] = [
   },
 ];
 
+// ---------------------------------------------------------------------------
+// Ordering scenarios — contexts where TWO conditions hold at once.
+//
+// `evaluateEdge`'s docstring says "Ordered: the first matching intent wins",
+// and that ordering is load-bearing: it decides which of two applicable codes
+// (and therefore which severity) an author is shown. The table above cannot
+// pin it. Almost every row there sets a single context flag, so no two
+// conditions are ever true together and any permutation of the cascade would
+// still pass — the fixture cannot distinguish the orderings it depends on.
+//
+// Each row below is a context where two branches both match, asserting which
+// one wins. Reordering the cascade breaks exactly the pair that moved.
+// ---------------------------------------------------------------------------
+const ORDERING_SCENARIOS: Scenario[] = [
+  {
+    // `unreadable` is checked FIRST by design: nothing else about a file that
+    // cannot be stat'ed is knowable, so no later branch answers from evidence.
+    intent: 'ordering: unreadable target that is ALSO outside the project → unreadable wins',
+    ctx: { subject: 'edge', unreadable: true, outsideProject: true },
+    expect: 'LINK_TARGET_UNREADABLE',
+  },
+  {
+    intent: 'ordering: directory target that is ALSO outside the project → outside-project wins',
+    ctx: { subject: 'edge', outsideProject: true, fileKind: 'directory' },
+    expect: 'LINK_OUTSIDE_PROJECT',
+  },
+  {
+    // ⚠️ The consequential one. `fileKind === 'directory'` is checked in
+    // `evaluateEdge`; `patternExcluded` only in `evaluateWalkDecision`, below
+    // it. So an author who EXPLICITLY excluded this reference via
+    // excludeReferencesFromBundle is shown LINK_TO_UNBUNDLED_DIRECTORY
+    // (warning) rather than LINK_EXCLUDED_BY_PATTERN (info) — a warning on a
+    // configuration they deliberately wrote. Pinned as the behaviour that
+    // ships, not endorsed: if LINK_TO_UNBUNDLED_DIRECTORY is ever promoted to
+    // `error`, this is the row that says whose build it breaks.
+    intent: 'ordering: directory target ALSO excluded by pattern → directory wins over pattern',
+    ctx: { subject: 'edge', fileKind: 'directory', patternExcluded: true },
+    expect: 'LINK_TO_UNBUNDLED_DIRECTORY',
+  },
+  {
+    // The leak risk outranks the author's exclusion: the pattern says this
+    // reference should not be followed, which is not the same as saying the
+    // gitignored data behind it is safe to carry.
+    intent: 'ordering: gitignored existing target ALSO excluded by pattern → gitignored wins',
+    ctx: { subject: 'edge', gitignored: true, existsAtSource: true, patternExcluded: true },
+    expect: 'LINK_TO_GITIGNORED_FILE',
+  },
+  {
+    intent: 'ordering: navigation-file target ALSO excluded by pattern → file kind wins',
+    ctx: { subject: 'edge', fileKind: 'nav', patternExcluded: true },
+    expect: 'LINK_TO_NAVIGATION_FILE',
+  },
+  {
+    intent: 'ordering: pattern-excluded edge ALSO beyond linkFollowDepth → pattern wins',
+    ctx: { subject: 'edge', patternExcluded: true, droppedByDepth: true },
+    expect: 'LINK_EXCLUDED_BY_PATTERN',
+  },
+  {
+    // Deliberately BELOW the missing-target check, per `evaluateWalkDecision`:
+    // a broken link inside an HTML page is an author error with a more
+    // actionable code, and reporting the routing boundary instead would send
+    // the author to fix VAT's traversal policy over their own typo.
+    intent: 'ordering: missing target reached from a non-routable source → missing-target wins',
+    ctx: { subject: 'edge', existsAtSource: false, nonRoutableSource: true },
+    expect: 'LINK_MISSING_TARGET',
+  },
+];
+
+/** Both tables drive the same assertions; the split is documentary. */
+const ALL_SCENARIOS: Scenario[] = [...SCENARIOS, ...ORDERING_SCENARIOS];
+
 describe('rule-engine: evaluate()', () => {
-  it.each(SCENARIOS)('$intent → $expect', ({ ctx, expect: expected }) => {
+  it.each(ALL_SCENARIOS)('$intent → $expect', ({ ctx, expect: expected }) => {
     const fullCtx = makeRuleContext(ctx);
     const code = evaluate(fullCtx);
     expect(code).toBe(expected);
