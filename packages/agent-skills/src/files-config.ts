@@ -8,8 +8,8 @@
  * - Copying declared build artifacts into a skill output dir (every build path)
  */
 
-import { existsSync, statSync } from 'node:fs';
-import { copyFile, mkdir } from 'node:fs/promises';
+import { statSync } from 'node:fs';
+import { copyFile, lstat, mkdir, stat } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import type { SkillFileEntry } from '@vibe-agent-toolkit/resources';
@@ -18,6 +18,7 @@ import {
   fileContentHash,
   globMagicRemainder,
   hasParentTraversalSegment,
+  isFilesystemAccessError,
   isGlob,
   issueLocation,
   safePath,
@@ -27,6 +28,7 @@ import {
 import { glob } from 'glob';
 import picomatch from 'picomatch';
 
+import { withFsAttribution } from './fs-attribution.js';
 import { materializeIssue } from './validators/rule-engine/index.js';
 import { isNeverPackagedBasename } from './validators/validation-rules.js';
 
@@ -55,6 +57,145 @@ function partitionNeverPackaged(matches: readonly string[]): { kept: string[]; d
     (isNeverPackagedBasename(basename) ? dropped : kept).push(rel);
   }
   return { kept, dropped };
+}
+
+/**
+ * Partition a glob's matches into the ones the OS can copy and the ones it cannot.
+ *
+ * `glob`'s `nodir: true` is NOT this check, and cannot be made into it: it filters
+ * on what `glob` itself stat'd, and `glob` does not follow symlinks — so a symlink
+ * pointing at a DIRECTORY is never a directory to it and arrives here as an
+ * ordinary match. `copyFile` on that link then throws a raw `ENOTSUP` which, on
+ * macOS, renders as "operation not supported on socket" and misdescribes the
+ * object outright (issue #183).
+ *
+ * Two simpler predicates were rejected:
+ *
+ * - Refusing on `isSymbolicLink()` alone would drop the legitimate
+ *   symlink-to-FILE case — copying a symlinked file by content is reasonable and
+ *   widely relied on — and would still let FIFOs, sockets and device nodes through
+ *   to the same raw errno.
+ * - Testing only `stat().isFile()` would follow the link and answer correctly, but
+ *   throws on a DANGLING link, putting the same unattributed errno back on the
+ *   build's critical path.
+ *
+ * So the predicate is "does this resolve to a regular file, without throwing" —
+ * see {@link isCopyableFile}, which is the one place following a link is correct,
+ * because the target's bytes are what `copyFile` would move.
+ */
+async function partitionRegularFiles(
+  matches: readonly string[],
+  absoluteBase: string,
+): Promise<{ regular: string[]; nonRegular: string[] }> {
+  // Bounded concurrency, not a serial loop and not an unbounded `Promise.all`.
+  // This adds one or two stats per match where the build previously did none, on
+  // the critical path of a command that already stats every match once inside
+  // `glob` — serially that is a latency floor proportional to the match count, and
+  // a monorepo glob can match thousands. Unbounded would trade it for EMFILE.
+  //
+  // Results are written BY INDEX rather than pushed, so the partition stays in the
+  // caller's sorted order regardless of completion order — `droppedRel` and
+  // `nonRegularRel` are rendered into error messages an adopter reads, and a set
+  // that reshuffles between runs is a diff for no reason.
+  const copyable = await mapWithConcurrency(matches, STAT_CONCURRENCY, (rel) =>
+    // joinUnderRoot asserts the match stays under absoluteBase, the same guard the
+    // copy loop applies before reading it.
+    isCopyableFile(safePath.joinUnderRoot(absoluteBase, rel)));
+
+  const regular: string[] = [];
+  const nonRegular: string[] = [];
+  for (const [i, rel] of matches.entries()) {
+    (copyable[i] === true ? regular : nonRegular).push(rel);
+  }
+  return { regular, nonRegular };
+}
+
+/**
+ * Enough parallelism to hide per-call latency, low enough to stay far from the
+ * default file-descriptor ceiling even with several skills building at once.
+ */
+const STAT_CONCURRENCY = 16;
+
+/** `Promise.all`-shaped, but with at most `limit` calls in flight. Order preserved. */
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = Array.from({ length: items.length }) as R[];
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const i = next++;
+      // Non-null: `i` is always a valid index, guarded by the loop condition.
+      results[i] = await fn(items[i] as T);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+/**
+ * Whether `copyFile` can read this path as a stream of bytes.
+ *
+ * A regular file is copyable directly. A SYMLINK is copyable exactly when its
+ * target resolves to a regular file — that is the `stat` call, and it is the one
+ * place following the link is correct, because it is the target's bytes `copyFile`
+ * would move. A dangling link, or one resolving to a directory, throws from `stat`
+ * and is reported as not copyable rather than escaping as the build's whole
+ * explanation.
+ */
+async function isCopyableFile(absPath: string): Promise<boolean> {
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- match of a validated config glob
+    const linkStat = await lstat(absPath);
+    if (linkStat.isFile()) return true;
+    if (!linkStat.isSymbolicLink()) return false;
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- match of a validated config glob
+    return (await stat(absPath)).isFile();
+  } catch (error) {
+    // Unreadable or dangling. Not copyable is the honest answer, and the caller
+    // reports it as a named finding — which is strictly more than the raw errno
+    // this replaces ever gave.
+    //
+    // Narrowed to filesystem errors on purpose: a bare `catch {}` here would
+    // answer "not a regular file" to a bug in our own code, silently converting a
+    // defect into a routine skip. Same predicate the audit walk uses, from one
+    // shared source so the two cannot drift.
+    if (!isFilesystemAccessError(error)) throw error;
+    return false;
+  }
+}
+
+/**
+ * Run the filesystem work for ONE `files:` entry, and make any failure name the
+ * entry that caused it.
+ *
+ * THE attribution point for the whole module, used by the glob and non-glob copy
+ * paths alike. It exists because the same defect was fixed three times in a row,
+ * one call site at a time: a raw errno from `copyFile` on a glob match, then the
+ * `mkdir` a line above it, then the identical pair on the explicit-entry path.
+ * Each fix was correct and none of them was the class. Routing every per-entry
+ * filesystem call through here is.
+ *
+ * The message is deliberately about the ENTRY, not the syscall: an author reading
+ * a build failure needs to know which line of their config produced it, which
+ * path it resolved to, and what to do — none of which an errno carries. The OS
+ * text is kept verbatim inside it, because it is what distinguishes a permission
+ * problem from a full disk from a vanished mount.
+ */
+async function attributed<T>(
+  entry: SkillFileEntry,
+  absPath: string,
+  projectRoot: string,
+  work: () => Promise<T>,
+  action?: string,
+): Promise<T> {
+  return withFsAttribution(
+    `files: source '${entry.source}' resolved to ${anchoredPath(absPath, projectRoot)}`,
+    work,
+    action,
+  );
 }
 
 /** One file a GLOB `files:` entry matched and the never-package list refused. */
@@ -105,6 +246,16 @@ export interface AppliedFilesConfig {
    * that silently shipped less than the config asked for.
    */
   dropped: DroppedGlobMatch[];
+  /**
+   * Matches a GLOB caught that are not copyable files, and so were skipped.
+   *
+   * Reported for the same reason as `dropped` — the bundle holds less than the
+   * config asked for and a CI consumer must be able to see it — but kept as its
+   * own population because the cause and the remedy differ (see
+   * {@link GlobExpansion.nonRegular}). Before this existed, the copy died on a raw
+   * `ENOTSUP` naming neither the entry nor the path (issue #183).
+   */
+  skipped: DroppedGlobMatch[];
 }
 
 /**
@@ -130,11 +281,41 @@ export function droppedGlobMatchesToIssues(
   dropped: readonly DroppedGlobMatch[],
   locationRoot: string,
 ): ValidationIssue[] {
-  return dropped.map((drop) => {
-    const file = issueLocation(drop.absFile, locationRoot);
-    return materializeIssue('FILES_GLOB_DROPPED_NEVER_PACKAGED', {
+  return globMatchesToIssues(dropped, locationRoot, 'FILES_GLOB_DROPPED_NEVER_PACKAGED');
+}
+
+/**
+ * Turn non-copyable matches into reportable findings.
+ *
+ * Same anchoring contract as {@link droppedGlobMatchesToIssues} — and it shares
+ * that function's body rather than restating it, so the two populations cannot
+ * drift into describing themselves in different coordinate systems.
+ *
+ * @param locationRoot The ONE base this run anchors locations at (see
+ *   {@link droppedGlobMatchesToIssues}).
+ */
+export function skippedGlobMatchesToIssues(
+  skipped: readonly DroppedGlobMatch[],
+  locationRoot: string,
+): ValidationIssue[] {
+  return globMatchesToIssues(skipped, locationRoot, 'FILES_GLOB_SKIPPED_NON_REGULAR_FILE');
+}
+
+/**
+ * The one emitter behind both per-file glob findings: anchored at the SOURCE file,
+ * naming the entry whose net caught it. Parameterized by code rather than copied
+ * per population — the anchoring rule above is the part that must never diverge.
+ */
+function globMatchesToIssues(
+  matches: readonly DroppedGlobMatch[],
+  locationRoot: string,
+  code: 'FILES_GLOB_DROPPED_NEVER_PACKAGED' | 'FILES_GLOB_SKIPPED_NON_REGULAR_FILE',
+): ValidationIssue[] {
+  return matches.map((match) => {
+    const file = issueLocation(match.absFile, locationRoot);
+    return materializeIssue(code, {
       location: file,
-      detail: `${file} matched by files: source '${drop.source}'`,
+      detail: `${file} matched by files: source '${match.source}'`,
     });
   });
 }
@@ -348,8 +529,17 @@ export function verifyFilesIntegrity(
   pairs: { absSource: string; absDest: string }[],
 ): void {
   for (const { absSource, absDest } of pairs) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths from validated config
-    if (!existsSync(absDest)) {
+    // `statSync` in a guard rather than `existsSync`, because `existsSync`
+    // answers FALSE for a file that is present but unreadable — so a permissions
+    // problem on the dest was reported as "dest file missing", sending the author
+    // to look for a file that is sitting right there. Only a real ENOENT is
+    // missing; anything else is the filesystem refusing the path, and is rethrown
+    // for the caller to attribute to the `files:` entry.
+    try {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths from validated config
+      statSync(absDest);
+    } catch (error) {
+      if ((error as { code?: string }).code !== 'ENOENT') throw error;
       throw new Error(
         `files: integrity check failed — dest file missing: ${toForwardSlash(absDest)}`,
       );
@@ -436,14 +626,25 @@ async function copyNonGlobEntry(
   projectRoot: string,
   skillOutputDir: string,
 ): Promise<{ relDest: string; absSource: string; absDest: string }> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- source path from validated config
-  if (!existsSync(absoluteSource)) {
+  // `statSync` in a guard, not `existsSync`: `existsSync` swallows EACCES and
+  // answers FALSE, so a source the process merely cannot REACH — one under a
+  // directory it lacks permission to traverse — was reported as "does not exist".
+  // For a `dist/` source that also appended `buildArtifactHint`, telling the
+  // author to run a build that would not have helped: a confidently wrong
+  // diagnosis plus a confidently wrong remedy. Only ENOENT is absence; anything
+  // else is the filesystem refusing the path, and `attributed` at the call site
+  // names the entry.
+  let sourceStat;
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- source path from validated config
+    sourceStat = statSync(absoluteSource);
+  } catch (error) {
+    if ((error as { code?: string }).code !== 'ENOENT') throw error;
     throw new Error(
       `files: source '${entry.source}' does not exist (resolved to ${anchoredPath(absoluteSource, projectRoot)}).${buildArtifactHint(entry.source)}`,
     );
   }
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- source path from validated config
-  if (statSync(absoluteSource).isDirectory()) {
+  if (sourceStat.isDirectory()) {
     throw new Error(
       `files: source '${entry.source}' is a directory; use a glob like '${entry.source}/**/*' to copy its contents.`,
     );
@@ -477,6 +678,21 @@ interface GlobExpansion {
    * package?", and that is only answerable in output-relative coordinates.
    */
   dropped: DroppedGlobMatch[];
+  /**
+   * Matches that are not copyable files, BASE-relative — the coordinate the author
+   * wrote the glob in. Used only by the copy's error message, mirroring
+   * {@link GlobExpansion.droppedRel}.
+   */
+  nonRegularRel: string[];
+  /**
+   * The same non-files as reportable records. Distinct from `dropped` because the
+   * causes are distinct and so are the remedies: a drop is POLICY refusing a file
+   * that could have shipped ("name it explicitly if you meant it"), while this is
+   * an object that cannot be packaged at all ("point the glob at files, or resolve
+   * the link yourself"). Collapsing them into one bucket would hand an author the
+   * wrong instruction half the time.
+   */
+  nonRegular: DroppedGlobMatch[];
 }
 
 /**
@@ -515,22 +731,30 @@ async function expandGlobEntry(
   const rawMatches = await glob(remainder, { cwd: absoluteBase, nodir: true, dot: true });
   const allMatches = rawMatches.map((m) => toForwardSlash(m)).sort((a, b) => a.localeCompare(b));
 
-  const { kept, dropped } = partitionNeverPackaged(allMatches);
+  // BEFORE the never-package split, because the two ask different questions and
+  // only one of them can be answered about a non-file: `partitionNeverPackaged`
+  // decides what POLICY refuses to ship, this decides what the OS can copy at all.
+  const { regular, nonRegular } = await partitionRegularFiles(allMatches, absoluteBase);
+  const { kept, dropped } = partitionNeverPackaged(regular);
+
+  const asMatchRecord = (rel: string): DroppedGlobMatch => ({
+    source: entry.source,
+    // The refused file itself. Computed HERE, where the base a match is
+    // relative to is known for certain, rather than re-derived by each
+    // consumer from `dest` — a dest cannot be inverted back to a source once
+    // the entry has rebased it.
+    absFile: toForwardSlash(safePath.joinUnderRoot(absoluteBase, rel)),
+    dest: normalizeRelPath(safePath.join(entry.dest, rel)),
+  });
 
   return {
     absoluteBase,
     allMatches,
     kept,
     droppedRel: dropped,
-    dropped: dropped.map((rel) => ({
-      source: entry.source,
-      // The refused file itself. Computed HERE, where the base a match is
-      // relative to is known for certain, rather than re-derived by each
-      // consumer from `dest` — a dest cannot be inverted back to a source once
-      // the entry has rebased it.
-      absFile: toForwardSlash(safePath.joinUnderRoot(absoluteBase, rel)),
-      dest: normalizeRelPath(safePath.join(entry.dest, rel)),
-    })),
+    dropped: dropped.map(asMatchRecord),
+    nonRegularRel: nonRegular,
+    nonRegular: nonRegular.map(asMatchRecord),
   };
 }
 
@@ -561,11 +785,11 @@ async function copyGlobEntry(
   pairs: { absSource: string; absDest: string }[];
   rels: string[];
   dropped: DroppedGlobMatch[];
+  skipped: DroppedGlobMatch[];
 }> {
-  const { absoluteBase, allMatches, kept: matches, droppedRel, dropped } = await expandGlobEntry(
-    entry,
-    projectRoot,
-  );
+  const {
+    absoluteBase, allMatches, kept: matches, droppedRel, dropped, nonRegularRel, nonRegular,
+  } = await expandGlobEntry(entry, projectRoot);
 
   // Project-relative in both throws below: these messages are published verbatim
   // as `failedSkills[].message` (see {@link anchoredPath}).
@@ -577,10 +801,32 @@ async function copyGlobEntry(
     );
   }
 
+  // Ordered BEFORE the never-package throw because it is the more specific
+  // diagnosis: if the entry nets nothing shippable and nothing it netted was even
+  // a file, "all of them are never packaged" names the wrong cause and its
+  // remediation ("declare an explicit source: entry") would not work if followed.
+  if (matches.length === 0 && droppedRel.length === 0) {
+    throw new Error(
+      `files: source '${entry.source}' (glob) matched ${allMatches.length} path(s) under ${reportedBase}, ` +
+      `but none of them is a regular file (a symlink to a directory, a FIFO, a socket or a device node ` +
+      `cannot be packaged): ${nonRegularRel.join(', ')}. ` +
+      `Point the glob at files, or replace the link with the directory it targets.`,
+    );
+  }
+
   // Distinct from the zero-match case above: the build DID run and the glob DID
   // match — every match is simply a file that never ships. Saying "has your build
   // run?" here would send the author hunting a build failure that isn't there.
   if (matches.length === 0) {
+    // The MIXED case reaches here — some matches refused by policy, some not files
+    // at all — so the non-regular ones are named too. Listing only `droppedRel`
+    // would say "all of them are never packaged" while silently omitting paths that
+    // failed for an entirely different reason, and this throw is the last word on
+    // the entry: it aborts the build, so the `skipped` findings never get emitted.
+    const alsoNonRegular = nonRegularRel.length === 0
+      ? ''
+      : ` A further ${nonRegularRel.length.toString()} match(es) are not regular files and could not ` +
+        `be packaged either: ${nonRegularRel.join(', ')}.`;
     throw new Error(
       `files: source '${entry.source}' (glob) matched ${allMatches.length} file(s) under ${reportedBase}, ` +
       `but all of them are never packaged into a skill bundle: ${droppedRel.join(', ')}. ` +
@@ -588,7 +834,8 @@ async function copyGlobEntry(
       // wider glob clears this error while still shipping none of these files — advice
       // that looks like it worked and silently does not.
       `Declare an explicit source: entry for a file you intend to ship, ` +
-      `or point the glob at a directory that holds files which can be packaged.`,
+      `or point the glob at a directory that holds files which can be packaged.` +
+      alsoNonRegular,
     );
   }
 
@@ -607,16 +854,29 @@ async function copyGlobEntry(
     const relDest = normalizeRelPath(safePath.join(entry.dest, rel));
     const absDest = safePath.joinUnderRoot(skillOutputDir, entry.dest, rel);
 
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dest path from validated config
-    await mkdir(dirname(absDest), { recursive: true });
-    await copyFile(absSource, absDest);
+    // `isCopyableFile` classified the TYPE of this match; it deliberately did not
+    // assert readability, because a permission can change between the check and
+    // the copy and a guard that pretended otherwise would just move the race. So
+    // the work itself is where an IO failure is caught — BOTH calls, since the
+    // `mkdir` fails on an unwritable output dir, a full disk, or a dest whose
+    // parent is an existing file.
+    //
+    // Still a hard failure, unlike a non-regular match: an unreadable file is one
+    // the author DECLARED and expects in the bundle, so shipping silently without
+    // it would change the artifact behind their back. A non-regular match can
+    // never be packaged at all, which is why that one degrades instead.
+    await attributed(entry, absSource, projectRoot, async () => {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- dest path from validated config
+      await mkdir(dirname(absDest), { recursive: true });
+      await copyFile(absSource, absDest);
+    });
 
     copied.push(relDest);
     pairs.push({ absSource, absDest });
     rels.push(toForwardSlash(rel));
   }
 
-  return { copied, pairs, rels, dropped };
+  return { copied, pairs, rels, dropped, skipped: nonRegular };
 }
 
 /** One GLOB `files:` entry that currently expands to nothing at all. */
@@ -672,6 +932,18 @@ export interface PreBuildGlobFindings {
   allRefused: AllRefusedGlobEntry[];
   /** Globs that currently match nothing — the other input the build dies on. */
   unmatched: UnmatchedGlobEntry[];
+  /**
+   * Matches that are not copyable files (symlink-to-directory, FIFO, socket,
+   * device node, dangling link) and so cannot be packaged at all.
+   *
+   * A FIFTH population, orthogonal to the other four: those partition an entry by
+   * what the never-package POLICY decided about its matches, this one by what the
+   * matched object physically IS. An entry can appear here AND ship normally, so
+   * this is not a failure verdict — see {@link DroppedGlobMatch}, whose shape it
+   * reuses because the reported facts (which entry, which file, which would-be
+   * dest) are the same three.
+   */
+  skipped: DroppedGlobMatch[];
 }
 
 /**
@@ -721,6 +993,7 @@ export async function collectPreBuildGlobFindings(
   const dropped: DroppedGlobMatch[] = [];
   const allRefused: AllRefusedGlobEntry[] = [];
   const unmatched: UnmatchedGlobEntry[] = [];
+  const skipped: DroppedGlobMatch[] = [];
   for (const entry of filesConfig) {
     if (!isGlob(entry.source)) continue;
     // A '..' segment in the magic remainder is a malformed pattern that
@@ -749,6 +1022,18 @@ export async function collectPreBuildGlobFindings(
       unmatched.push({ source: entry.source, absBase });
       continue;
     }
+    // Reported for EVERY entry that has them, including ones that go on to be
+    // `allRefused` below — unlike the per-file drops, which that verdict
+    // supersedes. A non-file is not the cause `allRefused` names, so its finding
+    // is not a second granularity of the same defect; suppressing it here would
+    // put the author back where the raw errno left them.
+    skipped.push(...expansion.nonRegular);
+    if (expansion.kept.length === 0 && expansion.dropped.length === 0) {
+      // Matched only non-files. `allRefused` would name the never-package list as
+      // the cause, which is not what happened, and its remediation would not work.
+      // The `skipped` findings just pushed carry this entry on their own.
+      continue;
+    }
     if (expansion.kept.length === 0) {
       // Supersedes this entry's per-file drops rather than adding to them: the
       // build raises ONE error listing every refused file, and reporting the same
@@ -763,7 +1048,7 @@ export async function collectPreBuildGlobFindings(
     }
     dropped.push(...expansion.dropped.filter((d) => !shippedDests.has(normalizeRelPath(d.dest))));
   }
-  return { dropped, allRefused, unmatched };
+  return { dropped, allRefused, unmatched, skipped };
 }
 
 /**
@@ -785,6 +1070,7 @@ export function preBuildGlobFindingsToIssues(
   const anchorBase = (absBase: string): string => anchoredPath(absBase, locationRoot);
   return [
     ...droppedGlobMatchesToIssues(findings.dropped, locationRoot),
+    ...skippedGlobMatchesToIssues(findings.skipped, locationRoot),
     ...findings.allRefused.map((entry) => {
       const base = anchorBase(entry.absBase);
       // Every refused file, in the SAME source coordinates the drop findings use —
@@ -880,6 +1166,8 @@ interface EntryOutcome {
   /** Skill-output-relative dests this entry accounts for. */
   dests: string[];
   dropped: DroppedGlobMatch[];
+  /** Matches that are not copyable files. Always empty for a non-glob entry. */
+  skipped: DroppedGlobMatch[];
   /** Deferred integrity work, or `undefined` when the entry did not opt in. */
   pending: PendingIntegrity | undefined;
 }
@@ -889,7 +1177,7 @@ async function applyGlobFileEntry(
   fileEntry: SkillFileEntry,
   opts: ApplyFilesConfigOptions,
 ): Promise<EntryOutcome> {
-  const { copied, pairs, rels, dropped } = await copyGlobEntry(
+  const { copied, pairs, rels, dropped, skipped } = await copyGlobEntry(
     fileEntry,
     opts.projectRoot,
     opts.skillOutputDir,
@@ -897,6 +1185,7 @@ async function applyGlobFileEntry(
   return {
     dests: copied,
     dropped,
+    skipped,
     pending: fileEntry.integrity === true ? { entry: fileEntry, pairs, rels } : undefined,
   };
 }
@@ -961,21 +1250,29 @@ async function applyNonGlobFileEntry(
     return {
       dests: [normalizeRelPath(fileEntry.dest)],
       dropped: [],
+      skipped: [],
       pending: optedIn
         ? { entry: fileEntry, pairs: [{ absSource: absoluteSource, absDest }], rels: undefined }
         : undefined,
     };
   }
 
-  const { relDest, absSource, absDest } = await copyNonGlobEntry(
-    fileEntry,
-    absoluteSource,
-    opts.projectRoot,
-    opts.skillOutputDir,
+  // The WHOLE entry's filesystem work is guarded, not just its copy. Guarding the
+  // copy alone left the source `statSync` outside — so a source under a directory
+  // the process cannot traverse still escaped as a bare errno, which is the same
+  // defect one call earlier. An EXPLICIT entry is the spelling that unambiguously
+  // says "ship this file", so a bare errno here is if anything worse than on a
+  // glob: the author named the path, and the build owes them an error that names
+  // it back. (`copyNonGlobEntry`'s own deliberate errors — "does not exist", "is a
+  // directory" — carry no errno, so `attributed` passes them through untouched.)
+  const { relDest, absSource, absDest } = await attributed(
+    fileEntry, absoluteSource, opts.projectRoot,
+    () => copyNonGlobEntry(fileEntry, absoluteSource, opts.projectRoot, opts.skillOutputDir),
   );
   return {
     dests: [relDest],
     dropped: [],
+    skipped: [],
     pending: optedIn ? { entry: fileEntry, pairs: [{ absSource, absDest }], rels: undefined } : undefined,
   };
 }
@@ -1005,9 +1302,18 @@ async function runDeferredIntegrity(
   pending: readonly PendingIntegrity[],
   allDests: readonly string[],
   skillOutputDir: string,
+  projectRoot: string,
 ): Promise<void> {
   for (const { entry, pairs, rels } of pending) {
-    verifyFilesIntegrity(pairs);
+    // Through the same attribution point as the copy. `verifyFilesIntegrity`
+    // hashes both sides, so an unreadable source or dest surfaces here as a raw
+    // errno carrying an absolute path and no entry name — the same defect the
+    // copy loop had, in the one lane that had not been routed through the guard.
+    // Anchored at the ENTRY, not at `pairs[0]`: any of the entry's files can be
+    // the one that failed, and naming the first while the errno names another is
+    // worse than naming none. The errno itself carries the offending path.
+    await attributed(entry, safePath.resolve(safePath.join(projectRoot, entry.source)), projectRoot,
+      async () => { verifyFilesIntegrity(pairs); }, 'verified');
     if (rels === undefined) continue;
 
     const destRoot = normalizeRelPath(entry.dest);
@@ -1028,6 +1334,7 @@ export async function applyFilesConfig(opts: ApplyFilesConfigOptions): Promise<A
   const bundledFileSet = new Set((opts.bundledFiles ?? []).map((f) => toForwardSlash(f)));
   const dests: string[] = [];
   const dropped: DroppedGlobMatch[] = [];
+  const skipped: DroppedGlobMatch[] = [];
   const pending: PendingIntegrity[] = [];
 
   for (const fileEntry of opts.filesConfig) {
@@ -1036,10 +1343,11 @@ export async function applyFilesConfig(opts: ApplyFilesConfigOptions): Promise<A
       : await applyNonGlobFileEntry(fileEntry, opts, bundledFileSet);
     dests.push(...outcome.dests);
     dropped.push(...outcome.dropped);
+    skipped.push(...outcome.skipped);
     if (outcome.pending) pending.push(outcome.pending);
   }
 
-  await runDeferredIntegrity(pending, dests, opts.skillOutputDir);
+  await runDeferredIntegrity(pending, dests, opts.skillOutputDir, opts.projectRoot);
 
   // A drop is only worth reporting if the file genuinely did not ship. In the
   // escape-hatch config the guide prescribes — a glob over a subtree plus an
@@ -1050,6 +1358,10 @@ export async function applyFilesConfig(opts: ApplyFilesConfigOptions): Promise<A
   // set (not on entry order) keeps the finding true whichever order they wrote.
   const shippedDests = new Set(dests.map((d) => normalizeRelPath(d)));
   const reportableDropped = dropped.filter((d) => !shippedDests.has(normalizeRelPath(d.dest)));
+  // Same filter, same reason: an explicit entry naming the link's dest resolves it
+  // deliberately, and reporting "it did not ship" about a path now in the bundle
+  // would tell the author their remediation failed when it worked.
+  const reportableSkipped = skipped.filter((s) => !shippedDests.has(normalizeRelPath(s.dest)));
 
-  return { dests, dropped: reportableDropped };
+  return { dests, dropped: reportableDropped, skipped: reportableSkipped };
 }

@@ -218,11 +218,55 @@ export const CODE_REGISTRY = {
     'Make `git` runnable for this tree — install it, put it on PATH, or repair the repository whose `.git` directory could not be read — then re-run the audit. Set severity.TREE_PROVENANCE_INDETERMINATE to ignore if this environment deliberately has no git and the unclassified files are known to be repository source.',
     'tree_provenance_indeterminate',
   ),
+  // Same stance as TREE_PROVENANCE_INDETERMINATE above, applied to the directory
+  // walk instead of to git: a missing answer is reported as a missing answer.
+  //
+  // `vat audit` is a bulk linter over trees it does not own — an adopter's
+  // monorepo, `~/.claude/plugins`, a vendored bundle — so an entry it cannot read
+  // is an ordinary condition, not an exceptional one. One root-owned or
+  // quarantined directory used to abort the ENTIRE run with `status: error`, exit
+  // 2, and zero findings, discarding every finding already collected from readable
+  // siblings (issue #180). Degrading beats destroying: the scan continues and
+  // names what it could not reach.
+  //
+  // Silence was the other tempting option and is not acceptable: a scan that
+  // reports success while having skipped a subtree is the same failure shape as a
+  // detector that silently disables itself. `warning`, not `error`, because the
+  // findings that DID come back are trustworthy and an unreadable path is usually
+  // an environment fact rather than a defect in the audited tree.
+  SCAN_PATH_UNREADABLE: entry(
+    'warning',
+    'A path under the audited tree could not be read — a directory the scan could not enter, or a file it could not open — so it was not scanned; findings from every readable sibling are still reported.',
+    // `--exclude` leads, and the severity override is qualified, because the
+    // override is NOT reachable in the case that produces this finding most
+    // often: `applySeverityFilter` early-returns unless a VAT config is found
+    // above the scan path, and there is normally none above `~/.claude/plugins`.
+    // Advertising a remedy an adopter cannot apply is worse than not offering it.
+    'Make the path readable — check its permissions and ownership — then re-run the audit, or pass --exclude to drop it from the scan deliberately. Set severity.SCAN_PATH_UNREADABLE to ignore if the path is expected to be unreadable and the scan runs inside a project whose config VAT can find.',
+    'scan_path_unreadable',
+  ),
   FILES_GLOB_DROPPED_NEVER_PACKAGED: entry(
     'warning',
     'A `files:` glob matched a file that is never packaged into a skill bundle (an agent-instruction file such as CLAUDE.md, or a navigation file such as README.md); it was dropped and did not ship.',
     'No action needed if the drop is intended — a glob is a net, not a declaration. To ship that specific file deliberately, add an explicit `files:` entry naming it (`source: <path>`); to stop matching it at all, narrow the glob.',
     'files_glob_dropped_never_packaged',
+  ),
+  // Orthogonal to the three verdicts around it: they partition an entry by what the
+  // never-package POLICY decided about its matches, this one by what the matched
+  // object physically IS. `glob`'s `nodir: true` cannot catch it — glob does not
+  // follow symlinks, so a symlink-to-directory is not a directory to it.
+  //
+  // `warning`, not `error`: the entry still ships everything else, so this is a
+  // partial result rather than a failed one — the same grading logic as
+  // FILES_GLOB_DROPPED_NEVER_PACKAGED. Louder than `info` because, unlike a
+  // never-packaged drop, nothing about a glob's design makes catching a device node
+  // the expected outcome. It replaces a raw `ENOTSUP` that killed the build naming
+  // neither the entry nor the path (issue #183).
+  FILES_GLOB_SKIPPED_NON_REGULAR_FILE: entry(
+    'warning',
+    'A `files:` glob matched something that is not a regular file (a symlink to a directory, a dangling symlink, a FIFO, a socket or a device node); it cannot be packaged and was skipped, so it did not ship.',
+    'Point the glob at regular files, or narrow it so it stops matching this path. To ship the contents a directory symlink targets, name the real directory in a glob of its own (`source: <real-dir>/**/*`) — a link cannot be packaged as one file. Set severity.FILES_GLOB_SKIPPED_NON_REGULAR_FILE to ignore if the skip is expected.',
+    'files_glob_skipped_non_regular_file',
   ),
   // The third of three verdicts a pre-build gate can reach about one glob entry
   // (partial drop / nothing shippable / nothing matched). This one: the glob

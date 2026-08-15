@@ -61,6 +61,7 @@ export {
   explicitFilesConfigDests,
   mergeFilesConfig,
   preBuildGlobFindingsToIssues,
+  skippedGlobMatchesToIssues,
   type AllRefusedGlobEntry,
   type AppliedFilesConfig,
   type ApplyFilesConfigOptions,

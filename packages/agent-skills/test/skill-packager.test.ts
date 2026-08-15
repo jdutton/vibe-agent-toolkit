@@ -1,5 +1,5 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
-import { existsSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, writeFileSync } from 'node:fs';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 
 
@@ -667,6 +667,70 @@ describe('packageSkill - binary file copy', () => {
     const copiedJson = await readFile(safePath.join(result.outputPath, 'templates', 'data.json'), 'utf-8');
     expect(copiedJson).toBe(jsonContent);
   });
+});
+
+// ============================================================================
+// fs-attribution on the two lanes copyAndRewriteFile/registerBundledAssets
+// guard: an unreadable linked asset (read side) and an unwritable output
+// subdirectory (write side). Both used to surface a bare, unattributed
+// EACCES with no skill and no remedy named.
+// ============================================================================
+
+describe('packageSkill - unreadable/unwritable linked file attribution', () => {
+  const skipUnlessRealPermissions =
+    process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
+
+  it.skipIf(skipUnlessRealPermissions)(
+    'attributes an unreadable linked asset instead of a bare EACCES (registerBundledAssets)',
+    async () => {
+      const dir = getTempDir();
+      await mkdir(safePath.join(dir, 'scripts'), { recursive: true });
+      const locked = safePath.join(dir, 'scripts', 'locked.mjs');
+      await writeFile(locked, 'export const secret = 1;\n');
+      chmodSync(locked, 0o000);
+
+      const sp = await writeSkillMd(dir, UNIT_SKILL_NAME, 'Run the [locked script](scripts/locked.mjs).');
+
+      try {
+        await expect(packWithOutput(sp)).rejects.toThrow(
+          /linked file[\s\S]*locked\.mjs[\s\S]*could not be read while collecting the files this skill links to[\s\S]*permissions and ownership/,
+        );
+      } finally {
+        chmodSync(locked, 0o644);
+      }
+    },
+  );
+
+  it.skipIf(skipUnlessRealPermissions)(
+    'attributes an unwritable output subdirectory instead of a bare EACCES (copyAndRewriteFile write)',
+    async () => {
+      const dir = getTempDir();
+      // Source lives INSIDE outputPath: packageSkill skips its stale-output
+      // `rm(resolvedOutput, { recursive: true })` in that case (see 'source-in-output
+      // check' above), which is required here — otherwise it would delete and
+      // recreate our locked resources/ dir with default permissions before the
+      // guarded write ever runs.
+      const outputPath = safePath.join(dir, 'out');
+      await mkdir(outputPath, { recursive: true });
+      await writeFile(safePath.join(outputPath, 'guide.md'), '# Guide\n\nContent.');
+      const sp = safePath.join(outputPath, 'SKILL.md');
+      await writeFile(sp, `${createFrontmatter({ name: UNIT_SKILL_NAME })}\n\nSee [guide](guide.md).`);
+
+      // Markdown links route to resources/ — pre-create it read-only so the
+      // guarded WRITE fails, not the (no-op-on-existing-dir) mkdir before it.
+      const lockedResourcesDir = safePath.join(outputPath, 'resources');
+      await mkdir(lockedResourcesDir, { recursive: true });
+      chmodSync(lockedResourcesDir, 0o500); // r-x: traversable, not writable
+
+      try {
+        await expect(packageSkill(sp, { outputPath })).rejects.toThrow(
+          /linked file[\s\S]*guide\.md[\s\S]*could not be written into the bundle[\s\S]*output directory is writable/,
+        );
+      } finally {
+        chmodSync(lockedResourcesDir, 0o755);
+      }
+    },
+  );
 });
 
 // ============================================================================

@@ -62,8 +62,10 @@ import {
   droppedGlobMatchesToIssues,
   explicitFilesConfigDests,
   globEntryDest,
+  skippedGlobMatchesToIssues,
   type SkillFileEntry,
 } from './files-config.js';
+import { READ_REMEDY, withFsAttribution } from './fs-attribution.js';
 import { checkBrokenPackagedLinks, checkUnreferencedFiles } from './post-build-checks.js';
 import {
   checkPackagedTestInput,
@@ -81,6 +83,9 @@ import { deferredAssetsToIssues, walkerExclusionsToIssues } from './validators/w
 import { walkLinkGraph, type WalkableRegistry } from './walk-link-graph.js';
 
 const PACKAGE_JSON_FILENAME = 'package.json';
+
+/** `withFsAttribution` action for a write in `copyAndRewriteFile` — never a copy, since the bytes are rewritten first. */
+const WRITE_ACTION = 'written into the bundle';
 
 /**
  * Default template for excluded links when no explicit template is configured —
@@ -623,7 +628,7 @@ export async function packageSkill(
   // For any asset whose id is already taken (a path-slug clash — `a-b/c.html`
   // and `a/b-c.html` both flatten to `a-b-c-html`), we set a synthetic
   // resolvedId on links pointing to it so link rewriting still works.
-  const { collidedAssets, collisions: assetCollisions } = await registerBundledAssets(registry, bundledAssets);
+  const { collidedAssets, collisions: assetCollisions } = await registerBundledAssets(registry, bundledAssets, projectRoot);
   resolveCollidedAssetLinks(
     collectResourcesWithLinks(bundledResources, skillResource),
     collidedAssets,
@@ -734,8 +739,15 @@ export async function packageSkill(
   );
 
   // 12. Copy and rewrite files
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- outputPath is validated
-  await mkdir(outputPath, { recursive: true });
+  // The build's own output directory. An unwritable `dist/` or a full disk failed
+  // here with a bare errno naming an output path the author never typed — the
+  // same shape as the copiers, at the step before any of them run.
+  await withFsAttribution(
+    `skill '${skillMetadata.name}' output directory ${issueLocation(outputPath, projectRoot) || '.'}`,
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- outputPath is validated
+    () => mkdir(outputPath, { recursive: true }),
+    'created',
+  );
 
   await copyAndRewriteFiles(skillPath, bundledFiles, {
     pathMap,
@@ -802,6 +814,10 @@ export async function packageSkill(
     // dropped file is a source file that never reached the output, so the only
     // path a reader can open is its source path.
     ...droppedGlobMatchesToIssues(appliedFiles.dropped, projectRoot),
+    // The same receipt, for matches that are not copyable files at all. Anchored
+    // identically and for the identical reason. Until issue #183 this population
+    // had no channel because the build died on the first one it met.
+    ...skippedGlobMatchesToIssues(appliedFiles.skipped, projectRoot),
     // Presence-side backstop for agent-instruction files. The walker excludes
     // them from link-following, but a `files:` glob can still copy one in, and
     // a file that arrives without a link is invisible to the link lane.
@@ -1101,6 +1117,7 @@ function collectResourcesWithLinks(
 async function registerBundledAssets(
   registry: ResourceRegistry,
   bundledAssets: string[],
+  projectRoot: string,
 ): Promise<{ collidedAssets: string[]; collisions: DuplicateIdCollision[] }> {
   const collidedAssets: string[] = [];
   const collisions: DuplicateIdCollision[] = [];
@@ -1109,7 +1126,19 @@ async function registerBundledAssets(
   }
   for (const assetPath of bundledAssets) {
     try {
-      await registry.addResource(assetPath);
+      // `addResource` parses the file, so it READS it — which makes this the first
+      // place a build touches a linked asset, and the place an unreadable one
+      // actually fails. It reported a bare `EACCES … open '/abs/path'` with no
+      // skill named and no remedy: the same shape as the copiers, one step
+      // earlier, and the step that fires first.
+      await withFsAttribution(
+        `linked file ${issueLocation(assetPath, projectRoot) || '.'}`,
+        () => registry.addResource(assetPath),
+        // The file is read to discover its links before anything is copied, so
+        // naming the copy would point past the step that actually failed.
+        'read while collecting the files this skill links to',
+        READ_REMEDY,
+      );
     } catch (error) {
       // `addResource` (singular) THROWS on a collision and — unlike
       // `addResources` — records nothing in the registry's collision log. So
@@ -1293,9 +1322,25 @@ function applyFilesEntriesToPathMap(
     // defense-in-depth beyond the schema refine on SkillFileEntry.dest.
     const absoluteDest = safePath.joinUnderRoot(outputPath, fileEntry.dest);
 
-    // Validate source exists at build time
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- source path from validated config
-    if (!existsSync(absoluteSource)) {
+    // Validate source exists at build time.
+    //
+    // `statSync` in a guard, not `existsSync`: `existsSync` swallows EACCES and
+    // answers FALSE, so a source the process cannot REACH — one under a directory
+    // it may not traverse — was reported as "does not exist", and for a `dist/`
+    // path `buildArtifactHint` then told the author to run a build that would not
+    // have helped. A wrong diagnosis with a confident wrong remedy attached.
+    // Only ENOENT is absence; a refusal is reported as itself, naming the entry.
+    try {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- source path from validated config
+      statSync(absoluteSource);
+    } catch (error) {
+      if ((error as { code?: string }).code !== 'ENOENT') {
+        const reason = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `files entry for skill '${skillName}': source '${fileEntry.source}' could not be read: ${reason}. ` +
+          `Check the file's permissions and ownership, and that every directory above it is traversable.`,
+        );
+      }
       throw new Error(
         `files entry for skill '${skillName}': source '${fileEntry.source}' does not exist.${buildArtifactHint(fileEntry.source)}`,
       );
@@ -1780,9 +1825,19 @@ async function copyAndRewriteFile(
   targetPath: string,
   ctx: CopyRewriteContext,
 ): Promise<void> {
+  // Through the SAME attribution point as the `files:` lanes. This is the default
+  // path for every ordinary markdown-linked file in a build — the most-travelled
+  // copier in the packager — and it was the last one still letting a raw errno be
+  // the build's whole explanation: `EACCES: permission denied, open '/abs/path'`,
+  // with no skill named and no remedy. Easy to believe it was covered because the
+  // `files:` fix landed in this same file; it is a different function.
+  const subject = `linked file ${issueLocation(sourcePath, ctx.projectRoot) || '.'}`;
+
   // Ensure target directory exists
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetPath is constructed from validated paths
-  await mkdir(dirname(targetPath), { recursive: true });
+  await withFsAttribution(subject, async () => {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetPath is constructed from validated paths
+    await mkdir(dirname(targetPath), { recursive: true });
+  });
 
   const lower = sourcePath.toLowerCase();
   const isMarkdown = lower.endsWith('.md');
@@ -1790,13 +1845,20 @@ async function copyAndRewriteFile(
 
   // Non-rewritable files or rewriting disabled: plain binary copy
   if ((!isMarkdown && !isHtml) || !ctx.rewriteLinks) {
-    await copyFile(sourcePath, targetPath);
+    await withFsAttribution(subject, () => copyFile(sourcePath, targetPath));
     return;
   }
 
   // Read source file
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- sourcePath is validated
-  const content = await readFile(sourcePath, 'utf-8');
+  const content = await withFsAttribution(
+    subject,
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- sourcePath is validated
+    () => readFile(sourcePath, 'utf-8'),
+    // Not "copied": the read is the step that failed, and this lane reads before
+    // it rewrites, so naming the copy would point past the actual failure.
+    'read for link rewriting',
+    READ_REMEDY,
+  );
 
   // Look up the resource in the "from" registry
   const resource = ctx.fromRegistry.getResource(safePath.resolve(sourcePath));
@@ -1818,8 +1880,12 @@ async function copyAndRewriteFile(
         : `Copied '${sourcePath}' verbatim without link rewriting: it lost a resource-id collision to ` +
             `'${winner}', which was registered first and holds the id. Source-relative links inside it are not rewritten.`,
     );
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetPath is constructed from validated paths
-    await writeFile(targetPath, content, 'utf-8');
+    await withFsAttribution(
+      subject,
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetPath is constructed from validated paths
+      () => writeFile(targetPath, content, 'utf-8'),
+      WRITE_ACTION,
+    );
     return;
   }
 
@@ -1838,8 +1904,12 @@ async function copyAndRewriteFile(
           `the original value was kept.`,
       );
     });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetPath is constructed from validated paths
-    await writeFile(targetPath, rewritten, 'utf-8');
+    await withFsAttribution(
+      subject,
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetPath is constructed from validated paths
+      () => writeFile(targetPath, rewritten, 'utf-8'),
+      WRITE_ACTION,
+    );
     return;
   }
 
@@ -1879,8 +1949,12 @@ async function copyAndRewriteFile(
     }
   }
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetPath is constructed from validated paths
-  await writeFile(targetPath, editor.toString(), 'utf-8');
+  await withFsAttribution(
+    subject,
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetPath is constructed from validated paths
+    () => writeFile(targetPath, editor.toString(), 'utf-8'),
+    WRITE_ACTION,
+  );
 }
 
 /**
