@@ -2,60 +2,60 @@
  * Unit tests for git-utils: isGitIgnored ancestor walk.
  */
 
-import { spawnSync } from 'node:child_process';
-import type { SpawnSyncReturns } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { GitRunResult } from '../src/git-run.js';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '../src/path-utils.js';
 
-// Mock modules before importing the code under test
-vi.mock('node:child_process', () => ({
-  spawnSync: vi.fn(),
-}));
-
-vi.mock('which', () => ({
-  default: { sync: vi.fn().mockReturnValue('/usr/bin/git') },
+/**
+ * The seam is `runGit`, not `spawnSync`.
+ *
+ * The spawn now happens inside `@vibe-validate/git`, which vitest externalizes
+ * as an ordinary `node_modules` dependency — so `vi.mock('node:child_process')`
+ * no longer reaches it. That does not fail loudly: the mock still applies to
+ * this package, so some cases went on passing while REAL git answered them, and
+ * only the assertions that count spawns noticed. `runGit` is the right seam
+ * anyway: what these tests pin is this module's ancestor-walk logic and its
+ * short-circuit, not how a child process gets started.
+ */
+vi.mock('../src/git-run.js', () => ({
+  runGit: vi.fn(),
 }));
 
 // Import after mocks are set up
+const { runGit } = await import('../src/git-run.js');
 const { isGitIgnored } = await import('../src/git-utils.js');
 
-/** Helper to create a spawnSync return value. */
-function makeSpawnResult(status: number, stdout = ''): SpawnSyncReturns<string> {
-  return { status, stdout, stderr: '', pid: 0, output: [], signal: null };
+/** Helper to build a {@link GitRunResult} from an exit status. */
+function makeRunResult(status: number, stdout = ''): GitRunResult {
+  return { ok: status === 0, status, stdout, stderr: '' };
 }
 
 /**
- * Create a spawnSync mock that returns exit codes based on a path → status map.
- * Handles both per-file mode (check-ignore -q <path>) and batch mode (check-ignore --stdin).
+ * Stub `runGit` to return exit codes from a path → status map.
+ * `check-ignore -q <path>` puts the path at args[2].
  * Unmapped paths return the fallback status (default: 1 = not ignored).
  */
-function mockSpawnByPath(
+function mockRunByPath(
   pathStatusMap: Record<string, number>,
-  options?: { batchStdout?: string; fallbackStatus?: number },
+  options?: { fallbackStatus?: number },
 ): void {
   const fallback = options?.fallbackStatus ?? 1;
-  vi.mocked(spawnSync).mockImplementation((_cmd, args) => {
-    const argsArray = args as string[];
-    // Batch mode: check-ignore --stdin
-    if (argsArray[1] === '--stdin' && options?.batchStdout !== undefined) {
-      return makeSpawnResult(0, options.batchStdout);
-    }
-    // Per-file mode: check-ignore -q <path> — pathArg is args[2]
-    const pathArg = argsArray[2];
+  vi.mocked(runGit).mockImplementation((args) => {
+    const pathArg = args[2];
     if (pathArg !== undefined && pathArg in pathStatusMap) {
-      return makeSpawnResult(pathStatusMap[pathArg] as number);
+      return makeRunResult(pathStatusMap[pathArg] as number);
     }
-    return makeSpawnResult(fallback);
+    return makeRunResult(fallback);
   });
 }
 
 /**
  * `isGitIgnored` now answers "is there a repository here?" from the filesystem
  * (via `gitFindRoot`) before it spawns anything, so these unit tests need cwds
- * whose *real* on-disk shape matches the case under test. `spawnSync` stays
+ * whose *real* on-disk shape matches the case under test. `runGit` stays
  * mocked — no git binary runs — but `.git` has to actually exist for the
  * in-repository cases, and must not exist anywhere above the orphan case.
  */
@@ -82,13 +82,13 @@ afterEach(() => {
 
 describe('isGitIgnored', () => {
   it('returns true when git check-ignore exits 0 (file is ignored)', () => {
-    vi.mocked(spawnSync).mockReturnValue(makeSpawnResult(0));
+    vi.mocked(runGit).mockReturnValue(makeRunResult(0));
 
     expect(isGitIgnored('node_modules/foo.js', CWD)).toBe(true);
   });
 
   it('returns false when git check-ignore exits 1 (file is not ignored)', () => {
-    vi.mocked(spawnSync).mockReturnValue(makeSpawnResult(1));
+    vi.mocked(runGit).mockReturnValue(makeRunResult(1));
 
     expect(isGitIgnored('src/index.ts', CWD)).toBe(false);
   });
@@ -97,7 +97,7 @@ describe('isGitIgnored', () => {
     const filePath = 'data/symlink/deep/file.md';
 
     // Walk: file(128) -> data/symlink/deep(128) -> data/symlink(128) -> data(0=ignored)
-    mockSpawnByPath({
+    mockRunByPath({
       [filePath]: 128,
       [safePath.resolve(CWD, 'data/symlink/deep')]: 128,
       [safePath.resolve(CWD, 'data/symlink')]: 128,
@@ -105,10 +105,10 @@ describe('isGitIgnored', () => {
     });
 
     expect(isGitIgnored(filePath, CWD)).toBe(true);
-    // The walk is the whole point of this branch: file + three ancestors = 4 spawns.
+    // The walk is the whole point of this branch: file + three ancestors = 4 calls.
     // Pinning the exact count means the `gitFindRoot` short-circuit cannot quietly
     // truncate the in-repository symlink recovery.
-    expect(vi.mocked(spawnSync).mock.calls.length).toBe(4);
+    expect(vi.mocked(runGit).mock.calls.length).toBe(4);
   });
 
   /**
@@ -121,27 +121,27 @@ describe('isGitIgnored', () => {
    * root, and answers `false` after (1 + depth) subprocess spawns, per call.
    *
    * Both the old and the new implementation return `false` here, so the return
-   * value cannot tell them apart — that is exactly why the bug survived. The spawn
+   * value cannot tell them apart — that is exactly why the bug survived. The call
    * COUNT can: (1 + depth) before, 0 after.
    */
   it('spawns nothing when cwd has no git repository above it', () => {
-    vi.mocked(spawnSync).mockReturnValue(makeSpawnResult(128));
+    vi.mocked(runGit).mockReturnValue(makeRunResult(128));
 
     const filePath = safePath.join(ORPHAN_CWD, 'docs', 'guides', 'deep', 'file.md');
 
     expect(isGitIgnored(filePath, ORPHAN_CWD)).toBe(false);
-    expect(vi.mocked(spawnSync)).not.toHaveBeenCalled();
+    expect(vi.mocked(runGit)).not.toHaveBeenCalled();
   });
 
   it('still spawns for the ordinary in-repository check (short-circuit negative control)', () => {
-    vi.mocked(spawnSync).mockReturnValue(makeSpawnResult(1));
+    vi.mocked(runGit).mockReturnValue(makeRunResult(1));
 
     expect(isGitIgnored('src/index.ts', CWD)).toBe(false);
-    expect(vi.mocked(spawnSync).mock.calls.length).toBe(1);
+    expect(vi.mocked(runGit).mock.calls.length).toBe(1);
   });
 
   it('returns false when exit 128 and ancestor walk is exhausted without finding ignored parent', () => {
-    vi.mocked(spawnSync).mockReturnValue(makeSpawnResult(128));
+    vi.mocked(runGit).mockReturnValue(makeRunResult(128));
 
     expect(isGitIgnored('data/symlink/file.md', CWD)).toBe(false);
   });
@@ -151,7 +151,7 @@ describe('isGitIgnored', () => {
 
     // Walk: file(128) -> src/symlink/deep(128) -> src/symlink(1=tracked, stop)
     // src should NOT be reached — exit 1 means parent is tracked, stop walking
-    mockSpawnByPath({
+    mockRunByPath({
       [filePath]: 128,
       [safePath.resolve(CWD, 'src/symlink/deep')]: 128,
       [safePath.resolve(CWD, 'src/symlink')]: 1,
@@ -161,14 +161,21 @@ describe('isGitIgnored', () => {
     expect(isGitIgnored(filePath, CWD)).toBe(false);
 
     // Verify we did NOT check 'src' (walk stopped at 'src/symlink')
-    const checkedPaths = vi.mocked(spawnSync).mock.calls.map((c) => (c[1] as string[])[2]);
+    const checkedPaths = vi.mocked(runGit).mock.calls.map((c) => c[0][2]);
     expect(checkedPaths).not.toContain(safePath.resolve(CWD, 'src'));
   });
 
-  it('returns false when git is not available (which.sync throws)', async () => {
-    const whichModule = await import('which');
-    vi.mocked(whichModule.default.sync).mockImplementation(() => {
-      throw new Error('not found');
+  it('returns false when git could not run at all', () => {
+    // `runGit` never throws: a missing binary comes back as a failed result
+    // carrying `error`, and exit status 1 — the same status as "not ignored".
+    // This caller is right to treat them alike, but the reason is worth pinning:
+    // the old `which.sync` pre-check that used to raise here is gone.
+    vi.mocked(runGit).mockReturnValue({
+      ok: false,
+      status: 1,
+      stdout: '',
+      stderr: 'spawn git ENOENT',
+      error: new Error('spawn git ENOENT'),
     });
 
     expect(isGitIgnored('file.md', CWD)).toBe(false);

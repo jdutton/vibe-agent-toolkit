@@ -775,7 +775,7 @@ function writeSymlinks(root: string, links: readonly CorpusSymlink[]): boolean {
  */
 function initGit(root: string): boolean {
   const run = (args: string[]): boolean =>
-    runGit(args, { cwd: root, stdio: 'ignore', timeout: 30_000 }).ok;
+    runGit(args, { cwd: root, suppressStderr: true, timeout: 30_000 }).ok;
 
   return (
     run(['init', '--quiet', '--initial-branch=main']) &&

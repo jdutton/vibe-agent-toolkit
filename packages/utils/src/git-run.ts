@@ -30,28 +30,34 @@
  * repository I am standing in" (`git remote get-url` inside the user's own
  * checkout, say) opts out explicitly, and has to name itself when it does.
  *
- * This is deliberately the **inverse** of `@vibe-validate/git`'s
- * `executeGitCommand`, whose `scrubGitEnv` defaults to `false`. That default is
- * right for vibe-validate, which mostly operates on the repository it was
- * invoked in; it is wrong here, because VAT and its adopters are handed a root.
+ * ## What this is, mechanically: a set of defaults over `@vibe-validate/git`
  *
- * ## Two other defaults that are not defaults anywhere else
+ * The spawn itself, the environment scrub and the treatment of a spawn-level
+ * error all live in `executeGitCommand`, which is that package's single
+ * chokepoint and is exercised by vibe-validate on every commit it gates. This
+ * module supplies only the three defaults VAT needs to differ on, and a result
+ * shape that never throws:
  *
- * - **`maxBuffer` is 64 MiB, never Node's 1 MiB.** `git ls-files -s -z` emits
- *   ~104 bytes per path, so an 8,500-file tree reaches 84% of Node's default and
- *   a larger one silently truncates.
- * - **A spawn-level failure is a failure regardless of exit status.** Overrunning
- *   `maxBuffer` can leave `status: 0` with truncated stdout and the cause only in
- *   `result.error`, so an exit-code check returns a partial answer marked
- *   successful — for an enumerating command, that is files silently missing from
- *   a list, which every caller downstream reads as "not there".
+ * - **`scrubGitEnv` is on unless `ambient: true`** — the inverse of
+ *   `executeGitCommand`'s `false`. That default is right for vibe-validate,
+ *   which mostly operates on the repository it was invoked in; it is wrong here,
+ *   because VAT and its adopters are handed a root. Consolidating without this
+ *   wrapper would relocate the opt-in rather than remove the hazard.
+ * - **`maxBuffer` is 64 MiB, never Node's 1 MiB** (`executeGitCommand` defaults
+ *   to 10 MiB). `git ls-files -s -z` emits ~104 bytes per path, so an
+ *   8,500-file tree reaches 84% of Node's default and a larger one truncates.
+ * - **A spawn-level failure is a failure regardless of exit status**, which
+ *   `executeGitCommand` now enforces itself; `ok` simply forwards its `success`.
+ *
+ * ⚠️ **One property was given up in the consolidation:** this used to resolve the
+ * binary with `which.sync('git')` and spawn an absolute path. `executeGitCommand`
+ * spawns bare `'git'` and lets the OS search `PATH`, so a "git is not on PATH"
+ * condition now arrives as an `ENOENT` in `error` rather than as a distinct
+ * pre-spawn message. Both are reported through {@link GitRunResult}, so no caller
+ * can mistake either for success.
  */
 
-import { spawnSync } from 'node:child_process';
-
-import which from 'which';
-
-import { cleanGitEnv } from './git-env.js';
+import { executeGitCommand } from '@vibe-validate/git';
 
 /**
  * 64 MiB. Chosen against `git ls-files -s -z`, the widest-output command here:
@@ -95,8 +101,24 @@ export interface GitRunOptions {
   /** Data written to the child's stdin. */
   input?: string;
 
-  /** Standard I/O configuration. @default 'pipe' */
-  stdio?: 'pipe' | 'ignore' | 'inherit';
+  /** Discard the child's stderr instead of capturing it. @default false */
+  suppressStderr?: boolean;
+
+  /**
+   * Trim surrounding whitespace from `stdout` and `stderr`.
+   *
+   * **Pass `false` for a NUL-delimited (`-z`) listing.** git sorts by byte value
+   * and 0x20 sorts below every printable character, so a path beginning with a
+   * space is listed *first* — where the trim reaches it. The caller then holds a
+   * path that does not exist, and every lookup against it reads as "not there"
+   * rather than as an error. Also pass `false` when the output is file content
+   * (`git show HEAD:file`), whose trailing newline is data.
+   *
+   * `ls-files -s -z` does not need it: the mode occupies position 0.
+   *
+   * @default true
+   */
+  trim?: boolean;
 }
 
 /** What one git command did. */
@@ -106,7 +128,11 @@ export interface GitRunResult {
    * child is never `ok`, whatever its exit status says.
    */
   ok: boolean;
-  /** Exit status, or `-1` when the process never ran or was killed. */
+  /**
+   * Exit status, or `1` when the process never ran or was killed — the two are
+   * not distinguishable here, so branch on {@link GitRunResult.error} rather
+   * than on this when you need to tell a real `exit 1` from a failure to spawn.
+   */
   status: number;
   /** Decoded stdout, trimmed. */
   stdout: string;
@@ -146,54 +172,42 @@ export interface GitRunResult {
  */
 export function runGit(args: readonly string[], options: GitRunOptions = {}): GitRunResult {
   if (args.length === 0) {
+    // Handled here rather than by `executeGitCommand`, which THROWS on an empty
+    // argv. This function's whole contract is that it never throws.
     return {
       ok: false,
-      status: -1,
+      status: 1,
       stdout: '',
       stderr: 'runGit() needs at least one argument',
       error: new Error('runGit() needs at least one argument'),
     };
   }
 
-  let gitPath: string;
-  try {
-    // Resolved on PATH here rather than handed to the shell, so the command that
-    // runs is a fixed absolute path and no PATH entry can substitute for it.
-    gitPath = which.sync('git');
-  } catch {
-    const error = new Error('git was not found on PATH');
-    return { ok: false, status: -1, stdout: '', stderr: error.message, error };
-  }
-
-  const result = spawnSync(gitPath, [...args], {
+  // `ignoreErrors` is what makes this non-throwing, and it is safe to set
+  // unconditionally only because `executeGitCommand` now reports `error` on that
+  // path too. Before that fix it dropped the spawn cause entirely, and a caller
+  // reading the result could not tell "git is not installed" from "exit 1 is the
+  // answer" from "your listing was truncated" — which is why this wrapper could
+  // not have been written against the previous release.
+  const result = executeGitCommand([...args], {
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-    env: options.ambient === true ? { ...process.env, ...options.env } : cleanGitEnv(options.env),
-    encoding: 'utf-8',
-    stdio: options.stdio ?? 'pipe',
+    ...(options.env === undefined ? {} : { env: options.env }),
+    ...(options.input === undefined ? {} : { stdin: options.input }),
+    scrubGitEnv: options.ambient !== true,
+    suppressStderr: options.suppressStderr ?? false,
+    trimOutput: options.trim ?? true,
+    ignoreErrors: true,
     timeout: options.timeout ?? DEFAULT_TIMEOUT_MS,
     maxBuffer: options.maxBuffer ?? DEFAULT_MAX_BUFFER,
-    ...(options.input === undefined ? {} : { input: options.input }),
   });
 
-  const status = result.status ?? -1;
-  const stdout = (result.stdout ?? '').trim();
-  const stderr = (result.stderr ?? '').trim();
-
-  if (result.error) {
-    // Named, so ENOENT / ENOBUFS / ETIMEDOUT stop collapsing into one opaque
-    // "git failed" and a truncated listing stops looking like a short one.
-    const cause = result.error as NodeJS.ErrnoException;
-    const label = args[0] ?? '<no args>';
-    return {
-      ok: false,
-      status,
-      stdout,
-      stderr: stderr || `git ${label} could not run: ${cause.message}`,
-      error: result.error,
-    };
-  }
-
-  return { ok: status === 0, status, stdout, stderr };
+  return {
+    ok: result.success,
+    status: result.exitCode,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    ...(result.error === undefined ? {} : { error: result.error }),
+  };
 }
 
 /**

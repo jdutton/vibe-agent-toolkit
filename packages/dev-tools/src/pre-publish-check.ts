@@ -138,7 +138,7 @@ console.log('');
 
 // Check 1: Git repository exists
 try {
-  const result = runGit(['rev-parse', '--git-dir'], { stdio: 'pipe' });
+  const result = runGit(['rev-parse', '--git-dir']);
   if (!result.ok) {
     throw new Error('Not a git repository');
   }
@@ -158,9 +158,7 @@ if (IS_CI || skipGitChecks) {
 } else {
   let currentBranch: string;
   try {
-    const result = runGit(['rev-parse', '--abbrev-ref', 'HEAD'], {
-      stdio: 'pipe',
-    });
+    const result = runGit(['rev-parse', '--abbrev-ref', 'HEAD']);
     if (!result.ok) {
       throw new Error('Failed to determine current branch');
     }
@@ -191,16 +189,14 @@ if (IS_CI || skipGitChecks) {
 if (IS_CI || skipGitChecks) {
   log('⊘ Uncommitted changes check skipped (CI mode or --skip-git-checks)', 'yellow');
 } else {
-  const result = runGit(['diff-index', '--quiet', 'HEAD', '--'], { stdio: 'pipe' });
+  const result = runGit(['diff-index', '--quiet', 'HEAD', '--']);
   const hasUncommittedChanges = !result.ok;
 
   if (hasUncommittedChanges) {
     log('✗ Uncommitted changes detected', 'red');
     console.log('');
 
-    const statusResult = runGit(['status', '--short'], {
-      stdio: 'pipe',
-    });
+    const statusResult = runGit(['status', '--short']);
 
     if (statusResult.ok) {
       console.log(statusResult.stdout);
@@ -218,9 +214,7 @@ if (IS_CI || skipGitChecks) {
 if (IS_CI || skipGitChecks) {
   log('⊘ Untracked files check skipped (CI mode or --skip-git-checks)', 'yellow');
 } else {
-  const untrackedResult = runGit(['ls-files', '--others', '--exclude-standard'], {
-    stdio: 'pipe',
-  });
+  const untrackedResult = runGit(['ls-files', '--others', '--exclude-standard']);
 
   let untracked = '';
   if (untrackedResult.ok) {
@@ -642,9 +636,7 @@ if (releaseReadiness) {
   console.log(`Checking remote tag v${currentVersion}...`);
 
   {
-    const tagResult = runGit(['ls-remote', '--tags', 'origin', `refs/tags/v${currentVersion}`], {
-      stdio: 'pipe',
-    });
+    const tagResult = runGit(['ls-remote', '--tags', 'origin', `refs/tags/v${currentVersion}`]);
 
     if (tagResult.ok && tagResult.stdout.toString().trim().length > 0) {
       log(`✗ v${currentVersion} tag already exists on remote`, 'red');

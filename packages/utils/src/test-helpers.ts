@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import fs from 'node:fs/promises';
 
-import { INHERITED_GIT_ENV } from './git-env.js';
+
 import { mkdirSyncReal, normalizedTmpdir, safePath } from './path-utils.js';
 
 /**
@@ -217,6 +217,33 @@ export function canCreateSymlinks(dir: string): boolean {
 }
 
 /**
+ * The variables git exports into a hook, which a fixture must clear before it
+ * can fabricate its own.
+ *
+ * These are the ones git sets *for* you. Deliberately **not** the operator's own
+ * `GIT_CONFIG_COUNT`/`KEY_n`/`VALUE_n`/`GLOBAL`/`SYSTEM` channel — a test may be
+ * using that on purpose to point a clone at a local path, and clearing it sends
+ * the clone to the network instead.
+ */
+export const INHERITED_GIT_ENV = [
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+  'GIT_CEILING_DIRECTORIES',
+  'GIT_COMMON_DIR',
+  'GIT_CONFIG_PARAMETERS',
+  'GIT_DIR',
+  'GIT_DISCOVERY_ACROSS_FILESYSTEM',
+  'GIT_GRAFT_FILE',
+  'GIT_INDEX_FILE',
+  'GIT_INDEX_VERSION',
+  'GIT_NAMESPACE',
+  'GIT_NOTES_REF',
+  'GIT_OBJECT_DIRECTORY',
+  'GIT_PREFIX',
+  'GIT_SHALLOW_FILE',
+  'GIT_WORK_TREE',
+] as const;
+
+/**
  * Remove every inherited git redirection from `process.env`, and hand back the
  * undo.
  *
@@ -227,9 +254,14 @@ export function canCreateSymlinks(dir: string): boolean {
  * process-global, so a test that leaks `GIT_DIR` silently redirects every later
  * test sharing the worker.
  *
- * The key list is {@link INHERITED_GIT_ENV}, the same one `cleanGitEnv()`
- * strips — so a variable added there is covered here without a second edit, and
- * the two can never disagree about what "the git environment" means.
+ * ⚠️ **The key list is restated here on purpose, not by oversight.** Deriving it
+ * from `@vibe-validate/git`'s `stripGitEnv()` would be tidier, and it is exactly
+ * what this function did for one revision — but this module is the `./testing`
+ * subpath, which `subpath-purity.test.ts` pins as reaching **no third-party
+ * package at all** so it stays importable with zero dependencies installed. One
+ * import cost that property. The drift risk the derivation was avoiding is
+ * handled instead by {@link "../test/test-helpers-git-env.test".default}, which
+ * asserts this list equals what the shipped scrub removes.
  *
  * @returns A function restoring every variable to its prior value, putting back
  *   "was not set" as unset rather than as an empty string

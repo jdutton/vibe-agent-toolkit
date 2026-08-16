@@ -107,8 +107,11 @@ const TEXT_FILE_EXTENSIONS = new Set([
 async function forEachTrackedTextFile(
   handler: (relPath: string, contents: Buffer) => void,
 ): Promise<void> {
+  // `trim: false` — the listing is NUL-delimited, and a path beginning with a
+  // space sorts first, so a trim would rename it out of the population.
   const tracked = runGitOrThrow(['ls-files', '-z'], {
     cwd: REPO_ROOT,
+    trim: false,
   }) as string;
 
   for (const relPath of tracked.split('\0')) {
@@ -541,7 +544,9 @@ async function validateNoContrabandTokens(): Promise<void> {
   }
   console.log(`   contraband scan: ${tokens.length} token(s) from ${tokensPath ?? 'an unnamed source'}`);
 
-  const lsFiles = String(runGitOrThrow(['ls-files', '-z'], { cwd: REPO_ROOT }));
+  // `trim: false` — NUL-delimited, and this population is a confidentiality
+  // gate: a path dropped from it is a file the scan never reads.
+  const lsFiles = String(runGitOrThrow(['ls-files', '-z'], { cwd: REPO_ROOT, trim: false }));
   const tracked = lsFiles
     .split('\0')
     .filter((p: string) => p.length > 0)

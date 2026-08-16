@@ -20,8 +20,8 @@ export interface SafeExecOptions {
   /**
    * The child's complete environment. It **replaces** `process.env` rather than
    * merging with it, so a partial object is a partial environment — build one
-   * by spreading (`{ ...process.env, ... }`), or use {@link cleanGitEnv} when
-   * the child is a `git` targeting a caller-supplied path.
+   * by spreading (`{ ...process.env, ... }`). A `git` child cannot get here at
+   * all — `runGit()` owns that, and this function refuses it.
    */
   env?: NodeJS.ProcessEnv;
   /** Working directory */

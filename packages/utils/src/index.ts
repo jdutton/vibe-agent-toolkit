@@ -82,12 +82,9 @@ export * from './file-crawler.js';
 // Git ignore checking
 export * from './gitignore-checker.js';
 
-// Inherited GIT_* redirection — the scrub every git child needs when it targets
-// a caller-supplied path rather than the ambient repository
-export * from './git-env.js';
-
 // The one way to run git: scrubbed by default, `ambient: true` to opt out.
-// safeExecSync/safeExecResult refuse `git` and point here.
+// safeExecSync/safeExecResult refuse `git` and point here. The scrub itself,
+// and dirty-corrected tree snapshots, come from `@vibe-validate/git`.
 export * from './git-run.js';
 
 // Git URL parsing (parse/detect git URLs, GitHub shorthand, SSH forms)
@@ -102,9 +99,6 @@ export * from './project-utils.js';
 
 // Git tracking cache (for efficient git-ignore checking)
 export * from './git-tracker.js';
-
-// Dirty-corrected git tree snapshots (paths + on-disk blob OIDs in one call)
-export * from './git-tree-snapshot.js';
 
 // Test helpers for isolated test output directories
 export * from './test-helpers.js';

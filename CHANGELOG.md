@@ -11,14 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`runGit()` and `runGitOrThrow()` in `@vibe-agent-toolkit/utils`** — run git against a path you
   were handed, without a git hook's inherited `GIT_DIR` silently redirecting it at another
-  repository. Pass `{ ambient: true }` when you do mean the repository the process is standing in.
+  repository. Pass `{ ambient: true }` when you do mean the repository the process is standing in,
+  and `{ trim: false }` for a NUL-delimited (`-z`) listing or for file content.
+
+### Changed
+
+- **`@vibe-agent-toolkit/utils` now depends on `@vibe-validate/git` (0.19.8).** It replaces this
+  package's own copy of the git-environment scrub and tree-snapshot machinery. Adds
+  `@vibe-validate/utils` and `yaml` to the installed tree.
 
 ### Breaking
 
 - **(library) `safeExecSync()` and `safeExecResult()` now throw when asked to run `git`.** Migrate:
   `safeExecSync('git', args, opts)` → `runGitOrThrow(args, opts)`; `safeExecResult('git', args,
   opts)` → `runGit(args, opts)`, checking `.ok` instead of `.success`. Drop `encoding` — output is
-  always decoded and trimmed. CLI users are unaffected.
+  always decoded, and trimmed unless you pass `{ trim: false }`. CLI users are unaffected.
 
 ### Fixed
 
@@ -70,26 +77,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resolution stack trace.
 
 ### Added
-
-- **`gitTreeSnapshot()` in `@vibe-agent-toolkit/utils`** — returns every path git can see under a
-  root together with a blob OID naming the bytes **actually on disk**, plus a deterministic
-  whole-tree OID, in three subprocesses. Unlike `git ls-files -s` against the real index, a
-  tracked-but-dirty file reports its on-disk content rather than its committed content; the real
-  index and working tree are never written (`GIT_INDEX_FILE` against a throwaway copy). Entries
-  carry git's file mode, so a caller can exclude symlinks (`120000`), whose blob holds the link
-  *target string* rather than the target's contents.
-
-  Safe to call from **inside a git hook**, which matters because `vat resources validate` runs from
-  `vibe-validate`'s `pre-commit`: git exports `GIT_DIR`, `GIT_INDEX_FILE`, `GIT_PREFIX` and friends
-  into hooks, and a child inheriting them silently snapshots the *outer* commit's repository rather
-  than the path it was given — worse under `git worktree`, where the two are different checkouts by
-  construction. Every git invocation here strips that inherited environment first.
-
-  The listing is captured through a 256 MiB buffer rather than `spawnSync`'s 1 MiB default —
-  measured at ~104 bytes per path, that default is exhausted at a few thousand files, and an
-  8,496-file tree already consumes 84% of it. Overrunning it returns `null`, which is spelled
-  exactly like "not a git repository", so the degradation would have been invisible and would have
-  landed on precisely the largest trees. Library-only; no VAT command uses it yet.
 
 - **`vat resources scan`/`validate`, `vat rag index` and the pipeline oracles can now take their
   file population from the projection instead of `git ls-files`, via

@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitest/config';
 
-import { platformTestTimeout, unitPool, unitPoolOptions } from './vitest.shared.js';
+import { inlineDeps, platformTestTimeout, unitPool, unitPoolOptions } from './vitest.shared.js';
 
 export default defineConfig({
   test: {
@@ -19,6 +19,8 @@ export default defineConfig({
       '**/*.system.test.ts', // System tests run separately (e2e, longer running)
     ],
     testTimeout: platformTestTimeout,
+    // Shared with every package's own config — see `inlineDeps`.
+    server: { deps: { inline: inlineDeps } },
     pool: unitPool,
     poolOptions: unitPoolOptions,
     coverage: {
