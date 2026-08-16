@@ -31,7 +31,7 @@ import {
 } from '../src/projection/contributors/git-extent.js';
 import { ProjectionBuilder } from '../src/projection/projection.js';
 
-import { expectContributionRowsValid } from './test-helpers.js';
+import { buildExtentContribution, expectContributionRowsValid } from './test-helpers.js';
 
 /** Committed. The plain tracked member. */
 const TRACKED_FILE = 'docs/tracked.md';
@@ -94,15 +94,10 @@ beforeAll(async () => {
   writeFileSync(safePath.join(root, IGNORED_FILE), 'secret\n');
   writeFileSync(safePath.join(root, UNTRACKED_FILE), '# untracked\n');
 
-  const tracker = new GitTracker(root);
-  await tracker.initialize({ includeUntracked: true });
-  const builder = new ProjectionBuilder(root, tracker);
-  rootId = builder.identities.rootId;
+  ({ contribution, rootId } = await buildExtentContribution(root, new GitExtentContributor()));
   // Spelled through the shared builder, with the literal kind — asserting
   // against `GIT_EXTENT_KIND` would make the id a tautology of itself.
   extentId = extentContextId('git', rootId);
-
-  contribution = await new GitExtentContributor().contribute(builder.base(), null);
 });
 
 afterAll(() => {

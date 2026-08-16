@@ -8,14 +8,15 @@ import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import { normalizedTmpdir, resetProjectRootCaches, safePath } from '@vibe-agent-toolkit/utils';
+import { GitTracker, normalizedTmpdir, resetProjectRootCaches, safePath } from '@vibe-agent-toolkit/utils';
 import { expect, type Assertion } from 'vitest';
 
 import { ExternalLinkValidator } from '../src/external-link-validator.js';
 import { parseMarkdown } from '../src/link-parser.js';
 import type { FragmentIndex, ValidateLinkOptions as LinkValidatorOptions } from '../src/link-validator.js';
 import { validateLink } from '../src/link-validator.js';
-import type { ExtentContribution } from '../src/projection/contributor.js';
+import type { ExtentContribution, ExtentContributor } from '../src/projection/contributor.js';
+import { ProjectionBuilder } from '../src/projection/projection.js';
 import { ResourceRegistry } from '../src/resource-registry.js';
 import {
   ResourceExtentRowSchema,
@@ -635,4 +636,31 @@ export function expectContributionRowsValid(contribution: ExtentContribution): v
   for (const row of contribution.memberships) {
     expect(() => ResourceExtentRowSchema.parse(row)).not.toThrow();
   }
+}
+
+/**
+ * Build one extent contribution against a fixture repository.
+ *
+ * The tracker → builder → `contribute` sequence is identical for every extent
+ * contributor, and repeating it per suite is a jscpd clone. Generic over the
+ * contributor so the git and filesystem lanes share one implementation rather
+ * than two near-copies. `rootId` comes back too, so a caller can derive extent
+ * context ids without constructing a second builder.
+ *
+ * @param root - Fixture repository root
+ * @param contributor - The extent contributor to run
+ * @returns The rows it emitted, plus the builder's root identity
+ */
+export async function buildExtentContribution(
+  root: string,
+  contributor: ExtentContributor
+): Promise<{ contribution: ExtentContribution; rootId: string }> {
+  const tracker = new GitTracker(root);
+  await tracker.initialize({ includeUntracked: true });
+  const builder = new ProjectionBuilder(root, tracker);
+
+  return {
+    contribution: await contributor.contribute(builder.base(), null),
+    rootId: builder.identities.rootId,
+  };
 }
