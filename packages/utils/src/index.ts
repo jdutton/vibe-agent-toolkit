@@ -95,6 +95,9 @@ export * from './project-utils.js';
 // Git tracking cache (for efficient git-ignore checking)
 export * from './git-tracker.js';
 
+// Dirty-corrected git tree snapshots (paths + on-disk blob OIDs in one call)
+export * from './git-tree-snapshot.js';
+
 // Test helpers for isolated test output directories
 export * from './test-helpers.js';
 

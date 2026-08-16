@@ -41,6 +41,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`gitTreeSnapshot()` in `@vibe-agent-toolkit/utils`** — returns every path git can see under a
+  root together with a blob OID naming the bytes **actually on disk**, plus a deterministic
+  whole-tree OID, in three subprocesses. Unlike `git ls-files -s` against the real index, a
+  tracked-but-dirty file reports its on-disk content rather than its committed content; the real
+  index and working tree are never written (`GIT_INDEX_FILE` against a throwaway copy). Entries
+  carry git's file mode, so a caller can exclude symlinks (`120000`), whose blob holds the link
+  *target string* rather than the target's contents.
+
+  Safe to call from **inside a git hook**, which matters because `vat resources validate` runs from
+  `vibe-validate`'s `pre-commit`: git exports `GIT_DIR`, `GIT_INDEX_FILE`, `GIT_PREFIX` and friends
+  into hooks, and a child inheriting them silently snapshots the *outer* commit's repository rather
+  than the path it was given — worse under `git worktree`, where the two are different checkouts by
+  construction. Every git invocation here strips that inherited environment first.
+  Library-only; no VAT command uses it yet.
+
 - **`vat resources scan`/`validate`, `vat rag index` and the pipeline oracles can now take their
   file population from the projection instead of `git ls-files`, via
   **`VAT_RESOURCES_CRAWL=projection`**. Opt-in; the default is unchanged.
