@@ -141,6 +141,16 @@ export async function routeInventory(
 		// roots and was measured 1.5x SLOWER than the N+1 crawl. The tracker source is
 		// the opposite case — asked per skill about its own root, `undefined` where it
 		// cannot serve — so it costs nothing where it does not apply.
+		//
+		// ⚠️ NO shared POPULATION either, and that is the same decision rather than an
+		// oversight: a population is rooted, and `membersOf` refuses any root that is not
+		// the one the extractor derives per skill. Rooted at the marketplace it would
+		// match no skill and answer nothing; rooted per plugin it is not shared. So this
+		// subject shape keeps the walk, and **the flip is plugin-directory-only** — as are
+		// the `--user` and single-`SKILL.md` lanes above, for the same rootedness reason.
+		// Measured 2026-08-15 on three real marketplace roots (35/51/29 skills): both arms
+		// filed only the walker's `crawl` stratum, no `base`/`closure`, so their identical
+		// output is the two arms agreeing about ONE lane, not evidence about the flip.
 		return extractClaudeMarketplaceInventory(absolute, {
 			gitTrackerSource: gitTrackerForProjectRoot,
 		});

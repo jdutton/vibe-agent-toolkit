@@ -24,10 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ⚠️ Projects declaring `excludeReferencesFromBundle` will see new **info** lines from `vat build`
   and `vat verify`. Info is non-blocking and packaged output is unchanged.
 
-- **`vat inventory` now answers membership from a projection instead of the link walk.** This is a
-  **behaviour change with identical output**: on a real 18-skill adopter plugin the two lanes produce
-  **byte-identical** YAML, and the incumbent walk remains available via
-  **`VAT_INVENTORY_CRAWL=walker`**.
+- **`vat inventory` now answers membership from a projection instead of the link walk, for a plugin
+  directory subject.** This is a **behaviour change with identical output**: across six real adopter
+  plugins (51 skills, 152 linked paths) the two lanes produce **byte-identical** YAML, and the
+  incumbent walk remains available via **`VAT_INVENTORY_CRAWL=walker`**.
+
+  ⚠️ **The other three subject shapes still walk, unchanged:** `--user`, a marketplace root, and a
+  path to a single `SKILL.md`. A marketplace fans out to plugins that each sit in their own
+  directory, so one population rooted at the marketplace answers a different question for every
+  skill under it — the same reason that lane already declines a shared link registry.
 
   ⚠️ **It is slower, and that is a deliberate, accepted trade — roughly 5.3× on that adopter** (522 ms
   of link walk against 2,751 ms of projection, warm, clean machine). The cost is not the membership
@@ -38,7 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the closure see references emitted from a skill's bundled scripts — which the markdown-only link
   walk is structurally blind to.
 
-  Scoped to the plugin lane of `vat inventory` only. The two packaging call sites additionally
+  Scoped to `vat inventory` only — no packaging call site moved. The two packaging call sites additionally
   consume `excludedReferences`, `deferredAssets` and `maxBundledDepth`; the closure selects the same
   files but emits **no reason**, so pointing either at it would silently delete adopter-visible
   validation findings. Membership parity is not flip-readiness.
