@@ -8,6 +8,7 @@ import {
   ResourceIdentityMap,
   canonicalPathFor,
   mintResourceId,
+  resolveRootPath,
   rootIdFor,
 } from '../src/projection/identity.js';
 
@@ -75,20 +76,36 @@ describe('mintResourceId', () => {
 describe('canonicalPathFor', () => {
   it('resolves a symlink to its target, so both share one identity', () => {
     const { root, target, alias } = makeAliasedDoc();
+    const context = { realRoot: resolveRootPath(root) };
 
-    expect(canonicalPathFor(alias, { root })).toBe(canonicalPathFor(target, { root }));
+    expect(canonicalPathFor(alias, context)).toBe(canonicalPathFor(target, context));
   });
 
   it('returns a root-relative forward-slashed path', () => {
     const root = makeRoot();
     writeFileSync(safePath.join(root, DOC_RELATIVE), DOC_CONTENT);
 
-    expect(canonicalPathFor(safePath.join(root, DOC_RELATIVE), { root })).toBe(DOC_RELATIVE);
+    expect(canonicalPathFor(safePath.join(root, DOC_RELATIVE), { realRoot: resolveRootPath(root) }))
+      .toBe(DOC_RELATIVE);
   });
 
   it('falls back to the requested path when the target cannot be resolved', () => {
     const root = makeRoot();
-    expect(canonicalPathFor(safePath.join(root, 'missing.md'), { root })).toBe('missing.md');
+    expect(canonicalPathFor(safePath.join(root, 'missing.md'), { realRoot: resolveRootPath(root) }))
+      .toBe('missing.md');
+  });
+
+  it('mints the same path from a root spelled unresolved, once reduced', () => {
+    // The guard on the `realRoot` contract: `makeRoot` returns a `mkdtemp` path
+    // under a symlinked `/var` on macOS, so the reduction is load-bearing rather
+    // than cosmetic. Passing the raw root here would relativize against the
+    // wrong base and yield an absolute path instead of `docs/readme.md` — which
+    // is exactly the silent failure the field's name is meant to prevent.
+    const root = makeRoot();
+    writeFileSync(safePath.join(root, DOC_RELATIVE), DOC_CONTENT);
+    const target = safePath.join(root, DOC_RELATIVE);
+
+    expect(canonicalPathFor(target, { realRoot: resolveRootPath(`${root}/`) })).toBe(DOC_RELATIVE);
   });
 
   it('canonicalizes an absent file through a symlinked PARENT, so its identity will not move when it appears', () => {
@@ -100,7 +117,7 @@ describe('canonicalPathFor', () => {
     const link = safePath.join(root, 'link');
     symlinkSync(safePath.join(root, 'docs'), link);
 
-    expect(canonicalPathFor(safePath.join(link, 'artifact.md'), { root }))
+    expect(canonicalPathFor(safePath.join(link, 'artifact.md'), { realRoot: resolveRootPath(root) }))
       .toBe('docs/artifact.md');
   });
 });

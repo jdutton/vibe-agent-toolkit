@@ -26,14 +26,53 @@ const ID_HEX_LENGTH = 32;
  * @returns Opaque root id, `root-` prefixed
  */
 export function rootIdFor(absoluteRootPath: string): string {
-  const resolved = realPathOrSelf(safePath.resolve(absoluteRootPath));
-  return `root-${sha256Hex(resolved).slice(0, ID_HEX_LENGTH)}`;
+  return rootIdForReal(resolveRootPath(absoluteRootPath));
+}
+
+/**
+ * A corpus root reduced to the one spelling everything else is derived from.
+ *
+ * Exported because {@link CanonicalPathContext.realRoot} *requires* this
+ * spelling and a caller cannot produce it otherwise — `realpathSync` alone is
+ * not equivalent, since it throws for a root that does not exist yet while this
+ * falls back to the nearest resolvable ancestor.
+ *
+ * **This is a `realpath` syscall. Call it once per root, not once per path** —
+ * re-deriving it inside a per-path helper was measured at ~10k wasted
+ * `realpathSync.native` calls on one adopter tree, roughly one per enumerated
+ * path, all of them recomputing a value fixed for the run.
+ *
+ * @param absoluteRootPath - Absolute path the corpus is crawled from
+ * @returns Forward-slashed real root, with any unresolvable tail appended
+ */
+export function resolveRootPath(absoluteRootPath: string): string {
+  return realPathOrSelf(safePath.resolve(absoluteRootPath));
+}
+
+/**
+ * Root id from a root already reduced by {@link resolveRootPath}.
+ *
+ * @param realRoot - Output of {@link resolveRootPath}
+ * @returns Opaque root id, `root-` prefixed
+ */
+function rootIdForReal(realRoot: string): string {
+  return `root-${sha256Hex(realRoot).slice(0, ID_HEX_LENGTH)}`;
 }
 
 /** Everything {@link canonicalPathFor} needs to answer the casing question. */
 export interface CanonicalPathContext {
-  /** Absolute corpus root. */
-  root: string;
+  /**
+   * Absolute corpus root, **already reduced by {@link resolveRootPath}**.
+   *
+   * Named `realRoot` rather than `root` so the requirement is unmissable at
+   * every call site: this function runs once per path, and a field that merely
+   * *accepted* an unresolved root would have to re-resolve it per call — which
+   * is exactly the N+1 this spelling exists to make impossible. Passing an
+   * unresolved path here does not error, it silently mints identities relative
+   * to the wrong base wherever the root is a symlink (`/var` → `/private/var`
+   * on macOS makes that the common case, not the corner one).
+   */
+  realRoot: string;
   /**
    * Supplies git-index casing where the path is tracked. Absent outside a repo.
    *
@@ -72,7 +111,7 @@ export function canonicalPathFor(absolutePath: string, context: CanonicalPathCon
   if (tracked !== null) {
     return toForwardSlash(tracked);
   }
-  return relativeTo(context.root, realPathOrSelf(resolved));
+  return relativeTo(context.realRoot, realPathOrSelf(resolved));
 }
 
 /**
@@ -116,9 +155,11 @@ export class ResourceIdentityMap {
    * @param gitTracker - Optional git oracle supplying index casing
    */
   constructor(root: string, gitTracker?: GitTracker | undefined) {
-    const resolvedRoot = safePath.resolve(root);
-    this.#rootId = rootIdFor(resolvedRoot);
-    this.#context = { root: resolvedRoot, ...(gitTracker !== undefined && { gitTracker }) };
+    // ONE `realpath` for the whole map. Both the id and every canonical path
+    // are derived from this single reduction rather than each redoing it.
+    const realRoot = resolveRootPath(root);
+    this.#rootId = rootIdForReal(realRoot);
+    this.#context = { realRoot, ...(gitTracker !== undefined && { gitTracker }) };
   }
 
   /** The root id every identity in this map is scoped to. */
@@ -197,9 +238,16 @@ function tryRealPath(absolutePath: string): string | null {
   }
 }
 
-/** Root-relative, forward-slashed. Falls back to the absolute path when outside the root. */
-function relativeTo(root: string, absolutePath: string): string {
-  const rel = safePath.relative(realPathOrSelf(safePath.resolve(root)), absolutePath);
+/**
+ * Root-relative, forward-slashed. Falls back to the absolute path when outside
+ * the root.
+ *
+ * Takes the ALREADY-resolved root and does no `realpath` of its own — see
+ * {@link CanonicalPathContext.realRoot}. This function runs once per enumerated
+ * path, so a resolve here is a syscall per path.
+ */
+function relativeTo(realRoot: string, absolutePath: string): string {
+  const rel = safePath.relative(realRoot, absolutePath);
   if (rel === '' || rel.startsWith('..')) {
     return toForwardSlash(absolutePath);
   }
