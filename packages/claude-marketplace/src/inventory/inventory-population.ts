@@ -51,7 +51,7 @@ import {
   type JsonValue,
   type Projection,
 } from '@vibe-agent-toolkit/resources';
-import { safePath, toForwardSlash, type GitTracker } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, safePath, toForwardSlash, type GitTracker } from '@vibe-agent-toolkit/utils';
 
 import {
   InventorySkillExtentContributor,
@@ -243,7 +243,7 @@ function indexPopulation(
         // of this, adding the skill's own path to the WALKER's set.
         .filter((path) => path !== relative)
         .map((path) => safePath.resolve(root, path))
-        .sort(byCodeUnit),
+        .sort(compareCodeUnits),
     );
   }
 
@@ -253,15 +253,3 @@ function indexPopulation(
   };
 }
 
-/**
- * Order by UTF-16 code unit — never `localeCompare`, whose collation depends on
- * the machine's locale and would make a membership list machine-dependent.
- *
- * @param left - First path
- * @param right - Second path
- * @returns Standard comparator result
- */
-function byCodeUnit(left: string, right: string): number {
-  if (left === right) return 0;
-  return left < right ? -1 : 1;
-}

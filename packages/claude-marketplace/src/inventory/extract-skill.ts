@@ -8,6 +8,7 @@ import {
 } from '@vibe-agent-toolkit/agent-skills';
 import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
 import {
+	compareCodeUnits,
 	CRAWL_REGISTRY_ENUMERATE_ID,
 	crawlDirectory,
 	crawlTimingStart,
@@ -403,4 +404,24 @@ function collectLinkedFiles(
 	for (const a of result.bundledAssets) {
 		linked.push(a);
 	}
+	// Sorted, and with the SAME comparator the projection lane uses
+	// (`inventory-population.ts`) rather than a second one that happens to agree
+	// today. Two reasons, and the first is the load-bearing one:
+	//
+	// 1. **It makes the crawler swap invisible in the output.** The projection
+	//    emits members sorted; this lane emitted them in walk-discovery order —
+	//    resources first, then assets, each in traversal order. Same SET, different
+	//    YAML, which meant flipping the crawler would have churned every adopter's
+	//    `vat inventory` output and buried any REAL divergence inside a diff that
+	//    was mostly reordering. Normalising here first means the flip has to be a
+	//    byte-for-byte no-op or it is wrong, which is a far stronger gate than
+	//    comparing the two as unordered sets.
+	// 2. Walk-discovery order is not a fact anyone can rely on: it is a function of
+	//    link order within each document and of the resource/asset split, so
+	//    inserting one link near the top of a SKILL.md reshuffles the tail.
+	//
+	// `compareCodeUnits` and never `localeCompare` — that function's own docstring
+	// has the argument, and it exists because three private copies of this rule had
+	// already grown independently.
+	linked.sort(compareCodeUnits);
 }

@@ -247,9 +247,16 @@ describe('extractClaudeSkillInventory tracker-state divergence', () => {
 	it('keeps the post-snapshot link target when no tracker answers', async () => {
 		const { linked } = await extractWith(repoSkillMd, repoRegistry, NO_GIT_TRACKER);
 
-		// Exact and ordered — link order in SKILL.md. A set comparison here would let a
-		// later change reorder the walk without anyone noticing which file it dropped.
-		expect(linked).toEqual([referenceMd, lateNoteMd]);
+		// Still exact and ordered, and for this assertion's original reason: a set
+		// comparison would let a later change reorder the walk without anyone noticing
+		// which file it DROPPED. Only the contract being pinned has changed — this used
+		// to be link order in SKILL.md, and is now `compareCodeUnits` order, the same
+		// comparator the projection lane sorts with. That is deliberate: both lanes
+		// emitting one order is what lets the crawler flip be verified as a
+		// byte-for-byte no-op instead of an unordered set comparison.
+		// `late-note.md` therefore precedes `reference.md` ('l' < 'r'), which is the
+		// REVERSE of the walk order this line used to assert.
+		expect(linked).toEqual([lateNoteMd, referenceMd]);
 	});
 
 	it('drops the post-snapshot link target when a tracker answers', async () => {
