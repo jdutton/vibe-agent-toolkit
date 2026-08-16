@@ -9,8 +9,31 @@ import { dirname, parse } from 'node:path';
 
 import which from 'which';
 
+import { cleanGitEnv } from './git-env.js';
 import { lookupGitRoot, rememberGitRoot } from './git-root-cache.js';
 import { safePath } from './path-utils.js';
+
+/**
+ * Options every git child here shares.
+ *
+ * The `env` is the load-bearing part: each of these commands answers about a
+ * **caller-supplied** `cwd`, and an inherited `GIT_DIR` overrides `cwd`
+ * outright. See {@link cleanGitEnv} — measured, a worktree pre-commit hook makes
+ * `gitLsFiles` describe the repository being committed instead of the one it was
+ * handed. Built per call rather than once at module load so a test that
+ * manipulates `process.env` sees the current environment.
+ *
+ * @returns Spawn options for one git child in `cwd`
+ */
+function gitSpawnOptions(cwd: string) {
+  return {
+    cwd,
+    encoding: 'utf-8',
+    stdio: 'pipe',
+    shell: false, // No shell interpreter for security
+    env: cleanGitEnv(),
+  } as const;
+}
 
 
 /**
@@ -94,12 +117,7 @@ export function gitLsFiles(options: {
       args.push('--', ...options.patterns);
     }
 
-    const result = spawnSync(gitPath, args, {
-      cwd: options.cwd,
-      encoding: 'utf-8',
-      stdio: 'pipe',
-      shell: false, // No shell interpreter for security
-    });
+    const result = spawnSync(gitPath, args, gitSpawnOptions(options.cwd));
 
     // Exit code 128 typically means not a git repository
     if (result.status === 128 || result.error) {
@@ -163,12 +181,7 @@ export function isGitIgnored(filePath: string, cwd: string = process.cwd()): boo
     const checkIgnoreArgs = ['check-ignore', '-q'] as const;
 
     // git check-ignore returns exit code 0 if file is ignored, 1 if not
-    const result = spawnSync(gitPath, [...checkIgnoreArgs, filePath], {
-      cwd,
-      encoding: 'utf-8',
-      stdio: 'pipe',
-      shell: false, // No shell interpreter for security
-    });
+    const result = spawnSync(gitPath, [...checkIgnoreArgs, filePath], gitSpawnOptions(cwd));
 
     if (result.status === 0) {
       return true;
@@ -184,12 +197,7 @@ export function isGitIgnored(filePath: string, cwd: string = process.cwd()): boo
       let current = dirname(resolvedFile);
 
       while (current !== resolvedCwd && !current.endsWith(parse(current).root)) {
-        const ancestorResult = spawnSync(gitPath, [...checkIgnoreArgs, current], {
-          cwd,
-          encoding: 'utf-8',
-          stdio: 'pipe',
-          shell: false,
-        });
+        const ancestorResult = spawnSync(gitPath, [...checkIgnoreArgs, current], gitSpawnOptions(cwd));
         if (ancestorResult.status === 0) {
           return true;
         }

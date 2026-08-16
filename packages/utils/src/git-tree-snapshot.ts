@@ -45,7 +45,7 @@
  * `vat resources validate` is invoked from `vibe-validate`'s `pre-commit`, which
  * is itself a git hook — so this code can execute two levels inside `git commit`.
  * Two consequences, and the first is a correctness bug that the environment
- * handling below exists to prevent (see {@link INHERITED_GIT_ENV}); the second is
+ * handling below exists to prevent (see {@link cleanGitEnv}); the second is
  * not yet addressed:
  *
  * 1. **Inherited git environment retargets the child.** Handled here.
@@ -72,6 +72,7 @@ import { copyFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
 
 import which from 'which';
 
+import { cleanGitEnv } from './git-env.js';
 import { normalizedTmpdir, safePath } from './path-utils.js';
 
 /** Git's mode for a symbolic link. Its blob holds the target string, not file bytes. */
@@ -118,54 +119,27 @@ export interface GitTreeSnapshot {
 const LS_FILES_STAGED = /^(\d{6}) ([0-9a-f]{40,64}) (\d)\t(.*)$/s;
 
 /**
- * Environment variables git exports into a hook, every one of which redirects a
- * child `git` away from the repository this module was asked about.
+ * Output cap for the git children — roughly a million paths.
  *
- * **This matters because `vat resources validate` genuinely runs inside a
- * `pre-commit` hook.** When git invokes a hook it exports `GIT_DIR` (often as
- * the *relative* string `.git`), `GIT_INDEX_FILE` pointing at the very index
- * being committed, `GIT_PREFIX`, and friends. A child that inherits those does
- * not snapshot the directory it was handed — it snapshots whatever the outer
- * commit was operating on, and a relative `GIT_DIR` additionally resolves
- * against the child's own `cwd`, so the answer changes with where the caller
- * stood. Under `git worktree` the two disagree by construction: `GIT_DIR` names
- * the outer worktree's `.git/worktrees/<name>` while the path under measurement
- * is a different checkout entirely.
+ * `spawnSync`'s **default is 1 MiB**, and the listing is the one call here whose
+ * size scales with the tree: measured at ~104 bytes per path on an ordinary
+ * monorepo and ~270 with deep paths, so the default is exhausted at a few
+ * thousand files. That is not a large repository. Measured 2026-08-16: an
+ * 8,496-file adopter tree emits 886 KB — **84% of the default cap** — and a
+ * 4,200-file fixture with long paths emits 1.07 MiB, at which point this
+ * function returned `null` for every call.
  *
- * The failure is silent — git answers confidently about the wrong repository —
- * which is why this is a deletion list rather than a best-effort override.
- * `GIT_CEILING_DIRECTORIES` is included even though it is not hook-set: it caps
- * upward discovery, and a caller who set it for their own purposes would
- * otherwise truncate ours.
+ * `null` is the safe direction (a caller falls back to its own enumeration) but
+ * not a distinguishable one: it is spelled exactly like "not a git repository",
+ * so the degradation is invisible and lands on precisely the largest trees.
+ *
+ * ⚠️ Not pinned by a test here, deliberately: reproducing it needs a fixture of
+ * several thousand files, which costs seconds on macOS and far more on Windows
+ * CI. `@vibe-validate/git` covers the same fault in milliseconds by shrinking
+ * the cap instead of growing the tree, and this module is scheduled to be
+ * replaced by it.
  */
-const INHERITED_GIT_ENV = [
-  'GIT_DIR',
-  'GIT_WORK_TREE',
-  'GIT_INDEX_FILE',
-  'GIT_PREFIX',
-  'GIT_COMMON_DIR',
-  'GIT_NAMESPACE',
-  'GIT_OBJECT_DIRECTORY',
-  'GIT_ALTERNATE_OBJECT_DIRECTORIES',
-  'GIT_CEILING_DIRECTORIES',
-  'GIT_INDEX_VERSION',
-] as const;
-
-/**
- * The ambient environment with every inherited git redirection removed.
- *
- * @param overrides - Variables to set after the strip
- * @returns A fresh environment for one git child
- */
-function cleanGitEnv(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  for (const name of INHERITED_GIT_ENV) {
-    // Deleted, not set to '': git treats an empty GIT_DIR as a real (empty)
-    // value and fails to discover a repository at all.
-    delete env[name];
-  }
-  return { ...env, ...overrides };
-}
+const LISTING_MAX_BUFFER = 256 * 1024 * 1024;
 
 /**
  * Run one git subprocess against a throwaway index.
@@ -190,6 +164,7 @@ function runGit(
     // Strip first, THEN set: an inherited GIT_INDEX_FILE from an outer hook
     // would otherwise be the index we are trying not to touch.
     env: cleanGitEnv({ GIT_INDEX_FILE: indexFile }),
+    maxBuffer: LISTING_MAX_BUFFER,
   });
   if (result.error || result.status !== 0) {
     return null;

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`gitLsFiles()` and `isGitIgnored()` could answer about the wrong repository when VAT runs
+  inside a git hook.** `vat resources validate` is invoked from `vibe-validate`'s `pre-commit`, so
+  these run inside `git commit` routinely — and git exports its own `GIT_DIR`, `GIT_INDEX_FILE`
+  and `GIT_PREFIX` into every hook, which override the `cwd` a caller passed. Measured against a
+  real hook: from a **worktree's** pre-commit (git exports absolute paths into
+  `<main>/.git/worktrees/<name>` there, and most VAT work happens in worktrees), asking
+  `gitLsFiles` about an unrelated project returned **the files of the repository being
+  committed** — a well-formed list of the wrong tree, which nothing downstream can detect. Both
+  functions now strip the inherited git environment before spawning, as `gitTreeSnapshot()`
+  already did. The shared list also covers `GIT_CONFIG_PARAMETERS`, through which the outer
+  commit's `-c` flags reach `core.excludesFile` and change which paths `--exclude-standard`
+  reports.
+
+  A caller outside a hook is unaffected: with none of those variables set, the answers were
+  already correct and are unchanged.
+
 ### Changed
 
 - **Scanning a tree with large ignored directories does one filesystem probe per ignored path
@@ -54,7 +72,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   into hooks, and a child inheriting them silently snapshots the *outer* commit's repository rather
   than the path it was given — worse under `git worktree`, where the two are different checkouts by
   construction. Every git invocation here strips that inherited environment first.
-  Library-only; no VAT command uses it yet.
+
+  The listing is captured through a 256 MiB buffer rather than `spawnSync`'s 1 MiB default —
+  measured at ~104 bytes per path, that default is exhausted at a few thousand files, and an
+  8,496-file tree already consumes 84% of it. Overrunning it returns `null`, which is spelled
+  exactly like "not a git repository", so the degradation would have been invisible and would have
+  landed on precisely the largest trees. Library-only; no VAT command uses it yet.
 
 - **`vat resources scan`/`validate`, `vat rag index` and the pipeline oracles can now take their
   file population from the projection instead of `git ls-files`, via
