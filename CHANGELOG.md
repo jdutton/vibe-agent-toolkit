@@ -42,6 +42,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an extent for; anything else — including a source that throws — falls back to the walk rather than
   reporting an empty membership as an answer.
 
+  `vat-lab` gained `--command inventory` so the two lanes can be measured against one subject. It is
+  **not** in the default command set, so a bare `vat-lab crawl run` measures exactly what it did
+  before. First reading, 13-skill plugin, warm, clean machine: the closure traversal is **2.9%** of
+  its own crawl, against ~2% for the incumbent's link walk — both lanes spend essentially all of
+  their time building the substrate rather than traversing it.
+
 - **The projection's closure primitive gained `CLOSURE_REFERENCE_OUTSIDE_ROOT`**, distinguishing a
   reference that escapes the extent root from one that simply did not resolve. Both used to report
   `CLOSURE_REFERENCE_UNRESOLVED`, which conflated "outside the project" with "no such file".

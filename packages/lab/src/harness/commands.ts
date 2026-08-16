@@ -109,6 +109,19 @@ export const MEASURABLE_COMMANDS = Object.freeze({
     args: Object.freeze(['audit', '{subject}']),
     // Documented as "0 - Always (even when validation errors are surfaced)".
   }),
+  inventory: Object.freeze({
+    name: 'inventory',
+    args: Object.freeze(['inventory', '{subject}']),
+    // Structural extraction: reports what it found and exits 0 whatever that is.
+    //
+    // Here because it is the ONLY verb whose link walk is membership-only, which
+    // makes it the one place both crawlers can be run over the same subject and
+    // compared. With `VAT_INVENTORY_CRAWL=projection` in the environment its
+    // membership comes from `populate()` instead of `walkLinkGraph`, so a `crawl`
+    // dump taken with and without that variable is the first side-by-side reading
+    // the two lanes have ever had. Not in the defaults — a bare run's command set
+    // is unchanged; a caller has to ask for this one.
+  }),
   validate: Object.freeze({
     name: 'validate',
     // No subject argument: `vat validate` REJECTS a positional path (exit 2) and
