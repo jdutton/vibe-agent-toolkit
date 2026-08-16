@@ -47,6 +47,27 @@
  * gitignored, so nothing defers and behaviour is unchanged. That is deliberate.
  * Deferring in a non-git tree would leave the projection with almost no content
  * at all — a capability loss dressed up as a saving.
+ *
+ * ## ⚠️ This extent's COST is not settled here — see the git lane before optimising
+ *
+ * Everything above argues why this extent must ENUMERATE what it enumerates.
+ * That is a claim about the population, and it stands. It is **not** a claim
+ * that the population must be obtained by walking the filesystem, and reading it
+ * as one has already cost this project a wrong conclusion ("this half is
+ * structural, not scopable") reached by reasoning from this comment alone.
+ *
+ * `docs/architecture/resource-scanning-and-caching.md` §3.1 is the authority on
+ * cost. For the TRACKED portion git already holds both the path list and a
+ * content hash, so `@vibe-validate/git`'s `getGitTreeHash()` + `git ls-files -s`
+ * against the temp index yields paths *and* content keys in ~140 ms on an
+ * 8,496-path adopter tree, against 1,537 ms warm here — dirty and untracked
+ * files included and correctly hashed. What git cannot supply is the ignored
+ * remainder, which is exactly the population this extent exists for; §6 tracks
+ * sourcing that via `ls-files --others --ignored --directory` (a 369-entry prune
+ * list, 60 ms) rather than a full walk.
+ *
+ * **Narrowing and re-sourcing are different moves.** This extent cannot be
+ * narrowed — dropping non-markdown loses real members. It can be re-sourced.
  */
 
 import { crawlDirectory, NEVER_CRAWL_GLOBS } from '@vibe-agent-toolkit/utils';

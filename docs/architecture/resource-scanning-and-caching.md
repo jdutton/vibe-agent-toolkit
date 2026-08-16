@@ -21,7 +21,7 @@ built from those bytes, the schema it's stored as, and how that result is cached
 | git-tracked, clean | yes | yes — always |
 | git-tracked, dirty (edited, uncommitted) | yes | yes — always |
 | git-untracked, not gitignored | yes | **depends on the caller** — see below |
-| git-ignored | yes | no, by design (never scanned; see §3.1) |
+| git-ignored | yes | **split, and the split is deliberate** — the scanning lanes never scan them (§3.1); the projection's `filesystem` extent always does |
 | non-git entirely (SharePoint, OneDrive, iCloud, `~/.claude/*`, ...) | no | yes, via filesystem crawl — no git shortcut available |
 
 **The "depends on the caller" row is a real, load-bearing inconsistency, recorded here as fact rather
@@ -38,6 +38,14 @@ document does not make — it only names the split precisely so nobody assumes u
 
 If `gitFindRoot()` finds no repository, or `gitLsFiles` returns `null`, `crawlDirectorySync` falls
 through to a manual `fs.readdirSync` walk (`file-crawler.ts:239-417`) — the non-git lane, §3.2.
+
+**The gitignored row is why the git lane cannot simply replace the projection's `filesystem`
+extent.** That extent exists precisely to model "Claude sees gitignored build output that the git
+extent cannot" (zones §2, and `filesystem-extent.ts`'s own header), and it is the only contributor
+that can ever write `gitignored: true` — the `git` extent enumerates `tracked ∪ (untracked ∧
+¬ignored)` and so emits `false` by construction. A tree snapshot (§3.1) excludes ignored paths by
+design, so it can accelerate the *tracked* portion of that extent and nothing more. Sourcing the
+ignored remainder is §6 work, not something §3.1 already covers.
 
 ## 3. Two lanes, two cost models
 
@@ -117,6 +125,38 @@ a saved tree hash — depends on whether the target has a stable identity to per
   the same way the git lane does. 🔷 **Proposed, not yet built** — no such persisted non-git manifest
   exists today.
 
+### 3.3 One crawl API, two implementations — and none of it needs Parquet
+
+The two lanes above are cost models. The shape they should take in code is **one crawl API with two
+implementations behind it**, selected by whether the root is a git working tree — not two call paths
+chosen ad hoc at each site. Stated as the contract:
+
+| | git implementation | non-git implementation |
+|---|---|---|
+| enumerate + content key | `getGitTreeHash()` temp index → `ls-files -s`: paths, blob SHAs, and file modes in one call | `readdir` walk + hash-on-read |
+| gitignored remainder | `ls-files --others --ignored --directory` prune list (369 entries / 60 ms on an 8,496-path adopter), descend only where a lens asks | already enumerated by the walk |
+| symlink detection | free — mode `120000` arrives with the path (§4) | per-entry `lstat` |
+| cache key | `write-tree` — exact, whole-tree, free | anchored manifest (§3.2, 🔷 unbuilt) or none |
+
+Three constraints this table encodes, each of which has already been got wrong once:
+
+- **The git implementation is not purely git.** It must still emit `gitignored: true` rows, because
+  that is the one thing the projection's `filesystem` extent exists to provide and the one thing a
+  tree snapshot structurally cannot see (§2). A git lane that silently drops ignored paths would be
+  faster and would delete the capability.
+- **Both lanes are cacheable, but their keys differ in kind, not merely in cost.** The git lane's key
+  is exact and free. The non-git lane has no free snapshot, so "is caching worth it" is a genuinely
+  different question per lane and should not be answered once for both — see §3.2's ad-hoc vs
+  anchored split.
+- **The API is the seam that makes the choice reviewable.** Two implementations of one interface can
+  be differentially tested against each other on the same root; two ad-hoc code paths cannot, and a
+  divergence between them shows up only as a wrong answer somewhere downstream.
+
+**None of this depends on a columnar store.** Sourcing (this section) and persistence (a Parquet
+substrate) are separable: the git lane already yields a content key per path and an exact whole-tree
+invalidation key, which is the entire input a persisted table would need. Doing the sourcing work
+first is what makes the persistence work worth doing — and it banks most of the win on its own.
+
 ## 4. Symlinks
 
 Detection is free in the git lane: `git ls-files -s` (and the write-tree manifest built from it)
@@ -162,6 +202,32 @@ side (tree-shape caching vs. the blob-keyed tables).
   §3.1 is mechanistically sound but unmeasured on the platform it matters most for.
 - **Build the blob-SHA memo and manifest-diff logic**, VAT-side, using `@vibe-validate/git`'s
   `getGitTreeHash()` as the underlying primitive.
+
+  Measured 2026-08-16 on an adopter working tree (8,496 tracked paths, macOS, warm), which sizes the
+  prize against the `filesystem` extent this would accelerate (`builtin:filesystem`, 1,537 ms warm /
+  2,948 ms cold on that tree):
+
+  | step | cost | yield |
+  |---|---|---|
+  | `cp .git/index` + `git add --all` via `GIT_INDEX_FILE` | 100 ms cold, 70 ms warm | dirty + untracked hashed |
+  | `git ls-files -s` against the temp index | **10 ms** | 8,496 paths **with real content OIDs** |
+  | `git write-tree` | 30 ms | deterministic snapshot key |
+  | **total** | **~140 ms** | replaces enumeration *and* the SHA-256 read |
+
+  So the enumerate-and-key half is ~10× cheaper via git, and the content key arrives already
+  computed — which is also the join key the memo above would use. `git add --all` re-hashes only
+  what the index's stat cache shows as changed, so a clean tree reads nothing. Two costs worth
+  naming: it writes loose blob objects into the target repo's `.git/objects` (not a pure read), and
+  git OIDs are SHA-1 against VAT's `<parserKind>.<sha256>`, so adopting them is a key-format change
+  to be compared as sorted multisets, not a swap.
+
+- **Source the gitignored remainder without a full crawl** (see §2). The tree snapshot excludes
+  ignored paths, so the projection's `filesystem` extent still needs them. `git ls-files --others
+  --ignored --exclude-standard` costs 1.19 s and returns 533,557 paths on that tree — worse than the
+  crawl. Adding `--directory` collapses each wholly-ignored directory to a single entry: **369
+  entries in 60 ms**, which is a prune list rather than a file list, and lets a caller descend only
+  into the ignored territory a lens actually wants (`dist/`) while skipping `.turbo/cache`
+  (418,518 of those paths) by name without ever entering it. Unbuilt.
 - **Decide the resources-vs-skills untracked-file inconsistency** (§2) — a separate product question
   from this document's scope, surfaced by writing the taxonomy down explicitly.
 - **Design the anchored non-git manifest** (§3.2). Nothing exists yet; SharePoint/OneDrive/iCloud
