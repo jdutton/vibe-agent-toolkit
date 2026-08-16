@@ -6,12 +6,15 @@ import {
 	type AnyInventory,
 } from '@vibe-agent-toolkit/agent-skills';
 import {
+	buildInventoryPopulation,
 	crawlSkillLinkRegistry,
 	extractClaudeInstallInventory,
 	extractClaudeMarketplaceInventory,
 	extractClaudePluginInventory,
 	extractClaudeSkillInventory,
 	getClaudeUserPaths,
+	projectionCrawlSelected,
+	type SharedPopulationSource,
 } from '@vibe-agent-toolkit/claude-marketplace';
 import { findProjectRoot, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
@@ -147,10 +150,54 @@ export async function routeInventory(
 	// is unconditional — it is asked per skill, about that skill's own root, and answers
 	// `undefined` for any root it cannot serve.
 	const sharedRegistry = linkRegistryProviderFor(absolute);
+	const sharedPopulation = populationProviderFor(absolute);
 	return extractClaudePluginInventory(absolute, {
 		...(sharedRegistry !== undefined && { sharedRegistry }),
+		...(sharedPopulation !== undefined && { sharedPopulation }),
 		gitTrackerSource: gitTrackerForProjectRoot,
 	});
+}
+
+/**
+ * The projection-backed membership lane, when this process asked for it — or
+ * `undefined`, which is the default and leaves the incumbent walk untouched.
+ *
+ * Gated on two things, in this order:
+ *
+ * 1. **`VAT_INVENTORY_CRAWL=projection`.** Off by default. This is a second
+ *    implementation of a question the walk already answers correctly, kept live
+ *    beside the first so the two can be measured against each other in one
+ *    process; it is not a replacement, and nothing about a user's command changes
+ *    unless they ask.
+ * 2. **A discoverable project root**, exactly as {@link linkRegistryProviderFor}
+ *    requires and for the identical reason: membership is resolved relative to a
+ *    root, and where `findProjectRoot` finds none the extractor falls back to each
+ *    skill's OWN directory — so one population rooted at the plugin would answer a
+ *    different question for every skill. No root, no provider.
+ *
+ * Root discovery belongs at this CLI boundary; inner functions take the root as a
+ * parameter.
+ *
+ * The tracker is resolved here too, and its absence is not cosmetic: with no
+ * tracker `resource_realizations.gitignored` is `false` on every row, and the
+ * declaration correspondingly drops its gitignore refusal rather than claiming a
+ * branch that cannot run.
+ *
+ * @param subjectDir - The plugin directory being inventoried
+ * @returns A population source, or `undefined` to use the walk
+ */
+function populationProviderFor(subjectDir: string): SharedPopulationSource | undefined {
+	if (!projectionCrawlSelected()) return undefined;
+	const projectRoot = findProjectRoot(subjectDir);
+	if (projectRoot === null) return undefined;
+	return async (skillMdPaths) => {
+		const gitTracker = await gitTrackerForProjectRoot(projectRoot);
+		return buildInventoryPopulation({
+			root: projectRoot,
+			skillMdPaths,
+			...(gitTracker !== undefined && { gitTracker }),
+		});
+	};
 }
 
 /**

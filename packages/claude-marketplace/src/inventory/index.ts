@@ -26,6 +26,14 @@ export {
 	inventoryExtentName,
 } from './inventory-extent.js';
 export {
+	INVENTORY_CRAWL_ENV,
+	INVENTORY_CRAWL_PROJECTION,
+	buildInventoryPopulation,
+	projectionCrawlSelected,
+	type InventoryPopulation,
+	type SharedPopulationSource,
+} from './inventory-population.js';
+export {
 	extractClaudePluginInventory,
 	type ClaudePluginInventoryOptions,
 } from './extract-plugin.js';

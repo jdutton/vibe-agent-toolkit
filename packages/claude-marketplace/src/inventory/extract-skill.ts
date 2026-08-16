@@ -17,6 +17,7 @@ import {
 	safePath,
 } from '@vibe-agent-toolkit/utils';
 
+import { type InventoryPopulation } from './inventory-population.js';
 import { ClaudeSkillInventory } from './types.js';
 
 type ParseErrors = ClaudeSkillInventory['parseErrors'];
@@ -139,6 +140,19 @@ export interface ClaudeSkillInventoryOptions {
 	gitTrackerSource: GitTrackerSource;
 	/** Optional pre-crawled registry (or a way to get one) — see {@link SharedRegistrySource}. */
 	sharedRegistry?: SharedRegistrySource;
+	/**
+	 * Optional pre-populated projection to answer membership from INSTEAD of the
+	 * link walk — see {@link InventoryPopulation}.
+	 *
+	 * Already resolved, unlike `sharedRegistry`: a population must know every
+	 * skill before it runs, so only a caller holding the whole list can build one,
+	 * and deferring it to here would defer it past the point the list is known.
+	 *
+	 * Supplying it does not force its use. It is honoured only for a population
+	 * rooted at exactly this skill's `projectRoot`, and only when that population
+	 * holds an extent for this skill; anything else falls back to the walk.
+	 */
+	sharedPopulation?: InventoryPopulation | undefined;
 }
 
 /**
@@ -245,6 +259,14 @@ async function walkLinkedFiles(
 	try {
 		// Library fallback to skill dir; see plan 2026-05-17 / spec §7.
 		const projectRoot = findProjectRoot(dirname(absolute)) ?? dirname(absolute);
+
+		// The projection lane, when one was supplied for exactly this root. Ahead of
+		// the registry so the incumbent's whole-corpus crawl is not paid and then
+		// discarded — the point of the lane is that it replaces that crawl, and a
+		// version that ran both would measure neither.
+		const projected = membersFromPopulation(projectRoot, absolute, options.sharedPopulation);
+		if (projected !== undefined) return [...projected];
+
 		const registry = await registryFor(projectRoot, options.sharedRegistry);
 		const skillResource = registry.getResource(absolute);
 		if (skillResource !== undefined) {
@@ -255,6 +277,38 @@ async function walkLinkedFiles(
 		parseErrors.push({ path: absolute, message: `link walk failed: ${(e as Error).message}` });
 	}
 	return linked;
+}
+
+/**
+ * This skill's membership from a supplied population, or `undefined` to fall back
+ * to the walk.
+ *
+ * Two independent guards, and both have to hold:
+ *
+ * 1. **Exact-root equality**, the same rule and the same reason as
+ *    {@link registryFor}: membership is resolved relative to a root, so a
+ *    population rooted elsewhere answers a different question. Ancestry is not
+ *    enough.
+ * 2. **The population holds an extent for this skill.** A population built from a
+ *    stale skill list — one skill added since — would otherwise report that skill
+ *    as having no linked files, which is a confident wrong answer rather than a
+ *    missing one. `membersOf` returns `undefined` for that case and an empty array
+ *    for a skill that genuinely links to nothing, and the two must not be
+ *    conflated here.
+ *
+ * @param projectRoot - The root this skill's walk resolves against
+ * @param skillMdPath - Absolute path to the skill's SKILL.md
+ * @param population - The caller's population, if any
+ * @returns Absolute linked-file paths, or `undefined` when the walk must run
+ */
+function membersFromPopulation(
+	projectRoot: string,
+	skillMdPath: string,
+	population: InventoryPopulation | undefined,
+): readonly string[] | undefined {
+	if (population === undefined) return undefined;
+	if (safePath.resolve(population.root) !== safePath.resolve(projectRoot)) return undefined;
+	return population.membersOf(skillMdPath);
 }
 
 /**

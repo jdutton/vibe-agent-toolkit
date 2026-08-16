@@ -24,6 +24,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ⚠️ Projects declaring `excludeReferencesFromBundle` will see new **info** lines from `vat build`
   and `vat verify`. Info is non-blocking and packaged output is unchanged.
 
+- **`vat inventory` can answer membership from a projection instead of the link walk**, behind
+  **`VAT_INVENTORY_CRAWL=projection`**. Off by default; unset, nothing about the command changes.
+  This gives `populate()` its first production caller — until now the projection lane existed only
+  under test, so the `closure` stratum measured **0% on every command** and the two crawlers could
+  never appear in one `vat-lab crawl run`. Measurement and the flip were mutually blocking; this is
+  the switch that breaks the cycle.
+
+  Scoped to the plugin lane of `vat inventory` on purpose. It is the **only** one of the three link-
+  walk call sites that consumes membership ALONE — `vat skills build` also reads `excludedReferences`
+  and `deferredAssets`, and `vat skills validate` additionally reads `maxBundledDepth`. The closure
+  selects the identical files and emits **no reason**, so pointing either of those at it would
+  silently delete adopter-visible validation findings. Membership parity is not flip-readiness.
+
+  Both crawlers stay live and the incumbent remains the default. The population is honoured only for
+  a root that exactly matches the one the extractor derives, and only for a skill it actually holds
+  an extent for; anything else — including a source that throws — falls back to the walk rather than
+  reporting an empty membership as an answer.
+
 - **The projection's closure primitive gained `CLOSURE_REFERENCE_OUTSIDE_ROOT`**, distinguishing a
   reference that escapes the extent root from one that simply did not resolve. Both used to report
   `CLOSURE_REFERENCE_UNRESOLVED`, which conflated "outside the project" with "no such file".

@@ -19,6 +19,7 @@ import {
 	type GitTrackerSource,
 	type SharedRegistrySource,
 } from './extract-skill.js';
+import { type InventoryPopulation, type SharedPopulationSource } from './inventory-population.js';
 import { ClaudePluginInventory, type ClaudeSkillInventory } from './types.js';
 
 type ParseErrors = ClaudePluginInventory['parseErrors'];
@@ -47,17 +48,31 @@ function memoizeSharedRegistry(
 /**
  * What {@link extractClaudePluginInventory} needs besides the plugin path.
  *
- * Structurally the skill extractor's options, and deliberately the same type
- * rather than a copy of it: this lane's only job with either member is to hand
- * it down, so a second declaration could only ever drift from the one that
+ * The skill extractor's options with ONE member re-typed. Everything this lane
+ * does is hand its options down, so it inherits rather than copies — a second
+ * declaration of the shared members could only ever drift from the one that
  * actually governs the walk.
+ *
+ * `sharedPopulation` is the exception, and the divergence is structural rather
+ * than stylistic: this layer holds the skill list and so takes a SOURCE, while
+ * the skill extractor takes the resolved population. See the member's own note.
  *
  * Its `gitTrackerSource` is REQUIRED for the reason the skill extractor's is —
  * see {@link ClaudeSkillInventoryOptions}. A plugin lane that genuinely has no
  * tracker to offer says {@link NO_GIT_TRACKER}, and the tracker-less walk is
  * then a choice at the call site rather than an omission three functions away.
  */
-export type ClaudePluginInventoryOptions = ClaudeSkillInventoryOptions;
+export interface ClaudePluginInventoryOptions
+	extends Omit<ClaudeSkillInventoryOptions, 'sharedPopulation'> {
+	/**
+	 * Optional projection-backed membership lane — see {@link SharedPopulationSource}.
+	 *
+	 * A SOURCE here, where the skill extractor takes a resolved population: a
+	 * population must register one contributor per skill before it runs, and this
+	 * is the layer that knows the skill list. The skill extractor never could.
+	 */
+	sharedPopulation?: SharedPopulationSource | undefined;
+}
 
 /**
  * Build a PluginInventory for a directory containing a .claude-plugin/plugin.json manifest
@@ -67,7 +82,7 @@ export async function extractClaudePluginInventory(
 	pluginPath: string,
 	options: ClaudePluginInventoryOptions,
 ): Promise<ClaudePluginInventory> {
-	const { sharedRegistry, gitTrackerSource } = options;
+	const { sharedRegistry, sharedPopulation, gitTrackerSource } = options;
 	const absolute = safePath.resolve(pluginPath);
 
 	// eslint-disable-next-line security/detect-non-literal-fs-filename -- absolute is resolved from caller-supplied path, safe for plugin extraction
@@ -102,6 +117,7 @@ export async function extractClaudePluginInventory(
 		parseErrors,
 		memoizeSharedRegistry(sharedRegistry),
 		gitTrackerSource,
+		sharedPopulation,
 	);
 	const unexpected = await buildUnexpected(absolute, shape);
 
@@ -252,6 +268,7 @@ async function buildDiscovered(
 	parseErrors: ParseErrors,
 	resolveSharedRegistry: () => Promise<ResourceRegistry | undefined>,
 	gitTrackerSource: GitTrackerSource,
+	sharedPopulation: SharedPopulationSource | undefined,
 ): Promise<ClaudePluginInventory['discovered']> {
 	const skills = await discoverSkills(
 		absolute,
@@ -260,6 +277,7 @@ async function buildDiscovered(
 		parseErrors,
 		resolveSharedRegistry,
 		gitTrackerSource,
+		sharedPopulation,
 	);
 	const commands = await discoverComponents(safePath.join(absolute, 'commands'));
 	const agents = await discoverComponents(safePath.join(absolute, 'agents'));
@@ -273,6 +291,7 @@ async function discoverSkills(
 	parseErrors: ParseErrors,
 	resolveSharedRegistry: () => Promise<ResourceRegistry | undefined>,
 	gitTrackerSource: GitTrackerSource,
+	sharedPopulation: SharedPopulationSource | undefined,
 ): Promise<ClaudeSkillInventory[]> {
 	const skillInventories: ClaudeSkillInventory[] = [];
 
@@ -298,10 +317,34 @@ async function discoverSkills(
 	// "the skill extractor requires a source" was a statement about one file
 	// rather than about the lane. Both now carry the obligation to their own
 	// callers, and a lane that wants no tracker names `NO_GIT_TRACKER`.
-	for (const skillMd of await collectSkillMdPaths(absolute, shape, rootSkillMd)) {
+	const skillMdPaths = await collectSkillMdPaths(absolute, shape, rootSkillMd);
+
+	// Resolved ONCE, here, because this is the first layer that knows the whole
+	// skill list — and a population must register a contributor per skill before it
+	// runs, so unlike the registry it cannot be deferred any further down. Resolved
+	// only when discovery actually found a skill, for the same reason the registry
+	// provider is handed over unresolved: a plugin of commands/ and agents/ alone
+	// must populate nothing.
+	//
+	// A source that throws degrades to the incumbent rather than failing the
+	// plugin. This lane is an opt-in second implementation of a question the walk
+	// already answers, so its failure is a missing measurement, not a defect in the
+	// subject — the same posture `gitTrackerFor` takes toward a failing tracker
+	// source, and for the same reason.
+	let population: InventoryPopulation | undefined;
+	if (sharedPopulation !== undefined && skillMdPaths.length > 0) {
+		try {
+			population = await sharedPopulation(skillMdPaths);
+		} catch {
+			population = undefined;
+		}
+	}
+
+	for (const skillMd of skillMdPaths) {
 		const inv = await extractClaudeSkillInventory(skillMd, {
 			sharedRegistry: resolveSharedRegistry,
 			gitTrackerSource,
+			...(population !== undefined && { sharedPopulation: population }),
 		});
 		for (const err of inv.parseErrors) parseErrors.push(err);
 		skillInventories.push(inv);
