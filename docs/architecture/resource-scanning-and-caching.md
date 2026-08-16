@@ -330,6 +330,37 @@ side (tree-shape caching vs. the blob-keyed tables).
   git OIDs are SHA-1 against VAT's `<parserKind>.<sha256>`, so adopting them is a key-format change
   to be compared as sorted multisets, not a swap.
 
+  **⚠️ Correction — "replaces the SHA-256 read" is warm-only and bounded. Read `content-key.ts`
+  before building this.** That module's docstring ("Why there is no git rung here") already
+  considered and rejected a git OID as the content key, on three grounds: the *index* SHA is stale
+  for a dirty file (the temp-index snapshot above fixes this one, and only this one); git stores a
+  symlink as a blob holding the link **target string**, so two symlinks with the same relative
+  target but different resolutions share an OID while VAT follows them and the parser reads
+  through; and a key derived at enumeration and used to file a parse performed later binds the old
+  key to new bytes. Its rule: **a git SHA may be used as a *lookup hint* whose miss is free — it
+  must never be the key.**
+
+  The `(blobSha, parserKind) → contentKey` memo proposed above *is* that permitted hint, so the two
+  documents do agree — but only under three conditions the table above does not state:
+
+  - **The saving is warm-only.** A cold memo misses on every path and hashes on read anyway.
+    "Replaces enumeration *and* the SHA-256 read" is a warm-cache claim written as an unconditional
+    one.
+  - **Mode `120000` entries must be excluded from the memo**, or the symlink defect lands. §3.3's
+    table already supplies the mode for free, so this is cheap — but it is not automatic.
+  - **Once a row's key came from the memo, those bytes must not be re-read from disk in the same
+    run**, or the stale-binding defect lands by a different route.
+
+  **A harder bound the table misses entirely:** `ParseResult` carries *required* `content` and
+  `sizeBytes`, and `parse-cache.ts`'s `rehydrate()` fills both from the fresh read, deliberately
+  never from the stored entry (`sizeBytes` is a raw byte count that the decoded string cannot
+  recover). **So a parse-cache hit still reads the file.** The read is skippable only for a path
+  that is keyed and *never parsed*. Measured on the same adopter tree: **9,974 keyed paths against
+  1,378 resource files**, so ~8,600 (86%) are keyed-only and could skip the read while ~1,374 must
+  be read regardless. That puts the git lane's syscall prize at ≈ 1,998 `readdir` + ~8,600 keying
+  reads ≈ **15% of that command's filesystem calls** — real, and worth building, but neither a
+  drop-in nor the largest remaining term.
+
 - **Source the gitignored remainder without a full crawl** (see §2). The tree snapshot excludes
   ignored paths, so the projection's `filesystem` extent still needs them. `git ls-files --others
   --ignored --exclude-standard` costs 1.19 s and returns 533,557 paths on that tree — worse than the
