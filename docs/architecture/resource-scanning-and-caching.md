@@ -182,13 +182,43 @@ markdown file an author has written but not committed is finally visible to vali
 rows are enumerated by the extent and **declined by this consumer**, deliberately: admitting them
 would start emitting findings about files the project told git to forget.
 
+**What it loses: committed symlinks — and this is the third symlink behaviour in the codebase, not
+a variation on the two already documented in §4.** `FilesystemExtentContributor` crawls with
+`followSymlinks: false`, and the manual walk under it skips symlink entries entirely rather than
+recording them unresolved. So a committed symlink is enumerated by the default lane and is *not a
+member at all* here.
+
+- **In-tree target** — arguably an improvement. The default lane reaches the same bytes twice, once
+  per path, and reports the same defect twice.
+- **Out-of-tree target** — a genuine capability loss, not deduplication. Those bytes have no other
+  path into the population, so a broken link the default lane reports goes unreported. This is the
+  case that keeps the lane opt-in independently of the cost.
+
+⚠️ `crawlDirectory`'s git branch already carries a documented known divergence about symlinks,
+pinned by `packages/cli/test/integration/enumeration-symlink-divergence.integration.test.ts`. That
+pin covers the git-vs-manual-walk pair. **This lane is a third behaviour and is not covered by it** —
+resolving §4's proposed within-snapshot resolution is what would collapse all three.
+
 **Measured 2026-08-16.**
 
 | subject | walker | projection | note |
 |---|---|---|---|
 | git repo, 1 committed + 1 untracked broken link | `filesScanned: 1` | `filesScanned: 2` | the untracked file's real broken link, found |
+| git repo, 2 committed symlinks | `filesScanned: 3` | `filesScanned: 1` | the symlink paths are not members |
 | non-git anchored corpus, 198 files / 90 HTML / 3,950 links | 112 files, 0.085 s | 112 files, 0.926 s | output **byte-identical** but for `durationSecs` |
 | ...its `resource-registry:enumerate` row | 2.7 ms | 851.9 ms | **316×** |
+| adopter git working tree, 1,378 resource files across 8 collections | 1.02 s | 4.99 s | **4.9×**, output byte-identical but for `durationSecs` |
+| ...its `resource-registry:enumerate` row | 24.2 ms | 4,580.7 ms | **189×** |
+
+**The adopter row is the blast-radius measurement, and it needs its precondition stated to mean
+anything.** That tree carried zero untracked files and zero committed symlinks at measurement time,
+so the two lanes had no population to disagree over — "byte-identical" there is agreement on
+*today's tree state*, not a property of the lanes. Re-measured with one untracked `roadmap.md`
+carrying a broken link added to it, the same tree gives `filesScanned` 1,378 → **1,379**,
+`errorsFound` 0 → **1**, and `status: success` → **`error`**. **So on that adopter the flip costs
+~4× wall clock and changes no finding until somebody has uncommitted work — at which point it turns
+a green run red, which is the entire point of the lane.** Sizing the flip from the clean-tree run
+alone would be sizing a fixture that cannot distinguish.
 
 ⚠️ **The `base` rows are NESTED inside `resource-registry:enumerate`, not additive to it** (675.3 ms
 `builtin:filesystem` + 174.8 ms `blob-population:derive` = 850.1 ms of the 851.9 ms). Summing them
@@ -196,8 +226,9 @@ per arm inflates the projection arm alone and corrupts the ratio. Compare `enume
 
 **It is opt-in, and the asymmetry with `vat inventory`'s default-on selector is the point.** The
 inventory flip was defensible as a default because it was provably a byte-for-byte no-op. This lane
-cannot claim that, because it deliberately does not agree — switching it on adds findings on real
-adopter trees, and that blast radius is a product call, not a correctness argument.
+cannot claim that, because it deliberately does not agree — and it disagrees in *both* directions:
+it adds findings on untracked files and it drops the symlink ones. That blast radius is a product
+call, not a correctness argument.
 
 #### The defect this lane found: every file was being handed to the markdown parser
 
@@ -241,6 +272,19 @@ target's bytes have no git-tracked home to be looked up in.
 🔷 **Proposed; not fully specified.** Remaining open fallbacks: multi-hop symlink chains, and the exact
 non-git-lane handoff for an out-of-tree target. (A dangling target is already `RESOURCE_UNREADABLE`,
 handled independently of this design.)
+
+**Three shipped behaviours today, and the design above collapses all three.** Nothing in this
+section is built yet, so an author asking "does VAT see my symlink?" gets a different answer per
+lane:
+
+| lane | committed symlink | pinned by |
+|---|---|---|
+| `crawlDirectory`, git branch (`git ls-files`) | enumerated as a path | `enumeration-symlink-divergence.integration.test.ts` |
+| `crawlDirectory`, manual walk (`followSymlinks` default off) | skipped | same test — this is the documented divergence |
+| projection population (§3.4, `FilesystemExtentContributor`) | skipped, in a git tree too | §3.4's measured probe |
+
+The third row is the one that matters for the §3.4 product call: it makes the *git* lane behave like
+the *non-git* one, which for an out-of-tree target loses bytes nothing else enumerates.
 
 ## 5. What's shared, what's not
 

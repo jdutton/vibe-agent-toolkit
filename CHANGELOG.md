@@ -21,9 +21,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tracked ∪ (untracked ∧ ¬ignored)` — the same semantics skill discovery has always used, because
   skills must be discoverable before being committed. Gitignored files stay out.
 
-  ⚠️ **Opt-in rather than default precisely because it finds more.** Turning it on adds findings on
-  real trees, so the blast radius is yours to choose. Verified byte-identical (but for
-  `durationSecs`) against the default lane on a 198-file, 3,950-link non-git corpus.
+  ⚠️ **What it loses: committed symlinks.** The projection's population crawls with
+  `followSymlinks: false` and skips symlink entries outright, so a committed symlink that the
+  default lane enumerates is not a member here — measured `filesScanned: 3` (default) vs `1`
+  (projection) on a two-symlink probe. Where the symlink points **inside** the tree this is
+  arguably an improvement: the default lane reports the same defect once per path. Where it points
+  **outside** the tree it is a real capability loss — those bytes have no other path into the
+  population, so a broken link the default lane reports goes unreported here. If your corpus
+  reaches content through committed symlinks to out-of-tree targets, stay on the default lane.
+
+  ⚠️ **Opt-in rather than default precisely because it disagrees in both directions.** Turning it
+  on adds findings on real trees and drops the symlink ones, so the blast radius is yours to
+  choose. Verified byte-identical (but for `durationSecs`) against the default lane on a 198-file,
+  3,950-link non-git corpus.
 
   ⚠️ **Slower: `resource-registry:enumerate` went 2.7 ms → 851.9 ms on that corpus (316×)**, whole
   command 0.085 s → 0.926 s. `include`/`exclude` still apply, and are still applied by the registry
