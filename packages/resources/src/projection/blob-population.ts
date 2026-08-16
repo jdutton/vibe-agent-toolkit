@@ -98,6 +98,72 @@ export const BLOB_CONTENT_CHANGED = 'BLOB_CONTENT_CHANGED';
 /** The parser threw on this blob's bytes. */
 export const BLOB_PARSE_FAILED = 'BLOB_PARSE_FAILED';
 
+/** The bytes are not text, so no text parser was run over them. */
+export const BLOB_NOT_TEXT = 'BLOB_NOT_TEXT';
+
+/**
+ * How far into a blob to look for the NUL that says "not text".
+ *
+ * Git's own heuristic, and the same 8000 bytes it uses: a NUL byte inside the
+ * first block is the one signal that separates binary from text without knowing
+ * anything about the format. Bounded rather than whole-file because the check
+ * must be cheap enough to run on every blob — the point is to avoid touching
+ * megabytes, so a test that reads megabytes defeats itself.
+ */
+const BINARY_SNIFF_BYTES = 8000;
+
+/**
+ * Whether these bytes are binary, and therefore have nothing a text parser can
+ * find.
+ *
+ * ## Why this exists, with the measurement
+ *
+ * `parserKindForPath` routes `.html`/`.htm` to the HTML parser and **everything
+ * else to markdown** — so the filesystem extent, which enumerates the whole tree
+ * rather than a glob, hands `remark-parse` every zip, PDF and `.docx` under the
+ * root. That was a deliberate choice and it is documented as one ("the markdown
+ * parser is handed arbitrary bytes by design"), because narrowing the parse to
+ * markdown would blind the closure to references emitted from a skill's bundled
+ * scripts. What was never measured is what "arbitrary bytes" costs when they are
+ * not text at all.
+ *
+ * Measured: a project of one 13-byte markdown file plus one 8 MB zip takes
+ * **4.83 s on the projection lane against 0.035 s on the walker — 138×** — and
+ * produces the identical answer, because the zip was never a member of the
+ * result in the first place. On a real 86 MB adopter corpus carrying 77 MB of
+ * PDFs and zips the command did not finish in five minutes, at 100% CPU.
+ * `remark-parse` does not *fail* on binary input; it succeeds, slowly, building
+ * an AST of garbage that every downstream stage then walks.
+ *
+ * ## Why a content sniff and not an extension list
+ *
+ * An extension list would be a claim about a FILENAME, and a filename cannot
+ * observe a cause: a `.zip` renamed `.md` would still hang, while a `.sh` a
+ * skill bundles — which the closure genuinely wants read — has no extension in
+ * common with `.md`. A NUL byte is the property itself. It also keeps the
+ * deliberate capability intact: scripts, configs, `.txt`, files with no
+ * extension at all are text, and are still parsed.
+ *
+ * ## This is a refusal, not a silence
+ *
+ * The caller records a {@link BLOB_NOT_TEXT} condition, exactly as it does for
+ * an unreadable or changed blob. A blob with no rows and no condition would be
+ * indistinguishable from a blob that genuinely had nothing to say — and the
+ * whole `blob_conditions` table exists to keep those two apart. The blob is
+ * still KEYED and still a member: identity, `gitignored`, and the realization
+ * row are untouched. Only the parse is declined.
+ *
+ * @param content - The decoded content, as the parser would receive it
+ * @returns `true` when the bytes are binary
+ */
+function looksBinary(content: string): boolean {
+  const limit = Math.min(content.length, BINARY_SNIFF_BYTES);
+  for (let index = 0; index < limit; index += 1) {
+    if (content.charCodeAt(index) === 0) return true;
+  }
+  return false;
+}
+
 /** The prefix a content key carries when its bytes route to the HTML parser. */
 const HTML_KEY_PREFIX = 'html.';
 
@@ -130,6 +196,14 @@ export interface BlobPopulationResult {
   readonly blobsContentChanged: number;
   /** Blobs the parser threw on — a {@link BLOB_PARSE_FAILED} row each. */
   readonly blobsParseFailed: number;
+  /**
+   * Blobs declined as binary before any parse — a {@link BLOB_NOT_TEXT} row each.
+   *
+   * Expected to be NON-zero on any real corpus that ships an image, an archive
+   * or a PDF, and that is the point: this counter is what makes the refusal
+   * auditable rather than a quiet speed-up. A corpus of pure text reports zero.
+   */
+  readonly blobsNotText: number;
   /**
    * `contentState: 'none'` rows that name a directory.
    *
@@ -297,6 +371,7 @@ function emptyCounts(): MutableCounts {
     blobsUnreadable: 0,
     blobsContentChanged: 0,
     blobsParseFailed: 0,
+    blobsNotText: 0,
     realizationsSkippedDirectory: 0,
     realizationsSkippedAbsent: 0,
     realizationsSkippedDanglingSymlink: 0,
@@ -420,6 +495,21 @@ async function deriveBlob(
 ): Promise<void> {
   const keyed = await readTarget(builder, target, base, counts);
   if (keyed === null) return;
+
+  // Before the parse, never after: the whole cost this refuses IS the parse.
+  // See {@link looksBinary} for the measurement and for why the test is on the
+  // bytes rather than on the extension.
+  if (looksBinary(keyed.content)) {
+    counts.blobsNotText += 1;
+    builder.addBlobCondition(condition(
+      target.contentKey,
+      BLOB_NOT_TEXT,
+      `"${target.path}" contains a NUL byte within its first ${BINARY_SNIFF_BYTES} bytes, so it is`
+      + ' not text; no parser was run over it. This blob has no sections or references because it'
+      + ' cannot have any, not because it was skipped silently',
+    ));
+    return;
+  }
 
   const parsed = await parseTarget(builder, target, keyed, cache, counts);
   if (parsed === null) return;

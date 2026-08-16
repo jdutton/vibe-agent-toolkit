@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`vat resources scan`/`validate`, `vat rag index` and the pipeline oracles can now take their
+  file population from the projection instead of `git ls-files`, via
+  **`VAT_RESOURCES_CRAWL=projection`**. Opt-in; the default is unchanged.
+
+  **What it fixes.** Inside a git working tree these lanes are answered by `git ls-files` with
+  tracked files only, so **a markdown file you have written but not committed is invisible to
+  validation** — the command reports a confident green over a corpus it did not fully see. On a
+  two-file repository with one committed and one uncommitted broken link, the default lane reports
+  `filesScanned: 1` and one finding; this lane reports 2. The projection-sourced population is
+  `tracked ∪ (untracked ∧ ¬ignored)` — the same semantics skill discovery has always used, because
+  skills must be discoverable before being committed. Gitignored files stay out.
+
+  ⚠️ **Opt-in rather than default precisely because it finds more.** Turning it on adds findings on
+  real trees, so the blast radius is yours to choose. Verified byte-identical (but for
+  `durationSecs`) against the default lane on a 198-file, 3,950-link non-git corpus.
+
+  ⚠️ **Slower: `resource-registry:enumerate` went 2.7 ms → 851.9 ms on that corpus (316×)**, whole
+  command 0.085 s → 0.926 s. `include`/`exclude` still apply, and are still applied by the registry
+  with the same matcher the incumbent crawler uses.
+
+  The projection does **not** parse binary files. A blob whose first 8000 bytes contain a NUL is
+  recorded as `BLOB_NOT_TEXT` and left unparsed — git's own test, chosen over an extension list so a
+  renamed archive is still caught and a bundled script is still read. Without it an 8 MB zip beside
+  one markdown file cost 4.83 s against the default lane's 0.035 s, for the identical answer.
+
 - **Two link exclusions that used to produce no output at all are now reported.** A markdown link
   resolving to a **directory** raises `LINK_TO_UNBUNDLED_DIRECTORY` (**warning**), and a reference
   dropped by an `excludeReferencesFromBundle` rule raises `LINK_EXCLUDED_BY_PATTERN` (**info**,

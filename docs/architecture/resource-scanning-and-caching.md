@@ -36,6 +36,12 @@ it — so **`vat resources scan`/`validate` cannot see a brand-new, uncommitted 
 Whether resources scanning should also see untracked files is a separate product decision this
 document does not make — it only names the split precisely so nobody assumes uniform behavior.
 
+**Demonstrated, not merely reasoned about** (2026-08-16): on a two-file repository with one
+committed and one uncommitted markdown file, each carrying a broken link, `vat resources validate`
+reports `filesScanned: 1` and one finding. The uncommitted file's broken link is not missed
+*quietly* — it is invisible, and the command exits green about the half it could see. §3.4 ships an
+opt-in lane whose population does include it.
+
 If `gitFindRoot()` finds no repository, or `gitLsFiles` returns `null`, `crawlDirectorySync` falls
 through to a manual `fs.readdirSync` walk (`file-crawler.ts:239-417`) — the non-git lane, §3.2.
 
@@ -157,6 +163,65 @@ substrate) are separable: the git lane already yields a content key per path and
 invalidation key, which is the entire input a persisted table would need. Doing the sourcing work
 first is what makes the persistence work worth doing — and it banks most of the win on its own.
 
+### 3.4 ✅ The resources lane on the projection — shipped opt-in, and what it measured
+
+`ResourceRegistry.crawl()` takes an optional `populationSource`. Supplied, the file list comes from
+a base-only projection (`buildResourcePopulation` → `FilesystemExtentContributor`) instead of from
+`crawlDirectory`; omitted, nothing changes. The CLI selects the lane at its boundary with
+`VAT_RESOURCES_CRAWL=projection`, which covers `vat resources scan`/`validate`, `vat rag index` and
+the pipeline oracles in one place — they all load through `loadResourcesWithConfig`.
+
+**`include`/`exclude` are still applied by the registry, using `crawlPathFilter` — the same compiled
+matcher `crawlDirectory` uses on its `git ls-files` branch.** The source answers enumeration only.
+That split is what makes the two lanes reviewable: a difference in the output is a difference in the
+population, never a difference in what the project's globs were taken to mean.
+
+**What it changes.** The population becomes `tracked ∪ (untracked ∧ ¬ignored)` — the `includeUntracked:
+true` semantics skill discovery already uses — rather than `git ls-files`' tracked-only default. So a
+markdown file an author has written but not committed is finally visible to validation. Gitignored
+rows are enumerated by the extent and **declined by this consumer**, deliberately: admitting them
+would start emitting findings about files the project told git to forget.
+
+**Measured 2026-08-16.**
+
+| subject | walker | projection | note |
+|---|---|---|---|
+| git repo, 1 committed + 1 untracked broken link | `filesScanned: 1` | `filesScanned: 2` | the untracked file's real broken link, found |
+| non-git anchored corpus, 198 files / 90 HTML / 3,950 links | 112 files, 0.085 s | 112 files, 0.926 s | output **byte-identical** but for `durationSecs` |
+| ...its `resource-registry:enumerate` row | 2.7 ms | 851.9 ms | **316×** |
+
+⚠️ **The `base` rows are NESTED inside `resource-registry:enumerate`, not additive to it** (675.3 ms
+`builtin:filesystem` + 174.8 ms `blob-population:derive` = 850.1 ms of the 851.9 ms). Summing them
+per arm inflates the projection arm alone and corrupts the ratio. Compare `enumerate` to `enumerate`.
+
+**It is opt-in, and the asymmetry with `vat inventory`'s default-on selector is the point.** The
+inventory flip was defensible as a default because it was provably a byte-for-byte no-op. This lane
+cannot claim that, because it deliberately does not agree — switching it on adds findings on real
+adopter trees, and that blast radius is a product call, not a correctness argument.
+
+#### The defect this lane found: every file was being handed to the markdown parser
+
+`parserKindForPath` routes `.html`/`.htm` to the HTML parser and **everything else to markdown**.
+That is deliberate — narrowing the parse to markdown would blind the closure to references emitted
+from a skill's bundled scripts — but nothing bounded it, and the `filesystem` extent enumerates a
+whole tree rather than a glob. So `remark-parse` was being handed every zip, PDF and `.docx` under
+the root. It does not *fail* on binary input; it succeeds, slowly.
+
+Measured: a project of one 13-byte markdown file plus one 8 MB zip cost **4.83 s against the
+walker's 0.035 s — 138×** — for the identical answer, because the zip was never a member of the
+result. On the 86 MB adopter corpus above (77 MB of it PDFs and archives) the command did not finish
+in five minutes at 100% CPU.
+
+Fixed by a **content sniff, not an extension list**: a NUL byte inside the first 8000 bytes (git's
+own heuristic) means the blob is not text, and `populateBlobs` records a `BLOB_NOT_TEXT` condition
+instead of parsing. An extension rule would be a claim about a filename — a renamed archive would
+still hang, and a bundled `.sh` the closure genuinely wants read shares no extension with markdown.
+The blob stays keyed and stays a member; only the parse is declined, and the refusal is a row rather
+than a silence. The 8 MB-zip probe went 4.83 s → 0.111 s.
+
+**This was never resources-specific.** `vat inventory` on any plugin shipping a binary asset paid
+the same cost; the resources lane merely pointed the projection at trees big enough to notice.
+
 ## 4. Symlinks
 
 Detection is free in the git lane: `git ls-files -s` (and the write-tree manifest built from it)
@@ -228,8 +293,8 @@ side (tree-shape caching vs. the blob-keyed tables).
   entries in 60 ms**, which is a prune list rather than a file list, and lets a caller descend only
   into the ignored territory a lens actually wants (`dist/`) while skipping `.turbo/cache`
   (418,518 of those paths) by name without ever entering it. Unbuilt.
-- **Decide the resources-vs-skills untracked-file inconsistency** (§2) — a separate product question
-  from this document's scope, surfaced by writing the taxonomy down explicitly.
+- **Decide the resources-vs-skills untracked-file inconsistency** (§2). ✅ A lane that resolves it
+  now exists and is measured (§3.4); what remains is the product call on making it the default.
 - **Design the anchored non-git manifest** (§3.2). Nothing exists yet; SharePoint/OneDrive/iCloud
   connectors are explicitly in scope for this design, unbuilt.
 - **Finish symlink-handling fallbacks** (§4): multi-hop chains, the precise non-git-lane handoff.

@@ -6,6 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { ParseCache } from '../src/parse-cache.js';
 import {
   BLOB_CONTENT_CHANGED,
+  BLOB_NOT_TEXT,
   BLOB_UNREADABLE,
   populateBlobs,
   type BlobPopulationResult,
@@ -366,6 +367,45 @@ describe('populateBlobs', () => {
     // Evidence, never `$HOME`: every other path column in the projection is
     // root-relative, and an fs error's own message embeds the absolute path.
     expect(conditions[0]?.message).not.toContain(suite.tempDir);
+  });
+
+  it('declines a binary blob before parsing it, and says so in a condition', async () => {
+    await writeCorpus([
+      { path: DOC_A, content: DOC_A_CONTENT },
+      // A NUL inside the sniff window is the whole signal — the extension is
+      // `.md`, so an extension-based rule would parse this and a renamed
+      // archive would still be handed to `remark-parse`.
+      { path: 'archive.md', content: 'PK\u0003\u0004\u0000\u0000binary payload' },
+    ]);
+    const builder = await baseBuilderFor();
+
+    const counts = await populateBlobs(builder, { parseCache: NO_CACHE });
+    const projection = builder.build();
+
+    expect(counts.blobsNotText).toBe(1);
+    // The text blob is unaffected: the refusal is per blob, not a mode.
+    expect(counts.blobsDerived).toBe(1);
+    // A refusal, not a silence — no blob row, but a row saying why there is none.
+    expect(projection.blobs).toHaveLength(1);
+    const conditions = projection.blobConditions.filter((row) => row.code === BLOB_NOT_TEXT);
+    expect(conditions).toHaveLength(1);
+    expect(conditions[0]?.message).toContain('archive.md');
+    expect(conditions[0]?.message).not.toContain(suite.tempDir);
+  });
+
+  it('parses a text file with no extension, so the refusal is about bytes and not names', async () => {
+    // The negative control for the test above, and it is what keeps the sniff
+    // from being quietly replaced by an extension allowlist: a bundled script
+    // is exactly the reference source the closure exists to read, and it has no
+    // extension in common with markdown.
+    await writeCorpus([{ path: 'Makefile', content: '# Build\n\nsee [docs](./a.md)\n' }]);
+    const builder = await baseBuilderFor();
+
+    const counts = await populateBlobs(builder, { parseCache: NO_CACHE });
+
+    expect(counts.blobsNotText).toBe(0);
+    expect(counts.blobsDerived).toBe(1);
+    expect(builder.build().blobReferences.map((row) => row.rawRef)).toContain('./a.md');
   });
 
   it('refuses to derive a blob from bytes that no longer key to it', async () => {

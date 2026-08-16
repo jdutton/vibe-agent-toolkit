@@ -5,10 +5,12 @@
 import { existsSync, statSync } from 'node:fs';
 
 import {
+  buildResourcePopulation,
   DEFAULT_RESOURCE_INCLUDE,
   ResourceRegistry,
   type CrawlOptions,
   type ProjectConfig,
+  type ResourcePopulationSource,
   type ResourceRegistryOptions,
 } from '@vibe-agent-toolkit/resources';
 import { GitTracker, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
@@ -85,6 +87,75 @@ function crawlOptionsForPath(
     include: scopeIncludeToSubtree(DEFAULT_RESOURCE_INCLUDE, normalizedRelDir),
     ...(config?.resources?.exclude ? { exclude: config.resources.exclude } : {}),
   };
+}
+
+/**
+ * The env var that selects the crawler behind every resources-crawling verb —
+ * `vat resources scan`/`validate`, `vat rag index`, and the pipeline oracles.
+ *
+ * An environment switch rather than a config field, for the same reason
+ * `VAT_INVENTORY_CRAWL` is one: it selects which INSTRUMENT runs, not what
+ * the project means, and it has to be reachable from the lab, which spawns the
+ * binary and controls its environment. A config field would put the A and B arms
+ * inside the subject's own tree, where a measurement edits the thing it measures.
+ */
+export const RESOURCES_CRAWL_ENV = 'VAT_RESOURCES_CRAWL';
+
+/** {@link RESOURCES_CRAWL_ENV}'s value that selects the projection lane. */
+export const RESOURCES_CRAWL_PROJECTION = 'projection';
+
+/**
+ * Whether this process should source the resources population from a projection.
+ *
+ * ⚠️ **Opposite default to `vat inventory`'s selector, and that asymmetry is the
+ * point rather than an oversight.** The inventory flip was defensible as a
+ * default because it was provably a byte-for-byte no-op on its subject: both
+ * lanes answered the same membership question and were shown to agree. This lane
+ * cannot make that claim, because it deliberately does NOT agree — sourcing from
+ * the `filesystem` extent is what lets validation see an uncommitted markdown
+ * file, so switching it on ADDS findings on real adopter trees.
+ *
+ * A population change that emits new `LINK_BROKEN_FILE`s at people is not a
+ * default to be taken on the strength of it being more correct in the abstract.
+ * The blast radius gets measured on real corpora first; flipping this default is
+ * then a one-line change with a changelog entry, not a rewrite.
+ *
+ * Read from the environment at each call rather than memoized at module load:
+ * `vitest.setup.js` deletes every `VAT_*` variable before any test module loads,
+ * so a module-level binding would make the switch unobservable to every test
+ * that sets it.
+ *
+ * @returns `true` when the projection lane is selected
+ */
+export function resourcesProjectionCrawlSelected(): boolean {
+  return process.env[RESOURCES_CRAWL_ENV] === RESOURCES_CRAWL_PROJECTION;
+}
+
+/**
+ * The projection-backed enumeration for this run, or `undefined` to keep the
+ * incumbent `crawlDirectory` walk.
+ *
+ * Gated on the selector alone — and NOT additionally on a discoverable project
+ * root, which is where this differs from `vat inventory`'s
+ * `populationProviderFor`. That gate exists there because inventory membership
+ * is resolved per skill against a root the extractor derives itself, so a
+ * population rooted anywhere else answers a different question. Here the caller
+ * has already resolved the root and the registry is crawled against exactly it,
+ * so there is no second root to disagree with.
+ *
+ * The tracker is threaded through because its absence is not cosmetic: with no
+ * tracker every realization row reads `gitignored: false`, and the population
+ * would admit the ignored half of a git tree rather than decline it. See
+ * `buildResourcePopulation`.
+ *
+ * @param gitTracker - The run's ignore oracle
+ * @returns A population source, or `undefined` to use the walk
+ */
+function populationSourceFor(gitTracker: GitTracker): ResourcePopulationSource | undefined {
+  if (!resourcesProjectionCrawlSelected()) {
+    return undefined;
+  }
+  return (root: string) => buildResourcePopulation({ root, gitTracker });
 }
 
 /**
@@ -182,6 +253,15 @@ export async function loadResourcesWithConfig(
       // Apply exclude patterns from config (if specified)
       ...(config?.resources?.exclude ? { exclude: config.resources.exclude } : {}),
     };
+  }
+
+  // Which lane enumerates. Applied to the options both branches above produced,
+  // so the path-argument case and the whole-root case cannot end up on different
+  // crawlers — the bug shape this file already carries one fix for.
+  const populationSource = populationSourceFor(gitTracker);
+  if (populationSource) {
+    logger.debug(`Enumerating via the projection lane (${RESOURCES_CRAWL_ENV}=${RESOURCES_CRAWL_PROJECTION})`);
+    crawlOptions = { ...crawlOptions, populationSource };
   }
 
   await registry.crawl(crawlOptions);

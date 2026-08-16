@@ -12,7 +12,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { createRegistryIssue, type IssueCode, runSingleUnitValidation, type ValidationConfig, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { CRAWL_REGISTRY_ADD_RESOURCE_ID, CRAWL_REGISTRY_ENUMERATE_ID, CRAWL_REGISTRY_RESOLVE_LINKS_ID, crawlDirectory, type CrawlOptions as UtilsCrawlOptions, crawlTimingStart, FsLookupCache, type GitTracker, issueLocation, recordRegistryPass, resolveAssetReference, safePath, toForwardSlash, toNfc } from '@vibe-agent-toolkit/utils';
+import { CRAWL_REGISTRY_ADD_RESOURCE_ID, CRAWL_REGISTRY_ENUMERATE_ID, CRAWL_REGISTRY_RESOLVE_LINKS_ID, crawlDirectory, type CrawlOptions as UtilsCrawlOptions, crawlPathFilter, crawlTimingStart, FsLookupCache, type GitTracker, issueLocation, recordRegistryPass, resolveAssetReference, safePath, toForwardSlash, toNfc } from '@vibe-agent-toolkit/utils';
 
 import { calculateChecksumFromContent } from './checksum.js';
 import { getCollectionsForFile } from './collection-matcher.js';
@@ -31,6 +31,10 @@ import {
 import { buildLinkAuthEngineConfig } from './link-auth-config-build.js';
 import { fillLinkFacts, fragmentIndex, judgeLink, resolveLinkEntries, type FragmentIndex, type JudgeLinkOptions, type LinkEntry, type ValidateLinkOptions } from './link-validator.js';
 import { ParseCache, type ParseCacheStats, parseKeyed, vatCacheRoot } from './parse-cache.js';
+// Type-only, and that is what keeps it acyclic: the projection's population
+// builder is a CALLER of the registry's world, not a dependency of it, so the
+// import is erased before any module graph exists at runtime.
+import type { ResourcePopulationSource } from './projection/resource-population.js';
 import type { ResourceCollectionInterface } from './resource-collection-interface.js';
 import type { SHA256 } from './schemas/checksum.js';
 import type { ProjectConfig, ValidationMode } from './schemas/project-config.js';
@@ -149,6 +153,23 @@ export interface CrawlOptions {
   exclude?: string[];
   /** Follow symbolic links (default: false) */
   followSymlinks?: boolean;
+  /**
+   * Where the file list comes from — omit for the incumbent `crawlDirectory`
+   * walk, supply one to source it from a projection instead.
+   *
+   * The source answers ENUMERATION only. `include`/`exclude` are still applied
+   * here, with {@link crawlPathFilter} — the same compiled matcher
+   * `crawlDirectory` itself uses on its `git ls-files` branch — so the two lanes
+   * cannot disagree about what the project's globs mean, only about which paths
+   * were offered to them. That distinction is what makes an A/B between them
+   * legible: a difference in the result is a difference in the population.
+   *
+   * Selecting the lane is the CLI's job, not this class's: an env read here
+   * would put the switch below the boundary where the project root is resolved,
+   * and a registry built by a library caller would silently change population
+   * with the environment.
+   */
+  populationSource?: ResourcePopulationSource;
 }
 
 /**
@@ -820,12 +841,62 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // below charges itself per file (see {@link addResource}), and a bracket
     // around both would produce a row that contains the other one. The two are
     // additive as written, which is what lets the incumbent arm be totalled.
+    //
+    // BOTH lanes are charged to this one id, deliberately. They answer the same
+    // question and the point of the seam is to compare them, so a projection arm
+    // that filed its cost under a different row would be incomparable with the
+    // walker arm by construction. Which lane RAN is still readable, and from the
+    // instrument rather than from the caller's intent: the projection reaches
+    // `populate`, which files `builtin:filesystem` and `blob-population:derive`
+    // in the `base` stratum — rows the walker arm cannot produce.
+    //
+    // ⚠️ Those `base` rows are NESTED INSIDE this one, not additive to it. On the
+    // probe repository the projection arm read `enumerate` 27.0 ms against `base`
+    // rows totalling 26.0 ms — so summing the two per-arm totals inflates the
+    // projection arm and leaves the walker arm untouched, which corrupts the
+    // RATIO and not merely the total. Compare `enumerate` to `enumerate`.
+    // See `crawl-timing.ts` on stratum inheritance.
     const enumerationStartedAt = crawlTimingStart();
-    const files = await crawlDirectory(crawlOptions);
+    const files = options.populationSource
+      ? await this.populationFrom(options.populationSource, baseDir, include, exclude)
+      : await crawlDirectory(crawlOptions);
     recordRegistryPass(CRAWL_REGISTRY_ENUMERATE_ID, enumerationStartedAt);
 
     // Add all found files
     return await this.addResources(files);
+  }
+
+  /**
+   * Narrow a projection-supplied population to what this crawl's globs admit.
+   *
+   * The source enumerates a ROOT; `include`/`exclude` are declared relative to
+   * the crawl's `baseDir`, and the two are the same directory for every current
+   * caller. Re-basing here rather than assuming it keeps the coordinate system
+   * explicit: a path outside `baseDir` relativizes to a `../`-prefixed spelling,
+   * which no root-relative glob matches, so it is declined rather than silently
+   * admitted under a nonsense name.
+   *
+   * @param source - The enumeration lane
+   * @param baseDir - The basis the caller's globs are written against
+   * @param include - Include globs
+   * @param exclude - Exclude globs
+   * @returns Absolute paths of the admitted files
+   */
+  private async populationFrom(
+    source: ResourcePopulationSource,
+    baseDir: string,
+    include: string[],
+    exclude: string[],
+  ): Promise<string[]> {
+    const base = safePath.resolve(baseDir);
+    const isMember = crawlPathFilter(include, exclude);
+    const admitted: string[] = [];
+    for (const absolutePath of await source(base)) {
+      if (isMember(safePath.relative(base, absolutePath))) {
+        admitted.push(absolutePath);
+      }
+    }
+    return admitted;
   }
 
   /**

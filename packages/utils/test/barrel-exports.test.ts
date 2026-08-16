@@ -52,6 +52,7 @@ const BARREL_EXPORTS = [
   'CRAWL_WALKER_ID',
   'crawlDirectory',
   'crawlDirectorySync',
+  'crawlPathFilter',
   'crawlTimingStart',
   'defaultRunCommand',
   'describeStdioBlocking',

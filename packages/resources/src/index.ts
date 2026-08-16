@@ -370,6 +370,14 @@ export { blobReferencesFor } from './projection/blob-references.js';
 // output — this is the extent that sees what the git extent cannot.
 export { FilesystemExtentContributor } from './projection/contributors/filesystem-extent.js';
 
+// The resources lane's population, sourced from that extent instead of from
+// `git ls-files` — which is what lets `vat resources validate` see a markdown
+// file the author has written but not yet committed.
+export {
+  buildResourcePopulation,
+  type ResourcePopulationSource,
+} from './projection/resource-population.js';
+
 // The git extent (zones §2): tracked ∪ (untracked ∧ ¬ignored) — what a clone
 // sees. Its disagreement with the filesystem extent over a gitignored path is
 // the visible-to-you/invisible-to-CI fact, not an inconsistency.
@@ -449,6 +457,7 @@ export {
 // what lets a skill's `.mjs` scripts be closure members at all.
 export {
   BLOB_CONTENT_CHANGED,
+  BLOB_NOT_TEXT,
   BLOB_PARSE_FAILED,
   BLOB_UNREADABLE,
   populateBlobs,
