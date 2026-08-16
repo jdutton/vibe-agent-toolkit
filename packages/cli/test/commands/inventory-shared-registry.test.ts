@@ -1,12 +1,6 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
-import {
-  findProjectRoot,
-  mkdirSyncReal,
-  normalizedTmpdir,
-  safeExecSync,
-  safePath,
-} from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, mkdirSyncReal, normalizedTmpdir, runGitOrThrow, safePath } from '@vibe-agent-toolkit/utils';
 import type * as UtilsModule from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -449,7 +443,7 @@ describe('git tracker source — the link walk stops spawning `git check-ignore`
     gitRoot = safePath.resolve(mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-inv-git-')));
     // No commit needed: the active set comes from `git ls-files --cached --others
     // --exclude-standard`, which already reports untracked-but-not-ignored files.
-    safeExecSync('git', ['init', '-q'], { cwd: gitRoot });
+    runGitOrThrow(['init', '-q'], { cwd: gitRoot });
     writeProjectConfig(gitRoot);
     gitPluginDir = safePath.join(gitRoot, 'plugins', 'demo');
     writeSkillPlugin(gitPluginDir, 'git-demo');

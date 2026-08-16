@@ -78,7 +78,7 @@
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
-import { safeExecResult, safePath } from '@vibe-agent-toolkit/utils';
+import { runGit, safePath } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
 import { hasUncommittedChanges } from './git-state.js';
@@ -328,9 +328,8 @@ async function findNearestManifest(startDir: string, subject: string): Promise<s
  * @throws {Error} when the path is not a git checkout, or not the root of one
  */
 async function readTreeCommit(treeRoot: string): Promise<string> {
-  const result = safeExecResult('git', ['rev-parse', '--show-toplevel', 'HEAD'], {
+  const result = runGit(['rev-parse', '--show-toplevel', 'HEAD'], {
     cwd: treeRoot,
-    encoding: 'utf-8',
   });
 
   const lines = String(result.stdout)
@@ -339,7 +338,7 @@ async function readTreeCommit(treeRoot: string): Promise<string> {
     .filter((line) => line.length > 0);
   const [toplevel, commit] = lines;
 
-  if (!result.success || toplevel === undefined || commit === undefined) {
+  if (!result.ok || toplevel === undefined || commit === undefined) {
     const detail = String(result.stderr).trim();
     const why = detail === '' ? `exit ${String(result.status)}` : detail;
     throw new Error(

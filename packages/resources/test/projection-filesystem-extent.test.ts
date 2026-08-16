@@ -1,7 +1,7 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
 import { mkdtempSync, writeFileSync } from 'node:fs';
 
-import { GitTracker, mkdirSyncReal, normalizedTmpdir, safeExecSync, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { GitTracker, mkdirSyncReal, normalizedTmpdir, runGitOrThrow, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { extentDigest, type ExtentContribution } from '../src/projection/contributor.js';
@@ -44,7 +44,7 @@ async function contribute(): Promise<ExtentContribution> {
  * `git check-ignore`, which reads `.gitignore` directly.
  */
 async function contributeInRepo(): Promise<ExtentContribution> {
-  safeExecSync('git', ['init'], { cwd: root, encoding: 'utf8', stdio: 'pipe' });
+  runGitOrThrow(['init'], { cwd: root, stdio: 'pipe' });
   const tracker = new GitTracker(root);
   await tracker.initialize();
   const base = new ProjectionBuilder(root, tracker).base();

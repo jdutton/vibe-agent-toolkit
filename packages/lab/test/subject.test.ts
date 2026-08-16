@@ -28,12 +28,7 @@
 import { rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import {
-  mkdirSyncReal,
-  safeExecSync,
-  safePath,
-  setupSyncTempDirSuite,
-} from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, runGitOrThrow, safePath, setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { type SubjectVersion, SubjectVersionSchema } from '../src/envelope/coordinate.js';
@@ -79,7 +74,7 @@ const suite = setupSyncTempDirSuite('lab-subject');
  * @param cwd - Fixture directory to run in
  */
 function git(args: readonly string[], cwd: string): void {
-  safeExecSync('git', [...args], { cwd, encoding: 'utf8', stdio: 'pipe' });
+  runGitOrThrow([...args], { cwd, stdio: 'pipe' });
 }
 
 /**

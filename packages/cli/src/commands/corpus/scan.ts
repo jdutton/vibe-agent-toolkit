@@ -11,7 +11,7 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { safeExecSync, safePath } from '@vibe-agent-toolkit/utils';
+import { runGit, safePath } from '@vibe-agent-toolkit/utils';
 
 import { handleCommandError } from '../../utils/command-error.js';
 import { createLogger } from '../../utils/logger.js';
@@ -40,13 +40,23 @@ function readVatVersion(): string {
   return pkg.version ?? 'unknown';
 }
 
+/**
+ * The commit of **VAT itself**, for the scan's provenance header.
+ *
+ * Asked at VAT's own package root, the same way {@link readVatVersion} resolves
+ * its `package.json`. Running with no `cwd` asked `process.cwd()` instead — the
+ * *scanned project*, not vat — so an installed vat stamped the adopter's HEAD
+ * under the name `vatCommit`, and an installed vat has no commit to report at
+ * all. The environment is scrubbed for the same reason the path is pinned: an
+ * inherited `GIT_DIR` overrides `cwd` and answers for a third repository again.
+ *
+ * @returns The short commit SHA, or `'unknown'` when vat is not in a checkout
+ */
 function readVatCommit(): string {
-  try {
-    const out = safeExecSync('git', ['rev-parse', '--short=8', 'HEAD'], { encoding: 'utf-8' });
-    return (typeof out === 'string' ? out : out.toString('utf-8')).trim();
-  } catch {
-    return 'unknown';
-  }
+  const result = runGit(['rev-parse', '--short=8', 'HEAD'], {
+    cwd: safePath.resolve(__dirname, '../../..'),
+  });
+  return result.ok ? result.stdout : 'unknown';
 }
 
 export async function corpusScanCommand(

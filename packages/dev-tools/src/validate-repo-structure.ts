@@ -39,7 +39,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { safeExecSync, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { runGitOrThrow, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import {
   loadTokens,
@@ -107,9 +107,8 @@ const TEXT_FILE_EXTENSIONS = new Set([
 async function forEachTrackedTextFile(
   handler: (relPath: string, contents: Buffer) => void,
 ): Promise<void> {
-  const tracked = safeExecSync('git', ['ls-files', '-z'], {
+  const tracked = runGitOrThrow(['ls-files', '-z'], {
     cwd: REPO_ROOT,
-    encoding: 'utf8',
   }) as string;
 
   for (const relPath of tracked.split('\0')) {
@@ -542,7 +541,7 @@ async function validateNoContrabandTokens(): Promise<void> {
   }
   console.log(`   contraband scan: ${tokens.length} token(s) from ${tokensPath ?? 'an unnamed source'}`);
 
-  const lsFiles = String(safeExecSync('git', ['ls-files', '-z'], { cwd: REPO_ROOT, encoding: 'utf8' }));
+  const lsFiles = String(runGitOrThrow(['ls-files', '-z'], { cwd: REPO_ROOT }));
   const tracked = lsFiles
     .split('\0')
     .filter((p: string) => p.length > 0)

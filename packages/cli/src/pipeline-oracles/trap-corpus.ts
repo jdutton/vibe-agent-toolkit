@@ -24,7 +24,7 @@
 
 import { symlinkSync, writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, safeExecResult, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, runGit, safePath } from '@vibe-agent-toolkit/utils';
 
 /** A regular file in the corpus: forward-slashed relative path → contents. */
 export type CorpusFiles = Readonly<Record<string, string>>;
@@ -763,12 +763,19 @@ function writeSymlinks(root: string, links: readonly CorpusSymlink[]): boolean {
  * global git config, and so a developer's `commit.gpgsign` or `core.hooksPath`
  * cannot make the fixture hang.
  *
+ * ⚠️ The environment scrub is load-bearing, not defensive. Measured: with an
+ * inherited `GIT_DIR`, `git init` here re-initializes *that* repository
+ * (`warning: re-init`, exit 0), no `.git` appears under `root` at all, and the
+ * subsequent `add --all` + `commit` land in the ambient repository — while every
+ * step reports success, so this function returns `true` having created no corpus
+ * and having written a commit into a bystander repository.
+ *
  * @param root - Absolute corpus root
  * @returns True when the commit landed
  */
 function initGit(root: string): boolean {
   const run = (args: string[]): boolean =>
-    safeExecResult('git', args, { cwd: root, stdio: 'ignore', timeout: 30_000 }).success;
+    runGit(args, { cwd: root, stdio: 'ignore', timeout: 30_000 }).ok;
 
   return (
     run(['init', '--quiet', '--initial-branch=main']) &&

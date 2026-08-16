@@ -7,23 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`runGit()` and `runGitOrThrow()` in `@vibe-agent-toolkit/utils`** — run git against a path you
+  were handed, without a git hook's inherited `GIT_DIR` silently redirecting it at another
+  repository. Pass `{ ambient: true }` when you do mean the repository the process is standing in.
+
+### Breaking
+
+- **(library) `safeExecSync()` and `safeExecResult()` now throw when asked to run `git`.** Migrate:
+  `safeExecSync('git', args, opts)` → `runGitOrThrow(args, opts)`; `safeExecResult('git', args,
+  opts)` → `runGit(args, opts)`, checking `.ok` instead of `.success`. Drop `encoding` — output is
+  always decoded and trimmed. CLI users are unaffected.
+
 ### Fixed
 
-- **`gitLsFiles()` and `isGitIgnored()` could answer about the wrong repository when VAT runs
-  inside a git hook.** `vat resources validate` is invoked from `vibe-validate`'s `pre-commit`, so
-  these run inside `git commit` routinely — and git exports its own `GIT_DIR`, `GIT_INDEX_FILE`
-  and `GIT_PREFIX` into every hook, which override the `cwd` a caller passed. Measured against a
-  real hook: from a **worktree's** pre-commit (git exports absolute paths into
-  `<main>/.git/worktrees/<name>` there, and most VAT work happens in worktrees), asking
-  `gitLsFiles` about an unrelated project returned **the files of the repository being
-  committed** — a well-formed list of the wrong tree, which nothing downstream can detect. Both
-  functions now strip the inherited git environment before spawning, as `gitTreeSnapshot()`
-  already did. The shared list also covers `GIT_CONFIG_PARAMETERS`, through which the outer
-  commit's `-c` flags reach `core.excludesFile` and change which paths `--exclude-standard`
-  reports.
+- **Git commands run from inside a git hook could read — or write — the wrong repository.** Worst
+  case, `vat claude marketplace publish` switched a branch and landed a commit in the repository you
+  were committing from. Also affected `gitLsFiles()`, `isGitIgnored()` and `cloneGitSource()`.
+  Fixed; no action needed.
 
-  A caller outside a hook is unaffected: with none of those variables set, the answers were
-  already correct and are unchanged.
+- **`vat doctor` reported "Git is not installed" when git was installed and working.** Also affected
+  `getToolVersion('git')` and `isToolAvailable('git')` for library callers.
+
+- **`vat` ignored git configuration supplied through `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_*`/
+  `GIT_CONFIG_VALUE_*`**, so a clone that CI had pointed at an internal mirror went to the network
+  instead. Those are honoured again; `GIT_CONFIG_PARAMETERS` is still ignored inside a hook.
+
+- **A `linkAuth` token command that invokes `git` was refused.** Configured commands such as
+  `git credential fill` work again.
 
 ### Changed
 

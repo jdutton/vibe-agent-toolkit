@@ -127,8 +127,6 @@
         "@vibe-agent-toolkit/claude-marketplace": "workspace:*",
         "@vibe-agent-toolkit/discovery": "workspace:*",
         "@vibe-agent-toolkit/gateway-mcp": "workspace:*",
-        "@vibe-agent-toolkit/rag": "workspace:*",
-        "@vibe-agent-toolkit/rag-lancedb": "workspace:*",
         "@vibe-agent-toolkit/resources": "workspace:*",
         "@vibe-agent-toolkit/schema": "workspace:*",
         "@vibe-agent-toolkit/utils": "workspace:*",
@@ -150,6 +148,10 @@
         "rimraf": "^6.0.1",
         "typescript": "^5.7.3",
         "vitest": "^3.2.4",
+      },
+      "optionalDependencies": {
+        "@vibe-agent-toolkit/rag": "workspace:*",
+        "@vibe-agent-toolkit/rag-lancedb": "workspace:*",
       },
     },
     "packages/dev-tools": {

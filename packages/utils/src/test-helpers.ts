@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import fs from 'node:fs/promises';
 
+import { INHERITED_GIT_ENV } from './git-env.js';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from './path-utils.js';
 
 /**
@@ -213,4 +214,51 @@ export function canCreateSymlinks(dir: string): boolean {
   }
   rmSync(probe, { force: true });
   return true;
+}
+
+/**
+ * Remove every inherited git redirection from `process.env`, and hand back the
+ * undo.
+ *
+ * A test that fabricates a hook environment has to start from a known-clean one,
+ * or it inherits whatever the *outer* runner exported and can no longer tell its
+ * own fixture apart from the ambient state — it then passes or fails for reasons
+ * it never set up. Restoring afterwards matters just as much: these are
+ * process-global, so a test that leaks `GIT_DIR` silently redirects every later
+ * test sharing the worker.
+ *
+ * The key list is {@link INHERITED_GIT_ENV}, the same one `cleanGitEnv()`
+ * strips — so a variable added there is covered here without a second edit, and
+ * the two can never disagree about what "the git environment" means.
+ *
+ * @returns A function restoring every variable to its prior value, putting back
+ *   "was not set" as unset rather than as an empty string
+ *
+ * @example
+ * ```typescript
+ * let restoreGitEnv: () => void;
+ * beforeEach(() => { restoreGitEnv = detachGitEnv(); });
+ * afterEach(() => { restoreGitEnv(); });
+ * ```
+ */
+export function detachGitEnv(): () => void {
+  const saved = new Map<string, string | undefined>();
+
+  const forget = (name: string): void => {
+    saved.set(name, process.env[name]);
+    delete process.env[name];
+  };
+
+  for (const name of INHERITED_GIT_ENV) {
+    forget(name);
+  }
+
+  return () => {
+    for (const [name, value] of saved) {
+      // Deleted first so an absent variable is restored as absent: assigning
+      // `undefined` would leave the literal string 'undefined' behind.
+      delete process.env[name];
+      if (value !== undefined) process.env[name] = value;
+    }
+  };
 }

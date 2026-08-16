@@ -988,6 +988,9 @@ describe('no-command-direct-factory', () => {
     availableFunctions: ['executeGitCommand()'],
     exemptPackage: 'packages/git/',
   });
+  // Deliberately the pattern this rule EXISTS to catch. It is a fixture, not a
+  // call site: a bulk migration that "fixes" it silently disarms the rule's
+  // entire invalid[] leg, which then passes by finding nothing to report.
   const gitCode = "safeExecSync('git', ['status']);";
   const errors = [{ messageId: 'noGitDirect' }];
 

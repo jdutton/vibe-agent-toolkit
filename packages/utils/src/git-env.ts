@@ -46,7 +46,7 @@
  * deliberately absent; none of them can move the answer, and dropping them
  * breaks legitimate setups.
  */
-const INHERITED_GIT_ENV = [
+export const INHERITED_GIT_ENV = [
   // Repository / index / worktree redirection
   'GIT_DIR',
   'GIT_WORK_TREE',
@@ -62,14 +62,22 @@ const INHERITED_GIT_ENV = [
   // Pathspec rescoping: git prepends GIT_PREFIX when interpreting a pathspec,
   // so an inherited value silently re-scopes a child that runs at the root.
   'GIT_PREFIX',
-  // Alternate config, which reaches `core.excludesFile` and therefore which
-  // paths `--exclude-standard` reports. GIT_CONFIG_PARAMETERS is the one git
-  // sets ITSELF — it carries the outer invocation's `-c` flags into every hook.
-  'GIT_CONFIG',
-  'GIT_CONFIG_GLOBAL',
-  'GIT_CONFIG_SYSTEM',
-  'GIT_CONFIG_NOSYSTEM',
-  'GIT_CONFIG_COUNT',
+  // The ONE config variable git sets by itself: it carries the outer
+  // invocation's `-c` flags into every hook and every hook's children, so an
+  // injected `core.excludesFile` silently changes which paths a child's
+  // `--exclude-standard` reports. Nobody opted into it, so removing it takes
+  // nothing away.
+  //
+  // Its siblings — GIT_CONFIG, GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM,
+  // GIT_CONFIG_NOSYSTEM, GIT_CONFIG_COUNT and the numbered KEY_/VALUE_ groups —
+  // are deliberately NOT here. Measured on git 2.50.1: git never sets any of
+  // them, in a plain repository or a worktree, with or without `-c` flags. They
+  // appear only when an operator put them there, and they are the documented
+  // env-only channel (git >= 2.31) that CI uses to point github.com at an
+  // internal mirror or to supply credentials. Stripping them defends against
+  // nothing git does and makes VAT the one tool on the box that ignores the
+  // operator's git configuration — silently, which is how a clone that should
+  // have gone to a mirror goes to the internet instead.
   'GIT_CONFIG_PARAMETERS',
   // History view
   'GIT_NOTES_REF',
@@ -78,11 +86,6 @@ const INHERITED_GIT_ENV = [
   // On-disk format of any index the child writes
   'GIT_INDEX_VERSION',
 ] as const;
-
-/**
- * Prefixes for numbered config groups, read when `GIT_CONFIG_COUNT` is set.
- */
-const INHERITED_GIT_ENV_PREFIXES = ['GIT_CONFIG_KEY_', 'GIT_CONFIG_VALUE_'] as const;
 
 /**
  * The ambient environment with every inherited git redirection removed.
@@ -101,11 +104,6 @@ export function cleanGitEnv(overrides: Record<string, string> = {}): NodeJS.Proc
     // Deleted, not set to '': git treats an empty GIT_DIR as a real (empty)
     // value and fails to discover a repository at all.
     delete env[name];
-  }
-  for (const name of Object.keys(env)) {
-    if (INHERITED_GIT_ENV_PREFIXES.some((prefix) => name.startsWith(prefix))) {
-      delete env[name];
-    }
   }
   return { ...env, ...overrides };
 }

@@ -21,16 +21,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { gitLsFiles, isGitIgnored } from '../../src/git-utils.js';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '../../src/path-utils.js';
+import { detachGitEnv } from '../../src/test-helpers.js';
 import { createGitRepo } from '../test-helpers.js';
-
-/** The variables git exports into a hook and that must never steer a child. */
-const HOOK_ENV_KEYS = [
-  'GIT_DIR',
-  'GIT_WORK_TREE',
-  'GIT_INDEX_FILE',
-  'GIT_PREFIX',
-  'GIT_CONFIG_PARAMETERS',
-] as const;
 
 /** The file only the repository under test has. */
 const OURS = 'docs/ours.md';
@@ -53,14 +45,10 @@ function enterHookOf(repo: string): void {
 describe('git helpers under a hook environment', () => {
   let ours: string;
   let theirs: string;
-  let saved: Record<string, string | undefined>;
+  let restoreGitEnv: () => void;
 
   beforeEach(() => {
-    saved = {};
-    for (const key of HOOK_ENV_KEYS) {
-      saved[key] = process.env[key];
-      delete process.env[key];
-    }
+    restoreGitEnv = detachGitEnv();
 
     ours = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-hook-ours-'));
     theirs = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-hook-theirs-'));
@@ -73,10 +61,7 @@ describe('git helpers under a hook environment', () => {
   });
 
   afterEach(() => {
-    for (const key of HOOK_ENV_KEYS) {
-      delete process.env[key];
-      if (saved[key] !== undefined) process.env[key] = saved[key];
-    }
+    restoreGitEnv();
     rmSync(ours, { recursive: true, force: true });
     rmSync(theirs, { recursive: true, force: true });
   });

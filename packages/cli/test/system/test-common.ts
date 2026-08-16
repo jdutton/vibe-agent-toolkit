@@ -9,7 +9,7 @@ import * as fs from 'node:fs';
 import { dirname as pathDirname, join as pathJoin, resolve as pathResolve } from 'node:path';
 import { fileURLToPath as urlFileURLToPath } from 'node:url';
 
-import { mkdirSyncReal, normalizedTmpdir, safeExecSync, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, normalizedTmpdir, runGitOrThrow, safePath } from '@vibe-agent-toolkit/utils';
 import { expect } from 'vitest';
 import * as yaml from 'yaml';
 
@@ -389,10 +389,10 @@ export function fakeHomeEnv(fakeHome: string): Record<string, string> {
  * git fixture (multi-plugin marketplace).
  */
 export function initGitRepoWithRemote(sourceRepo: string, bareRemote: string): void {
-  safeExecSync('git', ['init', '-q', '-b', 'main'], { cwd: sourceRepo });
-  safeExecSync('git', ['config', 'user.email', 'test@test'], { cwd: sourceRepo });
-  safeExecSync('git', ['config', 'user.name', 'test'], { cwd: sourceRepo });
-  safeExecSync('git', ['remote', 'add', 'origin', bareRemote], { cwd: sourceRepo });
+  runGitOrThrow(['init', '-q', '-b', 'main'], { cwd: sourceRepo });
+  runGitOrThrow(['config', 'user.email', 'test@test'], { cwd: sourceRepo });
+  runGitOrThrow(['config', 'user.name', 'test'], { cwd: sourceRepo });
+  runGitOrThrow(['remote', 'add', 'origin', bareRemote], { cwd: sourceRepo });
 }
 
 /**
@@ -400,9 +400,9 @@ export function initGitRepoWithRemote(sourceRepo: string, bareRemote: string): v
  * to `origin`. Pairs with `initGitRepoWithRemote`.
  */
 export function commitAllAndPushMain(sourceRepo: string): void {
-  safeExecSync('git', ['add', '-A'], { cwd: sourceRepo });
-  safeExecSync('git', ['commit', '-q', '-m', 'init'], { cwd: sourceRepo });
-  safeExecSync('git', ['push', '-q', 'origin', 'main'], { cwd: sourceRepo });
+  runGitOrThrow(['add', '-A'], { cwd: sourceRepo });
+  runGitOrThrow(['commit', '-q', '-m', 'init'], { cwd: sourceRepo });
+  runGitOrThrow(['push', '-q', 'origin', 'main'], { cwd: sourceRepo });
 }
 
 /**

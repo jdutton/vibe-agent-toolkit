@@ -5,7 +5,7 @@
  * Two clusters of duplicated infrastructure are eliminated here:
  *
  * **Cluster A — git helpers**
- * `runGit()` is a thin wrapper around `spawnSync('git', ...)` with a
+ * `runGit()` is a thin wrapper around `runGitOrThrow()` with a
  * descriptive error message; `makeBareRepoWithSkill()` creates a
  * self-contained bare repo + working-tree fixture with a SKILL.md so that
  * tests can exercise git-based skill sources without hitting real remotes.
@@ -15,11 +15,15 @@
  * `ResolveSkillSourceContext` before each test, and tears down after.
  */
 
-import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import {
+  mkdirSyncReal,
+  normalizedTmpdir,
+  runGitOrThrow,
+  safePath,
+} from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach } from 'vitest';
 
 import type { ResolveSkillSourceContext } from '../../src/skill-source/types.js';
@@ -41,12 +45,7 @@ const FIXTURE_SKILL_MD =
  * @param cwd  - Working directory for the git invocation
  */
 export function runGit(args: string[], cwd: string): void {
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git is a standard system command
-  const { status, stderr } = spawnSync('git', args, { cwd, encoding: 'utf-8' });
-  if (status === 0) return;
-  throw new Error(
-    `git ${args.join(' ')} exited ${String(status ?? '?')} in ${cwd}: ${stderr ?? ''}`,
-  );
+  runGitOrThrow(args, { cwd });
 }
 
 /**

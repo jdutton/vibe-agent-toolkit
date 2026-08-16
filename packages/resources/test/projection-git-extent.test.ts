@@ -19,16 +19,7 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
-import {
-  crawlDirectory,
-  GitTracker,
-  mkdirSyncReal,
-  NEVER_CRAWL_GLOBS,
-  normalizedTmpdir,
-  safeExecSync,
-  safePath,
-  toForwardSlash,
-} from '@vibe-agent-toolkit/utils';
+import { crawlDirectory, GitTracker, mkdirSyncReal, NEVER_CRAWL_GLOBS, normalizedTmpdir, runGitOrThrow, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { ExtentContribution } from '../src/projection/contributor.js';
@@ -76,7 +67,7 @@ let contribution: ExtentContribution;
  * @param cwd - Fixture directory to run in
  */
 function git(args: readonly string[], cwd: string): void {
-  safeExecSync('git', [...args], { cwd, encoding: 'utf8', stdio: 'pipe' });
+  runGitOrThrow([...args], { cwd, stdio: 'pipe' });
 }
 
 /** Root-relative paths of every realization the contributor emitted. */

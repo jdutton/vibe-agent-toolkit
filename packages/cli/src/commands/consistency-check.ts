@@ -10,7 +10,7 @@ import { readFileSync, existsSync } from 'node:fs';
 
 import { getPluginSourceDir } from '@vibe-agent-toolkit/agent-skills';
 import type { ProjectConfig, SkillPackagingConfig } from '@vibe-agent-toolkit/resources';
-import { safeExecResult, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { runGit, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import type { DiscoveredSkill } from './skills/command-helpers.js';
 
@@ -509,13 +509,9 @@ export function assertVendoredLicensingShipped(
   // (4) LICENSE.txt not gitignored (best-effort; skip if git is unavailable)
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- licensePath is derived from trusted packageDir parameter
   if (existsSync(licensePath)) {
-    const gitResult = safeExecResult(
-      'git',
-      ['check-ignore', '--quiet', licensePath],
-      { cwd: packageDir, encoding: 'utf8' },
-    );
+    const gitResult = runGit(['check-ignore', '--quiet', licensePath], { cwd: packageDir });
     // git check-ignore exits 0 if the path IS ignored, 1 if not ignored, error(-1) if git unavailable
-    if (gitResult.success) {
+    if (gitResult.ok) {
       problems.push(
         'vendor/skill-creator/LICENSE.txt is gitignored — the LICENSE.txt must be committed so it ships with the package. Remove the gitignore rule covering this path.',
       );

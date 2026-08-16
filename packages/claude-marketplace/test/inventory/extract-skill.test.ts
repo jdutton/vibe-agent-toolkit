@@ -2,19 +2,7 @@ import { writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import { type ResourceRegistry } from '@vibe-agent-toolkit/resources';
-import {
-	__readCrawlTimingSnapshot,
-	__setCrawlTimingForTest,
-	CRAWL_PASS_INSIDE,
-	CRAWL_REGISTRY_ADD_RESOURCE_ID,
-	CRAWL_REGISTRY_ENUMERATE_ID,
-	findProjectRoot,
-	GitTracker,
-	mkdirSyncReal,
-	safeExecSync,
-	safePath,
-	setupAsyncTempDirSuite,
-} from '@vibe-agent-toolkit/utils';
+import { __readCrawlTimingSnapshot, __setCrawlTimingForTest, CRAWL_PASS_INSIDE, CRAWL_REGISTRY_ADD_RESOURCE_ID, CRAWL_REGISTRY_ENUMERATE_ID, findProjectRoot, GitTracker, mkdirSyncReal, runGitOrThrow, safePath, setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -66,7 +54,7 @@ function commitRepo(root: string): void {
 	const identity = ['-c', 'user.email=t@example.com', '-c', 'user.name=t'];
 	const steps = [['init', '-q'], ['add', '-A'], [...identity, 'commit', '-qm', 'fixture']];
 	for (const args of steps) {
-		safeExecSync('git', args, { cwd: root });
+		runGitOrThrow(args, { cwd: root });
 	}
 }
 

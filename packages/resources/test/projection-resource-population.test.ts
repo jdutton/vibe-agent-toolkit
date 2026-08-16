@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 // `safePath`, which has no `dirname` because it never needed one.
 import { dirname } from 'node:path';
 
-import { compareCodeUnits, GitTracker, safeExecSync, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, GitTracker, runGitOrThrow, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { buildResourcePopulation } from '../src/projection/resource-population.js';
@@ -29,7 +29,7 @@ async function write(relativePath: string, content: string): Promise<void> {
 
 /** Run git in the fixture tree, throwing on any failure. */
 function git(args: readonly string[]): void {
-  safeExecSync('git', [...args], { cwd: suite.tempDir, encoding: 'utf8', stdio: 'pipe' });
+  runGitOrThrow([...args], { cwd: suite.tempDir, stdio: 'pipe' });
 }
 
 /** The population as root-relative, forward-slashed paths — the readable unit. */

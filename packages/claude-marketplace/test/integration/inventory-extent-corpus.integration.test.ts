@@ -66,24 +66,10 @@ import {
   type Projection,
   type ProjectionBase,
 } from '@vibe-agent-toolkit/resources';
-import {
-  GitTracker,
-  crawlDirectory,
-  mkdirSyncReal,
-  normalizedTmpdir,
-  safeExecSync,
-  safePath,
-  toForwardSlash,
-} from '@vibe-agent-toolkit/utils';
+import { crawlDirectory, GitTracker, mkdirSyncReal, normalizedTmpdir, runGitOrThrow, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import {
-  INVENTORY_REFUSED_GITIGNORED,
-  InventorySkillExtentContributor,
-  crawlSkillLinkRegistry,
-  inventoryExtentContributorId,
-  inventoryExtentDeclaration,
-} from '../../src/index.js';
+import { crawlSkillLinkRegistry, INVENTORY_REFUSED_GITIGNORED, inventoryExtentContributorId, inventoryExtentDeclaration, InventorySkillExtentContributor } from '../../src/index.js';
 
 // ============================================================================
 // The corpora
@@ -234,9 +220,9 @@ function buildFixtureCorpus(): string {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- a path this function just composed under its own mkdtemp root
     writeFileSync(absolute, contents, 'utf-8');
   }
-  safeExecSync('git', ['init', '-q'], { cwd: root });
-  safeExecSync('git', ['add', '-A'], { cwd: root });
-  safeExecSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-qm', 'fixture'], { cwd: root });
+  runGitOrThrow(['init', '-q'], { cwd: root });
+  runGitOrThrow(['add', '-A'], { cwd: root });
+  runGitOrThrow(['-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-qm', 'fixture'], { cwd: root });
   return root;
 }
 

@@ -3,7 +3,7 @@ import { existsSync, cpSync, readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 
 import { countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { normalizedTmpdir, safeExecSync, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, runGitOrThrow, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { globSync } from 'glob';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -339,11 +339,9 @@ function setupLinkedGlobRepo(): LinkedGlobRepo {
       JSON.stringify({ name: 'linked-glob-fixture', private: true }),
     );
 
-    safeExecSync('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
-    safeExecSync('git', ['add', '-A'], { cwd: repoRoot });
-    safeExecSync(
-      'git',
-      ['-c', 'user.email=vat@example.test', '-c', 'user.name=VAT Fixture',
+    runGitOrThrow(['init', '-q', '-b', 'main'], { cwd: repoRoot });
+    runGitOrThrow(['add', '-A'], { cwd: repoRoot });
+    runGitOrThrow(['-c', 'user.email=vat@example.test', '-c', 'user.name=VAT Fixture',
         'commit', '-q', '-m', 'fixture tree'],
       { cwd: repoRoot },
     );

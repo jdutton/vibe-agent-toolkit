@@ -1,15 +1,7 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
 import { mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 
-import {
-  GitTracker,
-  canCreateSymlinks,
-  mkdirSyncReal,
-  normalizedTmpdir,
-  safeExecSync,
-  safePath,
-  toForwardSlash,
-} from '@vibe-agent-toolkit/utils';
+import { canCreateSymlinks, GitTracker, mkdirSyncReal, normalizedTmpdir, runGitOrThrow, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { RunContentCache } from '../src/projection/content-cache.js';
@@ -65,7 +57,7 @@ async function nestedRow(): Promise<ResourceRealizationRow> {
  */
 async function trackerOverFixture(): Promise<GitTracker> {
   writeFileSync(safePath.join(root, '.gitignore'), `${IGNORED_LOG}\n${IGNORED_DIR}/\n`);
-  safeExecSync('git', ['init'], { cwd: root, encoding: 'utf8', stdio: 'pipe' });
+  runGitOrThrow(['init'], { cwd: root, stdio: 'pipe' });
   const tracker = new GitTracker(root);
   await tracker.initialize();
   return tracker;

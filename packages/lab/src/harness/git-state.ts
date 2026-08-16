@@ -14,7 +14,7 @@
  * So the definition lives here, once, and both axes import it.
  */
 
-import { safeExecResult } from '@vibe-agent-toolkit/utils';
+import { runGit as runGitSafely } from '@vibe-agent-toolkit/utils';
 
 /** One git plumbing invocation's outcome. */
 export interface GitOutcome {
@@ -27,18 +27,25 @@ export interface GitOutcome {
 /**
  * Run one git plumbing command and return its exit status and decoded stdout.
  *
- * Goes through `safeExecResult` (PATH resolved once, no shell) rather than
- * spawning directly, and never throws: callers treat a non-zero exit as
- * information — "no commit yet", "detached HEAD" — rather than as a failure.
+ * Goes through the `runGit()` chokepoint in utils, which never throws: callers
+ * treat a non-zero exit as information — "no commit yet", "detached HEAD" —
+ * rather than as a failure.
+ *
+ * `cwd` is a **caller-supplied** path — a subject or an instrument checkout,
+ * never "the repository I happen to be in" — so the scrub `runGit` applies by
+ * default is the behaviour this function needs. Without it, run from a worktree
+ * pre-commit hook, `git status --porcelain` at `cwd` reports the *committing*
+ * repository's status with exit 0; the `status !== 0` guard below cannot see
+ * that, and `hasUncommittedChanges` stamps a confident dirty/clean label
+ * belonging to a different tree.
  *
  * @param args - Arguments after the `git` executable
  * @param cwd - Directory to run in
  * @returns The exit status and stdout
  */
 export function runGit(args: readonly string[], cwd: string): GitOutcome {
-  const result = safeExecResult('git', [...args], { cwd, encoding: 'utf8' });
-  const stdout = typeof result.stdout === 'string' ? result.stdout : result.stdout.toString('utf8');
-  return { status: result.status, stdout };
+  const result = runGitSafely(args, { cwd });
+  return { status: result.status, stdout: result.stdout };
 }
 
 /**

@@ -80,7 +80,16 @@ export const defaultRunCommand: TokenResolutionDeps['runCommand'] = (argv) => {
   if (argv.length === 0) return { success: false, stdout: '' };
   const [bin, ...args] = argv;
   if (bin === undefined) return { success: false, stdout: '' };
-  const result = safeExecResult(bin, [...args], { encoding: 'utf8', env: scrubGitEnv(process.env) });
+  const result = safeExecResult(bin, [...args], {
+    encoding: 'utf8',
+    env: scrubGitEnv(process.env),
+    // The operator chose this argv; VAT neither composed it nor knows whether it
+    // means a path or the ambient repository, so the usual "say which you mean"
+    // refusal has nobody to ask. `git credential fill` and friends are ordinary
+    // things to configure here. The env is already handled above, and more
+    // strictly than runGit would: every GIT_* key, case-insensitively.
+    allowGit: true,
+  });
   const stdout = typeof result.stdout === 'string' ? result.stdout : result.stdout.toString('utf8');
   return { success: result.success, stdout };
 };

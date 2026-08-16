@@ -1,7 +1,7 @@
 /* eslint-disable security/detect-non-literal-fs-filename, sonarjs/no-duplicate-string */
 import { existsSync } from 'node:fs';
 
-import { mkdirSyncReal, safeExecSync, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, runGitOrThrow, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -165,9 +165,9 @@ claude:
       safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
       configMin('        - name: p1\n          skills: []\n'),
     );
-    safeExecSync('git', ['init', '-q'], { cwd: tempDir });
-    safeExecSync('git', ['config', 'user.email', 't@t'], { cwd: tempDir });
-    safeExecSync('git', ['config', 'user.name', 't'], { cwd: tempDir });
+    runGitOrThrow(['init', '-q'], { cwd: tempDir });
+    runGitOrThrow(['config', 'user.email', 't@t'], { cwd: tempDir });
+    runGitOrThrow(['config', 'user.name', 't'], { cwd: tempDir });
     writeTestFile(safePath.join(tempDir, '.gitignore'), 'plugins/p1/node_modules/\n');
     mkdirSyncReal(safePath.join(tempDir, 'plugins', 'p1', 'node_modules'), { recursive: true });
     writeTestFile(safePath.join(tempDir, 'plugins', 'p1', 'node_modules', 'junk.js'), '//');
@@ -176,8 +176,8 @@ claude:
       safePath.join(tempDir, 'plugins', 'p1', 'commands', 'ok.md'),
       '---\n---\n# ok',
     );
-    safeExecSync('git', ['add', '-A'], { cwd: tempDir });
-    safeExecSync('git', ['commit', '-q', '-m', 'init'], { cwd: tempDir });
+    runGitOrThrow(['add', '-A'], { cwd: tempDir });
+    runGitOrThrow(['commit', '-q', '-m', 'init'], { cwd: tempDir });
 
     const result = await runSkillsThenPluginBuild(tempDir);
     expect(result.status).toBe(0);

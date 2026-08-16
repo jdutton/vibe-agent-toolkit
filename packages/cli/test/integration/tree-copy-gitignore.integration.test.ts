@@ -2,7 +2,7 @@
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 
-import { mkdirSyncReal, safeExecSync, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, runGitOrThrow, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { treeCopyPlugin } from '../../src/commands/claude/plugin/tree-copy.js';
@@ -25,17 +25,17 @@ function initPluginTreeFixture(createTempDir: () => string): FixturePaths {
   mkdirSyncReal(src, { recursive: true });
   mkdirSyncReal(dest, { recursive: true });
 
-  safeExecSync('git', ['init', '-q'], { cwd: root });
-  safeExecSync('git', ['config', 'user.email', 't@t'], { cwd: root });
-  safeExecSync('git', ['config', 'user.name', 't'], { cwd: root });
+  runGitOrThrow(['init', '-q'], { cwd: root });
+  runGitOrThrow(['config', 'user.email', 't@t'], { cwd: root });
+  runGitOrThrow(['config', 'user.name', 't'], { cwd: root });
 
   return { root, src, dest };
 }
 
 /** Commit whatever's in the worktree so gitignore rules are effective. */
 function commitAll(root: string): void {
-  safeExecSync('git', ['add', '-A'], { cwd: root });
-  safeExecSync('git', ['commit', '-q', '-m', 'init'], { cwd: root });
+  runGitOrThrow(['add', '-A'], { cwd: root });
+  runGitOrThrow(['commit', '-q', '-m', 'init'], { cwd: root });
 }
 
 /** Write a dummy command file so the tree has *something* that must be copied. */

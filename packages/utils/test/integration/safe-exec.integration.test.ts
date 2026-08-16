@@ -528,8 +528,16 @@ describe('safeExecFromString', () => {
     });
 
     it('should handle commands with dashes and numbers', () => {
-      // Common pattern: git log --max-count 10
-      expect(() => safeExecFromString('git log --max-count 10')).not.toThrow();
+      // Shape under test is `<cmd> -flag <number>`, not this particular binary.
+      expect(() => safeExecFromString('node -e 0')).not.toThrow();
+    });
+
+    it('refuses git in string form too, so the chokepoint has no back door', () => {
+      // This case used to read `git log --max-count 10` and assert it ran. The
+      // string form resolves to the same spawn as safeExecSync, so exempting it
+      // would leave the one command whose environment decides which repository
+      // it describes reachable by spelling it differently.
+      expect(() => safeExecFromString('git log --max-count 10')).toThrow(/runGit\(\)/);
     });
   });
 

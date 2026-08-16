@@ -82,6 +82,14 @@ export * from './file-crawler.js';
 // Git ignore checking
 export * from './gitignore-checker.js';
 
+// Inherited GIT_* redirection — the scrub every git child needs when it targets
+// a caller-supplied path rather than the ambient repository
+export * from './git-env.js';
+
+// The one way to run git: scrubbed by default, `ambient: true` to opt out.
+// safeExecSync/safeExecResult refuse `git` and point here.
+export * from './git-run.js';
+
 // Git URL parsing (parse/detect git URLs, GitHub shorthand, SSH forms)
 export * from './git-url.js';
 

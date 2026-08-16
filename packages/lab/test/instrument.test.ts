@@ -29,7 +29,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import {
   normalizedTmpdir,
   resolveFromImportMeta,
-  safeExecSync,
+  runGitOrThrow,
   safePath,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
@@ -71,8 +71,7 @@ afterAll(async () => {
  * @param args - Git arguments
  */
 function git(cwd: string, args: string[]): void {
-  safeExecSync(
-    'git',
+  runGitOrThrow(
     [
       '-c',
       'user.email=lab@example.invalid',
@@ -84,7 +83,7 @@ function git(cwd: string, args: string[]): void {
       'init.defaultBranch=main',
       ...args,
     ],
-    { cwd, stdio: 'pipe' },
+    { cwd },
   );
 }
 

@@ -5,10 +5,9 @@
  * Uses child_process.spawnSync for git commands (no external dependencies).
  */
 
-import { spawnSync } from 'node:child_process';
 import { cpSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, runGit, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { Logger } from '../../../utils/logger.js';
 import { redactUrlCredentials } from '../../../utils/url-redact.js';
@@ -60,17 +59,22 @@ export function createCommitMessage(
 /**
  * Execute a git command and return the result.
  * Throws on non-zero exit code unless allowFailure is true.
+ *
+ * 🔴 Running through `runGit` is a data-loss guard, not a style choice. Every
+ * call here targets the private staging repo under the temp directory — a
+ * caller-supplied path — and an inherited `GIT_DIR` overrides `cwd` outright.
+ * Measured against a bystander repository: the `checkout -b`, `add -A` and
+ * `commit` below ran against *it* instead, switching its branch, rewriting its
+ * index and landing a commit, with `push` next in line. `runGit` scrubs by
+ * default, so no call site here has to remember.
  */
 function git(
   args: string[],
   options: { cwd: string; allowFailure?: boolean; timeout?: number; input?: string }
 ): { stdout: string; stderr: string; status: number } {
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git is a standard system command
-  const result = spawnSync('git', args, {
+  const result = runGit(args, {
     cwd: options.cwd,
-    encoding: 'utf-8',
-    stdio: ['pipe', 'pipe', 'pipe'],
-    timeout: options.timeout,
+    ...(options.timeout === undefined ? {} : { timeout: options.timeout }),
     ...(options.input === undefined ? {} : { input: options.input }),
   });
 
@@ -79,26 +83,20 @@ function git(
   // unreadable in CI logs.
   const label = args[0] ?? '<no args>';
 
-  // `spawnSync` reports a process that never ran (E2BIG, ENOENT, timeout kill) as
-  // `status: null` with the cause in `result.error`. Coercing that to an exit code
-  // invents a failure git never reported and discards the only diagnostic there is —
-  // the symptom is a confident "exit 1" with empty stderr. Report it as what it is.
+  // `runGit` separates "never ran" (E2BIG, ENOENT, timeout kill, ENOBUFS) from
+  // "ran and exited non-zero". Collapsing the first into an exit code invents a
+  // failure git never reported and discards the only diagnostic there is — the
+  // symptom is a confident "exit 1" with empty stderr.
   if (result.error && !options.allowFailure) {
     throw new Error(`git ${label} could not run: ${result.error.message}`);
   }
 
-  const status = result.status ?? 1;
+  const status = result.status === -1 ? 1 : result.status;
   if (status !== 0 && !options.allowFailure) {
-    throw new Error(`git ${label} failed (exit ${status}):\n${result.stderr ?? ''}`);
+    throw new Error(`git ${label} failed (exit ${status}):\n${result.stderr}`);
   }
 
-  return {
-    stdout: (result.stdout ?? '').trim(),
-    // Surface a spawn-level failure to `allowFailure` callers too, which would
-    // otherwise see an empty stderr beside a fabricated non-zero status.
-    stderr: (result.stderr ?? result.error?.message ?? '').trim(),
-    status,
-  };
+  return { stdout: result.stdout, stderr: result.stderr, status };
 }
 
 /**
