@@ -107,7 +107,33 @@ function instrumentTag(envelope: ReportEnvelope<unknown>): string {
  *
  * Encodes facet, subject, subject version and instrument — the whole coordinate
  * except what would make the name unreadable. Two reports that differ on any
- * axis therefore land on different filenames and cannot overwrite each other.
+ * MODELLED axis therefore land on different filenames and cannot overwrite each
+ * other.
+ *
+ * ⚠️ **"Any axis" means any axis the coordinate models, and an instrument
+ * selected by the ENVIRONMENT is not one of them.** Measured 2026-08-15: two
+ * `crawl run` invocations over one subject, differing only in
+ * `VAT_INVENTORY_CRAWL` (the switch choosing the incumbent link-walk crawler or
+ * the projection crawler), produced two genuinely different measurements and
+ * wrote them to a **byte-identical path** — the second silently overwrote the
+ * first. That is precisely "the failure this whole naming scheme exists to
+ * prevent", and it is silent: nothing warns, and the survivor looks like a
+ * complete capture.
+ *
+ * The lab does not set that variable and does not read it: it spawns the vat
+ * binary and the value is inherited from whoever ran the lab, so nothing here
+ * can currently notice. Closing this means giving the instrument coordinate an
+ * explicit VARIANT (a general operator-supplied label, not a VAT-specific env
+ * allowlist) and putting it in {@link instrumentTag} — a coordinate change, so
+ * it is recorded here rather than patched around.
+ *
+ * ✅ Until then the workaround is real and was RUN, not assumed: send each arm to
+ * its own `--out` directory, then hand `crawl compare` the two report paths. It
+ * prints a correct arm-vs-arm diff, honestly headed "Comparing two reports at the
+ * same coordinate" — which is exactly the gap named above, stated by the tool
+ * itself. Prefer this over a distinct `--id` per arm: that does reach the
+ * filename, but via the SUBJECT axis, so it buys separation by recording that the
+ * arms measured two different subjects, which they did not.
  *
  * @param envelope - The report to name
  * @returns A filename, without a directory
