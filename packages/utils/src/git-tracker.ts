@@ -246,8 +246,21 @@ export class GitTracker {
    * possible per-path spawn.
    *
    * @param absolutePath - Absolute path to check
+   * @param knownToExist - The caller's own answer to the existence question, when
+   *   it has already asked. Supplying it skips this method's `existsSync`, which
+   *   is otherwise paid once per path that is absent from the active set — i.e.
+   *   once per ignored path, and the projection's `filesystem` extent enumerates
+   *   all of them (11,108 calls on an 8,496-path adopter tree).
+   *
+   *   **It must mean what `existsSync` means: `stat` succeeds, following
+   *   symlinks.** A caller holding only an `lstat` result has a DIFFERENT fact —
+   *   `lstat` succeeds on a dangling symlink where `existsSync` returns false —
+   *   and must narrow it to `exists && symlinkResolves !== false` rather than
+   *   pass the `lstat` boolean through, or dangling symlinks silently stop
+   *   falling back to `git check-ignore` and start reporting as ignored.
+   *   Omit it and nothing changes.
    */
-  isIgnoredByActiveSet(absolutePath: string): boolean {
+  isIgnoredByActiveSet(absolutePath: string, knownToExist?: boolean): boolean {
     if (!this.activeSetPopulated) {
       return this.isIgnored(absolutePath);
     }
@@ -266,7 +279,8 @@ export class GitTracker {
     // Absent from the active set. That means "ignored" only for a path that is
     // actually there; otherwise the set has no opinion and git must be asked.
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied path, read-only existence probe
-    if (!existsSync(normalized)) {
+    const present = knownToExist ?? existsSync(normalized);
+    if (!present) {
       return this.isIgnored(absolutePath);
     }
 

@@ -145,8 +145,18 @@ export async function collectRealization(
   // ignored. A population is a read-only snapshot, which is exactly the lane that
   // bound is documented as safe for; a lane that WRITES between walks must hand
   // in a fresh tracker, as `walkLinkGraph`'s callers already must.
+  // The `lstat` above already answered "is this path there?", so the tracker is
+  // told rather than asked. Without this it re-probes with `existsSync` for every
+  // path absent from the active set -- once per ignored path, and this is the
+  // extent that enumerates all of them: 11,108 calls on an 8,496-path adopter.
+  //
+  // `existsSync` FOLLOWS symlinks and `lstat` does not, so the boolean handed
+  // over is deliberately not `exists`. A dangling symlink is `exists: true` here
+  // and absent to `existsSync`, and passing the raw `lstat` answer would stop it
+  // falling back to `git check-ignore` and start calling it ignored.
+  const resolvesForStat = exists && symlinkResolves !== false;
   const gitignored = context.gitTracker?.isUsable() === true
-    ? context.gitTracker.isIgnoredByActiveSet(absolutePath)
+    ? context.gitTracker.isIgnoredByActiveSet(absolutePath, resolvesForStat)
     : false;
 
   const { contentKey, contentState } = await keyOrState(absolutePath, context, {

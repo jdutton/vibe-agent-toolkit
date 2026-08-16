@@ -404,6 +404,45 @@ describe('GitTracker', () => {
       }
     });
 
+    it('should trust knownToExist:true over the disk, skipping its own existsSync probe', async () => {
+      // The disk state deliberately CONTRADICTS the argument: nothing is at this
+      // path. If the probe still ran, the answer would be `false` via the
+      // check-ignore fallback. `true` is only reachable by believing the caller,
+      // which is what makes this able to tell the parameter from a no-op.
+      vi.mocked(gitUtils.isGitIgnored).mockReturnValue(false);
+
+      const tracker = new GitTracker(projectRoot);
+      await tracker.initialize();
+
+      expect(tracker.isIgnoredByActiveSet('/project/dist/never-written.js', true)).toBe(true);
+      expect(gitUtils.isGitIgnored).not.toHaveBeenCalled();
+    });
+
+    it('should trust knownToExist:false over the disk, falling back for a path that IS there', async () => {
+      // The mirror, and the half that guards the dangling-symlink narrowing: a
+      // real file on disk, reported absent by the caller, must still reach
+      // `git check-ignore` rather than be called ignored from the set alone.
+      const root = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-git-tracker-'));
+      try {
+        mkdirSyncReal(safePath.join(root, 'dist'), { recursive: true });
+        writeFileSync(safePath.join(root, 'dist', 'foo.js'), 'x\n');
+        vi.mocked(gitUtils.gitLsFiles).mockReturnValue(['README.md']);
+        vi.mocked(gitUtils.isGitIgnored).mockReturnValue(false);
+
+        const tracker = new GitTracker(root);
+        await tracker.initialize();
+
+        const present = safePath.join(root, 'dist/foo.js');
+        // Without the argument the file is there, so the active set is authoritative: ignored.
+        expect(tracker.isIgnoredByActiveSet(present)).toBe(true);
+        // With `false` the set has no opinion and git is asked instead.
+        expect(tracker.isIgnoredByActiveSet(present, false)).toBe(false);
+        expect(gitUtils.isGitIgnored).toHaveBeenCalledWith(present, root);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
     it('should NOT call a non-existent in-project path ignored just because the active set lacks it', async () => {
       // The active set is built from `git ls-files`, so it can only ever
       // contain paths that EXIST. A path that does not exist is trivially

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Scanning a tree with large ignored directories does one filesystem probe per ignored path
+  fewer.** `GitTracker.isIgnoredByActiveSet()` takes an optional second argument, `knownToExist`,
+  so a caller that has already stat'd the path is not made to pay for a second `existsSync`. The
+  projection's `filesystem` extent enumerates every ignored path by design and had already
+  `lstat`ed each one: **11,108 redundant `existsSync` calls on an adopter tree of 8,496 paths**,
+  which is 14% of that command's total filesystem calls. Answers are unchanged. Omitting the
+  argument preserves the previous behaviour exactly.
+
 - **The RAG backend is no longer loaded by every `vat` command, and can now be omitted from an
   install.** `@vibe-agent-toolkit/rag` and `@vibe-agent-toolkit/rag-lancedb` moved from
   `dependencies` to `optionalDependencies`, and the four `vat rag` subcommands load their
