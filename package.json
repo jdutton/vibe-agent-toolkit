@@ -27,7 +27,7 @@
   ],
   "overrides": {
     "hono": "4.12.34",
-    "@hono/node-server": "1.19.13",
+    "@hono/node-server": "1.19.17",
     "undici": "7.29.0",
     "fast-uri": "3.1.5",
     "path-to-regexp": "8.4.0",
@@ -50,7 +50,8 @@
     "lodash": "4.18.1",
     "turbo": "2.10.5",
     "ws": "8.21.1",
-    "handlebars": "4.7.9"
+    "handlebars": "4.7.9",
+    "minimatch": "10.2.6"
   },
   "scripts": {
     "build": "turbo run build && turbo run build:skills",

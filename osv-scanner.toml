@@ -13,111 +13,47 @@
 #   2. Every entry MUST have a `reason` explaining WHY it is safe to defer.
 #   3. Re-evaluate on each Dependabot bump; delete entries once a fix lands.
 #
-# Snapshot when this register was last reconciled: the transitive protobufjs@6
-# chain (previously via the native onnxruntime-node backend, loaded through
-# @xenova/transformers@2 / @huggingface/transformers@3 → onnxruntime-web@1.14
-# → onnx-proto) was eliminated by replacing the native embedding backend with
-# onnxruntime-web (WASM) directly — no onnx-proto in the resolution path, so
-# onnxruntime-web resolves the patched protobufjs@7 line unconditionally. 20+
-# other transitive advisories were pinned to patched versions in package.json
-# `overrides`. The advisories below are what remains — all low-severity ReDoS
-# in build/glob tooling, or fixes that require an unsafe global major-version
-# pin, or dev/test-only packages that are not in the published consumer graph.
+# A stale entry is worse than no entry: it silently swallows the advisory if a
+# future resolution drags a vulnerable copy back into the tree. When in doubt,
+# delete the entry and let CI re-raise it.
+#
+# Snapshot when this register was last reconciled: eleven entries were deleted
+# because the tree now resolves patched copies and the ignores had become dead
+# weight — brace-expansion (1.1.18 / 2.1.4 / 5.0.9), picomatch (2.3.2 / 4.0.5)
+# and ajv (6.15.0 / 8.20.0) are at or above every published fix line, so the
+# "coexisting majors make a global pin unsafe" argument no longer applies to
+# any of them. minimatch and @hono/node-server were fixed outright rather than
+# ignored (see below). Earlier reconciliations eliminated the transitive
+# protobufjs@6 chain by replacing the native onnxruntime-node embedding backend
+# with onnxruntime-web (WASM), and pinned 20+ other transitive advisories to
+# patched versions in the package.json `overrides` block.
+#
+# Two load-bearing pins live in `overrides` and exist ONLY to keep advisories
+# out of the tree — do not "clean them up":
+#   * minimatch = 10.2.6 — eslint-plugin-sonarjs@3.0.7 hard-pins the exact
+#     version "10.1.2" (not a range), which carries GHSA-3ppc-4f35-3m26 (8.7),
+#     GHSA-23c5-xmqv-rm74 and GHSA-7r86-cg39-jmmj. No lockfile refresh can move
+#     an exact pin, so the flat override is the fix. It also collapses the
+#     formerly-coexisting 3.1.5 / 9.0.9 copies onto 10.2.6; lint, typecheck and
+#     the full test suite pass on the collapsed tree. The alternative — bumping
+#     eslint-plugin-sonarjs to 4.x, which declares `^10.2.5` — introduces ~113
+#     new lint errors from new rules and is tracked as separate work.
+#   * @hono/node-server = 1.19.17 — the previous 1.19.13 pin was itself what
+#     held GHSA-frvp-7c67-39w9 in the tree. The fix landed in 1.19.15, well
+#     inside @modelcontextprotocol/sdk's declared `^1.19.9`, so no major bump
+#     was needed.
 # ---------------------------------------------------------------------------
-
-# --- minimatch (ReDoS) --------------------------------------------------------
-# The tree carries minimatch 3.x, 9.x, AND 10.x simultaneously (3.x under dev
-# tooling, 9.x under glob@10 in agent-skills). A global `overrides` pin can only
-# force ONE version and would break the older-major consumers, so it is unsafe.
-# All three advisories are ReDoS in glob-pattern matching against attacker-
-# controlled globs — VAT only ever matches globs it authors. Consumers of the
-# published packages re-resolve VAT's floating ranges and pick up patched
-# minimatch independently of this lockfile.
-[[IgnoredVulns]]
-id = "GHSA-23c5-xmqv-rm74"
-reason = "minimatch ReDoS; 3.x/9.x/10.x coexist so a single global pin is unsafe. Low severity, VAT-authored globs only. Re-evaluate when glob majors converge."
-[[IgnoredVulns]]
-id = "GHSA-3ppc-4f35-3m26"
-reason = "minimatch ReDoS; 3.x/9.x/10.x coexist so a single global pin is unsafe. Low severity, VAT-authored globs only. Re-evaluate when glob majors converge."
-[[IgnoredVulns]]
-id = "GHSA-7r86-cg39-jmmj"
-reason = "minimatch ReDoS; 3.x/9.x/10.x coexist so a single global pin is unsafe. Low severity, VAT-authored globs only. Re-evaluate when glob majors converge."
-
-# --- brace-expansion (ReDoS) --------------------------------------------------
-# Same shape as minimatch/picomatch below, and for the same reason: the tree
-# carries brace-expansion 1.x, 2.x, AND 5.x simultaneously. The advisory is
-# fixed separately in each line (1.1.18 / 2.1.4 / 5.0.9), so no single value in
-# the global `overrides` block can patch all three — pinning any one of them
-# forces the other two majors onto an incompatible version. ReDoS in brace
-# expansion of attacker-controlled patterns; VAT only expands patterns it
-# authors. Delete this entry when the majors converge, or if bun gains
-# per-consumer override scoping.
-[[IgnoredVulns]]
-id = "GHSA-rgw5-rvv9-x895"
-reason = "brace-expansion ReDoS; 1.x/2.x/5.x coexist and the fix lands separately in each line, so a single global pin is unsafe. VAT-authored patterns only. Re-evaluate when the majors converge."
-
-# --- picomatch (ReDoS / method injection) ------------------------------------
-# picomatch 2.x and 4.x both present (2.x transitively under chokidar/micromatch,
-# 4.x declared directly). v2→v4 is a breaking major, so a global pin would
-# regress the v2 consumers. Same threat model as minimatch (VAT-authored globs).
-[[IgnoredVulns]]
-id = "GHSA-3v7f-55p6-f55p"
-reason = "picomatch glob-matching issue; 2.x and 4.x coexist across a breaking major, unsafe to globally pin. VAT-authored globs only."
-[[IgnoredVulns]]
-id = "GHSA-c2c7-rcm5-vvqj"
-reason = "picomatch ReDoS via extglob quantifiers; 2.x and 4.x coexist across a breaking major, unsafe to globally pin. VAT-authored globs only."
-
-# --- ajv (ReDoS via $data) ---------------------------------------------------
-# ajv 6.x (transitive dev tooling) and 8.x (declared in resources) coexist; a
-# global pin cannot satisfy both majors. VAT never enables the `$data` option
-# (the sole vector) in any of its AJV usages.
-[[IgnoredVulns]]
-id = "GHSA-2g4f-4pwh-qvx6"
-reason = "ajv ReDoS only reachable with the $data option, which VAT never enables. 6.x/8.x coexist so a single global pin is unsafe."
-
-# --- brace-expansion (ReDoS / expansion DoS) ---------------------------------
-# 1.1.12 and 2.0.2 coexist: minimatch@3.1.2 declares `^1.1.7`, minimatch@9.0.5
-# declares `^2.0.1`. No single version satisfies both, and bun's `overrides` is a
-# FLAT package->version map — path-scoped pins are not expressible (verified on
-# bun 1.3.9: `overrides` with `minimatch@3.1.2/brace-expansion`, and `resolutions`
-# with both `pkg@ver/dep` and `pkg/dep` paths, all resolved to "no changes").
-# All three advisories are DoS on glob expansion; VAT only ever expands globs it
-# authors itself, never attacker-supplied patterns. Consumers of the published
-# packages re-resolve VAT's floating ranges and pick up patched copies
-# independently of this lockfile.
-[[IgnoredVulns]]
-id = "GHSA-f886-m6hf-6m8v"
-reason = "brace-expansion ReDoS; 1.x and 2.x coexist under different minimatch majors, unsafe to globally pin. VAT-authored globs only."
-[[IgnoredVulns]]
-id = "GHSA-3jxr-9vmj-r5cp"
-reason = "brace-expansion exponential-time expansion of consecutive `{}` groups. Per-major fixes exist (1.1.16 / 2.1.2) but bun's flat `overrides` map cannot pin per-major and 1.x/2.x coexist under minimatch@3 and minimatch@9. VAT-authored globs only. Re-evaluate if bun gains path-scoped overrides or when glob majors converge."
-[[IgnoredVulns]]
-id = "GHSA-mh99-v99m-4gvg"
-reason = "brace-expansion unbounded-expansion OOM. The advisory range is a single [0, 5.0.8) span with NO 1.x or 2.x backport, so no in-range fix exists for either coexisting copy — brace-expansion@5 is three majors past minimatch@3's `^1.1.7` and minimatch@9's `^2.0.1`. VAT-authored globs only."
-
-# --- @hono/node-server (serve-static path traversal on Windows) ---------------
-# The vulnerable surface is the `@hono/node-server/serve-static` subpath export.
-# The only thing that pulls @hono/node-server into the tree is
-# @modelcontextprotocol/sdk@1.26.0, which (a) declares `^1.19.9`, so the 2.0.5
-# fix is out of its declared range and a global pin would force a semver-major
-# adapter swap under it, and (b) imports only `getRequestListener` from the
-# package root, in `server/streamableHttp.js` — it never imports serve-static.
-# VAT's single MCP consumer (packages/gateway-mcp) uses StdioServerTransport
-# exclusively and never constructs the Streamable HTTP transport, so the module
-# is not loaded at all. The advisory is additionally Windows-only static-file
-# serving, which VAT never does.
-[[IgnoredVulns]]
-id = "GHSA-frvp-7c67-39w9"
-reason = "@hono/node-server path traversal is in the `serve-static` export, which is never imported: @modelcontextprotocol/sdk uses only `getRequestListener` for its Streamable HTTP transport, and VAT's gateway-mcp is stdio-only. Fix (2.0.5) is a major bump outside the SDK's declared `^1.19.9`, so a global pin is unsafe. Re-evaluate when the MCP SDK widens its range."
 
 # --- esbuild (dev-server file read) ------------------------------------------
 # The advisory affects `esbuild serve` (the dev server). VAT never runs the
 # esbuild dev server; esbuild is build-time-only tooling (via vite/tsx) and is
-# not present in any published package. Fix requires an esbuild 0.x major bump
-# that would force a Vite upgrade.
+# not present in any published package. The vulnerable copy is `vite/esbuild`
+# at 0.27.7; the fix is 0.28.1, outside vite@7's declared `^0.27.0`, so it
+# requires a breaking vite major bump. A patched esbuild@0.28.2 already
+# coexists in the tree for the non-vite consumers.
 [[IgnoredVulns]]
 id = "GHSA-g7r4-m6w7-qqqr"
-reason = "esbuild advisory affects the `esbuild serve` dev server, which VAT never runs. Build-time-only, not shipped. Fix needs a breaking esbuild/vite bump."
+reason = "esbuild advisory affects the `esbuild serve` dev server, which VAT never runs. Build-time-only, not shipped. Vulnerable copy is vite@7's pinned esbuild@0.27.7; fix (0.28.1) is outside vite's declared `^0.27.0` and needs a breaking vite major bump."
 
 # --- uuid (missing buffer bounds check) --------------------------------------
 # uuid@10 is dev/test-only (reached via langsmith/@langchain/core). The fix is

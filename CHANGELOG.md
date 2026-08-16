@@ -275,6 +275,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Four advisories cleared from the dependency tree, and eleven dead entries removed from the
+  accepted-risk register.** `@hono/node-server` was pinned to `1.19.13` by VAT's own `overrides`
+  block — that pin was itself what held GHSA-frvp-7c67-39w9 (path traversal, 5.9) in the tree; the
+  fix shipped in `1.19.15`, inside `@modelcontextprotocol/sdk`'s declared `^1.19.9`, so the pin
+  moves to `1.19.17` with no major bump. A new `minimatch = 10.2.6` override clears
+  GHSA-3ppc-4f35-3m26 (8.7), GHSA-23c5-xmqv-rm74 and GHSA-7r86-cg39-jmmj, which entered through
+  `eslint-plugin-sonarjs@3.0.7`'s exact hard pin on the vulnerable `10.1.2` — an exact pin no
+  lockfile refresh can move. Un-ignored advisory groups in `bun.lock` go from 10 to 6. Separately,
+  eleven `IgnoredVulns` entries in `osv-scanner.toml` were deleted as dead weight: the
+  brace-expansion (×4), picomatch (×2) and ajv (×1) copies now resolve at or above every published
+  fix line, and the three minimatch and one hono entries are superseded by the pins above. Their
+  stated justification — "coexisting majors make a global pin unsafe" — had gone stale, and a stale
+  ignore silently swallows the advisory if a future resolution drags a vulnerable copy back in. The
+  six that remain (langsmith ×4, esbuild, uuid) are genuinely blocked on breaking major bumps and
+  carry corrected reasons.
+
 - **VAT's on-disk cache directory is now created owner-only (`0700`) on POSIX.**
   `<tmpdir>/.vat-cache/` is a world-readable location shared by every user on the host, and it holds
   the set of external URLs a project links to — including private hostnames. The per-OS-user cache
