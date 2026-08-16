@@ -4,10 +4,20 @@
 
 import { Command } from 'commander';
 
-import { clearCommand } from './clear-command.js';
-import { indexCommand } from './index-command.js';
-import { queryCommand } from './query-command.js';
-import { statsCommand } from './stats-command.js';
+import { lazyAction, type OptionalBackend } from '../../utils/optional-backend.js';
+
+/**
+ * The RAG lane ships as an optional install.
+ *
+ * `rag-lancedb` carries a platform-native LanceDB binary
+ * and pulls `onnxruntime-web` and `gpt-tokenizer` behind it -- 275 MB of a
+ * 351 MB install, and 1,350 ms of cold module load, for a lane most vat
+ * commands never touch.
+ */
+const RAG_BACKEND: OptionalBackend = {
+  feature: 'RAG',
+  packageName: '@vibe-agent-toolkit/rag-lancedb',
+};
 
 // Common option descriptions
 const DB_PATH_OPTION = '--db <path>';
@@ -49,7 +59,7 @@ Configuration:
     .description('Index markdown resources into vector database')
     .option(DB_PATH_OPTION, DB_PATH_DESC)
     .option('--debug', DEBUG_OPTION_DESC)
-    .action(indexCommand)
+    .action(lazyAction(RAG_BACKEND, async () => (await import('./index-command.js')).indexCommand))
     .addHelpText(
       'after',
       `
@@ -94,7 +104,7 @@ Example:
     .option(DB_PATH_OPTION, DB_PATH_DESC)
     .option('--limit <n>', 'Maximum results to return (default: 10)', Number.parseInt)
     .option('--debug', DEBUG_OPTION_DESC)
-    .action(queryCommand)
+    .action(lazyAction(RAG_BACKEND, async () => (await import('./query-command.js')).queryCommand))
     .addHelpText(
       'after',
       `
@@ -140,7 +150,7 @@ Example:
     .description('Show RAG database statistics')
     .option(DB_PATH_OPTION, DB_PATH_DESC)
     .option('--debug', DEBUG_OPTION_DESC)
-    .action(statsCommand)
+    .action(lazyAction(RAG_BACKEND, async () => (await import('./stats-command.js')).statsCommand))
     .addHelpText(
       'after',
       `
@@ -178,7 +188,7 @@ Example:
     .description('Delete entire RAG database directory')
     .option(DB_PATH_OPTION, DB_PATH_DESC)
     .option('--debug', DEBUG_OPTION_DESC)
-    .action(clearCommand)
+    .action(lazyAction(RAG_BACKEND, async () => (await import('./clear-command.js')).clearCommand))
     .addHelpText(
       'after',
       `

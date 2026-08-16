@@ -52,8 +52,6 @@
     "@vibe-agent-toolkit/claude-marketplace": "workspace:*",
     "@vibe-agent-toolkit/discovery": "workspace:*",
     "@vibe-agent-toolkit/gateway-mcp": "workspace:*",
-    "@vibe-agent-toolkit/rag": "workspace:*",
-    "@vibe-agent-toolkit/rag-lancedb": "workspace:*",
     "@vibe-agent-toolkit/resources": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
     "adm-zip": "^0.6.0",
@@ -81,5 +79,9 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/jdutton/vibe-agent-toolkit.git"
+  },
+  "optionalDependencies": {
+    "@vibe-agent-toolkit/rag": "workspace:*",
+    "@vibe-agent-toolkit/rag-lancedb": "workspace:*"
   }
 }

@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The RAG backend is no longer loaded by every `vat` command, and can now be omitted from an
+  install.** `@vibe-agent-toolkit/rag` and `@vibe-agent-toolkit/rag-lancedb` moved from
+  `dependencies` to `optionalDependencies`, and the four `vat rag` subcommands load their
+  implementation only when actually invoked.
+
+  **Why it mattered.** The import chain from the CLI entry point to `@lancedb/lancedb` was fully
+  static, so **every** command — `vat --version` included — dlopened a platform-native LanceDB
+  binary first. Measured: that import is **1,350 ms cold** (~50 ms warm), and the binary is
+  **119.6 MiB unpacked on `win32-x64`**. Verified by direct observation rather than timing:
+  `process.report().sharedObjects` now lists **0** LanceDB/onnxruntime objects for `vat --version`
+  and **1** for `vat rag stats`.
+
+  **To actually shrink the install you must ask for it:** `npm install vibe-agent-toolkit
+  --omit=optional`. npm installs `optionalDependencies` by default, so a plain install is unchanged
+  in size — measured, on the published `0.1.42`: 351.3 MB across 15,416 files, of which ~275 MB is
+  the RAG lane (`onnxruntime-web` 133 MB, the LanceDB native binary 98 MB, `gpt-tokenizer` 44 MB).
+  The startup saving above applies either way.
+
+  `vat rag --help` and every subcommand's `--help` work with nothing loaded. If the backend is
+  absent, `vat rag <cmd>` exits **2** naming the package to install rather than throwing a module
+  resolution stack trace.
+
 ### Added
 
 - **`vat resources scan`/`validate`, `vat rag index` and the pipeline oracles can now take their

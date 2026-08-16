@@ -3,6 +3,7 @@ import { mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 
 import {
   GitTracker,
+  canCreateSymlinks,
   mkdirSyncReal,
   normalizedTmpdir,
   safeExecSync,
@@ -125,7 +126,13 @@ describe('collectRealization', () => {
     expect(row.contentState).toBe('keyed');
   });
 
-  it('reports a live symlink as a symlink that resolves', async () => {
+  it('reports a live symlink as a symlink that resolves', async ({ skip }) => {
+    // Creating a symlink on Windows needs the privilege Developer Mode grants,
+    // which CI agents and most dev boxes lack — `symlinkSync` throws EPERM
+    // there. Skip loudly rather than no-op: a silently skipped symlink case
+    // reads as a passing test. Same gate `fs-utils.test.ts` already uses.
+    if (!canCreateSymlinks(root)) skip();
+
     symlinkSync(safePath.join(root, NESTED_RELATIVE), safePath.join(root, 'alias.md'));
 
     const row = await realize('alias.md');
@@ -135,7 +142,9 @@ describe('collectRealization', () => {
     expect(row.exists).toBe(true);
   });
 
-  it('reports a dangling symlink as present but unresolving, with no bytes to key', async () => {
+  it('reports a dangling symlink as present but unresolving, with no bytes to key', async ({ skip }) => {
+    if (!canCreateSymlinks(root)) skip();
+
     symlinkSync(safePath.join(root, NOWHERE), safePath.join(root, 'dangling.md'));
 
     const row = await realize('dangling.md');
@@ -278,7 +287,9 @@ describe('relativize', () => {
 });
 
 describe('realPathOrNull', () => {
-  it('resolves a symlink to its target rather than reporting the link', () => {
+  it('resolves a symlink to its target rather than reporting the link', ({ skip }) => {
+    if (!canCreateSymlinks(root)) skip();
+
     const alias = safePath.join(root, 'alias.md');
     symlinkSync(safePath.join(root, NESTED_RELATIVE), alias);
 
