@@ -28,6 +28,7 @@ export {
 export {
 	INVENTORY_CRAWL_ENV,
 	INVENTORY_CRAWL_PROJECTION,
+	INVENTORY_CRAWL_WALKER,
 	buildInventoryPopulation,
 	projectionCrawlSelected,
 	type InventoryPopulation,

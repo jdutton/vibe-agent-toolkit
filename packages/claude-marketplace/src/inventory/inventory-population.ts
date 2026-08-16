@@ -71,11 +71,52 @@ import {
  */
 export const INVENTORY_CRAWL_ENV = 'VAT_INVENTORY_CRAWL';
 
-/** {@link INVENTORY_CRAWL_ENV}'s value that selects the projection lane. */
+/**
+ * {@link INVENTORY_CRAWL_ENV}'s value that selects the projection lane.
+ *
+ * Kept as an explicit spelling after the projection became the DEFAULT, rather
+ * than deleted as redundant: it is what the lab's A arm passes, and naming the
+ * default out loud is how an A/B stays legible when the default later moves
+ * again.
+ */
 export const INVENTORY_CRAWL_PROJECTION = 'projection';
 
 /**
+ * {@link INVENTORY_CRAWL_ENV}'s value that selects the incumbent link walk.
+ *
+ * This is the escape hatch, and it exists for two distinct readers. A user who
+ * hits a membership difference the projection gets wrong can get their previous
+ * answer back without downgrading vat; and the lab can still capture both arms
+ * of the comparison from one build, which is the whole reason the switch was an
+ * environment variable rather than config.
+ */
+export const INVENTORY_CRAWL_WALKER = 'walker';
+
+/**
  * Whether this process should answer inventory membership from a projection.
+ *
+ * ## The projection is the DEFAULT as of 2026-08-15 — this predicate is inverted
+ *
+ * It shipped gated OFF, as a second implementation kept beside the first so the
+ * two could be measured against each other in one process. Everything that
+ * gating was waiting on is now discharged: `populate()` has a production caller,
+ * membership parity is proven against the link walk on a real 18-skill adopter
+ * plugin, and both lanes now emit members in one order — so the swap is
+ * verifiable as a **byte-for-byte no-op** on `vat inventory`'s output rather than
+ * as an unordered set comparison.
+ *
+ * ⚠️ **It is measurably SLOWER and that was accepted deliberately, not
+ * overlooked** (Jeff, 2026-08-15). ~5.3× on that adopter: 522 ms of link walk
+ * against 2,751 ms of projection, warm, on a clean machine. The cost is not the
+ * membership traversal — that is 2.5% of the projection's own time — but the
+ * substrate beneath it, which enumerates the whole tree (20,965 paths against
+ * the walk's 1,673 markdown documents) and reads every file it can key. **Do not
+ * "optimize" that away without reading the two contributors first: both halves
+ * are load-bearing.** Narrowing enumeration to markdown drops real non-markdown
+ * members, because membership is bounded by what the base realized; and
+ * narrowing the parse to markdown deliberately blinds the closure to references
+ * emitted from a skill's bundled scripts, which is one of the failures the
+ * projection exists to fix.
  *
  * Read from the environment at each call rather than memoized at module load:
  * the cost is one property access on a lane that then crawls a corpus, and a
@@ -83,14 +124,16 @@ export const INVENTORY_CRAWL_PROJECTION = 'projection';
  * variable after import — which is every test, since `vitest.setup.js` clears
  * `VAT_*` before any module loads.
  *
- * Exactly one value turns it on. An unrecognized value selects the incumbent
- * rather than throwing: this is an instrument selector, and a typo'd instrument
- * must not fail a user's command.
+ * Exactly one value turns it OFF, and an unrecognized value now lands on the
+ * projection rather than the walk. The rule is unchanged and only its
+ * destination moved: an unrecognized instrument selects the DEFAULT instrument
+ * rather than throwing, because a typo'd selector must not fail a user's
+ * command.
  *
  * @returns `true` when the projection lane is selected
  */
 export function projectionCrawlSelected(): boolean {
-  return process.env[INVENTORY_CRAWL_ENV] === INVENTORY_CRAWL_PROJECTION;
+  return process.env[INVENTORY_CRAWL_ENV] !== INVENTORY_CRAWL_WALKER;
 }
 
 /**

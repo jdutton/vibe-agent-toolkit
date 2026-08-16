@@ -24,29 +24,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ⚠️ Projects declaring `excludeReferencesFromBundle` will see new **info** lines from `vat build`
   and `vat verify`. Info is non-blocking and packaged output is unchanged.
 
-- **`vat inventory` can answer membership from a projection instead of the link walk**, behind
-  **`VAT_INVENTORY_CRAWL=projection`**. Off by default; unset, nothing about the command changes.
-  This gives `populate()` its first production caller — until now the projection lane existed only
-  under test, so the `closure` stratum measured **0% on every command** and the two crawlers could
-  never appear in one `vat-lab crawl run`. Measurement and the flip were mutually blocking; this is
-  the switch that breaks the cycle.
+- **`vat inventory` now answers membership from a projection instead of the link walk.** This is a
+  **behaviour change with identical output**: on a real 18-skill adopter plugin the two lanes produce
+  **byte-identical** YAML, and the incumbent walk remains available via
+  **`VAT_INVENTORY_CRAWL=walker`**.
 
-  Scoped to the plugin lane of `vat inventory` on purpose. It is the **only** one of the three link-
-  walk call sites that consumes membership ALONE — `vat skills build` also reads `excludedReferences`
-  and `deferredAssets`, and `vat skills validate` additionally reads `maxBundledDepth`. The closure
-  selects the identical files and emits **no reason**, so pointing either of those at it would
-  silently delete adopter-visible validation findings. Membership parity is not flip-readiness.
+  ⚠️ **It is slower, and that is a deliberate, accepted trade — roughly 5.3× on that adopter** (522 ms
+  of link walk against 2,751 ms of projection, warm, clean machine). The cost is not the membership
+  traversal, which is 2.5% of the projection's own time; it is the substrate beneath it, which
+  enumerates the whole project tree (20,965 paths against the walk's 1,673 markdown documents) and
+  reads every file it can content-key. Both halves are load-bearing: enumeration bounds membership,
+  so narrowing it to markdown silently drops real non-markdown members, and the parse is what lets
+  the closure see references emitted from a skill's bundled scripts — which the markdown-only link
+  walk is structurally blind to.
 
-  Both crawlers stay live and the incumbent remains the default. The population is honoured only for
-  a root that exactly matches the one the extractor derives, and only for a skill it actually holds
-  an extent for; anything else — including a source that throws — falls back to the walk rather than
-  reporting an empty membership as an answer.
+  Scoped to the plugin lane of `vat inventory` only. The two packaging call sites additionally
+  consume `excludedReferences`, `deferredAssets` and `maxBundledDepth`; the closure selects the same
+  files but emits **no reason**, so pointing either at it would silently delete adopter-visible
+  validation findings. Membership parity is not flip-readiness.
+
+  Both crawlers stay live. The projection is honoured only for a root that exactly matches the one
+  the extractor derives, and only for a skill it actually holds an extent for; anything else —
+  including a source that throws — falls back to the walk rather than reporting an empty membership
+  as an answer.
 
   `vat-lab` gained `--command inventory` so the two lanes can be measured against one subject. It is
   **not** in the default command set, so a bare `vat-lab crawl run` measures exactly what it did
-  before. First reading, 13-skill plugin, warm, clean machine: the closure traversal is **2.9%** of
-  its own crawl, against ~2% for the incumbent's link walk — both lanes spend essentially all of
-  their time building the substrate rather than traversing it.
+  before.
+
+- **`vat inventory` lists a skill's linked files in sorted order.** They were previously emitted in
+  link-walk discovery order — bundled resources first, then assets, each in traversal order — which
+  was never a stable property: it is a function of link order within each document, so inserting one
+  link near the top of a `SKILL.md` reshuffled the tail. Both membership lanes now sort with the same
+  host-independent comparator, so the listing is stable across machines and across the two crawlers.
 
 - **The projection's closure primitive gained `CLOSURE_REFERENCE_OUTSIDE_ROOT`**, distinguishing a
   reference that escapes the extent root from one that simply did not resolve. Both used to report

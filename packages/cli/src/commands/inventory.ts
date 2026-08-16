@@ -159,16 +159,19 @@ export async function routeInventory(
 }
 
 /**
- * The projection-backed membership lane, when this process asked for it — or
- * `undefined`, which is the default and leaves the incumbent walk untouched.
+ * The projection-backed membership lane — **now the default for this command** —
+ * or `undefined` to fall back to the incumbent link walk.
  *
  * Gated on two things, in this order:
  *
- * 1. **`VAT_INVENTORY_CRAWL=projection`.** Off by default. This is a second
- *    implementation of a question the walk already answers correctly, kept live
- *    beside the first so the two can be measured against each other in one
- *    process; it is not a replacement, and nothing about a user's command changes
- *    unless they ask.
+ * 1. **Not `VAT_INVENTORY_CRAWL=walker`.** The projection answers this command's
+ *    membership question unless a caller asks for the walk back. It shipped the
+ *    other way round, gated off, while it was a second implementation being
+ *    measured against the first; it is now the implementation, with the walk kept
+ *    reachable as an escape hatch and as the lab's B arm. ⚠️ It is ~5.3× slower on
+ *    a real adopter and that was a deliberate, accepted trade — see
+ *    {@link projectionCrawlSelected} for the measurement and for why neither half
+ *    of the cost can be trimmed without changing the answer.
  * 2. **A discoverable project root**, exactly as {@link linkRegistryProviderFor}
  *    requires and for the identical reason: membership is resolved relative to a
  *    root, and where `findProjectRoot` finds none the extractor falls back to each

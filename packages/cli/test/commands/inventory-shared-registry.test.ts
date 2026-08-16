@@ -277,7 +277,7 @@ describe('shared link registry — one corpus crawl per invocation', () => {
       failingCrawlRoots.length = 0;
     });
 
-    it('returns the plugin inventory, one parseError per skill, and attempts the crawl once', async () => {
+    it('returns the plugin inventory, one parseError per skill, and attempts each lane once', async () => {
       crawlBaseDirs.length = 0;
 
       const inventory = (await routeInventory(pluginDir, {})) as unknown as PluginInventoryShape;
@@ -298,9 +298,20 @@ describe('shared link registry — one corpus crawl per invocation', () => {
       );
       expect(crawlErrors).toHaveLength(SKILL_NAMES.length);
 
-      // Reported N times, ATTEMPTED once — the memoized provider hands every skill the
-      // same rejected promise instead of re-crawling a corpus that just failed.
-      expect(crawlBaseDirs).toHaveLength(1);
+      // Reported N times, ATTEMPTED once PER LANE — the memoized provider hands every
+      // skill the same rejected promise instead of re-crawling a corpus that just failed.
+      //
+      // Two, not one, since `vat inventory` began defaulting to the projection: this is
+      // the FAILURE path, so the projection's own corpus crawl fails and the extractor
+      // then degrades to the link walk, which builds the registry and fails too. One
+      // attempt each. The success-path test above still sees exactly ONE crawl, and the
+      // asymmetry is the whole mechanism — when the projection answers, it short-circuits
+      // `walkLinkedFiles` before `registryFor` is ever reached, so no registry is built.
+      //
+      // ⚠️ The number this pins is "per LANE", never "per skill". With three skills an
+      // N+1 regression in either lane reads 3 or 4 here, so this assertion still fails
+      // exactly as it was written to — do not relax it to a lower bound.
+      expect(crawlBaseDirs).toHaveLength(2);
     });
 
     it('returns the single-SKILL.md inventory with the failure in parseErrors', async () => {
