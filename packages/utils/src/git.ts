@@ -17,7 +17,12 @@
  * finder in the package.
  */
 
-export { gitFindRoot, gitLsFiles, isGitIgnored } from './git-utils.js';
+export { gitFindRoot, gitLsFiles, gitLsOthers, isGitIgnored } from './git-utils.js';
+export {
+  gitTreeSnapshot,
+  type GitSnapshotEntry,
+  type GitTreeSnapshot,
+} from './git-snapshot.js';
 export { loadGitignoreRules } from './gitignore-checker.js';
 export { GitTracker, type GitTrackerInitOptions } from './git-tracker.js';
 export {

@@ -93,6 +93,9 @@ export * from './git-url.js';
 // Git utilities (using git commands directly)
 export * from './git-utils.js';
 
+// Dirty-corrected tree snapshots: paths, on-disk blob OIDs and modes in one call
+export * from './git-snapshot.js';
+
 // Project root discovery (canonical: config → git → null).
 // CLI-boundary use only — see docs/concepts/roots-and-config.md.
 export * from './project-utils.js';
