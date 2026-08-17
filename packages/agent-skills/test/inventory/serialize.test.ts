@@ -6,11 +6,7 @@ import type {
 	MarketplaceInventory,
 	PluginInventory,
 } from '../../src/inventory/index.js';
-import {
-	INVENTORY_SCHEMA_VERSION,
-	serializeInventory,
-	serializeInventoryShallow,
-} from '../../src/inventory/serialize.js';
+import { serializeInventory, serializeInventoryShallow } from '../../src/inventory/serialize.js';
 
 const PLUGIN_PATH = '/home/user/plugins/p';
 const VENDOR = 'claude-code';
@@ -51,9 +47,25 @@ const fixturePlugin: PluginInventory = {
 };
 
 describe('serializeInventory', () => {
-	it('emits a top-level schema discriminator', () => {
-		const out = serializeInventory(fixturePlugin, 'yaml');
-		expect(out.startsWith(`schema: ${INVENTORY_SCHEMA_VERSION}\n`)).toBe(true);
+	/**
+	 * Pins an ABSENCE, so it must fail if a `schema:` label is ever reintroduced.
+	 * `toBeUndefined()` alone would not: it passes for a key present with an
+	 * undefined value, and it cannot see a `schema` line YAML emitted as a string.
+	 * The `'schema' in parsed` check and the raw-text check are what make this a
+	 * real guard rather than a tautology.
+	 */
+	it.each([
+		['full', serializeInventory],
+		['shallow', serializeInventoryShallow],
+	] as const)('%s serialization emits no schema version label', (_name, serialize) => {
+		const yamlOut = serialize(fixturePlugin, 'yaml');
+		const jsonOut = serialize(fixturePlugin, 'json');
+
+		expect(yamlOut).not.toMatch(/^schema:/m);
+		expect(jsonOut).not.toContain('"schema"');
+
+		expect('schema' in (yaml.parse(yamlOut) as object)).toBe(false);
+		expect('schema' in (JSON.parse(jsonOut) as object)).toBe(false);
 	});
 
 	it('round-trips through YAML without loss', () => {

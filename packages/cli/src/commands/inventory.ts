@@ -53,7 +53,6 @@ Description:
   detectors — pure structural enumeration.
 
 Output:
-  - schema: vat.inventory/v1alpha
   - kind: marketplace | plugin | skill | install
   - vendor: claude-code
   - declared / discovered / references / unexpected (per kind)

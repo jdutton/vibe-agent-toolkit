@@ -201,7 +201,6 @@ export {
   isSkillInventory,
   serializeInventory,
   serializeInventoryShallow,
-  INVENTORY_SCHEMA_VERSION,
   detectDeclaredButMissing,
   detectMarketplacePluginSourceMissing,
   detectPresentButUndeclared,

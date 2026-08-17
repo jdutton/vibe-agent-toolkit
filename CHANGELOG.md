@@ -50,6 +50,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- **`vat inventory` no longer emits a `schema:` version label.** Scripts that read
+  `schema == "vat.inventory/v1alpha"` must drop the check and switch on `kind` instead. The
+  `INVENTORY_SCHEMA_VERSION` export is gone from `@vibe-agent-toolkit/agent-skills`.
+
 - **(library) `safeExecSync()` and `safeExecResult()` now throw when asked to run `git`.** Migrate:
   `safeExecSync('git', args, opts)` → `runGitOrThrow(args, opts)`; `safeExecResult('git', args,
   opts)` → `runGit(args, opts)`, checking `.ok` instead of `.success`. Drop `encoding` — output is

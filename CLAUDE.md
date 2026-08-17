@@ -27,6 +27,8 @@ While this project is in v0.1.x (pre-1.0):
 
 ## Project-Specific Technical Principles
 
+🚫 **Hand-maintained version constants are PROHIBITED** — no `const CACHE_VERSION = 1`, no `SCHEMA_VERSION`, no `*_REVISION` deciding whether stored data is still valid: a number someone must remember to bump is not a contract, so derive it (a digest of the schema's own shape, as `parseFactsShapeSource()` does) or invalidate explicitly. This extends to version *labels* we emit in our own output — VAT ships no `schema:`/`vat.*/v1alpha` discriminator for a consumer to read; under pre-1.0 the package version is the only contract.
+
 ### Skill Distribution Architecture
 
 Skills, config, and packaging each have a distinct role. These boundaries are intentional:

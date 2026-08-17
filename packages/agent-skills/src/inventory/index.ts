@@ -22,7 +22,7 @@ export {
 	isSkillInventory,
 } from './types.js';
 
-export { serializeInventory, serializeInventoryShallow, INVENTORY_SCHEMA_VERSION } from './serialize.js';
+export { serializeInventory, serializeInventoryShallow } from './serialize.js';
 
 export {
 	detectDeclaredButMissing,

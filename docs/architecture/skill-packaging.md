@@ -111,7 +111,7 @@ The four inventory kinds:
 - **Skill** — `SKILL.md` frontmatter plus the linked and packaged files referenced from it.
 - **Install** — `~/.claude/plugins/` (or any install root) and the marketplaces and plugins under it.
 
-The inventory schema is `vat.inventory/v1alpha`; it evolves freely under pre-1.0. Output is available via `vat inventory <path>` (YAML, JSON, or `--shallow` projection).
+The inventory document carries no version label; it evolves freely under pre-1.0, and `kind` is its only discriminator. Output is available via `vat inventory <path>` (YAML, JSON, or `--shallow` projection).
 
 ## Skill Reference Resolution
 
