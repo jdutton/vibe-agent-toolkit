@@ -67,6 +67,18 @@ function executeCliCommand(
     timeout,
   });
 
+  // A process killed by the timeout never exits, so `status` is null and
+  // `expect(result.status).toBe(0)` reports "expected null to be +0" — a message
+  // that names neither the timeout nor the command, three frames from the cause.
+  // Checked before the status assertion so the timeout reports itself as one.
+  if (result.error !== undefined) {
+    const killedBy = result.signal === null ? '' : ` (killed by ${result.signal})`;
+    const budget = timeout === undefined ? '' : `, budget ${timeout}ms`;
+    throw new Error(
+      `node ${args.join(' ')} did not run to completion: ${result.error.message}${killedBy}${budget}`
+    );
+  }
+
   expect(result.status).toBe(0);
   return parseYamlOutput(result);
 }
@@ -116,14 +128,16 @@ describe('RAG CLI (Node.js dogfooding)', () => {
       // "only 5 docs" implies. Measured 2026-08-07 on an idle macOS host:
       // 58,161ms against 60,000ms. Under `bun run validate`, where other
       // packages' system suites are running concurrently, it exceeds the budget
-      // and `spawnSync` returns `status: null` — which surfaces as the
-      // thoroughly misleading "expected null to be +0" at executeCliCommand's
-      // `expect(result.status).toBe(0)`, three frames away from the timeout.
+      // and `spawnSync` returns `status: null`. Re-observed 2026-08-17: the
+      // suite failed inside `bun run validate` and passed 3/3 in isolation
+      // moments later, on the same tree.
       //
-      // The cost is dominated by loading the onnxruntime-web WASM backend in a
-      // fresh process, not by the 5 documents. Raising the number would hide
-      // the flake; making the embedding backend warm-startable, or asserting on
-      // `result.signal`/`error` so a timeout reports itself as one, would fix it.
+      // The DIAGNOSTIC half is now fixed — `executeCliCommand` checks
+      // `result.error` first, so a timeout says so instead of surfacing as
+      // "expected null to be +0" three frames away. The FLAKE itself remains:
+      // the cost is dominated by loading the onnxruntime-web WASM backend in a
+      // fresh process, not by the 5 documents. Raising this number would hide
+      // it; making the embedding backend warm-startable would fix it.
       60000 // 1 minute - only indexing 5 architecture docs
     );
 
