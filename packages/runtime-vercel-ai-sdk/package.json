@@ -21,20 +21,20 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@ai-sdk/provider": "^3.0.4",
-    "@ai-sdk/provider-utils": "^4.0.8",
+    "@ai-sdk/provider": "^4.0.7",
+    "@ai-sdk/provider-utils": "^5.0.27",
     "@vibe-agent-toolkit/agent-runtime": "workspace:*",
-    "ai": "^6.0.39",
-    "zod": "^3.24.1"
+    "ai": "^7.0.65",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@ai-sdk/anthropic": "^3.0.15",
-    "@ai-sdk/openai": "^3.0.12",
-    "@types/node": "^22.10.5",
+    "@ai-sdk/anthropic": "^4.0.38",
+    "@ai-sdk/openai": "^4.0.41",
+    "@types/node": "^26.2.0",
     "@vibe-agent-toolkit/dev-tools": "workspace:*",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.3",
-    "vitest": "^3.2.4",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10",
     "@vibe-agent-toolkit/test-agents": "workspace:*"
   },
   "keywords": [

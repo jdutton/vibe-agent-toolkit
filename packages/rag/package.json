@@ -37,19 +37,19 @@
   "dependencies": {
     "@vibe-agent-toolkit/resources": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
-    "gpt-tokenizer": "^2.6.0",
+    "gpt-tokenizer": "^3.4.0",
     "onnxruntime-web": "^1.27.0",
-    "zod": "^3.22.0",
+    "zod": "^4.4.3",
     "zod-to-json-schema": "^3.22.0"
   },
   "devDependencies": {
-    "@types/node": "^25.0.0",
-    "openai": "^6.16.0",
-    "typescript": "^5.9.0",
-    "vitest": "^3.2.4"
+    "@types/node": "^26.2.0",
+    "openai": "^7.4.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
   },
   "peerDependencies": {
-    "openai": "^6.16.0"
+    "openai": "^7.4.0"
   },
   "peerDependenciesMeta": {
     "openai": {

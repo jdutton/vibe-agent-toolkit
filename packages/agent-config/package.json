@@ -28,12 +28,12 @@
   "dependencies": {
     "@vibe-agent-toolkit/agent-schema": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
-    "yaml": "^2.3.4"
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "typescript": "~5.7.2",
-    "vitest": "^3.2.4"
+    "@types/node": "^26.2.0",
+    "typescript": "~7.0.2",
+    "vitest": "^4.1.10"
   },
   "keywords": [
     "ai",
