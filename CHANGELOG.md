@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without a YAML parser.
 - **`vat resources scan` now reports a `lane` field** naming which enumerator produced the
   population — `walk` or `projection`.
+- **`VAT_EXTENT_SOURCE=git` enumerates the projection's filesystem extent through git** instead of
+  by walking the tree. Opt-in, and only meaningful alongside `VAT_RESOURCES_CRAWL=projection`; the
+  walk stays the default.
+- **`gitLsOthers()` and `gitTreeSnapshot()` in `@vibe-agent-toolkit/utils`** — untracked/ignored
+  path listings, and every path git can see with the blob OID of its **on-disk** bytes.
+  `gitTreeSnapshot()` writes loose objects into the target repository's `.git/objects`.
 - **`runGit()` and `runGitOrThrow()` in `@vibe-agent-toolkit/utils`** — run git against a path you
   were handed, without a git hook's inherited `GIT_DIR` silently redirecting it at another
   repository. Pass `{ ambient: true }` when you do mean the repository the process is standing in,

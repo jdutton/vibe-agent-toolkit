@@ -370,6 +370,20 @@ export { blobReferencesFor } from './projection/blob-references.js';
 // output — this is the extent that sees what the git extent cannot.
 export { FilesystemExtentContributor } from './projection/contributors/filesystem-extent.js';
 
+// One crawl API, two implementations (scanning-and-caching §3.3): the walk, and
+// git plus a bounded walk of only what git cannot see. Same population, two cost
+// models — which is exactly what makes them differentially testable.
+export {
+  crawlSourceFor,
+  EXTENT_SOURCE_ENV,
+  EXTENT_SOURCE_GIT,
+  FilesystemCrawlSource,
+  GitCrawlSource,
+  type CrawlSource,
+  type CrawlSourceKind,
+  type EnumeratedPath,
+} from './projection/crawl-source.js';
+
 // The resources lane's population, sourced from that extent instead of from
 // `git ls-files` — which is what lets `vat resources validate` see a markdown
 // file the author has written but not yet committed.

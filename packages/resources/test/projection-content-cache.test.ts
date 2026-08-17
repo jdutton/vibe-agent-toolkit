@@ -9,12 +9,21 @@ import { RunContentCache, readKeyedContent } from '../src/projection/content-cac
 
 const DOC = 'doc.md';
 const ORIGINAL = '# original\n';
+/** A second document, so two paths can share one hint. */
+const OTHER = 'other.md';
+/** Stands in for a blob OID: the value's shape is irrelevant, its reuse is not. */
+const SHARED_HINT = 'oid-shared';
 
 let root: string;
 
 /** The fixture document's absolute path. */
 function docPath(): string {
   return safePath.join(root, DOC);
+}
+
+/** The second fixture document's absolute path. */
+function otherPath(): string {
+  return safePath.join(root, OTHER);
 }
 
 beforeEach(() => {
@@ -35,8 +44,61 @@ describe('RunContentCache', () => {
     expect(cache.stats).toEqual({
       hits: 1,
       misses: 1,
+      hintHits: 0,
       entries: 1,
       bytesHeld: Buffer.byteLength(ORIGINAL),
+    });
+  });
+
+  describe('content hints', () => {
+    it('serves a second path from the first path\'s bytes without reading it', async () => {
+      const cache = new RunContentCache();
+      // Deliberately DIFFERENT bytes on disk. A hint asserts byte identity, so a
+      // cache that honoured it while still reading would return these — which is
+      // exactly what makes this a proof that no read happened, rather than a
+      // proof that two identical files produce identical results.
+      writeFileSync(otherPath(), '# these bytes are never read\n');
+
+      const first = await cache.read(docPath(), 'markdown', SHARED_HINT);
+      const second = await cache.read(otherPath(), 'markdown', SHARED_HINT);
+
+      expect(second).toBe(first);
+      expect(second.content).toBe(ORIGINAL);
+      expect(cache.stats.hintHits).toBe(1);
+      // One read, not two — the whole point.
+      expect(cache.stats.misses).toBe(1);
+    });
+
+    it('files the key hashed from bytes, never the hint itself', async () => {
+      const cache = new RunContentCache();
+
+      const keyed = await cache.read(docPath(), 'markdown', SHARED_HINT);
+
+      // `content-key.ts`'s standing rule: a git SHA may be a lookup whose miss is
+      // free and must never be the identity a parse is filed under.
+      expect(keyed.key).not.toContain(SHARED_HINT);
+      expect(keyed.key).toBe((await readContentWithKey(docPath(), 'markdown')).key);
+    });
+
+    it('does not let one hint serve two parser kinds', async () => {
+      const cache = new RunContentCache();
+      writeFileSync(otherPath(), ORIGINAL);
+
+      const asMarkdown = await cache.read(docPath(), 'markdown', SHARED_HINT);
+      const asHtml = await cache.read(otherPath(), 'html', SHARED_HINT);
+
+      // Identical bytes, different parsers, therefore different identities — the
+      // reason the parser kind is in the hash preimage and in this cache's key.
+      expect(asHtml.key).not.toBe(asMarkdown.key);
+      expect(cache.stats.hintHits).toBe(0);
+    });
+
+    it('reads normally when the hint has not been seen before', async () => {
+      const cache = new RunContentCache();
+
+      await cache.read(docPath(), 'markdown', 'oid-unseen');
+
+      expect(cache.stats).toMatchObject({ hits: 0, misses: 1, hintHits: 0 });
     });
   });
 

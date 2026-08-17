@@ -163,6 +163,41 @@ substrate) are separable: the git lane already yields a content key per path and
 invalidation key, which is the entire input a persisted table would need. Doing the sourcing work
 first is what makes the persistence work worth doing — and it banks most of the win on its own.
 
+#### ✅ Built — `packages/resources/src/projection/crawl-source.ts`
+
+`CrawlSource` is the interface; `FilesystemCrawlSource` is the incumbent walk unchanged, and
+`GitCrawlSource` is git plus a bounded walk of only what git cannot see. `FilesystemExtentContributor`
+takes one, chosen at the seam by `crawlSourceFor()` behind `VAT_EXTENT_SOURCE=git` — **the walk is
+still the default**, because the git route reaches the same population by a different mechanism and
+that is a change to measure before taking (§3.4 makes the same argument for `VAT_RESOURCES_CRAWL`).
+
+The git implementation composes four questions, and the last two are not optional extras — they are
+what makes it return the same set rather than a faster smaller one:
+
+1. `getGitTreeSnapshot` → `tracked ∪ (untracked ∧ ¬ignored)`, with on-disk blob OIDs.
+2. `ls-files --others --ignored --exclude-standard --directory` → the prune list, descended into.
+3. `ls-files --others --directory` → wholly-untracked directories, **including the empty ones** that
+   appear in no tree object because git tracks content and an empty directory has none.
+4. Ancestor directories derived from every path, since a tree object records files and implies dirs.
+
+**Two behaviours the parity harness forced, both of which the design above missed.** Writing the
+differential test is what surfaced them, which is the argument for the seam restated as evidence:
+
+- **A committed symlink is excluded from the git source.** `crawlDirectory`'s manual walk runs with
+  `followSymlinks: false` and never records a link's own path, so the filesystem extent has never
+  contained one. Git reports mode `120000` like any other entry. Admitting it would have imported
+  `file-crawler.ts`'s KNOWN DIVERGENCE into an extent that does not have it — silently, as rows that
+  look like files whose bytes are a path string.
+- **A submodule is descended into.** It is one mode-`160000` entry whose OID is a *commit*, and none
+  of its files appear in the outer snapshot; the outer walk simply reads the directory. Matching it
+  means expanding it.
+
+Verified three ways: `crawl-source-parity.integration.test.ts` differences the two sources and then
+the two extents' realization rows (`path` **and** `contentKey`) on one fixture built so that each row
+of the table above is reached differently by each source; five mutations were run to confirm the
+right assertions redden. End to end, `vat resources scan --format json --verbose` over this
+repository returns byte-identical `path + checksum` sets on both arms — 176 files.
+
 ### 3.4 ✅ The resources lane on the projection — shipped opt-in, and what it measured
 
 `ResourceRegistry.crawl()` takes an optional `populationSource`. Supplied, the file list comes from
@@ -310,7 +345,20 @@ side (tree-shape caching vs. the blob-keyed tables).
 - **Benchmark the git-lane batch-read advantage on Windows.** The packfile/small-file reasoning in
   §3.1 is mechanistically sound but unmeasured on the platform it matters most for.
 - **Build the blob-SHA memo and manifest-diff logic**, VAT-side, using `@vibe-validate/git`'s
-  `getGitTreeHash()` as the underlying primitive.
+  `getGitTreeHash()` as the underlying primitive. **Half-built** — read this bullet's ⚠️ correction
+  below before extending it, then note precisely where the line now falls:
+
+  ✅ The *within-run* half exists. `GitCrawlSource` carries each path's on-disk blob OID as
+  `EnumeratedPath.contentHint`, and `RunContentCache.read()` uses it as a `(hint, parserKind)` lookup
+  so a second path holding identical bytes costs no read at all — reported as `hintHits`, separately
+  from `hits`, because it is the one saving whose soundness rests on something outside that class.
+  All three conditions the correction imposes are enforced structurally: the stored key is still
+  hashed from bytes, a hint hit returns the content so no row goes back to disk, and mode-`120000`
+  entries never reach the field because they are not members at all (§3.3).
+
+  🔷 The *cross-run* half — a persisted `(blobSha, parserKind) → contentKey` memo, and the
+  snapshot-to-snapshot manifest diff — remains unbuilt. That is where the warm-cache prize in the
+  table below actually lives: within one run a hint only pays where a corpus holds duplicate bytes.
 
   Measured 2026-08-16 on an adopter working tree (8,496 tracked paths, macOS, warm), which sizes the
   prize against the `filesystem` extent this would accelerate (`builtin:filesystem`, 1,537 ms warm /
@@ -361,13 +409,20 @@ side (tree-shape caching vs. the blob-keyed tables).
   reads ≈ **15% of that command's filesystem calls** — real, and worth building, but neither a
   drop-in nor the largest remaining term.
 
-- **Source the gitignored remainder without a full crawl** (see §2). The tree snapshot excludes
+- ✅ **Source the gitignored remainder without a full crawl** (see §2). The tree snapshot excludes
   ignored paths, so the projection's `filesystem` extent still needs them. `git ls-files --others
   --ignored --exclude-standard` costs 1.19 s and returns 533,557 paths on that tree — worse than the
   crawl. Adding `--directory` collapses each wholly-ignored directory to a single entry: **369
   entries in 60 ms**, which is a prune list rather than a file list, and lets a caller descend only
   into the ignored territory a lens actually wants (`dist/`) while skipping `.turbo/cache`
-  (418,518 of those paths) by name without ever entering it. Unbuilt.
+  (418,518 of those paths) by name without ever entering it.
+
+  Built as `gitLsOthers()` (`packages/utils/src/git-utils.ts`) and consumed by `GitCrawlSource`
+  (§3.3). ⚠️ **What shipped descends into every ignored directory the prune list names**, because the
+  extent's contract is to report `gitignored: true` rows and dropping them would delete the
+  capability. `NEVER_CRAWL_GLOBS` is applied to the *collapsed* entry, so a pruned directory is
+  skipped by name and never entered — that is where the saving is today. "Descend only where a lens
+  asks" is a further, unbuilt step, and it is a population change rather than a re-sourcing.
 - **Decide the resources-vs-skills untracked-file inconsistency** (§2). ✅ A lane that resolves it
   now exists and is measured (§3.4); what remains is the product call on making it the default.
 - **Design the anchored non-git manifest** (§3.2). Nothing exists yet; SharePoint/OneDrive/iCloud

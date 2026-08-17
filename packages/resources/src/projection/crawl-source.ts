@@ -1,0 +1,473 @@
+/**
+ * **One crawl API, two implementations** — the seam
+ * `docs/architecture/resource-scanning-and-caching.md` §3.3 specifies, and the
+ * reason it is an interface rather than a branch inside the caller.
+ *
+ * A corpus root is enumerated either by walking the filesystem or by asking git,
+ * and the two are cost models rather than behaviours: **they must answer the same
+ * question and return the same set.** Expressing that as one interface with two
+ * implementations is what makes the claim testable — two implementations can be
+ * run against the same root and differenced (`crawl-source-parity.integration.
+ * test.ts`), whereas two ad-hoc code paths chosen at each call site can only be
+ * compared by noticing a wrong answer somewhere downstream.
+ *
+ * | | {@link GitCrawlSource} | {@link FilesystemCrawlSource} |
+ * |---|---|---|
+ * | non-ignored members | `write-tree` snapshot, ~10 ms for 8,496 paths | `readdir` walk |
+ * | ignored members | prune list, then walk only that territory | same walk, undifferentiated |
+ * | content hint | blob OID, already computed | none — bytes get read and hashed |
+ * | directories | derived from paths + collapsed-directory entries | walked directly |
+ *
+ * ## What the git implementation is NOT allowed to do
+ *
+ * **Drop the ignored half.** A tree snapshot structurally cannot see gitignored
+ * paths, and that half is the entire reason the `filesystem` extent exists — a
+ * git source that silently returned only what git tracks would be much faster and
+ * would delete a capability. So this implementation is *not purely git*: it uses
+ * git for the members git knows and a bounded walk for the rest, and §3.3 names
+ * that constraint first because it has already been got wrong once.
+ *
+ * ## Why the ignored half is still cheap
+ *
+ * `ls-files --others --ignored --exclude-standard` on its own is a *worse* answer
+ * than the walk: 533,557 paths in 1.19 s on an 8,496-path adopter tree. Adding
+ * `--directory` collapses each wholly-ignored directory to one entry — 369
+ * entries in 60 ms — which is a **prune list**, not a file list. The walk then
+ * descends only into ignored territory that survives {@link NEVER_CRAWL_GLOBS},
+ * so `.turbo/cache` (418,518 of those paths) is skipped by name without ever
+ * being entered.
+ *
+ * ## Why an empty directory needs its own question
+ *
+ * A directory with no files beneath it appears in no tree object and in no
+ * `ls-files` listing, because git tracks content and an empty directory has none.
+ * Deriving directories from file paths therefore finds every directory *except*
+ * the empty ones — and the filesystem walk reports them, so the two sources would
+ * disagree. `ls-files --others --directory` (without `--ignored`) is what closes
+ * it: a wholly-untracked directory collapses to one entry whether or not it is
+ * empty.
+ */
+
+import {
+  crawlDirectory,
+  crawlPathFilter,
+  gitFindRoot,
+  gitLsOthers,
+  gitTreeSnapshot,
+  NEVER_CRAWL_GLOBS,
+  safePath,
+  toForwardSlash,
+} from '@vibe-agent-toolkit/utils';
+
+/**
+ * One path an enumeration source found, with whatever that source knew for free.
+ */
+export interface EnumeratedPath {
+  /** Absolute, forward-slashed. */
+  absolutePath: string;
+  /**
+   * A byte-identity hint for this path, or `null` when the source has none.
+   *
+   * Present only where it is **sound**: a git blob OID for a regular file, whose
+   * equality implies byte equality. Null for a directory, and for every path the
+   * filesystem walk found — the walk knows nothing about a path until it reads
+   * it, and inventing a hint from `mtime` would be a guess wearing a fact's
+   * clothes.
+   *
+   * The two OIDs that would NOT imply byte equality never reach this field at
+   * all, because the paths carrying them are not members: a symlink (whose OID
+   * is the link target string) is excluded outright, and a submodule (whose OID
+   * is a commit) is expanded into the files beneath it. Excluding them at
+   * enumeration rather than nulling the hint means a later consumer cannot
+   * reintroduce the defect by reading `mode` and deciding for itself.
+   *
+   * ⚠️ **A hint, never a key.** `content-key.ts` states the rule: a git SHA may
+   * be used as a lookup whose miss is free, and must never be the identity a
+   * parse is filed under.
+   */
+  contentHint: string | null;
+}
+
+/** An enumeration strategy for one corpus root. */
+export interface CrawlSource {
+  /** Which implementation this is — recorded so a population says how it was found. */
+  readonly kind: CrawlSourceKind;
+  /**
+   * Every file and directory beneath the root that {@link NEVER_CRAWL_GLOBS}
+   * admits, in no guaranteed order.
+   *
+   * @returns The population, deduplicated by absolute path
+   */
+  enumerate(): Promise<readonly EnumeratedPath[]>;
+}
+
+/** Which of the two implementations answered. */
+export type CrawlSourceKind = 'git' | 'filesystem';
+
+/**
+ * The walk. Enumerates the working tree directly and knows nothing else.
+ *
+ * This is the incumbent behaviour, preserved exactly: the same options
+ * `FilesystemExtentContributor` has always passed, so selecting this source is a
+ * no-op rather than a re-implementation that happens to agree.
+ */
+export class FilesystemCrawlSource implements CrawlSource {
+  readonly kind: CrawlSourceKind = 'filesystem';
+
+  readonly #root: string;
+
+  /**
+   * @param root - Absolute corpus root to enumerate
+   */
+  constructor(root: string) {
+    this.#root = root;
+  }
+
+  /**
+   * Walk the root.
+   *
+   * @returns Every admitted path, with no content hints
+   */
+  async enumerate(): Promise<readonly EnumeratedPath[]> {
+    const absolutePaths = await crawlDirectory({
+      baseDir: this.#root,
+      exclude: [...NEVER_CRAWL_GLOBS],
+      // `followSymlinks` is three decisions — re-entry, membership and reach —
+      // and all three come out the same way. Identity already collapses a
+      // symlink onto its target, so following links would enumerate one blob
+      // many times under distinct paths, each losing the `(extentId, path)` race.
+      followSymlinks: false,
+      // Directories are resources, not merely containers of them.
+      filesOnly: false,
+      // The whole point of the extent this feeds: build output git cannot see.
+      respectGitignore: false,
+    });
+
+    return absolutePaths.map((absolutePath) => ({ absolutePath, contentHint: null }));
+  }
+}
+
+/**
+ * Git plus a bounded walk. See the module docstring for what it may not do.
+ */
+export class GitCrawlSource implements CrawlSource {
+  readonly kind: CrawlSourceKind = 'git';
+
+  readonly #root: string;
+
+  /**
+   * @param root - Absolute corpus root, inside a git working tree
+   */
+  constructor(root: string) {
+    this.#root = root;
+  }
+
+  /**
+   * Ask git what it can see, then walk only what it cannot.
+   *
+   * @returns Every admitted path, with content hints on the regular files git
+   *   already hashed
+   * @throws When git does not answer. An empty population would be
+   *   indistinguishable from a repository with no files, which is the same
+   *   confusion `GitExtentContributor` refuses to ship
+   */
+  async enumerate(): Promise<readonly EnumeratedPath[]> {
+    const isMember = crawlPathFilter(['**/*'], [...NEVER_CRAWL_GLOBS]);
+    const admits = (absolutePath: string): boolean =>
+      isMember(relativeToRoot(absolutePath, this.#root));
+
+    const found = new Map<string, string | null>();
+
+    const { members, submodules } = this.#snapshotMembers(admits);
+    for (const entry of members) {
+      found.set(entry.absolutePath, entry.contentHint);
+    }
+    for (const absolutePath of await this.#untrackedTerritory(admits, submodules)) {
+      if (!found.has(absolutePath)) found.set(absolutePath, null);
+    }
+    // Last, and unconditionally `null`: a directory has no bytes, so it can
+    // never carry a hint, and an ancestor already recorded by the snapshot as a
+    // FILE must not be relabelled here.
+    for (const absolutePath of ancestorDirectories([...found.keys()], this.#root)) {
+      if (!found.has(absolutePath)) found.set(absolutePath, null);
+    }
+
+    return [...found].map(([absolutePath, contentHint]) => ({ absolutePath, contentHint }));
+  }
+
+  /**
+   * The members git holds: `tracked ∪ (untracked ∧ ¬ignored)`, with OIDs.
+   *
+   * @param admits - The shipped include/exclude decision
+   * @returns The admitted entries, and separately the submodule directories
+   *   whose contents git declined to describe
+   * @throws When git could not answer at all
+   */
+  #snapshotMembers(admits: (absolutePath: string) => boolean): {
+    members: EnumeratedPath[];
+    submodules: string[];
+  } {
+    const snapshot = gitTreeSnapshot({ cwd: this.#root });
+    if (snapshot === null) {
+      throw new Error(
+        `git did not answer for "${this.#root}" — it is not a git repository, or git could not read it.`
+        + ' Returning an empty population would be indistinguishable from an empty repository, so this is an error.',
+      );
+    }
+
+    const members: EnumeratedPath[] = [];
+    const submodules: string[] = [];
+
+    for (const entry of snapshot.entries) {
+      // A snapshot covers the whole REPOSITORY, which may be an ancestor of the
+      // corpus root. Narrowing is this caller's job — see `gitTreeSnapshot`.
+      if (!isUnderRoot(entry.absolutePath, this.#root)) continue;
+      if (!admits(entry.absolutePath)) continue;
+
+      // ⚠️ A SYMLINK IS NOT A MEMBER HERE, and dropping it is what makes this a
+      // re-sourcing rather than a redefinition. The walk this replaces runs with
+      // `followSymlinks: false`, whose `processSymlink` returns before recording
+      // anything — so the filesystem extent has never contained a symlink's own
+      // path. Git has no such notion and reports mode `120000` like any other
+      // entry, which is precisely the divergence `file-crawler.ts`'s KNOWN
+      // DIVERGENCE block describes between its own two branches. Admitting them
+      // here would import that divergence into an extent that does not have it,
+      // and would do it silently: the rows would look like ordinary files whose
+      // bytes are a target string.
+      if (entry.isSymlink) continue;
+
+      // A submodule is ONE gitlink entry whose OID is a commit — none of its
+      // files appear. The walk knows nothing about submodules and simply reads
+      // the directory, so matching it means descending. (`.git` inside is
+      // already excluded by NEVER_CRAWL_GLOBS.)
+      if (entry.isSubmodule) {
+        submodules.push(entry.absolutePath);
+        continue;
+      }
+
+      members.push({ absolutePath: entry.absolutePath, contentHint: entry.oid });
+    }
+
+    return { members, submodules };
+  }
+
+  /**
+   * Everything git deliberately does not hold: the ignored half, plus the
+   * directories that exist without containing anything.
+   *
+   * @param admits - The shipped include/exclude decision
+   * @param submodules - Directories the snapshot named but did not describe
+   * @returns Absolute paths, files and directories alike
+   */
+  async #untrackedTerritory(
+    admits: (absolutePath: string) => boolean,
+    submodules: readonly string[],
+  ): Promise<string[]> {
+    const paths: string[] = [];
+
+    // A submodule's own files belong to its own repository, so the outer
+    // snapshot cannot see them while the outer WALK reads them like any other
+    // directory. Descending is what keeps the two sources equal.
+    for (const submodule of submodules) {
+      paths.push(submodule, ...(await expandDirectory(submodule, admits)));
+    }
+
+    // Ignored territory: descend, because the extent this feeds must still
+    // report `gitignored: true` rows. `NEVER_CRAWL_GLOBS` is applied to the
+    // COLLAPSED entry before descending, which is where the saving is — a
+    // pruned directory is skipped by name and never entered.
+    for (const collapsed of this.#prune({ ignored: true })) {
+      if (!admits(collapsed.absolutePath)) continue;
+      paths.push(collapsed.absolutePath);
+      if (collapsed.isDirectory) {
+        paths.push(...(await expandDirectory(collapsed.absolutePath, admits)));
+      }
+    }
+
+    // Untracked-but-not-ignored territory: the entries themselves only, never a
+    // descent. Every FILE beneath such a directory is already in the snapshot
+    // (`git add --all` staged it), so walking here would re-enumerate what git
+    // just handed over. What this recovers is the directory entry itself —
+    // including the empty ones no tree object can represent.
+    for (const collapsed of this.#prune({ ignored: false })) {
+      if (admits(collapsed.absolutePath)) paths.push(collapsed.absolutePath);
+    }
+
+    return paths;
+  }
+
+  /**
+   * One `ls-files --others --directory` listing, located and shape-tagged.
+   *
+   * @param options - Whether to ask for the ignored side
+   * @param options.ignored - Restrict to ignored paths
+   * @returns Collapsed entries under this root
+   */
+  #prune(options: { ignored: boolean }): { absolutePath: string; isDirectory: boolean }[] {
+    const listing = gitLsOthers({ cwd: this.#root, ignored: options.ignored, directory: true });
+    if (listing === null) return [];
+
+    // Relative to the REPOSITORY root, like every other `ls-files` output.
+    const repositoryRoot = gitFindRoot(this.#root) ?? this.#root;
+
+    const entries: { absolutePath: string; isDirectory: boolean }[] = [];
+    for (const relativePath of listing) {
+      // git marks a collapsed directory with a trailing slash. That is the only
+      // signal distinguishing "this whole subtree" from "this one file", so it
+      // is read before being resolved away.
+      const isDirectory = relativePath.endsWith('/');
+      const absolutePath = safePath.resolve(
+        repositoryRoot,
+        isDirectory ? relativePath.slice(0, -1) : relativePath,
+      );
+      if (isUnderRoot(absolutePath, this.#root)) {
+        entries.push({ absolutePath, isDirectory });
+      }
+    }
+    return entries;
+  }
+}
+
+/**
+ * Walk one directory that git declined to enumerate.
+ *
+ * @param directory - Absolute path to descend into
+ * @param admits - The shipped include/exclude decision, applied per path
+ * @returns Every admitted path beneath it, files and directories
+ */
+async function expandDirectory(
+  directory: string,
+  admits: (absolutePath: string) => boolean,
+): Promise<string[]> {
+  const found = await crawlDirectory({
+    baseDir: directory,
+    // Passed so the walk PRUNES rather than enumerating and discarding. Safe to
+    // re-base only because every glob in this list is `**/`-prefixed and so is
+    // position-independent: `**/node_modules/**` selects the same paths whether
+    // it is evaluated against the corpus root or against a directory inside it.
+    // It can therefore only drop paths `admits` would drop anyway, which is what
+    // keeps it an optimization rather than a second, quieter policy. Without it
+    // an ignored directory containing its own `node_modules` is walked in full
+    // and then filtered — the cost this whole lane exists to avoid.
+    exclude: [...NEVER_CRAWL_GLOBS],
+    followSymlinks: false,
+    filesOnly: false,
+    // Already inside ignored territory by construction, so consulting git again
+    // would return nothing and cost a spawn.
+    respectGitignore: false,
+  });
+  // Still applied: `admits` evaluates against the CORPUS root, and it is the
+  // single authority on membership for both sources.
+  return found.filter((absolutePath) => admits(absolutePath));
+}
+
+/**
+ * Every directory on the way from the root down to each of these paths.
+ *
+ * A tree object records files; the directories are implied by their names. The
+ * filesystem walk reports them as members, so a git source that did not derive
+ * them would return a different set for the same tree.
+ *
+ * @param absolutePaths - Paths whose ancestors are wanted
+ * @param root - Boundary; the root itself is never a member of its own crawl
+ * @returns Absolute ancestor directories, deduplicated
+ */
+function ancestorDirectories(absolutePaths: readonly string[], root: string): string[] {
+  const directories = new Set<string>();
+  const normalizedRoot = toForwardSlash(safePath.resolve(root));
+
+  for (const absolutePath of absolutePaths) {
+    let current = parentOf(absolutePath);
+    // Stop at the root, and stop the moment an ancestor is already recorded —
+    // every ancestor above it necessarily is too, which turns a per-path walk to
+    // the root into an amortized constant on a deep tree.
+    while (current.length > normalizedRoot.length && current.startsWith(`${normalizedRoot}/`)) {
+      if (directories.has(current)) break;
+      directories.add(current);
+      current = parentOf(current);
+    }
+  }
+
+  return [...directories];
+}
+
+/**
+ * The containing directory of a forward-slashed absolute path.
+ *
+ * `node:path.dirname` is deliberately avoided: it returns backslashes on
+ * Windows, and every path in this module is forward-slashed so that a `Set` of
+ * them can compare by string.
+ *
+ * @param absolutePath - Forward-slashed absolute path
+ * @returns Its parent, or the path itself when it has no separator left
+ */
+function parentOf(absolutePath: string): string {
+  const lastSlash = absolutePath.lastIndexOf('/');
+  return lastSlash <= 0 ? absolutePath : absolutePath.slice(0, lastSlash);
+}
+
+/**
+ * Whether a path lies strictly beneath a root.
+ *
+ * @param absolutePath - Path to test
+ * @param root - Root it must be under
+ * @returns True when the path is a strict descendant
+ */
+function isUnderRoot(absolutePath: string, root: string): boolean {
+  return toForwardSlash(absolutePath).startsWith(`${toForwardSlash(safePath.resolve(root))}/`);
+}
+
+/**
+ * A path expressed the way the crawl globs are written — relative to the root,
+ * forward-slashed.
+ *
+ * @param absolutePath - Path to express
+ * @param root - Basis
+ * @returns Root-relative forward-slashed path
+ */
+function relativeToRoot(absolutePath: string, root: string): string {
+  return toForwardSlash(safePath.relative(root, absolutePath));
+}
+
+/**
+ * The env var selecting which implementation enumerates the `filesystem` extent.
+ *
+ * An environment switch rather than a config field, for the reason
+ * `VAT_RESOURCES_CRAWL` is one: it selects which INSTRUMENT runs, not what the
+ * project means, and it has to be reachable from the lab, which spawns the binary
+ * and controls its environment. A config field would put the A and B arms inside
+ * the subject's own tree, where a measurement edits the thing it measures.
+ */
+export const EXTENT_SOURCE_ENV = 'VAT_EXTENT_SOURCE';
+
+/** {@link EXTENT_SOURCE_ENV}'s value that selects {@link GitCrawlSource}. */
+export const EXTENT_SOURCE_GIT = 'git';
+
+/**
+ * Choose the enumeration source for a root.
+ *
+ * **Defaults to the walk even inside a git repository, and that is deliberate.**
+ * §3.3 specifies selection by "is this a git working tree", and that is the right
+ * end state — but the git implementation reaches the same population by a
+ * different route, so making it the default is a change to be *measured* on real
+ * corpora before it is taken, not one to be reasoned into. The lab's `population`
+ * facet compares the two arms; flipping this default is then a one-line change
+ * with a changelog entry.
+ *
+ * Read from the environment at each call rather than memoized at module load:
+ * `vitest.setup.js` deletes every `VAT_*` variable before any test module loads,
+ * so a module-level binding would make the switch unobservable to every test that
+ * sets it.
+ *
+ * @param root - Absolute corpus root
+ * @returns The selected source. Falls back to the walk when git is asked for but
+ *   the root is not in a repository, because a root outside git has no git answer
+ *   and failing would make the switch unusable across a mixed corpus
+ */
+export function crawlSourceFor(root: string): CrawlSource {
+  const wantsGit = process.env[EXTENT_SOURCE_ENV] === EXTENT_SOURCE_GIT;
+  if (wantsGit && gitFindRoot(root) !== null) {
+    return new GitCrawlSource(root);
+  }
+  return new FilesystemCrawlSource(root);
+}

@@ -127,6 +127,12 @@ function instrumentTag(envelope: ReportEnvelope<unknown>): string {
  * allowlist) and putting it in {@link instrumentTag} — a coordinate change, so
  * it is recorded here rather than patched around.
  *
+ * The family has since grown to three — `VAT_INVENTORY_CRAWL`,
+ * `VAT_RESOURCES_CRAWL` and `VAT_EXTENT_SOURCE` — which is the argument for a
+ * general variant axis rather than for lengthening this list again. Every one of
+ * them selects an INSTRUMENT rather than a subject, and every one of them is
+ * invisible here.
+ *
  * ✅ Until then the workaround is real and was RUN, not assumed: send each arm to
  * its own `--out` directory, then hand `crawl compare` the two report paths. It
  * prints a correct arm-vs-arm diff, honestly headed "Comparing two reports at the

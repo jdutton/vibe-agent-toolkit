@@ -60,10 +60,17 @@ import { type KeyedContent, type ParserKind, readContentWithKey } from '../conte
 
 /** What one run's cache did, for anyone measuring it. */
 export interface ContentCacheStats {
-  /** Reads served from an entry already held. */
+  /** Reads served from an entry already held for the same path. */
   readonly hits: number;
   /** Reads that touched the disk. */
   readonly misses: number;
+  /**
+   * Reads served from a **different path** that an enumeration source said holds
+   * identical bytes — see {@link RunContentCache.read}. Counted separately from
+   * `hits` because it is the only saving whose soundness rests on something
+   * outside this class, and a number nobody can see is a claim nobody can check.
+   */
+  readonly hintHits: number;
   /** Distinct `(path, parserKind)` pairs held. */
   readonly entries: number;
   /** Raw bytes held, summed over the entries. */
@@ -80,8 +87,20 @@ export interface ContentCacheStats {
  */
 export class RunContentCache {
   readonly #entries = new Map<string, KeyedContent>();
+  /**
+   * `(contentHint, parserKind)` → what those bytes decoded and keyed to.
+   *
+   * Separate from {@link #entries} rather than a second key into it, because the
+   * two answer different questions: one is "did this run already read THIS
+   * path", the other is "did this run already read bytes an enumerator says are
+   * identical to this path's". Collapsing them would make a hint miss look like
+   * a path miss in the statistics, which is the one number that makes the hint's
+   * soundness auditable.
+   */
+  readonly #byHint = new Map<string, KeyedContent>();
   #hits = 0;
   #misses = 0;
+  #hintHits = 0;
   #bytesHeld = 0;
 
   /**
@@ -117,21 +136,78 @@ export class RunContentCache {
    * treats an unreadable file as a fact about the corpus (`collectRealization`
    * records a null key) has already handled it.
    *
+   * ## `contentHint` — the one saving that skips the read entirely
+   *
+   * An enumeration source may already know a byte identity for a path: the git
+   * source hands over the blob OID `write-tree` computed for its **on-disk**
+   * bytes. Two paths with the same OID hold the same bytes, so the second one's
+   * content and key are already in hand and no `readFile` need happen at all.
+   * On a real corpus that is not a curiosity — repeated licence files, generated
+   * stubs, and every empty file in the tree share one OID.
+   *
+   * This is the *lookup hint whose miss is free* that `content-key.ts` permits,
+   * and it stays inside the three conditions that make it permitted:
+   *
+   * - **The stored key is still hashed from the bytes**, never derived from the
+   *   OID. A hint only chooses which already-computed answer to reuse; it never
+   *   becomes an identity. A miss reads and hashes exactly as before.
+   * - **The caller must not offer a hint for a symlink** (whose OID names the
+   *   link target string, not the bytes a follower reads) or for a submodule
+   *   (whose OID is a commit). `EnumeratedPath.contentHint` is null for both, so
+   *   the exclusion is made at the only place that can see the mode.
+   * - **A hint hit returns the content too**, so a row keyed from the memo never
+   *   goes back to disk for its bytes and cannot bind an old key to new ones.
+   *
+   * ⚠️ **What it widens.** `#entries` first-read-wins already means a file
+   * rewritten mid-population is not re-observed. A hint extends that window: the
+   * OID was computed when the source enumerated, so a path whose bytes changed
+   * between enumeration and realization is served the bytes it had at
+   * enumeration. That is the same instant the rest of the population describes —
+   * a projection consistent as of when it started, rather than a smear — but it
+   * is a wider window than a per-path read, and it is a deliberate choice rather
+   * than an oversight.
+   *
    * @param absolutePath - Absolute path to read
    * @param parserKind - The parser these bytes will actually be handed to
+   * @param contentHint - A byte identity the enumerator already computed, when it
+   *   has one that is sound for this path
    * @returns The content, its key, and the parser it routes to
    * @throws Whatever `readFile` throws — callers decide whether that is fatal
    */
-  async read(absolutePath: string, parserKind: ParserKind): Promise<KeyedContent> {
+  async read(
+    absolutePath: string,
+    parserKind: ParserKind,
+    contentHint?: string | undefined,
+  ): Promise<KeyedContent> {
     const key = cacheKey(absolutePath, parserKind);
     const held = this.#entries.get(key);
     if (held !== undefined) {
       this.#hits += 1;
       return held;
     }
+
+    // Asked before the read, answered from bytes some other path already
+    // supplied. The path entry is still recorded below, so a second visit to
+    // THIS path is an ordinary hit rather than a second hint lookup.
+    const hintKey = contentHint === undefined ? undefined : cacheKey(contentHint, parserKind);
+    if (hintKey !== undefined) {
+      const shared = this.#byHint.get(hintKey);
+      if (shared !== undefined) {
+        this.#hintHits += 1;
+        this.#entries.set(key, shared);
+        return shared;
+      }
+    }
+
     this.#misses += 1;
     const keyed = await readContentWithKey(absolutePath, parserKind);
     this.#entries.set(key, keyed);
+    if (hintKey !== undefined) {
+      this.#byHint.set(hintKey, keyed);
+    }
+    // Counted once per READ, not once per entry: a hint hit adds an `#entries`
+    // row pointing at bytes already counted, and counting it again would report
+    // a footprint the process is not paying.
     this.#bytesHeld += keyed.byteLength;
     return keyed;
   }
@@ -141,6 +217,7 @@ export class RunContentCache {
     return {
       hits: this.#hits,
       misses: this.#misses,
+      hintHits: this.#hintHits,
       entries: this.#entries.size,
       bytesHeld: this.#bytesHeld,
     };
@@ -158,16 +235,20 @@ export class RunContentCache {
  * @param absolutePath - Absolute path to read
  * @param parserKind - The parser these bytes will actually be handed to
  * @param cache - The run's cache, or absent for a caller outside a population
+ * @param contentHint - A byte identity the enumerator already computed. Ignored
+ *   without a cache: a hint's whole mechanism is reusing another path's read,
+ *   and outside a run there is no other read to reuse
  * @returns The content, its key, and the parser it routes to
  */
 export async function readKeyedContent(
   absolutePath: string,
   parserKind: ParserKind,
   cache?: RunContentCache | undefined,
+  contentHint?: string | undefined,
 ): Promise<KeyedContent> {
   return cache === undefined
     ? readContentWithKey(absolutePath, parserKind)
-    : cache.read(absolutePath, parserKind);
+    : cache.read(absolutePath, parserKind, contentHint);
 }
 
 /** The `(path, parserKind)` pair an entry is filed under. */

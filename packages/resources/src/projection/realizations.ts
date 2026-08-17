@@ -74,6 +74,17 @@ export interface RealizationContext {
    * to change.
    */
   contentDemand?: ContentDemand | undefined;
+  /**
+   * A byte identity the enumerator already computed for THIS path — the git
+   * source's blob OID, when it has a sound one.
+   *
+   * Only ever a lookup into the run's cache, so that a second path holding
+   * identical bytes costs no read; never the key a parse is filed under. Absent
+   * for every path a walk found, and absent for symlinks and submodules even
+   * under git — see `EnumeratedPath.contentHint`, which is where the mode is
+   * visible and therefore where the exclusion belongs.
+   */
+  contentHint?: string | undefined;
 }
 
 /**
@@ -265,6 +276,7 @@ async function keyOrState(
       absolutePath,
       parserKindForPath(absolutePath),
       context.contentCache,
+      context.contentHint,
     );
     return { contentKey: keyed.key, contentState: 'keyed' };
   } catch {

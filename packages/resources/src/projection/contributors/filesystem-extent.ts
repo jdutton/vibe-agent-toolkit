@@ -70,8 +70,6 @@
  * narrowed — dropping non-markdown loses real members. It can be re-sourced.
  */
 
-import { crawlDirectory, NEVER_CRAWL_GLOBS } from '@vibe-agent-toolkit/utils';
-
 import type {
   ResourceExtentRow,
   ResourceRealizationRow,
@@ -84,6 +82,7 @@ import type {
   ExtentContribution,
   ExtentContributor,
 } from '../contributor.js';
+import { crawlSourceFor, type CrawlSource } from '../crawl-source.js';
 import type { ProjectionBase } from '../projection.js';
 import { collectRealization } from '../realizations.js';
 
@@ -109,6 +108,18 @@ export class FilesystemExtentContributor implements ExtentContributor {
 
   readonly stratum: ContributorStratum = 'base';
 
+  readonly #sourceFor: (root: string) => CrawlSource;
+
+  /**
+   * @param sourceFor - How to obtain this extent's enumerator, defaulting to
+   *   {@link crawlSourceFor}. Injected only so the parity suite can pin one
+   *   implementation against the other on a single root; production selects at
+   *   the seam, never per construction site
+   */
+  constructor(sourceFor: (root: string) => CrawlSource = crawlSourceFor) {
+    this.#sourceFor = sourceFor;
+  }
+
   /**
    * Crawl the root and return one extent, its members, and their realizations.
    *
@@ -132,27 +143,15 @@ export class FilesystemExtentContributor implements ExtentContributor {
       role: null,
     };
 
-    const absolutePaths = await crawlDirectory({
-      baseDir: base.root,
-      exclude: [...NEVER_CRAWL_GLOBS],
-      // `followSymlinks` is three decisions — re-entry, membership and reach —
-      // and all three come out the same way here. Identity already collapses a
-      // symlink onto its target (`canonicalPathFor` resolves before hashing),
-      // so following links would enumerate one blob many times under distinct
-      // paths, each of which then loses the `(extentId, path)` race and lands
-      // in `realization_conditions`, for no membership the target does not
-      // already supply.
-      followSymlinks: false,
-      // Directories are resources, not merely containers of them.
-      filesOnly: false,
-      // The whole point of this extent: build output the git route cannot see.
-      respectGitignore: false,
-    });
+    // Which enumerator answers is chosen at the seam, never here — see
+    // `crawl-source.ts`. Both implementations return the same set for the same
+    // root; they differ in what they cost and in what they already know.
+    const enumerated = await this.#sourceFor(base.root).enumerate();
 
     const resources = new Map<string, ResourceRow>();
     const realizations: ResourceRealizationRow[] = [];
 
-    for (const absolutePath of absolutePaths) {
+    for (const { absolutePath, contentHint } of enumerated) {
       const resourceId = base.identities.idFor(absolutePath);
       // Sequential on purpose: `collectRealization` reads and keys every file's
       // bytes, and fanning the whole crawl out at once puts one file handle per
@@ -168,6 +167,7 @@ export class FilesystemExtentContributor implements ExtentContributor {
         // See the class docstring: paths carry this extent's whole argument, so
         // the ignored half of the tree gets rows without getting hashed.
         contentDemand: 'deferGitignored',
+        ...(contentHint !== null && { contentHint }),
       });
       realizations.push(realization);
       if (!resources.has(resourceId)) {
