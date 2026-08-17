@@ -95,7 +95,7 @@
     "clean": "rimraf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@vibe-validate/git": "0.19.8",
+    "@vibe-validate/git": "0.20.0",
     "handlebars": "^4.7.8",
     "ignore": "^7.0.5",
     "picomatch": "^4.0.3",
