@@ -77,6 +77,32 @@ export const VariableExpansionSyntaxSchema = z.enum(['brace', 'bare', 'percent',
 export type VariableExpansionSyntax = z.infer<typeof VariableExpansionSyntaxSchema>;
 
 /**
+ * The lexical features of a reference token, as field definitions two schemas
+ * share verbatim.
+ *
+ * `LexicalReferenceSchema` (`parse-facts.ts`) describes what the lexer produces
+ * and `BlobReferenceRowSchema` below describes what the projection stores, and
+ * these six columns must stay identical between them — `blob-references.ts`
+ * carries a type-level guard (`LexicalColumns`) asserting exactly that, because
+ * a row built by spreading a lexical reference silently gains any field the
+ * reference gains. One definition is what makes the guard's premise true rather
+ * than merely currently-observed.
+ *
+ * `syntacticForm` is deliberately NOT here: the lexer emits a strict subset of
+ * the row's enum, and widening the lexer's would make its schema unable to
+ * reject a payload claiming a markdown form.
+ */
+export const LEXICAL_FEATURE_COLUMNS = {
+  hasExtension: z.boolean().describe('The token ends in a dot followed by a short alphanumeric run'),
+  leadingAt: z.boolean().describe('The token begins with "@"'),
+  slashCount: z.number().int().nonnegative().describe('Number of "/" characters in the token'),
+  variableExpansion: VariableExpansionSyntaxSchema.nullable()
+    .describe('Which expansion syntax the token uses, or null when it contains none'),
+  inCodeSpan: z.boolean().describe('True when the reference sits inside an inline code span'),
+  inFence: z.boolean().describe('True when the reference sits inside a fenced code block'),
+} as const;
+
+/**
  * A row of the `blob_references` table — every reference **candidate** found
  * in a blob.
  *
@@ -170,13 +196,7 @@ export const BlobReferenceRowSchema = z.object({
   endOffset: z.number().int().nonnegative()
     .describe('0-based character offset one past the reference token — the half-open span [startOffset, endOffset)'),
   syntacticForm: ReferenceSyntacticFormSchema,
-  hasExtension: z.boolean().describe('The token ends in a dot followed by a short alphanumeric run'),
-  leadingAt: z.boolean().describe('The token begins with "@"'),
-  slashCount: z.number().int().nonnegative().describe('Number of "/" characters in the token'),
-  variableExpansion: VariableExpansionSyntaxSchema.nullable()
-    .describe('Which expansion syntax the token uses, or null when it contains none'),
-  inCodeSpan: z.boolean().describe('True when the reference sits inside an inline code span'),
-  inFence: z.boolean().describe('True when the reference sits inside a fenced code block'),
+  ...LEXICAL_FEATURE_COLUMNS,
 }).strict().describe('A row of the blob-keyed `blob_references` table');
 
 export type BlobReferenceRow = z.infer<typeof BlobReferenceRowSchema>;

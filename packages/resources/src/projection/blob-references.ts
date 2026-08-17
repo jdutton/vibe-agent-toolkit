@@ -33,7 +33,8 @@
  */
 
 import type { ParseResult } from '../link-parser.js';
-import { detectVariableExpansion, type LexicalReference } from '../reference-lexer.js';
+import { detectVariableExpansion } from '../reference-lexer.js';
+import type { LexicalReference } from '../schemas/parse-facts.js';
 import type { BlobReferenceRow, ReferenceSyntacticForm } from '../schemas/projection-blobs.js';
 import type { LinkNodeType, ResourceLink } from '../schemas/resource-metadata.js';
 

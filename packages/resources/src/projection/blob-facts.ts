@@ -9,19 +9,14 @@
 
 import type { ParseResult } from '../link-parser.js';
 import type { OffsetRange } from '../reference-lexer.js';
+import type { ContentMeasures } from '../schemas/parse-facts.js';
 import type { BlobConditionRow, BlobRow } from '../schemas/projection-blobs.js';
 
 import { flattenHeadings } from './blob-sections.js';
 
-/** Byte and word accounting for one blob, split by code context. */
-export interface ContentMeasures {
-  /** Whitespace-delimited words outside fenced code. */
-  wordCount: number;
-  /** Characters outside fenced code. */
-  proseBytes: number;
-  /** Characters inside fenced code. */
-  codeBlockBytes: number;
-}
+// `ContentMeasures` is defined by `ContentMeasuresSchema`
+// (`schemas/parse-facts.ts`), not here: the parse cache persists these three
+// counts and validates them on read, so the shape needs one definition.
 
 /**
  * Split a document's characters into prose and fenced code, and count prose words.

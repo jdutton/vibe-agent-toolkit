@@ -437,14 +437,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   namespace.
 
   A content-addressed cache cannot see a change to the *parser itself*, and the namespace is what
-  answers that. **For a source checkout it is answered by a hand-bumped constant, not
-  automatically** — the alternative, fingerprinting the emitted parser modules so every rebuild
+  answers that. **For a source checkout it answers per worktree, and nothing re-namespaces on a
+  rebuild** — the alternative, fingerprinting the emitted parser modules so every rebuild
   re-namespaced, was measured and rejected: it left **65 namespaces holding 267 MB** with nothing
-  evicting them, one day's rebuilds alone accounting for ~200 MB of near-duplicate content. So a
-  dev cache now survives `tsc --build`, and the cost is that changing what the parser *produces*
-  requires bumping the revision constant beside it, or running `vat cache clear`. Installed
-  releases are unaffected: the published version already discriminates parser behaviour, and two
-  machines on one release still share a namespace.
+  evicting them. So a dev cache survives `tsc --build`; **run `vat cache clear` after changing what
+  a parser produces.** Entries are validated against a schema on read, so one whose shape this
+  build cannot account for is a reparse rather than a plausible answer. Installed releases are
+  unaffected: the published version already discriminates parser behaviour, and two machines on one
+  release still share a namespace.
 
   Two consequences worth knowing. **Content keys are now stable across VAT versions** — they are
   `<parserKind>.<sha256>` with no version component — so upgrading no longer churns every recorded

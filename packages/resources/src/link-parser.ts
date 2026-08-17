@@ -32,8 +32,9 @@ import {
   recordParsedDocument,
   recordParsePass,
 } from './parse-timing.js';
-import { type ContentMeasures, measureContent } from './projection/blob-facts.js';
-import { collectCodeContextRanges, findLexicalReferences, type LexicalReference } from './reference-lexer.js';
+import { measureContent } from './projection/blob-facts.js';
+import { collectCodeContextRanges, findLexicalReferences } from './reference-lexer.js';
+import type { ContentMeasures, LexicalReference } from './schemas/parse-facts.js';
 import type { HtmlParseError } from './schemas/resource-metadata.js';
 import type { HeadingNode, LinkType, ResourceLink, UnresolvedReference } from './types.js';
 import { findUnresolvedReferences } from './unresolved-references.js';

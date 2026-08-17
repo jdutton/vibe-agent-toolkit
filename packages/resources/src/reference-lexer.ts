@@ -42,6 +42,7 @@ import type { Root } from 'mdast';
 import { visit } from 'unist-util-visit';
 
 import { forEachScannableLine } from './scan-lines.js';
+import type { LexicalReference } from './schemas/parse-facts.js';
 import type { VariableExpansionSyntax } from './schemas/projection-blobs.js';
 
 /** Half-open character-offset range `[start, end)`. */
@@ -60,26 +61,10 @@ export interface CodeContextRanges {
   excluded: OffsetRange[];
 }
 
-/** A reference candidate the markdown AST does not produce. */
-export interface LexicalReference {
-  /** The token as authored, with trailing sentence punctuation stripped. */
-  raw: string;
-  /** 1-based line. */
-  line: number;
-  /** 1-based column of the token's first character. */
-  column: number;
-  /** 0-based character offset of the token's first character. */
-  startOffset: number;
-  /** 0-based character offset one past the token's last character. */
-  endOffset: number;
-  syntacticForm: 'at-prefixed' | 'env-anchored' | 'bare-token';
-  hasExtension: boolean;
-  leadingAt: boolean;
-  slashCount: number;
-  variableExpansion: VariableExpansionSyntax | null;
-  inCodeSpan: boolean;
-  inFence: boolean;
-}
+// `LexicalReference` — the shape this module produces — is defined by
+// `LexicalReferenceSchema` in `schemas/parse-facts.ts`, not here: the parse
+// cache persists these rows and therefore has to validate them on read, and a
+// shape with two definitions is a shape the validator can fall behind.
 
 /** Node kinds {@link collectCodeContextRanges} reacts to, as one filtered walk. */
 const CONTEXT_NODE_TYPES = [

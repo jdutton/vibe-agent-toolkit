@@ -210,9 +210,12 @@ export {
   detectVariableExpansion,
   findLexicalReferences,
   type CodeContextRanges,
-  type LexicalReference,
   type OffsetRange,
 } from './reference-lexer.js';
+// `LexicalReference` and `ContentMeasures` are Zod-sourced (single source of
+// truth) — see schemas/parse-facts.ts, which is also what the parse cache
+// validates an entry against.
+export type { ContentMeasures, LexicalReference } from './schemas/parse-facts.js';
 
 // Export parser interface for advanced use cases
 export { parseMarkdown, classifyLink, isLocalFileLink, type ParseResult } from './link-parser.js';

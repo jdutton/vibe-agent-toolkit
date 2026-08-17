@@ -5,7 +5,6 @@ import { normalizedTmpdir, resolveFromImportMeta, safePath } from '@vibe-agent-t
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
-  PARSER_BEHAVIOR_REVISION,
   devNamespaceDigest,
   parseCacheDirectory,
   vatCacheNamespace,
@@ -49,11 +48,6 @@ async function restampModules(dir: string, epochSeconds: number): Promise<void> 
   );
 }
 
-/** The digest under the shipped revision — the common case in these tests. */
-function digestOf(moduleDir: string): string {
-  return devNamespaceDigest(moduleDir, PARSER_BEHAVIOR_REVISION);
-}
-
 describe('devNamespaceDigest', () => {
   let tempDir: string;
 
@@ -71,11 +65,11 @@ describe('devNamespaceDigest', () => {
     // a negative control by construction: it was RED before, because both the
     // size (different body length) and the mtime move below.
     await writeRebuiltModules(tempDir, 'export const version = 1;');
-    const before = digestOf(tempDir);
+    const before = devNamespaceDigest(tempDir);
 
     await writeRebuiltModules(tempDir, 'export const version = 2; // rebuilt, and longer than before');
     await restampModules(tempDir, Date.now() / 1000 + 3600);
-    const after = digestOf(tempDir);
+    const after = devNamespaceDigest(tempDir);
 
     expect(after).toBe(before);
   });
@@ -85,34 +79,31 @@ describe('devNamespaceDigest', () => {
     // recorded each missing module as `<name>:absent`, so mid-clean runs got
     // their own namespace; nothing about a parse fact changed.
     await writeRebuiltModules(tempDir, 'export const version = 1;');
-    const populated = digestOf(tempDir);
+    const populated = devNamespaceDigest(tempDir);
 
     await Promise.all(REBUILT_MODULE_FILES.map(async (name) => fs.rm(safePath.join(tempDir, name))));
 
-    expect(digestOf(tempDir)).toBe(populated);
+    expect(devNamespaceDigest(tempDir)).toBe(populated);
   });
 
-  it('moves when the parser behaviour revision is bumped', () => {
-    // The replacement for the fingerprint: deliberate, hand-driven invalidation.
-    expect(devNamespaceDigest(tempDir, PARSER_BEHAVIOR_REVISION + 1)).not.toBe(digestOf(tempDir));
+  it('depends on the module directory and NOTHING else', () => {
+    // Pins the whole input set. A hand-bumped parser-revision constant used to
+    // be the second argument; it is gone, and the invalidation it stood for now
+    // lives in `ParseFactsSchema` (shape) and `vat cache clear` (meaning). This
+    // test is what makes a re-introduction visible: a new input would have to
+    // appear in this signature.
+    expect(devNamespaceDigest.length).toBe(1);
   });
 
   it('moves when the module directory moves, so two worktrees never share a namespace', () => {
     // The one thing the path component is for. Every worktree reads the same
     // version from the same manifest, so without this, branch A and branch B
     // would collide — precisely when invalidation matters most.
-    expect(digestOf(safePath.join(tempDir, 'other-worktree'))).not.toBe(digestOf(tempDir));
+    expect(devNamespaceDigest(safePath.join(tempDir, 'other-worktree'))).not.toBe(devNamespaceDigest(tempDir));
   });
 
   it('is six lowercase hex digits, so it is safe as a path segment', () => {
-    expect(digestOf(tempDir)).toMatch(/^[0-9a-f]{6}$/u);
-  });
-});
-
-describe('PARSER_BEHAVIOR_REVISION', () => {
-  it('is a non-negative integer, so a bump is unambiguous in the digest', () => {
-    expect(Number.isInteger(PARSER_BEHAVIOR_REVISION)).toBe(true);
-    expect(PARSER_BEHAVIOR_REVISION).toBeGreaterThanOrEqual(0);
+    expect(devNamespaceDigest(tempDir)).toMatch(/^[0-9a-f]{6}$/u);
   });
 });
 
@@ -137,7 +128,7 @@ describe('vatCacheNamespace', () => {
     // Ties the memoized entry point to the function the tests above exercise:
     // without this, `devNamespaceDigest` could drift into being decoration.
     const moduleDir = safePath.join(resolveFromImportMeta(import.meta.url), '..', '..', 'src');
-    expect(vatCacheNamespace().endsWith(`-dev-${digestOf(moduleDir)}`)).toBe(true);
+    expect(vatCacheNamespace().endsWith(`-dev-${devNamespaceDigest(moduleDir)}`)).toBe(true);
   });
 
   it('is stable within a process, so two lookups cannot disagree', () => {

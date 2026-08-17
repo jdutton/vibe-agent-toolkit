@@ -31,32 +31,7 @@
             {
               "type": "array",
               "items": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "number"
-                  },
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "type": "array",
-                    "items": {
-                      "$ref": "#/definitions/projection-zone-provenance/properties/parameterSet/anyOf/4/items"
-                    }
-                  },
-                  {
-                    "type": "object",
-                    "additionalProperties": {
-                      "$ref": "#/definitions/projection-zone-provenance/properties/parameterSet/anyOf/4/items"
-                    }
-                  }
-                ],
+                "$ref": "#/definitions/projection-zone-provenance/properties/parameterSet",
                 "description": "An arbitrary JSON value (frontmatter, condition payloads, etc.)"
               }
             },

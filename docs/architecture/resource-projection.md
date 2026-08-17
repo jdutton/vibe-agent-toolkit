@@ -189,14 +189,18 @@ cache, not a replacement for either layer.
 - **Namespacing is version-based, with a dev-checkout escape hatch.** For an installed VAT, the
   namespace is the package version alone (e.g. `0.1.42`) — deliberately, so every machine on the same
   release shares one cache. Version alone is insufficient for a **dev checkout**, so there the
-  namespace gets a `-dev-<hash>` suffix hashing **both** the package-root path and a build fingerprint
-  of the emitted parser modules — deliberately two different inputs doing two different jobs: the path
-  separates one worktree from another, and the fingerprint separates edits made within one worktree
-  over time. This replaced two earlier hand-bumped constants (`CONTENT_KEY_SCHEMA_VERSION` and
-  `PARSE_CACHE_SCHEMA_VERSION`), deliberately: per the code's own docstring, a hand-bumped constant is
-  "a discipline, not a mechanism." Two other cache tenants in this codebase — `content-cache.ts` and
-  `external-link-cache.ts` — still use exactly that replaced pattern (`const CACHE_VERSION = 1`); that
-  is the pattern being moved away from, not a precedent this design follows.
+  namespace gets a `-dev-<hash>` suffix over the package-root path, which separates one worktree from
+  another. It covers nothing else, and that is the settled position after two attempts at covering
+  more: a build fingerprint of the emitted parser modules (rejected — 65 namespaces holding 267 MB,
+  because every rebuild minted one) and then a hand-bumped `PARSER_BEHAVIOR_REVISION` (rejected —
+  a second versioning scheme carried alongside the version that already works, protecting only
+  developers, who are the one audience that knows when they changed a parser). Within one worktree,
+  what a rebuild can change is covered by the read-time schema below and by `vat cache clear`, not
+  by a number. Three earlier hand-bumped constants are gone on the same reasoning
+  (`CONTENT_KEY_SCHEMA_VERSION`, `PARSE_CACHE_SCHEMA_VERSION`, `PARSER_BEHAVIOR_REVISION`); two other
+  cache tenants — `content-cache.ts` and `external-link-cache.ts` — still use that pattern
+  (`const CACHE_VERSION = 1`), which is what is being moved away from, not a precedent this design
+  follows.
 - **Entries are content-named and written by atomic rename**, so concurrent processes racing on the
   same key are benign rather than merely unlikely.
 - **Frontmatter is cached as YAML source, not serialized JSON.** A round-trip through `yaml.parse` →
@@ -204,9 +208,15 @@ cache, not a replacement for either layer.
   → an object literal; cyclic anchors make `JSON.stringify` throw). Storing the source and re-parsing
   on read is cheap and lossless. (The *projection* column, §2 above, stays JSON — that's a query
   surface, not a cache round-trip, and the two are not the same decision.)
+- **Every entry is validated against `ParseFactsSchema` on read**, element by element, not by a
+  structural spot-check. An entry whose *shape* this build cannot account for — a wrong field type,
+  a fact the envelope has no field for — is a miss. The one shape change it cannot see is the
+  addition of an **optional** field, where "written before the field existed" and "legitimately
+  absent" are the same bytes; `vat cache clear` is the answer to that class, and the schema's own
+  docstring says so.
 - **Fail-soft covers corruption, not wrongness.** Any read failure is a cache miss; any write failure
-  is a no-op. That does not cover a well-formed entry bound to the wrong content — the failure modes
-  the scanning doc's key rules exist to close, not fail-soft.
+  is a no-op. Neither that nor the schema above covers a well-formed entry bound to the wrong
+  content — that is what the scanning doc's key rules exist to close.
 - **Bad input never breaks the cache.** A file with invalid HTML or unparseable YAML produces a
   `ParseFacts` entry carrying `parseErrors`/`frontmatterError`/`unresolvedReferences` rather than
   throwing — and because those fields are part of the cached entry, re-validating an already-known-broken

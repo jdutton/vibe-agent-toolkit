@@ -68,18 +68,19 @@
  *
  * ## Versioning
  *
- * There is none here, on purpose. The content key covers the parser's *inputs*
- * and cannot see a change to the parser itself or to the shape stored here —
- * so both are handled one level up, by the namespace directory in
- * `cache-namespace.ts`. An installed VAT gets a namespace per release; a dev
- * checkout gets one per (worktree path, `PARSER_BEHAVIOR_REVISION`) pair.
+ * There is no version number here or anywhere else, on purpose. The content key
+ * covers the parser's *inputs* and cannot see a change to the parser itself, so
+ * that is handled one level up by the namespace directory in
+ * `cache-namespace.ts`: an installed VAT gets a namespace per release, a dev
+ * checkout one per worktree.
  *
- * ⚠ Read `cache-namespace.ts` before changing `dehydrate`/`rehydrate` or any
- * parser behaviour: the dev namespace deliberately **survives a rebuild**, so a
- * shape change that is not accompanied by a `PARSER_BEHAVIOR_REVISION` bump
- * will meet entries written under the old shape. `isParseFacts` rejects a
- * structurally wrong payload, but a shape change that stays structurally valid
- * is invisible. `vat cache clear` is the local escape hatch.
+ * What guards the *shape* stored here is {@link ParseFactsSchema} — a real
+ * schema at the read boundary, so an entry that disagrees with this build about
+ * what a link or a heading is becomes a miss rather than a plausible answer.
+ * Read that schema's docstring before changing `dehydrate`/`rehydrate`: it is
+ * explicit about the one class it cannot catch (adding an *optional* field,
+ * where "written before the field existed" and "legitimately absent" are the
+ * same bytes), and `vat cache clear` is the escape hatch for exactly that case.
  *
  * ## Layout
  *
@@ -124,10 +125,7 @@ import { CONTENT_KEY_PATTERN, type KeyedContent, type ParserKind, readContentWit
 import { parseHtmlContent } from './html-link-parser.js';
 import { type ParseResult, parseFrontmatterSource, parseMarkdownContent } from './link-parser.js';
 import { recordParseCacheHit, recordParseCacheMiss } from './parse-timing.js';
-import type { ContentMeasures } from './projection/blob-facts.js';
-import type { LexicalReference } from './reference-lexer.js';
-import type { HtmlParseError } from './schemas/resource-metadata.js';
-import type { HeadingNode, ResourceLink, UnresolvedReference } from './types.js';
+import { type ParseFacts, ParseFactsSchema } from './schemas/parse-facts.js';
 
 /**
  * Directory mode for every directory this cache creates.
@@ -160,49 +158,17 @@ const SAFE_KEY = CONTENT_KEY_PATTERN;
  */
 let tempFileCounter = 0;
 
-/**
- * The subset of {@link ParseResult} that is a function of the parsed bytes
- * alone — i.e. everything the cache is entitled to persist.
- *
- * Note what is missing: `content`, `sizeBytes` and `frontmatter`. See the table
- * in the module docstring for why each one is absent.
- */
-export interface ParseFacts {
-  links: ResourceLink[];
-  headings: HeadingNode[];
-  estimatedTokenCount: number;
-  anchors?: string[];
-  parseErrors?: HtmlParseError[];
-  unresolvedReferences?: UnresolvedReference[];
-  /** See `ParseResult.lexicalReferences`. Omitted when the document has none. */
-  lexicalReferences?: LexicalReference[];
-  /**
-   * See `ParseResult.contentMeasures`. A function of the bytes alone, so it is
-   * storable by the same rule as {@link estimatedTokenCount} — and it must be
-   * stored, because recomputing `codeBlockBytes` needs the AST this cache
-   * exists to avoid building.
-   */
-  contentMeasures?: ContentMeasures;
-  /** Raw YAML of the frontmatter block, without the `---` delimiters. */
-  frontmatterSource?: string;
-  /**
-   * Carried for producers that report a frontmatter error without a source.
-   * When {@link frontmatterSource} IS present, {@link rehydrate} prefers the
-   * value re-derived from it — the two agree by construction, since deriving is
-   * what produced this field in the first place.
-   */
-  frontmatterError?: string;
-}
+export type { ParseFacts } from './schemas/parse-facts.js';
 
 /**
  * The entry envelope.
  *
  * No version field: the namespace directory (see `cache-namespace.ts`) carries
- * the discrimination instead — per release when installed, and per
- * `PARSER_BEHAVIOR_REVISION` in a dev checkout. A serialization change must
- * therefore bump that constant; the namespace no longer moves on its own after
- * a rebuild. What remains is corruption, which `isParseFacts` rejects
- * structurally.
+ * the build discrimination — per release when installed, per worktree in a dev
+ * checkout — and {@link ParseFactsSchema} carries the shape discrimination on
+ * read. A serialization change therefore needs no number bumped anywhere; what
+ * it needs, in a dev checkout whose namespace deliberately survives a rebuild,
+ * is either a shape the schema can reject or a `vat cache clear`.
  */
 interface StoredEntry {
   facts: ParseFacts;
@@ -618,10 +584,19 @@ export async function parseFileCached(
  * well-formed entry.
  *
  * There is no version field to check — see the {@link StoredEntry} docblock.
- * Validation is purely structural, via {@link isParseFacts}: a `JSON.parse`
- * failure, a missing/malformed `facts`, or a `facts` whose `links`, `headings`
- * or `estimatedTokenCount` are the wrong shape are all misses, so a mangled or
- * foreign payload can never reach {@link rehydrate}.
+ * Validation is {@link ParseFactsSchema}, applied in full and to every element:
+ * a `JSON.parse` failure, a missing or malformed `facts`, an unknown key on the
+ * envelope, or one link whose `line` is a string are all misses, so no payload
+ * this build cannot account for reaches {@link rehydrate}.
+ *
+ * This runs on every cache hit, which is the hottest read path in the toolkit —
+ * the cost is deliberate and measured. A predicate that only checked array-ness
+ * is what previously let a shape change be served back as a plausible answer;
+ * "cheap enough to be wrong" was not a trade worth keeping.
+ *
+ * The returned object is Zod's own output, not the `JSON.parse` product: a
+ * fresh graph either way, which is what the "never hand out a shared object"
+ * constraint in the module docstring requires.
  */
 function readFacts(raw: string): ParseFacts | null {
   let value: unknown;
@@ -632,56 +607,8 @@ function readFacts(raw: string): ParseFacts | null {
   }
 
   if (typeof value !== 'object' || value === null) return null;
-  const entry = value as Partial<StoredEntry>;
-  return isParseFacts(entry.facts) ? entry.facts : null;
-}
-
-/**
- * Shallow structural check on the payload.
- *
- * Not a full schema validation: the writer is this same module, so the realistic
- * failure is truncation or foreign content, both of which this catches. It
- * exists so a mangled payload becomes a miss instead of a `ParseResult` whose
- * `links` is a string.
- *
- * An OPTIONAL field is checked as "absent, or the right shape" — never as "the
- * right shape". Requiring it would reject every entry written from a document
- * that legitimately has none, turning the common case into a permanent miss.
- *
- * Every optional field is checked, not just one: a truncated payload can end
- * anywhere, and a field that goes unchecked is one whose corruption reaches
- * {@link rehydrate} as a plausible-looking value.
- */
-function isParseFacts(value: unknown): value is ParseFacts {
-  if (typeof value !== 'object' || value === null) return false;
-  const facts = value as Partial<ParseFacts>;
-  return (
-    Array.isArray(facts.links) &&
-    Array.isArray(facts.headings) &&
-    typeof facts.estimatedTokenCount === 'number' &&
-    isAbsentOrArray(facts.anchors) &&
-    isAbsentOrArray(facts.parseErrors) &&
-    isAbsentOrArray(facts.unresolvedReferences) &&
-    isAbsentOrArray(facts.lexicalReferences) &&
-    isAbsentOrMeasures(facts.contentMeasures)
-  );
-}
-
-/** An optional array field: absent, or an array. */
-function isAbsentOrArray(value: unknown): boolean {
-  return value === undefined || Array.isArray(value);
-}
-
-/** An optional {@link ContentMeasures}: absent, or an object carrying all three counts. */
-function isAbsentOrMeasures(value: unknown): boolean {
-  if (value === undefined) return true;
-  if (typeof value !== 'object' || value === null) return false;
-  const measures = value as Partial<ContentMeasures>;
-  return (
-    typeof measures.wordCount === 'number' &&
-    typeof measures.proseBytes === 'number' &&
-    typeof measures.codeBlockBytes === 'number'
-  );
+  const parsed = ParseFactsSchema.safeParse((value as Partial<StoredEntry>).facts);
+  return parsed.success ? parsed.data : null;
 }
 
 /**

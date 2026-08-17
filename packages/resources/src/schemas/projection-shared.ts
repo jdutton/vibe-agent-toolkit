@@ -46,15 +46,23 @@ export const PROJECTION_SCHEMA_VERSION = 4;
  */
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
+/**
+ * Built on first use and kept — `ZodLazy` calls its getter on every parse, so
+ * an inline getter would re-construct a six-member union per value validated,
+ * and again per element of every nested array and object. See the same note on
+ * `HeadingNodeSchema` in `resource-metadata.ts`.
+ */
+let memoizedJsonValueSchema: z.ZodType<JsonValue> | undefined;
+
 export const JsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
-  z.union([
+  (memoizedJsonValueSchema ??= z.union([
     z.string(),
     z.number(),
     z.boolean(),
     z.null(),
     z.array(JsonValueSchema),
     z.record(z.string(), JsonValueSchema),
-  ])
+  ]))
 ).describe('An arbitrary JSON value (frontmatter, condition payloads, etc.)');
 
 /**

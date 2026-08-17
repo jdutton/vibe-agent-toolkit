@@ -110,32 +110,7 @@
             {
               "type": "array",
               "items": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "number"
-                  },
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "type": "array",
-                    "items": {
-                      "$ref": "#/definitions/projection-realization-conditions/properties/matchedPayload/anyOf/4/items"
-                    }
-                  },
-                  {
-                    "type": "object",
-                    "additionalProperties": {
-                      "$ref": "#/definitions/projection-realization-conditions/properties/matchedPayload/anyOf/4/items"
-                    }
-                  }
-                ],
+                "$ref": "#/definitions/projection-realization-conditions/properties/matchedPayload",
                 "description": "An arbitrary JSON value (frontmatter, condition payloads, etc.)"
               }
             },

@@ -1,6 +1,6 @@
 /**
- * The cache namespace: one directory per *release of VAT*, derived automatically,
- * plus a hand-bumped revision for parser behaviour.
+ * The cache namespace: one directory per *release of VAT*, derived
+ * automatically, and one per worktree in a source checkout.
  *
  * ## Why this exists
  *
@@ -29,9 +29,10 @@
  *
  * - **Installed VAT:** the package version, e.g. `0.1.42`. Two machines running
  *   the same release share a namespace, which is the point — identical bytes
- *   through identical code yield identical facts.
- * - **Dev checkout:** `0.1.42-dev-<6 hex>`, where the digits cover the package
- *   root path AND {@link PARSER_BEHAVIOR_REVISION}.
+ *   through identical code yield identical facts, and the version moves on
+ *   every release, so a released build's parsers are consistent by
+ *   construction and need no second number tracking them.
+ * - **Dev checkout:** `0.1.42-dev-<6 hex>` over the package root path.
  *
  * The path component is load-bearing and must survive any future change here:
  * every worktree on a machine reads the same version out of the same manifest,
@@ -58,15 +59,26 @@
  *
  * So the automatic mechanism is gone and the hazard it covered is **back, on
  * purpose**: within one worktree, editing parser behaviour and rebuilding will
- * serve parse facts written by the previous build. Nothing detects that for
- * you. The replacement is deliberate rather than automatic, and there are
- * exactly two ways to exercise it:
+ * serve parse facts written by the previous build.
  *
- * 1. Bump {@link PARSER_BEHAVIOR_REVISION} when you change what a parse means.
- *    This is the durable answer — it moves the namespace for every developer
- *    and every worktree, not just yours.
- * 2. Run `vat cache clear` when you merely *suspect* staleness. This is the
- *    local answer, and it costs nothing but a rescan.
+ * Two things answer that, and neither is a version number:
+ *
+ * 1. **`ParseFactsSchema` at the read boundary** (`schemas/parse-facts.ts`).
+ *    An entry whose shape this build cannot account for is a miss, not a
+ *    plausible answer. That covers every change to a stored shape except the
+ *    addition of an *optional* field, where "written before the field existed"
+ *    and "legitimately absent" are the same bytes — the schema's docstring is
+ *    explicit about that limit.
+ * 2. **`vat cache clear`**, for the case the schema cannot see and for any
+ *    change to what a parse *means* rather than what it contains. It costs a
+ *    rescan and nothing else, and a developer who changed parser behaviour is
+ *    the one person who does not need to be told they did.
+ *
+ * There is deliberately no hand-bumped revision constant here. It was removed
+ * once and must not come back: it protected developers only (an installed
+ * build's namespace already moves per release), it required someone to
+ * remember, and carrying a second versioning scheme alongside the version is
+ * debt that buys nothing the two mechanisms above do not.
  */
 
 import { createHash } from 'node:crypto';
@@ -77,64 +89,6 @@ import { normalizedTmpdir, resolveFromImportMeta, safePath, toForwardSlash } fro
 /** Hex digits of the dev discriminator. Short on purpose — it is a cache path, not a security boundary. */
 const DEV_FINGERPRINT_LENGTH = 6;
 
-/**
- * Hand-bumped revision of *what a cached parse fact means*.
- *
- * **If you change parser behaviour, increment this in the same change.** Nothing
- * in the build will do it for you and nothing will fail if you forget — that is
- * the accepted cost of a dev cache that survives a rebuild (see the module doc).
- * A stale entry is a well-formed answer to a question the parser no longer asks;
- * it looks exactly like a hit.
- *
- * ### The modules this revision covers
- *
- * The boundary is behavioural, not a directory. Bump when you change what any of
- * these produce — this is the same list the removed build fingerprint watched,
- * carried over because it is precisely the "if you edit this, bump this" set:
- *
- * - **`link-parser`** — the markdown link/reference facts themselves.
- * - **`html-link-parser`** — the HTML-embedded reference facts.
- * - **`content-key`** — how input bytes map to a cache key. A change here
- *   re-files every entry, so old entries are unreachable rather than wrong, but
- *   the revision keeps the two keyspaces from sharing a directory.
- * - **`unresolved-references`** — the `unresolvedReferences` fact, imported by
- *   `link-parser` and therefore able to change a parse result without
- *   `link-parser` itself being touched.
- * - **`parse-cache`** — the `ParseFacts` shape (`dehydrate`/`rehydrate`). Adding
- *   or removing a field changes what an entry even contains.
- *
- * ### When you only *suspect* staleness
- *
- * Do not bump speculatively — a bump discards every developer's cache, not just
- * yours. Run **`vat cache clear`** instead: it removes the whole
- * `<tmpdir>/.vat-cache/` tree, including the parse tenant under the current
- * namespace, and the next run rebuilds it.
- */
-export const PARSER_BEHAVIOR_REVISION = 2;
-// 2 — `ResourceLink` and `LexicalReference` gained `startOffset`/`endOffset`.
-//     A `ParseFacts` shape change, i.e. the third bullet above, and the first
-//     time this constant has actually been exercised. Worth recording HOW it
-//     surfaced, because it is the argument for the constant existing: the whole
-//     unit suite went green locally and then failed on the next run, because
-//     `isParseFacts` validates array-ness and never element shape, so entries
-//     written before the change were served back with the new fields absent,
-//     every AST reference was skipped for want of a span, and closure extents
-//     collapsed to their declared roots. A schema at that boundary would have
-//     made it a miss instead of a wrong answer; today the bump is what does.
-//
-//     This protects DEVELOPERS only, and that is now understood to be the ONLY
-//     job it has: an installed build's namespace is the VAT version, which
-//     already moves on every release, so a released build's built-in parsers are
-//     consistent by construction and need no second version number.
-//
-// 🎯 JEFF'S CALL, 2026-08-17: this constant is DEBT and should be removed.
-//     Persisting an opaque revision number into cache storage is a second
-//     versioning scheme carried alongside the one that already works. A
-//     developer who changes parser behaviour knows they did and can run
-//     `vat cache clear`; anyone in doubt can run it too. Do not add a third
-//     mechanism (dep-range fingerprints, emitted-module digests) to shore this
-//     one up — remove it and lean on the version plus an explicit clear.
-
 /** Resolved once — neither the version nor the install location changes mid-process. */
 let cached: string | undefined;
 
@@ -142,10 +96,9 @@ let cached: string | undefined;
  * Read this package's version from its own manifest.
  *
  * All packages in the monorepo share one version, so `@vibe-agent-toolkit/resources`
- * reporting `0.1.42` IS the VAT version. Read at runtime rather than compiled in,
- * because a constant would have to be maintained by hand — and unlike
- * {@link PARSER_BEHAVIOR_REVISION}, which tracks a meaning no file can observe,
- * the version is already written down.
+ * reporting `0.1.42` IS the VAT version. Read at runtime rather than compiled in:
+ * a constant would have to be maintained by hand, and the version is already
+ * written down.
  */
 function readVersion(moduleDir: string): string {
   for (const relative of ['../package.json', '../../package.json']) {
@@ -178,22 +131,20 @@ function isInstalled(moduleDir: string): boolean {
 }
 
 /**
- * The dev discriminator: a pure digest of where this checkout lives and which
- * parser revision it speaks.
+ * The dev discriminator: a pure digest of where this checkout lives.
  *
  * Touches no filesystem and reads no module state, so it is stable across a
- * rebuild by construction — a rebuild changes neither argument. That is exactly
- * the property the namespace exists to have, and keeping it a pure function is
- * what lets a test assert it without fighting the process-level memo in
- * {@link vatCacheNamespace}.
+ * rebuild by construction — a rebuild changes neither the path nor anything
+ * else this reads. That is exactly the property the namespace exists to have,
+ * and keeping it a pure function is what lets a test assert it without fighting
+ * the process-level memo in {@link vatCacheNamespace}.
  *
  * @param moduleDir - Directory this package's code was resolved from
- * @param revision - Parser behaviour revision, normally {@link PARSER_BEHAVIOR_REVISION}
  * @returns Six lowercase hex digits
  */
-export function devNamespaceDigest(moduleDir: string, revision: number): string {
+export function devNamespaceDigest(moduleDir: string): string {
   return createHash('sha256')
-    .update(`vat-cache-namespace\0${toForwardSlash(moduleDir)}\0r${String(revision)}`, 'utf-8')
+    .update(`vat-cache-namespace\0${toForwardSlash(moduleDir)}`, 'utf-8')
     .digest('hex')
     .slice(0, DEV_FINGERPRINT_LENGTH);
 }
@@ -220,7 +171,7 @@ export function vatCacheNamespace(): string {
     return cached;
   }
 
-  cached = `${version}-dev-${devNamespaceDigest(moduleDir, PARSER_BEHAVIOR_REVISION)}`;
+  cached = `${version}-dev-${devNamespaceDigest(moduleDir)}`;
   return cached;
 }
 

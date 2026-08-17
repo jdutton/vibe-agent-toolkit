@@ -65,19 +65,31 @@ export type HeadingNode = {
 };
 
 /**
+ * Built on first use and kept.
+ *
+ * ⚠️ `ZodLazy` calls its getter on **every** parse, so an inline
+ * `z.lazy(() => z.object({...}))` re-constructs the whole object schema — five
+ * field schemas and an array — once per heading node validated, and again per
+ * nested child. That is invisible until something validates headings in bulk;
+ * the parse cache does, on every hit. Memoizing costs one module-level slot and
+ * changes nothing about the schema, because a Zod schema is immutable.
+ */
+let memoizedHeadingNodeSchema: z.ZodType<HeadingNode> | undefined;
+
+/**
  * Zod schema for heading nodes in the document's table of contents.
  *
  * This is a recursive schema using z.lazy() to handle the self-referential structure.
  * The type is defined separately above to work with TypeScript's exactOptionalPropertyTypes.
  */
 export const HeadingNodeSchema: z.ZodType<HeadingNode> = z.lazy(() =>
-  z.object({
+  (memoizedHeadingNodeSchema ??= z.object({
     level: z.number().int().min(1).max(6).describe('Heading level (1-6)'),
     text: z.string().describe('Raw text content of the heading'),
     slug: z.string().describe('GitHub-style slug for anchor links (lowercase, hyphenated)'),
     line: z.number().int().positive().optional().describe('Line number in source file'),
     children: z.array(HeadingNodeSchema).optional().describe('Nested child headings'),
-  }).describe('Heading node in the document\'s table of contents')
+  }).describe('Heading node in the document\'s table of contents'))
 );
 
 /**

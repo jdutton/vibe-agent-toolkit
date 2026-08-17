@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { ParseResult } from '../src/link-parser.js';
 import { blobReferencesFor } from '../src/projection/blob-references.js';
-import type { LexicalReference } from '../src/reference-lexer.js';
+import type { LexicalReference } from '../src/schemas/parse-facts.js';
 import { BlobReferenceRowSchema } from '../src/schemas/projection-blobs.js';
 import type { LinkNodeType, ResourceLink } from '../src/schemas/resource-metadata.js';
 

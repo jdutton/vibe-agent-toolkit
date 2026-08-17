@@ -254,6 +254,32 @@ async function reseatEntry(
   await writeEntry(entryPath, JSON.stringify(mutate(await readEntry(entryPath))));
 }
 
+/**
+ * Rewrite the first stored link of an entry, leaving everything else intact.
+ *
+ * The element-shape cases need to corrupt exactly one field of exactly one
+ * array member. An entry that is wrong at the top level proves nothing about
+ * whether the validator ever looks *inside* an array — which is precisely what
+ * the predicate this schema replaced never did.
+ */
+function withFirstLink(
+  entry: Record<string, unknown>,
+  mutate: (link: Record<string, unknown>) => Record<string, unknown>,
+): Record<string, unknown> {
+  const facts = entry['facts'] as { links: Record<string, unknown>[] };
+  const [first, ...rest] = facts.links;
+  if (first === undefined) throw new Error('fixture has no stored link to rewrite');
+  return { ...entry, facts: { ...facts, links: [mutate(first), ...rest] } };
+}
+
+/** `link` without the named keys — the "this entry predates the field" arrangement. */
+function withoutKeys(
+  link: Record<string, unknown>,
+  ...dropped: readonly string[]
+): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(link).filter(([key]) => !dropped.includes(key)));
+}
+
 async function exists(target: string): Promise<boolean> {
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only: path under self-created tempDir
@@ -298,6 +324,31 @@ const MISS_ROUTES: readonly MissRoute[] = [
     arrange: async (suite) => {
       const keyed = keyedFromText(SIMPLE_DOC);
       await reseatEntry(suite, keyed, () => ({ facts: { links: 'not-an-array' } }));
+      return { cache: suite.makeCache(), keyed };
+    },
+  },
+  {
+    // The hole the hand-written predicate left, and the reason a schema
+    // replaced it: `Array.isArray(links)` is satisfied by an array of anything.
+    name: 'an entry whose stored link is the wrong shape inside the array',
+    arrange: async (suite) => {
+      const keyed = keyedFromText(SIMPLE_DOC);
+      await reseatEntry(suite, keyed, (entry) =>
+        withFirstLink(entry, (link) => ({ ...link, line: 'not-a-number' })));
+      return { cache: suite.makeCache(), keyed };
+    },
+  },
+  {
+    // `.strict()` on the envelope: an entry carrying a fact this build has no
+    // field for disagrees about what an entry *contains*, which is worth a
+    // reparse. This is the direction that catches a field REMOVAL.
+    name: 'an entry carrying a fact this build does not know',
+    arrange: async (suite) => {
+      const keyed = keyedFromText(SIMPLE_DOC);
+      await reseatEntry(suite, keyed, (entry) => ({
+        ...entry,
+        facts: { ...(entry['facts'] as Record<string, unknown>), retiredFact: [] },
+      }));
       return { cache: suite.makeCache(), keyed };
     },
   },
@@ -592,6 +643,47 @@ describe('ParseCache misses', () => {
     );
 
     expect(await suite.makeCache().get(keyed)).toBeNull();
+  });
+});
+
+describe('ParseFactsSchema — the boundary, and the one thing it cannot see', () => {
+  const suite = setupParseCacheTestSuite();
+
+  it('CANNOT tell an entry written before an OPTIONAL field from one that never had it', async () => {
+    // The honest negative, pinned so nobody reads the schema as total coverage.
+    // `ResourceLink.startOffset` is optional because remark reports no position
+    // for a quoted, parenthesised GFM autolink — so "this entry predates the
+    // span columns" and "this link never had one" are the same bytes, and no
+    // validator can separate them. `vat cache clear` is the answer to that
+    // class; see schemas/parse-facts.ts.
+    const keyed = keyedFromText(SIMPLE_DOC);
+
+    // Fixture guard: deleting a field the fixture never carried would make this
+    // pass for the wrong reason.
+    expect(freshParse(keyed).links[0]?.startOffset).toEqual(expect.any(Number));
+
+    await reseatEntry(suite, keyed, (entry) =>
+      withFirstLink(entry, (link) => withoutKeys(link, 'startOffset', 'endOffset')));
+
+    const hit = await suite.makeCache().get(keyed);
+
+    expect(hit).not.toBeNull();
+    expect(hit?.links[0]?.startOffset).toBeUndefined();
+  });
+
+  it('strips an unknown key from INSIDE an element rather than rejecting the entry', async () => {
+    // The counterpart to the envelope's `.strict()`: a stale field on a link is
+    // a field this build no longer reads, which harms nothing. Turning every
+    // such entry cold would spend a reparse on a change that cannot produce a
+    // wrong answer.
+    const keyed = keyedFromText(SIMPLE_DOC);
+    await reseatEntry(suite, keyed, (entry) =>
+      withFirstLink(entry, (link) => ({ ...link, retiredColumn: 'stale' })));
+
+    const hit = await suite.makeCache().get(keyed);
+
+    expect(hit).not.toBeNull();
+    expect(hit?.links[0]).not.toHaveProperty('retiredColumn');
   });
 });
 
