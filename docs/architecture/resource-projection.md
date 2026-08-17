@@ -203,10 +203,14 @@ cache, not a replacement for either layer.
   rebuilding unchanged code cannot move it, since it reads no file and no mtime. What is left over —
   a change to what a parse *means*, at unchanged shape — is `vat cache clear`, not a number. Three
   earlier hand-bumped constants are gone on the same reasoning
-  (`CONTENT_KEY_SCHEMA_VERSION`, `PARSE_CACHE_SCHEMA_VERSION`, `PARSER_BEHAVIOR_REVISION`); two other
-  cache tenants — `content-cache.ts` and `external-link-cache.ts` — still use that pattern
-  (`const CACHE_VERSION = 1`), which is what is being moved away from, not a precedent this design
-  follows.
+  (`CONTENT_KEY_SCHEMA_VERSION`, `PARSE_CACHE_SCHEMA_VERSION`, `PARSER_BEHAVIOR_REVISION`).
+  `external-link-cache.ts` followed, and is the interesting case: it is a tenant that deliberately
+  lives OUTSIDE the namespace — external reachability is a fact about the world, not about this
+  build — so it has no directory rename to fall back on, and `ExternalLinkCacheEntrySchema` at its
+  read boundary has to carry the whole load, with its TTL bounding the one class a schema cannot see.
+  `content-cache.ts` (the linkAuth content cache) followed for the same reason and by the same
+  route — `StoredContentMetadataSchema`, `.strict()` on the envelope, with its 30-minute TTL as the
+  bound. No hand-bumped cache version remains anywhere in the package.
 - **Entries are content-named and written by atomic rename**, so concurrent processes racing on the
   same key are benign rather than merely unlikely.
 - **Frontmatter is cached as YAML source, not serialized JSON.** A round-trip through `yaml.parse` →

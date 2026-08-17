@@ -8,12 +8,13 @@ import {
 } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { ContentCache, type ContentMetadata } from '../src/content-cache.js';
+import { ContentCache } from '../src/content-cache.js';
 import {
   fetchAuthenticated,
   type ContentFetchResult,
   type FetchAuthenticatedOptions,
 } from '../src/link-auth-content-fetch.js';
+import { type ContentMetadata } from '../src/schemas/content-cache.js';
 
 import { capturingFetch, countingFetch } from './auth-fetch-mocks.js';
 
@@ -234,9 +235,9 @@ describe('fetchAuthenticated — content cache integration', () => {
     expect(result.cached).toBe(true);
     expect(result.bytes).toEqual(SAMPLE_BYTES);
     expect(calls()).toBe(0);
-    // Metadata round-trip — every field a future regression in pickMetadata()
-    // or the on-disk format could drop must be asserted against an external
-    // constant, not against the cache's own previous output.
+    // Metadata round-trip — every field a future regression in the write-side
+    // whitelist or the on-disk format could drop must be asserted against an
+    // external constant, not against the cache's own previous output.
     expectSampleMetadata(result.metadata);
   });
 

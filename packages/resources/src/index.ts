@@ -335,7 +335,11 @@ export {
   type FetchAuthenticatedOptions,
 } from './link-auth-content-fetch.js';
 
-export { ContentCache, type ContentMetadata } from './content-cache.js';
+export { ContentCache } from './content-cache.js';
+// `ContentMetadata` is Zod-sourced (single source of truth) — see
+// schemas/content-cache.ts, which is also what the content cache validates a
+// stored entry against on read.
+export type { ContentMetadata } from './schemas/content-cache.js';
 
 // Token-resolution memo wrapper. High-volume callers iterating many URLs
 // from the same provider wrap their deps once and reuse the result, so

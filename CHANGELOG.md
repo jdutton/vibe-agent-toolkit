@@ -57,6 +57,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A corrupted cache entry could report a reachable link as broken, or return a fetched page with
+  no status.** Both link caches now validate an entry's shape on read. Entries written by earlier
+  versions are discarded, so external links are re-checked once on the first run after upgrading.
+
 - **Git commands run from inside a git hook could read — or write — the wrong repository.** Worst
   case, `vat claude marketplace publish` switched a branch and landed a commit in the repository you
   were committing from. Also affected `gitLsFiles()`, `isGitIgnored()` and `cloneGitSource()`.

@@ -3,13 +3,10 @@ import { promises as fs } from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 
-/**
- * Cache schema version. Incremented when CacheEntry shape changes; entries
- * written by an older code path that read as a different version are treated
- * as cache misses (rather than misparsed) — forward-compat for slice 3's
- * content-cache additions and any future entry-shape evolution.
- */
-const CACHE_VERSION = 1;
+import {
+	type ExternalLinkCacheEntry,
+	ExternalLinkCacheEntrySchema,
+} from './schemas/external-link-cache.js';
 
 /**
  * Owner-only mode for the cache directory.
@@ -27,25 +24,67 @@ const CACHE_VERSION = 1;
 const CACHE_DIR_MODE = 0o700;
 
 /**
- * Cache entry for external link validation results
+ * Cache entry for external link validation results.
+ *
+ * Inferred from {@link ExternalLinkCacheEntrySchema}, not declared here: the
+ * schema is what the read boundary actually enforces, so a hand-written twin
+ * could only ever drift away from the check that matters.
  */
-interface CacheEntry {
-	statusCode: number;
-	statusMessage: string;
-	timestamp: number;
-	/**
-	 * Schema version. Optional for backwards-compat: legacy entries without
-	 * `version` are treated as a cache miss, forcing a refetch. Reading on
-	 * version mismatch produces a miss rather than a parse error.
-	 */
-	version?: number;
-}
+type CacheEntry = ExternalLinkCacheEntry;
 
 /**
  * Cache storage format
  */
 interface CacheData {
 	[url: string]: CacheEntry;
+}
+
+/**
+ * Keep only the entries this build can account for.
+ *
+ * ## Why validation lives at load, not at `get`
+ *
+ * The alternative — validate the one entry a lookup asks for — leaves every
+ * other consumer reading whatever the file happened to hold. `getStats` counts
+ * entries and calls `isExpired` on each; a foreign entry with no `timestamp`
+ * yields `NaN > ttlMs === false`, so it is silently reported as a *live* cached
+ * result, forever, and no lookup ever touches it to find out otherwise.
+ * Filtering once, where the bytes enter the process, is what makes
+ * {@link CacheData}'s type honest for every reader rather than for one of them.
+ *
+ * ## Per entry, not per file
+ *
+ * A single unparseable entry must not cost the whole file. `z.record` would
+ * reject the map wholesale, which — on a cache shared by every VAT version on
+ * the host, none of them namespaced — turns one bad neighbour into a full
+ * internet re-fetch. Each entry stands or falls alone; a rejected one is simply
+ * absent, and the next `set` for that URL rewrites it.
+ *
+ * ⚠️ Rejected entries are dropped from memory, not eagerly rewritten to disk.
+ * They vanish from the file the next time anything calls `saveCache`, which is
+ * a `set` or a `clear`. A read-only run leaves them where they lie — harmless,
+ * since nothing in this process can see them, and cheaper than a disk write on
+ * every lookup (which is what the removed version check did).
+ *
+ * `Object.fromEntries` rather than assignment into a literal, deliberately: the
+ * keys come from a file any local user can write, and `entries['__proto__'] =`
+ * on an object literal mutates the prototype instead of adding a property.
+ * `fromEntries` defines an own data property, so a hostile key is inert data.
+ *
+ * @param value - The `JSON.parse` product of the cache file, unvalidated
+ * @returns Every well-formed entry, keyed as stored
+ */
+function readEntries(value: unknown): CacheData {
+	if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+		return {};
+	}
+
+	return Object.fromEntries(
+		Object.entries(value).flatMap(([key, candidate]) => {
+			const parsed = ExternalLinkCacheEntrySchema.safeParse(candidate);
+			return parsed.success ? [[key, parsed.data] as const] : [];
+		}),
+	);
 }
 
 /**
@@ -91,7 +130,10 @@ export class ExternalLinkCache {
 
 	/**
 	 * Load cache from disk. Fail-soft: any IO error (ENOENT, EACCES, EROFS,
-	 * corrupted JSON, …) degrades to an empty cache instead of throwing.
+	 * corrupted JSON, …) degrades to an empty cache instead of throwing, and
+	 * every surviving entry is put through {@link readEntries} — fail-soft
+	 * covers unreadable bytes, the schema covers readable ones this build
+	 * cannot account for, and neither is a substitute for the other.
 	 *
 	 * Why no error propagation: `vat resources validate` should keep running
 	 * when the cache file isn't reachable (read-only filesystem, permission
@@ -108,7 +150,7 @@ export class ExternalLinkCache {
 			await fs.mkdir(this.cacheDir, { recursive: true, mode: CACHE_DIR_MODE });
 			// eslint-disable-next-line security/detect-non-literal-fs-filename -- cacheFile is derived from cacheDir
 			const data = await fs.readFile(this.cacheFile, 'utf-8');
-			this.cache = JSON.parse(data) as CacheData;
+			this.cache = readEntries(JSON.parse(data));
 			return this.cache;
 		} catch {
 			// All IO and parse errors degrade to an empty cache. Subsequent
@@ -174,7 +216,20 @@ export class ExternalLinkCache {
 	}
 
 	/**
-	 * Check if cache entry is expired
+	 * Check if cache entry is expired.
+	 *
+	 * The TTL and the schema are orthogonal gates and neither subsumes the
+	 * other: the schema asks whether the entry is a *shape* this build can
+	 * read, the TTL asks whether the world has had time to move under it. A
+	 * schema-valid entry can be a year stale; a five-second-old entry can be
+	 * written by a foreign build.
+	 *
+	 * The TTL does, however, carry one job the schema hands it. Because this
+	 * tenant lives outside the version namespace on purpose (see
+	 * `schemas/external-link-cache.ts`), the shape changes a validator cannot
+	 * see — an added *optional* field — have no directory rename to hide behind
+	 * here. `ttlHours` is what bounds them: the affected entries age out within
+	 * a day rather than being detected. Bounded, not immediate.
 	 */
 	private isExpired(entry: CacheEntry): boolean {
 		const now = Date.now();
@@ -184,7 +239,14 @@ export class ExternalLinkCache {
 	}
 
 	/**
-	 * Get cached result for URL
+	 * Get cached result for URL.
+	 *
+	 * There is no version field to check. Shape is settled before an entry ever
+	 * reaches here — {@link readEntries} ran at load, so anything still in
+	 * `cache` is an entry this build can account for, and the only question
+	 * left at lookup time is age. Ordering the two that way is deliberate: a
+	 * foreign entry is not merely unusable for *this* URL, it is unusable for
+	 * every reader, so rejecting it per-lookup would have been the narrower fix.
 	 *
 	 * @param url - URL to look up
 	 * @returns Cache entry or null if not found/expired
@@ -195,15 +257,6 @@ export class ExternalLinkCache {
 		const entry = cache[key];
 
 		if (!entry) {
-			return null;
-		}
-
-		// Forward-compat: an entry written under a different (or missing)
-		// schema version is treated as a miss. Forces a refetch rather than
-		// silently misparsing a slice-3+ shape with slice-2 reader code.
-		if (entry.version !== CACHE_VERSION) {
-			delete cache[key];
-			await this.saveCache();
 			return null;
 		}
 
@@ -231,7 +284,6 @@ export class ExternalLinkCache {
 			statusCode,
 			statusMessage,
 			timestamp: Date.now(),
-			version: CACHE_VERSION,
 		};
 
 		await this.saveCache();
