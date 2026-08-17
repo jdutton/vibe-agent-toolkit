@@ -46,7 +46,10 @@ across two adopters — would produce one row, computed once, reused everywhere.
 
 **Update, stage 3 in progress:** the table *shapes* below are now ✅ shipped as Zod schemas with
 generated JSON Schema — `packages/resources/src/schemas/projection-blobs.ts` and
-`projection-resources.ts`, versioned via `PROJECTION_SCHEMA_VERSION`. **Population is still 🔷
+`projection-resources.ts`. There is deliberately **no** contract-version constant: the hand-bumped
+`PROJECTION_SCHEMA_VERSION` is removed, and a *stored* projection would take a derived digest of the
+row schemas' shape instead (the parse cache's `parseFactsShapeSource()` is the pattern). **Population
+is still 🔷
 proposed** for all ten tables: nothing yet derives real rows from `ParseFacts` or
 `ResourceRegistry` at runtime. Four tables (`blobs`, `blob_links`, `blob_sections`,
 `blob_conditions`) and three (`roots`, `resources`, `edges`) have a partial source to populate
@@ -232,8 +235,8 @@ cache, not a replacement for either layer.
 
 - ✅ **Shipped** (stages 1b/2): the pipeline restructure and the object-level, content-addressed parse
   cache described in §5.
-- ✅ **Shipped** (stage 3, schema only): the ten projection table shapes as versioned Zod schemas
-  with generated JSON Schema (`PROJECTION_SCHEMA_VERSION`).
+- ✅ **Shipped** (stage 3, schema only): the ten projection table shapes as Zod schemas with
+  generated JSON Schema, carrying no contract-version constant.
 - 🔷 **Proposed** (stage 3 continuation and beyond): population of those tables from `ParseFacts`/
   `ResourceRegistry` at runtime; the git-lane and non-git-lane change-detection manifests from
   the scanning doc; the blob-SHA memo.

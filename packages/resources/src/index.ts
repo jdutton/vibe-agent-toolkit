@@ -101,7 +101,6 @@ export {
 export {
   ContentKeySchema,
   JsonValueSchema,
-  PROJECTION_SCHEMA_VERSION,
   ProjectionConditionSeveritySchema,
   type JsonValue,
   type ProjectionConditionSeverity,

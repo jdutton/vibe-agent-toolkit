@@ -32,8 +32,6 @@
 
 import { compareCodeUnits } from '@vibe-agent-toolkit/utils';
 
-import { PROJECTION_SCHEMA_VERSION } from '../schemas/projection-shared.js';
-
 import type { Projection } from './projection.js';
 
 /**
@@ -46,22 +44,24 @@ import type { Projection } from './projection.js';
 export const ROOT_PATH_PLACEHOLDER = '<root>';
 
 /**
- * An exported projection: the twelve tables plus the contract version they were
- * emitted under.
+ * An exported projection: the twelve tables, and nothing else.
  *
- * The tables are nested rather than spread alongside `schemaVersion` so a
- * consumer can enumerate exactly the tables without filtering metadata out of
- * the same object. `tables` is typed as {@link Projection} itself, so adding a
- * thirteenth table is a compile error here rather than a silently unexported
+ * The tables stay nested under one key rather than spread across the document
+ * so a consumer can enumerate exactly the tables without filtering metadata out
+ * of the same object. `tables` is typed as {@link Projection} itself, so adding
+ * a thirteenth table is a compile error here rather than a silently unexported
  * one.
  *
  * `tables.roots` still satisfies `RootRowSchema` — the placeholder is a
  * non-empty string — so a redacted document round-trips through the row schemas
  * unchanged.
+ *
+ * There is no `schemaVersion`. It carried a hand-bumped integer that no reader
+ * ever branched on; see the note where that constant used to live, in
+ * `schemas/projection-shared.ts`, for what replaces it if a projection is ever
+ * *stored* rather than returned in-process.
  */
 export interface ProjectionDocument {
-  /** {@link PROJECTION_SCHEMA_VERSION} at the time of export. */
-  readonly schemaVersion: number;
   /** The twelve tables, each sorted by its primary key. */
   readonly tables: Projection;
 }
@@ -77,7 +77,6 @@ type KeyPart = string | number | boolean | null;
  */
 export function exportProjection(projection: Projection): ProjectionDocument {
   return {
-    schemaVersion: PROJECTION_SCHEMA_VERSION,
     tables: {
       roots: sortRows(projection.roots, (row) => [row.id])
         .map((row) => ({ ...row, path: ROOT_PATH_PLACEHOLDER })),

@@ -2,35 +2,21 @@ import { z } from 'zod';
 
 import { CONTENT_KEY_PATTERN } from '../content-key.js';
 
-/**
- * Contract version for VAT's queryable resource projection (the blob-keyed
- * and path-dependent tables documented in
- * `docs/architecture/resource-projection.md`, read through the zone model in
- * `docs/architecture/zones.md`).
+/*
+ * There is deliberately no `PROJECTION_SCHEMA_VERSION` here.
  *
- * Version 2 is the zones revision: identity split from realization, zones
- * factored into resolution contexts and entry points, edges split from their
- * candidate resolutions, four vocabularies opened.
+ * It was a hand-bumped integer that reached 4, and it is gone for the same
+ * reason `PARSER_BEHAVIOR_REVISION` is gone from `cache-namespace.ts`: a number
+ * a person has to remember to bump is not a contract, it is a hope. Nothing
+ * consumed it — the exported document carried it and no reader ever branched on
+ * it — so every bump was cost without a beneficiary.
  *
- * Version 3 is the demand-driven keying revision: `resource_realizations`
- * gains `contentState`, so a null `contentKey` says which of "no bytes here",
- * "nobody asked for these bytes yet" and "the read threw" it means, and an
- * extent may decline to hash bytes no consumer has demanded.
- *
- * Version 4 is the condition-provenance revision: `realization_conditions`
- * gains the six columns that say which reference provoked a condition
- * (`sourcePath`, `sourceLine`, `sourceRef`, `targetExists`, `matchedPattern`,
- * `matchedPayload`), so a refusal carries the same provenance
- * `walk-link-graph.ts`'s `LinkResolution` does and a consumer can raise the
- * issue the shipped walker raises.
- *
- * Bump whenever a table gains, loses, or renames a column, or a column's
- * type narrows — the "late column-level change" the architecture doc names
- * as expected, not exceptional. Adding a new *row* to an open vocabulary (a
- * new `resource_tags.tag` value, a new `blob_conditions.code`) is NOT a
- * version bump — see the doc's "facts are rows, not columns" rule.
+ * ⚠️ It becomes a real question again the moment a projection is *stored* rather
+ * than returned in-process, because then a file can outlive the build that
+ * wrote it. The answer at that point is a **derived** digest of the row schemas'
+ * own shape, exactly as the parse cache does with `parseFactsShapeSource()` —
+ * not this constant reinstated. Do not add it back.
  */
-export const PROJECTION_SCHEMA_VERSION = 4;
 
 /**
  * Any value YAML's core schema (and therefore JSON) can represent. Recursive

@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 
 import { ROOT_PATH_PLACEHOLDER, exportProjection, serializeProjection } from '../src/projection/export.js';
 import { ProjectionBuilder, type Projection } from '../src/projection/projection.js';
-import { PROJECTION_SCHEMA_VERSION } from '../src/schemas/projection-shared.js';
 
 /**
  * Two real tmpdir-shaped roots. Nothing is written: the only thing under test
@@ -209,8 +208,11 @@ function buildFixture(order: 'forward' | 'reverse'): Projection {
 }
 
 describe('exportProjection', () => {
-  it('stamps the projection schema version', () => {
-    expect(exportProjection(buildFixture('forward')).schemaVersion).toBe(PROJECTION_SCHEMA_VERSION);
+  it('emits the tables and no metadata beside them', () => {
+    // The document used to carry a `schemaVersion` no reader branched on. A
+    // consumer enumerating the document must find tables only, so a future
+    // metadata key cannot be mistaken for a thirteenth table.
+    expect(Object.keys(exportProjection(buildFixture('forward')))).toStrictEqual(['tables']);
   });
 
   it('carries all twelve tables as keys even when every one is empty', () => {

@@ -1,25 +1,24 @@
 import { describe, expect, it } from 'vitest';
 
+import * as projectionShared from '../src/schemas/projection-shared.js';
 import {
   ContentKeySchema,
   JsonValueSchema,
-  PROJECTION_SCHEMA_VERSION,
   ProjectionConditionSeveritySchema,
 } from '../src/schemas/projection-shared.js';
 
-describe('PROJECTION_SCHEMA_VERSION', () => {
-  it('is a positive integer', () => {
-    expect(Number.isInteger(PROJECTION_SCHEMA_VERSION)).toBe(true);
-    expect(PROJECTION_SCHEMA_VERSION).toBeGreaterThan(0);
-  });
+describe('the removed contract version', () => {
+  it('exports no hand-bumped version constant', () => {
+    // An absence pin, not decoration. `PROJECTION_SCHEMA_VERSION` reached 4 by
+    // hand and nothing ever branched on it, so every bump was cost without a
+    // beneficiary. The pressure to reinstate one arrives with the first STORED
+    // projection, and the answer then is a derived digest of the row schemas'
+    // shape (as `parseFactsShapeSource()` is for the parse cache) — not this
+    // constant back. That is why the guard names the shape rather than the
+    // symbol: `PROJECTION_SCHEMA_VERSION_2` would pass a symbol-only check.
+    const versionish = Object.keys(projectionShared).filter((name) => /VERSION|REVISION/u.test(name));
 
-  it('is 4 — the condition-provenance revision', () => {
-    // Pinned to a literal on purpose: `realization_conditions` gained six new
-    // required columns, so a consumer holding a version-3 export cannot read a
-    // version-4 one. A version that could drift silently would let exactly that
-    // happen without anything going red — which is also why the bump belongs to
-    // the column change and not to a later release.
-    expect(PROJECTION_SCHEMA_VERSION).toBe(4);
+    expect(versionish).toStrictEqual([]);
   });
 });
 
