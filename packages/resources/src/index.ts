@@ -202,6 +202,18 @@ export {
   type ProjectionBase,
 } from './projection/projection.js';
 
+// The table registry: the single authority on table name → row schema → primary
+// key → column order. `exportProjection`'s sort keys and the committed JSON
+// Schemas are both derived from it, and anything that writes the projection out
+// column-wise (a parquet `COPY (SELECT <columns> FROM …)`) reads it rather than
+// restating a fourth list.
+export {
+  PROJECTION_TABLES,
+  type ProjectionRow,
+  type ProjectionTableName,
+  type ProjectionTableSpec,
+} from './projection/table-registry.js';
+
 // Lexical reference extraction: reference candidates the markdown AST cannot
 // see (@-prefixed tokens, variable-anchored paths, bounded bare tokens).
 export {

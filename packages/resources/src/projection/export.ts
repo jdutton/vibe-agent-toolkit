@@ -33,6 +33,12 @@
 import { compareCodeUnits } from '@vibe-agent-toolkit/utils';
 
 import type { Projection } from './projection.js';
+import {
+  PROJECTION_TABLES,
+  type ProjectionRow,
+  type ProjectionTableName,
+  type ProjectionTableSpec,
+} from './table-registry.js';
 
 /**
  * What `roots.path` holds in an exported document.
@@ -72,28 +78,31 @@ type KeyPart = string | number | boolean | null;
 /**
  * Emit a projection as a deterministic, path-free document.
  *
+ * Every table is named once, and the object literal is checked against
+ * {@link Projection}, so a thirteenth table is still a compile error here. What
+ * is no longer restated is the **primary keys**: each sort reads the key out of
+ * {@link PROJECTION_TABLES}, which is the same declaration the parquet writer
+ * and the JSON Schema generator read. A key that disagreed between the sort and
+ * the schema used to be a silent possibility; now it is not representable.
+ *
  * @param projection - The projection to emit
  * @returns The document: twelve primary-key-sorted tables, roots redacted
  */
 export function exportProjection(projection: Projection): ProjectionDocument {
   return {
     tables: {
-      roots: sortRows(projection.roots, (row) => [row.id])
-        .map((row) => ({ ...row, path: ROOT_PATH_PLACEHOLDER })),
-      resources: sortRows(projection.resources, (row) => [row.resourceId]),
-      resourceRealizations: sortRows(projection.resourceRealizations, (row) => [row.extentId, row.path]),
-      resourceExtents: sortRows(projection.resourceExtents, (row) => [row.resourceId, row.extentId]),
-      resourceTags: sortRows(projection.resourceTags, (row) => [row.resourceId, row.tag, row.value, row.source]),
-      realizationConditions: sortRows(
-        projection.realizationConditions,
-        (row) => [row.extentId, row.path, row.code, row.resourceId],
-      ),
-      resolutionContexts: sortRows(projection.resolutionContexts, (row) => [row.contextId]),
-      zoneProvenance: sortRows(projection.zoneProvenance, (row) => [row.contextId, row.contributorId]),
-      blobs: sortRows(projection.blobs, (row) => [row.contentKey]),
-      blobReferences: sortRows(projection.blobReferences, (row) => [row.blob, row.ordinal]),
-      blobSections: sortRows(projection.blobSections, (row) => [row.blob, row.ordinal]),
-      blobConditions: sortRows(projection.blobConditions, (row) => [row.blob, row.code, row.line, row.message]),
+      roots: sortTable(projection, 'roots').map((row) => ({ ...row, path: ROOT_PATH_PLACEHOLDER })),
+      resources: sortTable(projection, 'resources'),
+      resourceRealizations: sortTable(projection, 'resourceRealizations'),
+      resourceExtents: sortTable(projection, 'resourceExtents'),
+      resourceTags: sortTable(projection, 'resourceTags'),
+      realizationConditions: sortTable(projection, 'realizationConditions'),
+      resolutionContexts: sortTable(projection, 'resolutionContexts'),
+      zoneProvenance: sortTable(projection, 'zoneProvenance'),
+      blobs: sortTable(projection, 'blobs'),
+      blobReferences: sortTable(projection, 'blobReferences'),
+      blobSections: sortTable(projection, 'blobSections'),
+      blobConditions: sortTable(projection, 'blobConditions'),
     },
   };
 }
@@ -114,17 +123,38 @@ export function serializeProjection(projection: Projection): string {
 }
 
 /**
- * Copy a table into primary-key order.
+ * Copy one table into the order its registered primary key defines.
  *
  * Copies rather than sorting in place: a built projection's tables are frozen,
  * and a caller's live table must not be reordered by the act of exporting it.
  *
- * @param rows - The table
- * @param keyOf - Extracts this table's primary key, in column order
- * @returns A new array in key order
+ * @param projection - The projection to read the table out of
+ * @param name - Which table
+ * @returns A new array in primary-key order
  */
-function sortRows<T>(rows: readonly T[], keyOf: (row: T) => readonly KeyPart[]): T[] {
-  return [...rows].sort((left, right) => compareKeys(keyOf(left), keyOf(right)));
+function sortTable<Name extends ProjectionTableName>(
+  projection: Projection,
+  name: Name,
+): ProjectionRow<Name>[] {
+  // The registry is declared with a mapped type over `keyof Projection`, so
+  // `PROJECTION_TABLES[name]` is this table's spec by construction; the compiler
+  // just cannot see through the generic parameter to say so.
+  const spec = PROJECTION_TABLES[name] as ProjectionTableSpec<Name, ProjectionRow<Name>>;
+  const rows = projection[name] as readonly ProjectionRow<Name>[];
+  return [...rows].sort(
+    (left, right) => compareKeys(keyOf(left, spec.primaryKey), keyOf(right, spec.primaryKey)),
+  );
+}
+
+/**
+ * Read a row's primary key out of it, in column order.
+ *
+ * @param row - The row
+ * @param primaryKey - The key columns, in comparison order
+ * @returns The key components
+ */
+function keyOf<Row>(row: Row, primaryKey: readonly (keyof Row & string)[]): readonly KeyPart[] {
+  return primaryKey.map((column) => row[column] as KeyPart);
 }
 
 /**
