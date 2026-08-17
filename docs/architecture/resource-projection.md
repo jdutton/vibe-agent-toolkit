@@ -189,14 +189,17 @@ cache, not a replacement for either layer.
 - **Namespacing is version-based, with a dev-checkout escape hatch.** For an installed VAT, the
   namespace is the package version alone (e.g. `0.1.42`) — deliberately, so every machine on the same
   release shares one cache. Version alone is insufficient for a **dev checkout**, so there the
-  namespace gets a `-dev-<hash>` suffix over the package-root path, which separates one worktree from
-  another. It covers nothing else, and that is the settled position after two attempts at covering
-  more: a build fingerprint of the emitted parser modules (rejected — 65 namespaces holding 267 MB,
-  because every rebuild minted one) and then a hand-bumped `PARSER_BEHAVIOR_REVISION` (rejected —
-  a second versioning scheme carried alongside the version that already works, protecting only
-  developers, who are the one audience that knows when they changed a parser). Within one worktree,
-  what a rebuild can change is covered by the read-time schema below and by `vat cache clear`, not
-  by a number. Three earlier hand-bumped constants are gone on the same reasoning
+  namespace gets a `-dev-<hash>` suffix over two inputs: the package-root path, which separates one
+  worktree from another, and a digest of `ParseFactsSchema`'s own shape, which separates two entry
+  formats within one worktree. Both are **derived**, and that is the settled position after two
+  attempts at hand-maintaining the second half: a build fingerprint of the emitted parser modules
+  (rejected — 65 namespaces holding 267 MB, because every rebuild minted one) and then a hand-bumped
+  `PARSER_BEHAVIOR_REVISION` (rejected — a second versioning scheme carried alongside the version
+  that already works, protecting only developers, who are the one audience that knows when they
+  changed a parser). The shape digest keeps what the build fingerprint was for without its churn:
+  rebuilding unchanged code cannot move it, since it reads no file and no mtime. What is left over —
+  a change to what a parse *means*, at unchanged shape — is `vat cache clear`, not a number. Three
+  earlier hand-bumped constants are gone on the same reasoning
   (`CONTENT_KEY_SCHEMA_VERSION`, `PARSE_CACHE_SCHEMA_VERSION`, `PARSER_BEHAVIOR_REVISION`); two other
   cache tenants — `content-cache.ts` and `external-link-cache.ts` — still use that pattern
   (`const CACHE_VERSION = 1`), which is what is being moved away from, not a precedent this design
@@ -212,8 +215,9 @@ cache, not a replacement for either layer.
   structural spot-check. An entry whose *shape* this build cannot account for — a wrong field type,
   a fact the envelope has no field for — is a miss. The one shape change it cannot see is the
   addition of an **optional** field, where "written before the field existed" and "legitimately
-  absent" are the same bytes; `vat cache clear` is the answer to that class, and the schema's own
-  docstring says so.
+  absent" are the same bytes. No validator can separate those, so that class is closed one level up
+  instead — by the shape digest in the namespace above, which puts the two kinds of entry in
+  different directories rather than trying to tell them apart on read.
 - **Fail-soft covers corruption, not wrongness.** Any read failure is a cache miss; any write failure
   is a no-op. Neither that nor the schema above covers a well-formed entry bound to the wrong
   content — that is what the scanning doc's key rules exist to close.

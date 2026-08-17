@@ -32,16 +32,17 @@
  *   through identical code yield identical facts, and the version moves on
  *   every release, so a released build's parsers are consistent by
  *   construction and need no second number tracking them.
- * - **Dev checkout:** `0.1.42-dev-<6 hex>` over the package root path.
+ * - **Dev checkout:** `0.1.42-dev-<6 hex>` over the package root path *and*
+ *   `ParseFactsSchema`'s own shape.
  *
  * The path component is load-bearing and must survive any future change here:
  * every worktree on a machine reads the same version out of the same manifest,
  * so branch A and branch B and the published release of that number would
  * otherwise all share one namespace — exactly when invalidation matters most.
  *
- * ## What was traded away, deliberately
+ * ## Why the shape, and not the build
  *
- * The dev discriminator used to also mix in a fingerprint (size + mtime) of the
+ * The dev discriminator used to mix in a fingerprint (size + mtime) of the
  * emitted parser modules, so that any `tsc --build` moved the namespace and the
  * dev cache went cold automatically. That is the strongest version of the
  * guarantee above — it caught a parser edit whether or not the developer
@@ -57,34 +58,43 @@
  * > never actually measured warm, and a cache directory that only grows is a
  * > defect in its own right.
  *
- * So the automatic mechanism is gone and the hazard it covered is **back, on
- * purpose**: within one worktree, editing parser behaviour and rebuilding will
- * serve parse facts written by the previous build.
+ * What replaced it keeps the automatic part and drops the churn: the digest
+ * takes the *shape of a cache entry* as its second input, via
+ * {@link parseFactsShapeSource}. Rebuilding unchanged code cannot move it —
+ * nothing there reads a file or an mtime — while changing what an entry
+ * contains moves it every time, without anyone deciding to.
  *
- * Two things answer that, and neither is a version number:
+ * Three mechanisms therefore divide the work, and none of them is a second
+ * version number:
  *
  * 1. **`ParseFactsSchema` at the read boundary** (`schemas/parse-facts.ts`).
  *    An entry whose shape this build cannot account for is a miss, not a
  *    plausible answer. That covers every change to a stored shape except the
  *    addition of an *optional* field, where "written before the field existed"
- *    and "legitimately absent" are the same bytes — the schema's docstring is
- *    explicit about that limit.
- * 2. **`vat cache clear`**, for the case the schema cannot see and for any
- *    change to what a parse *means* rather than what it contains. It costs a
- *    rescan and nothing else, and a developer who changed parser behaviour is
- *    the one person who does not need to be told they did.
+ *    and "legitimately absent" are the same bytes.
+ * 2. **The shape digest here**, which covers that last case by not letting the
+ *    two kinds of entry share a directory in the first place. It is derived
+ *    from the schema, so unlike the constant it replaced it cannot fall behind
+ *    what the schema actually says.
+ * 3. **`vat cache clear`**, for what neither can see: a change to what a parse
+ *    *means* with its shape unchanged — swap the token estimator and every warm
+ *    entry keeps serving the old count under a perfectly valid, correctly named
+ *    key. It costs a rescan and nothing else, and a developer who changed
+ *    parser behaviour is the one person who does not need to be told they did.
  *
  * There is deliberately no hand-bumped revision constant here. It was removed
  * once and must not come back: it protected developers only (an installed
  * build's namespace already moves per release), it required someone to
  * remember, and carrying a second versioning scheme alongside the version is
- * debt that buys nothing the two mechanisms above do not.
+ * debt that buys nothing the three mechanisms above do not.
  */
 
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
 import { normalizedTmpdir, resolveFromImportMeta, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+
+import { parseFactsShapeSource } from './schemas/parse-facts.js';
 
 /** Hex digits of the dev discriminator. Short on purpose — it is a cache path, not a security boundary. */
 const DEV_FINGERPRINT_LENGTH = 6;
@@ -131,20 +141,26 @@ function isInstalled(moduleDir: string): boolean {
 }
 
 /**
- * The dev discriminator: a pure digest of where this checkout lives.
+ * The dev discriminator: a pure digest of where this checkout lives and what a
+ * cache entry is shaped like in it.
  *
- * Touches no filesystem and reads no module state, so it is stable across a
- * rebuild by construction — a rebuild changes neither the path nor anything
- * else this reads. That is exactly the property the namespace exists to have,
- * and keeping it a pure function is what lets a test assert it without fighting
- * the process-level memo in {@link vatCacheNamespace}.
+ * Both inputs are values, not lookups: this touches no filesystem and reads no
+ * module state, so it is stable across a rebuild by construction. That is
+ * exactly the property the namespace exists to have, and keeping it a pure
+ * function is what lets a test assert it without fighting the process-level
+ * memo in {@link vatCacheNamespace}.
+ *
+ * The two inputs separate different things and are both needed: the path keeps
+ * two worktrees apart, the shape keeps two entry formats apart within one.
  *
  * @param moduleDir - Directory this package's code was resolved from
+ * @param parseFactsShape - From `parseFactsShapeSource()`; see that docstring
+ *   for why it is derived rather than declared
  * @returns Six lowercase hex digits
  */
-export function devNamespaceDigest(moduleDir: string): string {
+export function devNamespaceDigest(moduleDir: string, parseFactsShape: string): string {
   return createHash('sha256')
-    .update(`vat-cache-namespace\0${toForwardSlash(moduleDir)}`, 'utf-8')
+    .update(`vat-cache-namespace\0${toForwardSlash(moduleDir)}\0${parseFactsShape}`, 'utf-8')
     .digest('hex')
     .slice(0, DEV_FINGERPRINT_LENGTH);
 }
@@ -171,7 +187,7 @@ export function vatCacheNamespace(): string {
     return cached;
   }
 
-  cached = `${version}-dev-${devNamespaceDigest(moduleDir)}`;
+  cached = `${version}-dev-${devNamespaceDigest(moduleDir, parseFactsShapeSource())}`;
   return cached;
 }
 

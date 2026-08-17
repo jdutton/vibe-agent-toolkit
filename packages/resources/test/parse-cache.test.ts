@@ -654,8 +654,10 @@ describe('ParseFactsSchema — the boundary, and the one thing it cannot see', (
     // `ResourceLink.startOffset` is optional because remark reports no position
     // for a quoted, parenthesised GFM autolink — so "this entry predates the
     // span columns" and "this link never had one" are the same bytes, and no
-    // validator can separate them. `vat cache clear` is the answer to that
-    // class; see schemas/parse-facts.ts.
+    // validator can separate them. The answer to that class is one level up:
+    // `parseFactsShapeSource()` feeds the schema's shape into the cache
+    // namespace, so entries from before the field never sit in the same
+    // directory as entries from after it. See schemas/parse-facts.ts.
     const keyed = keyedFromText(SIMPLE_DOC);
 
     // Fixture guard: deleting a field the fixture never carried would make this

@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs';
 
 import { normalizedTmpdir, resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { z } from 'zod';
 
 import {
   devNamespaceDigest,
@@ -11,6 +12,7 @@ import {
   vatCacheNamespaceRoot,
   vatCacheRoot,
 } from '../src/cache-namespace.js';
+import { ParseFactsSchema, parseFactsShapeSource, schemaShapeSource } from '../src/schemas/parse-facts.js';
 
 /**
  * The emitted modules the *removed* build fingerprint used to stat.
@@ -48,6 +50,9 @@ async function restampModules(dir: string, epochSeconds: number): Promise<void> 
   );
 }
 
+/** A stand-in for the shape input, so path-only tests state what they hold fixed. */
+const A_SHAPE = '{"type":"object"}';
+
 describe('devNamespaceDigest', () => {
   let tempDir: string;
 
@@ -65,11 +70,11 @@ describe('devNamespaceDigest', () => {
     // a negative control by construction: it was RED before, because both the
     // size (different body length) and the mtime move below.
     await writeRebuiltModules(tempDir, 'export const version = 1;');
-    const before = devNamespaceDigest(tempDir);
+    const before = devNamespaceDigest(tempDir, A_SHAPE);
 
     await writeRebuiltModules(tempDir, 'export const version = 2; // rebuilt, and longer than before');
     await restampModules(tempDir, Date.now() / 1000 + 3600);
-    const after = devNamespaceDigest(tempDir);
+    const after = devNamespaceDigest(tempDir, A_SHAPE);
 
     expect(after).toBe(before);
   });
@@ -79,31 +84,82 @@ describe('devNamespaceDigest', () => {
     // recorded each missing module as `<name>:absent`, so mid-clean runs got
     // their own namespace; nothing about a parse fact changed.
     await writeRebuiltModules(tempDir, 'export const version = 1;');
-    const populated = devNamespaceDigest(tempDir);
+    const populated = devNamespaceDigest(tempDir, A_SHAPE);
 
     await Promise.all(REBUILT_MODULE_FILES.map(async (name) => fs.rm(safePath.join(tempDir, name))));
 
-    expect(devNamespaceDigest(tempDir)).toBe(populated);
+    expect(devNamespaceDigest(tempDir, A_SHAPE)).toBe(populated);
   });
 
-  it('depends on the module directory and NOTHING else', () => {
-    // Pins the whole input set. A hand-bumped parser-revision constant used to
-    // be the second argument; it is gone, and the invalidation it stood for now
-    // lives in `ParseFactsSchema` (shape) and `vat cache clear` (meaning). This
-    // test is what makes a re-introduction visible: a new input would have to
-    // appear in this signature.
-    expect(devNamespaceDigest.length).toBe(1);
+  it('depends on the module directory and the entry shape, and NOTHING else', () => {
+    // Pins the whole input set, so a fourth input cannot appear quietly. A
+    // hand-bumped parser-revision constant was once an argument here and must
+    // not return: both survivors are DERIVED — the path from where this code
+    // was resolved, the shape from `ParseFactsSchema` itself — so neither can
+    // fall behind what it stands for. What is left over lives in `vat cache
+    // clear` (a change of meaning, at unchanged shape).
+    expect(devNamespaceDigest.length).toBe(2);
   });
 
   it('moves when the module directory moves, so two worktrees never share a namespace', () => {
     // The one thing the path component is for. Every worktree reads the same
     // version from the same manifest, so without this, branch A and branch B
     // would collide — precisely when invalidation matters most.
-    expect(devNamespaceDigest(safePath.join(tempDir, 'other-worktree'))).not.toBe(devNamespaceDigest(tempDir));
+    expect(devNamespaceDigest(safePath.join(tempDir, 'other-worktree'), A_SHAPE)).not.toBe(
+      devNamespaceDigest(tempDir, A_SHAPE)
+    );
+  });
+
+  it('moves when the entry shape moves, so one worktree never mixes two entry formats', () => {
+    // The counterpart. Without this input, adding an OPTIONAL field to
+    // `ParseFacts` leaves every pre-existing entry valid, correctly keyed and
+    // silently missing the new field — the exact defect that shipped once.
+    expect(devNamespaceDigest(tempDir, A_SHAPE)).not.toBe(devNamespaceDigest(tempDir, '{"type":"array"}'));
+  });
+
+  it('cannot be confused by moving the boundary between its two inputs', () => {
+    // Concatenating inputs into one hash without a separator lets ('ab', 'c')
+    // and ('a', 'bc') collide. Cheap to get wrong, invisible when wrong.
+    expect(devNamespaceDigest(`${tempDir}/x`, 'y')).not.toBe(devNamespaceDigest(tempDir, '/xy'));
   });
 
   it('is six lowercase hex digits, so it is safe as a path segment', () => {
-    expect(devNamespaceDigest(tempDir)).toMatch(/^[0-9a-f]{6}$/u);
+    expect(devNamespaceDigest(tempDir, A_SHAPE)).toMatch(/^[0-9a-f]{6}$/u);
+  });
+});
+
+describe('parseFactsShapeSource', () => {
+  it('moves when an OPTIONAL field is added — the case validation provably cannot see', () => {
+    // `ParseFactsSchema` accepts an entry that predates an optional field and an
+    // entry that legitimately lacks one identically, because they are the same
+    // bytes (pinned as a negative in parse-cache.test.ts). The remedy is not a
+    // better validator; it is not letting the two share a cache directory.
+    const withNewOptionalField = ParseFactsSchema.extend({ someLaterAddition: z.string().optional() });
+
+    expect(schemaShapeSource(withNewOptionalField)).not.toBe(parseFactsShapeSource());
+  });
+
+  it('ignores a reworded description, so a comment cannot cool the cache', () => {
+    // The failure mode this input is designed around: the emitted-module
+    // fingerprint it replaces moved on every edit anywhere, which is how one
+    // machine accumulated 65 namespaces. Prose is not shape.
+    const reworded = ParseFactsSchema.extend({
+      estimatedTokenCount: z.number().int().nonnegative().describe('a rewording, and nothing else'),
+    });
+
+    expect(schemaShapeSource(reworded)).toBe(parseFactsShapeSource());
+  });
+
+  it('represents the recursive heading branch rather than collapsing it to `any`', () => {
+    // Guards `$refStrategy: 'root'`. The wrapper's default of 'none' cannot
+    // inline `HeadingNode`'s self-reference: it warns on the console and emits
+    // `{}` for `children`, which would make every change under that branch
+    // invisible here — a silent hole, not a loud one.
+    expect(parseFactsShapeSource()).toContain('"$ref"');
+  });
+
+  it('is deterministic, so two processes on one build agree', () => {
+    expect(parseFactsShapeSource()).toBe(parseFactsShapeSource());
   });
 });
 
@@ -128,7 +184,7 @@ describe('vatCacheNamespace', () => {
     // Ties the memoized entry point to the function the tests above exercise:
     // without this, `devNamespaceDigest` could drift into being decoration.
     const moduleDir = safePath.join(resolveFromImportMeta(import.meta.url), '..', '..', 'src');
-    expect(vatCacheNamespace().endsWith(`-dev-${devNamespaceDigest(moduleDir)}`)).toBe(true);
+    expect(vatCacheNamespace().endsWith(`-dev-${devNamespaceDigest(moduleDir, parseFactsShapeSource())}`)).toBe(true);
   });
 
   it('is stable within a process, so two lookups cannot disagree', () => {
