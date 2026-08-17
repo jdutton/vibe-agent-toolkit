@@ -81,7 +81,11 @@ vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) => ({
 // eslint-disable-next-line import/first -- must come after vi.mock calls
 import type { Logger } from '../../src/utils/logger.js';
 // eslint-disable-next-line import/first -- must come after vi.mock calls
-import { loadResourcesWithConfig } from '../../src/utils/resource-loader.js';
+import {
+  loadResourcesWithConfig,
+  RESOURCES_CRAWL_ENV,
+  RESOURCES_CRAWL_PROJECTION,
+} from '../../src/utils/resource-loader.js';
 
 function createTestLogger(): { logger: Logger; debugCalls: string[]; warnCalls: string[] } {
   const debugCalls: string[] = [];
@@ -245,6 +249,36 @@ describe('loadResourcesWithConfig', () => {
 
     expect(lastCrawlOptions).toEqual({ baseDir: PROJECT_ROOT });
     expect(result.config).toBeUndefined();
+  });
+
+  it('reports the lane it actually took, and takes the walk by default', async () => {
+    loadConfigMock.mockReturnValue(undefined);
+    const { logger } = createTestLogger();
+
+    const result = await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
+
+    expect(result.lane).toBe('walk');
+    // The lane is a claim about what ran, so it has to agree with whether a
+    // population source was actually installed on the crawl.
+    expect(lastCrawlOptions?.populationSource).toBeUndefined();
+  });
+
+  it('reports the projection lane when the selector chose it', async () => {
+    // A lane that came back `walk` here — or `projection` in the case above —
+    // would make every arm-identity claim built on this field worthless, which
+    // is precisely what it exists to prevent.
+    loadConfigMock.mockReturnValue(undefined);
+    const { logger } = createTestLogger();
+    process.env[RESOURCES_CRAWL_ENV] = RESOURCES_CRAWL_PROJECTION;
+
+    try {
+      const result = await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
+
+      expect(result.lane).toBe('projection');
+      expect(lastCrawlOptions?.populationSource).toBeDefined();
+    } finally {
+      delete process.env[RESOURCES_CRAWL_ENV];
+    }
   });
 
   it('logs debug messages for config load and gitTracker init', async () => {

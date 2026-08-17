@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`vat resources scan --format json`** — the same document as the YAML default, for consumers
+  without a YAML parser.
+- **`vat resources scan` now reports a `lane` field** naming which enumerator produced the
+  population — `walk` or `projection`.
 - **`runGit()` and `runGitOrThrow()` in `@vibe-agent-toolkit/utils`** — run git against a path you
   were handed, without a git hook's inherited `GIT_DIR` silently redirecting it at another
   repository. Pass `{ ambient: true }` when you do mean the repository the process is standing in,

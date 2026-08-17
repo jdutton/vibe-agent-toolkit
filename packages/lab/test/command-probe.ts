@@ -66,6 +66,21 @@ export const PROBE_FAIL_AT_ENV = 'LAB_PROBE_FAIL_AT';
  */
 export const PROBE_EXIT_CODE_ENV = 'LAB_PROBE_EXIT_CODE';
 
+/**
+ * Set to a JSON array of strings for the probe to write to stdout, one per
+ * invocation, the last entry repeating once the list runs out.
+ *
+ * A list rather than a single string because the facets that read stdout are
+ * exactly the facets that have to notice when two repeats DISAGREE, and a probe
+ * that can only say one thing makes that case unfixturable — the suite would be
+ * left asserting stability against a probe incapable of instability.
+ *
+ * Indexed by the count of children that already ran here, so it shares
+ * {@link PROBE_FAIL_AT_ENV}'s caveat: unambiguous only for a single warm
+ * command, where no cache clear is interleaved.
+ */
+export const PROBE_STDOUT_ENV = 'LAB_PROBE_STDOUT';
+
 /** An argument that makes every invocation of that command fail. */
 export const PROBE_FAIL_TOKEN = 'boom';
 
@@ -104,6 +119,11 @@ const PROBE_SOURCE = [
   `  perRepeat: process.env.${PROBE_REPEAT_ENV} ?? null,`,
   '});',
   String.raw`appendFileSync(log, line + '\n');`,
+  `const outSpec = process.env.${PROBE_STDOUT_ENV};`,
+  'if (outSpec !== undefined) {',
+  '  const outputs = JSON.parse(outSpec);',
+  '  process.stdout.write(outputs[Math.min(priorChildren, outputs.length - 1)] ?? "");',
+  '}',
   'if (failed) {',
   `  process.stderr.write(process.env.${PROBE_STDERR_ENV} ?? ${JSON.stringify(PROBE_DEFAULT_STDERR)});`,
   '}',

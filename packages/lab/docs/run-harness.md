@@ -109,10 +109,21 @@ It is also the only way a second facet can have defaults at all without importin
 the [facet contract](facets.md) forbids.
 
 The default is a default, not a definition. `MEASURABLE_COMMANDS` in the same file is the named
-registry — the three defaults plus `validate` and `verify` — and `vat-lab <facet> run --command
-<name>` selects from it. The flag is repeatable (`--command validate --command verify`), an unknown
-name is a usage error listing every valid one, and a run with no `--command` measures exactly the
-default set. A caller driving the library directly still passes whatever specs it likes.
+registry — the three defaults plus `inventory`, `validate`, `verify` and `resources-population` —
+and `vat-lab <facet> run --command <name>` selects from it. The flag is repeatable
+(`--command validate --command verify`), an unknown name is a usage error listing every valid one,
+and a run with no `--command` measures exactly the default set. A caller driving the library
+directly still passes whatever specs it likes.
+
+**A facet may override which defaults a bare run measures**, and exactly one does. `population`
+reads a file list out of the measured command's output, and two of the three shared defaults emit
+none — so a bare `population run` over them would be two refusals and one measurement every time,
+and a facet whose out-of-the-box output is two thirds noise teaches people to skim past the third.
+It defaults to `resources-population` instead: the same scan, asked for the whole list
+(`--verbose`) in a format needing no YAML parser (`--format json`). That is its own registry entry
+rather than flags added to `resources-scan`, because widening `resources-scan` would change what
+every stored `perf` and `io` report was taken over. Overriding the default never narrows what
+`--command` can ask for.
 
 `validate` and `verify` take no `{subject}` argument: both **reject** a positional path and take
 their scope from the config at the working directory, which the harness has already set to the

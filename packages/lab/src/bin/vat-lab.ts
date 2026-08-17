@@ -25,6 +25,12 @@ import { renderParseComparison, renderParseReport } from '../facets/parse/render
 import { capturePerf } from '../facets/perf/capture.js';
 import { comparePerf } from '../facets/perf/compare.js';
 import { renderPerfComparison, renderPerfReport } from '../facets/perf/render.js';
+import { capturePopulation } from '../facets/population/capture.js';
+import { comparePopulation } from '../facets/population/compare.js';
+import {
+  renderPopulationComparison,
+  renderPopulationReport,
+} from '../facets/population/render.js';
 import {
   abExitCondition,
   CHANGED_VERDICT,
@@ -40,6 +46,7 @@ import {
   MEASURABLE_COMMAND_NAMES,
   measurableCommand,
   type MeasuredCommandSpec,
+  POPULATION_MEASURED_COMMANDS,
 } from '../harness/commands.js';
 import { resolveInstrument } from '../harness/instrument.js';
 import { instrumentTrustNotes } from '../harness/render.js';
@@ -255,6 +262,17 @@ interface FacetWiring<TBody, TComparison extends ComparisonLike>
    * the out-of-the-box experience of the one facet it ruins.
    */
   readonly defaultCache: CacheMode;
+  /**
+   * The commands a bare run measures, when the shared default set is wrong for
+   * this facet.
+   *
+   * Absent means {@link DEFAULT_MEASURED_COMMANDS} — the three corpus-enumerating
+   * verbs every cost facet is taken over. `population` overrides it because two
+   * of those three emit no file list, so a bare run would be two refusals and a
+   * measurement. Overriding the DEFAULT never narrows what `--command` can ask
+   * for; the registry is still the whole menu.
+   */
+  readonly defaultCommands?: readonly MeasuredCommandSpec[];
   readonly renderReport: (report: ReportEnvelope<TBody>) => string;
   readonly renderComparison: (comparison: TComparison) => string;
 }
@@ -354,7 +372,7 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
         subject: await resolveSubject({ id: options.id ?? subjectPath, path: subjectPath }),
         armA: arms.a,
         armB: arms.b,
-        commands: options.command ?? DEFAULT_MEASURED_COMMANDS,
+        commands: options.command ?? wiring.defaultCommands ?? DEFAULT_MEASURED_COMMANDS,
         pairs: options.pairs,
         runs: options.runs,
         cache: options.cache,
@@ -488,9 +506,9 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
       const report = await wiring.capture({
         instrument,
         subject,
-        // No `--command` means the default set, unchanged — the flag widens what
-        // can be asked for and never quietly narrows a bare run.
-        commands: options.command ?? DEFAULT_MEASURED_COMMANDS,
+        // No `--command` means the facet's default set, unchanged — the flag
+        // widens what can be asked for and never quietly narrows a bare run.
+        commands: options.command ?? wiring.defaultCommands ?? DEFAULT_MEASURED_COMMANDS,
         runs: options.runs,
         cache: options.cache,
         capturedAt: new Date().toISOString(),
@@ -737,6 +755,35 @@ export function createProgram(): Command {
         // rule twice is how they drifted apart the first time.
         estimate: (report) =>
           rowEstimates(report.body.commands, 'ms crawl (all strata)', fastestRepeat),
+      }),
+    )
+    .addCommand(
+      createFacetCommand({
+        name: 'population',
+        summary: 'Record WHICH files a vat command enumerated, and diff two populations as sets',
+        runSummary: 'Capture a population report for one project against one vat build',
+        compareSummary: 'Diff two population reports along a single axis',
+        // Two repeats, which is the smallest number that can disagree. A
+        // population is supposed to be deterministic, so more repeats buy
+        // confidence in that rather than resolution in a statistic — and each
+        // repeat is a whole corpus enumeration, which is not cheap.
+        defaultRuns: 2,
+        // Warm. There is no cache in front of the enumeration, and a set does
+        // not move with one.
+        defaultCache: 'warm',
+        defaultCommands: POPULATION_MEASURED_COMMANDS,
+        capture: (request) => Promise.resolve(capturePopulation(request)),
+        compare: comparePopulation,
+        renderReport: renderPopulationReport,
+        renderComparison: renderPopulationComparison,
+        // The file COUNT, and it is deliberately the weakest thing this facet
+        // knows. `ab` compares exactly one number per command, and a population
+        // has no number worth interleaving arms over — the evidence is the set,
+        // which `compare` diffs exactly. The count is here because the contract
+        // requires an estimate, and it is honest about what it can see: two
+        // populations of equal size and different membership read as unchanged
+        // through `ab` and as CHANGED through `compare`. Use `compare`.
+        estimate: (report) => rowEstimates(report.body.commands, 'files', (row) => row.count),
       }),
     );
 }

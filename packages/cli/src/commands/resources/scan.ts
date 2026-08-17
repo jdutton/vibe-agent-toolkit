@@ -4,10 +4,10 @@
 
 import { formatDurationSecs } from '../../utils/duration.js';
 import { createLogger } from '../../utils/logger.js';
-import { writeYamlOutput } from '../../utils/output.js';
+import { writeJsonOutput, writeYamlOutput } from '../../utils/output.js';
 import { projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
 import { relativizePathEntries } from '../../utils/relativize-paths.js';
-import { loadResourcesWithConfig } from '../../utils/resource-loader.js';
+import { loadResourcesWithConfig, type ResourceCrawlLane } from '../../utils/resource-loader.js';
 
 import { handleCommandError } from './command-helpers.js';
 
@@ -15,6 +15,8 @@ interface ScanOptions {
   debug?: boolean;
   verbose?: boolean;
   collection?: string;
+  /** `yaml` (default) or `json`. Same document either way. */
+  format?: string;
 }
 
 /** A heading node, which may nest further headings beneath it. */
@@ -38,6 +40,16 @@ export interface ScanPayloadInput {
   resources: readonly ScanResource[];
   /** The stated root: the ONE base every reported `path` is relative to. */
   root: string;
+  /**
+   * Which enumerator produced these resources.
+   *
+   * Provenance, and it sits beside `root` because it qualifies the file list the
+   * same way: two scans of one tree that report different populations are only
+   * interpretable if each says which lane enumerated it. Derived from the load
+   * that ran, never re-read from the environment — the environment records what
+   * was asked for, which is not the same claim.
+   */
+  lane: ResourceCrawlLane;
   durationMs: number;
   collections: Record<string, { resourceCount: number }> | undefined;
   verbose: boolean;
@@ -64,7 +76,7 @@ function countHeadings(headings: readonly HeadingWithChildren[]): number {
  * the machine it ran on and cannot be diffed across two checkouts.
  */
 export function buildScanOutputData(input: ScanPayloadInput): Record<string, unknown> {
-  const { resources, root, durationMs, collections, verbose } = input;
+  const { resources, root, lane, durationMs, collections, verbose } = input;
 
   const files = resources.map((resource) => ({
     path: resource.filePath,
@@ -77,6 +89,7 @@ export function buildScanOutputData(input: ScanPayloadInput): Record<string, unk
     status: 'success',
     // Stated once, and the only absolute path in the document.
     root,
+    lane,
     filesScanned: resources.length,
     linksFound: resources.reduce((sum, r) => sum + r.links.length, 0),
     anchorsFound: files.reduce((sum, f) => sum + f.anchors, 0),
@@ -98,7 +111,7 @@ export async function scanCommand(
     const projectRoot = projectRootOrLoudCwd(pathArg ?? process.cwd(), logger);
 
     // Load resources with config support
-    const { registry } = await loadResourcesWithConfig(pathArg, projectRoot, logger);
+    const { registry, lane } = await loadResourcesWithConfig(pathArg, projectRoot, logger);
 
     // Get all resources (filtered by collection if specified)
     let allResources = registry.getAllResources();
@@ -127,15 +140,19 @@ export async function scanCommand(
         : undefined;
     }
 
-    writeYamlOutput(
-      buildScanOutputData({
-        resources: allResources,
-        root: projectRoot,
-        durationMs: Date.now() - startTime,
-        collections: collectionsOutput,
-        verbose: options.verbose ?? false,
-      })
-    );
+    const payload = buildScanOutputData({
+      resources: allResources,
+      root: projectRoot,
+      lane,
+      durationMs: Date.now() - startTime,
+      collections: collectionsOutput,
+      verbose: options.verbose ?? false,
+    });
+    if (options.format === 'json') {
+      writeJsonOutput(payload);
+    } else {
+      writeYamlOutput(payload);
+    }
 
     process.exit(0);
   } catch (error) {

@@ -25,32 +25,16 @@
  *    because a repo fixture with no commits behaves nothing like one with them.
  */
 
-import { rmSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { rmSync } from 'node:fs';
 
-import { mkdirSyncReal, runGitOrThrow, safePath, setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+import { safePath, setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { type SubjectVersion, SubjectVersionSchema } from '../src/envelope/coordinate.js';
 import { resolveSubject } from '../src/harness/subject.js';
 import type { ResolvedSubject } from '../src/harness/types.js';
 
-/** Pinned so the assertion does not depend on the host's `init.defaultBranch`. */
-const FIXTURE_BRANCH = 'lab-fixture';
-
-/**
- * Identity and signing forced per-invocation, because a fixture repo inherits
- * the host's global git config and a machine with no `user.email` — or with
- * `commit.gpgsign=true` and no key — would otherwise fail to commit at all.
- */
-const COMMIT_CONFIG = [
-  '-c',
-  'user.name=Lab Fixture',
-  '-c',
-  'user.email=lab@example.invalid',
-  '-c',
-  'commit.gpgsign=false',
-];
+import { commitAll, FIXTURE_BRANCH, git, initRepo, writeFixtureFile } from './git-fixtures.js';
 
 const TRACKED_FILE = 'docs/tracked.md';
 const NESTED_FILE = 'nested/b.txt';
@@ -63,33 +47,7 @@ const SHA256_HEX = /^[0-9a-f]{64}$/;
 
 const suite = setupSyncTempDirSuite('lab-subject');
 
-/**
- * Run a git command in a fixture repo, throwing on any failure.
- *
- * Fixtures must fail loudly: a silently failed `git commit` would leave an
- * unborn HEAD and turn a git-case test into a snapshot-case test that still
- * passes some other assertion.
- *
- * @param args - Arguments after the `git` executable
- * @param cwd - Fixture directory to run in
- */
-function git(args: readonly string[], cwd: string): void {
-  runGitOrThrow([...args], { cwd, stdio: 'pipe' });
-}
 
-/**
- * Write a file inside a fixture, creating parent directories.
- *
- * @param root - Fixture root
- * @param relativePath - Forward-slash path under the root
- * @param content - File content
- */
-function writeFixtureFile(root: string, relativePath: string, content: string): void {
-  const absolute = safePath.join(root, relativePath);
-  mkdirSyncReal(dirname(absolute), { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture path built from this suite's temp dir
-  writeFileSync(absolute, content, 'utf8');
-}
 
 /**
  * Delete a file inside a fixture.
@@ -101,29 +59,7 @@ function removeFixtureFile(root: string, relativePath: string): void {
   rmSync(safePath.join(root, relativePath), { force: true });
 }
 
-/**
- * `git init` on a known branch, with nothing committed yet.
- *
- * `symbolic-ref` rather than `git init -b`, so the branch is pinned on every
- * git version rather than only those new enough for the flag.
- *
- * @param root - Fixture root
- */
-function initRepo(root: string): void {
-  git(['init', '--quiet'], root);
-  git(['symbolic-ref', 'HEAD', `refs/heads/${FIXTURE_BRANCH}`], root);
-}
 
-/**
- * Stage everything present and commit it.
- *
- * @param root - Fixture root
- * @param message - Commit message
- */
-function commitAll(root: string, message: string): void {
-  git(['add', '--all'], root);
-  git([...COMMIT_CONFIG, 'commit', '--no-verify', '--quiet', '-m', message], root);
-}
 
 /**
  * A repository with exactly one commit — the only fixture shape that can yield

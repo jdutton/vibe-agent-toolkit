@@ -213,6 +213,37 @@ export {
 } from './facets/perf/types.js';
 
 export {
+  capturePopulation,
+  type CapturePopulationOptions,
+} from './facets/population/capture.js';
+export {
+  comparePopulation,
+  type PopulationCommandDiff,
+  type PopulationCommandVerdict,
+  type PopulationComparison,
+  type PopulationComparisonResult,
+} from './facets/population/compare.js';
+export {
+  type PopulationDocument,
+  type PopulationDocumentResult,
+  readPopulationDocument,
+  samePopulation,
+} from './facets/population/document.js';
+export {
+  renderPopulationComparison,
+  renderPopulationReport,
+} from './facets/population/render.js';
+export {
+  POPULATION_FACET,
+  POPULATION_FACET_VERSION,
+  type PopulationAttribution,
+  type PopulationBody,
+  PopulationBodySchema,
+  type PopulationCommandStats,
+  type PopulationEntry,
+} from './facets/population/types.js';
+
+export {
   type AbArmSummary,
   type AbCommandResult,
   abExitCondition,
@@ -236,6 +267,7 @@ export {
   MEASURABLE_COMMANDS,
   measurableCommand,
   type MeasuredCommandSpec,
+  POPULATION_MEASURED_COMMANDS,
 } from './harness/commands.js';
 export {
   type CountDelta,
@@ -283,7 +315,12 @@ export {
   refuseDumps,
   withDumpDirs,
 } from './harness/dumps.js';
-export { type GitOutcome, hasUncommittedChanges, runGit } from './harness/git-state.js';
+export {
+  type GitOutcome,
+  hasUncommittedChanges,
+  runGit,
+  trackedPaths,
+} from './harness/git-state.js';
 export { resolveInstrument } from './harness/instrument.js';
 export {
   DEFAULT_LOAD_PER_CPU_THRESHOLD,

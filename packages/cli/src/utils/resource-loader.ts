@@ -18,12 +18,31 @@ import { GitTracker, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils'
 import { loadConfig } from './config-loader.js';
 import type { Logger } from './logger.js';
 
+/**
+ * Which enumerator produced a load's population.
+ *
+ * `walk` is the incumbent `crawlDirectory` route; `projection` is the
+ * projection lane behind {@link RESOURCES_CRAWL_ENV}.
+ */
+export type ResourceCrawlLane = 'walk' | 'projection';
+
 export interface ResourceLoadResult {
   scanPath: string;
   projectRoot: string;
   config: ProjectConfig | undefined;
   registry: ResourceRegistry;
   gitTracker: GitTracker | undefined;
+  /**
+   * Which lane enumerated, as a fact about the run rather than about the
+   * environment that requested it.
+   *
+   * Reported so that a population can be held against another one: two scans of
+   * the same tree that disagree are only interpretable if each says which
+   * enumerator produced it. Reading the env var back instead would prove what
+   * was ASKED for, never what happened — a distinction that has already voided
+   * one whole A/B on this codebase, where both arms silently ran the incumbent.
+   */
+  lane: ResourceCrawlLane;
 }
 
 /**
@@ -259,9 +278,16 @@ export async function loadResourcesWithConfig(
   // so the path-argument case and the whole-root case cannot end up on different
   // crawlers — the bug shape this file already carries one fix for.
   const populationSource = populationSourceFor(gitTracker);
+  const lane: ResourceCrawlLane = populationSource ? 'projection' : 'walk';
   if (populationSource) {
     logger.debug(`Enumerating via the projection lane (${RESOURCES_CRAWL_ENV}=${RESOURCES_CRAWL_PROJECTION})`);
     crawlOptions = { ...crawlOptions, populationSource };
+  } else {
+    // Said for the same reason the projection branch says it, and the symmetry
+    // is the point: a marker that only one lane emits makes the other lane
+    // identifiable by ABSENCE, which is indistinguishable from a build too old
+    // to have either lane.
+    logger.debug(`Enumerating via the incumbent walk (${RESOURCES_CRAWL_ENV} unset)`);
   }
 
   await registry.crawl(crawlOptions);
@@ -272,5 +298,6 @@ export async function loadResourcesWithConfig(
     config,
     registry,
     gitTracker,
+    lane,
   };
 }

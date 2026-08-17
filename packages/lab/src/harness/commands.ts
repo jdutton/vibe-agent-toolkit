@@ -99,6 +99,24 @@ export const MEASURABLE_COMMANDS = Object.freeze({
     args: Object.freeze(['resources', 'scan', '{subject}']),
     // Exits 0 whatever it finds — scanning reports statistics, not findings.
   }),
+  'resources-population': Object.freeze({
+    name: 'resources-population',
+    // The same scan, asked for the whole file list in a format a consumer can
+    // read without a YAML parser. Three flags, each load-bearing and none of
+    // them a preference:
+    //
+    // - `--verbose` is what makes the command emit `files` at all. Without it
+    //   the document carries `filesScanned` and no population, and a count
+    //   compares byte-identically against any other run of the same size while
+    //   knowing nothing about which files those were.
+    // - `--format json` keeps the lab free of a YAML parser.
+    //
+    // Its own entry rather than flags added to `resources-scan`, because that
+    // spec is what `perf` and `io` measure: widening it would change what every
+    // stored timing and call count in this repo was taken over.
+    args: Object.freeze(['resources', 'scan', '{subject}', '--verbose', '--format', 'json']),
+    // Exits 0 whatever it finds — scanning reports statistics, not findings.
+  }),
   'resources-validate': Object.freeze({
     name: 'resources-validate',
     args: Object.freeze(['resources', 'validate', '{subject}', '--format', 'json']),
@@ -176,4 +194,18 @@ export const DEFAULT_MEASURED_COMMANDS: readonly MeasuredCommandSpec[] = Object.
   MEASURABLE_COMMANDS['resources-scan'],
   MEASURABLE_COMMANDS['resources-validate'],
   MEASURABLE_COMMANDS.audit,
+]);
+
+/**
+ * The commands whose output carries a population.
+ *
+ * The `population` facet's default set, and it is a different set rather than a
+ * subset of a preference: two of the three defaults above emit no file list at
+ * all, so a bare `population run` over {@link DEFAULT_MEASURED_COMMANDS} would
+ * produce one measured row and two refusals every time. A facet whose
+ * out-of-the-box output is two thirds noise teaches people to skim past the
+ * third.
+ */
+export const POPULATION_MEASURED_COMMANDS: readonly MeasuredCommandSpec[] = Object.freeze([
+  MEASURABLE_COMMANDS['resources-population'],
 ]);

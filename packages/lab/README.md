@@ -28,17 +28,37 @@ vat-lab <facet> compare <baseline> <candidate>
 [Which commands get measured](docs/run-harness.md#which-commands-get-measured).
 
 Facets today are **`io`** (filesystem-call counts), **`perf`** (wall time), **`parse`** (where the
-time inside vat's document parse goes, pass by pass) and **`crawl`** (where the time spent *finding*
-those documents goes, per contributor, stratum and fixpoint pass). `parse` defaults to
-`--cache cold` because vat's parse cache short-circuits the parse function on a hit, so a warm run
-has nothing to attribute; `crawl` defaults to warm, because nothing caches a crawl — see
-[Facets](docs/facets.md).
+time inside vat's document parse goes, pass by pass), **`crawl`** (where the time spent *finding*
+those documents goes, per contributor, stratum and fixpoint pass) and **`population`** (*which*
+files a command enumerated). `parse` defaults to `--cache cold` because vat's parse cache
+short-circuits the parse function on a hit, so a warm run has nothing to attribute; `crawl` and
+`population` default to warm, because nothing caches a crawl — see [Facets](docs/facets.md).
 
 `crawl` exists for one question `perf` cannot answer: VAT has **two crawlers live at once** — the
 incumbent `walkLinkGraph` and the projection's `ClosureExtentContributor` — and both now record
 through one seam, on one clock, into one dump. Its `by stratum` line is the two of them side by
 side (`crawl` is the incumbent walker, `closure` is the projection), which is what makes a flip
 decision a measurement rather than an argument.
+
+`population` answers the other half of that question, and the four cost facets could not: not what
+the crawl *spent* but what it *covered*. Its comparator is exact set difference — added, removed,
+and same-path-different-content kept apart — and every row is held against git's own listing, so a
+single report is falsifiable rather than only comparable with another run of itself. Each row also
+names the lane the run *said* it took, read back out of vat's own output: an A/B whose two arms
+silently ran the same enumerator is a clean result that means nothing, and this is what makes that
+visible.
+
+```bash
+vat-lab population run ../some-project --instrument tree:. --id some-project --out ./walk
+VAT_RESOURCES_CRAWL=projection \
+  vat-lab population run ../some-project --instrument tree:. --id some-project --out ./projection
+vat-lab population compare ./walk/<report>.json ./projection/<report>.json
+```
+
+⚠️ Separate `--out` directories are required for two arms selected by the **environment**: the
+coordinate models the subject, its version and the vat build, and an env-selected lane is none of
+those, so both reports would otherwise land on one filename and the second would overwrite the
+first. See the note on `reportFileName` in `src/store.ts`.
 
 A minimal vary-the-instrument comparison — the same project, measured by two builds of vat:
 

@@ -172,6 +172,26 @@ export function writeYamlOutput(data: unknown): void {
 }
 
 /**
+ * Write a single JSON document to stdout.
+ *
+ * The sibling of {@link writeYamlOutput}, for the same payloads, and it exists
+ * because a consumer that has to parse YAML needs a YAML parser: JSON is the
+ * format every language reads without one. `vat resources validate` already
+ * offers `--format json` for exactly this reason; a scan document that could
+ * only be had as YAML made the population it reports the harder of the two to
+ * consume programmatically, which is backwards.
+ *
+ * Written the same way as its YAML sibling, and the comment there applies
+ * verbatim: the ordinary stream write keeps this summary behind any
+ * human-readable progress already buffered on the same channel.
+ *
+ * @param data - Data to serialize as JSON
+ */
+export function writeJsonOutput(data: unknown): void {
+  process.stdout.write(`${JSON.stringify(data, null, 2)}\n`);
+}
+
+/**
  * Write a test-format finding to stderr.
  *
  * Format: `file:line:column: severity: message` — the GCC/ESLint-compact

@@ -99,3 +99,40 @@ export function hasUncommittedChanges(cwd: string, what: string): boolean {
 
   return result.stdout.split('\n').some((line) => line.trim().length > 0);
 }
+
+/**
+ * Every path git tracks in a working tree, or `null` when git could not say.
+ *
+ * The independent reference a population report is held against. `null` is the
+ * whole point of the signature: a subject outside git, or a git that failed, has
+ * to stay distinguishable from a subject git tracks nothing in, because a caller
+ * that read the second as the first would report the entire enumerated
+ * population as "paths git does not track".
+ *
+ * **`-z`, with the trim turned off.** git sorts by byte value and 0x20 sorts
+ * below every printable character, so a tracked path beginning with a space is
+ * listed FIRST — exactly where a trim reaches it. The trimmed reading hands back
+ * a path that does not exist, and every membership test against it then reads as
+ * "not tracked", which is a divergence this instrument would have reported as a
+ * finding about vat. The newline form has the mirror problem: git *quotes* paths
+ * containing unusual bytes, so a path would arrive wrapped in quotes and miss
+ * for a different reason.
+ *
+ * ⚠️ **The paths come back relative to `cwd`, not to the repository root**, and
+ * only files beneath it are listed. So a caller comparing these against a
+ * population must pass the base that population states — never "the subject
+ * directory" by habit, which is an ancestor or a descendant of it often enough
+ * that the mismatch would render as a wholesale divergence.
+ *
+ * @param cwd - The directory the listing is taken from and relative to
+ * @returns Tracked paths relative to `cwd`, or `null` when git declined to answer
+ */
+export function trackedPaths(cwd: string): ReadonlySet<string> | null {
+  const result = runGitSafely(['ls-files', '-z'], { cwd, trim: false });
+  if (!result.ok) return null;
+  // A `-z` listing ends with a trailing NUL, so the final split is empty; an
+  // empty listing is the empty string, which splits to one empty entry. Both are
+  // handled by dropping empties rather than by trimming, which is the thing this
+  // reading exists to avoid.
+  return new Set(result.stdout.split('\0').filter((path) => path.length > 0));
+}

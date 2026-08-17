@@ -31,15 +31,22 @@ including link integrity checking and anchor validation.
 - `--debug` - Enable debug logging
 - `--verbose` - Add a `files:` list with per-file link/anchor counts and checksums
 - `--collection <id>` - Only report files in the named collection (config mode — no path argument)
+- `--format <format>` - `yaml` (default) or `json`. The same document either way
 
 **Exit Codes:**
 - `0` - Always (scan is informational)
 - `2` - System error (file access, parsing error)
 
-**Output:** YAML on stdout, logs on stderr
+**Output:** YAML on stdout (JSON with `--format json`), logs on stderr
 
 `root` is stated once and is the only absolute path in the document; every
 `path` beneath it is relative to it.
+
+`lane` names which enumerator produced the population — `walk` (the default
+crawl) or `projection` (`VAT_RESOURCES_CRAWL=projection`). Two scans of one tree
+that report different populations are only interpretable if each says which lane
+produced it, so the field is derived from the load that ran rather than read back
+from the environment.
 
 **Example:**
 ```bash
