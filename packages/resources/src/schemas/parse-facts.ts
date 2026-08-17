@@ -205,7 +205,11 @@ export function schemaShapeSource(schema: z.ZodTypeAny): string {
  *   what separates it from the emitted-module fingerprint this repo removed,
  *   which minted a namespace per build.
  * - **Deterministic across processes** — same build, same string, on any
- *   machine. Pinned by a test.
+ *   machine. Pinned by a test. "Same build" includes the lockfile: bumping
+ *   `zod-to-json-schema` can change how a schema is emitted and so move this
+ *   string once. That is the only input here that is not VAT's own code, it
+ *   costs one rescan, and it is arguably the right answer anyway — a converter
+ *   change is a change to what this digest can see.
  *
  * @returns Canonical JSON of the schema's shape, prose stripped
  */
