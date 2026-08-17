@@ -74,6 +74,20 @@ const config: KnipConfig = {
       entry: [SRC_TS],
     },
 
+    // projection-parquet: SCAFFOLD ONLY. The DuckDB WASM engine and the two
+    // internal seams are declared as real dependencies — the pin is exact
+    // because the extension-cache probe path embeds a DuckDB core version and
+    // because the `latest` dist-tag points at a prerelease — but nothing in
+    // `src/` imports them yet; the writer lands next. Delete this entry the
+    // moment `src/` imports them, or the safety net stops watching.
+    'packages/projection-parquet': {
+      ignoreDependencies: [
+        '@duckdb/duckdb-wasm',
+        '@vibe-agent-toolkit/resources',
+        '@vibe-agent-toolkit/utils',
+      ],
+    },
+
     // rag: OpenAI is an opt-in optional peerDependency loaded via dynamic
     // import() (bring-your-own-backend), so knip sees it as a "referenced
     // optional peer". Intentional — not auto-installed for consumers.

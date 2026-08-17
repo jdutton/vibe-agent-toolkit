@@ -23,6 +23,7 @@ export const PUBLISHED_PACKAGES = [
   'utils',
   'discovery',
   'resources',
+  'projection-parquet',
   'resource-compiler',
   'rag',
   'rag-lancedb',
