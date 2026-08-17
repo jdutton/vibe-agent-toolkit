@@ -84,6 +84,9 @@ export class GitExtentContributor implements ExtentContributor {
   readonly kind: string = GIT_EXTENT_KIND;
   readonly stratum: ContributorStratum = 'base';
 
+  /** Enumerates what git tracks; reads no blob-keyed table. */
+  readonly readsBlobs = false;
+
   /**
    * Enumerate `tracked ∪ (untracked ∧ ¬ignored)` and return the rows for it.
    *

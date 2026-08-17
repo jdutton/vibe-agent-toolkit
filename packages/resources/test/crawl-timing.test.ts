@@ -205,6 +205,8 @@ class RegistryBuildingContributor implements ExtentContributor {
   readonly kind = 'test-kind';
   readonly stratum: ContributorStratum = 'base';
 
+  readonly readsBlobs = false;
+
   /**
    * Build a registry over the fixture and contribute nothing.
    *

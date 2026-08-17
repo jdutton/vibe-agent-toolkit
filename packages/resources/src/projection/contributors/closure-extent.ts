@@ -242,6 +242,16 @@ export class ClosureExtentContributor implements ExtentContributor {
 
   readonly stratum: ContributorStratum = 'closure';
 
+  /**
+   * True, and it is this contributor's defining dependency: its edges ARE
+   * `blob_references` rows (see "Edges come from the base projection, never from
+   * a fresh parse"). With the blob stage skipped, `byBlob` is empty, every
+   * extent is its declared root and nothing else, and the fixpoint converges on
+   * iteration one — reporting success. That is why the driver refuses to skip
+   * the stage while this is registered rather than quietly obliging.
+   */
+  readonly readsBlobs = true;
+
   /** The extent name — the within-root discriminator of this extent's context id. */
   readonly #name: string;
 

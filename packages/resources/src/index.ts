@@ -432,8 +432,11 @@ export {
 // and `BlobPopulationReport` reports that second run as its own measurement
 // rather than summing counters that have no honest combination rule.
 export {
+  BLOBS_DERIVE,
+  BLOBS_SKIP,
   ClosureNonConvergenceError,
   populate,
+  type BlobDerivation,
   type BlobPopulationReport,
   type ContributorTiming,
   type PopulateOptions,

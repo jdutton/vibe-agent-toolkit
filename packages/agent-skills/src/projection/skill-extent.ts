@@ -573,6 +573,15 @@ export class SkillExtentContributor implements ExtentContributor {
   readonly #closure: ClosureExtentContributor;
 
   /**
+   * Delegated, never restated: this contributor's `contribute` is the
+   * delegate's, so whether it reads blob-keyed tables is the delegate's answer
+   * and a hard-coded `true` here would be a second copy free to drift.
+   */
+  get readsBlobs(): boolean {
+    return this.#closure.readsBlobs;
+  }
+
+  /**
    * @param skillName - The skill's name. Discriminates both the contributor id
    *   and, through the delegate, the extent's within-root context id — one
    *   source for both, so the two cannot drift apart.

@@ -108,6 +108,9 @@ export class FilesystemExtentContributor implements ExtentContributor {
 
   readonly stratum: ContributorStratum = 'base';
 
+  /** Enumerates paths and keys bytes; reads no blob-keyed table. */
+  readonly readsBlobs = false;
+
   readonly #sourceFor: (root: string) => CrawlSource;
 
   /**

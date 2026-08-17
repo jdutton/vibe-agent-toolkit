@@ -88,6 +88,28 @@ export interface ExtentContributor {
   /** Which stratum the merge driver runs it in. */
   readonly stratum: ContributorStratum;
   /**
+   * Whether this contributor reads the blob-keyed tables off the base.
+   *
+   * **Declared, not inferred from {@link stratum}.** Every blob reader VAT ships
+   * today happens to be a `closure` contributor, so stratum would work as a
+   * proxy right up until it silently stopped working — a base contributor that
+   * reads `blob_references` would be handed empty tables and would report a
+   * complete, empty extent, which is the exact failure `blob-population.ts`
+   * exists to prevent.
+   *
+   * Required rather than optional, and for the same reason: an optional field
+   * defaults to `false`, which is the dangerous direction. A new contributor's
+   * author has to answer the question.
+   *
+   * It is what {@link PopulateOptions.blobs} `'skip'` is checked against — a run
+   * that declines to derive blobs while something registered reads them is a
+   * loud error, never a degraded extent. A wrapper around another contributor
+   * (the skill, plugin and inventory extents all wrap
+   * `ClosureExtentContributor`) must **delegate** this rather than restate it,
+   * or the two can drift apart.
+   */
+  readonly readsBlobs: boolean;
+  /**
    * Produce this contributor's rows against the projection built so far.
    *
    * @param base - Read-only view of everything merged before this invocation
@@ -158,5 +180,20 @@ export class ContributorRegistry {
    */
   byStratum(stratum: ContributorStratum): ExtentContributor[] {
     return [...this.#byId.values()].filter((contributor) => contributor.stratum === stratum);
+  }
+
+  /**
+   * Every registered contributor that declares it reads the blob-keyed tables.
+   *
+   * The contributors themselves rather than a boolean, so the driver's error can
+   * name which registration made a `'skip'` request unsatisfiable — "something
+   * reads blobs" sends the reader back to grep the registry, and the whole point
+   * of {@link ExtentContributor.readsBlobs} being declared is that the answer is
+   * already written down.
+   *
+   * @returns The blob readers, in registration order, possibly empty
+   */
+  blobReaders(): ExtentContributor[] {
+    return [...this.#byId.values()].filter((contributor) => contributor.readsBlobs);
   }
 }

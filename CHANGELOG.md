@@ -29,6 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`VAT_RESOURCES_CRAWL=projection` is several times faster on a cold parse cache.** The lane no
+  longer parses every file in the tree to fill tables it does not read. Results are unchanged.
+
+- **(library) `ExtentContributor` now requires a `readsBlobs` field**, and `populate()` accepts
+  `blobs: 'skip'` to leave the blob-keyed tables empty. A custom contributor must declare whether
+  it reads them; `'skip'` throws if any registered contributor does.
+
 - **`@vibe-agent-toolkit/utils` now depends on `@vibe-validate/git` (0.20.0).** It replaces this
   package's own copy of the git-environment scrub and tree-snapshot machinery. Adds
   `@vibe-validate/utils` and `yaml` to the installed tree.

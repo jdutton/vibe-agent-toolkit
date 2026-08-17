@@ -43,6 +43,7 @@ function countingContributor(id: string, stratum: ExtentContributor['stratum']):
     id,
     kind: KIND,
     stratum,
+    readsBlobs: false,
     calls: 0,
     contribute: async (): Promise<ExtentContribution> => {
       self.calls++;
@@ -63,6 +64,7 @@ function growingContributor(): ExtentContributor & { calls: number } {
     id: GROWING_ID,
     kind: KIND,
     stratum: CLOSURE,
+    readsBlobs: false,
     calls: 0,
     contribute: async (): Promise<ExtentContribution> => {
       self.calls++;
@@ -82,6 +84,7 @@ function oscillator(): ExtentContributor {
     id: OSCILLATOR,
     kind: KIND,
     stratum: CLOSURE,
+    readsBlobs: false,
     contribute: async (): Promise<ExtentContribution> => {
       flip = !flip;
       return contribution(flip ? [MEMBER_A] : [MEMBER_B]);
@@ -150,6 +153,7 @@ describe('populate', () => {
       id: BASE_ID,
       kind: KIND,
       stratum: BASE,
+      readsBlobs: false,
       contribute: async (_base, parameters) => {
         seen = parameters;
         return contribution([]);
@@ -203,6 +207,7 @@ describe('populate', () => {
         id: CLOSURE_ID,
         kind: KIND,
         stratum: CLOSURE,
+        readsBlobs: false,
         contribute: async () => {
           order.push(CLOSURE);
           return contribution([]);
@@ -212,6 +217,7 @@ describe('populate', () => {
         id: BASE_ID,
         kind: KIND,
         stratum: BASE,
+        readsBlobs: false,
         contribute: async () => {
           order.push(BASE);
           return contribution([]);
@@ -233,6 +239,7 @@ describe('populate', () => {
         id: CLOSURE_ID,
         kind: KIND,
         stratum: CLOSURE,
+        readsBlobs: false,
         contribute: async (base) => {
           observedMembers = base.resourceExtents.length;
           return contribution([]);
@@ -257,6 +264,7 @@ describe('populate', () => {
       id: BASE_ID,
       kind: KIND,
       stratum: BASE,
+      readsBlobs: false,
       contribute: async () => {
         throw new Error('git did not answer');
       },

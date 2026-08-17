@@ -94,6 +94,15 @@ const BASE_STRATUM_PASS = 1;
  */
 const DEFAULT_MAX_ITERATIONS = 8;
 
+/** Derive the blob-keyed tables — {@link PopulateOptions.blobs}'s default. */
+export const BLOBS_DERIVE = 'derive';
+
+/** Leave the blob-keyed tables empty — only sound when nothing reads them. */
+export const BLOBS_SKIP = 'skip';
+
+/** What {@link PopulateOptions.blobs} accepts. */
+export type BlobDerivation = typeof BLOBS_DERIVE | typeof BLOBS_SKIP;
+
 /**
  * What the blob-derivation stage did across a whole `populate()` — one run
  * between the strata, and optionally a second after the closure fixpoint.
@@ -156,6 +165,36 @@ export interface PopulateOptions {
   parameters?: Record<string, JsonValue> | undefined;
   /** Closure passes allowed before the run fails. Defaults to {@link DEFAULT_MAX_ITERATIONS}. */
   maxIterations?: number | undefined;
+  /**
+   * Whether to derive the blob-keyed tables. Defaults to {@link BLOBS_DERIVE}.
+   *
+   * ## Why a caller decision at all
+   *
+   * The stage reads and parses **every distinct keyed path**, not the resources
+   * among them, and on a caller that reads no blob table that is the whole cost
+   * of the lane. Measured on this repository, `vat resources scan` over 2,096
+   * tracked files of which 176 are admitted resources: 6,839 ms of 7,615 ms cold
+   * — 90% — deriving rows `buildResourcePopulation` never looks at. The walker
+   * arm of the same command is 1,363 ms. Skipping it puts the projection lane at
+   * ~1.5× the walk instead of 5.6×.
+   *
+   * ## Why `'skip'` is opt-in and cannot be inferred
+   *
+   * Whether the blob tables are read is only half knowable from here. The driver
+   * can see which registered contributors read them
+   * ({@link ContributorRegistry.blobReaders}); it cannot see what the CALLER
+   * does with the returned `Projection`. Inferring `'skip'` from "no registered
+   * blob reader" would silently empty four tables under a caller that queries
+   * them — token estimates and section trees are exactly the sort of thing a
+   * lens reads with no contributor involved.
+   *
+   * So the caller asks, and the driver refuses an unsound request: `'skip'` with
+   * a blob reader registered **throws**, naming the contributor. That is what
+   * stops the flag going stale — add a closure extent to a skipping caller later
+   * and the run fails loudly instead of converging on iteration one with every
+   * extent reduced to its own root.
+   */
+  blobs?: BlobDerivation | undefined;
   /**
    * Receives what the blob-derivation stage derived and what it skipped.
    *
@@ -351,14 +390,12 @@ export async function populate(options: PopulateOptions): Promise<Projection> {
   // below is awaited into its own binding for exactly the same reason: an
   // `await` inside the optional call's argument list would be short-circuited
   // away, so the promoted blobs would be derived only when someone was watching.
-  // Charged to the projection arm. This stage reads and parses every path the
-  // base contributors keyed — the projection's analogue of the incumbent's
-  // `resource-registry:add-resource`, which IS charged. Leaving it out biased the
-  // one comparison the seam exists to support, and only on one side; see
-  // `CRAWL_BLOB_POPULATE_ID`.
-  const blobStartedAt = crawlTimingStart();
-  const blobPopulation = await populateBlobs(builder);
-  recordCrawlPass(CRAWL_BLOB_POPULATE_ID, 'base', BASE_STRATUM_PASS, blobStartedAt);
+  //
+  // `null` rather than a skipped-flag beside a zeroed result, so that every
+  // consumer of the stage's outcome below is forced to handle the "did not run"
+  // case rather than reading zeros as measurements.
+  const deriveBlobs = blobDerivationFor(options);
+  const blobPopulation = deriveBlobs ? await runBlobStage(builder) : null;
   const promotionsBeforeClosure = builder.contentPromotions;
 
   await iterateClosure(
@@ -369,10 +406,71 @@ export async function populate(options: PopulateOptions): Promise<Projection> {
     options.onContributorTiming,
   );
 
-  const promoted = await afterClosurePromotion(builder, promotionsBeforeClosure);
-  options.onBlobPopulation?.({ ...blobPopulation, ...promoted });
+  if (blobPopulation !== null) {
+    const promoted = await afterClosurePromotion(builder, promotionsBeforeClosure);
+    // Not called at all under `'skip'`, rather than called with a zeroed result:
+    // "the stage did not run" and "it ran and derived nothing" are different
+    // facts, and a zeroed report cannot tell them apart — the same rule
+    // {@link BlobPopulationReport.afterClosurePromotion} states for its own
+    // absence.
+    options.onBlobPopulation?.({ ...blobPopulation, ...promoted });
+  }
 
   return builder.build();
+}
+
+/**
+ * Whether this run derives the blob-keyed tables, refusing an unsound request.
+ *
+ * The refusal is the load-bearing half. `'skip'` is a claim the caller makes
+ * about ITS OWN reads, and it cannot speak for the contributors it registered —
+ * `ClosureExtentContributor`'s edges *are* `blob_references` rows, so a closure
+ * extent under a skipped stage is its declared root and nothing else while
+ * `populate()` reports success. That is the precise failure `blob-population.ts`
+ * was written to prevent, so it is an error here rather than a degraded result,
+ * for the same reason `ContributorRegistry.forKind` throws instead of returning
+ * an empty array.
+ *
+ * The message names the contributors, because the request and the obstacle are
+ * usually in different files: a caller adds a closure extent months after
+ * something else asked to skip.
+ *
+ * @param options - The run's options and registry
+ * @returns True when the stage should run
+ * @throws When `'skip'` is asked for while a registered contributor reads blobs
+ */
+function blobDerivationFor(options: PopulateOptions): boolean {
+  if ((options.blobs ?? BLOBS_DERIVE) === BLOBS_DERIVE) return true;
+
+  const readers = options.registry.blobReaders();
+  if (readers.length > 0) {
+    throw new Error(
+      `populate() was asked to skip blob derivation, but ${readers.length} registered contributor(s) read the blob-keyed tables: ${readers.map((contributor) => contributor.id).join(', ')}.`
+      + ' Their extents would be silently reduced to their declared roots and the run would still report success,'
+      + ` so this is refused. Either drop the "${BLOBS_SKIP}" request or unregister those contributors.`,
+    );
+  }
+  return false;
+}
+
+/**
+ * Run the between-strata blob stage, charged to the projection arm.
+ *
+ * Its own function so the crawl-timing bracket cannot be separated from the call
+ * it brackets by a later edit — the stage reads and parses every path the base
+ * contributors keyed, which is the projection's analogue of the incumbent's
+ * `resource-registry:add-resource`, and that one IS charged. Leaving it out
+ * biased the one comparison the seam exists to support, and only on one side;
+ * see `CRAWL_BLOB_POPULATE_ID`.
+ *
+ * @param builder - The builder to derive into
+ * @returns What the stage derived and what it skipped
+ */
+async function runBlobStage(builder: ProjectionBuilder): Promise<BlobPopulationResult> {
+  const startedAt = crawlTimingStart();
+  const result = await populateBlobs(builder);
+  recordCrawlPass(CRAWL_BLOB_POPULATE_ID, 'base', BASE_STRATUM_PASS, startedAt);
+  return result;
 }
 
 /**

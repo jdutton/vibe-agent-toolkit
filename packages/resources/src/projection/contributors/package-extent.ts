@@ -122,6 +122,9 @@ export class PackageExtentContributor implements ExtentContributor {
   readonly kind = PACKAGE_KIND;
   readonly stratum: ContributorStratum = 'base';
 
+  /** Resolves declared package surfaces; reads no blob-keyed table. */
+  readonly readsBlobs = false;
+
   /**
    * Enumerate packages and resolve their declared surface.
    *

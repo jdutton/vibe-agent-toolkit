@@ -14,7 +14,7 @@ function emptyContribution(): ExtentContribution {
 }
 
 function stubContributor(id: string, kind: string): ExtentContributor {
-  return { id, kind, stratum: 'base', contribute: async () => emptyContribution() };
+  return { id, kind, stratum: 'base', readsBlobs: false, contribute: async () => emptyContribution() };
 }
 
 /**

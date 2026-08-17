@@ -174,6 +174,14 @@ export class PluginExtentContributor implements ExtentContributor {
   readonly stratum: ContributorStratum = 'closure';
 
   /**
+   * False — and it is the one closure contributor for which that is true, which
+   * is why the flag is declared rather than inferred from the stratum. This
+   * extent is defined by manifests and directory conventions the base already
+   * enumerated, not by following references, so it reads realizations only.
+   */
+  readonly readsBlobs = false;
+
+  /**
    * Contribute every plugin extent discoverable from the base.
    *
    * @param base - Everything merged so far; supplies the realizations that
@@ -202,6 +210,9 @@ export class MarketplaceExtentContributor implements ExtentContributor {
   readonly kind: string = MARKETPLACE_KIND;
 
   readonly stratum: ContributorStratum = 'closure';
+
+  /** False, for the reason {@link PluginExtentContributor.readsBlobs} states. */
+  readonly readsBlobs = false;
 
   /**
    * Contribute every marketplace extent discoverable from the base.

@@ -65,7 +65,7 @@ import { safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
 import { ContributorRegistry } from './contributor.js';
 import { FilesystemExtentContributor } from './contributors/filesystem-extent.js';
 import { crawlSourceFor, type CrawlSourceKind } from './crawl-source.js';
-import { populate } from './merge.js';
+import { BLOBS_SKIP, populate } from './merge.js';
 
 /**
  * A way to obtain the enumerated file population for a root.
@@ -100,10 +100,31 @@ export interface ResourcePopulation {
  *
  * Registers the `filesystem` extent and nothing else: resources membership is
  * the base extent itself, so unlike `buildInventoryPopulation` there is no
- * closure stratum to iterate and no per-subject contributor to register. The
- * blob stage still runs — that is `populate`'s own, and it is what makes the
- * bytes this walk already read available to the shared content cache instead of
- * being read a second time by every downstream parse.
+ * closure stratum to iterate and no per-subject contributor to register.
+ *
+ * ## The blob stage is SKIPPED here, and the arithmetic that used to defend it
+ *
+ * This function reads four columns off `resource_realizations` and discards the
+ * `Projection`. Not one blob row is consumed. The stage was nonetheless left
+ * running on the argument that parsing every blob warms the shared parse cache
+ * for the files the registry then admits — which is true, and is dwarfed by what
+ * it costs. Measured on VAT's own repository (2,096 tracked files, 176 admitted
+ * resources), cold, with the lab's `crawl` facet:
+ *
+ * | | walk lane | projection lane | `blob-population:derive` |
+ * |---|---|---|---|
+ * | cold | 1,363 ms | ~7,615 ms | 6,839 ms |
+ *
+ * The warming buys the 176 admitted parses, which the walker arm pays in full at
+ * `resource-registry:add-resource` for 1,299 ms. So the stage spent 6,839 ms to
+ * save 1,299 ms; the remainder is ~1,900 blobs parsed for nobody. Skipping it
+ * moves those 176 parses back to `add-resource` and puts this lane at roughly
+ * 1.5× the walk instead of 5.6×.
+ *
+ * ⚠️ The skip is safe **only** while nothing here reads a blob table. Registering
+ * a closure contributor in this function without dropping the `blobs` argument
+ * makes `populate()` throw, by design — see {@link PopulateOptions.blobs}. It
+ * does not silently return a closure extent reduced to its own root.
  *
  * @param options - The root and the run's git oracle
  * @param options.root - Absolute root to enumerate
@@ -140,6 +161,10 @@ export async function buildResourcePopulation(options: {
   const projection = await populate({
     root,
     registry,
+    // See the header: this lane consumes realizations only, and the stage is
+    // ~90% of its cold cost. Stated rather than inferred, and refused if a blob
+    // reader is ever registered above.
+    blobs: BLOBS_SKIP,
     ...(options.gitTracker !== undefined && { gitTracker: options.gitTracker }),
   });
 
