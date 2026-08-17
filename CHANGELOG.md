@@ -32,6 +32,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`VAT_RESOURCES_CRAWL=projection` is several times faster on a cold parse cache.** The lane no
   longer parses every file in the tree to fill tables it does not read. Results are unchanged.
 
+- **`blob_references` rows now carry `startOffset`/`endOffset`** — the half-open span of the
+  reference token, so a consumer can rewrite a link without re-parsing. `ResourceLink` gains the
+  same two fields, optional.
+
+- **`VAT_CRAWL_TIMING` no longer double-counts the projection lane.** Its `base` rows nest inside
+  `resource-registry:enumerate`, and both were added to the total; they are now reported as nested.
+  Totals from earlier dumps overstate the projection arm.
+
 - **(library) `ExtentContributor` now requires a `readsBlobs` field**, and `populate()` accepts
   `blobs: 'skip'` to leave the blob-keyed tables empty. A custom contributor must declare whether
   it reads them; `'skip'` throws if any registered contributor does.

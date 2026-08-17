@@ -275,6 +275,47 @@ describe('crawl timing seam', () => {
       expect(entryOf(snapshot, CLOSURE_DRIVER_ID, 1).stratum).toBe('closure');
     });
 
+    it('places a driver row as NESTED when a registry enumeration contains the whole population', async () => {
+      // The projection lane's shape, in miniature: `ResourceRegistry.crawl`
+      // brackets its enumeration and, when handed a population source, that
+      // enumeration IS a `populate()`. Before `withOuterBracket` the base rows
+      // came back at pass 1 — additive — and were summed alongside the
+      // `enumerate` row that already contained them, which on this repository
+      // read as `enumerate` 7,508.4 ms against `base` 7,501.4 ms and printed as
+      // an even split between two crawlers.
+      const registry = new ResourceRegistry();
+      await registry.crawl({
+        baseDir: suite.tempDir,
+        populationSource: async (root: string) => {
+          await populate({ root, registry: registryWithClosure(), parameters: {
+            [CLOSURE_DRIVER_ID]: closureDeclaration(),
+          } });
+          return [];
+        },
+      });
+
+      const snapshot = __readCrawlTimingSnapshot();
+      // Pass 0, not pass 1: the row says "I am inside something this dump
+      // already timed", which is what keeps it out of the total.
+      expect(entryOf(snapshot, FILESYSTEM_DRIVER_ID, CRAWL_PASS_INSIDE).stratum).toBe('base');
+      expect(
+        snapshot.entries.filter((entry) => entry.contributorId === FILESYSTEM_DRIVER_ID && entry.pass >= 1),
+      ).toStrictEqual([]);
+      // The containing row is still additive and still comparable to the
+      // walker's own `enumerate` — the fix moves the inner rows, never this one.
+      expect(entryOf(snapshot, CRAWL_REGISTRY_ENUMERATE_ID, CRAWL_PASS_INSIDE).calls).toBe(1);
+    });
+
+    it('charges a driver row as additive when nothing contains it', async () => {
+      // The negative control for the test above, and the reason it is not
+      // vacuous: the same contributor, the same seam, no containing bracket —
+      // pass 1, additive. Without this, a `withOuterBracket` that leaked and
+      // demoted every row in the process would still pass.
+      await runPopulation();
+
+      expect(entryOf(__readCrawlTimingSnapshot(), FILESYSTEM_DRIVER_ID, 1).stratum).toBe('base');
+    });
+
     it('charges the closure contributor from inside its own body, once per invocation', async () => {
       await runPopulation();
 

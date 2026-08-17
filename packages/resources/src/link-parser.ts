@@ -479,6 +479,20 @@ function toResourceLink(
     href,
     type: classifyLink(href),
     ...(node.position !== undefined && { line: node.position.start.line }),
+    // The whole node's span — `[text](href)`, not the href alone. mdast gives a
+    // position for the construct and none for the href within it, and the wider
+    // span is the one a rewriter wants anyway: shortening a path usually means
+    // reconsidering the text beside it, and a caller that only wants the href
+    // has the raw source and the span to find it in.
+    //
+    // Spread on `start.offset` rather than on `position`, because the two are
+    // independently optional in mdast's own types: a node can carry a position
+    // whose offsets are absent, and reading `line` while silently defaulting an
+    // offset to 0 would put a rewrite at the top of the document.
+    ...(node.position?.start.offset !== undefined && node.position.end.offset !== undefined && {
+      startOffset: node.position.start.offset,
+      endOffset: node.position.end.offset,
+    }),
     nodeType,
   };
 }

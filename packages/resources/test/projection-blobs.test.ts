@@ -64,6 +64,8 @@ describe('BlobReferenceRowSchema', () => {
     text: 'Other',
     line: 12,
     column: null,
+    startOffset: 240,
+    endOffset: 258,
     syntacticForm: 'markdown-link',
     hasExtension: true,
     leadingAt: false,
@@ -75,6 +77,19 @@ describe('BlobReferenceRowSchema', () => {
 
   it('accepts a markdown link with no column (AST-derived)', () => {
     expect(BlobReferenceRowSchema.safeParse(markdownLink).success).toBe(true);
+  });
+
+  it('requires the span, so no row can be admitted that a rewriter cannot locate', () => {
+    // `column` is null for every AST-derived link, so the span is the ONLY
+    // column that can place a reference precisely — a nullable one would leave
+    // exactly the population a rewriter cares about unlocatable, which is the
+    // state this column pair was added to end. A candidate with no span is
+    // skipped by `blobReferencesFor` and counted, never admitted with a hole.
+    for (const missing of ['startOffset', 'endOffset']) {
+      const row: Record<string, unknown> = { ...markdownLink };
+      delete row[missing];
+      expect(BlobReferenceRowSchema.safeParse(row).success).toBe(false);
+    }
   });
 
   it('accepts an @-prefixed token with a column (lexer-derived)', () => {

@@ -217,7 +217,21 @@ const CRAWL_DRIVERLESS_IDS: ReadonlyMap<string, DriverlessStratumIds> = new Map(
  *
  * - **`pass >= 1` is additive, whatever the stratum.** Only the merge driver
  *   numbers passes, it numbers them from 1, and it brackets a whole contributor
- *   invocation. Nothing in a dump can contain a driver-placed row.
+ *   invocation.
+ *
+ *   ⚠️ This used to add *"nothing in a dump can contain a driver-placed row"*,
+ *   and that was false: `ResourceRegistry.crawl` brackets its enumeration as
+ *   `resource-registry:enumerate`, and on the projection lane that enumeration
+ *   is a whole `populate()`. Measured on VAT's own repository, `enumerate`
+ *   7,508.4 ms against `base` rows totalling 7,501.4 ms — one body of work,
+ *   added twice, and printed as `base 49.6% / crawl 50.0%`, which reads as an
+ *   even split between two crawlers.
+ *
+ *   The premise now HOLDS rather than merely being asserted: the containing
+ *   call site wraps the contained work in `withOuterBracket`, so those rows
+ *   arrive at pass 0 and are caught by the next clause. Any future site that
+ *   nests a driver inside a bracket must do the same — the seam cannot infer
+ *   containment, and this rule is what a silent omission would corrupt.
  * - **`pass === 0` in a driver stratum is nested.** A pass-0 row is a bracket
  *   placed inside the measured work, and the only way one reaches `base` or
  *   `closure` is through the `AsyncLocalStorage` the driver wraps a contributor

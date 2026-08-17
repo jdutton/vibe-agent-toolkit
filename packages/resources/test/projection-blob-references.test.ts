@@ -14,10 +14,27 @@ function parseResult(overrides: Partial<ParseResult>): ParseResult {
   return { content: '', sizeBytes: 0, links: [], headings: [], estimatedTokenCount: 0, ...overrides };
 }
 
-/** An AST link as the parser really shapes it. `nodeType` decides syntacticForm. */
+/**
+ * An AST link as the parser really shapes it. `nodeType` decides syntacticForm.
+ *
+ * The span is derived from `line` rather than passed, because these fixtures
+ * assert ORDER and shape, not positions — but it has to be present and distinct
+ * per line, since a link with no span is skipped rather than admitted.
+ */
 function link(line: number, nodeType?: LinkNodeType): ResourceLink {
-  return { text: 'b', href: HREF, type: 'local_file', line, ...(nodeType !== undefined && { nodeType }) };
+  return {
+    text: 'b',
+    href: HREF,
+    type: 'local_file',
+    line,
+    startOffset: line * 100,
+    endOffset: line * 100 + HREF.length,
+    ...(nodeType !== undefined && { nodeType }),
+  };
 }
+
+/** The span columns every hand-built AST link fixture needs, at a fixed position. */
+const SPAN = { startOffset: 0, endOffset: HREF.length };
 
 /** A lexer token. Every column is explicit so a defaulted one cannot hide. */
 function token(line: number, column: number, overrides: Partial<LexicalReference> = {}): LexicalReference {
@@ -25,6 +42,8 @@ function token(line: number, column: number, overrides: Partial<LexicalReference
     raw: AT_TOKEN,
     line,
     column,
+    startOffset: line * 100 + column,
+    endOffset: line * 100 + column + AT_TOKEN.length,
     syntacticForm: 'at-prefixed',
     hasExtension: true,
     leadingAt: true,
@@ -109,9 +128,9 @@ describe('blobReferencesFor', () => {
     // markdown, so neither column is constant.
     const rows = blobReferencesFor(CONTENT_KEY, parseResult({
       links: [
-        { text: 'plain', href: HREF, type: 'local_file', line: 1, nodeType: 'link' },
-        { text: 'scoped', href: '@scope/pkg/docs/x.md', type: 'local_file', line: 2, nodeType: 'link' },
-        { text: 'var', href: '${CLAUDE_PLUGIN_ROOT}/scripts/run', type: 'local_file', line: 3, nodeType: 'link' },
+        { text: 'plain', href: HREF, type: 'local_file', line: 1, nodeType: 'link', ...SPAN },
+        { text: 'scoped', href: '@scope/pkg/docs/x.md', type: 'local_file', line: 2, nodeType: 'link', ...SPAN },
+        { text: 'var', href: '${CLAUDE_PLUGIN_ROOT}/scripts/run', type: 'local_file', line: 3, nodeType: 'link', ...SPAN },
       ],
     }));
 
@@ -132,7 +151,7 @@ describe('blobReferencesFor', () => {
     // content-addressed row carrying it would depend on which skill was
     // packaged first, so it must not appear on the row under any key.
     const rows = blobReferencesFor(CONTENT_KEY, parseResult({
-      links: [{ text: 'b', href: HREF, type: 'local_file', line: 1, nodeType: 'link', resolvedId: 'leaked' }],
+      links: [{ text: 'b', href: HREF, type: 'local_file', line: 1, nodeType: 'link', resolvedId: 'leaked', ...SPAN }],
     }));
 
     expect(Object.values(rows[0] ?? {})).not.toContain('leaked');

@@ -110,7 +110,30 @@ const DEV_FINGERPRINT_LENGTH = 6;
  * `<tmpdir>/.vat-cache/` tree, including the parse tenant under the current
  * namespace, and the next run rebuilds it.
  */
-export const PARSER_BEHAVIOR_REVISION = 1;
+export const PARSER_BEHAVIOR_REVISION = 2;
+// 2 — `ResourceLink` and `LexicalReference` gained `startOffset`/`endOffset`.
+//     A `ParseFacts` shape change, i.e. the third bullet above, and the first
+//     time this constant has actually been exercised. Worth recording HOW it
+//     surfaced, because it is the argument for the constant existing: the whole
+//     unit suite went green locally and then failed on the next run, because
+//     `isParseFacts` validates array-ness and never element shape, so entries
+//     written before the change were served back with the new fields absent,
+//     every AST reference was skipped for want of a span, and closure extents
+//     collapsed to their declared roots. A schema at that boundary would have
+//     made it a miss instead of a wrong answer; today the bump is what does.
+//
+//     This protects DEVELOPERS only, and that is now understood to be the ONLY
+//     job it has: an installed build's namespace is the VAT version, which
+//     already moves on every release, so a released build's built-in parsers are
+//     consistent by construction and need no second version number.
+//
+// 🎯 JEFF'S CALL, 2026-08-17: this constant is DEBT and should be removed.
+//     Persisting an opaque revision number into cache storage is a second
+//     versioning scheme carried alongside the one that already works. A
+//     developer who changes parser behaviour knows they did and can run
+//     `vat cache clear`; anyone in doubt can run it too. Do not add a third
+//     mechanism (dep-range fingerprints, emitted-module digests) to shore this
+//     one up — remove it and lean on the version plus an explicit clear.
 
 /** Resolved once — neither the version nor the install location changes mid-process. */
 let cached: string | undefined;

@@ -140,7 +140,14 @@ function compareCandidates(left: OrderedCandidate, right: OrderedCandidate): num
  */
 function astCandidates(contentKey: string, links: readonly ResourceLink[]): OrderedCandidate[] {
   return links.flatMap<OrderedCandidate>((link, sequence) => {
-    if (link.line === undefined) return [];
+    // Both halves of the position, and both required — the row's span columns
+    // are non-nullable, so a link whose node carried no offsets is skipped here
+    // exactly as a link with no line is, and counted by the same difference
+    // `emitBlobRows` takes. mdast fills the two together, so this admits and
+    // rejects the same population the line check alone did.
+    if (link.line === undefined || link.startOffset === undefined || link.endOffset === undefined) {
+      return [];
+    }
     return [{
       line: link.line,
       column: null,
@@ -151,6 +158,8 @@ function astCandidates(contentKey: string, links: readonly ResourceLink[]): Orde
         text: link.text,
         line: link.line,
         column: null,
+        startOffset: link.startOffset,
+        endOffset: link.endOffset,
         syntacticForm: syntacticFormFor(link.nodeType),
         ...lexicalFeatures(link.href),
         // A link inside a fence or a code span is not parsed as a link at all

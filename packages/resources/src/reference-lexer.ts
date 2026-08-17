@@ -68,6 +68,10 @@ export interface LexicalReference {
   line: number;
   /** 1-based column of the token's first character. */
   column: number;
+  /** 0-based character offset of the token's first character. */
+  startOffset: number;
+  /** 0-based character offset one past the token's last character. */
+  endOffset: number;
   syntacticForm: 'at-prefixed' | 'env-anchored' | 'bare-token';
   hasExtension: boolean;
   leadingAt: boolean;
@@ -309,6 +313,13 @@ function emitToken(
     raw,
     line,
     column: index + stripped + 1,
+    // The span `raw` occupies, which this function already computed for the
+    // code-context containment tests above. It is the token AFTER leading
+    // delimiters and trailing punctuation are stripped, so replacing
+    // `[startOffset, endOffset)` replaces exactly the reference and nothing
+    // around it.
+    startOffset: start,
+    endOffset: end,
     syntacticForm: classify(raw),
     hasExtension: EXTENSION_SUFFIX.test(raw),
     leadingAt: raw.startsWith('@'),

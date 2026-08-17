@@ -12,7 +12,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { createRegistryIssue, type IssueCode, runSingleUnitValidation, type ValidationConfig, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { CRAWL_REGISTRY_ADD_RESOURCE_ID, CRAWL_REGISTRY_ENUMERATE_ID, CRAWL_REGISTRY_RESOLVE_LINKS_ID, crawlDirectory, type CrawlOptions as UtilsCrawlOptions, crawlPathFilter, crawlTimingStart, FsLookupCache, type GitTracker, issueLocation, recordRegistryPass, resolveAssetReference, safePath, toForwardSlash, toNfc } from '@vibe-agent-toolkit/utils';
+import { CRAWL_REGISTRY_ADD_RESOURCE_ID, CRAWL_REGISTRY_ENUMERATE_ID, CRAWL_REGISTRY_RESOLVE_LINKS_ID, crawlDirectory, type CrawlOptions as UtilsCrawlOptions, crawlPathFilter, crawlTimingStart, FsLookupCache, type GitTracker, issueLocation, recordRegistryPass, resolveAssetReference, safePath, toForwardSlash, toNfc, withOuterBracket } from '@vibe-agent-toolkit/utils';
 
 import { calculateChecksumFromContent } from './checksum.js';
 import { getCollectionsForFile } from './collection-matcher.js';
@@ -856,9 +856,18 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // projection arm and leaves the walker arm untouched, which corrupts the
     // RATIO and not merely the total. Compare `enumerate` to `enumerate`.
     // See `crawl-timing.ts` on stratum inheritance.
+    //
+    // `withOuterBracket` is what makes that warning true of the DUMP and not
+    // only of this comment: the driver-placed rows inside now arrive at
+    // `CRAWL_PASS_INSIDE`, where the existing classification already calls them
+    // nested and the renderer already keeps them out of the total. It stayed a
+    // comment for as long as it did because the seam's placement rule assumed
+    // nothing could contain a driver-placed row, and this is the one call site
+    // where something does.
+    const { populationSource } = options;
     const enumerationStartedAt = crawlTimingStart();
-    const files = options.populationSource
-      ? await this.populationFrom(options.populationSource, baseDir, include, exclude)
+    const files = populationSource
+      ? await withOuterBracket(() => this.populationFrom(populationSource, baseDir, include, exclude))
       : await crawlDirectory(crawlOptions);
     recordRegistryPass(CRAWL_REGISTRY_ENUMERATE_ID, enumerationStartedAt);
 

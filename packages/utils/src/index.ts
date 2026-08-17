@@ -185,6 +185,7 @@ export {
   recordRegistryPass,
   recordSharedPass,
   withContributorStratum,
+  withOuterBracket,
   type CrawlDriverStratum,
   type CrawlStratum,
   type CrawlTimingDump,

@@ -653,10 +653,15 @@ function addEntry(
   pass: number,
   elapsedMs: number,
 ): void {
-  const key = keyOf(contributorId, stratum, pass);
+  // Demoted here rather than at each entry point, so both the bracketed
+  // (`recordCrawlPass`) and the pre-measured (`recordContributorInvocation`)
+  // routes inherit it — a contained row must not depend on which of the two the
+  // driver happened to use. See {@link withOuterBracket}.
+  const placed = insideOuterBracket.getStore() === true ? CRAWL_PASS_INSIDE : pass;
+  const key = keyOf(contributorId, stratum, placed);
   const bucket = entries.get(key);
   if (bucket === undefined) {
-    entries.set(key, { contributorId, stratum, pass, calls: 1, elapsedMs });
+    entries.set(key, { contributorId, stratum, pass: placed, calls: 1, elapsedMs });
     return;
   }
   bucket.calls += 1;
@@ -819,6 +824,55 @@ export function withContributorStratum<T>(
 ): Promise<T> {
   if (!timingEnabled) return run();
   return contributorStratum.run(stratum, run);
+}
+
+/**
+ * Whether the work now running is already inside a top-level span this seam
+ * timed.
+ *
+ * `AsyncLocalStorage`, for {@link contributorStratum}'s reason: the work in
+ * between is full of `await`s.
+ */
+const insideOuterBracket = new AsyncLocalStorage<true>();
+
+/**
+ * Run work that is CONTAINED by a bracket the caller has already opened, so its
+ * own rows are recorded as nested rather than additive.
+ *
+ * ## The double count this closes
+ *
+ * {@link crawlRowRole}'s rule reads *"`pass >= 1` is additive, whatever the
+ * stratum — only the merge driver numbers passes, and nothing in a dump can
+ * contain a driver-placed row."* The second half was false in exactly one
+ * place: `ResourceRegistry.crawl` brackets its enumeration as
+ * {@link CRAWL_REGISTRY_ENUMERATE_ID}, and on the projection lane that
+ * enumeration IS a whole `populate()` — so every `base` row sat inside a
+ * top-level `crawl` row and both were added.
+ *
+ * Measured on this repository before the fix: `enumerate` 7,508.4 ms against
+ * `base` rows totalling 7,501.4 ms — the same work, twice, printed as
+ * `base 49.6% / crawl 50.0%`, which reads as an even split between two
+ * crawlers. `resource-registry.ts` documented the hazard in a comment
+ * (*"summing the two per-arm totals inflates the projection arm... corrupts the
+ * RATIO and not merely the total"*) and the instrument printed the sum anyway.
+ *
+ * ## Why demoting the pass is the whole fix
+ *
+ * A pass-0 row in a driver stratum is **already** classified as nested by the
+ * existing rule, and the renderer already prints nested time on its own line
+ * and marks the rows `⊂`. So the containment only ever needed to reach the row,
+ * and no dump-format change, no new role and no new render path is involved.
+ *
+ * The cost is that a contained contributor's fixpoint pass is no longer
+ * readable — a pass-0 row aggregates across passes. That is the correct trade:
+ * a pass number is a detail, and a total that double-counts is a wrong answer.
+ *
+ * @param run - The contained work
+ * @returns Whatever the work returns
+ */
+export function withOuterBracket<T>(run: () => Promise<T>): Promise<T> {
+  if (!timingEnabled) return run();
+  return insideOuterBracket.run(true, run);
 }
 
 /**

@@ -114,6 +114,30 @@ export type VariableExpansionSyntax = z.infer<typeof VariableExpansionSyntaxSche
  * choose to exclude it; a scanner that never emits the row cannot be
  * second-guessed.
  *
+ * ## `startOffset`/`endOffset` — the span, not just the position
+ *
+ * `line` says where a reference is for a human; the half-open span says where it
+ * is for a **rewriter**. The two are not interchangeable: `column` is null for
+ * every AST-derived markdown link (`ResourceLink` carries none), so line alone
+ * cannot locate the second link on a line — and AST-derived links are exactly
+ * the population a link rewriter would edit.
+ *
+ * Both columns are **required**, which is what makes the table's rows uniformly
+ * actionable: a candidate whose AST node carries no position is skipped and
+ * counted (`referencesSkippedForMissingLine`), never admitted with a null span.
+ * Line and offsets come from one `position` object, so they are present or
+ * absent together and no new skip class exists.
+ *
+ * They are offsets into the **decoded** content — UTF-16 code units, the same
+ * units `ContentMeasures` and `estimateTokens` count — not bytes on disk. A
+ * rewriter operates on the decoded string, which is what it has.
+ *
+ * ⚠️ The span is what it would REPLACE, and nothing more. Whether a reference
+ * *should* be rewritten — whether `/docs/x.md` resolves as well as `../../docs/x.md`
+ * does — depends on the corpus root and on which surface reads the file, so it
+ * is a lens's judgement over this table and can never be a column in it. See
+ * this schema's "Only what a lexer can determine without leaving the file".
+ *
  * ## Ordinal ordering
  *
  * **One ordinal space, ordered by `(line, column)`** — the AST-derived and
@@ -141,6 +165,10 @@ export const BlobReferenceRowSchema = z.object({
   line: z.number().int().positive(),
   column: z.number().int().positive().nullable()
     .describe('1-based column. Null for a markdown form derived from an AST node that carries no column.'),
+  startOffset: z.number().int().nonnegative()
+    .describe('0-based character offset of the reference token in the decoded content'),
+  endOffset: z.number().int().nonnegative()
+    .describe('0-based character offset one past the reference token — the half-open span [startOffset, endOffset)'),
   syntacticForm: ReferenceSyntacticFormSchema,
   hasExtension: z.boolean().describe('The token ends in a dot followed by a short alphanumeric run'),
   leadingAt: z.boolean().describe('The token begins with "@"'),

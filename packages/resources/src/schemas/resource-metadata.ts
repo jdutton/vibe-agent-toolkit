@@ -91,6 +91,10 @@ export const ResourceLinkSchema = z.object({
   href: z.string().describe('Raw href attribute from markdown'),
   type: LinkTypeSchema.describe('Classified link type'),
   line: z.number().int().positive().optional().describe('Line number in source file'),
+  startOffset: z.number().int().nonnegative().optional()
+    .describe('0-based character offset of the link construct in the decoded source'),
+  endOffset: z.number().int().nonnegative().optional()
+    .describe('0-based character offset one past the link construct — the half-open span'),
   resolvedPath: z.string().optional().describe('Absolute file path (for local_file links)'),
   anchorTarget: z.string().optional().describe('Target heading slug (for anchor links)'),
   resolvedId: z.string().optional().describe('Resolved resource ID in the collection (for local_file links)'),
