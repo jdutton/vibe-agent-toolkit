@@ -74,18 +74,14 @@ const config: KnipConfig = {
       entry: [SRC_TS],
     },
 
-    // projection-parquet: SCAFFOLD ONLY. The DuckDB WASM engine and the two
-    // internal seams are declared as real dependencies — the pin is exact
-    // because the extension-cache probe path embeds a DuckDB core version and
-    // because the `latest` dist-tag points at a prerelease — but nothing in
-    // `src/` imports them yet; the writer lands next. Delete this entry the
-    // moment `src/` imports them, or the safety net stops watching.
+    // projection-parquet: the engine child is a SECOND entry point, and an
+    // invisible one — nothing imports `engine-child.ts`, the parent *spawns* it
+    // by path so that a DuckDB extension-cache miss (which parks a process in an
+    // uninterruptible Atomics.wait) can be killed from outside. It is also the
+    // only file that imports `@duckdb/duckdb-wasm`, so without it listed here
+    // knip reads the engine as dead code and the DuckDB dependency as unused.
     'packages/projection-parquet': {
-      ignoreDependencies: [
-        '@duckdb/duckdb-wasm',
-        '@vibe-agent-toolkit/resources',
-        '@vibe-agent-toolkit/utils',
-      ],
+      entry: ['src/index.ts', 'src/engine-child.ts'],
     },
 
     // rag: OpenAI is an opt-in optional peerDependency loaded via dynamic

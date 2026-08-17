@@ -1,5 +1,8 @@
 /**
- * Packaging pin for the published `@vibe-agent-toolkit/cli` tarball.
+ * Packaging pin for published tarballs whose contents are not obvious from the
+ * source tree: `@vibe-agent-toolkit/cli` (which must NOT ship two `dist/`
+ * directories) and `@vibe-agent-toolkit/projection-parquet` (which MUST ship a
+ * binary its build downloaded).
  *
  * `src/pipeline-oracles/` and `src/qa-snapshot/` are this repo's correctness-oracle
  * TEST instrumentation. They deliberately live under `src/` — that is what keeps them
@@ -46,6 +49,9 @@ import { beforeAll, describe, expect, it } from 'vitest';
 /** The `packages/cli` directory — the package whose tarball is under test. */
 const PACKAGE_DIR = safePath.resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
+/** `packages/projection-parquet` — the second tarball pinned here; see the header. */
+const PROJECTION_PARQUET_DIR = safePath.resolve(PACKAGE_DIR, '../projection-parquet');
+
 /** Compiled test instrumentation that must never reach an adopter's node_modules. */
 const EXCLUDED_PREFIXES = ['dist/pipeline-oracles/', 'dist/qa-snapshot/'] as const;
 
@@ -57,34 +63,44 @@ interface PackReport {
   files: { path: string; size: number }[];
 }
 
-let report: PackReport;
-/** Every packed entry path, normalised to forward slashes for comparison on Windows. */
-let packedPaths: string[];
+/** A captured report plus its entry paths, forward-slashed once at capture. */
+interface CapturedPack {
+  report: PackReport;
+  packedPaths: string[];
+}
+
+let cliPack: CapturedPack;
+let parquetPack: CapturedPack;
 
 /** Packed entry paths starting with `prefix`. */
-function entriesUnder(prefix: string): string[] {
+function entriesUnder(pack: CapturedPack, prefix: string): string[] {
   // `packedPaths` is already forward-slashed at capture, but the comparison site is
   // where the rule can see that — normalising again here is idempotent and keeps the
   // Windows guarantee local to the comparison rather than to a distant assignment.
-  return packedPaths.filter((packedPath) => toForwardSlash(packedPath).startsWith(prefix));
+  return pack.packedPaths.filter((packedPath) => toForwardSlash(packedPath).startsWith(prefix));
 }
 
-beforeAll(() => {
-  const distDir = safePath.join(PACKAGE_DIR, 'dist');
+/**
+ * Run `npm pack --dry-run --json` for one package.
+ *
+ * @param packageDir - Selects the package: cwd, NOT `--prefix`. See the header.
+ * @param buildHint - Printed when `dist/` is absent, because a tarball with no
+ *   build output satisfies every assertion here vacuously.
+ */
+function capturePack(packageDir: string, buildHint: string): CapturedPack {
+  const distDir = safePath.join(packageDir, 'dist');
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- path derived from this test file's own location, not from input
   if (!existsSync(distDir)) {
     throw new Error(
       `${distDir} does not exist, so "npm pack" would report a tarball with no build ` +
-        `output and every exclusion assertion in this file would pass vacuously. ` +
-        `Build first: bunx tsc --build packages/cli/tsconfig.json`,
+        `output and every assertion about it would pass vacuously. Build first: ${buildHint}`,
     );
   }
 
-  // cwd — NOT --prefix — is what selects the package npm packs. See the header.
   // `safeExecSync` resolves `npm` on PATH and handles the Windows `npm.cmd` shell
   // wrapper, so this is not a hand-rolled platform branch.
   const stdout = safeExecSync('npm', ['pack', '--dry-run', '--json'], {
-    cwd: PACKAGE_DIR,
+    cwd: packageDir,
     encoding: 'utf8',
     stdio: 'pipe',
     maxBuffer: 64 * 1024 * 1024,
@@ -95,29 +111,36 @@ beforeAll(() => {
   if (!first) {
     throw new Error(`npm pack --dry-run --json reported nothing (stdout: ${stdout.slice(0, 500)})`);
   }
-  report = first;
-  packedPaths = report.files.map((file) => toForwardSlash(file.path));
+  return { report: first, packedPaths: first.files.map((file) => toForwardSlash(file.path)) };
+}
+
+beforeAll(() => {
+  cliPack = capturePack(PACKAGE_DIR, 'bunx tsc --build packages/cli/tsconfig.json');
+  parquetPack = capturePack(
+    PROJECTION_PARQUET_DIR,
+    'cd packages/projection-parquet && bun run build (its build DOWNLOADS the extension bytes)',
+  );
 }, 180_000);
 
 describe('published @vibe-agent-toolkit/cli tarball', () => {
   it('packs the CLI package itself, not the surrounding workspace', () => {
-    expect(report.name).toBe('@vibe-agent-toolkit/cli');
-    expect(packedPaths.length).toBe(report.entryCount);
-    expect(report.unpackedSize).toBeGreaterThan(0);
+    expect(cliPack.report.name).toBe('@vibe-agent-toolkit/cli');
+    expect(cliPack.packedPaths.length).toBe(cliPack.report.entryCount);
+    expect(cliPack.report.unpackedSize).toBeGreaterThan(0);
   });
 
   // POSITIVE CONTROL for the exclusion assertions below: without it, packing the wrong
   // package, an empty file list, or a silently mis-parsed report would all satisfy
   // "no entry starts with dist/pipeline-oracles/".
   it('still ships the real CLI: bin, commands, docs and README', () => {
-    expect(packedPaths).toContain('dist/bin/vat.js');
-    expect(packedPaths).toContain('README.md');
-    expect(entriesUnder('dist/bin/').length).toBeGreaterThan(0);
-    expect(entriesUnder('dist/commands/').length).toBeGreaterThan(100);
-    expect(entriesUnder('docs/').length).toBeGreaterThan(0);
+    expect(cliPack.packedPaths).toContain('dist/bin/vat.js');
+    expect(cliPack.packedPaths).toContain('README.md');
+    expect(entriesUnder(cliPack, 'dist/bin/').length).toBeGreaterThan(0);
+    expect(entriesUnder(cliPack, 'dist/commands/').length).toBeGreaterThan(100);
+    expect(entriesUnder(cliPack, 'docs/').length).toBeGreaterThan(0);
 
     // Non-empty, not merely present — a zero-byte entry would otherwise read as shipped.
-    const binEntry = report.files.find((file) => toForwardSlash(file.path) === 'dist/bin/vat.js');
+    const binEntry = cliPack.report.files.find((file) => toForwardSlash(file.path) === 'dist/bin/vat.js');
     expect(binEntry?.size).toBeGreaterThan(0);
   });
 
@@ -125,7 +148,43 @@ describe('published @vibe-agent-toolkit/cli tarball', () => {
   // later per-case gating written here would throw on the one platform that needs it.
   for (const prefix of EXCLUDED_PREFIXES) {
     it(`ships no ${prefix} entries`, () => {
-      expect(entriesUnder(prefix)).toEqual([]);
+      expect(entriesUnder(cliPack, prefix)).toEqual([]);
     });
   }
+});
+
+/**
+ * The parquet package ships something no source tree shows: a ~3 MB DuckDB
+ * extension its build step downloaded into `dist/`. If npm drops it, nothing
+ * fails until an adopter's first `LOAD` — offline, that is an uninterruptible
+ * hang rather than an error, which is exactly why it is pinned here.
+ */
+describe('published @vibe-agent-toolkit/projection-parquet tarball', () => {
+  it('packs the parquet package itself, not the surrounding workspace', () => {
+    expect(parquetPack.report.name).toBe('@vibe-agent-toolkit/projection-parquet');
+    expect(parquetPack.packedPaths.length).toBe(parquetPack.report.entryCount);
+    expect(parquetPack.report.unpackedSize).toBeGreaterThan(0);
+  });
+
+  it('ships the engine, its child, and the extension manifest', () => {
+    expect(parquetPack.packedPaths).toContain('dist/index.js');
+    expect(parquetPack.packedPaths).toContain('dist/engine.js');
+    // The child is spawned by path, never imported — a packer that dropped it
+    // would leave an engine that cannot start.
+    expect(parquetPack.packedPaths).toContain('dist/engine-child.js');
+    expect(parquetPack.packedPaths).toContain('dist/duckdb-extension-manifest.json');
+    expect(parquetPack.packedPaths).toContain('README.md');
+  });
+
+  it('ships the captured extension binary, whole', () => {
+    const extensions = entriesUnder(parquetPack, 'dist/duckdb-extensions/');
+    expect(extensions.length).toBeGreaterThan(0);
+
+    // Every captured file must be a real binary, not a placeholder: the failure
+    // this guards against (a truncated or empty seed) is silent until load time.
+    for (const path of extensions) {
+      const entry = parquetPack.report.files.find((file) => toForwardSlash(file.path) === path);
+      expect(entry?.size).toBeGreaterThan(1_000_000);
+    }
+  });
 });
