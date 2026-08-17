@@ -64,6 +64,7 @@ import { safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
 
 import { ContributorRegistry } from './contributor.js';
 import { FilesystemExtentContributor } from './contributors/filesystem-extent.js';
+import { crawlSourceFor, type CrawlSourceKind } from './crawl-source.js';
 import { populate } from './merge.js';
 
 /**
@@ -77,6 +78,22 @@ import { populate } from './merge.js';
  * @returns Absolute paths of every file the population admits
  */
 export type ResourcePopulationSource = (root: string) => Promise<readonly string[]>;
+
+/**
+ * A population together with the enumerator that produced it.
+ *
+ * The kind travels WITH the paths rather than being obtainable by asking the
+ * environment again, for the reason the `lane` field on a scan exists: reading
+ * `VAT_EXTENT_SOURCE` back proves what was requested, and the request and the
+ * outcome come apart whenever {@link crawlSourceFor} declines a root that is
+ * not in a repository.
+ */
+export interface ResourcePopulation {
+  /** Absolute file paths, sorted by the projection's own row order. */
+  readonly paths: readonly string[];
+  /** Which enumerator ran — the instance's own kind, not the env's request. */
+  readonly extentSource: CrawlSourceKind;
+}
 
 /**
  * Enumerate a root's files from a base-only projection.
@@ -93,16 +110,30 @@ export type ResourcePopulationSource = (root: string) => Promise<readonly string
  * @param options.gitTracker - The ignore oracle, or omitted. Not cosmetic: with
  *   no tracker no row is `gitignored`, so the ignored half of a git tree would
  *   be admitted rather than declined
- * @returns Absolute file paths, sorted by the projection's own row order
+ * @returns The population and the enumerator that actually produced it
  */
 export async function buildResourcePopulation(options: {
   root: string;
   gitTracker?: GitTracker | undefined;
-}): Promise<readonly string[]> {
+}): Promise<ResourcePopulation> {
   const root = safePath.resolve(options.root);
 
+  // Selected here, one call earlier than `FilesystemExtentContributor` would
+  // select it, so the INSTANCE that enumerates is nameable afterwards. The
+  // choice is still made by `crawlSourceFor` — the seam is unchanged and this
+  // is not a second selection site — but the contributor discards the source as
+  // soon as it has called it, and a kind nobody kept is a kind nobody can
+  // report.
+  //
+  // Which matters because `crawlSourceFor` falls back SILENTLY: ask for git on
+  // a root that is not in a repository and the walk answers. An A/B that varies
+  // only `VAT_EXTENT_SOURCE` would then run one enumerator twice and produce two
+  // identical populations, which reads as "the two agree" and actually means
+  // "the switch did nothing". Those must not look alike.
+  const source = crawlSourceFor(root);
+
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor());
+  registry.register(new FilesystemExtentContributor(() => source));
 
   // No `parameters`: the filesystem extent is fully determined by the root, so
   // it runs under `null` and its provenance row says so honestly.
@@ -128,5 +159,5 @@ export async function buildResourcePopulation(options: {
     if (row.gitignored) continue;
     paths.push(safePath.resolve(root, row.path));
   }
-  return paths;
+  return { paths, extentSource: source.kind };
 }

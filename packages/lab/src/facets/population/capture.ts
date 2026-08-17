@@ -74,6 +74,7 @@ function failedRow(base: RowBase, runs: number, failure: string): PopulationComm
     stable: null,
     attribution: 'not-measured',
     lane: null,
+    extentSource: null,
     root: null,
     count: 0,
     files: [],
@@ -180,6 +181,7 @@ function rowFor(measurement: SpecMeasurement): PopulationCommandStats {
     // count of zero as a small population.
     attribution: reported.files.length === 0 ? 'nothing-enumerated' : 'measured',
     lane: reported.lane,
+    extentSource: reported.extentSource,
     root: reported.root,
     count: reported.files.length,
     files: reported.files,

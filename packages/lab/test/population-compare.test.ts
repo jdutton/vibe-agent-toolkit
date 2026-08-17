@@ -41,6 +41,8 @@ function row(
     stable: true,
     attribution: files.length === 0 ? 'nothing-enumerated' : 'measured',
     lane: 'walk',
+    // The walk sources no extent, so `null` is its real value, not a stand-in.
+    extentSource: null,
     root: '/fixture/project',
     count: files.length,
     files,

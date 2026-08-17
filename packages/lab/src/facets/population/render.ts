@@ -58,8 +58,18 @@ function pathLines(label: string, paths: readonly string[]): string[] {
  * @param row - The command's row
  * @returns A phrase for the row line
  */
+function armOf(row: PopulationCommandStats): string | null {
+  if (row.lane === null) return null;
+  // The extent source QUALIFIES the lane rather than replacing it, and it is
+  // appended rather than given its own column so a reader seeing `projection`
+  // on both sides gets the qualifier in the same glance — the moment they can
+  // still notice the two arms are not the two they asked for. `null` is the
+  // walk, which has no extent to source, so that row reads bare.
+  return row.extentSource === null ? row.lane : `${row.lane} via ${row.extentSource}`;
+}
+
 function laneOf(row: PopulationCommandStats): string {
-  return row.lane ?? 'lane UNREPORTED by this build';
+  return armOf(row) ?? 'lane UNREPORTED by this build';
 }
 
 /**
@@ -134,22 +144,27 @@ export function renderPopulationReport(report: ReportEnvelope<PopulationBody>): 
 }
 
 /**
- * The lane caveat for one command's pair of rows.
+ * The arm caveat for one command's pair of rows.
  *
- * Two sides that report the SAME lane are two runs of one enumerator, and their
- * agreement means nothing about the question a lane comparison was asked. That
- * is the failure this facet was built to make visible, so it is said on the row
+ * Two sides that report the SAME arm are two runs of one enumerator, and their
+ * agreement means nothing about the question the comparison was asked. That is
+ * the failure this facet was built to make visible, so it is said on the row
  * rather than left to a reader holding two reports open.
+ *
+ * ⚠️ Keyed on the lane AND its extent source, because the lane alone was not
+ * enough to identify an arm: the projection lane has two enumerators and
+ * reports the same word for both, so an A/B varying only `VAT_EXTENT_SOURCE`
+ * used to slip past this note reading as a genuine agreement.
  *
  * @param diff - The command's diff row
  * @returns A clause to append, or an empty string
  */
 function laneNote(diff: PopulationComparisonResult['commands'][number]): string {
-  const before = diff.before?.lane ?? null;
-  const after = diff.after?.lane ?? null;
+  const before = diff.before === null ? null : armOf(diff.before);
+  const after = diff.after === null ? null : armOf(diff.after);
   if (before === null || after === null) return '';
   if (before !== after) return ` [${before} → ${after}]`;
-  return ` [both sides ran the '${before}' lane — this compares one enumerator with itself]`;
+  return ` [both sides ran the '${before}' arm — this compares one enumerator with itself]`;
 }
 
 /**

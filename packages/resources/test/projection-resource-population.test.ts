@@ -4,8 +4,13 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { compareCodeUnits, GitTracker, runGitOrThrow, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import {
+  EXTENT_SOURCE_ENV,
+  EXTENT_SOURCE_GIT,
+  type CrawlSourceKind,
+} from '../src/projection/crawl-source.js';
 import { buildResourcePopulation } from '../src/projection/resource-population.js';
 
 import { setupSubdirTestSuite } from './test-helpers.js';
@@ -32,9 +37,15 @@ function git(args: readonly string[]): void {
   runGitOrThrow([...args], { cwd: suite.tempDir, stdio: 'pipe' });
 }
 
+/** The enumerator the run actually used, as the population reports it. */
+async function extentSourceOf(): Promise<CrawlSourceKind> {
+  const { extentSource } = await buildResourcePopulation({ root: suite.tempDir });
+  return extentSource;
+}
+
 /** The population as root-relative, forward-slashed paths — the readable unit. */
 async function populationOf(gitTracker?: GitTracker): Promise<string[]> {
-  const paths = await buildResourcePopulation({
+  const { paths } = await buildResourcePopulation({
     root: suite.tempDir,
     ...(gitTracker !== undefined && { gitTracker }),
   });
@@ -105,5 +116,42 @@ describe('buildResourcePopulation', () => {
     // `.gitignore` file is not an oracle. Declining here on the strength of the
     // file's mere presence would be a guess dressed up as a rule.
     expect(await populationOf()).toEqual([GITIGNORE, DOC_A, 'ignored/generated.md']);
+  });
+});
+
+describe('buildResourcePopulation reports which enumerator ran', () => {
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+  beforeEach(suite.beforeEach);
+  afterEach(() => {
+    delete process.env[EXTENT_SOURCE_ENV];
+  });
+
+  it('reports the walk when nothing selects git', async () => {
+    await write(DOC_A, '# A\n');
+
+    expect(await extentSourceOf()).toBe('filesystem');
+  });
+
+  it('reports git when git is selected inside a repository', async () => {
+    await write(DOC_A, '# A\n');
+    git(['init', '--quiet']);
+    process.env[EXTENT_SOURCE_ENV] = EXTENT_SOURCE_GIT;
+
+    expect(await extentSourceOf()).toBe('git');
+  });
+
+  it('reports the walk when git is selected OUTSIDE a repository', async () => {
+    await write(DOC_A, '# A\n');
+    // Deliberately no `git init`. `crawlSourceFor` declines git here and hands
+    // back the walk WITHOUT saying so anywhere else, which is the whole reason
+    // this field exists: an A/B varying only this variable would otherwise run
+    // one enumerator twice, agree with itself, and read as "safe to flip".
+    process.env[EXTENT_SOURCE_ENV] = EXTENT_SOURCE_GIT;
+
+    // The request was `git`; the answer is what RAN. If this ever reports
+    // `git`, the report has become a copy of the environment and every
+    // comparison built on it is void.
+    expect(await extentSourceOf()).toBe('filesystem');
   });
 });

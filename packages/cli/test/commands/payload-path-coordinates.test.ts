@@ -78,6 +78,8 @@ function scanPayload(verbose: boolean, lane: 'walk' | 'projection' = 'walk') {
     resources: [SCAN_RESOURCE],
     root: ROOT,
     lane,
+    // The walk sources no extent; these cases are about path coordinates.
+    extentSource: null,
     durationMs: 234,
     collections: undefined,
     verbose,

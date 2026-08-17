@@ -37,6 +37,9 @@ function row(over: Partial<PopulationCommandStats> = {}): PopulationCommandStats
     stable: true,
     attribution: 'measured',
     lane: 'walk',
+    // The walk sources no extent, so `null` is its real value rather than a
+    // stand-in — cases that need the projection's two enumerators override it.
+    extentSource: null,
     root: '/fixture/project',
     count: 2,
     files: [
@@ -165,8 +168,42 @@ describe('renderPopulationComparison', () => {
       }),
     );
 
-    expect(text).toContain("both sides ran the 'walk' lane");
+    expect(text).toContain("both sides ran the 'walk' arm");
     expect(text).toContain('compares one enumerator with itself');
+  });
+
+  it('distinguishes two arms that share a lane but differ in extent source', () => {
+    // The gap this field closed. `VAT_EXTENT_SOURCE` is the axis the git-walker
+    // flip turns on, and both of its arms report lane `projection` — so keyed
+    // on the lane alone this pair rendered as "one enumerator compared with
+    // itself" while it was in fact the exact comparison the caller wanted.
+    const text = renderPopulationComparison(
+      comparison({
+        name: COMMAND,
+        verdict: { kind: 'unchanged' },
+        before: row({ lane: 'projection', extentSource: 'filesystem' }),
+        after: row({ lane: 'projection', extentSource: 'git' }),
+      }),
+    );
+
+    expect(text).toContain('[projection via filesystem → projection via git]');
+    expect(text).not.toContain('compares one enumerator with itself');
+  });
+
+  it('WARNS when two projection arms share an extent source', () => {
+    // The other direction, and the one that would void a flip measurement: a
+    // switch that silently did nothing leaves both arms on `filesystem`, and
+    // their agreement then says nothing at all.
+    const text = renderPopulationComparison(
+      comparison({
+        name: COMMAND,
+        verdict: { kind: 'unchanged' },
+        before: row({ lane: 'projection', extentSource: 'filesystem' }),
+        after: row({ lane: 'projection', extentSource: 'filesystem' }),
+      }),
+    );
+
+    expect(text).toContain("both sides ran the 'projection via filesystem' arm");
   });
 
   it('renders a refusal to compare as its own outcome, not as no change', () => {

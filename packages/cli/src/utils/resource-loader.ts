@@ -9,6 +9,7 @@ import {
   DEFAULT_RESOURCE_INCLUDE,
   ResourceRegistry,
   type CrawlOptions,
+  type CrawlSourceKind,
   type ProjectConfig,
   type ResourcePopulationSource,
   type ResourceRegistryOptions,
@@ -43,6 +44,20 @@ export interface ResourceLoadResult {
    * one whole A/B on this codebase, where both arms silently ran the incumbent.
    */
   lane: ResourceCrawlLane;
+  /**
+   * Which enumerator the projection lane used, or `null` when the walk ran and
+   * there was no extent to source.
+   *
+   * Reported for the same reason {@link ResourceCrawlLane} is, one level down.
+   * `lane` distinguishes the walk from the projection; it does NOT distinguish
+   * the projection's two enumerators, and `VAT_EXTENT_SOURCE` is exactly the
+   * axis a flip decision turns on. Without this, both arms of that A/B report
+   * `projection` and two identical populations mean either "the enumerators
+   * agree" or "the switch was ignored" — indistinguishable, and the second is
+   * reachable, because `crawlSourceFor` falls back to the walk without saying
+   * so when the root is not in a repository.
+   */
+  extentSource: CrawlSourceKind | null;
 }
 
 /**
@@ -168,13 +183,23 @@ export function resourcesProjectionCrawlSelected(): boolean {
  * `buildResourcePopulation`.
  *
  * @param gitTracker - The run's ignore oracle
+ * @param observeExtentSource - Called with the enumerator that actually ran,
+ *   once per enumerated root. The value cannot be recovered afterwards by
+ *   re-reading the environment — see {@link ResourceLoadResult.extentSource}
  * @returns A population source, or `undefined` to use the walk
  */
-function populationSourceFor(gitTracker: GitTracker): ResourcePopulationSource | undefined {
+function populationSourceFor(
+  gitTracker: GitTracker,
+  observeExtentSource: (kind: CrawlSourceKind) => void
+): ResourcePopulationSource | undefined {
   if (!resourcesProjectionCrawlSelected()) {
     return undefined;
   }
-  return (root: string) => buildResourcePopulation({ root, gitTracker });
+  return async (root: string) => {
+    const population = await buildResourcePopulation({ root, gitTracker });
+    observeExtentSource(population.extentSource);
+    return population.paths;
+  };
 }
 
 /**
@@ -277,7 +302,10 @@ export async function loadResourcesWithConfig(
   // Which lane enumerates. Applied to the options both branches above produced,
   // so the path-argument case and the whole-root case cannot end up on different
   // crawlers — the bug shape this file already carries one fix for.
-  const populationSource = populationSourceFor(gitTracker);
+  let extentSource: CrawlSourceKind | null = null;
+  const populationSource = populationSourceFor(gitTracker, (kind) => {
+    extentSource = kind;
+  });
   const lane: ResourceCrawlLane = populationSource ? 'projection' : 'walk';
   if (populationSource) {
     logger.debug(`Enumerating via the projection lane (${RESOURCES_CRAWL_ENV}=${RESOURCES_CRAWL_PROJECTION})`);
@@ -299,5 +327,6 @@ export async function loadResourcesWithConfig(
     registry,
     gitTracker,
     lane,
+    extentSource,
   };
 }

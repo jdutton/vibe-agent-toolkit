@@ -40,6 +40,11 @@ const ScanDocumentSchema = z.object({
   // A free string, matching the body's own field: an unknown lane name must
   // survive verbatim rather than be folded into a value this build recognises.
   lane: z.string().min(1).optional(),
+  // Nullable as well as optional, and the difference is load-bearing: vat emits
+  // `null` for the walk (a lane with no extent to source) and omits the key
+  // entirely on a build too old to report it. Rejecting the null would refuse
+  // every walk-lane document.
+  extentSource: z.string().min(1).nullable().optional(),
   files: z
     .array(
       z.object({
@@ -56,6 +61,8 @@ export interface PopulationDocument {
   readonly root: string;
   /** Which enumerator the command said produced this set, or `null` if it did not say. */
   readonly lane: string | null;
+  /** Which source the reported lane enumerated from, or `null` if it did not say. */
+  readonly extentSource: string | null;
   /** Every enumerated file, sorted by path. */
   readonly files: readonly PopulationEntry[];
 }
@@ -115,6 +122,7 @@ export function readPopulationDocument(stdout: string): PopulationDocumentResult
     document: {
       root: document.root,
       lane: document.lane ?? null,
+      extentSource: document.extentSource ?? null,
       files: sortByPath(document.files),
     },
   };

@@ -2,6 +2,8 @@
  * Resources scan command - discover markdown resources
  */
 
+import type { CrawlSourceKind } from '@vibe-agent-toolkit/resources';
+
 import { formatDurationSecs } from '../../utils/duration.js';
 import { createLogger } from '../../utils/logger.js';
 import { writeJsonOutput, writeYamlOutput } from '../../utils/output.js';
@@ -50,6 +52,16 @@ export interface ScanPayloadInput {
    * was asked for, which is not the same claim.
    */
   lane: ResourceCrawlLane;
+  /**
+   * Which enumerator the projection lane used, or `null` for the walk.
+   *
+   * `lane` alone cannot qualify a projection population: the lane has two
+   * enumerators and reports the same word for both, so an A/B varying only
+   * `VAT_EXTENT_SOURCE` produces two documents that agree on every field. This
+   * is the field that makes the arms distinguishable, which is what makes the
+   * comparison mean anything.
+   */
+  extentSource: CrawlSourceKind | null;
   durationMs: number;
   collections: Record<string, { resourceCount: number }> | undefined;
   verbose: boolean;
@@ -76,7 +88,7 @@ function countHeadings(headings: readonly HeadingWithChildren[]): number {
  * the machine it ran on and cannot be diffed across two checkouts.
  */
 export function buildScanOutputData(input: ScanPayloadInput): Record<string, unknown> {
-  const { resources, root, lane, durationMs, collections, verbose } = input;
+  const { resources, root, lane, extentSource, durationMs, collections, verbose } = input;
 
   const files = resources.map((resource) => ({
     path: resource.filePath,
@@ -90,6 +102,10 @@ export function buildScanOutputData(input: ScanPayloadInput): Record<string, unk
     // Stated once, and the only absolute path in the document.
     root,
     lane,
+    // Always present, `null` included: a field that vanishes for the walk is
+    // indistinguishable from a build too old to report it, which is the same
+    // absence-vs-old-build ambiguity the two lane markers exist to avoid.
+    extentSource,
     filesScanned: resources.length,
     linksFound: resources.reduce((sum, r) => sum + r.links.length, 0),
     anchorsFound: files.reduce((sum, f) => sum + f.anchors, 0),
@@ -111,7 +127,7 @@ export async function scanCommand(
     const projectRoot = projectRootOrLoudCwd(pathArg ?? process.cwd(), logger);
 
     // Load resources with config support
-    const { registry, lane } = await loadResourcesWithConfig(pathArg, projectRoot, logger);
+    const { registry, lane, extentSource } = await loadResourcesWithConfig(pathArg, projectRoot, logger);
 
     // Get all resources (filtered by collection if specified)
     let allResources = registry.getAllResources();
@@ -144,6 +160,7 @@ export async function scanCommand(
       resources: allResources,
       root: projectRoot,
       lane,
+      extentSource,
       durationMs: Date.now() - startTime,
       collections: collectionsOutput,
       verbose: options.verbose ?? false,

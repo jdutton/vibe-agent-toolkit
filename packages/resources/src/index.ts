@@ -389,6 +389,7 @@ export {
 // file the author has written but not yet committed.
 export {
   buildResourcePopulation,
+  type ResourcePopulation,
   type ResourcePopulationSource,
 } from './projection/resource-population.js';
 

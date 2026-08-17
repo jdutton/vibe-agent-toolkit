@@ -115,6 +115,20 @@ export interface PopulationCommandStats {
    * not say*, which is the one case where an arm's identity is unproven.
    */
   readonly lane: string | null;
+  /**
+   * Which enumerator the reported lane used, verbatim from the run's own output
+   * — or `null` when the document stated none.
+   *
+   * {@link lane} is not fine-grained enough to identify an arm on its own: the
+   * projection lane has two enumerators and reports the same word for both, so
+   * an A/B varying only the extent source produces two rows identical in every
+   * other field. Two such rows agreeing then means either "the enumerators
+   * agree" or "the switch did nothing", and only this field separates them.
+   *
+   * A free string for the same reason {@link lane} is, and `null` likewise
+   * means *this build of vat does not say* rather than *the walk ran*.
+   */
+  readonly extentSource: string | null;
   /** The stated root every {@link PopulationEntry.path} is relative to. */
   readonly root: string | null;
   /** How many files were enumerated. Convenience; {@link files} is the evidence. */
@@ -189,6 +203,7 @@ export const PopulationBodySchema = z
           stable: z.boolean().nullable(),
           attribution: z.enum(['measured', 'nothing-enumerated', 'not-measured']),
           lane: z.string().nullable(),
+          extentSource: z.string().nullable(),
           root: z.string().nullable(),
           count: z.number().int().nonnegative(),
           files: z.array(z.object(populationEntryShape).strict()),

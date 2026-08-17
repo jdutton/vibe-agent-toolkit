@@ -44,9 +44,16 @@ decision a measurement rather than an argument.
 the crawl *spent* but what it *covered*. Its comparator is exact set difference — added, removed,
 and same-path-different-content kept apart — and every row is held against git's own listing, so a
 single report is falsifiable rather than only comparable with another run of itself. Each row also
-names the lane the run *said* it took, read back out of vat's own output: an A/B whose two arms
+names the arm the run *said* it took, read back out of vat's own output: an A/B whose two arms
 silently ran the same enumerator is a clean result that means nothing, and this is what makes that
 visible.
+
+⚠️ The arm is the **lane and its extent source together** (`projection via git`), never the lane
+alone. The projection lane has two enumerators and reports the same word for both, so an A/B
+varying only `VAT_EXTENT_SOURCE` — which is exactly the axis the git-walker flip turns on — puts
+`projection` on both sides. And `crawlSourceFor` declines git *silently* on a root outside a
+repository, so "the two enumerators agree" and "the switch did nothing" are the same picture until
+the extent source separates them. The walk sources no extent and so reports none.
 
 ```bash
 vat-lab population run ../some-project --instrument tree:. --id some-project --out ./walk

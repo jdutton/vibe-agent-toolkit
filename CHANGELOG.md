@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without a YAML parser.
 - **`vat resources scan` now reports a `lane` field** naming which enumerator produced the
   population — `walk` or `projection`.
+- **`vat resources scan` now reports an `extentSource` field** — `git`, `filesystem`, or `null` for
+  the walk. Comparing two projection populations requires it: `lane` reads `projection` for both
+  extent sources, so two runs can differ in `VAT_EXTENT_SOURCE` and look identical without it.
 - **`VAT_EXTENT_SOURCE=git` enumerates the projection's filesystem extent through git** instead of
   by walking the tree. Opt-in, and only meaningful alongside `VAT_RESOURCES_CRAWL=projection`; the
   walk stays the default.
