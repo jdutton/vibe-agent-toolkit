@@ -22,6 +22,7 @@ import {
   type SkillPackagingConfig,
 } from '@vibe-agent-toolkit/agent-skills';
 import type { Target } from '@vibe-agent-toolkit/claude-marketplace';
+import type { ResourcePopulationSource } from '@vibe-agent-toolkit/resources';
 import {
   allowUnusedIssues,
   calculateValidationStatus,
@@ -364,6 +365,15 @@ interface ValidateSkillInput {
   allowLedger: AllowUsageLedger;
   /** The RUN's declared eval suites — the whole project's, not this skill's. */
   projectSkills: readonly DeclaredEvalSuite[];
+  /**
+   * The RUN's enumeration lane, or `undefined` to keep the incumbent walk.
+   *
+   * This lane has no shared registry to inherit one from — unlike
+   * `vat skills validate`, this command passes none — so the validator builds a
+   * private registry per project root and this is the only thing that can put it
+   * anywhere but the walk.
+   */
+  populationSource: ResourcePopulationSource | undefined;
   verbose: boolean;
 }
 
@@ -385,7 +395,7 @@ interface ValidateSkillInput {
 async function validateSkillBeforeBuild(
   input: ValidateSkillInput,
 ): Promise<SkillValidationFailure | undefined> {
-  const { skillName, sourcePath, packagingConfig, logger, locationRoot, allowLedger, projectSkills, verbose } = input;
+  const { skillName, sourcePath, packagingConfig, logger, locationRoot, allowLedger, projectSkills, populationSource, verbose } = input;
   logger.debug(`   Validating skill: ${skillName}`);
 
   // The run's ledger, not this call's: an allow entry scoped to a SOURCE
@@ -399,7 +409,13 @@ async function validateSkillBeforeBuild(
     sourcePath,
     packagingConfig,
     'source',
-    { allowLedger, projectSkills },
+    {
+      allowLedger,
+      projectSkills,
+      // The RUN's source, so every skill in the loop shares one memo entry
+      // behind `crawlAndResolveRegistry` and the run pays one crawl, not N.
+      ...(populationSource !== undefined && { populationSource }),
+    },
   );
   applyConfigVerdicts(
     validationResult,
@@ -1276,60 +1292,75 @@ export async function runSkillBuild(input: SkillBuildRunInput): Promise<SkillBui
   // detail no reader should have to decode.
   const buildable: BuildSkillSpec[] = [];
   const validationFailures: SkillValidationFailure[] = [];
-  for (const spec of specs) {
-    const { skill, packagingConfig } = spec;
-    logger.info(`\nBuilding skill: ${skill.name}`);
-    logger.info(`   Source: ${skill.sourcePath}`);
-    logger.info(`   Output: ${finalOutputPath(cwd, skill.name)}`);
 
-    const failure = await validateSkillBeforeBuild({
-      skillName: skill.name,
-      sourcePath: skill.sourcePath,
-      packagingConfig,
-      logger,
-      locationRoot: cwd,
-      allowLedger,
-      projectSkills,
-      verbose,
-    });
-    if (failure) {
-      validationFailures.push(failure);
-      continue;
-    }
-    buildable.push(spec);
-  }
-
-  // Build the skills that qualified, with a shared registry.
+  // ONE bracket over the WHOLE run — both validation lanes and the packaging —
+  // rather than over `packageSkills` alone.
   //
-  // `projectSkills` is the run's declared eval suites — the whole project's, not
-  // `specs`'. `--skill x` narrows what gets BUILT; it never narrows what counts as
-  // test input, because an excluded skill's suite is still an answer key that must
-  // not ship inside x's bundle.
-  const buildSpecs: SkillBuildSpec[] = buildable.map(({ skill, packagingConfig }) => ({
-    skillPath: skill.sourcePath,
-    options: packagingConfigToPackageOptions(
-      packagingConfig,
-      {
-        skillPath: skill.sourcePath,
-        // Into staging, not dist/skills: see `beginStagedBuild`.
-        outputPath: safePath.join(staging.root, skillNameToFsPath(skill.name)),
-      },
-      projectSkills,
-    ),
-  }));
+  // Two properties depend on it, and neither is cosmetic. First, EVERY
+  // enumeration this run performs is then on the lane the process selected: the
+  // pre-build source check and each skill's post-build check build a private
+  // registry through `crawlAndResolveRegistry`, and outside the bracket they had
+  // no source to reach, so a projection-lane build still did one full walk.
+  // Second, the memo behind that crawl is keyed on the source's IDENTITY, so one
+  // closure for the run means one crawl for the run; a bracket per phase would
+  // hand out two closures and buy a second crawl to save the first.
+  //
+  // `populationSource` is `undefined` when the walk stays selected, and every
+  // consumer below treats that as "keep the incumbent" — the default path is
+  // structurally unchanged.
+  const outcomes = await withResourcePopulationSource({ root: cwd }, async (populationSource) => {
+    for (const spec of specs) {
+      const { skill, packagingConfig } = spec;
+      logger.info(`\nBuilding skill: ${skill.name}`);
+      logger.info(`   Source: ${skill.sourcePath}`);
+      logger.info(`   Output: ${finalOutputPath(cwd, skill.name)}`);
 
-  // On the projection lane when this process selected it. `packageSkills` builds
-  // THE registry for the run, so this is the only seam that can put `vat skills
-  // build` — and therefore `vat build`'s packaging phase — on it. The registry's
-  // markdown-only `include` is re-applied to whatever the source offers, so what
-  // gets packaged is unchanged; only how the file list was obtained differs.
-  const outcomes = await withResourcePopulationSource(
-    { root: cwd },
-    async (populationSource) =>
-      packageSkills(buildSpecs, cwd, allowLedger, {
-        ...(populationSource !== undefined && { populationSource }),
-      }),
-  );
+      const failure = await validateSkillBeforeBuild({
+        skillName: skill.name,
+        sourcePath: skill.sourcePath,
+        packagingConfig,
+        logger,
+        locationRoot: cwd,
+        allowLedger,
+        projectSkills,
+        populationSource,
+        verbose,
+      });
+      if (failure) {
+        validationFailures.push(failure);
+        continue;
+      }
+      buildable.push(spec);
+    }
+
+    // Build the skills that qualified, with a shared registry.
+    //
+    // `projectSkills` is the run's declared eval suites — the whole project's, not
+    // `specs`'. `--skill x` narrows what gets BUILT; it never narrows what counts as
+    // test input, because an excluded skill's suite is still an answer key that must
+    // not ship inside x's bundle.
+    const buildSpecs: SkillBuildSpec[] = buildable.map(({ skill, packagingConfig }) => ({
+      skillPath: skill.sourcePath,
+      options: packagingConfigToPackageOptions(
+        packagingConfig,
+        {
+          skillPath: skill.sourcePath,
+          // Into staging, not dist/skills: see `beginStagedBuild`.
+          outputPath: safePath.join(staging.root, skillNameToFsPath(skill.name)),
+        },
+        projectSkills,
+      ),
+    }));
+
+    // `packageSkills` builds THE registry for the run, so this is the only seam
+    // that can put `vat skills build` — and therefore `vat build`'s packaging
+    // phase — on the lane. The registry's markdown-only `include` is re-applied
+    // to whatever the source offers, so what gets packaged is unchanged; only how
+    // the file list was obtained differs.
+    return packageSkills(buildSpecs, cwd, allowLedger, {
+      ...(populationSource !== undefined && { populationSource }),
+    });
+  });
 
   const results: Array<{ name: string; result: PackageSkillResult }> = [];
   const skillsWithErrors: string[] = [];

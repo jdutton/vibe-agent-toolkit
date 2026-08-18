@@ -17,7 +17,7 @@ import { existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
-import { DeferredArtifacts, parseFileCached, ResourceRegistry, type SkillExecutableEntry } from '@vibe-agent-toolkit/resources';
+import { DeferredArtifacts, parseFileCached, ResourceRegistry, type ResourcePopulationSource, type SkillExecutableEntry } from '@vibe-agent-toolkit/resources';
 import {
   CODE_REGISTRY,
   runSingleUnitValidation,
@@ -258,6 +258,22 @@ function registryIssueAt(
 }
 
 /**
+ * Options for {@link crawlAndResolveRegistry}.
+ */
+export interface CrawlRegistryOptions {
+  /**
+   * Where the file list comes from — omit for the incumbent walk, supply one to
+   * source it from a projection instead.
+   *
+   * Also part of the memo key, by identity: see {@link sourcedRegistryCache}.
+   *
+   * Selecting the lane stays the CLI's job. This signature takes a source, never
+   * an environment, so a library caller that passes nothing keeps the walk.
+   */
+  populationSource?: ResourcePopulationSource | undefined;
+}
+
+/**
  * Build a fresh ResourceRegistry for a single skill's projectRoot and resolve
  * internal links. Extracted so the skill validator can fall back to a private
  * registry when the caller does not supply a shared one.
@@ -272,9 +288,14 @@ function registryIssueAt(
  * Exported so external callers (e.g. the inventory layer) can build a registry
  * once and pass it down rather than re-crawling per skill.
  */
-export async function crawlAndResolveRegistry(projectRoot: string): Promise<ResourceRegistry> {
+export async function crawlAndResolveRegistry(
+  projectRoot: string,
+  options: CrawlRegistryOptions = {},
+): Promise<ResourceRegistry> {
+  const { populationSource } = options;
+  const cache = registryCacheFor(populationSource);
   const key = toForwardSlash(safePath.resolve(projectRoot));
-  const cached = registryCache.get(key);
+  const cached = cache.get(key);
   if (cached !== undefined) {
     return cached;
   }
@@ -284,17 +305,26 @@ export async function crawlAndResolveRegistry(projectRoot: string): Promise<Reso
     const registry = await ResourceRegistry.fromCrawl({
       baseDir: projectRoot,
       include: ['**/*.md', '**/*.html', '**/*.htm'],
+      // Enumeration only. `ResourceRegistry.crawl` re-applies the include set
+      // above — and the crawl's default exclude — to whatever the source
+      // offers, through the same compiled matcher the walk itself uses, so a
+      // source that enumerates a whole tree still yields exactly this crawl's
+      // markdown and HTML. Handing this builder a projection is a cost change,
+      // not a scope change.
+      ...(populationSource !== undefined && { populationSource }),
     });
     registry.resolveLinks();
     return registry;
   })();
-  registryCache.set(key, pending);
+  cache.set(key, pending);
   return pending;
 }
 
 /**
- * Cache of (resolved project root → registry), so the crawl above is paid ONCE
- * per root per process rather than once per skill.
+ * Cache of (resolved project root → registry) for the INCUMBENT WALK, so the
+ * crawl above is paid ONCE per root per process rather than once per skill.
+ * Source-backed callers get {@link sourcedRegistryCache} instead, and the two
+ * never meet — see there for why that separation is the whole point.
  *
  * It lives beside the crawl because every caller wants the same thing and the
  * cost is a property of the crawl, not of any one lane. `vat audit` had already
@@ -309,7 +339,74 @@ export async function crawlAndResolveRegistry(projectRoot: string): Promise<Reso
  * CLI invocation. Note the crawl excludes build output (`BUILD_OUTPUT_GLOBS` via
  * the crawler's defaults), so packaging a skill mid-run cannot invalidate it.
  */
-const registryCache = new Map<string, Promise<ResourceRegistry>>();
+const walkRegistryCache = new Map<string, Promise<ResourceRegistry>>();
+
+/**
+ * The same memo for the SOURCE-BACKED lanes, keyed first by the population
+ * source's IDENTITY and only then by root.
+ *
+ * ## Why the source is part of the key
+ *
+ * This crawl is memoized for a process and SHARED across commands that do not
+ * know about each other: `vat skills build` reaches it per skill through
+ * {@link validateSkillForPackaging}, `vat audit` reaches it directly, and the
+ * pipeline oracles reach it as a lane. Keyed on the root ALONE, the FIRST
+ * caller's population binds for the whole process, and a later caller asking a
+ * different question transparently receives the earlier caller's answer — with
+ * nothing in any output saying so. The projection lane does not merely enumerate
+ * the same set faster: it sees uncommitted markdown, so it genuinely answers a
+ * different membership question and ADDS `LINK_BROKEN_FILE` findings. Serving
+ * one caller's answer to the other is a silent wrong answer in both directions.
+ *
+ * ## Why IDENTITY, and not a lane descriptor
+ *
+ * A `'walk' | 'projection'` tag would key two projection sources the same, and
+ * two projection sources can differ in their ignore oracle (a run with no
+ * `GitTracker` admits the ignored half of a tree), in which store answers them,
+ * and in whether that store is still OPEN — `withResourcePopulationSource`
+ * closes it when its bracket ends. A key that cannot see those differences is
+ * the same bug one level down. The closure itself can never be wrong about
+ * which of them it is.
+ *
+ * The win survives: one run holds ONE source closure for its whole bracket and
+ * hands the same one to every skill, so a `vat skills build` still pays a single
+ * crawl for the run rather than one per skill. Two independent callers cannot
+ * hold the same closure by accident, so they cannot collide.
+ *
+ * A `WeakMap` rather than a `Map` because the entry's useful life is the
+ * bracket's: once the source is unreachable its store is closed and its
+ * registries can never be served again, so holding them would be a leak with no
+ * upside. (`registryCacheFor` is what reads it; `resetPackagingRegistryCache`
+ * replaces it wholesale, since a `WeakMap` cannot be cleared in place.)
+ */
+let sourcedRegistryCache = new WeakMap<
+  ResourcePopulationSource,
+  Map<string, Promise<ResourceRegistry>>
+>();
+
+/**
+ * The (root → registry) memo this call belongs in: the walk's, or the one
+ * private to this population source.
+ *
+ * Separate maps rather than a composite key, because the two are keyed on
+ * different KINDS — a path string and an object identity — and a composite key
+ * would have to stringify the source, which is exactly the information loss
+ * {@link sourcedRegistryCache} exists to avoid.
+ */
+function registryCacheFor(
+  populationSource: ResourcePopulationSource | undefined,
+): Map<string, Promise<ResourceRegistry>> {
+  if (populationSource === undefined) {
+    return walkRegistryCache;
+  }
+  const existing = sourcedRegistryCache.get(populationSource);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const created = new Map<string, Promise<ResourceRegistry>>();
+  sourcedRegistryCache.set(populationSource, created);
+  return created;
+}
 
 /**
  * Drop every memoized registry.
@@ -321,7 +418,11 @@ const registryCache = new Map<string, Promise<ResourceRegistry>>();
  * as a fresh one. `resetAuditCaches` calls this alongside its own caches.
  */
 export function resetPackagingRegistryCache(): void {
-  registryCache.clear();
+  walkRegistryCache.clear();
+  // Both lanes, or the reset is a half-truth: a caller that reset the cache and
+  // then re-supplied the SAME source closure would be served the pre-reset parse
+  // of a tree it may have changed. A `WeakMap` has no `clear`, so it is replaced.
+  sourcedRegistryCache = new WeakMap();
 }
 
 /**
@@ -359,6 +460,24 @@ function registryCoversSkill(registry: ResourceRegistry, skillPath: string): boo
 export interface SkillValidationSharedContext {
   /** Pre-built registry that covers the skill's project root. */
   registry?: ResourceRegistry;
+  /**
+   * Where the file list for the validator's OWN registry comes from, when it has
+   * to build one (no `registry` above, or one that does not cover this skill).
+   *
+   * The lane seam for `vat skills build`, which — unlike `vat skills validate` —
+   * supplies no shared registry and so reaches {@link crawlAndResolveRegistry}
+   * per skill. Without this, a projection-lane build still enumerated that one
+   * registry with the walk, which was the last packaging enumeration on it.
+   *
+   * Ignored when `registry` above already covers the skill: a caller that built
+   * the registry itself has already chosen its lane, and re-deciding it here
+   * would let one call carry two answers.
+   *
+   * Supply the SAME closure for every skill in a run (that is what
+   * `withResourcePopulationSource` hands out), or the memo keys each call
+   * separately and the run pays a crawl per skill.
+   */
+  populationSource?: ResourcePopulationSource;
   /** Pre-populated tracker for the repo that contains the skill. */
   gitTracker?: GitTracker;
   /**
@@ -498,7 +617,9 @@ export async function validateSkillForPackaging(
   // fall back to a fresh crawl to avoid leaking resources across roots.
   const registry = shared?.registry !== undefined && registryCoversSkill(shared.registry, skillPath)
     ? shared.registry
-    : await crawlAndResolveRegistry(projectRoot);
+    : await crawlAndResolveRegistry(projectRoot, {
+      ...(shared?.populationSource !== undefined && { populationSource: shared.populationSource }),
+    });
 
   const skillResource = registry.getResource(safePath.resolve(skillPath));
   // Only the entries the PACKAGER will actually copy defer a link: an entry pointing

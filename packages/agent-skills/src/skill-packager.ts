@@ -247,6 +247,20 @@ export interface PackageSkillOptions {
   registry?: ResourceRegistry | undefined;
 
   /**
+   * Where the POST-BUILD validation's own registry gets its file list.
+   *
+   * `registry` above is the packaging registry and does not serve that lane:
+   * post-build validation calls `validateSkillForPackaging` with no shared
+   * registry, so it builds a private one through `crawlAndResolveRegistry`.
+   * Without this, a projection-lane run enumerated that registry with the walk —
+   * the last packaging enumeration still on it.
+   *
+   * Supplied by {@link packageSkills} from its own options, so a run holds ONE
+   * source closure and the memo behind that crawl is paid once for the run.
+   */
+  populationSource?: ResourcePopulationSource | undefined;
+
+  /**
    * Pre-populated {@link GitTracker} for the containing repo.
    *
    * When supplied, gitignore checks during the link-graph walk become O(1)
@@ -472,8 +486,10 @@ export type SkillPackageOutcome =
  *   (`vat build` also validates the SOURCE tree, whose matches count too).
  *   Containment does not change that: a skill that threw may still have matched
  *   allow entries before it threw, and those matches count for the run.
- * @param options - Registry-build options for the run's single shared registry,
- *   notably the optional `populationSource` that puts it on the projection lane
+ * @param runOptions - Registry-build options for the RUN. Named apart from the
+ *   per-skill `options` destructured in the loop below, which it is not: its
+ *   `populationSource` reaches both the run's shared registry AND every skill's
+ *   post-build validation, which builds a private registry of its own
  * @returns One outcome per input spec, in input order
  *
  * @example
@@ -491,24 +507,32 @@ export async function packageSkills(
   skills: SkillBuildSpec[],
   projectRoot: string,
   allowLedger: AllowUsageLedger,
-  options: ProjectRegistryOptions = {},
+  runOptions: ProjectRegistryOptions = {},
 ): Promise<SkillPackageOutcome[]> {
   // 1. Create one registry for the entire project. Through the shared builder:
   // this used to call `fromCrawl` directly and omit the config, so skills built
   // here belonged to no collection while a skill built through the single-skill
   // fallback did.
   //
-  // `options` is forwarded rather than absorbed: this is the ONLY registry the
+  // `runOptions` is forwarded rather than absorbed: this is the ONLY registry the
   // run builds, so a caller that wants the run on the projection lane has no
   // other seam to reach. Dropping it here would leave `vat skills build`
   // reaching a store it opened and never used.
-  const registry = await createProjectRegistry(projectRoot, options);
+  const registry = await createProjectRegistry(projectRoot, runOptions);
 
   // 2. Package each skill against the shared registry
   const outcomes: SkillPackageOutcome[] = [];
   for (const { skillPath, options } of skills) {
     try {
-      const result = await packageSkill(skillPath, { ...options, registry, allowLedger });
+      const result = await packageSkill(skillPath, {
+        ...options,
+        registry,
+        allowLedger,
+        // The run's lane, carried past the shared registry to the per-skill
+        // POST-BUILD validation, which builds a registry of its own and would
+        // otherwise be the one enumeration left on the walk.
+        ...(runOptions.populationSource !== undefined && { populationSource: runOptions.populationSource }),
+      });
       outcomes.push({ status: 'built', skillPath, result });
     } catch (error) {
       // Not swallowed: the error is carried on the outcome so the caller reports
@@ -936,6 +960,17 @@ function withRunAllowUnused(framework: FrameworkResult, ledger: AllowUsageLedger
  *
  * `allowLedger` is required, not optional: this lane is one half of a build, so
  * it must never conclude on its own that an allow entry matched nothing.
+ *
+ * ⛔ This lane deliberately stays on the walk, and must NOT be handed the run's
+ * `populationSource`. It validates the BUILT tree under `outputPath` — a
+ * different tree from the one the run enumerated, not tracked by git, and not
+ * covered by the packaging registry. A source produced by
+ * `withResourcePopulationSource` is bound to the PROJECT root and its git tree
+ * hash, so offering it a build-output directory asks it a question about a tree
+ * it does not describe; at worst the output's membership is written under the
+ * project's extent key and poisons the store for real runs. Forwarding it here
+ * was tried and reverted — the giveaway was a source offered
+ * `<root>/out/<skill>` instead of the root.
  */
 async function runPostBuildValidation(
   outputPath: string,

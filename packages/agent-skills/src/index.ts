@@ -115,6 +115,7 @@ export {
   crawlAndResolveRegistry,
   resetPackagingRegistryCache,
   validateSkillForPackaging,
+  type CrawlRegistryOptions,
   type ExcludedReferenceDetail,
   type PackagingValidationResult,
   type SkillPackagingConfig,
