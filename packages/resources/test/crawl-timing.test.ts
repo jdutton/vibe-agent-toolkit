@@ -274,11 +274,16 @@ describe('crawl timing seam', () => {
       const registry = new ResourceRegistry();
       await registry.crawl({
         baseDir: suite.tempDir,
-        populationSource: async (root: string) => {
-          await populate({ root, registry: registryWithClosure(), parameters: {
-            [CLOSURE_DRIVER_ID]: closureDeclaration(),
-          } });
-          return [];
+        populationSource: {
+          // Bound to the very root the crawl is about, or the registry's root
+          // guard would decline it and this dump would hold no `base` rows at all.
+          root: suite.tempDir,
+          enumerate: async (root: string) => {
+            await populate({ root, registry: registryWithClosure(), parameters: {
+              [CLOSURE_DRIVER_ID]: closureDeclaration(),
+            } });
+            return [];
+          },
         },
       });
 

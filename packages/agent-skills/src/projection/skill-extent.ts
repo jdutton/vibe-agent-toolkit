@@ -193,8 +193,13 @@ type DeclaredExcludeRule =
   NonNullable<SkillPackagingConfig['excludeReferencesFromBundle']>['rules'][number];
 
 /**
- * The four refusal labels this translation supplies, one per `classifyExclusion`
- * branch it can express.
+ * The refusal labels this translation supplies — **one per branch of the walker's
+ * exclusion cascade that a declaration can express**, and that property rather
+ * than a count is the definition: every `SKILL_REFUSED_*` constant below is a
+ * member, so adding a branch adds a member without falsifying this line. (The
+ * branches come from three classifiers, not one: `classifyExclusion`,
+ * `classifyPathKind` and `classifyGitignored` — each label's own doc line names
+ * which.)
  *
  * SCREAMING_SNAKE because they land in `realization_conditions.code`, whose two
  * existing members (`CLOSURE_REFERENCE_UNRESOLVED`, `CLOSURE_ROOT_ABSENT`) set

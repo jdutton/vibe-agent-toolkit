@@ -118,9 +118,9 @@ function chainRoot(): { root: string; skillPath: string } {
  * A population source that yields exactly the named files under `root`, and
  * counts how often it was asked.
  *
- * Deliberately a REAL {@link ResourcePopulationSource} rather than a mock: the
- * production type is a function, so the honest way to stand one up is to write
- * one. The count is what distinguishes "the memo was shared" from "the memo was
+ * Deliberately a REAL {@link ResourcePopulationSource} rather than a mock, so the
+ * root it declares is the root the registry's guard actually compares against.
+ * The count is what distinguishes "the memo was shared" from "the memo was
  * bypassed", and those are the two ways this seam can be wrong.
  */
 function countingSource(
@@ -129,9 +129,12 @@ function countingSource(
 ): { source: ResourcePopulationSource; calls: () => number } {
   let calls = 0;
   return {
-    source: async () => {
-      calls += 1;
-      return names.map((name) => safePath.join(root, name));
+    source: {
+      root,
+      enumerate: async () => {
+        calls += 1;
+        return names.map((name) => safePath.join(root, name));
+      },
     },
     calls: () => calls,
   };

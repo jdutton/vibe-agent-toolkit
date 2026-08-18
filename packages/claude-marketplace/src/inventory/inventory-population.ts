@@ -31,10 +31,13 @@
  * Of the three call sites that consume a link walk, this is the only one that
  * consumes **membership alone**. `skill-packager.ts` also reads
  * `excludedReferences` and `deferredAssets`; `packaging-validator.ts` additionally
- * reads `maxBundledDepth`. The closure selects the identical files and emits **no
- * reason**, so pointing either of those at it would silently delete adopter-visible
- * validation findings. Membership parity is not flip-readiness, and this module
- * claims only the former.
+ * reads `maxBundledDepth`. The closure DOES emit a reason —
+ * `realization_conditions` carries the code, severity and message alongside the
+ * six provenance columns (`sourcePath`, `sourceLine`, `sourceRef`, `targetExists`,
+ * `matchedPattern`, `matchedPayload`) — but nothing here reads them back into the
+ * shapes those two consumers want, so pointing either of them at this population
+ * today would still drop adopter-visible validation findings. Membership parity is
+ * not flip-readiness, and this module claims only the former.
  *
  * ## Both arms stay live, deliberately
  *

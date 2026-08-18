@@ -178,15 +178,23 @@ export function resourcesProjectionCrawlSelected(): boolean {
  * root, which is where this differs from `vat inventory`'s
  * `populationProviderFor`. That gate exists there because inventory membership
  * is resolved per skill against a root the extractor derives itself, so a
- * population rooted anywhere else answers a different question. Here the caller
- * has already resolved the root and the registry is crawled against exactly it,
- * so there is no second root to disagree with.
+ * population rooted anywhere else answers a different question.
+ *
+ * The root the caller resolved is carried ON the source rather than merely used
+ * to build it, which is what lets `ResourceRegistry.populationFrom` decline a
+ * crawl of some OTHER tree instead of answering it with this tree's ignore
+ * oracle. This function used to argue that no second root existed to disagree
+ * with; it does — `crawlOptionsForPath` re-bases `baseDir` onto a path argument
+ * that lies outside the project root, and the packaging validator's
+ * `findProjectRoot(...) ?? dirname(skillPath)` can land on a build output
+ * directory. Both are now declined rather than served.
  *
  * The tracker is threaded through because its absence is not cosmetic: with no
  * tracker every realization row reads `gitignored: false`, and the population
  * would admit the ignored half of a git tree rather than decline it. See
  * `buildResourcePopulation`.
  *
+ * @param root - The root this source may answer for, and no other
  * @param gitTracker - The run's ignore oracle
  * @param observeExtentSource - Called with the enumerator that actually ran,
  *   once per enumerated root. The value cannot be recovered afterwards by
@@ -200,6 +208,7 @@ export function resourcesProjectionCrawlSelected(): boolean {
  * @returns A population source, or `undefined` to use the walk
  */
 function populationSourceFor(
+  root: string,
   gitTracker: GitTracker,
   observeExtentSource: (kind: CrawlSourceKind) => void,
   cache: PopulationCache | undefined
@@ -207,14 +216,17 @@ function populationSourceFor(
   if (!resourcesProjectionCrawlSelected()) {
     return undefined;
   }
-  return async (root: string) => {
-    const population = await buildResourcePopulation({
-      root,
-      gitTracker,
-      ...(cache !== undefined && { cache }),
-    });
-    observeExtentSource(population.extentSource);
-    return population.paths;
+  return {
+    root: safePath.resolve(root),
+    enumerate: async (enumeratedRoot: string) => {
+      const population = await buildResourcePopulation({
+        root: enumeratedRoot,
+        gitTracker,
+        ...(cache !== undefined && { cache }),
+      });
+      observeExtentSource(population.extentSource);
+      return population.paths;
+    },
   };
 }
 
@@ -275,7 +287,7 @@ export async function withResourcePopulationSource<T>(
   }
 
   return withPopulationCache({ root: options.root }, async (cache) =>
-    work(populationSourceFor(gitTracker, options.observeExtentSource ?? (() => undefined), cache)),
+    work(populationSourceFor(options.root, gitTracker, options.observeExtentSource ?? (() => undefined), cache)),
   );
 }
 
@@ -384,7 +396,7 @@ export async function loadResourcesWithConfig(
   // outside this bracket can reach it: the population source is called from
   // inside `registry.crawl` and nowhere else.
   const lane = await withPopulationCache({ root: projectRoot }, async (cache) => {
-    const populationSource = populationSourceFor(gitTracker, (kind) => {
+    const populationSource = populationSourceFor(projectRoot, gitTracker, (kind) => {
       extentSource = kind;
     }, cache);
     const selected: ResourceCrawlLane = populationSource ? 'projection' : 'walk';

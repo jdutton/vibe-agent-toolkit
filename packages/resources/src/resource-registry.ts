@@ -40,7 +40,7 @@ import type { SHA256 } from './schemas/checksum.js';
 import type { ProjectConfig, ValidationMode } from './schemas/project-config.js';
 import type { HeadingNode, ResourceMetadata } from './schemas/resource-metadata.js';
 import type { ValidationResult } from './schemas/validation-result.js';
-import { locationRoot, matchesGlobPattern, resolveLocalHref } from './utils.js';
+import { locationRoot, matchesGlobPattern, resolveLocalHref, sameDirectory } from './utils.js';
 
 /**
  * Typed error thrown when two resources produce the same ID.
@@ -142,6 +142,48 @@ export class DuplicateResourceIdError extends Error {
 export const DEFAULT_RESOURCE_INCLUDE: readonly string[] = ['**/*.md', '**/*.html', '**/*.htm'];
 
 /**
+ * The (bound, offered) root pairs already announced, so a run that crawls the
+ * same mismatched pair per skill says it once instead of once per skill.
+ *
+ * Keyed on the PAIR and not on a single boolean: two different mismatches are two
+ * different facts, and a process-wide "already warned" flag would hide the second
+ * one behind the first.
+ */
+const announcedRootMismatches = new Set<string>();
+
+/**
+ * Say, on stderr, that a population source was declined for naming a different
+ * root — and what the two roots were.
+ *
+ * The repo's standard, stated in `cli/src/utils/projection-store.ts`'s header: an
+ * opted-in cache that quietly does nothing is worse than no cache. A silent
+ * decline turns a wired lane into an invisible walk, so a measurement arm that
+ * believes it is testing a projection tests an ordinary cold run — the failure
+ * that has already cost this project one whole A/B.
+ *
+ * A warning rather than a throw or a `ValidationIssue`: the decline is not the
+ * project's fault and produces the correct answer by a slower route, so it must
+ * neither abort a build nor be reported at an adopter as a finding about their
+ * corpus. Same posture, and the same channel, as `extract-plugin.ts` takes when
+ * its own cache lane fails.
+ *
+ * @param boundRoot - The root the source declared it can answer for
+ * @param offeredRoot - The resolved root this crawl asked it about
+ */
+function warnPopulationRootMismatch(boundRoot: string, offeredRoot: string): void {
+  const resolvedBound = safePath.resolve(boundRoot);
+  const pair = `${resolvedBound}\u0000${offeredRoot}`;
+  if (announcedRootMismatches.has(pair)) return;
+  announcedRootMismatches.add(pair);
+  console.warn(
+    '[vat] The resource population source is bound to '
+    + `${resolvedBound} but this crawl asked it about ${offeredRoot}. `
+    + 'Declining it and walking the tree instead, so this enumeration is on the '
+    + 'incumbent crawler rather than the projection lane.',
+  );
+}
+
+/**
  * Options for crawling directories to add resources.
  */
 export interface CrawlOptions {
@@ -168,6 +210,10 @@ export interface CrawlOptions {
    * would put the switch below the boundary where the project root is resolved,
    * and a registry built by a library caller would silently change population
    * with the environment.
+   *
+   * A source that is bound to a different root than `baseDir` is DECLINED here
+   * and this crawl walks instead — see {@link ResourceRegistry.populationFrom}
+   * for the guard and why it declines rather than throwing.
    */
   populationSource?: ResourcePopulationSource;
 }
@@ -864,11 +910,17 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // comment for as long as it did because the seam's placement rule assumed
     // nothing could contain a driver-placed row, and this is the one call site
     // where something does.
+    //
+    // `populationFrom` may DECLINE — see its root guard — and a decline falls
+    // back to the walk rather than to an empty list. `??` and not `||`: an empty
+    // ARRAY is a legitimate population (a tree with no admitted members) and must
+    // not re-trigger the walk, while `undefined` is the refusal.
     const { populationSource } = options;
     const enumerationStartedAt = crawlTimingStart();
-    const files = populationSource
+    const sourced = populationSource
       ? await withOuterBracket(() => this.populationFrom(populationSource, baseDir, include, exclude))
-      : await crawlDirectory(crawlOptions);
+      : undefined;
+    const files = sourced ?? await crawlDirectory(crawlOptions);
     recordRegistryPass(CRAWL_REGISTRY_ENUMERATE_ID, enumerationStartedAt);
 
     // Add all found files
@@ -876,31 +928,62 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
-   * Narrow a projection-supplied population to what this crawl's globs admit.
+   * Narrow a projection-supplied population to what this crawl's globs admit —
+   * **or decline the source outright, when it is not bound to this root.**
    *
    * The source enumerates a ROOT; `include`/`exclude` are declared relative to
-   * the crawl's `baseDir`, and the two are the same directory for every current
-   * caller. Re-basing here rather than assuming it keeps the coordinate system
-   * explicit: a path outside `baseDir` relativizes to a `../`-prefixed spelling,
-   * which no root-relative glob matches, so it is declined rather than silently
-   * admitted under a nonsense name.
+   * the crawl's `baseDir`. Re-basing here rather than assuming they coincide
+   * keeps the coordinate system explicit: a path outside `baseDir` relativizes to
+   * a `../`-prefixed spelling, which no root-relative glob matches, so it is
+   * declined rather than silently admitted under a nonsense name.
    *
-   * @param source - The enumeration lane
+   * ## The root guard, and why this is the only place it belongs
+   *
+   * This is the single place in the toolkit where a {@link ResourcePopulationSource}
+   * meets a root, so a check here makes every present and future forwarding site
+   * safe by construction. A source bound to tree A, asked about tree B, would
+   * build B's population with A's ignore oracle and — with a projection store
+   * open — file it under **A's extent key**; the next run would read that back
+   * and believe it. That is worse than a wrong answer in one run, and it is not
+   * expressible as an error unless the source carries its own root, which is why
+   * it does.
+   *
+   * ⛔ **A mismatch declines to the WALK, never to an empty population.** An
+   * empty file list means "no files", so a validation lane would report a
+   * confident green over a corpus it never looked at — silently deleting
+   * findings, which is the exact outcome the guard exists to prevent.
+   *
+   * ⛔ **And it declines rather than throwing.** A mismatch is not always a
+   * programming error: `packaging-validator.ts`'s
+   * `findProjectRoot(...) ?? dirname(skillPath)` legitimately resolves to a build
+   * output directory in an adopter layout with no config and no `.git` above it,
+   * and throwing there would break real builds over a lane the adopter opted into
+   * for speed.
+   *
+   * The decline is announced, once per (bound, offered) pair — see
+   * {@link warnPopulationRootMismatch}.
+   *
+   * @param source - The enumeration lane, carrying the one root it can answer for
    * @param baseDir - The basis the caller's globs are written against
    * @param include - Include globs
    * @param exclude - Exclude globs
-   * @returns Absolute paths of the admitted files
+   * @returns Absolute paths of the admitted files, or `undefined` when the source
+   *   is bound to a different root and the caller should walk instead
    */
   private async populationFrom(
     source: ResourcePopulationSource,
     baseDir: string,
     include: string[],
     exclude: string[],
-  ): Promise<string[]> {
+  ): Promise<string[] | undefined> {
     const base = safePath.resolve(baseDir);
+    if (!sameDirectory(source.root, base)) {
+      warnPopulationRootMismatch(source.root, base);
+      return undefined;
+    }
     const isMember = crawlPathFilter(include, exclude);
     const admitted: string[] = [];
-    for (const absolutePath of await source(base)) {
+    for (const absolutePath of await source.enumerate(base)) {
       if (isMember(safePath.relative(base, absolutePath))) {
         admitted.push(absolutePath);
       }

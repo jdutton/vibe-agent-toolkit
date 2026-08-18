@@ -247,20 +247,6 @@ export interface PackageSkillOptions {
   registry?: ResourceRegistry | undefined;
 
   /**
-   * Where the POST-BUILD validation's own registry gets its file list.
-   *
-   * `registry` above is the packaging registry and does not serve that lane:
-   * post-build validation calls `validateSkillForPackaging` with no shared
-   * registry, so it builds a private one through `crawlAndResolveRegistry`.
-   * Without this, a projection-lane run enumerated that registry with the walk —
-   * the last packaging enumeration still on it.
-   *
-   * Supplied by {@link packageSkills} from its own options, so a run holds ONE
-   * source closure and the memo behind that crawl is paid once for the run.
-   */
-  populationSource?: ResourcePopulationSource | undefined;
-
-  /**
    * Pre-populated {@link GitTracker} for the containing repo.
    *
    * When supplied, gitignore checks during the link-graph walk become O(1)
@@ -487,9 +473,10 @@ export type SkillPackageOutcome =
  *   Containment does not change that: a skill that threw may still have matched
  *   allow entries before it threw, and those matches count for the run.
  * @param runOptions - Registry-build options for the RUN. Named apart from the
- *   per-skill `options` destructured in the loop below, which it is not: its
- *   `populationSource` reaches both the run's shared registry AND every skill's
- *   post-build validation, which builds a private registry of its own
+ *   per-skill `options` destructured in the loop below, which it is not: it
+ *   configures the ONE shared registry {@link createProjectRegistry} builds here.
+ *   It does NOT reach the per-skill post-build validation, which builds a private
+ *   registry over the BUILT tree — see {@link runPostBuildValidation}
  * @returns One outcome per input spec, in input order
  *
  * @example
@@ -528,10 +515,6 @@ export async function packageSkills(
         ...options,
         registry,
         allowLedger,
-        // The run's lane, carried past the shared registry to the per-skill
-        // POST-BUILD validation, which builds a registry of its own and would
-        // otherwise be the one enumeration left on the walk.
-        ...(runOptions.populationSource !== undefined && { populationSource: runOptions.populationSource }),
       });
       outcomes.push({ status: 'built', skillPath, result });
     } catch (error) {
@@ -961,16 +944,21 @@ function withRunAllowUnused(framework: FrameworkResult, ledger: AllowUsageLedger
  * `allowLedger` is required, not optional: this lane is one half of a build, so
  * it must never conclude on its own that an allow entry matched nothing.
  *
- * ⛔ This lane deliberately stays on the walk, and must NOT be handed the run's
- * `populationSource`. It validates the BUILT tree under `outputPath` — a
- * different tree from the one the run enumerated, not tracked by git, and not
- * covered by the packaging registry. A source produced by
- * `withResourcePopulationSource` is bound to the PROJECT root and its git tree
- * hash, so offering it a build-output directory asks it a question about a tree
- * it does not describe; at worst the output's membership is written under the
- * project's extent key and poisons the store for real runs. Forwarding it here
- * was tried and reverted — the giveaway was a source offered
- * `<root>/out/<skill>` instead of the root.
+ * ⛔ This lane stays on the walk and is handed no `populationSource`. It validates
+ * the BUILT tree under `outputPath` — a different tree from the one the run
+ * enumerated, not tracked by git, and not covered by the packaging registry. A
+ * source produced by `withResourcePopulationSource` is bound to the PROJECT root
+ * and its git tree hash, so offering it a build-output directory asks it a
+ * question about a tree it does not describe. Forwarding it here was tried and
+ * reverted — the giveaway was a source offered `<root>/out/<skill>` instead of
+ * the root.
+ *
+ * The store-poisoning half of that hazard is now closed at the seam rather than by
+ * this comment: `ResourceRegistry.populationFrom` compares the source's own bound
+ * root against the crawl's base and declines a mismatch back onto the walk. So a
+ * future forward here would be a no-op that warns, not a corrupted extent key.
+ * What it would still NOT be is a speed-up, which is why nothing is forwarded:
+ * the built tree is a different tree, so there is no stored answer for it to hit.
  */
 async function runPostBuildValidation(
   outputPath: string,

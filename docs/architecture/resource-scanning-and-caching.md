@@ -211,6 +211,17 @@ matcher `crawlDirectory` uses on its `git ls-files` branch.** The source answers
 That split is what makes the two lanes reviewable: a difference in the output is a difference in the
 population, never a difference in what the project's globs were taken to mean.
 
+**A source carries the ONE root it may answer for, and `populationFrom` checks it.** A source built
+against tree A but asked about tree B would build B's population with A's ignore oracle and file it
+under **A's extent key**, which the next run reads back and believes — worse than a wrong answer in
+one run. So `ResourcePopulationSource` is `{ root, enumerate }` rather than a bare function, and the
+registry compares the two roots *resolved* (trailing separator, `a/../a`, symlinked ancestor, and
+case where the filesystem folds it, all compare equal — `sameDirectory` in `resources/src/utils.ts`).
+A mismatch **declines back to the walk** and warns on stderr naming both roots. It does not throw:
+`packaging-validator.ts`'s `findProjectRoot(...) ?? dirname(skillPath)` legitimately lands on a build
+output directory in an adopter layout with no config and no `.git` above it. And it never declines to
+an *empty* population, which would report a confident green over a corpus nothing looked at.
+
 **What it changes.** The population becomes `tracked ∪ (untracked ∧ ¬ignored)` — the `includeUntracked:
 true` semantics skill discovery already uses — rather than `git ls-files`' tracked-only default. So a
 markdown file an author has written but not committed is finally visible to validation. Gitignored

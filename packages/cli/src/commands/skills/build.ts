@@ -1296,14 +1296,17 @@ export async function runSkillBuild(input: SkillBuildRunInput): Promise<SkillBui
   // ONE bracket over the WHOLE run — both validation lanes and the packaging —
   // rather than over `packageSkills` alone.
   //
-  // Two properties depend on it, and neither is cosmetic. First, EVERY
-  // enumeration this run performs is then on the lane the process selected: the
-  // pre-build source check and each skill's post-build check build a private
-  // registry through `crawlAndResolveRegistry`, and outside the bracket they had
-  // no source to reach, so a projection-lane build still did one full walk.
-  // Second, the memo behind that crawl is keyed on the source's IDENTITY, so one
-  // closure for the run means one crawl for the run; a bracket per phase would
-  // hand out two closures and buy a second crawl to save the first.
+  // Two properties depend on it, and neither is cosmetic. First, every
+  // enumeration of the SOURCE tree this run performs is then on the lane the
+  // process selected: the pre-build check builds a private registry through
+  // `crawlAndResolveRegistry`, and outside the bracket it had no source to reach,
+  // so a projection-lane build still did one full walk. (Each skill's POST-build
+  // check is deliberately NOT on the lane — `runPostBuildValidation` passes no
+  // source, because it validates the built output rather than the source tree.
+  // See its docstring in `skill-packager.ts`.) Second, the memo behind that crawl
+  // is keyed on the source's IDENTITY, so one closure for the run means one crawl
+  // for the run; a bracket per phase would hand out two closures and buy a second
+  // crawl to save the first.
   //
   // `populationSource` is `undefined` when the walk stays selected, and every
   // consumer below treats that as "keep the incumbent" — the default path is

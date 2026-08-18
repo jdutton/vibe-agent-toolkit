@@ -58,7 +58,11 @@ describe('withResourcePopulationSource', () => {
 
     const paths = await withResourcePopulationSource({ root }, async (source) => {
       expect(source).toBeDefined();
-      return [...(await source?.(root) ?? [])];
+      // The root it declares is the root it may be asked about — the registry's
+      // guard compares exactly this, so a seam that handed back the wrong one
+      // would silently put every crawl back on the walk.
+      expect(source?.root).toBe(safePath.resolve(root));
+      return [...(await source?.enumerate(root) ?? [])];
     });
 
     // The source enumerates; it does NOT narrow. Narrowing to the caller's own
@@ -76,7 +80,7 @@ describe('withResourcePopulationSource', () => {
     const seen: string[] = [];
     await withResourcePopulationSource(
       { root, observeExtentSource: (kind) => seen.push(kind) },
-      async (source) => source?.(root),
+      async (source) => source?.enumerate(root),
     );
 
     expect(seen).toEqual(['filesystem']);

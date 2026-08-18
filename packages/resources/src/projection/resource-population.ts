@@ -68,16 +68,53 @@ import { crawlSourceFor, type CrawlSourceKind } from './crawl-source.js';
 import { BLOBS_SKIP, populate, type PopulationCache } from './merge.js';
 
 /**
- * A way to obtain the enumerated file population for a root.
+ * A way to obtain the enumerated file population for a root, together with the
+ * ONE root it is entitled to answer for.
  *
- * A function rather than a value so the CLI can decide the lane at its boundary
- * (where root discovery belongs) while the crawl stays lazy — a registry that is
- * never crawled must not pay for a projection.
+ * Lazy rather than a materialized list, so the CLI can decide the lane at its
+ * boundary (where root discovery belongs) while the crawl stays lazy — a
+ * registry that is never crawled must not pay for a projection.
  *
- * @param root - Absolute root to enumerate
- * @returns Absolute paths of every file the population admits
+ * ## Why the root travels WITH the enumerator
+ *
+ * A bare `(root: string) => Promise<readonly string[]>` cannot express the one
+ * invariant this seam has: a source built against tree A, handed tree B, would
+ * build B's population using A's ignore oracle and — with a store open — write
+ * it under **A's extent key**. Poisoning the key is worse than a wrong answer in
+ * one run, because the next run reads it back and believes it.
+ *
+ * With the root here, "the wrong tree" is a comparison rather than a convention,
+ * and `ResourceRegistry.populationFrom` makes it at the single place a source
+ * ever meets a root — so every present and future forwarding site is safe by
+ * construction instead of by a comment. The rejected alternative was a parallel
+ * `populationSourceRoot` argument beside the function, which is a second thing to
+ * keep in step and therefore the same bug one level out.
+ *
+ * ⚠️ **Compare RESOLVED, never as raw strings.** A trailing separator, a
+ * `a/../a` spelling, a symlinked temp root and (where the filesystem folds case)
+ * a differently-cased spelling all name the same directory. An over-strict
+ * comparison declines every one of them, and its symptom is not an error but a
+ * lane that quietly stopped helping. `sameDirectory` in `../utils.ts` is that
+ * comparison.
  */
-export type ResourcePopulationSource = (root: string) => Promise<readonly string[]>;
+export interface ResourcePopulationSource {
+  /**
+   * The absolute root this source can answer for, and no other.
+   *
+   * Need not be normalised — the guard resolves both sides — but must name the
+   * tree the enumeration was actually built against, not the tree a caller
+   * happens to be crawling.
+   */
+  readonly root: string;
+  /**
+   * Enumerate the population.
+   *
+   * @param root - Absolute root to enumerate, which the guard has already
+   *   established names the same directory as {@link ResourcePopulationSource.root}
+   * @returns Absolute paths of every file the population admits
+   */
+  enumerate(root: string): Promise<readonly string[]>;
+}
 
 /**
  * A population together with the enumerator that produced it.
