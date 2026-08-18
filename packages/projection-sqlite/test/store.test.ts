@@ -23,7 +23,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { openSqliteProjectionStore } from '../src/store.js';
 
-import { FIRST_BLOB, SECOND_BLOB, realizationRow, sampleBlobRows, sampleExtentRows } from './fixtures.js';
+import {
+  FIRST_BLOB,
+  SECOND_BLOB,
+  declinedBlobRows,
+  realizationRow,
+  sampleBlobRows,
+  sampleExtentRows,
+} from './fixtures.js';
 
 const KEY: ExtentKey = { rootId: 'root-1', treeHash: 'tree-aaa' };
 
@@ -252,10 +259,41 @@ describe('blob facts', () => {
     })).resolves.toBeUndefined();
   });
 
-  it('refuses facts for a blob the bundle does not carry', async () => {
-    const orphaned = sampleBlobRows(FIRST_BLOB);
-    await expect(store.writeBlobFacts({ ...orphaned, blobs: [] }))
-      .rejects.toThrow(/blobs table does not name/u);
+  it('holds a blob the derivation stage declined to parse, which has no blobs row', async () => {
+    // The shape every binary file in a corpus produces. This store used to
+    // REFUSE it outright — see the header of `writeBlobFacts` — which made
+    // `vat inventory` cache nothing at all on any root shipping one `.so`,
+    // `.pyc` or image, while exiting 0.
+    await store.writeBlobFacts(declinedBlobRows(FIRST_BLOB));
+
+    const read = await store.readBlobFacts([FIRST_BLOB]);
+    expect(read.blobs).toEqual([]);
+    expect(read.blobConditions).toHaveLength(1);
+    expect(read.blobConditions[0]?.code).toBe('BLOB_NOT_TEXT');
+  });
+
+  it('does not accumulate a declined blob\'s condition across rewrites', async () => {
+    // The hazard the refusal was guarding, kept as an assertion instead: a
+    // key absent from the bundle's `blobs` table used to fall outside the
+    // range the write clears, so its rows would pile up one copy per write —
+    // silently, since `blob_conditions` keys on a nullable `line` and so
+    // cannot be deduplicated by a conflict clause.
+    await store.writeBlobFacts(declinedBlobRows(FIRST_BLOB));
+    await store.writeBlobFacts(declinedBlobRows(FIRST_BLOB));
+    await store.writeBlobFacts(declinedBlobRows(FIRST_BLOB));
+
+    const read = await store.readBlobFacts([FIRST_BLOB]);
+    expect(read.blobConditions).toHaveLength(1);
+  });
+
+  it('leaves a declined blob alone while a parsed one is rewritten', async () => {
+    await store.writeBlobFacts(declinedBlobRows(FIRST_BLOB));
+    await store.writeBlobFacts(sampleBlobRows(SECOND_BLOB));
+    await store.writeBlobFacts(sampleBlobRows(SECOND_BLOB));
+
+    const read = await store.readBlobFacts([FIRST_BLOB, SECOND_BLOB]);
+    expect(read.blobs.map((row) => row.contentKey)).toEqual([SECOND_BLOB]);
+    expect(read.blobConditions.filter((row) => row.blob === FIRST_BLOB)).toHaveLength(1);
   });
 });
 

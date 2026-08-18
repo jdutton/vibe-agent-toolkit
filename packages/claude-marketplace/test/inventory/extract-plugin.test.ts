@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
 import { extractClaudePluginInventory } from '../../src/inventory/extract-plugin.js';
 import { NO_GIT_TRACKER } from '../../src/inventory/extract-skill.js';
@@ -416,5 +416,101 @@ describe('extractClaudePluginInventory', () => {
 			expect(inv.discovered.agents).toEqual([]);
 			expect(inv.unexpected.skillManifests).toEqual([]);
 		});
+	});
+});
+
+/**
+ * The projection-backed membership lane failing, and what the plugin extractor
+ * is allowed to do about it.
+ *
+ * `discoverSkills` used to hold a **bare** `catch { population = undefined; }`
+ * here, and that one line converted a hard failure into an invisible one: the
+ * store write throwing (which it did on every root shipping a binary file) left
+ * `vat inventory` exiting 0 with an empty cache, having paid the projection AND
+ * the walk. `cli/src/utils/projection-store.ts` states the standard this
+ * violates in its own header — *an opted-in cache that quietly does nothing is
+ * worse than no cache* — so a failure on this lane must be observable.
+ *
+ * It must also stay a *degradation*: `extractClaudePluginInventory` promises
+ * "never throws — all failures surface via parseErrors[]", and `audit.ts` relies
+ * on that promise (its `pluginInventoryAt` docstring records the incident where
+ * one unreadable file aborted a whole audit with exit code 2). So both halves
+ * are asserted: it says so, and it carries on.
+ */
+/**
+ * A plugin with one skill, so the extractor actually reaches its population
+ * source — it asks for one only when discovery found a `SKILL.md`.
+ *
+ * @param root - The plugin root to create
+ * @returns That same root
+ */
+function pluginWithOneSkill(root: string): string {
+	makePluginWithManifest(root, JSON.stringify({ name: 'p' }));
+	const skillDir = safePath.join(root, 'skills', 'alpha');
+	mkdirSyncReal(skillDir, { recursive: true });
+	// eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
+	writeFileSync(
+		safePath.join(skillDir, 'SKILL.md'),
+		'---\nname: alpha\ndescription: A skill the population source is asked about.\n---\n\n# Alpha\n',
+	);
+	return root;
+}
+
+describe('a shared population source that throws', () => {
+	let tempDir: string;
+	let warnings: string[];
+	let warnSpy: MockInstance<typeof console.warn>;
+
+	beforeAll(() => {
+		tempDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-inv-population-failure-'));
+	});
+
+	afterAll(() => {
+		rmSync(tempDir, { recursive: true, force: true });
+	});
+
+	beforeEach(() => {
+		warnings = [];
+		warnSpy = vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => {
+			warnings.push(args.map(arg => String(arg)).join(' '));
+		});
+	});
+
+	afterEach(() => {
+		warnSpy.mockRestore();
+	});
+
+	it('reports the failure rather than swallowing it', async () => {
+		const root = pluginWithOneSkill(safePath.join(tempDir, 'reported'));
+
+		await extractClaudePluginInventory(root, {
+			gitTrackerSource: NO_GIT_TRACKER,
+			sharedPopulation: () => {
+				throw new Error('blob_conditions carries a row for content key "x"');
+			},
+		});
+
+		expect(warnings).toHaveLength(1);
+		// The cause has to survive: "the projection lane failed" without the
+		// reason is the same dead end as silence, one step further along.
+		expect(warnings[0]).toContain('blob_conditions carries a row for content key "x"');
+		expect(warnings[0]).toContain(root);
+	});
+
+	it('still returns a usable inventory, degraded to the link walk', async () => {
+		const root = pluginWithOneSkill(safePath.join(tempDir, 'degraded'));
+
+		const inv = await extractClaudePluginInventory(root, {
+			gitTrackerSource: NO_GIT_TRACKER,
+			sharedPopulation: () => {
+				throw new Error('store unavailable');
+			},
+		});
+
+		expect(inv.discovered.skills.map(skill => skill.manifest.name)).toEqual(['alpha']);
+		// NOT a parse error: `audit.ts` turns every one of those into an
+		// error-severity `PLUGIN_INVALID_JSON` finding, so routing a cache
+		// failure there would both mislabel it and fail an audit over a cache.
+		expect(inv.parseErrors).toEqual([]);
 	});
 });

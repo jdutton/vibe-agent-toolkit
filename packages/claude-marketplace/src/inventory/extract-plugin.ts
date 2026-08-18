@@ -327,16 +327,45 @@ async function discoverSkills(
 	// must populate nothing.
 	//
 	// A source that throws degrades to the incumbent rather than failing the
-	// plugin. This lane is an opt-in second implementation of a question the walk
-	// already answers, so its failure is a missing measurement, not a defect in the
-	// subject — the same posture `gitTrackerFor` takes toward a failing tracker
-	// source, and for the same reason.
+	// plugin — but it SAYS SO, and the difference is not cosmetic.
+	//
+	// This was a bare `catch { population = undefined; }`, written when the lane
+	// was an opt-in second implementation of a question the walk already answers,
+	// so its failure was "a missing measurement, not a defect in the subject".
+	// That premise expired twice over: the projection is now this command's
+	// DEFAULT membership answer, and the source behind it writes an
+	// EXPLICITLY OPTED-IN cache (`VAT_PROJECTION_STORE`). Silence turned a hard
+	// store failure into a run that exited 0, cached nothing, and paid the
+	// projection AND the walk — on every root shipping a binary file, for as long
+	// as the store rejected a declined blob. Measured on a real adopter plugin:
+	// 76 s cold, then 76 s again warm, with an empty store; the same run reports
+	// 1.3 s warm once the store can actually be written.
+	// `cli/src/utils/projection-store.ts` states the standard in its own header:
+	// an opted-in cache that quietly does nothing is worse than no cache.
+	//
+	// A warning and not a `parseErrors` entry, and not a throw:
+	//
+	// - `parseErrors` is this module's degradation channel for defects in the
+	//   SUBJECT, and `audit.ts` renders every entry as an error-severity
+	//   `PLUGIN_INVALID_JSON` finding. A cache failure is neither invalid JSON
+	//   nor the plugin's fault, and routing it there would fail an audit over it.
+	// - A throw would break "never throws — all failures surface via
+	//   parseErrors[]", which `audit.ts` depends on by name: it records the
+	//   incident where moving a crawl outside this catch aborted a whole audit
+	//   with exit code 2 instead of degrading three link walks.
+	//
+	// So the failure is loud on stderr and the extraction continues, which is the
+	// same posture `projection-store.ts` takes when it cannot key a tree.
 	let population: InventoryPopulation | undefined;
 	if (sharedPopulation !== undefined && skillMdPaths.length > 0) {
 		try {
 			population = await sharedPopulation(skillMdPaths);
-		} catch {
+		} catch (error) {
 			population = undefined;
+			console.warn(
+				`[vat] Warning: the projection membership lane failed for ${absolute}, so this`
+				+ ` plugin's skills fell back to the link walk and nothing was cached: ${String(error)}`,
+			);
 		}
 	}
 

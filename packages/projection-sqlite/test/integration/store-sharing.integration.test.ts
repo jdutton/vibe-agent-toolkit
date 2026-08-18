@@ -108,6 +108,30 @@ const CORPUS: readonly { readonly path: string; readonly content: string }[] = [
   { path: 'skills/foo/c.md', content: '# C\n\nNothing links out of here.\n' },
 ];
 
+/**
+ * A file that is **not text**, and the reason it is here.
+ *
+ * A corpus of three tidy markdown documents cannot reach the branch every real
+ * subject reaches on its first `.so`, `.pyc`, image or archive: `blob-population
+ * .ts` sniffs the NUL byte, records a `BLOB_NOT_TEXT` condition and emits **no
+ * `blobs` row** for the key. The store rejected exactly that bundle — the whole
+ * write threw, so `vat inventory` under `VAT_PROJECTION_STORE=sqlite` cached
+ * nothing on any real repository while still exiting 0 and paying the full walk.
+ *
+ * It went unnoticed for one reason only: every fixture in the suite was clean.
+ * So this one is not, and every arm of this file now writes a declined blob
+ * through a real `populate()` into a real store.
+ *
+ * Deliberately NOT linked from any document: it must be a member of the
+ * filesystem extent and of no closure, so it changes what the store is asked to
+ * hold without changing a single membership answer this file asserts on.
+ */
+const BINARY_ASSET = {
+  path: 'skills/foo/asset.bin',
+  /** A NUL inside the first 8 KB is the whole signal — see `looksBinary`. */
+  bytes: new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00, 0x01, 0x02, 0x00, 0xff]),
+} as const;
+
 /** What one child process reported. */
 interface Population {
   /**
@@ -153,6 +177,10 @@ beforeEach(() => {
   mkdirSyncReal(corpusPath('skills/foo'), { recursive: true });
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture paths beneath this test's own mkdtemp root
   for (const file of CORPUS) writeFileSync(corpusPath(file.path), file.content, 'utf-8');
+  // No encoding argument: these are BYTES, and routing them through a string
+  // would let the NUL this fixture exists for be re-encoded away.
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture path beneath this test's own mkdtemp root
+  writeFileSync(corpusPath(BINARY_ASSET.path), BINARY_ASSET.bytes);
 });
 
 afterEach(() => {
@@ -258,6 +286,11 @@ describe('the fixture', () => {
     expect(counts['blobs']).toBeGreaterThanOrEqual(CORPUS.length);
     expect(counts['blobReferences']).toBeGreaterThanOrEqual(2);
     expect(counts['blobSections']).toBeGreaterThan(0);
+    // The declined blob is in the store too, and it is the row shape that has
+    // no `blobs` row to hang off — see {@link BINARY_ASSET}. Asserted here in
+    // the negative control because a fixture that quietly stopped being binary
+    // would take the regression's teeth with it and nothing else would notice.
+    expect(counts['blobConditions']).toBeGreaterThanOrEqual(1);
     // And the roots row the driver places itself.
     expect(counts['roots']).toBe(1);
   }, 60_000);

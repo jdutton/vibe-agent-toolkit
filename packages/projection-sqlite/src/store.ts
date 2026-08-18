@@ -31,7 +31,10 @@
  * about to write and inserts those. Replace rather than insert-if-absent for a
  * specific reason — see `schema-sql.ts` on SQLite's treatment of NULL in a
  * primary key, which makes a conflict clause unable to dedup three of the twelve
- * tables.
+ * tables. 🪤 The keys it clears are the union of what **all four** tables name,
+ * never `blobs` alone: a declined blob is a `blob_conditions` row with no
+ * `blobs` row, which is what every binary file in a corpus produces — see
+ * {@link uniqueContentKeys}.
  *
  * `writeExtent` replaces **only the resolution contexts its own rows name**, not
  * the whole `(rootId, treeHash)` range: five of its eight tables are deleted one
@@ -56,7 +59,6 @@
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
 
 import {
-  PROJECTION_TABLES,
   type BlobScopedRows,
   type ExtentKey,
   type ExtentScopedRows,
@@ -350,12 +352,17 @@ class SqliteProjectionStore implements ProjectionStore {
     );
   }
 
-  /** @inheritdoc */
+  /**
+   * @inheritdoc
+   *
+   * The range this write clears is the union of the content keys **all four**
+   * tables name, not the keys `blobs` alone names — see
+   * {@link uniqueContentKeys} for why the difference is the whole feature.
+   */
   async writeBlobFacts(rows: BlobScopedRows): Promise<void> {
     this.#assertOpen();
     const bundle = rows as unknown as Record<string, readonly Record<string, unknown>[]>;
     const contentKeys = uniqueContentKeys(bundle);
-    assertNoOrphanFacts(bundle, new Set(contentKeys));
     if (contentKeys.length === 0) return;
 
     this.#transaction(() => {
@@ -668,49 +675,48 @@ function decodeRows(plan: TablePlan, raw: readonly unknown[]): readonly Record<s
 }
 
 /**
- * Every content key the `blobs` table of a bundle names, deduplicated.
+ * Every content key a bundle names **anywhere**, across all four blob-scoped
+ * tables, deduplicated.
+ *
+ * ## 🪤 Why the union, and not the `blobs` table alone
+ *
+ * A key can legitimately appear in a child table with **no `blobs` row of its
+ * own**, and this is not an edge case: `blob-population.ts` records a
+ * `BLOB_NOT_TEXT`, `BLOB_UNREADABLE` or `BLOB_CONTENT_CHANGED` condition
+ * *instead of* a `blobs` row whenever it declines to parse a blob, and two of
+ * those three could not carry a `blobs` row at any price — there are no
+ * trustworthy bytes to measure. {@link ProjectionStore.readBlobFacts} states the
+ * rule directly: *a key is held when it has a `blobs` row **or** a
+ * `blobConditions` row, and neither table alone answers the question.*
+ *
+ * This function used to read `blobs` alone, and a guard beside it (
+ * `assertNoOrphanFacts`) then **rejected the whole bundle** whenever a child row
+ * named a key `blobs` did not — so a single `.so`, `.pyc`, image or archive
+ * anywhere under a root made every `writeBlobFacts` throw. Measured on a real
+ * adopter plugin inside a large monorepo: 31 declined blobs against 8,076
+ * parsed ones, enough to leave the store at its empty schema with **zero rows
+ * in all thirteen tables** where it now holds 193,021 — while the command
+ * exited 0 throughout and a warm run stayed a full cold re-derivation.
+ *
+ * The concern that guard was defending is real and is what the union answers:
+ * the write replaces the facts for exactly the keys it clears, so a row landing
+ * outside that range would accumulate one copy per write, silently — and
+ * `blob_conditions` keys on a nullable `line`, which SQLite's unique index
+ * treats as distinct, so no conflict clause would catch it. Taking the range
+ * from every table makes "every row written lands in a cleared range" true by
+ * construction rather than by assertion, which is why the assertion is gone
+ * rather than loosened.
  *
  * @param bundle - A blob-scoped row bundle
- * @returns The content keys, in first-seen order
+ * @returns The content keys, in first-seen order, `blobs` first
  */
 function uniqueContentKeys(bundle: Record<string, readonly Record<string, unknown>[]>): readonly string[] {
-  const column = blobKeyColumn(PROJECTION_TABLES.blobs);
-  const keys = (bundle[PROJECTION_TABLES.blobs.key] ?? []).map((row) => String(row[column]));
-  return [...new Set(keys)];
-}
-
-/** Whether a table's rows hang off `blobs` rather than being `blobs` itself. */
-function isBlobChildTable(spec: StoredTableSpec): boolean {
-  return spec.scope === 'blob' && spec.name !== PROJECTION_TABLES.blobs.name;
-}
-
-/**
- * Refuse a bundle whose child rows name a blob the bundle does not carry.
- *
- * The write replaces the facts for exactly the keys its `blobs` table names, so
- * a child row for some other key would be inserted into a range no later write
- * clears — a duplicate accumulating on every write, silently. That is a caller
- * bug (facts written without their blob), and it is worth a loud one.
- *
- * @param bundle - A blob-scoped row bundle
- * @param contentKeys - The keys the bundle's `blobs` table names
- * @throws Error When a child row names a key outside that set
- */
-function assertNoOrphanFacts(
-  bundle: Record<string, readonly Record<string, unknown>[]>,
-  contentKeys: ReadonlySet<string>,
-): void {
-  for (const spec of allSpecs().filter((candidate) => isBlobChildTable(candidate))) {
+  const keys = new Set<string>();
+  for (const spec of allSpecs().filter((candidate) => candidate.scope === 'blob')) {
     const column = blobKeyColumn(spec);
-    for (const row of bundle[spec.key] ?? []) {
-      const key = String(row[column]);
-      if (!contentKeys.has(key)) {
-        throw new Error(
-          `${spec.name} carries a row for content key "${key}", which the bundle's blobs table does not name`,
-        );
-      }
-    }
+    for (const row of bundle[spec.key] ?? []) keys.add(String(row[column]));
   }
+  return [...keys];
 }
 
 /**

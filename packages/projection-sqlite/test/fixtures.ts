@@ -176,3 +176,36 @@ export function sampleExtentRows(rootId = 'root-1'): ExtentScopedRows {
     }],
   };
 }
+
+/**
+ * A blob the derivation stage **declined to parse**: a `blob_conditions` row and
+ * no `blobs` row at all.
+ *
+ * This is what every binary file in a corpus produces — `blob-population.ts`
+ * sniffs a NUL byte, records `BLOB_NOT_TEXT` and returns before any `blobs` row
+ * is emitted — and the same shape `BLOB_UNREADABLE` and `BLOB_CONTENT_CHANGED`
+ * produce, neither of which *could* carry a `blobs` row, because there are no
+ * trustworthy bytes to measure. `ProjectionStore.readBlobFacts` states the rule
+ * this fixture stands for: a key is held when it has a `blobs` row **or** a
+ * `blobConditions` row.
+ *
+ * A fixture of well-formed blobs cannot exercise it, which is precisely how a
+ * store that rejected this shape outright shipped green.
+ *
+ * @param key - Which content key the condition is about
+ * @returns The four blob-scoped tables, three of them empty
+ */
+export function declinedBlobRows(key: string = FIRST_BLOB): BlobScopedRows {
+  return {
+    blobs: [],
+    blobReferences: [],
+    blobSections: [],
+    blobConditions: [{
+      blob: key,
+      code: 'BLOB_NOT_TEXT',
+      severity: 'warning',
+      message: 'contains a NUL byte, so no parser was run over it',
+      line: null,
+    }],
+  };
+}
