@@ -10,9 +10,9 @@ npm install @vibe-agent-toolkit/projection-sqlite
 ```
 
 Separate from `@vibe-agent-toolkit/resources` because a storage backend is a
-choice, not a default. Unlike `projection-parquet`, choosing this one costs
-almost nothing: `node:sqlite` ships with Node, so there is no binary, no WASM
-module, no extension to seed and nothing to download.
+choice, not a default. Choosing this one costs almost nothing: `node:sqlite`
+ships with Node, so there is no binary, no WASM module, no extension to seed and
+nothing to download.
 
 **Requires Node >= 22.13.0** — `node:sqlite` is absent from 22.12.0. The rest of
 the toolkit stays at `>=22.0.0`; a backend nobody has to install should not

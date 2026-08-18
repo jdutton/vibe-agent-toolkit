@@ -20,8 +20,7 @@
  * four characters `null`. That keeps `WHERE parameterSet IS NULL` meaningful,
  * and it is lossless because `null` is the only JSON value that serializes to
  * that token — a *string* `"null"` serializes to `"null"` with the quotes, which
- * survives untouched. It is also what `projection-parquet`'s Arrow encoder does
- * with the same columns, so a row means the same thing in both stores.
+ * survives untouched.
  */
 
 import type { ProjectionColumnKind } from '@vibe-agent-toolkit/resources';

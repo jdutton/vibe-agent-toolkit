@@ -74,16 +74,6 @@ const config: KnipConfig = {
       entry: [SRC_TS],
     },
 
-    // projection-parquet: the engine child is a SECOND entry point, and an
-    // invisible one — nothing imports `engine-child.ts`, the parent *spawns* it
-    // by path so that a DuckDB extension-cache miss (which parks a process in an
-    // uninterruptible Atomics.wait) can be killed from outside. It is also the
-    // only file that imports `@duckdb/duckdb-wasm`, so without it listed here
-    // knip reads the engine as dead code and the DuckDB dependency as unused.
-    'packages/projection-parquet': {
-      entry: ['src/index.ts', 'src/engine-child.ts'],
-    },
-
     // rag: OpenAI is an opt-in optional peerDependency loaded via dynamic
     // import() (bring-your-own-backend), so knip sees it as a "referenced
     // optional peer". Intentional — not auto-installed for consumers.

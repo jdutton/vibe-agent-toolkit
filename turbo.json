@@ -99,8 +99,7 @@
     "vitest.*.config.ts",
     "vitest.shared.ts",
     "vitest.setup.js",
-    "packages/dev-tools/src/copy-yaml-assets.ts",
-    "packages/dev-tools/src/warm-duckdb-extension.ts"
+    "packages/dev-tools/src/copy-yaml-assets.ts"
   ],
   "globalEnv": ["CI", "NET_AVAILABLE", "UPDATE_DRIFT_GOLDEN"]
 }

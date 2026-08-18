@@ -1,12 +1,11 @@
 /**
  * A SQLite-backed `ProjectionStore` for VAT's resource projection.
  *
- * This package is a **separate install**, matching `projection-parquet`: a
- * storage backend is a choice, and `@vibe-agent-toolkit/resources` — VAT's most
- * widely installed package — should not carry one by default. Unlike parquet,
- * the cost of choosing this one is close to zero: `node:sqlite` ships with Node,
- * so there is no binary, no wasm module, no extension to seed, and nothing to
- * download.
+ * This package is a **separate install**: a storage backend is a choice, and
+ * `@vibe-agent-toolkit/resources` — VAT's most widely installed package —
+ * should not carry one by default. The cost of choosing this one is close to
+ * zero: `node:sqlite` ships with Node, so there is no binary, no wasm module,
+ * no extension to seed, and nothing to download.
  *
  * What it does carry is a **version floor**. `node:sqlite` first appears in
  * **Node 22.13.0** and is absent from 22.12.0, so this package's `engines`

@@ -2,16 +2,17 @@
  * What kind of value a projection column holds, read out of its Zod schema.
  *
  * Every storage backend has to answer the same question before it can write a
- * row — Arrow needs a `DataType` per vector, SQLite needs a declared type per
- * column and a binder per value — and the answer is a property of the *row
- * schema*, not of the backend. So the classification lives here, once, beside
- * the registry that says which columns exist at all.
+ * row — SQLite needs a declared type per column and a binder per value, a
+ * columnar encoder would need a `DataType` per vector — and the answer is a
+ * property of the *row schema*, not of the backend. So the classification lives
+ * here, once, beside the registry that says which columns exist at all.
  *
- * It was not always here. `projection-parquet`'s Arrow encoder derived it
- * inline, and a second backend deriving it again would have been the same
- * drift the table registry exists to prevent, one layer down: two cascades
- * agreeing today about which Zod types are JSON-shaped, and disagreeing the
- * first time a column takes a type only one of them was taught.
+ * It was not always here: the first backend derived it inline, and a second one
+ * deriving it again would have been the same drift the table registry exists to
+ * prevent, one layer down — two cascades agreeing today about which Zod types
+ * are JSON-shaped, and disagreeing the first time a column takes a type only one
+ * of them was taught. Deriving it once is what keeps a backend from having an
+ * opinion about the schema.
  *
  * ## The kinds are semantic, not physical
  *

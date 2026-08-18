@@ -1,8 +1,7 @@
 /**
- * Packaging pin for published tarballs whose contents are not obvious from the
- * source tree: `@vibe-agent-toolkit/cli` (which must NOT ship two `dist/`
- * directories) and `@vibe-agent-toolkit/projection-parquet` (which MUST ship a
- * binary its build downloaded).
+ * Packaging pin for the published `@vibe-agent-toolkit/cli` tarball, whose
+ * contents are not obvious from the source tree: it must NOT ship two `dist/`
+ * directories.
  *
  * `src/pipeline-oracles/` and `src/qa-snapshot/` are this repo's correctness-oracle
  * TEST instrumentation. They deliberately live under `src/` — that is what keeps them
@@ -49,9 +48,6 @@ import { beforeAll, describe, expect, it } from 'vitest';
 /** The `packages/cli` directory — the package whose tarball is under test. */
 const PACKAGE_DIR = safePath.resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
-/** `packages/projection-parquet` — the second tarball pinned here; see the header. */
-const PROJECTION_PARQUET_DIR = safePath.resolve(PACKAGE_DIR, '../projection-parquet');
-
 /** Compiled test instrumentation that must never reach an adopter's node_modules. */
 const EXCLUDED_PREFIXES = ['dist/pipeline-oracles/', 'dist/qa-snapshot/'] as const;
 
@@ -70,7 +66,6 @@ interface CapturedPack {
 }
 
 let cliPack: CapturedPack;
-let parquetPack: CapturedPack;
 
 /** Packed entry paths starting with `prefix`. */
 function entriesUnder(pack: CapturedPack, prefix: string): string[] {
@@ -116,10 +111,6 @@ function capturePack(packageDir: string, buildHint: string): CapturedPack {
 
 beforeAll(() => {
   cliPack = capturePack(PACKAGE_DIR, 'bunx tsc --build packages/cli/tsconfig.json');
-  parquetPack = capturePack(
-    PROJECTION_PARQUET_DIR,
-    'cd packages/projection-parquet && bun run build (its build DOWNLOADS the extension bytes)',
-  );
 }, 180_000);
 
 describe('published @vibe-agent-toolkit/cli tarball', () => {
@@ -151,40 +142,4 @@ describe('published @vibe-agent-toolkit/cli tarball', () => {
       expect(entriesUnder(cliPack, prefix)).toEqual([]);
     });
   }
-});
-
-/**
- * The parquet package ships something no source tree shows: a ~3 MB DuckDB
- * extension its build step downloaded into `dist/`. If npm drops it, nothing
- * fails until an adopter's first `LOAD` — offline, that is an uninterruptible
- * hang rather than an error, which is exactly why it is pinned here.
- */
-describe('published @vibe-agent-toolkit/projection-parquet tarball', () => {
-  it('packs the parquet package itself, not the surrounding workspace', () => {
-    expect(parquetPack.report.name).toBe('@vibe-agent-toolkit/projection-parquet');
-    expect(parquetPack.packedPaths.length).toBe(parquetPack.report.entryCount);
-    expect(parquetPack.report.unpackedSize).toBeGreaterThan(0);
-  });
-
-  it('ships the engine, its child, and the extension manifest', () => {
-    expect(parquetPack.packedPaths).toContain('dist/index.js');
-    expect(parquetPack.packedPaths).toContain('dist/engine.js');
-    // The child is spawned by path, never imported — a packer that dropped it
-    // would leave an engine that cannot start.
-    expect(parquetPack.packedPaths).toContain('dist/engine-child.js');
-    expect(parquetPack.packedPaths).toContain('dist/duckdb-extension-manifest.json');
-    expect(parquetPack.packedPaths).toContain('README.md');
-  });
-
-  it('ships the captured extension binary, whole', () => {
-    const extensions = entriesUnder(parquetPack, 'dist/duckdb-extensions/');
-    expect(extensions.length).toBeGreaterThan(0);
-
-    // Every captured file must be a real binary, not a placeholder: the failure
-    // this guards against (a truncated or empty seed) is silent until load time.
-    for (const path of extensions) {
-      const entry = parquetPack.report.files.find((file) => toForwardSlash(file.path) === path);
-      expect(entry?.size).toBeGreaterThan(1_000_000);
-    }
-  });
 });

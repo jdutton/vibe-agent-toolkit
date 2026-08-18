@@ -77,7 +77,7 @@ const EXPECTED_SQL_NAMES: Record<ProjectionTableName, string> = {
 
 /**
  * Full column lists for three tables, in the order their Zod schemas declare
- * them — the order a parquet `COPY (SELECT <columns> …)` will emit.
+ * them — the order a storage backend's `INSERT (<columns>)` will use.
  *
  * Three rather than twelve, chosen for what each one can break:
  * `resourceRealizations` and `resolutionContexts` are the two row schemas

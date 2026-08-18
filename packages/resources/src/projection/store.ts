@@ -10,23 +10,28 @@
  * ## The seam is semantic, and that is the whole design
  *
  * The obvious shape — *publish an immutable batch of files, resolve the set of
- * files to read* — is parquet's physical model, and writing it down as the
- * interface would force every other backend to imitate a file set it has no
- * reason to have. A SQLite backend implementing "publish a batch" would be
- * emulating immutable extents on top of a store whose entire advantage is that
- * it can update a row in place.
+ * files to read* — is a **columnar file store's** physical model, and writing it
+ * down as the interface would force every other backend to imitate a file set it
+ * has no reason to have. A SQLite backend implementing "publish a batch" would
+ * be emulating immutable extents on top of a store whose entire advantage is
+ * that it can update a row in place.
  *
  * So the operations are stated in the vocabulary of the projection itself —
  * **facts about blobs**, and **the extent of a tree** — and each backend owns
- * its physical strategy underneath. Concretely, the same two writes land as:
+ * its physical strategy underneath. The test this interface had to pass was that
+ * the same two writes land naturally in either physical model:
  *
- * | | `projection-sqlite` | a parquet backend |
+ * | | `projection-sqlite` | a file-per-table backend |
  * |---|---|---|
  * | {@link ProjectionStore.writeBlobFacts} | `INSERT … ON CONFLICT DO NOTHING`, one transaction | a staged file per table, renamed into a content-addressed directory |
  * | {@link ProjectionStore.writeExtent} | delete-then-insert under the key, one transaction | a file per table under `root=…/tree=…/`, published through a manifest |
- * | {@link ProjectionStore.readExtent} | `SELECT … WHERE rootId = ? AND treeHash = ?` | read the manifest, then `read_parquet` exactly the files it lists |
+ * | {@link ProjectionStore.readExtent} | `SELECT … WHERE rootId = ? AND treeHash = ?` | read the manifest, then scan exactly the files it lists |
  *
- * Neither column is awkward, which is the test this interface had to pass.
+ * Neither column is awkward, which is what the seam had to demonstrate. Only the
+ * first column ships: a columnar backend was built and then **removed**, because
+ * the access pattern a cache actually needs is a keyed point lookup — read one
+ * extent, read the facts for a set of content keys — which is the one shape a
+ * scan-oriented format is worst at.
  *
  * ## Why the two scopes are separate operations
  *
@@ -140,8 +145,8 @@ export interface ExtentKey {
 /**
  * A storage backend for the resource projection.
  *
- * Every method is asynchronous because at least one backend is
- * (`projection-parquet` runs its engine in a child process). A synchronous
+ * Every method is asynchronous because a backend may be — one running its engine
+ * out of process, or over a network, has no synchronous option. A synchronous
  * backend — `projection-sqlite` is entirely synchronous — simply returns
  * already-resolved promises, which costs it nothing and keeps one interface.
  */

@@ -6,8 +6,8 @@
  * sync — {@link Projection}'s fields, `exportProjection`'s primary keys, and
  * dev-tools' JSON Schema generator, which listed fifteen because three row
  * schemas that are *not* tables had been folded into the same list. A fourth
- * such list was about to be added for a parquet writer, whose
- * `COPY (SELECT <columns> FROM …)` needs exactly the four facts above.
+ * such list was about to be added for a storage backend, whose `CREATE TABLE`
+ * and `INSERT` need exactly the four facts above.
  *
  * So there is one list, and the others derive from it:
  *
@@ -111,7 +111,7 @@ export interface ProjectionTableSpec<
 > {
   /** The {@link Projection} field these rows are carried under. */
   readonly key: Name;
-  /** The table's snake_case name, as the schema docs and DuckDB spell it. */
+  /** The table's snake_case name, as the schema docs and SQL spell it. */
   readonly name: string;
   /** What these rows are a fact about — see {@link ProjectionTableScope}. */
   readonly scope: Scope;

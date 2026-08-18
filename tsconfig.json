@@ -8,7 +8,6 @@
     { "path": "./packages/test-agents" },
     { "path": "./packages/discovery" },
     { "path": "./packages/resources" },
-    { "path": "./packages/projection-parquet" },
     { "path": "./packages/projection-sqlite" },
     { "path": "./packages/resource-compiler" },
     { "path": "./packages/rag" },

@@ -97,7 +97,8 @@
  * namespace deliberately — URL reachability and fetched link content are facts
  * about the world, not about this build, so re-fetching them on every VAT
  * upgrade would be waste. Only tenants whose contents VAT's own code determines
- * (this one, and `parquet/` when it lands) sit under the namespace.
+ * (this one, and a `projection-<shapeDigest>/` store when it lands) sit under
+ * the namespace.
  *
  * ## Failure model
  *

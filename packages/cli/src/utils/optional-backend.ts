@@ -10,8 +10,9 @@
  * published `vibe-agent-toolkit@0.1.42`: **275 MB of a 351 MB install is the
  * RAG lane**, and a static import chain from `bin.ts` meant
  * `import('@lancedb/lancedb')` — **1,350 ms cold** — ran before `vat --version`
- * could print a string. A second heavy backend (DuckDB WASM) is already
- * planned, which is what makes this a named seam rather than a one-off fix.
+ * could print a string. It is a named seam rather than a one-off fix because
+ * "optional backend" is a shape VAT keeps growing — a projection store is
+ * loaded through it too — not because any one dependency is special.
  *
  * ## What it does NOT do
  *

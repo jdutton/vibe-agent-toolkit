@@ -2,10 +2,10 @@
  * How a projection table or column name is spelled inside SQL.
  *
  * Here rather than in each storage backend because the *names* are here: the
- * table registry mints them, so it owns the one rule for quoting them. DuckDB
- * and SQLite happen to agree on that rule (both take the SQL standard's
- * double-quoted delimited identifier), which is what makes one helper honest
- * rather than a coincidence two backends would eventually diverge on.
+ * table registry mints them, so it owns the one rule for quoting them. The rule
+ * is the SQL standard's double-quoted delimited identifier, which every engine
+ * VAT has stored a projection in accepts — so one helper is honest rather than a
+ * coincidence two backends would eventually diverge on.
  */
 
 /**

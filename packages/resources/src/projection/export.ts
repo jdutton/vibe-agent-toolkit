@@ -81,7 +81,7 @@ type KeyPart = string | number | boolean | null;
  * Every table is named once, and the object literal is checked against
  * {@link Projection}, so a thirteenth table is still a compile error here. What
  * is no longer restated is the **primary keys**: each sort reads the key out of
- * {@link PROJECTION_TABLES}, which is the same declaration the parquet writer
+ * {@link PROJECTION_TABLES}, which is the same declaration a storage backend
  * and the JSON Schema generator read. A key that disagreed between the sort and
  * the schema used to be a silent possibility; now it is not representable.
  *

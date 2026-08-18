@@ -131,7 +131,7 @@ a saved tree hash — depends on whether the target has a stable identity to per
   the same way the git lane does. 🔷 **Proposed, not yet built** — no such persisted non-git manifest
   exists today.
 
-### 3.3 One crawl API, two implementations — and none of it needs Parquet
+### 3.3 One crawl API, two implementations — and none of it needs a columnar store
 
 The two lanes above are cost models. The shape they should take in code is **one crawl API with two
 implementations behind it**, selected by whether the root is a git working tree — not two call paths
@@ -158,8 +158,8 @@ Three constraints this table encodes, each of which has already been got wrong o
   be differentially tested against each other on the same root; two ad-hoc code paths cannot, and a
   divergence between them shows up only as a wrong answer somewhere downstream.
 
-**None of this depends on a columnar store.** Sourcing (this section) and persistence (a Parquet
-substrate) are separable: the git lane already yields a content key per path and an exact whole-tree
+**None of this depends on a columnar store.** Sourcing (this section) and persistence (a
+`ProjectionStore` substrate) are separable: the git lane already yields a content key per path and an exact whole-tree
 invalidation key, which is the entire input a persisted table would need. Doing the sourcing work
 first is what makes the persistence work worth doing — and it banks most of the win on its own.
 

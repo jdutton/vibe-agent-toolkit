@@ -15,7 +15,7 @@
  *
  * ```
  * <normalizedTmpdir()>/.vat-cache/<namespace>/parse/<shard>/<key>.json
- *                                 <namespace>/parquet/...      (reserved)
+ *                                 <namespace>/projection-<shapeDigest>/...  (reserved)
  * ```
  *
  * Every cache tenant whose contents depend on VAT's own code lives under the

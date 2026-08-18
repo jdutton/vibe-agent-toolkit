@@ -24,11 +24,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   across processes with atomic multi-table commits. **Requires Node >= 22.13.0** (`node:sqlite` is
   absent from 22.12.0); the rest of the toolkit stays at `>= 22.0.0`.
 
-- **`@vibe-agent-toolkit/projection-parquet`** — a new optional package that writes resource
-  projections as Parquet. Install it separately (`npm i @vibe-agent-toolkit/projection-parquet`); it
-  is not pulled in by the CLI. It bundles the DuckDB extension it needs, so it works with no network
-  — including in sandboxes that block extension downloads.
-
 - **`vat resources scan --format json`** — the same document as the YAML default, for consumers
   without a YAML parser.
 - **`vat resources scan` now reports a `lane` field** naming which enumerator produced the

@@ -210,7 +210,7 @@ describe('cache layout', () => {
   });
 
   it('leaves room beside parse/ for the tenants that come next', () => {
-    // `parquet/` is planned as a sibling. Pinning the shape now means the
+    // A `projection-<shapeDigest>/` store is planned as a sibling. Pinning the shape now means the
     // `cache clear` root derivation (which walks up two levels) stays correct
     // when it lands, rather than being rediscovered then.
     expect(safePath.relative(vatCacheNamespaceRoot(), parseCacheDirectory())).toBe('parse');
