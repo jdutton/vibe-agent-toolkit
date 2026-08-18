@@ -34,6 +34,7 @@ export {
   createTableSql,
   deleteBlobFactsSql,
   deleteExtentContextSql,
+  deleteExtentSql,
   deleteRowByKeySql,
   insertSql,
   selectBlobFactsSql,

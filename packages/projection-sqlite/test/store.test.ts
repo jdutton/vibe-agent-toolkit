@@ -9,6 +9,7 @@
  */
 
 import { mkdtempSync, rmSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 
 import {
   PROJECTION_TABLES,
@@ -486,3 +487,227 @@ describe('lifetime', () => {
     await expect(store.close()).resolves.toBeUndefined();
   });
 });
+
+/**
+ * How many rows each extent-scoped table holds for one tree, read from the file
+ * rather than through the store.
+ *
+ * 🪤 Row counts, never file size. An eviction that deleted only the `extents`
+ * manifest row would make {@link ProjectionStore.readExtent} answer `undefined`
+ * — a perfect-looking miss — while all eight tables kept their rows forever, and
+ * the store would go on growing exactly as before. Only a count taken outside
+ * the store can tell a reclaimed extent from a hidden one. File size cannot:
+ * SQLite allocates by page, so an empty store and a populated one are both
+ * 118,784 bytes at the sizes these fixtures produce.
+ *
+ * @param key - The tree to count
+ * @returns Table name to row count, for every extent-scoped table
+ */
+function storedRowCounts(key: ExtentKey): Record<string, number> {
+  const database = openStoreFile();
+  try {
+    const counts: Record<string, number> = {};
+    for (const spec of Object.values(PROJECTION_TABLES)) {
+      if (spec.scope === 'extent') counts[spec.name] = countExtentRows(database, spec.name, key);
+    }
+    return counts;
+  } finally {
+    database.close();
+  }
+}
+
+/** A second, read-only connection onto the store file the suite is exercising. */
+function openStoreFile(): DatabaseSync {
+  return new DatabaseSync(safePath.join(directory, 'projection.db'), { readOnly: true });
+}
+
+/**
+ * Rows one extent-scoped table holds for one tree, on a caller-supplied
+ * connection.
+ *
+ * The connection is a parameter rather than opened here because one caller needs
+ * several counts inside ONE `BEGIN DEFERRED` snapshot — see the read-tearing
+ * case — and a helper that opened its own would take a fresh snapshot per call
+ * and could never observe a torn read.
+ */
+function countExtentRows(database: DatabaseSync, table: string, key: ExtentKey): number {
+  return (database
+    .prepare(`SELECT COUNT(*) AS total FROM "${table}" WHERE "storeRootId" = ? AND "storeTreeHash" = ?`)
+    .get(key.rootId, key.treeHash) as { total: number }).total;
+}
+
+/**
+ * A store with a deliberately tiny retention, so a handful of writes reaches the
+ * limit that a real run reaches after a handful of edits.
+ *
+ * The default is a production choice about how many recent trees are worth
+ * keeping; these tests are about the mechanism, and a fixture that had to write
+ * the default number of extents to observe it would be slower and no more
+ * convincing.
+ */
+function openWithRetention(retainedExtentsPerRoot: number): ProjectionStore {
+  return openSqliteProjectionStore({ directory, retainedExtentsPerRoot });
+}
+
+/** Total rows a tree occupies across every extent-scoped table. */
+function storedRowTotal(key: ExtentKey): number {
+  return Object.values(storedRowCounts(key)).reduce((total, count) => total + count, 0);
+}
+
+/** A tree of one root, so a sequence of writes reads as a sequence of edits. */
+function treeKey(hash: string, rootId: string = KEY.rootId): ExtentKey {
+  return { rootId, treeHash: hash };
+}
+
+describe('eviction', () => {
+  it('keeps every tree while the root is under its retention limit', async () => {
+    // The negative control. Without it, an eviction that deleted everything it
+    // touched would satisfy every other case in this block.
+    const evicting = openWithRetention(3);
+    await evicting.writeExtent(treeKey('tree-1'), extentBundle(BROAD));
+    await evicting.writeExtent(treeKey('tree-2'), extentBundle(BROAD));
+    await evicting.close();
+
+    expect(contextsOf(await store.readExtent(treeKey('tree-1')))).toEqual([FS_CONTEXT, SKILL_CONTEXT, OTHER_SKILL_CONTEXT].sort((l, r) => l.localeCompare(r)));
+    expect(await store.readExtent(treeKey('tree-2'))).toBeDefined();
+  });
+
+  it('reclaims the ROWS of the oldest tree once the limit is passed, not just its manifest row', async () => {
+    // The measured defect: the key is a whole-repository tree hash, so any edit
+    // anywhere mints a brand new full extent. Five edits took a real store from
+    // 9.83 MB / 18,079 rows to 58.49 MB / 108,474 rows with six extents held,
+    // and nothing ever reclaimed one.
+    const evicting = openWithRetention(2);
+    const oldest = treeKey('tree-1');
+    await evicting.writeExtent(oldest, extentBundle(BROAD));
+    await evicting.writeExtent(treeKey('tree-2'), extentBundle(BROAD));
+    const beforeEviction = storedRowTotal(oldest);
+
+    await evicting.writeExtent(treeKey('tree-3'), extentBundle(BROAD));
+    await evicting.close();
+
+    expect(beforeEviction).toBeGreaterThan(0);
+    expect(storedRowTotal(oldest)).toBe(0);
+    // Every table, not the total: a prune that cleared seven of the eight would
+    // leave a growing tier behind a green sum.
+    expect(Object.values(storedRowCounts(oldest)).every((count) => count === 0)).toBe(true);
+    expect(await store.readExtent(oldest)).toBeUndefined();
+    expect(storedRowTotal(treeKey('tree-3'))).toBe(beforeEviction);
+  });
+
+  it('leaves another root alone, however old its trees are', async () => {
+    // The store is shared: two projects under one cache namespace write into the
+    // same file. A prune that ordered by age across the whole table would let a
+    // busy repository evict a quiet one's only extent.
+    const other = treeKey('tree-old', 'root-2');
+    const evicting = openWithRetention(1);
+    await evicting.writeExtent(other, extentBundle(BROAD, 'root-2'));
+    await evicting.writeExtent(treeKey('tree-1'), extentBundle(BROAD));
+    await evicting.writeExtent(treeKey('tree-2'), extentBundle(BROAD));
+    await evicting.close();
+
+    expect(await store.readExtent(other)).toBeDefined();
+    expect(storedRowTotal(other)).toBeGreaterThan(0);
+    expect(await store.readExtent(treeKey('tree-1'))).toBeUndefined();
+  });
+
+  it('never evicts the tree it is writing, at a retention of one', async () => {
+    // The writer's own protection, and it is structural rather than a special
+    // case: the extent being written is by construction the most recently
+    // written one, so recency ordering can never select it. That is what makes
+    // it safe for `vat build`'s second phase to read what its first phase wrote.
+    const evicting = openWithRetention(1);
+    for (const hash of ['tree-1', 'tree-2', 'tree-3']) {
+      await evicting.writeExtent(treeKey(hash), extentBundle(BROAD));
+      expect(await evicting.readExtent(treeKey(hash))).toBeDefined();
+    }
+    await evicting.close();
+  });
+
+  it('holds at least one tree however low the caller sets the retention', async () => {
+    // A retention of zero asks for a cache that evicts the extent it is writing
+    // the instant it commits — a store that can never hit, which is strictly
+    // worse than no store because it pays every write cost for nothing. Clamped
+    // rather than rejected: nothing in the CLI surfaces this option, so the only
+    // way to reach it is a programmatic caller, and turning its argument into a
+    // thrown error would be a worse answer than the obvious floor.
+    const evicting = openWithRetention(0);
+    await evicting.writeExtent(treeKey('tree-1'), extentBundle(BROAD));
+    await evicting.writeExtent(treeKey('tree-2'), extentBundle(BROAD));
+    await evicting.close();
+
+    expect(await store.readExtent(treeKey('tree-2'))).toBeDefined();
+    expect(storedRowTotal(treeKey('tree-2'))).toBeGreaterThan(0);
+    expect(await store.readExtent(treeKey('tree-1'))).toBeUndefined();
+  });
+
+  it('does not tear a read another connection is in the middle of', async () => {
+    // ⚠️ The one way eviction could corrupt rather than merely cool. This store
+    // reads under an explicit `BEGIN DEFERRED` precisely so every table in one
+    // read sees one snapshot; the question eviction raises is whether a delete
+    // committed by another connection can reach INTO that snapshot. It cannot —
+    // WAL keeps the reader on the version it started with — and the assertion
+    // below is what turns that from a claim about SQLite into a fact about this
+    // store's file.
+    const victim = treeKey('tree-1');
+    await store.writeExtent(victim, extentBundle(BROAD));
+
+    const reader = openStoreFile();
+    try {
+      reader.exec('BEGIN DEFERRED');
+      const countFor = (table: string): number => countExtentRows(reader, table, victim);
+      // First table read INSIDE the snapshot, before anything is evicted.
+      const contextsSeen = countFor(PROJECTION_TABLES.resolutionContexts.name);
+      expect(contextsSeen).toBeGreaterThan(0);
+
+      const evicting = openWithRetention(1);
+      await evicting.writeExtent(treeKey('tree-2'), extentBundle(BROAD));
+      await evicting.close();
+
+      // Same snapshot, a DIFFERENT table, read after the eviction committed. A
+      // torn read would show this one emptied while the first was not.
+      expect(countFor(PROJECTION_TABLES.resourceRealizations.name)).toBeGreaterThan(0);
+      expect(countFor(PROJECTION_TABLES.resolutionContexts.name)).toBe(contextsSeen);
+      reader.exec('COMMIT');
+
+      // And once the snapshot is released, the eviction is visible — otherwise
+      // the assertions above would be satisfied by an eviction that never ran.
+      expect(countFor(PROJECTION_TABLES.resolutionContexts.name)).toBe(0);
+    } finally {
+      reader.close();
+    }
+  });
+
+  it('gives the freed pages back to the file instead of only to a freelist', async () => {
+    // Deleting rows alone would bound the store's growth — SQLite reuses freed
+    // pages — but would never shrink the file, so an operator measuring with du
+    // sees a 58 MB cache that "was fixed". The store is created with incremental
+    // auto-vacuum so a prune can hand the pages back.
+    const evicting = openWithRetention(1);
+    await evicting.writeExtent(treeKey('tree-1'), extentBundle(BROAD));
+    const peak = filePages();
+
+    await evicting.writeExtent(treeKey('tree-2'), extentBundle(BROAD));
+    await evicting.close();
+
+    expect(filePages().pageCount).toBeLessThanOrEqual(peak.pageCount);
+    expect(filePages().freelist).toBe(0);
+    expect(filePages().autoVacuum).toBe(2);
+  });
+});
+
+/** The database file's page accounting, read outside the store. */
+function filePages(): { pageCount: number; freelist: number; autoVacuum: number } {
+  const database = openStoreFile();
+  try {
+    const read = (pragma: string, field: string): number =>
+      Number((database.prepare(`PRAGMA ${pragma}`).get() as Record<string, unknown>)[field]);
+    return {
+      pageCount: read('page_count', 'page_count'),
+      freelist: read('freelist_count', 'freelist_count'),
+      autoVacuum: read('auto_vacuum', 'auto_vacuum'),
+    };
+  } finally {
+    database.close();
+  }
+}

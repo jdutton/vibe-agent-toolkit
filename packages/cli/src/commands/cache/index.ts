@@ -98,13 +98,20 @@ export function createCacheCommand(): Command {
       'after',
       `
 Description:
-  VAT keeps three disposable caches under <tmpdir>/.vat-cache: parse facts
-  keyed by file content, external-URL validation results, and per-OS-user
-  authenticated-link content. None of them is durable — recovery is always
-  "rescan", and the OS temp purge is the eviction policy.
+  VAT keeps four disposable caches under <tmpdir>/.vat-cache: parse facts
+  keyed by file content, external-URL validation results, per-OS-user
+  authenticated-link content, and the projection store — a SQLite database
+  holding one whole scanned tree per entry, and by far the largest of the
+  four. None of them is durable — recovery is always "rescan".
+
+  Only the projection store evicts anything on its own: it keeps the few most
+  recently written trees per root and drops the rest as it writes. The other
+  three rely on the OS temp purge, and every one of them is reclaimed in full
+  by vat cache clear.
 
   To run WITHOUT the caches rather than remove them, use --no-cache on any
-  command (or VAT_CACHE=0), which also applies to spawned phases.
+  command (or VAT_CACHE=0), which also applies to spawned phases and to the
+  projection store.
 
 Example:
   $ vat cache clear                    # Reclaim the temp-directory cache tree
@@ -122,9 +129,11 @@ Example:
       `
 Description:
   Removes <tmpdir>/.vat-cache in its entirety — the parse cache, the
-  external-URL validation cache, and the per-OS-user authenticated-link cache.
-  Every one of them is disposable by design: the next run repopulates what it
-  needs, so the only cost of clearing is one cold pass.
+  external-URL validation cache, the per-OS-user authenticated-link cache, and
+  the projection store (<namespace>/projection-<shape>/projection.db), which is
+  usually most of the bytes this reclaims. Every one of them is disposable by
+  design: the next run repopulates what it needs, so the only cost of clearing
+  is one cold pass.
 
   Runs regardless of --no-cache / VAT_CACHE=0. Turning caching off must not
   disarm the one command that reclaims the space.

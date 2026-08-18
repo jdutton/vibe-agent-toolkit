@@ -24,7 +24,7 @@ import { Command } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { clearCacheDirectory, vatCacheRoot } from '../../src/commands/cache/clear.js';
-import { applyCacheControl, registerCacheControl } from '../../src/commands/cache/index.js';
+import { applyCacheControl, createCacheCommand, registerCacheControl } from '../../src/commands/cache/index.js';
 import { createResourcesCommand } from '../../src/commands/resources/index.js';
 
 /** The flag under test, spelled once so a rename cannot half-land. */
@@ -273,5 +273,51 @@ describe('vatCacheRoot', () => {
     // Asserted structurally rather than against a literal: the real value is
     // realpath-normalized, and nothing here is allowed to delete it.
     expect(vatCacheRoot().endsWith(`/${CACHE_DIR_NAME}`)).toBe(true);
+  });
+});
+
+/**
+ * The help for one command in the `cache` group, as a user would read it.
+ *
+ * 🪤 `helpInformation()` renders the built-in sections ONLY: Commander appends
+ * an `addHelpText('after', …)` block in `outputHelp()`, and every sentence
+ * describing what the caches ARE lives in that block. A test written against
+ * `helpInformation()` sees an empty Description section and passes every "does
+ * not say X" assertion vacuously.
+ *
+ * @param path - Subcommand name, or nothing for the group itself
+ * @returns The rendered help
+ */
+function cacheHelpFor(path?: string): string {
+  const group = createCacheCommand();
+  const target = path === undefined ? group : group.commands.find((command) => command.name() === path);
+  if (target === undefined) throw new Error(`no vat cache subcommand named ${String(path)} to render`);
+
+  let captured = '';
+  target.configureOutput({ writeOut: (text: string) => { captured += text; } });
+  target.outputHelp();
+  return captured;
+}
+
+describe('vat cache help text', () => {
+  it.each([
+    ['the group', undefined],
+    ['clear', 'clear'],
+  ])('names the projection store among the caches it describes (%s)', (_description, path) => {
+    // The store is a real tenant of `<tmpdir>/.vat-cache` — measured at 9.8 MB
+    // after ONE run of `vat resources validate` on this repository, and 58.5 MB
+    // after five edits. `vat cache clear` did reclaim it, but only incidentally,
+    // by removing the whole root; the text a user reads enumerated the other
+    // three and never mentioned it, so the one cache big enough to send someone
+    // to this command was the one the command did not admit to holding.
+    expect(cacheHelpFor(path)).toMatch(/projection store/i);
+  });
+
+  it('does not still claim there are three caches', () => {
+    // A count in prose is a claim that goes stale the moment a tenant is added,
+    // and this one already had. Asserted separately from the presence check
+    // above so an edit that appends "and the projection store" to a sentence
+    // beginning "three disposable caches" cannot go green.
+    expect(cacheHelpFor()).not.toMatch(/three disposable caches/i);
   });
 });

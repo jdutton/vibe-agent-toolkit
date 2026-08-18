@@ -56,10 +56,12 @@
  * - **No query.** Querying the projection is a lens's job over the rows, and
  *   putting a SQL string in this interface would make every backend owe an
  *   engine. A store reads rows back; a lens decides what they mean.
- * - **No eviction.** The cache lives under `vatCacheNamespaceRoot()` and inherits
- *   that tenant's policy — the namespace moves on every release, and OS tmpdir
- *   purge is the eviction mechanism. A backend is free to prune internally; no
- *   caller is offered a lever it would have to know when to pull.
+ * - **No eviction operation.** A backend prunes internally on its own schedule —
+ *   `projection-sqlite` keeps the newest few trees per root and drops the rest as
+ *   it writes — and no caller is offered a lever it would have to know when to
+ *   pull. Beyond that, the cache lives under `vatCacheNamespaceRoot()` and
+ *   inherits that tenant's policy: the namespace moves on every release, and OS
+ *   tmpdir purge is what reclaims a directory this build no longer opens.
  * - **No version or format discriminator in the data.** What separates one
  *   build's rows from another's is {@link projectionShapeDigest}, in the path —
  *   derived from the schemas, never declared.

@@ -82,16 +82,32 @@ import { isModuleMissing, reportMissingBackend, type OptionalBackend } from './o
  * `vat verify` spawn a byte-identical `resources validate` child, so the second
  * hits the store.
  *
- * ⚠️ One packaging enumeration is still on the walk: `crawlAndResolveRegistry`
- * in `packaging-validator.ts`, which `vat skills build` reaches per skill
- * through `validateSkillForPackaging` (it passes no shared registry, unlike
- * `vat skills validate`). It is process-memoized, so it costs one extra crawl
- * per `skills build` run rather than one per skill.
+ * ⚠️ One packaging enumeration is still on the walk: `vat claude plugin build`'s
+ * per-skill post-build validation, which reaches `crawlAndResolveRegistry` in
+ * `packaging-validator.ts` without a source — its `withResourcePopulationSource`
+ * bracket closes around `createProjectRegistry` and does not span the
+ * marketplace loop. `vat skills build` no longer does: it holds one bracket over
+ * the whole run, and the registry memo is keyed on the population source, so
+ * both of its registries source from the projection.
  */
 export const PROJECTION_STORE_ENV = 'VAT_PROJECTION_STORE';
 
 /** {@link PROJECTION_STORE_ENV}'s value that selects the SQLite backend. */
 export const PROJECTION_STORE_SQLITE = 'sqlite';
+
+/**
+ * The env var that turns VAT's disk caches off for a run.
+ *
+ * Not this module's invention — `ParseCache` has read it since the parse cache
+ * shipped, and `vat`'s root `--no-cache` exports it from a `preAction` hook so
+ * the decision reaches every spawned phase. Named here rather than spelled
+ * inline so the projection store is visibly the same tenant as the caches the
+ * flag was written for.
+ */
+export const CACHE_ENV = 'VAT_CACHE';
+
+/** {@link CACHE_ENV}'s one off value. Exactly `'0'`, never truthiness — see {@link projectionStoreSelected}. */
+export const CACHE_DISABLED = '0';
 
 /**
  * The backend as a user is told to install it.
@@ -120,9 +136,24 @@ const PROJECTION_STORE_BACKEND: OptionalBackend = {
  * loads, so a module-level binding would make the switch unobservable to every
  * test that sets it.
  *
+ * ## The two switches are AND-ed, and the second one is a veto
+ *
+ * {@link PROJECTION_STORE_ENV} says *which* backend; {@link CACHE_ENV} says
+ * whether this run caches at all. A store selected while `VAT_CACHE=0` was
+ * measured writing a 9.8 MB, 18,079-row store on this repository and hitting it
+ * on the next run — a user who asked for no cache silently got one, and
+ * `vat cache`'s own help text described three caches while a fourth was being
+ * written beside them.
+ *
+ * 🪤 Compared against `'0'` exactly, never for truthiness, matching
+ * `ParseCache`'s `env['VAT_CACHE'] !== '0'`. `VAT_CACHE=1` is the value an
+ * operator writes to turn caching ON, and a truthiness test would read it as a
+ * reason to decline.
+ *
  * @returns `true` when a store is selected
  */
 export function projectionStoreSelected(): boolean {
+  if (process.env[CACHE_ENV] === CACHE_DISABLED) return false;
   return process.env[PROJECTION_STORE_ENV] === PROJECTION_STORE_SQLITE;
 }
 

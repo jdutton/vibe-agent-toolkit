@@ -104,10 +104,15 @@ export const WRITTEN_AT_COLUMN = 'writtenAt';
 /**
  * DDL for the extent manifest.
  *
- * `writtenAt` is the only handle any future eviction has. Nothing reads it
- * today, and it is here rather than added later because a cache whose rows
- * carry no age has no prune to design — the alternative when the directory
- * grows is deleting all of it.
+ * `writtenAt` is the handle eviction steers by: `store.ts` orders a root's trees
+ * by it and reclaims everything past the retention window. It was declared
+ * before anything read it because a cache whose rows carry no age has no prune
+ * to design — the alternative when the directory grows is deleting all of it.
+ *
+ * Ordering is by this column and then by `rowid`, which the table has because it
+ * is an ordinary rowid table. The tie-break is not decoration: an ISO-8601
+ * string has millisecond resolution and two writes inside one millisecond are
+ * ordinary, so `writtenAt` alone leaves the victim unspecified.
  */
 export const CREATE_EXTENTS_TABLE_SQL
   = `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(EXTENTS_TABLE)} (`
@@ -260,6 +265,27 @@ export function deleteExtentContextSql(spec: StoredTableSpec): string {
   }
   return `DELETE FROM ${quoteIdentifier(spec.name)}`
     + ` WHERE ${extentKeyPredicate()} AND ${quoteIdentifier(column)} = ?`;
+}
+
+/**
+ * The `DELETE` that removes one extent-scoped table's rows for a **whole tree**.
+ *
+ * The only statement here that takes out every context under a key at once, and
+ * the only one eviction uses. `writeExtent` must never reach for it — a write is
+ * additive at context granularity, and the reason
+ * {@link deleteExtentContextSql} exists is that clearing the whole key would let
+ * one command delete another command's contexts. Eviction is the opposite
+ * situation: the tree is being reclaimed entire, so every context under it goes.
+ *
+ * Bound as `(rootId, treeHash)`, which is a prefix of the table's own primary
+ * key, so this is a key range rather than a scan — the same index
+ * {@link selectExtentSql} reads through.
+ *
+ * @param spec - An extent-scoped table's registry entry
+ * @returns A `DELETE … WHERE rootId = ? AND treeHash = ?` statement
+ */
+export function deleteExtentSql(spec: StoredTableSpec): string {
+  return `DELETE FROM ${quoteIdentifier(spec.name)} WHERE ${extentKeyPredicate()}`;
 }
 
 /**

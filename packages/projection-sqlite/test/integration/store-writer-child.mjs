@@ -11,16 +11,25 @@
  * plain `node` with no TypeScript loader — which is why the package's own
  * `build` is a dependency of `test:integration` (see `turbo.json`).
  *
- * Usage: node store-writer-child.mjs <directory> <writerId> <mode> <iterations>
+ * Usage: node store-writer-child.mjs <directory> <writerId> <mode> <iterations> [retention]
  *   mode `distinct`  — write `iterations` blobs and one extent, all this
  *                      writer's own, so the parent can count for loss
  *   mode `contended` — rewrite ONE shared extent `iterations` times, so a
  *                      concurrent reader can look for a torn read
+ *
+ * `retention` is `retainedExtentsPerRoot`, and it is a parameter because the
+ * `distinct` arm writes one tree PER WRITER under a single root. That arm asks
+ * whether a concurrent write LOSES rows — the failure that rejected `pglite`,
+ * where four writers dropped 100–150 of 250 rows and every process exited 0 —
+ * and eviction dropping the oldest tree on purpose is a different event with the
+ * same shape from the outside. The parent hands a retention that admits every
+ * writer so the arm keeps measuring contention rather than retention; the
+ * retention policy itself is pinned in `test/store.test.ts`.
  */
 
 import { openSqliteProjectionStore } from '@vibe-agent-toolkit/projection-sqlite';
 
-const [directory, writerId, mode, iterationsRaw] = process.argv.slice(2);
+const [directory, writerId, mode, iterationsRaw, retentionRaw] = process.argv.slice(2);
 const iterations = Number(iterationsRaw);
 
 /** A content key of the shape the schema requires: `<parserKind>.<64 hex>`. */
@@ -77,7 +86,9 @@ function extentBundle(rootId, count) {
   };
 }
 
-const store = openSqliteProjectionStore({ directory });
+const store = openSqliteProjectionStore(
+  retentionRaw === undefined ? { directory } : { directory, retainedExtentsPerRoot: Number(retentionRaw) },
+);
 try {
   if (mode === 'distinct') {
     for (let index = 0; index < iterations; index += 1) {

@@ -47,13 +47,53 @@
  * second writer replacing the same key writes the same rows. That is what lets
  * many processes share one store with no lock of VAT's own.
  *
- * ## What this store does not do
+ * ## Eviction: the newest few trees per root, pruned by the write that grew it
  *
- * It never evicts. The database sits under a namespace directory that already
- * moves on every VAT release and on every projection schema edit, inside the OS
- * temporary directory whose purge is this cache's eviction policy. `writtenAt`
- * on the extents table is the one handle a future prune would need; nothing
- * reads it yet.
+ * The store used to keep everything, and named the OS tmpdir purge as its
+ * eviction policy. That was not adequate and the numbers say so plainly: the
+ * extent key is a **whole-repository** tree hash, so any edit anywhere mints a
+ * brand new full extent, and a five-edit sequence took one measured store from
+ * 9.83 MB / 18,079 rows to 58.49 MB / 108,474 rows — and a larger repository's
+ * from 33.83 MB to 202.80 MB — inside a minute. A purge that runs on a reboot,
+ * or on some systems never, does not bound something that grows by a whole
+ * corpus per keystroke-sized edit.
+ *
+ * So {@link SqliteProjectionStore.writeExtent} keeps the
+ * {@link SqliteStoreOptions.retainedExtentsPerRoot} most recently written trees
+ * of the root it is writing and drops the rest, **inside its own transaction**.
+ * Three properties make that the cheap and safe place for it:
+ *
+ * - **Amortized, not deferred.** The write that adds an extent is the write that
+ *   removes one, so the steady-state cost is a delete of what was just inserted:
+ *   eight `DELETE … WHERE storeRootId = ? AND storeTreeHash = ?` statements over
+ *   a **prefix of each table's own primary key**. There is no scan, no
+ *   background thread, and no command that surprises an operator with a big
+ *   bill. The one unbounded case — a store that already grew to hundreds of
+ *   extents before this shipped — costs one pass, once, on its next write.
+ * - **It can never evict the tree being written.** That tree is by construction
+ *   the most recently written one, so recency ordering cannot select it. This is
+ *   what keeps `vat build`'s second phase able to read what its first phase
+ *   wrote, with no pin, no lease and no lock.
+ * - **It cannot tear a concurrent read.** Reads run under `BEGIN DEFERRED` (see
+ *   {@link SqliteProjectionStore} on why autocommit reads go stale), and in WAL
+ *   a reader stays on the snapshot it opened with. A delete committed by another
+ *   process becomes visible to that reader only after it ends its transaction.
+ *
+ * Retention is **per root**, never global: two projects share one cache
+ * namespace, and an age ordering across the whole manifest would let a busy
+ * repository evict a quiet one's only extent.
+ *
+ * ## What eviction deliberately does NOT reclaim
+ *
+ * **Blob-scoped rows.** They are a pure function of bytes, shared by every tree
+ * and every root that contains those bytes, so they cannot be attributed to the
+ * extent being evicted without scanning every surviving extent's realizations —
+ * and a scan that ran between another process's `writeBlobFacts` and its
+ * `writeExtent` would collect rows that are about to be referenced. They also do
+ * not exhibit the defect being fixed: an edit changes one file's content key, so
+ * the blob tier grows by one file's rows where the extent tier grows by a whole
+ * corpus. That tier is still bounded only by the namespace rotation, which is
+ * stated here rather than left for someone to discover.
  */
 
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
@@ -81,6 +121,7 @@ import {
   createTableSql,
   deleteBlobFactsSql,
   deleteExtentContextSql,
+  deleteExtentSql,
   deleteRowByKeySql,
   insertSql,
   selectBlobFactsSql,
@@ -111,6 +152,23 @@ const KEY_BATCH_SIZE = 500;
 /** The database file's name inside the store directory. */
 const DATABASE_FILENAME = 'projection.db';
 
+/**
+ * How many of a root's trees survive a write, when the caller does not say.
+ *
+ * Three rather than one, and the difference is what a developer's actual
+ * sequence looks like: edit, run, undo the edit, run again. One would make that
+ * second run cold; three covers a short there-and-back without holding a
+ * corpus-sized extent for every tree ever seen. It caps the extent tier at
+ * roughly three times one scan of one repository — ~29 MB for the store measured
+ * at 9.83 MB per extent — against the unbounded growth it replaces.
+ *
+ * Not tuned against a hit-rate curve, and stated here rather than implied: the
+ * cost of being wrong low is one cold run, and the cost of being wrong high is
+ * proportional disk. Both are cheap, which is why this is a constant and not a
+ * knob every command has to plumb.
+ */
+const DEFAULT_RETAINED_EXTENTS_PER_ROOT = 3;
+
 /** Retries for the WAL switch, which the busy handler does not cover — see {@link enableWal}. */
 const WAL_SWITCH_ATTEMPTS = 50;
 
@@ -132,6 +190,15 @@ export interface SqliteStoreOptions {
    * without waiting seconds for it, not because a caller should tune it.
    */
   readonly busyTimeoutMs?: number;
+  /**
+   * How many of a root's most recently written trees survive a write.
+   *
+   * Defaults to {@link DEFAULT_RETAINED_EXTENTS_PER_ROOT}. Clamped to at least
+   * one: a retention of zero would delete the extent the caller is writing the
+   * moment it committed, which is a cache that cannot hit rather than a cache
+   * that holds nothing.
+   */
+  readonly retainedExtentsPerRoot?: number;
 }
 
 /**
@@ -170,6 +237,13 @@ interface TablePlan {
   readonly insert: StatementSync;
   /** Extent-scoped only: read this table for one tree. */
   readonly selectExtent?: StatementSync;
+  /**
+   * Extent-scoped only: clear this table's rows for a whole tree.
+   *
+   * Eviction's statement, and eviction's alone — see {@link deleteExtentSql} on
+   * why a write must never reach for it.
+   */
+  readonly deleteExtent?: StatementSync;
   /**
    * Extent-scoped with a context column: clear one context of one tree.
    *
@@ -218,7 +292,10 @@ export function openSqliteProjectionStore(options: SqliteStoreOptions = {}): Pro
   const database = new DatabaseSync(safePath.join(directory, DATABASE_FILENAME));
   configure(database, options.busyTimeoutMs ?? BUSY_TIMEOUT_MS);
   createSchema(database);
-  return new SqliteProjectionStore(database);
+  return new SqliteProjectionStore(
+    database,
+    Math.max(1, Math.trunc(options.retainedExtentsPerRoot ?? DEFAULT_RETAINED_EXTENTS_PER_ROOT)),
+  );
 }
 
 /**
@@ -231,6 +308,18 @@ function configure(database: DatabaseSync, busyTimeoutMs: number): void {
   // FIRST. See this module's header — the WAL switch itself needs a busy
   // handler already installed, or it fails under contention.
   database.exec(`PRAGMA busy_timeout = ${Math.trunc(busyTimeoutMs)}`);
+  // Before the schema exists, because that is the only moment it takes. SQLite
+  // writes the auto-vacuum flag into the file header when the first table is
+  // created and refuses to change it afterwards except through a full `VACUUM`,
+  // so a store created before this line stays at `NONE` for its whole life —
+  // which is correct rather than a gap: its freed pages go to the freelist and
+  // are reused, so it stops GROWING even though it never shrinks, and the
+  // namespace rotates on the next release anyway.
+  //
+  // Without it, `PRAGMA incremental_vacuum` is silently a no-op and every page a
+  // prune frees stays in the file. An operator measuring the fix with `du` would
+  // then see a 58 MB cache that "was fixed", which is the worst of both.
+  database.exec('PRAGMA auto_vacuum = INCREMENTAL');
   enableWal(database);
   // NORMAL rather than FULL: a cache that loses its most recent commit to a
   // power cut is repopulated by the next run, and FULL costs an fsync per
@@ -317,15 +406,22 @@ class SqliteProjectionStore implements ProjectionStore {
   readonly #plans: readonly TablePlan[];
   readonly #recordExtent: StatementSync;
   readonly #extentPresent: StatementSync;
+  /** Eviction's two statements: which trees are past the window, and how to forget one. */
+  readonly #extentsPastRetention: StatementSync;
+  readonly #forgetExtent: StatementSync;
+  readonly #retainedExtentsPerRoot: number;
   /** Blob-fact statements memoized by table and placeholder count — see {@link TablePlan}. */
   readonly #blobStatements = new Map<string, StatementSync>();
   #closed = false;
 
   /**
    * @param database - An open, configured connection whose schema exists
+   * @param retainedExtentsPerRoot - How many of a root's newest trees survive a
+   *   write. Already clamped to at least one by {@link openSqliteProjectionStore}
    */
-  constructor(database: DatabaseSync) {
+  constructor(database: DatabaseSync, retainedExtentsPerRoot: number) {
     this.#database = database;
+    this.#retainedExtentsPerRoot = retainedExtentsPerRoot;
     this.#plans = allSpecs().map((spec) => ({
       spec,
       columns: projectionColumnTypes(spec),
@@ -333,6 +429,7 @@ class SqliteProjectionStore implements ProjectionStore {
       ...(spec.scope === 'extent'
         ? {
             selectExtent: database.prepare(selectExtentSql(spec)),
+            deleteExtent: database.prepare(deleteExtentSql(spec)),
             deleteRow: database.prepare(deleteRowByKeySql(spec)),
             keyColumns: keyColumnTypes(spec),
             // Guarded here rather than at run time: `deleteExtentContextSql`
@@ -349,6 +446,17 @@ class SqliteProjectionStore implements ProjectionStore {
     );
     this.#extentPresent = database.prepare(
       `SELECT 1 FROM "${EXTENTS_TABLE}" WHERE "storeRootId" = ? AND "storeTreeHash" = ?`,
+    );
+    // `LIMIT -1 OFFSET ?` is SQLite's spelling of "everything past the first N".
+    // The `rowid` tie-break is load-bearing: `writtenAt` is an ISO-8601 string
+    // with millisecond resolution, and two writes inside one millisecond are
+    // ordinary, so ordering by it alone leaves the victim unspecified.
+    this.#extentsPastRetention = database.prepare(
+      `SELECT "storeTreeHash" FROM "${EXTENTS_TABLE}" WHERE "storeRootId" = ?`
+      + ` ORDER BY "${WRITTEN_AT_COLUMN}" DESC, "rowid" DESC LIMIT -1 OFFSET ?`,
+    );
+    this.#forgetExtent = database.prepare(
+      `DELETE FROM "${EXTENTS_TABLE}" WHERE "storeRootId" = ? AND "storeTreeHash" = ?`,
     );
   }
 
@@ -399,6 +507,7 @@ class SqliteProjectionStore implements ProjectionStore {
     const bundle = rows as unknown as Record<string, readonly Record<string, unknown>[]>;
     const keyValues = [key.rootId, key.treeHash];
     const contexts = contextsNamedBy(bundle, this.#plansOfScope('extent'));
+    let evicted = 0;
     this.#transaction(() => {
       for (const plan of this.#plansOfScope('extent')) {
         this.#clearSpaceFor(plan, bundle, keyValues, contexts);
@@ -408,7 +517,15 @@ class SqliteProjectionStore implements ProjectionStore {
       // the manifest row is the only thing separating "written and empty" from
       // "never written", and an additive write is still a write.
       this.#recordExtent.run(key.rootId, key.treeHash, new Date().toISOString());
+      // AFTER the manifest row, inside the same transaction. Before it, this
+      // write's own tree would not yet be in the ordering and a retention of one
+      // would evict the newest tree the store had — the one it is replacing.
+      evicted = this.#evictPastRetention(key.rootId);
     });
+    // Outside the transaction, because SQLite refuses `incremental_vacuum`
+    // inside one, and only when something was actually freed — an ordinary
+    // steady-state write evicts nothing and must pay nothing.
+    if (evicted > 0) this.#database.exec('PRAGMA incremental_vacuum');
   }
 
   /** @inheritdoc */
@@ -486,6 +603,36 @@ class SqliteProjectionStore implements ProjectionStore {
       this.#database.exec('ROLLBACK');
       throw error;
     }
+  }
+
+  /**
+   * Drop every tree of one root past the retention window, rows and all.
+   *
+   * Called from inside {@link SqliteProjectionStore.writeExtent}'s transaction,
+   * so an eviction and the write that caused it commit together or not at all —
+   * a store can never be observed holding the manifest row of a tree whose rows
+   * are already gone, which would read as a hit and return an empty extent.
+   *
+   * The manifest row is deleted **last** for each victim. It is what
+   * {@link SqliteProjectionStore.readExtent} consults to tell a written-and-empty
+   * extent from an unwritten one, so removing it first would open a window —
+   * inside this transaction only, but a window all the same for anything later
+   * added to it — where the key reads as present with nothing under it.
+   *
+   * @param rootId - The root whose trees are being aged out
+   * @returns How many trees were evicted
+   */
+  #evictPastRetention(rootId: string): number {
+    const victims = this.#extentsPastRetention.all(rootId, this.#retainedExtentsPerRoot) as {
+      storeTreeHash: string;
+    }[];
+    for (const victim of victims) {
+      for (const plan of this.#plansOfScope('extent')) {
+        plan.deleteExtent?.run(rootId, victim.storeTreeHash);
+      }
+      this.#forgetExtent.run(rootId, victim.storeTreeHash);
+    }
+    return victims.length;
   }
 
   /**

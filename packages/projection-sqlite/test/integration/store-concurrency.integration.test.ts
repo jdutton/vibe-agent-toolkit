@@ -63,11 +63,19 @@ afterEach(() => {
  * @param writerId - Distinguishes this writer's keys from the others'
  * @param mode - `distinct` or `contended`; see the writer script
  * @param iterations - How many writes it performs
+ * @param retention - `retainedExtentsPerRoot` for the child's store, when this
+ *   arm must not have eviction in the picture; the child's default otherwise
  * @returns Its exit code and anything it wrote to stderr
  */
-function runWriter(writerId: string, mode: string, iterations: number): Promise<{ code: number; stderr: string }> {
+function runWriter(
+  writerId: string,
+  mode: string,
+  iterations: number,
+  retention?: number,
+): Promise<{ code: number; stderr: string }> {
+  const retentionArgs = retention === undefined ? [] : [String(retention)];
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [WRITER, directory, writerId, mode, String(iterations)], {
+    const child = spawn(process.execPath, [WRITER, directory, writerId, mode, String(iterations), ...retentionArgs], {
       stdio: ['ignore', 'ignore', 'pipe'],
     });
     let stderr = '';
@@ -114,8 +122,14 @@ describe('connection configuration', () => {
 
 describe('concurrent writers', () => {
   it('loses nothing when four processes write at once', async () => {
+    // Retention is handed to the children so it cannot participate. Each writer
+    // takes its own tree under ONE root, so at the shipped default of three this
+    // arm would drop the oldest of the four ON PURPOSE — indistinguishable from
+    // the silent row loss it exists to detect, and a green wall against ever
+    // seeing that loss again. What retention does is asserted separately, in
+    // `test/store.test.ts`.
     const results = await Promise.all(
-      Array.from({ length: WRITERS }, (_, index) => runWriter(`w${index}`, 'distinct', BLOBS_EACH)),
+      Array.from({ length: WRITERS }, (_, index) => runWriter(`w${index}`, 'distinct', BLOBS_EACH, WRITERS)),
     );
 
     // Exit codes first, so a crashed writer is diagnosed as a crash rather than

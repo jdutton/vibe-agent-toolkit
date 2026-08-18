@@ -159,6 +159,7 @@ vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) => {
 });
 
 const {
+  CACHE_ENV,
   openPopulationCache,
   PROJECTION_STORE_ENV,
   PROJECTION_STORE_SQLITE,
@@ -231,6 +232,7 @@ afterAll(() => {
 
 let restoreGitEnv: () => void;
 let savedSelector: string | undefined;
+let savedCacheSwitch: string | undefined;
 
 beforeEach(() => {
   // 🪤 A git child inherits `GIT_DIR` / `GIT_INDEX_FILE` from whatever spawned
@@ -239,6 +241,7 @@ beforeEach(() => {
   // git resolving from the directory it is given and nowhere else.
   restoreGitEnv = detachGitEnv();
   savedSelector = process.env[PROJECTION_STORE_ENV];
+  savedCacheSwitch = process.env[CACHE_ENV];
   backend.stores.length = 0;
   backend.openCalls.count = 0;
   git.calls.count = 0;
@@ -250,6 +253,11 @@ afterEach(() => {
   // test. "Passes in isolation, fails in the suite" is the signature.
   delete process.env[PROJECTION_STORE_ENV];
   if (savedSelector !== undefined) process.env[PROJECTION_STORE_ENV] = savedSelector;
+  // Restored exactly, for the reason `cache-control.test.ts` states about the
+  // same variable: a leaked `VAT_CACHE=0` silently disables the parse cache for
+  // every later test in this worker.
+  delete process.env[CACHE_ENV];
+  if (savedCacheSwitch !== undefined) process.env[CACHE_ENV] = savedCacheSwitch;
   restoreGitEnv();
   vi.restoreAllMocks();
 });
@@ -282,6 +290,31 @@ describe('projectionStoreSelected', () => {
     process.env[PROJECTION_STORE_ENV] = value;
 
     expect(projectionStoreSelected()).toBe(false);
+  });
+
+  it.each([
+    ['the root --no-cache flag, which exports this', '0'],
+  ])('is false when %s turns the disk caches off', (_description, value) => {
+    // The projection store IS one of VAT's disk caches, and `--no-cache` is
+    // documented as "every cache off". Honouring the backend selector while
+    // ignoring the switch that disables caching gave a user who asked for no
+    // cache a 9.8 MB one anyway — measured on this repository, where a
+    // `--no-cache` run still wrote 18,079 rows and the run after it still hit
+    // the store.
+    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
+    process.env[CACHE_ENV] = value;
+
+    expect(projectionStoreSelected()).toBe(false);
+  });
+
+  it('stays selected for a VAT_CACHE value that is not the off switch', () => {
+    // Exactly `'0'`, matching `ParseCache`'s `env['VAT_CACHE'] !== '0'`. A
+    // truthiness test here would read `VAT_CACHE=1` — the value an operator
+    // writes to turn caching ON — as a reason to decline the store.
+    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
+    process.env[CACHE_ENV] = '1';
+
+    expect(projectionStoreSelected()).toBe(true);
   });
 
   it('reads the environment on every call rather than memoizing it at module load', () => {
@@ -412,6 +445,30 @@ describe('withPopulationCache', () => {
     // its own fallback for it.
     expect(seen).toEqual([undefined]);
     expect(result).toBe('the work happened');
+  });
+
+  it('opens no backend at all when the disk caches are turned off', async () => {
+    // Stronger than "returns undefined": the store must never be CONSTRUCTED,
+    // because constructing it creates the database file and its schema. A
+    // `--no-cache` run that still opened a connection would leave a store on
+    // disk with the right namespace and an empty schema, which reads to anyone
+    // measuring by file size as a populated cache — an empty and a populated
+    // SQLite file are both 118,784 bytes at the sizes this store starts from.
+    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
+    process.env[CACHE_ENV] = '0';
+    const seen: (PopulationCache | undefined)[] = [];
+
+    const result = await withPopulationCache({ root: repoRoot }, async (cache) => {
+      seen.push(cache);
+      return 'uncached';
+    });
+
+    expect(seen).toEqual([undefined]);
+    expect(result).toBe('uncached');
+    expect(backend.openCalls.count).toBe(0);
+    // Upstream of the key, too: no `git write-tree` is spawned for a store this
+    // process is not going to have.
+    expect(git.calls.count).toBe(0);
   });
 
   it('closes the store once the work resolves', async () => {
