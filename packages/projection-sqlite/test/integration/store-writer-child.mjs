@@ -1,0 +1,99 @@
+/**
+ * One writer process, for the cross-process arms of the store integration test.
+ *
+ * A separate **process**, not a worker thread, on purpose: POSIX advisory locks
+ * are held per process, and SQLite arbitrates two connections inside one process
+ * through its own machinery rather than through the file locks a second process
+ * would take. A thread-based harness would exercise a different code path and
+ * report a pass that says nothing about the claim being tested.
+ *
+ * Imports the built package rather than the source, because this runs under
+ * plain `node` with no TypeScript loader — which is why the package's own
+ * `build` is a dependency of `test:integration` (see `turbo.json`).
+ *
+ * Usage: node store-writer-child.mjs <directory> <writerId> <mode> <iterations>
+ *   mode `distinct`  — write `iterations` blobs and one extent, all this
+ *                      writer's own, so the parent can count for loss
+ *   mode `contended` — rewrite ONE shared extent `iterations` times, so a
+ *                      concurrent reader can look for a torn read
+ */
+
+import { openSqliteProjectionStore } from '@vibe-agent-toolkit/projection-sqlite';
+
+const [directory, writerId, mode, iterationsRaw] = process.argv.slice(2);
+const iterations = Number(iterationsRaw);
+
+/** A content key of the shape the schema requires: `<parserKind>.<64 hex>`. */
+function key(writer, index) {
+  const seed = `${writer}${index}`;
+  const digits = seed.padEnd(64, '0').slice(0, 64).replaceAll(/[^\da-f]/gu, '0');
+  return `markdown.${digits}`;
+}
+
+/** The `blobs` row for one key; the three child tables stay empty here. */
+function blobBundle(contentKey) {
+  return {
+    blobs: [{
+      contentKey,
+      bytes: 1,
+      tokenEstimate: 1,
+      frontmatter: null,
+      frontmatterError: null,
+      wordCount: 1,
+      proseBytes: 1,
+      codeBlockBytes: 0,
+      linkCount: 0,
+      headingCount: 0,
+      sectionCount: 0,
+    }],
+    blobReferences: [],
+    blobSections: [],
+    blobConditions: [],
+  };
+}
+
+/**
+ * An extent whose two tables always carry the SAME number of rows.
+ *
+ * That equality is what a torn read breaks: a reader seeing one table replaced
+ * and the other not observes a count mismatch, which no committed state can
+ * produce.
+ */
+function extentBundle(rootId, count) {
+  return {
+    roots: Array.from({ length: count }, (_, index) => ({ id: `${rootId}-${index}`, path: `/corpus/${index}` })),
+    resources: [],
+    resourceRealizations: [],
+    resourceExtents: [],
+    resourceTags: [],
+    realizationConditions: [],
+    resolutionContexts: [],
+    zoneProvenance: Array.from({ length: count }, (_, index) => ({
+      contextId: `ctx-${index}`,
+      contributorId: `contributor-${index}`,
+      parameterSet: null,
+      extentDigest: `digest-${index}`,
+    })),
+  };
+}
+
+const store = openSqliteProjectionStore({ directory });
+try {
+  if (mode === 'distinct') {
+    for (let index = 0; index < iterations; index += 1) {
+      await store.writeBlobFacts(blobBundle(key(writerId, index)));
+    }
+    await store.writeExtent({ rootId: 'root-shared', treeHash: `tree-${writerId}` }, extentBundle('r', 1));
+  } else {
+    for (let index = 0; index < iterations; index += 1) {
+      // Alternate the row count so a stale half is detectable rather than
+      // accidentally matching the fresh half.
+      await store.writeExtent(
+        { rootId: 'root-shared', treeHash: 'tree-contended' },
+        extentBundle('r', (index % 3) + 1),
+      );
+    }
+  }
+} finally {
+  await store.close();
+}

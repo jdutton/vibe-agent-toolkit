@@ -44,7 +44,6 @@ export {
   PARQUET_COMPRESSION_CODECS,
   type ParquetCompression,
   buildTableCopySql,
-  quoteIdentifier,
   quotePathLiteral,
 } from './copy-sql.js';
 

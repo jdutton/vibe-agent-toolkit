@@ -6,7 +6,6 @@ import {
   PARQUET_COMPRESSION_CODECS,
   type ParquetCompression,
   buildTableCopySql,
-  quoteIdentifier,
   quotePathLiteral,
 } from '../src/copy-sql.js';
 
@@ -90,16 +89,9 @@ describe('buildTableCopySql', () => {
   });
 });
 
-describe('quoteIdentifier', () => {
-  it.each([
-    ['blob_sections', '"blob_sections"'],
-    ['we"ird', '"we""ird"'],
-    ['"; DROP TABLE blobs; --', '"""; DROP TABLE blobs; --"'],
-    ['', '""'],
-  ])('quotes %j as %j', (input, expected) => {
-    expect(quoteIdentifier(input)).toBe(expected);
-  });
-});
+// `quoteIdentifier` moved to `@vibe-agent-toolkit/resources`, beside the
+// registry that mints the names, so both storage backends quote them one way.
+// Its tests moved with it.
 
 describe('quotePathLiteral', () => {
   it.each([

@@ -211,8 +211,41 @@ export {
   PROJECTION_TABLES,
   type ProjectionRow,
   type ProjectionTableName,
+  type ProjectionTableScope,
   type ProjectionTableSpec,
 } from './projection/table-registry.js';
+
+// What each column holds, read out of the row schema. Every storage backend
+// needs it — Arrow needs a type per vector, SQL needs one per column — so the
+// classification lives beside the registry rather than once per backend.
+export {
+  type ProjectionColumnKind,
+  type ProjectionColumnSource,
+  type ProjectionColumnType,
+  type ProjectionColumnTypeSource,
+  projectionColumnType,
+  projectionColumnTypes,
+  projectionRowShape,
+} from './projection/column-kinds.js';
+
+// The pluggable storage seam. Stated in the projection's own vocabulary — facts
+// about blobs, the extent of a tree — so each backend owns its physical
+// strategy instead of inheriting another's.
+export {
+  type BlobScopedRows,
+  type BlobScopedTableName,
+  type ExtentKey,
+  type ExtentScopedRows,
+  type ExtentScopedTableName,
+  type ProjectionStore,
+  type ProjectionTableNamesOfScope,
+  projectionShapeDigest,
+  splitProjectionByScope,
+} from './projection/store.js';
+
+// How the registry's names are spelled inside SQL — one rule, beside the
+// registry that mints them.
+export { quoteIdentifier } from './projection/sql-identifiers.js';
 
 // Lexical reference extraction: reference candidates the markdown AST cannot
 // see (@-prefixed tokens, variable-anchored paths, bounded bare tokens).

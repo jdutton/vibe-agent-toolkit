@@ -7,7 +7,7 @@
  * two traps this module exists to close are both silent.
  */
 
-import { PROJECTION_TABLES, type ProjectionTableName } from '@vibe-agent-toolkit/resources';
+import { PROJECTION_TABLES, type ProjectionTableName, quoteIdentifier } from '@vibe-agent-toolkit/resources';
 import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 /**
@@ -43,27 +43,6 @@ export const DEFAULT_PARQUET_COMPRESSION: ParquetCompression = 'zstd';
 export interface CopyOptions {
   /** Codec for the written file. Defaults to {@link DEFAULT_PARQUET_COMPRESSION}. */
   readonly compression?: ParquetCompression;
-}
-
-/**
- * Quote a SQL identifier the way DuckDB spells one: double quotes, with any
- * internal double quote doubled.
- *
- * Every table and column name this package emits comes from the registry, so
- * none of them are hostile today. They are quoted anyway, because "the input is
- * trusted" is a property of today's caller and not of the function: an
- * unquoted identifier path is one new column name away from being either a
- * syntax error (a name with a space or a dash) or an injection point.
- *
- * @param identifier - A table or column name
- * @returns The identifier, quoted and escaped for DuckDB
- *
- * @example
- * quoteIdentifier('blob_sections')  // '"blob_sections"'
- * quoteIdentifier('we"ird')         // '"we""ird"'
- */
-export function quoteIdentifier(identifier: string): string {
-  return `"${identifier.replaceAll('"', '""')}"`;
 }
 
 /**
@@ -123,7 +102,7 @@ export function quotePathLiteral(outputPath: string): string {
  *
  * @example
  * buildTableCopySql('blobs', '/out/blobs.parquet');
- * // COPY (SELECT "content_key", … FROM "blobs") TO '/out/blobs.parquet' (FORMAT parquet, COMPRESSION zstd)
+ * // COPY (SELECT "contentKey", … FROM "blobs") TO '/out/blobs.parquet' (FORMAT parquet, COMPRESSION zstd)
  */
 export function buildTableCopySql(table: ProjectionTableName, outputPath: string, options: CopyOptions = {}): string {
   const spec: { readonly name: string; readonly columns: readonly string[] } = PROJECTION_TABLES[table];

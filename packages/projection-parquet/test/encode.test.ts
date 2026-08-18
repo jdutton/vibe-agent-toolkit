@@ -164,13 +164,13 @@ describe('encodeArrowStream', () => {
     expect(() => encodeArrowStream(bogus, [{ nope: 'x' }])).toThrow(TypeError);
   });
 
-  it('refuses a Zod type it has no Arrow representation for', () => {
+  it('refuses a Zod type no storage backend has a representation for', () => {
     const unsupported = {
       columns: ['blob'],
       schema: z.object({ blob: z.instanceof(Uint8Array) }),
     } as unknown as ArrowEncodableTable<{ blob: Uint8Array }>;
 
-    expect(() => encodeArrowStream(unsupported, [{ blob: new Uint8Array([1]) }])).toThrow(/no Arrow representation/u);
+    expect(() => encodeArrowStream(unsupported, [{ blob: new Uint8Array([1]) }])).toThrow(/no storage representation/u);
   });
 });
 

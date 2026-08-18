@@ -41,8 +41,12 @@
  * The count is part of the return type so a caller cannot forget to compare.
  */
 
+import {
+  type ProjectionColumnKind,
+  type ProjectionColumnSource,
+  projectionColumnTypes,
+} from '@vibe-agent-toolkit/resources';
 import * as arrow from 'apache-arrow';
-import { z } from 'zod';
 
 /** Arrow IPC stream bytes, and the number of rows they are supposed to carry. */
 export interface EncodedArrowStream {
@@ -63,13 +67,11 @@ export interface EncodedArrowStream {
  * Structural on purpose — every entry of `PROJECTION_TABLES` satisfies it, so
  * a caller writes `encodeArrowStream(PROJECTION_TABLES.blobs, rows)` and the
  * column order is the registry's, never a second list.
+ *
+ * The same shape every storage backend reads, so it is an alias rather than a
+ * parallel declaration.
  */
-export interface ArrowEncodableTable<Row extends object> {
-  /** Every column, in the order it should appear in the Arrow schema. */
-  readonly columns: readonly (keyof Row & string)[];
-  /** The Zod schema one row validates against; supplies each column's type. */
-  readonly schema: z.ZodType<Row, z.ZodTypeDef, unknown>;
-}
+export type ArrowEncodableTable<Row extends object> = ProjectionColumnSource<Row>;
 
 /** How one column's values become Arrow cells. */
 interface ColumnEncoder {
@@ -138,77 +140,22 @@ const JSON_TEXT_ENCODER: ColumnEncoder = {
 };
 
 /**
- * Zod wrappers that say something about *optionality*, not about the value's
- * type, and so have to come off before the type can be read.
+ * The Arrow representation of each column kind.
  *
- * @param schema - Any column schema
- * @returns The schema underneath every optionality/refinement wrapper
+ * Which kind a column *is* comes from `projectionColumnTypes`, in `resources`
+ * beside the registry — deriving it here as well would be two cascades
+ * agreeing today about which Zod types are JSON-shaped and disagreeing the
+ * first time a column takes a type only one of them was taught. What is
+ * genuinely parquet's own is this table: the mapping from a kind to Arrow.
  */
-function unwrapSchema(schema: z.ZodTypeAny): z.ZodTypeAny {
-  let current = schema;
-  for (;;) {
-    if (current instanceof z.ZodEffects) {
-      current = current.innerType() as z.ZodTypeAny;
-    } else if (current instanceof z.ZodOptional || current instanceof z.ZodNullable) {
-      current = current.unwrap() as z.ZodTypeAny;
-    } else if (current instanceof z.ZodDefault) {
-      current = current.removeDefault() as z.ZodTypeAny;
-    } else {
-      return current;
-    }
-  }
-}
-
-/** Zod types whose values are arbitrary JSON and are stored as a JSON string. */
-const JSON_SHAPED = [z.ZodLazy, z.ZodRecord, z.ZodObject, z.ZodArray, z.ZodUnion, z.ZodTuple] as const;
-
-/**
- * Pick the Arrow representation of one column from its Zod schema.
- *
- * @param column - The column's name, for the error message
- * @param schema - The column's schema, or `undefined` if the row schema has no
- *   such key
- * @returns How to type and fill that column's Arrow vector
- * @throws TypeError When the column is undeclared, or its Zod type has no
- *   Arrow representation here
- */
-function columnEncoder(column: string, schema: z.ZodTypeAny | undefined): ColumnEncoder {
-  if (schema === undefined) {
-    throw new TypeError(`Column "${column}" is not declared by the row schema`);
-  }
-  const inner = unwrapSchema(schema);
-  if (inner instanceof z.ZodString || inner instanceof z.ZodEnum) {
-    return TEXT_ENCODER;
-  }
-  if (inner instanceof z.ZodBoolean) {
-    return BOOLEAN_ENCODER;
-  }
-  if (inner instanceof z.ZodDate) {
-    return TIMESTAMP_ENCODER;
-  }
-  if (inner instanceof z.ZodNumber) {
-    return inner.isInt ? INTEGER_ENCODER : FLOAT_ENCODER;
-  }
-  if (JSON_SHAPED.some((candidate) => inner instanceof candidate)) {
-    return JSON_TEXT_ENCODER;
-  }
-  throw new TypeError(`Column "${column}" has no Arrow representation for Zod type ${inner.constructor.name}`);
-}
-
-/**
- * The object shape a row schema ultimately validates.
- *
- * @param schema - A row schema, possibly wrapped in refinements
- * @returns Its column-name-to-schema shape
- * @throws TypeError When the schema is not an object under its wrappers
- */
-function rowShape(schema: z.ZodTypeAny): z.ZodRawShape {
-  const inner = unwrapSchema(schema);
-  if (!(inner instanceof z.ZodObject)) {
-    throw new TypeError('A row schema must be a z.object(), optionally wrapped in refinements');
-  }
-  return inner.shape as z.ZodRawShape;
-}
+const ENCODERS: Readonly<Record<ProjectionColumnKind, ColumnEncoder>> = {
+  text: TEXT_ENCODER,
+  boolean: BOOLEAN_ENCODER,
+  timestamp: TIMESTAMP_ENCODER,
+  integer: INTEGER_ENCODER,
+  real: FLOAT_ENCODER,
+  json: JSON_TEXT_ENCODER,
+};
 
 /**
  * Encode rows as Arrow IPC stream bytes.
@@ -228,11 +175,13 @@ export function encodeArrowStream<Row extends object>(
   table: ArrowEncodableTable<Row>,
   rows: readonly Row[],
 ): EncodedArrowStream {
-  const shape = rowShape(table.schema);
   const vectors: Record<string, arrow.Vector> = {};
-  for (const column of table.columns) {
-    const encoder = columnEncoder(column, shape[column]);
-    const cells = rows.map((row) => encoder.cell(row[column]));
+  for (const [column, { kind }] of projectionColumnTypes(table)) {
+    const encoder = ENCODERS[kind];
+    // The column name came out of this table's own schema shape, so it is a key
+    // of `Row`; classification erases the row type (see
+    // `ProjectionColumnTypeSource`), and this restates what it erased.
+    const cells = rows.map((row) => encoder.cell((row as Record<string, unknown>)[column]));
     vectors[column] = arrow.vectorFromArray(cells, encoder.type);
   }
 

@@ -21,7 +21,7 @@
  *   key order *is* the declaration order — which is the order the row schemas
  *   already document and the order the generated JSON Schemas already carry.
  *   Two of the twelve row schemas are wrapped in `.superRefine()`, so the shape
- *   lives one `ZodEffects` deep; {@link objectShape} unwraps rather than each
+ *   lives one `ZodEffects` deep; `projectionRowShape` unwraps rather than each
  *   caller knowing that.
  * - **The SQL name is derived from the field name.** `resourceRealizations` →
  *   `resource_realizations` holds for all twelve, and the JSON Schema filenames
@@ -33,12 +33,15 @@
  * `exportProjection` reads it rather than restating it — the two must agree,
  * because the export's byte-identity across hosts is a claim about *that* sort.
  *
+ * The **scope** is the second such fact, and it is what a stored projection is
+ * partitioned on. See {@link ProjectionTableScope}.
+ *
  * 🚫 There is deliberately no version or digest of this registry. See the note
  * in `schemas/projection-shared.ts` about the `PROJECTION_SCHEMA_VERSION` that
  * used to exist: a number someone has to remember to bump is not a contract.
  */
 
-import { z } from 'zod';
+import type { z } from 'zod';
 
 import {
   BlobConditionRowSchema,
@@ -56,10 +59,34 @@ import {
 } from '../schemas/projection-resources.js';
 import { ResolutionContextRowSchema, ZoneProvenanceRowSchema } from '../schemas/projection-zones.js';
 
+import { projectionRowShape } from './column-kinds.js';
 import type { Projection } from './projection.js';
 
 /** The field of {@link Projection} a table's rows are carried under. */
 export type ProjectionTableName = keyof Projection;
+
+/**
+ * What a table's rows are a fact *about* — the partition any stored projection
+ * is cut along.
+ *
+ * - **`blob`** — every column is a pure function of the content's bytes. Editing
+ *   a file yields a different `contentKey`, so a row is correct forever and is
+ *   never invalidated. These rows are **global**: two corpora containing the
+ *   same bytes share them, which is exactly what makes a store worth sharing.
+ * - **`extent`** — the rows describe *what is present in one tree*. A row is
+ *   only meaningful in company with the root and the tree it was observed in,
+ *   so a store keys these on `(rootId, treeHash)`. Keyed that way they are as
+ *   immutable as blob rows are: the extent of a given tree is a pure function
+ *   of that tree.
+ *
+ * The distinction is not derivable — nothing in a Zod object says whether its
+ * rows outlive the tree they were observed in — so it is declared here, beside
+ * the primary key, and read by every backend rather than restated by each.
+ * A backend that stored blob rows per-tree would re-derive facts it already
+ * holds; one that stored extent rows globally would serve another tree's
+ * contents as this tree's.
+ */
+export type ProjectionTableScope = 'blob' | 'extent';
 
 /** The row type of one projection table. */
 export type ProjectionRow<Name extends ProjectionTableName> = Projection[Name][number];
@@ -77,11 +104,17 @@ type ColumnOf<Row> = keyof Row & string;
 type RowSchema<Row> = z.ZodType<Row, z.ZodTypeDef, unknown>;
 
 /** Everything a consumer needs to read, write or query one table. */
-export interface ProjectionTableSpec<Name extends ProjectionTableName, Row> {
+export interface ProjectionTableSpec<
+  Name extends ProjectionTableName,
+  Row,
+  Scope extends ProjectionTableScope = ProjectionTableScope,
+> {
   /** The {@link Projection} field these rows are carried under. */
   readonly key: Name;
   /** The table's snake_case name, as the schema docs and DuckDB spell it. */
   readonly name: string;
+  /** What these rows are a fact about — see {@link ProjectionTableScope}. */
+  readonly scope: Scope;
   /** The Zod schema one row of this table validates against. */
   readonly schema: RowSchema<Row>;
   /** The columns that identify a row, in the order they are compared. */
@@ -98,46 +131,56 @@ export interface ProjectionTableSpec<Name extends ProjectionTableName, Row> {
  * not be byte-identical to its predecessor even with every row unchanged.
  */
 export const PROJECTION_TABLES = {
-  roots: table('roots', RootRowSchema, ['id']),
-  resources: table('resources', ResourceRowSchema, ['resourceId']),
-  resourceRealizations: table('resourceRealizations', ResourceRealizationRowSchema, ['extentId', 'path']),
-  resourceExtents: table('resourceExtents', ResourceExtentRowSchema, ['resourceId', 'extentId']),
-  resourceTags: table('resourceTags', ResourceTagRowSchema, ['resourceId', 'tag', 'value', 'source']),
-  realizationConditions: table('realizationConditions', RealizationConditionRowSchema, [
+  roots: table('roots', 'extent', RootRowSchema, ['id']),
+  resources: table('resources', 'extent', ResourceRowSchema, ['resourceId']),
+  resourceRealizations: table('resourceRealizations', 'extent', ResourceRealizationRowSchema, ['extentId', 'path']),
+  resourceExtents: table('resourceExtents', 'extent', ResourceExtentRowSchema, ['resourceId', 'extentId']),
+  resourceTags: table('resourceTags', 'extent', ResourceTagRowSchema, ['resourceId', 'tag', 'value', 'source']),
+  realizationConditions: table('realizationConditions', 'extent', RealizationConditionRowSchema, [
     'extentId',
     'path',
     'code',
     'resourceId',
   ]),
-  resolutionContexts: table('resolutionContexts', ResolutionContextRowSchema, ['contextId']),
-  zoneProvenance: table('zoneProvenance', ZoneProvenanceRowSchema, ['contextId', 'contributorId']),
-  blobs: table('blobs', BlobRowSchema, ['contentKey']),
-  blobReferences: table('blobReferences', BlobReferenceRowSchema, ['blob', 'ordinal']),
-  blobSections: table('blobSections', BlobSectionRowSchema, ['blob', 'ordinal']),
-  blobConditions: table('blobConditions', BlobConditionRowSchema, ['blob', 'code', 'line', 'message']),
+  resolutionContexts: table('resolutionContexts', 'extent', ResolutionContextRowSchema, ['contextId']),
+  zoneProvenance: table('zoneProvenance', 'extent', ZoneProvenanceRowSchema, ['contextId', 'contributorId']),
+  blobs: table('blobs', 'blob', BlobRowSchema, ['contentKey']),
+  blobReferences: table('blobReferences', 'blob', BlobReferenceRowSchema, ['blob', 'ordinal']),
+  blobSections: table('blobSections', 'blob', BlobSectionRowSchema, ['blob', 'ordinal']),
+  blobConditions: table('blobConditions', 'blob', BlobConditionRowSchema, ['blob', 'code', 'line', 'message']),
 } as const satisfies { readonly [Name in ProjectionTableName]: ProjectionTableSpec<Name, ProjectionRow<Name>> };
 
 /**
  * Describe one table, deriving everything derivable.
  *
+ * `Scope` is a type parameter rather than a plain field so each entry's scope
+ * survives as a literal into {@link PROJECTION_TABLES}. That is what lets a
+ * consumer split the table names by scope *in the type system* — a store's
+ * blob-scoped and extent-scoped row bundles are derived from these literals,
+ * so a thirteenth table joins the right bundle by declaring its scope here and
+ * nowhere else.
+ *
  * @param key - The {@link Projection} field these rows are carried under
+ * @param scope - What these rows are a fact about
  * @param schema - The row schema, which supplies the column order
  * @param primaryKey - The columns that identify a row, in comparison order
  * @returns The table's specification
  */
-function table<Name extends ProjectionTableName>(
+function table<Name extends ProjectionTableName, Scope extends ProjectionTableScope>(
   key: Name,
+  scope: Scope,
   schema: RowSchema<ProjectionRow<Name>>,
   primaryKey: readonly ColumnOf<ProjectionRow<Name>>[],
-): ProjectionTableSpec<Name, ProjectionRow<Name>> {
+): ProjectionTableSpec<Name, ProjectionRow<Name>, Scope> {
   return {
     key,
     name: sqlName(key),
+    scope,
     schema,
     primaryKey,
     // `Object.keys` of a Zod shape is the shape literal's key order, and the
     // cast only re-states what that shape is already typed as one level up.
-    columns: Object.keys(objectShape(schema)) as ColumnOf<ProjectionRow<Name>>[],
+    columns: Object.keys(projectionRowShape(schema)) as ColumnOf<ProjectionRow<Name>>[],
   };
 }
 
@@ -149,26 +192,4 @@ function table<Name extends ProjectionTableName>(
  */
 function sqlName(key: string): string {
   return key.replaceAll(/[A-Z]/gu, (letter) => `_${letter.toLowerCase()}`);
-}
-
-/**
- * The object shape under a row schema, however many refinements wrap it.
- *
- * `.superRefine()` returns a `ZodEffects`, not a `ZodObject`, so two of the
- * twelve row schemas have no `.shape` of their own. Unwrapping here rather than
- * at each call site is the difference between a registry that covers all twelve
- * tables and one that silently reports no columns for those two.
- *
- * @param schema - A row schema
- * @returns The shape of the object it ultimately validates
- * @throws TypeError When the schema is not an object under its refinements
- */
-function objectShape(schema: z.ZodTypeAny): z.ZodRawShape {
-  if (schema instanceof z.ZodEffects) {
-    return objectShape(schema.innerType() as z.ZodTypeAny);
-  }
-  if (schema instanceof z.ZodObject) {
-    return schema.shape as z.ZodRawShape;
-  }
-  throw new TypeError('A projection row schema must be a z.object(), optionally wrapped in refinements');
 }

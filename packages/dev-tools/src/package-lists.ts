@@ -24,6 +24,7 @@ export const PUBLISHED_PACKAGES = [
   'discovery',
   'resources',
   'projection-parquet',
+  'projection-sqlite',
   'resource-compiler',
   'rag',
   'rag-lancedb',

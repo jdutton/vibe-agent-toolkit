@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A pluggable storage seam for the resource projection.** `@vibe-agent-toolkit/resources` now
+  exports a `ProjectionStore` interface stated in the projection's own vocabulary — facts about
+  blobs, and the extent of a tree keyed by `(rootId, treeHash)` — so a storage backend can be added
+  without changing anything above it. Each projection table now declares a `scope` (`blob` or
+  `extent`) in `PROJECTION_TABLES`, and `splitProjectionByScope()` cuts a projection along it.
+  Also exported: `projectionColumnTypes()` (what each column holds, read out of its Zod schema, used
+  by every backend), `projectionShapeDigest()` (a derived digest of the stored shape — no version
+  constant, no migration), and `quoteIdentifier()`.
+
+- **`@vibe-agent-toolkit/projection-sqlite`** — a new optional package implementing that interface
+  on Node's built-in `node:sqlite` in WAL mode. Install it separately; it is not pulled in by the
+  CLI. It carries no binary, no WASM and no download, and supports concurrent readers and writers
+  across processes with atomic multi-table commits. **Requires Node >= 22.13.0** (`node:sqlite` is
+  absent from 22.12.0); the rest of the toolkit stays at `>= 22.0.0`.
+
 - **`@vibe-agent-toolkit/projection-parquet`** — a new optional package that writes resource
   projections as Parquet. Install it separately (`npm i @vibe-agent-toolkit/projection-parquet`); it
   is not pulled in by the CLI. It bundles the DuckDB extension it needs, so it works with no network
