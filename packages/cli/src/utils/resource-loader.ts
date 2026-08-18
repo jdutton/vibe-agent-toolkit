@@ -10,6 +10,7 @@ import {
   ResourceRegistry,
   type CrawlOptions,
   type CrawlSourceKind,
+  type PopulationCache,
   type ProjectConfig,
   type ResourcePopulationSource,
   type ResourceRegistryOptions,
@@ -18,6 +19,7 @@ import { GitTracker, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils'
 
 import { loadConfig } from './config-loader.js';
 import type { Logger } from './logger.js';
+import { withPopulationCache } from './projection-store.js';
 
 /**
  * Which enumerator produced a load's population.
@@ -185,18 +187,29 @@ export function resourcesProjectionCrawlSelected(): boolean {
  * @param gitTracker - The run's ignore oracle
  * @param observeExtentSource - Called with the enumerator that actually ran,
  *   once per enumerated root. The value cannot be recovered afterwards by
- *   re-reading the environment — see {@link ResourceLoadResult.extentSource}
+ *   re-reading the environment — see {@link ResourceLoadResult.extentSource}.
+ *   🪤 On a cache hit NO enumerator runs and this still reports the one this
+ *   process selected, because the source is chosen before the store is asked
+ * @param cache - The run's projection store, or `undefined` to enumerate every
+ *   time. A SEPARATE selector from {@link RESOURCES_CRAWL_ENV}: which lane
+ *   enumerates and whether its answer is cached are independent choices, and a
+ *   cache folded into the lane switch could never be measured against it
  * @returns A population source, or `undefined` to use the walk
  */
 function populationSourceFor(
   gitTracker: GitTracker,
-  observeExtentSource: (kind: CrawlSourceKind) => void
+  observeExtentSource: (kind: CrawlSourceKind) => void,
+  cache: PopulationCache | undefined
 ): ResourcePopulationSource | undefined {
   if (!resourcesProjectionCrawlSelected()) {
     return undefined;
   }
   return async (root: string) => {
-    const population = await buildResourcePopulation({ root, gitTracker });
+    const population = await buildResourcePopulation({
+      root,
+      gitTracker,
+      ...(cache !== undefined && { cache }),
+    });
     observeExtentSource(population.extentSource);
     return population.paths;
   };
@@ -303,22 +316,28 @@ export async function loadResourcesWithConfig(
   // so the path-argument case and the whole-root case cannot end up on different
   // crawlers — the bug shape this file already carries one fix for.
   let extentSource: CrawlSourceKind | null = null;
-  const populationSource = populationSourceFor(gitTracker, (kind) => {
-    extentSource = kind;
-  });
-  const lane: ResourceCrawlLane = populationSource ? 'projection' : 'walk';
-  if (populationSource) {
-    logger.debug(`Enumerating via the projection lane (${RESOURCES_CRAWL_ENV}=${RESOURCES_CRAWL_PROJECTION})`);
-    crawlOptions = { ...crawlOptions, populationSource };
-  } else {
-    // Said for the same reason the projection branch says it, and the symmetry
-    // is the point: a marker that only one lane emits makes the other lane
-    // identifiable by ABSENCE, which is indistinguishable from a build too old
-    // to have either lane.
-    logger.debug(`Enumerating via the incumbent walk (${RESOURCES_CRAWL_ENV} unset)`);
-  }
+  // The store brackets the crawl and is closed however the crawl ends. Nothing
+  // outside this bracket can reach it: the population source is called from
+  // inside `registry.crawl` and nowhere else.
+  const lane = await withPopulationCache({ root: projectRoot }, async (cache) => {
+    const populationSource = populationSourceFor(gitTracker, (kind) => {
+      extentSource = kind;
+    }, cache);
+    const selected: ResourceCrawlLane = populationSource ? 'projection' : 'walk';
+    if (populationSource) {
+      logger.debug(`Enumerating via the projection lane (${RESOURCES_CRAWL_ENV}=${RESOURCES_CRAWL_PROJECTION})`);
+      crawlOptions = { ...crawlOptions, populationSource };
+    } else {
+      // Said for the same reason the projection branch says it, and the symmetry
+      // is the point: a marker that only one lane emits makes the other lane
+      // identifiable by ABSENCE, which is indistinguishable from a build too old
+      // to have either lane.
+      logger.debug(`Enumerating via the incumbent walk (${RESOURCES_CRAWL_ENV} unset)`);
+    }
 
-  await registry.crawl(crawlOptions);
+    await registry.crawl(crawlOptions);
+    return selected;
+  });
 
   return {
     scanPath: pathArg ?? projectRoot,

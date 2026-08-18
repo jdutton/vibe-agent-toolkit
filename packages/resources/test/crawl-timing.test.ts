@@ -25,7 +25,7 @@
  * is therefore built here directly, as the six production sites build it.
  */
 
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 
 import {
   __readCrawlTimingSnapshot,
@@ -44,7 +44,7 @@ import {
   type CrawlTimingEntry,
   safePath,
 } from '@vibe-agent-toolkit/utils';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   ContributorRegistry,
@@ -58,7 +58,7 @@ import { populate, type ContributorTiming } from '../src/projection/merge.js';
 import { ResourceRegistry } from '../src/resource-registry.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
-import { setupSubdirTestSuite } from './test-helpers.js';
+import { setupSubdirTestSuite, useCorpusSuite } from './test-helpers.js';
 
 // ---------------------------------------------------------------------------
 // Fixture
@@ -222,19 +222,7 @@ class RegistryBuildingContributor implements ExtentContributor {
 // ---------------------------------------------------------------------------
 
 describe('crawl timing seam', () => {
-  beforeAll(suite.beforeAll);
-  afterAll(suite.afterAll);
-  beforeEach(suite.beforeEach);
-  beforeEach(async () => {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture directory beneath a mkdtemp root
-    await mkdir(safePath.join(suite.tempDir, NESTED_DIR), { recursive: true });
-    await Promise.all(
-      CORPUS.map((file) =>
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture path beneath a mkdtemp root
-        writeFile(safePath.join(suite.tempDir, file.path), file.content, 'utf-8'),
-      ),
-    );
-  });
+  useCorpusSuite(suite, [NESTED_DIR], CORPUS);
 
   afterEach(() => {
     // Always leave the seam off: it is module-level state shared by every test in

@@ -242,6 +242,20 @@ export {
   splitProjectionByScope,
 } from './projection/store.js';
 
+// The reuse rule over that seam: whether a stored extent answers THIS run's
+// question, and how a projection is put back together from the rows that do.
+// Exported because it is the half a second backend must not be free to
+// reinterpret — a store holds rows, this decides what they are worth.
+export {
+  assembleProjection,
+  blobFactsCover,
+  emptyBlobRows,
+  keyedContentKeys,
+  selectRequestedContexts,
+  selectRequestedRows,
+  type RequestedContributor,
+} from './projection/store-hydration.js';
+
 // How the registry's names are spelled inside SQL — one rule, beside the
 // registry that mints them.
 export { quoteIdentifier } from './projection/sql-identifiers.js';
@@ -490,6 +504,7 @@ export {
   type BlobPopulationReport,
   type ContributorTiming,
   type PopulateOptions,
+  type PopulationCache,
 } from './projection/merge.js';
 
 // The declarative closure primitive (zones §7.3): a closure-defined extent is a

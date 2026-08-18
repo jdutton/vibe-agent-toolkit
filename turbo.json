@@ -101,5 +101,13 @@
     "vitest.setup.js",
     "packages/dev-tools/src/copy-yaml-assets.ts"
   ],
-  "globalEnv": ["CI", "NET_AVAILABLE", "UPDATE_DRIFT_GOLDEN"]
+  "globalEnv": [
+    "CI",
+    "NET_AVAILABLE",
+    "UPDATE_DRIFT_GOLDEN",
+    "VAT_EXTENT_SOURCE",
+    "VAT_INVENTORY_CRAWL",
+    "VAT_PROJECTION_STORE",
+    "VAT_RESOURCES_CRAWL"
+  ]
 }

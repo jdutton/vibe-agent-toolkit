@@ -65,7 +65,7 @@ import { safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
 import { ContributorRegistry } from './contributor.js';
 import { FilesystemExtentContributor } from './contributors/filesystem-extent.js';
 import { crawlSourceFor, type CrawlSourceKind } from './crawl-source.js';
-import { BLOBS_SKIP, populate } from './merge.js';
+import { BLOBS_SKIP, populate, type PopulationCache } from './merge.js';
 
 /**
  * A way to obtain the enumerated file population for a root.
@@ -131,11 +131,17 @@ export interface ResourcePopulation {
  * @param options.gitTracker - The ignore oracle, or omitted. Not cosmetic: with
  *   no tracker no row is `gitignored`, so the ignored half of a git tree would
  *   be admitted rather than declined
+ * @param options.cache - A projection store to answer this enumeration from, or
+ *   omitted to enumerate every time. 🪤 A hit here returns rows a run with
+ *   `blobs: BLOBS_SKIP` wrote, so its `extentSource` reports the enumerator this
+ *   process SELECTED rather than one that ran — a lane whose whole point is that
+ *   nothing enumerated cannot also report who enumerated
  * @returns The population and the enumerator that actually produced it
  */
 export async function buildResourcePopulation(options: {
   root: string;
   gitTracker?: GitTracker | undefined;
+  cache?: PopulationCache | undefined;
 }): Promise<ResourcePopulation> {
   const root = safePath.resolve(options.root);
 
@@ -166,6 +172,7 @@ export async function buildResourcePopulation(options: {
     // reader is ever registered above.
     blobs: BLOBS_SKIP,
     ...(options.gitTracker !== undefined && { gitTracker: options.gitTracker }),
+    ...(options.cache !== undefined && { cache: options.cache }),
   });
 
   const paths: string[] = [];

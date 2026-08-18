@@ -40,10 +40,13 @@ const MODULE_NOT_FOUND = 'ERR_MODULE_NOT_FOUND';
 /**
  * Whether a thrown value is Node's "module not installed" error.
  *
+ * Exported because every optional backend asks it, and a second copy would be
+ * free to drift onto the message.
+ *
  * @param error - The thrown value
  * @returns True when the module could not be resolved at all
  */
-function isModuleMissing(error: unknown): boolean {
+export function isModuleMissing(error: unknown): boolean {
   return (
     typeof error === 'object'
     && error !== null
@@ -61,10 +64,15 @@ function isModuleMissing(error: unknown): boolean {
  * user's corpus, and a caller scripting `vat` must be able to tell those apart
  * from the exit code alone.
  *
+ * Exported for the backends that are not selected by a Commander action —
+ * {@link lazyAction} is the shape most take, but a store chosen by an
+ * environment variable is loaded from inside a command rather than in place of
+ * one, and it must fail the same way.
+ *
  * @param backend - What to name and how to install it
  * @returns Never; the process exits
  */
-function reportMissingBackend(backend: OptionalBackend): never {
+export function reportMissingBackend(backend: OptionalBackend): never {
   const install = `npm install ${backend.packageName}`;
   process.stderr.write(
     `${backend.feature} is an optional feature and its backend is not installed.\n`

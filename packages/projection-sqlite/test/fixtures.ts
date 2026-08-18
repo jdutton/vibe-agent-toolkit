@@ -90,6 +90,46 @@ export function sampleBlobRows(key: string = FIRST_BLOB): BlobScopedRows {
  * @param rootId - The root these rows belong to
  * @returns The eight extent-scoped tables
  */
+/**
+ * One `resourceRealizations` row, varying only the three fields a caller cares
+ * about and pinning the rest.
+ *
+ * Extracted because two suites were spelling the same eighteen-column row out in
+ * full — this module's fixed sample and `store.test.ts`'s per-context builder —
+ * and eighteen columns restated twice is eighteen chances for the two to drift
+ * into describing different rows while both look plausible.
+ *
+ * @param fields - The identity, the context, and the path this row realizes
+ * @param fields.resourceId - The identity the row realizes
+ * @param fields.extentId - The context it belongs to
+ * @param fields.path - Root-relative, forward-slashed
+ * @returns The row
+ */
+export function realizationRow(fields: {
+  resourceId: string;
+  extentId: string;
+  path: string;
+}): ExtentScopedRows['resourceRealizations'][number] {
+  return {
+    resourceId: fields.resourceId,
+    extentId: fields.extentId,
+    path: fields.path,
+    pathLower: fields.path,
+    basenameLower: 'a.md',
+    dir: 'docs',
+    depth: 1,
+    ext: '.md',
+    contentKey: FIRST_BLOB,
+    contentState: 'keyed',
+    mtime: new Date('2026-08-18T12:34:56.789Z'),
+    exists: true,
+    isDirectory: false,
+    gitignored: false,
+    isSymlink: false,
+    symlinkResolves: null,
+  };
+}
+
 export function sampleExtentRows(rootId = 'root-1'): ExtentScopedRows {
   return {
     roots: [{ id: rootId, path: '/corpus' }],
@@ -101,24 +141,9 @@ export function sampleExtentRows(rootId = 'root-1'): ExtentScopedRows {
       fromEnumeration: false,
       vatId: null,
     }],
-    resourceRealizations: [{
-      resourceId: 'res-1',
-      extentId: 'ext-1',
-      path: 'docs/a.md',
-      pathLower: 'docs/a.md',
-      basenameLower: 'a.md',
-      dir: 'docs',
-      depth: 1,
-      ext: '.md',
-      contentKey: FIRST_BLOB,
-      contentState: 'keyed',
-      mtime: new Date('2026-08-18T12:34:56.789Z'),
-      exists: true,
-      isDirectory: false,
-      gitignored: false,
-      isSymlink: false,
-      symlinkResolves: null,
-    }],
+    resourceRealizations: [
+      realizationRow({ resourceId: 'res-1', extentId: 'ext-1', path: 'docs/a.md' }),
+    ],
     resourceExtents: [{ resourceId: 'res-1', extentId: 'ext-1' }],
     resourceTags: [{ resourceId: 'res-1', tag: 'kind', value: null, source: 'filename' }],
     realizationConditions: [{

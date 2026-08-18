@@ -16,11 +16,13 @@ import {
 	projectionCrawlSelected,
 	type SharedPopulationSource,
 } from '@vibe-agent-toolkit/claude-marketplace';
+import type { PopulationCache } from '@vibe-agent-toolkit/resources';
 import { findProjectRoot, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { handleCommandError } from '../utils/command-error.js';
 import { createLogger } from '../utils/logger.js';
+import { withPopulationCache } from '../utils/projection-store.js';
 
 import { gitTrackerForProjectRoot } from './audit/distributed-tree.js';
 
@@ -159,11 +161,20 @@ export async function routeInventory(
 	// is unconditional — it is asked per skill, about that skill's own root, and answers
 	// `undefined` for any root it cannot serve.
 	const sharedRegistry = linkRegistryProviderFor(absolute);
-	const sharedPopulation = populationProviderFor(absolute);
-	return extractClaudePluginInventory(absolute, {
-		...(sharedRegistry !== undefined && { sharedRegistry }),
-		...(sharedPopulation !== undefined && { sharedPopulation }),
-		gitTrackerSource: gitTrackerForProjectRoot,
+	// Root discovery at the CLI boundary, once, and then handed down — both the
+	// population provider and the store key are rooted, and deriving the root
+	// twice is how two rules drift into disagreeing about which corpus this is.
+	const projectRoot = findProjectRoot(absolute);
+	// The store scopes the whole extraction, not the provider call: the extractor
+	// MEMOIZES `sharedPopulation` and reaches it when it is about to walk its
+	// first skill, which is after this frame would otherwise have closed it.
+	return withPopulationCache({ root: projectRoot ?? absolute }, async (cache) => {
+		const sharedPopulation = populationProviderFor(projectRoot, cache);
+		return extractClaudePluginInventory(absolute, {
+			...(sharedRegistry !== undefined && { sharedRegistry }),
+			...(sharedPopulation !== undefined && { sharedPopulation }),
+			gitTrackerSource: gitTrackerForProjectRoot,
+		});
 	});
 }
 
@@ -187,20 +198,26 @@ export async function routeInventory(
  *    skill's OWN directory — so one population rooted at the plugin would answer a
  *    different question for every skill. No root, no provider.
  *
- * Root discovery belongs at this CLI boundary; inner functions take the root as a
- * parameter.
+ * Root discovery belongs at this CLI boundary; this function takes the root the
+ * caller already discovered rather than discovering a second one.
  *
  * The tracker is resolved here too, and its absence is not cosmetic: with no
  * tracker `resource_realizations.gitignored` is `false` on every row, and the
  * declaration correspondingly drops its gitignore refusal rather than claiming a
  * branch that cannot run.
  *
- * @param subjectDir - The plugin directory being inventoried
+ * @param projectRoot - The discovered project root, or `null` when there is none
+ * @param cache - The run's projection store, or `undefined` to re-derive. A
+ *   SEPARATE selector from the one above: which crawler answers membership and
+ *   whether the answer is cached are independent choices, and conflating them
+ *   would make the cache unmeasurable against the lane it is supposed to speed up
  * @returns A population source, or `undefined` to use the walk
  */
-function populationProviderFor(subjectDir: string): SharedPopulationSource | undefined {
+function populationProviderFor(
+	projectRoot: string | null,
+	cache: PopulationCache | undefined,
+): SharedPopulationSource | undefined {
 	if (!projectionCrawlSelected()) return undefined;
-	const projectRoot = findProjectRoot(subjectDir);
 	if (projectRoot === null) return undefined;
 	return async (skillMdPaths) => {
 		const gitTracker = await gitTrackerForProjectRoot(projectRoot);
@@ -208,6 +225,7 @@ function populationProviderFor(subjectDir: string): SharedPopulationSource | und
 			root: projectRoot,
 			skillMdPaths,
 			...(gitTracker !== undefined && { gitTracker }),
+			...(cache !== undefined && { cache }),
 		});
 	};
 }

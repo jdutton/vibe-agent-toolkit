@@ -121,6 +121,34 @@ export interface ProjectionTableSpec<
   readonly primaryKey: readonly ColumnOf<Row>[];
   /** Every column, in the order the row schema declares it. */
   readonly columns: readonly ColumnOf<Row>[];
+  /**
+   * The column naming the resolution context a row belongs to, when it has one.
+   *
+   * This is what makes a stored extent **divisible**. A store keys extent-scoped
+   * rows on `(rootId, treeHash)`, but two commands over one tree ask different
+   * questions of it: `vat inventory` declares the filesystem extent plus one
+   * closure extent per skill, `vat resources scan` declares the filesystem
+   * extent alone. Without this column a write would have to replace the whole
+   * key range, so the narrow run would silently delete the broad run's closure
+   * extents — and the alternative (folding the request into the tree hash) gives
+   * the two runs disjoint keys and stops them sharing the enumeration that is
+   * over half the cost.
+   *
+   * With it, a write replaces only the contexts it produced, and a read takes
+   * only the contexts it asked for.
+   *
+   * Three tables legitimately have none — `roots`, `resources` and
+   * `resource_tags` are facts about the *tree* or about an *identity*, not about
+   * one extent's view of it, and two contributors that both realize a file
+   * contribute the same identity row. Those are merged by primary key rather
+   * than partitioned, and a reader reconstructs the subset it is owed by
+   * following the references its own contexts' rows carry.
+   *
+   * Not derivable: `extentId` and `contextId` are two spellings of the same
+   * relation (an extent *is* a resolution context), and nothing in a Zod object
+   * says which of a row's string columns is the one a store partitions on.
+   */
+  readonly contextColumn?: ColumnOf<Row> | undefined;
 }
 
 /**
@@ -133,17 +161,17 @@ export interface ProjectionTableSpec<
 export const PROJECTION_TABLES = {
   roots: table('roots', 'extent', RootRowSchema, ['id']),
   resources: table('resources', 'extent', ResourceRowSchema, ['resourceId']),
-  resourceRealizations: table('resourceRealizations', 'extent', ResourceRealizationRowSchema, ['extentId', 'path']),
-  resourceExtents: table('resourceExtents', 'extent', ResourceExtentRowSchema, ['resourceId', 'extentId']),
+  resourceRealizations: table('resourceRealizations', 'extent', ResourceRealizationRowSchema, ['extentId', 'path'], 'extentId'),
+  resourceExtents: table('resourceExtents', 'extent', ResourceExtentRowSchema, ['resourceId', 'extentId'], 'extentId'),
   resourceTags: table('resourceTags', 'extent', ResourceTagRowSchema, ['resourceId', 'tag', 'value', 'source']),
   realizationConditions: table('realizationConditions', 'extent', RealizationConditionRowSchema, [
     'extentId',
     'path',
     'code',
     'resourceId',
-  ]),
-  resolutionContexts: table('resolutionContexts', 'extent', ResolutionContextRowSchema, ['contextId']),
-  zoneProvenance: table('zoneProvenance', 'extent', ZoneProvenanceRowSchema, ['contextId', 'contributorId']),
+  ], 'extentId'),
+  resolutionContexts: table('resolutionContexts', 'extent', ResolutionContextRowSchema, ['contextId'], 'contextId'),
+  zoneProvenance: table('zoneProvenance', 'extent', ZoneProvenanceRowSchema, ['contextId', 'contributorId'], 'contextId'),
   blobs: table('blobs', 'blob', BlobRowSchema, ['contentKey']),
   blobReferences: table('blobReferences', 'blob', BlobReferenceRowSchema, ['blob', 'ordinal']),
   blobSections: table('blobSections', 'blob', BlobSectionRowSchema, ['blob', 'ordinal']),
@@ -164,6 +192,9 @@ export const PROJECTION_TABLES = {
  * @param scope - What these rows are a fact about
  * @param schema - The row schema, which supplies the column order
  * @param primaryKey - The columns that identify a row, in comparison order
+ * @param contextColumn - The column naming the row's resolution context, for a
+ *   table whose rows belong to one; omitted for the three that describe the tree
+ *   or an identity rather than one extent's view of it
  * @returns The table's specification
  */
 function table<Name extends ProjectionTableName, Scope extends ProjectionTableScope>(
@@ -171,6 +202,7 @@ function table<Name extends ProjectionTableName, Scope extends ProjectionTableSc
   scope: Scope,
   schema: RowSchema<ProjectionRow<Name>>,
   primaryKey: readonly ColumnOf<ProjectionRow<Name>>[],
+  contextColumn?: ColumnOf<ProjectionRow<Name>>,
 ): ProjectionTableSpec<Name, ProjectionRow<Name>, Scope> {
   return {
     key,
@@ -178,6 +210,11 @@ function table<Name extends ProjectionTableName, Scope extends ProjectionTableSc
     scope,
     schema,
     primaryKey,
+    // Conditional spread rather than `contextColumn: contextColumn`:
+    // `exactOptionalPropertyTypes` makes an absent key and one holding
+    // `undefined` different values, and "this table has no context column" is
+    // the absence.
+    ...(contextColumn !== undefined && { contextColumn }),
     // `Object.keys` of a Zod shape is the shape literal's key order, and the
     // cast only re-states what that shape is already typed as one level up.
     columns: Object.keys(projectionRowShape(schema)) as ColumnOf<ProjectionRow<Name>>[],

@@ -81,6 +81,7 @@
     "url": "https://github.com/jdutton/vibe-agent-toolkit.git"
   },
   "optionalDependencies": {
+    "@vibe-agent-toolkit/projection-sqlite": "workspace:*",
     "@vibe-agent-toolkit/rag": "workspace:*",
     "@vibe-agent-toolkit/rag-lancedb": "workspace:*"
   }

@@ -168,10 +168,18 @@ export interface ProjectionStore {
    * Read back the facts held for a set of content keys.
    *
    * Returns only what the store holds — a key it has never seen contributes no
-   * rows, and that is a miss rather than an error. **Presence is decided by the
-   * `blobs` table alone**: a blob with no references legitimately has zero
-   * `blobReferences` rows, so a caller inferring "not cached" from an empty
-   * child table would re-parse every reference-free file forever.
+   * rows, and that is a miss rather than an error.
+   *
+   * 🪤 **A key is "held" when it has a `blobs` row OR a `blobConditions` row,
+   * and neither table alone answers the question.** A blob with no references
+   * legitimately has zero `blobReferences` rows, so inferring "not cached" from
+   * an empty child table would re-parse every reference-free file forever — but
+   * `blobs` alone is not the oracle either, because the derivation stage
+   * declines to parse a blob that is unreadable, changed under it, or **binary**
+   * (see `blob-population.ts`'s NUL sniff), and records a `blobConditions` row
+   * *instead of* a `blobs` row. Any corpus shipping one image or archive has
+   * such keys, so a caller checking `blobs` alone would call every real corpus a
+   * miss forever.
    *
    * @param contentKeys - The keys to look up; may be empty
    * @returns The rows held for those keys, across all four blob-scoped tables
@@ -179,13 +187,37 @@ export interface ProjectionStore {
   readBlobFacts(contentKeys: readonly string[]): Promise<BlobScopedRows>;
 
   /**
-   * Record the extent of one tree.
+   * Record the extent of one tree — **additively, at context granularity**.
    *
    * **Atomic across the eight tables.** A reader must never observe one table
    * updated and another not — a projection half from one tree and half from
-   * another is not a projection of anything. Writing a key the store already
-   * holds replaces it, which is a no-op in content terms because the key names
-   * the contents.
+   * another is not a projection of anything.
+   *
+   * ## 🔑 A write replaces the contexts it carries, and nothing else
+   *
+   * {@link ExtentKey} names a *tree*, not a *question*, and two commands over
+   * one tree ask different questions of it: `vat inventory` declares the
+   * filesystem extent plus one closure extent per skill, `vat resources scan`
+   * declares the filesystem extent alone. A write that replaced the whole key
+   * range would let the narrow run silently delete the broad run's closure
+   * extents — the same key, a strictly smaller answer, and no error.
+   *
+   * So a write replaces exactly the resolution contexts its own rows name (see
+   * {@link ProjectionTableSpec.contextColumn}) and leaves every other context
+   * under that key alone. The filesystem extent is written once and read by
+   * every command; each command adds its own closure extents; nobody clobbers
+   * anybody.
+   *
+   * The alternative — folding a digest of the request into `treeHash` — was
+   * rejected deliberately: it gives two commands disjoint keys, so they share
+   * nothing but the blob tier, and enumeration is over half of what the cache
+   * exists to save.
+   *
+   * The three tables with no context column (`roots`, `resources`,
+   * `resourceTags`) are facts about the tree or about an identity rather than
+   * about one extent's view of it, so they are **merged by primary key**: two
+   * commands that both realize a file contribute the same identity row, and
+   * whichever writes last writes the same bytes.
    *
    * @param key - Which root, which tree
    * @param rows - The eight extent-scoped tables; any of them may be empty
@@ -193,7 +225,14 @@ export interface ProjectionStore {
   writeExtent(key: ExtentKey, rows: ExtentScopedRows): Promise<void>;
 
   /**
-   * Read back the extent of one tree.
+   * Read back everything stored under one tree.
+   *
+   * Returns **every** context written under the key, not only the ones the
+   * caller is about to ask about — the store does not know what a caller wants,
+   * and narrowing it here would need a second parameter that duplicates the
+   * `zone_provenance` rows the answer already carries. Selecting the subset a
+   * run is owed is `store-hydration.ts`'s job, which is also where the rule for
+   * the three context-less tables lives.
    *
    * @param key - Which root, which tree
    * @returns The eight tables, or `undefined` when this tree was never written.
@@ -229,14 +268,18 @@ export interface ProjectionStore {
  * old one is cold, and the OS tmpdir purge that already owns this cache's
  * eviction reclaims it. That is the whole mechanism.
  *
- * Three inputs, because all three change what is stored:
+ * Four inputs, because all four change what is stored:
  *
  * - each table's **row schema shape**, prose stripped, so rewording a
  *   `.describe()` cannot cool the cache while adding an optional field does;
  * - its **primary key**, which is the stored table's key and cannot be read
  *   back out of a Zod object;
  * - its **scope**, which decides which partition a row is filed under, so
- *   moving a table between them must invalidate both.
+ *   moving a table between them must invalidate both;
+ * - its **context column**, which decides what a write replaces. Rows already
+ *   filed under one partitioning would survive a write that partitions
+ *   differently, so a store written before the change and read after it holds
+ *   rows this build would never have kept.
  *
  * @returns Twelve lowercase hex digits, stable across processes and rebuilds
  *
@@ -251,7 +294,10 @@ export function projectionShapeDigest(): string {
   // reordering is a different document (see `exportProjection`), so letting it
   // move the digest is correct rather than merely tolerable.
   for (const spec of Object.values(PROJECTION_TABLES)) {
-    hash.update(`\0${spec.name}\0${spec.scope}\0${spec.primaryKey.join(',')}\0${schemaShapeSource(spec.schema)}`);
+    hash.update(
+      `\0${spec.name}\0${spec.scope}\0${spec.primaryKey.join(',')}`
+      + `\0${spec.contextColumn ?? ''}\0${schemaShapeSource(spec.schema)}`,
+    );
   }
   memoizedShapeDigest = hash.digest('hex').slice(0, SHAPE_DIGEST_LENGTH);
   return memoizedShapeDigest;

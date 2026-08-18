@@ -66,7 +66,7 @@ export function extentDigest(contribution: ExtentContribution): string {
   const serializedRows: string[] = [];
   for (const table of DIGESTED_TABLES) {
     for (const row of contribution[table]) {
-      serializedRows.push(canonicalize({ table, row }));
+      serializedRows.push(canonicalJson({ table, row }));
     }
   }
   // Sorting the serialized rows — not the rows themselves — is what makes the
@@ -84,10 +84,17 @@ export function extentDigest(contribution: ExtentContribution): string {
  * digest differently. Dates are normalised to ISO-8601 because
  * `resource_realizations.mtime` is a `Date` after Zod coercion.
  *
+ * Exported for `store-hydration.ts`, which compares a run's requested
+ * `parameterSet` against the one a stored `zone_provenance` row recorded. That
+ * is the same equality this digest needs and for the same reason — a parameter
+ * set assembled by two code paths in two key orders is one parameter set — so
+ * it is this function rather than a second one that would be free to disagree
+ * with it.
+ *
  * @param value - Any row, column value or nested JSON value
  * @returns A canonical string form
  */
-function canonicalize(value: unknown): string {
+export function canonicalJson(value: unknown): string {
   if (value === undefined) {
     return 'undefined';
   }
@@ -100,14 +107,14 @@ function canonicalize(value: unknown): string {
   if (Array.isArray(value)) {
     // Array order IS data (`lens_entry_points.ancestry` is "nearest ancestor
     // first"), so it is preserved rather than sorted.
-    const items = value.map((item: unknown) => canonicalize(item));
+    const items = value.map((item: unknown) => canonicalJson(item));
     return `[${items.join(',')}]`;
   }
   const entries = Object.entries(value as Record<string, unknown>)
     // An absent key and a key holding `undefined` are the same fact; keeping
     // both would make the digest move on a no-op change.
     .filter(([, item]) => item !== undefined)
-    .map(([key, item]) => `${JSON.stringify(key)}:${canonicalize(item)}`);
+    .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`);
   entries.sort(compareCodeUnits);
   return `{${entries.join(',')}}`;
 }

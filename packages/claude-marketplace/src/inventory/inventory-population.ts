@@ -49,6 +49,7 @@ import {
   FilesystemExtentContributor,
   populate,
   type JsonValue,
+  type PopulationCache,
   type Projection,
 } from '@vibe-agent-toolkit/resources';
 import { compareCodeUnits, safePath, toForwardSlash, type GitTracker } from '@vibe-agent-toolkit/utils';
@@ -207,12 +208,20 @@ function relativeToRoot(root: string, absolute: string): string {
  *   population. Not cosmetic: `resource_realizations.gitignored` is filled only
  *   when a tracker was supplied, so its absence changes which refusal rules the
  *   declaration may honestly carry
+ * @param options.cache - A projection store to answer this population from, or
+ *   omitted to re-derive every time. 🔑 The reuse rule compares this run's
+ *   registered contributors AND their parameter sets against what the store
+ *   holds, which is why {@link inventoryExtentDeclaration} being a parameter set
+ *   rather than a hard-coded walk is load-bearing here: two runs over one tree
+ *   under different declarations are two questions, and the store refuses to
+ *   answer one with the other
  * @returns The indexed population
  */
 export async function buildInventoryPopulation(options: {
   root: string;
   skillMdPaths: readonly string[];
   gitTracker?: GitTracker | undefined;
+  cache?: PopulationCache | undefined;
 }): Promise<InventoryPopulation> {
   const root = safePath.resolve(options.root);
   const hasGitTracker = options.gitTracker !== undefined;
@@ -240,6 +249,7 @@ export async function buildInventoryPopulation(options: {
     registry,
     parameters,
     ...(options.gitTracker !== undefined && { gitTracker: options.gitTracker }),
+    ...(options.cache !== undefined && { cache: options.cache }),
   });
 
   return indexPopulation(root, options.skillMdPaths, projection);

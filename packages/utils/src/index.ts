@@ -176,6 +176,8 @@ export {
   // is every dump being refused rather than a subtly wrong number.
   CRAWL_SEAM_DUMP_VERSION,
   CRAWL_SHARED_GIT_TRACKER_ID,
+  CRAWL_STORE_READ_ID,
+  CRAWL_STORE_WRITE_ID,
   CRAWL_STRATA,
   CRAWL_WALKER_GITIGNORE_ID,
   CRAWL_WALKER_ID,

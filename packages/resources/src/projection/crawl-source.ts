@@ -464,6 +464,24 @@ export const EXTENT_SOURCE_GIT = 'git';
  *   the root is not in a repository, because a root outside git has no git answer
  *   and failing would make the switch unusable across a mixed corpus
  */
+/**
+ * What this process's environment asks the enumerator to be, verbatim.
+ *
+ * Exported for the projection store's key. {@link crawlSourceFor} decides the
+ * *effective* source, which also depends on whether the root is in a
+ * repository; this is the raw **selector**, and the store wants the selector
+ * rather than the outcome. Two runs with the same selector always resolve the
+ * same way for the same root, so keying on it can only over-separate — a run
+ * that asked for git on a non-repository is filed apart from one that asked for
+ * nothing, though both walked. Conservative in the safe direction, and the safe
+ * direction is the one where a cache never hands back the other answer.
+ *
+ * @returns The selector as set, or `undefined` when it is not set at all
+ */
+export function crawlSourceSelector(): string | undefined {
+  return process.env[EXTENT_SOURCE_ENV];
+}
+
 export function crawlSourceFor(root: string): CrawlSource {
   const wantsGit = process.env[EXTENT_SOURCE_ENV] === EXTENT_SOURCE_GIT;
   if (wantsGit && gitFindRoot(root) !== null) {

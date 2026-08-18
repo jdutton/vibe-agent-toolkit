@@ -24,6 +24,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   across processes with atomic multi-table commits. **Requires Node >= 22.13.0** (`node:sqlite` is
   absent from 22.12.0); the rest of the toolkit stays at `>= 22.0.0`.
 
+- **The projection store is now wired to the population, behind `VAT_PROJECTION_STORE=sqlite`.**
+  `populate()` takes an optional cache and answers from it when the store already holds an answer to
+  *this* run's question; on a miss it derives as before and records both tiers. Off by default: a
+  cache changes no answer, so the reason to hold it back is evidence rather than correctness. Both
+  projection lanes are wired — `vat inventory`'s membership and `vat resources scan`'s enumeration —
+  so the two share one stored filesystem extent instead of enumerating the tree twice. The selector
+  is an environment variable and therefore inherited by every phase child.
+
+  The key is `(rootId, treeHash)` plus a digest of the **ambient inputs that change what a
+  contributor stores** — whether a `GitTracker` was supplied, and `VAT_EXTENT_SOURCE`. Neither
+  appears in any parameter set, and both change the filesystem extent's rows, so without them
+  `VAT_EXTENT_SOURCE=git vat inventory` followed by a plain `vat inventory` over an unchanged tree
+  would be a silent false hit. Changing either therefore cools the cache, deliberately.
+
+- **`ProjectionStore.writeExtent` is additive at resolution-context granularity.** An `ExtentKey`
+  names a *tree*, not a *question*, and two commands over one tree ask different questions of it. A
+  write now replaces only the resolution contexts its own rows name and leaves every other context
+  under that key alone, so a narrow run can no longer silently delete a broad run's closure extents.
+  `PROJECTION_TABLES` entries gained a `contextColumn` declaring what a write partitions on — folded
+  into `projectionShapeDigest()`, because rows filed under one partitioning would otherwise survive a
+  write that partitions differently. The three tables without one (`roots`, `resources`,
+  `resource_tags`) describe the tree or an identity rather than one extent's view of it and are
+  merged by primary key.
+
+- **`assembleProjection()`, `blobFactsCover()`, `emptyBlobRows()`, `keyedContentKeys()`,
+  `selectRequestedContexts()` and `selectRequestedRows()` in `@vibe-agent-toolkit/resources`** — the
+  reuse rule over the storage seam, exported because it is the half a second backend must not be
+  free to reinterpret. A stored extent serves a run when every contributor the run registered has a
+  `zone_provenance` row under the same `parameterSet`; a hit returns only that run's contexts, and
+  the blob tier is checked rather than trusted.
+
+- **`projection-store:read` and `projection-store:write` crawl-timing ids** — a cache hit runs no
+  contributor, so without these rows a dump cannot tell a served population from a subject that
+  exercised nothing. A read row with no write row is a hit; both is a miss; neither means no store.
+
 - **`vat resources scan --format json`** — the same document as the YAML default, for consumers
   without a YAML parser.
 - **`vat resources scan` now reports a `lane` field** naming which enumerator produced the

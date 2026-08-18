@@ -24,6 +24,20 @@
  *    `blobs` rows their realizations now name. Strictly after the fixpoint, and
  *    reported as a separate measurement: see {@link BlobPopulationReport}.
  *
+ * ## A store short-circuits all of it, or none of it
+ *
+ * With a {@link PopulationCache}, the driver asks the store first and returns a
+ * hydrated projection when the store already holds an answer to *this* question
+ * — see `store-hydration.ts` for what makes a stored extent an answer to one run
+ * and not another. On a miss the four steps above run exactly as they always
+ * have, and what they produced is written back.
+ *
+ * It is deliberately all-or-nothing. A partial hit — "the base is stored, run
+ * the closure over it" — would need the base's *builder* rather than its rows,
+ * and would make the fixpoint's convergence claim rest on rows no contributor in
+ * this process emitted. The cheap, checkable version is the whole run or none of
+ * it.
+ *
  * ## Non-convergence throws, and never returns what it reached
  *
  * A driver that capped the loop and returned would hand back a *truncated*
@@ -45,15 +59,27 @@
  * loop ends on the first pass in which none of them moved.
  */
 
-import { CRAWL_BLOB_POPULATE_ID, crawlTimingStart, recordContributorInvocation, recordCrawlPass, safePath, withContributorStratum, type GitTracker } from '@vibe-agent-toolkit/utils';
+import { CRAWL_BLOB_POPULATE_ID, CRAWL_STORE_READ_ID, CRAWL_STORE_WRITE_ID, crawlTimingStart, recordContributorInvocation, recordCrawlPass, safePath, withContributorStratum, type GitTracker } from '@vibe-agent-toolkit/utils';
 
 import type { JsonValue } from '../schemas/projection-shared.js';
 
 import { populateBlobs, type BlobPopulationResult } from './blob-population.js';
 import { RunContentCache } from './content-cache.js';
 import type { ContributorRegistry, ExtentContribution, ExtentContributor } from './contributor.js';
-import { extentDigest } from './digest.js';
+import { crawlSourceSelector } from './crawl-source.js';
+import { canonicalJson, extentDigest } from './digest.js';
+import { rootIdFor } from './identity.js';
 import { ProjectionBuilder, type Projection } from './projection.js';
+import {
+  assembleProjection,
+  blobFactsCover,
+  emptyBlobRows,
+  keyedContentKeys,
+  selectRequestedContexts,
+  selectRequestedRows,
+  type RequestedContributor,
+} from './store-hydration.js';
+import { splitProjectionByScope, type ExtentKey, type ProjectionStore } from './store.js';
 
 /**
  * The pass number every driver-placed row in the `base` stratum carries.
@@ -236,6 +262,47 @@ export interface PopulateOptions {
    * them here; a caller that wants them on disk needs no caller at all.
    */
   onContributorTiming?: ((timing: ContributorTiming) => void) | undefined;
+  /**
+   * A store to answer this population from, and to record it in on a miss.
+   *
+   * Omitted, every run re-derives — which is what shipped, and is still the
+   * default. See {@link PopulationCache}.
+   */
+  cache?: PopulationCache | undefined;
+}
+
+/**
+ * The store this run may read from and will write to, and the tree it names.
+ *
+ * One object rather than two options, because neither half is usable alone: a
+ * store with no tree hash has no key, and a tree hash with no store has nothing
+ * to ask.
+ *
+ * The `rootId` half of {@link ExtentKey} is deliberately **not** here.
+ * `populate()` derives it from `root` with the same `rootIdFor` the identity map
+ * uses, so a caller cannot hand the store one root's hash filed under another
+ * root's id — which would be a silent cross-corpus hit, the one failure a cache
+ * key exists to make impossible.
+ */
+export interface PopulationCache {
+  /** The backend. `resources` never selects one; a caller supplies it. */
+  readonly store: ProjectionStore;
+  /**
+   * A hash naming this tree's exact contents — see {@link ExtentKey.treeHash}.
+   *
+   * In a repository, `@vibe-validate/git`'s dirty-corrected `write-tree` hash
+   * (`gitTreeSnapshot().hash`), which covers unstaged edits and untracked files
+   * and carries no timestamp. 🪤 Never `git stash create`, whose commit object
+   * does — two calls over byte-identical content would disagree and every read
+   * would miss.
+   *
+   * ⚠️ That hash covers the whole **repository**, not the subtree `root` names.
+   * An edit anywhere in the repository therefore cools the cache for every root
+   * inside it. Conservative in the safe direction, and cheap to be conservative
+   * about: `git write-tree` against a throwaway index is the same call
+   * `vibe-validate` makes on every commit.
+   */
+  readonly treeHash: string;
 }
 
 /** What one contributor invocation cost. */
@@ -337,6 +404,21 @@ export class ClosureNonConvergenceError extends Error {
  */
 export async function populate(options: PopulateOptions): Promise<Projection> {
   const { root, registry, parameters, maxIterations = DEFAULT_MAX_ITERATIONS } = options;
+
+  // Resolved BEFORE anything else, and deliberately before the cache is asked:
+  // it refuses an unsound `'skip'` request by throwing, and a run that would
+  // have been refused must not be silently served from a store instead. The
+  // request's soundness is a property of the registry, not of the cache's luck.
+  const deriveBlobs = blobDerivationFor(options);
+
+  // Same `rootIdFor` the identity map mints `roots.id` with — see
+  // {@link PopulationCache} on why the caller does not supply it.
+  const rootId = rootIdFor(root);
+  const cached = await readCachedProjection(options, rootId, deriveBlobs);
+  if (cached !== undefined) {
+    return cached;
+  }
+
   // Constructed here and nowhere else, so its lifetime is exactly this run's.
   // A module-level cache would leak bytes across two populations in one process
   // — including two populations of a tree that changed in between, which would
@@ -394,7 +476,6 @@ export async function populate(options: PopulateOptions): Promise<Projection> {
   // `null` rather than a skipped-flag beside a zeroed result, so that every
   // consumer of the stage's outcome below is forced to handle the "did not run"
   // case rather than reading zeros as measurements.
-  const deriveBlobs = blobDerivationFor(options);
   const blobPopulation = deriveBlobs ? await runBlobStage(builder) : null;
   const promotionsBeforeClosure = builder.contentPromotions;
 
@@ -416,7 +497,171 @@ export async function populate(options: PopulateOptions): Promise<Projection> {
     options.onBlobPopulation?.({ ...blobPopulation, ...promoted });
   }
 
-  return builder.build();
+  const projection = builder.build();
+  await writeCachedProjection(options, rootId, deriveBlobs, projection);
+  return projection;
+}
+
+/**
+ * The store key for this run — the tree, plus the ambient inputs that change
+ * what a contributor puts in it.
+ *
+ * ## 🪤 Why the tree hash alone is not the key
+ *
+ * The reuse rule compares `(contributorId, parameterSet)`, which is the right
+ * question and is still not sufficient: a contributor can read inputs that
+ * appear in **no** parameter set. `FilesystemExtentContributor` has a fixed id,
+ * always runs under `null`, and reads two of them —
+ *
+ * | input | reaches it via | what it changes |
+ * |---|---|---|
+ * | a {@link GitTracker} | {@link ProjectionBase.gitTracker} | every realization's `gitignored`; with no tracker the whole column is `false` |
+ * | {@link EXTENT_SOURCE_ENV} | {@link crawlSourceFor} at construction | which enumerator produces the extent at all |
+ *
+ * — so without this, `VAT_EXTENT_SOURCE=git vat inventory` followed by a plain
+ * `vat inventory` over an unchanged tree is a **false hit**: same key, same
+ * question, materially different rows, exit 0. {@link PopulateOptions.parameters}
+ * already argues that a declaration hidden in a *constructor* leaves a
+ * provenance row that under-describes its own extent; these are the same fault
+ * arriving through the base and through the environment instead.
+ *
+ * ## Why this is NOT the rejected "request digest in the tree hash"
+ *
+ * Folding a digest of the *request* into `treeHash` is a settled do-not: it
+ * gives two commands disjoint keys, so they share nothing but the blob tier,
+ * and enumeration is over half of what the cache exists to save. Ambient inputs
+ * are the opposite case on both counts — they are **constant across the verbs
+ * of one invocation and across a phase run**, so folding them separates nothing
+ * that would otherwise share; and two runs that disagree on them genuinely
+ * cannot share a filesystem extent, so they **must** be separated.
+ *
+ * ## The rule to apply when a third one appears
+ *
+ * Ask of every populate option: *would two runs differing only in this produce
+ * different rows?* Every yes belongs here. If the list grows past these two,
+ * stop extending it and let each contributor declare its own ambient
+ * fingerprint instead — the list below is the set someone remembered to model,
+ * which is exactly the property that failed the first time.
+ *
+ * @param options - The run's options, for its ambient inputs
+ * @param rootId - This run's corpus root id
+ * @param cache - The caller's store and tree hash
+ * @returns The key to read and write under
+ */
+function storeKeyFor(options: PopulateOptions, rootId: string, cache: PopulationCache): ExtentKey {
+  const ambient = canonicalJson({
+    gitTracker: options.gitTracker !== undefined,
+    extentSource: crawlSourceSelector() ?? null,
+  });
+  return { rootId, treeHash: `${cache.treeHash} ${ambient}` };
+}
+
+/**
+ * Every contributor this run registered, paired with the parameters it will run
+ * under — the run's question, as `zone_provenance` records it.
+ *
+ * Both strata, because a stored extent that holds the base but not the closure
+ * answers only half of what was asked, and a half answer here is a projection
+ * whose closure extents are each their own declared root.
+ *
+ * @param options - The run's registry and parameters
+ * @returns One entry per registered contributor
+ */
+function requestedContributors(options: PopulateOptions): readonly RequestedContributor[] {
+  return [...options.registry.byStratum('base'), ...options.registry.byStratum('closure')]
+    .map((contributor) => ({
+      id: contributor.id,
+      parameterSet: options.parameters?.[contributor.id] ?? null,
+    }));
+}
+
+/**
+ * Answer this population from the store, if the store holds an answer to this
+ * exact question.
+ *
+ * Every way of not answering returns `undefined` and the run proceeds as if
+ * there were no store — but a store that *throws* is not one of them. A cache is
+ * recoverable by definition, so swallowing its errors is tempting; it is also
+ * how a store that has been silently failing to write for a week goes unnoticed
+ * while every run pays full price and reports success. The failure surfaces.
+ *
+ * @param options - The run's options, including its cache if it has one
+ * @param rootId - This run's corpus root id
+ * @param deriveBlobs - Whether this run reads the blob-keyed tables at all
+ * @returns The hydrated projection, or `undefined` on any kind of miss
+ */
+async function readCachedProjection(
+  options: PopulateOptions,
+  rootId: string,
+  deriveBlobs: boolean,
+): Promise<Projection | undefined> {
+  const cache = options.cache;
+  if (cache === undefined) return undefined;
+
+  const startedAt = crawlTimingStart();
+  try {
+    const stored = await cache.store.readExtent(storeKeyFor(options, rootId, cache));
+    if (stored === undefined) return undefined;
+
+    const contexts = selectRequestedContexts(stored, requestedContributors(options));
+    if (contexts === undefined) return undefined;
+
+    const extent = selectRequestedRows(stored, { contexts, rootId });
+    // A run that declined to derive the blob tier must also decline to read it
+    // back, or a hit would hand it four tables a populate would have left empty
+    // — and `'skip'` is a claim about what the caller reads, so honouring it on
+    // both paths is what keeps hydrated and populated indistinguishable.
+    if (!deriveBlobs) return assembleProjection(extent, emptyBlobRows());
+
+    const contentKeys = keyedContentKeys(extent);
+    const blobs = await cache.store.readBlobFacts(contentKeys);
+    // See `store-hydration.ts`: an extent written by a run that skipped blob
+    // derivation names keys the blob tier does not hold, and accepting it would
+    // reduce every closure extent to its own root while reporting success.
+    if (!blobFactsCover(blobs, contentKeys)) return undefined;
+
+    return assembleProjection(extent, blobs);
+  } finally {
+    // Filed whether this hit or missed, and that is the point: a hit runs no
+    // contributor, so without this row a dump cannot tell a served population
+    // from a subject that exercised nothing. See {@link CRAWL_STORE_READ_ID}.
+    recordCrawlPass(CRAWL_STORE_READ_ID, 'base', BASE_STRATUM_PASS, startedAt);
+  }
+}
+
+/**
+ * Record a freshly derived population in the store.
+ *
+ * Blob facts first, then the extent. The order is the recovery order: a reader
+ * that finds the extent must find the facts its realizations name, and writing
+ * the extent first opens a window in which a concurrent reader hits the extent,
+ * fails the coverage check, and re-derives a corpus that was moments from being
+ * complete.
+ *
+ * `writeBlobFacts` is skipped rather than called with four empty tables when the
+ * run derived none — the call would be a no-op, but skipping it keeps "this run
+ * had nothing to say about blobs" distinguishable from "it said there are none"
+ * in anything that watches the store.
+ *
+ * @param options - The run's options, including its cache if it has one
+ * @param rootId - This run's corpus root id
+ * @param deriveBlobs - Whether this run derived the blob-keyed tables
+ * @param projection - What the run produced
+ */
+async function writeCachedProjection(
+  options: PopulateOptions,
+  rootId: string,
+  deriveBlobs: boolean,
+  projection: Projection,
+): Promise<void> {
+  const cache = options.cache;
+  if (cache === undefined) return;
+
+  const startedAt = crawlTimingStart();
+  const { blobs, extent } = splitProjectionByScope(projection);
+  if (deriveBlobs) await cache.store.writeBlobFacts(blobs);
+  await cache.store.writeExtent(storeKeyFor(options, rootId, cache), extent);
+  recordCrawlPass(CRAWL_STORE_WRITE_ID, 'base', BASE_STRATUM_PASS, startedAt);
 }
 
 /**

@@ -13,6 +13,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import {
   PROJECTION_TABLES,
   type ExtentKey,
+  type ExtentScopedRows,
   type ProjectionStore,
   type ProjectionTableName,
 } from '@vibe-agent-toolkit/resources';
@@ -22,7 +23,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { openSqliteProjectionStore } from '../src/store.js';
 
-import { FIRST_BLOB, SECOND_BLOB, sampleBlobRows, sampleExtentRows } from './fixtures.js';
+import { FIRST_BLOB, SECOND_BLOB, realizationRow, sampleBlobRows, sampleExtentRows } from './fixtures.js';
 
 const KEY: ExtentKey = { rootId: 'root-1', treeHash: 'tree-aaa' };
 
@@ -53,6 +54,135 @@ function expectSchemaValid(bundle: Record<string, readonly unknown[]>, names: re
       expect(parsed.success, `${name}: ${JSON.stringify(parsed.error?.issues)}`).toBe(true);
     }
   }
+}
+
+/**
+ * One resolution context as a command would declare it, in the smallest shape
+ * that still touches all five context-scoped tables.
+ *
+ * `sampleExtentRows` builds one fixed context and is what the round-trip tests
+ * want; the additive tests need several contexts under one key, and need to tell
+ * one write's version of a context from another's.
+ */
+interface ContextFixture {
+  /** The context these rows belong to — `extentId` and `contextId` alike. */
+  readonly contextId: string;
+  /** The identity this context realizes, and the one the context-less tables carry. */
+  readonly resourceId: string;
+  /** The realized path. Varying it is how a rewrite is told from the write before it. */
+  readonly path?: string;
+  /** When present, the context also carries one realization condition. */
+  readonly condition?: string;
+}
+
+/**
+ * Extent rows declaring exactly the given contexts.
+ *
+ * The three context-less tables (`roots`, `resources`, `resourceTags`) are
+ * deduplicated by their own primary key, because a bundle carrying one identity
+ * twice is a caller bug rather than a case the store is asked to absorb — two
+ * contexts realizing one file contribute one identity row, and that row is what
+ * the merge path is asserted on.
+ *
+ * @param contexts - The contexts this write declares; empty is legal and means a
+ *   write that names no context at all
+ * @param rootId - The root these rows belong to
+ * @returns The eight extent-scoped tables
+ */
+function extentBundle(contexts: readonly ContextFixture[], rootId: string = KEY.rootId): ExtentScopedRows {
+  const identities = [...new Map(contexts.map((fixture) => [fixture.resourceId, fixture])).values()];
+  const pathOf = (fixture: ContextFixture): string => fixture.path ?? `docs/${fixture.contextId}.md`;
+  return {
+    roots: [{ id: rootId, path: '/corpus' }],
+    resources: identities.map((fixture) => ({
+      resourceId: fixture.resourceId,
+      kind: 'file',
+      origin: 'filesystem',
+      observed: true,
+      fromEnumeration: false,
+      vatId: null,
+    })),
+    resourceRealizations: contexts.map((fixture) =>
+      realizationRow({
+        resourceId: fixture.resourceId,
+        extentId: fixture.contextId,
+        path: pathOf(fixture),
+      }),
+    ),
+    resourceExtents: contexts.map((fixture) => ({
+      resourceId: fixture.resourceId,
+      extentId: fixture.contextId,
+    })),
+    // `value: null` on purpose — this is the row whose key column is nullable,
+    // and the one an `=` comparison in the merge path fails to delete.
+    resourceTags: identities.map((fixture) => ({
+      resourceId: fixture.resourceId,
+      tag: 'kind',
+      value: null,
+      source: 'filename',
+    })),
+    realizationConditions: contexts
+      .filter((fixture) => fixture.condition !== undefined)
+      .map((fixture) => ({
+        extentId: fixture.contextId,
+        path: pathOf(fixture),
+        code: 'REALIZATION_PATH_COLLISION',
+        severity: 'warning',
+        message: fixture.condition ?? '',
+        resourceId: null,
+        sourcePath: null,
+        sourceLine: null,
+        sourceRef: null,
+        targetExists: null,
+        matchedPattern: null,
+        matchedPayload: null,
+      })),
+    resolutionContexts: contexts.map((fixture) => ({
+      contextId: fixture.contextId,
+      species: 'extent',
+      kind: 'filesystem',
+      rootId,
+      extentContextId: null,
+      role: null,
+    })),
+    zoneProvenance: contexts.map((fixture) => ({
+      contextId: fixture.contextId,
+      contributorId: fixture.contextId,
+      parameterSet: { include: ['**/*.md'], depth: 0 },
+      extentDigest: `digest-${fixture.contextId}`,
+    })),
+  };
+}
+
+/** The filesystem extent's context — the one every command over a tree declares. */
+const FS_CONTEXT = 'ext-fs';
+
+/** A closure extent, the kind only the broader command declares. */
+const SKILL_CONTEXT = 'ext-skill-1';
+
+/** A second closure extent, so "kept" cannot be satisfied by keeping one of them. */
+const OTHER_SKILL_CONTEXT = 'ext-skill-2';
+
+/** An identity two contexts both realize, which is what the merge path is about. */
+const SHARED_IDENTITY = 'res-1';
+
+/** A broad command's answer: the filesystem extent plus a closure extent per skill. */
+const BROAD: readonly ContextFixture[] = [
+  { contextId: FS_CONTEXT, resourceId: 'res-fs' },
+  { contextId: SKILL_CONTEXT, resourceId: 'res-skill-1' },
+  { contextId: OTHER_SKILL_CONTEXT, resourceId: 'res-skill-2' },
+];
+
+/**
+ * Every context id a stored extent holds, in a stable order.
+ *
+ * @param extent - What `readExtent` returned
+ * @returns The context ids, sorted
+ */
+function contextsOf(extent: ExtentScopedRows | undefined): readonly string[] {
+  return [...(extent?.resolutionContexts ?? [])]
+    .map((row) => row.contextId)
+    .sort((left, right) => left.localeCompare(right));
 }
 
 describe('blob facts', () => {
@@ -197,12 +327,104 @@ describe('extents', () => {
     expect((await store.readExtent(other))?.roots.map((row) => row.id)).toEqual(['root-2']);
   });
 
-  it('replaces a key rather than appending to it', async () => {
+  it('absorbs the same write twice without duplicating a row', async () => {
+    // Not "replaces the key": the key is a tree, and this write names one
+    // context of it. What is asserted is only that re-declaring the same
+    // context and the same identities leaves one of each.
     await store.writeExtent(KEY, sampleExtentRows(KEY.rootId));
     await store.writeExtent(KEY, sampleExtentRows(KEY.rootId));
 
     expect((await store.readExtent(KEY))?.resources).toHaveLength(1);
     expect((await store.readExtent(KEY))?.resourceTags).toHaveLength(1);
+  });
+});
+
+describe('extents are additive at context granularity', () => {
+  it('keeps the contexts a narrower write does not name', async () => {
+    // The regression this whole design exists for. A broad run declares three
+    // contexts; a narrow run over the same tree declares one. Before the write
+    // became additive the narrow run deleted the whole key range, so the broad
+    // run's two closure extents vanished with no error anywhere.
+    await store.writeExtent(KEY, extentBundle(BROAD));
+    await store.writeExtent(KEY, extentBundle([
+      { contextId: FS_CONTEXT, resourceId: 'res-fs', path: 'docs/rewritten.md' },
+    ]));
+
+    const read = await store.readExtent(KEY);
+    expect(contextsOf(read)).toEqual([FS_CONTEXT, SKILL_CONTEXT, OTHER_SKILL_CONTEXT]);
+    expect(read?.resourceRealizations.filter((row) => row.extentId === SKILL_CONTEXT)).toHaveLength(1);
+    expect(read?.resourceExtents.filter((row) => row.extentId === OTHER_SKILL_CONTEXT)).toHaveLength(1);
+    expect(read?.zoneProvenance.map((row) => row.contextId).sort((left, right) => left.localeCompare(right)))
+      .toEqual([FS_CONTEXT, SKILL_CONTEXT, OTHER_SKILL_CONTEXT]);
+    // …and the context the narrow run did name is its version, not the old one.
+    expect(read?.resourceRealizations.filter((row) => row.extentId === FS_CONTEXT)
+      .map((row) => row.path)).toEqual(['docs/rewritten.md']);
+  });
+
+  it('replaces a rewritten context rather than appending to it', async () => {
+    await store.writeExtent(KEY, extentBundle([
+      { contextId: FS_CONTEXT, resourceId: SHARED_IDENTITY, path: 'docs/first.md' },
+    ]));
+    await store.writeExtent(KEY, extentBundle([
+      { contextId: FS_CONTEXT, resourceId: SHARED_IDENTITY, path: 'docs/second.md' },
+    ]));
+
+    const read = await store.readExtent(KEY);
+    expect(read?.resourceRealizations).toHaveLength(1);
+    expect(read?.resourceRealizations[0]?.path).toBe('docs/second.md');
+    expect(read?.resolutionContexts).toHaveLength(1);
+    expect(read?.zoneProvenance).toHaveLength(1);
+  });
+
+  it('drops a row the rewritten context no longer produces', async () => {
+    // A context is cleared across every context-scoped table, not only the
+    // tables the new bundle happens to carry rows for. Clearing per table would
+    // leave this condition behind forever, since the rewrite names no condition
+    // and so would name no context in that table.
+    await store.writeExtent(KEY, extentBundle([
+      { contextId: FS_CONTEXT, resourceId: SHARED_IDENTITY, condition: 'collided' },
+    ]));
+    expect((await store.readExtent(KEY))?.realizationConditions).toHaveLength(1);
+
+    await store.writeExtent(KEY, extentBundle([{ contextId: FS_CONTEXT, resourceId: SHARED_IDENTITY }]));
+    expect((await store.readExtent(KEY))?.realizationConditions).toEqual([]);
+  });
+
+  it('merges a context-less row across two writes, null key column included', async () => {
+    // 🪤 `resource_tags` keys on a nullable `value`, and `= NULL` is never true:
+    // a merge comparing with `=` deletes nothing here and the insert that
+    // follows leaves two identical rows. Two contexts realizing one identity is
+    // the ordinary case, so this would accumulate on every write.
+    await store.writeExtent(KEY, extentBundle([{ contextId: FS_CONTEXT, resourceId: SHARED_IDENTITY }]));
+    await store.writeExtent(KEY, extentBundle([{ contextId: SKILL_CONTEXT, resourceId: SHARED_IDENTITY }]));
+
+    const read = await store.readExtent(KEY);
+    expect(read?.resourceTags).toHaveLength(1);
+    expect(read?.resourceTags[0]?.value).toBeNull();
+    expect(read?.resources).toHaveLength(1);
+    expect(read?.roots).toHaveLength(1);
+    // Both contexts survive — the merge is about the identity, not the context.
+    expect(contextsOf(read)).toEqual([FS_CONTEXT, SKILL_CONTEXT]);
+  });
+
+  it('records the key on a write that names no context, disturbing nothing', async () => {
+    await store.writeExtent(KEY, extentBundle(BROAD));
+    await store.writeExtent(KEY, extentBundle([]));
+
+    const read = await store.readExtent(KEY);
+    expect(read).toBeDefined();
+    expect(contextsOf(read)).toEqual([FS_CONTEXT, SKILL_CONTEXT, OTHER_SKILL_CONTEXT]);
+    expect(read?.roots).toHaveLength(1);
+  });
+
+  it('keeps written-but-empty distinguishable from never-written after an additive write', async () => {
+    // The manifest row is the only thing that tells them apart, and an additive
+    // write must still record it — otherwise a tree whose contexts were all
+    // written by someone else reads as a miss.
+    await store.writeExtent(KEY, { ...extentBundle([]), roots: [] });
+
+    expect(await store.readExtent(KEY)).toBeDefined();
+    expect(await store.readExtent({ ...KEY, treeHash: 'tree-never-written' })).toBeUndefined();
   });
 });
 

@@ -9,7 +9,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { GitTracker, normalizedTmpdir, resetProjectRootCaches, safePath } from '@vibe-agent-toolkit/utils';
-import { expect, type Assertion } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, type Assertion } from 'vitest';
 
 import { ExternalLinkValidator } from '../src/external-link-validator.js';
 import { parseMarkdown } from '../src/link-parser.js';
@@ -663,4 +663,80 @@ export async function buildExtentContribution(
     contribution: await contributor.contribute(builder.base(), null),
     rootId: builder.identities.rootId,
   };
+}
+
+/** One fixture document: where it goes under the root, and what is in it. */
+export interface CorpusFile {
+  /** Root-relative, forward-slashed. */
+  readonly path: string;
+  readonly content: string;
+}
+
+/**
+ * Write a fixture corpus beneath a temp root, creating the directories it needs.
+ *
+ * Extracted because two suites build the same corpus the same way in the same
+ * `beforeEach` — `crawl-timing.test.ts` and `projection-store-roundtrip.test.ts`
+ * both measure the projection driver over a linked chain of documents, so their
+ * fixtures are identical by intent rather than by accident. Sharing it is what
+ * keeps them measuring the same subject when one of them is edited.
+ *
+ * @param root - The temp root to write beneath
+ * @param directories - Directories to create first, root-relative
+ * @param corpus - The documents to write
+ */
+export async function writeCorpusFiles(
+  root: string,
+  directories: readonly string[],
+  corpus: readonly CorpusFile[],
+): Promise<void> {
+  for (const directory of directories) {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture directory beneath a mkdtemp root
+    await mkdir(safePath.join(root, directory), { recursive: true });
+  }
+  await Promise.all(
+    corpus.map((file) =>
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture path beneath a mkdtemp root
+      writeFile(safePath.join(root, file.path), file.content, 'utf-8'),
+    ),
+  );
+}
+
+/** The shape {@link setupSubdirTestSuite} hands back. */
+export interface SubdirTestSuite {
+  suiteDir: string;
+  tempDir: string;
+  beforeAll: () => Promise<void>;
+  afterAll: () => Promise<void>;
+  beforeEach: () => Promise<void>;
+}
+
+/**
+ * Register the standard per-test temp-root lifecycle and write a corpus into it.
+ *
+ * Registers hooks rather than returning them, which is the point: two suites
+ * were repeating the same four `beforeAll`/`afterAll`/`beforeEach` lines
+ * verbatim, and boilerplate restated is boilerplate that drifts — one suite
+ * gaining a fixture the other silently lacks is a difference nobody reads a
+ * lifecycle block closely enough to notice.
+ *
+ * Each suite keeps its OWN `afterEach`, deliberately: what a suite must reset is
+ * a fact about what that suite touches, and hiding it here would make a leak
+ * between tests invisible at the place it has to be reasoned about.
+ *
+ * @param suite - The suite handle from {@link setupSubdirTestSuite}
+ * @param directories - Directories to create under the temp root, root-relative
+ * @param corpus - The documents to write
+ */
+export function useCorpusSuite(
+  suite: SubdirTestSuite,
+  directories: readonly string[],
+  corpus: readonly CorpusFile[],
+): void {
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+  beforeEach(suite.beforeEach);
+  beforeEach(async () => {
+    await writeCorpusFiles(suite.tempDir, directories, corpus);
+  });
 }

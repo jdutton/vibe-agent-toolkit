@@ -27,12 +27,18 @@
  *
  * ## Both writes replace, and both are one transaction
  *
- * `writeExtent` deletes the eight tables' rows for `(rootId, treeHash)` and
- * inserts the new ones; `writeBlobFacts` deletes the four tables' rows for the
- * content keys it is about to write and inserts those. Replace rather than
- * insert-if-absent for a specific reason — see `schema-sql.ts` on SQLite's
- * treatment of NULL in a primary key, which makes a conflict clause unable to
- * dedup three of the twelve tables.
+ * `writeBlobFacts` deletes the four tables' rows for the content keys it is
+ * about to write and inserts those. Replace rather than insert-if-absent for a
+ * specific reason — see `schema-sql.ts` on SQLite's treatment of NULL in a
+ * primary key, which makes a conflict clause unable to dedup three of the twelve
+ * tables.
+ *
+ * `writeExtent` replaces **only the resolution contexts its own rows name**, not
+ * the whole `(rootId, treeHash)` range: five of its eight tables are deleted one
+ * context at a time, and the three with no context column are merged row by row
+ * under their primary key. The interface states why (a tree is not a question,
+ * and two commands ask different ones of it); the consequence here is that this
+ * write is not a range operation and cannot be expressed as one.
  *
  * Neither is a lost-update hazard, because both keys name their own contents: a
  * second writer replacing the same key writes the same rows. That is what lets
@@ -72,7 +78,8 @@ import {
   blobKeyColumn,
   createTableSql,
   deleteBlobFactsSql,
-  deleteExtentSql,
+  deleteExtentContextSql,
+  deleteRowByKeySql,
   insertSql,
   selectBlobFactsSql,
   selectExtentSql,
@@ -159,9 +166,27 @@ interface TablePlan {
   /** Each declared column paired with what it holds, in registry order. */
   readonly columns: readonly (readonly [column: string, type: ProjectionColumnType])[];
   readonly insert: StatementSync;
-  /** Extent-scoped only: read and clear this table for one tree. */
+  /** Extent-scoped only: read this table for one tree. */
   readonly selectExtent?: StatementSync;
-  readonly deleteExtent?: StatementSync;
+  /**
+   * Extent-scoped with a context column: clear one context of one tree.
+   *
+   * Absent for `roots`, `resources` and `resource_tags`, which have no context
+   * to clear — {@link TablePlan.deleteRow} is how those are replaced.
+   */
+  readonly deleteExtentContext?: StatementSync;
+  /** Extent-scoped only: remove the one row a primary key names. */
+  readonly deleteRow?: StatementSync;
+  /**
+   * Extent-scoped only: the row's own key columns paired with what they hold,
+   * in the order {@link TablePlan.deleteRow} binds them after the extent key.
+   *
+   * Precomputed rather than looked up per row, and paired with the kind rather
+   * than the name alone, because the delete has to bind a key value in the
+   * **stored** encoding — a boolean key column binds 1, not `true`, or the
+   * predicate matches nothing and the insert that follows duplicates the row.
+   */
+  readonly keyColumns?: readonly (readonly [column: string, type: ProjectionColumnType])[];
 }
 
 /**
@@ -306,7 +331,14 @@ class SqliteProjectionStore implements ProjectionStore {
       ...(spec.scope === 'extent'
         ? {
             selectExtent: database.prepare(selectExtentSql(spec)),
-            deleteExtent: database.prepare(deleteExtentSql(spec)),
+            deleteRow: database.prepare(deleteRowByKeySql(spec)),
+            keyColumns: keyColumnTypes(spec),
+            // Guarded here rather than at run time: `deleteExtentContextSql`
+            // throws for a table with no context column, and the three that
+            // have none are merged row by row instead.
+            ...(spec.contextColumn === undefined
+              ? {}
+              : { deleteExtentContext: database.prepare(deleteExtentContextSql(spec)) }),
           }
         : {}),
     }));
@@ -359,11 +391,15 @@ class SqliteProjectionStore implements ProjectionStore {
     this.#assertOpen();
     const bundle = rows as unknown as Record<string, readonly Record<string, unknown>[]>;
     const keyValues = [key.rootId, key.treeHash];
+    const contexts = contextsNamedBy(bundle, this.#plansOfScope('extent'));
     this.#transaction(() => {
       for (const plan of this.#plansOfScope('extent')) {
-        plan.deleteExtent?.run(...keyValues);
+        this.#clearSpaceFor(plan, bundle, keyValues, contexts);
       }
       this.#insertBundle(bundle, 'extent', keyValues);
+      // Recorded on every write, including one that names no context at all:
+      // the manifest row is the only thing separating "written and empty" from
+      // "never written", and an additive write is still a write.
       this.#recordExtent.run(key.rootId, key.treeHash, new Date().toISOString());
     });
   }
@@ -446,6 +482,53 @@ class SqliteProjectionStore implements ProjectionStore {
   }
 
   /**
+   * Empty exactly the space one table's incoming rows are about to occupy, and
+   * nothing beyond it.
+   *
+   * Two different clearances, because the tables are two different kinds of
+   * fact:
+   *
+   * - **A table with a context column** is cleared one context at a time, for
+   *   every context the *bundle* names — not only the contexts this table's own
+   *   rows name. A rewrite that produces no condition row still has to remove
+   *   the condition row the previous write left, and a per-table context set
+   *   would name no context for that table and so delete nothing. The bundle is
+   *   one command's answer for a set of contexts; the unit being replaced is
+   *   the context, across every table that carries one.
+   * - **A table without one** (`roots`, `resources`, `resource_tags`) is merged:
+   *   the single row each incoming row's primary key names is deleted, then the
+   *   insert puts the same identity back. Two commands that both realize a file
+   *   contribute the same row, so whichever writes last writes the same bytes.
+   *
+   * @param plan - The table being written
+   * @param bundle - Table key to rows, as the caller handed them over
+   * @param keyValues - The extent key, bound ahead of everything else
+   * @param contexts - Every resolution context this write declares
+   */
+  #clearSpaceFor(
+    plan: TablePlan,
+    bundle: Record<string, readonly Record<string, unknown>[]>,
+    keyValues: readonly string[],
+    contexts: ReadonlySet<string>,
+  ): void {
+    if (plan.deleteExtentContext !== undefined) {
+      for (const context of contexts) {
+        plan.deleteExtentContext.run(...keyValues, context);
+      }
+      return;
+    }
+    for (const row of bundle[plan.spec.key] ?? []) {
+      // The bind order is `storedPrimaryKey`'s: the two extent key columns, then
+      // the row's own key columns in registry order. `deleteRowByKeySql` emits
+      // its predicate from the same function, so the two cannot drift.
+      plan.deleteRow?.run(
+        ...keyValues,
+        ...(plan.keyColumns ?? []).map(([column, { kind }]) => encodeValue(kind, row[column])),
+      );
+    }
+  }
+
+  /**
    * Insert every row of a bundle into the tables of one scope.
    *
    * @param bundle - Table key to rows
@@ -507,6 +590,63 @@ class SqliteProjectionStore implements ProjectionStore {
       throw new Error('This projection store is closed');
     }
   }
+}
+
+/**
+ * Every resolution context a write declares, read off the rows themselves.
+ *
+ * The union across all five context-carrying tables, not a set per table: the
+ * five are five views of one context, and `extentId` and `contextId` are two
+ * spellings of the same relation. A context named by any of them is a context
+ * this write is answering for, so it is cleared in all of them — see the store's
+ * `#clearSpaceFor` on the stale row a per-table set would strand.
+ *
+ * Nothing else names the contexts. There is no parameter for them and no
+ * manifest of them, deliberately: a caller stating a context list that its rows
+ * disagreed with could delete a context it never wrote, which is the failure
+ * this design removes rather than relocates.
+ *
+ * @param bundle - Table key to rows, as the caller handed them over
+ * @param plans - The extent-scoped tables' plans
+ * @returns The context ids, deduplicated
+ */
+function contextsNamedBy(
+  bundle: Record<string, readonly Record<string, unknown>[]>,
+  plans: readonly TablePlan[],
+): ReadonlySet<string> {
+  const contexts = new Set<string>();
+  for (const { spec } of plans) {
+    const column = spec.contextColumn;
+    if (column === undefined) continue;
+    for (const row of bundle[spec.key] ?? []) {
+      contexts.add(String(row[column]));
+    }
+  }
+  return contexts;
+}
+
+/**
+ * A table's own key columns paired with what they hold, in comparison order.
+ *
+ * The extent key columns are *not* included: they are two plain strings the
+ * caller already holds, and `projectionColumnTypes` only knows about columns the
+ * row schema declares.
+ *
+ * @param spec - An extent-scoped table's registry entry
+ * @returns Each key column with its type, in `primaryKey` order
+ * @throws TypeError When a table keys on a column its row schema does not
+ *   declare — which would otherwise bind `undefined` as SQL NULL and delete
+ *   nothing, silently, forever
+ */
+function keyColumnTypes(spec: StoredTableSpec): readonly (readonly [string, ProjectionColumnType])[] {
+  const types = new Map(projectionColumnTypes(spec));
+  return spec.primaryKey.map((column) => {
+    const type = types.get(column);
+    if (type === undefined) {
+      throw new TypeError(`Table "${spec.name}" keys on "${column}", which its row schema does not declare`);
+    }
+    return [column, type] as const;
+  });
 }
 
 /**

@@ -18,7 +18,8 @@ import {
   blobKeyColumn,
   createTableSql,
   deleteBlobFactsSql,
-  deleteExtentSql,
+  deleteExtentContextSql,
+  deleteRowByKeySql,
   insertSql,
   selectBlobFactsSql,
   selectExtentSql,
@@ -131,10 +132,55 @@ describe('selectExtentSql', () => {
   });
 });
 
-describe('deleteExtentSql', () => {
-  it('scopes the delete to one tree', () => {
-    expect(deleteExtentSql(PROJECTION_TABLES.resources))
-      .toBe('DELETE FROM "resources" WHERE "storeRootId" = ? AND "storeTreeHash" = ?');
+describe('deleteExtentContextSql', () => {
+  it('scopes the delete to one context of one tree, never to the whole key', () => {
+    // The tree key alone would take out every context under it, which is the
+    // regression the additive write exists to prevent: a command declaring only
+    // the filesystem extent would delete another command's closure extents.
+    expect(deleteExtentContextSql(PROJECTION_TABLES.resourceRealizations))
+      .toBe('DELETE FROM "resource_realizations"'
+        + ' WHERE "storeRootId" = ? AND "storeTreeHash" = ? AND "extentId" = ?');
+  });
+
+  it('partitions on contextId where the registry spells the relation that way', () => {
+    // `extentId` and `contextId` are two spellings of one relation, so the
+    // statement is built from the registry's column rather than from either name.
+    expect(deleteExtentContextSql(PROJECTION_TABLES.zoneProvenance))
+      .toContain('AND "contextId" = ?');
+  });
+
+  it('refuses a table with no context column rather than emitting a key-wide delete', () => {
+    // Silently widening to the whole key here is precisely the deletion this
+    // change removes, so the absent column is a TypeError and not a fallback.
+    expect(() => deleteExtentContextSql(PROJECTION_TABLES.roots)).toThrow(TypeError);
+    expect(() => deleteExtentContextSql(PROJECTION_TABLES.resources)).toThrow(TypeError);
+    expect(() => deleteExtentContextSql(PROJECTION_TABLES.resourceTags))
+      .toThrow(/no context column/u);
+  });
+});
+
+describe('deleteRowByKeySql', () => {
+  it('compares every key column with IS, so a nullable one still matches', () => {
+    // 🪤 `resource_tags.value` is nullable and `= NULL` is never true, so an `=`
+    // predicate deletes nothing for exactly those rows and the insert that
+    // follows duplicates them, silently, on every write.
+    expect(deleteRowByKeySql(PROJECTION_TABLES.resourceTags))
+      .toBe('DELETE FROM "resource_tags" WHERE "storeRootId" IS ? AND "storeTreeHash" IS ?'
+        + ' AND "resourceId" IS ? AND "tag" IS ? AND "value" IS ? AND "source" IS ?');
+  });
+
+  it('never emits an = comparison on any table', () => {
+    for (const spec of allSpecs().filter((candidate) => candidate.scope === 'extent')) {
+      expect(deleteRowByKeySql(spec), spec.name).not.toContain('= ?');
+    }
+  });
+
+  it('leads with the two extent key columns, in the order the store binds them', () => {
+    for (const spec of allSpecs().filter((candidate) => candidate.scope === 'extent')) {
+      const bound = [...deleteRowByKeySql(spec).matchAll(/"(?<column>[^"]+)" IS \?/gu)]
+        .map((match) => match.groups?.['column']);
+      expect(bound, spec.name).toEqual([...storedPrimaryKey(spec)]);
+    }
   });
 });
 

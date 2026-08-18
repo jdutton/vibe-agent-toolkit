@@ -390,6 +390,38 @@ export const CRAWL_REGISTRY_RESOLVE_LINKS_ID = 'resource-registry:resolve-links'
 export const CRAWL_BLOB_POPULATE_ID = 'blob-population:derive';
 
 /**
+ * Synthetic contributor id for the merge driver's attempt to answer a population
+ * from a {@link ProjectionStore} instead of deriving it.
+ *
+ * **A row here is the only way a dump can tell a cache HIT from a subject that
+ * exercised nothing.** Both look identical from the totals — a hit files no
+ * contributor rows at all, because no contributor ran — and "nothing ran" is
+ * precisely the reading that has already turned one A/B into a measurement of
+ * noise. This row says the lane was reached and what it cost to ask.
+ *
+ * Charged in `base` at the driver's pass for the same reason
+ * {@link CRAWL_BLOB_POPULATE_ID} is: the driver places it, and pass >= 1 is what
+ * makes it additive rather than a breakdown of a bracket that does not contain it.
+ */
+export const CRAWL_STORE_READ_ID = 'projection-store:read';
+
+/**
+ * Synthetic contributor id for writing a freshly derived population back to a
+ * {@link ProjectionStore}.
+ *
+ * Filed only on a miss, which is what makes the pair readable: a run with a read
+ * row and no write row is a hit, a run with both is a miss that paid to populate
+ * and then paid to store, and a run with neither had no store at all.
+ *
+ * ⚠️ **Those three readings are not exhaustive.** A store that THROWS also files
+ * a read row and no write row, because the read is bracketed in a `finally` so
+ * that a hit — which runs no contributor and would otherwise leave no trace at
+ * all — is still visible. The error propagates and the run dies, so only a
+ * post-mortem reader of the dump can be misled by it; a live run cannot.
+ */
+export const CRAWL_STORE_WRITE_ID = 'projection-store:write';
+
+/**
  * Synthetic contributor id for one `GitTracker.initialize()` — the `git ls-files`
  * spawn and the active-set, ancestor and index maps built from its output.
  *
@@ -462,6 +494,8 @@ export const CRAWL_CHARGEABLE_IDS: readonly string[] = [
   CRAWL_REGISTRY_ENUMERATE_ID,
   CRAWL_REGISTRY_RESOLVE_LINKS_ID,
   CRAWL_SHARED_GIT_TRACKER_ID,
+  CRAWL_STORE_READ_ID,
+  CRAWL_STORE_WRITE_ID,
   CRAWL_WALKER_GITIGNORE_ID,
   CRAWL_WALKER_ID,
 ];

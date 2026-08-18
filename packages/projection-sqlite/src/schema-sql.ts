@@ -31,10 +31,12 @@
  * conflicts.
  *
  * So this store never relies on a conflict clause to keep a write idempotent.
- * Both writes delete their key range first and insert into the emptied space
- * (see `store.ts`), which is correct whatever SQLite thinks two NULLs mean. The
- * `PRIMARY KEY` is declared for the index it builds and the contract it
- * documents, not for the uniqueness it cannot fully enforce here.
+ * Every write deletes the space it is about to fill and inserts into it (see
+ * `store.ts`), which is correct whatever SQLite thinks two NULLs mean — and the
+ * per-row variant compares its key columns with `IS` rather than `=` for the
+ * same reason, since `= NULL` is never true. The `PRIMARY KEY` is declared for
+ * the index it builds and the contract it documents, not for the uniqueness it
+ * cannot fully enforce here.
  */
 
 import {
@@ -136,6 +138,14 @@ export interface StoredTableSpec extends ProjectionColumnTypeSource {
   readonly scope: ProjectionTableScope;
   /** The columns that identify a row, in comparison order. */
   readonly primaryKey: readonly string[];
+  /**
+   * The column naming the resolution context a row belongs to, when it has one.
+   *
+   * What a write partitions on — see {@link deleteExtentContextSql}. Absent for
+   * the three extent-scoped tables that describe the tree or an identity rather
+   * than one extent's view of it, which are merged instead.
+   */
+  readonly contextColumn?: string | undefined;
 }
 
 /**
@@ -228,13 +238,54 @@ export function selectExtentSql(spec: StoredTableSpec): string {
 }
 
 /**
- * The `DELETE` that empties one extent-scoped table's rows for one tree.
+ * The `DELETE` that empties one extent-scoped table's rows for **one context**
+ * of one tree.
+ *
+ * This is the physical half of `writeExtent` being additive: the tree key alone
+ * would take out every context under it, so a `vat resources scan` writing the
+ * filesystem extent would delete the skill extents `vat inventory` wrote against
+ * the same tree. Bound as `(rootId, treeHash, contextId)`.
+ *
+ * @param spec - An extent-scoped table's registry entry, with a context column
+ * @returns A `DELETE … WHERE rootId = ? AND treeHash = ? AND <context> = ?` statement
+ * @throws TypeError When the table has no context column to partition on
+ */
+export function deleteExtentContextSql(spec: StoredTableSpec): string {
+  const column = spec.contextColumn;
+  if (column === undefined) {
+    throw new TypeError(
+      `Table "${spec.name}" declares no context column, so its rows cannot be replaced one context`
+      + ' at a time. Tables without one are merged by primary key — see deleteRowByKeySql.',
+    );
+  }
+  return `DELETE FROM ${quoteIdentifier(spec.name)}`
+    + ` WHERE ${extentKeyPredicate()} AND ${quoteIdentifier(column)} = ?`;
+}
+
+/**
+ * The `DELETE` that removes the single row a primary key names, so an insert can
+ * take its place.
+ *
+ * The three extent-scoped tables with no context column (`roots`, `resources`,
+ * `resource_tags`) describe the tree or an identity rather than one extent's
+ * view of it, so they are merged rather than partitioned: two commands that both
+ * realize a file contribute the same identity row, and whichever writes last
+ * writes the same bytes.
+ *
+ * 🪤 Every key column is compared with `IS`, not `=`. `resource_tags.value` is
+ * nullable and `= NULL` is never true, so an `=` predicate would delete nothing
+ * for exactly the rows a conflict clause also cannot dedup (see this module's
+ * header) — and the row would insert a second time, silently, on every write.
+ * `IS` is SQLite's null-safe comparison and behaves as `=` elsewhere.
  *
  * @param spec - An extent-scoped table's registry entry
- * @returns A `DELETE … WHERE rootId = ? AND treeHash = ?` statement
+ * @returns A `DELETE … WHERE rootId IS ? AND treeHash IS ? AND <key…> IS ?` statement
  */
-export function deleteExtentSql(spec: StoredTableSpec): string {
-  return `DELETE FROM ${quoteIdentifier(spec.name)} WHERE ${extentKeyPredicate()}`;
+export function deleteRowByKeySql(spec: StoredTableSpec): string {
+  const predicate = storedPrimaryKey(spec)
+    .map((column) => `${quoteIdentifier(column)} IS ?`)
+    .join(' AND ');
+  return `DELETE FROM ${quoteIdentifier(spec.name)} WHERE ${predicate}`;
 }
 
 /**
