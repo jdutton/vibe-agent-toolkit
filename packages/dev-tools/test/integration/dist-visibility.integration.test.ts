@@ -16,11 +16,11 @@
  * or missing its export.
  */
 
-import { spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
 import { delimiter } from 'node:path';
 
-import { setupSyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
+import { setupSyncTempDirSuite, safePath, spawnHardened } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 
 /* eslint-disable security/detect-non-literal-fs-filename -- fixture paths under a temp dir */
@@ -88,13 +88,35 @@ function writeFixture(root: string): Fixture {
   return { root, barrel: safePath.join(root, 'dist', 'index.js') };
 }
 
-function runBuild(root: string): ReturnType<typeof spawn> {
-  const isWindows = process.platform === 'win32';
-  const tsx = safePath.join(REPO_BIN, isWindows ? 'tsx.cmd' : 'tsx');
-  return spawn(tsx, [TSC_CLEAN_BUILD], {
+/**
+ * The `tsx` shim's filename is package-manager- and platform-specific: npm writes
+ * `tsx.cmd` on Windows, bun writes `tsx.exe`/`tsx` and no `.cmd` at all. Probe for the
+ * one that exists instead of hardcoding, and fail LOUDLY if none does — a missing shim
+ * spawned through a shell exits 1, which is indistinguishable from "the compiler
+ * rejected the fixture" and reports a harness problem in product-shaped language.
+ */
+function resolveTsx(): string {
+  const candidates =
+    process.platform === 'win32' ? ['tsx.exe', 'tsx.cmd', 'tsx.bunx', 'tsx'] : ['tsx'];
+  const found = candidates
+    .map((name) => safePath.join(REPO_BIN, name))
+    .find((candidate) => fs.existsSync(candidate));
+  if (!found) {
+    throw new Error(
+      `tsx shim not found in ${REPO_BIN} (tried ${candidates.join(', ')}) — the harness cannot build the fixture`,
+    );
+  }
+  return found;
+}
+
+function runBuild(root: string): ChildProcess {
+  // An explicit path is `isPathLike`, so spawnHardened uses it as-is and owns the
+  // Windows .cmd/.exe shell handling (and its quoting) instead of a raw `shell: true`.
+  // The PATH prepend stays: tsc-clean-build resolves its BARE `tsc` from PATH, and the
+  // fixture's cwd is a temp dir outside the repo where node_modules/.bin is not visible.
+  return spawnHardened(resolveTsx(), [TSC_CLEAN_BUILD], {
     cwd: root,
     stdio: ['ignore', 'ignore', 'inherit'],
-    shell: isWindows,
     env: { ...process.env, PATH: `${REPO_BIN}${delimiter}${process.env['PATH'] ?? ''}` },
   });
 }
