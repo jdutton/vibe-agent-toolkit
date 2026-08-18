@@ -554,9 +554,13 @@ export {
 // ROOT_PATH_PLACEHOLDER (VAT has already shipped evidence leaking $HOME), and
 // every table is sorted by its primary key — one of `crawlDirectory`'s two
 // routes enumerates in FILESYSTEM order, so an export carrying insertion order
-// would make any golden differ between ext4, APFS and NTFS.
+// would make any golden differ between ext4, APFS and NTFS. Key order within a
+// row is imposed here too, out of the table registry, so a projection a
+// population derived and the same projection read back out of a store are the
+// same bytes rather than the same values in whatever order each built them.
 export {
   ROOT_PATH_PLACEHOLDER,
+  UnregisteredProjectionColumnError,
   exportProjection,
   serializeProjection,
   type ProjectionDocument,

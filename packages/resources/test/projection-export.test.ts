@@ -1,8 +1,16 @@
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-import { ROOT_PATH_PLACEHOLDER, exportProjection, serializeProjection } from '../src/projection/export.js';
+import {
+  ROOT_PATH_PLACEHOLDER,
+  UnregisteredProjectionColumnError,
+  exportProjection,
+  serializeProjection,
+} from '../src/projection/export.js';
 import { ProjectionBuilder, type Projection } from '../src/projection/projection.js';
+import { PROJECTION_TABLES, type ProjectionTableName } from '../src/projection/table-registry.js';
+import type { BlobReferenceRow } from '../src/schemas/projection-blobs.js';
+import { CONDITION_WITHOUT_REFERENCE, type RootRow } from '../src/schemas/projection-resources.js';
 
 /**
  * Two real tmpdir-shaped roots. Nothing is written: the only thing under test
@@ -85,6 +93,39 @@ const SIDE_B: Side = {
   sectionOrdinal: LOW_ORDINAL,
 };
 
+/**
+ * One `blob_references` row, built the way the real producer builds one.
+ *
+ * The spread-then-append shape is not incidental: `blobReferencesFor` assigns
+ * ordinals with `candidates.map(({ row }, ordinal) => ({ ...row, ordinal }))`,
+ * which lands `ordinal` **last** even though the registry declares it second.
+ * A helper that spelled the columns out in registry order would build a row no
+ * producer produces and could never catch the key-order defect this fixture
+ * exists to pin.
+ *
+ * @param blob - The content key the reference was found in
+ * @returns A complete reference row with `ordinal` appended last
+ */
+function referenceRow(blob: string): BlobReferenceRow {
+  const row = {
+    blob,
+    rawRef: './other.md',
+    text: 'other',
+    line: 1,
+    column: null,
+    startOffset: 0,
+    endOffset: 11,
+    syntacticForm: 'markdown-link',
+    hasExtension: true,
+    leadingAt: false,
+    slashCount: 1,
+    variableExpansion: null,
+    inCodeSpan: false,
+    inFence: false,
+  } as const satisfies Omit<BlobReferenceRow, 'ordinal'>;
+  return { ...row, ordinal: 0 };
+}
+
 /** Contribute one side's rows to every one of the twelve tables. */
 function contribute(builder: ProjectionBuilder, side: Side): void {
   builder.addRoot({ id: side.rootId, path: side.rootPath });
@@ -123,6 +164,9 @@ function contribute(builder: ProjectionBuilder, side: Side): void {
     severity: 'info',
     message: 'fixture condition',
     resourceId: side.resourceId,
+    // Spread exactly as every unprovoked producer spreads it, so the fixture
+    // row carries the six provenance columns in the shape real rows have.
+    ...CONDITION_WITHOUT_REFERENCE,
   });
   builder.addContext({
     contextId: side.extentId,
@@ -151,21 +195,7 @@ function contribute(builder: ProjectionBuilder, side: Side): void {
     headingCount: 1,
     sectionCount: 1,
   });
-  builder.addBlobReference({
-    blob: side.blob,
-    ordinal: 0,
-    rawRef: './other.md',
-    text: 'other',
-    line: 1,
-    column: null,
-    syntacticForm: 'markdown-link',
-    hasExtension: true,
-    leadingAt: false,
-    slashCount: 1,
-    variableExpansion: null,
-    inCodeSpan: false,
-    inFence: false,
-  });
+  builder.addBlobReference(referenceRow(side.blob));
   // Both sections land on BLOB_A so that (blob, ordinal) ordering is exercised
   // on a single blob rather than merely following the blob key.
   builder.addBlobSection({
@@ -267,5 +297,103 @@ describe('serializeProjection', () => {
     expect(serialized).not.toContain(TMP_ROOT_A);
     expect(serialized).not.toContain(TMP_ROOT_B);
     expect(serialized).not.toContain(normalizedTmpdir());
+  });
+});
+
+/**
+ * The key order *within* a row, which is as load-bearing as the row order and
+ * was for a while not a property of the export at all.
+ *
+ * `JSON.stringify` writes an object's keys in the order the object holds them,
+ * so two rows carrying identical values in different key orders serialize to
+ * different bytes. That is not hypothetical: a `blob_references` row a producer
+ * built as `{ ...row, ordinal }` and the same row rebuilt from columns by a
+ * storage backend differ in exactly that way, and the projection-sqlite
+ * store-sharing integration test measured the resulting two-hunk diff on a
+ * three-document corpus. These tests pin the guarantee at unit level — a fake
+ * store that hands row objects back by reference preserves key order for free
+ * and structurally cannot exhibit the defect, so nothing below is reachable
+ * from the round-trip suite that first found it.
+ */
+describe('the key order of an exported row', () => {
+  it('is the registry column order even when the producer appended a key last', () => {
+    // The exact construction `blobReferencesFor` uses: `ordinal` is half the
+    // primary key and the registry's SECOND column, and the producer appends it
+    // LAST. The export has to put it back.
+    const references = exportProjection(buildFixture('forward')).tables.blobReferences;
+
+    expect(references.length).toBeGreaterThan(0);
+    for (const row of references) {
+      expect(Object.keys(row)).toStrictEqual([...PROJECTION_TABLES.blobReferences.columns]);
+    }
+  });
+
+  it('is the registry column order for every row of all twelve tables', () => {
+    // Uniform across the registry rather than patched at the one producer known
+    // to be wrong: any of the twelve can grow a producer that builds a row by
+    // spreading, and none of them should have to know that it must not.
+    const tables = exportProjection(buildFixture('reverse')).tables;
+
+    for (const name of EXPECTED_TABLES) {
+      const spec = PROJECTION_TABLES[name as ProjectionTableName];
+      const rows = tables[name] as readonly Record<string, unknown>[];
+      expect(rows.length, `${name} contributed no row, so its key order is untested`)
+        .toBeGreaterThan(0);
+      for (const row of rows) {
+        expect(Object.keys(row), name).toStrictEqual([...spec.columns]);
+      }
+    }
+  });
+
+  it('leaves the root placeholder in the position the registry gives `path`', () => {
+    // `roots` is the one table whose rows are rewritten after the sort. The
+    // redaction must not move the column it redacts.
+    const roots = exportProjection(buildFixture('forward')).tables.roots;
+
+    expect(roots[0]?.path).toBe(ROOT_PATH_PLACEHOLDER);
+    expect(Object.keys(roots[0] ?? {})).toStrictEqual([...PROJECTION_TABLES.roots.columns]);
+  });
+
+  it('serializes `mtime` as a Date\'s own JSON form, untouched by the reordering', () => {
+    // Reordering keys must copy values, never re-encode them. A `Date` that
+    // survived as a `Date` serializes to ISO-8601; one turned into a plain
+    // object by a "canonicalizing" deep copy would serialize to `{}`.
+    const mtime = new Date('2024-03-04T05:06:07.000Z');
+    const builder = new ProjectionBuilder(TMP_ROOT_A);
+    contribute(builder, SIDE_A);
+    builder.addRealization({
+      resourceId: RES_B,
+      extentId: EXTENT_A,
+      path: PATH_B,
+      pathLower: PATH_B,
+      basenameLower: 'b.md',
+      dir: 'docs',
+      depth: 2,
+      ext: '.md',
+      contentKey: BLOB_B,
+      contentState: 'keyed',
+      mtime,
+      exists: true,
+      isDirectory: false,
+      gitignored: false,
+      isSymlink: false,
+      symlinkResolves: null,
+    });
+
+    expect(serializeProjection(builder.build())).toContain('"mtime": "2024-03-04T05:06:07.000Z"');
+  });
+
+  it('throws rather than silently dropping a column the registry does not declare', () => {
+    // Projecting a row through `columns` would otherwise DELETE a column a
+    // producer added and the registry has not been taught about, and report the
+    // export clean. Silent data loss is the one failure mode an export cannot
+    // have, so an undeclared column is loud.
+    const builder = new ProjectionBuilder(TMP_ROOT_A);
+    builder.addRoot({ id: ROOT_ID_A, path: TMP_ROOT_A, surplus: 'undeclared' } as RootRow);
+
+    expect(() => exportProjection(builder.build())).toThrow(UnregisteredProjectionColumnError);
+    // Named, so the failure says which table and which column rather than only
+    // that something went wrong.
+    expect(() => exportProjection(builder.build())).toThrow(/roots.*surplus/u);
   });
 });

@@ -41,6 +41,7 @@ import {
   exportProjection,
   FilesystemExtentContributor,
   populate,
+  serializeProjection,
 } from '@vibe-agent-toolkit/resources';
 
 /** The `resolution_contexts.kind` every closure extent here is registered under. */
@@ -137,14 +138,19 @@ try {
     cache: { store, treeHash },
   });
 
-  // `exportProjection` sorts every table by its primary key and redacts the one
-  // column that legitimately varies between two runs (`roots.path`, an absolute
-  // path). That is what turns "process B hydrated what process A derived" into
-  // a comparison rather than a judgement call.
+  // `serializeProjection` sorts every table by its primary key, emits every
+  // row's keys in the table registry's column order, and redacts the one column
+  // that legitimately varies between two runs (`roots.path`, an absolute path).
+  // That is what turns "process B hydrated what process A derived" into a
+  // comparison rather than a judgement call.
   //
-  // The tables travel structurally rather than as `serializeProjection`'s
-  // string, because the parent must canonicalize key order before comparing —
-  // see the note on the oracle in `store-sharing.integration.test.ts`.
+  // The document travels as the STRING, not as the parsed tables. The parent
+  // compares raw bytes — key order included — because a hydration that rebuilt
+  // rows with their keys in a different order is a real defect against anyone
+  // diffing this output against a committed golden, and re-stringifying in the
+  // parent would be asserting on the parent's rendering rather than on what
+  // `serializeProjection` produced.
+  const document = serializeProjection(projection);
   const { tables } = exportProjection(projection);
 
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- the parent supplies this path, beneath its own mkdtemp root
@@ -152,7 +158,7 @@ try {
     outputPath,
     JSON.stringify({
       contributorRuns,
-      tables,
+      document,
       counts: Object.fromEntries(Object.entries(tables).map(([table, rows]) => [table, rows.length])),
     }),
     'utf-8',
