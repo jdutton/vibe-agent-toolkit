@@ -16,7 +16,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsx ../dev-tools/src/tsc-clean-build.ts --build",
+    "build": "tsx ../dev-tools/src/tsc-clean-build.ts",
     "build:watch": "tsc --build --watch",
     "clean": "rm -rf dist",
     "test:unit": "vitest run",
