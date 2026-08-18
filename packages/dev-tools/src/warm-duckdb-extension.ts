@@ -33,8 +33,9 @@
  * shipping a package whose only failure mode is at an adopter's machine.
  */
 
-import { mkdtempSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import {
   dynamicImportPath,
@@ -160,6 +161,35 @@ function warm(engine: EngineModule, home: string): NonNullable<EngineOutcome['re
   return receipt;
 }
 
+/**
+ * Move one captured file into `dist/`, tolerating a volume boundary.
+ *
+ * `rename` is the cheap path and is all that is ever needed when the scratch
+ * home and the package share a filesystem. They do not always: on the Windows CI
+ * runner `TEMP` sits on `C:` while the checkout is on `D:`, and `rename` there
+ * fails outright with `EXDEV` — the build's only failure mode, and one no
+ * same-volume machine can reproduce. Copy-then-delete is the portable fallback;
+ * the scratch home is removed wholesale afterwards either way, so the extra copy
+ * is in flight only until this function returns.
+ *
+ * `rename` is injectable purely so the fallback can be tested: a same-volume
+ * machine cannot provoke `EXDEV`, and a fallback that only ever runs on a Windows
+ * CI runner is a fallback nobody would notice breaking.
+ */
+export function moveCapturedFile(
+  source: string,
+  destination: string,
+  rename: (from: string, to: string) => void = renameSync,
+): void {
+  try {
+    rename(source, destination);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error;
+    copyFileSync(source, destination);
+    rmSync(source, { force: true });
+  }
+}
+
 /** Copy the captured tree into `dist/` verbatim and describe it. */
 function publishAssets(
   scratchHome: string,
@@ -201,8 +231,7 @@ function publishAssets(
     mkdirSyncReal(dirname(destination), { recursive: true });
     // Move rather than copy: the scratch home is thrown away next, and this
     // keeps exactly one copy of a 3 MB binary in flight.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- both paths composed from a tree this script just created
-    renameSync(source, destination);
+    moveCapturedFile(source, destination);
     return {
       name: extensionNameOf(segments.at(-1) ?? ''),
       relativePath,
@@ -231,17 +260,21 @@ function publishAssets(
   );
 }
 
-const packageRoot = process.cwd();
-const distDir = safePath.join(packageRoot, 'dist');
-const engine = await dynamicImportPath<EngineModule>(safePath.join(distDir, 'engine.js'));
+// CLI entry point. Guarded so a test can import the helpers above without
+// running a build: this script downloads an extension and rewrites `dist/`.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const packageRoot = process.cwd();
+  const distDir = safePath.join(packageRoot, 'dist');
+  const engine = await dynamicImportPath<EngineModule>(safePath.join(distDir, 'engine.js'));
 
-// Fresh, and under the realpath'd temp root: on macOS `os.tmpdir()` reports
-// `/var/...` while the process's home resolves to `/private/var/...`, and on
-// Windows an un-normalised temp root gives the `RUNNER~1` short form — either
-// way the receipt's home would not match the directory this script captures.
-const scratchHome = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-duckdb-warm-'));
-try {
-  publishAssets(scratchHome, distDir, warm(engine, scratchHome));
-} finally {
-  rmSync(scratchHome, { recursive: true, force: true });
+  // Fresh, and under the realpath'd temp root: on macOS `os.tmpdir()` reports
+  // `/var/...` while the process's home resolves to `/private/var/...`, and on
+  // Windows an un-normalised temp root gives the `RUNNER~1` short form — either
+  // way the receipt's home would not match the directory this script captures.
+  const scratchHome = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-duckdb-warm-'));
+  try {
+    publishAssets(scratchHome, distDir, warm(engine, scratchHome));
+  } finally {
+    rmSync(scratchHome, { recursive: true, force: true });
+  }
 }
