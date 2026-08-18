@@ -64,16 +64,29 @@ import { isModuleMissing, reportMissingBackend, type OptionalBackend } from './o
  * child**. `runPhase` passes no `env` to `spawnSync`, so `vat validate`'s
  * children see the same selection their parent did.
  *
- * ⚠️ **That inheritance is the mechanism, and today it has no within-verb
- * instance.** Traced 2026-08-18: of `vat validate`'s and `vat verify`'s phases
- * exactly ONE reaches a projection lane (`resources validate`) and `vat build`
- * reaches none — every other phase builds a registry with no population source
- * and takes the walk. So no verb has two phases that could share an extent. The
- * reachable cross-process win is **cross-invocation**: `vat validate` and
+ * 🔑 **That inheritance now has a within-verb instance.** `vat build`'s two
+ * phases — `skills build` and `claude plugin build` — both reach the lane
+ * through `withResourcePopulationSource` (see `resource-loader.ts`), and both
+ * root their population at the same directory, so phase 2 reads the extent
+ * phase 1 wrote. Measured on `packages/vat-development-agents` with
+ * `VAT_CRAWL_TIMING`: with a cold store phase 1 files `builtin:filesystem`
+ * 39.2 ms and `projection-store:write` 10.1 ms, phase 2 files neither and its
+ * `resource-registry:enumerate` reads 3.6 ms against phase 1's 66.6 ms.
+ *
+ * It did NOT need the closure to emit reasons, which is what an earlier reading
+ * of this expected: the packaging lanes consume `resource_realizations` and let
+ * `walkLinkGraph` keep running on top of the registry, so the base extent alone
+ * answers them — the same shape `buildResourcePopulation` already had.
+ *
+ * The cross-INVOCATION win is unchanged and independent: `vat validate` and
  * `vat verify` spawn a byte-identical `resources validate` child, so the second
- * hits the store. Closing the within-verb gap means converting
- * `packaging-validator.ts` and `skill-packager.ts`, which need reasons the
- * closure does not yet emit — a feature, not this wiring.
+ * hits the store.
+ *
+ * ⚠️ One packaging enumeration is still on the walk: `crawlAndResolveRegistry`
+ * in `packaging-validator.ts`, which `vat skills build` reaches per skill
+ * through `validateSkillForPackaging` (it passes no shared registry, unlike
+ * `vat skills validate`). It is process-memoized, so it costs one extra crawl
+ * per `skills build` run rather than one per skill.
  */
 export const PROJECTION_STORE_ENV = 'VAT_PROJECTION_STORE';
 

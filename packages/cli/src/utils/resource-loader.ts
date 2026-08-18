@@ -127,7 +127,10 @@ function crawlOptionsForPath(
 
 /**
  * The env var that selects the crawler behind every resources-crawling verb —
- * `vat resources scan`/`validate`, `vat rag index`, and the pipeline oracles.
+ * `vat resources scan`/`validate`, `vat rag index`, the pipeline oracles, and
+ * (via {@link withResourcePopulationSource}) the packaging verbs
+ * `vat skills build`/`validate` and `vat claude plugin build`, which is what
+ * puts `vat build` on the lane at all.
  *
  * An environment switch rather than a config field, for the same reason
  * `VAT_INVENTORY_CRAWL` is one: it selects which INSTRUMENT runs, not what
@@ -213,6 +216,67 @@ function populationSourceFor(
     observeExtentSource(population.extentSource);
     return population.paths;
   };
+}
+
+/**
+ * Run one command's work with the projection-backed population source it
+ * selected, and the store that answers it open for the whole call.
+ *
+ * The lane-selection seam for every command that builds its OWN registry rather
+ * than going through {@link loadResourcesWithConfig} — `vat skills build` and
+ * `vat claude plugin build` (via `createProjectRegistry`) and
+ * `vat skills validate` (via its shared-context registry). Those three are what
+ * put `vat build` on the projection lane at all: before this, that verb reached
+ * a projection store on NO phase.
+ *
+ * Same selector, same store, same ignore oracle as the resource loader —
+ * deliberately, and not merely for tidiness. A second way to decide the lane is
+ * a second thing to keep in step, and a packaging lane that answered the
+ * selector differently from the validation lane would make a whole-run A/B
+ * uninterpretable: half the phases on one population, half on the other, and
+ * nothing in the output saying so.
+ *
+ * ⚠️ The tracker is **not optional dressing**. With no `GitTracker` every
+ * realization row reads `gitignored: false`, so the population would admit the
+ * ignored half of a git tree — generated markdown, caches, vendored corpora —
+ * and the packaging run would start bundling and validating files the project
+ * told git to forget. One is built here when the caller has none, rooted at the
+ * same root the population is enumerated from.
+ *
+ * @param options - Where the corpus is, and what to reuse
+ * @param options.root - The absolute corpus root, which is also the basis every
+ *   enumerated path is returned against
+ * @param options.gitTracker - An already-initialized tracker to reuse. Omit to
+ *   have one built, which costs a `git ls-files` spawn — and only when the lane
+ *   is actually selected
+ * @param options.observeExtentSource - Called with the enumerator that ran, once
+ *   per enumerated root. 🪤 NOT a cache-hit marker: on a hit no enumerator runs
+ *   and this still reports the one this process selected
+ * @param work - Given the source, or `undefined` when the walk stays selected
+ * @returns Whatever `work` returned
+ */
+export async function withResourcePopulationSource<T>(
+  options: {
+    root: string;
+    gitTracker?: GitTracker | undefined;
+    observeExtentSource?: ((kind: CrawlSourceKind) => void) | undefined;
+  },
+  work: (populationSource: ResourcePopulationSource | undefined) => Promise<T>,
+): Promise<T> {
+  // Checked before anything is built or opened: an unselected lane must cost
+  // nothing, or every command pays a tracker and a store to decline them.
+  if (!resourcesProjectionCrawlSelected()) {
+    return work(undefined);
+  }
+
+  const gitTracker = options.gitTracker ?? new GitTracker(options.root);
+  if (options.gitTracker === undefined) {
+    await gitTracker.initialize();
+  }
+
+  return withPopulationCache({ root: options.root }, async (cache) =>
+    work(populationSourceFor(gitTracker, options.observeExtentSource ?? (() => undefined), cache)),
+  );
 }
 
 /**

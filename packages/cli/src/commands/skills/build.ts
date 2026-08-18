@@ -50,6 +50,7 @@ import {
 } from '../../utils/issue-rendering.js';
 import { type createLogger } from '../../utils/logger.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
+import { withResourcePopulationSource } from '../../utils/resource-loader.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
 
@@ -1317,7 +1318,18 @@ export async function runSkillBuild(input: SkillBuildRunInput): Promise<SkillBui
     ),
   }));
 
-  const outcomes = await packageSkills(buildSpecs, cwd, allowLedger);
+  // On the projection lane when this process selected it. `packageSkills` builds
+  // THE registry for the run, so this is the only seam that can put `vat skills
+  // build` — and therefore `vat build`'s packaging phase — on it. The registry's
+  // markdown-only `include` is re-applied to whatever the source offers, so what
+  // gets packaged is unchanged; only how the file list was obtained differs.
+  const outcomes = await withResourcePopulationSource(
+    { root: cwd },
+    async (populationSource) =>
+      packageSkills(buildSpecs, cwd, allowLedger, {
+        ...(populationSource !== undefined && { populationSource }),
+      }),
+  );
 
   const results: Array<{ name: string; result: PackageSkillResult }> = [];
   const skillsWithErrors: string[] = [];

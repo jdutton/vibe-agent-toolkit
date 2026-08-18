@@ -34,6 +34,7 @@ import {
   type ParseResult,
   type ProjectConfig,
   type ResourceMetadata,
+  type ResourcePopulationSource,
   parseFileCached,
 } from '@vibe-agent-toolkit/resources';
 import {
@@ -471,6 +472,8 @@ export type SkillPackageOutcome =
  *   (`vat build` also validates the SOURCE tree, whose matches count too).
  *   Containment does not change that: a skill that threw may still have matched
  *   allow entries before it threw, and those matches count for the run.
+ * @param options - Registry-build options for the run's single shared registry,
+ *   notably the optional `populationSource` that puts it on the projection lane
  * @returns One outcome per input spec, in input order
  *
  * @example
@@ -488,12 +491,18 @@ export async function packageSkills(
   skills: SkillBuildSpec[],
   projectRoot: string,
   allowLedger: AllowUsageLedger,
+  options: ProjectRegistryOptions = {},
 ): Promise<SkillPackageOutcome[]> {
   // 1. Create one registry for the entire project. Through the shared builder:
   // this used to call `fromCrawl` directly and omit the config, so skills built
   // here belonged to no collection while a skill built through the single-skill
   // fallback did.
-  const registry = await createProjectRegistry(projectRoot);
+  //
+  // `options` is forwarded rather than absorbed: this is the ONLY registry the
+  // run builds, so a caller that wants the run on the projection lane has no
+  // other seam to reach. Dropping it here would leave `vat skills build`
+  // reaching a store it opened and never used.
+  const registry = await createProjectRegistry(projectRoot, options);
 
   // 2. Package each skill against the shared registry
   const outcomes: SkillPackageOutcome[] = [];
@@ -990,6 +999,20 @@ function assemblePackageResult(input: AssembleResultInput): PackageSkillResult {
 // ============================================================================
 
 /**
+ * Options for {@link createProjectRegistry}.
+ */
+export interface ProjectRegistryOptions {
+  /**
+   * Where the file list comes from — omit for the incumbent walk, supply one to
+   * source it from a projection instead.
+   *
+   * See {@link createProjectRegistry}'s docstring: the source answers
+   * enumeration only, and this builder's markdown-only scoping survives it.
+   */
+  populationSource?: ResourcePopulationSource | undefined;
+}
+
+/**
  * Build THE project registry: every markdown file under `projectRoot`, parsed,
  * with links resolved and the project config attached.
  *
@@ -1019,13 +1042,29 @@ function assemblePackageResult(input: AssembleResultInput): PackageSkillResult {
  *
  * Widening this glob would NOT widen what the walker follows: routing is
  * markdown-only regardless — see `isRoutable` in `walk-link-graph.ts`.
+ *
+ * ## The optional population source, and why it cannot widen that glob
+ *
+ * `populationSource` replaces the ENUMERATION only. `ResourceRegistry.crawl`
+ * re-applies this function's `include` — and the crawl's default `exclude` —
+ * to whatever the source offers, through the same compiled matcher the walk
+ * itself uses, so a source that enumerates a whole tree still yields exactly
+ * the project's markdown here. That is what makes handing this builder a
+ * projection a cost change rather than a scope change.
+ *
+ * Selecting the lane stays the CLI's job: this signature takes a source, never
+ * an environment. A library caller that passes nothing keeps the walk.
  */
-export async function createProjectRegistry(projectRoot: string): Promise<ResourceRegistry> {
+export async function createProjectRegistry(
+  projectRoot: string,
+  options: ProjectRegistryOptions = {},
+): Promise<ResourceRegistry> {
   const config = await loadConfig(projectRoot);
   const registry = await ResourceRegistry.fromCrawl(
     {
       baseDir: projectRoot,
       include: ['**/*.md'],
+      ...(options.populationSource !== undefined && { populationSource: options.populationSource }),
     },
     config === undefined ? undefined : { config },
   );

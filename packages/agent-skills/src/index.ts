@@ -15,6 +15,7 @@ export {
   type PackageSkillOptions,
   type PackageSkillResult,
   type PackagingTarget,
+  type ProjectRegistryOptions,
   type SkillBuildSpec,
   type SkillMetadata,
   type SkillPackageOutcome,
