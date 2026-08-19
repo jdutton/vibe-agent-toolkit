@@ -24,7 +24,7 @@
  *   to `collectRealization`; without that, no row anywhere would ever be
  *   `gitignored: true` and the column would be dead.
  *
- * ## Why this extent keys lazily — `contentDemand: 'deferGitignored'`
+ * ## Why this extent keys lazily, and why the POLICY belongs to the caller
  *
  * The argument above is fully satisfied by **paths**. It never needed the
  * bytes: a gitignored path still gets a realization row, still reports
@@ -38,15 +38,28 @@
  * **The general rule is not "gitignored".** It is: key eagerly where the bytes
  * are already essentially free from the discovery step, and defer everywhere
  * else. A source tree outside git entirely falls under the same rule.
- * `gitignored` is merely how that rule is *evaluated* here today, because it is
- * the only O(1) test available: `GitTracker` exposes no tracked-vs-ignored
- * predicate distinct from ignored — under the default `includeUntracked: true`,
- * tracked and untracked-not-ignored files share one active set.
+ * `gitignored` is merely how that rule is *evaluated* under
+ * {@link DEFAULT_CONTENT_DEMAND}, because it is the only O(1) test available:
+ * `GitTracker` exposes no tracked-vs-ignored predicate distinct from ignored —
+ * under the default `includeUntracked: true`, tracked and untracked-not-ignored
+ * files share one active set.
  *
- * **The consequence, stated plainly:** with no git repository nothing is
- * gitignored, so nothing defers and behaviour is unchanged. That is deliberate.
- * Deferring in a non-git tree would leave the projection with almost no content
- * at all — a capability loss dressed up as a saving.
+ * **The consequence of THAT policy, stated plainly:** with no git repository
+ * nothing is gitignored, so nothing defers. Deferring in a non-git tree would
+ * leave a blob-reading lane with almost no content at all — a capability loss
+ * dressed up as a saving.
+ *
+ * ⚠️ **But "which half of the tree" was never the whole question, and a literal
+ * here answered it once for every lane.** This contributor serves more than one:
+ * `buildInventoryPopulation` runs the blob stage over what this extent keys, so
+ * its bytes are load-bearing; `buildResourcePopulation` consumes exactly four
+ * columns — `isDirectory`, `exists`, `gitignored`, `path` — discards the
+ * `Projection`, and skips the blob stage outright. Measured on an 8,548-file
+ * monorepo, keying for that second lane was **~1,684 ms of a 13,714 ms cold run,
+ * reading 152.9 MB**, and every byte of it was thrown away. No single literal is
+ * right for both, so the demand is a **constructor parameter** and each lane
+ * states its own — the policy stays inspectable and serializable (see
+ * {@link ContentDemand}), it is simply no longer decided here.
  *
  * ## ⚠️ This extent's COST is not settled here — see the git lane before optimising
  *
@@ -84,7 +97,7 @@ import type {
 } from '../contributor.js';
 import { crawlSourceFor, type CrawlSource } from '../crawl-source.js';
 import type { ProjectionBase } from '../projection.js';
-import { collectRealization } from '../realizations.js';
+import { collectRealization, type ContentDemand } from '../realizations.js';
 
 import { extentContextId } from './context-id.js';
 
@@ -96,6 +109,17 @@ const FILESYSTEM_KIND = 'filesystem';
 
 /** `resources.origin` for an identity this contributor first observed. */
 const FILESYSTEM_ORIGIN = 'filesystem';
+
+/**
+ * The demand a caller that states none gets — the historical literal, unmoved.
+ *
+ * Named rather than defaulted inline so that "the lane that did not opt in is
+ * unchanged" is one readable fact instead of a literal in a parameter list.
+ * `buildInventoryPopulation` is that lane: it runs the blob stage over what this
+ * extent keys, and a default that quietly became `'deferred'` would empty that
+ * stage while every membership assertion about it stayed green.
+ */
+export const DEFAULT_CONTENT_DEMAND: ContentDemand = 'deferGitignored';
 
 /**
  * Enumerates the working tree: every file *and* directory beneath the corpus
@@ -113,14 +137,24 @@ export class FilesystemExtentContributor implements ExtentContributor {
 
   readonly #sourceFor: (root: string) => CrawlSource;
 
+  readonly #contentDemand: ContentDemand;
+
   /**
    * @param sourceFor - How to obtain this extent's enumerator, defaulting to
    *   {@link crawlSourceFor}. Injected only so the parity suite can pin one
    *   implementation against the other on a single root; production selects at
    *   the seam, never per construction site
+   * @param contentDemand - Whether this registration wants the bytes keyed, and
+   *   which half of the tree. A **lane's** decision, not this class's — see the
+   *   class docstring — defaulting to {@link DEFAULT_CONTENT_DEMAND} so a caller
+   *   that has not thought about it is left exactly where it was
    */
-  constructor(sourceFor: (root: string) => CrawlSource = crawlSourceFor) {
+  constructor(
+    sourceFor: (root: string) => CrawlSource = crawlSourceFor,
+    contentDemand: ContentDemand = DEFAULT_CONTENT_DEMAND,
+  ) {
     this.#sourceFor = sourceFor;
+    this.#contentDemand = contentDemand;
   }
 
   /**
@@ -156,9 +190,9 @@ export class FilesystemExtentContributor implements ExtentContributor {
 
     for (const { absolutePath, contentHint } of enumerated) {
       const resourceId = base.identities.idFor(absolutePath);
-      // Sequential on purpose: `collectRealization` reads and keys every file's
-      // bytes, and fanning the whole crawl out at once puts one file handle per
-      // corpus file in flight.
+      // Sequential on purpose: under a keying demand `collectRealization` reads
+      // and keys every file's bytes, and fanning the whole crawl out at once
+      // puts one file handle per corpus file in flight.
       const realization = await collectRealization(absolutePath, resourceId, {
         root: base.root,
         extentId,
@@ -167,9 +201,10 @@ export class FilesystemExtentContributor implements ExtentContributor {
         // by the git extent too, and the point is that the second realization
         // costs no read.
         ...(base.contentCache !== undefined && { contentCache: base.contentCache }),
-        // See the class docstring: paths carry this extent's whole argument, so
-        // the ignored half of the tree gets rows without getting hashed.
-        contentDemand: 'deferGitignored',
+        // The registering LANE's policy, never a literal chosen here: paths
+        // carry this extent's whole argument, and which lanes additionally need
+        // the bytes is a fact about the lanes. See the class docstring.
+        contentDemand: this.#contentDemand,
         ...(contentHint !== null && { contentHint }),
       });
       realizations.push(realization);

@@ -139,6 +139,20 @@ export interface ResourcePopulation {
  * the base extent itself, so unlike `buildInventoryPopulation` there is no
  * closure stratum to iterate and no per-subject contributor to register.
  *
+ * ## Nothing here reads a file's CONTENT, and that is a pinned property
+ *
+ * The loop below consumes four columns — `isDirectory`, `exists`, `gitignored`,
+ * `path` — every one of which `lstat` and the ignore oracle already answer.
+ * `contentKey` is not among them, so this lane registers the extent under
+ * `contentDemand: 'deferred'` and the population is obtained by enumeration and
+ * `lstat` alone.
+ *
+ * It is a property rather than a comment: `zero-content-reads.integration.test.ts`
+ * runs this function in a child process under an `fs` preload and asserts that
+ * **no** content-read route fires for a path under the crawl root, with
+ * `readdir`/`opendir` routed to a separate sink so the gate cannot be satisfied
+ * by an enumeration that stopped enumerating.
+ *
  * ## The blob stage is SKIPPED here, and the arithmetic that used to defend it
  *
  * This function reads four columns off `resource_realizations` and discards the
@@ -197,7 +211,17 @@ export async function buildResourcePopulation(options: {
   const source = crawlSourceFor(root);
 
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor(() => source));
+  // `'deferred'`, and it is the same argument as `blobs: BLOBS_SKIP` one layer
+  // down — see the header. This lane reads four realization columns and
+  // `contentKey` is not one of them, so every byte read to compute one was read
+  // for nobody: ~1,684 ms of a 13,714 ms cold run, 152.9 MB, on an 8,548-file
+  // monorepo. The rows still arrive; they arrive `contentState: 'deferred'`,
+  // which is the state that says "enumerated, deliberately not read" rather
+  // than any of the three that say there was nothing to read.
+  //
+  // ⚠️ Stated per LANE, never flipped in the contributor: `vat inventory`
+  // registers the same class and DOES run the blob stage over what it keys.
+  registry.register(new FilesystemExtentContributor(() => source, 'deferred'));
 
   // No `parameters`: the filesystem extent is fully determined by the root, so
   // it runs under `null` and its provenance row says so honestly.

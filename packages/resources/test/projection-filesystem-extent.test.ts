@@ -4,10 +4,14 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { GitTracker, mkdirSyncReal, normalizedTmpdir, runGitOrThrow, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { beforeEach, describe, expect, it } from 'vitest';
 
+import { RunContentCache } from '../src/projection/content-cache.js';
 import { extentDigest, type ExtentContribution } from '../src/projection/contributor.js';
 import { extentContextId } from '../src/projection/contributors/context-id.js';
 import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
+import { crawlSourceFor } from '../src/projection/crawl-source.js';
 import { ProjectionBuilder } from '../src/projection/projection.js';
+import type { ContentDemand } from '../src/projection/realizations.js';
+import type { ResourceRealizationRow } from '../src/schemas/projection-resources.js';
 
 import { expectContributionRowsValid } from './test-helpers.js';
 
@@ -49,6 +53,33 @@ async function contributeInRepo(): Promise<ExtentContribution> {
   await tracker.initialize();
   const base = new ProjectionBuilder(root, tracker).base();
   return new FilesystemExtentContributor().contribute(base, null);
+}
+
+/**
+ * Run the contributor in a git repository under a stated content demand.
+ *
+ * A repository, because `deferGitignored` is only distinguishable from `eager`
+ * where something IS gitignored — outside git nothing is, and the default arm
+ * would pass against any of the three policies.
+ *
+ * @param demand - The policy to construct the contributor with, or omitted to
+ *   take the default
+ * @returns The contribution
+ */
+async function contributeUnder(demand?: ContentDemand): Promise<ExtentContribution> {
+  runGitOrThrow(['init'], { cwd: root, stdio: 'pipe' });
+  const tracker = new GitTracker(root);
+  await tracker.initialize();
+  const base = new ProjectionBuilder(root, tracker, new RunContentCache()).base();
+  const contributor = demand === undefined
+    ? new FilesystemExtentContributor()
+    : new FilesystemExtentContributor(crawlSourceFor, demand);
+  return contributor.contribute(base, null);
+}
+
+/** One realization row by its root-relative path. */
+function rowFor(contribution: ExtentContribution, path: string): ResourceRealizationRow | undefined {
+  return contribution.realizations.find((row) => row.path === path);
 }
 
 function writeFixtureFile(relativePath: string, contents: string): void {
@@ -215,5 +246,64 @@ describe('FilesystemExtentContributor digest', () => {
     writeFixtureFile('added.md', '# added\n');
 
     expect(extentDigest(await contribute())).not.toBe(before);
+  });
+});
+
+/**
+ * **Who decides whether this extent pays to read bytes.**
+ *
+ * The policy used to be a literal inside `contribute()`, which made it one
+ * decision for every lane that registers this contributor — and the lanes do not
+ * agree. `vat inventory` runs the blob stage over what this extent keys;
+ * `buildResourcePopulation` reads four columns and `contentKey` is not one of
+ * them. A single literal cannot be right for both, so the demand is a
+ * constructor parameter and each lane states its own.
+ *
+ * The default is asserted as well as the override. It is what `vat inventory`
+ * gets, and a default that silently became `deferred` would empty the blob stage
+ * while every membership assertion in this file stayed green.
+ */
+describe('FilesystemExtentContributor content demand', () => {
+  it('keys a tracked file by default, which is what the blob stage consumes', async () => {
+    const contribution = await contributeUnder();
+
+    expect(rowFor(contribution, 'README.md')?.contentState).toBe('keyed');
+    expect(rowFor(contribution, 'README.md')?.contentKey).not.toBeNull();
+  });
+
+  it('defers a gitignored file by default, which is the incumbent saving', async () => {
+    const contribution = await contributeUnder();
+
+    expect(rowFor(contribution, BUILD_OUTPUT)?.contentState).toBe('deferred');
+    expect(rowFor(contribution, BUILD_OUTPUT)?.contentKey).toBeNull();
+  });
+
+  it('keys nothing at all under "deferred", tracked half included', async () => {
+    // The whole point of the parameter: the tracked half is what the default
+    // still reads, so a policy that only changed the ignored half would be
+    // indistinguishable from the default here.
+    const contribution = await contributeUnder('deferred');
+    const files = contribution.realizations.filter((row) => !row.isDirectory);
+
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.every((row) => row.contentState === 'deferred')).toBe(true);
+    expect(files.every((row) => row.contentKey === null)).toBe(true);
+  });
+
+  it('still says "none" for a directory under "deferred" — no bytes is not a deferral', async () => {
+    // Precedence, asserted where it can regress: a demand policy may not relabel
+    // a thing that has no content, or a consumer could not tell a corpus of
+    // directories from one nobody read.
+    const contribution = await contributeUnder('deferred');
+
+    expect(rowFor(contribution, NESTED_DIR)?.contentState).toBe('none');
+  });
+
+  it('produces rows the shipped schemas accept under "deferred"', async () => {
+    // `contentKey: null` with `contentState: 'deferred'` is the pair the
+    // realization schema's superRefine pins in both directions. Asserted rather
+    // than assumed, because widening that schema to make this change fit would
+    // be the wrong fix.
+    expectContributionRowsValid(await contributeUnder('deferred'));
   });
 });
