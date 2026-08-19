@@ -4,11 +4,11 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import { GitTracker, normalizedTmpdir, resetProjectRootCaches, safePath } from '@vibe-agent-toolkit/utils';
+import { GitTracker, mkdirSyncReal, normalizedTmpdir, resetProjectRootCaches, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, expect, type Assertion } from 'vitest';
 
 import { ExternalLinkValidator } from '../src/external-link-validator.js';
@@ -25,6 +25,25 @@ import {
 } from '../src/schemas/projection-resources.js';
 import { ResolutionContextRowSchema } from '../src/schemas/projection-zones.js';
 import type { HeadingNode, ResourceLink, ValidationIssue } from '../src/types.js';
+
+/**
+ * Write a fixture file under `rootDir`, creating its parent directories.
+ *
+ * Synchronous and root-relative because every fixture tree in this package is
+ * built the same way: a list of root-relative paths planted before anything
+ * reads them. Lives here rather than in each suite so the two crawl fixtures
+ * cannot drift into two spellings of one operation.
+ *
+ * @param rootDir - Root the path is relative to
+ * @param relativePath - Root-relative, forward-slashed
+ * @param contents - Bytes to write
+ */
+export function writeFileIn(rootDir: string, relativePath: string, contents: string): void {
+  const absolutePath = safePath.resolve(rootDir, relativePath);
+  mkdirSyncReal(safePath.resolve(absolutePath, '..'), { recursive: true });
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture path beneath a caller-owned temp root
+  writeFileSync(absolutePath, contents, 'utf-8');
+}
 
 /**
  * Initialize a git repository in the specified directory.

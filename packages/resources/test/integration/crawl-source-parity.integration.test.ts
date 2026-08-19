@@ -52,6 +52,7 @@ import {
   type EnumeratedPath,
 } from '../../src/projection/crawl-source.js';
 import { ProjectionBuilder } from '../../src/projection/projection.js';
+import { writeFileIn as writeIn } from '../test-helpers.js';
 
 /** An ordinary committed file — the baseline both sources reach first. */
 const TRACKED = 'tracked.md';
@@ -103,19 +104,6 @@ let root = '';
  */
 function gitIn(rootDir: string, args: readonly string[]): string {
   return runGitOrThrow([...args], { cwd: rootDir });
-}
-
-/**
- * Write a file, creating its parent directories.
- *
- * @param rootDir - Root the path is relative to
- * @param relativePath - Root-relative, forward-slashed
- * @param contents - What to write
- */
-function writeIn(rootDir: string, relativePath: string, contents: string): void {
-  const absolutePath = safePath.resolve(rootDir, relativePath);
-  mkdirSyncReal(safePath.resolve(absolutePath, '..'), { recursive: true });
-  writeFileSync(absolutePath, contents, 'utf-8');
 }
 
 /**

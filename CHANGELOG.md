@@ -79,6 +79,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Every resource crawl now sees uncommitted files.** The validation universe is
+  `tracked ∪ (untracked ∧ ¬ignored)` — what a commit made right now *would* contain — and it is
+  declared repo-wide at `docs/architecture/resource-scanning-and-caching.md` §2.1, with each
+  command scored against it in `docs/architecture/command-population-matrix.md`.
+  `ResourceRegistry.crawl` passes `includeUntracked: true`, so `git ls-files` no longer answers
+  tracked-only. **This can newly fail a run**: a brand-new, un-ignored markdown file with a broken
+  link used to be invisible, and the command exited green over it. Affected:
+  `vat resources scan`/`validate`, `vat rag index`, and the link registries behind
+  `vat skills validate`/`build`, `vat audit` and `vat skill review`. Gitignored files are
+  unchanged — still excluded, and the fast path is kept (this is `includeUntracked`, not
+  `respectGitignore: false`).
+
 - **`VAT_RESOURCES_CRAWL=projection` is several times faster on a cold parse cache.** The lane no
   longer parses every file in the tree to fill tables it does not read. Results are unchanged.
 

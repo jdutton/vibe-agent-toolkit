@@ -14,33 +14,65 @@ This document covers the **input side** — discovering what bytes exist and rea
 correctly. See [Resource Projection](./resource-projection.md) for the **output side** — what gets
 built from those bytes, the schema it's stored as, and how that result is cached.
 
-## 2. The scanning taxonomy
+## 2. The scanning taxonomy, and the rule it is scored against
+
+### 2.1 The rule — declared here
+
+**The population a VAT command scans is `tracked ∪ (untracked ∧ ¬ignored)`: what a commit made right
+now *would* contain.** That is a repo-wide obligation, not a per-caller preference. A brand-new,
+uncommitted, un-ignored file MUST be visible to any crawler; a command that cannot see one has a
+**defect**, not a narrower scope. A gitignored path is never part of a prospective commit and stays
+out, so the exclusion binds the same way the inclusion does.
+
+This repository has no ADRs — a decision lives in an architecture document, in `CHANGELOG.md`, or in
+the docstring of the thing it governs. So this section is where that rule lives, and it is a binding
+statement rather than a note. [Command Population Matrix](./command-population-matrix.md) scores
+every command against it, cell by cell; this paragraph is the standard those cells cite.
+
+**Three bounds the rule does not claim**, each an open question in that document rather than a silent
+extension of this one:
+
+- **Packaging populations — what *ships* — are not settled by it.** `vat claude plugin build` copies
+  tracked files only and warns about untracked skill directories, by declared intent. Under the set
+  above an untracked-not-ignored skill *would* be in a commit and so should ship; under "you ship what
+  you committed" it should not.
+- **Populations with no git behind them are not settled by it.** Outside a working tree neither
+  "tracked" nor "ignored" exists, a `.gitignore` sitting there is inert, and the population is
+  whatever the globs admit. That is today's behaviour; this section does not ratify it.
+- **A population that is deliberately build output is a different subject.** `vat claude marketplace
+  validate` reads `dist/`, which is normally gitignored, and must — a verify verb that could not see
+  what was built would be useless. The exclusion half above governs the **source corpus**, not a tree
+  whose whole purpose is to be generated.
+
+### 2.2 The taxonomy
 
 | state | in a git working tree? | does VAT see it today? |
 |---|---|---|
 | git-tracked, clean | yes | yes — always |
 | git-tracked, dirty (edited, uncommitted) | yes | yes — always |
-| git-untracked, not gitignored | yes | **depends on the caller** — see below |
+| git-untracked, not gitignored | yes | **yes — required by §2.1**. Every `crawlDirectory`-backed scanning lane passes `includeUntracked: true`; the routes that never consult git at all see it incidentally |
 | git-ignored | yes | **split, and the split is deliberate** — the scanning lanes never scan them (§3.1); the projection's `filesystem` extent always does |
 | non-git entirely (SharePoint, OneDrive, iCloud, `~/.claude/*`, ...) | no | yes, via filesystem crawl — no git shortcut available |
 
-**The "depends on the caller" row is a real, load-bearing inconsistency, recorded here as fact rather
-than resolved.** `gitLsFiles()` (`packages/utils/src/git-utils.ts:72-121`) spawns `git ls-files -z` by
+**The untracked row used to read "depends on the caller", and that inconsistency is what §2.1
+resolves.** `gitLsFiles()` (`packages/utils/src/git-utils.ts`) spawns `git ls-files -z` by
 default — tracked files only. Passing `includeUntracked: true` adds `--cached --others
---exclude-standard`, pulling in untracked-but-not-ignored files too. `crawlDirectorySync()`
-(`packages/utils/src/file-crawler.ts:156-237`) defaults `includeUntracked` to `false`, and
-`ResourceRegistry.crawl()` (`packages/resources/src/resource-registry.ts:755-782`) never overrides
-it — so **`vat resources scan`/`validate` cannot see a brand-new, uncommitted `.md` file.**
-`crawlOneBase()` (`packages/cli/src/commands/skills/skill-discovery.ts:97-116`) explicitly sets
-`includeUntracked: true`, with a comment noting skills must be discoverable before being committed.
-Whether resources scanning should also see untracked files is a separate product decision this
-document does not make — it only names the split precisely so nobody assumes uniform behavior.
+--exclude-standard`, pulling in untracked-but-not-ignored files too, and *keeping* the fast path,
+unlike `respectGitignore: false` which costs the whole walk and also admits ignored files.
+`crawlDirectorySync()` (`packages/utils/src/file-crawler.ts`) still defaults
+`includeUntracked` to `false` — it is a general-purpose crawler with callers that are not scanning a
+corpus — so each scanning lane sets it: `ResourceRegistry.crawl()`
+(`packages/resources/src/resource-registry.ts`) and `crawlOneBase()`
+(`packages/cli/src/commands/skills/skill-discovery.ts:97-116`) both do, the latter with a comment
+noting skills must be discoverable before being committed.
 
-**Demonstrated, not merely reasoned about** (2026-08-16): on a two-file repository with one
-committed and one uncommitted markdown file, each carrying a broken link, `vat resources validate`
-reports `filesScanned: 1` and one finding. The uncommitted file's broken link is not missed
-*quietly* — it is invisible, and the command exits green about the half it could see. §3.4 ships an
-opt-in lane whose population does include it.
+**Demonstrated, not merely reasoned about** (2026-08-16, against the pre-rule code): on a two-file
+repository with one committed and one uncommitted markdown file, each carrying a broken link, `vat
+resources validate` reported `filesScanned: 1` and one finding. The uncommitted file's broken link
+was not missed *quietly* — it was invisible, and the command exited green about the half it could
+see. That measurement is the evidence behind §2.1, and it is what the registry's
+`includeUntracked: true` now fixes on the default lane; §3.4's opt-in projection lane reaches the
+same population by a different mechanism.
 
 If `gitFindRoot()` finds no repository, or `gitLsFiles` returns `null`, `crawlDirectorySync` falls
 through to a manual `fs.readdirSync` walk (`file-crawler.ts:239-417`) — the non-git lane, §3.2.
@@ -222,11 +254,13 @@ A mismatch **declines back to the walk** and warns on stderr naming both roots. 
 output directory in an adopter layout with no config and no `.git` above it. And it never declines to
 an *empty* population, which would report a confident green over a corpus nothing looked at.
 
-**What it changes.** The population becomes `tracked ∪ (untracked ∧ ¬ignored)` — the `includeUntracked:
-true` semantics skill discovery already uses — rather than `git ls-files`' tracked-only default. So a
-markdown file an author has written but not committed is finally visible to validation. Gitignored
-rows are enumerated by the extent and **declined by this consumer**, deliberately: admitting them
-would start emitting findings about files the project told git to forget.
+**What it changes.** The population is `tracked ∪ (untracked ∧ ¬ignored)` — §2.1's rule, reached by a
+different mechanism. ⚠️ **This used to be the lane's distinguishing property and no longer is:** the
+default walk now passes `includeUntracked: true` too, so an uncommitted markdown file is visible to
+validation on *both* lanes. The measurements below were taken before that, and are kept as the
+evidence that produced §2.1 rather than as a live description of the difference. Gitignored rows are
+enumerated by the extent and **declined by this consumer**, deliberately: admitting them would start
+emitting findings about files the project told git to forget.
 
 **What it loses: committed symlinks — and this is the third symlink behaviour in the codebase, not
 a variation on the two already documented in §4.** `FilesystemExtentContributor` crawls with
@@ -249,7 +283,7 @@ resolving §4's proposed within-snapshot resolution is what would collapse all t
 
 | subject | walker | projection | note |
 |---|---|---|---|
-| git repo, 1 committed + 1 untracked broken link | `filesScanned: 1` | `filesScanned: 2` | the untracked file's real broken link, found |
+| git repo, 1 committed + 1 untracked broken link | `filesScanned: 1` | `filesScanned: 2` | the untracked file's real broken link, found. ⚠️ **The walker column is pre-§2.1**; both arms are 2 today |
 | git repo, 2 committed symlinks | `filesScanned: 3` | `filesScanned: 1` | the symlink paths are not members |
 | non-git anchored corpus, 198 files / 90 HTML / 3,950 links | 112 files, 0.085 s | 112 files, 0.926 s | output **byte-identical** but for `durationSecs` |
 | ...its `resource-registry:enumerate` row | 2.7 ms | 851.9 ms | **316×** |
@@ -257,7 +291,7 @@ resolving §4's proposed within-snapshot resolution is what would collapse all t
 | ...its `resource-registry:enumerate` row | 24.2 ms | 4,580.7 ms | **189×** |
 
 **The adopter row is the blast-radius measurement, and it needs its precondition stated to mean
-anything.** That tree carried zero untracked files and zero committed symlinks at measurement time,
+anything** — including that it, too, is a pre-§2.1 walker arm. That tree carried zero untracked files and zero committed symlinks at measurement time,
 so the two lanes had no population to disagree over — "byte-identical" there is agreement on
 *today's tree state*, not a property of the lanes. Re-measured with one untracked `roadmap.md`
 carrying a broken link added to it, the same tree gives `filesScanned` 1,378 → **1,379**,
@@ -272,9 +306,11 @@ per arm inflates the projection arm alone and corrupts the ratio. Compare `enume
 
 **It is opt-in, and the asymmetry with `vat inventory`'s default-on selector is the point.** The
 inventory flip was defensible as a default because it was provably a byte-for-byte no-op. This lane
-cannot claim that, because it deliberately does not agree — and it disagrees in *both* directions:
-it adds findings on untracked files and it drops the symlink ones. That blast radius is a product
-call, not a correctness argument.
+cannot claim that, because it deliberately does not agree: it drops committed symlinks (§4), and for
+an out-of-tree target those bytes have no other path into the population. It used to disagree in the
+other direction too, by adding findings on untracked files — §2.1 closed that half by moving the
+default walk onto the same population, leaving the symlink loss as the whole of the remaining
+disagreement. That blast radius is a product call, not a correctness argument.
 
 #### The defect this lane found: every file was being handed to the markdown parser
 
@@ -434,8 +470,13 @@ side (tree-shape caching vs. the blob-keyed tables).
   capability. `NEVER_CRAWL_GLOBS` is applied to the *collapsed* entry, so a pruned directory is
   skipped by name and never entered — that is where the saving is today. "Descend only where a lens
   asks" is a further, unbuilt step, and it is a population change rather than a re-sourcing.
-- **Decide the resources-vs-skills untracked-file inconsistency** (§2). ✅ A lane that resolves it
-  now exists and is measured (§3.4); what remains is the product call on making it the default.
+- ✅ **Decide the resources-vs-skills untracked-file inconsistency** (§2). Decided and declared at
+  §2.1: the population is `tracked ∪ (untracked ∧ ¬ignored)` for every scanning lane, and
+  `ResourceRegistry.crawl` passes `includeUntracked: true` so the default walk carries it — the
+  projection lane (§3.4) is no longer the only route to that population. What remains is the separate
+  product call on the projection lane's own default, which now turns only on the symlink loss and the
+  cost, and the three scope bounds §2.1 does not claim (packaging, non-git, build output), open in
+  the [Command Population Matrix](./command-population-matrix.md) §8.
 - **Design the anchored non-git manifest** (§3.2). Nothing exists yet; SharePoint/OneDrive/iCloud
   connectors are explicitly in scope for this design, unbuilt.
 - **Finish symlink-handling fallbacks** (§4): multi-hop chains, the precise non-git-lane handoff.

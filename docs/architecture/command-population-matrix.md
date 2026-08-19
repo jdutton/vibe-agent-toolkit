@@ -25,16 +25,17 @@ is the authority on *which command gets which*.
 *would* contain. A command that cannot see a brand-new, uncommitted, un-ignored file is a **defect**,
 not a scoping choice.
 
-⚠️ **This ruling is undeclared in-repo.** The set expression exists at [D1] as the definition of the
-`git` *extent* — one entry in an open extent vocabulary, glossed "committed or potentially committed". Nothing
-promotes it to a universal obligation on every command's population. [D2] explicitly declines to
-make the call: it names the split "a separate product decision this document does not make". So the
-ruling below is the standard every row is scored against, and the ruling itself is the first entry
-in [§8](#8-️-undeclared--the-open-questions).
+**The ruling is declared in-repo, at [D2] §2.1.** This repository has no ADRs — a decision of this
+kind lives in an architecture document — so that section is the binding statement, not a note, and it
+supersedes the sentence in the same document that used to decline the call. Every row below is scored
+against it. The set expression also appears at [D1], but only as the definition of the `git`
+*extent* — one entry in an open extent vocabulary, which is a narrower thing than an obligation on a
+command's population.
 
-Two further scope questions the ruling does not settle, both consequential and both listed in §8:
-whether it binds **packaging** populations (what *ships*) as well as validation populations (what is
-*checked*), and whether it binds populations that are not git-backed at all.
+Three scope bounds the ruling explicitly does **not** claim, all named at [D2] §2.1 and all still
+open in §8: whether it binds **packaging** populations (what *ships*) as well as validation
+populations (what is *checked*) — U2; whether it binds populations that are not git-backed at all —
+U3; and what a verb whose subject is deliberately build output owes it — U6.
 
 ## 2. The three selectors, and their opposite defaults
 
@@ -51,8 +52,9 @@ Three properties that are easy to get wrong:
 
 - **`VAT_INVENTORY_CRAWL` is the only one whose default is the new lane**, and the asymmetry is
   deliberate rather than an oversight: the inventory flip was provable as a byte-for-byte no-op, and
-  the resources flip is provably *not* one — it adds findings on untracked files and drops committed
-  symlinks [D3].
+  the resources flip is provably *not* one — it drops committed symlinks [D3]. It used to disagree in
+  the other direction too, by adding findings on untracked files; that half is gone now that the
+  default lane honours §1, so the symlink loss is the whole of the remaining disagreement.
 - **An unrecognized value never throws.** `VAT_INVENTORY_CRAWL` treats anything that is not exactly
   `walker` as the projection [D4]; the other two treat anything that is not exactly their opt-in
   spelling as the default. A typo'd selector silently selects a lane.
@@ -119,22 +121,22 @@ mechanism through a route where the concept does not apply.
 
 | command | in a git working tree | NOT in a git working tree | sees untracked-not-ignored? | sees gitignored (e.g. `dist/`)? |
 |---|---|---|---|---|
-| `vat resources scan` | `git ls-files` fast path | manual `readdir` walk; `.gitignore` is never consulted, so everything not glob-excluded is a member | **`BUG:` no — tracked only.** `packages/resources/src/resource-registry.ts:877-884` builds crawl options without `includeUntracked`, so `packages/utils/src/file-crawler.ts:199`'s `false` default stands | no |
-| `vat resources validate` | `git ls-files` fast path | manual walk, as above | **`BUG:` no — tracked only.** Same two sites; demonstrated as a silent green over a file it could not see [D2] | no |
-| `vat rag index` | `git ls-files` fast path | manual walk, as above | **`BUG:` no — tracked only.** Same two sites | no |
+| `vat resources scan` | `git ls-files` fast path | manual `readdir` walk; `.gitignore` is never consulted, so everything not glob-excluded is a member | yes — `ResourceRegistry.crawl` passes `includeUntracked: true`, which widens the `git ls-files` query to `--cached --others --exclude-standard` without leaving the fast path | no |
+| `vat resources validate` | `git ls-files` fast path | manual walk, as above | yes — same registry option. The silent green [D2] measured over a file it could not see is pinned as an assertion at `packages/resources/test/integration/crawl-untracked-population.integration.test.ts` | no |
+| `vat rag index` | `git ls-files` fast path | manual walk, as above | yes — same loader, same registry option | no |
 | `vat resources scan/validate`, `vat rag index` — with `VAT_RESOURCES_CRAWL=projection` | filesystem-extent walk, or git enumeration under `VAT_EXTENT_SOURCE=git` | filesystem-extent walk; with no git oracle every row reads `gitignored: false`, so the whole crawl is admitted | yes | no — enumerated by the extent, then declined by this consumer [D15] |
 | `vat inventory` (plugin dir) | projection over the filesystem extent | filesystem extent; no ignore oracle, whole crawl admitted | yes | no |
 | `vat inventory` (other shapes) | link walk over a `crawlDirectory` registry | manual walk | yes — the skill extractor sets `includeUntracked: true` [D16] | no |
 | `vat skills validate` — discovery | `git ls-files --cached --others --exclude-standard` | manual walk | yes [D8] | no |
 | `vat skills build` — discovery | as above | manual walk | yes [D8] | no |
-| `vat skills validate/build` — link registry | `git ls-files` fast path | manual walk | **`BUG:` no — tracked only**, via the same `resource-registry.ts:877-884` default. A skill is discovered but its brand-new link target is not a registry member, so the link resolves against a corpus one file short | no |
+| `vat skills validate/build` — link registry | `git ls-files` fast path | manual walk | yes — `crawlAndResolveRegistry` builds its registry through `ResourceRegistry.crawl`, so a discovered skill's brand-new link target is a registry member | no |
 | `vat claude plugin build` — pool skills | `git ls-files --cached --others --exclude-standard` | manual walk | yes [D8] | no |
 | `vat claude plugin build` — plugin-local skills | `git ls-files`, tracked only | manual walk — every directory is visible, and `listUntrackedPluginSkillDirs` returns `[]` because there is no git to disagree with | no, **by declared intent**, with a build **warning** naming each one [D9]. ⚠️ Whether the §1 ruling overrides that intent is undeclared — see §8 | no, by declared intent [D9] |
 | `vat claude plugin build` — tree-copy | `git ls-files`, tracked only | manual walk | no, by declared intent [D9] | no, by declared intent [D9] |
 | `vat audit` — subject tree | raw `fs.readdir`; git is not consulted | identical — the route has no git branch | yes, incidentally: `readdir` sees every file | **yes**, incidentally — nothing filters ignored paths out of the subject walk. ⚠️ undeclared whether that is intended |
-| `vat audit` — link registry | `git ls-files` fast path | manual walk | **`BUG:` no — tracked only.** `packages/cli/src/commands/audit.ts:330` calls `crawlAndResolveRegistry(projectRoot)` with no `populationSource`, so the registry is on the walk and `resource-registry.ts:877-884` applies | no |
+| `vat audit` — link registry | `git ls-files` fast path | manual walk | yes — `packages/cli/src/commands/audit.ts:330` calls `crawlAndResolveRegistry(projectRoot)`, and that route reaches `ResourceRegistry.crawl`, so the walk itself now carries the ruling | no |
 | `vat skill review` — discovery | `git ls-files --cached --others --exclude-standard` | manual walk | yes [D8] | no |
-| `vat skill review` — link registry | `git ls-files` fast path | manual walk | **`BUG:` no — tracked only**, same `resource-registry.ts:877-884` default | no |
+| `vat skill review` — link registry | `git ls-files` fast path | manual walk | yes — same `crawlAndResolveRegistry` route | no |
 | `vat skill test run` — subject resolution | `git ls-files --cached --others --exclude-standard` | manual walk | yes [D8] | no |
 | `vat claude marketplace validate` | one-level `readdirSync` over `dist/` | identical | n/a — the tree it reads is build output | **yes** — necessarily, and correctly: `dist/` is normally gitignored and a verify verb must see what was built. ⚠️ undeclared |
 | `vat claude marketplace publish` | **git decides** — the composed tree is `git add -A`ed, so the published set is `tracked ∪ (untracked ∧ ¬ignored)` of the publish repo | n/a — publishing requires a repository | yes, by the mechanism | no |
@@ -205,7 +207,7 @@ recorded so the pattern is legible.
 | # | claim | where | status |
 |---|---|---|---|
 | C1 | "opt-in second implementation", of a lane that had become the default | `packages/claude-marketplace/src/inventory/inventory-population.ts` header | **fixed** at `b4afef72` — the header now says the projection is the default [D4] |
-| C2 | "a separate product decision this document does not make", of the untracked question | [D2] | **open** — the ruling in §1 has been made; the sentence now under-states the document's own §3.4, which ships the lane that resolves it |
+| C2 | "a separate product decision this document does not make", of the untracked question | [D2] | **fixed** — [D2] §2.1 now declares the ruling instead of declining it, and `ResourceRegistry.crawl` conforms to it |
 | C3 | "This extent cannot be narrowed — dropping non-markdown loses real members" | [D17], the closing lines of the file header | **open** — asserted with no fixture behind it. No test in the repo demonstrates a real member lost by narrowing to markdown. The neighbouring claim about *re-sourcing* is measured; this one is reasoned |
 | C4 | "Discovery honors the same git visibility as the tree-copy (tracked files only, inside a git repo)" | [D9] | **open, and self-contradicting** — the same paragraph then describes warning about untracked skill directories, which requires seeing them. Two listings exist (`listPluginSourceSkillDirs`, tracked-only; `listUntrackedPluginSkillDirs`, everything) and the sentence describes only the first while the paragraph describes both |
 | C5 | the selector "covers `vat resources scan`/`validate`, `vat rag index` and the pipeline oracles in one place — they all load through `loadResourcesWithConfig`" | [D2] §3.4, and [D3] | **open** — true of those four, but `vat audit` builds its registry through `crawlAndResolveRegistry` with no `populationSource` (`packages/cli/src/commands/audit.ts:330`) and is therefore reachable by no selector. The sentence is accurate about what it lists and reads as a claim of completeness |
@@ -218,10 +220,13 @@ recorded so the pattern is legible.
 Every cell above marked `⚠️ undeclared`, collected. These are decisions, not defects. Nothing here
 should be resolved by reading the code.
 
+**The keys are stable identifiers, so a decided question leaves a gap rather than a renumbering.**
+U1 asked whether `tracked ∪ (untracked ∧ ¬ignored)` is the universe for every command; it was
+decided and declared at [D2] §2.1, and retired from this table. Nothing renumbers.
+
 | # | question |
 |---|---|
-| U1 | **Is `tracked ∪ (untracked ∧ ¬ignored)` the universe for every command, or only for validation?** [D1] declares it as one extent's definition; nothing promotes it. Every `BUG:` in §4 is scored against a ruling with no in-repo home |
-| U2 | **Does the ruling bind packaging populations — what *ships* — as well as validation populations?** `vat claude plugin build` deliberately ships tracked-only and warns [D9]. Under U1's set, an untracked-not-ignored skill *would* be in a commit, so it should ship. Under "you ship what you committed", it should not. Both readings are defensible and they disagree |
+| U2 | **Does the ruling bind packaging populations — what *ships* — as well as validation populations?** `vat claude plugin build` deliberately ships tracked-only and warns [D9]. Under §1's set, an untracked-not-ignored skill *would* be in a commit, so it should ship. Under "you ship what you committed", it should not. Both readings are defensible and they disagree |
 | U3 | **Does the ruling bind populations that are not git-backed?** Outside a working tree the concepts do not exist and the whole tree is the population. Nothing says whether that is the intended answer or an accident of there being no oracle |
 | U4 | **Is the raw-`readdir` route intended, or is it drift?** Every command whose §3 row names it enumerates with no git awareness, so neither selector nor `.gitignore` reaches it. Nothing says which route a new command should reach for |
 | U5 | **Should `vat audit` be on the projection lane?** It is the highest-volume enumerating verb and is reachable by no selector |
@@ -280,11 +285,15 @@ assertion), and the same tree with `.git` removed. Every row in §4's two visibi
 prediction about those two fixtures. Turning the measurement into an assertion is what would move
 those cells from "asserted here" to "pinned".
 
-**This document demonstrated its own headline `BUG:` on the way in.** Before it was committed, `vat
-resources validate docs/architecture` reported ten files scanned; the same command with
-`VAT_RESOURCES_CRAWL=projection` reported eleven and validated this file's links. The one-file
-difference is this document. Re-run that pair against any uncommitted markdown file to reproduce it;
-that is the whole fixture the first probe above needs.
+**This document demonstrated its own headline `BUG:` on the way in, and the fix closed it.** Before
+this file was committed, `vat resources validate docs/architecture` reported ten files scanned; the
+same command with `VAT_RESOURCES_CRAWL=projection` reported eleven and validated this file's links.
+The one-file difference was this document. Re-measured once `ResourceRegistry.crawl` was given
+`includeUntracked: true`: the default lane reports eleven over `docs/architecture`, and with one
+untracked markdown file carrying a broken link planted there it reports **twelve, one error, and
+exits `error`** — the arm that used to exit green over exactly that file. That pair is the fixture
+the first probe above needs, and both of its halves are now pinned as assertions at
+`packages/resources/test/integration/crawl-untracked-population.integration.test.ts`.
 
 **`⚠️ undeclared` must never be gate-clearable.** It is a request for a ruling, and a gate that
 accepted it as a satisfied state would convert an open question into a permanent one.
@@ -294,7 +303,7 @@ accepted it as a satisfied state would convert an open question into a permanent
 | key | declaration | source |
 |---|---|---|
 | D1 | the `git` extent is `tracked ∪ (untracked ∧ ¬ignored)`, glossed "committed or potentially committed" | `docs/architecture/zones.md:106` |
-| D2 | the scanning taxonomy, the untracked split named as a load-bearing inconsistency, and the measured probe | `docs/architecture/resource-scanning-and-caching.md:19-46`, and §3.4 at `:201-247` |
+| D2 | **the §1 ruling, declared** (§2.1), the scanning taxonomy it scores, the three bounds it does not claim, and the measured probe behind it | `docs/architecture/resource-scanning-and-caching.md` §2, and §3.4 |
 | D3 | `VAT_RESOURCES_CRAWL`, its value, its opt-in default and the argument for that default | `packages/cli/src/utils/resource-loader.ts:128-171`; scope statement at `:130-133` |
 | D4 | `VAT_INVENTORY_CRAWL`, its three values, and the projection as default | `packages/claude-marketplace/src/inventory/inventory-population.ts:68-143` |
 | D5 | `VAT_EXTENT_SOURCE`, and the walk as default even inside a repository | `packages/resources/src/projection/crawl-source.ts:432-491` |

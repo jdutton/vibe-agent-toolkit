@@ -150,12 +150,23 @@ export const RESOURCES_CRAWL_PROJECTION = 'projection';
  * point rather than an oversight.** The inventory flip was defensible as a
  * default because it was provably a byte-for-byte no-op on its subject: both
  * lanes answered the same membership question and were shown to agree. This lane
- * cannot make that claim, because it deliberately does NOT agree — sourcing from
- * the `filesystem` extent is what lets validation see an uncommitted markdown
- * file, so switching it on ADDS findings on real adopter trees.
+ * cannot make that claim, because it deliberately does NOT agree: the
+ * `filesystem` extent crawls with `followSymlinks: false` and records no link's
+ * own path, so a committed symlink is a member of the default lane and not a
+ * member here — and for an out-of-tree target those bytes have no other path
+ * into the population, so a broken link the default lane reports goes
+ * unreported.
  *
- * A population change that emits new `LINK_BROKEN_FILE`s at people is not a
- * default to be taken on the strength of it being more correct in the abstract.
+ * ⚠️ It used to disagree in the other direction too — this was the only lane
+ * that could see an uncommitted markdown file, so switching it on ADDED findings
+ * on real adopter trees. That half is gone: `ResourceRegistry.crawl` now passes
+ * `includeUntracked: true`, per the ruling declared at
+ * `docs/architecture/resource-scanning-and-caching.md` §2.1, so both lanes
+ * enumerate `tracked ∪ (untracked ∧ ¬ignored)` and the symlink loss is the whole
+ * of the remaining disagreement.
+ *
+ * A population change that drops `LINK_BROKEN_FILE`s people rely on is not a
+ * default to be taken on the strength of it being cheaper in the abstract.
  * The blast radius gets measured on real corpora first; flipping this default is
  * then a one-line change with a changelog entry, not a rewrite.
  *

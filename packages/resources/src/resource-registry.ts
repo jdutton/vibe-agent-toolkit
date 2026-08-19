@@ -881,6 +881,20 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       followSymlinks,
       absolute: true,
       filesOnly: true,
+      // The validation universe is `tracked ∪ (untracked ∧ ¬ignored)` — what a
+      // commit made right now WOULD contain. Without this, `crawlDirectory`'s
+      // `git ls-files` fast path answers tracked-only, so a brand-new,
+      // uncommitted, un-ignored markdown file is not merely missed, it is
+      // invisible: the command exits green about the half it could see. That is
+      // a defect, not a scoping choice — see
+      // `docs/architecture/resource-scanning-and-caching.md` §2.1, which declares
+      // the obligation, and the per-command scoring in
+      // `docs/architecture/command-population-matrix.md`.
+      //
+      // `includeUntracked` rather than `respectGitignore: false`: it keeps the
+      // fast path and it keeps ignored files out, which is the half of the
+      // universe that must NOT widen (see {@link CrawlOptions.includeUntracked}).
+      includeUntracked: true,
     };
 
     // The enumeration ALONE is charged here, not the whole method: `addResources`
