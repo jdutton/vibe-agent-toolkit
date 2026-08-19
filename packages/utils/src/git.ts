@@ -20,6 +20,7 @@
 export { gitFindRoot, gitLsFiles, gitLsOthers, isGitIgnored } from './git-utils.js';
 export {
   gitTreeSnapshot,
+  withGitSnapshotCache,
   type GitSnapshotEntry,
   type GitTreeSnapshot,
 } from './git-snapshot.js';

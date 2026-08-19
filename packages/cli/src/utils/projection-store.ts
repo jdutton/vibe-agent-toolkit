@@ -46,7 +46,7 @@
  */
 
 import type { PopulationCache } from '@vibe-agent-toolkit/resources';
-import { gitTreeSnapshot } from '@vibe-agent-toolkit/utils';
+import { gitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils';
 
 import { isModuleMissing, reportMissingBackend, type OptionalBackend } from './optional-backend.js';
 
@@ -242,6 +242,10 @@ async function loadStore(): Promise<PopulationCache['store']> {
  * after the frame that supplied it has returned. A store closed at the end of
  * that frame would be closed under its own consumer.
  *
+ * It is also the `withGitSnapshotCache` bracket for the work inside it, so the
+ * key and the extent filed under it come from ONE git snapshot — see the note
+ * on the call below.
+ *
  * @param options - Where the corpus is
  * @param options.root - The absolute corpus root
  * @param work - Given the cache, or `undefined` when there is none to give
@@ -251,11 +255,29 @@ export async function withPopulationCache<T>(
   options: { root: string },
   work: (cache: PopulationCache | undefined) => Promise<T>,
 ): Promise<T> {
-  const opened = await openPopulationCache(options);
-  if (opened === undefined) return work(undefined);
-  try {
-    return await work(opened.cache);
-  } finally {
-    await opened.close();
-  }
+  // ONE git snapshot for the whole scope, and this is the level that gets it:
+  // `openPopulationCache` below takes one to derive the store key, and the crawl
+  // that runs inside `work` takes another to enumerate the extent — same
+  // repository, sequentially, ~195 ms and ~159 ms measured on a large monorepo.
+  //
+  // The correctness half matters more than the saving. Taken separately, a
+  // working-tree edit landing between them makes the two snapshots DIFFERENT
+  // answers, and the extent from the second is then filed under the key from the
+  // first: a cache entry whose key does not describe its contents, written
+  // silently. The bracket closes that race rather than merely deduplicating.
+  //
+  // Opened here rather than around either consumer because it must enclose BOTH
+  // — a bracket opened deeper than one of them dedupes nothing while looking
+  // exactly like a bracket that works. Every CLI entry into the projection lane
+  // (`inventory`, `resource-loader`'s two) reaches the store through this scope,
+  // so this one placement covers all of them.
+  return withGitSnapshotCache(async () => {
+    const opened = await openPopulationCache(options);
+    if (opened === undefined) return work(undefined);
+    try {
+      return await work(opened.cache);
+    } finally {
+      await opened.close();
+    }
+  });
 }

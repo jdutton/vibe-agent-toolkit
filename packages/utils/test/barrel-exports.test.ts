@@ -149,6 +149,7 @@ const BARREL_EXPORTS = [
   'verifyConfinedYamlEdit',
   'windowsShellQuote',
   'withContributorStratum',
+  'withGitSnapshotCache',
   'withOuterBracket',
   'writeTimingDump',
   'ZodTypeNames',

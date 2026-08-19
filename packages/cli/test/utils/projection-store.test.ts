@@ -32,7 +32,7 @@
  *    transaction.
  */
 
-import { writeFileSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
 
 import type { PopulationCache } from '@vibe-agent-toolkit/resources';
 // All three come from the module this file MOCKS, and all three survive it: the
@@ -537,5 +537,45 @@ describe('withPopulationCache', () => {
     });
 
     expect(lastStore().isOpen()).toBe(false);
+  });
+
+  it('is the git-snapshot bracket, so a mid-scope edit cannot split the key from the extent', async () => {
+    // The wiring assertion for `withGitSnapshotCache`. `packages/utils` proves
+    // the bracket dedupes; only this file can prove the bracket is OPEN AROUND
+    // BOTH consumers — the store's key snapshot and the crawl's entries
+    // snapshot. A bracket opened deeper than one of them dedupes nothing and
+    // looks exactly like a bracket that works.
+    //
+    // 🪤 Asserted as BEHAVIOUR, not as a call count. `git.calls.count` above
+    // wraps `gitTreeSnapshot`, which is where the memo lives — it counts CALLS,
+    // and stays 2 whether or not the second one spawned git. The spawn-level
+    // count belongs at the `@vibe-validate/git` seam and is asserted there, in
+    // `packages/utils/test/git-snapshot-cache.test.ts`.
+    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
+    const arrivedLate = safePath.join(repoRoot, 'landed-mid-scope.md');
+
+    try {
+      const keyed = await withPopulationCache({ root: repoRoot }, async (cache) => {
+        // The race, made deliberate: unbracketed, the crawl inside `work` takes
+        // its own snapshot ~195 ms after the key was derived, and an edit
+        // landing in between files THIS extent under THAT key.
+        writeFileSync(arrivedLate, '# late\n', 'utf-8');
+        // Stands in for `GitCrawlSource.#snapshotMembers`.
+        const crawled = gitTreeSnapshot({ cwd: repoRoot });
+        return { treeHash: cache?.treeHash, crawledHash: crawled?.hash };
+      });
+
+      expect(keyed.treeHash).toMatch(/^[0-9a-f]{40}$/);
+      expect(keyed.crawledHash).toBe(keyed.treeHash);
+
+      // And the edit was REAL: outside the scope the hash moves. Without this
+      // the assertion above would also hold for a mutation git never noticed,
+      // which is the shape that makes a race test pass while proving nothing.
+      expect(gitTreeSnapshot({ cwd: repoRoot })?.hash).not.toBe(keyed.treeHash);
+    } finally {
+      // The fixture repo is shared by every test in this file, so the edit is
+      // undone rather than left for whatever runs next.
+      rmSync(arrivedLate, { force: true });
+    }
   });
 });
