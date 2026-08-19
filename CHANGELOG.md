@@ -103,8 +103,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Totals from earlier dumps overstate the projection arm.
 
 - **(library) `ExtentContributor` now requires a `readsBlobs` field**, and `populate()` accepts
-  `blobs: 'skip'` to leave the blob-keyed tables empty. A custom contributor must declare whether
-  it reads them; `'skip'` throws if any registered contributor does.
+  `contentParsing: 'skip'` to read and parse no file content, leaving the blob-keyed tables empty. A
+  custom contributor must declare whether it reads them; `'skip'` throws if any registered
+  contributor does.
 
 - **`@vibe-agent-toolkit/utils` now depends on `@vibe-validate/git` (0.20.0).** It replaces this
   package's own copy of the git-environment scrub and tree-snapshot machinery. Adds

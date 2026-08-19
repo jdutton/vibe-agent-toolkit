@@ -120,14 +120,20 @@ const BASE_STRATUM_PASS = 1;
  */
 const DEFAULT_MAX_ITERATIONS = 8;
 
-/** Derive the blob-keyed tables — {@link PopulateOptions.blobs}'s default. */
-export const BLOBS_DERIVE = 'derive';
+/**
+ * Parse the content of every distinct keyed path, deriving the four blob-keyed
+ * tables from it — {@link PopulateOptions.contentParsing}'s default.
+ */
+export const CONTENT_PARSING_DERIVE = 'derive';
 
-/** Leave the blob-keyed tables empty — only sound when nothing reads them. */
-export const BLOBS_SKIP = 'skip';
+/**
+ * Read and parse nothing, leaving the four blob-keyed tables empty — only sound
+ * when nothing reads them.
+ */
+export const CONTENT_PARSING_SKIP = 'skip';
 
-/** What {@link PopulateOptions.blobs} accepts. */
-export type BlobDerivation = typeof BLOBS_DERIVE | typeof BLOBS_SKIP;
+/** What {@link PopulateOptions.contentParsing} accepts. */
+export type ContentParsing = typeof CONTENT_PARSING_DERIVE | typeof CONTENT_PARSING_SKIP;
 
 /**
  * What the blob-derivation stage did across a whole `populate()` — one run
@@ -192,7 +198,22 @@ export interface PopulateOptions {
   /** Closure passes allowed before the run fails. Defaults to {@link DEFAULT_MAX_ITERATIONS}. */
   maxIterations?: number | undefined;
   /**
-   * Whether to derive the blob-keyed tables. Defaults to {@link BLOBS_DERIVE}.
+   * Whether this run reads and parses file content. Defaults to
+   * {@link CONTENT_PARSING_DERIVE}.
+   *
+   * ## What is and is not gated
+   *
+   * Gated: the blob-derivation stage — one read-and-parse of **every distinct
+   * keyed path**, and the four blob-keyed tables (`blobs`, `blob_references`,
+   * `blob_sections`, `blob_conditions`) derived from it; the store's blob tier
+   * on both the read-back and write-back paths; and the post-fixpoint re-run
+   * that would pick up a demand promotion.
+   *
+   * **Not** gated: the closure stratum, which iterates to its fixpoint either
+   * way. That is what makes `'skip'` dangerous rather than merely thrifty — a
+   * closure contributor still runs, reads an empty `blob_references`, and
+   * converges on pass one with its extent reduced to its declared root. Hence
+   * the refusal below.
    *
    * ## Why a caller decision at all
    *
@@ -220,7 +241,7 @@ export interface PopulateOptions {
    * and the run fails loudly instead of converging on iteration one with every
    * extent reduced to its own root.
    */
-  blobs?: BlobDerivation | undefined;
+  contentParsing?: ContentParsing | undefined;
   /**
    * Receives what the blob-derivation stage derived and what it skipped.
    *
@@ -409,12 +430,12 @@ export async function populate(options: PopulateOptions): Promise<Projection> {
   // it refuses an unsound `'skip'` request by throwing, and a run that would
   // have been refused must not be silently served from a store instead. The
   // request's soundness is a property of the registry, not of the cache's luck.
-  const deriveBlobs = blobDerivationFor(options);
+  const parseContent = contentParsingFor(options);
 
   // Same `rootIdFor` the identity map mints `roots.id` with — see
   // {@link PopulationCache} on why the caller does not supply it.
   const rootId = rootIdFor(root);
-  const cached = await readCachedProjection(options, rootId, deriveBlobs);
+  const cached = await readCachedProjection(options, rootId, parseContent);
   if (cached !== undefined) {
     return cached;
   }
@@ -476,7 +497,7 @@ export async function populate(options: PopulateOptions): Promise<Projection> {
   // `null` rather than a skipped-flag beside a zeroed result, so that every
   // consumer of the stage's outcome below is forced to handle the "did not run"
   // case rather than reading zeros as measurements.
-  const blobPopulation = deriveBlobs ? await runBlobStage(builder) : null;
+  const blobPopulation = parseContent ? await runBlobStage(builder) : null;
   const promotionsBeforeClosure = builder.contentPromotions;
 
   await iterateClosure(
@@ -498,7 +519,7 @@ export async function populate(options: PopulateOptions): Promise<Projection> {
   }
 
   const projection = builder.build();
-  await writeCachedProjection(options, rootId, deriveBlobs, projection);
+  await writeCachedProjection(options, rootId, parseContent, projection);
   return projection;
 }
 
@@ -587,13 +608,13 @@ function requestedContributors(options: PopulateOptions): readonly RequestedCont
  *
  * @param options - The run's options, including its cache if it has one
  * @param rootId - This run's corpus root id
- * @param deriveBlobs - Whether this run reads the blob-keyed tables at all
+ * @param parseContent - Whether this run reads and parses content at all
  * @returns The hydrated projection, or `undefined` on any kind of miss
  */
 async function readCachedProjection(
   options: PopulateOptions,
   rootId: string,
-  deriveBlobs: boolean,
+  parseContent: boolean,
 ): Promise<Projection | undefined> {
   const cache = options.cache;
   if (cache === undefined) return undefined;
@@ -611,7 +632,7 @@ async function readCachedProjection(
     // back, or a hit would hand it four tables a populate would have left empty
     // — and `'skip'` is a claim about what the caller reads, so honouring it on
     // both paths is what keeps hydrated and populated indistinguishable.
-    if (!deriveBlobs) return assembleProjection(extent, emptyBlobRows());
+    if (!parseContent) return assembleProjection(extent, emptyBlobRows());
 
     const contentKeys = keyedContentKeys(extent);
     const blobs = await cache.store.readBlobFacts(contentKeys);
@@ -645,13 +666,13 @@ async function readCachedProjection(
  *
  * @param options - The run's options, including its cache if it has one
  * @param rootId - This run's corpus root id
- * @param deriveBlobs - Whether this run derived the blob-keyed tables
+ * @param parseContent - Whether this run read and parsed content
  * @param projection - What the run produced
  */
 async function writeCachedProjection(
   options: PopulateOptions,
   rootId: string,
-  deriveBlobs: boolean,
+  parseContent: boolean,
   projection: Projection,
 ): Promise<void> {
   const cache = options.cache;
@@ -659,13 +680,13 @@ async function writeCachedProjection(
 
   const startedAt = crawlTimingStart();
   const { blobs, extent } = splitProjectionByScope(projection);
-  if (deriveBlobs) await cache.store.writeBlobFacts(blobs);
+  if (parseContent) await cache.store.writeBlobFacts(blobs);
   await cache.store.writeExtent(storeKeyFor(options, rootId, cache), extent);
   recordCrawlPass(CRAWL_STORE_WRITE_ID, 'base', BASE_STRATUM_PASS, startedAt);
 }
 
 /**
- * Whether this run derives the blob-keyed tables, refusing an unsound request.
+ * Whether this run reads and parses content, refusing an unsound request.
  *
  * The refusal is the load-bearing half. `'skip'` is a claim the caller makes
  * about ITS OWN reads, and it cannot speak for the contributors it registered —
@@ -684,15 +705,15 @@ async function writeCachedProjection(
  * @returns True when the stage should run
  * @throws When `'skip'` is asked for while a registered contributor reads blobs
  */
-function blobDerivationFor(options: PopulateOptions): boolean {
-  if ((options.blobs ?? BLOBS_DERIVE) === BLOBS_DERIVE) return true;
+function contentParsingFor(options: PopulateOptions): boolean {
+  if ((options.contentParsing ?? CONTENT_PARSING_DERIVE) === CONTENT_PARSING_DERIVE) return true;
 
   const readers = options.registry.blobReaders();
   if (readers.length > 0) {
     throw new Error(
-      `populate() was asked to skip blob derivation, but ${readers.length} registered contributor(s) read the blob-keyed tables: ${readers.map((contributor) => contributor.id).join(', ')}.`
+      `populate() was asked to skip content parsing, but ${readers.length} registered contributor(s) read the blob-keyed tables: ${readers.map((contributor) => contributor.id).join(', ')}.`
       + ' Their extents would be silently reduced to their declared roots and the run would still report success,'
-      + ` so this is refused. Either drop the "${BLOBS_SKIP}" request or unregister those contributors.`,
+      + ` so this is refused. Either drop the "${CONTENT_PARSING_SKIP}" request or unregister those contributors.`,
     );
   }
   return false;

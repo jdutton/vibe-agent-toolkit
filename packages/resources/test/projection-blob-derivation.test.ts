@@ -1,5 +1,5 @@
 /**
- * The blob-derivation gate — `PopulateOptions.blobs`.
+ * The content-parsing gate — `PopulateOptions.contentParsing`.
  *
  * ## Why the fixture writes real files
  *
@@ -21,7 +21,7 @@ import { ContributorRegistry } from '../src/projection/contributor.js';
 import type { ExtentContribution, ExtentContributor } from '../src/projection/contributor.js';
 import { ClosureExtentContributor } from '../src/projection/contributors/closure-extent.js';
 import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
-import { BLOBS_SKIP, populate } from '../src/projection/merge.js';
+import { CONTENT_PARSING_SKIP, populate } from '../src/projection/merge.js';
 import type { Projection } from '../src/projection/projection.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
@@ -92,18 +92,18 @@ const CLOSURE_DECLARATION: Record<string, JsonValue> = {
  * Populate the fixture corpus.
  *
  * @param registry - The contributors to run
- * @param blobs - The `blobs` option, omitted to take the default
+ * @param contentParsing - The `contentParsing` option, omitted to take the default
  * @returns The projection
  */
 async function populateFixture(
   registry: ContributorRegistry,
-  blobs?: typeof BLOBS_SKIP,
+  contentParsing?: typeof CONTENT_PARSING_SKIP,
 ): Promise<Projection> {
   return populate({
     root: suite.tempDir,
     registry,
     parameters: CLOSURE_DECLARATION,
-    ...(blobs === undefined ? {} : { blobs }),
+    ...(contentParsing === undefined ? {} : { contentParsing }),
   });
 }
 
@@ -118,7 +118,7 @@ describe('populate blob derivation', () => {
 
   it('derives no blob rows when asked to skip, while the realizations are unchanged', async () => {
     const derived = await populateFixture(filesystemOnly());
-    const skipped = await populateFixture(filesystemOnly(), BLOBS_SKIP);
+    const skipped = await populateFixture(filesystemOnly(), CONTENT_PARSING_SKIP);
 
     expect(skipped.blobs).toStrictEqual([]);
     expect(skipped.blobReferences).toStrictEqual([]);
@@ -137,7 +137,7 @@ describe('populate blob derivation', () => {
     await populate({
       root: suite.tempDir,
       registry: filesystemOnly(),
-      blobs: BLOBS_SKIP,
+      contentParsing: CONTENT_PARSING_SKIP,
       onBlobPopulation: (report) => reports.push(report),
     });
 
@@ -150,14 +150,14 @@ describe('populate blob derivation', () => {
     const registry = filesystemOnly();
     registry.register(new ClosureExtentContributor(EXTENT_NAME, SKILL_KIND));
 
-    await expect(populateFixture(registry, BLOBS_SKIP)).rejects.toThrow(`closure:${EXTENT_NAME}`);
+    await expect(populateFixture(registry, CONTENT_PARSING_SKIP)).rejects.toThrow(`closure:${EXTENT_NAME}`);
   });
 
   it('refuses to skip for a BASE contributor that reads blobs, so the gate is not stratum in disguise', async () => {
     const registry = filesystemOnly();
     registry.register(baseBlobReader());
 
-    await expect(populateFixture(registry, BLOBS_SKIP)).rejects.toThrow(BASE_READER_ID);
+    await expect(populateFixture(registry, CONTENT_PARSING_SKIP)).rejects.toThrow(BASE_READER_ID);
   });
 
   it('still populates a closure extent under the default, so the refusal is not the only path', async () => {

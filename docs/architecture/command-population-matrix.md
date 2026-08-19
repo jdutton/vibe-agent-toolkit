@@ -164,10 +164,10 @@ These two columns apply only where a projection runs; the incumbent walk has no 
 no blob stage — it reads and parses each admitted resource directly, charged at
 `resource-registry:add-resource`.
 
-| lane | `contentDemand` at enumeration | resulting `contentState` | blob / reference-following stage |
+| lane | `contentDemand` at enumeration | resulting `contentState` | blob stage (`contentParsing`) |
 |---|---|---|---|
-| resources projection (`vat resources scan/validate`, `vat rag index`, and the packaging registries under `VAT_RESOURCES_CRAWL=projection`) | `deferred` — enumerate every path, read none of them [D17] | `deferred` for every file row, `none` for a directory. `contentKey` is always null | **`BLOBS_SKIP`** — the stage is ~90% of this lane's cold cost and not one blob row is read [D18] |
-| inventory projection (`vat inventory`, plugin dir) | `deferGitignored`, from the same contributor — key eagerly, except where the row's own `gitignored` column is true [D17] | `keyed`, or `deferred` for an ignored row, or `none`/`unreadable` | **`BLOBS_DERIVE`** (the default). Mandatory here, not a choice: the closure contributor reads the blob-keyed tables, and `populate()` **throws** rather than silently reducing every extent to its own root [D18] |
+| resources projection (`vat resources scan/validate`, `vat rag index`, and the packaging registries under `VAT_RESOURCES_CRAWL=projection`) | `deferred` — enumerate every path, read none of them [D17] | `deferred` for every file row, `none` for a directory. `contentKey` is always null | **`CONTENT_PARSING_SKIP`** — the stage is ~90% of this lane's cold cost and not one blob row is read [D18] |
+| inventory projection (`vat inventory`, plugin dir) | `deferGitignored`, from the same contributor — key eagerly, except where the row's own `gitignored` column is true [D17] | `keyed`, or `deferred` for an ignored row, or `none`/`unreadable` | **`CONTENT_PARSING_DERIVE`** (the default). Mandatory here, not a choice: the closure contributor reads the blob-keyed tables, and `populate()` **throws** rather than silently reducing every extent to its own root [D18] |
 
 **Zero file-content reads on this lane, and a gate holds it there.** The demand is the caller's
 decision rather than a property of the contributor, so `vat inventory` keeps `deferGitignored` while
@@ -175,10 +175,28 @@ this lane passes `'deferred'`. `packages/resources/test/integration/resources-la
 patches `node:fs` and `node:fs/promises` through an `--import` preload and fails on any content read
 under the crawl root; it documents the six routes it cannot observe rather than claiming completeness.
 
-**`BLOBS_SKIP` / `BLOBS_DERIVE` are named for the wrong thing.** They read as a choice about a
-storage tier. What they actually gate is whether a `deferred` realization is ever promoted to
-`keyed` on demand — a *behaviour*, not a table. The names are recorded here as misleading; nothing
-is renamed by this document.
+**Renamed, and why the old name mattered.** `BLOBS_SKIP` / `BLOBS_DERIVE` are now
+`CONTENT_PARSING_SKIP` / `CONTENT_PARSING_DERIVE`, the option key `blobs:` is `contentParsing:`, and
+the type `BlobDerivation` is `ContentParsing` [D22].
+
+The old name asserted a choice about a **storage tier** — and about one named table at that, since
+`blobs` is also the name of one of the four tables the stage fills. What the flag gates is a
+**behaviour**: reading and parsing the bytes of every distinct keyed path. The tier is that
+behaviour's *output*, not the decision being made.
+
+**The false conclusion it produced.** `blobs: BLOBS_SKIP` at the resources lane's call site was read
+as "`vat resources validate` needs no file content". It does not follow and it is not true: the lane
+declines *this stage*, while validate still parses 1,391 files to find links — the parse simply moves
+to `resource-registry:add-resource`. A flag named for a table invites a conclusion about the
+command's content reads that the flag cannot support.
+
+⚠️ **This paragraph itself used to mis-state the gated behaviour**, as "whether a `deferred`
+realization is ever promoted to `keyed` on demand". That is `contentDemand` and
+`ProjectionBuilder.ensureContentKey` — neither of which this flag touches, and nothing shipped
+promotes at all. What the flag gates is the stage, the store's blob tier on both the read-back and
+write-back paths, and the post-fixpoint re-run. The closure stratum is **not** gated: under `'skip'`
+it still iterates, reading an empty `blob_references`, which is precisely why the driver refuses the
+combination instead of degrading quietly [D18].
 
 ## 6. Commands that enumerate no file population
 
@@ -222,7 +240,9 @@ should be resolved by reading the code.
 
 **The keys are stable identifiers, so a decided question leaves a gap rather than a renumbering.**
 U1 asked whether `tracked ∪ (untracked ∧ ¬ignored)` is the universe for every command; it was
-decided and declared at [D2] §2.1, and retired from this table. Nothing renumbers.
+decided and declared at [D2] §2.1, and retired from this table. U11 asked what the blob-stage flags
+should be called; it was decided and declared at [D22], and §5 keeps the record of what the old name
+asserted and the false conclusion it produced. Nothing renumbers.
 
 | # | question |
 |---|---|
@@ -235,7 +255,6 @@ decided and declared at [D2] §2.1, and retired from this table. Nothing renumbe
 | U8 | **Which commands are entitled to have no population at all?** §6 is a judgement call this document makes and no rule supports |
 | U9 | **Is `vat inventory`'s projection lane meant to stay plugin-directory-only?** [D7] gives a rootedness *reason* for excluding the marketplace, `--user` and single-skill shapes, not an intent that they stay excluded |
 | U10 | **Should `contentDemand` be a property of the lane or of the consumer?** It is set on the contributor [D17], so every consumer of the filesystem extent inherits one policy; the change in flight is evidence that one policy does not fit both |
-| U11 | **What should the blob-stage flags be called?** They gate demand promotion and are named for a storage tier |
 | U12 | **Should a command ever *report* a gitignored file rather than dropping it?** [D19] does, uniquely. If that is the right model, the other routes are wrong; if it is not, it is |
 | U13 | **Is a denylist the intended shape for `vat claude org skills install`'s upload set?** It walks the skill directory and uploads what it finds, filtered by `NEVER_UPLOADED_DIR_NAMES` — `evals`, `node_modules`, `.git` (`packages/cli/src/commands/claude/org/skills.ts:97`) — plus any declared eval-suite input, resolved inside `collectUploadFiles` so no caller can obtain a set with the exclusion skipped (`:130-136`), and every exclusion is reported rather than silent (`:101-107`). It deliberately does not consult git, and that is correct: a skill legitimately ships generated assets git ignores. What is undeclared is the SHAPE — a denylist can only exclude what somebody thought of, so a stray `.env` or scratch note at the skill root still uploads, where an allowlist (the skill declares what it ships, as npm `files` does) could not |
 | U14 | **Is `crawlSkillLinkRegistry` [D20] meant to be a separate seam?** It calls `crawlDirectory` and feeds `addResources` without going through `ResourceRegistry.crawl`, so it is reachable by no `populationSource` and is outside the accounting bracket. Three commands depend on it |
@@ -318,11 +337,12 @@ accepted it as a satisfied state would convert an open question into a permanent
 | D14 | `vat verify` phases, subprocess and in-process | `packages/cli/src/commands/verify.ts:1-15` |
 | D15 | the resources consumer declines gitignored rows while the extent still enumerates them | `packages/resources/src/projection/resource-population.ts:30-50`, `:226-229` |
 | D16 | the inventory skill extractor crawls with `includeUntracked: true` | `packages/claude-marketplace/src/inventory/extract-skill.ts:212-245` |
-| D17 | the filesystem extent's lazy-keying rule, and the claim it cannot be narrowed | `packages/resources/src/projection/contributors/filesystem-extent.ts:27-70` (at `b4afef72`), applied at `:172` |
-| D18 | `BLOBS_DERIVE` as default, `BLOBS_SKIP` as an opt-in the driver refuses when a blob reader is registered | `packages/resources/src/projection/merge.ts:124-130`, `:195-223`, `:688-699`; the resources lane's skip at `packages/resources/src/projection/resource-population.ts:142-164`, `:210` |
+| D17 | the filesystem extent's lazy-keying rule, and the narrowing claim — now **measured**, not reasoned: withholding the non-markdown row costs a skill both a direct link target and the leaf reachable only through it | `packages/resources/src/projection/contributors/filesystem-extent.ts:27-70` (at `b4afef72`), applied at `:172`; the deciding fixture at `packages/resources/test/projection-extent-narrowing.test.ts` |
+| D18 | `CONTENT_PARSING_DERIVE` as default, `CONTENT_PARSING_SKIP` as an opt-in the driver refuses when a blob reader is registered | `packages/resources/src/projection/merge.ts:123-136`, `:200-244`, `:688-720`; the resources lane's skip at `packages/resources/src/projection/resource-population.ts:142-179`, `:235` |
 | D19 | the discovery scanner forces a full walk and annotates ignored status per file rather than filtering | `packages/discovery/src/scanners/local-scanner.ts:56-66`, `:103-117`; consumed by `packages/cli/src/commands/skills/list.ts:225-255` |
 | D20 | the skill link registry crawls with `includeUntracked: true` and feeds `addResources` directly, bypassing `ResourceRegistry.crawl` | `packages/claude-marketplace/src/inventory/extract-skill.ts:212-250`; the docstring at `:216-236` states the timing bracket does not cover it |
 | D21 | `vat audit`'s subject enumeration is its own recursive `fs.readdir` walk with its own prune rules | `packages/cli/src/commands/audit.ts:2413`, `:2477`; prune at `:2258`, `:2277`; the registry it validates against at `:330` |
+| D22 | the blob stage's caller flag is named for the BEHAVIOUR it gates — read-and-parse every distinct keyed path — and not for the tier that behaviour fills; the tier keeps `blob` throughout, because the tables really are blob-keyed | `packages/resources/src/projection/merge.ts:123-136`, `:200-244`; §5 of this document |
 
 ## Related
 

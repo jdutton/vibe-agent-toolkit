@@ -101,7 +101,7 @@ export interface ExtentContributor {
    * defaults to `false`, which is the dangerous direction. A new contributor's
    * author has to answer the question.
    *
-   * It is what {@link PopulateOptions.blobs} `'skip'` is checked against — a run
+   * It is what {@link PopulateOptions.contentParsing} `'skip'` is checked against — a run
    * that declines to derive blobs while something registered reads them is a
    * loud error, never a degraded extent. A wrapper around another contributor
    * (the skill, plugin and inventory extents all wrap

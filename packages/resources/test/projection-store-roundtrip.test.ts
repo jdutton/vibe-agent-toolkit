@@ -56,7 +56,7 @@ import { ClosureExtentContributor } from '../src/projection/contributors/closure
 import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { EXTENT_SOURCE_ENV, EXTENT_SOURCE_GIT } from '../src/projection/crawl-source.js';
 import { serializeProjection } from '../src/projection/export.js';
-import { BLOBS_SKIP, populate } from '../src/projection/merge.js';
+import { CONTENT_PARSING_SKIP, populate } from '../src/projection/merge.js';
 import type { Projection } from '../src/projection/projection.js';
 import type {
   BlobScopedRows,
@@ -383,8 +383,8 @@ interface RunRequest {
   readonly treeHash?: string;
   /** The closure declaration; defaults to {@link FULL_DEPTH_DECLARATION}. */
   readonly declaration?: JsonValue;
-  /** `'skip'` to decline blob derivation; omitted to derive. */
-  readonly blobs?: typeof BLOBS_SKIP;
+  /** `'skip'` to decline content parsing; omitted to parse. */
+  readonly contentParsing?: typeof CONTENT_PARSING_SKIP;
   /**
    * A git oracle to populate under, or omitted for the tracker-less run.
    *
@@ -431,7 +431,7 @@ async function run(request: RunRequest): Promise<Run> {
     ...(request.store === undefined
       ? {}
       : { cache: { store: request.store, treeHash: request.treeHash ?? TREE_HASH } }),
-    ...(request.blobs === undefined ? {} : { blobs: request.blobs }),
+    ...(request.contentParsing === undefined ? {} : { contentParsing: request.contentParsing }),
     ...(request.gitTracker === undefined ? {} : { gitTracker: request.gitTracker }),
   });
   return { projection, document: serializeProjection(projection), contributorRuns };
@@ -721,7 +721,7 @@ describe('populate through a projection store', () => {
       // reader makes `'skip'` throw outright — the miss under test is the one
       // that survives that refusal.
       const store = new FakeProjectionStore();
-      const skipped = await run({ registry: filesystemOnly(), store, blobs: BLOBS_SKIP });
+      const skipped = await run({ registry: filesystemOnly(), store, contentParsing: CONTENT_PARSING_SKIP });
       expect(skipped.projection.blobs).toStrictEqual([]);
       expect(store.writeExtentCalls).toBe(1);
       // Not written at all, rather than written empty: "nothing to say about
@@ -742,9 +742,9 @@ describe('populate through a projection store', () => {
       // hit would hand it four tables a populate would have left empty and
       // hydrated would stop being indistinguishable from populated.
       const store = new FakeProjectionStore();
-      const populated = await run({ registry: filesystemOnly(), store, blobs: BLOBS_SKIP });
+      const populated = await run({ registry: filesystemOnly(), store, contentParsing: CONTENT_PARSING_SKIP });
 
-      const hydrated = await run({ registry: filesystemOnly(), store, blobs: BLOBS_SKIP });
+      const hydrated = await run({ registry: filesystemOnly(), store, contentParsing: CONTENT_PARSING_SKIP });
 
       expect(hydrated.contributorRuns).toEqual([]);
       expect(hydrated.projection.blobs).toStrictEqual([]);
@@ -772,7 +772,7 @@ describe('populate through a projection store', () => {
       await run({ registry: filesystemAndClosure(), store });
       const readsBeforeTheRefusal = store.readExtentCalls;
 
-      await expect(run({ registry: filesystemAndClosure(), store, blobs: BLOBS_SKIP }))
+      await expect(run({ registry: filesystemAndClosure(), store, contentParsing: CONTENT_PARSING_SKIP }))
         .rejects.toThrow(CLOSURE_ID);
 
       expect(store.readExtentCalls).toBe(readsBeforeTheRefusal);

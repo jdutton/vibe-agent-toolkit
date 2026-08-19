@@ -80,7 +80,21 @@
  * list, 60 ms) rather than a full walk.
  *
  * **Narrowing and re-sourcing are different moves.** This extent cannot be
- * narrowed — dropping non-markdown loses real members. It can be re-sourced.
+ * narrowed — dropping non-markdown loses real members, and that is measured now
+ * rather than reasoned. `test/projection-extent-narrowing.test.ts` builds
+ * `SKILL.md → scripts/tool.mjs → docs/note.md` and withholds the non-markdown
+ * row: the skill loses the script, which is a direct link target of its own
+ * root, AND the leaf reachable no other way.
+ *
+ * 🪤 The transitive half rests on one precondition that fixture also pins. The
+ * script's reference lexes as `markdown-link` — a JSDoc comment is markdown —
+ * while its bare `readFileSync('docs/note.md')` token lexes as `bare-token`,
+ * which the default `follow` set does not traverse. What is proven is that
+ * non-markdown files carry *followed* references, not that every path a script
+ * names is walked; widen `follow` and the fixture reds so the measurement is
+ * retaken against the wider set.
+ *
+ * It can be re-sourced.
  */
 
 import type {

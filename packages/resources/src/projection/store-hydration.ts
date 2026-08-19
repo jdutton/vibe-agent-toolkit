@@ -56,7 +56,7 @@
  * ## Why the blob tier is checked rather than trusted
  *
  * The blob tier is written by whoever derived it, and a run may legitimately
- * decline to derive it (`PopulateOptions.blobs` = `'skip'` — `vat resources
+ * decline to derive it (`PopulateOptions.contentParsing` = `'skip'` — `vat resources
  * scan` reads no blob table and the stage is ~90% of its cold cost). Such a run
  * still writes its extent, which is what lets the next command share the
  * enumeration — but that extent's realizations name content keys the blob tier

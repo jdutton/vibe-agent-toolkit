@@ -65,7 +65,7 @@ import { safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
 import { ContributorRegistry } from './contributor.js';
 import { FilesystemExtentContributor } from './contributors/filesystem-extent.js';
 import { crawlSourceFor, type CrawlSourceKind } from './crawl-source.js';
-import { BLOBS_SKIP, populate, type PopulationCache } from './merge.js';
+import { CONTENT_PARSING_SKIP, populate, type PopulationCache } from './merge.js';
 
 /**
  * A way to obtain the enumerated file population for a root, together with the
@@ -173,9 +173,10 @@ export interface ResourcePopulation {
  * 1.5× the walk instead of 5.6×.
  *
  * ⚠️ The skip is safe **only** while nothing here reads a blob table. Registering
- * a closure contributor in this function without dropping the `blobs` argument
- * makes `populate()` throw, by design — see {@link PopulateOptions.blobs}. It
- * does not silently return a closure extent reduced to its own root.
+ * a closure contributor in this function without dropping the `contentParsing`
+ * argument makes `populate()` throw, by design — see
+ * {@link PopulateOptions.contentParsing}. It does not silently return a closure
+ * extent reduced to its own root.
  *
  * @param options - The root and the run's git oracle
  * @param options.root - Absolute root to enumerate
@@ -184,7 +185,7 @@ export interface ResourcePopulation {
  *   be admitted rather than declined
  * @param options.cache - A projection store to answer this enumeration from, or
  *   omitted to enumerate every time. 🪤 A hit here returns rows a run with
- *   `blobs: BLOBS_SKIP` wrote, so its `extentSource` reports the enumerator this
+ *   `contentParsing: CONTENT_PARSING_SKIP` wrote, so its `extentSource` reports the enumerator this
  *   process SELECTED rather than one that ran — a lane whose whole point is that
  *   nothing enumerated cannot also report who enumerated
  * @returns The population and the enumerator that actually produced it
@@ -211,7 +212,7 @@ export async function buildResourcePopulation(options: {
   const source = crawlSourceFor(root);
 
   const registry = new ContributorRegistry();
-  // `'deferred'`, and it is the same argument as `blobs: BLOBS_SKIP` one layer
+  // `'deferred'`, and it is the same argument as `contentParsing: CONTENT_PARSING_SKIP` one layer
   // down — see the header. This lane reads four realization columns and
   // `contentKey` is not one of them, so every byte read to compute one was read
   // for nobody: ~1,684 ms of a 13,714 ms cold run, 152.9 MB, on an 8,548-file
@@ -231,7 +232,7 @@ export async function buildResourcePopulation(options: {
     // See the header: this lane consumes realizations only, and the stage is
     // ~90% of its cold cost. Stated rather than inferred, and refused if a blob
     // reader is ever registered above.
-    blobs: BLOBS_SKIP,
+    contentParsing: CONTENT_PARSING_SKIP,
     ...(options.gitTracker !== undefined && { gitTracker: options.gitTracker }),
     ...(options.cache !== undefined && { cache: options.cache }),
   });
