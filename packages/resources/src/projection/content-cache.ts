@@ -96,6 +96,79 @@ export class RunContentCache {
    * identical to this path's". Collapsing them would make a hint miss look like
    * a path miss in the statistics, which is the one number that makes the hint's
    * soundness auditable.
+   *
+   * ## ⛔ The hint is git's blob OID, and it is not a hash of what is on disk
+   *
+   * `crawl-source.ts` sets `contentHint` from `entry.oid`. Git hashes the
+   * **cleaned** content — after `text`/`eol` conversion, after any `filter.*`
+   * clean, after `working-tree-encoding`. `computeContentKey` hashes the **raw
+   * working-tree bytes**, and `content-key.ts` says so where it reads them: *the
+   * key must be over what was on disk*. Those are two different preimages, so
+   * this map is keyed on something that is not the thing it stands in for.
+   *
+   * The load-bearing fact is not that conversion *may* apply. It is that one OID
+   * names more than one byte string, in one repository, at one instant.
+   * Measured in throwaway repos under `GIT_CONFIG_NOSYSTEM=1`, from identical
+   * source content under a two-line `.gitattributes` (`dirA/*.md eol=lf`,
+   * `dirB/*.md eol=crlf`):
+   *
+   * ```text
+   * dirA/same.md  7a28df3c975fa62270a452251c4e0b24d685c4ba  worktree 23 B  ┐ one OID,
+   * dirB/same.md  7a28df3c975fa62270a452251c4e0b24d685c4ba  worktree 27 B  ┘ two files
+   * ```
+   *
+   * So the key is **many-to-one** against working-tree bytes, and that settles
+   * the shape of the remedy: **no normalize-on-read can repair a many-to-one
+   * key.** Whichever path did not populate the entry is handed the other path's
+   * content *and* the other path's `contentKey` — the well-formed-entry-wrong-
+   * contents failure the rest of this module is built to exclude, arriving with
+   * no error and nothing in the key to read it off.
+   *
+   * Four mechanisms produce the divergence, all silent on the read path,
+   * measured against a 23 B LF source, with a control that must not diverge:
+   *
+   * | mechanism | worktree | blob | equal |
+   * |---|---|---|---|
+   * | `*.md text eol=crlf` | 27 B | 23 B | no |
+   * | `core.autocrlf=true`, no attributes | 27 B | 23 B | no |
+   * | `filter=demo` clean/smudge | 17 B | 19 B | no |
+   * | `working-tree-encoding=UTF-16` | 26 B | 12 B | no |
+   * | `*.bin -text` — the control | 17 B | 17 B | yes |
+   *
+   * The control is what proves the harness was not printing `no` at everything.
+   * `working-tree-encoding` moved 12 B → 26 B and the clean filter changed the
+   * token text itself, so neither "it is only CRLF, strip it" nor a byte-length
+   * comparison is a detector. (Git LFS pointer blobs are a further route by
+   * LFS's own design; that one is asserted from the design, **not** measured —
+   * `git-lfs` was not installed.) None of this needs a hostile repository: a
+   * monorepo with per-directory `.gitattributes` produces it, and
+   * `core.autocrlf=true` is the Windows installer default on trees that are not
+   * ours.
+   *
+   * ## Why this repository's own corpora cannot detect it
+   *
+   * VAT's root `.gitattributes` pins `* text=auto eol=lf` with explicit per-type
+   * `eol=lf`, and sets no `core.autocrlf`, no `core.eol` and no `filter.*`; on
+   * macOS the worktree bytes and the blob bytes are then equal by construction.
+   * All 313 hint hits measured over this repository's 8,548-file corpus were
+   * sound. An equality assertion over these corpora is therefore **vacuous** —
+   * it holds for a reason that has nothing to do with the hint being safe, which
+   * is exactly how this survived being looked at.
+   *
+   * ## Which lane is exposed
+   *
+   * A hint reaches this map only from `GitCrawlSource` (`FilesystemCrawlSource`
+   * reports `contentHint: null`) and only when the read happens at all.
+   * `buildResourcePopulation` registers the filesystem extent with
+   * `contentDemand: 'deferred'`, so `keyOrState` returns before
+   * `readKeyedContent` and the resources lane consumes no hint. Inventory's
+   * `buildInventoryPopulation` registers it with the default
+   * `deferGitignored` and runs the blob stage over what it keys, so the hint is
+   * **live** there.
+   *
+   * Dormant is not fixed. The safe direction for anyone widening where a hint is
+   * offered or consumed is to **stop using the hint**, not to normalize what it
+   * names.
    */
   readonly #byHint = new Map<string, KeyedContent>();
   #hits = 0;
@@ -139,14 +212,21 @@ export class RunContentCache {
    * ## `contentHint` — the one saving that skips the read entirely
    *
    * An enumeration source may already know a byte identity for a path: the git
-   * source hands over the blob OID `write-tree` computed for its **on-disk**
-   * bytes. Two paths with the same OID hold the same bytes, so the second one's
-   * content and key are already in hand and no `readFile` need happen at all.
-   * On a real corpus that is not a curiosity — repeated licence files, generated
-   * stubs, and every empty file in the tree share one OID.
+   * source hands over the blob OID from its snapshot. Two paths with the same
+   * OID were taken to hold the same bytes, so the second one's content and key
+   * are already in hand and no `readFile` need happen at all. On a real corpus
+   * that is not a curiosity — repeated licence files, generated stubs, and every
+   * empty file in the tree share one OID.
+   *
+   * ⛔ **That premise is false in general.** An OID names the *cleaned* bytes,
+   * and one OID can name two different working-tree byte strings in one
+   * repository at one instant — demonstrated on {@link #byHint}, which also
+   * records which lane is exposed. Read it before widening where a hint is
+   * offered or consumed.
    *
    * This is the *lookup hint whose miss is free* that `content-key.ts` permits,
-   * and it stays inside the three conditions that make it permitted:
+   * and it stays inside three conditions — necessary, and, per {@link #byHint},
+   * not sufficient:
    *
    * - **The stored key is still hashed from the bytes**, never derived from the
    *   OID. A hint only chooses which already-computed answer to reuse; it never

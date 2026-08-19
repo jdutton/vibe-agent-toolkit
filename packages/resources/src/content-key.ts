@@ -35,6 +35,12 @@
  * cannot key one read and parse another. A git SHA may still be used as a
  * *lookup hint* whose miss is free — it must never be the key.
  *
+ * A hint's **hit** is only free if the hint is one-to-one against working-tree
+ * bytes, and a blob OID is not: it names the *cleaned* content, so one OID can
+ * name two different working-tree byte strings in one repository at one instant.
+ * `RunContentCache.#byHint` in `projection/content-cache.ts` holds the
+ * demonstration and names the lane exposed to it.
+ *
  * ## Why the preimage is RAW BYTES and not the decoded string
  *
  * It was the decoded string until schema version 2, and that was unsound.
