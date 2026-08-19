@@ -41,10 +41,12 @@
  *
  * ## Both arms stay live, deliberately
  *
- * The incumbent remains the default and is not touched. This is an opt-in second
- * implementation whose purpose is evidence: with the switch on, a single
- * `vat-lab crawl run` prints the `crawl` and `closure` strata from one dump for
- * the first time, against the same subject, in the same process.
+ * The projection is now the DEFAULT here and the incumbent link walk is the
+ * escape hatch, reachable through {@link INVENTORY_CRAWL_ENV} — see
+ * {@link INVENTORY_CRAWL_WALKER}. Both arms stay live so an A/B remains runnable
+ * against the same subject in the same process: a single `vat-lab crawl run`
+ * prints the `crawl` and `closure` strata from one dump, which is what this lane
+ * was built to make possible.
  */
 
 import {
