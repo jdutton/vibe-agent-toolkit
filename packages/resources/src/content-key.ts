@@ -38,8 +38,12 @@
  * A hint's **hit** is only free if the hint is one-to-one against working-tree
  * bytes, and a blob OID is not: it names the *cleaned* content, so one OID can
  * name two different working-tree byte strings in one repository at one instant.
- * `RunContentCache.#byHint` in `projection/content-cache.ts` holds the
- * demonstration and names the lane exposed to it.
+ * What a hit then costs is mostly a key that does not describe this path's
+ * bytes — a later fresh read of the path misses — and, only where `filter.*` or
+ * `working-tree-encoding` config diverges between the sharing paths, the text
+ * served as well. `RunContentCache.#byHint` in `projection/content-cache.ts`
+ * holds the measurements, separates those two costs, and names the lane exposed
+ * to it.
  *
  * ## Why the preimage is RAW BYTES and not the decoded string
  *

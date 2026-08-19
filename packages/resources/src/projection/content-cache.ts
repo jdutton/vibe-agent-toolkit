@@ -97,16 +97,19 @@ export class RunContentCache {
    * a path miss in the statistics, which is the one number that makes the hint's
    * soundness auditable.
    *
-   * ## ⛔ The hint is git's blob OID, and it is not a hash of what is on disk
+   * ## The hint is git's blob OID — a lookup over cleaned-content identity
    *
    * `crawl-source.ts` sets `contentHint` from `entry.oid`. Git hashes the
    * **cleaned** content — after `text`/`eol` conversion, after any `filter.*`
    * clean, after `working-tree-encoding`. `computeContentKey` hashes the **raw
-   * working-tree bytes**, and `content-key.ts` says so where it reads them: *the
-   * key must be over what was on disk*. Those are two different preimages, so
-   * this map is keyed on something that is not the thing it stands in for.
+   * working-tree bytes**, and it does so deliberately: its own docstring
+   * measures `[c2]`, `[e2 82]` and `[ff]` all decoding to `�`, so a key over the
+   * decoded string would file three different files under one key. The
+   * raw-bytes preimage is the one that must not move — which is exactly why the
+   * OID **cannot be** a key over it. Not "conversion might be configured
+   * somewhere": two different preimages by construction.
    *
-   * The load-bearing fact is not that conversion *may* apply. It is that one OID
+   * Concretely, the OID is **many-to-one** against working-tree bytes: one OID
    * names more than one byte string, in one repository, at one instant.
    * Measured in throwaway repos under `GIT_CONFIG_NOSYSTEM=1`, from identical
    * source content under a two-line `.gitattributes` (`dirA/*.md eol=lf`,
@@ -117,12 +120,10 @@ export class RunContentCache {
    * dirB/same.md  7a28df3c975fa62270a452251c4e0b24d685c4ba  worktree 27 B  ┘ two files
    * ```
    *
-   * So the key is **many-to-one** against working-tree bytes, and that settles
-   * the shape of the remedy: **no normalize-on-read can repair a many-to-one
-   * key.** Whichever path did not populate the entry is handed the other path's
-   * content *and* the other path's `contentKey` — the well-formed-entry-wrong-
-   * contents failure the rest of this module is built to exclude, arriving with
-   * no error and nothing in the key to read it off.
+   * That settles the shape of any remedy — **no normalize-on-read can repair a
+   * many-to-one key** — but it does not by itself say what goes wrong
+   * downstream. Which mechanism produced the divergence decides that, and they
+   * do not all cost the same thing.
    *
    * Four mechanisms produce the divergence, all silent on the read path,
    * measured against a 23 B LF source, with a control that must not diverge:
@@ -138,12 +139,76 @@ export class RunContentCache {
    * The control is what proves the harness was not printing `no` at everything.
    * `working-tree-encoding` moved 12 B → 26 B and the clean filter changed the
    * token text itself, so neither "it is only CRLF, strip it" nor a byte-length
-   * comparison is a detector. (Git LFS pointer blobs are a further route by
-   * LFS's own design; that one is asserted from the design, **not** measured —
-   * `git-lfs` was not installed.) None of this needs a hostile repository: a
+   * comparison is a detector. None of this needs a hostile repository: a
    * monorepo with per-directory `.gitattributes` produces it, and
    * `core.autocrlf=true` is the Windows installer default on trees that are not
    * ours.
+   *
+   * ## Which of the four can change what the parse concludes
+   *
+   * Two of them, and they are the ones worth reasoning about:
+   *
+   * - **`filter.*` clean/smudge divergence.** Two paths in one tree with
+   *   different filter config produce genuinely different characters for the
+   *   same OID — the clean filter above changed the token text itself, not its
+   *   framing. Exotic, and real.
+   * - **`working-tree-encoding` divergence.** Reasoned from the mechanism, and
+   *   the one of the two that is **not fixtured**. `readContentWithKey` decodes
+   *   raw bytes as UTF-8 unconditionally, so a UTF-16 worktree decodes to
+   *   NUL-interleaved text, and two paths sharing an OID under divergent
+   *   `working-tree-encoding` config would each be served the other's
+   *   characters. What is measured is the read, not the hint: the system suite's
+   *   UTF-16 fixture is a single `.md` asserting `hintHits: 0`, and on that path
+   *   nothing reaches the parser at all — `looksBinary` in `blob-population.ts`
+   *   sees the NUL bytes, records `BLOB_NOT_TEXT` and returns **before any blob
+   *   row**, so the document that yields one heading and one link from its UTF-8
+   *   bytes yields no blob row, no section and no reference from its UTF-16
+   *   bytes. The hint hit between two divergently-encoded paths is the case no
+   *   fixture builds; it follows from the mechanism, and is recorded here as
+   *   reasoning rather than as a measurement.
+   *
+   * For either, whichever path did not populate the entry is handed the other
+   * path's content *and* the other path's `contentKey` — a well-formed entry
+   * whose text is not this path's text, arriving with no error and nothing in
+   * the key to read it off.
+   *
+   * ## Why line endings are NOT one of them — state it, or it gets re-raised
+   *
+   * CRLF is the mechanism a reader reaches for first. Under a hint hit it does
+   * change the characters served — `dirB` is handed `dirA`'s LF string — and it
+   * is still the one mechanism that changes no structural fact the parse
+   * concludes from them. Three things make a hint-served entry
+   * internally consistent whatever produced it: `lineStartOffsets` in
+   * `blob-sections.ts` derives offsets from the **decoded JS string**
+   * (`content.split('\n')`, `offset += line.length + 1`), so they are
+   * **character** offsets and not byte offsets; `parseMarkdownContent` takes
+   * `startOffset` from remark's own character positions over that same string;
+   * and `ParseCache.get` hands `rehydrate` the very `KeyedContent` the caller
+   * holds, so facts are re-attached to that content and never to a fresh disk
+   * read. Content, key, offsets and facts travel together.
+   *
+   * Measured through `parseMarkdownContent` on one document in both line
+   * endings: headings identical in level, text, slug and line; links identical
+   * in `href`, `text`, `type` and `line`. What moves is the `\r` in `content`,
+   * the character `startOffset`/`endOffset`, `estimatedTokenCount`, and a blob
+   * section's `bytes` and `tokens`. Measures, not structure — so a CRLF/LF pair
+   * costs fidelity of measurement, never a wrong answer about what the document
+   * says.
+   *
+   * Git LFS is a different kind again. A pointer blob is **indirection**, like a
+   * symlink: two paths sharing a pointer blob name the same real content. That
+   * is asserted from LFS's design, **not** measured — `git-lfs` was not
+   * installed.
+   *
+   * ## The residual cost, on every mechanism including the harmless ones
+   *
+   * A hint-served entry carries a `contentKey` computed from a different path's
+   * raw bytes, so the key does not describe what is on disk at this path. Two
+   * consequences, neither of them a wrong parse: a later fresh read of this path
+   * keys differently and **misses**, and the blob tier's "content-keyed,
+   * cross-tree-shareable" premise becomes platform-variant — the same tree
+   * checked out under `core.autocrlf=true` shares blobs the way this one does
+   * not. A cost, and a claim the tier makes that is narrower than it sounds.
    *
    * ## Why this repository's own corpora cannot detect it
    *
@@ -166,9 +231,11 @@ export class RunContentCache {
    * `deferGitignored` and runs the blob stage over what it keys, so the hint is
    * **live** there.
    *
-   * Dormant is not fixed. The safe direction for anyone widening where a hint is
-   * offered or consumed is to **stop using the hint**, not to normalize what it
-   * names.
+   * Dormant is not fixed. Anyone widening where a hint is offered or consumed
+   * owns the two text-changing mechanisms above, and the condition to satisfy is
+   * that paths sharing an OID also share their `filter.*` and
+   * `working-tree-encoding` configuration. Normalizing what the OID names is not
+   * that condition, and cannot be made into it.
    */
   readonly #byHint = new Map<string, KeyedContent>();
   #hits = 0;
@@ -218,11 +285,15 @@ export class RunContentCache {
    * that is not a curiosity — repeated licence files, generated stubs, and every
    * empty file in the tree share one OID.
    *
-   * ⛔ **That premise is false in general.** An OID names the *cleaned* bytes,
-   * and one OID can name two different working-tree byte strings in one
-   * repository at one instant — demonstrated on {@link #byHint}, which also
-   * records which lane is exposed. Read it before widening where a hint is
-   * offered or consumed.
+   * ⚠️ **An OID is a lookup hint over cleaned content, not that byte identity.**
+   * One OID can name two different working-tree byte strings in one repository
+   * at one instant. Mostly what that costs is a stored key describing bytes
+   * other than this path's, so a later fresh read of the path misses; under
+   * divergent `filter.*` or `working-tree-encoding` config it also changes the
+   * text served, while line-ending divergence provably does not. {@link #byHint}
+   * holds the measurements, separates the mechanisms that can change text from
+   * the ones that cannot, and names which lane is exposed. Read it before
+   * widening where a hint is offered or consumed.
    *
    * This is the *lookup hint whose miss is free* that `content-key.ts` permits,
    * and it stays inside three conditions — necessary, and, per {@link #byHint},
