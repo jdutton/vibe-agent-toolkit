@@ -4,9 +4,8 @@
  * Discovers and parses project configuration files with directory tree walk-up.
  */
 
-import { readFile } from 'node:fs/promises';
-
 import { findConfigFile } from '@vibe-agent-toolkit/utils';
+import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 import { parse as parseYaml } from 'yaml';
 
 import { ProjectConfigSchema, type ProjectConfig } from './schemas/project-config.js';
@@ -28,9 +27,11 @@ import { ProjectConfigSchema, type ProjectConfig } from './schemas/project-confi
  * ```
  */
 export async function parseConfigFile(configPath: string): Promise<ProjectConfig> {
-  // Read file content
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- configPath is from findConfigFile() walk-up
-  const content = await readFile(configPath, 'utf-8');
+  // Read file content through the one decoder. An adopter's config file is
+  // authored by hand on whatever platform they use — PowerShell 5.1 writes
+  // UTF-16LE by default — and `readFile(path, 'utf-8')` would hand the YAML
+  // parser mojibake, or a BOM that makes the first key unparseable.
+  const { text: content } = await readTextContent(configPath);
 
   // Parse YAML
   let parsed: unknown;

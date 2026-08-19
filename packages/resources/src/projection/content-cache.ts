@@ -153,19 +153,32 @@ export class RunContentCache {
    *   same OID — the clean filter above changed the token text itself, not its
    *   framing. Exotic, and real.
    * - **`working-tree-encoding` divergence.** Reasoned from the mechanism, and
-   *   the one of the two that is **not fixtured**. `readContentWithKey` decodes
-   *   raw bytes as UTF-8 unconditionally, so a UTF-16 worktree decodes to
-   *   NUL-interleaved text, and two paths sharing an OID under divergent
-   *   `working-tree-encoding` config would each be served the other's
+   *   the one of the two that is **not fixtured**. Two paths sharing an OID
+   *   under divergent `working-tree-encoding` config are each served the other's
    *   characters. What is measured is the read, not the hint: the system suite's
-   *   UTF-16 fixture is a single `.md` asserting `hintHits: 0`, and on that path
-   *   nothing reaches the parser at all — `looksBinary` in `blob-population.ts`
-   *   sees the NUL bytes, records `BLOB_NOT_TEXT` and returns **before any blob
-   *   row**, so the document that yields one heading and one link from its UTF-8
-   *   bytes yields no blob row, no section and no reference from its UTF-16
-   *   bytes. The hint hit between two divergently-encoded paths is the case no
-   *   fixture builds; it follows from the mechanism, and is recorded here as
-   *   reasoning rather than as a measurement.
+   *   UTF-16 fixture is a single `.md` asserting `hintHits: 0`. The hint hit
+   *   between two divergently-encoded paths is the case no fixture builds; it
+   *   follows from the mechanism, and is recorded here as reasoning rather than
+   *   as a measurement.
+   *
+   *   ⚠️ **A correct decoder made this case WORSE-behaved, not better, and the
+   *   analysis above is the post-fix one.** `readContentWithKey` used to decode
+   *   every file as UTF-8 unconditionally, so a UTF-16 worktree arrived as
+   *   NUL-interleaved text and `looksBinary` in `blob-population.ts` refused the
+   *   parse outright: `BLOB_NOT_TEXT`, no blob row, no section, no reference.
+   *   That refusal was a capability gap — the document was unreadable — but it
+   *   was also, accidentally, a **loud floor under this hint lane**: a path
+   *   served the wrong encoding's characters could not quietly produce plausible
+   *   facts, because it could not produce facts at all.
+   *
+   *   `decodeTextContent` (`@vibe-agent-toolkit/utils/text`) removes the gap and the floor
+   *   together. A UTF-16 path now parses; so does a UTF-16 path handed a UTF-8
+   *   sibling's text under a hint hit, and the result is a well-formed blob whose
+   *   characters are not this path's. Net: the reader is strictly better and
+   *   this lane is strictly quieter, which is the honest statement of the trade.
+   *   Nothing here is a *new* unsoundness — the many-to-one OID was always the
+   *   cause and no decode fixed that — but the one mechanism whose divergence
+   *   used to announce itself no longer does.
    *
    * For either, whichever path did not populate the entry is handed the other
    * path's content *and* the other path's `contentKey` — a well-formed entry

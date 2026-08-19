@@ -277,6 +277,13 @@ export type { ContentMeasures, LexicalReference } from './schemas/parse-facts.js
 // Export parser interface for advanced use cases
 export { parseMarkdown, classifyLink, isLocalFileLink, type ParseResult } from './link-parser.js';
 
+// The content-decoding seam is NOT re-exported here. It is a `utils` primitive
+// (`@vibe-agent-toolkit/utils/text` for `decodeTextContent`,
+// `@vibe-agent-toolkit/utils/fs` for `readTextContent`), and an adopter who
+// wants "read a file, decode it" should not have to depend on the projection
+// layer to get it. `readContentWithKey` below is what this package adds: the
+// decode COMPOSED with a raw-bytes content key.
+
 // Parse identity: which parser a path routes to, and the key a parse result is
 // filed under. Path-independent by construction — see content-key.ts.
 export {

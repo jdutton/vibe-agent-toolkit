@@ -50,6 +50,7 @@ const rules = {
   'no-file-url-string-concat': require('./rules/no-file-url-string-concat.cjs'),
   'prefer-startswith-over-regex': require('./rules/prefer-startswith-over-regex.cjs'),
   'no-unsafe-root-join': require('./rules/no-unsafe-root-join.cjs'),
+  'no-raw-text-decode': require('./rules/no-raw-text-decode.cjs'),
   'require-justified-skip': require('./rules/require-justified-skip.cjs'),
 };
 
@@ -95,6 +96,15 @@ const RECOMMENDED_EXCLUDE = new Set([
   // a security boundary (this repo scopes it to the skill-test staging code).
   // Re-include it when it keys on taint rather than on naming.
   'no-unsafe-root-join',
+  // Excluded because it names a seam that does not exist until a consumer builds
+  // one. `decodeTextContent()` is VAT's module, in VAT's repo; an adopter who
+  // installed this package for `safePath.join()` has no content-decoding seam to
+  // be pointed at, so `recommended` would hand them a rule whose every message
+  // advises importing from `your content-decoding module`. It ships in `rules`
+  // and is enabled — with `safeModule` naming the real seam and `exemptFiles`
+  // naming the file that implements it — by whoever has one. VAT itself does
+  // exactly that, scoped to the directories that read corpus documents.
+  'no-raw-text-decode',
 ]);
 
 /**

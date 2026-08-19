@@ -383,7 +383,8 @@ export class ParseCache {
 
     let raw: string;
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is cacheDir + a charset-validated content key
+       
+      // eslint-disable-next-line security/detect-non-literal-fs-filename, local/no-raw-text-decode -- reading back this cache's own entry, written as UTF-8 by `set()`; a corpus document never lands here
       raw = await fs.readFile(this.entryPath(keyed.key), 'utf-8');
     } catch {
       // ENOENT (never written), EACCES (perms), EISDIR — all a miss.

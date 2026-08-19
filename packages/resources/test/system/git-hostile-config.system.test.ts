@@ -26,18 +26,23 @@
  * `content-cache.ts` predicts, reproduced end to end. The `eol` case is the same
  * mechanism in a milder form: a 22-byte CRLF file described by a 19-byte blob.
  *
- * **VAT cannot read a UTF-16 document at all.** `readContentWithKey` calls
- * `bytes.toString('utf-8')` unconditionally, with no BOM or encoding detection,
- * so a `working-tree-encoding=UTF-16` checkout decodes to NUL-interleaved
- * mojibake and the blob stage's NUL test then refuses the parse. The same
- * document that yields one heading and one link from its UTF-8 bytes yields
- * **neither, and no blob row at all**, from its UTF-16 bytes — asserted here on
- * both sides, because only the contrast makes it a missing capability rather
- * than a policy. The refusal is at least loud (`BLOB_NOT_TEXT`, naming the
- * path), and that is the whole of the consolation: loudness is what makes this a
- * gap rather than a silent corruption; it does not make an unreadable document
- * an acceptable outcome. Fix-or-declare is not this file's decision, so the
- * defect is pinned, not blessed.
+ * ## What is pinned here as a capability, on a fixture that used to pin its absence
+ *
+ * **A `working-tree-encoding=UTF-16` checkout reads exactly like its UTF-8
+ * twin.** `readContentWithKey` used to call `bytes.toString('utf-8')`
+ * unconditionally, so the checkout decoded to NUL-interleaved mojibake and the
+ * blob stage's NUL test refused the parse: no blob row, no section, no
+ * reference. It now decodes through `decodeTextContent`, the pure `utils`
+ * primitive at `@vibe-agent-toolkit/utils/text`,
+ * which reads the encoding off the BOM. The contrast against the UTF-8 twin is
+ * kept and inverted — it was the proof of the gap, and it is now the proof of
+ * the fix, which is a stronger assertion than either side alone (a suite that
+ * only checked the UTF-16 side could pass on a projection that had stopped
+ * parsing anything).
+ *
+ * The content KEY still differs between the twins, and must: it is computed over
+ * the raw working-tree bytes, and 40 bytes of UTF-16BE are not 19 bytes of
+ * UTF-8. Decoding changes what VAT reads, never what a parse is filed under.
  *
  * ## What is pinned as surprising-but-correct
  *
@@ -167,7 +172,11 @@ const HOST_GATES: Record<'utf16' | 'filter' | 'symlinks' | 'lfs', HostGate> = {
   utf16: {
     requirement: 'a POSIX host',
     met: !IS_WINDOWS,
-    lost: 'section 3 — that VAT cannot read a UTF-16 document at all (DEFECT)',
+    lost:
+      'section 3 — that a `working-tree-encoding=UTF-16` checkout reads exactly'
+      + ' like its UTF-8 twin. This is the only end-to-end proof that'
+      + ' `decodeTextContent` reaches the projection, so without it nothing here'
+      + ' demonstrates that VAT can read a UTF-16 document',
   },
   filter: {
     requirement: 'a POSIX host with `sed` on PATH',
@@ -801,70 +810,119 @@ describe.skipIf(!HOST_GATES.utf16.met)(gatedTitle('working-tree-encoding=UTF-16'
   });
 
   /**
-   * DEFECT, at its source. `readContentWithKey` calls `bytes.toString('utf-8')`
-   * unconditionally — no BOM check, no encoding detection — so it is asked here
-   * for the real thing, rather than being described while a `Buffer.toString`
-   * the test performed itself is asserted on. Asserting on a buffer this test
-   * decoded would still pass after someone added BOM detection, which is the
-   * opposite of what a defect pin is for; this one turns red the moment the read
-   * learns to decode UTF-16.
+   * The fix, at its source. `readContentWithKey` used to call
+   * `bytes.toString('utf-8')` unconditionally — no BOM check, no encoding
+   * detection — and handed the rest of the projection two replacement
+   * characters followed by NUL-interleaved ASCII. It now decodes through
+   * `decodeTextContent`, which reads the encoding off the BOM.
+   *
+   * `readContentWithKey` is asked for the real thing here rather than being
+   * described while a `Buffer.toString` the test performed itself is asserted
+   * on: an assertion over bytes this test decoded would pass no matter what the
+   * reader did, which is the single most likely way a decoder test lies.
+   *
+   * The KEY assertion is the load-bearing half. It must stay over the RAW
+   * on-disk bytes — 40 of them, UTF-16BE — and not over the 19 bytes the
+   * decoded characters would re-encode to. `content-key.ts` measures why: the
+   * key's preimage cannot move when the decode improves, or every cached parse
+   * in existence is filed under a stale name.
    */
-  it('mojibakes the document at the READ, not somewhere downstream (DEFECT)', async () => {
+  it('decodes the document at the READ, and still keys the raw bytes', async () => {
     const keyed = await readContentWithKey(safePath.join(fixture.repo, DOC_PATH), 'markdown');
 
-    // What the reader hands the rest of the projection: the BOM as two
-    // replacement characters, then NUL-interleaved ASCII.
-    expect(keyed.content.startsWith('��')).toBe(true);
-    expect(keyed.content).toContain('\u0000');
-    expect(keyed.content).not.toContain('# Doc');
-    // The bytes were read whole and keyed over — only the decode is wrong.
+    // The document, as authored. Not a BOM, not a NUL, not a replacement
+    // character — the three symptoms the old decode produced, each named so a
+    // regression cannot half-pass.
+    expect(keyed.content).toBe(DOC);
+    expect(keyed.content.startsWith('\u{FEFF}')).toBe(false);
+    expect(keyed.content).not.toContain('\u{0}');
+    expect(keyed.content).not.toContain('\u{FFFD}');
+    // The bytes were read whole and keyed over: 40 raw bytes, keyed as 40, even
+    // though the characters they carry re-encode to 19.
     expect(keyed.byteLength).toBe(onDisk.byteLength);
+    expect(keyed.byteLength).toBe(40);
+    expect(Buffer.byteLength(keyed.content, 'utf-8')).toBe(19);
     expect(keyed.key).toBe(computeContentKey(onDisk, 'markdown'));
+    // And NOT the key its UTF-8 twin gets. Same document, different bytes,
+    // different identity — which is the whole reason the preimage is bytes.
+    expect(keyed.key).not.toBe(computeContentKey(Buffer.from(DOC), 'markdown'));
   });
 
   /**
-   * DEFECT, as the projection sees it. VAT cannot read a UTF-16 document at all:
-   * the same content that yields one heading and one link from its UTF-8 bytes
-   * yields no blob row, no section and no reference from its UTF-16 bytes. Both
-   * sides are asserted here on purpose — the empty side on its own reads as a
-   * policy about binary files, and only the contrast against the UTF-8 twin
-   * shows it is a markdown document VAT can no longer see.
+   * The fix, as the projection sees it. A UTF-16 checkout now yields the same
+   * facts as its UTF-8 twin: one heading, one link, one section titled `Doc`,
+   * one reference to `./b.md`, and no condition row at all.
    *
-   * The one consolation is that the refusal is loud: the blob stage's NUL test
-   * catches it before the parser and records `BLOB_NOT_TEXT` naming the path, so
-   * this is a capability gap rather than a silent corruption. That is the whole
-   * of the consolation. It does not make an unreadable markdown document an
-   * acceptable outcome, and nothing here is to be read as blessing it. Whether
-   * to fix the decode or to declare UTF-16 out of scope is a decision this file
-   * does not make; it pins the state.
+   * Both sides are asserted, and the contrast is what makes the test worth
+   * having. The UTF-16 side on its own would pass on a projection that had
+   * stopped deriving blobs for *every* document; only "these two agree, and the
+   * agreement is non-empty" says the reader learned an encoding. The assertions
+   * are therefore written against the twin's values rather than against
+   * literals, so a change that guts one side cannot leave the other looking
+   * healthy.
+   *
+   * ## What deliberately does NOT match: the content key
+   *
+   * The two documents have different bytes on disk (40 vs 19) and therefore
+   * different keys, asserted here as a non-equality. That is the raw-bytes
+   * preimage doing its job — see `content-key.ts`. Two encodings of one document
+   * are two documents as far as the cache is concerned, and collapsing them
+   * would mean a key that is a function of the decoder, which is exactly what
+   * the preimage rule forbids.
+   *
+   * ## What this fix took away
+   *
+   * The old refusal was loud — `BLOB_NOT_TEXT`, naming the path — and that
+   * loudness was the whole consolation for the gap. It is now gone, because
+   * there is nothing to refuse. The cost of losing it is recorded where it
+   * lands: `RunContentCache.#byHint` in `projection/content-cache.ts`, whose
+   * `working-tree-encoding` divergence case used to be caught by this very
+   * refusal and is now served as plausible text instead.
    */
-  it('cannot read a UTF-16 document at all — the refusal is loud, the capability is missing (DEFECT)', () => {
+  it('reads a UTF-16 document exactly as it reads its UTF-8 twin', () => {
     // The same document, read from UTF-8 bytes: parsed, with facts.
     const utf8Key = keyOf(utf8Control.projection, DOC_PATH);
     expect(utf8Key).toBe(computeContentKey(Buffer.from(DOC), 'markdown'));
-    expect(blobOf(utf8Control.projection, utf8Key)?.headingCount).toBe(1);
-    expect(blobOf(utf8Control.projection, utf8Key)?.linkCount).toBe(1);
+    const twin = blobOf(utf8Control.projection, utf8Key);
+    expect(twin?.headingCount).toBe(1);
+    expect(twin?.linkCount).toBe(1);
     expect(sectionTitlesOf(utf8Control.projection, utf8Key)).toEqual(['Doc']);
     expect(referencesOf(utf8Control.projection, utf8Key)).toEqual(['./b.md']);
     expect(utf8Control.projection.blobConditions).toEqual([]);
 
-    // The same document, read from UTF-16 bytes: zero of each, under either
-    // enumerator, with a refusal where the rows should be.
+    // The same document, read from UTF-16 bytes: the same facts, under either
+    // enumerator, and no refusal where the rows should be.
     for (const arm of [arms.walk, arms.git]) {
       const key = keyOf(arm.projection, DOC_PATH);
+      // Keyed over the RAW 40 on-disk bytes, so NOT the twin's key. Same
+      // document, two encodings, two identities — by design.
       expect(key).toBe(computeContentKey(onDisk, 'markdown'));
-      // No blob row at all — the stage records the refusal instead.
-      expect(blobOf(arm.projection, key)).toBeUndefined();
-      expect(sectionTitlesOf(arm.projection, key)).toEqual([]);
-      expect(referencesOf(arm.projection, key)).toEqual([]);
+      expect(key).not.toBe(utf8Key);
 
-      const condition = arm.projection.blobConditions.find((row) => row.blob === key);
-      // The `code` is the whole of the discrimination available here: `condition()`
-      // in `blob-population.ts` stamps `severity: 'warning'` on every row it
-      // builds, so asserting the severity could not tell `BLOB_NOT_TEXT` apart
-      // from `BLOB_PARSE_FAILED` and would fail only if that literal were edited.
-      expect(condition?.code).toBe('BLOB_NOT_TEXT');
-      expect(condition?.message).toContain(DOC_PATH);
+      const blob = blobOf(arm.projection, key);
+      expect(blob).toBeDefined();
+      // Against the twin's numbers, not against literals: an assertion of `1`
+      // on both sides passes even if both sides broke the same way.
+      expect(blob?.headingCount).toBe(twin?.headingCount);
+      expect(blob?.linkCount).toBe(twin?.linkCount);
+      expect(blob?.sectionCount).toBe(twin?.sectionCount);
+      expect(sectionTitlesOf(arm.projection, key)).toEqual(
+        sectionTitlesOf(utf8Control.projection, utf8Key),
+      );
+      expect(referencesOf(arm.projection, key)).toEqual(
+        referencesOf(utf8Control.projection, utf8Key),
+      );
+
+      // No condition row of any code — `BLOB_NOT_TEXT` is what used to be here,
+      // and asserting the whole (empty) list rather than that one code means a
+      // refusal arriving under a different code cannot slip past.
+      expect(arm.projection.blobConditions.filter((row) => row.blob === key)).toEqual([]);
+
+      // The one measure that legitimately differs: `bytes` is the raw byte
+      // count, so it is the on-disk 40 rather than the twin's 19. Pinned, so
+      // "the two agree" above is never read as "the two are identical".
+      expect(blob?.bytes).toBe(onDisk.byteLength);
+      expect(twin?.bytes).toBe(DOC.length);
     }
   });
 

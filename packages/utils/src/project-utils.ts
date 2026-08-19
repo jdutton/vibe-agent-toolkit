@@ -7,11 +7,12 @@
  * falling back to an absolute path.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { dirname, parse } from 'node:path';
 
 import { resetGitRootCache } from './git-root-cache.js';
 import { safePath } from './path-utils.js';
+import { readTextContentSync } from './text-file.js';
 
 const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
 const PACKAGE_JSON_FILENAME = 'package.json';
@@ -56,8 +57,10 @@ export function findNodeWorkspaceRoot(startDir: string): string | null {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- walk-up is intentional
     if (existsSync(pkgPath)) {
       try {
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- walk-up is intentional
-        const parsed: unknown = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+        // Through the decoding seam: this is the ADOPTER's manifest, not ours,
+        // and a UTF-8 BOM in front of `{` makes `JSON.parse` throw — which the
+        // `catch` below would silently report as "not the workspace root".
+        const parsed: unknown = JSON.parse(readTextContentSync(pkgPath).text);
         if (typeof parsed === 'object' && parsed !== null && 'workspaces' in parsed) {
           return current;
         }

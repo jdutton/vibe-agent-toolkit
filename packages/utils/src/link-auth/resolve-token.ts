@@ -90,6 +90,11 @@ export const defaultRunCommand: TokenResolutionDeps['runCommand'] = (argv) => {
     // strictly than runGit would: every GIT_* key, case-insensitively.
     allowGit: true,
   });
+  // Not a file read: these bytes are the stdout of the credential helper spawned
+  // three lines up, and its encoding is that program's contract, not a property
+  // of any file. `safeExecResult` was already asked for `encoding: 'utf8'`, so
+  // this branch only runs when it handed back a Buffer anyway.
+  // eslint-disable-next-line local/no-raw-text-decode -- subprocess stdout; producer is the credential helper spawned above
   const stdout = typeof result.stdout === 'string' ? result.stdout : result.stdout.toString('utf8');
   return { success: result.success, stdout };
 };

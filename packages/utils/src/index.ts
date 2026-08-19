@@ -17,6 +17,16 @@ export * from './spawn-hardened.js';
 // Cross-platform path utilities
 export * from './path-utils.js';
 
+// THE content-decoding seam: bytes to text, in one place. `decodeTextContent` is
+// pure and also reachable from the dependency-free `./text` entry; the two
+// file-reading wrappers need `node:fs` and are also on `./fs`. Other routes from
+// bytes to text — `buf.toString('utf-8')`, `new TextDecoder()`,
+// `readFile(p, 'utf-8')` — are a lint error under `local/no-raw-text-decode`
+// WHERE IT IS REGISTERED (this package's `src` and `resources`' `src`); the rest
+// of the repo is a migration ledger in `eslint.config.js`, not a covered claim.
+export * from './text-content.js';
+export * from './text-file.js';
+
 // Blocking stdio for published bins (process.exit must not truncate output)
 export * from './stdio-blocking.js';
 

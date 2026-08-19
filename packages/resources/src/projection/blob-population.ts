@@ -102,15 +102,24 @@ export const BLOB_PARSE_FAILED = 'BLOB_PARSE_FAILED';
 export const BLOB_NOT_TEXT = 'BLOB_NOT_TEXT';
 
 /**
- * How far into a blob to look for the NUL that says "not text".
+ * How far into a blob's DECODED content to look for the NUL that says "not
+ * text".
  *
- * Git's own heuristic, and the same 8000 bytes it uses: a NUL byte inside the
+ * Git's own heuristic, and the same 8000-unit window it uses: a NUL inside the
  * first block is the one signal that separates binary from text without knowing
  * anything about the format. Bounded rather than whole-file because the check
  * must be cheap enough to run on every blob — the point is to avoid touching
  * megabytes, so a test that reads megabytes defeats itself.
+ *
+ * **Characters, not bytes**, and the name says so because the difference is
+ * real: {@link looksBinary} runs over the decoded string, so for a UTF-16
+ * document this window covers ~16 000 bytes and for UTF-32 ~32 000. Git counts
+ * bytes because git never decodes. Nothing downstream depends on the exact
+ * width, so the window is left at git's number rather than scaled per encoding —
+ * a scaled window would be a second encoding-dependent behaviour to keep in step
+ * with the decoder for no gain.
  */
-const BINARY_SNIFF_BYTES = 8000;
+const BINARY_SNIFF_CHARS = 8000;
 
 /**
  * Whether these bytes are binary, and therefore have nothing a text parser can
@@ -153,11 +162,32 @@ const BINARY_SNIFF_BYTES = 8000;
  * still KEYED and still a member: identity, `gitignored`, and the realization
  * row are untouched. Only the parse is declined.
  *
+ * ## The sniff runs AFTER the decode, and that ordering is the whole reason
+ * UTF-16 works
+ *
+ * This takes the **decoded string**, never the raw bytes, and the argument type
+ * is the enforcement. UTF-16 and UTF-32 text legitimately contains NUL *bytes* —
+ * every ASCII character in a UTF-16 document carries one — so a sniff over bytes
+ * classifies every such document as binary. That is precisely what used to
+ * happen: `readContentWithKey` decoded as UTF-8 unconditionally, the NUL bytes
+ * survived into the string as U+0000, and a perfectly ordinary markdown document
+ * was refused here before any parser saw it. The decoder fix
+ * (`decodeTextContent`, in `@vibe-agent-toolkit/utils/text`) removes the NULs by
+ * decoding correctly, and this function needs no encoding table of its own to
+ * benefit — it needs only to keep running second. **Moving this test onto raw bytes reinstates the defect in full.**
+ *
+ * What remains, stated rather than hidden: a genuinely binary file whose first
+ * bytes happen to match a recognised BOM is decoded as text, and whether its
+ * NULs survive that decode is luck. UTF-16 pairs `00 00` to U+0000 and UTF-32
+ * maps most 4-byte runs to U+FFFD, so binary content usually still trips this
+ * test — usually, not always. The consequence of a miss is a slow parse of
+ * garbage, which is the cost this function exists to avoid, not a wrong answer.
+ *
  * @param content - The decoded content, as the parser would receive it
- * @returns `true` when the bytes are binary
+ * @returns `true` when the content is binary
  */
 function looksBinary(content: string): boolean {
-  const limit = Math.min(content.length, BINARY_SNIFF_BYTES);
+  const limit = Math.min(content.length, BINARY_SNIFF_CHARS);
   for (let index = 0; index < limit; index += 1) {
     if (content.charCodeAt(index) === 0) return true;
   }
@@ -497,16 +527,17 @@ async function deriveBlob(
   if (keyed === null) return;
 
   // Before the parse, never after: the whole cost this refuses IS the parse.
-  // See {@link looksBinary} for the measurement and for why the test is on the
-  // bytes rather than on the extension.
+  // And after the DECODE, never before — see {@link looksBinary} for why a sniff
+  // over raw bytes refuses every UTF-16 document, and for why the test is on the
+  // content rather than on the extension.
   if (looksBinary(keyed.content)) {
     counts.blobsNotText += 1;
     builder.addBlobCondition(condition(
       target.contentKey,
       BLOB_NOT_TEXT,
-      `"${target.path}" contains a NUL byte within its first ${BINARY_SNIFF_BYTES} bytes, so it is`
-      + ' not text; no parser was run over it. This blob has no sections or references because it'
-      + ' cannot have any, not because it was skipped silently',
+      `"${target.path}" contains a NUL within the first ${BINARY_SNIFF_CHARS} characters of its`
+      + ' decoded content, so it is not text; no parser was run over it. This blob has no sections'
+      + ' or references because it cannot have any, not because it was skipped silently',
     ));
     return;
   }

@@ -25,7 +25,7 @@ export default [
 ];
 ```
 
-`configs.recommended` registers the plugin under the `@vibe-agent-toolkit` namespace and enables the **cross-platform safety core** — 18 of the 21 rules, most at `error` and three at `warn` (see [Severities](#severities)). The other three are opt-in; the [rule tables](#rules) mark each rule's `recommended` severity, and `—` means not in `recommended`.
+`configs.recommended` registers the plugin under the `@vibe-agent-toolkit` namespace and enables the **cross-platform safety core** — 18 of the 22 rules, most at `error` and three at `warn` (see [Severities](#severities)). The other four are opt-in; the [rule tables](#rules) mark each rule's `recommended` severity, and `—` means not in `recommended`.
 
 To pick rules yourself, register the plugin and name them:
 
@@ -122,6 +122,45 @@ The member-call rules here check the **receiver**, not just the method name, so 
 | `no-bare-dynamic-import-path` | `await import(absolutePath)` | `dynamicImportPath()` / `pathToFileURL(p).href` | `/fs` | | `error` |
 | `no-file-url-string-concat` | `` `file://${p}` `` | `pathToFileURL(p).href` | — | | `error` |
 
+### Content decoding
+
+| Rule | Bans | Use instead | Subpath | Fix | `recommended` |
+|---|---|---|---|---|---|
+| `no-raw-text-decode` | `buf.toString('utf-8')`, `new TextDecoder(…)`, `readFile(p, 'utf-8')` | one project-owned decoding seam | — | | — |
+
+`buf.toString('utf-8')` ignores every byte-order mark and cannot express UTF-16BE at all — Node's `Buffer` has no such encoding. A UTF-16 document therefore decodes to NUL-interleaved mojibake, and whatever sniffs for binary content downstream believes it. PowerShell 5.1's `Out-File` and `>` write UTF-16LE by default, so this is a Windows-authored file, not an exotic one.
+
+This rule has no wrapper to point at, because the seam is yours: write one decoder, name it with `safeModule`, and exempt its own file with `exemptFiles`. Put the decoder at the **bottom** of your dependency arrow — a seam in a leaf package cannot be imported by the primitive packages the rule also lints, and those files would then have no legal way to comply.
+
+**Not every `'utf-8'` read is a content read**, and this is the distinction that decides whether the rule survives. Three categories:
+
+1. **A document you did not write** — an adopter's markdown, config, schema, `.gitignore`, `package.json`. The encoding must be **discovered**. This is the rule's target.
+2. **An artifact your project wrote** — its own cache entry, its own published asset. The encoding was **chosen at the write**; reading it back the same way is a closed loop.
+3. **Bytes that were never a file** — subprocess stdout, an HTTP body, a Buffer you built. The **producer's contract** decides.
+
+Static analysis cannot tell them apart, so the rule reports all three and you settle 2 and 3 at the call site with a one-line `eslint-disable-next-line` that **names the writer or the producer**:
+
+```js
+// eslint-disable-next-line @vibe-agent-toolkit/no-raw-text-decode -- subprocess stdout; producer is the credential helper spawned above
+const out = result.stdout.toString('utf8');
+```
+
+That gives a reviewer a falsifiable test: a justification that cannot name who wrote the bytes is a category-1 call wearing a disable comment. Do not settle these by adding paths to `exemptFiles` — that list is for the seam's own implementation file.
+
+```js
+{
+  files: ['src/corpus/**/*.ts'],
+  rules: {
+    '@vibe-agent-toolkit/no-raw-text-decode': ['error', {
+      safeModule: '@my-org/resources',
+      exemptFiles: ['src/corpus/text-content.ts'],
+    }],
+  },
+}
+```
+
+Only a string **literal** encoding triggers it. `buf.toString(enc)` is deliberately not reported: without type information it is indistinguishable from `n.toString(radix)`, and `readFile(p, cb)` from `readFile(p, encoding)`.
+
 ### Code and test hygiene
 
 | Rule | Bans | Use instead | Subpath | Fix | `recommended` |
@@ -132,7 +171,7 @@ The member-call rules here check the **receiver**, not just the method name, so 
 
 ### What `recommended` deliberately leaves out
 
-Three rules ship without riding in `recommended`, for two different reasons.
+Four rules ship without riding in `recommended`, for three different reasons.
 
 **Test-style opinions** — `no-test-scoped-functions` (where a helper may be declared) and `require-justified-skip` (the annotation grammar for a disabled test). Neither is a portability or correctness fact, and installing this package for `safePath.join()` should not also import someone else's test conventions. Both are worth turning on deliberately.
 
@@ -147,7 +186,9 @@ safePath.join(base, userInput)              // SILENT — the shape it exists to
 
 A rule that misses its own target does not belong in a config named `recommended` at any severity: a safety core that cries wolf teaches people to ignore it, and that costs you the true positives too. It still ships, and it still earns `error` when scoped to directories where a path escape is a security boundary — which is how this repo uses it, on its skill-test staging code. It will return to `recommended` when it keys on taint rather than on naming.
 
-Enable any of the three by naming it:
+**No wrapper to point at** — `no-raw-text-decode`. Every other rule in this pack names a replacement this package publishes; this one names a decoding seam that only exists once *you* write it. Shipped in `recommended`, its every message would read "use `decodeTextContent()` from your content-decoding module", which is advice nobody can follow. Turn it on with `safeModule` and `exemptFiles` set, as shown above.
+
+Enable any of the four by naming it:
 
 ```js
 import vat from '@vibe-agent-toolkit/utils/eslint';
@@ -158,6 +199,16 @@ export default [
     rules: {
       '@vibe-agent-toolkit/no-test-scoped-functions': 'error',
       '@vibe-agent-toolkit/require-justified-skip': 'error',
+    },
+  },
+  {
+    // Scope it to the code that reads files whose encoding you do not choose.
+    files: ['src/corpus/**/*.ts'],
+    rules: {
+      '@vibe-agent-toolkit/no-raw-text-decode': ['error', {
+        safeModule: '@my-org/resources',
+        exemptFiles: ['src/corpus/text-content.ts'],
+      }],
     },
   },
   {

@@ -13,8 +13,9 @@
  * from `schemas/resource-metadata.ts` (single source of truth).
  */
 
-import { readFile, stat } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 
+import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 import GithubSlugger from 'github-slugger';
 import type { Definition, Heading, Html, Link, LinkReference, Root, Yaml } from 'mdast';
 import { toString as mdastToString } from 'mdast-util-to-string';
@@ -160,14 +161,17 @@ export function estimateTokens(text: string): number {
  */
 export async function parseMarkdown(filePath: string): Promise<ParseResult> {
   // Read file content and stats
-  const [content, stats] = await Promise.all([
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath is user-provided path parameter
-    readFile(filePath, 'utf-8'),
+  // `readTextContent`, never `readFile(path, 'utf-8')`: this reads a CORPUS
+  // document, whose encoding VAT does not choose. See text-content.ts.
+  const [decoded, stats] = await Promise.all([
+    readTextContent(filePath),
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath is user-provided path parameter
     stat(filePath),
   ]);
 
-  return parseMarkdownContent(content, stats.size);
+  // `stats.size` is RAW bytes and stays raw — see the `sizeBytes` note on
+  // `parseMarkdownContent` for why it cannot be derived from the decoded string.
+  return parseMarkdownContent(decoded.text, stats.size);
 }
 
 /**

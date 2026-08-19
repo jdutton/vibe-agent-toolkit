@@ -12,6 +12,7 @@ import path from 'node:path';
 import ignore, { type Ignore } from 'ignore';
 
 import { safePath , toForwardSlash } from './path-utils.js';
+import { readTextContentSync } from './text-file.js';
 
 /**
  * Load and parse .gitignore files from git root to baseDir.
@@ -51,9 +52,11 @@ export function loadGitignoreRules(gitRoot: string, baseDir?: string): Ignore | 
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- constructed from validated gitRoot and baseDir
     if (fs.existsSync(gitignorePath)) {
       try {
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- validated above
-        const content = fs.readFileSync(gitignorePath, 'utf-8');
-        ig.add(content);
+        // Through the decoding seam. A `.gitignore` written by PowerShell's `>`
+        // is UTF-16LE, and `readFileSync(p, 'utf-8')` would hand `ignore` a
+        // string of NUL-interleaved garbage — every pattern silently wrong, with
+        // no error anywhere.
+        ig.add(readTextContentSync(gitignorePath).text);
       } catch {
         // Skip gitignore files we can't read
       }

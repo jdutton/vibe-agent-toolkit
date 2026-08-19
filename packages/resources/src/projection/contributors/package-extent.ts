@@ -35,9 +35,10 @@
  * limitation of predicting a location, not a claim of stability.
  */
 
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 
 import { resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { readTextContentSync } from '@vibe-agent-toolkit/utils/fs';
 import { z } from 'zod';
 
 import { CONDITION_WITHOUT_REFERENCE } from '../../schemas/projection-resources.js';
@@ -445,8 +446,10 @@ function childDirectories(parent: string): string[] {
  */
 function readManifest(manifestPath: string): Manifest | undefined {
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- a manifest path derived from the corpus root
-    const parsed: unknown = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    // Through the one decoder. A corpus `package.json` is the adopter's file,
+    // and a UTF-8 BOM in front of `{` makes `JSON.parse` throw — which this
+    // `catch` would then report as "not a package".
+    const parsed: unknown = JSON.parse(readTextContentSync(manifestPath).text);
     return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
       ? (parsed as Manifest)
       : undefined;

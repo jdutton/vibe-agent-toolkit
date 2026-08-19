@@ -145,7 +145,8 @@ export class ContentCache {
 
   private async readMetadata(jsonPath: string): Promise<ContentMetadata | null> {
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- jsonPath derived from cacheDir
+       
+      // eslint-disable-next-line security/detect-non-literal-fs-filename, local/no-raw-text-decode -- reading back an entry THIS class wrote as UTF-8; the encoding is chosen here, not discovered
       const raw = await fs.readFile(jsonPath, 'utf-8');
       const validated = StoredContentMetadataSchema.safeParse(JSON.parse(raw));
       // A shape this build cannot account for is a miss, on the same footing

@@ -23,9 +23,10 @@ The last two columns are the ones that matter when choosing. **"Resolves with ze
 | Subpath | Contents | Node builtins reached | Third-party | Resolves with zero deps installed? |
 |---|---|---|---|---|
 | `./path` | `safePath`, `toForwardSlash`, `toNfc`, `isAbsolutePath`, `isAbsoluteAnyPlatform`, `hasParentTraversalSegment`, `toAbsolutePath`, `getRelativePath`, `issueLocation` | `path` only | — | **yes** |
+| `./text` | `decodeTextContent` — the one bytes-to-text seam: BOM-announced UTF-8/UTF-16LE/UTF-16BE/UTF-32LE/UTF-32BE, BOM stripped, UTF-8 assumed otherwise | **none** | — | **yes** |
 | `./zod` | `ZodTypeNames`, `getZodTypeName`, `isZodType`, `unwrapZodType`, `isZodOptional`, `isZodNullable` | **none** | — | **yes** |
 | `./glob` | `isGlob`, static base extraction, magic remainder | `path` only | — | **yes** |
-| `./fs` | `normalizePath`, `normalizedTmpdir`, `mkdirSyncReal`, `resolveFromImportMeta`, `dynamicImportPath`, `copyDirectory`, `fillSiblingNames`, `classifyFilenameCaseFrom`, `FsLookupCache` | `fs`, `fs/promises`, `os`, `path`, `url` | — | **yes** |
+| `./fs` | `normalizePath`, `normalizedTmpdir`, `mkdirSyncReal`, `resolveFromImportMeta`, `dynamicImportPath`, `copyDirectory`, `fillSiblingNames`, `classifyFilenameCaseFrom`, `FsLookupCache`, `readTextContent`, `readTextContentSync` | `fs`, `fs/promises`, `os`, `path`, `url` | — | **yes** |
 | `./testing` | `getTestOutputDir`, `getTestOutputBase`, `setupAsyncTempDirSuite`, `setupSyncTempDirSuite` | `crypto`, `fs`, `fs/promises`, `os`, `path`, `url` | — | **yes** |
 | `./asset` | `resolveAssetReference` — paths and npm bare specifiers | `fs`, `module`, `os`, `path`, `url` | — | **yes** |
 | `./yaml` | `updateYamlIn`, `verifyConfinedYamlEdit` — byte-surgical YAML edits | **none** | `yaml` | no — needs `yaml` |
@@ -34,7 +35,7 @@ The last two columns are the ones that matter when choosing. **"Resolves with ze
 | `./git` | `gitFindRoot`, `gitLsFiles`, `isGitIgnored`, `loadGitignoreRules`, `GitTracker`, `parseGitUrl`, `isGitUrl`, `nonInteractiveGitOverrides` | `child_process`, `fs`, `os`, `path`, `url` | `ignore`, `which` | no — needs `which`, `ignore` |
 | `./crawl` | `crawlDirectory`, `crawlDirectorySync`, `NEVER_CRAWL_GLOBS`, `BUILD_OUTPUT_GLOBS` | `child_process`, `fs`, `os`, `path`, `url` | `picomatch`, `which` | no — needs `picomatch`, `which` |
 | `./project` | `findProjectRoot`, `findConfigFile`, `findNodeWorkspaceRoot`, `resetProjectRootCaches` | `fs`, `path` | — | **yes** |
-| `./eslint` | the 21 ESLint rules that enforce everything above — see [ESLint rules](#eslint-rules--vibe-agent-toolkitutilseslint) | **none** | — | **yes** |
+| `./eslint` | the 22 ESLint rules that enforce everything above — see [ESLint rules](#eslint-rules--vibe-agent-toolkitutilseslint) | **none** | — | **yes** |
 | `.` | every runtime entry above (not `./eslint`) | all of the above, plus `stream` | `handlebars`, `ignore`, `picomatch`, `which`, `yaml` | no — needs all of them |
 | `./package.json` | the manifest itself, for version reporting and resolution assertions | — | — | **yes** |
 

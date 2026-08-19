@@ -114,7 +114,9 @@ function readVersion(moduleDir: string): string {
   for (const relative of ['../package.json', '../../package.json']) {
     try {
       const manifestPath = safePath.join(moduleDir, relative);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- path derived from this module's own location
+      // VAT's OWN published manifest, not corpus content: npm writes it, this
+      // repo commits it, and its encoding is not an adopter's choice.
+      // eslint-disable-next-line security/detect-non-literal-fs-filename, local/no-raw-text-decode -- path derived from this module's own location; own manifest, so the encoding is not discovered
       const parsed: unknown = JSON.parse(readFileSync(manifestPath, 'utf8'));
       if (typeof parsed === 'object' && parsed !== null) {
         const version = (parsed as { version?: unknown }).version;

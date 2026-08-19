@@ -70,10 +70,29 @@
  * the cached value depends on.** Enumerate the cached struct's fields and ask of
  * each one, "is this a function of what I hashed?" Exactly one field was not,
  * and one was enough.
+ *
+ * ## Why the DECODE is somewhere else entirely
+ *
+ * This module owns the *identity* of a document. What its characters are is a
+ * different question with a different answer, and `@vibe-agent-toolkit/utils`
+ * owns it — `decodeTextContent` is a pure `utils` primitive precisely because a
+ * decode knows nothing about keys, caches or the projection:
+ * {@link readContentWithKey} reads bytes once, hands them to
+ * `decodeTextContent` for the text and to {@link computeContentKey} for the key,
+ * and those two consume the *same* byte string for opposite purposes.
+ *
+ * That split is the whole point. Decoding changes the content — a UTF-16BE file
+ * that used to arrive as NUL-interleaved mojibake now arrives as the document it
+ * is — and it must change nothing about the key, because the key's preimage is
+ * what was on disk. So a decoder improvement is a change in what VAT can READ
+ * and never a change in what a cache entry is FILED UNDER, and no cached parse
+ * is invalidated by teaching the reader a new encoding.
  */
 
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+
+import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
 
 /**
  * Which parser a document is routed to. This is part of a document's identity,
@@ -136,7 +155,13 @@ export function computeContentKey(bytes: Uint8Array, parserKind: ParserKind): st
 
 /** A document's bytes and the key they were hashed under, from one read. */
 export interface KeyedContent {
-  /** The decoded content, exactly as it must be handed to the parser. */
+  /**
+   * The decoded content, exactly as it must be handed to the parser.
+   *
+   * Decoded through `decodeTextContent` (`@vibe-agent-toolkit/utils/text`) —
+   * BOM-announced UTF-8/UTF-16/UTF-32 honoured, BOM stripped, UTF-8 assumed
+   * otherwise.
+   */
   content: string;
   /** The key computed over the RAW BYTES this content was decoded from. */
   key: string;
@@ -145,10 +170,12 @@ export interface KeyedContent {
   /**
    * Length of the raw bytes.
    *
-   * Carried because it is NOT derivable from {@link content}: decoding is lossy
-   * on malformed UTF-8, so `Buffer.byteLength(content)` can differ from what was
-   * actually on disk. `ParseResult.sizeBytes` is this number, and a cache must
-   * store it rather than recompute it from the decoded string.
+   * Carried because it is NOT derivable from {@link content}, for two
+   * independent reasons: decoding is lossy on malformed UTF-8, and the encoding
+   * need not be UTF-8 at all — a 40-byte UTF-16BE document decodes to 19 UTF-8
+   * bytes' worth of characters. `Buffer.byteLength(content)` recovers neither.
+   * `ParseResult.sizeBytes` is this number, and a cache must store it rather
+   * than recompute it from the decoded string.
    */
   byteLength: number;
 }
@@ -188,11 +215,15 @@ export async function readContentWithKey(
   parserKind: ParserKind,
 ): Promise<KeyedContent> {
   // Read as bytes and decode here, rather than letting readFile decode: the key
-  // must be over what was on disk, and the decode is lossy.
+  // must be over what was on disk, the decode is lossy, and `readFile(path,
+  // 'utf-8')` offers no BOM or encoding handling at all.
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied path, same trust level as the parsers this feeds
   const bytes = await readFile(filePath);
   return {
-    content: bytes.toString('utf-8'),
+    // `decodeTextContent` is the ONE decoder — see `utils`' text-content.ts.
+    // The bytes handed to `computeContentKey` are the same ones, undecoded, on
+    // purpose: this function COMPOSES a decode with a raw-bytes key.
+    content: decodeTextContent(bytes).text,
     key: computeContentKey(bytes, parserKind),
     parserKind,
     byteLength: bytes.byteLength,

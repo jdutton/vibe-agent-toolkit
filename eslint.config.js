@@ -342,6 +342,73 @@ export default [
     },
   },
 
+  // Scoped: one content-decoding seam, and no second private decoder beside it.
+  //
+  // `local/no-raw-text-decode` bans `buf.toString('utf-8')`, `new TextDecoder()`
+  // and `readFile(p, 'utf-8')` in favour of `decodeTextContent()` /
+  // `readTextContent()`, which live in `packages/utils/src` — at the BOTTOM of
+  // the dependency arrow, deliberately. `resources` depends on `utils` and
+  // `utils` must never depend on `resources`, so a seam in `resources` would
+  // leave `utils`' own reads (an adopter's `.gitignore`, an adopter's
+  // `package.json`) with no legal way to comply, and the rule would be widened
+  // with exemptions until it meant nothing.
+  //
+  // The defect it locks shut: the old unconditional UTF-8 decode turned a
+  // `working-tree-encoding=UTF-16` markdown document into NUL-interleaved
+  // mojibake, the blob stage's binary sniff believed it, and a document with one
+  // heading and one link produced no blob row at all. PowerShell 5.1 writes
+  // UTF-16LE by default, so that is a Windows-authored file.
+  //
+  // ## Why this is SCOPED and not repo-wide, stated rather than implied
+  //
+  // The rule cannot tell a corpus-document read from a read of an artifact we
+  // wrote, or from a subprocess's stdout — the rule's own docstring draws that
+  // line and requires each exemption to name the writer or the producer. Inside
+  // these two packages the population needing one is FIVE call sites, each
+  // carrying that name. Repo-wide it would be ~350 `readFile(p, 'utf-8')` calls
+  // (130 in `src/`, 220 in tests) plus a dozen `child_process` stdout decodes,
+  // and settling those is migration work, not a config change. This repo has
+  // already learned what an over-firing rule costs: see `no-unsafe-root-join`,
+  // demoted out of `configs.recommended` for exactly that.
+  //
+  // `packages/utils/src` and `packages/resources/src` are the honest scope: the
+  // first OWNS the seam, the second owns every corpus-document read
+  // (`link-parser`, `html-link-parser`, the projection's blob stage). **The rest
+  // of the repo is NOT covered**, and the widening ledger, in cost order, is:
+  // `packages/resource-compiler/src` (6), `packages/agent-skills/src` (22 —
+  // reads `SKILL.md`, the strongest candidate), `packages/claude-marketplace/src`
+  // (19), `packages/cli/src` (31). Test directories are deliberately last: a
+  // fixture written and read as UTF-8 by the same test is a closed loop, not a
+  // content read.
+  {
+    files: ['packages/utils/src/**/*.ts'],
+    plugins: {
+      local: localRules,
+    },
+    rules: {
+      // In-package, so the advice names the relative module rather than the
+      // package `utils` cannot import from itself.
+      'local/no-raw-text-decode': ['error', {
+        safeModule: './text-content.js',
+        // The ONE file allowed to call the primitives it wraps.
+        exemptFiles: ['packages/utils/src/text-content.ts'],
+      }],
+    },
+  },
+  {
+    files: ['packages/resources/src/**/*.ts'],
+    plugins: {
+      local: localRules,
+    },
+    rules: {
+      // No `exemptFiles` here: this package implements no decoder, and adding one
+      // would be the first step of the widening the rule exists to prevent.
+      'local/no-raw-text-decode': ['error', {
+        safeModule: '@vibe-agent-toolkit/utils',
+      }],
+    },
+  },
+
   // Scoped: enforce safePath.joinUnderRoot() for security-root path joins
   // in the skill-test staging code. This catches the Windows drive-letter
   // escape bug class where a caller-controlled segment can break containment

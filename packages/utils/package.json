@@ -34,6 +34,10 @@
       "types": "./dist/fs.d.ts",
       "import": "./dist/fs.js"
     },
+    "./text": {
+      "types": "./dist/text.d.ts",
+      "import": "./dist/text.js"
+    },
     "./process": {
       "types": "./dist/process.d.ts",
       "import": "./dist/process.js"

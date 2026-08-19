@@ -325,15 +325,185 @@ walker's 0.035 s — 138×** — for the identical answer, because the zip was n
 result. On the 86 MB adopter corpus above (77 MB of it PDFs and archives) the command did not finish
 in five minutes at 100% CPU.
 
-Fixed by a **content sniff, not an extension list**: a NUL byte inside the first 8000 bytes (git's
-own heuristic) means the blob is not text, and `populateBlobs` records a `BLOB_NOT_TEXT` condition
-instead of parsing. An extension rule would be a claim about a filename — a renamed archive would
+Fixed by a **content sniff, not an extension list**: a NUL inside the first 8000 characters of the
+**decoded** content (git's own heuristic, counted in characters here because the sniff runs after the
+decode — see §3.5) means the blob is not text, and `populateBlobs` records a `BLOB_NOT_TEXT`
+condition instead of parsing. An extension rule would be a claim about a filename — a renamed archive would
 still hang, and a bundled `.sh` the closure genuinely wants read shares no extension with markdown.
 The blob stays keyed and stays a member; only the parse is declined, and the refusal is a row rather
 than a silence. The 8 MB-zip probe went 4.83 s → 0.111 s.
 
 **This was never resources-specific.** `vat inventory` on any plugin shipping a binary asset paid
 the same cost; the resources lane merely pointed the projection at trees big enough to notice.
+
+### 3.5 ✅ Decoding: bytes to text, in exactly one place
+
+**The rule, declared here: every route from file bytes to text goes through `decodeTextContent()` in
+`packages/utils/src/text-content.ts`, and `local/no-raw-text-decode` makes any other route a lint
+error.** Like §2.1 this is a binding statement rather than a note — this repository has no ADRs, so a
+decision lives in an architecture document or in the docstring of the thing it governs.
+
+#### Why the seam is a `utils` primitive and not a `resources` one
+
+Bytes-to-text is a pure function of its argument: it knows nothing about content keys, parse caches
+or the projection. `readContentWithKey` in `resources` *composes* it with a raw-bytes content key, and
+the key is the projection concept while the decode is not.
+
+The placement is forced by more than taste. `resources` depends on `utils` and **`utils` must never
+depend on `resources`**, so a seam in `resources` would leave `utils`' own corpus reads — an adopter's
+`.gitignore` in `gitignore-checker.ts`, an adopter's `package.json` in `project-utils.ts` — with no
+legal way to comply with a rule shipped from `utils`. The rule would then be widened with exemptions
+until it meant nothing. Putting the primitive at the bottom of the dependency arrow is what makes the
+guardrail enforceable at all. It also matters to adopters: both packages are published, and `utils`
+is the primitive one, so "read a file and decode it correctly" must not require depending on the
+projection layer.
+
+`./text` is deliberately **pure** — it reaches no `node:*` builtin and no third-party package, pinned
+by `subpath-purity.test.ts` — so bytes from a git blob, an HTTP body or a zip entry decode through the
+same function as bytes from disk. `readTextContent` / `readTextContentSync`, which are that plus a
+`readFile`, live on `./fs` with everything else that touches the filesystem.
+
+#### The defect it replaces
+
+`readContentWithKey` called `bytes.toString('utf-8')` unconditionally: no byte-order mark, no
+encoding detection, and no way to express UTF-16BE at all, because Node's `Buffer` has no such
+encoding. Measured on a real `working-tree-encoding=UTF-16` checkout
+(`packages/resources/test/system/git-hostile-config.system.test.ts`):
+
+| | UTF-8 twin | UTF-16 checkout, before | UTF-16 checkout, after |
+|---|---|---|---|
+| bytes on disk | 19 | 40 (BOM `fe ff`) | 40 (BOM `fe ff`) |
+| decoded | `# Doc\n\n[b](./b.md)\n` | `U+FFFD U+FFFD # NUL D NUL o …` | `# Doc\n\n[b](./b.md)\n` |
+| blob row | yes | **none** | yes |
+| headings / links | 1 / 1 | **0 / 0** | 1 / 1 |
+| condition | — | `BLOB_NOT_TEXT` | — |
+
+So VAT could not read a UTF-16 document *at all*. The reason that matters commercially is not
+exotic: **PowerShell 5.1's `Out-File` and `>` write UTF-16LE by default**, so a Windows-authored
+document landed squarely in the hole.
+
+#### What is detected, and what is assumed
+
+| input | encoding used | basis |
+|---|---|---|
+| leading `ef bb bf` | UTF-8 | **BOM** — a fact about the bytes |
+| leading `ff fe`, not followed by `00 00` | UTF-16LE | **BOM** |
+| leading `fe ff` | UTF-16BE | **BOM** |
+| leading `ff fe 00 00` | UTF-32LE | **BOM** |
+| leading `00 00 fe ff` | UTF-32BE | **BOM** |
+| anything else | UTF-8 | **assumed** |
+
+The distinction is carried in the return value (`DecodedText.basis`), not left to prose, because a
+caller reasoning about a document's text deserves to know which of the two it got.
+
+🪤 **The UTF-32LE BOM `ff fe 00 00` starts with the UTF-16LE BOM `ff fe`.** A table tested
+shortest-first decodes every UTF-32LE document as NUL-interleaved UTF-16 — the same bug this section
+exists to close, one encoding further down. The BOM table is ordered longest-first and a test pins
+that ordering.
+
+**UTF-32 is decoded by hand**, because no engine will. `TextDecoder` implements the WHATWG Encoding
+Standard, which deliberately omits UTF-32; `Buffer` is narrower still. A loud refusal was the
+alternative and was rejected on one ground: the BOM has to be *recognised* regardless, per the trap
+above, so the choice was never whether to detect UTF-32 but only whether to decode it or throw having
+detected it.
+
+#### Two limitations, recorded rather than guessed around
+
+- **BOM-less UTF-16 is not detected.** It is undecidable from bytes alone — the same byte string is a
+  legal, different UTF-8 document. A NUL-density heuristic would be right most of the time and
+  silently wrong the rest, and "silently wrong" is the failure class this whole change is a reaction
+  to.
+- **Latin charsets are not detected, and there is no windows-1252 fallback.** "These bytes are not
+  valid UTF-8" is a fact; "therefore they are latin-1" is a guess, equally consistent with a UTF-8
+  document carrying one corrupt byte. Malformed input decodes to U+FFFD. In practice the cost is
+  small: every ASCII byte string is valid UTF-8, so only high bytes are affected.
+
+Both are pinned as tests that state what is given up, so adding a heuristic later has to edit an
+assertion rather than quietly widen a claim.
+
+#### The binary sniff must stay downstream of the decode
+
+`looksBinary` in `blob-population.ts` takes the **decoded string**, and that ordering is the whole
+reason UTF-16 now works. UTF-16 and UTF-32 text legitimately contains NUL *bytes* — every ASCII
+character in a UTF-16 document carries one — so a sniff over raw bytes classifies every such document
+as binary and reinstates the defect in full. The sniff needs no encoding table of its own; it needs
+only to keep running second.
+
+#### The content key does NOT move
+
+`computeContentKey` hashes **raw bytes**, and that is unchanged. Its own docstring measures why:
+`[c2]`, `[e2 82]` and `[ff]` all decode to U+FFFD, so a key over the decoded string would file three
+different files under one name. The consequence worth stating plainly is that **a decoder improvement
+changes what VAT can read and invalidates no cached parse** — and that two encodings of one document
+are two documents as far as the cache is concerned, which is correct: their bytes differ, and
+`ParseResult.sizeBytes` is a raw byte count that reaches adopter-visible rule variables.
+
+#### What this cost, stated because it is a real regression
+
+The old refusal was **loud**: `BLOB_NOT_TEXT`, naming the path. That loudness was also, accidentally,
+a floor under `RunContentCache`'s `#byHint` lane. A blob OID is many-to-one against working-tree
+bytes, and `working-tree-encoding` divergence between two paths sharing an OID is one of the two
+mechanisms that can change the text served. Before, a path handed the wrong encoding's characters
+could not produce plausible facts, because it could not produce facts at all. Now it can. Nothing new
+became unsound — the many-to-one OID was always the cause, and no decoder fixed that — but the one
+mechanism whose divergence used to announce itself no longer does. The analysis lives in
+`projection/content-cache.ts` beside the measurements.
+
+#### Not every `'utf-8'` read is a content read — the line, stated once
+
+This is the part that decides whether the guardrail survives contact. Three categories, and every
+call site is in exactly one:
+
+| category | example | whose choice was the encoding? | verdict |
+|---|---|---|---|
+| **1 — a document from the corpus** | an adopter's markdown, `SKILL.md`, config, JSON schema, `.gitignore`, `package.json` | nobody's; it must be **discovered** | the seam is the only correct reader |
+| **2 — an artifact this project wrote** | a parse-cache entry, an external-link cache, VAT's own published manifest, an asset a package ships beside its own code | **chosen at the write** | a closed loop, not a decode |
+| **3 — bytes that were never a file** | a subprocess's stdout, an HTTP response body, a Buffer this process built | the **producer's contract** | no file encoding exists to discover |
+
+Static analysis cannot tell the three apart: `buf.toString('utf8')` looks identical whether the
+Buffer came from `readFile` or from `spawn`. So the rule reports all three, and categories 2 and 3
+are settled at the call site with a one-line `eslint-disable-next-line` that **names the writer or the
+producer**. That gives a reviewer a falsifiable test, which is the point — *a justification that
+cannot name who wrote the bytes is a category-1 call wearing a disable comment*, and "it's always
+UTF-8 in practice" names nobody. `exemptFiles` is for the seam's own implementation file and nothing
+else; settling a call site by adding its path there is the first step of the widening this rule exists
+to prevent.
+
+#### The guardrail, and the honest bound on its coverage
+
+`local/no-raw-text-decode` (in `packages/utils/eslint/rules/`) bans three shapes:
+`value.toString('<encoding>')`, `new TextDecoder(…)`, and `readFile`/`readFileSync` handed a text
+encoding either positionally or as `{ encoding }`. The encoding test is an **exclusion** of the three
+binary-to-text codecs (`base64`, `base64url`, `hex`) rather than an inclusion list of character
+encodings, so an encoding spelling nobody anticipated still fires — the rule fails closed. Only a
+string *literal* triggers it: without type information `buf.toString(enc)` is indistinguishable from
+`n.toString(radix)`, and `readFile(p, cb)` from `readFile(p, encoding)`.
+
+It is registered over **`packages/utils/src` and `packages/resources/src`**, and that is a scope, not
+a claim about the repo. Repo-wide it would fire on a dozen legitimate `child_process` decodes and on
+~350 `readFile(p, 'utf-8')` calls (130 in `src/`, 220 in tests), most of them category 2. Widening it
+means migrating and justifying those, in this order: `packages/resource-compiler/src` (6),
+`packages/agent-skills/src` (22 — reads `SKILL.md`, the strongest candidate),
+`packages/claude-marketplace/src` (19), `packages/cli/src` (31). Test directories are last: a fixture
+written and read as UTF-8 by the same test is a closed loop, not a content read.
+
+Inside the scope the whole exemption set is **one `exemptFiles` entry** — the seam's own
+`text-content.ts` — plus **six call sites**, each naming its category:
+
+| site | category | what the justification names |
+|---|---|---|
+| `resources/parse-cache.ts` | 2 | its own `set()` wrote the entry as UTF-8 |
+| `resources/content-cache.ts` | 2 | its own writer, five lines up |
+| `resources/external-link-cache.ts` | 2 | its own `save()` |
+| `resources/cache-namespace.ts` | 2 | VAT's own published manifest |
+| `utils/link-auth/expand-macro.ts` | 2 | `macros.yaml`, an asset this package authors and publishes |
+| `utils/link-auth/resolve-token.ts` | 3 | stdout of the credential helper spawned above |
+
+What the migration bought inside `utils`, beyond consistency: a `.gitignore` written by PowerShell's
+`>` is UTF-16LE, and the old read handed `ignore` a string of NUL-interleaved garbage — every pattern
+silently wrong, with no error anywhere. And a `package.json` carrying a UTF-8 BOM made `JSON.parse`
+throw, which `findNodeWorkspaceRoot`'s `catch` reported as "not the workspace root".
+
 
 ## 4. Symlinks
 

@@ -13,6 +13,7 @@ import path from 'node:path';
 
 import { createRegistryIssue, type IssueCode, runSingleUnitValidation, type ValidationConfig, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { CRAWL_REGISTRY_ADD_RESOURCE_ID, CRAWL_REGISTRY_ENUMERATE_ID, CRAWL_REGISTRY_RESOLVE_LINKS_ID, crawlDirectory, type CrawlOptions as UtilsCrawlOptions, crawlPathFilter, crawlTimingStart, FsLookupCache, type GitTracker, issueLocation, recordRegistryPass, resolveAssetReference, safePath, toForwardSlash, toNfc, withOuterBracket } from '@vibe-agent-toolkit/utils';
+import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
 
 import { calculateChecksumFromContent } from './checksum.js';
 import { getCollectionsForFile } from './collection-matcher.js';
@@ -360,8 +361,11 @@ async function readAndCompileSchema(
   fsModule: typeof fs,
 ): Promise<LoadedCollectionSchema> {
   try {
-    const schemaContent = await fsModule.readFile(resolvedSchemaPath, 'utf-8');
-    const schema = JSON.parse(schemaContent) as object;
+    // Bytes from the injected fs, characters from the one decoder. Reading
+    // `'utf-8'` here would hand `JSON.parse` a leading BOM — which throws — on
+    // an adopter schema written by a Windows editor.
+    const schemaBytes = await fsModule.readFile(resolvedSchemaPath);
+    const schema = JSON.parse(decodeTextContent(schemaBytes).text) as object;
     return { ok: true, compiled: compileFrontmatterSchema(schema, mode) };
   } catch (error) {
     return { ok: false, error };

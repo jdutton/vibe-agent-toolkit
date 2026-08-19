@@ -88,7 +88,12 @@ function reachedFromEntry(entryFile: string): { builtins: string[]; thirdParty: 
 }
 
 describe('pure subpath entries reach no Node builtin', () => {
-  it.each(['zod.ts', 'yaml.ts', 'template-entry.ts'])(
+  // `text.ts` is here BY DESIGN, not by accident: `decodeTextContent` decides
+  // what bytes say and never fetches them, so bytes from a git blob, an HTTP
+  // body or a zip entry decode through the same function as bytes from disk. The
+  // read-a-file half deliberately lives on `./fs` instead. If this row ever gains
+  // a builtin, that split has been undone.
+  it.each(['zod.ts', 'yaml.ts', 'template-entry.ts', 'text.ts'])(
     '%s has an empty node: builtin set',
     (entry) => {
       expect(reachedFromEntry(entry).builtins).toEqual([]);
@@ -117,6 +122,7 @@ describe('every subpath entry reaches exactly the third-party packages the READM
   it.each([
     { entry: 'path.ts', thirdParty: [] },
     { entry: 'zod.ts', thirdParty: [] },
+    { entry: 'text.ts', thirdParty: [] },
     { entry: 'glob.ts', thirdParty: [] },
     { entry: 'fs.ts', thirdParty: [] },
     { entry: 'testing.ts', thirdParty: [] },

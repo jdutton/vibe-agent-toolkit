@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`decodeTextContent()` on the new `@vibe-agent-toolkit/utils/text` subpath** — the one
+  content-decoding seam (see **Fixed**). Pure: it reaches no `node:*` builtin and no third-party
+  package, so bytes from a git blob, an HTTP body or a zip entry decode through the same function as
+  bytes from disk. `readTextContent()` / `readTextContentSync()` — that plus a `readFile` — are on
+  `@vibe-agent-toolkit/utils/fs`. All three return the text, the encoding used, and whether that
+  encoding was a fact (`basis: 'bom'`) or a default (`'assumed'`), and all three are on the `.`
+  barrel too.
+
+  It is a `utils` primitive rather than a `resources` one deliberately: a decode knows nothing about
+  content keys or the projection, `resources` depends on `utils` and never the reverse, and an adopter
+  who wants "read a file and decode it correctly" should not have to take the projection layer to get
+  it. `readContentWithKey` in `@vibe-agent-toolkit/resources` now *composes* the two.
+
+- **`@vibe-agent-toolkit/no-raw-text-decode`** — a new ESLint rule in the published rule pack. Bans
+  `value.toString('<encoding>')`, `new TextDecoder(…)` and `readFile`/`readFileSync` handed a text
+  encoding, in favour of one project-owned decoding seam named by the `safeModule` option. The
+  encoding test is an *exclusion* of the three binary-to-text codecs (`base64`, `base64url`, `hex`)
+  rather than an inclusion list of character encodings, so a spelling nobody anticipated still fires.
+  Not in `configs.recommended`: it names a seam that only exists once you write one. In this
+  repository it is scoped to `packages/utils/src` and `packages/resources/src`; the three-category
+  rule for deciding whether a given `'utf-8'` read is a content read at all, and the widening ledger
+  for the rest of the tree, are in `docs/architecture/resource-scanning-and-caching.md` §3.5.
+
 - **A pluggable storage seam for the resource projection.** `@vibe-agent-toolkit/resources` now
   exports a `ProjectionStore` interface stated in the projection's own vocabulary — facts about
   blobs, and the extent of a tree keyed by `(rootId, treeHash)` — so a storage backend can be added
@@ -123,6 +146,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   always decoded, and trimmed unless you pass `{ trim: false }`. CLI users are unaffected.
 
 ### Fixed
+
+- **VAT could not read a UTF-16 document at all.** Every content read went through
+  `bytes.toString('utf-8')`, which honours no byte-order mark and cannot express UTF-16BE — Node's
+  `Buffer` has no such encoding. A `working-tree-encoding=UTF-16` markdown file therefore decoded to
+  NUL-interleaved mojibake, the projection's binary sniff believed it, and a document yielding one
+  heading and one link from its UTF-8 bytes yielded **no blob row, no section and no reference**.
+  PowerShell 5.1's `Out-File` and `>` write UTF-16LE by default, so this was a Windows-authored
+  document, not an exotic one.
+
+  Content is now decoded in **one place** — `decodeTextContent()`, in `utils` — which reads the encoding off the
+  BOM (UTF-8, UTF-16LE/BE, UTF-32LE/BE; UTF-32 converted by hand, because `TextDecoder` deliberately
+  omits it), strips the BOM so a leading U+FEFF cannot stop `# Heading` parsing, and assumes UTF-8
+  otherwise. The result says which of the two it was, in `DecodedText.basis`. BOM-less UTF-16 and
+  BOM-less latin charsets are **not** detected: both are undecidable from bytes alone, and each is
+  pinned as a test stating what is given up rather than left to a heuristic. Along the way, an
+  adopter's config file, JSON schema or `package.json` carrying a UTF-8 BOM no longer fails to parse,
+  and a `.gitignore` written by PowerShell's `>` (UTF-16LE) no longer produces silently wrong ignore
+  patterns.
+
+  **Content keys are unchanged** — `computeContentKey` still hashes raw bytes, so no cached parse is
+  invalidated, and two encodings of one document remain two documents. The rule and its full
+  reasoning: `docs/architecture/resource-scanning-and-caching.md` §3.5.
 
 - **A corrupted cache entry could report a reachable link as broken, or return a fetched page with
   no status.** Both link caches now validate an entry's shape on read. Entries written by earlier
