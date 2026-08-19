@@ -56,7 +56,7 @@
     "build": "turbo run build && turbo run build:skills",
     "build:packages": "tsc --build && cd packages/schema && bun run generate:schemas",
     "build:cli": "bun --filter @vibe-agent-toolkit/cli run build",
-    "build:clean": "tsc --build --clean && tsc --build && cd packages/schema && bun run generate:schemas",
+    "build:clean": "bun run clean && turbo run build --force && turbo run build:skills --force",
     "test": "echo \"❌ Direct test execution not supported. Use: vv validate (full validation) or bun run test:unit / test:integration / test:system\" && exit 1",
     "test:unit": "turbo run test:unit",
     "test:cli": "bun --filter @vibe-agent-toolkit/cli run test:unit",
@@ -77,7 +77,7 @@
     "validate-structure": "tsx packages/dev-tools/src/validate-repo-structure.ts",
     "validate-version": "tsx packages/dev-tools/src/validate-version.ts",
     "pre-commit": "vibe-validate pre-commit",
-    "clean": "tsc --build --clean && rimraf node_modules 'packages/*/.test-output'",
+    "clean": "rimraf 'packages/*/dist' 'packages/*/*.tsbuildinfo' 'packages/*/.tsc-staging' 'packages/*/.test-output'",
     "clean:test-output": "rimraf 'packages/*/.test-output'",
     "postinstall": "tsx packages/dev-tools/src/link-workspace-packages.ts",
     "prepare": "husky",
@@ -93,7 +93,8 @@
     "prepare-cli-bin": "cd packages/cli && tsx ../dev-tools/src/prepare-bin.ts",
     "vat": "node packages/cli/dist/bin/vat.js",
     "link-all": "tsx packages/dev-tools/src/link-all.ts",
-    "unlink-all": "tsx packages/dev-tools/src/unlink-all.ts"
+    "unlink-all": "tsx packages/dev-tools/src/unlink-all.ts",
+    "clean:deps": "rimraf node_modules 'packages/*/node_modules'"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
