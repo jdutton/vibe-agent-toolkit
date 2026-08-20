@@ -19,14 +19,25 @@
  * was written". Every assertion below counts ROWS, out of the file, with the
  * store's own connection closed.
  *
- * ## Isolation is `TMPDIR`, not a store option
+ * ## Isolation is the temp directory, not a store option
  *
  * `defaultStoreDirectory()` is derived from the OS temp directory and there is
  * no env var to point it elsewhere — deliberately, since a cache nobody can
- * misplace is a feature. So each arm gets its own `TMPDIR`, which is what the
- * derivation reads through `normalizedTmpdir()`. That also keeps this suite off
- * the developer's live cache: a test that populated or cleared the real
+ * misplace is a feature. So each arm gets its own temp directory, which is what
+ * the derivation reads through `normalizedTmpdir()`. That also keeps this suite
+ * off the developer's live cache: a test that populated or cleared the real
  * `<tmpdir>/.vat-cache` would be a bug whether or not it passed.
+ *
+ * ## 🪤 Which variable names the temp directory is PLATFORM-SPECIFIC
+ *
+ * `os.tmpdir()` — under `normalizedTmpdir()` — reads `TMPDIR` on POSIX and
+ * `TEMP`, then `TMP`, on Windows. It reads no variable that both platforms
+ * honour, so isolating by `TMPDIR` alone is inert on Windows: the child resolves
+ * the runner's real temp directory instead, writes its store there, and every
+ * assertion here reads an isolated directory that no run ever touched. That
+ * fails the positive control and passes the two `--no-cache` arms VACUOUSLY,
+ * which is the worse half. All three names are set, per the platform set this
+ * repo already keeps in `skill-test/env-scrub.ts`.
  */
 
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -65,6 +76,16 @@ afterAll(() => {
 /** A private OS temp directory, so this arm's store cannot be any other arm's. */
 function isolatedTmpdir(label: string): string {
   return mkdtempSync(safePath.join(scratch, `${label}-tmp-`));
+}
+
+/**
+ * Point a child's `os.tmpdir()` at one directory on every platform.
+ *
+ * @param temp - The arm's private temp directory
+ * @returns The env pairs to merge, covering the POSIX and the Windows names
+ */
+function tmpdirEnv(temp: string): Record<string, string> {
+  return { TMPDIR: temp, TMP: temp, TEMP: temp };
 }
 
 /**
@@ -134,7 +155,7 @@ async function runValidate(
 ): Promise<void> {
   const result = await executeCli(binPath, [...(extra.flags ?? []), 'resources', 'validate'], {
     cwd: corpus,
-    env: { ...STORE_ON, ...extra.env, TMPDIR: temp },
+    env: { ...STORE_ON, ...extra.env, ...tmpdirEnv(temp) },
   });
   // A run that crashed writes no store either, and would make every "nothing
   // was written" assertion below pass for the wrong reason.
