@@ -124,21 +124,36 @@ describe('RAG CLI (Node.js dogfooding)', () => {
       binPath,
       ['rag', 'index', docsPath, '--db', testDbPath],
       projectRoot,
-      // ⚠️ This budget has ~3% of headroom, not the comfortable margin
-      // "only 5 docs" implies. Measured 2026-08-07 on an idle macOS host:
-      // 58,161ms against 60,000ms. Under `bun run validate`, where other
-      // packages' system suites are running concurrently, it exceeds the budget
-      // and `spawnSync` returns `status: null`. Re-observed 2026-08-17: the
-      // suite failed inside `bun run validate` and passed 3/3 in isolation
-      // moments later, on the same tree.
+      // ⚠️ A FIXED budget over a corpus that GROWS. `docsPath` is the live
+      // `docs/architecture` directory, so this test gets slower every time
+      // anyone documents the architecture — it is not "only 5 docs", and no
+      // number written here stays correct.
       //
-      // The DIAGNOSTIC half is now fixed — `executeCliCommand` checks
-      // `result.error` first, so a timeout says so instead of surfacing as
-      // "expected null to be +0" three frames away. The FLAKE itself remains:
-      // the cost is dominated by loading the onnxruntime-web WASM backend in a
-      // fresh process, not by the 5 documents. Raising this number would hide
-      // it; making the embedding backend warm-startable would fix it.
-      60000 // 1 minute - only indexing 5 architecture docs
+      // Measured 2026-08-19 on an idle macOS host, varying ONLY the corpus and
+      // holding the binary fixed:
+      //
+      //     7 docs (116 KB)  216 chunks  26.4s   122.2 ms/chunk
+      //    12 docs (276 KB)  374 chunks  45.4s   121.4 ms/chunk
+      //
+      // Cost is `chunks × ~121 ms` — linear, with a near-zero intercept. Two
+      // consequences, both of which contradict what this comment used to say:
+      //
+      //  - It is NOT dominated by loading the onnxruntime-web WASM backend in a
+      //    fresh process. Rates that agree to 0.7% across a 1.7x corpus leave no
+      //    room for a large fixed cost, and `rag query` — also a fresh process,
+      //    also embedding — returns in ~880ms. So making the backend
+      //    warm-startable would NOT fix this; there is no startup to warm.
+      //  - It is NOT a flake, and rerunning is not a diagnosis. Observed red
+      //    3-of-3 on ubuntu across two trees, and on windows, which runs system
+      //    tests SERIALLY (`maxForks: 1`) — so concurrency is not required to
+      //    blow the budget, though it does subtract headroom.
+      //
+      // 60,000ms buys ~495 chunks here and fewer on CI hardware, which reddens
+      // at 374. Raising the number only moves the next failure; the corpus keeps
+      // growing. The fix is to stop measuring an unbounded input — pin this to a
+      // fixture — which trades away dogfooding the real docs tree and is
+      // therefore a product call, not a test-maintenance one.
+      60000 // ~495 chunks locally; the live corpus is at 374 and climbing
     );
 
     expect(output.status).toBe('success');
