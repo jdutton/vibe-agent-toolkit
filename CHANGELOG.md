@@ -160,6 +160,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The projection resource lane did more than twice the filesystem work it needed.** Scanning with
+  `VAT_RESOURCES_CRAWL=projection` built a realization row for every gitignored path and then
+  discarded it, paying an `lstat` for each and a `realpathSync` for each one absent from git's index.
+  The lane now declines that half up front. Measured on an 8,548-file adopter tree, `vat resources
+  scan` fell from **40,698 filesystem calls to 18,454** — `lstat` 20,908 → 9,786, `realpath` 12,362 →
+  1,240 — with the scanned file set unchanged. The extent still enumerates the ignored half by
+  default; only this lane declines it, and it declares that as a contributor parameter so a stored
+  extent cannot be served to a run that asked for the whole tree.
+
 - **A corrupt ONNX embedding model could be cached permanently.** The shared model cache is guarded
   only by existence, so concurrent first-users all downloaded and each wrote the cache path directly
   — a reader during that window got a truncated file, surfacing as `protobuf parsing failed`.

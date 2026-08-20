@@ -97,6 +97,8 @@
  * It can be re-sourced.
  */
 
+import type { GitTracker } from '@vibe-agent-toolkit/utils';
+
 import type {
   ResourceExtentRow,
   ResourceRealizationRow,
@@ -134,6 +136,110 @@ const FILESYSTEM_ORIGIN = 'filesystem';
  * stage while every membership assertion about it stayed green.
  */
 export const DEFAULT_CONTENT_DEMAND: ContentDemand = 'deferGitignored';
+
+/**
+ * The parameter set that makes this extent decline the gitignored half.
+ *
+ * ## Why this is a PARAMETER and not a second constructor argument
+ *
+ * `contentDemand` above is a constructor argument because it changes what a row
+ * *says* (`contentState`), never which rows exist. This changes **membership**,
+ * and membership is the one thing a stored extent is read back for. Two runs
+ * differing only in this produce different row sets, so
+ * {@link PopulateOptions.parameters} is where it has to live: `zone_provenance`
+ * records the parameter set verbatim, and `selectRequestedContexts` keys a
+ * stored context on `(contributorId, parameterSet)`. A run asking the wide
+ * question therefore **misses** an extent written by a run that asked the narrow
+ * one, rather than being served a truncated population and reporting success.
+ *
+ * That is not a new rule invented here — `merge.ts` already states it: *"a
+ * declaration hidden in a constructor would leave a provenance row that
+ * under-describes the very extent its digest is supposed to make comparable"*.
+ * Putting this in the constructor beside `contentDemand` would have been the
+ * exact fault that sentence names, with a poisoned cache key as the symptom.
+ *
+ * ## What it costs the extent's own argument — nothing
+ *
+ * The class docstring's case for `respectGitignore: false` is a case about what
+ * this extent *can* enumerate, and it is untouched: the default is still to
+ * realize everything, `gitignored` is still a live column, and a lens that wants
+ * the ignored half still gets it by asking nothing. What moves is that a lane
+ * which provably discards those rows may now say so **before** they are paid
+ * for. `buildResourcePopulation` is that lane — it consumes four columns and
+ * drops every `gitignored` row in its own loop.
+ *
+ * Measured on an 8,548-file adopter tree, `vat resources scan` warm, before and
+ * after: **`lstat` 20,908 → 9,786, `realpathSync.native` 12,362 → 1,240, total
+ * filesystem calls 40,698 → 18,454.** Both sites fall by exactly the 11,122
+ * gitignored rows, which is the arithmetic that identifies the saving rather
+ * than merely reporting it — the `realpath` half because a path absent from
+ * git's index misses `canonicalPathFor`'s tracked fast path, so the ignored
+ * rows were paying for casing git could never have supplied.
+ */
+export const DECLINE_IGNORED: JsonValue = { ignored: 'decline' };
+
+/**
+ * Whether a parameter set asks this extent to skip the gitignored half.
+ *
+ * Anything that is not the exact {@link DECLINE_IGNORED} shape reads as "realize
+ * everything" — the historical behaviour. The default direction matters more
+ * than the parsing does: an unrecognised parameter set must never be able to
+ * silently *narrow* a population, because a narrowed population is a green run
+ * over a corpus nobody saw.
+ *
+ * @param parameters - The parameter set this run passed for this contributor
+ * @returns True only for an explicit decline
+ */
+function declinesIgnored(parameters: JsonValue): boolean {
+  return (
+    typeof parameters === 'object'
+    && parameters !== null
+    && !Array.isArray(parameters)
+    && parameters['ignored'] === 'decline'
+  );
+}
+
+/**
+ * The predicate that skips a path before it costs anything, or one that skips
+ * nothing.
+ *
+ * Returned as a closure rather than evaluated per path so the "are we declining
+ * at all?" question is answered once, and so the tracker is narrowed here
+ * instead of at every call site.
+ *
+ * 🪤 **`knownToExist: true` is load-bearing and is the enumerator's own
+ * observation, not an assumption.** Without it `isIgnoredByActiveSet` probes
+ * with `existsSync` for every path absent from the active set — once per ignored
+ * path, which is precisely the set being skipped — and the fix would trade an
+ * `lstat` for a `stat` instead of removing it. The paths reaching that probe are
+ * exactly the ones an enumerator just returned from a `readdir`.
+ *
+ * The only case where that could differ from `collectRealization`, which passes
+ * `exists && symlinkResolves !== false` rather than raw existence, is a
+ * **dangling symlink**: it is `exists: true` to `lstat` and absent to
+ * `existsSync`, so the row builder falls back to `git check-ignore` where this
+ * predicate would decline outright. **That set is empty by construction, not by
+ * luck: no crawl source emits a symlink's own path** — the walk runs
+ * `followSymlinks: false` and `GitCrawlSource` drops mode `120000` explicitly
+ * (`crawl-source.ts`, "A SYMLINK IS NOT A MEMBER HERE"). A symlink therefore
+ * never reaches this predicate, and `projection-filesystem-extent.test.ts` pins
+ * that precondition rather than leaving the safety argued: if a source ever
+ * starts emitting them, the test reddens here rather than the divergence
+ * arriving silently.
+ *
+ * @param tracker - The run's ignore oracle, or absent outside a repository
+ * @param parameters - This contributor's parameter set
+ * @returns A predicate that is true for a path this run declines to realize
+ */
+function declinedPathFilter(
+  tracker: GitTracker | undefined,
+  parameters: JsonValue,
+): (absolutePath: string) => boolean {
+  if (tracker === undefined || !tracker.isUsable() || !declinesIgnored(parameters)) {
+    return () => false;
+  }
+  return (absolutePath) => tracker.isIgnoredByActiveSet(absolutePath, true);
+}
 
 /**
  * Enumerates the working tree: every file *and* directory beneath the corpus
@@ -177,11 +283,12 @@ export class FilesystemExtentContributor implements ExtentContributor {
    * @param base - Read-only projection view; supplies the root and the shared
    *   identity map, so a path already identified by another contributor keeps
    *   its identity here
-   * @param _parameters - Unused: the filesystem extent is fully determined by
-   *   the root, so there is nothing to scope it by
+   * @param parameters - {@link DECLINE_IGNORED} to skip the gitignored half, or
+   *   anything else (`null` included) to realize the whole enumeration. The root
+   *   determines the rest of this extent, so this is the only thing to scope by
    * @returns The contributed rows
    */
-  async contribute(base: ProjectionBase, _parameters: JsonValue): Promise<ExtentContribution> {
+  async contribute(base: ProjectionBase, parameters: JsonValue): Promise<ExtentContribution> {
     const { rootId } = base.identities;
     // One filesystem extent per root, so no discriminator.
     const extentId = extentContextId(FILESYSTEM_KIND, rootId);
@@ -201,8 +308,17 @@ export class FilesystemExtentContributor implements ExtentContributor {
 
     const resources = new Map<string, ResourceRow>();
     const realizations: ResourceRealizationRow[] = [];
+    const declined = declinedPathFilter(base.gitTracker, parameters);
 
     for (const { absolutePath, contentHint } of enumerated) {
+      // BEFORE `idFor` and before `collectRealization`, which is the whole
+      // saving and the reason this is not a filter over the finished rows:
+      // `idFor` costs a `realpathSync.native` for any path git's index cannot
+      // supply casing for — i.e. every ignored one — and `collectRealization`
+      // opens with an unconditional `lstat`. Declining afterwards would pay both
+      // and then throw the answer away, which is what the consuming lane was
+      // already doing.
+      if (declined(absolutePath)) continue;
       const resourceId = base.identities.idFor(absolutePath);
       // Sequential on purpose: under a keying demand `collectRealization` reads
       // and keys every file's bytes, and fanning the whole crawl out at once

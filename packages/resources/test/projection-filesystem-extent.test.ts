@@ -7,11 +7,15 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { RunContentCache } from '../src/projection/content-cache.js';
 import { extentDigest, type ExtentContribution } from '../src/projection/contributor.js';
 import { extentContextId } from '../src/projection/contributors/context-id.js';
-import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
+import {
+  DECLINE_IGNORED,
+  FilesystemExtentContributor,
+} from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../src/projection/crawl-source.js';
 import { ProjectionBuilder } from '../src/projection/projection.js';
 import type { ContentDemand } from '../src/projection/realizations.js';
 import type { ResourceRealizationRow } from '../src/schemas/projection-resources.js';
+import type { JsonValue } from '../src/schemas/projection-shared.js';
 
 import { expectContributionRowsValid } from './test-helpers.js';
 
@@ -48,11 +52,25 @@ async function contribute(): Promise<ExtentContribution> {
  * `git check-ignore`, which reads `.gitignore` directly.
  */
 async function contributeInRepo(): Promise<ExtentContribution> {
+  return contributeWithParameters(null);
+}
+
+/**
+ * Run the contributor in a git repository under a parameter set.
+ *
+ * A repository, because {@link DECLINE_IGNORED} is only distinguishable from the
+ * default where something IS ignored — outside git nothing is, and both arms
+ * would agree for the wrong reason.
+ *
+ * @param parameters - The parameter set to run under
+ * @returns The contribution
+ */
+async function contributeWithParameters(parameters: JsonValue): Promise<ExtentContribution> {
   runGitOrThrow(['init'], { cwd: root, stdio: 'pipe' });
   const tracker = new GitTracker(root);
   await tracker.initialize();
   const base = new ProjectionBuilder(root, tracker).base();
-  return new FilesystemExtentContributor().contribute(base, null);
+  return new FilesystemExtentContributor().contribute(base, parameters);
 }
 
 /**
@@ -127,6 +145,83 @@ describe('FilesystemExtentContributor gitignored column', () => {
 
     expect(contribution.realizations.every((row) => !row.gitignored)).toBe(true);
   });
+});
+
+describe('FilesystemExtentContributor declining the ignored half', () => {
+  it('realizes the ignored half by default, so declining is strictly opt-in', async () => {
+    // The baseline every assertion below is a departure from. Without it a
+    // decline that silently became the default would look like a pass.
+    const paths = pathsOf(await contributeInRepo());
+
+    expect(paths).toContain(BUILD_OUTPUT);
+    expect(paths).toContain(IGNORED_LOG);
+  });
+
+  it('skips the gitignored half, directories included, when the run asks it to', async () => {
+    const paths = pathsOf(await contributeWithParameters(DECLINE_IGNORED));
+
+    expect(paths).not.toContain(BUILD_OUTPUT);
+    expect(paths).not.toContain(IGNORED_LOG);
+    // The ignored DIRECTORY goes too, and that is where the saving compounds on
+    // a real tree: `dist/` is one row here and thousands on an adopter.
+    expect(paths).not.toContain(BUILD_DIR);
+  });
+
+  it('keeps every non-ignored member, including a directory that holds one', async () => {
+    // The discriminator. Without it the assertion above passes just as well
+    // against a predicate that declined the entire tree.
+    const paths = pathsOf(await contributeWithParameters(DECLINE_IGNORED));
+
+    expect(paths).toContain('README.md');
+    expect(paths).toContain(NESTED_FILE);
+    expect(paths).toContain(NESTED_DIR);
+  });
+
+  it('emits no row it would itself have marked gitignored', async () => {
+    // Stated against the column rather than against the fixture's path list, so
+    // it stays true of a corpus this file does not know about.
+    const contribution = await contributeWithParameters(DECLINE_IGNORED);
+
+    expect(contribution.realizations.every((row) => !row.gitignored)).toBe(true);
+  });
+
+  it('mints no identity for a declined path, which is where the realpath went', async () => {
+    // A skip that dropped the realization but still called `idFor` would keep
+    // the `realpathSync.native` this change exists to remove — and would be
+    // invisible in the path list above. `resources` is one entry per identity
+    // minted, so its size is the observable proxy.
+    const contribution = await contributeWithParameters(DECLINE_IGNORED);
+
+    expect(contribution.resources).toHaveLength(contribution.realizations.length);
+    expect(contribution.memberships).toHaveLength(contribution.realizations.length);
+  });
+
+  it('realizes everything under a parameter set it does not recognise', async () => {
+    // The safe direction, pinned: an unrecognised parameter set must never be
+    // able to NARROW a population, because a narrowed population is a green run
+    // over a corpus nobody saw. One transposed letter is the whole fixture.
+    const paths = pathsOf(await contributeWithParameters({ ignored: 'declne' }));
+
+    expect(paths).toContain(BUILD_OUTPUT);
+  });
+
+  it('realizes everything outside a repository even when asked to decline', async () => {
+    // Deliberately no `git init`: with no ignore oracle nothing is ignorable, so
+    // the decline has nothing to act on and must not guess from `.gitignore`'s
+    // mere presence.
+    const base = new ProjectionBuilder(root).base();
+    const contribution = await new FilesystemExtentContributor().contribute(base, DECLINE_IGNORED);
+
+    expect(pathsOf(contribution)).toContain(BUILD_OUTPUT);
+  });
+
+  // 🪤 The skip predicate's one safety precondition — that no symlink ever
+  // reaches it — is NOT pinned here, deliberately. It is already pinned, with a
+  // better fixture, by `projection-git-extent-symlink.test.ts`'s "is contradicted
+  // by the filesystem extent, which skips the links entirely". A second copy here
+  // would assert the same source-level fact against a weaker fixture and go stale
+  // separately. See `declinedPathFilter` in `filesystem-extent.ts` for why that
+  // precondition is what makes `knownToExist: true` sound.
 });
 
 describe('FilesystemExtentContributor identity', () => {

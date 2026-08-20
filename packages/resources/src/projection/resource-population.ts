@@ -39,9 +39,29 @@
  *
  * So the filter is deliberate and it is the narrow choice: this lane admits
  * `tracked ∪ (untracked ∧ ¬ignored)`, which is exactly `includeUntracked: true`
- * and nothing more. **The extent still enumerates the ignored half** — the rows
- * exist, the column stays alive, and a future lens that wants them can ask. Only
- * this consumer declines them.
+ * and nothing more.
+ *
+ * ⚠️ **This paragraph used to end "the extent still enumerates the ignored half
+ * — the rows exist, the column stays alive, and a future lens that wants them
+ * can ask", and that is still true of the EXTENT and no longer true of THIS
+ * LANE.** The capability is unchanged: realizing everything is still the
+ * default, `gitignored` is still a live column, and a lens that wants the
+ * ignored half still gets it by asking nothing. What changed is that declining
+ * moved from *after* the rows were built to *before*, because building them was
+ * never free. Measured on an 8,548-file adopter tree, warm, before and after:
+ * **`lstat` 20,908 → 9,786, `realpathSync.native` 12,362 → 1,240, total
+ * filesystem calls 40,698 → 18,454** — both sites falling by exactly the 11,122
+ * rows this loop discarded, to answer a question about 1,289 markdown files.
+ *
+ * ⚠️ The remaining 9,786 `lstat` calls are NOT this change's residue to sweep up
+ * casually: 8,548 of them are git-tracked paths whose mode bits git already
+ * holds, but skipping those would null `mtime` for a tracked row and so change
+ * what a shipped column description means. That is a separate decision.
+ *
+ * The declining is stated as a contributor PARAMETER, never a constructor
+ * argument, so that a stored extent written under it cannot be served to a run
+ * that asked the wide question: `zone_provenance` records the parameter set and
+ * `selectRequestedContexts` keys on it. See `DECLINE_IGNORED`.
  *
  * ⚠️ With no `gitTracker` the projection cannot answer "ignored", so every row
  * arrives `gitignored: false` and this filter admits everything the crawl found.
@@ -52,18 +72,25 @@
  * ## Cost
  *
  * Slower than `git ls-files`, structurally, and knowingly — the same trade Jeff
- * accepted for `vat inventory` (~5.3× there). The population is obtained by a
- * filesystem walk that reads and keys the bytes it can, against one `ls-files`
- * spawn. `resource-scanning-and-caching.md` §3.1/§3.3 is where that cost gets
+ * accepted for `vat inventory` (~5.3× there). The population is obtained by an
+ * enumeration plus one `lstat` per surviving path (no byte is read; see
+ * `contentDemand: 'deferred'` below), against one `ls-files` spawn.
+ * `resource-scanning-and-caching.md` §3.1/§3.3 is where that cost gets
  * re-sourced (~140 ms against 1,537 ms warm on an 8,496-path adopter tree, with
- * content keys included); it is NOT narrowable here, because narrowing the
- * enumeration is what drops the members this lane exists to recover.
+ * content keys included).
+ *
+ * ⚠️ **"Not narrowable" was too broad a claim and is now split in two.** What
+ * cannot be narrowed is the *kind* of member — dropping non-markdown paths loses
+ * real members this lane exists to recover, which
+ * `projection-extent-narrowing.test.ts` measures rather than argues. What CAN be
+ * declined is the gitignored half, because this lane never admitted it in the
+ * first place; the two moves look alike and are not.
  */
 
 import { safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
 
 import { ContributorRegistry } from './contributor.js';
-import { FilesystemExtentContributor } from './contributors/filesystem-extent.js';
+import { DECLINE_IGNORED, FilesystemExtentContributor } from './contributors/filesystem-extent.js';
 import { crawlSourceFor, type CrawlSourceKind } from './crawl-source.js';
 import {
   CONTENT_PARSING_SKIP,
@@ -227,13 +254,22 @@ export async function buildResourcePopulation(options: {
   //
   // ⚠️ Stated per LANE, never flipped in the contributor: `vat inventory`
   // registers the same class and DOES run the blob stage over what it keys.
-  registry.register(new FilesystemExtentContributor(() => source, 'deferred'));
+  const filesystem = new FilesystemExtentContributor(() => source, 'deferred');
+  registry.register(filesystem);
 
-  // No `parameters`: the filesystem extent is fully determined by the root, so
-  // it runs under `null` and its provenance row says so honestly.
   const projection = await populate({
     root,
     registry,
+    // This lane drops every `gitignored` row in its own loop below, so it asks
+    // the extent not to produce them — see `DECLINE_IGNORED`. Measured on an
+    // 8,548-file adopter tree, the declined rows were 11,122 of 20,908 and cost
+    // 11,122 `lstat` plus ~12,362 `realpathSync.native` calls, every one of them
+    // for a row this function then discarded.
+    //
+    // Keyed off the INSTANCE's own id rather than a second copy of the literal:
+    // a parameter set filed under an id no registered contributor answers to is
+    // silently ignored, so the two must not be able to drift.
+    parameters: { [filesystem.id]: DECLINE_IGNORED },
     // See the header: this lane consumes realizations only, and the stage is
     // ~90% of its cold cost. Stated rather than inferred, and refused if a blob
     // reader is ever registered above.
@@ -260,8 +296,13 @@ export async function buildResourcePopulation(options: {
     // motivating case. Admitting it would turn an enumeration difference into a
     // `RESOURCE_UNREADABLE` finding the incumbent never emits.
     if (!row.exists) continue;
-    // See the header: this consumer declines the ignored half; the extent still
-    // enumerates it.
+    // Retained even though `DECLINE_IGNORED` above means no such row can arrive
+    // from a run with a usable tracker. It is not redundant: with no tracker the
+    // extent declines nothing (correctly — outside a repository there is no
+    // ignore oracle), and this line is where the lane's admitted set is STATED
+    // rather than inferred from a parameter two files away. It is also the
+    // backstop if the skip predicate and `collectRealization`'s `gitignored`
+    // column ever drift, which would otherwise widen this lane in silence.
     if (row.gitignored) continue;
     paths.push(safePath.resolve(root, row.path));
   }
