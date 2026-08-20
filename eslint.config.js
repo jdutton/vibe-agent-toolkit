@@ -1,3 +1,5 @@
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+
 import eslint from '@eslint/js';
 import tseslint from '@typescript-eslint/eslint-plugin';
 import tsparser from '@typescript-eslint/parser';
@@ -43,6 +45,40 @@ const PATH_IMPL_EXEMPT = { exemptFiles: [
 ] };
 const PATH_UTILS_EXEMPT = { exemptFiles: ['packages/utils/src/path-utils.ts'] };
 const SAFE_EXEC_EXEMPT = { exemptFiles: ['packages/utils/src/safe-exec.ts'] };
+
+/**
+ * One `local/no-self-package-import` block per workspace package, each naming
+ * that package and scoped to the sources it compiles.
+ *
+ * The rule does not read `package.json` itself on purpose. Every module on the
+ * `./eslint` subpath requires nothing at all — not `eslint`, not a third-party
+ * package, not even a Node builtin — which is what keeps `eslint` an optional
+ * peer dependency and the pack shippable as a subpath of a runtime package
+ * (`packages/utils/test/eslint/subpath-purity.test.ts` asserts the empty set).
+ * This file is not on that subpath: it already runs in full Node, so reading the
+ * manifests here costs the invariant nothing.
+ *
+ * `src/**` is exactly what every package's tsconfig `include`s. Test and example
+ * trees are excluded from every package build and import their own package by
+ * name deliberately, to exercise the public entry point the way a consumer does.
+ */
+function selfImportConfigs() {
+  return readdirSync('packages', { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .flatMap((entry) => {
+      const manifest = `packages/${entry.name}/package.json`;
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- the path is a workspace directory name read from `packages/` moments earlier, not user input.
+      if (!existsSync(manifest)) return [];
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- same path, existence just confirmed above.
+      const { name } = JSON.parse(readFileSync(manifest, 'utf8'));
+      if (typeof name !== 'string' || name.length === 0) return [];
+      return [{
+        files: [`packages/${entry.name}/src/**/*.ts`, `packages/${entry.name}/src/**/*.cts`],
+        plugins: { local: localRules },
+        rules: { 'local/no-self-package-import': ['error', { packageName: name }] },
+      }];
+    });
+}
 
 // Local rules — agentic code safety. Apply to both TS and JS source.
 const localRulesConfig = {
@@ -408,6 +444,14 @@ export default [
       }],
     },
   },
+
+  // Scoped: a package's compiled sources must not import that package by its own
+  // name. `src/**` is exactly what every package's tsconfig `include`s, and the
+  // hazard is a build-time resolution failure, so this is the whole surface where
+  // it can bite. Test and example trees are excluded from every package build and
+  // import their own package by name deliberately — see the rule's header and the
+  // `RECOMMENDED_EXCLUDE` note in `packages/utils/eslint/index.cjs`.
+  ...selfImportConfigs(),
 
   // Scoped: enforce safePath.joinUnderRoot() for security-root path joins
   // in the skill-test staging code. This catches the Windows drive-letter

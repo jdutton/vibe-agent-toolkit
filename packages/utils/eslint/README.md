@@ -161,6 +161,24 @@ That gives a reviewer a falsifiable test: a justification that cannot name who w
 
 Only a string **literal** encoding triggers it. `buf.toString(enc)` is deliberately not reported: without type information it is indistinguishable from `n.toString(radix)`, and `readFile(p, cb)` from `readFile(p, encoding)`.
 
+### Build correctness
+
+| Rule | Bans | Use instead | Subpath | Fix | `recommended` |
+|---|---|---|---|---|---|
+| `no-self-package-import` | importing the enclosing package by its own name | a relative path to the defining module | — | | — (needs `packageName`) |
+
+A file inside `packages/foo` that writes `import … from '@scope/foo'` resolves out through `node_modules` to its own `package.json`, whose `types` point at `./dist/index.d.ts` — a file the compiler is in the middle of producing. It works only by a TypeScript courtesy: while `dist` **is** the running project's output path, that declaration is recognised as the project's own output and the import is redirected back to `src`, so it resolves with no `dist/` on disk.
+
+Change `outDir` — to a staging directory that makes emit atomic, say — and the redirect is gone, tsc looks for a literal `dist/index.d.ts`, and a tree that has never been built has none:
+
+```
+error TS2307: Cannot find module '@scope/foo' or its corresponding type declarations.
+```
+
+The knock-on `TS2339`s land wherever a local type extended one of the now-unresolved imports, which is what makes it read as a type bug in code nobody touched.
+
+It is latent by construction, and worse, **it is invisible to any tree that has built before**: a stale `dist/` satisfies the literal lookup, so the build passes by typechecking against the *previous* build's declarations. In a monorepo whose worktrees live inside the main checkout, resolution walks up past the worktree and satisfies it from the *parent checkout's* `dist/`. Both are green locally and red in CI, which is the only genuinely pristine tree. Lint is the only stage that sees it on the author's machine.
+
 ### Code and test hygiene
 
 | Rule | Bans | Use instead | Subpath | Fix | `recommended` |
@@ -171,7 +189,7 @@ Only a string **literal** encoding triggers it. `buf.toString(enc)` is deliberat
 
 ### What `recommended` deliberately leaves out
 
-Four rules ship without riding in `recommended`, for three different reasons.
+Five rules ship without riding in `recommended`, for four different reasons.
 
 **Test-style opinions** — `no-test-scoped-functions` (where a helper may be declared) and `require-justified-skip` (the annotation grammar for a disabled test). Neither is a portability or correctness fact, and installing this package for `safePath.join()` should not also import someone else's test conventions. Both are worth turning on deliberately.
 
@@ -188,7 +206,23 @@ A rule that misses its own target does not belong in a config named `recommended
 
 **No wrapper to point at** — `no-raw-text-decode`. Every other rule in this pack names a replacement this package publishes; this one names a decoding seam that only exists once *you* write it. Shipped in `recommended`, its every message would read "use `decodeTextContent()` from your content-decoding module", which is advice nobody can follow. Turn it on with `safeModule` and `exemptFiles` set, as shown above.
 
-Enable any of the four by naming it:
+**Needs an option, and only in the directories you compile** — `no-self-package-import`. The import it bans is a genuine build-breaker with no style opinion in it, but the rule cannot discover on its own which package a file is in: reading `package.json` would mean `require('node:fs')`, and every module on this subpath is plain data that requires *nothing* — not `eslint`, not a third-party package, not even a Node builtin. That is what keeps `eslint` an optional peer dependency and lets these rules ship as a subpath of a runtime package rather than as one of their own. So the caller names the package. The caller is a config file, which already runs in full Node and can read every manifest it likes:
+
+```js
+import { readFileSync, readdirSync } from 'node:fs';
+
+export default readdirSync('packages').flatMap((dir) => {
+  const { name } = JSON.parse(readFileSync(`packages/${dir}/package.json`, 'utf8'));
+  return [{
+    files: [`packages/${dir}/src/**/*.ts`],
+    rules: { '@vibe-agent-toolkit/no-self-package-import': ['error', { packageName: name }] },
+  }];
+});
+```
+
+Scope it to the sources you **compile**. Test and example trees — normally excluded from the build — import their own package by name **on purpose**, to exercise the public entry point exactly as a consumer does. This repo has ~10 such imports, every one of them correct.
+
+Enable any of the five by naming it:
 
 ```js
 import vat from '@vibe-agent-toolkit/utils/eslint';

@@ -32,6 +32,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rule for deciding whether a given `'utf-8'` read is a content read at all, and the widening ledger
   for the rest of the tree, are in `docs/architecture/resource-scanning-and-caching.md` §3.5.
 
+- **`@vibe-agent-toolkit/no-self-package-import`** — a new ESLint rule in the published rule pack.
+  Bans a file importing the package it lives in by that package's own name, which resolves through
+  the package's own `dist/` and breaks the build wherever `outDir` is not `dist`. Takes a required
+  `packageName` option. Not in `configs.recommended`: scope it to the sources you compile, since
+  test and example trees import their own package by name deliberately.
+
 - **A pluggable storage seam for the resource projection.** `@vibe-agent-toolkit/resources` now
   exports a `ProjectionStore` interface stated in the projection's own vocabulary — facts about
   blobs, and the extent of a tree keyed by `(rootId, treeHash)` — so a storage backend can be added

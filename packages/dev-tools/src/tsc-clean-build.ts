@@ -55,6 +55,32 @@
  *     resolution — which skips dot-prefixed directories — cannot sweep the staged
  *     `.d.ts` files back into the program as sources.
  *
+ * A fourth property is load-bearing and this design **cannot** preserve it:
+ * `outDir` IDENTITY. While `outDir` is `dist`, TypeScript recognises
+ * `dist/index.d.ts` as the running project's own declaration output and redirects
+ * any import of it back to `src` — so a file that imports its OWN package by name
+ * resolves with no `dist/` on disk at all. Overriding `--outDir` to the staging
+ * directory moves the project's output path, the redirect is gone, tsc looks for
+ * a literal `dist/index.d.ts`, and a tree that has never been built has none:
+ *
+ *   error TS2307: Cannot find module '@scope/foo' …            (plus knock-on TS2339s)
+ *
+ * Depth, filesystem and dot-prefix are all preserved above; this one is not, and
+ * it cannot be — the whole point is that emit lands somewhere other than `dist`.
+ * So the constraint lands on the SOURCES instead: no file may import the package
+ * it lives in by that package's own name. `local/no-self-package-import` (in
+ * `@vibe-agent-toolkit/utils/eslint`, scoped in `eslint.config.js` to every
+ * package's compiled `src` tree) is what holds that line, and it exists because
+ * this override exposed exactly two such imports that had been latent for as long
+ * as they had been written.
+ *
+ * That failure is also invisible to any tree that has built before — a stale
+ * `dist/` satisfies the literal lookup, so the build passes by typechecking
+ * against the PREVIOUS build's declarations. In a worktree nested inside the main
+ * checkout it is worse: resolution walks up past the worktree and satisfies the
+ * lookup from the PARENT checkout's `dist/`. Neither tree can reproduce it. Only
+ * a pristine clone, or CI, can.
+ *
  * Because the compiler is incremental, a rebuild with no source change emits
  * nothing, staging stays empty, and not one file in `dist/` is touched. A
  * rebuild with one changed module emits only what that change invalidated. The

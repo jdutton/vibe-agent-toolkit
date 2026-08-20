@@ -1074,6 +1074,9 @@ const SUITES: readonly RuleSuite[] = [
   },
 ];
 
+/** Shared title for the `ruleTester.run(...)` leg every rule suite below has. */
+const RULE_TESTER_CASES = 'passes RuleTester cases';
+
 describe.each(SUITES)('$name', ({ name, cases }) => {
   const rule = loadLocalRule(`${name}.cjs`);
 
@@ -1081,7 +1084,7 @@ describe.each(SUITES)('$name', ({ name, cases }) => {
     expect(rule.meta?.type).toBe('problem');
   });
 
-  it('passes RuleTester cases', () => {
+  it(RULE_TESTER_CASES, () => {
     expect(() => { ruleTester.run(name, rule, cases); }).not.toThrow();
   });
 });
@@ -1115,7 +1118,7 @@ describe('no-command-direct-factory', () => {
   const gitCode = "safeExecSync('git', ['status']);";
   const errors = [{ messageId: 'noGitDirect' }];
 
-  it('passes RuleTester cases', () => {
+  it(RULE_TESTER_CASES, () => {
     expect(() => {
       ruleTester.run('no-git-commands-direct', rule, {
         valid: [
@@ -2191,5 +2194,105 @@ describe('reportDeadUnsafeImports only ever removes a listed module', () => {
   ])('%s removable=%s', (module, removable) => {
     const source = `import dead from '${module}';\nexport const x = 1;`;
     expect(removedFrom(source).includes(`'${module}'`)).toBe(!removable);
+  });
+});
+
+/**
+ * `no-self-package-import` is told which package it is inside, via a required
+ * `packageName` option — it reads no files, because every module on the `./eslint`
+ * subpath must require nothing at all (`subpath-purity.test.ts`). That also makes
+ * these cases independent of the working directory the suite runs from.
+ *
+ * The load-bearing case is `selfImportOfTheShippedDefect`: the exact import that
+ * reddened CI on both ubuntu and windows at `0e8b74f9`. A guard nobody has
+ * watched fire on the real defect is an assumption, not a guard.
+ *
+ * The other one worth naming is the `rag` / `rag-lancedb` leg. Matching a
+ * self-reference with `startsWith(packageName)` alone would report
+ * `@vibe-agent-toolkit/rag-lancedb` as a self-import of `@vibe-agent-toolkit/rag`
+ * — the same unanchored-prefix bug the exempt-path matchers were written to kill.
+ */
+describe('no-self-package-import', () => {
+  const rule = loadLocalRule('no-self-package-import.cjs');
+  const AGENT_RUNTIME = [{ packageName: '@vibe-agent-toolkit/agent-runtime' }];
+
+  it('is registered with a valid schema', () => {
+    expect(rule.meta?.type).toBe('problem');
+  });
+
+  it(RULE_TESTER_CASES, () => {
+    const withTs = <T extends object>(cases: T[]): T[] =>
+      cases.map((testCase) => ({ ...testCase, languageOptions: { parser: tsParser } }));
+
+    expect(() => {
+      ruleTester.run('no-self-package-import', rule, {
+        valid: withTs([
+          {
+            name: 'the relative import that replaced the defect',
+            options: AGENT_RUNTIME,
+            code: "import type { SessionStore } from './types.js';",
+          },
+          {
+            name: 'a genuinely different package',
+            options: AGENT_RUNTIME,
+            code: "import { safePath } from '@vibe-agent-toolkit/utils';",
+          },
+          {
+            name: 'a sibling whose name merely EXTENDS this one',
+            options: [{ packageName: '@vibe-agent-toolkit/rag' }],
+            code: "import { connect } from '@vibe-agent-toolkit/rag-lancedb';",
+          },
+          {
+            name: 'a node builtin',
+            options: AGENT_RUNTIME,
+            code: "import { readFile } from 'node:fs/promises';",
+          },
+        ]),
+        invalid: withTs([
+          {
+            name: 'selfImportOfTheShippedDefect',
+            options: AGENT_RUNTIME,
+            code: "import type { SessionStore } from '@vibe-agent-toolkit/agent-runtime';",
+            errors: [{ messageId: 'useRelativeImport' }],
+          },
+          {
+            name: 'a declared subpath of the same package',
+            options: AGENT_RUNTIME,
+            code: "import { makeSession } from '@vibe-agent-toolkit/agent-runtime/session/test-helpers';",
+            errors: [{ messageId: 'useRelativeImport' }],
+          },
+          {
+            name: 'a barrel re-exporting through its own name',
+            options: AGENT_RUNTIME,
+            code: "export * from '@vibe-agent-toolkit/agent-runtime';",
+            errors: [{ messageId: 'useRelativeImport' }],
+          },
+          {
+            name: 'a named re-export through its own name',
+            options: AGENT_RUNTIME,
+            code: "export { SessionNotFoundError } from '@vibe-agent-toolkit/agent-runtime';",
+            errors: [{ messageId: 'useRelativeImport' }],
+          },
+          {
+            name: 'a dynamic import',
+            options: AGENT_RUNTIME,
+            code: "const m = await import('@vibe-agent-toolkit/agent-runtime');",
+            errors: [{ messageId: 'useRelativeImport' }],
+          },
+          {
+            name: 'an import() in TYPE position, which no other visitor reaches',
+            options: AGENT_RUNTIME,
+            code: "type S = import('@vibe-agent-toolkit/agent-runtime').SessionStore;",
+            errors: [{ messageId: 'useRelativeImport' }],
+          },
+          {
+            name: 'a require() call',
+            options: AGENT_RUNTIME,
+            code: "const m = require('@vibe-agent-toolkit/agent-runtime');",
+            errors: [{ messageId: 'useRelativeImport' }],
+          },
+        ]),
+      });
+    }).not.toThrow();
   });
 });

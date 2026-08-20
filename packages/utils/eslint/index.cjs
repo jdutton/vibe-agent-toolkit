@@ -51,6 +51,7 @@ const rules = {
   'prefer-startswith-over-regex': require('./rules/prefer-startswith-over-regex.cjs'),
   'no-unsafe-root-join': require('./rules/no-unsafe-root-join.cjs'),
   'no-raw-text-decode': require('./rules/no-raw-text-decode.cjs'),
+  'no-self-package-import': require('./rules/no-self-package-import.cjs'),
   'require-justified-skip': require('./rules/require-justified-skip.cjs'),
 };
 
@@ -105,6 +106,19 @@ const RECOMMENDED_EXCLUDE = new Set([
   // naming the file that implements it — by whoever has one. VAT itself does
   // exactly that, scoped to the directories that read corpus documents.
   'no-raw-text-decode',
+  // Excluded for two reasons, either of which would be enough. It REQUIRES a
+  // `packageName` option — it will not read a `package.json` to find out, because
+  // that would mean `require('node:fs')` and break the empty-external-set property
+  // this whole subpath rests on — and a rule with a required option cannot ride in
+  // a config that supplies none. And the directories it must not fire in are a
+  // property of the adopter's `tsconfig`, not of this package: a self-import only
+  // breaks the build in files the package actually COMPILES, while test and
+  // example trees import their own package by name on purpose, to exercise the
+  // public entry point the way a consumer does. This repo has ~10 such imports
+  // across `utils`, `agent-skills`, `claude-marketplace` and
+  // `vat-example-cat-agents`, every one of them correct. It ships in `rules`, and
+  // `eslint.config.js` generates one scoped block per workspace package.
+  'no-self-package-import',
 ]);
 
 /**
