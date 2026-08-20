@@ -400,7 +400,7 @@ export default [
   // The rule cannot tell a corpus-document read from a read of an artifact we
   // wrote, or from a subprocess's stdout — the rule's own docstring draws that
   // line and requires each exemption to name the writer or the producer. Inside
-  // `utils` and `resources` the population needing one is FIVE call sites, each
+  // `utils` and `resources` the population needing one is SIX call sites, each
   // carrying that name; `rag`'s one violation needed no exemption — it was a
   // genuine corpus read and got routed through the seam instead. Repo-wide it
   // would be ~350 `readFile(p, 'utf-8')` calls
