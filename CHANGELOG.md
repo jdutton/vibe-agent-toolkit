@@ -160,6 +160,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A corrupt ONNX embedding model could be cached permanently.** The shared model cache is guarded
+  only by existence, so concurrent first-users all downloaded and each wrote the cache path directly
+  — a reader during that window got a truncated file, surfacing as `protobuf parsing failed`.
+  Downloads now publish atomically, and a body shorter than the server declared is never cached.
+
 - **VAT could not read a UTF-16 document at all.** Every content read went through
   `bytes.toString('utf-8')`, which honours no byte-order mark and cannot express UTF-16BE — Node's
   `Buffer` has no such encoding. A `working-tree-encoding=UTF-16` markdown file therefore decoded to
