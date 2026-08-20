@@ -5,12 +5,13 @@
  * per process. Three things here are not incidental:
  *
  * 1. **Every dump in the directory is read, not the first one.** The counter
- *    propagates into descendant processes, and a single `vat` invocation
- *    produces two dumps because vat's launcher spawns a second node process for
- *    the real binary. A reader that took one file would report the launcher's
- *    handful of calls and look entirely healthy doing it — the most expensive
- *    shape of wrong answer this module can give, because nothing in the output
- *    says it is partial.
+ *    propagates into descendant processes, and whenever one is spawned its dump
+ *    matters as much as the parent's. A reader that took one file could report a
+ *    launcher's handful of calls and look entirely healthy doing it — the most
+ *    expensive shape of wrong answer this module can give, because nothing in
+ *    the output says it is partial. ⚠️ Note the count of dumps is NOT a health
+ *    check: a vat resolved through `tree:`/`dist:` is the real binary, not the
+ *    wrapper, so it legitimately produces ONE dump.
  * 2. **Sites are normalized before they are merged.** Two processes can reach
  *    one module by different real paths (bun nests them under
  *    `node_modules/.bun/<pkg>@<version>/node_modules/<pkg>/…`), and unnormalized
@@ -150,10 +151,13 @@ export interface MergedDumps {
   /**
    * Distinct PIDs that produced a dump.
    *
-   * Reported rather than assumed: a real `vat` invocation should never yield 1,
-   * because the launcher spawns a second node process for the binary. When it
-   * does, the counter failed to propagate and these numbers describe the
-   * launcher alone.
+   * ⚠️ **1 is ordinary.** This said "a real `vat` invocation should never yield
+   * 1, because the launcher spawns a second node process for the binary" — true
+   * only while the lab measured the context-detecting wrapper. `tree:` and
+   * `dist:` now resolve `packages/cli/dist/bin.js` and refuse the wrapper, so
+   * the measured vat does its work in one process. Reading 1 as a failure warned
+   * on every correct report; the launcher signature is a counted process with no
+   * `fs.` site at all (`measuredLauncherOnly` in `render.ts`).
    */
   readonly processes: number;
   /** Total loader-class calls, kept in aggregate and never dropped. */

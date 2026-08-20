@@ -106,9 +106,12 @@ export interface IoTotalsDelta {
   /**
    * How many processes produced a dump.
    *
-   * A movement here is rarely about the subject — it usually means the counter
-   * stopped propagating, and every other number on the side that dropped is then
-   * describing vat's launcher alone.
+   * A movement here is rarely about the subject — it usually means one side
+   * spawned where the other did not, or the counter stopped reaching a
+   * descendant. ⚠️ It does NOT follow that a side reading 1 measured a launcher:
+   * a vat resolved through `tree:`/`dist:` runs in one process by design. Judge
+   * that from whether the side did any `fs` work at all, never from this count
+   * (`measuredLauncherOnly` in `render.ts`).
    */
   readonly processes: IoCountDelta;
 }

@@ -185,10 +185,18 @@ export interface IoCommandStats {
   /**
    * How many distinct PIDs produced a dump for the reported repeat.
    *
-   * Never 1 in practice for a real `vat` invocation: the launcher spawns a
-   * second node process for the binary, and the counter propagates into it. The
-   * number is reported so that a reader can see when it *is* 1 — which means the
-   * counter did not propagate and the report is measuring the launcher alone.
+   * ⚠️ **1 is the ORDINARY case, and this field's own guidance used to say the
+   * opposite.** It read "never 1 in practice… the launcher spawns a second node
+   * process for the binary", which was true only while the lab measured the
+   * context-detecting wrapper. `tree:` and `dist:` now resolve
+   * `packages/cli/dist/bin.js` directly and refuse the wrapper outright, so the
+   * measured vat does its work in one process and there is no second PID to
+   * count. Reading 1 as a failure made the io facet warn on every correct run.
+   *
+   * The number is still reported, because a reader comparing two arms wants to
+   * know a spawn appeared or vanished. What it must NOT be read as, on its own,
+   * is evidence that the counter failed — see `measuredLauncherOnly` in
+   * `render.ts` for the test that replaced it.
    */
   readonly processes: number;
   /**

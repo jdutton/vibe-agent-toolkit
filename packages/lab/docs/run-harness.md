@@ -193,10 +193,16 @@ describes neither.
 
 ## Two properties the harness must preserve
 
-**Env injection must reach the child.** The I/O facet works by `NODE_OPTIONS=--require`, and vat's
-own launcher spawns a second node process for the real binary. Verified: the preload propagates to
-descendants automatically, so a run under it records both PIDs. The harness must not clobber `env`
-when spawning, or the facet silently measures the launcher alone.
+**Env injection must reach the child.** The I/O facet works by `NODE_OPTIONS=--require`, and the
+preload propagates to descendants automatically, so any node process vat spawns records its own PID.
+The harness must not clobber `env` when spawning, or the facet silently measures less than the
+command did.
+
+⚠️ **A one-PID report is not a symptom.** `tree:` and `dist:` resolve `packages/cli/dist/bin.js` and
+refuse the context-detecting wrapper, so the measured vat does its work in a single process — the
+`processes` count is 1 on a perfectly healthy run. The io facet's warning keys on a counted process
+that made no `fs` calls at all, never on the PID count; see `measuredLauncherOnly` in
+`src/facets/io/render.ts`.
 
 **The instrument must never be resolved from the lab's own cwd by accident.** A harness that falls
 back to "whatever vat is on PATH" produces reports stamped with an instrument that was not the one

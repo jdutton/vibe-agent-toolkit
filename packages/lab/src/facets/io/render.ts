@@ -12,10 +12,13 @@
  *   report that then showed only the remainder would let a reader conclude "vat
  *   barely touches the disk", and "6,371 were bucketed out" versus "there were
  *   only 40" support opposite conclusions. {@link IoCommandStats.processes} is
- *   the same hazard in reverse: it is printed even when it is 1, because 1 means
- *   the counter never propagated into vat's real binary and every other number
- *   on the line describes the launcher alone. {@link IoCommandStats.stable} is
- *   printed next to the counts it qualifies, not in a footnote.
+ *   the same hazard in reverse, and the qualifier that goes with it is NOT the
+ *   count: since `tree:` began resolving `packages/cli/dist/bin.js` rather than
+ *   the context-detecting wrapper, a measured vat runs in ONE process, so 1 is
+ *   ordinary and treating it as a failure warned on every correct report. The
+ *   launcher signature is a counted process with no `fs.` site at all — see
+ *   {@link measuredLauncherOnly}. {@link IoCommandStats.stable} is printed next
+ *   to the counts it qualifies, not in a footnote.
  * - **The absence of a delta is never rendered as good news.** `unmeasurable`
  *   and `unwarranted` get their own words, because a reader scanning for green
  *   will otherwise count a broken or unattributable command as a pass.
@@ -76,10 +79,15 @@ const COUNTING_LEGEND =
   'Counted: Node fs and child_process calls. One fs.readFile is one call into ' +
   "Node's library, whatever the kernel then does with it.";
 
-/** Said when only one process was counted. See {@link IoCommandStats.processes}. */
+/**
+ * Said when the counted process looks like a launcher rather than the command.
+ *
+ * See {@link measuredLauncherOnly} for why the process count alone is not the
+ * test, and {@link IoCommandStats.processes} for what that field now means.
+ */
 const PROPAGATION_WARNING =
-  '      ⚠ COUNTER DID NOT PROPAGATE — only one process was counted, so these numbers ' +
-  "describe vat's launcher rather than the command it spawned.";
+  '      ⚠ COUNTER DID NOT PROPAGATE — one process was counted and it made no fs calls at all, ' +
+  'so these numbers describe a launcher that spawned the real command rather than the command itself.';
 
 /**
  * Said where a distinct-argument count would otherwise go.
@@ -224,6 +232,45 @@ function summaryLine(row: IoCommandStats): string {
 }
 
 /**
+ * Whether this row measured a launcher instead of the command it spawned.
+ *
+ * ## Why the process count alone is no longer the test
+ *
+ * This warning used to fire on `processes === 1`, on the premise its own field
+ * documented: *"the launcher spawns a second node process for the binary, and
+ * the counter propagates into it"*, so one process meant the counter had failed.
+ *
+ * **That premise died when the instrument was fixed.** `tree:` and `dist:` now
+ * resolve `packages/cli/dist/bin.js` — the real binary — and naming the
+ * context-detecting wrapper is an explicit refusal (`resolveBinPath`). A vat the
+ * lab launches therefore does its work in ONE process, and the bare count fired
+ * on every run of every arm. Measured on an 8,548-file adopter tree:
+ * `resources-scan` reported
+ * 40,698 user calls across 1,372 sites, including 20,908 `fs.lstatSync` inside
+ * `resources/dist/projection/realizations.js`, and still printed "these numbers
+ * describe vat's launcher". A warning that cries wolf on correct data is worse
+ * than no warning: it was cited as grounds to distrust a valid crucible report.
+ *
+ * ## What the failure actually looks like
+ *
+ * A launcher that spawned and waited does no filesystem work of its own — its
+ * loader calls are bucketed out of {@link IoCommandStats.sites}, leaving the
+ * spawn and nothing else. So the signature is one process **with no `fs.` site
+ * at all**, which is exact rather than a threshold. A real command always
+ * touches the filesystem; a process that touched it is the process doing the
+ * work, however many of them there were.
+ *
+ * ⚠️ Still reachable, and deliberately kept: `npx:` runs the published package's
+ * `bin`, which IS the wrapper, and cannot be fixed the way `tree:` was.
+ *
+ * @param row - The command's statistics
+ * @returns True when the counted process did no filesystem work
+ */
+function measuredLauncherOnly(row: IoCommandStats): boolean {
+  return row.processes === 1 && !row.sites.some((site) => site.method.startsWith('fs.'));
+}
+
+/**
  * Every line for one measured command.
  *
  * @param row - The command's statistics
@@ -234,7 +281,7 @@ function commandLines(row: IoCommandStats, maxSites: number): readonly string[] 
   if (row.failed) return [`  ${row.name}: FAILED — ${row.failure ?? 'unknown'}`];
 
   const lines = [summaryLine(row), stabilityLine(row)];
-  if (row.processes === 1) lines.push(PROPAGATION_WARNING);
+  if (measuredLauncherOnly(row)) lines.push(PROPAGATION_WARNING);
   lines.push(...row.sites.slice(0, maxSites).map((site) => siteLine(site)));
 
   const withheld = row.sites.length - Math.min(row.sites.length, maxSites);
