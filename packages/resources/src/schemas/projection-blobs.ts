@@ -15,15 +15,15 @@ const BLOB_FK_DESC = 'Foreign key to blobs.contentKey';
  */
 export const BlobRowSchema = z.object({
   contentKey: ContentKeySchema.describe('Primary key — see content-key.ts'),
-  bytes: z.number().int().nonnegative().describe('Raw byte length of the blob'),
+  bytes: z.number().int().nonnegative().describe('Raw on-disk byte length of the blob — NOT necessarily UTF-8 bytes. For a BOM\'d UTF-16 or UTF-32 source this differs from the sum of that blob\'s `blob_sections.bytes`, which are UTF-8 bytes of the decoded text'),
   tokenEstimate: z.number().int().nonnegative().describe('Estimated token count for LLM context'),
   frontmatter: z.record(z.string(), JsonValueSchema).nullable()
     .describe('Parsed frontmatter as JSON, or null when the blob has no frontmatter block'),
   frontmatterError: z.string().nullable()
     .describe('Why frontmatter did not parse to an object, or null when it did (including "no block at all")'),
   wordCount: z.number().int().nonnegative(),
-  proseBytes: z.number().int().nonnegative().describe('Bytes outside fenced/inline code'),
-  codeBlockBytes: z.number().int().nonnegative().describe('Bytes inside fenced code blocks'),
+  proseCharacters: z.number().int().nonnegative().describe('Unicode code points outside fenced/inline code'),
+  codeBlockCharacters: z.number().int().nonnegative().describe('Unicode code points inside fenced code blocks'),
   linkCount: z.number().int().nonnegative(),
   headingCount: z.number().int().nonnegative(),
   sectionCount: z.number().int().nonnegative(),
@@ -224,7 +224,8 @@ export const BlobSectionRowSchema = z.object({
     .describe('ordinal of the enclosing heading, or null at the top of the tree'),
   lineStart: z.number().int().positive(),
   lineEnd: z.number().int().positive(),
-  bytes: z.number().int().nonnegative().describe('Bytes spanned by this section, including nested subsections'),
+  bytes: z.number().int().nonnegative().describe('UTF-8 bytes spanned by this section, including nested subsections'),
+  characters: z.number().int().nonnegative().describe('Unicode code points spanned by this section, including nested subsections'),
   tokens: z.number().int().nonnegative(),
 }).strict().describe('A row of the blob-keyed `blob_sections` table');
 

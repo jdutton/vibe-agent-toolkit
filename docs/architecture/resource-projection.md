@@ -51,9 +51,9 @@ generated JSON Schema — `packages/resources/src/schemas/projection-blobs.ts` a
 row schemas' shape instead (the parse cache's `parseFactsShapeSource()` is the pattern). **Population
 is still 🔷
 proposed** for all ten tables: nothing yet derives real rows from `ParseFacts` or
-`ResourceRegistry` at runtime. Four tables (`blobs`, `blob_links`, `blob_sections`,
+`ResourceRegistry` at runtime. Four tables (`blobs`, `blob_references`, `blob_sections`,
 `blob_conditions`) and three (`roots`, `resources`, `edges`) have a partial source to populate
-from already — several columns (e.g. `wordCount`, `proseBytes`, `codeBlockBytes`, `sectionCount`,
+from already — several columns (e.g. `wordCount`, `proseCharacters`, `codeBlockCharacters`, `sectionCount`,
 `slugOccurrence`, `column`, `inCodeSpan`, `inFence`) require new parser output that `ParseFacts`
 does not yet carry; `resource_realizations`, `resource_zones` beyond a single default "tree" zone, and
 zone-sourced `resource_tags` additionally depend on zone modeling (skill/plugin/marketplace
@@ -62,9 +62,9 @@ boundaries) that does not exist anywhere in the codebase yet — a separate, lar
 
 | table (🔷 proposed) | contents |
 |---|---|
-| `blobs` | content key, bytes, token estimate, frontmatter (JSON), `frontmatter_error`, word count, prose vs. code-block bytes, link/heading/section counts |
-| `blob_links` | ordinal, raw href, text, line, column, node type, in-code-span, in-fence |
-| `blob_sections` | ordinal, depth, title, slug, slug occurrence, parent, line span, bytes, tokens |
+| `blobs` | content key, bytes, token estimate, frontmatter (JSON), `frontmatter_error`, word count, prose vs. code-block character counts (Unicode code points), link/heading/section counts |
+| `blob_references` | ordinal, raw ref, text, line, column, `startOffset`/`endOffset` (UTF-16 code units), syntactic form, lexical features (extension, leading `@`, slash count, variable-expansion syntax, in-code-span, in-fence) |
+| `blob_sections` | ordinal, depth, title, slug, slug occurrence, parent, line span, bytes (UTF-8), characters (Unicode code points), tokens |
 | `blob_conditions` | `(blob, code, severity, message, line)` — parse-time oddities |
 
 **The proposed schema would store frontmatter as a JSON column, not DuckDB's `VARIANT`.** (Measured
@@ -240,7 +240,13 @@ cache, not a replacement for either layer.
 - ✅ **Shipped** (stages 1b/2): the pipeline restructure and the object-level, content-addressed parse
   cache described in §5.
 - ✅ **Shipped** (stage 3, schema only): the ten projection table shapes as Zod schemas with
-  generated JSON Schema, carrying no contract-version constant.
+  generated JSON Schema, carrying no contract-version constant. Includes the `blob_links` →
+  `blob_references` rename — the old name was a claim the data cannot make (a markdown link is
+  certainly a link, an `@`-prefixed token is not), so the table now records syntactic shape and
+  lexical features rather than classified link types. Classification needs the corpus, and the
+  parse cache is content-addressed across corpora — the same bytes share one blob-keyed row
+  everywhere they appear, so a fact true in one repository and false in another cannot live on
+  that row. §2's table above already reflects the new name.
 - 🔷 **Proposed** (stage 3 continuation and beyond): population of those tables from `ParseFacts`/
   `ResourceRegistry` at runtime; the git-lane and non-git-lane change-detection manifests from
   the scanning doc; the blob-SHA memo.
@@ -261,9 +267,6 @@ cache, not a replacement for either layer.
 >   rewrites content into bundles, so a resource's source and dist realizations have different bytes.
 > - **`(extentId, path)` is unique**, with collisions emitted as condition rows — two source paths can
 >   flatten to one dist slug, and that diagnostic currently survives only inside a `catch`.
-> - **`blob_links` becomes `blob_references`**, recording syntactic shape and lexical features rather
->   than classified link types. Classification needs the corpus, and the parse cache is
->   content-addressed across corpora.
 > - **`edges` splits into `edges` + `edge_resolutions`** with a candidate ordinal and a score. A scalar
 >   target cannot express ambiguous resolution or scored inference, and collapsing candidates to one
 >   winner is the last-write-wins behaviour per-zone resolution exists to remove.

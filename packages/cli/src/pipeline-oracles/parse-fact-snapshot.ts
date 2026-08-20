@@ -253,8 +253,8 @@ function toRow(contentKey: string, parserKind: ParserKind, parsed: ParseResult):
         ? null
         : {
             wordCount: parsed.contentMeasures.wordCount,
-            proseBytes: parsed.contentMeasures.proseBytes,
-            codeBlockBytes: parsed.contentMeasures.codeBlockBytes,
+            proseCharacters: parsed.contentMeasures.proseCharacters,
+            codeBlockCharacters: parsed.contentMeasures.codeBlockCharacters,
           },
     decodedLength: parsed.content.length,
     conditions: collectConditions(parsed),

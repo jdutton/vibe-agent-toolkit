@@ -55,7 +55,12 @@
         "bytes": {
           "type": "integer",
           "minimum": 0,
-          "description": "Bytes spanned by this section, including nested subsections"
+          "description": "UTF-8 bytes spanned by this section, including nested subsections"
+        },
+        "characters": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Unicode code points spanned by this section, including nested subsections"
         },
         "tokens": {
           "type": "integer",
@@ -73,6 +78,7 @@
         "lineStart",
         "lineEnd",
         "bytes",
+        "characters",
         "tokens"
       ],
       "additionalProperties": false,

@@ -21,29 +21,37 @@ import { flattenHeadings } from './blob-sections.js';
 /**
  * Split a document's characters into prose and fenced code, and count prose words.
  *
- * The two byte counts partition the content exactly — `proseBytes +
- * codeBlockBytes === content.length` — which is the invariant that makes a
- * measurement trustworthy rather than approximate. Ranges are merged before
- * summing, because a range list is a set of spans and two overlapping spans
- * cover their union, not the sum of their lengths.
+ * The two character counts partition the content exactly — `proseCharacters +
+ * codeBlockCharacters === [...content].length` — which is the invariant that
+ * makes a measurement trustworthy rather than approximate. Ranges are merged
+ * before summing, because a range list is a set of spans and two overlapping
+ * spans cover their union, not the sum of their lengths.
  *
- * Both counts are in UTF-16 code units, not bytes on disk: the input is a
- * decoded string, and decoding is many-to-one on malformed UTF-8. `BlobRow.bytes`
- * carries the on-disk count separately for exactly that reason.
+ * Both counts are **Unicode code points**, not UTF-16 code units and not bytes
+ * on disk: `fences` are UTF-16 code-unit offsets (a rewriter indexes the
+ * decoded JS string), so each slice is spread into an array before counting —
+ * `end - start` would count code units under a name that promises characters.
+ * `BlobRow.bytes` carries the on-disk byte count separately.
  *
  * @param content - Decoded document text
- * @param fences - Fenced-code offset ranges, from `collectCodeContextRanges`
+ * @param fences - Fenced-code offset ranges (UTF-16 code units), from `collectCodeContextRanges`
  * @returns The three measures
  */
 export function measureContent(content: string, fences: readonly OffsetRange[]): ContentMeasures {
   const merged = mergeRanges(fences, content.length);
-  let codeBlockBytes = 0;
+  let codeBlockCharacters = 0;
   const proseSegments: string[] = [];
   let cursor = 0;
 
   for (const [start, end] of merged) {
     if (start > cursor) proseSegments.push(content.slice(cursor, start));
-    codeBlockBytes += end - start;
+    // Slice and count, never `end - start`: those are code-unit indices, and
+    // subtracting them counts code units under a name that promises characters.
+    // Sliced into a local first — spreading `content.slice(...)` directly reads
+    // to `unicorn/no-useless-spread` as cloning an array, when it is actually a
+    // string being spread into code points.
+    const codeSegment = content.slice(start, end);
+    codeBlockCharacters += [...codeSegment].length;
     cursor = end;
   }
   if (cursor < content.length) proseSegments.push(content.slice(cursor));
@@ -53,8 +61,9 @@ export function measureContent(content: string, fences: readonly OffsetRange[]):
   const prose = proseSegments.join(' ');
   return {
     wordCount: prose.split(/\s+/u).filter((word) => word.length > 0).length,
-    proseBytes: content.length - codeBlockBytes,
-    codeBlockBytes,
+    // The partition invariant, in code points on both sides.
+    proseCharacters: [...content].length - codeBlockCharacters,
+    codeBlockCharacters,
   };
 }
 
@@ -97,8 +106,8 @@ export function blobRowFor(contentKey: string, sizeBytes: number, parsed: ParseR
     frontmatter: (parsed.frontmatter ?? null) as BlobRow['frontmatter'],
     frontmatterError: parsed.frontmatterError ?? null,
     wordCount: measures?.wordCount ?? 0,
-    proseBytes: measures?.proseBytes ?? 0,
-    codeBlockBytes: measures?.codeBlockBytes ?? 0,
+    proseCharacters: measures?.proseCharacters ?? 0,
+    codeBlockCharacters: measures?.codeBlockCharacters ?? 0,
     linkCount: parsed.links.length,
     headingCount,
     sectionCount: headingCount,

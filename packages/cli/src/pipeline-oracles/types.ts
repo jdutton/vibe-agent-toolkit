@@ -207,8 +207,8 @@ export interface LexicalReferenceFact {
  */
 export interface ContentMeasuresFact {
   wordCount: number;
-  proseBytes: number;
-  codeBlockBytes: number;
+  proseCharacters: number;
+  codeBlockCharacters: number;
 }
 
 /** One heading, with the slug anchors resolve against. */
@@ -333,8 +333,8 @@ export interface ParseFactRow {
    */
   anchors: string[] | null;
   /**
-   * Word and byte accounting split by code context, or `null` when the parse
-   * result omits the field.
+   * Word and character accounting split by code context, or `null` when the
+   * parse result omits the field.
    *
    * Recorded because it is **carried in the parse cache** and because it is the
    * only fact in a row derived from the AST's `code` node offsets — a cache
@@ -342,10 +342,13 @@ export interface ParseFactRow {
    * for every document while `links`, `headings` and both frontmatter columns
    * held perfectly still.
    *
-   * It is also the one column that pairs with {@link decodedLength} to make the
-   * partition checkable from the golden alone: `wordCount` aside,
-   * `proseBytes + codeBlockBytes` must equal `decodedLength`, so a row that
-   * violates it is visibly wrong without re-running anything.
+   * `proseCharacters` and `codeBlockCharacters` are **Unicode code points**;
+   * {@link decodedLength} is **UTF-16 code units** of the same string. The two
+   * units coincide for BMP-only content, so `wordCount` aside,
+   * `proseCharacters + codeBlockCharacters` equals `decodedLength` for any
+   * document without astral characters (surrogate pairs) — but is not a
+   * general invariant, because a surrogate pair is one code point and two code
+   * units.
    */
   contentMeasures: ContentMeasuresFact | null;
   /**

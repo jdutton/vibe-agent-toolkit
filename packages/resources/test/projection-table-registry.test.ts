@@ -244,6 +244,7 @@ describe('PROJECTION_TABLES primary keys', () => {
           lineStart: 1,
           lineEnd: 2,
           bytes: 10,
+          characters: 10,
           tokens: 3,
         });
       }

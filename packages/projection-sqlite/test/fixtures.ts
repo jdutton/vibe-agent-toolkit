@@ -35,8 +35,8 @@ export function sampleBlobRows(key: string = FIRST_BLOB): BlobScopedRows {
       frontmatter: { title: 'x', tags: ['a', 'b'], nested: { deep: null } },
       frontmatterError: null,
       wordCount: 3,
-      proseBytes: 2,
-      codeBlockBytes: 0,
+      proseCharacters: 2,
+      codeBlockCharacters: 0,
       linkCount: 1,
       headingCount: 1,
       sectionCount: 1,
@@ -69,6 +69,7 @@ export function sampleBlobRows(key: string = FIRST_BLOB): BlobScopedRows {
       lineStart: 1,
       lineEnd: 2,
       bytes: 9,
+      characters: 9,
       tokens: 2,
     }],
     // `line: null` is the case a nullable primary-key column makes interesting:

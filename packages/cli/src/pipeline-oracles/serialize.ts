@@ -288,15 +288,15 @@ function renderMultiline(value: string | null): string {
  *
  * Named rather than positional (`words=… prose=… code=…`), because the three
  * are all bare integers: a transposition of two of them would be invisible in a
- * positional rendering, and `proseBytes`/`codeBlockBytes` are exactly the pair a
- * mistake would swap.
+ * positional rendering, and `proseCharacters`/`codeBlockCharacters` are exactly
+ * the pair a mistake would swap.
  *
  * @param measures - The measures, or null when the field was absent
  * @returns `-`, or the three counts labelled
  */
 function renderContentMeasures(measures: ContentMeasuresFact | null): string {
   if (measures === null) return '-';
-  return `words=${String(measures.wordCount)} prose=${String(measures.proseBytes)} code=${String(measures.codeBlockBytes)}`;
+  return `words=${String(measures.wordCount)} prose=${String(measures.proseCharacters)} code=${String(measures.codeBlockCharacters)}`;
 }
 
 /**

@@ -67,17 +67,18 @@ import {
 } from './resource-metadata.js';
 
 /**
- * Byte and word accounting for one blob, split by code context.
+ * Character and word accounting for one blob, split by code context.
  *
- * Both byte counts are in UTF-16 code units of the *decoded* document, not
- * bytes on disk — decoding is many-to-one on malformed UTF-8, and `BlobRow.bytes`
- * carries the on-disk count separately for that reason.
+ * Both counts are **Unicode code points** of the decoded document — not UTF-16
+ * code units and not bytes on disk. `BlobRow.bytes` carries the on-disk byte
+ * count separately, and reference `startOffset`/`endOffset` remain code units
+ * because a rewriter indexes the decoded JS string.
  */
 export const ContentMeasuresSchema = z.object({
   wordCount: z.number().int().nonnegative().describe('Whitespace-delimited words outside fenced code'),
-  proseBytes: z.number().int().nonnegative().describe('Characters outside fenced code'),
-  codeBlockBytes: z.number().int().nonnegative().describe('Characters inside fenced code'),
-}).describe('Byte and word accounting for one blob, split by code context');
+  proseCharacters: z.number().int().nonnegative().describe('Unicode code points outside fenced code'),
+  codeBlockCharacters: z.number().int().nonnegative().describe('Unicode code points inside fenced code'),
+}).describe('Character and word accounting for one blob, split by code context');
 
 export type ContentMeasures = z.infer<typeof ContentMeasuresSchema>;
 
@@ -130,7 +131,7 @@ export const ParseFactsSchema = z.object({
   /**
    * See `ParseResult.contentMeasures`. A function of the bytes alone, so it is
    * storable by the same rule as `estimatedTokenCount` — and it must be stored,
-   * because recomputing `codeBlockBytes` needs the AST the cache exists to
+   * because recomputing `codeBlockCharacters` needs the AST the cache exists to
    * avoid building.
    */
   contentMeasures: ContentMeasuresSchema.optional(),

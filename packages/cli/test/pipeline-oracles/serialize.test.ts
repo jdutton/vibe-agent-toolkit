@@ -181,7 +181,7 @@ describe('renderParseFactSnapshot', () => {
           { key: 'value', typeName: 'number', valueDigest: 'bbbbbbbbbbbb' },
         ],
         anchors: ['top'],
-        contentMeasures: { wordCount: 7, proseBytes: 30, codeBlockBytes: 12 },
+        contentMeasures: { wordCount: 7, proseCharacters: 30, codeBlockCharacters: 12 },
         decodedLength: 42,
         conditions: [{ code: 'PARSE_ODDITY', message: 'something\nmultiline', line: 2 }],
         optionalArrays: [
@@ -329,13 +329,13 @@ describe('renderParseFactSnapshot', () => {
     });
 
   it('labels each measure, so a transposition of two counts is visible', () => {
-    // All three are bare integers. Positionally, swapping proseBytes and
-    // codeBlockBytes renders identically to not swapping them — and those two
-    // are exactly the pair a mistake would swap.
+    // All three are bare integers. Positionally, swapping proseCharacters and
+    // codeBlockCharacters renders identically to not swapping them — and those
+    // two are exactly the pair a mistake would swap.
     expect(renderParseFactSnapshot(facts).split('\n')).toContain(
       'contentMeasures: words=7 prose=30 code=12',
     );
-    expect(withContentMeasures({ wordCount: 7, proseBytes: 12, codeBlockBytes: 30 })).not.toBe(
+    expect(withContentMeasures({ wordCount: 7, proseCharacters: 12, codeBlockCharacters: 30 })).not.toBe(
       renderParseFactSnapshot(facts),
     );
   });
@@ -346,7 +346,7 @@ describe('renderParseFactSnapshot', () => {
     // stopped producing the field indistinguishable from an empty corpus.
     expect(withContentMeasures(null)).toContain('contentMeasures: -');
     expect(withContentMeasures(null)).not.toBe(
-      withContentMeasures({ wordCount: 0, proseBytes: 0, codeBlockBytes: 0 }),
+      withContentMeasures({ wordCount: 0, proseCharacters: 0, codeBlockCharacters: 0 }),
     );
   });
 

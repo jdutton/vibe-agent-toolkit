@@ -37,17 +37,17 @@ describe('blobRowFor', () => {
   it('defaults the three measures to zero when the parse omitted them', () => {
     const row = blobRowFor(CONTENT_KEY, 8, parseResult());
     expect(row.wordCount).toBe(0);
-    expect(row.proseBytes).toBe(0);
-    expect(row.codeBlockBytes).toBe(0);
+    expect(row.proseCharacters).toBe(0);
+    expect(row.codeBlockCharacters).toBe(0);
   });
 
   it('carries the measures through when the parse supplied them', () => {
     const row = blobRowFor(CONTENT_KEY, 8, parseResult({
-      contentMeasures: { wordCount: 3, proseBytes: 6, codeBlockBytes: 2 },
+      contentMeasures: { wordCount: 3, proseCharacters: 6, codeBlockCharacters: 2 },
     }));
     expect(row.wordCount).toBe(3);
-    expect(row.proseBytes).toBe(6);
-    expect(row.codeBlockBytes).toBe(2);
+    expect(row.proseCharacters).toBe(6);
+    expect(row.codeBlockCharacters).toBe(2);
   });
 
   it('nulls frontmatter rather than emitting an empty object', () => {

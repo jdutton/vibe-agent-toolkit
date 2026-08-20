@@ -12,7 +12,7 @@
         "bytes": {
           "type": "integer",
           "minimum": 0,
-          "description": "Raw byte length of the blob"
+          "description": "Raw on-disk byte length of the blob — NOT necessarily UTF-8 bytes. For a BOM'd UTF-16 or UTF-32 source this differs from the sum of that blob's `blob_sections.bytes`, which are UTF-8 bytes of the decoded text"
         },
         "tokenEstimate": {
           "type": "integer",
@@ -70,15 +70,15 @@
           "type": "integer",
           "minimum": 0
         },
-        "proseBytes": {
+        "proseCharacters": {
           "type": "integer",
           "minimum": 0,
-          "description": "Bytes outside fenced/inline code"
+          "description": "Unicode code points outside fenced/inline code"
         },
-        "codeBlockBytes": {
+        "codeBlockCharacters": {
           "type": "integer",
           "minimum": 0,
-          "description": "Bytes inside fenced code blocks"
+          "description": "Unicode code points inside fenced code blocks"
         },
         "linkCount": {
           "type": "integer",
@@ -100,8 +100,8 @@
         "frontmatter",
         "frontmatterError",
         "wordCount",
-        "proseBytes",
-        "codeBlockBytes",
+        "proseCharacters",
+        "codeBlockCharacters",
         "linkCount",
         "headingCount",
         "sectionCount"

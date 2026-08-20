@@ -107,11 +107,11 @@ export interface ParseResult {
    */
   lexicalReferences?: LexicalReference[];
   /**
-   * Word and byte accounting for this blob, split by code context —
-   * `BlobRow`'s `wordCount` / `proseBytes` / `codeBlockBytes`.
+   * Word and character accounting for this blob, split by code context —
+   * `BlobRow`'s `wordCount` / `proseCharacters` / `codeBlockCharacters`.
    *
    * Computed at parse time rather than at population time because
-   * `codeBlockBytes` needs the AST's `code` node offsets, which exist only
+   * `codeBlockCharacters` needs the AST's `code` node offsets, which exist only
    * while the tree is live. Both parsers currently always supply it, so the
    * absent state is defensive rather than reachable; the key stays optional to
    * match {@link anchors} and {@link lexicalReferences}, and because a
@@ -132,7 +132,10 @@ export interface ParseResult {
  * `Math.ceil(text.length / 4)` at each site is how an estimator drifts.
  *
  * The input is a **decoded** string, so this counts UTF-16 code units, not bytes
- * on disk — the same caveat `ContentMeasures` carries.
+ * on disk. `ContentMeasures` no longer carries that caveat — `proseCharacters` and
+ * `codeBlockCharacters` count Unicode code points — so `tokens` is now the only
+ * code-unit quantity in a `blob_sections` row whose other two size columns
+ * (`bytes`, `characters`) just gained explicit, different units.
  *
  * @param text - Decoded text to estimate
  * @returns Estimated token count, rounded up

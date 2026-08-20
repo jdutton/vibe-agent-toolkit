@@ -189,8 +189,8 @@ function contribute(builder: ProjectionBuilder, side: Side): void {
     frontmatter: null,
     frontmatterError: null,
     wordCount: 2,
-    proseBytes: 10,
-    codeBlockBytes: 0,
+    proseCharacters: 10,
+    codeBlockCharacters: 0,
     linkCount: 0,
     headingCount: 1,
     sectionCount: 1,
@@ -209,6 +209,7 @@ function contribute(builder: ProjectionBuilder, side: Side): void {
     lineStart: 1,
     lineEnd: 2,
     bytes: 10,
+    characters: 10,
     tokens: 3,
   });
   builder.addBlobCondition({

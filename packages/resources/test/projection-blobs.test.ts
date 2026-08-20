@@ -17,8 +17,8 @@ describe('BlobRowSchema', () => {
     frontmatter: null,
     frontmatterError: null,
     wordCount: 1,
-    proseBytes: 10,
-    codeBlockBytes: 0,
+    proseCharacters: 10,
+    codeBlockCharacters: 0,
     linkCount: 0,
     headingCount: 0,
     sectionCount: 0,
@@ -32,8 +32,8 @@ describe('BlobRowSchema', () => {
       frontmatter: { status: 'accepted', sources: ['a.md', 'b.md'] },
       frontmatterError: null,
       wordCount: 150,
-      proseBytes: 900,
-      codeBlockBytes: 124,
+      proseCharacters: 900,
+      codeBlockCharacters: 124,
       linkCount: 3,
       headingCount: 2,
       sectionCount: 2,
@@ -156,6 +156,7 @@ describe('BlobSectionRowSchema', () => {
       lineStart: 1,
       lineEnd: 20,
       bytes: 400,
+      characters: 380,
       tokens: 90,
     };
     expect(BlobSectionRowSchema.safeParse(row).success).toBe(true);
@@ -173,6 +174,7 @@ describe('BlobSectionRowSchema', () => {
       lineStart: 40,
       lineEnd: 55,
       bytes: 300,
+      characters: 290,
       tokens: 60,
     };
     expect(BlobSectionRowSchema.safeParse(row).success).toBe(true);
@@ -190,6 +192,7 @@ describe('BlobSectionRowSchema', () => {
       lineStart: 1,
       lineEnd: 2,
       bytes: 10,
+      characters: 10,
       tokens: 2,
     };
     expect(BlobSectionRowSchema.safeParse(row).success).toBe(false);
