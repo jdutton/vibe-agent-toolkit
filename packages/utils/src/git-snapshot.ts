@@ -214,6 +214,44 @@ export function gitTreeSnapshot(options: { cwd: string }): GitTreeSnapshot | nul
 }
 
 /**
+ * The snapshot this bracket ALREADY holds for a repository — never a new one.
+ *
+ * The difference from {@link gitTreeSnapshot} is the whole reason this exists:
+ * that function TAKES a snapshot when the memo misses, and a snapshot is three
+ * spawns and a `git add --all`. This one only ever reports what a previous
+ * caller already paid for, so a consumer can prefer it and fall back to its own
+ * cheaper question without any risk of turning a miss into the most expensive
+ * git operation in the package.
+ *
+ * That asymmetry is what makes it safe to reach for from shared code. The
+ * {@link GitTracker} does exactly this: inside the projection's git lane a
+ * snapshot is already in hand and describes precisely the set its own
+ * `git ls-files --cached --others --exclude-standard` would spawn to rebuild,
+ * while on the incumbent walk no snapshot is ever taken and the tracker must
+ * keep spawning. One consumer, two lanes, and neither pays for the other's
+ * strategy.
+ *
+ * @param cwd - Any directory inside the repository of interest
+ * @returns The memoized snapshot, or `undefined` when this bracket has none —
+ *   which includes there being no bracket open at all, and includes a memoized
+ *   `null` (git could not answer). Callers treat all three the same way: ask
+ *   your own question instead
+ */
+export function peekGitTreeSnapshot(cwd: string): GitTreeSnapshot | undefined {
+  const memo = snapshotsInBracket.getStore();
+  if (memo === undefined) return undefined;
+
+  // Resolved the same way `gitTreeSnapshot` resolves it, because the memo is
+  // keyed by repository root and not by the directory anyone asked from. A peek
+  // keyed on `cwd` would miss every time the snapshot was taken from a different
+  // depth — which is the normal case, and a miss here is silent.
+  const repositoryRoot = gitFindRoot(cwd);
+  if (repositoryRoot === null) return undefined;
+
+  return memo.get(repositoryRoot) ?? undefined;
+}
+
+/**
  * Ask git, and rebase the answer onto absolute paths.
  *
  * Split out so {@link gitTreeSnapshot} reads as "key, look up, or take one" —

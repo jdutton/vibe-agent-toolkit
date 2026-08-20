@@ -548,9 +548,31 @@ export function crawlSourceSelector(): string | undefined {
 }
 
 export function crawlSourceFor(root: string): CrawlSource {
-  const wantsGit = process.env[EXTENT_SOURCE_ENV] === EXTENT_SOURCE_GIT;
-  if (wantsGit && gitFindRoot(root) !== null) {
+  if (gitExtentSelected(root)) {
     return new GitCrawlSource(root);
   }
   return new FilesystemCrawlSource(root);
+}
+
+/**
+ * Will {@link crawlSourceFor} hand back the git enumerator for this root?
+ *
+ * Exported so a caller can act on the consequence of that choice BEFORE the
+ * crawl runs, without duplicating the condition — two copies of "is the git
+ * lane on" is exactly how one of them ends up stale.
+ *
+ * The consequence that matters today: the git enumerator takes a
+ * `gitTreeSnapshot` during enumeration no matter what. A caller inside a
+ * `withGitSnapshotCache` bracket can therefore take that same snapshot early,
+ * pay nothing extra for it (the bracket memoizes, so the enumerator's own call
+ * becomes free), and let other consumers read the answers off it. Doing that
+ * when this returns FALSE would be a pure loss — a snapshot is `git add --all`
+ * plus two more spawns, bought to save something smaller.
+ *
+ * @param root - The corpus root the crawl will run against
+ * @returns Whether the git enumerator is both requested and usable here
+ */
+export function gitExtentSelected(root: string): boolean {
+  const wantsGit = process.env[EXTENT_SOURCE_ENV] === EXTENT_SOURCE_GIT;
+  return wantsGit && gitFindRoot(root) !== null;
 }

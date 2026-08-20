@@ -13,6 +13,7 @@ import {
   crawlTimingStart,
   recordSharedPass,
 } from './crawl-timing.js';
+import { peekGitTreeSnapshot } from './git-snapshot.js';
 import { gitLsFiles, isGitIgnored } from './git-utils.js';
 import { safePath, toForwardSlash } from './path-utils.js';
 
@@ -123,7 +124,7 @@ export class GitTracker {
     const startedAt = crawlTimingStart();
     const includeUntracked = options?.includeUntracked ?? true;
 
-    const files = gitLsFiles({
+    const files = this.activePathsFromOpenSnapshot(includeUntracked) ?? gitLsFiles({
       cwd: this.projectRoot,
       ...(includeUntracked ? { includeUntracked: true } : {}),
     });
@@ -146,6 +147,68 @@ export class GitTracker {
     // because a failed `git ls-files` still spawned a process and still cost the
     // command the time it took to fail.
     recordSharedPass(CRAWL_SHARED_GIT_TRACKER_ID, startedAt);
+  }
+
+  /**
+   * The active set read off a snapshot this process has ALREADY taken — or
+   * `null` to say "ask git yourself".
+   *
+   * ## Why this is the same question, not a similar one
+   *
+   * `git ls-files --cached --others --exclude-standard` returns
+   * `tracked ∪ (untracked ∧ ¬ignored)`. A snapshot is `git add --all` **without**
+   * `--force` staged into a throwaway index, whose membership is that same set
+   * by construction — the exclusion of ignored paths is `--force`'s absence in
+   * both cases. So where a snapshot is already in hand, the spawn this method
+   * replaces would re-derive a set the process is already holding.
+   *
+   * It is deliberately a PEEK ({@link peekGitTreeSnapshot}) and never a take: a
+   * snapshot costs a `git add --all`, so causing one to avoid an `ls-files`
+   * would be a large loss dressed as a saving. On the incumbent walk no snapshot
+   * is ever taken, the peek misses, and this tracker spawns exactly as it always
+   * has.
+   *
+   * ## The one divergence, and why it is an improvement
+   *
+   * `--cached` reads the REAL index, so a tracked file deleted from the working
+   * tree is still listed. `git add --all` stages that deletion, so the snapshot
+   * omits it. The set is therefore not identical — it is the same set minus
+   * paths that do not exist, which is what {@link isIgnoredByActiveSet} already
+   * documents the active set to be ("it can only ever contain paths that
+   * EXIST"). The snapshot-sourced set honours that sentence more exactly than
+   * the spawn does.
+   *
+   * @param includeUntracked - The caller's requested membership
+   * @returns Root-relative paths in `git ls-files` shape, or `null` when no
+   *   snapshot is available or the request is one a snapshot cannot answer
+   */
+  private activePathsFromOpenSnapshot(includeUntracked: boolean): string[] | null {
+    // A snapshot cannot express the tracked-ONLY set: `add --all` stages
+    // untracked-not-ignored files too, and nothing in the result marks which
+    // entries were already tracked. Declining is the only correct answer.
+    if (!includeUntracked) return null;
+
+    const snapshot = peekGitTreeSnapshot(this.projectRoot);
+    if (snapshot === undefined) return null;
+
+    const relativePaths: string[] = [];
+    for (const entry of snapshot.entries) {
+      // A snapshot covers the whole REPOSITORY, which may be an ancestor of this
+      // tracker's root — `git ls-files` run at that root scopes its listing to
+      // it, so anything above is not this tracker's business and must not enter
+      // the active set. Everything below is kept verbatim, symlinks and
+      // submodule gitlinks included, because `--cached` lists those too.
+      const relativePath = toForwardSlash(safePath.relative(this.normalizedProjectRoot, entry.absolutePath));
+      // A leading `..` SEGMENT, not a `../` prefix: compared as a path segment,
+      // a file legitimately named `..hidden` is kept rather than silently
+      // dropped as if it were an escape.
+      if (relativePath.length === 0 || relativePath.split('/')[0] === '..') {
+        continue;
+      }
+      relativePaths.push(relativePath);
+    }
+
+    return relativePaths;
   }
 
   /**

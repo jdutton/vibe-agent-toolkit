@@ -110,6 +110,7 @@ const BARREL_EXPORTS = [
   'parseGitUrl',
   'parseStreamJsonTranscript',
   'parseWholeNumberAtLeast',
+  'peekGitTreeSnapshot',
   'probeAuthStatus',
   'protectedEnvNames',
   'readTextContent',

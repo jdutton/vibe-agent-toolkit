@@ -456,6 +456,7 @@ export {
   EXTENT_SOURCE_ENV,
   EXTENT_SOURCE_GIT,
   FilesystemCrawlSource,
+  gitExtentSelected,
   GitCrawlSource,
   type CrawlSource,
   type CrawlSourceKind,

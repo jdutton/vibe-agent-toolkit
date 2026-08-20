@@ -7,6 +7,7 @@ import { existsSync, statSync } from 'node:fs';
 import {
   buildResourcePopulation,
   DEFAULT_RESOURCE_INCLUDE,
+  gitExtentSelected,
   ResourceRegistry,
   type CrawlOptions,
   type CrawlSourceKind,
@@ -15,7 +16,7 @@ import {
   type ResourcePopulationSource,
   type ResourceRegistryOptions,
 } from '@vibe-agent-toolkit/resources';
-import { GitTracker, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { GitTracker, gitTreeSnapshot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { loadConfig } from './config-loader.js';
 import type { Logger } from './logger.js';
@@ -293,13 +294,18 @@ export async function withResourcePopulationSource<T>(
   }
 
   const gitTracker = options.gitTracker ?? new GitTracker(options.root);
-  if (options.gitTracker === undefined) {
-    await gitTracker.initialize();
-  }
 
-  return withPopulationCache({ root: options.root }, async (cache) =>
-    work(populationSourceFor(options.root, gitTracker, options.observeExtentSource ?? (() => undefined), cache)),
-  );
+  return withPopulationCache({ root: options.root }, async (cache) => {
+    // Initialized inside the bracket for the reason `loadResourcesWithConfig`
+    // gives at its own call: the store has already taken the snapshot that
+    // answers this tracker's question, so asking git again is a spawn spent
+    // rebuilding a set the process is holding.
+    if (options.gitTracker === undefined) {
+      await gitTracker.initialize();
+    }
+
+    return work(populationSourceFor(options.root, gitTracker, options.observeExtentSource ?? (() => undefined), cache));
+  });
 }
 
 /**
@@ -361,11 +367,10 @@ export async function loadResourcesWithConfig(
     logger.debug(`Loaded config from ${projectRoot}`);
   }
 
-  // Create and initialize GitTracker anchored at the resolved projectRoot.
+  // Built here, but deliberately NOT initialized here — see the call inside the
+  // population-cache bracket below. The registry only reads the tracker during
+  // `crawl`, which happens inside that bracket, so nothing observes it empty.
   const gitTracker = new GitTracker(projectRoot);
-  await gitTracker.initialize();
-  const stats = gitTracker.getStats();
-  logger.debug(`GitTracker initialized with ${stats.cacheSize} tracked files`);
 
   // Create registry and crawl
   // Build options conditionally to satisfy exactOptionalPropertyTypes
@@ -407,6 +412,27 @@ export async function loadResourcesWithConfig(
   // outside this bracket can reach it: the population source is called from
   // inside `registry.crawl` and nowhere else.
   const lane = await withPopulationCache({ root: projectRoot }, async (cache) => {
+    // The git enumerator takes a `gitTreeSnapshot` during the crawl below no matter
+    // what. Taking it HERE instead is the same snapshot moved a few lines earlier —
+    // the open bracket memoizes it, so the enumerator's own call becomes a lookup —
+    // and it puts the answer in hand before the tracker asks its question.
+    //
+    // ⚠️ Gated, because ungated this is a LOSS: a snapshot is `git add --all` plus
+    // two more spawns, and on the filesystem enumerator or the incumbent walk
+    // nothing would ever consume it. Guarded by `gitExtentSelected` rather than a
+    // second copy of the condition, so the two cannot drift.
+    if (gitExtentSelected(projectRoot)) {
+      gitTreeSnapshot({ cwd: projectRoot });
+    }
+
+    // Now inside the bracket, and after the snapshot above. The set a snapshot
+    // describes — `tracked ∪ (untracked ∧ ¬ignored)` — is exactly the set this
+    // would otherwise spawn `git ls-files --cached --others --exclude-standard` to
+    // rebuild, so on the git lane it reads the answer instead of re-asking. Where
+    // no snapshot was taken the peek misses and it spawns exactly as before.
+    await gitTracker.initialize();
+    logger.debug(`GitTracker initialized with ${gitTracker.getStats().cacheSize} tracked files`);
+
     const populationSource = populationSourceFor(projectRoot, gitTracker, (kind) => {
       extentSource = kind;
     }, cache);
