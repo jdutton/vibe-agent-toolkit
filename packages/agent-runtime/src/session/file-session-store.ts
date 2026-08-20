@@ -9,19 +9,16 @@ import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 
 
-import type {
-  RuntimeSession,
-  SessionStore,
-  SessionStoreOptions,
-} from '@vibe-agent-toolkit/agent-runtime';
+import { safePath } from '@vibe-agent-toolkit/utils';
+
+import { SessionNotFoundError } from './errors.js';
 import {
   createInitialSession,
   isSessionExpired,
   updateSessionAccess,
-  SessionNotFoundError,
   validateSessionId,
-} from '@vibe-agent-toolkit/agent-runtime';
-import { safePath } from '@vibe-agent-toolkit/utils';
+} from './session-store-helpers.js';
+import type { RuntimeSession, SessionStore, SessionStoreOptions } from './types.js';
 
 /**
  * File-based session store for VAT agents.
