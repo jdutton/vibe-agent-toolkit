@@ -73,7 +73,7 @@
               "type": "null"
             }
           ],
-          "description": "Last modification time, or null when this path has never been observed on disk"
+          "description": "Last modification time, or null when nothing stat-ed this path — it is absent, or its shape came from git rather than from the filesystem"
         },
         "exists": {
           "type": "boolean"

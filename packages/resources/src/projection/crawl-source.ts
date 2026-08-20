@@ -17,6 +17,24 @@
  * | ignored members | prune list, then walk only that territory | same walk, undifferentiated |
  * | content hint | blob OID, already computed | none — bytes get read and hashed |
  * | directories | derived from paths + collapsed-directory entries | walked directly |
+ * | path shape | index mode bits, so the realization never `lstat`s | none — every path is stat'ed |
+ *
+ * ## The shape column is where the two cost models genuinely diverge
+ *
+ * Until it existed they did not. Both sources returned bare paths, both fed the
+ * same `FilesystemExtentContributor`, and its per-path `collectRealization`
+ * opened with an unconditional `lstat` — so the git source saved ~963 `readdir`
+ * calls, added several git spawns, and paid **byte-identically** for everything
+ * else: 20,908 `lstat` on an 8,548-file adopter tree from either source. Git
+ * already held the answer (`git add -A` stages deletions, so a snapshot entry
+ * exists; a blob is not a directory; mode `120000` is a symlink and is dropped
+ * from membership here anyway) and dropped it at this seam.
+ *
+ * Carrying it is a deliberate asymmetry, not a leak: the git source is meant to
+ * be the one that does not touch the filesystem for what git can answer, and
+ * {@link EnumeratedPath.shape} is `null` on every path it had to walk for —
+ * ignored territory, submodule contents, collapsed untracked directory entries —
+ * so the strictness stops exactly where git's knowledge does.
  *
  * ## What the git implementation is NOT allowed to do
  *
@@ -59,6 +77,8 @@ import {
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
 
+import type { PathShape } from './realizations.js';
+
 /**
  * One path an enumeration source found, with whatever that source knew for free.
  */
@@ -86,6 +106,21 @@ export interface EnumeratedPath {
    * parse is filed under.
    */
   contentHint: string | null;
+  /**
+   * What this source already knows the path IS, or `null` when it must be
+   * stat'ed.
+   *
+   * Unlike {@link EnumeratedPath.contentHint} this is **authoritative**: a
+   * realization built from it never calls `lstat`, so a wrong answer here is a
+   * wrong row rather than a slow one. Supply it only where {@link PathShape}'s
+   * bar is met — present, not a symlink, and known to be a file or a directory.
+   *
+   * Required rather than optional, and `null` rather than absent, for the reason
+   * `contentHint` is: a new source must *state* that it knows nothing, because
+   * the failure mode of forgetting is a population that silently stops being
+   * described.
+   */
+  shape: PathShape | null;
 }
 
 /** An enumeration strategy for one corpus root. */
@@ -126,7 +161,7 @@ export class FilesystemCrawlSource implements CrawlSource {
   /**
    * Walk the root.
    *
-   * @returns Every admitted path, with no content hints
+   * @returns Every admitted path, with no content hints and no shapes
    */
   async enumerate(): Promise<readonly EnumeratedPath[]> {
     const absolutePaths = await crawlDirectory({
@@ -143,7 +178,17 @@ export class FilesystemCrawlSource implements CrawlSource {
       respectGitignore: false,
     });
 
-    return absolutePaths.map((absolutePath) => ({ absolutePath, contentHint: null }));
+    // `shape: null` even though `crawlDirectory` walked with `readdir`, which
+    // does carry a dirent type. Supplying it here would erase the asymmetry the
+    // module docstring describes, and it is not this change's measurement to
+    // take: the walk is the incumbent, its cost is the baseline every git-source
+    // number is quoted against, and moving both arms at once leaves neither
+    // attributable. It remains available if it is ever wanted for its own sake.
+    return absolutePaths.map((absolutePath) => ({
+      absolutePath,
+      contentHint: null,
+      shape: null,
+    }));
   }
 }
 
@@ -166,7 +211,7 @@ export class GitCrawlSource implements CrawlSource {
    * Ask git what it can see, then walk only what it cannot.
    *
    * @returns Every admitted path, with content hints on the regular files git
-   *   already hashed
+   *   already hashed and shapes on everything git described rather than walked
    * @throws When git does not answer. An empty population would be
    *   indistinguishable from a repository with no files, which is the same
    *   confusion `GitExtentContributor` refuses to ship
@@ -176,23 +221,36 @@ export class GitCrawlSource implements CrawlSource {
     const admits = (absolutePath: string): boolean =>
       isMember(relativeToRoot(absolutePath, this.#root));
 
-    const found = new Map<string, string | null>();
+    const found = new Map<string, EnumeratedPath>();
+    const record = (entry: EnumeratedPath): void => {
+      if (!found.has(entry.absolutePath)) found.set(entry.absolutePath, entry);
+    };
 
     const { members, submodules } = this.#snapshotMembers(admits);
-    for (const entry of members) {
-      found.set(entry.absolutePath, entry.contentHint);
-    }
+    for (const entry of members) found.set(entry.absolutePath, entry);
     for (const absolutePath of await this.#untrackedTerritory(admits, submodules)) {
-      if (!found.has(absolutePath)) found.set(absolutePath, null);
+      // `shape: null`, and that is the honest answer rather than a conservative
+      // one: every path here came from a filesystem walk or from a collapsed
+      // `ls-files --others --directory` entry. The walk knows the dirent type but
+      // deliberately does not report it (see `FilesystemCrawlSource`), and the
+      // collapsed entry is worse than unknown — git marks a *directory* with a
+      // trailing slash by `lstat`ing it, so a symlink pointing at a directory
+      // arrives spelled exactly like a file and a shape derived from it would be
+      // a wrong row.
+      record({ absolutePath, contentHint: null, shape: null });
     }
-    // Last, and unconditionally `null`: a directory has no bytes, so it can
-    // never carry a hint, and an ancestor already recorded by the snapshot as a
-    // FILE must not be relabelled here.
+    // Last, so an ancestor already recorded by the snapshot as a FILE is not
+    // relabelled. `contentHint` is unconditionally null — a directory has no
+    // bytes — and `shape` is unconditionally `'directory'`, which is sound
+    // because these paths were DERIVED from the names of paths git or the walk
+    // found beneath them: a path exists only if its ancestors do, and neither
+    // git nor a `followSymlinks: false` walk reports anything beneath a symlink,
+    // so no ancestor reached here can be one.
     for (const absolutePath of ancestorDirectories([...found.keys()], this.#root)) {
-      if (!found.has(absolutePath)) found.set(absolutePath, null);
+      record({ absolutePath, contentHint: null, shape: 'directory' });
     }
 
-    return [...found].map(([absolutePath, contentHint]) => ({ absolutePath, contentHint }));
+    return [...found.values()];
   }
 
   /**
@@ -245,7 +303,14 @@ export class GitCrawlSource implements CrawlSource {
         continue;
       }
 
-      members.push({ absolutePath: entry.absolutePath, contentHint: entry.oid });
+      // `shape: 'file'` on all three counts, each from the snapshot rather than
+      // from a stat: it EXISTS because `getGitTreeSnapshot` is `git add --all`
+      // into a throwaway index, which stages deletions — a tracked file removed
+      // from the working tree is absent from `entries` rather than present and
+      // stale; it is NOT A DIRECTORY because a tree object records blobs and
+      // git lists no directories at all; and it is NOT A SYMLINK because mode
+      // `120000` was dropped a few lines above.
+      members.push({ absolutePath: entry.absolutePath, contentHint: entry.oid, shape: 'file' });
     }
 
     return { members, submodules };

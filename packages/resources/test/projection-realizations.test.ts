@@ -19,6 +19,8 @@ const EXTENT_ID = 'ctx-filesystem';
 const RESOURCE_ID = 'res-0000';
 const NESTED_RELATIVE = 'docs/guides/Setup.MD';
 const NOWHERE = 'nowhere.md';
+/** Named but never created — the fixture the shape cases deliberately contradict. */
+const UNWRITTEN = 'never-written.md';
 const IGNORED_LOG = 'ignored.log';
 const IGNORED_DIR = 'dist';
 const DOCS_DIR = 'docs';
@@ -28,7 +30,7 @@ let root: string;
 /** The parts of a {@link RealizationContext} a case may vary. */
 type RealizationOptions = Partial<Pick<
   RealizationContext,
-  'contentCache' | 'contentDemand' | 'gitTracker'
+  'contentCache' | 'contentDemand' | 'gitTracker' | 'observedShape'
 >>;
 
 /** Realize a fixture path, varying only the policy inputs a case cares about. */
@@ -199,6 +201,85 @@ describe('collectRealization', () => {
     const row = await nestedRow();
 
     expect(() => ResourceRealizationRowSchema.parse(row)).not.toThrow();
+  });
+});
+
+/**
+ * **The shape is authoritative, and these fixtures LIE ON PURPOSE.**
+ *
+ * A change whose whole effect is "one syscall no longer happens" cannot be
+ * guarded by asserting the columns: a correct `lstat` produces the same answers,
+ * so an accidental revert stays green. Nor can it be guarded here by spying —
+ * `realizations.ts` imports `lstatSync` as an ESM named binding, which
+ * `vi.spyOn` cannot replace, and the module-mocking needed to reach it would
+ * pin the mechanism rather than the property.
+ *
+ * So each case below hands `observedShape` a fixture the filesystem CONTRADICTS,
+ * and asserts that git's answer survives. A row claiming `exists: true` for a
+ * path that is not there is only producible by code that did not look — the
+ * `lstat` is proven absent by its consequence, on every platform, with no
+ * instrumentation. The negative control at the end runs the identical fixture
+ * with no shape and gets the filesystem's answer instead, so a shape that had
+ * silently stopped being read would redden here rather than pass twice.
+ *
+ * ⚠️ This is a unit-level property. What it does NOT show is that a real
+ * enumerator supplies shapes for the paths it should; that is measured in
+ * `test/integration/git-crawl-io-cost.integration.test.ts`, which counts the
+ * `lstat`s a git-sourced extent actually makes.
+ */
+describe('collectRealization observed shape', () => {
+  it('takes the enumerator\'s word that a path exists, without looking', async () => {
+    const row = await realize(UNWRITTEN, { observedShape: 'file' });
+
+    expect(row.exists).toBe(true);
+    expect(row.isDirectory).toBe(false);
+    expect(row.isSymlink).toBe(false);
+    expect(row.symlinkResolves).toBeNull();
+  });
+
+  it('calls a shape-declared directory a directory, over the file that is really there', async () => {
+    const row = await realize(NESTED_RELATIVE, { observedShape: 'directory' });
+
+    expect(row.isDirectory).toBe(true);
+    // And the no-bytes rule follows from the shape, not from a second look.
+    expect(row.contentKey).toBeNull();
+    expect(row.contentState).toBe('none');
+  });
+
+  it('leaves mtime null, because nothing stat-ed the path', async () => {
+    const row = await realize(NESTED_RELATIVE, { observedShape: 'file' });
+
+    // The file is real and has a real mtime — `takes mtime from the lstat…`
+    // above proves the unshaped path reports one — so null here is the skipped
+    // stat, not an absent file.
+    expect(row.mtime).toBeNull();
+    expect(() => ResourceRealizationRowSchema.parse(row)).not.toThrow();
+  });
+
+  it('still reads the bytes: the shape replaces the stat, never the content key', async () => {
+    const cache = new RunContentCache();
+
+    const row = await realize(NESTED_RELATIVE, { contentCache: cache, observedShape: 'file' });
+
+    expect(row.contentState).toBe('keyed');
+    expect(cache.stats.misses).toBe(1);
+  });
+
+  it('reports a read that could not happen as unreadable, not as absent', async () => {
+    // The lying fixture's honest consequence: the row says the path is there
+    // because git said so, and says its bytes could not be keyed because they
+    // could not. Two different facts, and the shape only settles the first.
+    const row = await realize(UNWRITTEN, { observedShape: 'file' });
+
+    expect(row.exists).toBe(true);
+    expect(row.contentState).toBe('unreadable');
+  });
+
+  it('stats when no shape is supplied — the control that makes the above mean something', async () => {
+    const row = await realize(UNWRITTEN);
+
+    expect(row.exists).toBe(false);
+    expect(row.mtime).toBeNull();
   });
 });
 

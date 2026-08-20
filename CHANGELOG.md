@@ -160,6 +160,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The git enumerator stat-ed every path git had already described.** `VAT_EXTENT_SOURCE=git`
+  advertised a cheaper cost model but only replaced the directory walk: the realization of each path
+  still opened with an `lstat`, so the two sources cost the same per path. `exists`, `isDirectory`
+  and `isSymlink` are all answerable from the tree snapshot, and now travel with the path. On a
+  1,200-file fixture the extent fell from **1,205 `lstat` to 4** (total filesystem + spawn calls
+  2,449 → 1,248), and the residue does not grow with the corpus. A realization sourced this way
+  records `mtime: null` — the column has always been nullable, and no source that skips the stat can
+  know it. Paths git did not describe, such as gitignored territory, are still stat-ed.
+
 - **The projection resource lane did more than twice the filesystem work it needed.** Scanning with
   `VAT_RESOURCES_CRAWL=projection` built a realization row for every gitignored path and then
   discarded it, paying an `lstat` for each and a `realpathSync` for each one absent from git's index.

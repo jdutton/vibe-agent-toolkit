@@ -175,6 +175,7 @@ export {
   realPathOrNull,
   relativize,
   type ContentDemand,
+  type PathShape,
   type RealizationContext,
 } from './projection/realizations.js';
 

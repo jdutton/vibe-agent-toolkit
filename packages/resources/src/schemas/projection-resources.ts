@@ -167,7 +167,7 @@ export const ResourceRealizationRowSchema = z.object({
     .describe('Foreign key to blobs.contentKey for THIS realization\'s bytes, or null — read contentState for WHICH of the three null cases this is'),
   contentState: ContentStateSchema
     .describe('Why contentKey is or is not set. Pinned to contentKey in BOTH directions by a superRefine (keyed ⟺ non-null); like symlinkResolves, that constraint is NOT encoded in the generated JSON Schema'),
-  mtime: z.coerce.date().nullable().describe('Last modification time, or null when this path has never been observed on disk'),
+  mtime: z.coerce.date().nullable().describe('Last modification time, or null when nothing stat-ed this path — it is absent, or its shape came from git rather than from the filesystem'),
   exists: z.boolean(),
   isDirectory: z.boolean(),
   gitignored: z.boolean(),

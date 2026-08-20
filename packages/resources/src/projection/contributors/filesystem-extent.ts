@@ -310,7 +310,7 @@ export class FilesystemExtentContributor implements ExtentContributor {
     const realizations: ResourceRealizationRow[] = [];
     const declined = declinedPathFilter(base.gitTracker, parameters);
 
-    for (const { absolutePath, contentHint } of enumerated) {
+    for (const { absolutePath, contentHint, shape } of enumerated) {
       // BEFORE `idFor` and before `collectRealization`, which is the whole
       // saving and the reason this is not a filter over the finished rows:
       // `idFor` costs a `realpathSync.native` for any path git's index cannot
@@ -336,6 +336,13 @@ export class FilesystemExtentContributor implements ExtentContributor {
         // the bytes is a fact about the lanes. See the class docstring.
         contentDemand: this.#contentDemand,
         ...(contentHint !== null && { contentHint }),
+        // The enumerator's own answer to "what is this path", when it had one.
+        // Passing it is what stops `collectRealization` opening with an `lstat`,
+        // so the git source's constant-cost enumeration is no longer undone one
+        // layer down. Absent for every path the walk found, which is why the two
+        // sources now have genuinely different cost models rather than the same
+        // one with different spawn counts.
+        ...(shape !== null && { observedShape: shape }),
       });
       realizations.push(realization);
       if (!resources.has(resourceId)) {

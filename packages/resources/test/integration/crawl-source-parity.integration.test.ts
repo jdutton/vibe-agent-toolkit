@@ -52,6 +52,8 @@ import {
   type EnumeratedPath,
 } from '../../src/projection/crawl-source.js';
 import { ProjectionBuilder } from '../../src/projection/projection.js';
+import type { PathShape } from '../../src/projection/realizations.js';
+import type { ResourceRealizationRow } from '../../src/schemas/projection-resources.js';
 import { writeFileIn as writeIn } from '../test-helpers.js';
 
 /** An ordinary committed file — the baseline both sources reach first. */
@@ -70,6 +72,9 @@ const NEVER_CRAWL_DIR = 'node_modules';
 const BURIED = 'ignored-dir/deep/buried.md';
 /** Written after the first enumeration — the planted-file control. */
 const PLANTED = 'ignored-dir/planted.md';
+
+/** A directory neither source lists directly: both must derive it from its contents. */
+const NESTED_DIR = 'docs/nested';
 
 /** Byte-identical to {@link DUPLICATE_B}, so the two share one blob OID. */
 const DUPLICATE_A = 'dup/a.md';
@@ -151,6 +156,23 @@ function hintFor(
   return hintForIn(enumerated, root, relativePath);
 }
 
+/**
+ * The shape a source attached to one path in the main fixture.
+ *
+ * @param enumerated - What a source returned
+ * @param relativePath - The path to look up
+ * @returns The shape, `null` when the source declined to describe it, or
+ *   `undefined` when the path is not a member at all — the same three-way
+ *   distinction {@link hintForIn} draws, and for the same reason
+ */
+function shapeFor(
+  enumerated: readonly EnumeratedPath[],
+  relativePath: string,
+): PathShape | null | undefined {
+  const absolutePath = safePath.resolve(root, relativePath);
+  return enumerated.find((entry) => entry.absolutePath === absolutePath)?.shape;
+}
+
 let walked: readonly EnumeratedPath[];
 let gitted: readonly EnumeratedPath[];
 let walkedModes: readonly EnumeratedPath[];
@@ -218,7 +240,7 @@ describe('crawl sources agree on the population', () => {
     ['ignored-dir/deep'],
     [EMPTY_DIR],
     [IGNORED_EMPTY_DIR],
-    ['docs/nested'],
+    [NESTED_DIR],
     ['café.md'],
   ])('both sources found %s, so the comparison is not vacuous', (relativePath) => {
     expect(relativePaths(walked)).toContain(relativePath);
@@ -253,7 +275,7 @@ describe('crawl sources agree on the population', () => {
 describe('content hints', () => {
   it('are supplied for a regular file and withheld from a directory', () => {
     expect(hintFor(gitted, TRACKED)).toMatch(/^[0-9a-f]{40,64}$/);
-    expect(hintFor(gitted, 'docs/nested')).toBeNull();
+    expect(hintFor(gitted, NESTED_DIR)).toBeNull();
   });
 
   it('are identical for byte-identical files, which is the whole saving', () => {
@@ -268,6 +290,52 @@ describe('content hints', () => {
 
   it('are never supplied by the walk, which has not read anything yet', () => {
     expect(walked.every((entry) => entry.contentHint === null)).toBe(true);
+  });
+});
+
+/**
+ * **The one field the two sources are MEANT to disagree about.**
+ *
+ * Everything else in this file asserts parity. `shape` is the deliberate
+ * exception: it is what lets a realization skip its `lstat`, the git source can
+ * answer it from the index for the paths git describes, and the walk declines to
+ * answer it at all so that the two cost models stay distinguishable. Asserting
+ * it per path rather than in aggregate is what makes the boundary visible —
+ * `null` on the git side is not a gap, it is the line where git's knowledge
+ * stops and a walk began.
+ */
+describe('path shapes', () => {
+  it.each([
+    [TRACKED, 'file'],
+    ['café.md', 'file'],
+    // Derived from the names of paths beneath them, never stat-ed.
+    [NESTED_DIR, 'directory'],
+    ['dup', 'directory'],
+  ])('the git source describes %s as a %s', (relativePath, shape) => {
+    expect(shapeFor(gitted, relativePath)).toBe(shape);
+  });
+
+  it.each([
+    // A collapsed `ls-files --others --ignored --directory` entry: git spelled
+    // it by `lstat`ing it, and a symlink to a directory is spelled exactly like
+    // a file, so nothing here may be believed.
+    [IGNORED_FILE],
+    [BURIED],
+    ['ignored-dir/deep'],
+    [EMPTY_DIR],
+  ])('the git source declines to describe %s, which it walked rather than held', (relativePath) => {
+    expect(shapeFor(gitted, relativePath)).toBeNull();
+  });
+
+  it('the walk describes nothing, so its realizations still stat', () => {
+    expect(walked.every((entry) => entry.shape === null)).toBe(true);
+  });
+
+  it('describes most of the corpus, so the assertions above are not the whole story', () => {
+    // A guard against the boundary drifting until only the four named paths are
+    // described: the git source must carry shapes for the BULK of what it found.
+    const described = gitted.filter((entry) => entry.shape !== null).length;
+    expect(described).toBeGreaterThan(gitted.length / 2);
   });
 });
 
@@ -292,9 +360,11 @@ describe('content hints', () => {
  * every file one identical hint changed nothing here.
  *
  * @param source - Which implementation to hand the contributor
- * @returns `path\tcontentKey` for every realization, sorted
+ * @returns Every realization row the extent produced
  */
-async function rowsFrom(source: 'git' | 'filesystem'): Promise<string[]> {
+async function realizationsFrom(
+  source: 'git' | 'filesystem',
+): Promise<readonly ResourceRealizationRow[]> {
   const tracker = new GitTracker(root);
   await tracker.initialize({ includeUntracked: true });
   const builder = new ProjectionBuilder(root, tracker, new RunContentCache());
@@ -302,22 +372,57 @@ async function rowsFrom(source: 'git' | 'filesystem'): Promise<string[]> {
   const contributor = new FilesystemExtentContributor((r) =>
     source === 'git' ? new GitCrawlSource(r) : new FilesystemCrawlSource(r),
   );
-  const contribution = await contributor.contribute(builder.base(), null);
+  return (await contributor.contribute(builder.base(), null)).realizations;
+}
 
-  return contribution.realizations
+/**
+ * The comparable projection of one extent's rows.
+ *
+ * @param realizations - What the extent produced
+ * @returns `path\tcontentKey` per row, sorted
+ */
+function keyedPaths(realizations: readonly ResourceRealizationRow[]): string[] {
+  return realizations
     .map((row) => `${row.path}\t${row.contentKey ?? '(none)'}`)
     .sort((a, b) => a.localeCompare(b));
 }
 
 describe('the filesystem extent is unchanged by which source enumerated it', () => {
   it('produces identical realization rows either way', async () => {
-    const viaWalk = await rowsFrom('filesystem');
-    const viaGit = await rowsFrom('git');
+    const viaWalk = keyedPaths(await realizationsFrom('filesystem'));
+    const viaGit = keyedPaths(await realizationsFrom('git'));
 
     expect(viaGit).toEqual(viaWalk);
     // Not vacuous: the extent must actually have keyed something, or two empty
     // key columns would compare equal while proving nothing about the hint.
     expect(viaWalk.filter((row) => !row.endsWith('(none)')).length).toBeGreaterThan(0);
+  });
+
+  /**
+   * **`mtime` is the one column that does diverge, and it is pinned here rather
+   * than left to be discovered.**
+   *
+   * A source that describes a path's shape is a source that did not stat it, and
+   * the modification time exists nowhere but the filesystem — not in a tree
+   * object, and not honestly in the index, whose stat cache is deliberately
+   * stale for a modified file. So the git-sourced row records `null` where the
+   * walk records a `Date`. The column has always been nullable, nothing in
+   * production reads it, and `keyedPaths` above compares the columns that carry
+   * meaning — but "nobody noticed" is not the same as "it was decided", so the
+   * divergence gets its own assertion in both directions.
+   */
+  it('nulls mtime on the git side and dates it on the walk side, deliberately', async () => {
+    const viaWalk = await realizationsFrom('filesystem');
+    const viaGit = await realizationsFrom('git');
+
+    const tracked = (rows: readonly ResourceRealizationRow[]): ResourceRealizationRow | undefined =>
+      rows.find((row) => row.path === TRACKED);
+
+    expect(tracked(viaWalk)?.mtime).toBeInstanceOf(Date);
+    expect(tracked(viaGit)?.mtime).toBeNull();
+    // And the boundary holds inside one extent: a path the git source WALKED
+    // still carries a date, so the null above is the shape and not the source.
+    expect(viaGit.find((row) => row.path === BURIED)?.mtime).toBeInstanceOf(Date);
   });
 });
 

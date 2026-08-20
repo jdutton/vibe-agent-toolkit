@@ -50,6 +50,31 @@ export function relativize(absolutePath: string, root: string): string {
  */
 export type ContentDemand = 'eager' | 'deferred' | 'deferGitignored';
 
+/**
+ * What an enumerator already established about a path, so no `lstat` is needed.
+ *
+ * Two literals and no third, because the vocabulary is deliberately narrower
+ * than `lstat`'s: a source may supply one of these **only** when it knows, for
+ * free, that the path is present on disk, is not a symbolic link, and is one of
+ * a regular file or a directory. Everything else — a symlink, a path whose
+ * shape the source is merely confident about, a path it found by walking —
+ * supplies nothing and is stat'ed as before.
+ *
+ * The narrowness is the safety property. A richer record (`{exists, isSymlink,
+ * isDirectory, symlinkResolves}`) could express states no source can actually
+ * observe without a stat, and a source that filled one in from a guess would
+ * produce a row indistinguishable from an observed one. Here the only thing
+ * expressible is what git's index can answer.
+ *
+ * ⚠️ **A shape carries no `mtime`, and cannot.** Every source able to skip the
+ * stat is able to precisely because it never asked the filesystem, and the
+ * modification time exists nowhere else — a tree object has none, and the
+ * index's stat cache is a deliberately-stale cache-validation stamp rather than
+ * the truth. So a realization built from a shape records `mtime: null`, which
+ * the column has always allowed.
+ */
+export type PathShape = 'file' | 'directory';
+
 /** Everything needed to answer the realization questions for a path. */
 export interface RealizationContext {
   /** Root every `path` in the resulting rows is relative to. */
@@ -85,15 +110,127 @@ export interface RealizationContext {
    * visible and therefore where the exclusion belongs.
    */
   contentHint?: string | undefined;
+  /**
+   * The enumerator's own answer to "what is this path", when it had one.
+   *
+   * Authoritative, unlike {@link RealizationContext.contentHint}, which is only
+   * ever a cache lookup whose miss is free: supplying this **replaces** the
+   * `lstat`, it does not accelerate it. So a source may set it only from
+   * something it genuinely observed — see {@link PathShape} for the exact bar —
+   * and absence means "ask the filesystem", which is what every caller that has
+   * not opted in continues to do.
+   */
+  observedShape?: PathShape | undefined;
+}
+
+/**
+ * The five columns a realization gets from looking at a path — by whatever means
+ * it looked.
+ *
+ * Named as one record so the two ways of answering are interchangeable at the
+ * call site and cannot drift into filling in different subsets. A column added
+ * here must be answerable by BOTH producers or the type stops compiling, which
+ * is the property that keeps a shape-sourced row from quietly under-describing
+ * a path.
+ */
+interface PathObservation {
+  /** The path is present. */
+  exists: boolean;
+  /** The path is a directory (following the link, when it is one). */
+  isDirectory: boolean;
+  /** The path is itself a symbolic link. */
+  isSymlink: boolean;
+  /** Whether a symlink's target resolves; `null` when the path is not a link. */
+  symlinkResolves: boolean | null;
+  /** Last modification time; `null` when nothing stat'ed this path. */
+  mtime: Date | null;
+}
+
+/**
+ * Ask the filesystem.
+ *
+ * @param absolutePath - Path to stat
+ * @returns What `lstat` (and, for a link, `stat`) said
+ */
+function statObservation(absolutePath: string): PathObservation {
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- enumerated corpus path
+    const link = lstatSync(absolutePath);
+    if (!link.isSymbolicLink()) {
+      return {
+        exists: true,
+        isDirectory: link.isDirectory(),
+        isSymlink: false,
+        symlinkResolves: null,
+        mtime: link.mtime,
+      };
+    }
+    try {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- enumerated corpus path
+      const target = statSync(absolutePath);
+      return {
+        exists: true,
+        isDirectory: target.isDirectory(),
+        isSymlink: true,
+        symlinkResolves: true,
+        mtime: link.mtime,
+      };
+    } catch {
+      return {
+        exists: true,
+        isDirectory: false,
+        isSymlink: true,
+        symlinkResolves: false,
+        mtime: link.mtime,
+      };
+    }
+  } catch {
+    // Genuinely absent — `exists` is false and every other column takes its "we
+    // could not look" default rather than a guess.
+    return {
+      exists: false,
+      isDirectory: false,
+      isSymlink: false,
+      symlinkResolves: null,
+      mtime: null,
+    };
+  }
+}
+
+/**
+ * Take the enumerator's word for it, and spend no syscall.
+ *
+ * `exists: true` is not an assumption bolted on here — it is half of what
+ * {@link PathShape} means, and a source that cannot assert it must supply no
+ * shape. `isSymlink: false` is the other half, which is why `symlinkResolves`
+ * is `null` rather than `true`: the column reports how a *link* resolved, and
+ * this path is not one.
+ *
+ * @param shape - What the enumerator observed
+ * @returns The same five columns, none of them stat'ed
+ */
+function shapeObservation(shape: PathShape): PathObservation {
+  return {
+    exists: true,
+    isDirectory: shape === 'directory',
+    isSymlink: false,
+    symlinkResolves: null,
+    mtime: null,
+  };
 }
 
 /**
  * Collect the realization row for one absolute path in one extent.
  *
- * `lstat` first, deliberately: `stat` follows symlinks, so a `stat`-only
- * implementation cannot tell a symlink from what it points at, and reports a
- * dangling link as simply absent. That single `lstat` also supplies `mtime` —
- * there is deliberately no second `stat` call for it.
+ * `lstat` first, deliberately, **whenever the filesystem has to be asked at
+ * all**: `stat` follows symlinks, so a `stat`-only implementation cannot tell a
+ * symlink from what it points at, and reports a dangling link as simply absent.
+ * That single `lstat` also supplies `mtime` — there is deliberately no second
+ * `stat` call for it.
+ *
+ * The filesystem does not have to be asked when the enumerator already answered:
+ * see {@link RealizationContext.observedShape}. That path costs no syscall and
+ * yields `mtime: null`.
  *
  * @param absolutePath - Path to describe
  * @param resourceId - The identity this path realizes, from `ResourceIdentityMap`
@@ -106,34 +243,10 @@ export async function collectRealization(
   resourceId: string,
   context: RealizationContext,
 ): Promise<ResourceRealizationRow> {
-  let isSymlink = false;
-  let exists = false;
-  let isDirectory = false;
-  let symlinkResolves: boolean | null = null;
-  let mtime: Date | null = null;
-
-  try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- enumerated corpus path
-    const link = lstatSync(absolutePath);
-    exists = true;
-    mtime = link.mtime;
-    isSymlink = link.isSymbolicLink();
-    if (isSymlink) {
-      try {
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- enumerated corpus path
-        const target = statSync(absolutePath);
-        symlinkResolves = true;
-        isDirectory = target.isDirectory();
-      } catch {
-        symlinkResolves = false;
-      }
-    } else {
-      isDirectory = link.isDirectory();
-    }
-  } catch {
-    // Genuinely absent — `exists` stays false and every other column stays at
-    // its "we could not look" default rather than a guess.
-  }
+  const { exists, isDirectory, isSymlink, symlinkResolves, mtime }
+    = context.observedShape === undefined
+      ? statObservation(absolutePath)
+      : shapeObservation(context.observedShape);
 
   // `isIgnoredByActiveSet`, NOT `isIgnored`, and the difference is 59× on this
   // repository. `GitTracker.initialize()` primes its cache with the ACTIVE files
@@ -156,8 +269,8 @@ export async function collectRealization(
   // ignored. A population is a read-only snapshot, which is exactly the lane that
   // bound is documented as safe for; a lane that WRITES between walks must hand
   // in a fresh tracker, as `walkLinkGraph`'s callers already must.
-  // The `lstat` above already answered "is this path there?", so the tracker is
-  // told rather than asked. Without this it re-probes with `existsSync` for every
+  // The observation above already answered "is this path there?", so the tracker
+  // is told rather than asked. Without this it re-probes with `existsSync` for every
   // path absent from the active set -- once per ignored path, and this is the
   // extent that enumerates all of them: 11,108 calls on an 8,496-path adopter.
   //

@@ -230,6 +230,47 @@ of the table above is reached differently by each source; five mutations were ru
 right assertions redden. End to end, `vat resources scan --format json --verbose` over this
 repository returns byte-identical `path + checksum` sets on both arms — 176 files.
 
+#### ✅ The `shape` column — where "symlink detection is free" finally became true
+
+The table above promised that mode bits arrive with the path and spare the per-entry `lstat`. For a
+while they did not: `EnumeratedPath` carried `{absolutePath, contentHint}` only, the modes were
+dropped at that seam, and both sources fed the same `collectRealization`, which opened with an
+unconditional `lstat`. So the two "cost models" cost byte-identically for everything except
+enumeration — **20,908 `lstatSync` from either source** on an 8,548-file adopter tree.
+
+`EnumeratedPath.shape` closes it. It is `'file' | 'directory' | null`, and a source may fill it only
+where it knows, without stat-ing, that the path is present, is not a symlink, and is one of the two.
+`GitCrawlSource` can for everything git *described* — a snapshot entry exists because `git add --all`
+stages deletions, is not a directory because a tree records blobs, and is not a symlink because mode
+`120000` was already excluded from membership — and for the ancestor directories derived from those
+names. It is `null` for everything the source had to *walk*: ignored territory, submodule contents,
+and collapsed `--others --directory` entries, where git's trailing-slash spelling comes from its own
+`lstat` and cannot distinguish a directory from a symlink pointing at one.
+
+`FilesystemCrawlSource` reports `null` everywhere. `readdir` does hand it a dirent type, so this is a
+choice rather than a limit: the walk is the incumbent and the baseline every git-source number is
+quoted against, and moving both arms at once would leave neither attributable.
+
+Measured by `git-crawl-io-cost.integration.test.ts`, which now measures the extent at **two** corpus
+sizes so the assertion can be equality rather than a threshold — a cost-only change cannot be guarded
+by an output-level test, since a correct `lstat` produces identical rows:
+
+| arm (1,200-file fixture) | before | after |
+|---|---:|---:|
+| `fs.lstatSync` | 1,205 | **4** |
+| total fs + spawn | 2,449 | **1,248** |
+
+The residual 4 are git's temp-index handling and the bounded walk of the one ignored directory, and
+they are identical at 300 files. **The per-path `readFile` remains** — deferring the content key is
+the other half of that file's `it.fails`, and it is not done.
+
+One column legitimately diverges as a result: a realization built from a shape records `mtime: null`,
+because every source able to skip the stat is able to precisely because it never asked the
+filesystem, and no other place holds the answer — a tree object has no mtime, and the index's stat
+cache is deliberately stale for a modified file. The column has always been nullable and nothing in
+production reads it; the divergence is pinned in both directions by the parity suite rather than left
+to be discovered.
+
 ### 3.4 ✅ The resources lane on the projection — shipped opt-in, and what it measured
 
 `ResourceRegistry.crawl()` takes an optional `populationSource`. Supplied, the file list comes from

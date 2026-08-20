@@ -57,6 +57,14 @@
  * the one ignored directory. Not one of them is per-file. The equality of the
  * two sizes is what this file leans on; the absolute ceiling is a coarse
  * tripwire derived from the fixture rather than a fitted constant.
+ *
+ * The **extent** built on that enumeration is measured here too, and it is where
+ * the per-path cost used to reappear. Once {@link EnumeratedPath.shape} carried
+ * git's mode bits through to the realization, the same 1,200-file arm went from
+ * **1,205 `lstatSync` to 4** — total 2,449 → 1,248 operations, i.e. −49% — while
+ * the 300-file arm went 305 → 4. The residual 4 are git's temp-index handling
+ * and the bounded walk of the one ignored directory, and they do not move with
+ * the corpus, which is exactly the property the assertions state.
  */
 
 /* eslint-disable security/detect-non-literal-fs-filename -- every path here is a temp fixture this file created */
@@ -100,6 +108,9 @@ const GROWN_FILE_COUNT = BASE_FILE_COUNT + GROWTH_FILE_COUNT;
  */
 const DIRECTORY_COUNT = 20;
 
+/** The counter's name for the call this change exists to remove. */
+const LSTAT = 'fs.lstatSync';
+
 /** The one gitignored subtree, so the bounded ignored-territory walk really runs. */
 const IGNORED_DIR = 'ignored';
 
@@ -140,6 +151,7 @@ let workDir = '';
 let importOnly: Measurement;
 let smallCrawl: Measurement;
 let grownCrawl: Measurement;
+let smallExtent: Measurement;
 let grownExtent: Measurement;
 
 /** This file's directory, the anchor for every in-repo path below. */
@@ -393,6 +405,11 @@ beforeAll(() => {
 
   importOnly = measure('import-only');
   smallCrawl = netOfImports(measure('enumerate'), importOnly);
+  // Measured at BOTH sizes, unlike the other extent arm, so the per-path
+  // assertions below can say "constant" rather than "under a threshold". A
+  // ceiling can be met by an implementation that stats a fixed fraction of the
+  // corpus; equality across a 4× growth cannot.
+  smallExtent = netOfImports(measure('extent'), importOnly);
 
   addFiles(BASE_FILE_COUNT, GROWTH_FILE_COUNT);
   git(['add', '-A']);
@@ -456,7 +473,7 @@ describe('GitCrawlSource.enumerate costs a constant, not a per-file toll', () =>
   it('never stats or reads a file per path', () => {
     // Named explicitly, because "the total did not move" would also hold for an
     // implementation that traded 900 stats for 900 reads.
-    for (const method of ['fs.lstatSync', 'fs.statSync', 'fs.readFileSync', 'fs.promises.readFile']) {
+    for (const method of [LSTAT, 'fs.statSync', 'fs.readFileSync', 'fs.promises.readFile']) {
       expect(grownCrawl.perMethod.get(method) ?? 0, `${method}: ${describeMeasurement(grownCrawl)}`)
         .toBeLessThan(BASE_FILE_COUNT / 4);
     }
@@ -464,36 +481,75 @@ describe('GitCrawlSource.enumerate costs a constant, not a per-file toll', () =>
 });
 
 /**
- * **The gap.** Enumeration is constant; the extent built on top of it is not.
+ * **The gap, now half closed.** Enumeration is constant; the extent built on top
+ * of it costs one *read* per path and no longer costs one *stat*.
  *
  * `FilesystemExtentContributor` calls `collectRealization` per enumerated path,
- * which `lstat`s it (`projection/realizations.ts`) and reads its bytes to key
- * them (`content-key.ts`) — measured at 1,225 `lstatSync` + 1,201
+ * which used to `lstat` it (`projection/realizations.ts`) *and* read its bytes to
+ * key them (`content-key.ts`) — measured at 1,225 `lstatSync` + 1,201
  * `fs.promises.readFile` for 1,224 paths, i.e. **~2 operations per path**, with
- * or without the git source. The blob OID the git source hands over is a cache
- * *lookup*, and a cold cache misses, so on a first run it saves nothing.
+ * or without the git source. Two changes were named here as what would close it:
  *
- * So the constant-cost enumeration is undone one layer down, and `it.fails`
- * records that rather than a green test recording a property the shipped code
- * does not have. It is deliberately NOT a red test: a permanently-failing gate
- * teaches everyone to ignore it. It flips to a genuine failure the moment
- * someone closes the gap, which is when this block should be promoted to `it`.
- *
- * Closing it means two production changes this test does not make:
- *
- * 1. **Stop stat-ing.** `exists`, `isDirectory` and `isSymlink` are all
+ * 1. ✅ **Stop stat-ing — DONE.** `exists`, `isDirectory` and `isSymlink` are all
  *    derivable from the git entry (staged ⇒ exists; blob ⇒ not a directory; mode
- *    `120000` ⇒ symlink), so the realization of a git-enumerated path needs no
- *    `lstat` at all. `mtime` is nullable and would simply stay null.
- * 2. **Stop reading.** `contentKey` is nullable too. Keying every file's bytes
- *    during enumeration is what turns a 19-operation crawl into a 2,400-operation
- *    one; the extent could defer it to the consumers that actually need a key,
+ *    `120000` ⇒ symlink, and such an entry is not a member here at all), so
+ *    {@link EnumeratedPath.shape} now carries them and the realization of a
+ *    git-described path makes no `lstat`. `mtime` is nullable and simply stays
+ *    null. The first two cases below are the guard, and they assert **equality
+ *    across a 4× corpus growth** rather than a threshold: this is a cost-only
+ *    change, so an output-level assertion could not have caught its revert.
+ * 2. ❌ **Stop reading — NOT DONE.** `contentKey` is nullable too. Keying every
+ *    file's bytes during enumeration is what remains of the ~2,400-operation
+ *    extent; the extent could defer it to the consumers that actually need a key,
  *    exactly as `contentDemand: 'deferGitignored'` already defers it for the
  *    ignored half.
+ *
+ * So the total is still per-file, and `it.fails` still records that rather than a
+ * green test recording a property the shipped code does not have. It is
+ * deliberately NOT a red test: a permanently-failing gate teaches everyone to
+ * ignore it. It flips to a genuine failure the moment someone closes (2), which
+ * is when it should be promoted to `it`.
  */
 describe('the extent built on the git source has not inherited its cost model', () => {
-  it('enumerated the whole corpus, so the failing assertion below is about cost', () => {
+  it('enumerated the whole corpus at both sizes, so the assertions below are about cost', () => {
+    expect(smallExtent.paths).toBeGreaterThanOrEqual(BASE_FILE_COUNT);
     expect(grownExtent.paths).toBeGreaterThanOrEqual(GROWN_FILE_COUNT);
+    expect((grownExtent.paths ?? 0) - (smallExtent.paths ?? 0)).toBe(GROWTH_FILE_COUNT);
+  });
+
+  it('never stats a path git described, however many of them there are', () => {
+    // The load-bearing assertion, and the only one immune to platform constants:
+    // whatever the extent spends on `lstat`, quadrupling the corpus must not
+    // change it. The residue is git's own temp-index handling plus the bounded
+    // walk of the one ignored directory — paths `shape` is deliberately null for,
+    // because they were walked rather than described.
+    const stats = (measurement: Measurement): number =>
+      measurement.perMethod.get(LSTAT) ?? 0;
+
+    expect(
+      stats(grownExtent),
+      `${describeMeasurement(grownExtent)} vs ${describeMeasurement(smallExtent)}`,
+    ).toBe(stats(smallExtent));
+  });
+
+  it('spends far fewer stats than the corpus has files', () => {
+    // Named separately from the equality above because equality alone would also
+    // hold for an implementation that stats a constant 5,000 times.
+    expect(
+      grownExtent.perMethod.get(LSTAT) ?? 0,
+      describeMeasurement(grownExtent),
+    ).toBeLessThan(BASE_FILE_COUNT / 4);
+  });
+
+  it('still reads one file per path — the half that is not closed', () => {
+    // The negative control for the two cases above: they must not be passing
+    // because the extent silently stopped doing per-path work altogether.
+    const reads = (measurement: Measurement): number =>
+      (measurement.perMethod.get('fs.promises.readFile') ?? 0)
+      + (measurement.perMethod.get('fs.readFileSync') ?? 0);
+
+    expect(reads(grownExtent) - reads(smallExtent), describeMeasurement(grownExtent))
+      .toBeGreaterThanOrEqual(GROWTH_FILE_COUNT);
   });
 
   it.fails('spends fewer operations than the corpus has files — it does not, see above', () => {
