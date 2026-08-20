@@ -41,8 +41,10 @@
  * parsing anything).
  *
  * The content KEY still differs between the twins, and must: it is computed over
- * the raw working-tree bytes, and 40 bytes of UTF-16BE are not 19 bytes of
- * UTF-8. Decoding changes what VAT reads, never what a parse is filed under.
+ * the raw working-tree bytes, and 40 bytes of BOM-prefixed UTF-16 are not 19
+ * bytes of UTF-8. Decoding changes what VAT reads, never what a parse is filed
+ * under. (Which byte order git re-materializes is the host's business and is not
+ * asserted — see the BOM assertion in section 3.)
  *
  * ## What is pinned as surprising-but-correct
  *
@@ -803,10 +805,17 @@ describe.skipIf(!HOST_GATES.utf16.met)(gatedTitle('working-tree-encoding=UTF-16'
     expect(blobBytes(fixture, oid)).toHaveLength(19);
     expect(onDisk).toHaveLength(40);
     // Observed, and not what an author would guess: the fixture is written
-    // little-endian (`fffe`), and git re-materializes plain `UTF-16` as
-    // BIG-endian (`feff`). The attribute names a charset, not the byte order the
-    // file happened to arrive in, so a round trip through git flips it.
-    expect(onDisk.subarray(0, 2)).toEqual(Buffer.from([0xfe, 0xff]));
+    // little-endian (`fffe`), and git re-materializes plain `UTF-16` with a BOM
+    // whose byte order is GIT'S choice, not the file's. Which one it picks is not
+    // portable — macOS produced BIG-endian (`feff`) here, ubuntu little-endian
+    // (`fffe`) — and neither is wrong, because the attribute names a charset and
+    // says nothing about byte order. Pinning one of them pinned the host.
+    //
+    // What is portable, and what this test is actually about, is that the
+    // worktree holds BOM-prefixed UTF-16 while the blob holds UTF-8. Both BOMs
+    // are still asserted exactly, so a re-materialization that dropped the BOM or
+    // wrote UTF-8 to disk still fails.
+    expect([[0xfe, 0xff], [0xff, 0xfe]]).toContainEqual([...onDisk.subarray(0, 2)]);
   });
 
   /**

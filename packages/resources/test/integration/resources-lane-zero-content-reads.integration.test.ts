@@ -221,7 +221,12 @@ function preloadSource(): string {
     '  try { abs = path.resolve(p); } catch { return null; }',
     '  for (const base of [ROOT, realRoot]) {',
     "    if (abs === base) return '.';",
-    '    if (abs.startsWith(base + path.sep)) return path.relative(base, abs);',
+    // Forward slashes always: every assertion in this file names a path as
+    // `docs/d1.md`, and on Windows `path.relative` answers `docs\d1.md`, so a
+    // native separator here turns each of them into a failure about nothing.
+    // Hand-rolled rather than `toForwardSlash()` because this source is a string
+    // evaluated in a child process that has no access to the workspace.
+    "    if (abs.startsWith(base + path.sep)) return path.relative(base, abs).split(path.sep).join('/');",
     '  }',
     '  return null;',
     '}',
