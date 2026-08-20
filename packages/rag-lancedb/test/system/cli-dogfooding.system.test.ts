@@ -83,6 +83,45 @@ function executeCliCommand(
   return parseYamlOutput(result);
 }
 
+/** Where the CLI lives and which database it should be pointed at. */
+interface CliTarget {
+  binPath: string;
+  dbPath: string;
+  projectRoot: string;
+}
+
+/**
+ * Query the fixture corpus and return the resourceId of the single top hit.
+ *
+ * `--limit 1` is load-bearing. A limit at or above the corpus size makes
+ * `chunks.length > 0` unfalsifiable: every chunk comes back, in any order,
+ * with any embedder — so the assertion passes over a broken ranker and even
+ * over a broken embedder. (Measured: with ranking replaced by an unordered
+ * table scan, `--limit 5` still returned 5 chunks.) Asking for exactly one
+ * hit forces the corpus to be ranked, and naming the document that must win
+ * is the part that can actually fail. That the index is non-empty at all is
+ * already asserted by the index test and the stats test.
+ *
+ * @param cli - CLI binary, database and working directory to run against
+ * @param query - Natural-language query to run through the CLI
+ * @returns resourceId of the highest-ranked chunk
+ */
+function queryTopResourceId(cli: CliTarget, query: string): string {
+  const output = executeCliCommand(
+    cli.binPath,
+    ['rag', 'query', query, '--db', cli.dbPath, '--limit', '1'],
+    cli.projectRoot,
+    30000 // 30 seconds for query with embedding
+  ) as { status: string; stats: { totalMatches: number }; chunks: { resourceId: string }[] };
+
+  expect(output.status).toBe('success');
+  expect(output.stats.totalMatches).toBe(1);
+  expect(output.chunks.length).toBe(1);
+
+  const [topHit] = output.chunks;
+  return topHit.resourceId;
+}
+
 // Runs on all platforms including macOS. The RAG CLI's default embedding backend
 // is onnxruntime-web (WASM), which has no native static destructors, so it no
 // longer races LanceDB's native runtime at process teardown. (This repo's CI
@@ -101,6 +140,10 @@ describe('RAG CLI (Node.js dogfooding)', () => {
   // meaningful, and the pinned count below turns a chunking regression into a
   // named failure instead of somebody else's timeout.
   //
+  // The corpus is small but NOT uniformly small: `chunk-sizing.md` carries one
+  // section long enough to exceed the effective target size, which is what
+  // makes the pinned count sensitive to the token splitter (see the index test).
+  //
   // Deliberately NOT named `test/fixtures/...`: this project's own
   // `vibe-agent-toolkit.config.yaml` excludes `**/test/fixtures/**` and
   // `**/test-fixtures/**` from resource crawling (that pattern means "test
@@ -111,6 +154,7 @@ describe('RAG CLI (Node.js dogfooding)', () => {
   // and silently indexes zero resources — this corpus IS meant to be indexed,
   // so it lives under a path the exclude doesn't match.
   const docsPath = safePath.join(__dirname, '../rag-corpus-fixture');
+  const cli: CliTarget = { binPath, dbPath: testDbPath, projectRoot };
 
   beforeAll(async () => {
     // Ensure CLI is built
@@ -146,24 +190,43 @@ describe('RAG CLI (Node.js dogfooding)', () => {
     );
 
     expect(output.status).toBe('success');
-    expect(output.resourcesIndexed).toBe(4);
+    expect(output.resourcesIndexed).toBe(5);
     // Pinned, not `> 0`: a chunker change is the thing most likely to move
-    // indexing cost, and `> 0` cannot see it. If this number changes, decide
-    // whether the chunker change was intended — do not simply update it.
-    expect(output.chunksCreated).toBe(5);
+    // indexing cost, and `> 0` cannot see it.
+    //
+    // What the 8 is made of, and why it is not just a file count:
+    //   5 heading-section chunks — `overview.md` has two headings,
+    //     `configuration.md`, `glossary.md` and `retrieval.md` one each, and
+    //     every one of those sections is short enough to survive whole;
+    //   3 token-split chunks — `chunk-sizing.md` is a single ~1110-token
+    //     section, well past the effective target (`targetChunkSize` 512 ×
+    //     `paddingFactor` 0.9 = 460), so `chunkByTokens` divides it.
+    //
+    // That second term is the entire point of `chunk-sizing.md`.
+    // `chunkResource` is a HYBRID: it splits on heading boundaries first and
+    // calls `chunkByTokens` only for sections over the target. A corpus whose
+    // sections are all a few lines long therefore pins a PURE HEADING COUNT —
+    // the token path is never entered, and `targetChunkSize` could be changed
+    // to anything at all without moving the number. That was measured, not
+    // assumed: over the four short files this fixture started as, indexing
+    // reported 5 chunks at `targetChunkSize` 64 AND at 2048, identically.
+    // With `chunk-sizing.md` in the corpus the count now tracks the setting:
+    // 64 → 29, 512 → 8, 2048 → 6 (the long section fits whole again).
+    //
+    // If this number changes, decide whether the chunker change was intended —
+    // do not simply update it.
+    expect(output.chunksCreated).toBe(8);
   }, 30000);
 
   it('should query indexed documentation via CLI', () => {
-    const output = executeCliCommand(
-      binPath,
-      ['rag', 'query', 'How do I configure RAG?', '--db', testDbPath, '--limit', '5'],
-      projectRoot,
-      30000 // 30 seconds for query with embedding
+    // Targets `retrieval.md`, which is the only document about matching a
+    // query against stored vectors. The corpus also holds `chunk-sizing.md`,
+    // which discusses embeddings and retrieval at length and outweighs every
+    // other file — so passing means ranking a longer, topically adjacent
+    // document below a shorter, on-topic one.
+    expect(queryTopResourceId(cli, 'How is a search query matched against stored vectors?')).toMatch(
+      /retrieval-md$/
     );
-
-    expect(output.status).toBe('success');
-    expect(output.chunks.length).toBeGreaterThan(0);
-    expect(output.stats.totalMatches).toBeGreaterThan(0);
   });
 
   it('should show database statistics via CLI', () => {
@@ -176,24 +239,10 @@ describe('RAG CLI (Node.js dogfooding)', () => {
   });
 
   it('should find relevant chunks for configuration questions', () => {
-    const output = executeCliCommand(
-      binPath,
-      ['rag', 'query', 'RAG configuration and setup', '--db', testDbPath, '--limit', '1'],
-      projectRoot,
-      30000 // 30 seconds for query with embedding
-    );
-
-    expect(output.chunks.length).toBe(1);
-
-    // `--limit 1` over a 5-chunk fixture is a real ranking assertion: the
-    // fixture also has `overview.md`, `glossary.md`, and `retrieval.md`, so
-    // the query must actually outrank them, not merely land in a returned
-    // set that happens to be everything. With `--limit 5` over this same
-    // 5-chunk corpus every chunk comes back regardless of ranking, and
-    // `configuration.md` always contains "config" — so the assertion would
-    // pass even with a broken embedder or ranker.
-    const [topHit] = output.chunks as { resourceId: string; content: string }[];
-    expect(topHit.resourceId).toMatch(/configuration-md$/);
+    // A real ranking assertion for the same reason as the test above: the
+    // corpus also holds `overview.md`, `glossary.md`, `retrieval.md` and
+    // `chunk-sizing.md`, so the query must actually outrank all of them.
+    expect(queryTopResourceId(cli, 'RAG configuration and setup')).toMatch(/configuration-md$/);
   });
 
   it('should clear database via CLI', () => {
