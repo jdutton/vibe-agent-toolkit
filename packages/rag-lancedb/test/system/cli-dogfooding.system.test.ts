@@ -94,8 +94,23 @@ describe('RAG CLI (Node.js dogfooding)', () => {
   const binPath = safePath.join(projectRoot, 'packages/cli/dist/bin.js');
   // Use isolated test output directory to avoid conflicts in parallel test execution
   const testDbPath = getTestOutputDir('rag-lancedb', 'system', 'test-db');
-  // Index only architecture docs (5 files) instead of all docs (53 files) for faster tests
-  const docsPath = safePath.join(projectRoot, 'docs/architecture');
+  // A FIXED corpus, deliberately not the live `docs/architecture`. Cost is
+  // `chunks × ~121 ms`, so indexing a directory that grows as the repo documents
+  // itself put a fixed budget over an unbounded input — it reddened on both CI
+  // platforms once the corpus reached 374 chunks. A fixture keeps the budget
+  // meaningful, and the pinned count below turns a chunking regression into a
+  // named failure instead of somebody else's timeout.
+  //
+  // Deliberately NOT named `test/fixtures/...`: this project's own
+  // `vibe-agent-toolkit.config.yaml` excludes `**/test/fixtures/**` and
+  // `**/test-fixtures/**` from resource crawling (that pattern means "test
+  // input, not real content" — e.g. deliberately-broken skill-eval fixtures),
+  // and `rag index <path>` applies that exclude to explicit path arguments
+  // too (see `crawlOptionsForPath` in `packages/cli/src/utils/resource-loader.ts`).
+  // A directory named `test/fixtures/rag-corpus` is invisible to the crawler
+  // and silently indexes zero resources — this corpus IS meant to be indexed,
+  // so it lives under a path the exclude doesn't match.
+  const docsPath = safePath.join(__dirname, '../rag-corpus-fixture');
 
   beforeAll(async () => {
     // Ensure CLI is built
@@ -124,42 +139,19 @@ describe('RAG CLI (Node.js dogfooding)', () => {
       binPath,
       ['rag', 'index', docsPath, '--db', testDbPath],
       projectRoot,
-      // ⚠️ A FIXED budget over a corpus that GROWS. `docsPath` is the live
-      // `docs/architecture` directory, so this test gets slower every time
-      // anyone documents the architecture — it is not "only 5 docs", and no
-      // number written here stays correct.
-      //
-      // Measured 2026-08-19 on an idle macOS host, varying ONLY the corpus and
-      // holding the binary fixed:
-      //
-      //     7 docs (116 KB)  216 chunks  26.4s   122.2 ms/chunk
-      //    12 docs (276 KB)  374 chunks  45.4s   121.4 ms/chunk
-      //
-      // Cost is `chunks × ~121 ms` — linear, with a near-zero intercept. Two
-      // consequences, both of which contradict what this comment used to say:
-      //
-      //  - It is NOT dominated by loading the onnxruntime-web WASM backend in a
-      //    fresh process. Rates that agree to 0.7% across a 1.7x corpus leave no
-      //    room for a large fixed cost, and `rag query` — also a fresh process,
-      //    also embedding — returns in ~880ms. So making the backend
-      //    warm-startable would NOT fix this; there is no startup to warm.
-      //  - It is NOT a flake, and rerunning is not a diagnosis. Observed red
-      //    3-of-3 on ubuntu across two trees, and on windows, which runs system
-      //    tests SERIALLY (`maxForks: 1`) — so concurrency is not required to
-      //    blow the budget, though it does subtract headroom.
-      //
-      // 60,000ms buys ~495 chunks here and fewer on CI hardware, which reddens
-      // at 374. Raising the number only moves the next failure; the corpus keeps
-      // growing. The fix is to stop measuring an unbounded input — pin this to a
-      // fixture — which trades away dogfooding the real docs tree and is
-      // therefore a product call, not a test-maintenance one.
-      60000 // ~495 chunks locally; the live corpus is at 374 and climbing
+      // A fixed fixture corpus, so this budget is a hang-detector rather than a
+      // performance assertion. Cost is `chunks × ~121 ms`; the pinned
+      // `chunksCreated` below is what actually guards regressions.
+      30000
     );
 
     expect(output.status).toBe('success');
-    expect(output.resourcesIndexed).toBeGreaterThan(0);
-    expect(output.chunksCreated).toBeGreaterThan(0);
-  }, 60000);
+    expect(output.resourcesIndexed).toBe(4);
+    // Pinned, not `> 0`: a chunker change is the thing most likely to move
+    // indexing cost, and `> 0` cannot see it. If this number changes, decide
+    // whether the chunker change was intended — do not simply update it.
+    expect(output.chunksCreated).toBe(5);
+  }, 30000);
 
   it('should query indexed documentation via CLI', () => {
     const output = executeCliCommand(
@@ -186,20 +178,22 @@ describe('RAG CLI (Node.js dogfooding)', () => {
   it('should find relevant chunks for configuration questions', () => {
     const output = executeCliCommand(
       binPath,
-      ['rag', 'query', 'RAG configuration and setup', '--db', testDbPath, '--limit', '5'],
+      ['rag', 'query', 'RAG configuration and setup', '--db', testDbPath, '--limit', '1'],
       projectRoot,
       30000 // 30 seconds for query with embedding
     );
 
-    expect(output.chunks.length).toBeGreaterThan(0);
+    expect(output.chunks.length).toBe(1);
 
-    // Verify relevance - should find docs about RAG/config
-    const hasRelevantContent = output.chunks.some((chunk: { content: string }) => {
-      const content = chunk.content.toLowerCase();
-      return content.includes('rag') || content.includes('config') || content.includes('provider');
-    });
-
-    expect(hasRelevantContent).toBe(true);
+    // `--limit 1` over a 5-chunk fixture is a real ranking assertion: the
+    // fixture also has `overview.md`, `glossary.md`, and `retrieval.md`, so
+    // the query must actually outrank them, not merely land in a returned
+    // set that happens to be everything. With `--limit 5` over this same
+    // 5-chunk corpus every chunk comes back regardless of ranking, and
+    // `configuration.md` always contains "config" — so the assertion would
+    // pass even with a broken embedder or ranker.
+    const [topHit] = output.chunks as { resourceId: string; content: string }[];
+    expect(topHit.resourceId).toMatch(/configuration-md$/);
   });
 
   it('should clear database via CLI', () => {
