@@ -1,7 +1,13 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
 import { mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import {
+  canCreateSymlinks,
+  mkdirSyncReal,
+  normalizedTmpdir,
+  safePath,
+  toForwardSlash,
+} from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -74,7 +80,12 @@ describe('mintResourceId', () => {
 });
 
 describe('canonicalPathFor', () => {
-  it('resolves a symlink to its target, so both share one identity', () => {
+  it('resolves a symlink to its target, so both share one identity', ({ skip }) => {
+    // Creating a symlink on Windows needs the privilege Developer Mode grants,
+    // which most dev boxes lack — `symlinkSync` throws EPERM there. Skip loudly
+    // rather than no-op: a silently skipped symlink case reads as a pass.
+    if (!canCreateSymlinks(normalizedTmpdir())) skip();
+
     const { root, target, alias } = makeAliasedDoc();
     const context = { realRoot: resolveRootPath(root) };
 
@@ -108,7 +119,11 @@ describe('canonicalPathFor', () => {
     expect(canonicalPathFor(target, { realRoot: resolveRootPath(`${root}/`) })).toBe(DOC_RELATIVE);
   });
 
-  it('canonicalizes an absent file through a symlinked PARENT, so its identity will not move when it appears', () => {
+  it('canonicalizes an absent file through a symlinked PARENT, so its identity will not move when it appears', ({
+    skip,
+  }) => {
+    if (!canCreateSymlinks(normalizedTmpdir())) skip();
+
     // A `files:`-declared build artifact reached through a symlinked directory.
     // Resolving only the whole path gives up the moment the leaf is missing and
     // would mint `link/artifact.md`; the file appearing later would then mint
@@ -123,7 +138,9 @@ describe('canonicalPathFor', () => {
 });
 
 describe('ResourceIdentityMap', () => {
-  it('returns one id for two names of one file', () => {
+  it('returns one id for two names of one file', ({ skip }) => {
+    if (!canCreateSymlinks(normalizedTmpdir())) skip();
+
     const { root, target, alias } = makeAliasedDoc();
 
     const map = new ResourceIdentityMap(root);
