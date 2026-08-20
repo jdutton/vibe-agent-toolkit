@@ -21,7 +21,7 @@
   "scripts": {
     "build": "tsx ../dev-tools/src/tsc-clean-build.ts && bun run generate:schemas",
     "build:watch": "tsc --build --watch",
-    "clean": "rm -rf dist *.tsbuildinfo schemas/",
+    "clean": "rm -rf dist *.tsbuildinfo",
     "generate:schemas": "tsx scripts/generate-json-schemas.ts",
     "test:unit": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",

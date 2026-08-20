@@ -26,7 +26,7 @@
     "test:system": "vitest run --config vitest.system.config.ts",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "clean": "rimraf dist *.tsbuildinfo schemas/"
+    "clean": "rimraf dist *.tsbuildinfo"
   },
   "keywords": [
     "markdown",
