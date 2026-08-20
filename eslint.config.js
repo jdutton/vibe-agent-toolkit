@@ -400,22 +400,30 @@ export default [
   // The rule cannot tell a corpus-document read from a read of an artifact we
   // wrote, or from a subprocess's stdout — the rule's own docstring draws that
   // line and requires each exemption to name the writer or the producer. Inside
-  // these two packages the population needing one is FIVE call sites, each
-  // carrying that name. Repo-wide it would be ~350 `readFile(p, 'utf-8')` calls
+  // `utils` and `resources` the population needing one is FIVE call sites, each
+  // carrying that name; `rag`'s one violation needed no exemption — it was a
+  // genuine corpus read and got routed through the seam instead. Repo-wide it
+  // would be ~350 `readFile(p, 'utf-8')` calls
   // (130 in `src/`, 220 in tests) plus a dozen `child_process` stdout decodes,
   // and settling those is migration work, not a config change. This repo has
   // already learned what an over-firing rule costs: see `no-unsafe-root-join`,
   // demoted out of `configs.recommended` for exactly that.
   //
-  // `packages/utils/src` and `packages/resources/src` are the honest scope: the
-  // first OWNS the seam, the second owns every corpus-document read
-  // (`link-parser`, `html-link-parser`, the projection's blob stage). **The rest
-  // of the repo is NOT covered**, and the widening ledger, in cost order, is:
-  // `packages/resource-compiler/src` (6), `packages/agent-skills/src` (22 —
-  // reads `SKILL.md`, the strongest candidate), `packages/claude-marketplace/src`
-  // (19), `packages/cli/src` (31). Test directories are deliberately last: a
-  // fixture written and read as UTF-8 by the same test is a closed loop, not a
-  // content read.
+  // `packages/utils/src`, `packages/resources/src` and (as of the third pass)
+  // `packages/rag/src` are the honest scope: the first OWNS the seam, the second
+  // owns every corpus-document read (`link-parser`, `html-link-parser`, the
+  // projection's blob stage), the third owns exactly one — a HuggingFace
+  // `vocab.txt` in `embedding-providers/onnx-utils.ts`, whose encoding is the
+  // model publisher's choice, not this project's. **The rest of the repo is NOT
+  // covered**, and the widening ledger, measured by running this rule over each
+  // candidate package, is: `packages/resource-compiler/src` (5 — the cheapest
+  // remaining candidate), `packages/agent-skills/src` (22 — reads `SKILL.md`),
+  // `packages/claude-marketplace/src` (20), `packages/cli/src` (31).
+  // `packages/projection-sqlite/src` and `packages/schema/src` measure zero — no
+  // file reads of any kind, so scoping the rule there guards no real call site
+  // and is not a widening pass worth spending. Test directories are deliberately
+  // last: a fixture written and read as UTF-8 by the same test is a closed loop,
+  // not a content read.
   {
     files: ['packages/utils/src/**/*.ts'],
     plugins: {
@@ -444,7 +452,25 @@ export default [
       }],
     },
   },
-
+  {
+    files: ['packages/rag/src/**/*.ts'],
+    plugins: {
+      local: localRules,
+    },
+    rules: {
+      // Third pass of the staged widening (see the block comment above). Chosen
+      // over `agent-skills`/`cli`/`claude-marketplace` because it measured the
+      // fewest violations that were an actual widening: ONE, a HuggingFace
+      // `vocab.txt` read in `embedding-providers/onnx-utils.ts`, now routed
+      // through the seam. `projection-sqlite` and `schema` measured zero, but
+      // zero there means no file reads at all, not a reviewed decision, so they
+      // were passed over rather than claimed as "smallest". No `exemptFiles`
+      // here for the same reason as `resources`.
+      'local/no-raw-text-decode': ['error', {
+        safeModule: '@vibe-agent-toolkit/utils',
+      }],
+    },
+  },
   // Scoped: a package's compiled sources must not import that package by its own
   // name. `src/**` is exactly what every package's tsconfig `include`s, and the
   // hazard is a build-time resolution failure, so this is the whole surface where

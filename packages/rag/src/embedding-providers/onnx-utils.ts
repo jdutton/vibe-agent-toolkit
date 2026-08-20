@@ -7,10 +7,11 @@
  * - HuggingFace model file downloader
  */
 
-import { readFile, stat, mkdir, writeFile } from 'node:fs/promises';
+import { stat, mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 
 // ---------------------------------------------------------------------------
 // WordPiece Tokenizer
@@ -399,8 +400,7 @@ export class BertTokenizer {
    *   for why that cannot be tolerated silently
    */
   static async fromVocabFile(vocabPath: string, modelId?: string): Promise<BertTokenizer> {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- vocabPath is from model cache, not user input
-    const content = await readFile(vocabPath, 'utf8');
+    const { text: content } = await readTextContent(vocabPath);
     const vocab = parseVocab(content);
     const specialTokens = resolveSpecialTokens(vocab, vocabPath, modelId);
     rejectIfCased(vocab, vocabPath, modelId);

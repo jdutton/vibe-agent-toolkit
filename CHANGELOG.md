@@ -28,9 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   encoding test is an *exclusion* of the three binary-to-text codecs (`base64`, `base64url`, `hex`)
   rather than an inclusion list of character encodings, so a spelling nobody anticipated still fires.
   Not in `configs.recommended`: it names a seam that only exists once you write one. In this
-  repository it is scoped to `packages/utils/src` and `packages/resources/src`; the three-category
-  rule for deciding whether a given `'utf-8'` read is a content read at all, and the widening ledger
-  for the rest of the tree, are in `docs/architecture/resource-scanning-and-caching.md` §3.5.
+  repository it is scoped to `packages/utils/src`, `packages/resources/src` and `packages/rag/src`;
+  the three-category rule for deciding whether a given `'utf-8'` read is a content read at all, and
+  the widening ledger for the rest of the tree, are in
+  `docs/architecture/resource-scanning-and-caching.md` §3.5.
 
 - **`@vibe-agent-toolkit/no-self-package-import`** — a new ESLint rule in the published rule pack.
   Bans a file importing the package it lives in by that package's own name, which resolves through

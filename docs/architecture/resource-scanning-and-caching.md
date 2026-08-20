@@ -479,13 +479,14 @@ encodings, so an encoding spelling nobody anticipated still fires — the rule f
 string *literal* triggers it: without type information `buf.toString(enc)` is indistinguishable from
 `n.toString(radix)`, and `readFile(p, cb)` from `readFile(p, encoding)`.
 
-It is registered over **`packages/utils/src` and `packages/resources/src`**, and that is a scope, not
-a claim about the repo. Repo-wide it would fire on a dozen legitimate `child_process` decodes and on
-~350 `readFile(p, 'utf-8')` calls (130 in `src/`, 220 in tests), most of them category 2. Widening it
-means migrating and justifying those, in this order: `packages/resource-compiler/src` (6),
-`packages/agent-skills/src` (22 — reads `SKILL.md`, the strongest candidate),
-`packages/claude-marketplace/src` (19), `packages/cli/src` (31). Test directories are last: a fixture
-written and read as UTF-8 by the same test is a closed loop, not a content read.
+It is registered over **`packages/utils/src`, `packages/resources/src`, and `packages/rag/src`**, and
+that is a scope, not a claim about the repo. Repo-wide it would fire on a dozen legitimate
+`child_process` decodes and on ~350 `readFile(p, 'utf-8')` calls (130 in `src/`, 220 in tests), most
+of them category 2. Widening it means migrating and justifying those, in this order:
+`packages/resource-compiler/src` (5, the cheapest remaining candidate), `packages/agent-skills/src`
+(22 — reads `SKILL.md`), `packages/claude-marketplace/src` (20), `packages/cli/src` (31). Test
+directories are last: a fixture written and read as UTF-8 by the same test is a closed loop, not a
+content read.
 
 Inside the scope the whole exemption set is **one `exemptFiles` entry** — the seam's own
 `text-content.ts` — plus **six call sites**, each naming its category:
