@@ -29,7 +29,7 @@ import { decodeTextContent, type DecodedText } from './text-content.js';
  * Read a file and decode it through {@link decodeTextContent}.
  *
  * @param filePath - Path to read
- * @returns The decoded text, the encoding used, and whether it was a fact
+ * @returns The decoded text, the encoding used, whether that was a fact, and the replacement-character count
  * @throws Whatever `readFile` throws — callers decide whether that is fatal
  *
  * @example
@@ -47,7 +47,7 @@ export async function readTextContent(filePath: string): Promise<DecodedText> {
  * {@link readTextContent}, synchronously.
  *
  * @param filePath - Path to read
- * @returns The decoded text, the encoding used, and whether it was a fact
+ * @returns The decoded text, the encoding used, whether that was a fact, and the replacement-character count
  * @throws Whatever `readFileSync` throws
  */
 export function readTextContentSync(filePath: string): DecodedText {

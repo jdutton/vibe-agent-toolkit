@@ -7,6 +7,8 @@
  * a path never enters the derivation.
  */
 
+import type { TextProvenance } from '@vibe-agent-toolkit/utils/text';
+
 import type { ParseResult } from '../link-parser.js';
 import type { OffsetRange } from '../reference-lexer.js';
 import type { ContentMeasures } from '../schemas/parse-facts.js';
@@ -19,39 +21,54 @@ import { flattenHeadings } from './blob-sections.js';
 // counts and validates them on read, so the shape needs one definition.
 
 /**
- * Split a document's characters into prose and fenced code, and count prose words.
+ * Split a document into prose and code blocks by size, and count prose words.
  *
- * The two character counts partition the content exactly — `proseCharacters +
- * codeBlockCharacters === [...content].length` — which is the invariant that
- * makes a measurement trustworthy rather than approximate. Ranges are merged
- * before summing, because a range list is a set of spans and two overlapping
- * spans cover their union, not the sum of their lengths.
+ * The two size counts partition the content exactly — `proseCodeUnits +
+ * codeBlockCodeUnits === content.length` — which is the invariant that makes a
+ * measurement trustworthy rather than approximate. Ranges are merged before
+ * summing, because a range list is a set of spans and two overlapping spans
+ * cover their union, not the sum of their lengths.
  *
- * Both counts are **Unicode code points**, not UTF-16 code units and not bytes
- * on disk: `fences` are UTF-16 code-unit offsets (a rewriter indexes the
- * decoded JS string), so each slice is spread into an array before counting —
- * `end - start` would count code units under a name that promises characters.
- * `BlobRow.bytes` carries the on-disk byte count separately.
+ * ## What "code" means here, exactly
+ *
+ * Whatever the caller puts in `fences`, and `collectCodeContextRanges` fills that
+ * array from every `code` AST node — which is **fenced and indented code blocks
+ * alike**, since remark gives both the same node type. "Fenced" would name only
+ * half of what is actually excluded.
+ *
+ * **Inline code is NOT excluded.** `collectCodeContextRanges` files `inlineCode`
+ * nodes into a separate `codeSpans` array, and no caller ever passes that array
+ * here — so a `` `token` `` in a sentence counts as prose, in both the size
+ * count and the word count. That is a property of the wiring rather than a
+ * decision this function makes, which is exactly why it has to be written down:
+ * the name `codeBlockCodeUnits` is true and the intuition "code is excluded" is
+ * not.
+ *
+ * Both counts are **UTF-16 code units**, which is what the names say and what
+ * the arithmetic already produces: `fences` are code-unit offsets into the
+ * decoded JS string, so `end - start` is a code-unit count and `content.length`
+ * is the code-unit total. No scan and no allocation — the whole measurement is
+ * arithmetic on offsets the parse already handed us. A code-point count would
+ * cost an O(n) spread per document to buy a unit nothing downstream indexes in;
+ * `BlobRow.bytes` carries the on-disk byte count for callers who want bytes.
  *
  * @param content - Decoded document text
- * @param fences - Fenced-code offset ranges (UTF-16 code units), from `collectCodeContextRanges`
+ * @param fences - Code-block offset ranges (UTF-16 code units), from
+ *   `collectCodeContextRanges` — fenced and indented blocks, never inline spans
  * @returns The three measures
  */
 export function measureContent(content: string, fences: readonly OffsetRange[]): ContentMeasures {
   const merged = mergeRanges(fences, content.length);
-  let codeBlockCharacters = 0;
+  let codeBlockCodeUnits = 0;
   const proseSegments: string[] = [];
   let cursor = 0;
 
   for (const [start, end] of merged) {
     if (start > cursor) proseSegments.push(content.slice(cursor, start));
-    // Slice and count, never `end - start`: those are code-unit indices, and
-    // subtracting them counts code units under a name that promises characters.
-    // Sliced into a local first — spreading `content.slice(...)` directly reads
-    // to `unicorn/no-useless-spread` as cloning an array, when it is actually a
-    // string being spread into code points.
-    const codeSegment = content.slice(start, end);
-    codeBlockCharacters += [...codeSegment].length;
+    // `end - start` on code-unit offsets IS the code-unit count — the column is
+    // named for the unit the offsets are already in, so nothing has to be
+    // re-measured.
+    codeBlockCodeUnits += end - start;
     cursor = end;
   }
   if (cursor < content.length) proseSegments.push(content.slice(cursor));
@@ -61,29 +78,65 @@ export function measureContent(content: string, fences: readonly OffsetRange[]):
   const prose = proseSegments.join(' ');
   return {
     wordCount: prose.split(/\s+/u).filter((word) => word.length > 0).length,
-    // The partition invariant, in code points on both sides.
-    proseCharacters: [...content].length - codeBlockCharacters,
-    codeBlockCharacters,
+    // The partition invariant, in code units on both sides.
+    proseCodeUnits: content.length - codeBlockCodeUnits,
+    codeBlockCodeUnits,
   };
 }
+
+/**
+ * `TextProvenance` — but only while the `blobs` row's `encoding` column admits
+ * *exactly* the encodings the decoder can produce.
+ *
+ * `BlobEncodingSchema` restates `TextEncoding` as a Zod enum because a stored
+ * column needs a runtime validator, and two spellings of one closed set is the
+ * shape that drifts. This alias resolves to `never` in either direction of
+ * divergence — the decoder gaining an encoding the column cannot store, or the
+ * column gaining one nothing produces — and {@link blobRowFor} then stops
+ * compiling, which is the only notification that does not depend on someone
+ * reading a comment.
+ *
+ * `encodingSource` needs no such guard: it is assigned by name below, so a
+ * mismatch is an ordinary type error at the assignment.
+ */
+type ExactBlobEncoding =
+  TextProvenance['encoding'] extends BlobRow['encoding']
+    ? BlobRow['encoding'] extends TextProvenance['encoding']
+      ? TextProvenance
+      : never
+    : never;
 
 /**
  * Build the `blobs` row for one parse.
  *
  * Every column is a function of the bytes alone, so the row is safe to cache
- * content-addressed alongside `estimatedTokenCount`.
+ * content-addressed alongside `estimatedTokenCount`. That includes the three
+ * decode columns: which encoding a byte string announces, and what decoding it
+ * under that encoding costs, are properties of the bytes and of nothing else.
  *
  * `sizeBytes` is a parameter rather than `parsed.content.length` on purpose:
  * decoding is many-to-one on malformed UTF-8, so the raw on-disk byte count and
  * the decoded string length legitimately diverge. `ParseFactRow` records both
  * for the same reason. The caller passes its `stat().size`.
  *
+ * `decoding` is a parameter for a stronger version of that reason: it is not
+ * recoverable from `parsed` **at all**. A `ParseResult` describes a JS string,
+ * and by then the encoding question has already been answered and thrown away —
+ * which is precisely the silence these columns exist to end.
+ *
  * @param contentKey - The blob's `<parserKind>.<sha256>` key
  * @param sizeBytes - Raw on-disk byte length, from the caller's `stat()`
+ * @param decoding - What the decode of these bytes knew, guessed and lost,
+ *   straight off the `KeyedContent` the parse was performed on
  * @param parsed - The parse this row describes
  * @returns The `blobs` row
  */
-export function blobRowFor(contentKey: string, sizeBytes: number, parsed: ParseResult): BlobRow {
+export function blobRowFor(
+  contentKey: string,
+  sizeBytes: number,
+  decoding: ExactBlobEncoding,
+  parsed: ParseResult,
+): BlobRow {
   const measures = parsed.contentMeasures;
   // One section per heading, so both columns come from the same count. The
   // heading list is a TREE (`buildHeadingTree`), so `.length` alone counts only
@@ -98,6 +151,9 @@ export function blobRowFor(contentKey: string, sizeBytes: number, parsed: ParseR
   return {
     contentKey,
     bytes: sizeBytes,
+    encoding: decoding.encoding,
+    encodingSource: decoding.encodingSource,
+    replacementCharacters: decoding.replacementCharacters,
     tokenEstimate: parsed.estimatedTokenCount,
     // `ParseResult` types frontmatter values as `unknown` — YAML can decode to
     // `Infinity`, `NaN` or a `Buffer`, none of which are JSON. The projection
@@ -106,8 +162,8 @@ export function blobRowFor(contentKey: string, sizeBytes: number, parsed: ParseR
     frontmatter: (parsed.frontmatter ?? null) as BlobRow['frontmatter'],
     frontmatterError: parsed.frontmatterError ?? null,
     wordCount: measures?.wordCount ?? 0,
-    proseCharacters: measures?.proseCharacters ?? 0,
-    codeBlockCharacters: measures?.codeBlockCharacters ?? 0,
+    proseCodeUnits: measures?.proseCodeUnits ?? 0,
+    codeBlockCodeUnits: measures?.codeBlockCodeUnits ?? 0,
     linkCount: parsed.links.length,
     headingCount,
     sectionCount: headingCount,

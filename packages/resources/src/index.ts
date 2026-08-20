@@ -108,6 +108,8 @@ export {
 
 export {
   BlobConditionRowSchema,
+  BlobEncodingSchema,
+  BlobEncodingSourceSchema,
   BlobReferenceRowSchema,
   BlobRowSchema,
   BlobSectionRowSchema,
@@ -195,9 +197,13 @@ export { blobSectionsFor, flattenHeadings } from './projection/blob-sections.js'
 // them, and the read-only base view a contributor is handed. The builder's
 // `ensureContentKey` is the demand half of demand-driven keying — the only way
 // a `deferred` realization's null `contentKey` ever becomes a real one.
+// A read it makes that THROWS is `REALIZATION_PROMOTION_UNREADABLE`: the blob
+// layer's `BLOB_UNREADABLE` one tier down, and the row that stops a failed
+// promotion looking like a promotion nobody asked for.
 export {
   ProjectionBuilder,
   REALIZATION_PATH_COLLISION,
+  REALIZATION_PROMOTION_UNREADABLE,
   type Projection,
   type ProjectionBase,
 } from './projection/projection.js';
@@ -506,6 +512,7 @@ export {
   CONTENT_PARSING_DERIVE,
   CONTENT_PARSING_SKIP,
   ClosureNonConvergenceError,
+  DISCARD_BLOB_POPULATION,
   populate,
   type BlobPopulationReport,
   type ContentParsing,
@@ -513,6 +520,15 @@ export {
   type PopulateOptions,
   type PopulationCache,
 } from './projection/merge.js';
+
+// The one line a user sees when the blob stage declined to derive something.
+// `populate()` computes the refusal counts on every run; until this shipped,
+// every production caller threw them away, so a corpus in which every document
+// was declined as binary produced an empty `blobs` table and exit 0. The counts
+// are the half that `blob_conditions` cannot carry — nobody queries a projection
+// they were never told to look at, and a skipped heading or reference is an
+// absent row.
+export { describeBlobRefusals } from './projection/blob-refusals.js';
 
 // The declarative closure primitive (zones §7.3): a closure-defined extent is a
 // GENERIC contributor handed an `ExtentDeclaration`, never new privileged code —

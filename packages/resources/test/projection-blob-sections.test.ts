@@ -77,23 +77,24 @@ describe('blobSectionsFor', () => {
     expect(rows[1]?.bytes ?? 0).toBeGreaterThan(rows[2]?.bytes ?? Number.POSITIVE_INFINITY);
   });
 
-  it('reports bytes as UTF-8 bytes and characters as code points, using an astral character', () => {
+  it('reports bytes as real UTF-8 bytes, not the string length, using an astral character', () => {
     // U+1D11E (MUSICAL SYMBOL G CLEF) is astral: a surrogate pair, so it is 1
-    // code point but 2 UTF-16 code units. Measured (node -e, Buffer.byteLength):
+    // character but 2 UTF-16 code units. Measured (node -e, Buffer.byteLength):
     // this document is 7 UTF-16 code units, 6 code points, 9 UTF-8 bytes — all
-    // three numbers differ. A BMP-only character like '⭐' (U+2B50) cannot do
-    // this: its code-unit and code-point counts are equal, so a test built on
-    // it would pass whether or not `characters` was ever fixed to use code
-    // points instead of `.length`.
+    // three numbers differ, which is what lets one assertion separate them. A
+    // BMP-only character like '⭐' (U+2B50) cannot do this job for the
+    // code-unit/code-point pair, and only a NON-ASCII one separates bytes from
+    // either, so `body.length` would pass a pure-ASCII fixture unnoticed.
     const doc = '# T\n\u{1D11E}\n';
     const rows = blobSectionsFor(CONTENT_KEY, doc, headingsOf(doc));
     const section = rows[0];
 
     expect(section?.bytes).toBe(Buffer.byteLength(doc, 'utf-8'));
     expect(section?.bytes).toBe(9);
-    expect(section?.characters).toBe([...doc].length);
-    expect(section?.characters).toBe(6);
-    expect(section?.bytes).not.toBe(section?.characters);
+    // The two values `bytes` is NOT: 7 code units (`body.length`) and 6 code
+    // points. `bytes` is the table's only size column and it means bytes.
+    expect(doc.length).toBe(7);
+    expect([...doc].length).toBe(6);
   });
 
   it('runs the last section to the end of the document', () => {

@@ -67,18 +67,20 @@ import {
 } from './resource-metadata.js';
 
 /**
- * Character and word accounting for one blob, split by code context.
+ * Code-unit and word accounting for one blob, split by code context.
  *
- * Both counts are **Unicode code points** of the decoded document — not UTF-16
- * code units and not bytes on disk. `BlobRow.bytes` carries the on-disk byte
- * count separately, and reference `startOffset`/`endOffset` remain code units
- * because a rewriter indexes the decoded JS string.
+ * Both counts are **UTF-16 code units** of the decoded document — neither
+ * characters nor bytes. A JS string is a sequence of UTF-16 code units, so
+ * `'𝄞'.length === 2` for one character that occupies four bytes on disk. These
+ * are the same units reference `startOffset`/`endOffset` use, because a
+ * rewriter indexes the decoded JS string; `BlobRow.bytes` carries the on-disk
+ * byte count separately.
  */
 export const ContentMeasuresSchema = z.object({
-  wordCount: z.number().int().nonnegative().describe('Whitespace-delimited words outside fenced code'),
-  proseCharacters: z.number().int().nonnegative().describe('Unicode code points outside fenced code'),
-  codeBlockCharacters: z.number().int().nonnegative().describe('Unicode code points inside fenced code'),
-}).describe('Character and word accounting for one blob, split by code context');
+  wordCount: z.number().int().nonnegative().describe('Whitespace-delimited words outside code blocks. Inline code spans are NOT excluded — `measureContent` is passed only the fence ranges'),
+  proseCodeUnits: z.number().int().nonnegative().describe('UTF-16 code units outside code blocks — NOT characters and NOT bytes; an astral character counts as two. Inline code spans are NOT excluded — `measureContent` is passed only the fence ranges, so a `` `token` `` counts as prose'),
+  codeBlockCodeUnits: z.number().int().nonnegative().describe('UTF-16 code units inside code blocks — NOT characters and NOT bytes; an astral character counts as two. Fenced AND indented blocks, since both are one `code` AST node. Excludes inline code spans'),
+}).describe('Code-unit and word accounting for one blob, split by code context');
 
 export type ContentMeasures = z.infer<typeof ContentMeasuresSchema>;
 
@@ -100,9 +102,9 @@ export const LexicalReferenceSchema = z.object({
   line: z.number().int().positive().describe('1-based line'),
   column: z.number().int().positive().describe("1-based column of the token's first character"),
   startOffset: z.number().int().nonnegative()
-    .describe("0-based character offset of the token's first character"),
+    .describe("0-based UTF-16 code-unit offset of the token's first character — the same unit `ContentMeasures` counts in, so an astral character advances it by two"),
   endOffset: z.number().int().nonnegative()
-    .describe("0-based character offset one past the token's last character"),
+    .describe("0-based UTF-16 code-unit offset one past the token's last character"),
   syntacticForm: LexicalSyntacticFormSchema,
   ...LEXICAL_FEATURE_COLUMNS,
 }).describe('A reference candidate the markdown AST does not produce');
@@ -131,7 +133,7 @@ export const ParseFactsSchema = z.object({
   /**
    * See `ParseResult.contentMeasures`. A function of the bytes alone, so it is
    * storable by the same rule as `estimatedTokenCount` — and it must be stored,
-   * because recomputing `codeBlockCharacters` needs the AST the cache exists to
+   * because recomputing `codeBlockCodeUnits` needs the AST the cache exists to
    * avoid building.
    */
   contentMeasures: ContentMeasuresSchema.optional(),

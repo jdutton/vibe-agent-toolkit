@@ -9,13 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Encoding provenance in the projection's `blobs` table** — new `encoding`, `encodingSource`
+  (`bom` or `assumed`) and `replacementCharacters` columns record how each document was decoded.
+  `vat inventory` warns when a corpus contains mis-decoded documents; a clean corpus stays quiet.
+  Check it if you index files that are not UTF-8 — a mis-decoded document indexes as mojibake without
+  erroring anywhere.
+
 - **`decodeTextContent()` on the new `@vibe-agent-toolkit/utils/text` subpath** — the one
   content-decoding seam (see **Fixed**). Pure: it reaches no `node:*` builtin and no third-party
   package, so bytes from a git blob, an HTTP body or a zip entry decode through the same function as
   bytes from disk. `readTextContent()` / `readTextContentSync()` — that plus a `readFile` — are on
-  `@vibe-agent-toolkit/utils/fs`. All three return the text, the encoding used, and whether that
-  encoding was a fact (`basis: 'bom'`) or a default (`'assumed'`), and all three are on the `.`
-  barrel too.
+  `@vibe-agent-toolkit/utils/fs`. All three return the text, the encoding used, whether that
+  encoding was a fact (`encodingSource: 'bom'`) or a default (`'assumed'`), and how many U+FFFD the
+  decode had to substitute (`replacementCharacters`), and all three are on the `.` barrel too.
 
   It is a `utils` primitive rather than a `resources` one deliberately: a decode knows nothing about
   content keys or the projection, `resources` depends on `utils` and never the reverse, and an adopter
@@ -165,7 +171,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Content is now decoded in **one place** — `decodeTextContent()`, in `utils` — which reads the encoding off the
   BOM (UTF-8, UTF-16LE/BE, UTF-32LE/BE; UTF-32 converted by hand, because `TextDecoder` deliberately
   omits it), strips the BOM so a leading U+FEFF cannot stop `# Heading` parsing, and assumes UTF-8
-  otherwise. The result says which of the two it was, in `DecodedText.basis`. BOM-less UTF-16 and
+  otherwise. The result says which of the two it was, in `DecodedText.encodingSource`. BOM-less UTF-16 and
   BOM-less latin charsets are **not** detected: both are undecidable from bytes alone, and each is
   pinned as a test stating what is given up rather than left to a heuristic. Along the way, an
   adopter's config file, JSON schema or `package.json` carrying a UTF-8 BOM no longer fails to parse,

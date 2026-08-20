@@ -69,10 +69,9 @@ interface OpenAncestor {
  * "step".
  *
  * **`lineEnd` runs to the next heading of level ≤ this one**, not to the next
- * heading of any level. That is what makes `bytes` and `characters` span
- * nested subsections, as `BlobSectionRowSchema` documents — a nested
- * subsection is therefore counted twice across the table, once in its own row
- * and once in each ancestor's.
+ * heading of any level. That is what makes `bytes` span nested subsections, as
+ * `BlobSectionRowSchema` documents — a nested subsection is therefore counted
+ * twice across the table, once in its own row and once in each ancestor's.
  *
  * ## Headings with no position are skipped, not defaulted
  *
@@ -125,11 +124,11 @@ export function blobSectionsFor(
       parentOrdinal,
       lineStart: line,
       lineEnd,
-      // `bytes` and `characters` differ for any non-ASCII body, and both are
-      // sizes rather than indices — the spans a rewriter uses are
-      // `startOffset`/`endOffset` on references, which stay UTF-16 code units.
+      // A real UTF-8 byte count, not `body.length` — this is a size rather than
+      // an index, and it differs from the code-unit length for any non-ASCII
+      // body. The spans a rewriter uses are `startOffset`/`endOffset` on
+      // references, which stay UTF-16 code units.
       bytes: Buffer.byteLength(body, 'utf-8'),
-      characters: [...body].length,
       tokens: estimateTokens(body),
     });
   }
@@ -182,9 +181,8 @@ function sectionEndLine(
  *
  * Index `i` holds the offset of line `i + 1`, so the end of line `n` is the
  * start of line `n + 1` — including that line's own newline in the slice. That
- * is what makes two adjacent sections' `bytes` (UTF-8 byte count) sum to the
- * UTF-8 bytes between them, and `characters` (code-point count) sum to the code
- * points between them — each column partitions the document in its own unit.
+ * is what makes two adjacent sections' `bytes` (a UTF-8 byte count) sum to the
+ * UTF-8 bytes between them.
  *
  * @param content - The decoded document text
  * @returns One offset per line, in order

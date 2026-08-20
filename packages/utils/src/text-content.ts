@@ -49,10 +49,10 @@
  *
  * ## What is a fact here, and what is an assumption
  *
- * The distinction is carried in the result ({@link DecodedText.basis}) rather
- * than left to prose, because the two are not the same kind of claim:
+ * The distinction is carried in the result ({@link TextProvenance.encodingSource})
+ * rather than left to prose, because the two are not the same kind of claim:
  *
- * | input | encoding | basis | why |
+ * | input | encoding | encodingSource | why |
  * |---|---|---|---|
  * | leading `ef bb bf` | `utf-8` | `bom` | the bytes say so |
  * | leading `ff fe` (not `ff fe 00 00`) | `utf-16le` | `bom` | the bytes say so |
@@ -60,6 +60,28 @@
  * | leading `ff fe 00 00` | `utf-32le` | `bom` | the bytes say so |
  * | leading `00 00 fe ff` | `utf-32be` | `bom` | the bytes say so |
  * | anything else | `utf-8` | `assumed` | the defensible default |
+ *
+ * ## And what proves the assumption WRONG
+ *
+ * `encoding` says what was guessed; {@link TextProvenance.replacementCharacters}
+ * is what the guess cost. A malformed sequence decodes to U+FFFD instead of
+ * throwing, so a mis-decoded document arrives as a well-formed JS string full of
+ * garbage — and a byte-level BPE tokenizer has no out-of-vocabulary concept, so
+ * it embeds and indexes that garbage without erroring anywhere. Counting the
+ * substitutions is what turns "we assumed UTF-8" into "we assumed UTF-8 and were
+ * demonstrably wrong 3,200 times in this file".
+ *
+ * It is counted **without paying for it on the clean path**. Every decode runs
+ * first through a `fatal: true` decoder, which throws on the first malformed
+ * sequence rather than substituting; a file that decodes cleanly — nearly every
+ * file — costs exactly one decode and no scan at all. Only a file that actually
+ * threw is decoded a second time in substituting mode and scanned for U+FFFD, so
+ * the O(n) scan is charged entirely to broken input.
+ *
+ * That ordering also buys a correctness property a scan alone cannot have: a
+ * document that *legitimately contains* U+FFFD is valid input, so the fatal
+ * decoder does not throw and it is reported as **0** replacements rather than
+ * accused of a bad decode. A bare scan would count its own content against it.
  *
  * 🪤 **The UTF-32LE BOM starts with the UTF-16LE BOM.** `ff fe 00 00` matches
  * `ff fe`, so a table tested shortest-first decodes every UTF-32LE document as
@@ -119,16 +141,38 @@ export type TextEncoding = 'utf-8' | 'utf-16le' | 'utf-16be' | 'utf-32le' | 'utf
  * name for it: BOM-less UTF-16 and BOM-less latin-1 both land here and both
  * decode as UTF-8.
  */
-export type EncodingBasis = 'bom' | 'assumed';
+export type EncodingSource = 'bom' | 'assumed';
 
-/** Text decoded from bytes, and what it was decoded as. */
-export interface DecodedText {
-  /** The decoded content, BOM removed, exactly as a parser should receive it. */
-  readonly text: string;
+/**
+ * Everything the decode knew, guessed, and lost — the text itself excluded.
+ *
+ * Split out from {@link DecodedText} so a consumer that must carry the decode's
+ * provenance alongside *other* facts about the same bytes — `KeyedContent` in
+ * `@vibe-agent-toolkit/resources` carries it beside a content key and a byte
+ * length — can hold exactly these three fields without also re-holding the
+ * content, and without restating them one by one at every layer they cross.
+ */
+export interface TextProvenance {
   /** The encoding used. */
   readonly encoding: TextEncoding;
   /** Whether {@link encoding} was read off a BOM or assumed. */
-  readonly basis: EncodingBasis;
+  readonly encodingSource: EncodingSource;
+  /**
+   * How many U+FFFD REPLACEMENT CHARACTERs the decode produced.
+   *
+   * Zero for a document that decodes cleanly, **including one whose own content
+   * legitimately contains U+FFFD** — see the module docstring for why the
+   * fatal-first ordering is what makes those two cases distinguishable. A
+   * non-zero value is proof, not suspicion: these bytes are not valid in the
+   * encoding they were read as.
+   */
+  readonly replacementCharacters: number;
+}
+
+/** Text decoded from bytes, and what it was decoded as. */
+export interface DecodedText extends TextProvenance {
+  /** The decoded content, BOM removed, exactly as a parser should receive it. */
+  readonly text: string;
 }
 
 /**
@@ -166,6 +210,26 @@ const DECODERS: ReadonlyMap<TextEncoding, InstanceType<typeof TextDecoder>> = ne
   ['utf-8', new TextDecoder('utf-8', { ignoreBOM: true })],
   ['utf-16le', new TextDecoder('utf-16le', { ignoreBOM: true })],
   ['utf-16be', new TextDecoder('utf-16be', { ignoreBOM: true })],
+]);
+
+/**
+ * The same three encodings in **fatal** mode — throw rather than substitute.
+ *
+ * This is the whole cost model for {@link TextProvenance.replacementCharacters}.
+ * A substituting decoder cannot tell a caller whether it substituted, so the only
+ * other way to know is to scan every decoded string for U+FFFD — an O(n) pass
+ * over every file in a corpus to learn that almost none of them needed it. A
+ * fatal decoder answers the same question by *not throwing*, at no extra cost on
+ * the clean path, and the expensive route is taken only where there is genuinely
+ * something to count.
+ *
+ * Same `ignoreBOM: true` as their substituting twins, for the same reason: the
+ * BOM is already gone by the time either sees the bytes.
+ */
+const FATAL_DECODERS: ReadonlyMap<TextEncoding, InstanceType<typeof TextDecoder>> = new Map([
+  ['utf-8', new TextDecoder('utf-8', { ignoreBOM: true, fatal: true })],
+  ['utf-16le', new TextDecoder('utf-16le', { ignoreBOM: true, fatal: true })],
+  ['utf-16be', new TextDecoder('utf-16be', { ignoreBOM: true, fatal: true })],
 ]);
 
 /** How many code points to spread into one `String.fromCodePoint` call. */
@@ -236,20 +300,55 @@ function fromCodePoints(points: readonly number[]): string {
  * trailing run of 1–3 bytes that cannot form a unit. That mirrors what
  * `TextDecoder` does with malformed input, so the two paths fail the same way.
  *
+ * There is no fatal-first pass here and none is needed: this loop *decides* each
+ * substitution, so it can count them as it makes them — free, and exact. The
+ * fatal-decoder trick exists only because `TextDecoder` refuses to say.
+ *
  * @param bytes - The content bytes, BOM already removed
  * @param littleEndian - Byte order the BOM announced
- * @returns The decoded string
+ * @returns The decoded string and how many units were replaced
  */
-function decodeUtf32(bytes: Uint8Array, littleEndian: boolean): string {
+function decodeUtf32(
+  bytes: Uint8Array,
+  littleEndian: boolean,
+): { text: string; replacementCharacters: number } {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const whole = bytes.byteLength - (bytes.byteLength % 4);
   const points: number[] = [];
+  let replacementCharacters = 0;
   for (let offset = 0; offset < whole; offset += 4) {
     const codePoint = view.getUint32(offset, littleEndian);
-    points.push(isScalarValue(codePoint) ? codePoint : REPLACEMENT_CODE_POINT);
+    if (isScalarValue(codePoint)) {
+      points.push(codePoint);
+    } else {
+      points.push(REPLACEMENT_CODE_POINT);
+      replacementCharacters += 1;
+    }
   }
-  if (whole !== bytes.byteLength) points.push(REPLACEMENT_CODE_POINT);
-  return fromCodePoints(points);
+  if (whole !== bytes.byteLength) {
+    points.push(REPLACEMENT_CODE_POINT);
+    replacementCharacters += 1;
+  }
+  return { text: fromCodePoints(points), replacementCharacters };
+}
+
+/**
+ * Count the U+FFFD in a string that a fatal decode already refused.
+ *
+ * Only ever called on input known to be malformed, which is what keeps the O(n)
+ * scan off the common path. `charCodeAt` rather than a regex or a split: U+FFFD
+ * is a BMP character, so a code-unit comparison is exact here and allocates
+ * nothing on a string that may be megabytes long.
+ *
+ * @param text - The substituting decoder's output
+ * @returns How many replacement characters it contains
+ */
+function countReplacementCharacters(text: string): number {
+  let count = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    if (text.charCodeAt(index) === REPLACEMENT_CODE_POINT) count += 1;
+  }
+  return count;
 }
 
 /**
@@ -264,30 +363,43 @@ function decodeUtf32(bytes: Uint8Array, littleEndian: boolean): string {
  * `@vibe-agent-toolkit/utils/fs`.
  *
  * @param bytes - The exact bytes read from disk
- * @returns The decoded text, the encoding used, and whether it was a fact
+ * @returns The decoded text, the encoding used, whether that was a fact, and how
+ *   many characters the decode had to replace
  *
  * @example
  * ```typescript
  * const bytes = await readFile(path);
- * const { text, encoding, basis } = decodeTextContent(bytes);
- * // UTF-16BE file: encoding 'utf-16be', basis 'bom', text has no BOM and no NULs
+ * const { text, encoding, encodingSource, replacementCharacters } = decodeTextContent(bytes);
+ * // UTF-16BE file: encoding 'utf-16be', encodingSource 'bom', 0 replacements,
+ * // text with no BOM and no NULs
  * ```
  */
 export function decodeTextContent(bytes: Uint8Array): DecodedText {
   const bom = bomAt(bytes);
   const encoding = bom?.encoding ?? 'utf-8';
   const body = bom === null ? bytes : bytes.subarray(bom.length);
-  const basis: EncodingBasis = bom === null ? 'assumed' : 'bom';
+  const encodingSource: EncodingSource = bom === null ? 'assumed' : 'bom';
 
   if (encoding === 'utf-32le' || encoding === 'utf-32be') {
-    return { text: decodeUtf32(body, encoding === 'utf-32le'), encoding, basis };
+    return { ...decodeUtf32(body, encoding === 'utf-32le'), encoding, encodingSource };
   }
   const decoder = DECODERS.get(encoding);
-  if (decoder === undefined) {
-    // Unreachable: BOMS and DECODERS cover the same five encodings between them.
-    // Thrown rather than defaulted, because a silent fall back to UTF-8 here
-    // would reproduce the exact defect this module was written to remove.
+  const fatalDecoder = FATAL_DECODERS.get(encoding);
+  if (decoder === undefined || fatalDecoder === undefined) {
+    // Unreachable: BOMS, DECODERS and FATAL_DECODERS cover the same five
+    // encodings between them. Thrown rather than defaulted, because a silent fall
+    // back to UTF-8 here would reproduce the exact defect this module was written
+    // to remove.
     throw new Error(`no decoder for encoding "${encoding}"`);
   }
-  return { text: decoder.decode(body), encoding, basis };
+
+  try {
+    // The clean path, and the only one nearly every file takes: one decode, no
+    // scan. A throw here is the ONLY evidence that a substitution happened —
+    // see FATAL_DECODERS.
+    return { text: fatalDecoder.decode(body), encoding, encodingSource, replacementCharacters: 0 };
+  } catch {
+    const text = decoder.decode(body);
+    return { text, encoding, encodingSource, replacementCharacters: countReplacementCharacters(text) };
+  }
 }

@@ -384,7 +384,7 @@ document landed squarely in the hole.
 
 #### What is detected, and what is assumed
 
-| input | encoding used | basis |
+| input | encoding used | encodingSource |
 |---|---|---|
 | leading `ef bb bf` | UTF-8 | **BOM** — a fact about the bytes |
 | leading `ff fe`, not followed by `00 00` | UTF-16LE | **BOM** |
@@ -393,8 +393,16 @@ document landed squarely in the hole.
 | leading `00 00 fe ff` | UTF-32BE | **BOM** |
 | anything else | UTF-8 | **assumed** |
 
-The distinction is carried in the return value (`DecodedText.basis`), not left to prose, because a
-caller reasoning about a document's text deserves to know which of the two it got.
+The distinction is carried in the return value (`DecodedText.encodingSource`), not left to prose,
+because a caller reasoning about a document's text deserves to know which of the two it got. The
+result carries a third fact for the same reason: `replacementCharacters`, the number of U+FFFD the
+decode had to substitute. `encodingSource` says the encoding was a *guess*; a non-zero
+`replacementCharacters` is proof the guess was **wrong**, and all three land in the projection's
+`blobs` table so a corpus can be asked how much of its indexed text is already garbage.
+
+The count is free on the clean path: each decode is attempted in `TextDecoder`'s `fatal: true` mode
+first, so only a file that genuinely failed is decoded again and scanned. A document whose own text
+legitimately contains U+FFFD therefore reports `0` rather than being accused of a bad decode.
 
 🪤 **The UTF-32LE BOM `ff fe 00 00` starts with the UTF-16LE BOM `ff fe`.** A table tested
 shortest-first decodes every UTF-32LE document as NUL-interleaved UTF-16 — the same bug this section

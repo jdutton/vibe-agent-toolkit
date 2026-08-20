@@ -51,6 +51,7 @@ import type {
 import type { ResolutionContextRow, ZoneProvenanceRow } from '../schemas/projection-zones.js';
 
 import { readKeyedContent, type RunContentCache } from './content-cache.js';
+import { errorLabel } from './error-label.js';
 import { ResourceIdentityMap } from './identity.js';
 
 /**
@@ -61,6 +62,21 @@ import { ResourceIdentityMap } from './identity.js';
  * rather than an enum member.
  */
 export const REALIZATION_PATH_COLLISION = 'REALIZATION_PATH_COLLISION';
+
+/**
+ * Condition code for a demand promotion whose read threw.
+ *
+ * The counterpart to {@link BLOB_UNREADABLE}, one layer down and for the same
+ * reason: `ensureContentKey` rewrites the rows to `unreadable` and returns null,
+ * which is a *state* but not a *cause*. Without this row the error's `code`, and
+ * the fact that anyone asked at all, are discarded at the `catch` — so a path
+ * nobody wanted and a path everybody wanted and could not have produce the same
+ * projection.
+ *
+ * `realization_conditions.code` is an open vocabulary, so this is a constant
+ * rather than an enum member.
+ */
+export const REALIZATION_PROMOTION_UNREADABLE = 'REALIZATION_PROMOTION_UNREADABLE';
 
 /** Composite-key separator — a NUL can never occur in a path or an id. */
 const KEY_SEPARATOR = '\u0000';
@@ -317,6 +333,8 @@ export class ProjectionBuilder {
 
   #contentPromotions = 0;
 
+  #contentPromotionAttempts = 0;
+
   /**
    * @param root - Absolute corpus root
    * @param gitTracker - Optional git oracle supplying index casing to identity minting
@@ -396,9 +414,37 @@ export class ProjectionBuilder {
    * A read that threw is not a promotion: it rewrites the rows to `unreadable`
    * and leaves this untouched, because no new content key entered the
    * projection and re-deriving blobs would find nothing.
+   *
+   * ⚠️ **Not on its own a record that promotion was attempted** — see
+   * {@link contentPromotionAttempts}, which is the counter that separates
+   * "nobody asked" from "everybody asked and every read failed". Reading this
+   * one alone is what made those two runs emit an identical signal.
    */
   get contentPromotions(): number {
     return this.#contentPromotions;
+  }
+
+  /**
+   * How many paths this builder has **tried** to promote by reading their bytes.
+   *
+   * The denominator {@link contentPromotions} is the numerator of, and the whole
+   * reason it exists separately: a promotion that throws leaves
+   * `contentPromotions` untouched, so a driver comparing only that counter reads
+   * "every read failed" as "nobody asked" and reports the deliberate no-op. Two
+   * outcomes that differ by an entire corpus of unreadable files must not emit
+   * one signal.
+   *
+   * Counted on the same unit — **per path**, once per act of reading bytes — so
+   * `attempts - promotions` is exactly the number of paths whose read threw, and
+   * each of those carries a {@link REALIZATION_PROMOTION_UNREADABLE} row naming
+   * the cause.
+   *
+   * A path with nothing `deferred` performs no read and is therefore not an
+   * attempt: `ensureContentKey` returns the key it already had, which is not a
+   * question this counter was asked.
+   */
+  get contentPromotionAttempts(): number {
+    return this.#contentPromotionAttempts;
   }
 
   /**
@@ -423,9 +469,15 @@ export class ProjectionBuilder {
    *   `collectRealization` would have made — so the bytes really are shared with
    *   the rest of the run rather than being a second traversal wearing the same
    *   key.
-   * - A read that throws rewrites the rows to `unreadable` with a null key. An
-   *   unreadable file is a fact about the corpus, and leaving the rows
-   *   `deferred` would claim nobody had asked yet, which would be false.
+   * - A read that throws rewrites the rows to `unreadable` with a null key,
+   *   records a {@link REALIZATION_PROMOTION_UNREADABLE} condition per rewritten
+   *   row carrying the error's label, and still counts as an
+   *   {@link contentPromotionAttempts attempt}. An unreadable file is a fact
+   *   about the corpus, and leaving the rows `deferred` would claim nobody had
+   *   asked yet, which would be false. Swallowing the error on top of that used
+   *   to make the failure indistinguishable from the deliberate no-op — the
+   *   state column said `unreadable`, but no row said why and no counter said
+   *   anyone had tried.
    *
    * ## Idempotent, and observably so
    *
@@ -448,6 +500,13 @@ export class ProjectionBuilder {
       return rows.find((row) => row.contentState === 'keyed')?.contentKey ?? null;
     }
 
+    // Counted BEFORE the read, so a throw cannot skip it. This is the fact the
+    // bare `catch` used to destroy: without it the driver's only evidence that
+    // promotion happened at all is `#contentPromotions`, which a failed read
+    // leaves untouched — making "nobody asked" and "everybody asked and every
+    // read failed" the same number.
+    this.#contentPromotionAttempts += 1;
+
     const absolutePath = safePath.join(this.#root, path);
     let keyed: KeyedContent;
     try {
@@ -456,7 +515,31 @@ export class ProjectionBuilder {
         parserKindForPath(absolutePath),
         this.#contentCache,
       );
-    } catch {
+    } catch (error) {
+      // A row per extent that deferred this path, not one row for the path: a
+      // condition is keyed on `(extentId, path)` like the realization it is
+      // about, and a single row would leave the other extents' realizations
+      // `unreadable` with nothing saying why.
+      //
+      // The same standard `blob-population.ts`'s `readTarget` sets: count it,
+      // record the cause with `errorLabel` (never `String(error)` — an `fs`
+      // message carries the absolute path, and every other column here is
+      // root-relative), and say why the rows that follow are absent.
+      for (const row of deferred) {
+        this.addCondition({
+          extentId: row.extentId,
+          path: row.path,
+          code: REALIZATION_PROMOTION_UNREADABLE,
+          severity: 'warning',
+          message:
+            `The bytes for "${row.path}" were demanded by a consumer and could not be read`
+            + ` (${errorLabel(error)}); this realization is "unreadable" rather than "deferred"`
+            + ' because it was asked for, and it has no content key because the read failed,'
+            + ' not because nobody wanted one',
+          resourceId: row.resourceId,
+          ...CONDITION_WITHOUT_REFERENCE,
+        });
+      }
       this.#rewriteRealizations(deferred, null, 'unreadable');
       return null;
     }

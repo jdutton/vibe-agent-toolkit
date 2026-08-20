@@ -4,7 +4,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { RunContentCache } from '../src/projection/content-cache.js';
-import { ProjectionBuilder } from '../src/projection/projection.js';
+import { ProjectionBuilder, REALIZATION_PROMOTION_UNREADABLE } from '../src/projection/projection.js';
 import { collectRealization, type ContentDemand } from '../src/projection/realizations.js';
 
 import { setupSubdirTestSuite } from './test-helpers.js';
@@ -111,6 +111,71 @@ describe('ProjectionBuilder.ensureContentKey', () => {
     // blob-derivation run to find. Counting this would make the merge driver
     // re-derive the whole corpus for a file it could not read.
     expect(builder.contentPromotions).toBe(0);
+  });
+
+  it('records WHY a failed promotion produced no key, instead of swallowing the error', async () => {
+    // The defect this pins: the `catch` was bare. The error's `code`, its
+    // message and the path were all discarded, so the projection carried an
+    // `unreadable` row and no statement of what went wrong — the state without
+    // the cause.
+    await writeDoc(DOC, DOC_CONTENT);
+    const cache = new RunContentCache();
+    const builder = await builderWith(cache, DOC, [EXTENT_A, EXTENT_B]);
+    // The positive control for the assertion below: the corpus really did reach
+    // this builder, so an empty condition table would be a fact about the catch
+    // rather than about a fixture that enumerated nothing.
+    expect(statesFor(builder, DOC)).toEqual(['deferred', 'deferred']);
+    expect(builder.build().realizationConditions).toEqual([]);
+
+    await rm(safePath.join(suite.tempDir, DOC), { force: true });
+    await builder.ensureContentKey(DOC);
+
+    const conditions = builder.build().realizationConditions
+      .filter((row) => row.code === REALIZATION_PROMOTION_UNREADABLE);
+    // One per extent that deferred the path, matching the rows that were
+    // rewritten — a single row would leave EXTENT_B `unreadable` with nothing
+    // saying why.
+    expect(conditions.map((row) => row.extentId)).toEqual([EXTENT_A, EXTENT_B]);
+    for (const row of conditions) {
+      expect(row.path).toBe(DOC);
+      // The path and the `errorLabel`, exactly as `readTarget` records them for
+      // a blob. ENOENT, not the raw message: an `fs` message embeds the absolute
+      // path, and every other column here is root-relative.
+      expect(row.message).toContain(DOC);
+      expect(row.message).toContain('ENOENT');
+      expect(row.message).not.toContain(suite.tempDir);
+    }
+  });
+
+  it('counts a failed promotion as an ATTEMPT, so it cannot read as nobody having asked', async () => {
+    // `contentPromotions` alone cannot express this: it is the SUCCESS counter,
+    // and the merge driver comparing only that reported "every read failed" and
+    // "no consumer asked" as the same deliberate no-op.
+    await writeDoc(DOC, DOC_CONTENT);
+    const cache = new RunContentCache();
+    const builder = await builderWith(cache, DOC, [EXTENT_A]);
+    expect(builder.contentPromotionAttempts).toBe(0);
+
+    await rm(safePath.join(suite.tempDir, DOC), { force: true });
+    await builder.ensureContentKey(DOC);
+
+    expect(builder.contentPromotionAttempts).toBe(1);
+    expect(builder.contentPromotions).toBe(0);
+  });
+
+  it('does not count an attempt for a path with nothing deferred — no read, no question', async () => {
+    // The discriminator that stops `contentPromotionAttempts` degenerating into
+    // "how many times was `ensureContentKey` called". Without it every lens
+    // asking after an already-keyed path would make the driver re-run the blob
+    // stage over a corpus with no new work in it.
+    await writeDoc(DOC, DOC_CONTENT);
+    const cache = new RunContentCache();
+    const builder = await builderWith(cache, DOC, [EXTENT_A], 'eager');
+
+    await builder.ensureContentKey(DOC);
+
+    expect(builder.contentPromotionAttempts).toBe(0);
+    expect(builder.build().realizationConditions).toEqual([]);
   });
 
   it('reads once however often it is asked — a second call is a memo, not a read', async () => {

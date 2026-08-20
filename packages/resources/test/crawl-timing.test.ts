@@ -54,7 +54,7 @@ import {
 } from '../src/projection/contributor.js';
 import { ClosureExtentContributor } from '../src/projection/contributors/closure-extent.js';
 import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
-import { populate, type ContributorTiming } from '../src/projection/merge.js';
+import { DISCARD_BLOB_POPULATION, populate, type ContributorTiming } from '../src/projection/merge.js';
 import { ResourceRegistry } from '../src/resource-registry.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
@@ -133,6 +133,7 @@ async function runPopulation(onTiming?: (timing: ContributorTiming) => void): Pr
     registry: registryWithClosure(),
     parameters: { [CLOSURE_DRIVER_ID]: closureDeclaration() },
     ...(onTiming === undefined ? {} : { onContributorTiming: onTiming }),
+    onBlobPopulation: DISCARD_BLOB_POPULATION,
   });
 }
 
@@ -279,9 +280,12 @@ describe('crawl timing seam', () => {
           // guard would decline it and this dump would hold no `base` rows at all.
           root: suite.tempDir,
           enumerate: async (root: string) => {
-            await populate({ root, registry: registryWithClosure(), parameters: {
-              [CLOSURE_DRIVER_ID]: closureDeclaration(),
-            } });
+            await populate({
+              root,
+              registry: registryWithClosure(),
+              parameters: { [CLOSURE_DRIVER_ID]: closureDeclaration() },
+              onBlobPopulation: DISCARD_BLOB_POPULATION,
+            });
             return [];
           },
         },
@@ -392,7 +396,11 @@ describe('crawl timing seam', () => {
     it('charges registry work inside a base contributor to the projection arm, never to the walker arm', async () => {
       const contributors = new ContributorRegistry();
       contributors.register(new RegistryBuildingContributor());
-      await populate({ root: suite.tempDir, registry: contributors });
+      await populate({
+        root: suite.tempDir,
+        registry: contributors,
+        onBlobPopulation: DISCARD_BLOB_POPULATION,
+      });
       const snapshot = __readCrawlTimingSnapshot();
 
       // The driver's own row still measures the whole invocation, registry build

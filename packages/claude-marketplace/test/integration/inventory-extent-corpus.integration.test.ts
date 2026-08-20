@@ -59,6 +59,7 @@ import {
 } from '@vibe-agent-toolkit/agent-skills';
 import {
   ContributorRegistry,
+  DISCARD_BLOB_POPULATION,
   FilesystemExtentContributor,
   ProjectionBuilder,
   populate,
@@ -323,6 +324,7 @@ async function populateCorpus(
     root,
     registry,
     parameters,
+    onBlobPopulation: DISCARD_BLOB_POPULATION,
     ...(gitTracker !== undefined && { gitTracker }),
   });
 

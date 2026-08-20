@@ -56,7 +56,7 @@ import { ClosureExtentContributor } from '../src/projection/contributors/closure
 import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { EXTENT_SOURCE_ENV, EXTENT_SOURCE_GIT } from '../src/projection/crawl-source.js';
 import { serializeProjection } from '../src/projection/export.js';
-import { CONTENT_PARSING_SKIP, populate } from '../src/projection/merge.js';
+import { CONTENT_PARSING_SKIP, DISCARD_BLOB_POPULATION, populate } from '../src/projection/merge.js';
 import type { Projection } from '../src/projection/projection.js';
 import type {
   BlobScopedRows,
@@ -428,6 +428,7 @@ async function run(request: RunRequest): Promise<Run> {
     onContributorTiming: (timing) => {
       contributorRuns.push(`${timing.contributorId}@${timing.pass}`);
     },
+    onBlobPopulation: DISCARD_BLOB_POPULATION,
     ...(request.store === undefined
       ? {}
       : { cache: { store: request.store, treeHash: request.treeHash ?? TREE_HASH } }),

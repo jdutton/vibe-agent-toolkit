@@ -103,6 +103,9 @@ function keyFor(content: string, parserKind: 'markdown' | 'html' = 'markdown'): 
   const bytes = Buffer.from(content, 'utf-8');
   return {
     content,
+    // What a BOM-less UTF-8 read reports: the encoding was defaulted to, not
+    // stated, and nothing had to be substituted.
+    decoding: { encoding: 'utf-8', encodingSource: 'assumed', replacementCharacters: 0 },
     key: computeContentKey(bytes, parserKind),
     parserKind,
     byteLength: bytes.byteLength,

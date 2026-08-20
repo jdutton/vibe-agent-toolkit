@@ -18,7 +18,11 @@ import { extentContextId } from '../src/projection/contributors/context-id.js';
 import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { rootIdFor } from '../src/projection/identity.js';
 import { afterClosurePromotion, populate } from '../src/projection/merge.js';
-import { ProjectionBuilder, type Projection } from '../src/projection/projection.js';
+import {
+  ProjectionBuilder,
+  REALIZATION_PROMOTION_UNREADABLE,
+  type Projection,
+} from '../src/projection/projection.js';
 import { collectRealization } from '../src/projection/realizations.js';
 import type { ResourceRealizationRow } from '../src/schemas/projection-resources.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
@@ -579,7 +583,7 @@ describe('afterClosurePromotion', () => {
     const builder = await builderWithDeferredPath(DOC_A, DEMAND_CORPUS, cache);
     await populateBlobs(builder, { parseCache: NO_CACHE });
 
-    const report = await afterClosurePromotion(builder, builder.contentPromotions);
+    const report = await afterClosurePromotion(builder, builder.contentPromotionAttempts);
 
     // An ABSENT key, not a zeroed result: "the stage did not need to run again"
     // and "it ran again and derived nothing" are different facts.
@@ -591,7 +595,7 @@ describe('afterClosurePromotion', () => {
     const cache = new RunContentCache();
     const builder = await builderWithDeferredPath(DOC_A, DEMAND_CORPUS, cache);
     const first = await populateBlobs(builder, { parseCache: NO_CACHE });
-    const before = builder.contentPromotions;
+    const before = builder.contentPromotionAttempts;
     await builder.ensureContentKey(DOC_A);
 
     const report = await afterClosurePromotion(builder, before);
@@ -603,5 +607,38 @@ describe('afterClosurePromotion', () => {
     expect(first.blobsAlreadyPresent).toBe(0);
     expect(report.afterClosurePromotion?.blobsAlreadyPresent).toBe(1);
     expect(builder.build().blobs).toHaveLength(2);
+  });
+
+  it('reports a promotion whose every read FAILED, rather than the deliberate no-op', async () => {
+    // The defect: the gate read `contentPromotions`, the SUCCESS counter, which
+    // `ensureContentKey` leaves untouched when the read throws. So a closure
+    // stratum that demanded bytes and could not read one of them returned the
+    // identical `{}` as a stratum where nobody asked at all — one corpus of
+    // unreadable files and one deliberate no-op, emitting one signal.
+    const cache = new RunContentCache();
+    const builder = await builderWithDeferredPath(DOC_A, DEMAND_CORPUS, cache);
+    await populateBlobs(builder, { parseCache: NO_CACHE });
+    const before = builder.contentPromotionAttempts;
+
+    // The read is deferred, so deleting now makes the demand-time read the
+    // first and only one — and it fails.
+    await rm(safePath.join(suite.tempDir, DOC_A), { force: true });
+    expect(await builder.ensureContentKey(DOC_A)).toBeNull();
+    // The premise, asserted: this really is the "asked and failed" shape, not
+    // "asked and succeeded" and not "never asked".
+    expect(builder.contentPromotionAttempts).toBe(before + 1);
+    expect(builder.contentPromotions).toBe(0);
+
+    const report = await afterClosurePromotion(builder, before);
+
+    // PRESENT — the whole point. A `{}` here would be the no-op's answer.
+    expect('afterClosurePromotion' in report).toBe(true);
+    // And honest about what it found: nothing new was derivable, because no key
+    // entered the projection.
+    expect(report.afterClosurePromotion?.blobsDerived).toBe(0);
+    // The row that carries the cause. `blobsUnreadable` cannot: there is no blob
+    // and therefore no content key to hang a `blob_conditions` row on.
+    expect(builder.build().realizationConditions.map((row) => row.code))
+      .toEqual([REALIZATION_PROMOTION_UNREADABLE]);
   });
 });

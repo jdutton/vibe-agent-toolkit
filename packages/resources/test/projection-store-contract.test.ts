@@ -14,6 +14,7 @@ import type { Projection } from '../src/projection/projection.js';
 import { quoteIdentifier } from '../src/projection/sql-identifiers.js';
 import { projectionShapeDigest, splitProjectionByScope } from '../src/projection/store.js';
 import { PROJECTION_TABLES, type ProjectionTableName } from '../src/projection/table-registry.js';
+import { BlobRowSchema } from '../src/schemas/projection-blobs.js';
 
 /** The specifier both the digest harness and the no-constant test reach for. */
 const TABLE_REGISTRY_MODULE = '../src/projection/table-registry.js';
@@ -194,6 +195,29 @@ describe('projectionShapeDigest', () => {
     // re-importing `store.js` is machinery, and machinery that moved the digest
     // on its own would make every "it moves" assertion below vacuous.
     return expect(digestUnderRegistry({ ...PROJECTION_TABLES })).resolves.toBe(projectionShapeDigest());
+  });
+
+  it('moves when a row schema gains a column, which is the ONLY thing making a new column safe to add', async () => {
+    // This repository prohibits hand-maintained version constants, so nothing
+    // gets bumped when a column is added — the store simply has to land in a
+    // different directory, or a build written before the column is read back by
+    // a build that expects it. The three decode columns
+    // (`encoding`/`encodingSource`/`replacementCharacters`) are the live case:
+    // the digest under a `blobs` schema WITHOUT them must differ from the digest
+    // this build actually uses.
+    const withoutDecodeColumns = await digestUnderRegistry({
+      ...PROJECTION_TABLES,
+      blobs: {
+        ...PROJECTION_TABLES.blobs,
+        schema: BlobRowSchema.omit({
+          encoding: true,
+          encodingSource: true,
+          replacementCharacters: true,
+        }),
+      },
+    });
+
+    expect(withoutDecodeColumns).not.toBe(projectionShapeDigest());
   });
 
   it('moves when a table declares a DIFFERENT contextColumn', async () => {

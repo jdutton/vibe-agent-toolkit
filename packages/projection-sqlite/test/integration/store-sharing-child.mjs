@@ -38,6 +38,7 @@ import { openSqliteProjectionStore } from '@vibe-agent-toolkit/projection-sqlite
 import {
   ClosureExtentContributor,
   ContributorRegistry,
+  DISCARD_BLOB_POPULATION,
   exportProjection,
   FilesystemExtentContributor,
   populate,
@@ -135,6 +136,7 @@ try {
     onContributorTiming: (timing) => {
       contributorRuns.push(`${timing.contributorId}@${timing.pass}`);
     },
+    onBlobPopulation: DISCARD_BLOB_POPULATION,
     cache: { store, treeHash },
   });
 

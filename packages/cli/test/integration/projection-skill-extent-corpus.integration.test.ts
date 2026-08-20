@@ -231,6 +231,7 @@ import {
   CLOSURE_REFERENCE_UNRESOLVED,
   CLOSURE_ROOT_ABSENT,
   ContributorRegistry,
+  DISCARD_BLOB_POPULATION,
   FilesystemExtentContributor,
   ProjectionBuilder,
   populate,
@@ -830,7 +831,13 @@ async function populateCorpus(
     parameters[skillExtentContributorId(skill.name)] = declarationFor(skill, skill.config);
   }
 
-  const projection = await populate({ root, registry, parameters, gitTracker });
+  const projection = await populate({
+    root,
+    registry,
+    parameters,
+    gitTracker,
+    onBlobPopulation: DISCARD_BLOB_POPULATION,
+  });
 
   // From provenance rather than by re-deriving `extentContextId`: the row names
   // the contributor that produced the extent, so a change to how an extent id is

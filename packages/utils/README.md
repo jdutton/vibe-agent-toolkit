@@ -23,7 +23,7 @@ The last two columns are the ones that matter when choosing. **"Resolves with ze
 | Subpath | Contents | Node builtins reached | Third-party | Resolves with zero deps installed? |
 |---|---|---|---|---|
 | `./path` | `safePath`, `toForwardSlash`, `toNfc`, `isAbsolutePath`, `isAbsoluteAnyPlatform`, `hasParentTraversalSegment`, `toAbsolutePath`, `getRelativePath`, `issueLocation` | `path` only | — | **yes** |
-| `./text` | `decodeTextContent` — the one bytes-to-text seam: BOM-announced UTF-8/UTF-16LE/UTF-16BE/UTF-32LE/UTF-32BE, BOM stripped, UTF-8 assumed otherwise | **none** | — | **yes** |
+| `./text` | `decodeTextContent` — the one bytes-to-text seam: BOM-announced UTF-8/UTF-16LE/UTF-16BE/UTF-32LE/UTF-32BE, BOM stripped, UTF-8 assumed otherwise; reports the encoding, whether it was a BOM fact or an assumption, and how many U+FFFD the decode substituted | **none** | — | **yes** |
 | `./zod` | `ZodTypeNames`, `getZodTypeName`, `isZodType`, `unwrapZodType`, `isZodOptional`, `isZodNullable` | **none** | — | **yes** |
 | `./glob` | `isGlob`, static base extraction, magic remainder | `path` only | — | **yes** |
 | `./fs` | `normalizePath`, `normalizedTmpdir`, `mkdirSyncReal`, `resolveFromImportMeta`, `dynamicImportPath`, `copyDirectory`, `fillSiblingNames`, `classifyFilenameCaseFrom`, `FsLookupCache`, `readTextContent`, `readTextContentSync` | `fs`, `fs/promises`, `os`, `path`, `url` | — | **yes** |

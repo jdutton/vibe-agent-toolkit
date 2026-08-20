@@ -1,6 +1,6 @@
 # parse-fact-snapshot
 corpus: trap/non-git
-blobCount: 41
+blobCount: 42
 keyDisagreementCount: 0
 
 ## blob html.0e14c14b58f404a15053e0e1f4ba6abf2c25e64a4cf19b4579db3b9e965c6b88
@@ -225,6 +225,24 @@ links: 0
 lexicalReferences: -
 headings: 1
   0	h1	slug=twin	line=1	text=Twin
+conditions: 0
+
+## blob markdown.2f89511e18b35834cfc14173663f19732b1ea48b1905db75ab19892dcc2e1528
+parser: markdown
+paths: parse/astral-characters.md
+sizeBytes: 400
+estimatedTokenCount: 98
+decodedLength: 391
+contentMeasures: words=54 prose=307 code=84
+frontmatterSource: -
+optionalArrays: anchors=absent parseErrors=absent unresolvedReferences=empty lexicalReferences=absent
+frontmatterFields: -
+anchors: -
+links: 1
+  0	local_file	link	line=5	resolvedId=-	href=../docs/sibling.md	text=a 🪤 trap
+lexicalReferences: -
+headings: 1
+  0	h1	slug=astral-characters-	line=1	text=Astral characters 𝄞
 conditions: 0
 
 ## blob markdown.36fed748ce7ba9fbdf91d1de57631626964b3072777312e17271f827b24db245

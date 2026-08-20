@@ -76,6 +76,7 @@
  */
 
 import { compareCodeUnits, safePath } from '@vibe-agent-toolkit/utils';
+import type { TextProvenance } from '@vibe-agent-toolkit/utils/text';
 
 import type { KeyedContent, ParserKind } from '../content-key.js';
 import type { ParseResult } from '../link-parser.js';
@@ -87,6 +88,7 @@ import { blobConditionsFor, blobRowFor } from './blob-facts.js';
 import { blobReferencesFor } from './blob-references.js';
 import { blobSectionsFor, flattenHeadings } from './blob-sections.js';
 import { readKeyedContent } from './content-cache.js';
+import { errorLabel } from './error-label.js';
 import type { ProjectionBase, ProjectionBuilder } from './projection.js';
 
 /** A blob whose bytes could not be read at derivation time. */
@@ -303,6 +305,40 @@ export interface BlobPopulationResult {
    * 76 documents where nothing could falsify them.
    */
   readonly referencesSkippedForMissingLine: number;
+  /**
+   * Blobs whose decode produced at least one U+FFFD.
+   *
+   * The one counter here that describes a blob the stage **derived** rather than
+   * one it declined, and it is here for that reason: a refusal is at least
+   * visible as a missing row, while a mis-decode produces a complete, plausible,
+   * queryable row whose text is garbage. Nothing else in this result set would
+   * ever go non-zero for it.
+   *
+   * Counted at row-emission time, deliberately **after** the {@link looksBinary}
+   * refusal. Counting it at read time would count every PNG, zip and PDF in the
+   * corpus — their bytes are invalid UTF-8 by the megabyte — and a warning that
+   * fires on every repository containing an image is wallpaper. What survives to
+   * here is the population that actually reached the index.
+   */
+  readonly blobsDecodedWithReplacements: number;
+  /**
+   * Of those, how many had **no BOM**, so the encoding was a guess.
+   *
+   * The distinction that decides what a reader should do. With a BOM the
+   * encoding is a fact and the replacements mean the file is genuinely corrupt;
+   * without one they mean VAT probably read a windows-1252 or BOM-less UTF-16
+   * document as UTF-8, and the remedy is to re-encode the source rather than to
+   * repair it.
+   */
+  readonly blobsAssumedEncodingWithReplacements: number;
+  /**
+   * Total U+FFFD across those blobs — characters, not malformed byte runs.
+   *
+   * The magnitude, which the blob count alone cannot give: one replacement in a
+   * 40 KB document is a stray byte, and 3,200 in the same document is a file
+   * that was never UTF-8 at all.
+   */
+  readonly replacementCharacters: number;
 }
 
 /** The accumulator behind {@link BlobPopulationResult}. */
@@ -409,7 +445,29 @@ function emptyCounts(): MutableCounts {
     realizationsContentDeferred: 0,
     headingsSkippedForMissingLine: 0,
     referencesSkippedForMissingLine: 0,
+    blobsDecodedWithReplacements: 0,
+    blobsAssumedEncodingWithReplacements: 0,
+    replacementCharacters: 0,
   };
+}
+
+/**
+ * Attribute one derived blob's decode to the encoding buckets.
+ *
+ * A no-op for a clean decode, which is nearly every blob — the point of these
+ * counters is that they stay at zero until something is actually wrong, so a
+ * clean corpus produces exactly the silence it did before.
+ *
+ * @param decoding - What the decode of this blob's bytes knew, guessed and lost
+ * @param counts - The accumulator to attribute it to
+ */
+function countDecoding(decoding: TextProvenance, counts: MutableCounts): void {
+  if (decoding.replacementCharacters === 0) return;
+  counts.blobsDecodedWithReplacements += 1;
+  counts.replacementCharacters += decoding.replacementCharacters;
+  if (decoding.encodingSource === 'assumed') {
+    counts.blobsAssumedEncodingWithReplacements += 1;
+  }
 }
 
 /**
@@ -685,7 +743,8 @@ function emitBlobRows(
 
   // `byteLength`, never `content.length`: decoding is many-to-one on malformed
   // UTF-8, so the decoded string's length is not the on-disk byte count.
-  builder.addBlob(blobRowFor(contentKey, keyed.byteLength, parsed));
+  builder.addBlob(blobRowFor(contentKey, keyed.byteLength, keyed.decoding, parsed));
+  countDecoding(keyed.decoding, counts);
 
   for (const row of blobConditionsFor(contentKey, parsed)) {
     builder.addBlobCondition(row);
@@ -733,23 +792,6 @@ function parserKindOf(contentKey: string): ParserKind {
  */
 function condition(blob: string, code: string, message: string): BlobConditionRow {
   return { blob, code, severity: 'warning', message, line: null };
-}
-
-/**
- * A short, path-free label for a thrown value.
- *
- * Deliberately not `String(error)`: an `fs` error's message embeds the absolute
- * path it failed on, which would put `$HOME` into a projection row that every
- * other column keeps root-relative. The `code` carries the diagnosis anyway.
- *
- * @param error - Whatever was thrown
- * @returns The error's `code`, its message, or a stable placeholder
- */
-function errorLabel(error: unknown): string {
-  if (typeof error === 'object' && error !== null && 'code' in error) {
-    return String((error as { code: unknown }).code);
-  }
-  return error instanceof Error ? error.message : 'unknown error';
 }
 
 // `compareCodeUnits` comes from `@vibe-agent-toolkit/utils`. Never `localeCompare`: collation is

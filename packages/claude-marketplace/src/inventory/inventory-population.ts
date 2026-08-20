@@ -53,6 +53,7 @@ import {
   ContributorRegistry,
   FilesystemExtentContributor,
   populate,
+  type BlobPopulationReport,
   type JsonValue,
   type PopulationCache,
   type Projection,
@@ -220,6 +221,14 @@ function relativeToRoot(root: string, absolute: string): string {
  *   rather than a hard-coded walk is load-bearing here: two runs over one tree
  *   under different declarations are two questions, and the store refuses to
  *   answer one with the other
+ * @param options.onBlobPopulation - Receives what the blob stage derived and what
+ *   it REFUSED to derive. **Required, and passed through unchanged**: this is the
+ *   only production lane that runs the stage, and while `populate()`'s observer
+ *   was optional this function passed none — so every `blobsNotText`,
+ *   `blobsUnreadable` and `referencesSkippedForMissingLine` the stage computed
+ *   was discarded here, and a plugin whose every document was declined as binary
+ *   inventoried as empty with exit 0. A caller with nothing to do with the counts
+ *   names `DISCARD_BLOB_POPULATION`; it does not leave the argument off
  * @returns The indexed population
  */
 export async function buildInventoryPopulation(options: {
@@ -227,6 +236,7 @@ export async function buildInventoryPopulation(options: {
   skillMdPaths: readonly string[];
   gitTracker?: GitTracker | undefined;
   cache?: PopulationCache | undefined;
+  onBlobPopulation: (report: BlobPopulationReport) => void;
 }): Promise<InventoryPopulation> {
   const root = safePath.resolve(options.root);
   const hasGitTracker = options.gitTracker !== undefined;
@@ -253,6 +263,7 @@ export async function buildInventoryPopulation(options: {
     root,
     registry,
     parameters,
+    onBlobPopulation: options.onBlobPopulation,
     ...(options.gitTracker !== undefined && { gitTracker: options.gitTracker }),
     ...(options.cache !== undefined && { cache: options.cache }),
   });

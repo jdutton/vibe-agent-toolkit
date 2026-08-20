@@ -185,12 +185,15 @@ function contribute(builder: ProjectionBuilder, side: Side): void {
   builder.addBlob({
     contentKey: side.blob,
     bytes: 10,
+    encoding: 'utf-8',
+    encodingSource: 'assumed',
+    replacementCharacters: 0,
     tokenEstimate: 3,
     frontmatter: null,
     frontmatterError: null,
     wordCount: 2,
-    proseCharacters: 10,
-    codeBlockCharacters: 0,
+    proseCodeUnits: 10,
+    codeBlockCodeUnits: 0,
     linkCount: 0,
     headingCount: 1,
     sectionCount: 1,
@@ -209,7 +212,6 @@ function contribute(builder: ProjectionBuilder, side: Side): void {
     lineStart: 1,
     lineEnd: 2,
     bytes: 10,
-    characters: 10,
     tokens: 3,
   });
   builder.addBlobCondition({

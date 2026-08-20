@@ -43,7 +43,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { ContributorRegistry } from '../src/projection/contributor.js';
 import { ClosureExtentContributor } from '../src/projection/contributors/closure-extent.js';
 import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
-import { populate } from '../src/projection/merge.js';
+import { DISCARD_BLOB_POPULATION, populate } from '../src/projection/merge.js';
 import type { Projection } from '../src/projection/projection.js';
 import { ExtentDeclarationSchema } from '../src/schemas/project-config.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
@@ -95,6 +95,7 @@ async function populateCorpus(narrowed: boolean): Promise<Projection> {
     root: suite.tempDir,
     registry,
     parameters: { [`closure:${EXTENT_NAME}`]: declaration as unknown as JsonValue },
+    onBlobPopulation: DISCARD_BLOB_POPULATION,
   });
 }
 

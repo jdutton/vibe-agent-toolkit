@@ -13,6 +13,7 @@
 
 import {
   ContributorRegistry,
+  DISCARD_BLOB_POPULATION,
   extentContextId,
   FilesystemExtentContributor,
   populate,
@@ -58,7 +59,7 @@ async function project(root: string): Promise<Projection> {
   registry.register(new FilesystemExtentContributor());
   registry.register(new PluginExtentContributor());
   registry.register(new MarketplaceExtentContributor());
-  return populate({ root, registry });
+  return populate({ root, registry, onBlobPopulation: DISCARD_BLOB_POPULATION });
 }
 
 /** The extent context of one kind whose id carries `discriminator`. */
@@ -239,7 +240,12 @@ describe('the closure fixpoint', () => {
     registry.register(new PluginExtentContributor());
     registry.register(new MarketplaceExtentContributor());
     await expect(
-      populate({ root: MARKETPLACE_ROOT, registry, maxIterations: 2 }),
+      populate({
+        root: MARKETPLACE_ROOT,
+        registry,
+        maxIterations: 2,
+        onBlobPopulation: DISCARD_BLOB_POPULATION,
+      }),
     ).resolves.toBeDefined();
   }, 60_000);
 

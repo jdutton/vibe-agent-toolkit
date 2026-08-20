@@ -44,12 +44,12 @@
         "startOffset": {
           "type": "integer",
           "minimum": 0,
-          "description": "0-based character offset of the reference token in the decoded content"
+          "description": "0-based UTF-16 code-unit offset of the reference token in the decoded content — NOT characters and NOT bytes; an astral character advances it by two"
         },
         "endOffset": {
           "type": "integer",
           "minimum": 0,
-          "description": "0-based character offset one past the reference token — the half-open span [startOffset, endOffset)"
+          "description": "0-based UTF-16 code-unit offset one past the reference token — the half-open span [startOffset, endOffset)"
         },
         "syntacticForm": {
           "type": "string",

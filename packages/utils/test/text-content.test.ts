@@ -109,7 +109,7 @@ describe('decodeTextContent — what a BOM makes a fact', () => {
       const decoded = decodeTextContent(withBom(DOC, encoding));
       expect(decoded.text).toBe(DOC);
       expect(decoded.encoding).toBe(encoding);
-      expect(decoded.basis).toBe('bom');
+      expect(decoded.encodingSource).toBe('bom');
       // The BOM must not survive into the content: a leading U+FEFF stops
       // `# Doc` from parsing as a heading at all.
       expect(decoded.text.startsWith(ZERO_WIDTH_NO_BREAK_SPACE)).toBe(false);
@@ -153,14 +153,14 @@ describe('decodeTextContent — what it assumes when nothing says', () => {
     const decoded = decodeTextContent(Buffer.from(DOC, 'utf-8'));
     expect(decoded.text).toBe(DOC);
     expect(decoded.encoding).toBe('utf-8');
-    expect(decoded.basis).toBe('assumed');
+    expect(decoded.encodingSource).toBe('assumed');
   });
 
   it('decodes an empty file to an empty string, not to a failure', () => {
     const decoded = decodeTextContent(new Uint8Array());
     expect(decoded.text).toBe('');
     expect(decoded.encoding).toBe('utf-8');
-    expect(decoded.basis).toBe('assumed');
+    expect(decoded.encodingSource).toBe('assumed');
   });
 
   it('does NOT detect BOM-less UTF-16 — a recorded limitation, pinned so it cannot be claimed', () => {
@@ -169,7 +169,7 @@ describe('decodeTextContent — what it assumes when nothing says', () => {
     // later heuristic has to change a test that states what it gives up.
     const decoded = decodeTextContent(body(DOC, 'utf-16le'));
     expect(decoded.encoding).toBe('utf-8');
-    expect(decoded.basis).toBe('assumed');
+    expect(decoded.encodingSource).toBe('assumed');
     expect(decoded.text).toContain(NUL);
   });
 
@@ -179,7 +179,11 @@ describe('decodeTextContent — what it assumes when nothing says', () => {
     // consistent with a UTF-8 document carrying one corrupt byte. All three
     // decode to U+FFFD, which is why the content KEY is over raw bytes.
     for (const invalid of [[0xc2], [0xe2, 0x82], [0xff]]) {
-      expect(decodeTextContent(Uint8Array.from(invalid)).text).toBe(REPLACEMENT);
+      const decoded = decodeTextContent(Uint8Array.from(invalid));
+      expect(decoded.text).toBe(REPLACEMENT);
+      // The substitution is COUNTED, not merely performed — the whole point of
+      // the column downstream.
+      expect(decoded.replacementCharacters).toBe(1);
     }
   });
 
@@ -211,6 +215,89 @@ describe('decodeTextContent — what it assumes when nothing says', () => {
     // this, and nothing smaller than a real document would notice.
     const long = 'x'.repeat(300_000);
     expect(decodeTextContent(withBom(long, 'utf-32le')).text).toBe(long);
+  });
+});
+
+describe('decodeTextContent — what the replacement count proves', () => {
+  it('reports zero for a clean decode, on real content rather than on nothing', () => {
+    // The positive control is the point: `replacementCharacters === 0` is
+    // trivially satisfiable by decoding an empty buffer, so this asserts the
+    // document actually came through alongside the zero.
+    const decoded = decodeTextContent(Buffer.from(DOC, 'utf-8'));
+    expect(decoded.replacementCharacters).toBe(0);
+    expect(decoded.text).toBe(DOC);
+    expect(decoded.encodingSource).toBe('assumed');
+  });
+
+  it.each(ALL_ENCODINGS)('reports zero for a well-formed %s document', (encoding) => {
+    const decoded = decodeTextContent(withBom(DOC, encoding));
+    expect(decoded.replacementCharacters).toBe(0);
+    expect(decoded.text).toBe(DOC);
+  });
+
+  it('does NOT accuse a document that legitimately contains U+FFFD', () => {
+    // The reason the decode is attempted in FATAL mode first rather than scanned
+    // afterwards. These bytes are valid UTF-8 whose content happens to be a
+    // replacement character, so nothing was replaced — a bare scan would report
+    // 2 and blame the decoder for the author's own text.
+    const authored = `before ${REPLACEMENT}${REPLACEMENT} after`;
+    const decoded = decodeTextContent(Buffer.from(authored, 'utf-8'));
+    expect(decoded.replacementCharacters).toBe(0);
+    expect(decoded.text).toBe(authored);
+    // Positive control: the U+FFFDs really are in the string being judged.
+    expect(decoded.text).toContain(REPLACEMENT);
+  });
+
+  it('counts every substitution in a windows-1252 document read as UTF-8', () => {
+    // The realistic mis-decode: `café ± 3° — naïve` as a legacy Windows editor
+    // writes it. Spelled as BYTES, per this suite's rule — and it has to be,
+    // since `0x97` (em dash) is a windows-1252 assignment that latin-1 does not
+    // share and no JS string encoder will produce. Every one of the five high
+    // bytes is invalid UTF-8 standing alone, so each becomes one U+FFFD, and the
+    // count is what tells a corpus owner how much of this file is garbage.
+    const windows1252 = Uint8Array.from([
+      0x63, 0x61, 0x66, 0xe9, 0x20, // caf<e9>
+      0xb1, 0x20, 0x33, 0xb0, 0x20, // <b1> 3<b0>
+      0x97, 0x20, // <97>
+      0x6e, 0x61, 0xef, 0x76, 0x65, // na<ef>ve
+    ]);
+    const decoded = decodeTextContent(windows1252);
+    expect(decoded.encoding).toBe('utf-8');
+    expect(decoded.encodingSource).toBe('assumed');
+    expect(decoded.replacementCharacters).toBe(5);
+    // Self-consistency: the count is a count OF THIS STRING, not a tally kept
+    // somewhere else that could drift from it.
+    expect(decoded.text.split(REPLACEMENT).length - 1).toBe(decoded.replacementCharacters);
+  });
+
+  it('counts the substitutions a UTF-32 decode makes, without a second pass', () => {
+    const bytes = Buffer.concat([
+      Buffer.from(BOM['utf-32le']),
+      u32le(0x41),
+      u32le(0x11_0000),
+      u32le(0xd800),
+      u32le(0x42),
+    ]);
+    const decoded = decodeTextContent(bytes);
+    expect(decoded.text).toBe(`A${REPLACEMENT}${REPLACEMENT}B`);
+    expect(decoded.replacementCharacters).toBe(2);
+  });
+
+  it('counts a lone trailing byte that cannot form a UTF-32 unit', () => {
+    const truncated = Buffer.concat([withBom('ab', 'utf-32le'), Buffer.from([0x41])]);
+    expect(decodeTextContent(truncated).replacementCharacters).toBe(1);
+  });
+
+  it('cannot detect BOM-less UTF-16 — it decodes cleanly and reports zero', () => {
+    // Stated, not hidden. Every NUL byte is a VALID UTF-8 encoding of U+0000, so
+    // a BOM-less UTF-16 document is not malformed UTF-8 and produces no
+    // substitutions at all. `replacementCharacters` proves a wrong encoding
+    // only when the wrong encoding rejects the bytes; the sibling signal for
+    // this case is the NULs themselves, which `looksBinary` in
+    // `@vibe-agent-toolkit/resources` keys on.
+    const decoded = decodeTextContent(body(DOC, 'utf-16le'));
+    expect(decoded.replacementCharacters).toBe(0);
+    expect(decoded.text).toContain(NUL);
   });
 });
 

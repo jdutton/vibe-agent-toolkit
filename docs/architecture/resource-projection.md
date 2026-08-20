@@ -53,7 +53,7 @@ is still 🔷
 proposed** for all ten tables: nothing yet derives real rows from `ParseFacts` or
 `ResourceRegistry` at runtime. Four tables (`blobs`, `blob_references`, `blob_sections`,
 `blob_conditions`) and three (`roots`, `resources`, `edges`) have a partial source to populate
-from already — several columns (e.g. `wordCount`, `proseCharacters`, `codeBlockCharacters`, `sectionCount`,
+from already — several columns (e.g. `wordCount`, `proseCodeUnits`, `codeBlockCodeUnits`, `sectionCount`,
 `slugOccurrence`, `column`, `inCodeSpan`, `inFence`) require new parser output that `ParseFacts`
 does not yet carry; `resource_realizations`, `resource_zones` beyond a single default "tree" zone, and
 zone-sourced `resource_tags` additionally depend on zone modeling (skill/plugin/marketplace
@@ -62,9 +62,9 @@ boundaries) that does not exist anywhere in the codebase yet — a separate, lar
 
 | table (🔷 proposed) | contents |
 |---|---|
-| `blobs` | content key, bytes, token estimate, frontmatter (JSON), `frontmatter_error`, word count, prose vs. code-block character counts (Unicode code points), link/heading/section counts |
+| `blobs` | content key, bytes, decode provenance (`encoding`, `encodingSource`, `replacementCharacters`), token estimate, frontmatter (JSON), `frontmatter_error`, word count, prose vs. code-block size counts (UTF-16 code units), link/heading/section counts |
 | `blob_references` | ordinal, raw ref, text, line, column, `startOffset`/`endOffset` (UTF-16 code units), syntactic form, lexical features (extension, leading `@`, slash count, variable-expansion syntax, in-code-span, in-fence) |
-| `blob_sections` | ordinal, depth, title, slug, slug occurrence, parent, line span, bytes (UTF-8), characters (Unicode code points), tokens |
+| `blob_sections` | ordinal, depth, title, slug, slug occurrence, parent, line span, bytes (UTF-8), tokens |
 | `blob_conditions` | `(blob, code, severity, message, line)` — parse-time oddities |
 
 **The proposed schema would store frontmatter as a JSON column, not DuckDB's `VARIANT`.** (Measured

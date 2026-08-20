@@ -12,7 +12,31 @@
         "bytes": {
           "type": "integer",
           "minimum": 0,
-          "description": "Raw on-disk byte length of the blob — NOT necessarily UTF-8 bytes. For a BOM'd UTF-16 or UTF-32 source this differs from the sum of that blob's `blob_sections.bytes`, which are UTF-8 bytes of the decoded text"
+          "description": "Raw on-disk byte length of the blob — NOT necessarily UTF-8 bytes, and NOT the sum of that blob's `blob_sections.bytes`. Section bytes are UTF-8 bytes of the DECODED text and are not a partition of this value in either direction, in any encoding: a section spans its nested subsections, so a nested body is counted once per ancestor level (measured on plain ASCII, one nested subheading: 36 on disk vs 53 summed); text before the first heading belongs to no section, and a blob with no heading has no section rows at all (16 vs 0); a stripped BOM drops bytes the sections never see (UTF-8 BOM: 10 vs 7); and a malformed byte decodes to U+FFFD and re-encodes as three, so the sum can EXCEED the file (one 0xFF byte: 9 vs 11)"
+        },
+        "encoding": {
+          "type": "string",
+          "enum": [
+            "utf-8",
+            "utf-16le",
+            "utf-16be",
+            "utf-32le",
+            "utf-32be"
+          ],
+          "description": "The encoding the raw bytes were decoded as — one of the five VAT can read. NOT a claim about what the file was authored in: see encodingSource"
+        },
+        "encodingSource": {
+          "type": "string",
+          "enum": [
+            "bom",
+            "assumed"
+          ],
+          "description": "\"bom\" when a byte-order mark stated the encoding, \"assumed\" when there was none and UTF-8 was the default. \"assumed\" is the common case and is NOT by itself a problem — it is the case in which a wrong answer is possible at all, and encodingSource === \"assumed\" AND encoding !== \"utf-8\" is unreachable today, since nothing but a BOM ever selects a non-UTF-8 encoding"
+        },
+        "replacementCharacters": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many U+FFFD REPLACEMENT CHARACTERs the decode produced — a count of characters, not of malformed bytes, and one malformed run can collapse to a single U+FFFD. 0 for a clean decode, INCLUDING a document whose own text legitimately contains U+FFFD (the decode is attempted in fatal mode first, so valid input is never accused). Greater than 0 is proof the bytes are not valid in `encoding` — that much of this blob's indexed text is already garbage"
         },
         "tokenEstimate": {
           "type": "integer",
@@ -70,15 +94,15 @@
           "type": "integer",
           "minimum": 0
         },
-        "proseCharacters": {
+        "proseCodeUnits": {
           "type": "integer",
           "minimum": 0,
-          "description": "Unicode code points outside fenced/inline code"
+          "description": "UTF-16 code units outside code blocks — NOT characters and NOT bytes; an astral character counts as two. Inline code spans are NOT excluded — `measureContent` is passed only the fence ranges, so a `` `token` `` counts as prose"
         },
-        "codeBlockCharacters": {
+        "codeBlockCodeUnits": {
           "type": "integer",
           "minimum": 0,
-          "description": "Unicode code points inside fenced code blocks"
+          "description": "UTF-16 code units inside code blocks — NOT characters and NOT bytes; an astral character counts as two. Fenced AND indented blocks, since both are one `code` AST node. Excludes inline code spans"
         },
         "linkCount": {
           "type": "integer",
@@ -96,12 +120,15 @@
       "required": [
         "contentKey",
         "bytes",
+        "encoding",
+        "encodingSource",
+        "replacementCharacters",
         "tokenEstimate",
         "frontmatter",
         "frontmatterError",
         "wordCount",
-        "proseCharacters",
-        "codeBlockCharacters",
+        "proseCodeUnits",
+        "codeBlockCodeUnits",
         "linkCount",
         "headingCount",
         "sectionCount"

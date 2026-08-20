@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { computeContentKey, type KeyedContent, type ParserKind } from '../src/content-key.js';
@@ -156,8 +157,13 @@ const isWindows = process.platform === 'win32';
 // ---------------------------------------------------------------------------
 
 function keyedFromBytes(bytes: Uint8Array, parserKind: ParserKind = 'markdown'): KeyedContent {
+  // Through the real decoder, exactly as `readContentWithKey` does it — which is
+  // also where `decoding` comes from. Hand-building that struct here would let
+  // this helper claim a provenance the bytes do not have.
+  const { text, ...decoding } = decodeTextContent(bytes);
   return {
-    content: Buffer.from(bytes).toString('utf-8'),
+    content: text,
+    decoding,
     key: computeContentKey(bytes, parserKind),
     parserKind,
     byteLength: bytes.byteLength,

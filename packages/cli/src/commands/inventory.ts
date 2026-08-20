@@ -16,12 +16,12 @@ import {
 	projectionCrawlSelected,
 	type SharedPopulationSource,
 } from '@vibe-agent-toolkit/claude-marketplace';
-import type { PopulationCache } from '@vibe-agent-toolkit/resources';
+import { describeBlobRefusals, type PopulationCache } from '@vibe-agent-toolkit/resources';
 import { findProjectRoot, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { handleCommandError } from '../utils/command-error.js';
-import { createLogger } from '../utils/logger.js';
+import { createLogger, type Logger } from '../utils/logger.js';
 import { withPopulationCache } from '../utils/projection-store.js';
 
 import { gitTrackerForProjectRoot } from './audit/distributed-tree.js';
@@ -80,7 +80,7 @@ export async function inventoryCommand(
 	const logger = createLogger(options.debug === true ? { debug: true } : {});
 	const startTime = Date.now();
 	try {
-		const inv = await routeInventory(pathArg, options);
+		const inv = await routeInventory(pathArg, options, logger);
 		const format = options.format ?? 'yaml';
 		const out = options.shallow === true
 			? serializeInventoryShallow(inv, format)
@@ -92,9 +92,21 @@ export async function inventoryCommand(
 	}
 }
 
+/**
+ * Dispatch to the extractor the subject's shape calls for.
+ *
+ * @param pathArg - The path argument, or undefined under `--user` / `--system`
+ * @param options - The command's flags
+ * @param logger - Where diagnostics go. Defaults to a REPORTING logger, never a
+ *   silent one: the default has to be the loud behaviour, or a caller acquires
+ *   silence by leaving an argument off — which is the exact defect the blob
+ *   stage's refusal counts were lost to in the first place
+ * @returns The extracted inventory
+ */
 export async function routeInventory(
 	pathArg: string | undefined,
 	options: InventoryCommandOptions,
+	logger: Logger = createLogger(),
 ): Promise<AnyInventory> {
 	if (options.user === true) {
 		// The tracker source is REQUIRED here now, and this is the lane it matters
@@ -169,7 +181,7 @@ export async function routeInventory(
 	// MEMOIZES `sharedPopulation` and reaches it when it is about to walk its
 	// first skill, which is after this frame would otherwise have closed it.
 	return withPopulationCache({ root: projectRoot ?? absolute }, async (cache) => {
-		const sharedPopulation = populationProviderFor(projectRoot, cache);
+		const sharedPopulation = populationProviderFor(projectRoot, cache, logger);
 		return extractClaudePluginInventory(absolute, {
 			...(sharedRegistry !== undefined && { sharedRegistry }),
 			...(sharedPopulation !== undefined && { sharedPopulation }),
@@ -211,11 +223,15 @@ export async function routeInventory(
  *   SEPARATE selector from the one above: which crawler answers membership and
  *   whether the answer is cached are independent choices, and conflating them
  *   would make the cache unmeasurable against the lane it is supposed to speed up
+ * @param logger - Where the blob stage's refusals are reported. stderr, never
+ *   stdout: this command's stdout is the YAML document a caller parses, and a
+ *   diagnostic in the middle of it would break every consumer
  * @returns A population source, or `undefined` to use the walk
  */
 function populationProviderFor(
 	projectRoot: string | null,
 	cache: PopulationCache | undefined,
+	logger: Logger,
 ): SharedPopulationSource | undefined {
 	if (!projectionCrawlSelected()) return undefined;
 	if (projectRoot === null) return undefined;
@@ -224,6 +240,14 @@ function populationProviderFor(
 		return buildInventoryPopulation({
 			root: projectRoot,
 			skillMdPaths,
+			// The observer this lane went without. `describeBlobRefusals` returns
+			// undefined on a run that refused nothing, so a clean inventory stays
+			// exactly as quiet as it was — which is the only thing that keeps the
+			// line worth reading when it does appear.
+			onBlobPopulation: (report) => {
+				const refusals = describeBlobRefusals(report);
+				if (refusals !== undefined) logger.warn(refusals);
+			},
 			...(gitTracker !== undefined && { gitTracker }),
 			...(cache !== undefined && { cache }),
 		});

@@ -21,7 +21,7 @@ import { ContributorRegistry } from '../src/projection/contributor.js';
 import type { ExtentContribution, ExtentContributor } from '../src/projection/contributor.js';
 import { ClosureExtentContributor } from '../src/projection/contributors/closure-extent.js';
 import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
-import { CONTENT_PARSING_SKIP, populate } from '../src/projection/merge.js';
+import { CONTENT_PARSING_SKIP, DISCARD_BLOB_POPULATION, populate } from '../src/projection/merge.js';
 import type { Projection } from '../src/projection/projection.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
@@ -103,6 +103,7 @@ async function populateFixture(
     root: suite.tempDir,
     registry,
     parameters: CLOSURE_DECLARATION,
+    onBlobPopulation: DISCARD_BLOB_POPULATION,
     ...(contentParsing === undefined ? {} : { contentParsing }),
   });
 }

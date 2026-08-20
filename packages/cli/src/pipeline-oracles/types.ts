@@ -207,8 +207,8 @@ export interface LexicalReferenceFact {
  */
 export interface ContentMeasuresFact {
   wordCount: number;
-  proseCharacters: number;
-  codeBlockCharacters: number;
+  proseCodeUnits: number;
+  codeBlockCodeUnits: number;
 }
 
 /** One heading, with the slug anchors resolve against. */
@@ -333,7 +333,7 @@ export interface ParseFactRow {
    */
   anchors: string[] | null;
   /**
-   * Word and character accounting split by code context, or `null` when the
+   * Word and code-unit accounting split by code context, or `null` when the
    * parse result omits the field.
    *
    * Recorded because it is **carried in the parse cache** and because it is the
@@ -342,13 +342,11 @@ export interface ParseFactRow {
    * for every document while `links`, `headings` and both frontmatter columns
    * held perfectly still.
    *
-   * `proseCharacters` and `codeBlockCharacters` are **Unicode code points**;
-   * {@link decodedLength} is **UTF-16 code units** of the same string. The two
-   * units coincide for BMP-only content, so `wordCount` aside,
-   * `proseCharacters + codeBlockCharacters` equals `decodedLength` for any
-   * document without astral characters (surrogate pairs) — but is not a
-   * general invariant, because a surrogate pair is one code point and two code
-   * units.
+   * `proseCodeUnits` and `codeBlockCodeUnits` are **UTF-16 code units**, the
+   * same unit {@link decodedLength} is in — so `wordCount` aside,
+   * `proseCodeUnits + codeBlockCodeUnits === decodedLength` is a general
+   * invariant of every row, astral characters included. A row where the two
+   * disagree is a row whose measures were counted in some other unit.
    */
   contentMeasures: ContentMeasuresFact | null;
   /**

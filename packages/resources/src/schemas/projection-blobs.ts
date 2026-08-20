@@ -5,6 +5,29 @@ import { ContentKeySchema, JsonValueSchema, ProjectionConditionSeveritySchema } 
 const BLOB_FK_DESC = 'Foreign key to blobs.contentKey';
 
 /**
+ * The encodings VAT can decode, as a stored column.
+ *
+ * Restated here as a Zod enum because a projection column needs a runtime
+ * validator and `TextEncoding` (`@vibe-agent-toolkit/utils/text`) is a type. The
+ * two are held in step by a compile-time parity check in
+ * `projection/blob-facts.ts` — `ExactBlobEncoding` resolves to `never` and stops
+ * `blobRowFor` compiling the moment either side gains or loses a member — rather
+ * than by a comment asking the next person to remember.
+ */
+export const BlobEncodingSchema = z.enum(['utf-8', 'utf-16le', 'utf-16be', 'utf-32le', 'utf-32be'])
+  .describe('The encoding the blob\'s bytes were decoded as');
+
+/**
+ * How that encoding was arrived at.
+ *
+ * `bom` is a fact the bytes stated. `assumed` is VAT's default, and it is the
+ * value that carries the risk: BOM-less UTF-16 and BOM-less windows-1252 both
+ * land here, both decode as UTF-8, and neither announces itself.
+ */
+export const BlobEncodingSourceSchema = z.enum(['bom', 'assumed'])
+  .describe('Whether the encoding was read off a byte-order mark or assumed');
+
+/**
  * A row of the `blobs` table — proposed projection schema,
  * resource-projection.md §2.
  *
@@ -12,18 +35,50 @@ const BLOB_FK_DESC = 'Foreign key to blobs.contentKey';
  * which parser it was routed to, folded into {@link ContentKeySchema}
  * itself). Two files with identical content anywhere in the corpus, at any
  * point in history, produce exactly one row.
+ *
+ * ## Why the decode's provenance is three columns and not a footnote
+ *
+ * Every other column here describes the blob's *text*. `encoding`,
+ * `encodingSource` and `replacementCharacters` describe how VAT arrived at that
+ * text, and they are stored for one reason: the failure they make queryable is
+ * otherwise **completely silent**. A file written as windows-1252 or as BOM-less
+ * UTF-16 is decoded as UTF-8, becomes mojibake, and then tokenizes without
+ * complaint — byte-level BPE has no out-of-vocabulary concept, so the garbage is
+ * embedded and indexed with every gate green.
+ *
+ * The three answer three different questions, and only together:
+ *
+ * - `encoding` — what we decoded as.
+ * - `encodingSource` — whether we *knew* that (`bom`) or *guessed* it
+ *   (`assumed`). The guess is where the risk lives.
+ * - `replacementCharacters` — proof the guess was wrong, as a number. Not a
+ *   suspicion: a non-zero value means these bytes are not valid in the encoding
+ *   they were read as, and the count says how much of the text is already
+ *   garbage.
+ *
+ * ⚠️ A blob row exists only for a blob that was decoded, sniffed as text and
+ * parsed. A file mis-decoded *badly enough to look binary* — which is what
+ * BOM-less UTF-16 usually is, since its NUL bytes survive a UTF-8 decode — is
+ * refused upstream as `BLOB_NOT_TEXT` and has no row here at all. These columns
+ * describe the corpus VAT indexed, not the corpus it declined.
  */
 export const BlobRowSchema = z.object({
   contentKey: ContentKeySchema.describe('Primary key — see content-key.ts'),
-  bytes: z.number().int().nonnegative().describe('Raw on-disk byte length of the blob — NOT necessarily UTF-8 bytes. For a BOM\'d UTF-16 or UTF-32 source this differs from the sum of that blob\'s `blob_sections.bytes`, which are UTF-8 bytes of the decoded text'),
+  bytes: z.number().int().nonnegative().describe('Raw on-disk byte length of the blob — NOT necessarily UTF-8 bytes, and NOT the sum of that blob\'s `blob_sections.bytes`. Section bytes are UTF-8 bytes of the DECODED text and are not a partition of this value in either direction, in any encoding: a section spans its nested subsections, so a nested body is counted once per ancestor level (measured on plain ASCII, one nested subheading: 36 on disk vs 53 summed); text before the first heading belongs to no section, and a blob with no heading has no section rows at all (16 vs 0); a stripped BOM drops bytes the sections never see (UTF-8 BOM: 10 vs 7); and a malformed byte decodes to U+FFFD and re-encodes as three, so the sum can EXCEED the file (one 0xFF byte: 9 vs 11)'),
+  encoding: BlobEncodingSchema
+    .describe('The encoding the raw bytes were decoded as — one of the five VAT can read. NOT a claim about what the file was authored in: see encodingSource'),
+  encodingSource: BlobEncodingSourceSchema
+    .describe('"bom" when a byte-order mark stated the encoding, "assumed" when there was none and UTF-8 was the default. "assumed" is the common case and is NOT by itself a problem — it is the case in which a wrong answer is possible at all, and encodingSource === "assumed" AND encoding !== "utf-8" is unreachable today, since nothing but a BOM ever selects a non-UTF-8 encoding'),
+  replacementCharacters: z.number().int().nonnegative()
+    .describe('How many U+FFFD REPLACEMENT CHARACTERs the decode produced — a count of characters, not of malformed bytes, and one malformed run can collapse to a single U+FFFD. 0 for a clean decode, INCLUDING a document whose own text legitimately contains U+FFFD (the decode is attempted in fatal mode first, so valid input is never accused). Greater than 0 is proof the bytes are not valid in `encoding` — that much of this blob\'s indexed text is already garbage'),
   tokenEstimate: z.number().int().nonnegative().describe('Estimated token count for LLM context'),
   frontmatter: z.record(z.string(), JsonValueSchema).nullable()
     .describe('Parsed frontmatter as JSON, or null when the blob has no frontmatter block'),
   frontmatterError: z.string().nullable()
     .describe('Why frontmatter did not parse to an object, or null when it did (including "no block at all")'),
   wordCount: z.number().int().nonnegative(),
-  proseCharacters: z.number().int().nonnegative().describe('Unicode code points outside fenced/inline code'),
-  codeBlockCharacters: z.number().int().nonnegative().describe('Unicode code points inside fenced code blocks'),
+  proseCodeUnits: z.number().int().nonnegative().describe('UTF-16 code units outside code blocks — NOT characters and NOT bytes; an astral character counts as two. Inline code spans are NOT excluded — `measureContent` is passed only the fence ranges, so a `` `token` `` counts as prose'),
+  codeBlockCodeUnits: z.number().int().nonnegative().describe('UTF-16 code units inside code blocks — NOT characters and NOT bytes; an astral character counts as two. Fenced AND indented blocks, since both are one `code` AST node. Excludes inline code spans'),
   linkCount: z.number().int().nonnegative(),
   headingCount: z.number().int().nonnegative(),
   sectionCount: z.number().int().nonnegative(),
@@ -155,8 +210,12 @@ export const LEXICAL_FEATURE_COLUMNS = {
  * absent together and no new skip class exists.
  *
  * They are offsets into the **decoded** content — UTF-16 code units, the same
- * units `ContentMeasures` and `estimateTokens` count — not bytes on disk. A
- * rewriter operates on the decoded string, which is what it has.
+ * units `estimateTokens` counts, the same units `String.prototype.slice` takes,
+ * and the same units `ContentMeasures` (`proseCodeUnits`/`codeBlockCodeUnits`)
+ * reports — not characters and not bytes on disk. A rewriter operates on the
+ * decoded string and indexes it in code units, which is what it has. The one
+ * size column in another unit is `blob_sections.bytes`, which is UTF-8 bytes of
+ * the decoded text and is labelled as such.
  *
  * ⚠️ The span is what it would REPLACE, and nothing more. Whether a reference
  * *should* be rewritten — whether `/docs/x.md` resolves as well as `../../docs/x.md`
@@ -192,9 +251,9 @@ export const BlobReferenceRowSchema = z.object({
   column: z.number().int().positive().nullable()
     .describe('1-based column. Null for a markdown form derived from an AST node that carries no column.'),
   startOffset: z.number().int().nonnegative()
-    .describe('0-based character offset of the reference token in the decoded content'),
+    .describe('0-based UTF-16 code-unit offset of the reference token in the decoded content — NOT characters and NOT bytes; an astral character advances it by two'),
   endOffset: z.number().int().nonnegative()
-    .describe('0-based character offset one past the reference token — the half-open span [startOffset, endOffset)'),
+    .describe('0-based UTF-16 code-unit offset one past the reference token — the half-open span [startOffset, endOffset)'),
   syntacticForm: ReferenceSyntacticFormSchema,
   ...LEXICAL_FEATURE_COLUMNS,
 }).strict().describe('A row of the blob-keyed `blob_references` table');
@@ -225,7 +284,6 @@ export const BlobSectionRowSchema = z.object({
   lineStart: z.number().int().positive(),
   lineEnd: z.number().int().positive(),
   bytes: z.number().int().nonnegative().describe('UTF-8 bytes spanned by this section, including nested subsections'),
-  characters: z.number().int().nonnegative().describe('Unicode code points spanned by this section, including nested subsections'),
   tokens: z.number().int().nonnegative(),
 }).strict().describe('A row of the blob-keyed `blob_sections` table');
 

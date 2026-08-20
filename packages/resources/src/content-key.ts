@@ -92,7 +92,7 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
-import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
+import { decodeTextContent, type TextProvenance } from '@vibe-agent-toolkit/utils/text';
 
 /**
  * Which parser a document is routed to. This is part of a document's identity,
@@ -163,6 +163,22 @@ export interface KeyedContent {
    * otherwise.
    */
   content: string;
+  /**
+   * What that decode knew, guessed, and lost.
+   *
+   * Carried rather than discarded because this is the only place the knowledge
+   * exists: by the time any consumer sees {@link content} it is a JS string, and
+   * a string mis-decoded from BOM-less UTF-16 or from windows-1252 is
+   * indistinguishable from a string that says what it means. The projection's
+   * `blobs` row spells these three out as columns — see
+   * `schemas/projection-blobs.ts` — so a corpus can be *asked* how much of its
+   * indexed text is garbage instead of being silently poisoned by it.
+   *
+   * A function of the bytes alone, exactly like {@link key} and
+   * {@link byteLength}, so a run cache holding this struct memoizes the
+   * provenance as soundly as it memoizes the content.
+   */
+  decoding: TextProvenance;
   /** The key computed over the RAW BYTES this content was decoded from. */
   key: string;
   /** The parser this content routes to. */
@@ -219,11 +235,18 @@ export async function readContentWithKey(
   // 'utf-8')` offers no BOM or encoding handling at all.
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied path, same trust level as the parsers this feeds
   const bytes = await readFile(filePath);
+  // `decodeTextContent` is the ONE decoder — see `utils`' text-content.ts. The
+  // bytes handed to `computeContentKey` are the same ones, undecoded, on purpose:
+  // this function COMPOSES a decode with a raw-bytes key.
+  //
+  // Destructured rather than field-by-field so `decoding` IS whatever
+  // `TextProvenance` holds. A decoder that learns to report a fourth fact about
+  // its input then reaches the projection without an edit here — and, more to the
+  // point, cannot be silently dropped here either.
+  const { text, ...decoding } = decodeTextContent(bytes);
   return {
-    // `decodeTextContent` is the ONE decoder — see `utils`' text-content.ts.
-    // The bytes handed to `computeContentKey` are the same ones, undecoded, on
-    // purpose: this function COMPOSES a decode with a raw-bytes key.
-    content: decodeTextContent(bytes).text,
+    content: text,
+    decoding,
     key: computeContentKey(bytes, parserKind),
     parserKind,
     byteLength: bytes.byteLength,

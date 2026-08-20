@@ -16,6 +16,7 @@
 export {
   decodeTextContent,
   type DecodedText,
-  type EncodingBasis,
+  type EncodingSource,
   type TextEncoding,
+  type TextProvenance,
 } from './text-content.js';

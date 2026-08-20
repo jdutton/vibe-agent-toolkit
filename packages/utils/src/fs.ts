@@ -20,7 +20,7 @@ export {
 // about what the bytes say is pure and lives on `./text`; these two are that
 // plus a `readFile`, which is why they are here and not there.
 export { readTextContent, readTextContentSync } from './text-file.js';
-export type { DecodedText, EncodingBasis, TextEncoding } from './text-content.js';
+export type { DecodedText, EncodingSource, TextEncoding, TextProvenance } from './text-content.js';
 
 // Two materialized columns, each a fill+judge pair and nothing else. For sibling
 // names the judge is `classifyFilenameCaseFrom`, and the internal

@@ -6,6 +6,16 @@
  * mdast-tree accessor, and none is to be added. The wiring is observed through
  * `parseMarkdownContent(...).contentMeasures`, which is the only supported way
  * to see the real fence ranges reach it.
+ *
+ * ⚠️ Every fixture here carries an ASTRAL character on purpose. `proseCodeUnits`
+ * is DEFINED as the complement `content.length - codeBlockCodeUnits`, so
+ * `prose + code === total` is an algebraic identity that no input can falsify —
+ * the only way these tests can catch either column drifting to a code-POINT
+ * count (`[...s].length`) is for the fixture to make code units, code points and
+ * UTF-8 bytes three DIFFERENT numbers. A BMP character (⭐, é) is one UTF-16 code
+ * unit and cannot do that; 🪤 (U+1FAA4) and 𝄞 (U+1D11E) are surrogate pairs and
+ * can. The numeric literals below are the pins; do not replace them with
+ * expressions computed the way production computes them.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -14,8 +24,26 @@ import { parseMarkdownContent } from '../src/link-parser.js';
 import { measureContent } from '../src/projection/blob-facts.js';
 import type { OffsetRange } from '../src/reference-lexer.js';
 
-const PROSE = 'Some prose here.';
-const FENCED = ['# Title', '', PROSE, '', '```ts', 'const x = 1;', '```', ''].join('\n');
+/** 19 UTF-16 code units, 18 code points, 21 UTF-8 bytes — all three differ. */
+const PROSE = 'Some prose here 🪤.';
+const PROSE_CODE_UNITS = 19;
+const PROSE_CODE_POINTS = 18;
+
+/** 59 UTF-16 code units, 57 code points, 63 UTF-8 bytes — all three differ. */
+const FENCED = ['# Title', '', PROSE, '', '```ts', 'const x = 1; // 𝄞', '```', ''].join('\n');
+
+/**
+ * The fence body "```ts\nconst x = 1; // 𝄞\n```" is 28 UTF-16 code units but 27
+ * code points, because 𝄞 is a surrogate pair. 28 is what `end - start` on the
+ * fence offsets produces and what the column's name promises; 27 is what a
+ * code-point count would report, so pinning both is what makes a drift between
+ * them observable.
+ */
+const FENCE_CODE_UNITS = 28;
+const FENCE_CODE_POINTS = 27;
+
+/** The prose outside the fence: 31 code units (FENCED's 59, less the fence's 28). */
+const FENCED_PROSE_CODE_UNITS = 31;
 
 /** The fenced block's offsets in FENCED, derived rather than hand-counted. */
 function fenceRange(): OffsetRange {
@@ -24,91 +52,99 @@ function fenceRange(): OffsetRange {
 }
 
 describe('measureContent', () => {
-  it('accounts for every character: prose + code === total length', () => {
-    const measures = measureContent(FENCED, [fenceRange()]);
-    expect(measures.proseCharacters + measures.codeBlockCharacters).toBe(FENCED.length);
-  });
-
-  it('attributes the fenced block to codeBlockCharacters and nothing else', () => {
+  it('counts prose as the summed code units of the segments outside the fences', () => {
+    // Derived by SUMMING the prose segments, which is an independent route to
+    // the answer: production reaches `proseCodeUnits` by subtracting
+    // `codeBlockCodeUnits` from the total, so the two agree only when
+    // `codeBlockCodeUnits` really is a code-unit count. Under a code-point
+    // count this sum stays 31 while `proseCodeUnits` drops to 30.
     const [start, end] = fenceRange();
-    expect(measureContent(FENCED, [fenceRange()]).codeBlockCharacters).toBe(end - start);
+    const summed = [FENCED.slice(0, start), FENCED.slice(end)]
+      .reduce((total, segment) => total + segment.length, 0);
+    expect(summed).toBe(FENCED_PROSE_CODE_UNITS); // the fixture, sanity-checked
+
+    expect(measureContent(FENCED, [fenceRange()]).proseCodeUnits).toBe(summed);
   });
 
-  it('counts zero code characters for a document with no fences', () => {
+  it('attributes the fenced block to codeBlockCodeUnits in code units, not code points', () => {
+    const [start, end] = fenceRange();
+    // The two numbers the fixture exists to separate. The code-point count is
+    // asserted here as what the answer is NOT.
+    const fenceBody = FENCED.slice(start, end);
+    expect(end - start).toBe(FENCE_CODE_UNITS);
+    expect([...fenceBody].length).toBe(FENCE_CODE_POINTS);
+
+    expect(measureContent(FENCED, [fenceRange()]).codeBlockCodeUnits).toBe(FENCE_CODE_UNITS);
+  });
+
+  it('counts zero code units for a fence-free document, and its prose in code units', () => {
     const measures = measureContent(PROSE, []);
-    expect(measures.codeBlockCharacters).toBe(0);
-    expect(measures.proseCharacters).toBe(PROSE.length);
+    expect([...PROSE].length).toBe(PROSE_CODE_POINTS); // what a code-point regression would report
+    expect(measures.codeBlockCodeUnits).toBe(0);
+    expect(measures.proseCodeUnits).toBe(PROSE_CODE_UNITS);
   });
 
   it('counts words outside fences only', () => {
-    // "# Title" -> 2, "Some prose here." -> 3. The fence body contributes none.
-    expect(measureContent(FENCED, [fenceRange()]).wordCount).toBe(5);
+    // "# Title" -> 2, "Some prose here 🪤." -> 4. The fence body contributes none.
+    expect(measureContent(FENCED, [fenceRange()]).wordCount).toBe(6);
   });
 
   it('does not double-count overlapping ranges', () => {
     // A range list is a set of spans; the sum is over their UNION, not over
     // their lengths. Nested code nodes make this reachable, not hypothetical.
     const measures = measureContent('abcdef', [[0, 4], [2, 6]]);
-    expect(measures.codeBlockCharacters).toBe(6);
-    expect(measures.proseCharacters).toBe(0);
+    expect(measures.codeBlockCodeUnits).toBe(6);
+    expect(measures.proseCodeUnits).toBe(0);
   });
 
-  it('counts CODE POINTS, not UTF-16 code units', () => {
+  it('counts UTF-16 code units, not code points', () => {
     // '⭐' (U+2B50) is in the BMP: 1 code point, 1 UTF-16 code unit, 3 UTF-8 bytes.
     // '𝄞' (U+1D11E) is astral: 1 code point, 2 UTF-16 code units (a surrogate
     // pair), 4 UTF-8 bytes.
     const measures = measureContent('a⭐𝄞', []);
 
-    // 3 characters. `.length` would say 4 (1 + 1 + 2 code units).
-    expect(measures.proseCharacters).toBe(3);
-    expect(measures.codeBlockCharacters).toBe(0);
+    // 4 code units. A code-point count would say 3; a UTF-8 byte count, 8.
+    expect(measures.proseCodeUnits).toBe(4);
+    expect(measures.codeBlockCodeUnits).toBe(0);
   });
 
-  it('partitions the content exactly, in code points', () => {
-    const content = 'prose ⭐\n```\ncode 𝄞\n```\n';
-    const start = content.indexOf('```');
-    const end = content.lastIndexOf('```') + 3;
-    const measures = measureContent(content, [[start, end]]);
-
-    expect(measures.proseCharacters + measures.codeBlockCharacters).toBe([...content].length);
-  });
-
-  it('pins the fenced count directly, independent of the prose/total complement', () => {
-    // The two tests above both assert `prose + codeBlock === total` (or count
-    // only the un-fenced side). That equation holds algebraically no matter
-    // what unit codeBlockCharacters is counted in, because proseCharacters is
-    // defined as the complement `[...content].length - codeBlockCharacters` —
-    // so neither test can ever catch codeBlockCharacters itself reverting to
-    // code-unit arithmetic (`end - start`). This test pins the fenced count as
-    // a literal, computed independently of measureContent.
+  it('pins the fenced count of a document that is astral on BOTH sides of the fence', () => {
+    // The fixture above carries its astral character only inside the fence.
+    // This one puts one on each side, so a regression that changed the unit on
+    // only one side cannot land on the right total by luck.
     //
-    // Fence body: "```\ncode 𝄞\n```" — 𝄞 (U+1D11E) is a surrogate pair, so the
-    // body is 15 UTF-16 code units but 14 Unicode code points.
+    // Fence body: "```\ncode 𝄞\n```" — 15 UTF-16 code units, 14 code points.
+    // ⚠️ Prose is 9 in EITHER unit here (the outside-the-fence astral is ⭐,
+    // which is BMP), so the code column is the discriminating assertion and the
+    // prose one is the partition check.
     const content = 'prose ⭐\n```\ncode 𝄞\n```\n';
     const start = content.indexOf('```');
     const end = content.lastIndexOf('```') + 3;
+    // Sliced into a local first: a spread applied straight to `.slice(...)`
+    // reads to `unicorn/no-useless-spread` as cloning an array, when it is a
+    // string being spread into code points.
     const fenceBody = content.slice(start, end);
-    expect(fenceBody.length).toBe(15); // code units, sanity-checking the fixture itself
-    expect([...fenceBody].length).toBe(14); // code points — the value this test pins
+    expect([...fenceBody].length).toBe(14); // code points, the value this is NOT
 
     const measures = measureContent(content, [[start, end]]);
-    expect(measures.codeBlockCharacters).toBe(14);
+    expect(measures.codeBlockCodeUnits).toBe(15); // code units — the value this test pins
+    expect(measures.proseCodeUnits).toBe(9); // "prose ⭐\n" (8) + "\n" (1)
   });
 });
 
 describe('parseMarkdownContent wiring', () => {
-  it('carries contentMeasures whose character split matches the document', () => {
-    const measures = parseMarkdownContent(FENCED, FENCED.length).contentMeasures;
+  it('carries contentMeasures whose fenced count is the real fence, in code units', () => {
+    const measures = parseMarkdownContent(FENCED, Buffer.byteLength(FENCED)).contentMeasures;
     expect(measures).toBeDefined();
-    // `?? 0` rather than a non-null assertion (banned repo-wide). An absent
-    // field therefore sums to 0, which still fails this assertion.
-    expect((measures?.proseCharacters ?? 0) + (measures?.codeBlockCharacters ?? 0)).toBe(FENCED.length);
-    expect(measures?.codeBlockCharacters).toBeGreaterThan(0);
+    // Pinned as literals rather than as `total - other`: the two fields are
+    // complements of one another, so asserting their sum proves nothing.
+    expect(measures?.codeBlockCodeUnits).toBe(FENCE_CODE_UNITS);
+    expect(measures?.proseCodeUnits).toBe(FENCED_PROSE_CODE_UNITS);
   });
 
-  it('reports a fence-free document as all prose', () => {
-    const result = parseMarkdownContent(PROSE, PROSE.length);
-    expect(result.contentMeasures?.codeBlockCharacters).toBe(0);
-    expect(result.contentMeasures?.proseCharacters).toBe(PROSE.length);
+  it('reports a fence-free document as all prose, counted in code units', () => {
+    const result = parseMarkdownContent(PROSE, Buffer.byteLength(PROSE));
+    expect(result.contentMeasures?.codeBlockCodeUnits).toBe(0);
+    expect(result.contentMeasures?.proseCodeUnits).toBe(PROSE_CODE_UNITS);
   });
 });

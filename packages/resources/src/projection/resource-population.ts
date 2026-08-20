@@ -65,7 +65,12 @@ import { safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
 import { ContributorRegistry } from './contributor.js';
 import { FilesystemExtentContributor } from './contributors/filesystem-extent.js';
 import { crawlSourceFor, type CrawlSourceKind } from './crawl-source.js';
-import { CONTENT_PARSING_SKIP, populate, type PopulationCache } from './merge.js';
+import {
+  CONTENT_PARSING_SKIP,
+  DISCARD_BLOB_POPULATION,
+  populate,
+  type PopulationCache,
+} from './merge.js';
 
 /**
  * A way to obtain the enumerated file population for a root, together with the
@@ -233,6 +238,13 @@ export async function buildResourcePopulation(options: {
     // ~90% of its cold cost. Stated rather than inferred, and refused if a blob
     // reader is ever registered above.
     contentParsing: CONTENT_PARSING_SKIP,
+    // The ONE place discarding the counts is sound, and only because of the line
+    // above: under `CONTENT_PARSING_SKIP` the blob stage never runs, so there is
+    // no refusal to report and `populate()` never calls this. If the skip is ever
+    // dropped, this line becomes a silence and must be replaced with a real
+    // observer at the same time — that is why it is spelled out here rather than
+    // being an argument nobody passed.
+    onBlobPopulation: DISCARD_BLOB_POPULATION,
     ...(options.gitTracker !== undefined && { gitTracker: options.gitTracker }),
     ...(options.cache !== undefined && { cache: options.cache }),
   });

@@ -13,12 +13,15 @@ describe('BlobRowSchema', () => {
   const minimalBlob = {
     contentKey: VALID_KEY,
     bytes: 10,
+    encoding: 'utf-8',
+    encodingSource: 'assumed',
+    replacementCharacters: 0,
     tokenEstimate: 2,
     frontmatter: null,
     frontmatterError: null,
     wordCount: 1,
-    proseCharacters: 10,
-    codeBlockCharacters: 0,
+    proseCodeUnits: 10,
+    codeBlockCodeUnits: 0,
     linkCount: 0,
     headingCount: 0,
     sectionCount: 0,
@@ -28,12 +31,15 @@ describe('BlobRowSchema', () => {
     const row = {
       contentKey: VALID_KEY,
       bytes: 1024,
+      encoding: 'utf-16be',
+      encodingSource: 'bom',
+      replacementCharacters: 3,
       tokenEstimate: 256,
       frontmatter: { status: 'accepted', sources: ['a.md', 'b.md'] },
       frontmatterError: null,
       wordCount: 150,
-      proseCharacters: 900,
-      codeBlockCharacters: 124,
+      proseCodeUnits: 900,
+      codeBlockCodeUnits: 124,
       linkCount: 3,
       headingCount: 2,
       sectionCount: 2,
@@ -144,22 +150,31 @@ describe('BlobReferenceRowSchema', () => {
 });
 
 describe('BlobSectionRowSchema', () => {
+  const topLevelSection = {
+    blob: VALID_KEY,
+    ordinal: 0,
+    depth: 1,
+    title: 'Overview',
+    slug: 'overview',
+    slugOccurrence: 0,
+    parentOrdinal: null,
+    lineStart: 1,
+    lineEnd: 20,
+    bytes: 400,
+    tokens: 90,
+  };
+
   it('accepts a top-level heading with no parent', () => {
-    const row = {
-      blob: VALID_KEY,
-      ordinal: 0,
-      depth: 1,
-      title: 'Overview',
-      slug: 'overview',
-      slugOccurrence: 0,
-      parentOrdinal: null,
-      lineStart: 1,
-      lineEnd: 20,
-      bytes: 400,
-      characters: 380,
-      tokens: 90,
-    };
-    expect(BlobSectionRowSchema.safeParse(row).success).toBe(true);
+    expect(BlobSectionRowSchema.safeParse(topLevelSection).success).toBe(true);
+  });
+
+  it('rejects a `characters` column, which the table deliberately does not carry', () => {
+    // `bytes` is a real UTF-8 byte count and is the ONLY size column here. A
+    // code-point column was added and then dropped: it cost an O(n) spread per
+    // section to report a unit nothing indexes in, while `bytes` already
+    // answers "how big is this" honestly. `.strict()` is what makes the removal
+    // enforced rather than merely current, so this pins it.
+    expect(BlobSectionRowSchema.safeParse({ ...topLevelSection, characters: 380 }).success).toBe(false);
   });
 
   it('accepts the second occurrence of a repeated heading, disambiguated by slugOccurrence', () => {
@@ -174,7 +189,6 @@ describe('BlobSectionRowSchema', () => {
       lineStart: 40,
       lineEnd: 55,
       bytes: 300,
-      characters: 290,
       tokens: 60,
     };
     expect(BlobSectionRowSchema.safeParse(row).success).toBe(true);
@@ -192,7 +206,6 @@ describe('BlobSectionRowSchema', () => {
       lineStart: 1,
       lineEnd: 2,
       bytes: 10,
-      characters: 10,
       tokens: 2,
     };
     expect(BlobSectionRowSchema.safeParse(row).success).toBe(false);
