@@ -10,4 +10,8 @@ createPostBuildScript({
   generatedDir: 'generated',
   distDir: 'dist',
   verbose: true,
+  // Eval fixtures are test input for vat-audit/vat-skill-review, not distributed
+  // skill content (mirrors the resources.exclude entry in this package's
+  // vibe-agent-toolkit.config.yaml) — keep them out of the published package.
+  exclude: ['resources/skills/evals'],
 });
