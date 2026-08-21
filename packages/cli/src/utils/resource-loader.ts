@@ -423,7 +423,15 @@ export async function loadResourcesWithConfig(
     // two more spawns, and on the filesystem enumerator or the incumbent walk
     // nothing would ever consume it. Guarded by `gitExtentSelected` rather than a
     // second copy of the condition, so the two cannot drift.
-    if (gitExtentSelected(projectRoot)) {
+    //
+    // ⚠️⚠️ BOTH HALVES, and the second one is not redundant. `gitExtentSelected`
+    // answers "which ENUMERATOR would the projection lane use", which stopped
+    // implying "the projection lane is running" the moment git became the extent
+    // default: under `VAT_RESOURCES_CRAWL=walk` it still answers true inside any
+    // repository, so the walk paid for a snapshot nothing consumed — measured at
+    // 7 git spawns on the escape hatch against 2 before the flip. The lane check
+    // is the half that went missing when the default moved.
+    if (resourcesProjectionCrawlSelected() && gitExtentSelected(projectRoot)) {
       gitTreeSnapshot({ cwd: projectRoot });
     }
 
