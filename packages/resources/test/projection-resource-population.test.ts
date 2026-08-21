@@ -255,7 +255,11 @@ describe('buildResourcePopulation reports which enumerator ran', () => {
     delete process.env[EXTENT_SOURCE_ENV];
   });
 
-  it('reports the walk when nothing selects git', async () => {
+  // ⚠️ Not "when nothing selects git" any more — git IS what nothing selects.
+  // This fixture is a bare temp directory with no repository above it, so what
+  // it pins is the FALLBACK, and the title has to say so or the next reader
+  // takes it as evidence the default is still the walk.
+  it('reports the filesystem enumerator on a tree with no repository above it', async () => {
     await write(DOC_A, '# A\n');
 
     expect(await extentSourceOf()).toBe('filesystem');

@@ -23,6 +23,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   RESOURCES_CRAWL_ENV,
   RESOURCES_CRAWL_PROJECTION,
+  RESOURCES_CRAWL_WALK,
   withResourcePopulationSource,
 } from '../../src/utils/resource-loader.js';
 
@@ -45,10 +46,25 @@ afterEach(() => {
 });
 
 describe('withResourcePopulationSource', () => {
-  it('hands back no source when the selector is unset', async () => {
+  it('hands back a source when the selector is unset, because the projection lane is the default', async () => {
     const received = await withResourcePopulationSource({ root }, async (source) => source);
 
-    expect(received).toBeUndefined();
+    expect(received).toBeDefined();
+  });
+
+  it('hands back NO source when opted out to the walk', async () => {
+    // The escape hatch has to actually reach this seam: an opt-out that still
+    // installed a population source would leave the walk unreachable, and the
+    // lane label would be the only thing that changed.
+    process.env[RESOURCES_CRAWL_ENV] = RESOURCES_CRAWL_WALK;
+
+    try {
+      const received = await withResourcePopulationSource({ root }, async (source) => source);
+
+      expect(received).toBeUndefined();
+    } finally {
+      delete process.env[RESOURCES_CRAWL_ENV];
+    }
   });
 
   it('hands back a source that enumerates the tree when the selector chose the projection lane', async () => {

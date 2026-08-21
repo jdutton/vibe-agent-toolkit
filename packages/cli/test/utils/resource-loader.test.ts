@@ -42,6 +42,24 @@ const existingDirectories = new Set<string>();
 let lastRegistryOptions: Record<string, unknown> | undefined;
 let lastCrawlOptions: Record<string, unknown> | undefined;
 
+/**
+ * The crawl options minus the population source.
+ *
+ * The tests below are about which include/exclude patterns a path argument
+ * produces, and the projection lane — now the DEFAULT — installs a
+ * `populationSource` alongside them. Stripping exactly that one key keeps these
+ * assertions on their own subject while preserving `toEqual`'s guarantee that no
+ * OTHER stray key crept in, which `objectContaining` would quietly give up.
+ *
+ * @returns The recorded options without `populationSource`, or `undefined`
+ */
+function crawlPatterns(): Record<string, unknown> | undefined {
+  if (lastCrawlOptions === undefined) return undefined;
+  const rest = { ...lastCrawlOptions };
+  delete rest.populationSource;
+  return rest;
+}
+
 vi.mock('node:fs', () => ({
   existsSync: (p: string): boolean => existingDirectories.has(p),
   statSync: (p: string): { isDirectory: () => boolean } => ({
@@ -85,6 +103,7 @@ import {
   loadResourcesWithConfig,
   RESOURCES_CRAWL_ENV,
   RESOURCES_CRAWL_PROJECTION,
+  RESOURCES_CRAWL_WALK,
 } from '../../src/utils/resource-loader.js';
 
 function createTestLogger(): { logger: Logger; debugCalls: string[]; warnCalls: string[] } {
@@ -132,7 +151,7 @@ describe('loadResourcesWithConfig', () => {
 
     const result = await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
 
-    expect(lastCrawlOptions).toEqual({
+    expect(crawlPatterns()).toEqual({
       baseDir: PROJECT_ROOT,
       include: INCLUDE_PATTERNS,
       exclude: EXCLUDE_PATTERNS,
@@ -155,7 +174,7 @@ describe('loadResourcesWithConfig', () => {
     // baseDir stays at projectRoot so the config's root-relative globs evaluate
     // on the basis they were declared against; the path arg becomes an include
     // prefix instead of a new base.
-    expect(lastCrawlOptions).toEqual({
+    expect(crawlPatterns()).toEqual({
       baseDir: PROJECT_ROOT,
       include: SUBTREE_INCLUDE,
       exclude: EXCLUDE_PATTERNS,
@@ -170,7 +189,7 @@ describe('loadResourcesWithConfig', () => {
 
     await loadResourcesWithConfig(PROJECT_ROOT, PROJECT_ROOT, logger);
 
-    expect(lastCrawlOptions).toEqual({
+    expect(crawlPatterns()).toEqual({
       baseDir: PROJECT_ROOT,
       include: ['**/*.md', '**/*.html', '**/*.htm'],
       exclude: EXCLUDE_PATTERNS,
@@ -184,7 +203,7 @@ describe('loadResourcesWithConfig', () => {
 
     await loadResourcesWithConfig('docs', safePath.resolve('.'), logger);
 
-    expect(lastCrawlOptions).toEqual({
+    expect(crawlPatterns()).toEqual({
       baseDir: safePath.resolve('.'),
       include: ['docs/**/*.md', 'docs/**/*.html', 'docs/**/*.htm'],
       exclude: EXCLUDE_PATTERNS,
@@ -200,7 +219,7 @@ describe('loadResourcesWithConfig', () => {
 
     const result = await loadResourcesWithConfig(EXPLICIT_PATH, PROJECT_ROOT, logger);
 
-    expect(lastCrawlOptions).toEqual({ baseDir: EXPLICIT_PATH });
+    expect(crawlPatterns()).toEqual({ baseDir: EXPLICIT_PATH });
     expect(warnCalls.join('\n')).toContain(EXPLICIT_PATH);
     expect(result.scanPath).toBe(EXPLICIT_PATH);
   });
@@ -247,26 +266,44 @@ describe('loadResourcesWithConfig', () => {
 
     const result = await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
 
-    expect(lastCrawlOptions).toEqual({ baseDir: PROJECT_ROOT });
+    expect(crawlPatterns()).toEqual({ baseDir: PROJECT_ROOT });
     expect(result.config).toBeUndefined();
   });
 
-  it('reports the lane it actually took, and takes the walk by default', async () => {
+  it('reports the lane it actually took, and takes the PROJECTION by default', async () => {
     loadConfigMock.mockReturnValue(undefined);
     const { logger } = createTestLogger();
 
     const result = await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
 
-    expect(result.lane).toBe('walk');
+    expect(result.lane).toBe('projection');
     // The lane is a claim about what ran, so it has to agree with whether a
     // population source was actually installed on the crawl.
-    expect(lastCrawlOptions?.populationSource).toBeUndefined();
+    expect(lastCrawlOptions?.populationSource).toBeDefined();
   });
 
-  it('reports the projection lane when the selector chose it', async () => {
-    // A lane that came back `walk` here — or `projection` in the case above —
+  it('takes the walk when opted out, and says so', async () => {
+    // A lane that came back `projection` here — or `walk` in the case above —
     // would make every arm-identity claim built on this field worthless, which
     // is precisely what it exists to prevent.
+    loadConfigMock.mockReturnValue(undefined);
+    const { logger } = createTestLogger();
+    process.env[RESOURCES_CRAWL_ENV] = RESOURCES_CRAWL_WALK;
+
+    try {
+      const result = await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
+
+      expect(result.lane).toBe('walk');
+      expect(lastCrawlOptions?.populationSource).toBeUndefined();
+    } finally {
+      delete process.env[RESOURCES_CRAWL_ENV];
+    }
+  });
+
+  it('keeps honouring the historical explicit `projection` value', async () => {
+    // The opt-in spelling predates the flip and is all over scripts and lab
+    // arms. It must still select the projection lane rather than becoming an
+    // unrecognised value that silently means something else.
     loadConfigMock.mockReturnValue(undefined);
     const { logger } = createTestLogger();
     process.env[RESOURCES_CRAWL_ENV] = RESOURCES_CRAWL_PROJECTION;
@@ -275,7 +312,6 @@ describe('loadResourcesWithConfig', () => {
       const result = await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
 
       expect(result.lane).toBe('projection');
-      expect(lastCrawlOptions?.populationSource).toBeDefined();
     } finally {
       delete process.env[RESOURCES_CRAWL_ENV];
     }

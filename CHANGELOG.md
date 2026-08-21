@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **⚠️ BREAKING (behaviour): resource scanning now uses the projection lane with the git enumerator
+  by default.** Previously both were opt-in via `VAT_RESOURCES_CRAWL=projection` and
+  `VAT_EXTENT_SOURCE=git`; those values still work and still mean the same thing. Measured on an
+  8,548-file repository the git enumerator costs 7,705 filesystem calls against the filesystem
+  enumerator's 18,454, and both lanes report the same population (1,289 documents).
+
+  **Outside a usable git working tree the git enumerator is not used**: any tree with no `.git` above
+  it — a SharePoint-synced corpus, an extracted tarball, a plain documentation folder — falls back to
+  the filesystem enumerator automatically, and the command reports `extentSource: filesystem`, naming
+  the enumerator that ran rather than the one requested. The same fallback covers a `.git` that
+  exists but is not a repository git can read: an aborted clone that left an empty `.git/`, a linked
+  worktree whose parent checkout was deleted, or a directory somebody happened to name `.git`. Those
+  scan as they always did rather than failing.
+
+  **⚠️ One finding is lost, knowingly.** Both projection enumerators omit a committed symlink's own
+  path (the filesystem one crawls with `followSymlinks: false`; the git one skips mode `120000` to
+  match it), so a **broken symlink that the previous walk reported as `LINK_BROKEN_FILE` is no
+  longer reported**. If you rely on that, set `VAT_RESOURCES_CRAWL=walk` — the new opt-out — and
+  tell us, because closing the gap properly is a separate change.
+
+- **`VAT_RESOURCES_CRAWL=walk` and `VAT_EXTENT_SOURCE=filesystem`** are the new opt-outs for the two
+  defaults above.
+
 ### Added
 
 - **Encoding provenance in the projection's `blobs` table** — new `encoding`, `encodingSource`

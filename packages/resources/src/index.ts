@@ -454,6 +454,7 @@ export { FilesystemExtentContributor } from './projection/contributors/filesyste
 export {
   crawlSourceFor,
   EXTENT_SOURCE_ENV,
+  EXTENT_SOURCE_FILESYSTEM,
   EXTENT_SOURCE_GIT,
   FilesystemCrawlSource,
   gitExtentSelected,

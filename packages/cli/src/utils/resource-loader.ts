@@ -145,31 +145,33 @@ export const RESOURCES_CRAWL_ENV = 'VAT_RESOURCES_CRAWL';
 export const RESOURCES_CRAWL_PROJECTION = 'projection';
 
 /**
+ * {@link RESOURCES_CRAWL_ENV}'s value that opts BACK to the incumbent walk.
+ *
+ * The projection lane is the default now, so this is the escape hatch rather
+ * than the selector. Any other value — including the historical `projection` —
+ * leaves the projection lane selected, so existing scripts and lab arms that
+ * name it explicitly keep working and keep MEANING the same thing.
+ */
+export const RESOURCES_CRAWL_WALK = 'walk';
+
+/**
  * Whether this process should source the resources population from a projection.
  *
- * ⚠️ **Opposite default to `vat inventory`'s selector, and that asymmetry is the
- * point rather than an oversight.** The inventory flip was defensible as a
- * default because it was provably a byte-for-byte no-op on its subject: both
- * lanes answered the same membership question and were shown to agree. This lane
- * cannot make that claim, because it deliberately does NOT agree: the
+ * **Defaults to the projection lane.** Both lanes now enumerate
+ * `tracked ∪ (untracked ∧ ¬ignored)` — `ResourceRegistry.crawl` passes
+ * `includeUntracked: true` per `docs/architecture/resource-scanning-and-caching.md`
+ * §2.1 — so the population question they answer is the same one.
+ *
+ * ⚠️⚠️ **ONE DISAGREEMENT SURVIVES, AND IT DROPS FINDINGS: SYMLINKS.** The
  * `filesystem` extent crawls with `followSymlinks: false` and records no link's
- * own path, so a committed symlink is a member of the default lane and not a
- * member here — and for an out-of-tree target those bytes have no other path
- * into the population, so a broken link the default lane reports goes
- * unreported.
- *
- * ⚠️ It used to disagree in the other direction too — this was the only lane
- * that could see an uncommitted markdown file, so switching it on ADDED findings
- * on real adopter trees. That half is gone: `ResourceRegistry.crawl` now passes
- * `includeUntracked: true`, per the ruling declared at
- * `docs/architecture/resource-scanning-and-caching.md` §2.1, so both lanes
- * enumerate `tracked ∪ (untracked ∧ ¬ignored)` and the symlink loss is the whole
- * of the remaining disagreement.
- *
- * A population change that drops `LINK_BROKEN_FILE`s people rely on is not a
- * default to be taken on the strength of it being cheaper in the abstract.
- * The blast radius gets measured on real corpora first; flipping this default is
- * then a one-line change with a changelog entry, not a rewrite.
+ * own path, and `GitCrawlSource` skips mode `120000` deliberately to match it —
+ * so BOTH projection extents omit a committed symlink that the incumbent walk
+ * includes. For an out-of-tree target those bytes have no other path into the
+ * population, which means **a broken symlink the walk reports as
+ * `LINK_BROKEN_FILE` is not reported on this lane.** That is a real loss, it is
+ * known, and it is the cost this default was accepted at; closing it is its own
+ * change (teaching an extent to admit `120000` entries as their own paths).
+ * {@link RESOURCES_CRAWL_WALK} is the one-value escape hatch meanwhile.
  *
  * Read from the environment at each call rather than memoized at module load:
  * `vitest.setup.js` deletes every `VAT_*` variable before any test module loads,
@@ -179,7 +181,7 @@ export const RESOURCES_CRAWL_PROJECTION = 'projection';
  * @returns `true` when the projection lane is selected
  */
 export function resourcesProjectionCrawlSelected(): boolean {
-  return process.env[RESOURCES_CRAWL_ENV] === RESOURCES_CRAWL_PROJECTION;
+  return process.env[RESOURCES_CRAWL_ENV] !== RESOURCES_CRAWL_WALK;
 }
 
 /**

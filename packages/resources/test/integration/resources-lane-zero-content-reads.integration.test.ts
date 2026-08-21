@@ -88,7 +88,7 @@ import {
 } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { EXTENT_SOURCE_ENV, EXTENT_SOURCE_GIT } from '../../src/projection/crawl-source.js';
+import { EXTENT_SOURCE_ENV, EXTENT_SOURCE_FILESYSTEM, EXTENT_SOURCE_GIT } from '../../src/projection/crawl-source.js';
 
 /** Markdown files the corpus holds, all tracked and none ignored. */
 const TRACKED_DOC_COUNT = 8;
@@ -448,7 +448,13 @@ beforeAll(() => {
   runGitOrThrow(['add', '-A'], { cwd: corpusRoot });
   runGitOrThrow([...COMMIT_CONFIG, 'commit', '-m', 'fixture'], { cwd: corpusRoot });
 
-  laneArm = measure('lane');
+  // ⚠️ The filesystem extent is NAMED rather than left to the default. It used
+  // to be the default, so an unset environment selected it — then git became the
+  // default and this arm silently turned into a second copy of `gitArm`, taking
+  // the git plumbing read with it. Two arms that measure the same thing cannot
+  // show the difference this file exists to show, and the failure looked like
+  // the filesystem extent had started reading `.git/index`.
+  laneArm = measure('lane', { [EXTENT_SOURCE_ENV]: EXTENT_SOURCE_FILESYSTEM });
   gitArm = measure('lane', { [EXTENT_SOURCE_ENV]: EXTENT_SOURCE_GIT });
   strayArm = measure('lane-with-stray-read');
   leakageArm = measure(SINK_LEAKAGE_ARM);

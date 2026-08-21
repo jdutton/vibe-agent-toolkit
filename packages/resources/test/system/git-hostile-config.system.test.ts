@@ -99,6 +99,7 @@ import { GitExtentContributor } from '../../src/projection/contributors/git-exte
 import {
   crawlSourceFor,
   EXTENT_SOURCE_ENV,
+  EXTENT_SOURCE_FILESYSTEM,
   EXTENT_SOURCE_GIT,
   type CrawlSourceKind,
 } from '../../src/projection/crawl-source.js';
@@ -399,11 +400,13 @@ interface Arm {
 async function runArm(root: string, useGitSource: boolean): Promise<Arm> {
   // Set inside the test, never in the ambient environment: `vitest.setup.js`
   // deletes every `VAT_*` variable before any test module loads.
-  if (useGitSource) {
-    process.env[EXTENT_SOURCE_ENV] = EXTENT_SOURCE_GIT;
-  } else {
-    delete process.env[EXTENT_SOURCE_ENV];
-  }
+  //
+  // ⚠️ BOTH arms name their enumerator. Leaving the walk arm unset used to mean
+  // "the filesystem enumerator" only because that was the default; once git
+  // became the default, an unset arm silently became a SECOND git arm and every
+  // A/B claim in this file collapsed into A/A — two identical measurements
+  // asserted to differ. Naming it is what keeps the two arms two arms.
+  process.env[EXTENT_SOURCE_ENV] = useGitSource ? EXTENT_SOURCE_GIT : EXTENT_SOURCE_FILESYSTEM;
   // `gitFindRoot` memoizes per directory, including the `null` recorded by a walk
   // that climbed through this path before the repository existed.
   resetProjectRootCaches();

@@ -66,6 +66,8 @@
  * empty.
  */
 
+import { existsSync, statSync } from 'node:fs';
+
 import {
   crawlDirectory,
   crawlPathFilter,
@@ -73,11 +75,15 @@ import {
   gitLsOthers,
   gitTreeSnapshot,
   NEVER_CRAWL_GLOBS,
+  readTextContentSync,
   safePath,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
 
 import type { PathShape } from './realizations.js';
+
+/** The key a `.git` pointer file uses to name the real gitdir. */
+const GITDIR_PREFIX = 'gitdir:';
 
 /**
  * One path an enumeration source found, with whatever that source knew for free.
@@ -509,26 +515,16 @@ export const EXTENT_SOURCE_ENV = 'VAT_EXTENT_SOURCE';
 export const EXTENT_SOURCE_GIT = 'git';
 
 /**
- * Choose the enumeration source for a root.
+ * {@link EXTENT_SOURCE_ENV}'s value that opts BACK to {@link FilesystemCrawlSource}.
  *
- * **Defaults to the walk even inside a git repository, and that is deliberate.**
- * §3.3 specifies selection by "is this a git working tree", and that is the right
- * end state — but the git implementation reaches the same population by a
- * different route, so making it the default is a change to be *measured* on real
- * corpora before it is taken, not one to be reasoned into. The lab's `population`
- * facet compares the two arms; flipping this default is then a one-line change
- * with a changelog entry.
- *
- * Read from the environment at each call rather than memoized at module load:
- * `vitest.setup.js` deletes every `VAT_*` variable before any test module loads,
- * so a module-level binding would make the switch unobservable to every test that
- * sets it.
- *
- * @param root - Absolute corpus root
- * @returns The selected source. Falls back to the walk when git is asked for but
- *   the root is not in a repository, because a root outside git has no git answer
- *   and failing would make the switch unusable across a mixed corpus
+ * The git enumerator is the default now, so this is the escape hatch rather than
+ * the selector — an opt-OUT, per the house preference for opt-outs over
+ * experimental flags. It also stays the way the lab names the filesystem arm
+ * explicitly instead of relying on the absence of a variable, which is
+ * indistinguishable from a build too old to have the switch.
  */
+export const EXTENT_SOURCE_FILESYSTEM = 'filesystem';
+
 /**
  * What this process's environment asks the enumerator to be, verbatim.
  *
@@ -547,6 +543,30 @@ export function crawlSourceSelector(): string | undefined {
   return process.env[EXTENT_SOURCE_ENV];
 }
 
+/**
+ * Choose the enumeration source for a root.
+ *
+ * **Defaults to git wherever there is a git working tree** — the end state §3.3
+ * specifies, taken now that the population was compared on real corpora rather
+ * than reasoned about. Both arms enumerate `tracked ∪ (untracked ∧ ¬ignored)`;
+ * measured on an 8,548-file adopter the git arm costs 7,705 filesystem calls
+ * against the filesystem arm's 18,454, and 6 git spawns.
+ *
+ * ⚠️ Outside a git working tree this is not a preference but a REQUIREMENT to
+ * fall back — see the guard in {@link gitExtentSelected}.
+ *
+ * Read from the environment at each call rather than memoized at module load:
+ * `vitest.setup.js` deletes every `VAT_*` variable before any test module loads,
+ * so a module-level binding would make the switch unobservable to every test that
+ * sets it.
+ *
+ * @param root - Absolute corpus root
+ * @returns The selected source — {@link GitCrawlSource} inside a repository,
+ *   {@link FilesystemCrawlSource} outside one or when
+ *   {@link EXTENT_SOURCE_FILESYSTEM} is asked for. The fallback is not a
+ *   preference: a root outside git has no git answer, and failing there would
+ *   make the default unusable across a mixed corpus
+ */
 export function crawlSourceFor(root: string): CrawlSource {
   if (gitExtentSelected(root)) {
     return new GitCrawlSource(root);
@@ -572,7 +592,71 @@ export function crawlSourceFor(root: string): CrawlSource {
  * @param root - The corpus root the crawl will run against
  * @returns Whether the git enumerator is both requested and usable here
  */
+/**
+ * Does the `.git` entry at this root describe a repository git can read?
+ *
+ * {@link gitFindRoot} answers a *filesystem* question — "is there a `.git`
+ * entry at or above this path" — and that is **not** the question the git
+ * enumerator needs answered. {@link GitCrawlSource} throws when git declines to
+ * describe the tree, so selecting it on the strength of a `.git` entry alone
+ * turns every unreadable repository into a hard failure of a command that used
+ * to work: an aborted clone that left an empty `.git/`, a linked worktree whose
+ * parent checkout was deleted, a submodule pointer into a missing gitdir, or a
+ * directory somebody simply named `.git`.
+ *
+ * Checked **structurally rather than by asking git**, because asking costs a
+ * spawn on the hot path and the snapshot the enumerator takes is `git add
+ * --all` — far too dear to buy as a probe. `HEAD` is the discriminator: every
+ * repository git will describe has one, and none of the broken shapes above
+ * does.
+ *
+ * ⚠️ This is a *necessary* condition, not a sufficient one — a readable `HEAD`
+ * does not prove the git binary exists or that its objects are intact. The
+ * enumerator's own throw remains the backstop for those.
+ *
+ * @param gitRoot - The repository root {@link gitFindRoot} returned
+ * @returns Whether the marker looks like a repository git can describe
+ */
+function gitMarkerIsReadable(gitRoot: string): boolean {
+  const marker = safePath.join(gitRoot, '.git');
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- derived from a resolved corpus root
+    const stat = statSync(marker);
+    if (stat.isDirectory()) {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- derived from a resolved corpus root
+      return existsSync(safePath.join(marker, 'HEAD'));
+    }
+
+    // A `.git` FILE is a pointer — a linked worktree or a submodule. It is only
+    // as good as the gitdir it names, which is exactly what goes missing when
+    // the parent checkout is deleted out from under it.
+    const pointer = readTextContentSync(marker)
+      .text.split('\n')
+      .map((line) => line.trim())
+      .find((line) => line.startsWith(GITDIR_PREFIX));
+    if (pointer === undefined) return false;
+    const target = safePath.resolve(gitRoot, pointer.slice(GITDIR_PREFIX.length).trim());
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- derived from a resolved corpus root
+    return existsSync(safePath.join(target, 'HEAD'));
+  } catch {
+    // Unreadable for any reason is the same answer as absent: do not select an
+    // enumerator that will throw on it.
+    return false;
+  }
+}
+
 export function gitExtentSelected(root: string): boolean {
-  const wantsGit = process.env[EXTENT_SOURCE_ENV] === EXTENT_SOURCE_GIT;
-  return wantsGit && gitFindRoot(root) !== null;
+  if (process.env[EXTENT_SOURCE_ENV] === EXTENT_SOURCE_FILESYSTEM) return false;
+
+  // ⭐ THE FALLBACK, and it is the reason this is a function of the ROOT rather
+  // than of the environment alone. `GitCrawlSource` THROWS when git cannot
+  // answer — deliberately, since an empty population is indistinguishable from
+  // an empty repository — so a default of "git" would turn every tree without a
+  // repository into a hard failure. A corpus synced from SharePoint, an
+  // extracted tarball, a plain documentation folder: no `.git` anywhere above
+  // it, and each must still scan. Answering `false` here routes them to
+  // `FilesystemCrawlSource`, and the command reports `extentSource: filesystem`
+  // — the enumerator that RAN, not the one that was asked for.
+  const gitRoot = gitFindRoot(root);
+  return gitRoot !== null && gitMarkerIsReadable(gitRoot);
 }

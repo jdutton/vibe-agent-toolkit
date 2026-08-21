@@ -60,7 +60,10 @@ describe('vat resources scan (integration)', () => {
     // stray `---` opener or a trailing second document fails exactly here.
     const parsed = JSON.parse(result.stdout) as Record<string, unknown>;
     expect(parsed.status).toBe('success');
-    expect(parsed.lane).toBe('walk');
+    // The projection lane is the default; this fixture has no `.git`, so it is
+    // the filesystem enumerator that runs under it.
+    expect(parsed.lane).toBe('projection');
+    expect(parsed.extentSource).toBe('filesystem');
     expect(Array.isArray(parsed.files)).toBe(true);
   });
 
