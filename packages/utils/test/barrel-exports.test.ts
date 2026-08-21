@@ -122,6 +122,7 @@ const BARREL_EXPORTS = [
   'recordCrawlPass',
   'recordRegistryPass',
   'recordSharedPass',
+  'removeScratchDir',
   'renderTemplate',
   'resetProjectRootCaches',
   'resolveAssetReference',

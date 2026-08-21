@@ -51,8 +51,8 @@ const suite = setupSyncTempDirSuite('lab-population');
 
 beforeAll(suite.beforeAll);
 beforeEach(suite.beforeEach);
-afterAll(() => {
-  suite.afterAll();
+afterAll(async () => {
+  await suite.afterAll();
   cleanupProbes();
 });
 

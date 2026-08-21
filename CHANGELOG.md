@@ -58,6 +58,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **(library) `removeScratchDir()` on `@vibe-agent-toolkit/utils`** — a best-effort temp-directory
+  teardown for test suites, which warns and returns instead of failing when removal errors or
+  outruns its own budget. A plain `rm` in an `afterAll` can fail a suite whose every assertion
+  passed, purely from machine contention; this cannot. `setupAsyncTempDirSuite` and
+  `setupSyncTempDirSuite` now use it, so their teardowns are bounded too — note that
+  `setupSyncTempDirSuite`'s `afterAll` is consequently `async` (a removal cannot be bounded without
+  a race, and `rmSync` cannot be raced). Its `beforeEach` and `getTempDir` stay synchronous.
+
 - **The resource projection** — a populated, queryable model of a project's documents, blobs, links
   and membership, replacing ad-hoc crawling as the substrate for the resource commands. `vat
   resources scan` gains `--format json` and two new fields, `lane` and `extentSource`, naming which

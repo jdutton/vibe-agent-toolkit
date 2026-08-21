@@ -6,6 +6,121 @@ import fs from 'node:fs/promises';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from './path-utils.js';
 
 /**
+ * How long a scratch-dir teardown may run before it gives up and warns.
+ *
+ * The value only has to be comfortably *under* vitest's 10s default hook
+ * timeout — that is the whole design. Sizing a teardown budget to beat
+ * contention is unprovable (see {@link removeScratchDir}); sizing it below a
+ * known constant is arithmetic.
+ */
+const SCRATCH_REMOVAL_BUDGET_MS = 4000;
+
+/** Knobs for {@link removeScratchDir}; both exist so the behaviour is testable. */
+export interface RemoveScratchDirOptions {
+  /** Deadline before the removal is abandoned. Default {@link SCRATCH_REMOVAL_BUDGET_MS}. */
+  readonly budgetMs?: number;
+  /** Where the give-up notice goes. Default `console.warn`. */
+  readonly onWarn?: (message: string) => void;
+}
+
+/**
+ * Delete a scratch directory as *best effort* — never failing the suite that
+ * created it, and never taking longer than its own budget to say so.
+ *
+ * ## Why this is not just `await rm(dir, { recursive: true, force: true })`
+ *
+ * A teardown hook that can redden a suite whose every assertion passed is a
+ * defect in the harness, not a flake. `packages/lab/test/instrument.test.ts`
+ * timed out here on two consecutive Windows runs with all 655 assertions
+ * green — only the cleanup lost.
+ *
+ * The measurement is what rules out the obvious fixes: that scratch dir holds
+ * 490 files / 378 KiB across 14 fixture git repos, and deletes in **59 ms**
+ * idle. Against vitest's 10,000 ms unit-hook budget that is 170x of headroom,
+ * and Windows blew through it anyway. No quantity of real work explains that,
+ * so the cause is scheduling — contention from a fully parallel `validate`,
+ * plus per-unlink antivirus on Windows — which is unbounded by nature. Hence:
+ *
+ * - **Raising `hookTimeout` cannot be argued.** You would be picking a number
+ *   to beat an unbounded quantity, when 10s of 170x headroom already lost. It
+ *   also punches a hole in the deliberate policy in `vitest.shared.ts` ("no
+ *   hookTimeout override here on purpose") for every unit hook, to fix one.
+ * - **`try`/`catch` around the `rm` cannot work.** A vitest hook timeout is a
+ *   race decided on the *timer* side; the hook's own catch never sees it. It
+ *   addresses a failure mode we did not observe and leaves the one we did.
+ * - **`maxRetries` alone makes it worse.** Retries target transient
+ *   `EPERM`/`EBUSY`, which fail *fast*; our failure was *slow*, and retry
+ *   backoff only adds to it. Kept below as a cheap inner win, not as the fix.
+ *
+ * So the deadline is taken away from vitest: the removal races a timer of our
+ * own, well inside the hook budget, and expiry is a warning rather than a
+ * failure. The hook therefore always resolves in time, which makes it
+ * *structurally* incapable of reddening a green suite on any machine at any
+ * load — rather than merely unlikely to.
+ *
+ * The cost, stated plainly: under pathological contention the directory
+ * survives in the OS temp dir, which the OS reclaims, and the warning names
+ * the path. An abandoned removal keeps running harmlessly in the background;
+ * it can never surface as an unhandled rejection because the only rejection
+ * handler is installed before the race.
+ *
+ * @param dir - Directory to remove. An empty string is a no-op, so a suite
+ *   whose `beforeAll` never ran can call this unconditionally.
+ * @param options - Deadline and warning sink
+ *
+ * @example
+ * ```typescript
+ * afterAll(async () => {
+ *   await removeScratchDir(scratch);
+ * });
+ * ```
+ */
+export async function removeScratchDir(
+  dir: string,
+  options: RemoveScratchDirOptions = {},
+): Promise<void> {
+  if (dir === '') return;
+
+  const budgetMs = options.budgetMs ?? SCRATCH_REMOVAL_BUDGET_MS;
+  const onWarn =
+    options.onWarn ??
+    ((message: string): void => {
+      console.warn(message);
+    });
+
+  // Latches on the first outcome so a removal that finishes (or fails) after
+  // the budget expired cannot log a second time into an already-finished suite.
+  let settled = false;
+  const giveUp = (reason: string): void => {
+    if (settled) return;
+    settled = true;
+    onWarn(`scratch dir left behind at ${dir}: ${reason}`);
+  };
+
+  const removal = fs
+    .rm(dir, { recursive: true, force: true, maxRetries: 2, retryDelay: 50 })
+    .then(() => {
+      settled = true;
+    })
+    .catch((error: unknown) => {
+      giveUp(error instanceof Error ? error.message : String(error));
+    });
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<void>((resolve) => {
+    timer = setTimeout(() => {
+      giveUp(`removal did not finish within ${budgetMs}ms`);
+      resolve();
+    }, budgetMs);
+    // Never hold the process open for a teardown nobody is waiting on.
+    timer.unref();
+  });
+
+  await Promise.race([removal, deadline]);
+  clearTimeout(timer);
+}
+
+/**
  * Get isolated test output directory for current test run
  *
  * Creates a unique directory under `packages/{packageName}/.test-output/{testType}/{runId}`
@@ -115,9 +230,7 @@ export function setupAsyncTempDirSuite(prefix: string): {
       suiteDir = await fs.mkdtemp(safePath.join(normalizedTmpdir(), `${prefix}-suite-`));
     },
     afterAll: async () => {
-      if (suiteDir) {
-        await fs.rm(suiteDir, { recursive: true, force: true });
-      }
+      await removeScratchDir(suiteDir);
     },
     beforeEach: async () => {
       testCounter++;
@@ -159,7 +272,10 @@ export function setupAsyncTempDirSuite(prefix: string): {
  */
 export function setupSyncTempDirSuite(prefix: string): {
   beforeAll: () => void;
-  afterAll: () => void;
+  // Async despite the "sync suite" name, deliberately: only the teardown is,
+  // because bounding a removal needs a race and `rmSync` cannot be raced. The
+  // parts a sync `it()` actually calls — `beforeEach`, `getTempDir` — stay sync.
+  afterAll: () => Promise<void>;
   beforeEach: () => void;
   afterEach: () => void;
   getTempDir: () => string;
@@ -172,10 +288,8 @@ export function setupSyncTempDirSuite(prefix: string): {
     beforeAll: () => {
       suiteDir = mkdtempSync(safePath.join(normalizedTmpdir(), `${prefix}-suite-`));
     },
-    afterAll: () => {
-      if (suiteDir) {
-        rmSync(suiteDir, { recursive: true, force: true });
-      }
+    afterAll: async () => {
+      await removeScratchDir(suiteDir);
     },
     beforeEach: () => {
       testCounter++;

@@ -24,10 +24,11 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- every path here is derived from a controlled mkdtemp scratch dir */
 
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 
 import {
   normalizedTmpdir,
+  removeScratchDir,
   resolveFromImportMeta,
   runGitOrThrow,
   safePath,
@@ -60,7 +61,11 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await rm(scratch, { recursive: true, force: true });
+  // Best-effort by design — this suite's 14 fixture git repos are what proved
+  // an unbounded teardown can redden a run whose every assertion passed. See
+  // `removeScratchDir` for the measurement and why the budget lives here
+  // rather than in `hookTimeout`.
+  await removeScratchDir(scratch);
 });
 
 /**
