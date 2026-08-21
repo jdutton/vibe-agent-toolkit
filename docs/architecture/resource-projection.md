@@ -113,20 +113,37 @@ column from `checksum` today; the constraint that matters for the *proposed* `re
 is that adding a content-key column there must not collapse it onto `checksum` — doing so would
 silently change cross-tree equality and break existing, shipped output.
 
-### Agentic conventions — proposed native modeling (🔷)
+### Agentic conventions — native modeling (✅ shipped, stage 4)
 
-The design models the agent-instruction surface as ordinary `resource_tags` rows rather than a
-bolt-on concept, once `resource_tags` exists. The organizing axis: files whose selection logic exists
-(conditionally-loaded, indexed by a description or glob the harness reads without opening the body)
-would carry a `loading` tag with values `always` / `selected` / `referenced`. `SKILL.md`, subagents,
-commands, and `.claude/rules/*` would be `selected`; `CLAUDE.md`/`AGENTS.md` and their `@` imports
-`always`; anything only reachable by a followed link, `referenced`. Extensible tagging is designed as
-a generalization of collections (already a shipped glob → name → schema mechanism) minus the schema —
-a project would declare `resources.tags.runbook: ["**/resources/*-runbook.md"]` in its config and get
-a tag with no plugin API and no new security surface. **None of this exists today** — there is no
-`tags` key in `packages/resources/src/schemas/project-config.ts`, and no `loading` tag anywhere in the
-codebase. A tag that recurs across adopters, once this ships, would be a candidate to graduate into a
-built-in with smarter detection.
+The agent-instruction surface is ordinary `resource_tags` rows rather than a bolt-on concept. The
+organizing axis: files whose selection logic exists (conditionally-loaded, indexed by a description
+or glob the harness reads without opening the body) carry a `loading` tag with values `always` /
+`selected` / `referenced`. `SKILL.md`, subagents and commands are `selected`; `CLAUDE.md` and
+`CLAUDE.local.md` are `always`; settings, manifests and READMEs are `referenced`.
+
+⚠️ **Two entries the earlier draft got wrong, both corrected against vendor documentation rather
+than against taste** (`packages/resources/src/projection/agentic-tags.ts` carries the
+`@vendor-claim` and the citations):
+
+- **`.claude/rules/*` are not uniformly `selected`.** A rule *without* `paths:` frontmatter loads
+  unconditionally, at the same priority as `.claude/CLAUDE.md`. The 53/53-carry-`paths:`
+  measurement that motivated `selected` is a **base rate, not a rule**, so the tag ships with no
+  `loading` value at all until something reads frontmatter.
+- **`AGENTS.md` is not `always`.** Claude Code reads `CLAUDE.md`, not `AGENTS.md`; the latter is
+  charged only where a `CLAUDE.md` imports it. Its class is a property of the import graph, so it
+  too ships with no `loading` value.
+
+`.claude/rules/`, `.claude/agents/` and `.claude/commands/` are all discovered **recursively**, and
+a plugin's components live at `<plugin>/agents/` rather than under `.claude/` — anchored to a
+directory holding `.claude-plugin/plugin.json`, because a bare "directory named `commands`" rule
+false-positives on every CLI in this monorepo.
+
+Extensible tagging is designed as a generalization of collections (already a shipped glob → name →
+schema mechanism) minus the schema — a project would declare
+`resources.tags.runbook: ["**/resources/*-runbook.md"]` in its config and get a tag with no plugin
+API and no new security surface. **That half does not exist yet**: there is no `tags` key in
+`packages/resources/src/schemas/project-config.ts`, so today the vocabulary is built-in only. A tag
+that recurs across adopters would be a candidate to graduate into a built-in with smarter detection.
 
 ### `routable` — membership is not traversability
 
@@ -251,11 +268,27 @@ cache, not a replacement for either layer.
   runtime, and export.
 - 🔷 **Proposed** (beyond stage 3): the git-lane and non-git-lane change-detection manifests from
   the scanning doc; the blob-SHA memo.
-- ⚠️ **Plumbed but never populated:** `resource_tags` has a schema, a contributor field, a merge
-  forwarder, an export key and store hydration — and **zero producers**; every contributor returns
-  `tags: []`. Emitting the agentic-convention vocabulary into it is stage 4, and it is a
-  *contributor*, not a schema change. A fully-typed table is not evidence of a populated one:
-  the schema validates, the export emits the key and the round trip agrees, all over an empty array.
+- ✅ **Shipped** (stage 4): `resource_tags` has a producer. `AgenticConventionContributor`
+  (`stratum: 'base'`, `readsBlobs: false`) classifies every realization by path and emits the
+  convention vocabulary plus a `loading` row; it is registered in the repo-wide lane after the
+  enumerator whose realizations it reads. It is a *contributor*, not a schema change — the table's
+  key `('resourceId','tag','value','source')` is unchanged. The six extent contributors still
+  return `tags: []`, which is the rule `git-extent.ts` states: tags are for classification
+  contributors.
+  - ⛔ **Three conventions carry no `loading` value, on purpose.** `rules-file` (Anthropic
+    documents that a rule *without* `paths:` frontmatter loads unconditionally, so the class is a
+    frontmatter fact and this lane declines to parse), `agents-md` (Claude Code reads `CLAUDE.md`,
+    not `AGENTS.md` — an `AGENTS.md` is charged only where a `CLAUDE.md` imports it, making the
+    class a property of the import graph), and every path matching nothing. A missing row is the
+    positive statement *"a path cannot answer this"*.
+  - `changeset`, `deferred-source`, `deferred-dest` and `entry-point` were dropped from the
+    vocabulary the earlier draft listed: the first belongs to the npm Changesets release tool that
+    no agent harness reads, and the other three are the skill packager's and a lens's outputs
+    rather than functions of a path.
+- ⚠️ **Populated but not yet consumed:** nothing reads `resource_tags`. The §7 always-loaded
+  context-budget check — the first named consumer — is unbuilt, and so is `lens_entry_points`,
+  which it would join against. A populated table is not evidence of a *useful* one any more than a
+  typed one was evidence of a populated one.
 
 > ✅ **The Zones revisions below have LANDED** — this note is kept as the record of what changed and
 > why, not as a warning about pending work. Zone modelling was originally deferred past population

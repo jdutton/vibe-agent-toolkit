@@ -90,6 +90,7 @@
 import { safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
 
 import { ContributorRegistry } from './contributor.js';
+import { AgenticConventionContributor } from './contributors/agentic-convention.js';
 import { DECLINE_IGNORED, FilesystemExtentContributor } from './contributors/filesystem-extent.js';
 import { crawlSourceFor, type CrawlSourceKind } from './crawl-source.js';
 import {
@@ -256,6 +257,17 @@ export async function buildResourcePopulation(options: {
   // registers the same class and DOES run the blob stage over what it keys.
   const filesystem = new FilesystemExtentContributor(() => source, 'deferred');
   registry.register(filesystem);
+
+  // AFTER the enumerator, and the order is load-bearing: `byStratum` returns
+  // registration order and the driver runs base contributors sequentially, each
+  // reading the base the previous ones grew. Registered first, this would
+  // classify an empty realization table and report a complete, empty extent —
+  // the same silent-success shape `ContributorRegistry.forKind` refuses.
+  //
+  // Safe in THIS lane specifically because it declares `readsBlobs: false`:
+  // `CONTENT_PARSING_SKIP` below is checked against that, and a blob reader
+  // registered here would be a loud error rather than a degraded extent.
+  registry.register(new AgenticConventionContributor());
 
   const projection = await populate({
     root,

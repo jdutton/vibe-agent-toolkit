@@ -448,6 +448,18 @@ export { blobReferencesFor } from './projection/blob-references.js';
 // output — this is the extent that sees what the git extent cannot.
 export { FilesystemExtentContributor } from './projection/contributors/filesystem-extent.js';
 
+// The agentic-convention classifier and its producer — the first contributor
+// that answers "what IS this file" rather than "does it exist", and the only
+// thing that puts rows in `resource_tags`.
+export { AgenticConventionContributor } from './projection/contributors/agentic-convention.js';
+export {
+  classifyPath,
+  LOADING_TAG,
+  pluginRootsFrom,
+  strongestLoading,
+} from './projection/agentic-tags.js';
+export type { AgenticTag, PluginRoots, TagLoading } from './projection/agentic-tags.js';
+
 // One crawl API, two implementations (scanning-and-caching §3.3): the walk, and
 // git plus a bounded walk of only what git cannot see. Same population, two cost
 // models — which is exactly what makes them differentially testable.
