@@ -22,9 +22,9 @@
  * whether this host can make symlinks at all rather than assume it.
  */
 
-import { symlinkSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, runGit, safePath } from '@vibe-agent-toolkit/utils';
+import { createSymlink, mkdirSyncReal, runGit, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 
 /** A regular file in the corpus: forward-slashed relative path → contents. */
 export type CorpusFiles = Readonly<Record<string, string>>;
@@ -791,18 +791,17 @@ export function materializeTrapCorpus(
  * @returns True when every symlink was created
  */
 function writeSymlinks(root: string, links: readonly CorpusSymlink[]): boolean {
-  try {
-    for (const link of links) {
-      const absolutePath = safePath.join(root, link.path);
-      mkdirSyncReal(safePath.resolve(absolutePath, '..'), { recursive: true });
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- target and path both come from the frozen literals above
-      symlinkSync(link.target, absolutePath, link.type);
-    }
-    return true;
-  } catch {
-    // Windows without Developer Mode or SeCreateSymbolicLinkPrivilege.
+  // Windows without Developer Mode or SeCreateSymbolicLinkPrivilege.
+  const cap = symlinkCapability();
+  if (!cap) {
     return false;
   }
+  for (const link of links) {
+    const absolutePath = safePath.join(root, link.path);
+    mkdirSyncReal(safePath.resolve(absolutePath, '..'), { recursive: true });
+    createSymlink(cap, link.target, absolutePath, link.type);
+  }
+  return true;
 }
 
 /**

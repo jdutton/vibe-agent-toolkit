@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { symlinkSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
@@ -7,12 +7,13 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { crawlDirectory, crawlDirectorySync } from '../../src/file-crawler.js';
 import { mkdirSyncReal, toForwardSlash } from '../../src/path-utils.js';
-import { canCreateSymlinks, setupSyncTempDirSuite } from '../../src/test-helpers.js';
+import { createSymlink, setupSyncTempDirSuite, symlinkCapability } from '../../src/test-helpers.js';
 import { createGitRepo } from '../test-helpers.js';
 
 const GITIGNORE = '.gitignore';
 const CLAUDE_RULE = '/.claude/rules/house-style.md';
 const GITHUB_DOC = '/.github/CONTRIBUTING.md';
+const NO_SYMLINKS = 'SKIPPED: host cannot create symlinks (needs Developer Mode on Windows)';
 
 /**
  * Create tracked markdown inside two dot-directories — the shape picomatch's
@@ -25,6 +26,23 @@ function createDotDirStructure(dir: string): void {
   mkdirSyncReal(safePath.join(dir, '.github'));
   writeFileSync(safePath.join(dir, GITHUB_DOC.slice(1)), '# Contributing');
   /* eslint-enable security/detect-non-literal-fs-filename */
+}
+
+/**
+ * Symlinks `testDir/link.md` to `testDir/docs/guide.md`. Returns false (after
+ * warning) when the host cannot create symlinks, so the caller can bail out.
+ */
+function createGuideSymlink(testDir: string): boolean {
+  const targetFile = safePath.join(testDir, 'docs', 'guide.md');
+  const symlinkPath = safePath.join(testDir, 'link.md');
+
+  const cap = symlinkCapability();
+  if (!cap) {
+    console.warn(NO_SYMLINKS);
+    return false;
+  }
+  createSymlink(cap, targetFile, symlinkPath);
+  return true;
 }
 
 /**
@@ -223,18 +241,7 @@ describe('file-crawler', () => {
     describe('symlink handling', () => {
       it('should skip symlinks by default', () => {
         createTestStructure(testDir);
-
-        // Create a symlink to a markdown file
-        const targetFile = safePath.join(testDir, 'docs', 'guide.md');
-        const symlinkPath = safePath.join(testDir, 'link.md');
-
-        try {
-          // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is controlled temp directory
-          symlinkSync(targetFile, symlinkPath);
-        } catch {
-          // Skip test if symlinks not supported (Windows without admin)
-          return;
-        }
+        if (!createGuideSymlink(testDir)) return;
 
         const files = crawlDirectorySync({
           baseDir: testDir,
@@ -249,17 +256,7 @@ describe('file-crawler', () => {
 
       it('should follow symlinks when followSymlinks=true', () => {
         createTestStructure(testDir);
-
-        const targetFile = safePath.join(testDir, 'docs', 'guide.md');
-        const symlinkPath = safePath.join(testDir, 'link.md');
-
-        try {
-          // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is controlled temp directory
-          symlinkSync(targetFile, symlinkPath);
-        } catch {
-          // Skip test if symlinks not supported
-          return;
-        }
+        if (!createGuideSymlink(testDir)) return;
 
         const files = crawlDirectorySync({
           baseDir: testDir,
@@ -272,8 +269,9 @@ describe('file-crawler', () => {
       });
 
       it('should enumerate each real file once when a directory symlink loops', () => {
-        if (!canCreateSymlinks(testDir)) {
-          console.warn('SKIPPED: host cannot create symlinks (needs Developer Mode on Windows)');
+        const cap = symlinkCapability();
+        if (!cap) {
+          console.warn(NO_SYMLINKS);
           return;
         }
 
@@ -282,8 +280,7 @@ describe('file-crawler', () => {
         mkdirSyncReal(dir);
         // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is a controlled temp directory
         writeFileSync(safePath.join(dir, 'note.md'), '# note');
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is a controlled temp directory
-        symlinkSync(dir, safePath.join(dir, 'loop'), 'dir');
+        createSymlink(cap, dir, safePath.join(dir, 'loop'), 'dir');
 
         const files = crawlDirectorySync({
           baseDir: testDir,
@@ -303,8 +300,9 @@ describe('file-crawler', () => {
       });
 
       it('should enumerate a directory reached by two symlinks once', () => {
-        if (!canCreateSymlinks(testDir)) {
-          console.warn('SKIPPED: host cannot create symlinks (needs Developer Mode on Windows)');
+        const cap = symlinkCapability();
+        if (!cap) {
+          console.warn(NO_SYMLINKS);
           return;
         }
 
@@ -314,10 +312,8 @@ describe('file-crawler', () => {
         mkdirSyncReal(real);
         // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is a controlled temp directory
         writeFileSync(safePath.join(real, 'doc.md'), '# doc');
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is a controlled temp directory
-        symlinkSync(real, safePath.join(testDir, 'alias-one'), 'dir');
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is a controlled temp directory
-        symlinkSync(real, safePath.join(testDir, 'alias-two'), 'dir');
+        createSymlink(cap, real, safePath.join(testDir, 'alias-one'), 'dir');
+        createSymlink(cap, real, safePath.join(testDir, 'alias-two'), 'dir');
 
         const files = crawlDirectorySync({
           baseDir: testDir,

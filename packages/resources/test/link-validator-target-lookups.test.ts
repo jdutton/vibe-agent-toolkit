@@ -39,10 +39,11 @@
 import fs from 'node:fs/promises';
 
 import {
-  canCreateSymlinks,
+  createSymlinkAsync,
   FsLookupCache,
   safePath,
   setupAsyncTempDirSuite,
+  symlinkCapability,
 } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -77,12 +78,13 @@ async function createFixture(tempDir: string): Promise<void> {
   await fs.writeFile(safePath.join(tempDir, FILE_ENTRY), '# Reference\n', 'utf-8');
   await fs.mkdir(safePath.join(tempDir, DIR_ENTRY), { recursive: true });
   await fs.writeFile(safePath.join(tempDir, ACCENTED_ON_DISK), '# Accented\n', 'utf-8');
-  if (canCreateSymlinks(tempDir)) {
+  const cap = symlinkCapability();
+  if (cap) {
     // No `try`/`catch`: guarded by the same probe that skips the only test that
     // needs the link, so a throw here is a real fixture failure and must
     // surface. Swallowing it would leave that test asserting `null` against a
     // link resolving to nothing — passing, or failing, for the wrong reason.
-    await fs.symlink(safePath.join(tempDir, 'nowhere.md'), safePath.join(tempDir, DANGLING_ENTRY));
+    await createSymlinkAsync(cap, safePath.join(tempDir, 'nowhere.md'), safePath.join(tempDir, DANGLING_ENTRY));
   }
 }
 
@@ -242,7 +244,7 @@ describe('validateLink target lookups', () => {
     // Windows with Developer Mode on can create symlinks, and a platform test
     // declines coverage it could have had. Report the skip rather than
     // returning early — a silently no-op'd case reads as a passing test.
-    if (!canCreateSymlinks(tempDir)) skip();
+    if (!symlinkCapability()) skip();
 
     // The case the removed stat used to have to survive: the parent listing
     // names the entry, so the link resolves, while stat'ing the path itself

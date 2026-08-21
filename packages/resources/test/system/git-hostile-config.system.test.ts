@@ -78,14 +78,16 @@
 
 /* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture trees */
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
 import {
+  createSymlink,
   GitTracker,
   mkdirSyncReal,
   normalizedTmpdir,
   resetProjectRootCaches,
   safePath,
+  symlinkCapability,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -190,8 +192,8 @@ const HOST_GATES: Record<'utf16' | 'filter' | 'symlinks' | 'lfs', HostGate> = {
       + ' here demonstrates an unsound hint hit at all',
   },
   symlinks: {
-    requirement: 'a POSIX host',
-    met: !IS_WINDOWS,
+    requirement: 'the ability to create symlinks',
+    met: symlinkCapability() !== null,
     lost: 'section 5 — what the extents do with committed symlinks',
   },
   lfs: {
@@ -1044,14 +1046,19 @@ describe.skipIf(!HOST_GATES.symlinks.met)(gatedTitle('committed symlinks', HOST_
   let gitExtentRows: readonly ResourceRealizationRow[];
 
   beforeAll(async () => {
+    // symlinkCapability() is memoized, and the describe.skipIf above already
+    // proved it non-null (via HOST_GATES.symlinks) before this beforeAll ever runs.
+    const cap = symlinkCapability();
+    if (!cap) throw new Error('unreachable: describe.skipIf already gated on HOST_GATES.symlinks');
+
     fixture = newRepo('vat-hostile-symlink-');
     writeFileSync(safePath.join(fixture.base, 'outside.md'), '# outside\n');
     plant(fixture.repo, TARGET, '# target\n');
-    symlinkSync(TARGET, safePath.join(fixture.repo, LINK_INSIDE));
-    symlinkSync(safePath.join(fixture.base, 'outside.md'), safePath.join(fixture.repo, LINK_OUTSIDE));
-    symlinkSync('nowhere.md', safePath.join(fixture.repo, LINK_BROKEN));
-    symlinkSync(LOOP_B, safePath.join(fixture.repo, LOOP_A));
-    symlinkSync(LOOP_A, safePath.join(fixture.repo, LOOP_B));
+    createSymlink(cap, TARGET, safePath.join(fixture.repo, LINK_INSIDE));
+    createSymlink(cap, safePath.join(fixture.base, 'outside.md'), safePath.join(fixture.repo, LINK_OUTSIDE));
+    createSymlink(cap, 'nowhere.md', safePath.join(fixture.repo, LINK_BROKEN));
+    createSymlink(cap, LOOP_B, safePath.join(fixture.repo, LOOP_A));
+    createSymlink(cap, LOOP_A, safePath.join(fixture.repo, LOOP_B));
     fixture.git('add', '-A');
     fixture.git('commit', '-qm', 'fixture');
 

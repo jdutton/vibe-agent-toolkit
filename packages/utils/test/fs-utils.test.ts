@@ -23,7 +23,7 @@ import type {
   SiblingNamesTable,
 } from '../src/fs-utils.js';
 import { toForwardSlash } from '../src/path-core.js';
-import { canCreateSymlinks, setupAsyncTempDirSuite } from '../src/test-helpers.js';
+import { createSymlinkAsync, setupAsyncTempDirSuite, symlinkCapability } from '../src/test-helpers.js';
 
 import { setupNestedDirectory } from './test-helpers.js';
 
@@ -330,10 +330,10 @@ describe('fs-utils', () => {
     it('reports a dangling symlink as absent, matching existsSync rather than lstat', async ({ skip }) => {
       // Windows CI agents often lack the symlink privilege. Say so rather than
       // no-op: a silently skipped symlink case reads as a passing test.
-      if (!canCreateSymlinks(tempDir)) skip();
+      const cap = symlinkCapability() ?? skip();
 
       const dangling = safePath.join(tempDir, 'dangling-link');
-      await fs.symlink(safePath.join(tempDir, 'no-such-target.txt'), dangling);
+      await createSymlinkAsync(cap, safePath.join(tempDir, 'no-such-target.txt'), dangling);
       const cache = new FsLookupCache();
 
       // `existsSync` follows the link, so a dangling one reads as absent. The
@@ -391,14 +391,16 @@ describe('fs-utils', () => {
      * the walk must not fabricate containment for paths that genuinely escape.
      */
     const setupSymlinkedRoot = async (
-      base: string
+      base: string,
+      skip: () => never,
     ): Promise<{ realRoot: string; canonicalRealRoot: string; linkRoot: string; outside: string }> => {
+      const cap = symlinkCapability() ?? skip();
       const realRoot = safePath.join(base, 'real-root');
       const linkRoot = safePath.join(base, 'link-root');
       const outside = safePath.join(base, 'outside');
       await fs.mkdir(safePath.join(realRoot, DOCS), { recursive: true });
       await fs.mkdir(outside, { recursive: true });
-      await fs.symlink(realRoot, linkRoot, 'dir');
+      await createSymlinkAsync(cap, realRoot, linkRoot, 'dir');
       return {
         realRoot,
         canonicalRealRoot: toForwardSlash(nodeFs.realpathSync(realRoot)),
@@ -412,8 +414,7 @@ describe('fs-utils', () => {
     }) => {
       // Windows CI agents often lack the symlink privilege. Say so rather than
       // no-op: a silently skipped symlink case reads as a passing test.
-      if (!canCreateSymlinks(tempDir)) skip();
-      const { canonicalRealRoot, linkRoot } = await setupSymlinkedRoot(tempDir);
+      const { canonicalRealRoot, linkRoot } = await setupSymlinkedRoot(tempDir, skip);
       const missing = safePath.join(linkRoot, DOCS, GONE);
 
       const answer = await new FsLookupCache().realpath(missing);
@@ -428,8 +429,7 @@ describe('fs-utils', () => {
     it('walks through several missing levels to reach the ancestor that exists', async ({
       skip,
     }) => {
-      if (!canCreateSymlinks(tempDir)) skip();
-      const { canonicalRealRoot, linkRoot } = await setupSymlinkedRoot(tempDir);
+      const { canonicalRealRoot, linkRoot } = await setupSymlinkedRoot(tempDir, skip);
       const missing = safePath.join(linkRoot, DOCS, 'nope', 'deeper', GONE);
 
       const answer = await new FsLookupCache().realpath(missing);
@@ -441,8 +441,7 @@ describe('fs-utils', () => {
     });
 
     it('leaves an existing file byte-identical to realpathSync', async ({ skip }) => {
-      if (!canCreateSymlinks(tempDir)) skip();
-      const { linkRoot } = await setupSymlinkedRoot(tempDir);
+      const { linkRoot } = await setupSymlinkedRoot(tempDir, skip);
       const present = safePath.join(linkRoot, DOCS, 'here.md');
       await fs.writeFile(present, '');
 
@@ -456,11 +455,10 @@ describe('fs-utils', () => {
     it('keeps an existing symlink that points outside the root resolving outside it', async ({
       skip,
     }) => {
-      if (!canCreateSymlinks(tempDir)) skip();
-      const { canonicalRealRoot, realRoot, linkRoot, outside } = await setupSymlinkedRoot(tempDir);
+      const { canonicalRealRoot, realRoot, linkRoot, outside } = await setupSymlinkedRoot(tempDir, skip);
       const escapeTarget = safePath.join(outside, 'data.md');
       await fs.writeFile(escapeTarget, '');
-      await fs.symlink(escapeTarget, safePath.join(realRoot, 'escape.md'));
+      await createSymlinkAsync(cap, escapeTarget, safePath.join(realRoot, 'escape.md'));
 
       const answer = await new FsLookupCache().realpath(safePath.join(linkRoot, 'escape.md'));
 
@@ -471,9 +469,8 @@ describe('fs-utils', () => {
     it('keeps a missing file behind an escaping directory symlink resolving outside the root', async ({
       skip,
     }) => {
-      if (!canCreateSymlinks(tempDir)) skip();
-      const { canonicalRealRoot, realRoot, linkRoot, outside } = await setupSymlinkedRoot(tempDir);
-      await fs.symlink(outside, safePath.join(realRoot, 'outlink'), 'dir');
+      const { canonicalRealRoot, realRoot, linkRoot, outside } = await setupSymlinkedRoot(tempDir, skip);
+      await createSymlinkAsync(cap, outside, safePath.join(realRoot, 'outlink'), 'dir');
       const missing = safePath.join(linkRoot, 'outlink', GONE);
 
       const answer = await new FsLookupCache().realpath(missing);
@@ -528,8 +525,7 @@ describe('fs-utils', () => {
     it('shares one in-flight promise and canonicalizes the ancestor through the memo', async ({
       skip,
     }) => {
-      if (!canCreateSymlinks(tempDir)) skip();
-      const { linkRoot } = await setupSymlinkedRoot(tempDir);
+      const { linkRoot } = await setupSymlinkedRoot(tempDir, skip);
       const missing = safePath.join(linkRoot, DOCS, GONE);
       const cache = new FsLookupCache();
       const spy = vi.spyOn(nodeFs, 'realpath');
@@ -1107,12 +1103,12 @@ describe('fs-utils', () => {
     }) => {
       // Windows CI agents often lack the symlink privilege. Say so rather than
       // no-op: a silently skipped symlink case reads as a passing test.
-      if (!canCreateSymlinks(tempDir)) skip();
+      const cap = symlinkCapability() ?? skip();
 
       const targetPath = safePath.join(tempDir, 'Target.txt');
       const linkPath = safePath.join(tempDir, 'Link.txt');
       await fs.writeFile(targetPath, '');
-      await fs.symlink(targetPath, linkPath);
+      await createSymlinkAsync(cap, targetPath, linkPath);
 
       const table = await fillRealpaths([linkPath], new FsLookupCache());
 

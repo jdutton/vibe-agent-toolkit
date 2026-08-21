@@ -23,6 +23,7 @@
  * against the unfixed wrapper.
  */
 
+import { createSymlink, type SymlinkCapability, symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, it } from 'vitest';
 
 import {
@@ -50,9 +51,10 @@ const CLI_SCOPE = '@vibe-agent-toolkit';
 /**
  * Windows needs elevation or developer mode to create directory symlinks, and
  * pnpm's layout IS symlinks — without them the fixture is not a pnpm layout and
- * would assert nothing.
+ * would assert nothing. Probed rather than gated on raw platform, so this also
+ * runs on an elevated/Developer-Mode Windows host instead of skipping outright.
  */
-const NO_SYMLINKS = process.platform === 'win32';
+const symlinkCap = symlinkCapability();
 
 let tempDir: string;
 let adopterDir: string;
@@ -76,7 +78,7 @@ function writeJson(filePath: string, value: object): void {
  * Note what is ABSENT: `adopter/node_modules/@vibe-agent-toolkit/`. That absence
  * is the bug's precondition, and it is asserted below rather than left implied.
  */
-function buildPnpmLayout(root: string): void {
+function buildPnpmLayout(root: string, cap: SymlinkCapability): void {
   const pnpmDir = safePath.join(root, NODE_MODULES, '.pnpm');
   const umbrellaModules = safePath.join(pnpmDir, `${UMBRELLA_PKG}@${UMBRELLA_VERSION}`, NODE_MODULES);
   const cliModules = safePath.join(pnpmDir, `@vibe-agent-toolkit+cli@${CLI_VERSION}`, NODE_MODULES);
@@ -107,30 +109,32 @@ function buildPnpmLayout(root: string): void {
 
   // Only the umbrella is linked at top level — the CLI deliberately is not.
   fs.mkdirSync(safePath.join(umbrellaModules, CLI_SCOPE), { recursive: true });
-  fs.symlinkSync(
+  createSymlink(
+    cap,
     safePath.join('..', '..', '..', `@vibe-agent-toolkit+cli@${CLI_VERSION}`, NODE_MODULES, CLI_PKG),
     safePath.join(umbrellaModules, CLI_SCOPE, 'cli'),
   );
-  fs.symlinkSync(
+  createSymlink(
+    cap,
     safePath.join('.pnpm', `${UMBRELLA_PKG}@${UMBRELLA_VERSION}`, NODE_MODULES, UMBRELLA_PKG),
     safePath.join(root, NODE_MODULES, UMBRELLA_PKG),
   );
 }
 
 beforeAll(() => {
-  if (NO_SYMLINKS) return;
+  if (!symlinkCap) return;
   tempDir = createTestTempDir('vat-pnpm-resolution-');
   adopterDir = safePath.join(tempDir, 'adopter');
   fs.mkdirSync(adopterDir, { recursive: true });
-  buildPnpmLayout(adopterDir);
+  buildPnpmLayout(adopterDir, symlinkCap);
 });
 
 afterAll(() => {
-  if (NO_SYMLINKS || !tempDir) return;
+  if (!symlinkCap || !tempDir) return;
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
-describe.skipIf(NO_SYMLINKS)('vat wrapper local-install resolution under pnpm', () => {
+describe.skipIf(!symlinkCap)('vat wrapper local-install resolution under pnpm', () => {
   // The bug's precondition. If a future pnpm changes this, these tests would go
   // green for a reason unrelated to the fix, so it is asserted rather than assumed.
   it('fixture has no top-level @vibe-agent-toolkit directory (pnpm isolated layout)', () => {

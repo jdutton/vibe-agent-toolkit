@@ -969,6 +969,52 @@ const NO_UNIX_SHELL_COMMANDS_CASES: RuleCases = {
   ],
 };
 
+/**
+ * `no-bare-symlink-in-tests` fires only INSIDE test files (`isTestFile`) — the
+ * opposite polarity of `no-unix-shell-commands` above: a bare `symlinkSync()`
+ * is unremarkable in production code (there is no capability wrapper to route
+ * it through there) and only a Windows landmine inside a test that skipped the
+ * probe. No auto-fix: the replacement needs a capability token threaded from a
+ * probe call, a placement judgment a mechanical fixer cannot make.
+ *
+ * The exempt path deliberately ends in `.test.ts` (a real backlog entry, not
+ * the implementation file) so the anchoring decoy below actually exercises
+ * `exempt-path-matcher.cjs` rather than being filtered out by `isTestFile`
+ * first for an unrelated reason.
+ */
+const SYMLINK_TEST_FILE = 'packages/cli/test/example.test.ts';
+const SYMLINK_EXEMPT = 'packages/resources/test/resolve-local-href.test.ts';
+const SYMLINK_SYNC_NAMED = "import { symlinkSync } from 'node:fs';\nsymlinkSync(a, b);";
+const SYMLINK_SYNC_MEMBER = "import fs from 'node:fs';\nfs.symlinkSync(a, b);";
+const SYMLINK_ASYNC_MEMBER = "import fs from 'node:fs/promises';\nawait fs.symlink(a, b);";
+const SYMLINK_ASYNC_NAMED = "import { symlink } from 'node:fs/promises';\nawait symlink(a, b);";
+const SYMLINK_ASYNC_CHAINED_MEMBER = "import fs from 'node:fs';\nawait fs.promises.symlink(a, b);";
+const NO_BARE_SYMLINK_CASES: RuleCases = {
+  valid: [
+    // Not a test file at all — production code has no wrapper to route through.
+    { code: SYMLINK_SYNC_NAMED, filename: LINTED_FILE, options: [{ exemptFiles: [SYMLINK_EXEMPT] }] },
+    { code: SYMLINK_SYNC_NAMED, filename: SYMLINK_EXEMPT, options: [{ exemptFiles: [SYMLINK_EXEMPT] }] },
+    { code: SYMLINK_SYNC_NAMED, filename: `/Users/dev/vat/${SYMLINK_EXEMPT}`, options: [{ exemptFiles: [SYMLINK_EXEMPT] }] },
+    // A same-named method on an unrelated receiver is not this module's call.
+    {
+      code: "const env = { symlinkSync: () => {} };\nenv.symlinkSync();",
+      filename: SYMLINK_TEST_FILE,
+      options: [{ exemptFiles: [SYMLINK_EXEMPT] }],
+    },
+  ],
+  invalid: [
+    { code: SYMLINK_SYNC_NAMED, filename: SYMLINK_TEST_FILE, options: [{ exemptFiles: [SYMLINK_EXEMPT] }], errors: [{ messageId: 'noBareSymlink' }] },
+    { code: SYMLINK_SYNC_MEMBER, filename: SYMLINK_TEST_FILE, options: [{ exemptFiles: [SYMLINK_EXEMPT] }], errors: [{ messageId: 'noBareSymlink' }] },
+    { code: SYMLINK_ASYNC_MEMBER, filename: SYMLINK_TEST_FILE, options: [{ exemptFiles: [SYMLINK_EXEMPT] }], errors: [{ messageId: 'noBareSymlink' }] },
+    { code: SYMLINK_ASYNC_NAMED, filename: SYMLINK_TEST_FILE, options: [{ exemptFiles: [SYMLINK_EXEMPT] }], errors: [{ messageId: 'noBareSymlink' }] },
+    { code: SYMLINK_ASYNC_CHAINED_MEMBER, filename: SYMLINK_TEST_FILE, options: [{ exemptFiles: [SYMLINK_EXEMPT] }], errors: [{ messageId: 'noBareSymlink' }] },
+    // DECOY — same basename as the exempt entry, different directory: must still fire.
+    { code: SYMLINK_SYNC_NAMED, filename: 'packages/other/test/resolve-local-href.test.ts', options: [{ exemptFiles: [SYMLINK_EXEMPT] }], errors: [{ messageId: 'noBareSymlink' }] },
+    // UNCONFIGURED — with no `exemptFiles` option nothing is exempt, including the backlog path.
+    { code: SYMLINK_SYNC_NAMED, filename: SYMLINK_EXEMPT, errors: [{ messageId: 'noBareSymlink' }] },
+  ],
+};
+
 const SUITES: readonly RuleSuite[] = [
   { name: 'no-raw-text-decode', cases: NO_RAW_TEXT_DECODE_CASES },
   { name: 'no-url-pathname-for-fs', cases: NO_URL_PATHNAME_FOR_FS_CASES },
@@ -978,6 +1024,7 @@ const SUITES: readonly RuleSuite[] = [
   { name: 'no-unsafe-root-join', cases: NO_UNSAFE_ROOT_JOIN_CASES },
   { name: 'require-justified-skip', cases: REQUIRE_JUSTIFIED_SKIP_CASES },
   { name: 'no-unix-shell-commands', cases: NO_UNIX_SHELL_COMMANDS_CASES },
+  { name: 'no-bare-symlink-in-tests', cases: NO_BARE_SYMLINK_CASES },
   { name: PATH_FACTORY_RULE, cases: pathFunctionRuleCases('join') },
   { name: RULE.resolve, cases: pathFunctionRuleCases('resolve') },
   { name: RULE.relative, cases: pathFunctionRuleCases('relative') },

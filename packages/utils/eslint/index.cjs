@@ -53,6 +53,7 @@ const rules = {
   'no-raw-text-decode': require('./rules/no-raw-text-decode.cjs'),
   'no-self-package-import': require('./rules/no-self-package-import.cjs'),
   'require-justified-skip': require('./rules/require-justified-skip.cjs'),
+  'no-bare-symlink-in-tests': require('./rules/no-bare-symlink-in-tests.cjs'),
 };
 
 /**
@@ -119,6 +120,14 @@ const RECOMMENDED_EXCLUDE = new Set([
   // `vat-example-cat-agents`, every one of them correct. It ships in `rules`, and
   // `eslint.config.js` generates one scoped block per workspace package.
   'no-self-package-import',
+  // Excluded because its message names a vitest-specific idiom (`skip()` from
+  // the per-test context) and its replacement — `createSymlink()` /
+  // `createSymlinkAsync()` / `symlinkCapability()` — lives on THIS package's
+  // own `./testing` subpath rather than on a seam every consumer already has.
+  // An adopter using a different test runner, or no symlink-heavy tests at
+  // all, should not silently inherit an opinion about vitest control flow.
+  // VAT enables it explicitly, scoped to its own test-file convention.
+  'no-bare-symlink-in-tests',
 ]);
 
 /**

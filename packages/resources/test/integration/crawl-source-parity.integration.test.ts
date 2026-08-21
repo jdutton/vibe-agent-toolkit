@@ -32,14 +32,16 @@
  */
 
 /* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import {
+  createSymlink,
   GitTracker,
   mkdirSyncReal,
   normalizedTmpdir,
   runGitOrThrow,
   safePath,
+  symlinkCapability,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -436,15 +438,22 @@ describe('the filesystem extent is unchanged by which source enumerated it', () 
  * and because an embedded repository makes `git add` noisy enough that mixing it
  * into the main tree would obscure what that tree is for.
  */
-describe.skipIf(process.platform === 'win32')('entries whose OID is not file bytes', () => {
+// Gated on the real capability rather than raw platform, so this also runs on an
+// elevated/Developer-Mode Windows host instead of skipping outright.
+describe.skipIf(!symlinkCapability())('entries whose OID is not file bytes', () => {
   let linkRoot = '';
 
   beforeAll(async () => {
     linkRoot = toForwardSlash(mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-crawl-modes-')));
 
+    // symlinkCapability() is memoized, and the describe.skipIf above already
+    // proved it non-null before this beforeAll ever runs.
+    const cap = symlinkCapability();
+    if (!cap) throw new Error('unreachable: describe.skipIf already gated on symlinkCapability()');
+
     gitIn(linkRoot, ['init', '-b', 'main']);
     writeIn(linkRoot, 'target.md', '# the real file\n');
-    symlinkSync('target.md', safePath.resolve(linkRoot, 'link.md'));
+    createSymlink(cap, 'target.md', safePath.resolve(linkRoot, 'link.md'));
 
     // An embedded repository: `git add` records it as a gitlink (mode 160000)
     // exactly as a registered submodule would, without the remote a real

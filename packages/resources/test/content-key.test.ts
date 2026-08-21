@@ -13,9 +13,9 @@
 
 /* eslint-disable security/detect-non-literal-fs-filename -- every path derives from a mkdtemp root created here. */
 
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
-import { canCreateSymlinks, mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { createSymlink, mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -250,7 +250,8 @@ describe('readContentWithKey', () => {
     writeFileSync(safePath.join(subA, 'target.md'), 'AAA\n', 'utf-8');
     writeFileSync(safePath.join(subB, 'target.md'), 'BBB\n', 'utf-8');
 
-    if (!canCreateSymlinks(dir)) {
+    const cap = symlinkCapability();
+    if (!cap) {
       // Windows without Developer Mode or SeCreateSymbolicLinkPrivilege. Say so
       // rather than passing silently — a green that never ran is the failure
       // mode this whole suite exists to avoid.
@@ -259,8 +260,8 @@ describe('readContentWithKey', () => {
     }
 
     // Identical target STRING in both directories, different resolved bytes.
-    symlinkSync('target.md', safePath.join(subA, 'link.md'));
-    symlinkSync('target.md', safePath.join(subB, 'link.md'));
+    createSymlink(cap, 'target.md', safePath.join(subA, 'link.md'));
+    createSymlink(cap, 'target.md', safePath.join(subB, 'link.md'));
 
     const [a, b] = await Promise.all([
       readContentWithKey(safePath.join(subA, 'link.md'), 'markdown'),

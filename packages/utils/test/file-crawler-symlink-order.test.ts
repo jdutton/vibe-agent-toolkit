@@ -1,11 +1,11 @@
 import type fs from 'node:fs';
-import { symlinkSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { crawlDirectorySync } from '../src/file-crawler.js';
 import { mkdirSyncReal, safePath, toForwardSlash } from '../src/path-utils.js';
-import { canCreateSymlinks, setupSyncTempDirSuite } from '../src/test-helpers.js';
+import { createSymlink, setupSyncTempDirSuite, symlinkCapability } from '../src/test-helpers.js';
 
 /**
  * `readdirSync` order is filesystem-defined, not alphabetical — so a real
@@ -68,7 +68,8 @@ describe('file-crawler: symlink-vs-real-directory dedup ordering', () => {
   });
 
   it('keeps a directory contents under its REAL name even when readdir lists the symlink alias first', () => {
-    if (!canCreateSymlinks(testDir)) {
+    const cap = symlinkCapability();
+    if (!cap) {
       console.warn('SKIPPED: host cannot create symlinks (needs Developer Mode on Windows)');
       return;
     }
@@ -78,8 +79,7 @@ describe('file-crawler: symlink-vs-real-directory dedup ordering', () => {
     mkdirSyncReal(realDir);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is a controlled temp directory
     writeFileSync(safePath.join(realDir, 'file.md'), '# file');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is a controlled temp directory
-    symlinkSync(realDir, safePath.join(testDir, 'alias'), 'dir');
+    createSymlink(cap, realDir, safePath.join(testDir, 'alias'), 'dir');
 
     // Force readdirSync(testDir) to list `alias` before `real-dir`,
     // regardless of what the real filesystem's order happens to be.

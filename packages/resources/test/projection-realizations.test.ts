@@ -1,7 +1,7 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
-import { mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 
-import { canCreateSymlinks, GitTracker, mkdirSyncReal, normalizedTmpdir, runGitOrThrow, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { createSymlink, GitTracker, mkdirSyncReal, normalizedTmpdir, runGitOrThrow, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { RunContentCache } from '../src/projection/content-cache.js';
@@ -125,9 +125,9 @@ describe('collectRealization', () => {
     // which CI agents and most dev boxes lack — `symlinkSync` throws EPERM
     // there. Skip loudly rather than no-op: a silently skipped symlink case
     // reads as a passing test. Same gate `fs-utils.test.ts` already uses.
-    if (!canCreateSymlinks(root)) skip();
+    const cap = symlinkCapability() ?? skip();
 
-    symlinkSync(safePath.join(root, NESTED_RELATIVE), safePath.join(root, 'alias.md'));
+    createSymlink(cap, safePath.join(root, NESTED_RELATIVE), safePath.join(root, 'alias.md'));
 
     const row = await realize('alias.md');
 
@@ -137,9 +137,9 @@ describe('collectRealization', () => {
   });
 
   it('reports a dangling symlink as present but unresolving, with no bytes to key', async ({ skip }) => {
-    if (!canCreateSymlinks(root)) skip();
+    const cap = symlinkCapability() ?? skip();
 
-    symlinkSync(safePath.join(root, NOWHERE), safePath.join(root, 'dangling.md'));
+    createSymlink(cap, safePath.join(root, NOWHERE), safePath.join(root, 'dangling.md'));
 
     const row = await realize('dangling.md');
 
@@ -361,10 +361,10 @@ describe('relativize', () => {
 
 describe('realPathOrNull', () => {
   it('resolves a symlink to its target rather than reporting the link', ({ skip }) => {
-    if (!canCreateSymlinks(root)) skip();
+    const cap = symlinkCapability() ?? skip();
 
     const alias = safePath.join(root, 'alias.md');
-    symlinkSync(safePath.join(root, NESTED_RELATIVE), alias);
+    createSymlink(cap, safePath.join(root, NESTED_RELATIVE), alias);
 
     expect(realPathOrNull(alias)).toBe(realPathOrNull(safePath.join(root, NESTED_RELATIVE)));
   });

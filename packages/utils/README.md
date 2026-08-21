@@ -27,7 +27,7 @@ The last two columns are the ones that matter when choosing. **"Resolves with ze
 | `./zod` | `ZodTypeNames`, `getZodTypeName`, `isZodType`, `unwrapZodType`, `isZodOptional`, `isZodNullable` | **none** | — | **yes** |
 | `./glob` | `isGlob`, static base extraction, magic remainder | `path` only | — | **yes** |
 | `./fs` | `normalizePath`, `normalizedTmpdir`, `mkdirSyncReal`, `resolveFromImportMeta`, `dynamicImportPath`, `copyDirectory`, `fillSiblingNames`, `classifyFilenameCaseFrom`, `FsLookupCache`, `readTextContent`, `readTextContentSync` | `fs`, `fs/promises`, `os`, `path`, `url` | — | **yes** |
-| `./testing` | `getTestOutputDir`, `getTestOutputBase`, `setupAsyncTempDirSuite`, `setupSyncTempDirSuite` | `crypto`, `fs`, `fs/promises`, `os`, `path`, `url` | — | **yes** |
+| `./testing` | `getTestOutputDir`, `getTestOutputBase`, `setupAsyncTempDirSuite`, `setupSyncTempDirSuite`, `symlinkCapability`, `createSymlink`, `createSymlinkAsync` | `crypto`, `fs`, `fs/promises`, `os`, `path`, `url` | — | **yes** |
 | `./asset` | `resolveAssetReference` — paths and npm bare specifiers | `fs`, `module`, `os`, `path`, `url` | — | **yes** |
 | `./yaml` | `updateYamlIn`, `verifyConfinedYamlEdit` — byte-surgical YAML edits | **none** | `yaml` | no — needs `yaml` |
 | `./template` | `renderTemplate` — cached Handlebars | **none** | `handlebars` | no — needs `handlebars` |
@@ -184,6 +184,8 @@ These return **OS-native** separators, because they resolve real filesystem iden
 
 - `setupAsyncTempDirSuite()` / `setupSyncTempDirSuite()` - per-suite temp directories with cleanup
 - `getTestOutputDir()` / `getTestOutputBase()` - isolated test output paths
+- `symlinkCapability()` - probes once (memoized per process) whether this host can create symlinks (Windows needs Developer Mode or `SeCreateSymbolicLinkPrivilege`), returning a `SymlinkCapability` token or `null`
+- `createSymlink()` / `createSymlinkAsync()` - the sanctioned way to create a symlink in test code; both require a `SymlinkCapability` from `symlinkCapability()`, so a test cannot reach the raw syscall without first proving the host supports it (or explicitly skipping via vitest's `skip()`)
 
 ### Project roots — `@vibe-agent-toolkit/utils` (barrel only)
 

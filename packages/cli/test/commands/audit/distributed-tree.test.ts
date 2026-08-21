@@ -8,9 +8,9 @@
  * would agree with any implementation, including a no-op.
  */
 
-import { existsSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, renameSync, writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { createSymlink, mkdirSyncReal, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -56,12 +56,10 @@ function breakGitMetadata(root: string): void {
 
 /** Create a symlink, or report that this host will not let us (Windows without admin). */
 function trySymlink(target: string, link: string): boolean {
-  try {
-    symlinkSync(target, link);
-    return true;
-  } catch {
-    return false;
-  }
+  const cap = symlinkCapability();
+  if (!cap) return false;
+  createSymlink(cap, target, link);
+  return true;
 }
 
 /**

@@ -1,7 +1,7 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- test sandbox paths derived from tmp dirs */
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { createSymlink, mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -216,13 +216,14 @@ const UNBUILT_BASE = 'dist/not-built';
  * the regular sibling that must still ship — without it the case could not tell
  * "skipped the link" from "refused the whole entry".
  */
-function makeNonRegularSandbox(): { projectRoot: string; skillOutputDir: string } {
+function makeNonRegularSandbox(skip: () => never): { projectRoot: string; skillOutputDir: string } {
+  const cap = symlinkCapability() ?? skip();
   const sandbox = makeApplySandbox();
   const assets = safePath.join(sandbox.projectRoot, NON_REGULAR_SRC_DIR);
   mkdirSyncReal(safePath.join(assets, 'sub'), { recursive: true });
   writeFileSync(safePath.join(assets, 'sub', 'inner.mjs'), 'export const inner = 1;\n');
   writeFileSync(safePath.join(assets, 'ok.mjs'), OK_BYTES);
-  symlinkSync('sub', safePath.join(assets, 'linkdir'), 'dir');
+  createSymlink(cap, 'sub', safePath.join(assets, 'linkdir'), 'dir');
   return sandbox;
 }
 
@@ -401,10 +402,10 @@ describe('collectPreBuildGlobFindings', () => {
   // physically IS. `glob`'s `nodir: true` filters on what glob itself stat'd, and
   // it does not follow links — so a symlink-to-directory is not a dir to it and
   // arrives in the match list as if it were a file.
-  it.skipIf(process.platform === 'win32')(
+  it(
     'non-regular: reports a symlink-to-directory a glob matched, without refusing the entry',
-    async () => {
-      const { projectRoot } = makeNonRegularSandbox();
+    async ({ skip }) => {
+      const { projectRoot } = makeNonRegularSandbox(skip);
       const { dropped, allRefused, unmatched, skipped } = await collectPreBuildGlobFindings(
         [nonRegularGlob],
         projectRoot,
@@ -957,10 +958,10 @@ describe('applyFilesConfig', () => {
   // actively misdescribes the object — and it escaped as the build's WHOLE
   // explanation, naming neither the `files:` entry nor the path. A hard build
   // failure on an OS errno with no attribution gives the author nothing to act on.
-  it.skipIf(process.platform === 'win32')(
+  it(
     'skips a symlink-to-directory instead of dying on a raw ENOTSUP, and still ships the rest',
-    async () => {
-      const { projectRoot, skillOutputDir } = makeNonRegularSandbox();
+    async ({ skip }) => {
+      const { projectRoot, skillOutputDir } = makeNonRegularSandbox(skip);
 
       const { dests, skipped } = await applyFilesConfig({
         filesConfig: [nonRegularGlob],
@@ -986,10 +987,13 @@ describe('applyFilesConfig', () => {
   // REGULAR file reaches `copyFile` and fails there. What must not happen is the
   // raw `EACCES` becoming the build's whole explanation — that is the exact
   // failure #183 set out to eliminate, reached by permissions instead of by type.
-  it.skipIf(process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0))(
+  it(
     'names the files: entry and the path when a matched file cannot be read',
-    async () => {
-      const { projectRoot, skillOutputDir } = makeNonRegularSandbox();
+    async ({ skip }) => {
+      // chmod 0o000 does not restrict access on Windows, and root bypasses
+      // permission checks entirely — either makes the fixture assert nothing.
+      if (process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0)) skip();
+      const { projectRoot, skillOutputDir } = makeNonRegularSandbox(skip);
       const locked = safePath.join(projectRoot, NON_REGULAR_SRC_DIR, 'locked.mjs');
       writeFileSync(locked, 'export const secret = 2;\n');
       chmodSync(locked, 0o000);
@@ -1070,10 +1074,10 @@ describe('applyFilesConfig', () => {
   // so the headline claim of this fix — "reported as
   // FILES_GLOB_SKIPPED_NON_REGULAR_FILE" — rested on nothing. The two codes are a
   // union in `globMatchesToIssues`, so a swap typechecks.
-  it.skipIf(process.platform === 'win32')(
+  it(
     'emits FILES_GLOB_SKIPPED_NON_REGULAR_FILE, anchored at the source path',
-    async () => {
-      const { projectRoot } = makeNonRegularSandbox();
+    async ({ skip }) => {
+      const { projectRoot } = makeNonRegularSandbox(skip);
       const issues = preBuildGlobFindingsToIssues(
         await collectPreBuildGlobFindings([nonRegularGlob], projectRoot),
         projectRoot,
@@ -1094,10 +1098,10 @@ describe('applyFilesConfig', () => {
   // build, so the `skipped` findings never reach a report. A message listing only
   // the policy drops would assert "all of them are never packaged" while silently
   // omitting paths that failed for a completely different reason.
-  it.skipIf(process.platform === 'win32')(
+  it(
     'names BOTH causes when a glob nets only never-packaged files and non-files',
-    async () => {
-      const { projectRoot, skillOutputDir } = makeNonRegularSandbox();
+    async ({ skip }) => {
+      const { projectRoot, skillOutputDir } = makeNonRegularSandbox(skip);
       const assets = safePath.join(projectRoot, NON_REGULAR_SRC_DIR);
       // Leave the entry with nothing shippable: the only regular file it can match
       // is a never-packaged basename, alongside the directory symlink.
@@ -1116,10 +1120,10 @@ describe('applyFilesConfig', () => {
   // wrong cause and its remedy ("declare an explicit source: entry") would not
   // work if followed, since an explicit entry cannot package a directory link
   // either.
-  it.skipIf(process.platform === 'win32')(
+  it(
     'raises its own error when a glob matches only non-files, not the never-package one',
-    async () => {
-      const { projectRoot, skillOutputDir } = makeNonRegularSandbox();
+    async ({ skip }) => {
+      const { projectRoot, skillOutputDir } = makeNonRegularSandbox(skip);
       const assets = safePath.join(projectRoot, NON_REGULAR_SRC_DIR);
       // Leave `linkdir` as the ONLY match: no regular file, nothing policy-refused.
       rmSync(safePath.join(assets, 'ok.mjs'));
@@ -1140,11 +1144,12 @@ describe('applyFilesConfig', () => {
   // content, which is reasonable behaviour and must NOT be caught by the guard.
   // Without this case an over-broad `isSymbolicLink()` test would pass everything
   // above while silently dropping a legitimate, widely-used shape.
-  it.skipIf(process.platform === 'win32')(
+  it(
     'still copies a symlink to a regular file by content',
-    async () => {
-      const { projectRoot, skillOutputDir } = makeNonRegularSandbox();
-      symlinkSync(
+    async ({ skip }) => {
+      const { projectRoot, skillOutputDir } = makeNonRegularSandbox(skip);
+      createSymlink(
+        cap,
         'ok.mjs',
         safePath.join(projectRoot, NON_REGULAR_SRC_DIR, 'linkfile.mjs'),
         'file',

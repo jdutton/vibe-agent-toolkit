@@ -1,11 +1,13 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
-import { mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 
 import {
-  canCreateSymlinks,
+  createSymlink,
   mkdirSyncReal,
   normalizedTmpdir,
   safePath,
+  type SymlinkCapability,
+  symlinkCapability,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
@@ -34,12 +36,12 @@ function makeRoot(): string {
 }
 
 /** A fresh root holding one doc and a symlink that is a second name for it. */
-function makeAliasedDoc(): { root: string; target: string; alias: string } {
+function makeAliasedDoc(cap: SymlinkCapability): { root: string; target: string; alias: string } {
   const root = makeRoot();
   const target = safePath.join(root, DOC_RELATIVE);
   writeFileSync(target, DOC_CONTENT);
   const alias = safePath.join(root, ALIAS_NAME);
-  symlinkSync(target, alias);
+  createSymlink(cap, target, alias);
   return { root, target, alias };
 }
 
@@ -84,9 +86,8 @@ describe('canonicalPathFor', () => {
     // Creating a symlink on Windows needs the privilege Developer Mode grants,
     // which most dev boxes lack — `symlinkSync` throws EPERM there. Skip loudly
     // rather than no-op: a silently skipped symlink case reads as a pass.
-    if (!canCreateSymlinks(normalizedTmpdir())) skip();
-
-    const { root, target, alias } = makeAliasedDoc();
+    const cap = symlinkCapability() ?? skip();
+    const { root, target, alias } = makeAliasedDoc(cap);
     const context = { realRoot: resolveRootPath(root) };
 
     expect(canonicalPathFor(alias, context)).toBe(canonicalPathFor(target, context));
@@ -119,18 +120,15 @@ describe('canonicalPathFor', () => {
     expect(canonicalPathFor(target, { realRoot: resolveRootPath(`${root}/`) })).toBe(DOC_RELATIVE);
   });
 
-  it('canonicalizes an absent file through a symlinked PARENT, so its identity will not move when it appears', ({
-    skip,
-  }) => {
-    if (!canCreateSymlinks(normalizedTmpdir())) skip();
-
+  it('canonicalizes an absent file through a symlinked PARENT, so its identity will not move when it appears', ({ skip }) => {
     // A `files:`-declared build artifact reached through a symlinked directory.
     // Resolving only the whole path gives up the moment the leaf is missing and
     // would mint `link/artifact.md`; the file appearing later would then mint
     // `docs/artifact.md` — two identities for one future file.
+    const cap = symlinkCapability() ?? skip();
     const root = makeRoot();
     const link = safePath.join(root, 'link');
-    symlinkSync(safePath.join(root, 'docs'), link);
+    createSymlink(cap, safePath.join(root, 'docs'), link);
 
     expect(canonicalPathFor(safePath.join(link, 'artifact.md'), { realRoot: resolveRootPath(root) }))
       .toBe('docs/artifact.md');
@@ -139,9 +137,8 @@ describe('canonicalPathFor', () => {
 
 describe('ResourceIdentityMap', () => {
   it('returns one id for two names of one file', ({ skip }) => {
-    if (!canCreateSymlinks(normalizedTmpdir())) skip();
-
-    const { root, target, alias } = makeAliasedDoc();
+    const cap = symlinkCapability() ?? skip();
+    const { root, target, alias } = makeAliasedDoc(cap);
 
     const map = new ResourceIdentityMap(root);
     expect(map.idFor(alias)).toBe(map.idFor(target));

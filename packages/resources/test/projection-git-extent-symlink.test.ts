@@ -19,9 +19,9 @@
  */
 
 /* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, normalizedTmpdir, runGitOrThrow, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { createSymlink, mkdirSyncReal, normalizedTmpdir, runGitOrThrow, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { ExtentContribution } from '../src/projection/contributor.js';
@@ -74,15 +74,22 @@ function distinctResourceIds(): number {
 }
 
 // Symlink creation needs privilege on Windows; the divergence is POSIX-observable.
-describe.skipIf(process.platform === 'win32')('git extent — a committed symlink', () => {
+// Gated on the real capability rather than raw platform, so this also runs on an
+// elevated/Developer-Mode Windows host instead of skipping outright.
+describe.skipIf(!symlinkCapability())('git extent — a committed symlink', () => {
   beforeAll(async () => {
     root = toForwardSlash(mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-git-symlink-')));
+
+    // symlinkCapability() is memoized, and the describe.skipIf above already
+    // proved it non-null before this beforeAll ever runs.
+    const cap = symlinkCapability();
+    if (!cap) throw new Error('unreachable: describe.skipIf already gated on symlinkCapability()');
 
     git(['init']);
     mkdirSyncReal(safePath.join(root, 'docs'), { recursive: true });
     writeFileSync(safePath.join(root, TARGET), '# target\n');
-    symlinkSync('target.md', safePath.join(root, LINK_A));
-    symlinkSync('target.md', safePath.join(root, LINK_B));
+    createSymlink(cap, 'target.md', safePath.join(root, LINK_A));
+    createSymlink(cap, 'target.md', safePath.join(root, LINK_B));
     git(['add', TARGET, LINK_A, LINK_B]);
     git([...COMMIT_CONFIG, 'commit', '-m', 'fixture']);
 

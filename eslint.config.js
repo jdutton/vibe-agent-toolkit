@@ -102,6 +102,11 @@ const localRulesConfig = {
   'local/no-file-url-string-concat': 'error',
   'local/prefer-startswith-over-regex': 'error',
   'local/require-justified-skip': 'error',
+  // No `exemptFiles`: the one file this rule must not fire on
+  // (`packages/utils/src/test-helpers.ts`) already isn't a test file, so
+  // `isTestFile()` inside the rule excludes it before any exemption list
+  // would be consulted — an `exemptFiles` entry here could never activate.
+  'local/no-bare-symlink-in-tests': 'error',
 };
 
 // Import organization. Apply to both TS and JS source.

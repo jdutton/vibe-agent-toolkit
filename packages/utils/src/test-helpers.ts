@@ -189,31 +189,107 @@ export function setupSyncTempDirSuite(prefix: string): {
   };
 }
 
+declare const symlinkCapabilityBrand: unique symbol;
+
 /**
- * Probe whether this host can create symbolic links inside `dir`.
+ * Proof that this process can create filesystem symlinks.
+ *
+ * The only way to obtain one is {@link symlinkCapability}, and it exists at
+ * all only when a real probe already succeeded — so a function that requires
+ * this as a parameter cannot be reached by code that skipped the check. That
+ * is the point of branding it rather than passing a `boolean`: forgetting the
+ * check becomes a type error instead of a runtime `EPERM` on a machine you
+ * don't control.
+ */
+export type SymlinkCapability = { readonly [symlinkCapabilityBrand]: true };
+
+let cachedCapability: SymlinkCapability | null | undefined;
+
+/**
+ * Whether this PROCESS can create symlinks — probed once and memoized.
  *
  * On Windows, `symlink()` needs either Developer Mode or
- * `SeCreateSymbolicLinkPrivilege`; CI agents frequently have neither. Fixtures
- * that depend on symlinks must therefore ask rather than assume — and, having
- * asked, must SAY they skipped. A symlink case that silently no-ops reads as a
- * passing test for a property nobody exercised.
+ * `SeCreateSymbolicLinkPrivilege`. That privilege lives on the process's
+ * security token, not on any one directory: it cannot change between calls
+ * within a single run, so probing it once and reusing the result is a
+ * memoization, not a shortcut that risks a stale answer. (An exotic
+ * filesystem that itself refuses symlinks — some network shares, some FAT
+ * variants — is a real exception this does not model; every fixture in this
+ * repo creates its roots under {@link normalizedTmpdir}, so it never arises
+ * here.)
  *
- * The probe creates and removes one link, because the privilege cannot be
- * inferred from `process.platform` alone.
+ * Fixtures that depend on symlinks must ask rather than assume — and, having
+ * asked, must SAY they skipped. A symlink case that silently no-ops reads as
+ * a passing test for a property nobody exercised.
  *
- * @param dir - An existing directory to probe in (the probe cleans up after itself)
- * @returns True when a symlink was created successfully
+ * @returns A {@link SymlinkCapability} token when this process can create
+ *   symlinks, else `null`. Route the `null` case through vitest's `skip()`
+ *   rather than a plain `return`, so the skip is visible in the report.
  */
-export function canCreateSymlinks(dir: string): boolean {
-  const probe = safePath.join(dir, `.vat-symlink-probe-${randomBytes(4).toString('hex')}`);
-  try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied dir plus a random basename generated here
-    symlinkSync('.', probe);
-  } catch {
-    return false;
+export function symlinkCapability(): SymlinkCapability | null {
+  if (cachedCapability === undefined) {
+    const probe = safePath.join(normalizedTmpdir(), `.vat-symlink-probe-${randomBytes(4).toString('hex')}`);
+    try {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixed tmp dir plus a random basename generated here
+      symlinkSync('.', probe);
+      cachedCapability = {} as SymlinkCapability;
+    } catch {
+      cachedCapability = null;
+    }
+    if (cachedCapability !== null) {
+      // Best-effort: the capability answer comes from creation succeeding, not
+      // from cleanup — a probe left behind by a failed rmSync (e.g. a transient
+      // lock on the freshly-created reparse point) must not flip a real "yes"
+      // into a memoized, process-wide "no".
+      try {
+        rmSync(probe, { force: true });
+      } catch {
+        // Leftover probe file; harmless, and not this function's concern.
+      }
+    }
   }
-  rmSync(probe, { force: true });
-  return true;
+  return cachedCapability;
+}
+
+/**
+ * Create a symlink — the one sanctioned call site for `fs.symlinkSync` in
+ * test code. Requires a {@link SymlinkCapability}, which only
+ * {@link symlinkCapability} can mint, so a test cannot reach the real
+ * syscall without first proving (or explicitly bypassing via `skip()`) that
+ * this host supports it.
+ *
+ * @param _cap - Proof from {@link symlinkCapability} that this host can create symlinks
+ * @param target - The existing path the new link should point at
+ * @param path - Where to create the link
+ * @param type - Windows-only link-type hint (`'file'` \| `'dir'` \| `'junction'`); ignored on POSIX
+ */
+export function createSymlink(
+  _cap: SymlinkCapability,
+  target: string,
+  path: string,
+  type?: 'dir' | 'file' | 'junction',
+): void {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied path; the capability parameter is what proves this call site is sanctioned
+  symlinkSync(target, path, type);
+}
+
+/**
+ * The async counterpart of {@link createSymlink}, for fixtures already using
+ * `node:fs/promises`. Same capability requirement, same reasoning.
+ *
+ * @param _cap - Proof from {@link symlinkCapability} that this host can create symlinks
+ * @param target - The existing path the new link should point at
+ * @param path - Where to create the link
+ * @param type - Windows-only link-type hint (`'file'` \| `'dir'` \| `'junction'`); ignored on POSIX
+ */
+export async function createSymlinkAsync(
+  _cap: SymlinkCapability,
+  target: string,
+  path: string,
+  type?: 'dir' | 'file' | 'junction',
+): Promise<void> {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied path; the capability parameter is what proves this call site is sanctioned
+  await fs.symlink(target, path, type);
 }
 
 /**

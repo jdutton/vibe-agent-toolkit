@@ -40,7 +40,7 @@
  */
 import { mkdtempSync, rmSync } from 'node:fs';
 
-import { canCreateSymlinks, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -131,7 +131,7 @@ describe('a committed dangling *.md symlink is reported, not fatal', () => {
   it('completes the git route and records the unreadable file', async () => {
     const gitRoot = makeRoot('dangling-git');
     const walkRoot = makeRoot('dangling-walk');
-    if (!canCreateSymlinks(gitRoot)) {
+    if (!symlinkCapability()) {
       console.warn('enumeration-symlink-divergence: symlinks unavailable; the dangling-symlink path was NOT exercised');
       return;
     }
@@ -168,7 +168,7 @@ describe('a committed dangling *.md symlink is reported, not fatal', () => {
 
   it('reports RESOURCE_UNREADABLE naming the file, rather than failing silently', async () => {
     const root = makeRoot('dangling-issue');
-    if (!canCreateSymlinks(root)) {
+    if (!symlinkCapability()) {
       console.warn('enumeration-symlink-divergence: symlinks unavailable; RESOURCE_UNREADABLE was NOT exercised');
       return;
     }
