@@ -102,11 +102,18 @@ const localRulesConfig = {
   'local/no-file-url-string-concat': 'error',
   'local/prefer-startswith-over-regex': 'error',
   'local/require-justified-skip': 'error',
-  // No `exemptFiles`: the one file this rule must not fire on
-  // (`packages/utils/src/test-helpers.ts`) already isn't a test file, so
-  // `isTestFile()` inside the rule excludes it before any exemption list
-  // would be consulted — an `exemptFiles` entry here could never activate.
-  'local/no-bare-symlink-in-tests': 'error',
+  // `exemptFiles` IS load-bearing now, and was not when this rule landed.
+  // The rule covered only test files then, so `packages/utils/src/test-helpers.ts`
+  // — which holds the one sanctioned `symlinkSync`/`fs.symlink` pair — was
+  // excluded for free by `isTestFile()`, and the original comment here recorded
+  // that an entry "could never activate". The rule now covers shipped code too
+  // (adopters get it from `@vibe-agent-toolkit/utils/eslint`, and their
+  // production symlinks face the same Windows privilege hazard with none of the
+  // test lane's ability to skip), so the implementation file needs a real
+  // exemption or the rule fires on the very helper it points everyone at.
+  'local/no-bare-symlink-in-tests': ['error', {
+    exemptFiles: ['packages/utils/src/test-helpers.ts'],
+  }],
 };
 
 // Import organization. Apply to both TS and JS source.

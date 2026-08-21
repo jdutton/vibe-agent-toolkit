@@ -559,8 +559,24 @@ async function symlinkDevSkill(
   await prepareDevSymlinkDest(destSkillPath, skillFsName, options);
 
   if (!options.dryRun) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
-    await symlink(srcSkillPath, destSkillPath, 'dir');
+    try {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename, local/no-bare-symlink-in-tests -- eyes open: dev-mode linking is knowingly unavailable on an unprivileged Windows, and the catch below says so rather than surfacing a bare EPERM.
+      await symlink(srcSkillPath, destSkillPath, 'dir');
+    } catch (error) {
+      // Same reasoning as `agent/install.ts`: a directory symlink needs
+      // SeCreateSymbolicLinkPrivilege on Windows, and "EPERM" alone sends the
+      // reader looking for a file-permission problem instead of a process
+      // privilege they can grant. Not falling back to a copy — dev mode exists
+      // so a rebuild is picked up live, and a copy would quietly stop that.
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Could not symlink ${skillFsName} to ${destSkillPath}: ${detail}\n` +
+          (process.platform === 'win32'
+            ? 'On Windows, creating a directory symlink requires SeCreateSymbolicLinkPrivilege. ' +
+              'Enable Developer Mode or run from an elevated shell to use dev-mode plugin install.'
+            : 'Check that the destination directory is writable.'),
+      );
+    }
   }
 
   logger.info(`   Symlinked: ${safePath.relative(cwd, destSkillPath)} → ${srcSkillPath}`);

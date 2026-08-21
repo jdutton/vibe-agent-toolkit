@@ -111,6 +111,21 @@ Two ways your target can be wrong, which surface differently: `ERR_MODULE_NOT_FO
 | `no-fs-promises-cp` | `cp()` from `node:fs/promises` (drops nested files on Node 22) | `cpSync()` from `node:fs` | — | ✓ | `error` |
 | `no-child-process-execSync` | `child_process.execSync()` | `safeExecSync()` | `/process` | ✓ | `error` |
 | `no-unix-shell-commands` | `tar`, `grep`, `rm`, `echo`, … spawned directly | Node APIs, or a portable script fixture | — | | `error` |
+| `no-bare-symlink-in-tests` | unguarded `fs.symlinkSync()` / `fs.promises.symlink()` | in tests: `createSymlink(cap, …)` / `createSymlinkAsync(cap, …)`; in shipped code: a win32 junction, or a `catch` naming the privilege | `/testing` | | `error` |
+
+**`no-bare-symlink-in-tests` reports two different remedies, and the name is narrower than the rule.**
+Creating a symlink on Windows requires `SeCreateSymbolicLinkPrivilege` — Developer Mode or an
+elevated shell — which most user machines and CI agents lack. In a **test file** the fix is to probe
+with `symlinkCapability()` and pass the resulting token to `createSymlink()`, so a host without the
+privilege produces a visible `skip()` rather than a failure or a silently-swallowed one. In **shipped
+code** there is deliberately no wrapper to route through: `createSymlink()` lives on the `/testing`
+subpath, and pointing production code at a test helper would be worse advice than the bare call.
+There the guidance is a junction for a directory link on win32 (no elevation required), or catching
+the failure and naming the missing privilege. Declaring a platform out of scope is legitimate —
+say so in an `eslint-disable` justification, which is what `vat agent install --dev` does.
+
+`exemptFiles` matters here: the implementation file holding the sanctioned `symlinkSync` is not a
+test file, so it needs an explicit exemption once the rule covers shipped code.
 
 The member-call rules here check the **receiver**, not just the method name, so `env.tmpdir()` on some unrelated object is not a finding — and the namespace they check for can be bound by a static `import * as os`, by `const os = require('node:os')`, or by `const os = await import('node:os')`. The fix replaces the whole callee (`os.tmpdir()` → `normalizedTmpdir()`), which is correct however the binding was made. Matching the method name alone was the earlier behaviour and it produced `os.normalizedTmpdir()` — a method that does not exist, compiles, and throws.
 

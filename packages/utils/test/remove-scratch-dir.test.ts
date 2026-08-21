@@ -74,22 +74,49 @@ describe('removeScratchDir', () => {
   });
 
   /**
-   * A path whose parent component is a regular file yields `ENOTDIR`, which
-   * `force: true` does NOT swallow the way it swallows `ENOENT` — verified
-   * empirically before this test was written. That makes it the one portable
-   * way to drive the error branch without depending on chmod semantics or on
-   * the test not running as root.
+   * The error branch is driven by injection rather than by a hostile path, and
+   * that is a correction rather than a shortcut.
+   *
+   * The first version of this test used a path whose parent component is a
+   * regular file, which yields `ENOTDIR` — `force: true` swallows `ENOENT` but
+   * not that. Verified empirically... on macOS only. **Windows resolves the
+   * same call silently**, so no warning fired, and the test failed in CI having
+   * passed locally: a fixture that cannot produce the condition it asserts.
+   *
+   * What actually needs pinning is the contract — a removal that fails warns
+   * instead of throwing — and that is platform-independent. Injecting the
+   * failure tests it identically everywhere; fabricating one on the filesystem
+   * tests the platform's error semantics as well, which is the part that
+   * diverged.
    */
   it('warns and resolves when removal errors outright', async () => {
-    const file = safePath.join(scratch, 'a-file');
-    await writeFile(file, 'not a directory');
-    const target = safePath.join(file, 'child');
+    const target = safePath.join(scratch, 'refuses-to-go');
     const { warnings, onWarn } = warningSink();
 
-    await expect(removeScratchDir(target, { onWarn })).resolves.toBeUndefined();
+    await expect(
+      removeScratchDir(target, {
+        onWarn,
+        remove: () => Promise.reject(new Error('EPERM: operation not permitted')),
+      }),
+    ).resolves.toBeUndefined();
 
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain(target);
+    expect(warnings[0]).toContain('EPERM');
+  });
+
+  it('reports a non-Error rejection without throwing on it', async () => {
+    const { warnings, onWarn } = warningSink();
+
+    await expect(
+      removeScratchDir(safePath.join(scratch, 'odd-rejection'), {
+        onWarn,
+        // A rejection that is NOT an Error, which the String() fallback exists for.
+        remove: () => Promise.reject('a bare string'),
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(warnings[0]).toContain('a bare string');
   });
 
   /**
@@ -99,10 +126,16 @@ describe('removeScratchDir', () => {
    * suite in which every assertion passed.
    */
   it('gives up within its budget rather than running long, and names the leaked path', async () => {
-    const root = await makeTree('outlives-budget');
+    const root = safePath.join(scratch, 'outlives-budget');
     const { warnings, onWarn } = warningSink();
 
-    await expect(removeScratchDir(root, { budgetMs: 0, onWarn })).resolves.toBeUndefined();
+    // A removal that never settles, so the timer always wins. Racing a real
+    // `fs.rm` over a handful of files against a 0ms timer is a coin flip —
+    // which is how the first version of this test passed locally and would
+    // have flaked anywhere slower or faster.
+    await expect(
+      removeScratchDir(root, { budgetMs: 5, onWarn, remove: () => new Promise<void>(() => {}) }),
+    ).resolves.toBeUndefined();
 
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain(root);
@@ -110,12 +143,21 @@ describe('removeScratchDir', () => {
   });
 
   it('warns at most once, so a removal settling after the budget cannot log into a finished suite', async () => {
-    const root = await makeTree('single-warning');
+    const root = safePath.join(scratch, 'single-warning');
     const { warnings, onWarn } = warningSink();
+    let settle: (() => void) | undefined;
 
-    await removeScratchDir(root, { budgetMs: 0, onWarn });
-    // Let the abandoned removal run to completion in the background.
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await removeScratchDir(root, {
+      budgetMs: 5,
+      onWarn,
+      remove: () => new Promise<void>((resolve) => { settle = resolve; }),
+    });
+    expect(warnings).toHaveLength(1);
+
+    // Now let the abandoned removal finish. Its `.then` must not log again —
+    // the suite that called this has already ended.
+    settle?.();
+    await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(warnings).toHaveLength(1);
   });

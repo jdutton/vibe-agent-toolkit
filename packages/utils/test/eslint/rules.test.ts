@@ -991,8 +991,6 @@ const SYMLINK_ASYNC_NAMED = "import { symlink } from 'node:fs/promises';\nawait 
 const SYMLINK_ASYNC_CHAINED_MEMBER = "import fs from 'node:fs';\nawait fs.promises.symlink(a, b);";
 const NO_BARE_SYMLINK_CASES: RuleCases = {
   valid: [
-    // Not a test file at all — production code has no wrapper to route through.
-    { code: SYMLINK_SYNC_NAMED, filename: LINTED_FILE, options: [{ exemptFiles: [SYMLINK_EXEMPT] }] },
     { code: SYMLINK_SYNC_NAMED, filename: SYMLINK_EXEMPT, options: [{ exemptFiles: [SYMLINK_EXEMPT] }] },
     { code: SYMLINK_SYNC_NAMED, filename: `/Users/dev/vat/${SYMLINK_EXEMPT}`, options: [{ exemptFiles: [SYMLINK_EXEMPT] }] },
     // A same-named method on an unrelated receiver is not this module's call.
@@ -1010,6 +1008,14 @@ const NO_BARE_SYMLINK_CASES: RuleCases = {
     { code: SYMLINK_ASYNC_CHAINED_MEMBER, filename: SYMLINK_TEST_FILE, options: [{ exemptFiles: [SYMLINK_EXEMPT] }], errors: [{ messageId: 'noBareSymlink' }] },
     // DECOY — same basename as the exempt entry, different directory: must still fire.
     { code: SYMLINK_SYNC_NAMED, filename: 'packages/other/test/resolve-local-href.test.ts', options: [{ exemptFiles: [SYMLINK_EXEMPT] }], errors: [{ messageId: 'noBareSymlink' }] },
+    // Shipped code is covered too, with the OTHER message. It cannot `skip()`,
+    // and `createSymlink()` lives on the `utils/testing` subpath, so pointing
+    // production code at a test helper would be worse advice than the bare
+    // call — hence a distinct messageId rather than a reworded one.
+    // Asserting the id, not just "it errors", is what stops the two remedies
+    // silently collapsing into one.
+    { code: SYMLINK_SYNC_NAMED, filename: LINTED_FILE, options: [{ exemptFiles: [SYMLINK_EXEMPT] }], errors: [{ messageId: 'unguardedSymlink' }] },
+    { code: SYMLINK_ASYNC_MEMBER, filename: LINTED_FILE, options: [{ exemptFiles: [SYMLINK_EXEMPT] }], errors: [{ messageId: 'unguardedSymlink' }] },
     // UNCONFIGURED — with no `exemptFiles` option nothing is exempt, including the backlog path.
     { code: SYMLINK_SYNC_NAMED, filename: SYMLINK_EXEMPT, errors: [{ messageId: 'noBareSymlink' }] },
   ],

@@ -1,8 +1,23 @@
 /**
  * ESLint rule: no-bare-symlink-in-tests
  *
- * Bans `fs.symlinkSync()` / `fs.promises.symlink()` in test files, in favor of
- * `createSymlink()` / `createSymlinkAsync()` from `@vibe-agent-toolkit/utils`.
+ * Bans unguarded `fs.symlinkSync()` / `fs.promises.symlink()`, with a different
+ * remedy on each side of the test boundary:
+ *
+ * - **test files** → route through `createSymlink()` / `createSymlinkAsync()`
+ *   from `@vibe-agent-toolkit/utils`, which require a probed capability token.
+ * - **shipped code** → there is no wrapper to route through, and there must not
+ *   be: `createSymlink()` lives on the `utils/testing` subpath, so pointing
+ *   production code at it would be worse advice than the bare call. Prefer a
+ *   junction for a directory link on win32, or catch the failure and name the
+ *   missing privilege. An `eslint-disable` justification is the sanctioned way
+ *   to say "this platform is deliberately out of scope" — see
+ *   `cli/src/commands/agent/install.ts`, where `--dev` is knowingly unavailable
+ *   on an unprivileged Windows and fails saying exactly that.
+ *
+ * ⚠️ **The name is now narrower than the rule.** It covers shipped code too;
+ * renaming it is a public-API change to `@vibe-agent-toolkit/utils/eslint` and
+ * has not been done.
  *
  * Why: creating a symlink on Windows needs Developer Mode or
  * `SeCreateSymbolicLinkPrivilege`, which most dev boxes and CI agents lack. A
@@ -32,7 +47,7 @@ module.exports = {
   meta: {
     type: 'problem',
     docs: {
-      description: 'Ban bare fs.symlinkSync()/fs.symlink() in test files — route through createSymlink()/createSymlinkAsync()',
+      description: 'Ban unguarded fs.symlinkSync()/fs.symlink() — route tests through createSymlink()/createSymlinkAsync(), and guard shipped code against the Windows privilege requirement',
       category: 'Cross-Platform',
       recommended: true,
     },
@@ -43,18 +58,42 @@ module.exports = {
         'Bare {{fn}}() in a test file can throw EPERM on Windows without Developer Mode. ' +
         'Probe with symlinkCapability() and call {{safeFn}}(cap, ...) from @vibe-agent-toolkit/utils, ' +
         "routing a missing capability through vitest's skip() rather than a silent return.",
+      // Deliberately a different remedy, not a reworded version of the same one.
+      // Production code cannot `skip()`, and `createSymlink()` lives on the
+      // `@vibe-agent-toolkit/utils/testing` subpath — telling shipped code to
+      // import a test helper would be worse advice than the bare call.
+      unguardedSymlink:
+        'Unguarded {{fn}}() will throw EPERM on Windows unless the process holds ' +
+        'SeCreateSymbolicLinkPrivilege (Developer Mode or an elevated shell) — most user machines ' +
+        'and CI agents do not. For a DIRECTORY link prefer a junction on win32 ' +
+        "(`process.platform === 'win32' ? 'junction' : 'dir'`, absolute target), which needs no " +
+        'elevation; otherwise catch the failure and say what privilege is missing, or degrade to a copy. ' +
+        'If this platform is deliberately out of scope, say so in an eslint-disable justification.',
     },
   },
 
   create(context) {
-    if (!isTestFile(context.getFilename())) {
+    const filename = context.getFilename();
+
+    const exemptMatcherFor = createConfigurableExemptPathMatcher([]);
+    if (exemptMatcherFor(context)(filename)) {
       return {};
     }
 
-    const exemptMatcherFor = createConfigurableExemptPathMatcher([]);
-    if (exemptMatcherFor(context)(context.getFilename())) {
-      return {};
-    }
+    // Test files and shipped code are both covered, with different remedies.
+    //
+    // The rule was test-only for one revision, and that left two blind spots
+    // that mattered: VAT's own `src/` fixture builders (`trap-corpus.ts` had to
+    // be migrated by hand precisely because no rule could see it), and — since
+    // this rule ships publicly on `@vibe-agent-toolkit/utils/eslint` — every
+    // adopter's production code, which faces the identical Windows hazard with
+    // none of the test lane's ability to skip.
+    //
+    // ⚠️ Extending it is what MAKES `exemptFiles` load-bearing:
+    // `packages/utils/src/test-helpers.ts` holds the one sanctioned
+    // `symlinkSync` call and is not a test file, so it was previously excluded
+    // for free. It now needs a real exemption entry in eslint.config.js.
+    const messageId = isTestFile(filename) ? 'noBareSymlink' : 'unguardedSymlink';
 
     // Local names bound to each module's default/namespace import, e.g.
     // `import fs from 'node:fs/promises'` binds `fs` to ASYNC_MODULES.
@@ -97,13 +136,13 @@ module.exports = {
 
         // Bare `symlinkSync(...)` from a named import.
         if (syncNamedImported && callee.type === 'Identifier' && callee.name === 'symlinkSync') {
-          context.report({ node, messageId: 'noBareSymlink', data: { fn: 'symlinkSync', safeFn: 'createSymlink' } });
+          context.report({ node, messageId, data: { fn: 'symlinkSync', safeFn: 'createSymlink' } });
           return;
         }
 
         // Bare `symlink(...)` from a named `node:fs/promises` import.
         if (asyncNamedImported && callee.type === 'Identifier' && callee.name === 'symlink') {
-          context.report({ node, messageId: 'noBareSymlink', data: { fn: 'symlink', safeFn: 'createSymlinkAsync' } });
+          context.report({ node, messageId, data: { fn: 'symlink', safeFn: 'createSymlinkAsync' } });
           return;
         }
 
@@ -117,7 +156,7 @@ module.exports = {
           callee.object.object.type === 'Identifier' &&
           syncNamespaceNames.has(callee.object.object.name)
         ) {
-          context.report({ node, messageId: 'noBareSymlink', data: { fn: 'symlink', safeFn: 'createSymlinkAsync' } });
+          context.report({ node, messageId, data: { fn: 'symlink', safeFn: 'createSymlinkAsync' } });
           return;
         }
 
@@ -128,14 +167,14 @@ module.exports = {
 
         // `fs.symlinkSync(...)` / `nodeFs.symlinkSync(...)` on a tracked sync namespace.
         if (syncNamespaceNames.has(receiver) && callee.property.name === 'symlinkSync') {
-          context.report({ node, messageId: 'noBareSymlink', data: { fn: 'symlinkSync', safeFn: 'createSymlink' } });
+          context.report({ node, messageId, data: { fn: 'symlinkSync', safeFn: 'createSymlink' } });
           return;
         }
 
         // `fs.symlink(...)` on a tracked async namespace (the common
         // `import fs from 'node:fs/promises'` shape).
         if (asyncNamespaceNames.has(receiver) && callee.property.name === 'symlink') {
-          context.report({ node, messageId: 'noBareSymlink', data: { fn: 'symlink', safeFn: 'createSymlinkAsync' } });
+          context.report({ node, messageId, data: { fn: 'symlink', safeFn: 'createSymlinkAsync' } });
         }
       },
     };

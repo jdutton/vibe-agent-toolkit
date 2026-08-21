@@ -70,9 +70,7 @@ export async function installAgent(
     }
 
     if (dev) {
-      // Symlink for development
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Paths from validated sources
-      await fs.symlink(builtSkillPath, installPath, 'dir');
+      await linkForDevelopment(builtSkillPath, installPath);
       logger.info(`✓ Symlinked ${agentName} to ${installPath} (dev mode)`);
       logger.info(`  Rebuild agent to see changes immediately`);
     } else {
@@ -87,6 +85,45 @@ export async function installAgent(
     process.exit(0);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'Install');
+  }
+}
+
+/**
+ * Symlink a built bundle into place for `--dev`, failing legibly where the OS
+ * refuses.
+ *
+ * A directory symlink on Windows requires `SeCreateSymbolicLinkPrivilege`
+ * (Developer Mode, or an elevated shell), which most user machines and CI
+ * agents do not hold. **`--dev` being unavailable there is an accepted
+ * outcome** — it is a development convenience, and `install` without `--dev`
+ * copies instead and needs no privilege. What is not acceptable is how this
+ * used to fail: a bare `EPERM` reaching the generic handler, which reads as a
+ * file-permission problem and names neither the missing privilege nor the way
+ * out.
+ *
+ * Deliberately does NOT fall back to copying. `--dev` exists so a rebuild is
+ * picked up live; a copy that reported success would leave someone editing
+ * sources and wondering why nothing changes — a silent wrong answer in place of
+ * a loud, correct refusal.
+ *
+ * @param builtSkillPath - Absolute path to the built bundle
+ * @param installPath - Where the link should be created
+ * @throws When the link cannot be created, naming the privilege and the remedy
+ */
+async function linkForDevelopment(builtSkillPath: string, installPath: string): Promise<void> {
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename, local/no-bare-symlink-in-tests -- eyes open: this is the guarded call the rule asks for. Windows without the privilege is an accepted unsupported case for --dev, and the catch below names it.
+    await fs.symlink(builtSkillPath, installPath, 'dir');
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Could not create the dev-mode symlink at ${installPath}: ${detail}\n` +
+        (process.platform === 'win32'
+          ? 'On Windows, creating a directory symlink requires SeCreateSymbolicLinkPrivilege. ' +
+            'Enable Developer Mode or run from an elevated shell — or install without --dev, ' +
+            'which copies the bundle instead and needs no privilege.'
+          : 'Install without --dev to copy the bundle instead of linking it.'),
+    );
   }
 }
 

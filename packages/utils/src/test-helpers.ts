@@ -15,12 +15,23 @@ import { mkdirSyncReal, normalizedTmpdir, safePath } from './path-utils.js';
  */
 const SCRATCH_REMOVAL_BUDGET_MS = 4000;
 
-/** Knobs for {@link removeScratchDir}; both exist so the behaviour is testable. */
+/** Knobs for {@link removeScratchDir}; all three exist so the behaviour is testable. */
 export interface RemoveScratchDirOptions {
   /** Deadline before the removal is abandoned. Default {@link SCRATCH_REMOVAL_BUDGET_MS}. */
   readonly budgetMs?: number;
   /** Where the give-up notice goes. Default `console.warn`. */
   readonly onWarn?: (message: string) => void;
+  /**
+   * The removal itself. Defaults to `fs.rm` with recursive/force/retries.
+   *
+   * Injectable because the *contract* — a removal that fails must warn rather
+   * than throw — cannot otherwise be tested on every platform. Driving a real
+   * `fs.rm` failure needs a path the OS refuses, and those diverge: a path
+   * whose parent component is a regular file yields `ENOTDIR` on POSIX, and
+   * resolves silently on Windows. A test written against the POSIX shape
+   * passes locally and fails in CI, which is exactly what it did once.
+   */
+  readonly remove?: (dir: string) => Promise<void>;
 }
 
 /**
@@ -97,8 +108,12 @@ export async function removeScratchDir(
     onWarn(`scratch dir left behind at ${dir}: ${reason}`);
   };
 
-  const removal = fs
-    .rm(dir, { recursive: true, force: true, maxRetries: 2, retryDelay: 50 })
+  const remove =
+    options.remove ??
+    ((target: string): Promise<void> =>
+      fs.rm(target, { recursive: true, force: true, maxRetries: 2, retryDelay: 50 }));
+
+  const removal = remove(dir)
     .then(() => {
       settled = true;
     })
