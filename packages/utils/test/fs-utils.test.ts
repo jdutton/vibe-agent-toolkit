@@ -23,6 +23,7 @@ import type {
   SiblingNamesTable,
 } from '../src/fs-utils.js';
 import { toForwardSlash } from '../src/path-core.js';
+import type { SymlinkCapability } from '../src/test-helpers.js';
 import { createSymlinkAsync, setupAsyncTempDirSuite, symlinkCapability } from '../src/test-helpers.js';
 
 import { setupNestedDirectory } from './test-helpers.js';
@@ -393,7 +394,16 @@ describe('fs-utils', () => {
     const setupSymlinkedRoot = async (
       base: string,
       skip: () => never,
-    ): Promise<{ realRoot: string; canonicalRealRoot: string; linkRoot: string; outside: string }> => {
+    ): Promise<{
+      cap: SymlinkCapability;
+      realRoot: string;
+      canonicalRealRoot: string;
+      linkRoot: string;
+      outside: string;
+    }> => {
+      // Handed back, not just used here: callers that add their own links must
+      // thread this one probe's token rather than re-probing or — as two of
+      // them did — naming a `cap` that only ever existed in this scope.
       const cap = symlinkCapability() ?? skip();
       const realRoot = safePath.join(base, 'real-root');
       const linkRoot = safePath.join(base, 'link-root');
@@ -402,6 +412,7 @@ describe('fs-utils', () => {
       await fs.mkdir(outside, { recursive: true });
       await createSymlinkAsync(cap, realRoot, linkRoot, 'dir');
       return {
+        cap,
         realRoot,
         canonicalRealRoot: toForwardSlash(nodeFs.realpathSync(realRoot)),
         linkRoot,
@@ -455,7 +466,7 @@ describe('fs-utils', () => {
     it('keeps an existing symlink that points outside the root resolving outside it', async ({
       skip,
     }) => {
-      const { canonicalRealRoot, realRoot, linkRoot, outside } = await setupSymlinkedRoot(tempDir, skip);
+      const { cap, canonicalRealRoot, realRoot, linkRoot, outside } = await setupSymlinkedRoot(tempDir, skip);
       const escapeTarget = safePath.join(outside, 'data.md');
       await fs.writeFile(escapeTarget, '');
       await createSymlinkAsync(cap, escapeTarget, safePath.join(realRoot, 'escape.md'));
@@ -469,7 +480,7 @@ describe('fs-utils', () => {
     it('keeps a missing file behind an escaping directory symlink resolving outside the root', async ({
       skip,
     }) => {
-      const { canonicalRealRoot, realRoot, linkRoot, outside } = await setupSymlinkedRoot(tempDir, skip);
+      const { cap, canonicalRealRoot, realRoot, linkRoot, outside } = await setupSymlinkedRoot(tempDir, skip);
       await createSymlinkAsync(cap, outside, safePath.join(realRoot, 'outlink'), 'dir');
       const missing = safePath.join(linkRoot, 'outlink', GONE);
 

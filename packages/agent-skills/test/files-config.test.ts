@@ -1,6 +1,7 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- test sandbox paths derived from tmp dirs */
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
+import type { SymlinkCapability } from '@vibe-agent-toolkit/utils';
 import { createSymlink, mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -216,7 +217,13 @@ const UNBUILT_BASE = 'dist/not-built';
  * the regular sibling that must still ship — without it the case could not tell
  * "skipped the link" from "refused the whole entry".
  */
-function makeNonRegularSandbox(skip: () => never): { projectRoot: string; skillOutputDir: string } {
+function makeNonRegularSandbox(skip: () => never): {
+  cap: SymlinkCapability;
+  projectRoot: string;
+  skillOutputDir: string;
+} {
+  // Handed back, not just used here: a caller adding its own link must thread
+  // this one probe's token rather than naming a `cap` local to this function.
   const cap = symlinkCapability() ?? skip();
   const sandbox = makeApplySandbox();
   const assets = safePath.join(sandbox.projectRoot, NON_REGULAR_SRC_DIR);
@@ -224,7 +231,7 @@ function makeNonRegularSandbox(skip: () => never): { projectRoot: string; skillO
   writeFileSync(safePath.join(assets, 'sub', 'inner.mjs'), 'export const inner = 1;\n');
   writeFileSync(safePath.join(assets, 'ok.mjs'), OK_BYTES);
   createSymlink(cap, 'sub', safePath.join(assets, 'linkdir'), 'dir');
-  return sandbox;
+  return { cap, ...sandbox };
 }
 
 const NON_REGULAR_SRC_DIR = 'gen/assets';
@@ -1147,7 +1154,7 @@ describe('applyFilesConfig', () => {
   it(
     'still copies a symlink to a regular file by content',
     async ({ skip }) => {
-      const { projectRoot, skillOutputDir } = makeNonRegularSandbox(skip);
+      const { cap, projectRoot, skillOutputDir } = makeNonRegularSandbox(skip);
       createSymlink(
         cap,
         'ok.mjs',
