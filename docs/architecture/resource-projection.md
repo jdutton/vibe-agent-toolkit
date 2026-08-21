@@ -247,16 +247,27 @@ cache, not a replacement for either layer.
   parse cache is content-addressed across corpora — the same bytes share one blob-keyed row
   everywhere they appear, so a fact true in one repository and false in another cannot live on
   that row. §2's table above already reflects the new name.
-- 🔷 **Proposed** (stage 3 continuation and beyond): population of those tables from `ParseFacts`/
-  `ResourceRegistry` at runtime; the git-lane and non-git-lane change-detection manifests from
+- ✅ **Shipped** (stage 3): population of those tables from `ParseFacts`/`ResourceRegistry` at
+  runtime, and export.
+- 🔷 **Proposed** (beyond stage 3): the git-lane and non-git-lane change-detection manifests from
   the scanning doc; the blob-SHA memo.
+- ⚠️ **Plumbed but never populated:** `resource_tags` has a schema, a contributor field, a merge
+  forwarder, an export key and store hydration — and **zero producers**; every contributor returns
+  `tags: []`. Emitting the agentic-convention vocabulary into it is stage 4, and it is a
+  *contributor*, not a schema change. A fully-typed table is not evidence of a populated one:
+  the schema validates, the export emits the key and the round trip agrees, all over an empty array.
 
-> ⚠️ **Several table shapes above are superseded — see [Zones](./zones.md).** Zone modelling was
-> originally deferred past population; it has been moved to the front, because the capabilities that
-> justify the projection are all *cross-zone* questions. The shapes documented above remain an
-> accurate description of what is in `packages/resources/src/schemas/` today; they are not the target.
+> ✅ **The Zones revisions below have LANDED** — this note is kept as the record of what changed and
+> why, not as a warning about pending work. Zone modelling was originally deferred past population
+> and moved to the front, because the capabilities that justify the projection are all *cross-zone*
+> questions. `packages/resources/src/schemas/` now implements every revision listed here.
 >
-> Revisions that follow, each forced by a concrete case rather than by taste:
+> ⚠️ **§2 above has not been swept for this and still describes the pre-Zones shape in at least two
+> places** — it calls `resource_realizations` a table the projection "does not yet carry", and keys it
+> on `zone_id` where the shipped schema uses `extentId`. Read
+> `packages/resources/src/schemas/projection-*.ts` as the authority until that sweep lands.
+>
+> Revisions, each forced by a concrete case rather than by taste:
 >
 > - **`resources` becomes an entity table** keyed by an opaque identity — `hash(rootId,
 >   canonicalPath at first observation)`. Zero realizations is legal, so a plugin known only from a
