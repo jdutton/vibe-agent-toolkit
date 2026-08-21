@@ -146,6 +146,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `fs.lstat()`, which stats the link itself, so `--force` clears it whether or not its target still
   exists.
 
+- **A failed `vat claude plugin install --dev` no longer denies the state it leaves behind.** The
+  symlink step throws from inside a loop, after the previous marketplace directory has already been
+  removed and the plugin's non-skill content copied — so some skills are linked, the rest are not,
+  and the plugin is never registered. The error now says the install is incomplete and to re-run,
+  instead of offering only "check that the destination directory is writable".
+
 - **`local/no-bare-symlink-in-tests` silently accepted an unanchored `exemptFiles` entry.** Every
   other rule in the pack that takes `exemptFiles` reports a bare filename, because ESLint filenames
   are absolute and a bare entry exempts *every* file with that name anywhere in the tree — including
