@@ -168,9 +168,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   custom contributor must declare whether it reads them; `'skip'` throws if any registered
   contributor does.
 
-- **`@vibe-agent-toolkit/utils` now depends on `@vibe-validate/git` (0.20.0).** It replaces this
+- **`@vibe-agent-toolkit/utils` now depends on `@vibe-validate/git` (0.20.1).** It replaces this
   package's own copy of the git-environment scrub and tree-snapshot machinery. Adds
-  `@vibe-validate/utils` and `yaml` to the installed tree.
+  `@vibe-validate/utils` and `yaml` to the installed tree. A resource scan spawns git 6 times
+  rather than 8.
 
 ### Breaking
 
