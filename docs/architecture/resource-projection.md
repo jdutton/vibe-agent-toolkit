@@ -129,6 +129,16 @@ than against taste** (`packages/resources/src/projection/agentic-tags.ts` carrie
   unconditionally, at the same priority as `.claude/CLAUDE.md`. The 53/53-carry-`paths:`
   measurement that motivated `selected` is a **base rate, not a rule**, so the tag ships with no
   `loading` value at all until something reads frontmatter.
+
+  ⚠️ **Two consequences, and the second is a correction to the budget check that has not been
+  built yet.** First, VAT's own `claude-rules` collection *requires* `paths:` — deliberately
+  stricter than the vendor, because an unscoped rule is charged to every session whether or not
+  the work touches what it guards, and that cost is precisely what this check exists to surface.
+  Second, the design's instruction to **exclude rules files from the always-loaded chain sum is
+  right only for rules that carry `paths:`**. A rule that omits it *is* always-loaded, and
+  excluding it under-reports exactly the file whose cost is worst — the same direction of error
+  the `loading` rank rule exists to prevent. Once the check reads frontmatter, the rule is
+  `paths:` present → `selected` (excluded), absent → `always` (charged).
 - **`AGENTS.md` is not `always`.** Claude Code reads `CLAUDE.md`, not `AGENTS.md`; the latter is
   charged only where a `CLAUDE.md` imports it. Its class is a property of the import graph, so it
   too ships with no `loading` value.

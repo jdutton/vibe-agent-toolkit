@@ -65,9 +65,12 @@ resources:
         frontmatterSchema: "packages/agent-skills/schemas/skill-frontmatter.json"
         mode: strict  # Skills MUST have valid frontmatter
 
-    # Claude Code subtree-scoped rule guards. `paths:` is the only field Claude Code
-    # reads to decide when a rule fires — strict mode catches a typo'd/missing key
-    # before it ships as a guard that validates green and silently never activates.
+    # Claude Code subtree-scoped rule guards. Requiring `paths:` is deliberately
+    # STRICTER than Claude Code, which loads a rule that omits it unconditionally, at
+    # the same priority as .claude/CLAUDE.md. That is legal and it is still wrong: an
+    # unscoped rule is charged to every session's context whether or not the work
+    # touches what it guards. Strict mode catches a typo'd/missing key before it ships
+    # as a guard that validates green and quietly costs every turn.
     claude-rules:
       include:
         - ".claude/rules/**/*.md"
