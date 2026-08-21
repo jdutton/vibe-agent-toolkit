@@ -970,12 +970,15 @@ const NO_UNIX_SHELL_COMMANDS_CASES: RuleCases = {
 };
 
 /**
- * `no-bare-symlink-in-tests` fires only INSIDE test files (`isTestFile`) — the
- * opposite polarity of `no-unix-shell-commands` above: a bare `symlinkSync()`
- * is unremarkable in production code (there is no capability wrapper to route
- * it through there) and only a Windows landmine inside a test that skipped the
- * probe. No auto-fix: the replacement needs a capability token threaded from a
- * probe call, a placement judgment a mechanical fixer cannot make.
+ * `no-bare-symlink-in-tests` fires on BOTH sides of the test boundary, with a
+ * different `messageId` on each — `noBareSymlink` in test files, where
+ * `createSymlink(cap, …)` is the remedy, and `unguardedSymlink` in shipped
+ * code, where it is not (that helper lives on the `utils/testing` subpath, so
+ * pointing production at it would be worse advice than the bare call). Both ids
+ * are asserted below so the two remedies cannot silently collapse into one.
+ *
+ * No auto-fix: the replacement needs a capability token threaded from a probe
+ * call, a placement judgment a mechanical fixer cannot make.
  *
  * The exempt path deliberately ends in `.test.ts` (a real backlog entry, not
  * the implementation file) so the anchoring decoy below actually exercises
@@ -1018,6 +1021,26 @@ const NO_BARE_SYMLINK_CASES: RuleCases = {
     { code: SYMLINK_ASYNC_MEMBER, filename: LINTED_FILE, options: [{ exemptFiles: [SYMLINK_EXEMPT] }], errors: [{ messageId: 'unguardedSymlink' }] },
     // UNCONFIGURED — with no `exemptFiles` option nothing is exempt, including the backlog path.
     { code: SYMLINK_SYNC_NAMED, filename: SYMLINK_EXEMPT, errors: [{ messageId: 'noBareSymlink' }] },
+    // An unanchored `exemptFiles` entry is reported, exactly as every other
+    // consumer of `exempt-path-matcher.cjs` reports it. Extending this rule past
+    // test files is what made `exemptFiles` load-bearing here, and it shipped
+    // the option without the advisory the matcher module documents as
+    // mandatory — so a bare basename silently exempted that name tree-wide.
+    {
+      code: SYMLINK_SYNC_NAMED,
+      filename: LINTED_FILE,
+      options: [{ exemptFiles: ['test-helpers.ts'] }],
+      errors: [{ messageId: 'unanchoredExemptFile' }, { messageId: 'unguardedSymlink' }],
+    },
+    // …and on the file the bare entry DOES match, which is exempt only because
+    // the entry is unanchored. The symlink finding is correctly suppressed; the
+    // advisory is what stops that suppression being invisible.
+    {
+      code: SYMLINK_SYNC_NAMED,
+      filename: 'packages/anything/src/deep/test-helpers.ts',
+      options: [{ exemptFiles: ['test-helpers.ts'] }],
+      errors: [{ messageId: 'unanchoredExemptFile' }],
+    },
   ],
 };
 

@@ -27,7 +27,7 @@ The last two columns are the ones that matter when choosing. **"Resolves with ze
 | `./zod` | `ZodTypeNames`, `getZodTypeName`, `isZodType`, `unwrapZodType`, `isZodOptional`, `isZodNullable` | **none** | — | **yes** |
 | `./glob` | `isGlob`, static base extraction, magic remainder | `path` only | — | **yes** |
 | `./fs` | `normalizePath`, `normalizedTmpdir`, `mkdirSyncReal`, `resolveFromImportMeta`, `dynamicImportPath`, `copyDirectory`, `fillSiblingNames`, `classifyFilenameCaseFrom`, `FsLookupCache`, `readTextContent`, `readTextContentSync` | `fs`, `fs/promises`, `os`, `path`, `url` | — | **yes** |
-| `./testing` | `getTestOutputDir`, `getTestOutputBase`, `setupAsyncTempDirSuite`, `setupSyncTempDirSuite`, `symlinkCapability`, `createSymlink`, `createSymlinkAsync` | `crypto`, `fs`, `fs/promises`, `os`, `path`, `url` | — | **yes** |
+| `./testing` | `getTestOutputDir`, `getTestOutputBase`, `setupAsyncTempDirSuite`, `setupSyncTempDirSuite`, `removeScratchDir`, `symlinkCapability`, `createSymlink`, `createSymlinkAsync` | `crypto`, `fs`, `fs/promises`, `os`, `path`, `url` | — | **yes** |
 | `./asset` | `resolveAssetReference` — paths and npm bare specifiers | `fs`, `module`, `os`, `path`, `url` | — | **yes** |
 | `./yaml` | `updateYamlIn`, `verifyConfinedYamlEdit` — byte-surgical YAML edits | **none** | `yaml` | no — needs `yaml` |
 | `./template` | `renderTemplate` — cached Handlebars | **none** | `handlebars` | no — needs `handlebars` |

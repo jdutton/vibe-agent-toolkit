@@ -53,9 +53,18 @@ export async function installAgent(
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path constructed from validated scope location
     await fs.mkdir(targetLocation, { recursive: true });
 
-    // Check if already installed
+    // Check if already installed.
+    //
+    // `lstat`, not `access`: `access` FOLLOWS symlinks, so a dangling dev-mode
+    // link — precisely what `build:clean` orphans by deleting `dist/` under a
+    // previous `--dev` install — answered ENOENT here. That fell into the catch
+    // below as "not installed", which skipped the `--force` removal and left the
+    // link in place for `fs.symlink` to reject with EEXIST. `--force` was inert
+    // against the one state it most needed to clear. `lstat` stats the link
+    // itself, so the entry is seen whether or not its target still exists.
     try {
-      await fs.access(installPath);
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- installPath is built from a validated scope location
+      await fs.lstat(installPath);
       if (!force) {
         logger.error(
           `\n${agentName} already installed at ${installPath}\n` +
@@ -122,7 +131,8 @@ async function linkForDevelopment(builtSkillPath: string, installPath: string): 
           ? 'On Windows, creating a directory symlink requires SeCreateSymbolicLinkPrivilege. ' +
             'Enable Developer Mode or run from an elevated shell — or install without --dev, ' +
             'which copies the bundle instead and needs no privilege.'
-          : 'Install without --dev to copy the bundle instead of linking it.'),
+          : `Re-run with --force to replace whatever is already at ${installPath}, ` +
+            'or install without --dev to copy the bundle instead of linking it.'),
     );
   }
 }

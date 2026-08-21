@@ -111,7 +111,7 @@ Two ways your target can be wrong, which surface differently: `ERR_MODULE_NOT_FO
 | `no-fs-promises-cp` | `cp()` from `node:fs/promises` (drops nested files on Node 22) | `cpSync()` from `node:fs` | — | ✓ | `error` |
 | `no-child-process-execSync` | `child_process.execSync()` | `safeExecSync()` | `/process` | ✓ | `error` |
 | `no-unix-shell-commands` | `tar`, `grep`, `rm`, `echo`, … spawned directly | Node APIs, or a portable script fixture | — | | `error` |
-| `no-bare-symlink-in-tests` | unguarded `fs.symlinkSync()` / `fs.promises.symlink()` | in tests: `createSymlink(cap, …)` / `createSymlinkAsync(cap, …)`; in shipped code: a win32 junction, or a `catch` naming the privilege | `/testing` | | `error` |
+| `no-bare-symlink-in-tests` | unguarded `fs.symlinkSync()` / `fs.promises.symlink()` | in tests: `createSymlink(cap, …)` / `createSymlinkAsync(cap, …)`; in shipped code: a win32 junction, or a `catch` naming the privilege | `/testing` | | — |
 
 **`no-bare-symlink-in-tests` reports two different remedies, and the name is narrower than the rule.**
 Creating a symlink on Windows requires `SeCreateSymbolicLinkPrivilege` — Developer Mode or an
@@ -204,7 +204,7 @@ It is latent by construction, and worse, **it is invisible to any tree that has 
 
 ### What `recommended` deliberately leaves out
 
-Five rules ship without riding in `recommended`, for four different reasons.
+Six rules ship without riding in `recommended`, for five different reasons.
 
 **Test-style opinions** — `no-test-scoped-functions` (where a helper may be declared) and `require-justified-skip` (the annotation grammar for a disabled test). Neither is a portability or correctness fact, and installing this package for `safePath.join()` should not also import someone else's test conventions. Both are worth turning on deliberately.
 
@@ -237,7 +237,9 @@ export default readdirSync('packages').flatMap((dir) => {
 
 Scope it to the sources you **compile**. Test and example trees — normally excluded from the build — import their own package by name **on purpose**, to exercise the public entry point exactly as a consumer does. This repo has ~10 such imports, every one of them correct.
 
-Enable any of the five by naming it:
+**Half its advice is unreachable without a helper you may not have** — `no-bare-symlink-in-tests`. In a test file it points at `createSymlink()` / `createSymlinkAsync()`, which live on *this* package's `./testing` subpath and route through a probed capability token; an adopter on a different test runner, or with no symlink-heavy tests, should not silently inherit that opinion — nor the vitest-specific `skip()` idiom the message names. Its **shipped-code** half (`unguardedSymlink`) carries neither dependency and is portable advice on its own, so this is the one exclusion that is half arbitrary; it stays out because the two halves cannot be enabled separately. This repo turns it on explicitly, scoped to its own test-file convention.
+
+Enable any of the six by naming it:
 
 ```js
 import vat from '@vibe-agent-toolkit/utils/eslint';

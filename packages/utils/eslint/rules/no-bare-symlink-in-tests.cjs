@@ -36,7 +36,14 @@
  * to a shared `beforeAll`) that a mechanical fixer cannot make safely.
  */
 
-const { EXEMPT_FILES_SCHEMA, createConfigurableExemptPathMatcher, isTestFile } = require('./exempt-path-matcher.cjs');
+const {
+  EXEMPT_FILES_SCHEMA,
+  UNANCHORED_EXEMPT_FILE,
+  UNANCHORED_EXEMPT_MESSAGE,
+  createConfigurableExemptPathMatcher,
+  isTestFile,
+  reportUnanchoredExemptEntries,
+} = require('./exempt-path-matcher.cjs');
 
 /** `node:fs` names carrying the sync primitive. */
 const SYNC_MODULES = new Set(['node:fs', 'fs']);
@@ -69,6 +76,7 @@ module.exports = {
         "(`process.platform === 'win32' ? 'junction' : 'dir'`, absolute target), which needs no " +
         'elevation; otherwise catch the failure and say what privilege is missing, or degrade to a copy. ' +
         'If this platform is deliberately out of scope, say so in an eslint-disable justification.',
+      [UNANCHORED_EXEMPT_FILE]: UNANCHORED_EXEMPT_MESSAGE,
     },
   },
 
@@ -77,7 +85,13 @@ module.exports = {
 
     const exemptMatcherFor = createConfigurableExemptPathMatcher([]);
     if (exemptMatcherFor(context)(filename)) {
-      return {};
+      // Still surface a malformed exemption list: the file we are standing in
+      // may be exempt only BECAUSE the entry is unanchored.
+      return {
+        Program(node) {
+          reportUnanchoredExemptEntries(context, node);
+        },
+      };
     }
 
     // Test files and shipped code are both covered, with different remedies.
@@ -117,6 +131,10 @@ module.exports = {
     }
 
     return {
+      Program(node) {
+        reportUnanchoredExemptEntries(context, node);
+      },
+
       ImportDeclaration(node) {
         const source = node.source.value;
         if (SYNC_MODULES.has(source)) {

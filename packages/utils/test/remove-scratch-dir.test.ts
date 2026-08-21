@@ -12,8 +12,17 @@
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 
-import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+// `../src/`, not the package name. Importing `@vibe-agent-toolkit/utils` here
+// resolves to `dist/`, which scores ZERO coverage against `src/test-helpers.ts`
+// — so every line of the give-up mechanism, the whole reason this module
+// exists, would read as unhit — and silently tests a stale build whenever `src`
+// changes without a rebuild. Every sibling behaviour test imports from `../src/`
+// for exactly this reason; only the barrel/subpath tests use the package name,
+// because the resolution IS what they assert.
+import { normalizedTmpdir, safePath } from '../src/path-utils.js';
+import { removeScratchDir } from '../src/test-helpers.js';
 
 let scratch: string;
 
@@ -160,5 +169,34 @@ describe('removeScratchDir', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(warnings).toHaveLength(1);
+  });
+
+  /**
+   * The other half of the latch, and the ordering the safety claim actually
+   * rests on: a removal that **rejects** after its budget already expired. The
+   * sibling above settles by resolving, which exercises the `.then` arm only —
+   * so the `.catch` arm's `giveUp` was reachable in production and pinned by
+   * nothing. If the latch failed to hold here the suite would see a second
+   * warning; if the handler were attached after the race instead of before it,
+   * this would surface as an unhandled rejection rather than a passing test.
+   */
+  it('stays silent when an abandoned removal rejects after the budget expired', async () => {
+    const root = safePath.join(scratch, 'rejects-after-budget');
+    const { warnings, onWarn } = warningSink();
+    let fail: ((error: Error) => void) | undefined;
+
+    await removeScratchDir(root, {
+      budgetMs: 5,
+      onWarn,
+      remove: () => new Promise<void>((_resolve, reject) => { fail = reject; }),
+    });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('did not finish');
+
+    fail?.(new Error('EPERM: too late to matter'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).not.toContain('EPERM');
   });
 });

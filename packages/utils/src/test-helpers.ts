@@ -8,10 +8,21 @@ import { mkdirSyncReal, normalizedTmpdir, safePath } from './path-utils.js';
 /**
  * How long a scratch-dir teardown may run before it gives up and warns.
  *
- * The value only has to be comfortably *under* vitest's 10s default hook
- * timeout — that is the whole design. Sizing a teardown budget to beat
- * contention is unprovable (see {@link removeScratchDir}); sizing it below a
- * known constant is arithmetic.
+ * The value only has to be comfortably *under* the hook timeout it runs in —
+ * that is the whole design. Sizing a teardown budget to beat contention is
+ * unprovable (see {@link removeScratchDir}); sizing it below a known constant is
+ * arithmetic.
+ *
+ * ⚠️ **The known constant is the UNIT tier's**, which is the only tier that
+ * takes vitest's 10s default (`vitest.shared.ts` declines to override it there
+ * on purpose) and the tier where the flake was actually observed. The other two
+ * tiers set their own, far larger: integration gets `platformTestTimeout`
+ * (60s on Unix, 900s on Windows) and system gets 300s. A suite in those tiers
+ * inherits this 4s default and therefore gives up 15x–225x earlier than its hook
+ * would have allowed — for a heavy fixture tree that is a leaked directory and a
+ * warning bought for nothing, since an abandoned removal does not stop (see
+ * {@link removeScratchDir}). Such a suite should pass its own `budgetMs`, which
+ * both suite helpers forward.
  */
 const SCRATCH_REMOVAL_BUDGET_MS = 4000;
 
@@ -71,9 +82,19 @@ export interface RemoveScratchDirOptions {
  *
  * The cost, stated plainly: under pathological contention the directory
  * survives in the OS temp dir, which the OS reclaims, and the warning names
- * the path. An abandoned removal keeps running harmlessly in the background;
- * it can never surface as an unhandled rejection because the only rejection
- * handler is installed before the race.
+ * the path. It can never surface as an unhandled rejection, because the only
+ * rejection handler is installed before the race.
+ *
+ * ⚠️ **Abandoning the removal does not stop it, and does not free the worker.**
+ * A pending libuv `fs` request is an active handle, so the `rm` runs to
+ * completion regardless — measured at 2,407 ms on an 8,000-file tree after the
+ * race was decided at 5 ms — and the process cannot exit until it does.
+ * `timer.unref()` below unrefs the *timer*, not the removal. So what this buys
+ * is bounded: the **hook** always resolves in time, which is what stops a green
+ * suite going red. It does **not** shed the work, and under the contention it
+ * targets the abandoned removal competes for disk with whatever runs next in
+ * the same worker. That is the trade, and it is why the budget wants to be as
+ * large as the tier's hook allows rather than as small as possible.
  *
  * @param dir - Directory to remove. An empty string is a no-op, so a suite
  *   whose `beforeAll` never ran can call this unconditionally.
@@ -211,6 +232,9 @@ export function getTestOutputBase(packageName: string): string {
  * than creating a new mkdtemp for each test.
  *
  * @param prefix - Prefix for the suite temp directory name
+ * @param teardown - Forwarded to {@link removeScratchDir}. Raise `budgetMs` for a
+ *   suite whose fixture tree is heavy or whose tier allows a longer hook than the
+ *   unit tier this default is sized against — see {@link SCRATCH_REMOVAL_BUDGET_MS}.
  * @returns Suite helper with beforeAll, afterAll, beforeEach, afterEach, and getTempDir
  *
  * @example
@@ -229,7 +253,7 @@ export function getTestOutputBase(packageName: string): string {
  * });
  * ```
  */
-export function setupAsyncTempDirSuite(prefix: string): {
+export function setupAsyncTempDirSuite(prefix: string, teardown: RemoveScratchDirOptions = {}): {
   beforeAll: () => Promise<void>;
   afterAll: () => Promise<void>;
   beforeEach: () => Promise<void>;
@@ -245,7 +269,7 @@ export function setupAsyncTempDirSuite(prefix: string): {
       suiteDir = await fs.mkdtemp(safePath.join(normalizedTmpdir(), `${prefix}-suite-`));
     },
     afterAll: async () => {
-      await removeScratchDir(suiteDir);
+      await removeScratchDir(suiteDir, teardown);
     },
     beforeEach: async () => {
       testCounter++;
@@ -267,6 +291,9 @@ export function setupAsyncTempDirSuite(prefix: string): {
  * than creating a new mkdtemp for each test.
  *
  * @param prefix - Prefix for the suite temp directory name
+ * @param teardown - Forwarded to {@link removeScratchDir}. Raise `budgetMs` for a
+ *   suite whose fixture tree is heavy or whose tier allows a longer hook than the
+ *   unit tier this default is sized against — see {@link SCRATCH_REMOVAL_BUDGET_MS}.
  * @returns Suite helper with beforeAll, afterAll, beforeEach, afterEach, and getTempDir
  *
  * @example
@@ -285,7 +312,7 @@ export function setupAsyncTempDirSuite(prefix: string): {
  * });
  * ```
  */
-export function setupSyncTempDirSuite(prefix: string): {
+export function setupSyncTempDirSuite(prefix: string, teardown: RemoveScratchDirOptions = {}): {
   beforeAll: () => void;
   // Async despite the "sync suite" name, deliberately: only the teardown is,
   // because bounding a removal needs a race and `rmSync` cannot be raced. The
@@ -304,7 +331,7 @@ export function setupSyncTempDirSuite(prefix: string): {
       suiteDir = mkdtempSync(safePath.join(normalizedTmpdir(), `${prefix}-suite-`));
     },
     afterAll: async () => {
-      await removeScratchDir(suiteDir);
+      await removeScratchDir(suiteDir, teardown);
     },
     beforeEach: () => {
       testCounter++;

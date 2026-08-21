@@ -117,6 +117,9 @@ describe('whole-module subpath entries', () => {
     expect(typeof mod.getTestOutputDir).toBe('function');
     expect(typeof mod.setupAsyncTempDirSuite).toBe('function');
     expect(typeof mod.setupSyncTempDirSuite).toBe('function');
+    // The bounded teardown both suite helpers delegate to. A consumer wiring
+    // its own `afterAll` needs it from the same subpath as the helpers.
+    expect(typeof mod.removeScratchDir).toBe('function');
   });
 
   it('./asset exposes asset reference resolution', async () => {

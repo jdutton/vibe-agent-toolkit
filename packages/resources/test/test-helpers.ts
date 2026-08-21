@@ -8,7 +8,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import { GitTracker, mkdirSyncReal, normalizedTmpdir, resetProjectRootCaches, safePath } from '@vibe-agent-toolkit/utils';
+import { GitTracker, mkdirSyncReal, normalizedTmpdir, removeScratchDir, resetProjectRootCaches, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, expect, type Assertion } from 'vitest';
 
 import { ExternalLinkValidator } from '../src/external-link-validator.js';
@@ -251,7 +251,11 @@ export function setupSubdirTestSuite(suitePrefix: string): {
       suite.suiteDir = await mkdtemp(safePath.join(normalizedTmpdir(), suitePrefix));
     },
     afterAll: async () => {
-      await rm(suite.suiteDir, { recursive: true, force: true });
+      // Bounded, like the two `utils` suite helpers. This is the third shared
+      // helper of the same shape and it was missed by that migration — it backs
+      // the projection suites, whose fixture trees are the heaviest in the repo
+      // and therefore the likeliest to lose a teardown to contention.
+      await removeScratchDir(suite.suiteDir);
     },
     beforeEach: async () => {
       testCounter++;

@@ -64,7 +64,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   passed, purely from machine contention; this cannot. `setupAsyncTempDirSuite` and
   `setupSyncTempDirSuite` now use it, so their teardowns are bounded too — note that
   `setupSyncTempDirSuite`'s `afterAll` is consequently `async` (a removal cannot be bounded without
-  a race, and `rmSync` cannot be raced). Its `beforeEach` and `getTempDir` stay synchronous.
+  a race, and `rmSync` cannot be raced). Its `beforeEach` and `getTempDir` stay synchronous. Both
+  suite helpers take an optional second argument forwarded to `removeScratchDir`, because the
+  default budget is sized against the unit tier's hook timeout and a suite in a tier with a longer
+  one (or with a heavy fixture tree) should raise it. Note what the bound does and does not buy:
+  the *hook* always resolves in time, but an abandoned removal is a pending libuv request that runs
+  to completion regardless — it is not cancelled, and it keeps its worker alive until it finishes.
 
 - **The resource projection** — a populated, queryable model of a project's documents, blobs, links
   and membership, replacing ad-hoc crawling as the substrate for the resource commands. `vat
@@ -132,6 +137,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `@vibe-validate/utils` and `yaml` to the installed tree.
 
 ### Fixed
+
+- **`vat agent install --force` could not replace a broken dev-mode symlink.** The already-installed
+  check used `fs.access()`, which *follows* a symlink — so a link left dangling by a rebuild that
+  removed `dist/` read as "nothing installed here". That skipped the `--force` removal entirely and
+  let the install fail with a bare `EEXIST` a moment later, and the advice it printed
+  ("install without `--dev`") hit the same stale entry and failed too. The check now uses
+  `fs.lstat()`, which stats the link itself, so `--force` clears it whether or not its target still
+  exists.
+
+- **`local/no-bare-symlink-in-tests` silently accepted an unanchored `exemptFiles` entry.** Every
+  other rule in the pack that takes `exemptFiles` reports a bare filename, because ESLint filenames
+  are absolute and a bare entry exempts *every* file with that name anywhere in the tree — including
+  files added later by someone who never saw the config. This rule shipped the option without that
+  advisory, which began to matter when the rule was extended past test files and `exemptFiles`
+  became load-bearing. It now reports `unanchoredExemptFile` like its three siblings.
 
 - **Git commands run from inside a git hook could read — or write — the wrong repository.** Worst
   case, `vat claude marketplace publish` switched a branch and landed a commit in the repository you

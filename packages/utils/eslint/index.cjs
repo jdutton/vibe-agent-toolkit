@@ -120,13 +120,21 @@ const RECOMMENDED_EXCLUDE = new Set([
   // `vat-example-cat-agents`, every one of them correct. It ships in `rules`, and
   // `eslint.config.js` generates one scoped block per workspace package.
   'no-self-package-import',
-  // Excluded because its message names a vitest-specific idiom (`skip()` from
-  // the per-test context) and its replacement — `createSymlink()` /
-  // `createSymlinkAsync()` / `symlinkCapability()` — lives on THIS package's
-  // own `./testing` subpath rather than on a seam every consumer already has.
-  // An adopter using a different test runner, or no symlink-heavy tests at
-  // all, should not silently inherit an opinion about vitest control flow.
-  // VAT enables it explicitly, scoped to its own test-file convention.
+  // Excluded for its TEST half only, which is the honest way to say it. That
+  // half names a vitest-specific idiom (`skip()` from the per-test context) and
+  // a replacement — `createSymlink()` / `createSymlinkAsync()` /
+  // `symlinkCapability()` — living on THIS package's own `./testing` subpath
+  // rather than on a seam every consumer already has. An adopter using a
+  // different test runner, or no symlink-heavy tests at all, should not
+  // silently inherit an opinion about vitest control flow.
+  //
+  // ⚠️ The rule now covers SHIPPED code too, and that half (`unguardedSymlink`)
+  // has neither dependency: it names the Windows privilege and a junction, both
+  // portable facts. So this exclusion is weaker than it reads — the two halves
+  // share one rule id and cannot be enabled separately, and the test half is
+  // what keeps the pair out. Splitting the rule would let the production half
+  // ride in `recommended`; that is a public-API change and has not been made.
+  // VAT enables the whole rule explicitly, scoped to its own conventions.
   'no-bare-symlink-in-tests',
 ]);
 
