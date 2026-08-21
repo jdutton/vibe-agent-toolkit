@@ -15,9 +15,37 @@
  * |---|---|---|
  * | `always` | `CLAUDE.md`, `CLAUDE.local.md` | charged **every turn**, unconditionally |
  * | `selected` | `SKILL.md`, subagents, commands | index entry always; body only when chosen |
- * | `referenced` | settings, manifests, READMEs | nothing until traversed |
  *
- * ## ⛔ Three conventions deliberately carry NO loading class
+ * **Two values, both with a real producer.** An earlier draft had a third,
+ * `referenced`, for "nothing until traversed". It was dropped because it is true
+ * of a README and equally true of every `.ts` file in the tree, so as a class it
+ * partitioned nothing. The question worth asking — *is this reachable from
+ * something already loaded* — is a property of the link closure, which a path
+ * classifier cannot see and a closure contributor can. When one produces it, the
+ * value comes back; `resource_tags.value` is a plain nullable string, so that
+ * costs no schema change.
+ *
+ * ## ⛔ The class is about the MODEL's context, not about the client's inputs
+ *
+ * `settings.json`, `.mcp.json`, `plugin.json` and `marketplace.json` carry **no**
+ * loading class, and the reason is not that they are cheap — it is that the
+ * question does not apply. The **client** parses them; their bytes never enter a
+ * context window under any traversal, so "when is this body charged" has no
+ * answer. An earlier draft called them `referenced`, which put them in the same
+ * bucket as a README, whose bytes a link walk really does charge in full.
+ *
+ * That conflation is not cosmetic — it breaks the first consumer in **both**
+ * directions at once. A budget check summing `tokenEstimate` over `referenced`
+ * files would count JSON the model can never read, while missing the cost those
+ * files actually cause: an `.mcp.json` naming three servers might be 200 tokens
+ * of its own and inject several thousand tokens of tool schemas into the system
+ * prompt. The indirect cost is real and worth modelling one day; it is a
+ * different quantity, needing a different estimator, and it is not `loading`.
+ * Inventing a fourth class for it now would ship a value with no producer and no
+ * consumer, which is how `deferred-source` and `entry-point` got into the
+ * earlier draft.
+ *
+ * ## ⛔ Conventions that deliberately carry NO loading class
  *
  * A missing `loading` row is a positive statement — *"a path cannot answer
  * this"* — and is the correction that distinguishes this vocabulary from its
@@ -37,10 +65,9 @@
  *   `AGENTS.md` enters context only where a `CLAUDE.md` imports it (`@AGENTS.md`)
  *   or a symlink aliases it — which makes its loading class a property of the
  *   **import graph**, not of its basename. A repo with an unimported `AGENTS.md`
- *   (this one included) would be over-reported by any per-basename answer.
- * - **`mcp-config`, `plugin-manifest`, and friends** do carry `referenced`,
- *   because "nothing loads this until something walks to it" *is* answerable
- *   from the path.
+ *   would be over-reported by any per-basename answer.
+ * - **`settings`, `mcp-config`, `plugin-manifest`, `marketplace-manifest`** — the
+ *   client's inputs, never the model's. See the section above.
  *
  * ## Case-insensitivity is a construction property, not a courtesy
  *
@@ -62,7 +89,7 @@
 import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 /** What a convention costs an agent's context, and when. */
-export type TagLoading = 'always' | 'referenced' | 'selected';
+export type TagLoading = 'always' | 'selected';
 
 /** The tag whose value carries a resource's {@link TagLoading} class. */
 export const LOADING_TAG = 'loading';
@@ -279,31 +306,38 @@ const CONVENTIONS: readonly Convention[] = [
     matches: (b, p, roots) => b.endsWith('.md') && isComponent(p, PLUGIN_COMPONENT_DIRS.commands, roots),
   },
 
-  // Referenced: configuration and manifests. An agent pays for these only if
-  // something walks to them.
+  // ⛔ HARNESS CONFIGURATION — located, never charged. These four carry no
+  // loading class because the model never sees their bytes under any traversal:
+  // the CLIENT parses them. See the header.
   {
     tag: 'settings',
-    loading: 'referenced',
+    loading: null,
     matches: (b, p) =>
       ((b === 'settings.json' || b === 'settings.local.json') && directlyInside(p, '.claude')) ||
       b === '.claude.json',
   },
   {
     tag: 'mcp-config',
-    loading: 'referenced',
+    loading: null,
     matches: (b, p, roots) => b === '.mcp.json' && atProjectOrPluginRoot(p, roots),
   },
   {
     tag: 'plugin-manifest',
-    loading: 'referenced',
+    loading: null,
     matches: (b, p) => b === 'plugin.json' && directlyInside(p, '.claude-plugin'),
   },
   {
     tag: 'marketplace-manifest',
-    loading: 'referenced',
+    loading: null,
     matches: (b, p) => b === 'marketplace.json' && directlyInside(p, '.claude-plugin'),
   },
-  { tag: 'readme', loading: 'referenced', matches: (b) => b === 'readme.md' },
+
+  // Located, never charged — for a different reason from the manifests above.
+  // "Costs nothing until something walks to it" is true of a README and equally
+  // true of every other file in the tree, so as a CLASS it distinguishes
+  // nothing. The real question — is anything reachable from an always-loaded
+  // file — is a property of the link closure, which a path cannot see.
+  { tag: 'readme', loading: null, matches: (b) => b === 'readme.md' },
 ];
 
 /**
@@ -409,11 +443,14 @@ export function strongestLoading(classes: readonly TagLoading[]): TagLoading | u
 /**
  * Order the loading classes by context cost, cheapest first.
  *
+ * Deliberately a comparison rather than an identity test even at two members:
+ * the caller's rule is "strongest wins", and writing that as `=== 'always'` at
+ * the call site would have to be rewritten — not merely extended — the first
+ * time a third class appears.
+ *
  * @param loading - The class to rank
  * @returns A comparable rank, higher meaning more expensive
  */
 function rank(loading: TagLoading): number {
-  if (loading === 'always') return 2;
-  if (loading === 'selected') return 1;
-  return 0;
+  return loading === 'always' ? 1 : 0;
 }

@@ -103,6 +103,7 @@ describe('classifyPath — the built-in vocabulary', () => {
     ['.claude/settings.local.json', 'settings.local.json', SETTINGS],
     ['.claude.json', '.claude.json', SETTINGS],
     [MCP_JSON, MCP_JSON, MCP_CONFIG],
+    ['README.md', README_MD, 'readme'],
     [`.claude-plugin/${PLUGIN_JSON}`, PLUGIN_JSON, PLUGIN_MANIFEST],
     [`.claude-plugin/${MARKETPLACE_JSON}`, MARKETPLACE_JSON, 'marketplace-manifest'],
     ['README.md', README_MD, 'readme'],
@@ -250,8 +251,6 @@ describe('loading classes', () => {
     ['skills/x/SKILL.md', 'skill.md', 'selected'],
     ['.claude/agents/a.md', 'a.md', 'selected'],
     ['.claude/commands/c.md', 'c.md', 'selected'],
-    [`.claude/${SETTINGS_JSON}`, SETTINGS_JSON, 'referenced'],
-    ['README.md', README_MD, 'referenced'],
   ])('charges %s as %s', ([path, basename, expected]) => {
     expect(loadingOf(path as string, basename as string)).toBe(expected);
   });
@@ -261,6 +260,20 @@ describe('loading classes', () => {
   it('does not charge a rules file, because `paths:` frontmatter decides', () => {
     expect(tagsOf(ROOT_RULE, 'x.md')).toEqual([RULES_FILE]);
     expect(loadingOf(ROOT_RULE, 'x.md')).toBeUndefined();
+  });
+
+  // ⛔ The client parses these; their bytes never reach a context window, so
+  // "when is this body charged" has no answer. Calling them `referenced` put
+  // them in the same bucket as a README, whose bytes a walk really does charge.
+  it.for([
+    [`.claude/${SETTINGS_JSON}`, SETTINGS_JSON, SETTINGS],
+    [MCP_JSON, MCP_JSON, MCP_CONFIG],
+    ['README.md', README_MD, 'readme'],
+    [`.claude-plugin/${PLUGIN_JSON}`, PLUGIN_JSON, PLUGIN_MANIFEST],
+    [`.claude-plugin/${MARKETPLACE_JSON}`, MARKETPLACE_JSON, 'marketplace-manifest'],
+  ])('locates %s without charging it', ([path, basename, tag]) => {
+    expect(tagsOf(path as string, basename as string)).toEqual([tag]);
+    expect(loadingOf(path as string, basename as string)).toBeUndefined();
   });
 
   it('does not charge AGENTS.md, because the import graph decides', () => {
@@ -284,12 +297,10 @@ describe('strongestLoading', () => {
   // every path that exists, and a rank-everything-equally mutant survives the
   // entire path-level suite above.
   it.for([
-    [['referenced', 'always'], 'always'],
-    [['always', 'referenced'], 'always'],
-    [['referenced', 'selected'], 'selected'],
-    [['selected', 'referenced'], 'selected'],
     [['selected', 'always'], 'always'],
-    [['referenced'], 'referenced'],
+    [['always', 'selected'], 'always'],
+    [['selected'], 'selected'],
+    [['always'], 'always'],
   ] as const)('reduces %j to %s', ([classes, expected]) => {
     expect(strongestLoading([...classes])).toBe(expected);
   });

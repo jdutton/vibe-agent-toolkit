@@ -58,20 +58,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`resource_tags` is populated.** `AgenticConventionContributor` classifies every realization by
-  the harness convention its path carries — `claude-md`, `agents-md`, `skill-md`, `rules-file`,
-  `subagent`, `command`, `settings`, `mcp-config`, `plugin-manifest`, `marketplace-manifest`,
-  `readme` — plus a `loading` row valued `always` / `selected` / `referenced`. It is a `base`
-  contributor that reads no blobs, so it runs in the repo-wide lane alongside `contentParsing:
-  'skip'`, and it declares its own extent so `zone_provenance` records that it ran. The six extent
-  contributors still emit no tags: classification is not an enumerator's job.
-
-  Three points where a path genuinely cannot answer, so no `loading` row is written rather than a
-  guessed one: a `.claude/rules/*` file (a rule without `paths:` frontmatter loads unconditionally,
-  so the class is a frontmatter fact), `AGENTS.md` (Claude Code reads `CLAUDE.md`, not `AGENTS.md` —
-  the class is a property of the import graph), and any path matching no convention.
-
-  Nothing consumes these rows yet; the always-loaded context-budget check is a separate change.
+- **(library) `resource_tags` is now populated.** `AgenticConventionContributor`, `classifyPath()`
+  and `pluginRootsFrom()` are exported from `@vibe-agent-toolkit/resources`; the contributor tags
+  each resource with the harness convention its path carries (`claude-md`, `skill-md`, `subagent`,
+  `command`, `settings`, `mcp-config`, `plugin-manifest`, `readme`, …) plus a `loading` row valued
+  `always` or `selected`. No CLI command reads these rows yet.
 
 - **(library) `removeScratchDir()` on `@vibe-agent-toolkit/utils`** — a best-effort temp-directory
   teardown for test suites, which warns and returns instead of failing when removal errors or

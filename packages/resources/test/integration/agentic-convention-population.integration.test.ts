@@ -41,7 +41,6 @@ const SOURCE = 'agentic-convention';
 const PLUGIN_SUBAGENT = 'plugins/reviewer/agents/team/security.md';
 /** The loading value asserted from several rows below. */
 const SELECTED = 'loading=selected';
-const REFERENCED = 'loading=referenced';
 /** A command under a `src/commands/` directory that no plugin root owns. */
 const CLI_COMMAND_DOC = 'packages/cli/src/commands/build.md';
 /** A rules file two directories deep — dropped by a direct-containment matcher. */
@@ -144,9 +143,11 @@ describe('the tags a path carries', () => {
     [NESTED_SUBAGENT, [SELECTED, 'subagent']],
     [PLUGIN_SUBAGENT, [SELECTED, 'subagent']],
     ['plugins/reviewer/commands/audit.md', ['command', SELECTED]],
-    ['README.md', [REFERENCED, 'readme']],
-    ['.mcp.json', [REFERENCED, 'mcp-config']],
-    ['plugins/reviewer/.claude-plugin/plugin.json', [REFERENCED, 'plugin-manifest']],
+    ['README.md', ['readme']],
+    // ⛔ Located, never charged — the client parses these, so their bytes never
+    // reach a context window and no `loading` row can honestly be written.
+    ['.mcp.json', ['mcp-config']],
+    ['plugins/reviewer/.claude-plugin/plugin.json', ['plugin-manifest']],
   ])('tags %s exactly as %j', ([path, expected]) => {
     expect(tagsFor(path as string)).toEqual(expected);
   });

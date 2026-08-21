@@ -118,8 +118,28 @@ silently change cross-tree equality and break existing, shipped output.
 The agent-instruction surface is ordinary `resource_tags` rows rather than a bolt-on concept. The
 organizing axis: files whose selection logic exists (conditionally-loaded, indexed by a description
 or glob the harness reads without opening the body) carry a `loading` tag with values `always` /
-`selected` / `referenced`. `SKILL.md`, subagents and commands are `selected`; `CLAUDE.md` and
-`CLAUDE.local.md` are `always`; settings, manifests and READMEs are `referenced`.
+`selected`. `CLAUDE.md` and `CLAUDE.local.md` are `always` — their location *is* the loading
+mechanism, since ancestors load at launch and subdirectory ones load on demand. `SKILL.md`,
+subagents and commands are `selected`: their index entry is unconditional, their body is not.
+
+⛔ **`loading` answers one question — what does turn zero cost — and only two classes can answer
+it from a path.** An earlier draft had a third, `referenced`, holding two unrelated things:
+
+- **Harness configuration** (`settings.json`, `.mcp.json`, `plugin.json`, `marketplace.json`) —
+  the *client* parses these; their bytes never reach a context window under any traversal. Summing
+  their `tokenEstimate` would be wrong in both directions at once: counting JSON the model cannot
+  read, while missing the several thousand tokens of tool schemas an `.mcp.json` injects into the
+  system prompt. That indirect cost is real, is a different quantity needing a different estimator,
+  and is not `loading`.
+- **`README.md`** — "nothing until traversed" is equally true of every `.ts` file in the tree, so
+  as a class it partitioned nothing. And a README *can* be always-loaded, via an `@README` import:
+  VAT's own worst location, `docs/architecture`, is 253 tokens of `CLAUDE.md` and **4,009 tokens of
+  imported README**. Its class is therefore graph-dependent, exactly like `AGENTS.md`.
+
+So three conventions decline the question for one coherent reason — `rules-file` because
+frontmatter decides, `agents-md` and `readme` because the import graph decides — and `referenced`
+returns only when a closure contributor can produce it. `resource_tags.value` is a plain nullable
+string, so that costs no schema change.
 
 ⚠️ **Two entries the earlier draft got wrong, both corrected against vendor documentation rather
 than against taste** (`packages/resources/src/projection/agentic-tags.ts` carries the
