@@ -41,6 +41,24 @@ vi.mock('../../src/skill-test/preflight.js', async (io) => (await import('../ski
  * a prompt, or a transcript).
  */
 const ANSWER_KEY = 'CANARY-EXPECTED-OUTPUT-9f2c4a7e1b';
+
+/**
+ * VAT's private per-run dirs, which live in the OS temp dir as SIBLINGS of the
+ * arm's workspace rather than under the harness root — the held eval suite (the
+ * answer key for a fetched-artifact subject) and the grader dir.
+ *
+ * Enumerated by GLOB rather than by asking the harness for the paths, because
+ * that is precisely how an executor with Bash finds them (`ls $TMPDIR`); a walk
+ * that needs vat to hand it the token tests a reach no attacker has to make.
+ * Only this file's high-entropy `ANSWER_KEY` counts as a hit, so another run's
+ * dir sitting alongside cannot produce a false positive.
+ */
+function vatOnlyTmpDirs(): string[] {
+  const tmp = normalizedTmpdir();
+  return readdirSync(tmp)
+    .filter((name) => name.startsWith('vat-skill-evals-') || name.startsWith('vat-skill-grade-'))
+    .map((name) => safePath.join(tmp, name));
+}
 /** Shared eval prompt — its content is irrelevant to every canary assertion. */
 const EVAL_PROMPT = 'do the thing';
 const SKILL_NAME = 'canary-skill';
@@ -151,16 +169,25 @@ async function runCanary(
     onExecutorSpawn: (opts) => {
       spawns += 1;
       // The executor's REACHABLE world, not merely its cwd: cwd + --add-dir
-      // sandbox + every --plugin-dir + the whole harness root.
-      // `safePath.join(opts.cwd, '..')` is the WORKSPACES ROOT. It used to be
-      // covered incidentally, because workspaces lived under `harnessRoot`; they
-      // now live outside it, so without this the walk covers only the ONE eval's
-      // own directory and this file's stated invariant — "every byte the executor
-      // could reach" — quietly became false. The executor has Bash, so sibling
-      // workspaces are one `ls ..` away.
+      // sandbox + every --plugin-dir + the whole harness root + the WORKSPACES
+      // ROOT + every vat-only dir sitting in the same OS temp dir.
+      //
+      // The cwd is `<workspacesRoot>/<armToken>/<evalId>`, so the workspaces root
+      // is TWO levels up. It was one level up until the per-arm segment landed,
+      // and the walk was not updated — which silently narrowed it to the eval's
+      // own arm and made this file's stated invariant ("every byte the executor
+      // could reach") false for the arm next door. The executor has Bash; a
+      // sibling workspace is one `ls ..` away.
       leaks.push(
         ...filesContaining(
-          [opts.cwd, safePath.join(opts.cwd ?? '.', '..'), opts.sandboxDir, ...opts.pluginDirs, harnessRoot],
+          [
+            opts.cwd,
+            safePath.join(opts.cwd ?? '.', '..', '..'),
+            opts.sandboxDir,
+            ...opts.pluginDirs,
+            harnessRoot,
+            ...vatOnlyTmpDirs(),
+          ],
           ANSWER_KEY,
         ),
       );
@@ -229,6 +256,56 @@ describe('eval answer-key isolation (canary)', () => {
     expect(
       existsSync(safePath.join(soleArmWorkspace(workspacesPath ?? '', 'with-files'), 'fixtures', 'input.md')),
     ).toBe(true);
+  });
+
+  it('a --baseline run cannot reach expected_output from EITHER arm', async () => {
+    // Until this case existed, no canary passed `baseline: true`, so the WITHOUT
+    // tree was never staged and never walked — the arm the whole `--baseline`
+    // isolation lane exists to protect was the one arm the canary never saw.
+    const layout = writeFixture('subject', [
+      { id: 'both-arms', prompt: EVAL_PROMPT, expected_output: ANSWER_KEY, expectations: ['it works'] },
+    ]);
+
+    const { exitCode, leaks, spawns } = await runCanary(layout, { baseline: true });
+
+    expect(leaks).toEqual([]);
+    // Two executor spawns — one per arm. A canary that saw only one arm would
+    // pass here vacuously, which is exactly how this gap survived.
+    expect(spawns).toBe(2);
+    expect(exitCode).toBe(0);
+  });
+
+  it('holds the suite in tmp ONLY when it exists nowhere else, and vat detects that reach', async () => {
+    // The fetched-artifact shape: the suite exists ONLY inside the resolved
+    // subject, so vat has to keep a copy somewhere it can read and the executor
+    // cannot be handed. That copy goes to `<tmp>/vat-skill-evals-<token>/` at 0700.
+    //
+    // This case is the honest residual, and it is why the walk above globs tmp:
+    // 0700-outside-the-sandbox is Claude's permission model, not an OS boundary —
+    // skill code runs as the same uid. What vat owes here is DETECTION, which is
+    // `vatPrivateDirNeedles`. What it owes everywhere else is not making the copy
+    // at all, which every other case in this file now asserts.
+    const layout = writeFixture('subject', [
+      { id: 'held-only', prompt: EVAL_PROMPT, expected_output: ANSWER_KEY, expectations: ['it works'] },
+    ]);
+    // An authored dir with a SKILL.md but no evals/, so rule 1 finds nothing and
+    // the run must fall back to the held copy.
+    const authoredWithoutEvals = safePath.join(tempDir, 'authored-empty', SKILL_NAME);
+    mkdirSyncReal(authoredWithoutEvals, { recursive: true });
+    writeFileSync(safePath.join(authoredWithoutEvals, 'SKILL.md'), SKILL_MD, 'utf8');
+
+    const { exitCode, leaks, spawns } = await runCanary(
+      { ...layout, scaffoldDir: authoredWithoutEvals },
+    );
+
+    // The run WORKED off the held copy — this is the path the hold dir exists for,
+    // and skipping the hold write on the common path must not have broken it.
+    expect(spawns).toBe(1);
+    expect(exitCode).toBe(0);
+    // Every reachable copy is inside vat's own 0700 tmp dir; none is under the
+    // executor's cwd, sandbox, plugin dirs, workspaces root or the harness root.
+    expect(leaks.length).toBeGreaterThan(0);
+    for (const leak of leaks) expect(leak).toContain('vat-skill-evals-');
   });
 
   it('a dist-shaped subject that does not carry the suite never has it staged back in', async () => {

@@ -64,8 +64,14 @@ export interface StageHarnessOptions {
    * carries the suite (a fetched npm/url/vendored artifact, or a source tree that
    * holds its own evals), it is relocated here so the harness can still read it
    * while the executor cannot. Left empty when the subject carried no suite.
+   *
+   * OMIT IT when the run will read the suite from the AUTHORED source instead —
+   * the strip out of the staged tree still happens, but no copy is written. A
+   * held copy the run never reads is a second copy of the answer key in the
+   * shared OS temp dir, bought for nothing; the caller owns that decision because
+   * it is the one that resolves the read path.
    */
-  evalSuiteHoldDir: string;
+  evalSuiteHoldDir?: string;
 }
 
 export interface StageHarnessResult {
@@ -254,15 +260,19 @@ export async function stageHarness(opts: StageHarnessOptions): Promise<StageHarn
 
   // Strip the eval suite from an item's resolved copy BEFORE it is staged onward or
   // content-hashed — the answer key must never reach the executor's filesystem. The
-  // SUBJECT's suite is relocated to the vat-only hold dir first (so the harness can
-  // still read a suite that exists only inside a fetched artifact); every other
-  // item's is simply removed. See eval-suite-isolation.ts for the full rationale.
+  // SUBJECT's suite is relocated to the vat-only hold dir first, but ONLY when the
+  // caller asked for that (`evalSuiteHoldDir` given) — i.e. when the suite exists
+  // nowhere else and the run has to read it back. Every other item's, and the
+  // subject's when an authored copy already exists, is simply removed. See
+  // eval-suite-isolation.ts for the full rationale.
   const stripEvalSuite = (stagedDir: string, role: StageItem['role']): boolean => {
     const preserved = isolateEvalSuite({
       stagedDir,
       stagingRoot: opts.ctx.stagingRoot,
       evalsSubpath: opts.evalsSubpath,
-      ...(role === 'subject' ? { holdDir: opts.evalSuiteHoldDir } : {}),
+      ...(role === 'subject' && opts.evalSuiteHoldDir !== undefined
+        ? { holdDir: opts.evalSuiteHoldDir }
+        : {}),
     });
     // When the run reads its suite from somewhere OTHER than the convention, the
     // conventional location must be stripped too. A suite this run is not grading

@@ -364,6 +364,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   All grader-supplied strings are now stripped of escape sequences and control characters, capped in
   length, and the friction report is capped at 50 lines.
 
+- **`vat skill test` no longer copies your eval suite into the OS temp dir when it does not need
+  to.** Every run that staged a subject carrying its own `evals/` wrote a second copy of the suite —
+  `expected_output` answer keys included — to `<tmp>/vat-skill-evals-<token>/`, even though the run
+  then read the authored source and never touched it. The copy is now made only when the suite
+  exists nowhere else (a fetched npm/url artifact), which is the case it was added for. It is
+  `0700`, but that is a same-uid directory, not an OS boundary.
+
 - **A grader's tool verdict must now name the checks the eval actually declared.** `mustRun` /
   `mustNotRun` / `mustSucceed` / `sequence` verdicts were computed from whatever checks the grader
   returned, so omitting one made that expectation vacuously pass and inventing one added a check the

@@ -5,6 +5,7 @@ import {
   detectBaselineContamination,
   harnessNeedles,
   siblingArmNeedles,
+  vatPrivateDirNeedles,
   scrubControlArmEnv,
   summarizeBaselineIntegrity,
   type BaselineContamination,
@@ -21,6 +22,7 @@ const EXCERPT_ELLIPSIS = '…';
 const KIND_HARNESS_PATH = 'harness-path' as const;
 const KIND_DECLARED_EXECUTABLE = 'declared-executable' as const;
 const KIND_SIBLING_ARM = 'sibling-arm' as const;
+const KIND_VAT_PRIVATE_DIR = 'vat-private-dir' as const;
 // A workspaces-root path: under the tmp root like the real one, but deliberately
 // NOT under HARNESS_ROOT — the control arm must keep its own fixtures.
 // eslint-disable-next-line sonarjs/publicly-writable-directories -- inert test literal; nothing is read or written
@@ -328,6 +330,92 @@ describe('detectBaselineContamination — the sibling arm', () => {
         harnessRoot: HARNESS_ROOT,
       }),
     ).toEqual([]);
+  });
+});
+
+/**
+ * The FOURTH reachable class: vat's own private tmp dirs. The held eval suite has
+ * the `expected_output` ANSWER KEY in it and the grader dir has the run's nonce.
+ * Both are siblings of the arm's cwd under the OS temp dir and contain no harness
+ * path, so neither the harness needles nor the sibling-arm needles can see them.
+ * Reaching a copy of the skill inflates the control arm; reaching the answer key
+ * inflates BOTH, so it cannot even show up as a shrunken delta.
+ */
+describe('detectBaselineContamination — vat private dirs', () => {
+  // eslint-disable-next-line sonarjs/publicly-writable-directories -- inert test literal; the detector is a pure string scan
+  const HOLD_DIR = '/tmp/vat-skill-evals-1111aaaa2222bbbb';
+  // eslint-disable-next-line sonarjs/publicly-writable-directories -- inert test literal; the detector is a pure string scan
+  const GRADER_DIR = '/tmp/vat-skill-grade-3333cccc4444dddd';
+
+  it.each([
+    ['the absolute path', `cat ${HOLD_DIR}/evals.json`],
+    // The load-bearing case. The token is 16 random hex the arm cannot know, so
+    // every reach it can actually TYPE enumerates or globs — and a glob contains
+    // neither the full path nor the token, which is what defeats a suffix needle.
+    ['a glob over the temp dir', 'cat /tmp/vat-skill-evals-*/evals.json'],
+    ['a relative climb', 'cat ../../vat-skill-evals-1111aaaa2222bbbb/evals.json'],
+    ['a find that printed it', 'find /tmp -name evals.json -> /tmp/vat-skill-evals-1111aaaa2222bbbb/evals.json'],
+  ])('fires on %s into the held answer key', (_label, command) => {
+    const hits = detectBaselineContamination({
+      transcript: transcriptWith(command),
+      harnessRoot: HARNESS_ROOT,
+      vatPrivateDirs: [HOLD_DIR, GRADER_DIR],
+    });
+    expect(hits, `read clean: ${command}`).toHaveLength(1);
+    expect(hits[0]?.kind).toBe(KIND_VAT_PRIVATE_DIR);
+  });
+
+  // Same rule that keeps the bare `vat-skill-test` needle honest: a directory
+  // LISTING prints the name with nothing before it. "Where am I" is not "I read
+  // the answer key", and flagging it would train operators to ignore the flag.
+  it('does not fire when the arm merely LISTED the temp dir', () => {
+    const transcript = transcriptWith('ls /tmp\nvat-skill-evals-1111aaaa2222bbbb\nvat-skill-grade-3333cccc4444dddd\n');
+
+    expect(
+      detectBaselineContamination({ transcript, harnessRoot: HARNESS_ROOT, vatPrivateDirs: [HOLD_DIR, GRADER_DIR] }),
+    ).toEqual([]);
+  });
+
+  // The prefix needle is only safe for a dir the arm has no business naming. Its
+  // OWN workspace root shares the `vat-skill-` stem and its absolute path is in
+  // the arm's own prompt, so a needle built from it would fire on every clean run.
+  it('does not fire on the arm working in its own workspace', () => {
+    const transcript = transcriptWith('cd /tmp/vat-skill-test-ws-abc/3333cccc4444dddd/e1 && cat data.csv');
+
+    expect(
+      detectBaselineContamination({ transcript, harnessRoot: HARNESS_ROOT, vatPrivateDirs: [HOLD_DIR, GRADER_DIR] }),
+    ).toEqual([]);
+  });
+
+  // Two different capabilities — reading the answer key and reading the nonce —
+  // so an operator triaging a contaminated run must see both, not the first.
+  it('reports the answer-key dir and the grader dir separately', () => {
+    const hits = detectBaselineContamination({
+      transcript: transcriptWith(`cat ${HOLD_DIR}/evals.json && ls ${GRADER_DIR}`),
+      harnessRoot: HARNESS_ROOT,
+      vatPrivateDirs: [HOLD_DIR, GRADER_DIR],
+    });
+
+    expect(hits).toHaveLength(2);
+    expect(hits.map((h) => h.kind)).toEqual([KIND_VAT_PRIVATE_DIR, KIND_VAT_PRIVATE_DIR]);
+  });
+
+  it('is inert when no private dirs are supplied', () => {
+    expect(vatPrivateDirNeedles('')).toEqual([]);
+    expect(
+      detectBaselineContamination({
+        transcript: transcriptWith(`cat ${HOLD_DIR}/evals.json`),
+        harnessRoot: HARNESS_ROOT,
+      }),
+    ).toEqual([]);
+  });
+
+  it('builds full, name and prefix needles, longest first', () => {
+    expect(vatPrivateDirNeedles(HOLD_DIR)).toEqual([
+      HOLD_DIR,
+      'vat-skill-evals-1111aaaa2222bbbb',
+      'vat-skill-evals-',
+    ]);
   });
 });
 

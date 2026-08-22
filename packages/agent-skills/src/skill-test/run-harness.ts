@@ -1290,6 +1290,12 @@ interface EvalRunContext {
   armDirs: ArmWorkspaceDirs;
   pluginDirs: string[];
   graderOutDir: string;
+  /**
+   * The vat-only dir a harvested eval suite is held in — the ANSWER KEY for a
+   * fetched-artifact subject. Carried on the context solely so the WITHOUT arm's
+   * contamination scan can look for it; nothing in the eval loop reads from it.
+   */
+  evalSuiteHoldDir: string;
   runNonce: string;
   graderModel: string;
   model?: string;
@@ -1521,6 +1527,13 @@ function baselineContaminationFor(
       ctx.workspacesRoot,
       armDirSegment(ctx.armDirs, 'with'),
     ),
+    // VAT's private tmp dirs: the held eval suite (the `expected_output` answer
+    // key) and the grader dir (the run's integrity nonce). Both are SIBLINGS of
+    // the arm's cwd under the OS temp dir — two hops or one `$TMPDIR` expansion
+    // away — and contain no harness path, so neither the harness needles nor the
+    // sibling-arm needles can see them. The workspaces root is deliberately NOT
+    // in this list: it is the arm's own legitimate cwd.
+    vatPrivateDirs: [ctx.evalSuiteHoldDir, ctx.graderOutDir],
     // `name` is the executable's basename with the extension stripped
     // (`scripts/csvsum.py` → `csvsum`) — a stable token appearing in both the
     // command the arm ran and the output it got back. `howInvoked` is a command
@@ -1986,6 +1999,20 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     const resolveCtx = buildResolveCtx(harnessRoot, repoRoot);
     const items = buildStageItems(opts, repoRoot);
 
+    // Hold a copy of the subject's suite ONLY when this run would have to read it
+    // from there. `resolveEvalSuitePath` prefers the AUTHORED source and falls back
+    // to the hold dir, so when the authored copy exists the held one is never read
+    // — and staging was writing it anyway, putting a second copy of the
+    // `expected_output` answer key in the shared OS temp dir on the common path,
+    // for nothing. The hold dir is 0700 and outside the executor's `--add-dir`
+    // sandbox, but that is Claude's permission model, not an OS boundary: skill
+    // code runs as the same uid and `ls $TMPDIR` finds it. The cheapest answer to
+    // "can the executor reach the answer key" is not to write it there.
+    // Same predicate as `resolveEvalSuitePath`'s rule 1, so the two cannot disagree
+    // about which copy this run uses.
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- authored source path resolved from opts
+    const authoredSuiteExists = existsSync(resolveScaffoldEvalsPath(opts, repoRoot, evalsRef));
+
     const stageResult = await stageHarness({
       harnessRoot,
       items,
@@ -1994,7 +2021,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
       ctx: resolveCtx,
       currentUid,
       evalsSubpath,
-      evalSuiteHoldDir,
+      ...(authoredSuiteExists ? {} : { evalSuiteHoldDir }),
     });
 
     const { pluginDirs, subjectStagedDir, subjectPluginRoot, skippedOptional } = stageResult;
@@ -2177,6 +2204,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
       harnessRoot,
       pluginDirs,
       graderOutDir,
+      evalSuiteHoldDir,
       runNonce,
       graderModel,
       costAccumulator,

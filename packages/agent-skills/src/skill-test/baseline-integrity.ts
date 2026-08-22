@@ -178,6 +178,17 @@ function needsLeadingBoundary(needle: string): boolean {
   return !needle.includes('/');
 }
 
+// A `prefixNeedle` mode lived here — needles ending in `-` skipping the TRAILING
+// boundary check, so `vat-skill-evals-` could match with the run's token still
+// attached. It is REMOVED: nothing needed it. The reach it was written for is
+// `cat $TMPDIR/vat-skill-evals-*/evals.json`, and `*` is not in
+// PATH_SEGMENT_CONTINUATION, so the ORDINARY trailing check already accepts it;
+// every reach carrying the real token matches the full-path or whole-name needle
+// first. Proven by mutation: disabling the mode left all 53 tests green, which is
+// the definition of a special case nobody is standing on. See the MIN_NEEDLE_LENGTH
+// note above for the same lesson, and do not reintroduce this without a reach that
+// ONLY it can catch.
+
 function indexOfPathAtBoundary(haystack: string, needle: string): number {
   if (needle === '') return -1;
   const requireLeading = needsLeadingBoundary(needle);
@@ -277,14 +288,20 @@ export function scrubControlArmEnv(
 export const BaselineContaminationHitSchema = z.object({
   /**
    * What matched: a path under vat's harness root, a declared executable's name,
-   * or the OTHER arm's workspace directory.
+   * the OTHER arm's workspace directory, or one of vat's private tmp dirs.
    *
-   * `sibling-arm` is a materially different finding from the other two. Those mean
+   * `sibling-arm` is a materially different finding from the first two. Those mean
    * the arm found a copy of the skill; this one means it read the treatment arm's
    * live working directory, so the control may be echoing an answer the treatment
    * produced seconds earlier rather than solving anything.
+   *
+   * `vat-private-dir` is worse than all of them. It means the arm reached the held
+   * eval suite (the `expected_output` ANSWER KEY) or the grader dir (the run's
+   * integrity nonce). Reaching a copy of the skill inflates the control arm;
+   * reaching the answer key inflates BOTH arms, so it does not even show up as a
+   * shrunken delta — see {@link vatPrivateDirNeedles}.
    */
-  kind: z.enum(['harness-path', 'declared-executable', 'sibling-arm']),
+  kind: z.enum(['harness-path', 'declared-executable', 'sibling-arm', 'vat-private-dir']),
   /** The matched token — the path prefix or the executable basename. */
   match: z.string().min(1),
   /**
@@ -385,6 +402,16 @@ export interface DetectBaselineContaminationInput {
    * The ABSOLUTE path to that directory; the needles are derived from it.
    */
   siblingArmDir?: string;
+  /**
+   * VAT's private tmp dirs for this run — the held eval suite (the answer key) and
+   * the grader dir (the integrity nonce). Absolute paths; see
+   * {@link vatPrivateDirNeedles} for why these need a detector of their own and
+   * why the useful needle is a name PREFIX rather than the token.
+   *
+   * Never pass the workspaces root here: it is the arm's own legitimate cwd, and a
+   * prefix needle built from it fires on every clean run.
+   */
+  vatPrivateDirs?: readonly (string | undefined)[];
 }
 
 /**
@@ -407,6 +434,48 @@ export function siblingArmNeedles(siblingArmDir: string): string[] {
   const token = normalizedSegments(full).at(-1);
   // Longest first, so one reach is reported at its most specific spelling.
   return token === undefined || token === full ? [full] : [full, token];
+}
+
+/**
+ * The needles that mean "this transcript reached a dir only VAT is supposed to
+ * see" — the held eval suite (`<tmp>/vat-skill-evals-<token>`, which holds the
+ * `expected_output` ANSWER KEY for a fetched-artifact subject) and the grader dir
+ * (`<tmp>/vat-skill-grade-<token>`, which holds the run's integrity nonce).
+ *
+ * These are a FOURTH reachable class the harness-path detector cannot see: they
+ * are siblings of the arm's cwd under the OS temp dir, contain no harness path,
+ * and are two hops (`ls ../..`) or one `$TMPDIR` expansion away. Worse than
+ * reaching the skill — reaching the answer key inflates BOTH arms, so it cannot
+ * show up as a shrunken delta at all.
+ *
+ * Three needles, longest-first: the full path, the whole dir NAME, and the
+ * dir-name prefix with the per-run token stripped (`vat-skill-evals-`).
+ *
+ * The prefix is what catches the reach an arm can actually type. The token is 16
+ * random hex it has no way to know, so it globs — `cat $TMPDIR/vat-skill-evals-&#42;/
+ * evals.json` — and that string contains neither the full path nor the name. (One
+ * `&#42;` defeating a needle that embeds a random key is the same trap that once
+ * made the whole harness-suffix scheme inert.)
+ *
+ * The prefix needle carries no `/`, so {@link needsLeadingBoundary} requires one
+ * before it — without that, `ls $TMPDIR` printing `vat-skill-evals-abc` on its own
+ * line stamps a clean run contaminated. That rule is also why this must NEVER be
+ * built for the workspaces root: `vat-skill-test-ws-` is the arm's own legitimate
+ * cwd and its absolute path is in the arm's own prompt, so the needle would fire
+ * on every single clean run.
+ */
+export function vatPrivateDirNeedles(dir: string): string[] {
+  const full = normalizeForMatch(dir);
+  if (full === '') return [];
+  const segments = normalizedSegments(full);
+  const name = segments.at(-1);
+  if (name === undefined || name === full) return [full];
+  const needles = [full, name];
+  // Everything up to and including the final `-`, i.e. the part that is NOT the
+  // per-run token. Absent when the dir name carries no `-` at all.
+  const lastHyphen = name.lastIndexOf('-');
+  if (lastHyphen > 0) needles.push(name.slice(0, lastHyphen + 1));
+  return needles;
 }
 
 /**
@@ -481,39 +550,51 @@ function executableInvocationPattern(name: string): RegExp {
  * Pure + unit-testable. Returns hits in a stable order (harness paths first,
  * then executables in declared order), at most one per distinct token.
  */
+/**
+ * The first needle in `needles` that matches at a path boundary, as a hit of
+ * `kind` — or `undefined` when none does. Needle sets are ordered longest-first,
+ * so "first" is "most specific spelling that matched", and one reach is reported
+ * once rather than once per spelling of itself.
+ */
+function firstNeedleHit(
+  haystack: string,
+  needles: readonly string[],
+  kind: BaselineContaminationHit['kind'],
+): BaselineContaminationHit | undefined {
+  for (const needle of needles) {
+    const index = indexOfPathAtBoundary(haystack, needle);
+    if (index === -1) continue;
+    return { kind, match: needle, excerpt: excerptAround(haystack, index, needle.length) };
+  }
+  return undefined;
+}
+
 export function detectBaselineContamination(
   input: DetectBaselineContaminationInput,
 ): BaselineContaminationHit[] {
   const hits: BaselineContaminationHit[] = [];
   const haystack = normalizeForMatch(input.transcript);
 
-  // First needle wins: the needles run longest-first (full root, suffix, VAT's own
-  // dir name), so one reach is reported once, at the most specific spelling that
-  // matched. Boundary-matched, so a needle never fires mid-segment — see
-  // containsPathAtBoundary for the two live false positives that required.
-  for (const needle of harnessNeedles(input.harnessRoot)) {
-    const index = indexOfPathAtBoundary(haystack, needle);
-    if (index === -1) continue;
-    hits.push({
-      kind: 'harness-path',
-      match: needle,
-      excerpt: excerptAround(haystack, index, needle.length),
-    });
-    break;
-  }
+  // First needle wins, per group: every needle set runs longest-first, so one
+  // reach is reported once, at the most specific spelling that matched.
+  //
+  // Harness needles = full root, its last two segments, VAT's own dir name.
+  const harnessMatch = firstNeedleHit(haystack, harnessNeedles(input.harnessRoot), 'harness-path');
+  if (harnessMatch !== undefined) hits.push(harnessMatch);
 
   // The other arm's working directory. Reported independently of the harness
   // needles above: a reach here contains no harness path at all, which is exactly
   // why the four-channel audit and the harness-path detector both missed it.
-  for (const needle of siblingArmNeedles(input.siblingArmDir ?? '')) {
-    const index = indexOfPathAtBoundary(haystack, needle);
-    if (index === -1) continue;
-    hits.push({
-      kind: 'sibling-arm',
-      match: needle,
-      excerpt: excerptAround(haystack, index, needle.length),
-    });
-    break;
+  const siblingMatch = firstNeedleHit(haystack, siblingArmNeedles(input.siblingArmDir ?? ''), 'sibling-arm');
+  if (siblingMatch !== undefined) hits.push(siblingMatch);
+
+  // VAT's private tmp dirs, scanned PER DIR rather than first-match-wins across
+  // all of them: reaching the answer key and reaching the grader dir are two
+  // different capabilities, and an operator triaging a contaminated run needs to
+  // see both. Within one dir the needles still run longest-first and stop.
+  for (const dir of input.vatPrivateDirs ?? []) {
+    const privateMatch = firstNeedleHit(haystack, vatPrivateDirNeedles(dir ?? ''), 'vat-private-dir');
+    if (privateMatch !== undefined) hits.push(privateMatch);
   }
 
   const harnessHit = hits.length > 0;
