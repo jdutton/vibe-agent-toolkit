@@ -198,7 +198,7 @@ describe('external eval suite (integration)', () => {
     // and land in the eval's own workspace.
     expect(result.workspacesPath, 'the run did not report where workspaces were staged').toBeDefined();
     expect(
-      existsSync(safePath.join(result.workspacesPath ?? '', EXTERNAL_EVAL_ID, 'fixtures', 'case.md')),
+      existsSync(safePath.join(result.workspacesPath ?? '', 'with', EXTERNAL_EVAL_ID, 'fixtures', 'case.md')),
     ).toBe(true);
     // And they are NOT under the harness root, which holds vat's runnable copies.
     expect(result.workspacesPath ?? '').not.toContain(safePath.join(tempDir, 'harness'));

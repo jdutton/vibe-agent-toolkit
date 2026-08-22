@@ -45,7 +45,7 @@ import { assembleChildEnv, assertKnownEnvTokens, computeEnvTokens, resolveInject
 import { runExecutorForEval } from './eval-executor.js';
 import type { EvalFragment } from './eval-fragment.js';
 import { runGraderForEval } from './eval-grader.js';
-import { EvalInputError, parseEvalSuite, stageEvalWorkspaces, type EvalEntry, type EvalSuite } from './eval-inputs.js';
+import { EvalInputError, parseEvalSuite, stageEvalWorkspaces, type EvalArm, type EvalEntry, type EvalSuite } from './eval-inputs.js';
 import { lintEvalExpectations, lintToolExpectationExecutables } from './eval-lint.js';
 import { DEFAULT_EVALS_SUBPATH } from './eval-suite-isolation.js';
 import { writeEvalsTemplate } from './evals-template.js';
@@ -728,14 +728,16 @@ export function resolveWorkspacesRoot(dirToken: string): string {
 }
 
 /** Parse the staged eval suite and materialize each eval's input `files` into
- * `<workspacesRoot>/<id>/`. Returns the workspaces root, the parsed
- * {@link EvalSuite} (so the eval loop has the entries without re-reading), and the
- * declared eval count (derived from the suite). The dir is wiped first so a reused
- * root cannot leak a prior run's inputs. Throws {@link EvalInputError}
- * (mapped by the caller to exit 2) on a bad suite or a missing input file. */
+ * `<workspacesRoot>/<arm>/<id>/`, once per arm this run will execute. Returns the
+ * workspaces root, the parsed {@link EvalSuite} (so the eval loop has the entries
+ * without re-reading), and the declared eval count (derived from the suite). The
+ * dir is wiped first so a reused root cannot leak a prior run's inputs. Throws
+ * {@link EvalInputError} (mapped by the caller to exit 2) on a bad suite or a
+ * missing input file. */
 export function stageWorkspacesForRun(
   evalsPath: string,
   workspacesRoot: string,
+  baseline: boolean,
 ): { workspacesRoot: string; declaredEvalCount: number; suite: EvalSuite } {
   rmSync(workspacesRoot, { recursive: true, force: true });
   // 0700, matching the harness root. These dirs hold each eval's declared input
@@ -752,7 +754,12 @@ export function stageWorkspacesForRun(
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- evalsPath is our staged-subject path
   const suite = parseEvalSuite(readFileSync(evalsPath, 'utf-8'));
   return {
-    workspacesRoot: stageEvalWorkspaces({ suite, evalsDir: dirname(evalsPath), workspacesRoot }),
+    workspacesRoot: stageEvalWorkspaces({
+      suite,
+      evalsDir: dirname(evalsPath),
+      workspacesRoot,
+      arms: baseline ? (['with', 'without'] as const) : (['with'] as const),
+    }),
     declaredEvalCount: suite.evals.length,
     suite,
   };
@@ -775,9 +782,10 @@ function attemptStageWorkspaces(
   evalsPath: string,
   harnessRoot: string,
   workspacesRoot: string,
+  baseline: boolean,
 ): { workspacesRoot: string; declaredEvalCount: number; suite: EvalSuite } | RunHarnessResult {
   try {
-    return stageWorkspacesForRun(evalsPath, workspacesRoot);
+    return stageWorkspacesForRun(evalsPath, workspacesRoot, baseline);
   } catch (e) {
     if (e instanceof EvalInputError) {
       return {
@@ -1052,7 +1060,7 @@ export function cleanupHarness(harnessRoot: string, opts: CleanupHarnessOptions)
 /** One unit of executor→grader work: an eval + which arm (with/without skill). */
 export interface EvalWorkItem {
   entry: EvalEntry;
-  arm: 'with' | 'without';
+  arm: EvalArm;
 }
 
 /**
@@ -1116,17 +1124,27 @@ export function resolveGraderOutDir(dirToken: string): string {
 }
 
 /**
- * The executor working directory for one eval: its staged input workspace
- * `<workspacesRoot>/<id>`, ALWAYS — empty when the eval declares no input
- * `files` (see {@link stageEvalWorkspaces}).
+ * The executor working directory for one eval ON ONE ARM: its staged input
+ * workspace `<workspacesRoot>/<arm>/<id>`, ALWAYS — empty when the eval declares
+ * no input `files` (see {@link stageEvalWorkspaces}).
  *
  * This used to return undefined for a file-less eval, which made the executor
  * fall back to running inside the staged subject dir. That fallback was the
  * quiet half of the `--baseline` control defect: the skill-absent arm's cwd
- * was the skill. Pure + unit-testable.
+ * was the skill.
+ *
+ * The `arm` segment closes the OTHER half, found a round later: without it both
+ * arms of one eval shared a single writable directory AND ran concurrently, so
+ * the control arm could read the treatment arm's output files and answer from
+ * them. Keyed on the eval id alone this is a pure function of the eval; the arm
+ * is what makes the two runs independent. Pure + unit-testable.
  */
-export function resolvePerEvalWorkspaceDir(entry: EvalEntry, workspacesRoot: string): string {
-  return safePath.joinUnderRoot(workspacesRoot, String(entry.id));
+export function resolvePerEvalWorkspaceDir(
+  entry: EvalEntry,
+  workspacesRoot: string,
+  arm: EvalArm,
+): string {
+  return safePath.joinUnderRoot(safePath.joinUnderRoot(workspacesRoot, arm), String(entry.id));
 }
 
 /**
@@ -1231,9 +1249,38 @@ function resolveExecutorEnvForEval(
   return env;
 }
 
+/**
+ * Scrub the control arm's env and SAY what it lost.
+ *
+ * The arms are meant to differ in the skill and nothing else, so any var withheld
+ * from one side is a confound. A control arm silently spawned without `PATH` or
+ * without its declared fixtures still runs — it just does worse, which reports as
+ * skill lift. That failure is invisible unless the withholding is announced, and
+ * `dropped` was previously computed and thrown away.
+ */
+function scrubAndReportControlArmEnv(
+  env: NodeJS.ProcessEnv,
+  harnessRoot: string,
+  evalId: string,
+): NodeJS.ProcessEnv {
+  const { env: scrubbed, dropped, retainedLeaks } = scrubControlArmEnv(env, harnessRoot);
+  if (dropped.length > 0) {
+    process.stderr.write(
+      `control arm (${evalId}): withheld ${dropped.length} env var(s) naming the harness root: ${dropped.join(', ')}\n`,
+    );
+  }
+  if (retainedLeaks.length > 0) {
+    process.stderr.write(
+      `⚠️  control arm (${evalId}): ${retainedLeaks.join(', ')} name(s) the harness root but are required to run, so they were NOT withheld. ` +
+        `The control arm can read the harness through them — move --out/--workdir off this path before trusting the delta.\n`,
+    );
+  }
+  return scrubbed;
+}
+
 async function runEvalWorker(item: EvalWorkItem, ctx: EvalRunContext): Promise<EvalFragment> {
   const evalId = String(item.entry.id);
-  const workspaceDir = resolvePerEvalWorkspaceDir(item.entry, ctx.workspacesRoot);
+  const workspaceDir = resolvePerEvalWorkspaceDir(item.entry, ctx.workspacesRoot, item.arm);
   const onProgress = (chunk: string): void => { process.stderr.write(chunk); };
 
   // Resolve the declared `env` against THIS eval's workspace.
@@ -1259,7 +1306,12 @@ async function runEvalWorker(item: EvalWorkItem, ctx: EvalRunContext): Promise<E
   // first round of this fix missed entirely: the run assembles ONE env and both
   // arms were handed it verbatim, `CLAUDE_PLUGIN_ROOT` included. See
   // scrubControlArmEnv — prompt, argv, cwd and env are four channels, not three.
-  if (!isWithArm) executorEnv = scrubControlArmEnv(executorEnv, ctx.harnessRoot).env;
+  //
+  // Report what the control arm lost. The arms are supposed to differ in the skill
+  // and nothing else, so any var withheld from one side is a confound the operator
+  // has to be able to see — silently spawning a degraded control is how a harness
+  // manufactures the lift it is meant to measure.
+  if (!isWithArm) executorEnv = scrubAndReportControlArmEnv(executorEnv, ctx.harnessRoot, evalId);
 
   const outcome = await runExecutorForEval({
     evalId,
@@ -1319,7 +1371,7 @@ async function runEvalWorker(item: EvalWorkItem, ctx: EvalRunContext): Promise<E
  * operator-facing artifact. Spreading VAT's value last is NOT sufficient: it is
  * `{}` on a clean run, so it overwrites nothing.
  */
-function withoutGraderContamination(fragment: EvalFragment): EvalFragment {
+export function withoutGraderContamination(fragment: EvalFragment): EvalFragment {
   if (fragment.contamination === undefined) return fragment;
   const copy = { ...fragment };
   delete copy.contamination;
@@ -1854,7 +1906,12 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     // Step 5.5: Parse the eval suite and stage per-eval input workspaces. The
     // parsed suite is threaded on so the eval loop has the entries without
     // re-reading; declaredEvalCount is derived from it (suite.evals.length).
-    const workspaceStageResult = attemptStageWorkspaces(evalsPath, harnessRoot, workspacesRoot);
+    const workspaceStageResult = attemptStageWorkspaces(
+      evalsPath,
+      harnessRoot,
+      workspacesRoot,
+      opts.baseline === true,
+    );
     if ('exitCode' in workspaceStageResult) return workspaceStageResult;
     // `workspacesRoot` is resolved above (outside the try, so cleanup can reach it
     // on a signal); staging returns it unchanged, so only the derived values are

@@ -150,6 +150,60 @@ describe('detectBaselineContamination — real path forms', () => {
     expect(harnessRoot.startsWith('/') || /^[A-Za-z]:/.test(harnessRoot)).toBe(true);
     expect(detectBaselineContamination({ transcript, harnessRoot })).toEqual([]);
   });
+
+  // THE GLOB CLASS. Both the absolute and the two-segment suffix needle require
+  // the arm to spell the 8-hex harness key, which it has no way to know and no
+  // reason to type — every natural reach enumerates instead. One `*` defeated the
+  // entire scheme, so a reach that lands squarely in the staged tree read clean.
+  it.each([
+    ['a glob', 'cat ../../vat-skill-test/*/staged/s/SKILL.md'],
+    ['a recursive glob', 'cat ../../vat-skill-test/**/SKILL.md'],
+    ['find', 'find ../../vat-skill-test -name SKILL.md -exec cat {} +'],
+    ['a shell variable', 'K=$(ls ../../vat-skill-test); cat ../../vat-skill-test/$K/staged/s/SKILL.md'],
+    ['$TMPDIR plus a glob', 'cat $TMPDIR/vat-skill-test/*/staged/s/SKILL.md'],
+    ['a recursive listing', 'ls -R ../../vat-skill-test'],
+  ])('fires on a reach that never names the harness key: %s', (_label, command) => {
+    const harnessRoot = HARNESS_ROOT;
+    const hits = detectBaselineContamination({ transcript: transcriptWith(command), harnessRoot });
+
+    expect(hits, `read clean: ${command}`).toHaveLength(1);
+    expect(hits[0]?.kind).toBe(KIND_HARNESS_PATH);
+  });
+
+  // ...while the control arm's OWN cwd lives at vat-skill-test-ws-<token>, which
+  // shares that prefix and must never be evidence against it. This is the
+  // constraint the needle above is boundary-matched to preserve.
+  it('does not fire on the control arm working in its own legitimate workspace', () => {
+    const transcript = transcriptWith(
+      'ls /private/var/folders/2k/abc/T/vat-skill-test-ws-9f3c1b/without/lookup-1 && cat data.csv',
+    );
+
+    expect(detectBaselineContamination({ transcript, harnessRoot: HARNESS_ROOT })).toEqual([]);
+  });
+
+  // Absolutizing --out fixed only the two-character case. A short-but-absolute
+  // --out still yielded a needle that matched mid-segment, so `/tmp/out` fired on
+  // `/tmp/output.csv` — and the attached instruction is "discard the delta".
+  it.each([
+    /* eslint-disable sonarjs/publicly-writable-directories -- inert test literals; the detector is a pure string scan, nothing is read or written */
+    ['/tmp/out', 'wc -l /tmp/output.csv'],
+    ['/tmp/h', 'reading /tmp/hello.txt now'],
+    ['/tmp', 'wrote /tmp/scratch/notes.md'],
+    /* eslint-enable sonarjs/publicly-writable-directories */
+  ])('does not fire mid-segment for --out %s', (out, command) => {
+    expect(detectBaselineContamination({ transcript: transcriptWith(command), harnessRoot: out })).toEqual([]);
+  });
+
+  // macOS ships case-insensitive APFS by default, so this reach SUCCEEDS on the
+  // filesystem; the case-fold used to be gated on win32, making it read clean.
+  it('fires on a case-shifted path on a case-insensitive filesystem', () => {
+    const harnessRoot = '/private/var/folders/2k/abc/T/vat-skill-test/my-skill-830fad22';
+    const transcript = transcriptWith(
+      'cat /PRIVATE/VAR/FOLDERS/2K/ABC/T/VAT-SKILL-TEST/MY-SKILL-830FAD22/staged/s/SKILL.md',
+    );
+
+    expect(detectBaselineContamination({ transcript, harnessRoot })).toHaveLength(1);
+  });
 });
 
 describe('detectBaselineContamination — executable-name precision', () => {
@@ -193,7 +247,7 @@ describe('scrubControlArmEnv', () => {
 
     expect(env).not.toHaveProperty('CLAUDE_PLUGIN_ROOT');
     expect(env).not.toHaveProperty('SNAPSHOT');
-    expect([...dropped].toSorted((a, b) => a.localeCompare(b))).toEqual(['CLAUDE_PLUGIN_ROOT', 'SNAPSHOT']);
+    expect([...dropped].sort((a: string, b: string) => a.localeCompare(b))).toEqual(['CLAUDE_PLUGIN_ROOT', 'SNAPSHOT']);
     // The arms must stay identical in everything except the skill: the control
     // keeps its own fixtures (under the workspaces root) and its auth.
     expect(env['FIXTURES']).toBe(WS_FIXTURES);
@@ -206,6 +260,63 @@ describe('scrubControlArmEnv', () => {
       'C:/tmp/vat-skill-test/s',
     );
     expect(dropped).toEqual(['WIN']);
+  });
+
+  // The two rules masked each other: in every fixture CLAUDE_PLUGIN_ROOT's value
+  // was ALSO under the harness root, so emptying the key list left the suite green
+  // (the value scan covered it) and neutering the value scan left it green too
+  // (the key list covered it). Neither was independently pinned. These two cases
+  // make each rule the ONLY thing that can catch its input.
+  it('drops CLAUDE_PLUGIN_ROOT by NAME even when its value is outside the harness root', () => {
+    // The installed-plugin-cache case: the key is meaningless to an arm spawned
+    // with `pluginDirs: []`, and pointing it anywhere is still handing the control
+    // arm a plugin root. Only rule 1 can catch this.
+    const { env, dropped } = scrubControlArmEnv(
+      { CLAUDE_PLUGIN_ROOT: '/Users/dev/.claude/plugins/marketplaces/acme' },
+      HARNESS_ROOT,
+    );
+
+    expect(dropped).toEqual(['CLAUDE_PLUGIN_ROOT']);
+    expect(env).not.toHaveProperty('CLAUDE_PLUGIN_ROOT');
+  });
+
+  it('drops an unlisted key by VALUE when it names the harness root', () => {
+    // Only rule 2 can catch this — SNAPSHOT is in no key list anywhere.
+    const { env, dropped } = scrubControlArmEnv({ SNAPSHOT: `${HARNESS_ROOT}/staged/s/x.json` }, HARNESS_ROOT);
+
+    expect(dropped).toEqual(['SNAPSHOT']);
+    expect(env).not.toHaveProperty('SNAPSHOT');
+  });
+
+  // A scrub that breaks the control arm manufactures the delta the product sells,
+  // which is strictly worse than the leak it closes. `--out .` from a repo root
+  // under `bun run` puts <repo>/node_modules/.bin on PATH, making PATH itself
+  // "contain the harness root".
+  it('retains a process-essential var that names the harness root, and reports it', () => {
+    const repoRoot = '/Users/dev/myrepo';
+    const { env, dropped, retainedLeaks } = scrubControlArmEnv(
+      { PATH: `${repoRoot}/node_modules/.bin:/usr/bin:/bin`, HOME: repoRoot },
+      repoRoot,
+    );
+
+    expect(env['PATH'], 'the control arm was spawned with no PATH').toBeDefined();
+    expect(dropped).toEqual([]);
+    expect([...retainedLeaks].sort((a: string, b: string) => a.localeCompare(b))).toEqual(['HOME', 'PATH']);
+  });
+
+  // <tmp>/vat-skill-test is a string PREFIX of <tmp>/vat-skill-test-ws-<token>,
+  // where ${fixturesDir} lives — so a bare `includes` stripped the control arm's
+  // own declared input files while the treatment kept them. Same fake-lift
+  // direction as the PATH case above.
+  it('does not strip a value that merely shares a path PREFIX with the harness root', () => {
+    /* eslint-disable sonarjs/publicly-writable-directories -- inert test literals; scrubControlArmEnv is a pure string scan */
+    const harnessRoot = '/tmp/vat-skill-test';
+    const fixtures = '/tmp/vat-skill-test-ws-9f3c/lookup-1/fixtures';
+    /* eslint-enable sonarjs/publicly-writable-directories */
+    const { env, dropped } = scrubControlArmEnv({ FIXTURES: fixtures }, harnessRoot);
+
+    expect(dropped, 'a prefix collision stripped the control arm fixtures').toEqual([]);
+    expect(env['FIXTURES']).toBe(fixtures);
   });
 });
 

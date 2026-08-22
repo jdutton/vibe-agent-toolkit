@@ -58,6 +58,7 @@ import {
   subjectSkillName,
   verdictExitCode,
   wipeStaleArtifacts,
+  withoutGraderContamination,
   type DryRunSummaryInput,
   type RunHarnessOptions,
 } from '../../src/skill-test/run-harness.js';
@@ -252,6 +253,30 @@ describe('buildEvalWorkItems', () => {
   });
 });
 
+// The grader's ONLY input is the executor transcript, which untrusted skill code
+// controls. Nothing in this repo tested the stripping step, and mutation testing
+// confirmed it: deleting the call left the whole suite green. This is the
+// prompt-injection defense the function's own docstring names.
+describe('withoutGraderContamination', () => {
+  it('drops a `contamination` field the grader emitted', () => {
+    const forged = {
+      ...makeFragment('e1', 'without'),
+      contamination: [{ kind: 'harness-path', match: 'ATTACKER', excerpt: 'attacker-chosen text' }],
+    } as unknown as EvalFragment;
+
+    const cleaned = withoutGraderContamination(forged);
+
+    expect(cleaned).not.toHaveProperty('contamination');
+    // Everything else survives — this strips one field, it does not sanitize.
+    expect(cleaned.evalId).toBe('e1');
+  });
+
+  it('leaves a fragment without the field untouched', () => {
+    const fragment = makeFragment('e1', 'without');
+    expect(withoutGraderContamination(fragment)).toEqual(fragment);
+  });
+});
+
 describe('partitionFragmentsByArm', () => {
   it('routes undefined/with arms to withArm and without to withoutArm', () => {
     const { withArm, withoutArm } = partitionFragmentsByArm([
@@ -310,14 +335,28 @@ describe('resolvePerEvalWorkspaceDir', () => {
   // No undefined case any more: an eval without `files` used to get no workspace,
   // which made the executor run inside the staged subject dir — the skill-absent
   // arm's cwd was then the skill itself.
-  it('routes to <workspacesRoot>/<id> even when the eval declares no files', () => {
-    const dir = resolvePerEvalWorkspaceDir(makeEvalEntry({ id: '1' }), workspacesRoot);
-    expect(toForwardSlash(dir).endsWith('/workspaces/1')).toBe(true);
+  it('routes to <workspacesRoot>/<arm>/<id> even when the eval declares no files', () => {
+    const dir = resolvePerEvalWorkspaceDir(makeEvalEntry({ id: '1' }), workspacesRoot, 'with');
+    expect(toForwardSlash(dir).endsWith('/workspaces/with/1')).toBe(true);
   });
 
-  it('routes to <workspacesRoot>/<id> when the eval declares files', () => {
-    const dir = resolvePerEvalWorkspaceDir(makeEvalEntry({ id: '7', files: ['a.md'] }), workspacesRoot);
-    expect(toForwardSlash(dir ?? '').endsWith('/workspaces/7')).toBe(true);
+  it('routes to <workspacesRoot>/<arm>/<id> when the eval declares files', () => {
+    const dir = resolvePerEvalWorkspaceDir(makeEvalEntry({ id: '7', files: ['a.md'] }), workspacesRoot, 'with');
+    expect(toForwardSlash(dir ?? '').endsWith('/workspaces/with/7')).toBe(true);
+  });
+
+  // The two arms of one eval run CONCURRENTLY. Sharing a directory let the control
+  // arm read what the treatment had just written and answer from it — no harness
+  // path in the transcript, nothing for the detector to see, and the delta silently
+  // collapsed to zero. Neither arm may sit inside the other, either.
+  it('gives the two arms of one eval disjoint directories', () => {
+    const entry = makeEvalEntry({ id: '1' });
+    const withDir = toForwardSlash(resolvePerEvalWorkspaceDir(entry, workspacesRoot, 'with'));
+    const withoutDir = toForwardSlash(resolvePerEvalWorkspaceDir(entry, workspacesRoot, 'without'));
+
+    expect(withDir).not.toBe(withoutDir);
+    expect(toForwardSlash(withDir).startsWith(toForwardSlash(withoutDir) + '/')).toBe(false);
+    expect(toForwardSlash(withoutDir).startsWith(toForwardSlash(withDir) + '/')).toBe(false);
   });
 });
 
@@ -1002,9 +1041,34 @@ describe('stageWorkspacesForRun', () => {
     const { workspacesRoot, declaredEvalCount } = stageWorkspacesForRun(
       safePath.join(evalsDir, EVALS_JSON),
       harnessRoot,
+      false,
     );
-    expect(existsSync(safePath.join(workspacesRoot, '5', 'fixtures', 'doc.md'))).toBe(true);
+    expect(existsSync(safePath.join(workspacesRoot, 'with', '5', 'fixtures', 'doc.md'))).toBe(true);
     expect(declaredEvalCount).toBe(1);
+  });
+
+  // Under --baseline the control arm needs its own copy of the same inputs: the
+  // arms must start byte-identical and stay unable to observe each other.
+  it('stages an identical, separate workspace for each arm when baseline is on', () => {
+    const root = getTempDir();
+    const evalsDir = safePath.join(root, 'evals-baseline');
+    mkdirSyncReal(safePath.join(evalsDir, 'fixtures'), { recursive: true });
+    writeFileSync(safePath.join(evalsDir, 'fixtures', 'doc.md'), 'x', 'utf-8');
+    writeFileSync(safePath.join(evalsDir, EVALS_JSON), JSON.stringify({
+      skill_name: 'demo',
+      evals: [{ id: 5, prompt: 'p', expected_output: 'o', files: ['fixtures/doc.md'], expectations: ['e'] }],
+    }), 'utf-8');
+    const harnessRoot = safePath.join(root, 'harness-baseline');
+    mkdirSyncReal(harnessRoot, { recursive: true });
+
+    const { workspacesRoot } = stageWorkspacesForRun(safePath.join(evalsDir, EVALS_JSON), harnessRoot, true);
+
+    for (const arm of ['with', 'without']) {
+      expect(
+        existsSync(safePath.join(workspacesRoot, arm, '5', 'fixtures', 'doc.md')),
+        `${arm} arm did not get its own copy of the declared input`,
+      ).toBe(true);
+    }
   });
 
   it('throws EvalInputError when a declared eval file is absent', () => {
@@ -1018,6 +1082,6 @@ describe('stageWorkspacesForRun', () => {
     }), 'utf-8');
     const harnessRoot = safePath.join(root, 'harness');
     mkdirSyncReal(harnessRoot, { recursive: true });
-    expect(() => stageWorkspacesForRun(evalsPath, harnessRoot)).toThrow(EvalInputError);
+    expect(() => stageWorkspacesForRun(evalsPath, harnessRoot, false)).toThrow(EvalInputError);
   });
 });

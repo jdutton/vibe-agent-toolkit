@@ -1,3 +1,4 @@
+import { protectedEnvNames } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
 /**
@@ -8,13 +9,23 @@ import { z } from 'zod';
  * control arm (`pluginDirs: []` plus `--setting-sources ""`), which removes
  * DISCOVERY but not CAPABILITY: the executor runs with unrestricted Bash under
  * `--permission-mode bypassPermissions`, so any copy of the skill still on the
- * filesystem is reachable. vat now keeps its OWN copies out of the control arm's
- * reach (the prompt no longer names the staged subject, and the arm's cwd is a
- * per-eval workspace outside the harness root), but two classes of copy remain
- * that vat did not create and cannot remove:
+ * filesystem is reachable. vat no longer ESCORTS the control arm to its own staged
+ * copies — the prompt does not name the staged subject, the arm's cwd is a per-arm
+ * per-eval workspace outside the harness root, `pluginDirs` is empty, and the env is
+ * scrubbed — but "not escorted" is not "cannot reach", and three classes of copy
+ * remain reachable by an arm that goes looking:
  *
- *   1. the adopter's own repo / build output, and
- *   2. the user's installed plugin cache.
+ *   1. the adopter's own repo / build output,
+ *   2. the user's installed plugin cache, and
+ *   3. vat's OWN staged tree, which is a sibling of the arm's cwd under the shared
+ *      OS temp dir. `resolveHarnessRoot` derives `<tmp>/vat-skill-test/<name>-<hash8>`
+ *      with no random token, so `ls ../..` reaches it and a `*` glob makes the hash
+ *      irrelevant. Closing this needs a per-run random token on the harness root, and
+ *      is NOT done — which is why the harness-directory needle below exists.
+ *
+ * Do not restore a claim here that vat's copies are out of reach. They are one
+ * directory climb away, the detector is what covers them, and an overstated comment
+ * is how the last two rounds of this fix each shipped believing they were finished.
  *
  * A control arm that reaches either of those answers from the skill's own tool
  * and the reported delta stops being a measure of skill lift — silently, with a
@@ -37,37 +48,110 @@ import { z } from 'zod';
  *     single-slash needle; the run-collapse is what closes that, and is why
  *     excerpts are taken from the NORMALIZED haystack (this step does not
  *     preserve length, so an index into it does not address the original).
- *   - **Windows case.** Paths are case-insensitive there; the child may echo a
- *     different case than we derived.
- *   - **8.3 short names** (`RUNNER~1`) — not folded here; the suffix matching in
- *     {@link harnessNeedles} is what survives those.
+ *   - **Case.** Folded UNCONDITIONALLY, not just on win32. Windows is the obvious
+ *     case-insensitive filesystem, but macOS ships case-insensitive APFS/HFS+ by
+ *     default, so `cat /PRIVATE/VAR/…/VAT-SKILL-TEST/…/SKILL.md` succeeds there and
+ *     read as clean while the win32-gated fold was in force. Case-folding both
+ *     sides cannot create a false positive that the path-boundary match would not
+ *     already have rejected, so there is no cost to paying it everywhere.
+ *
+ * 8.3 short names (`VAT-SK~1`) are NOT handled — neither here nor, contrary to what
+ * this comment used to claim, by {@link harnessNeedles}, whose segments are all
+ * longer than 8 characters and are therefore exactly what Windows shortens.
  */
 function normalizeForMatch(value: string): string {
-  const forward = value.replaceAll('\\', '/').replaceAll(/\/{2,}/g, '/');
-  return process.platform === 'win32' ? forward.toLowerCase() : forward;
+  return value.replaceAll('\\', '/').replaceAll(/\/{2,}/g, '/').toLowerCase();
 }
+
+/** The directory name VAT puts every harness root under. See {@link harnessNeedles}. */
+const VAT_HARNESS_DIR_NAME = 'vat-skill-test';
+
+/**
+ * Shortest needle we will match on. Below this a needle stops being evidence and
+ * starts being noise: `--out /tmp/out` yields the suffix `tmp/out`, which fires on
+ * `/tmp/output.csv` in a transcript that never went near the harness.
+ */
+const MIN_NEEDLE_LENGTH = 8;
 
 /**
  * The needles that mean "this transcript reached VAT's staged copies".
  *
- * Returns the full normalized root AND its last two path segments. The suffix is
- * the load-bearing one: the control arm's cwd and the harness root are siblings
- * under the OS temp dir, so the natural reach is RELATIVE
- * (`cat ../vat-skill-test/<key>/staged/...`) and the absolute root never appears in
- * the transcript at all. The suffix also survives an 8.3-short-named or
- * differently-realpathed prefix (macOS `$TMPDIR` is `/var/folders/…` while VAT
- * derives `/private/var/folders/…`), which is the difference between a detector
- * that works on one platform and one that works everywhere.
+ * Three, in longest-first order, and every one of them is matched at a PATH
+ * BOUNDARY (see {@link containsPathAtBoundary}) rather than by bare substring:
  *
- * Two segments, not one: a bare basename like `harness` under a custom `--out` is
- * too generic to be evidence of anything.
+ *   1. the full normalized root;
+ *   2. its last two path segments — the load-bearing one for a RELATIVE reach.
+ *      The control arm's cwd and the harness root are siblings under the OS temp
+ *      dir, so `cat ../../vat-skill-test/<key>/staged/…` never contains the
+ *      absolute root. The suffix also survives an 8.3-short-named or
+ *      differently-realpathed prefix (macOS `$TMPDIR` is `/var/folders/…` while
+ *      VAT derives `/private/var/folders/…`);
+ *   3. VAT's own harness directory NAME, when the root is actually under one.
+ *
+ * Needle 3 exists because needles 1 and 2 both require the arm to spell the 8-hex
+ * harness key — which it has no way to know and no reason to type. Every natural
+ * reach enumerates instead: `cat ../../vat-skill-test/&#42;/staged/SKILL.md`,
+ * `find ../../vat-skill-test -name SKILL.md`, or `K=$(ls ../../vat-skill-test)`.
+ * One `&#42;` defeated the entire suffix scheme. The boundary match is what keeps
+ * needle 3 honest: the control arm's OWN legitimate cwd is
+ * `vat-skill-test-ws-<token>/…`, where the next character is `-` rather than `/`,
+ * so it is not a hit — which is the constraint any change here must preserve.
+ *
+ * A root too short or too generic to be evidence (`--out /`, `--out /tmp/out`)
+ * yields NO harness needle rather than one that fires on every run.
  */
 export function harnessNeedles(harnessRoot: string): string[] {
   const normalized = normalizeForMatch(harnessRoot);
+  if (normalized === '') return [];
   const segments = normalized.split('/').filter((s) => s !== '' && s !== '.');
-  const needles = normalized === '' ? [] : [normalized];
-  if (segments.length >= 2) needles.push(segments.slice(-2).join('/'));
+  const needles: string[] = [];
+  if (normalized.length >= MIN_NEEDLE_LENGTH) needles.push(normalized);
+  if (segments.length >= 2) {
+    const suffix = segments.slice(-2).join('/');
+    if (suffix.length >= MIN_NEEDLE_LENGTH) needles.push(suffix);
+  }
+  const vatDir = normalizeForMatch(VAT_HARNESS_DIR_NAME);
+  if (segments.includes(vatDir)) needles.push(vatDir);
   return needles;
+}
+
+/**
+ * Does `value` contain `needle` as a whole PATH PREFIX — i.e. ending at a `/` or at
+ * the end of the string, never mid-segment?
+ *
+ * A bare `includes` over-matches in exactly the layout VAT ships: the default
+ * harness root `<tmp>/vat-skill-test/<key>` is a string prefix of the workspaces
+ * root `<tmp>/vat-skill-test-ws-<token>`, so `--out <tmp>/vat-skill-test` made every
+ * `${fixturesDir}` value look like a harness leak and stripped the control arm's own
+ * declared input files. It also made a `--out /tmp/out` needle fire on `/tmp/output.csv`.
+ * Both directions of that error are expensive, so the boundary is not optional.
+ */
+/**
+ * Characters that CONTINUE a path segment. A needle followed by one of these
+ * matched mid-name and is not evidence; a needle followed by anything else (`/`,
+ * whitespace, a quote, end of string) ended where we said it did.
+ *
+ * Hyphen is the load-bearing member: VAT's own `vat-skill-test-ws-<token>` — the
+ * control arm's LEGITIMATE workspace — shares a prefix with the `vat-skill-test`
+ * needle, and it is the `-` that must disqualify it. Whitespace must NOT be in
+ * this set: `find ../../vat-skill-test -name SKILL.md` and `ls -R ../../vat-skill-test`
+ * are real reaches that end the path at a space.
+ */
+const PATH_SEGMENT_CONTINUATION = /[\w-]/;
+
+function indexOfPathAtBoundary(haystack: string, needle: string): number {
+  if (needle === '') return -1;
+  for (let from = 0; ; ) {
+    const index = haystack.indexOf(needle, from);
+    if (index === -1) return -1;
+    const nextChar = haystack.charAt(index + needle.length);
+    if (nextChar === '' || !PATH_SEGMENT_CONTINUATION.test(nextChar)) return index;
+    from = index + 1;
+  }
+}
+
+function containsPathAtBoundary(haystack: string, needle: string): boolean {
+  return indexOfPathAtBoundary(haystack, needle) !== -1;
 }
 
 /**
@@ -97,25 +181,46 @@ const CONTROL_ARM_FORBIDDEN_ENV_KEYS = ['CLAUDE_PLUGIN_ROOT'] as const;
  *      somebody adds without knowing this function exists.
  *
  * Rule 2 is a value scan rather than a longer key list on purpose: a key list only
- * ever knows about the leaks already found.
+ * ever knows about the leaks already found. It is accident-catching HYGIENE, not an
+ * adversarial control — a determined skill author splits the path across two vars
+ * (`A=/tmp/vat-skill-test` + `B=/<key>/…`) and the per-value scan never joins them.
+ * The adversarial control is that the path is not REACHABLE, not that it is unnamed.
+ *
+ * Rule 2 exempts {@link protectedEnvNames}. Those are the vars a child cannot run
+ * without — `PATH`, `HOME`, `TMPDIR` — and an `--out` under any of their values (e.g.
+ * `--out .` from a repo root, which puts `<repo>/node_modules/.bin` on PATH inside a
+ * `bun run`) would otherwise spawn the control arm with no PATH at all. That does not
+ * fail; it DEGRADES the control, which scores lower, which reports as skill lift. A
+ * scrub that manufactures the very delta the product sells is worse than the leak it
+ * closes, so a protected var that names the harness root is RETAINED and reported
+ * loudly instead — the operator can see it and move `--out`.
  *
  * `${fixturesDir}` resolves under the WORKSPACES root, not the harness root, so the
  * control arm keeps its declared input files — the arms stay identical in
  * everything except the skill itself.
  *
- * Pure. Returns the scrubbed env plus the names dropped, for the transparency line.
+ * Pure. Returns the scrubbed env, the names dropped, and the protected names retained
+ * despite naming the harness root — all three for the transparency line.
  */
 export function scrubControlArmEnv(
   env: NodeJS.ProcessEnv,
   harnessRoot: string,
-): { env: NodeJS.ProcessEnv; dropped: string[] } {
+): { env: NodeJS.ProcessEnv; dropped: string[]; retainedLeaks: string[] } {
   const needle = normalizeForMatch(harnessRoot);
+  const protectedNames = protectedEnvNames();
   const scrubbed: NodeJS.ProcessEnv = {};
   const dropped: string[] = [];
+  const retainedLeaks: string[] = [];
 
   for (const [key, value] of Object.entries(env)) {
     const forbiddenKey = (CONTROL_ARM_FORBIDDEN_ENV_KEYS as readonly string[]).includes(key);
-    const leaksPath = typeof value === 'string' && needle !== '' && normalizeForMatch(value).includes(needle);
+    const leaksPath =
+      typeof value === 'string' && containsPathAtBoundary(normalizeForMatch(value), needle);
+    if (leaksPath && !forbiddenKey && protectedNames.has(key)) {
+      retainedLeaks.push(key);
+      scrubbed[key] = value;
+      continue;
+    }
     if (forbiddenKey || leaksPath) {
       dropped.push(key);
       continue;
@@ -123,7 +228,7 @@ export function scrubControlArmEnv(
     scrubbed[key] = value;
   }
 
-  return { env: scrubbed, dropped };
+  return { env: scrubbed, dropped, retainedLeaks };
 }
 
 /** One piece of evidence that the skill-absent arm reached the skill anyway. */
@@ -264,10 +369,12 @@ export function detectBaselineContamination(
   const hits: BaselineContaminationHit[] = [];
   const haystack = normalizeForMatch(input.transcript);
 
-  // First needle wins: the needles run longest-first (full root, then suffix), so
-  // one reach is reported once, at the most specific spelling that matched.
+  // First needle wins: the needles run longest-first (full root, suffix, VAT's own
+  // dir name), so one reach is reported once, at the most specific spelling that
+  // matched. Boundary-matched, so a needle never fires mid-segment — see
+  // containsPathAtBoundary for the two live false positives that required.
   for (const needle of harnessNeedles(input.harnessRoot)) {
-    const index = haystack.indexOf(needle);
+    const index = indexOfPathAtBoundary(haystack, needle);
     if (index === -1) continue;
     hits.push({
       kind: 'harness-path',

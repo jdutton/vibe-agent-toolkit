@@ -47,9 +47,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
      declared `env:` value containing the harness root. A path reaches a child through four
      channels — prompt, argv, cwd, env — and the first three are not a closure.
 
+  4. **The two arms of one eval shared a working directory, and ran in it at the same time.**
+     `resolvePerEvalWorkspaceDir` keyed the workspace on the eval id alone, and the result was the
+     executor's `cwd` *and* `sandboxDir` for both arms — while `buildEvalWorkItems` queues the two
+     arms adjacently into a bounded-parallel pool. So the control arm could `ls`, read whatever the
+     treatment arm had just written into the shared directory, and answer from it: scoring like the
+     treatment, collapsing the delta, and producing a transcript with no harness path in it for the
+     detector to find. Workspaces are now `<workspacesRoot>/<arm>/<id>`, staged identically per arm.
+
+     This is a channel BETWEEN the arms rather than into one of them, which is why two rounds of
+     auditing "what does vat hand this process" did not surface it — each arm's cwd was correct in
+     isolation and wrong as a pair. The four-channel rule (prompt, argv, cwd, env) is necessary and
+     not sufficient; a shared writable directory is a fifth.
+
+  **The contamination detector was blind to any reach that did not spell the harness key.** Both
+  needles required the arm to type the 8-hex key from `deriveHarnessKey`, which it has no way to
+  know; every natural reach enumerates instead, and one `*` defeated the scheme
+  (`cat ../../vat-skill-test/*/staged/SKILL.md`, `find ../../vat-skill-test -name SKILL.md`,
+  `K=$(ls ../../vat-skill-test)` were all silent). The needle set now includes vat's own harness
+  directory name; every needle is matched at a **path boundary**, so the arm's legitimate
+  `vat-skill-test-ws-<token>` workspace is not evidence against it and a short `--out /tmp/out` no
+  longer fires on `/tmp/output.csv`. Case is folded on all platforms — macOS ships case-insensitive
+  APFS, so a case-shifted reach succeeds on the filesystem and read clean under the win32-only fold.
+
+  **The env scrub could break the control arm, which manufactures lift.** Its value scan had no path
+  boundary and no exemption for process essentials, so an `--out` under `PATH`'s value (`--out .`
+  from a repo root under `bun run`) spawned the control with **no `PATH`**, and a harness root that
+  was a string *prefix* of the workspaces root stripped the control arm's own `${fixturesDir}`. A
+  degraded control scores lower and reports as skill lift — worse than the leak being closed. Process
+  essentials are now retained and reported loudly instead, and both dropped and retained vars are
+  named on stderr rather than being computed and discarded.
+
+  **Grader-supplied `evalId` is no longer trusted.** It was schema-typed as any non-empty string and
+  echoed verbatim into the run summary and the `BASELINE CONTAMINATED` banner, so a grader talked
+  into emitting an id containing newlines and ANSI escapes — via the executor transcript, which
+  untrusted skill code controls — could paint a reassuring "known false positive" line under vat's
+  own warning. The id is taken from the request, never from the answer.
+
   **Interpretation changed, not just behavior.** The delta A/Bs the skill's *instructions*, not its
   capability, and vat now says so in `--help` and the skill-testing guide (the guide's claim that
-  "the skill-absent arm has no tools to judge" was false and is corrected).
+  "the skill-absent arm has no tools to judge" was false and is corrected). Two claims made by
+  earlier rounds of this same fix are also retracted in place: that vat keeps its own staged copies
+  "out of the control arm's reach" (they are one directory climb away under the shared temp dir —
+  the harness root has no random token), and that the baseline integration test asserts over the
+  whole spawn surface "by construction" (it enumerated five of seven fields; it now serializes the
+  whole options object, which a mutation routing the staged path through `model` — and onto argv —
+  proved was necessary).
 
 - **`--out` and `--workdir` are now mutually exclusive** (exit 2). `--out` names the harness root
   exactly; `--workdir` names the base it is derived under. Passing both silently discarded

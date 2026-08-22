@@ -159,30 +159,63 @@ export function parseEvalSuite(jsonText: string): EvalSuite {
   return result.data;
 }
 
+/**
+ * One side of a `--baseline` A/B: `'with'` runs the skill staged and declared,
+ * `'without'` is the control. Declared here rather than in the run orchestrator
+ * because the staging layer needs it to give each arm its own workspace tree.
+ */
+export type EvalArm = 'with' | 'without';
+
 export interface StageEvalWorkspacesInput {
   /** Parsed suite (Task 1). */
   suite: EvalSuite;
   /** Directory containing evals.json — the base for each eval's relative `files`. */
   evalsDir: string;
-  /** `<harnessRoot>/workspaces` — per-eval dirs are created beneath it. */
+  /** `<harnessRoot>/workspaces` — per-arm, per-eval dirs are created beneath it. */
   workspacesRoot: string;
+  /**
+   * The arms this run will execute — `['with']` normally, `['with','without']`
+   * under `--baseline`. Each arm gets its OWN copy of every workspace; see the
+   * note on the layout below for why that is not an optimization to undo.
+   */
+  arms: readonly EvalArm[];
 }
 
 /**
- * Materialize each eval's declared input `files` into `<workspacesRoot>/<id>/<relpath>`,
- * preserving relative structure. Throws {@link EvalInputError} if a listed file does
- * not exist (the eval cannot run without it). Returns `workspacesRoot`.
+ * Materialize each eval's declared input `files` into
+ * `<workspacesRoot>/<arm>/<id>/<relpath>`, preserving relative structure. Throws
+ * {@link EvalInputError} if a listed file does not exist (the eval cannot run
+ * without it). Returns `workspacesRoot`.
  *
  * EVERY eval gets a directory, including one that declares no `files` — it is
  * simply left empty. An eval without a workspace used to leave the executor with
  * no cwd of its own, so it ran inside the staged subject dir instead; for the
  * skill-absent arm of a `--baseline` run that placed the control's cwd inside the
  * very skill the arm exists to withhold. An empty dir costs nothing and keeps cwd
- * identical across both arms, which is what makes the A/B a comparison.
+ * shaped identically across both arms, which is what makes the A/B a comparison.
+ *
+ * WHY THE `<arm>` SEGMENT. The two arms of one eval are dispatched ADJACENTLY into
+ * a bounded-parallel pool, so they run at the same time. When they shared one
+ * directory, the control arm could simply `ls` and read whatever the treatment arm
+ * had just written — recovering the treatment's answer without ever touching the
+ * skill, and without producing a single detectable harness path. That is a channel
+ * BETWEEN the arms rather than into one of them, which is why auditing the four
+ * channels into a process (prompt, argv, cwd, env) did not surface it: each arm's
+ * own cwd was correct in isolation, and wrong as a pair. The arms must be
+ * byte-identical at start and unable to observe each other after it.
  */
 export function stageEvalWorkspaces(input: StageEvalWorkspacesInput): string {
+  for (const arm of input.arms) {
+    stageEvalWorkspacesForArm(input, arm);
+  }
+  return input.workspacesRoot;
+}
+
+function stageEvalWorkspacesForArm(input: StageEvalWorkspacesInput, arm: EvalArm): void {
+  const armRoot = safePath.joinUnderRoot(input.workspacesRoot, arm);
+  mkdirSyncReal(armRoot, { recursive: true, mode: 0o700 });
   for (const entry of input.suite.evals) {
-    const evalWorkspace = safePath.joinUnderRoot(input.workspacesRoot, String(entry.id));
+    const evalWorkspace = safePath.joinUnderRoot(armRoot, String(entry.id));
     // 0700 like the root above it — created for every eval, populated only by
     // those declaring `files`.
     mkdirSyncReal(evalWorkspace, { recursive: true, mode: 0o700 });
@@ -217,5 +250,4 @@ export function stageEvalWorkspaces(input: StageEvalWorkspacesInput): string {
       }
     }
   }
-  return input.workspacesRoot;
 }

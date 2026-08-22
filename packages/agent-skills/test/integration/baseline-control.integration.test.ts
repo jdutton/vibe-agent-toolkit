@@ -94,16 +94,32 @@ function baselineOpts(
   };
 }
 
-/** Every string VAT hands one spawn: prompt, cwd, sandbox, plugin dirs, env values. */
-function spawnSurface(opts: {
-  prompt: string;
-  cwd?: string;
-  sandboxDir: string;
-  pluginDirs: string[];
-  env?: NodeJS.ProcessEnv;
-}): string {
-  const envValues = Object.entries(opts.env ?? {}).map(([k, v]) => `${k}=${String(v)}`);
-  return [opts.prompt, opts.cwd ?? '', opts.sandboxDir, ...opts.pluginDirs, ...envValues].join('\n');
+/**
+ * EVERY value VAT hands one spawn, serialized whole — not an enumeration of the
+ * fields we currently think matter.
+ *
+ * This used to name five fields (`prompt`, `cwd`, `sandboxDir`, `pluginDirs`,
+ * `env`) while `SpawnHeadlessOptions` carries seven, and a mutation that routed the
+ * staged skill dir through `model` — which `assembleClaudeArgs` puts straight onto
+ * argv as `--model <path>` — left all four tests green. An allowlist here reproduces,
+ * one level up, exactly the failure this file exists to prevent: the first fix closed
+ * three of four channels, and its test closed five of seven fields. Serializing the
+ * whole options object is what makes the docblock's "by construction" claim true.
+ */
+function spawnSurface(opts: Record<string, unknown>): string {
+  return JSON.stringify(opts, (_key, value) => (typeof value === 'function' ? undefined : value));
+}
+
+/**
+ * Fold a path or a serialized surface into one comparable spelling, mirroring the
+ * production `normalizeForMatch`. `JSON.stringify` escapes a Windows separator as
+ * `\\`, which becomes `//` under a naive slash flip and then matches no
+ * single-slash needle — so collapsing slash runs is what keeps these assertions
+ * alive on Windows rather than merely green.
+ */
+function fold(value: string): string {
+  // eslint-disable-next-line unicorn/prefer-string-replace-all -- test tsconfig lib predates String.replaceAll
+  return toForwardSlash(value).replace(/\/{2,}/g, '/').toLowerCase();
 }
 
 describe('baseline control arm (integration)', () => {
@@ -127,8 +143,8 @@ describe('baseline control arm (integration)', () => {
     expect(control, 'no skill-absent arm was spawned').toHaveLength(1);
     expect(treatment, 'no skill-present arm was spawned').toHaveLength(1);
 
-    const harnessRoot = toForwardSlash(result.harnessPath);
-    const surface = toForwardSlash(spawnSurface(control[0] as never));
+    const harnessRoot = fold(result.harnessPath);
+    const surface = fold(spawnSurface(control[0] as Record<string, unknown>));
 
     // The whole point, stated once: nothing VAT hands the control arm may lead to
     // the staged skill. Not the prompt, not argv, not cwd, not the environment.
@@ -139,8 +155,43 @@ describe('baseline control arm (integration)', () => {
 
     // The treatment arm still gets everything it needs — otherwise "isolated" is
     // indistinguishable from "broken", and the A/B measures nothing.
-    expect(toForwardSlash(spawnSurface(treatment[0] as never))).toContain(harnessRoot);
+    expect(fold(spawnSurface(treatment[0] as Record<string, unknown>))).toContain(harnessRoot);
     expect((treatment[0] as { env?: NodeJS.ProcessEnv }).env ?? {}).toHaveProperty('CLAUDE_PLUGIN_ROOT');
+  });
+
+  /**
+   * The FIFTH channel, and the one an audit of "what does VAT hand this process"
+   * structurally cannot find: not a path into either arm, but a directory both arms
+   * own. The two arms of one eval are queued adjacently into a bounded-parallel
+   * pool, so they run at the same time; when they shared a workspace the control
+   * arm could `ls`, read whatever the treatment had just written, and answer from
+   * it — scoring like the treatment, erasing the lift, and leaving a transcript
+   * with no harness path in it for the detector to find. Each arm's own cwd was
+   * correct in isolation and wrong as a pair.
+   */
+  it('gives each arm its own workspace, so the control cannot read the treatment output', async () => {
+    const { subjectDir } = writePluginFixture();
+    const cwds = new Map<string, string>();
+
+    const fake = makeHarnessFakeSpawn({
+      onExecutorSpawn: (opts) => {
+        cwds.set(opts.pluginDirs.length === 0 ? 'control' : 'treatment', opts.cwd ?? '');
+      },
+    });
+
+    const result = await runSkillTestHarness(baselineOpts(subjectDir, fake.spawn, { keep: true }));
+
+    expect(result.exitCode, result.summary).toBe(0);
+    const controlCwd = fold(cwds.get('control') ?? '');
+    const treatmentCwd = fold(cwds.get('treatment') ?? '');
+
+    expect(controlCwd, 'no skill-absent arm was spawned').not.toBe('');
+    expect(treatmentCwd, 'no skill-present arm was spawned').not.toBe('');
+    expect(controlCwd, 'both arms were given the SAME working directory').not.toBe(treatmentCwd);
+    // Neither may sit inside the other, which a naive `<ws>/<id>` vs `<ws>/<id>/without`
+    // layout would satisfy the inequality above while still sharing everything.
+    expect(controlCwd.startsWith(treatmentCwd + '/')).toBe(false);
+    expect(treatmentCwd.startsWith(controlCwd + '/')).toBe(false);
   });
 
   it("runs the control arm in its own workspace, never in the staged skill", async () => {
@@ -157,8 +208,8 @@ describe('baseline control arm (integration)', () => {
 
     expect(result.exitCode, result.summary).toBe(0);
     expect(controlCwd).toBeDefined();
-    expect(toForwardSlash(controlCwd ?? '')).toContain(toForwardSlash(result.workspacesPath ?? '@none'));
-    expect(toForwardSlash(controlCwd ?? '')).not.toContain(toForwardSlash(result.harnessPath));
+    expect(fold(controlCwd ?? '')).toContain(fold(result.workspacesPath ?? '@none'));
+    expect(fold(controlCwd ?? '')).not.toContain(fold(result.harnessPath));
   });
 
   // The detector's whole value is that it makes a bad number LOUD. Mutation

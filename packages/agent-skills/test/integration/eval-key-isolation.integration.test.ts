@@ -222,8 +222,11 @@ describe('eval answer-key isolation (canary)', () => {
     // are what the executor is meant to work on. Workspaces now live outside the
     // harness root, so the run reports their location rather than it being derivable.
     expect(workspacesPath).toBeDefined();
+    // `with/` is the arm segment: each arm of a `--baseline` run gets its own copy
+    // of every workspace so the two cannot observe each other mid-run. A non-baseline
+    // run stages the `with` arm only.
     expect(
-      existsSync(safePath.join(workspacesPath ?? '', 'with-files', 'fixtures', 'input.md')),
+      existsSync(safePath.join(workspacesPath ?? '', 'with', 'with-files', 'fixtures', 'input.md')),
     ).toBe(true);
   });
 

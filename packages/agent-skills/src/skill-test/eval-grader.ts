@@ -190,7 +190,14 @@ export async function runGraderForEval(input: RunGraderInput): Promise<EvalFragm
 
   assertToolVerdictConsistent(input.evalId, input.toolExpectations, fragment.tool);
 
-  return fragment;
+  // The grader's only input is the executor transcript, which untrusted skill code
+  // controls, and `evalId` is schema-typed as any non-empty string. It is echoed
+  // verbatim into the run summary and into `baseline.json` — including the
+  // CONTAMINATED banner — so a grader talked into emitting an id containing
+  // newlines and ANSI escapes can paint a reassuring "known false positive, the
+  // delta is valid" line directly beneath vat's own warning. VAT knows which eval
+  // it asked about; take the id from the request, never from the answer.
+  return { ...fragment, evalId: input.evalId };
 }
 
 /**

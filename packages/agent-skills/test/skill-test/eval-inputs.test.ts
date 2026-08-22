@@ -212,9 +212,9 @@ describe('stageEvalWorkspaces', () => {
     const suite = { skill_name: 'demo', evals: [
       { id: 7, prompt: 'fix', expected_output: 'fixed', files: [FIXTURES_DOC], expectations: ['ok'] },
     ] };
-    const returned = stageEvalWorkspaces({ suite, evalsDir, workspacesRoot });
+    const returned = stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, arms: ['with'] });
     expect(returned).toBe(workspacesRoot);
-    expect(existsSync(safePath.join(workspacesRoot, '7', FIXTURES_DOC))).toBe(true);
+    expect(existsSync(safePath.join(workspacesRoot, 'with', '7', FIXTURES_DOC))).toBe(true);
   });
 
   it('stages files under a string id directory (filesystem-safe via joinUnderRoot)', () => {
@@ -222,8 +222,8 @@ describe('stageEvalWorkspaces', () => {
     const suite = { skill_name: 'demo', evals: [
       { id: 'dollar-quote-recovery', prompt: 'fix', expected_output: 'fixed', files: [FIXTURES_DOC], expectations: ['ok'] },
     ] };
-    stageEvalWorkspaces({ suite, evalsDir, workspacesRoot });
-    expect(existsSync(safePath.join(workspacesRoot, 'dollar-quote-recovery', FIXTURES_DOC))).toBe(true);
+    stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, arms: ['with'] });
+    expect(existsSync(safePath.join(workspacesRoot, 'with', 'dollar-quote-recovery', FIXTURES_DOC))).toBe(true);
   });
 
   // An eval with no `files` still gets an EMPTY workspace. Before, it got none,
@@ -235,8 +235,8 @@ describe('stageEvalWorkspaces', () => {
     const suite = { skill_name: 'demo', evals: [
       { id: 1, prompt: 'p', expected_output: 'o', expectations: ['e'] },
     ] };
-    stageEvalWorkspaces({ suite, evalsDir, workspacesRoot });
-    const dir = safePath.join(workspacesRoot, '1');
+    stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, arms: ['with'] });
+    const dir = safePath.join(workspacesRoot, 'with', '1');
     expect(existsSync(dir)).toBe(true);
     expect(readdirSync(dir)).toEqual([]);
   });
@@ -246,8 +246,8 @@ describe('stageEvalWorkspaces', () => {
     const suite = { skill_name: 'demo', evals: [
       { id: 2, prompt: 'p', expected_output: 'o', files: [], expectations: ['e'] },
     ] };
-    stageEvalWorkspaces({ suite, evalsDir, workspacesRoot });
-    const dir = safePath.join(workspacesRoot, '2');
+    stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, arms: ['with'] });
+    const dir = safePath.join(workspacesRoot, 'with', '2');
     expect(existsSync(dir)).toBe(true);
     expect(readdirSync(dir)).toEqual([]);
   });
@@ -257,7 +257,7 @@ describe('stageEvalWorkspaces', () => {
     const suite = { skill_name: 'demo', evals: [
       { id: 3, prompt: 'p', expected_output: 'o', files: ['fixtures/nope.md'], expectations: ['e'] },
     ] };
-    expect(() => stageEvalWorkspaces({ suite, evalsDir, workspacesRoot })).toThrow(EvalInputError);
+    expect(() => stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, arms: ['with'] })).toThrow(EvalInputError);
   });
 
   it('throws EvalInputError (not raw Error) when a declared file contains a path traversal escape', () => {
@@ -265,6 +265,6 @@ describe('stageEvalWorkspaces', () => {
     const suite = { skill_name: 'demo', evals: [
       { id: 4, prompt: 'p', expected_output: 'o', files: ['../escape.md'], expectations: ['e'] },
     ] };
-    expect(() => stageEvalWorkspaces({ suite, evalsDir, workspacesRoot })).toThrow(EvalInputError);
+    expect(() => stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, arms: ['with'] })).toThrow(EvalInputError);
   });
 });
