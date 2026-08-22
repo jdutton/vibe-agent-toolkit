@@ -27,6 +27,27 @@ const PACKAGES_CLI_SRC = 'packages/cli/src';
 /** The `paths:` glob several glob-matcher fixtures share. */
 const TS_GLOB = 'packages/**/*.ts';
 
+/** A realized `.ts` file under {@link PACKAGES_CLI_SRC} — the usual ∃ witness. */
+const SUBJECT_TS = 'packages/cli/src/index.ts';
+
+/** A realized `.md` file beside it, for the extension-narrowing ∀ case. */
+const SUBJECT_MD = 'packages/cli/src/notes.md';
+
+/** A realized file directly in {@link PACKAGES_CLI}, sorting AFTER `src`. */
+const SUBJECT_CONFIG = 'packages/cli/tsconfig.json';
+
+/** The path-scoped rule several fixtures reuse. */
+const TS_RULE = '.claude/rules/ts.md';
+
+/** The rule whose `paths:` list blows the vendor's expansion budget. */
+const HUGE_RULE = '.claude/rules/huge.md';
+
+/** ∃ — spelled once, so a rename cannot leave a stale spelling passing. */
+const MAY_FIRE = 'glob-rule-may-fire';
+
+/** ∀ — same reason. */
+const COVERS_DIR = 'glob-rule-covers-dir';
+
 /** 11^4 = 14,641 expansions — over the documented 1,000-pattern budget. */
 const OVER_BUDGET_PATTERN
   = 'src/{a,b,c,d,e,f,g,h,i,j,k}/{a,b,c,d,e,f,g,h,i,j,k}/{a,b,c,d,e,f,g,h,i,j,k}/{a,b,c,d,e,f,g,h,i,j,k}/x.ts';
@@ -83,7 +104,7 @@ describe('selectRules', () => {
   });
 
   it('admits a path-scoped rule for a FILE query only when a glob matches', () => {
-    const path = '.claude/rules/ts.md';
+    const path = TS_RULE;
     const input = {
       realizations: [queryRealization(path)], tags: [scopeTag(path, PATH_SCOPED)],
       blobs: [blob(path, [TS_GLOB])], queryDir: PACKAGES_CLI_SRC,
@@ -94,14 +115,145 @@ describe('selectRules', () => {
     expect(selectRules({ ...input, queryFile: 'packages/cli/src/index.md' }).rules).toEqual([]);
   });
 
-  it('answers a DIRECTORY query about a path-scoped rule as "may fire", never as a match', () => {
-    const path = '.claude/rules/ts.md';
+  it('answers a DIRECTORY query about a path-scoped rule as ∃, naming the file that witnessed it', () => {
+    const path = TS_RULE;
     const result = selectRules({
-      realizations: [queryRealization(path)], tags: [scopeTag(path, PATH_SCOPED)],
+      realizations: [queryRealization(path), queryRealization(SUBJECT_TS)],
+      tags: [scopeTag(path, PATH_SCOPED)],
       blobs: [blob(path, [TS_GLOB])], queryDir: PACKAGES_CLI_SRC, queryFile: null,
     });
 
-    expect(result.rules[0]?.admission).toEqual({ kind: 'glob-rule-may-fire' });
+    expect(result.rules[0]?.admission)
+      .toEqual({ kind: MAY_FIRE, pattern: TS_GLOB, examplePath: SUBJECT_TS });
+  });
+
+  it('DROPS a path-scoped rule from a DIRECTORY query no file under it can match', () => {
+    // ⛔ The whole reason the split exists. This returned `may fire` for every
+    // path-scoped rule without inspecting one glob, so three unrelated
+    // directories of a 116-rule adopter each reported an identical 73,958-token
+    // on-demand total — the rule corpus, not the directory's cost. A rule scoped
+    // to another package provably cannot fire here and is now absent, not
+    // charged.
+    const path = '.claude/rules/elsewhere.md';
+    const result = selectRules({
+      realizations: [queryRealization(path), queryRealization(SUBJECT_TS)],
+      tags: [scopeTag(path, PATH_SCOPED)],
+      blobs: [blob(path, ['packages/other-pkg/src/thing*.ts'])],
+      queryDir: PACKAGES_CLI_SRC, queryFile: null,
+    });
+
+    expect(result.rules).toEqual([]);
+  });
+
+  it('classifies a rule whose glob covers the whole query directory as ∀, without enumerating a file', () => {
+    // ⚠️ The realization list holds ONLY the rule — no file under the query
+    // directory exists at all. ∀ is pure pattern containment, and a fixture that
+    // supplied a matching file could not tell it from ∃: both would pass. The
+    // empty tree is the discriminator.
+    const path = '.claude/rules/everything.md';
+    const result = selectRules({
+      realizations: [queryRealization(path)], tags: [scopeTag(path, PATH_SCOPED)],
+      blobs: [blob(path, [`${PACKAGES_CLI}/**`])],
+      queryDir: PACKAGES_CLI_SRC, queryFile: null,
+    });
+
+    expect(result.rules[0]?.admission)
+      .toEqual({ kind: COVERS_DIR, pattern: `${PACKAGES_CLI}/**` });
+  });
+
+  it('declines ∀ for a covering glob that narrows by extension, falling back to ∃', () => {
+    // `packages/cli/**/*.md` reaches every directory below the query but not
+    // every FILE in it, so calling it ∀ would assert a burden on the `.ts` files
+    // it never matches. The conservative direction: declined here, still admitted
+    // by ∃ with a witness.
+    const path = '.claude/rules/markdown.md';
+    const pattern = `${PACKAGES_CLI}/**/*.md`;
+    const result = selectRules({
+      realizations: [queryRealization(path), queryRealization(SUBJECT_MD), queryRealization(SUBJECT_TS)],
+      tags: [scopeTag(path, PATH_SCOPED)],
+      blobs: [blob(path, [pattern])], queryDir: PACKAGES_CLI_SRC, queryFile: null,
+    });
+
+    expect(result.rules[0]?.admission)
+      .toEqual({ kind: MAY_FIRE, pattern, examplePath: SUBJECT_MD });
+  });
+
+  it('prefers ∀ over ∃ when the same rule earns both', () => {
+    // Order matters and is asserted, because `directoryAdmission` tests every
+    // pattern for ∀ before any pattern for ∃. Reversed, a rule that covers the
+    // directory would report as "some file here matches" — technically true and
+    // strictly less informative than the burden it actually imposes.
+    const path = '.claude/rules/both.md';
+    const covering = `${PACKAGES_CLI}/**`;
+    const result = selectRules({
+      realizations: [queryRealization(path), queryRealization(SUBJECT_TS)],
+      tags: [scopeTag(path, PATH_SCOPED)],
+      // ∃-only pattern FIRST, so a naive first-match loop would return it.
+      blobs: [blob(path, [TS_GLOB, covering])],
+      queryDir: PACKAGES_CLI_SRC, queryFile: null,
+    });
+
+    expect(result.rules[0]?.admission).toEqual({ kind: COVERS_DIR, pattern: covering });
+  });
+
+  it('treats the corpus ROOT as a directory every rule can be tested against', () => {
+    // 🪤 `isAtOrBelow` answered false for an empty `under`, because its only
+    // caller before the split was the nested-rule branch, which never produces
+    // one. Under a root query that made the candidate file list EMPTY and every
+    // path-scoped rule vanished — a confident zero, the exact answer shape this
+    // lane refuses elsewhere. Both halves are pinned: ∃ finds its witness, and ∀
+    // holds for the whole-tree pattern.
+    const existential = '.claude/rules/ts.md';
+    const universal = '.claude/rules/all.md';
+    const result = selectRules({
+      realizations: [
+        queryRealization(existential), queryRealization(universal), queryRealization(SUBJECT_TS),
+      ],
+      tags: [scopeTag(existential, PATH_SCOPED), scopeTag(universal, PATH_SCOPED)],
+      blobs: [blob(existential, [TS_GLOB]), blob(universal, ['**'])],
+      queryDir: '', queryFile: null,
+    });
+
+    const byPath = new Map(result.rules.map((rule) => [rule.path, rule.admission]));
+    expect(byPath.get(existential))
+      .toEqual({ kind: MAY_FIRE, pattern: TS_GLOB, examplePath: SUBJECT_TS });
+    expect(byPath.get(universal)).toEqual({ kind: COVERS_DIR, pattern: '**' });
+  });
+
+  it('reports an over-budget rule on a DIRECTORY query too, where the check never used to run', () => {
+    // The retired `directory-budget-unchecked` limit, asserted as behaviour. The
+    // budget check moved ahead of the file/directory fork, so a directory query
+    // now drops the rule and reports it instead of answering "may fire" for a
+    // pattern list the harness would refuse to expand.
+    const path = HUGE_RULE;
+    const result = selectRules({
+      realizations: [queryRealization(path), queryRealization(SUBJECT_TS)],
+      tags: [scopeTag(path, PATH_SCOPED)],
+      blobs: [blob(path, [OVER_BUDGET_PATTERN])], queryDir: PACKAGES_CLI_SRC, queryFile: null,
+    });
+
+    expect(result.rules).toEqual([]);
+    expect(result.overBudget).toEqual([path]);
+  });
+
+  it('never offers a DIRECTORY as the witness for an ∃ admission', () => {
+    // A `paths:` glob names files, and `packages/cli/*` matches the directory row
+    // `packages/cli/src` as readily as the file beside it. The fixture is ordered
+    // so a broken filter FAILS rather than coincidentally passing: `src` sorts
+    // before `tsconfig.json`, so an implementation that forgot `isDirectory`
+    // would return the directory as the witness — a path a reader cannot open to
+    // check the claim.
+    const path = '.claude/rules/any.md';
+    const pattern = `${PACKAGES_CLI}/*`;
+    const directoryRow = { ...queryRealization(PACKAGES_CLI_SRC), isDirectory: true };
+    const result = selectRules({
+      realizations: [queryRealization(path), directoryRow, queryRealization(SUBJECT_CONFIG)],
+      tags: [scopeTag(path, PATH_SCOPED)],
+      blobs: [blob(path, [pattern])], queryDir: PACKAGES_CLI, queryFile: null,
+    });
+
+    expect(result.rules[0]?.admission)
+      .toEqual({ kind: MAY_FIRE, pattern, examplePath: SUBJECT_CONFIG });
   });
 
   it('matches dotfile paths, which is an ASSUMPTION the limits record', () => {
@@ -115,7 +267,7 @@ describe('selectRules', () => {
   });
 
   it('treats an over-budget brace pattern as a literal, matching nothing, and reports it', () => {
-    const path = '.claude/rules/huge.md';
+    const path = HUGE_RULE;
     const result = selectRules({
       realizations: [queryRealization(path)], tags: [scopeTag(path, PATH_SCOPED)],
       blobs: [blob(path, [OVER_BUDGET_PATTERN])], queryDir: 'src/a/a/a', queryFile: 'src/a/a/a/x.ts',
@@ -127,7 +279,7 @@ describe('selectRules', () => {
   });
 
   it('reports an over-budget rule realized in THREE extents ONCE', () => {
-    const path = '.claude/rules/huge.md';
+    const path = HUGE_RULE;
     const result = selectRules({
       realizations: realizedInThreeExtents(path), tags: [scopeTag(path, PATH_SCOPED)],
       blobs: [blob(path, [OVER_BUDGET_PATTERN])], queryDir: 'src/a/a/a', queryFile: 'src/a/a/a/x.ts',

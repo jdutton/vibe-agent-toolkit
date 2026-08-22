@@ -455,6 +455,16 @@ function loadClasses(
  * loads the file — a contradiction, not a refinement. `root-rule` stays because
  * an unscoped root rule genuinely does load at launch.
  *
+ * ⛔ `glob-rule-covers-dir` is NOT in this set either, and it is the one that
+ * looks like it should be. A ∀ rule matches every file under the query directory,
+ * so it reads as a second `CLAUDE.md` for that directory — but a directory-scoped
+ * `CLAUDE.md` loads when the SESSION starts and a path-scoped rule loads when the
+ * agent touches a matching file, and those are different moments. The same
+ * contradiction as above settles it: that rule is `glob-rule` for a file query
+ * one level down, so classing the ∀ form `always` would make the launch-time
+ * budget depend on how precisely the question was asked. ∀ is the BURDEN signal
+ * the `on-demand` total earns from naming the pattern, never a load class.
+ *
  * @param admissions - Every admission that reached one identity
  * @returns `always` when a non-import admission loads at launch, else `on-demand`
  */

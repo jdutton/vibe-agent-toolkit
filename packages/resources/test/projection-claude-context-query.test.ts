@@ -319,7 +319,9 @@ describe('whatLoadsAt', () => {
     // the LESS precise question about the same rule file, and precision about
     // the query cannot change when the harness loads the file — so if these two
     // classes disagree, one of them is wrong by construction.
-    expect(directory?.admissions).toEqual([{ kind: 'glob-rule-may-fire' }]);
+    expect(directory?.admissions).toEqual([
+      { kind: 'glob-rule-may-fire', pattern: SCOPED_RULE_PATTERN, examplePath: SCOPED_RULE_SUBJECT },
+    ]);
     expect(file?.loadClass).toBe(directory?.loadClass);
   });
 

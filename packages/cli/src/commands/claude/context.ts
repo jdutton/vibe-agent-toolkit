@@ -166,8 +166,10 @@ export function createContextCommand(): Command {
 Description:
   Report which CLAUDE.md files, .claude/rules files and @-imported files load
   into an agent's context at a path, why each one is there, and what it costs.
-  A FILE argument is exact; a directory argument answers path-scoped rules as
-  "may fire here".
+  A FILE argument is exact. A directory argument classifies each path-scoped
+  rule as ∀ (its glob covers every file there, so it is a second CLAUDE.md for
+  that directory) or ∃ (some file there matches, and the answer names it); a
+  rule no file there can match is left out rather than charged.
 
   Several paths may be named at once. The tree is enumerated ONCE and every
   path answered from that one population, so asking about ten paths together
@@ -533,7 +535,8 @@ function renderAnswerText(document: ContextAnswerDocument): string {
  */
 function headingLines(document: ContextAnswerDocument): string[] {
   const exactness = document.file === null
-    ? 'DIRECTORY query — path-scoped rules are reported as "may fire here", not exactly'
+    ? 'DIRECTORY query — a path-scoped rule is reported as ∀ (covers every file here)'
+      + ' or ∃ (some file here matches); only a FILE query is exact'
     : 'FILE query — path-scoped rules are matched exactly';
   return [`Claude Code context at ${displayPath(document.input)}`, `  ${exactness}`, ''];
 }
@@ -629,8 +632,12 @@ function describeAdmission(admission: Admission): string {
       return `nested rules file, under ${displayPath(admission.under)}`;
     case 'glob-rule':
       return `rule matched ${admission.pattern}`;
+    case 'glob-rule-covers-dir':
+      return `∀ rule covers EVERY file here via ${admission.pattern}`
+        + ' — a second CLAUDE.md for this directory in all but name';
     case 'glob-rule-may-fire':
-      return 'path-scoped rule MAY fire here — ask about a FILE for an exact answer';
+      return `∃ rule may fire here — ${admission.pattern} matches ${displayPath(admission.examplePath)}`
+        + ', among possibly others; ask about a FILE for an exact answer';
     // Spelled out rather than left to a `default`, so that adding a seventh
     // admission kind upstream is a lint error here instead of an import
     // description silently applied to something that is not an import.

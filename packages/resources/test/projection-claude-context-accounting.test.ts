@@ -372,12 +372,35 @@ describe('the stated limits', () => {
   });
 
   it('states what the answer is not addressed to at all', () => {
-    // The overall context window, and the budget check a directory query never
-    // reaches. Both are `scope`: not an error in the number, a question the
+    // The overall context window: not an error in the number, a question the
     // number is not an answer to.
     const byId = new Map(CLAUDE_CONTEXT_LIMITS.map((limit) => [limit.id, limit]));
     expect(byId.get('context-window-scope')?.direction).toBe('scope');
-    expect(byId.get('directory-budget-unchecked')?.direction).toBe('scope');
+  });
+
+  it('retired the directory budget limit when the check started running on both query shapes', () => {
+    // ⛔ Asserted as an ABSENCE, and the absence is the whole point. The ∃/∀ split
+    // moved the vendor's 1,000-pattern / 4 MiB check ahead of the file/directory
+    // fork in `admissionFor`, so a directory query now reaches it and its
+    // `overBudget` list is no longer always empty. Leaving the limit published
+    // would tell a reader to ask about a FILE to get a check that already ran —
+    // and a stale limit is worse than a missing one, because it is read as
+    // current.
+    const ids = new Set(CLAUDE_CONTEXT_LIMITS.map((limit) => limit.id));
+    expect(ids.has('directory-budget-unchecked')).toBe(false);
+  });
+
+  it('signs the existential classification as an under-report, because a rule can outlive its files', () => {
+    // The bound the ∃/∀ split CREATED, and the one direction it runs in. Before
+    // the split every path-scoped rule was admitted for every directory, so no
+    // rule could go missing; now a rule whose patterns match nothing in the tree
+    // today is absent and fires the day a matching file appears. Filed
+    // `under-report` rather than `scope`: it makes the number too SMALL, which is
+    // a direction a reader can hedge against.
+    const limit = CLAUDE_CONTEXT_LIMITS.find((entry) => entry.id === 'existential-needs-a-file');
+
+    expect(limit?.direction).toBe('under-report');
+    expect(limit?.statement).toContain('∀ half is immune');
   });
 
   it('signs the estimator as an assumption running in both directions', () => {

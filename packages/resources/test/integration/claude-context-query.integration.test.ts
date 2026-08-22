@@ -148,10 +148,17 @@ describe('whatLoadsAt over a real populated tree', () => {
     ].sort(byCodePoint));
   });
 
-  it('answers the same DIRECTORY query with the glob rule as "may fire", not as a match', () => {
+  it('answers the same DIRECTORY query with the glob rule as ∃, naming the file that witnessed it', () => {
     const scoped = rowAt(answerAt(QUERIED_DIR), SCOPED_RULE);
 
-    expect(scoped?.admissions).toEqual([{ kind: 'glob-rule-may-fire' }]);
+    // The ∃ half of the classification, on a REAL tree rather than hand-built
+    // rows: `packages/**/*.ts` covers no whole directory, so it cannot be ∀, and
+    // the witness is a file that genuinely exists under the query directory.
+    // Naming it is what makes the claim checkable — "may fire" alone was true of
+    // every path-scoped rule in every repository.
+    expect(scoped?.admissions).toEqual([
+      { kind: 'glob-rule-may-fire', pattern: 'packages/**/*.ts', examplePath: QUERIED_FILE },
+    ]);
     expect(scoped?.loadClass).toBe('on-demand');
   });
 

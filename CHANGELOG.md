@@ -9,6 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- **`vat claude context` now classifies a directory query's path-scoped rules as ∀ or ∃, and drops
+  the ones that cannot fire.** The `glob-rule-may-fire` admission gained `pattern` and `examplePath`
+  fields, and a new `glob-rule-covers-dir` admission joins it. A consumer matching on
+  `kind: 'glob-rule-may-fire'` still matches; one that compared the admission object structurally
+  must account for the two new fields and the new kind.
+
+  The reason it exists: the directory branch returned `glob-rule-may-fire` for **every** path-scoped
+  rule without inspecting a single glob, so every directory in a repository reported the same
+  on-demand total — the whole rule corpus. Measured on a 116-rule adopter, three unrelated
+  directories each reported **73,958 tokens**. They now report **1,393**, **5,513** and **1,393**,
+  and the two that agree do so through different predicates, which the admission names.
+
+  - **∀ (`glob-rule-covers-dir`)** — some pattern covers every path under the directory, so the rule
+    is a second `CLAUDE.md` for it in all but name. Decided by pattern containment alone: no file is
+    enumerated, and it holds for a directory that is empty or does not exist yet. Deliberately
+    conservative (a glob-free prefix plus `/**`), because a false ∀ would overstate a cost.
+  - **∃ (`glob-rule-may-fire`)** — at least one realized file under the directory matches, and the
+    admission names the pattern *and* one path that witnessed it, so the claim can be checked by
+    opening a file rather than by re-running the matcher.
+  - **Neither** — the rule is absent from the answer instead of charged to it.
+
+  Neither half adds a table, a column or a crawl: ∀ is arithmetic on the pattern and ∃ reads
+  `resource_realizations`, which the population already materialises. A pattern whose literal prefix
+  is disjoint from the query directory is skipped without testing a file, and one whose prefix lies
+  below it is tested against that subtree alone, found by binary search over a path-sorted array.
+
+  Two stated limits moved with the behaviour. `directory-glob` was rewritten: ∀ is exact for the
+  directory, and ∃ remains an over-report against any one file in it. `directory-budget-unchecked`
+  was **retired** — the vendor's 1,000-pattern / 4 MiB `paths:` budget check moved ahead of the
+  file/directory fork, so a directory query now reaches it and its over-budget list is no longer
+  always empty. A new `existential-needs-a-file` limit records the bound the split created: ∃ is
+  decided against the files that exist *now*, so a rule scoped to a generated or not-yet-written
+  path is invisible until that path appears. It is signed `under-report`; the ∀ half is immune.
+
+  ⛔ Neither ∀ nor ∃ is launch-time. A path-scoped rule loads when the agent touches a matching
+  file, and a directory-scoped `CLAUDE.md` loads when the session starts — different moments. ∀ is
+  the burden signal the on-demand total earns from naming the pattern, never a load class.
+
 - **`vat claude context` takes several paths, and its machine-readable output is now an envelope.**
   The argument became `[paths...]`, and `--format json`/`yaml` emit `{ root, answers: [...] }` rather
   than a bare answer document. `answers` is a list **even for a single path**, so a consumer never

@@ -15,14 +15,67 @@
  * |---|---|---|
  * | `root` | always | always |
  * | `nested` | on demand, at or below the rules directory's PARENT | same |
- * | `path-scoped` | on demand, "may fire here" — a directory query is not exact | on demand, admitted iff a glob matches |
+ * | `path-scoped` | on demand, ∀ (covers the directory) or ∃ (some file here matches) or absent | on demand, admitted iff a glob matches |
  *
  * ⛔ A path-scoped rule is ON DEMAND in BOTH columns. The vendor's on-demand
  * class is *"rules that load on demand, including path-scoped rules and rules in
  * nested `.claude/rules/` directories"* — both halves, not just the nested one.
  * A matching glob decides whether the rule is in the answer, never that it is
  * loaded at launch; `claude-context-query.ts`'s `baseLoadClass` is where that is
- * enforced and says so at length.
+ * enforced and says so at length. **∀ does not change that**: a rule covering
+ * every file in a directory still fires when the agent touches one of them, not
+ * at launch. ∀ is the BURDEN signal, not a load class.
+ *
+ * ## ∃ and ∀, and the constant they replace
+ *
+ * This returned `glob-rule-may-fire` for EVERY path-scoped rule on a directory
+ * query, without inspecting a single glob. Measured on a 116-rule adopter, three
+ * unrelated directories — one data directory, one package, one documentation tree
+ * — each reported an on-demand total of **73,958 tokens**. Identical, because the
+ * answer was the whole rule corpus every time. A number that is the
+ * same for every directory in a repo carries no information, and the stated
+ * `directory-glob` limit kept it from being a lie without making it useful.
+ *
+ * The split is Jeff's:
+ *
+ * - **∀ — `glob-rule-covers-dir`.** Some pattern covers every path under the
+ *   query directory, so the rule is a second `CLAUDE.md` for it in all but name.
+ *   This is the BURDEN answer, and it is **pure pattern containment**: no file is
+ *   enumerated to decide it. {@link coversDirectory} is deliberately narrow —
+ *   a glob-free literal prefix plus `/**` — because a false ∀ would overstate a
+ *   cost, and everything it declines still gets the ∃ test below.
+ * - **∃ — `glob-rule-may-fire`.** At least one realized file under the query
+ *   directory matches, and the admission now NAMES that pattern and one path it
+ *   matched. This is the DISCOVERABILITY answer. It reads `resource_realizations`
+ *   and nothing else — already materialised, no new table, no new crawl.
+ * - **Neither ⇒ the rule is not in the answer at all.** That is the half that
+ *   kills the constant: a rule scoped to `packages/some-pkg/src/*.ts` is no longer
+ *   charged against `docs/wiki/`, which it provably cannot fire under.
+ *
+ * ∃ is still an over-report against any ONE file in the directory, which is what
+ * the rewritten `directory-glob` limit now says. It is no longer an over-report
+ * against the directory.
+ *
+ * ## The cost of ∃, and the prune that pays for it
+ *
+ * ∃ is a pattern-by-file cross product, and the adopter that produced the
+ * constant would run 116 rules × ~18 patterns against every file under the query
+ * directory. Two prunes keep it off the critical path, and both are ordinary
+ * prefix arithmetic rather than an index:
+ *
+ * 1. A pattern's LITERAL PREFIX bounds the subtree it can possibly match. When
+ *    that prefix and the query directory are disjoint the pattern is skipped
+ *    without testing one file — which on that adopter is most of the rule corpus
+ *    for most directories, and is why the constant was so much larger than any
+ *    real answer.
+ * 2. When the prefix is BELOW the query directory, only files under the prefix
+ *    are tested, found by binary search over a path-sorted array
+ *    ({@link candidateRange}). A root query against a deep pattern scans that
+ *    pattern's own subtree, not the tree.
+ *
+ * Matchers are compiled once per pattern and reused across files.
+ * `picomatch.isMatch` recompiles on every call, so the file-query path can use it
+ * on its single path and this one must not.
  *
  * ⚠️ The `nested` trigger is the directional analogue of the vendor's
  * subdirectory-`CLAUDE.md` rule and is NOT documented. The vendor says only that
@@ -70,12 +123,52 @@ const PATTERN_BYTE_BUDGET = 4 * 1024 * 1024;
 /** The `.claude/rules` segment a nested rules directory hangs below. */
 const RULES_SEGMENT = '/.claude/rules/';
 
+/**
+ * The pattern tails that make a glob-free prefix universal over its subtree.
+ *
+ * Longest first, because `/**\/*` also ends with `/*` and testing the short form
+ * first would leave a `/**` behind in the prefix — the same longest-first
+ * discipline the UTF-32/UTF-16 BOM guard needs, and for the same reason.
+ */
+const UNIVERSAL_TAILS = ['/**/*', '/**'] as const;
+
+/**
+ * The two whole-tree patterns, which cover every directory including the root.
+ *
+ * Separate from {@link UNIVERSAL_TAILS} because they have no prefix to test:
+ * there is no directory they do not cover.
+ */
+const UNIVERSAL_PATTERNS = new Set(['**', '**/*']);
+
+/**
+ * Characters that make a path segment a pattern rather than a literal.
+ *
+ * `!` is here even though it only negates in leading position: a `paths:` list
+ * containing a negation is a predicate this module's OR-over-patterns does not
+ * model, and refusing to call such a pattern universal is the conservative
+ * direction. `(` and `)` cover picomatch's extglobs.
+ */
+const GLOB_META = /[*?[\]{}()!]/;
+
 /** Why one rule is in the answer. */
 export type RuleAdmission =
   | { readonly kind: 'root-rule' }
   | { readonly kind: 'nested-rule'; readonly under: string }
   | { readonly kind: 'glob-rule'; readonly pattern: string }
-  | { readonly kind: 'glob-rule-may-fire' };
+  /** ∀ — every path under the query directory matches. The burden answer. */
+  | { readonly kind: 'glob-rule-covers-dir'; readonly pattern: string }
+  /**
+   * ∃ — some realized file under the query directory matches.
+   *
+   * Carries the witness: without `examplePath` the claim is unfalsifiable by the
+   * reader, who would have to re-run the matcher to find out whether "may fire"
+   * meant one generated file or the whole directory.
+   */
+  | {
+      readonly kind: 'glob-rule-may-fire';
+      readonly pattern: string;
+      readonly examplePath: string;
+    };
 
 /** One rule this query loads, and the predicate that admitted it. */
 export interface SelectedRule {
@@ -140,6 +233,13 @@ export function selectRules(input: {
     }
   }
   const blobByKey = new Map(input.blobs.map((row) => [row.contentKey, row]));
+  // Computed ONCE for the whole selection, not per rule: it is a function of the
+  // query alone, and 116 rules rebuilding one adopter's file list is the shape of
+  // cost that made the naive ∃ pass look unaffordable in the first place. Empty
+  // for a file query, which never reaches ∃.
+  const dirFiles = input.queryFile === null
+    ? filesUnder(input.realizations, input.queryDir)
+    : [];
 
   const rules: SelectedRule[] = [];
   const overBudget: string[] = [];
@@ -159,7 +259,7 @@ export function selectRules(input: {
     const scope = scopeOf.get(row.resourceId);
     if (scope === undefined || row.isDirectory || seen.has(row.resourceId)) continue;
     seen.add(row.resourceId);
-    const admission = admissionFor(scope, row, input, blobByKey, overBudget);
+    const admission = admissionFor(scope, row, { ...input, dirFiles }, blobByKey, overBudget);
     if (admission !== undefined) {
       rules.push({ resourceId: row.resourceId, path: row.path, admission });
     }
@@ -176,7 +276,8 @@ export function selectRules(input: {
  *
  * @param scope - The rule's `rule-scope` value
  * @param row - The rule's realization
- * @param input - The query, as {@link selectRules} received it
+ * @param input - The query, as {@link selectRules} received it, plus the
+ *   path-sorted files under the query directory
  * @param blobByKey - `contentKey` → blob, for `paths:` frontmatter
  * @param overBudget - Collector for rules whose `paths:` list blew the budget
  * @returns The admission, or undefined
@@ -184,7 +285,11 @@ export function selectRules(input: {
 function admissionFor(
   scope: RuleScope,
   row: ResourceRealizationRow,
-  input: { readonly queryDir: string; readonly queryFile: string | null },
+  input: {
+    readonly queryDir: string;
+    readonly queryFile: string | null;
+    readonly dirFiles: readonly string[];
+  },
   blobByKey: ReadonlyMap<string, BlobRow>,
   overBudget: string[],
 ): RuleAdmission | undefined {
@@ -202,22 +307,220 @@ function admissionFor(
   // silently inherit glob semantics nobody chose for it.
   if (scope !== 'path-scoped') return undefined;
 
-  if (input.queryFile === null) return { kind: 'glob-rule-may-fire' };
-
   const patterns = pathsFrontmatterOf(row, blobByKey);
   if (patterns.length === 0) return undefined;
-  if (
-    expandedPatternCount(patterns) > EXPANDED_PATTERN_BUDGET
-    || patterns.reduce((sum, pattern) => sum + pattern.length, 0) > PATTERN_BYTE_BUDGET
-  ) {
+  // ⚠️ NOW BEFORE the file/directory split, where it used to sit after it. A
+  // directory query never reached this check while it answered "may fire" for
+  // everything, which is what the retired `directory-budget-unchecked` limit
+  // recorded: a rule the harness would refuse to expand was indistinguishable
+  // from one that matched cleanly, and its over-budget list was always empty.
+  // Both query shapes read the same `paths:` list, so both owe the same check.
+  if (isOverBudget(patterns)) {
     // The documented over-budget behaviour: the pattern is used UNEXPANDED and
     // its literal braces match no files. Reported, because a rule that silently
     // stopped matching is exactly the case a budget check is worth having for.
     overBudget.push(row.path);
     return undefined;
   }
+
+  if (input.queryFile === null) return directoryAdmission(patterns, input.queryDir, input.dirFiles);
+
   const matched = patterns.find((pattern) => picomatch.isMatch(input.queryFile ?? '', pattern, { dot: true }));
   return matched === undefined ? undefined : { kind: 'glob-rule', pattern: matched };
+}
+
+/**
+ * Has this `paths:` list blown either half of the vendor's shared budget?
+ *
+ * @param patterns - The rule's `paths:` entries
+ * @returns True when the harness would use the patterns unexpanded
+ */
+function isOverBudget(patterns: readonly string[]): boolean {
+  return expandedPatternCount(patterns) > EXPANDED_PATTERN_BUDGET
+    || patterns.reduce((sum, pattern) => sum + pattern.length, 0) > PATTERN_BYTE_BUDGET;
+}
+
+/**
+ * A directory query's answer for one path-scoped rule: ∀, ∃, or absent.
+ *
+ * ∀ is tested first and across every pattern before any ∃ work, because it is
+ * the stronger claim and free — a rule that covers the directory is reported as
+ * covering it even when a second pattern would also have produced a witness.
+ *
+ * @param patterns - The rule's `paths:` entries, already inside the budget
+ * @param queryDir - Root-relative directory of the query
+ * @param dirFiles - Path-sorted realized files at or below `queryDir`
+ * @returns The ∀ or ∃ admission, or undefined when the rule cannot fire here
+ */
+function directoryAdmission(
+  patterns: readonly string[],
+  queryDir: string,
+  dirFiles: readonly string[],
+): RuleAdmission | undefined {
+  const covering = patterns.find((pattern) => coversDirectory(pattern, queryDir));
+  if (covering !== undefined) return { kind: 'glob-rule-covers-dir', pattern: covering };
+
+  for (const pattern of patterns) {
+    const examplePath = firstMatchUnder(pattern, queryDir, dirFiles);
+    if (examplePath !== undefined) return { kind: 'glob-rule-may-fire', pattern, examplePath };
+  }
+  return undefined;
+}
+
+/**
+ * Does this one pattern match EVERY path under `queryDir`?
+ *
+ * ⛔ Deliberately narrow, and the narrowness is the safety property. Only a
+ * glob-free literal prefix followed by `/**` (or `/**\/*`) qualifies, plus the
+ * two whole-tree patterns. `docs/**\/*.md` is declined though it covers every
+ * markdown file, because it does not cover every FILE; `packages/*\/README.md` is
+ * declined because its prefix is not literal. Everything declined here still
+ * reaches the ∃ test, so a false negative costs precision and a false positive
+ * would state a burden the adopter does not carry — the asymmetry decides it.
+ *
+ * @param pattern - One `paths:` entry
+ * @param queryDir - Root-relative directory of the query
+ * @returns True when every path under `queryDir` matches
+ */
+function coversDirectory(pattern: string, queryDir: string): boolean {
+  if (UNIVERSAL_PATTERNS.has(pattern)) return true;
+  const tail = UNIVERSAL_TAILS.find((candidate) => pattern.endsWith(candidate));
+  if (tail === undefined) return false;
+  const prefix = pattern.slice(0, -tail.length);
+  // An empty prefix here means a leading-slash pattern (`/**`), which is not the
+  // root-relative shape every other path in this projection uses. Declined rather
+  // than normalised: guessing what an author meant by it would be a dialect.
+  if (prefix === '' || GLOB_META.test(prefix)) return false;
+  return isAtOrBelow(queryDir, prefix);
+}
+
+/**
+ * The first realized file under `queryDir` this pattern matches, if any.
+ *
+ * The matcher is compiled ONCE and applied across the candidate range;
+ * `picomatch.isMatch` would recompile per file, which on a root query is the
+ * difference between one compile and thousands.
+ *
+ * @param pattern - One `paths:` entry
+ * @param queryDir - Root-relative directory of the query
+ * @param dirFiles - Path-sorted realized files at or below `queryDir`
+ * @returns The witness path, or undefined when the pattern matches nothing here
+ */
+function firstMatchUnder(
+  pattern: string,
+  queryDir: string,
+  dirFiles: readonly string[],
+): string | undefined {
+  const prefix = literalPrefix(pattern);
+  // Disjoint subtrees: the pattern cannot match anything under the query
+  // directory, and no file is tested. This is the prune that turns the whole
+  // rule corpus into the handful that can actually fire here.
+  if (!isAtOrBelow(queryDir, prefix) && !isAtOrBelow(prefix, queryDir)) return undefined;
+
+  const [start, end] = candidateRange(dirFiles, prefix, queryDir);
+  if (start >= end) return undefined;
+  const isMatch = picomatch(pattern, { dot: true });
+  for (let index = start; index < end; index += 1) {
+    const file = dirFiles[index];
+    if (file !== undefined && isMatch(file)) return file;
+  }
+  return undefined;
+}
+
+/**
+ * The literal directory prefix a pattern's matches must all live under.
+ *
+ * Segments are taken while they contain no glob metacharacter, so
+ * `packages/some-pkg/src/thing*.ts` yields `packages/some-pkg/src`. A wholly
+ * literal pattern yields ITSELF — a file path, not a directory — which is
+ * harmless: it is used only for at-or-below tests, and a longer prefix prunes
+ * strictly more.
+ *
+ * @param pattern - One `paths:` entry
+ * @returns The literal prefix, possibly empty
+ */
+function literalPrefix(pattern: string): string {
+  // eslint-disable-next-line local/no-hardcoded-path-split -- `paths:` globs are forward-slashed by the vendor's own dialect, never platform-separated
+  const segments = pattern.split('/');
+  const literal: string[] = [];
+  for (const segment of segments) {
+    if (GLOB_META.test(segment)) break;
+    literal.push(segment);
+  }
+  return literal.join('/');
+}
+
+/**
+ * The slice of `dirFiles` a pattern could match, as `[start, end)`.
+ *
+ * `dirFiles` is already restricted to `queryDir`, so a prefix at or above it
+ * bounds nothing new and the whole array is the range. A prefix BELOW it names a
+ * contiguous run, because the array is sorted by code point and every path under
+ * `P` shares the literal `P/`.
+ *
+ * @param dirFiles - Path-sorted realized files at or below the query directory
+ * @param prefix - The pattern's literal prefix
+ * @param queryDir - Root-relative directory of the query
+ * @returns Inclusive start and exclusive end indices
+ */
+function candidateRange(
+  dirFiles: readonly string[],
+  prefix: string,
+  queryDir: string,
+): [number, number] {
+  if (prefix === '' || isAtOrBelow(queryDir, prefix)) return [0, dirFiles.length];
+  const bound = `${prefix}/`;
+  const start = lowerBound(dirFiles, bound);
+  let end = start;
+  while (end < dirFiles.length && (dirFiles[end] ?? '').startsWith(bound)) end += 1;
+  return [start, end];
+}
+
+/**
+ * The first index in a sorted array whose value is not less than `target`.
+ *
+ * @param sorted - A code-point-sorted array
+ * @param target - The value to bound
+ * @returns The insertion index
+ */
+function lowerBound(sorted: readonly string[], target: string): number {
+  let low = 0;
+  let high = sorted.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if ((sorted[middle] ?? '') < target) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
+/**
+ * Every realized file at or below `queryDir`, deduplicated and path-sorted.
+ *
+ * ⚠️ Deduplicated because `resource_realizations` is keyed `(extentId, path)`:
+ * a file reachable from three import closures carries three rows, and testing it
+ * three times would be three chances to return the same witness at triple the
+ * cost. Directories are dropped — a rule's `paths:` glob names files.
+ *
+ * Sorted by code point rather than `localeCompare`, matching every other
+ * ordering in this lane: {@link candidateRange}'s binary search depends on the
+ * order, so an ICU- and locale-dependent one would make the ∃ answer differ
+ * between two machines.
+ *
+ * @param realizations - Every realization the projection holds
+ * @param queryDir - Root-relative directory of the query
+ * @returns The sorted, deduplicated file list
+ */
+function filesUnder(
+  realizations: readonly ResourceRealizationRow[],
+  queryDir: string,
+): string[] {
+  const paths = new Set<string>();
+  for (const row of realizations) {
+    if (row.isDirectory || !isAtOrBelow(row.dir, queryDir)) continue;
+    paths.add(row.path);
+  }
+  return [...paths].sort((left, right) => (left < right ? -1 : Number(left > right)));
 }
 
 /**
@@ -255,11 +558,20 @@ function nestedRuleParent(path: string): string | null {
 /**
  * Is `queryDir` the directory `under`, or somewhere below it?
  *
+ * ⚠️ An EMPTY `under` is the corpus ROOT, and everything is at or below it. The
+ * nested-rule caller can never produce one — `nestedRuleParent` returns null
+ * rather than `''` — so this branch exists for the ∃/∀ callers, where the root is
+ * an ordinary query directory (`vat claude context .` at the top of a repo) and a
+ * literal-free pattern has an empty prefix. Without it a root query enumerated
+ * zero candidate files and every path-scoped rule silently vanished from the
+ * answer: a confident empty, which is the one answer shape this lane refuses.
+ *
  * @param queryDir - Root-relative directory of the query
- * @param under - Root-relative scoping directory
+ * @param under - Root-relative scoping directory, or `''` for the corpus root
  * @returns True when the query is in scope
  */
 function isAtOrBelow(queryDir: string, under: string): boolean {
+  if (under === '') return true;
   // eslint-disable-next-line local/no-path-startswith -- `resource_realizations.path`-derived directories are forward-slashed and root-relative by `relativize()` before any consumer sees it, which is the precondition this rule enforces
   return queryDir === under || queryDir.startsWith(`${under}/`);
 }
