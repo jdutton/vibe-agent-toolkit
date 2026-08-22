@@ -9,6 +9,7 @@ import {
   vatPrivateDirNeedles,
   type ContaminationSignal,
   scrubControlArmEnv,
+  skillContentNeedles,
   summarizeBaselineIntegrity,
   type BaselineContamination,
 } from '../../src/skill-test/baseline-integrity.js';
@@ -25,7 +26,14 @@ const KIND_HARNESS_PATH = 'harness-path' as const;
 const KIND_DECLARED_EXECUTABLE = 'declared-executable' as const;
 const KIND_SIBLING_ARM = 'sibling-arm' as const;
 const KIND_VAT_PRIVATE_DIR = 'vat-private-dir' as const;
-const ALL_SIGNALS: ContaminationSignal[] = [KIND_HARNESS_PATH, KIND_SIBLING_ARM, KIND_VAT_PRIVATE_DIR, KIND_DECLARED_EXECUTABLE];
+const KIND_SKILL_CONTENT = 'skill-content' as const;
+const ALL_SIGNALS: ContaminationSignal[] = [
+  KIND_HARNESS_PATH,
+  KIND_SIBLING_ARM,
+  KIND_VAT_PRIVATE_DIR,
+  KIND_SKILL_CONTENT,
+  KIND_DECLARED_EXECUTABLE,
+];
 // A workspaces-root path: under the tmp root like the real one, but deliberately
 // NOT under HARNESS_ROOT — the control arm must keep its own fixtures.
 // eslint-disable-next-line sonarjs/publicly-writable-directories -- inert test literal; nothing is read or written
@@ -674,6 +682,126 @@ describe('scrubControlArmEnv', () => {
  * contributing shows up as its own failure rather than as a count that still
  * happens to add up.
  */
+/**
+ * The signal for the case every OTHER signal is blind to: an instruction-only
+ * skill, which ships no executable, reached through an ambient copy, which carries
+ * no harness path. `grep -rl "<phrase>" .` → `Read` → answer left no trace at all.
+ */
+/** The two body lines of SKILL_MD below that qualify, normalized as the detector sees them. */
+const BUCKET_RULE = 'rows are assigned to the nearest bucket whose ceiling exceeds the row value.';
+const TIE_RULE = 'when two buckets tie, the one declared first in the config wins outright.';
+
+describe('skillContentNeedles', () => {
+  const SKILL_MD = [
+    '---',
+    'name: bucket-mapper',
+    'description: Maps rows onto buckets using the house convention.',
+    '---',
+    '',
+    '# Bucket mapper',
+    '',
+    'Rows are assigned to the nearest bucket whose ceiling exceeds the row value.',
+    'Short line.',
+    '',
+    '```bash',
+    'node scripts/bucket-map.mjs --input rows.csv --emit buckets.json',
+    '```',
+    '',
+    '| column | meaning | so that a table row is long enough to qualify on length |',
+    '',
+    '> A block quote that is comfortably longer than the minimum needle length.',
+    '',
+    'When two buckets tie, the one declared first in the config wins outright.',
+  ].join('\n');
+
+  it('lifts distinctive body prose, longest first', () => {
+    expect(skillContentNeedles(SKILL_MD)).toEqual([BUCKET_RULE, TIE_RULE]);
+  });
+
+  // Each exclusion earns its place, and the reason differs per line.
+  it.each([
+    ['the frontmatter description', 'maps rows onto buckets'],
+    ['a fenced code line', 'bucket-map.mjs'],
+    ['a heading', '# bucket mapper'],
+    ['a table row', '| column |'],
+    ['a block quote', 'a block quote'],
+    ['a line under the length floor', 'short line'],
+  ])('does not lift %s', (_label, fragment) => {
+    expect(skillContentNeedles(SKILL_MD).some((needle) => needle.includes(fragment))).toBe(false);
+  });
+
+  // The false positive that would make this signal unusable. An adopter who
+  // quotes a sentence of their SKILL.md in an eval prompt hands it to the arm
+  // THROUGH vat — the arm reading the prompt it was given is not the arm reaching
+  // the skill, and firing on it would stamp every run contaminated.
+  it('drops a needle the run\'s own eval text already contains', () => {
+    const needles = skillContentNeedles(
+      SKILL_MD,
+      'Rows are assigned to the nearest bucket whose ceiling exceeds the row value.',
+    );
+
+    expect(needles).toEqual([TIE_RULE]);
+  });
+
+  // stream-json escapes `"` and `\`, and normalizeForMatch then rewrites the
+  // escape — a needle carrying either could never match its own text, so it would
+  // be a silently dead entry occupying one of the three slots.
+  it('skips a line carrying characters that stream-json escapes', () => {
+    const md = [
+      '# Doc',
+      'This line is long enough to qualify but it says "quoted" in the middle.',
+      'This line is long enough to qualify and carries no escapable characters.',
+    ].join('\n');
+
+    expect(skillContentNeedles(md)).toEqual([
+      'this line is long enough to qualify and carries no escapable characters.',
+    ]);
+  });
+
+  it('yields nothing for a skill whose body has no distinctive prose', () => {
+    expect(skillContentNeedles('---\nname: x\n---\n\n# X\n\nDo the thing.\n')).toEqual([]);
+  });
+});
+
+describe('detectBaselineContamination — skill content', () => {
+  const NEEDLE = BUCKET_RULE;
+
+  it('flags a transcript quoting the skill with no path attached', () => {
+    // The invisible reach: a grep hit read and answered from. No harness path, no
+    // executable name, nothing else in this module can see it.
+    const hits = detectBaselineContamination({
+      transcript: transcriptWith(`Per the guidance: ${NEEDLE}`),
+      harnessRoot: HARNESS_ROOT,
+      skillContentNeedles: [NEEDLE],
+    });
+
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.kind).toBe(KIND_SKILL_CONTENT);
+    expect(hits[0]?.match).toBe(NEEDLE);
+  });
+
+  it('reports one hit even when several needles match', () => {
+    const second = TIE_RULE;
+    const hits = detectBaselineContamination({
+      transcript: transcriptWith(`${NEEDLE} ${second}`),
+      harnessRoot: HARNESS_ROOT,
+      skillContentNeedles: [NEEDLE, second],
+    });
+
+    expect(hits).toHaveLength(1);
+  });
+
+  it('stays silent on a transcript that never quotes the skill', () => {
+    expect(
+      detectBaselineContamination({
+        transcript: transcriptWith('I grouped the rows by their value and wrote the result.'),
+        harnessRoot: HARNESS_ROOT,
+        skillContentNeedles: [NEEDLE],
+      }),
+    ).toEqual([]);
+  });
+});
+
 describe('activeContaminationSignals', () => {
   // eslint-disable-next-line sonarjs/publicly-writable-directories -- inert test literal; these are string needles
   const PRIVATE_DIR = '/tmp/vat-skill-evals-1111aaaa2222bbbb';
@@ -687,6 +815,7 @@ describe('activeContaminationSignals', () => {
   it.each([
     [KIND_SIBLING_ARM, { siblingArmDir: SIBLING_DIR }],
     [KIND_VAT_PRIVATE_DIR, { vatPrivateDirs: [PRIVATE_DIR] }],
+    [KIND_SKILL_CONTENT, { skillContentNeedles: ['a sentence long enough to be a real content needle'] }],
     [KIND_DECLARED_EXECUTABLE, { executableNames: [BUNDLE_NAME] }],
   ])('arms %s when, and only when, its input is threaded through', (signal, extra) => {
     expect(
@@ -703,6 +832,9 @@ describe('activeContaminationSignals', () => {
         harnessRoot: HARNESS_ROOT,
         siblingArmDir: '',
         vatPrivateDirs: [undefined],
+        // A SKILL.md whose body yields no line distinctive enough to accuse
+        // anyone with — the signal is genuinely unarmed, and must say so.
+        skillContentNeedles: [],
         // Below MIN_EXECUTABLE_NAME_LENGTH, so the detector skips it entirely.
         executableNames: ['wc'],
       }),

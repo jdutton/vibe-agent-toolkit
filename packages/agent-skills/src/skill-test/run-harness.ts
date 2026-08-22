@@ -39,6 +39,7 @@ import {
   activeContaminationSignals,
   detectBaselineContamination,
   scrubControlArmEnv,
+  skillContentNeedles,
   summarizeBaselineIntegrity,
   type BaselineContamination,
   type ContaminationSignal,
@@ -1299,6 +1300,12 @@ interface EvalRunContext {
    * contamination scan can look for it; nothing in the eval loop reads from it.
    */
   evalSuiteHoldDir: string;
+  /**
+   * Verbatim lines of the staged SKILL.md, for the skill-absent arm's scan. The
+   * only contamination signal that does not need the arm to name a path or an
+   * executable, and so the only cover an instruction-only skill has.
+   */
+  skillContentNeedles: readonly string[];
   runNonce: string;
   graderModel: string;
   model?: string;
@@ -1521,6 +1528,37 @@ export function withoutGraderContamination(fragment: EvalFragment): EvalFragment
 }
 
 /**
+ * Lift the run's content needles off the STAGED SKILL.md.
+ *
+ * Staged, not source: the staged copy is byte-identical to what the treatment arm
+ * is given, so a needle taken from it is exactly the text an ambient copy of the
+ * same build would carry.
+ *
+ * The exclusion set is the suite's own prompts and expectations. An adopter who
+ * quotes a sentence of their SKILL.md in an eval prompt would otherwise stamp
+ * every run contaminated, including the arm that merely read the prompt vat gave
+ * it — the skill's words arriving THROUGH vat are not the arm reaching the skill.
+ *
+ * Returns `[]` when the file cannot be read. A missing SKILL.md is not this
+ * function's error to raise (staging has already validated the subject), and an
+ * unarmed signal is reported as unarmed rather than claimed as clean.
+ */
+function resolveSkillContentNeedles(subjectStagedDir: string, evals: readonly EvalEntry[]): string[] {
+  const skillMdPath = safePath.join(subjectStagedDir, 'SKILL.md');
+  let markdown: string;
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path derived from vat's own staged dir
+    markdown = readFileSync(skillMdPath, 'utf8');
+  } catch {
+    return [];
+  }
+  const excluded = evals
+    .flatMap((entry) => [entry.prompt, entry.expected_output ?? '', ...entry.expectations])
+    .join('\n');
+  return skillContentNeedles(markdown, excluded);
+}
+
+/**
  * Baseline integrity for ONE skill-absent eval: vat has removed its OWN copies
  * from the control arm's reach, but an ambient copy in the adopter's repo or
  * installed plugin cache is not vat's to remove — so the control arm can still,
@@ -1573,6 +1611,7 @@ function buildContaminationInput(transcript: string, ctx: EvalRunContext): Detec
     // sibling-arm needles can see them. The workspaces root is deliberately NOT
     // in this list: it is the arm's own legitimate cwd.
     vatPrivateDirs: [ctx.evalSuiteHoldDir, ctx.graderOutDir],
+    skillContentNeedles: ctx.skillContentNeedles,
     // `name` is the executable's basename with the extension stripped
     // (`scripts/csvsum.py` → `csvsum`) — a stable token appearing in both the
     // command the arm ran and the output it got back. `howInvoked` is a command
@@ -2262,6 +2301,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
       pluginDirs,
       graderOutDir,
       evalSuiteHoldDir,
+      skillContentNeedles: resolveSkillContentNeedles(subjectStagedDir, suite.evals),
       runNonce,
       graderModel,
       costAccumulator,

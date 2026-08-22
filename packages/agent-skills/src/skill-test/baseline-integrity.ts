@@ -337,6 +337,7 @@ const CONTAMINATION_KINDS = [
   'declared-executable',
   'sibling-arm',
   'vat-private-dir',
+  'skill-content',
 ] as const;
 
 /** Named so the push sites below do not restate the string literals. */
@@ -344,6 +345,7 @@ const KIND_HARNESS_PATH = 'harness-path';
 const KIND_DECLARED_EXECUTABLE = 'declared-executable';
 const KIND_SIBLING_ARM = 'sibling-arm';
 const KIND_VAT_PRIVATE_DIR = 'vat-private-dir';
+const KIND_SKILL_CONTENT = 'skill-content';
 
 export const BaselineContaminationHitSchema = z.object({
   /**
@@ -409,8 +411,12 @@ export type BaselineContamination = z.infer<typeof BaselineContaminationSchema>;
  *   ({@link vatPrivateDirNeedles}).
  * - `declared-executable` — the skill's executables by name. Armed ONLY for a
  *   skill that ships executables; an instruction-only skill (the common case)
- *   has no such name, so this signal is absent and a `contaminated: false` from
- *   that run is a materially weaker statement.
+ *   has no such name, so this signal is absent.
+ * - `skill-content` — verbatim lines of the staged SKILL.md
+ *   ({@link skillContentNeedles}). The one signal that does not need the arm to
+ *   name a path or an executable, and therefore the only cover an
+ *   instruction-only skill has. Unarmed when the body yields no line distinctive
+ *   enough to accuse anyone with, which is itself worth seeing.
  */
 export const ContaminationSignalSchema = BaselineContaminationHitSchema.shape.kind;
 
@@ -487,6 +493,12 @@ export interface DetectBaselineContaminationInput {
    * caller that has not threaded it: the check gets noisier, never blinder.
    */
   armWorkspaceDir?: string;
+  /**
+   * Verbatim lines lifted from the staged SKILL.md by {@link skillContentNeedles}
+   * — the ONLY signal that sees an ambient copy of an instruction-only skill,
+   * which ships nothing this module could match by name or path.
+   */
+  skillContentNeedles?: readonly string[];
   /**
    * The OTHER arm's workspace directory — for a skill-absent eval, the treatment
    * arm's live working directory.
@@ -580,6 +592,105 @@ export function vatPrivateDirNeedles(dir: string): string[] {
   const lastHyphen = name.lastIndexOf('-');
   if (lastHyphen > 0) needles.push(name.slice(0, lastHyphen + 1));
   return needles;
+}
+
+/** How many verbatim lines to lift from the skill body as content needles. */
+const SKILL_CONTENT_NEEDLE_COUNT = 3;
+
+/**
+ * Shortest line worth using as a content needle.
+ *
+ * A needle this long is verbatim prose an arm does not reproduce by coincidence,
+ * which is what lets this signal skip the path-boundary machinery the other
+ * needles need: there is no shorter spelling of a 48-character sentence to guard
+ * against, and no `ls` output that prints one by accident.
+ */
+const MIN_SKILL_CONTENT_NEEDLE_LENGTH = 48;
+
+/** Line prefixes that make a line structural rather than distinctive prose. */
+const STRUCTURAL_LINE_PREFIXES = ['#', '|', '>', '---', '```'];
+
+/**
+ * Verbatim lines from the skill body that mean "this transcript SAW the skill".
+ *
+ * THE GAP THIS FILLS. Every other signal in this module needs the arm to name a
+ * PATH or an executable. An instruction-only skill — the common case — ships no
+ * executable, and the two ambient classes vat cannot remove (the adopter's own
+ * repo/build output, the installed plugin cache) produce no harness path. So
+ * `grep -rl "<phrase>" .` → `Read` → answer was completely invisible, and
+ * `contaminated: false` meant "saw no evidence" while reading as "verified none".
+ * Content is the only thing that survives all three of those steps: a `grep` hit
+ * line, a `Read` echo, and an answer that quotes the skill with no path attached.
+ *
+ * Selection is deterministic and needs no corpus: LONGEST first, because length is
+ * rarity for free. A candidate must be plain body prose —
+ *
+ *   - frontmatter is skipped (the `name:` is the skill's own identifier and shows
+ *     up in ordinary config and prose; it is not distinctive enough to accuse
+ *     anyone with);
+ *   - fenced code is skipped, since a code block is often copied from a shared
+ *     upstream and is the same in every skill that wraps the same tool;
+ *   - headings, table rows and block quotes are skipped as structural;
+ *   - a line carrying `"` or `\` is skipped: the transcript is stream-json, so
+ *     those are ESCAPED inside it and {@link normalizeForMatch} then rewrites the
+ *     escape — the needle would never match its own text.
+ *
+ * `excludedText` is the run's own eval prompts and expectations, and it is not
+ * optional care: an adopter who quotes a sentence of their SKILL.md in an eval
+ * prompt would otherwise stamp EVERY run contaminated, including the arm that
+ * merely read the prompt it was given. The skill's own words reaching the arm
+ * through vat are not the arm reaching the skill.
+ */
+export function skillContentNeedles(skillMarkdown: string, excludedText = ''): string[] {
+  const excluded = normalizeForMatch(excludedText);
+  const candidates: string[] = [];
+
+  for (const line of skillBodyLines(skillMarkdown)) {
+    if (!isNeedleCandidate(line)) continue;
+    const needle = normalizeForMatch(line);
+    if (excluded.includes(needle)) continue;
+    if (!candidates.includes(needle)) candidates.push(needle);
+  }
+
+  // Longest first; ties keep document order, so the list is stable across runs of
+  // the same skill and a reported `match` can be found in SKILL.md by eye.
+  return candidates
+    .map((needle, order) => ({ needle, order }))
+    .sort((a, b) => b.needle.length - a.needle.length || a.order - b.order)
+    .slice(0, SKILL_CONTENT_NEEDLE_COUNT)
+    .map((c) => c.needle);
+}
+
+/** Trimmed body lines: frontmatter and fenced code stripped, everything else kept. */
+function skillBodyLines(skillMarkdown: string): string[] {
+  const lines = skillMarkdown.split('\n').map((line) => line.trim());
+  const body: string[] = [];
+  let inFrontmatter = lines[0] === '---';
+  let inCode = false;
+
+  for (const [index, line] of lines.entries()) {
+    if (index === 0 && inFrontmatter) continue;
+    if (inFrontmatter) {
+      if (line === '---') inFrontmatter = false;
+      continue;
+    }
+    if (line.startsWith('```')) {
+      inCode = !inCode;
+      continue;
+    }
+    if (!inCode) body.push(line);
+  }
+  return body;
+}
+
+/** Is this body line distinctive enough that quoting it means seeing the skill? */
+function isNeedleCandidate(line: string): boolean {
+  if (line.length < MIN_SKILL_CONTENT_NEEDLE_LENGTH) return false;
+  // stream-json ESCAPES these, and `normalizeForMatch` then rewrites the escape —
+  // such a needle could never match its own text, so it would occupy one of the
+  // three slots while being silently dead.
+  if (line.includes('"') || line.includes('\\')) return false;
+  return !STRUCTURAL_LINE_PREFIXES.some((prefix) => line.startsWith(prefix));
 }
 
 /**
@@ -765,6 +876,26 @@ function firstNeedleHit(
   return undefined;
 }
 
+/**
+ * The first content needle present in the transcript, as a hit — or `undefined`.
+ *
+ * A plain substring test, deliberately: these needles are whole verbatim lines,
+ * not paths, so there is no boundary to enforce and no shorter spelling of one to
+ * be defeated by. First match wins, as in every other group — one reach, one hit.
+ */
+function firstContentHit(
+  haystack: string,
+  needles: readonly string[],
+): BaselineContaminationHit | undefined {
+  for (const needle of needles) {
+    const index = haystack.indexOf(needle);
+    if (index !== -1) {
+      return { kind: KIND_SKILL_CONTENT, match: needle, excerpt: excerptAround(haystack, index, needle.length) };
+    }
+  }
+  return undefined;
+}
+
 export function detectBaselineContamination(
   input: DetectBaselineContaminationInput,
 ): BaselineContaminationHit[] {
@@ -792,6 +923,11 @@ export function detectBaselineContamination(
     const privateMatch = firstNeedleHit(haystack, vatPrivateDirNeedles(dir ?? ''), KIND_VAT_PRIVATE_DIR);
     if (privateMatch !== undefined) hits.push(privateMatch);
   }
+
+  // Content, which needs no path boundary: these needles are whole verbatim lines
+  // of prose, and there is no shorter spelling of one to guard against.
+  const contentMatch = firstContentHit(haystack, input.skillContentNeedles ?? []);
+  if (contentMatch !== undefined) hits.push(contentMatch);
 
   const harnessHit = hits.length > 0;
   const armDir = normalizeForMatch(input.armWorkspaceDir ?? '');
@@ -837,6 +973,7 @@ export function activeContaminationSignals(
   if ((input.vatPrivateDirs ?? []).some((dir) => vatPrivateDirNeedles(dir ?? '').length > 0)) {
     signals.push(KIND_VAT_PRIVATE_DIR);
   }
+  if ((input.skillContentNeedles ?? []).length > 0) signals.push(KIND_SKILL_CONTENT);
   if ((input.executableNames ?? []).some((name) => name.length >= MIN_EXECUTABLE_NAME_LENGTH)) {
     signals.push(KIND_DECLARED_EXECUTABLE);
   }

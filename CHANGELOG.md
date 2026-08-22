@@ -117,9 +117,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   but a copy in the adopter's `dist/`, build output, or installed plugin cache is not vat's to
   remove — and a control arm that finds one produces a silently wrong delta: exit 0, well-formed
   JSON, plausible numbers. The skill-absent arm's transcript is now scanned for paths under the
-  harness root, for declared executable names, and for the other arm's working directory, and the
-  finding is stamped onto `baseline.json`
-  with per-eval evidence excerpts. The block is written on **every** baseline run, so its absence
+  harness root, for the other arm's working directory, for declared executable names run from
+  outside the arm's own workspace, and for verbatim lines of your SKILL.md — the last of which is
+  the only signal that sees an **instruction-only** skill, which ships nothing to match by name or
+  path. Findings are stamped onto `baseline.json` with per-eval evidence excerpts, alongside a
+  `signals` list naming which detectors were armed, so a clean verdict can be told apart from a
+  blind one. The block is written on **every** baseline run, so its absence
   means "produced before this check existed" and never "checked and clean". A wrong number that
   announces itself is recoverable; a silent one gets believed, written down, and acted on.
 

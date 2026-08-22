@@ -26,7 +26,7 @@
 
 import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath, toForwardSlash, type SpawnHeadlessOptions } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -41,7 +41,13 @@ vi.mock('../../src/skill-test/preflight.js', async (io) => (await import('../ski
 
 const SKILL_NAME = 'control-skill';
 const EVAL_ID = 'no-files-eval';
-const SKILL_MD = `---\nname: ${SKILL_NAME}\ndescription: A fixture skill for the baseline control test.\n---\n\n# Control\n`;
+/**
+ * One body line long and distinctive enough to become a content needle — the
+ * signal an instruction-only skill depends on. Kept out of the eval prompt on
+ * purpose: a needle the suite's own text contains is excluded by design.
+ */
+const SKILL_BODY_LINE = 'Rows are assigned to the nearest bucket whose ceiling exceeds the row value.';
+const SKILL_MD = `---\nname: ${SKILL_NAME}\ndescription: A fixture skill for the baseline control test.\n---\n\n# Control\n\n${SKILL_BODY_LINE}\n`;
 /** The `--baseline` arm's artifact — the file this whole lane exists to make honest. */
 const BASELINE_JSON = 'baseline.json';
 
@@ -52,7 +58,10 @@ const { getTempDir } = setupTempDir('vat-baseline-control-');
  * only shape for which `CLAUDE_PLUGIN_ROOT` is set at all. A standalone-skill
  * fixture would pass this test while the hole stayed wide open.
  */
-function writePluginFixture(skillName: string = SKILL_NAME): { subjectDir: string; pluginRoot: string } {
+function writePluginFixture(
+  skillName: string = SKILL_NAME,
+  evalPrompt = 'do the thing',
+): { subjectDir: string; pluginRoot: string } {
   const pluginRoot = safePath.join(getTempDir(), 'src', `plugin-${skillName}`);
   const manifestDir = safePath.join(pluginRoot, '.claude-plugin');
   mkdirSyncReal(manifestDir, { recursive: true });
@@ -75,7 +84,7 @@ function writePluginFixture(skillName: string = SKILL_NAME): { subjectDir: strin
     safePath.join(evalsDir, 'evals.json'),
     JSON.stringify({
       skill_name: skillName,
-      evals: [{ id: EVAL_ID, prompt: 'do the thing', expectations: ['it happened'] }],
+      evals: [{ id: EVAL_ID, prompt: evalPrompt, expectations: ['it happened'] }],
     }) + '\n',
     'utf8',
   );
@@ -148,6 +157,31 @@ function spawnSurface(opts: Record<string, unknown>): string {
  * single-slash needle — so collapsing slash runs is what keeps these assertions
  * alive on Windows rather than merely green.
  */
+/**
+ * Extra stream-json emitted by the CONTROL arm alone.
+ *
+ * Only its transcript is scanned, so putting the evidence on both arms would let
+ * a test pass on a detector that read the wrong one. The arm is identified the
+ * way the whole file identifies it — the one spawned with no plugin dirs.
+ */
+function controlArmEmits(
+  build: (opts: SpawnHeadlessOptions) => unknown,
+): (opts: SpawnHeadlessOptions) => string | undefined {
+  return (opts) => (opts.pluginDirs.length === 0 ? JSON.stringify(build(opts)) : undefined);
+}
+
+/** A single assistant text block, the shape a model answers in. */
+const assistantText = (text: string): unknown => ({
+  type: 'assistant',
+  message: { content: [{ type: 'text', text }] },
+});
+
+/** A single Bash tool_use block, the shape a model reaches with. */
+const assistantBash = (command: string): unknown => ({
+  type: 'assistant',
+  message: { content: [{ type: 'tool_use', name: 'Bash', input: { command } }] },
+});
+
 /**
  * The integrity block read back off disk, which is the only place it reaches an
  * operator. Reading it rather than trusting the in-memory result is the point:
@@ -331,19 +365,7 @@ describe('baseline control arm (integration)', () => {
     const harnessTail = toForwardSlash(safePath.join(getTempDir(), 'harness')).split('/').slice(-2).join('/');
 
     const fake = makeHarnessFakeSpawn({
-      executorExtraStdout: (opts) =>
-        opts.pluginDirs.length === 0
-          ? JSON.stringify({
-              type: 'assistant',
-              message: {
-                content: [{
-                  type: 'tool_use',
-                  name: 'Bash',
-                  input: { command: `cat ../${harnessTail}/${SKILL_NAME}/SKILL.md` },
-                }],
-              },
-            })
-          : undefined,
+      executorExtraStdout: controlArmEmits(() => assistantBash(`cat ../${harnessTail}/${SKILL_NAME}/SKILL.md`)),
     });
 
     const integrity = await runBaselineForIntegrity(subjectDir, fake.spawn);
@@ -359,6 +381,55 @@ describe('baseline control arm (integration)', () => {
     const integrity = await runBaselineForIntegrity(subjectDir, makeHarnessFakeSpawn({}).spawn);
     expect(integrity.contaminated).toBe(false);
     expect(integrity.findings).toEqual([]);
+  });
+
+  /**
+   * The reach every other signal is structurally blind to, and the common case:
+   * an INSTRUCTION-ONLY skill, which ships no executable, found as an ambient copy,
+   * which carries no harness path. `grep -rl "<phrase>" .` → `Read` → answer left
+   * nothing for a path needle or a name needle to match, so `contaminated: false`
+   * meant "saw no evidence" while reading as "verified none".
+   *
+   * The transcript below quotes the skill and names NOTHING — no path, no
+   * executable, no directory. Only content can see it.
+   */
+  it('flags a control arm that quotes the skill without naming any path', async () => {
+    const { subjectDir } = writePluginFixture();
+
+    const fake = makeHarnessFakeSpawn({
+      executorExtraStdout: controlArmEmits(() => assistantText(`Following the guidance: ${SKILL_BODY_LINE}`)),
+    });
+
+    const integrity = await runBaselineForIntegrity(subjectDir, fake.spawn);
+
+    expect(integrity.signals, 'the content signal was not armed').toContain('skill-content');
+    expect(integrity.contaminated, 'a quoted-skill reach went undetected').toBe(true);
+    expect(integrity.findings?.[0]?.evalId).toBe(EVAL_ID);
+  });
+
+  /**
+   * The other half of the content signal, and the half that decides whether it is
+   * usable at all: an adopter who quotes a sentence of their own SKILL.md in an
+   * eval prompt hands it to the arm THROUGH vat. The arm echoing the prompt it was
+   * given is not the arm reaching the skill — and without the exclusion, every run
+   * of that suite would be stamped contaminated, control and treatment alike.
+   *
+   * Asserted at the harness rather than on the derivation, because what has to be
+   * right here is that the run's own eval text reaches the exclusion at all.
+   */
+  it('does not flag the control arm for echoing a skill line its own eval prompt carried', async () => {
+    const { subjectDir } = writePluginFixture(SKILL_NAME, `Explain this rule: ${SKILL_BODY_LINE}`);
+
+    const fake = makeHarnessFakeSpawn({
+      executorExtraStdout: controlArmEmits(() => assistantText(`The rule says: ${SKILL_BODY_LINE}`)),
+    });
+
+    const integrity = await runBaselineForIntegrity(subjectDir, fake.spawn);
+
+    // Unarmed, not merely quiet: the sole candidate needle was the excluded line,
+    // and `signals` has to say so rather than report a clean check that never ran.
+    expect(integrity.signals, 'the excluded needle was still armed').not.toContain('skill-content');
+    expect(integrity.contaminated, 'echoing the prompt was reported as a reach').toBe(false);
   });
 
   /**
@@ -385,22 +456,12 @@ describe('baseline control arm (integration)', () => {
     const { subjectDir } = writePluginFixture();
 
     const fake = makeHarnessFakeSpawn({
-      executorExtraStdout: (opts) =>
-        opts.pluginDirs.length === 0
-          ? JSON.stringify({
-              type: 'assistant',
-              message: {
-                content: [{
-                  type: 'tool_use',
-                  name: 'Bash',
-                  // Both clean forms in one transcript: the bare filename an arm
-                  // writes and reports, and its own workspace named ABSOLUTELY,
-                  // which is the spelling its prompt handed it.
-                  input: { command: `python3 summary.py && node ${opts.cwd ?? ''}/scripts/summary.mjs` },
-                }],
-              },
-            })
-          : undefined,
+      // Both clean forms in one transcript: the bare filename an arm writes and
+      // reports, and its own workspace named ABSOLUTELY, which is the spelling
+      // its prompt handed it.
+      executorExtraStdout: controlArmEmits((opts) =>
+        assistantBash(`python3 summary.py && node ${opts.cwd ?? ''}/scripts/summary.mjs`),
+      ),
     });
 
     const integrity = await runBaselineForIntegrity(subjectDir, fake.spawn, {
