@@ -193,3 +193,41 @@ describe('findLexicalReferences — bare tokens', () => {
     expect(lex('[a](packages/utils/src/index.ts)\n')).toHaveLength(0);
   });
 });
+
+describe('a code span followed by prose', () => {
+  // ⛔ These assert `inCodeSpan`, NOT just a tidy `raw`. `raw` is the visible
+  // symptom; the DEFECT is that `end` is derived from `raw.length`, so a token
+  // running past its closing backtick escapes the code-span range and records
+  // `inCodeSpan: false`. The closure's guard reads that column and therefore
+  // never fires. Asserting only `raw` would keep passing if the offsets were
+  // reintroduced, which is the failure this suite exists to prevent.
+  // Scope names are SYNTHETIC. The shapes are taken from a real adopter's prose,
+  // but this repository is public and a proprietary name cannot be retracted from
+  // git history once pushed — the structural gate enforces this, and it caught
+  // the first draft of these very cases.
+  it.each([
+    ['a possessive', 'a re-export of `@scope/pkg`\'s helper\n', '@scope/pkg'],
+    // 🪤 NO space before the `**`. With one, the closing backtick is the token's
+    // last character and `stripTrailingPunctuation` already removed it — that
+    // spelling passes with or without the fix, and a RED run proved it vacuous.
+    ['closing emphasis', '**never author new `@scope`**\n', '@scope'],
+    ['a full stop and emphasis', '**TypeScript, `@other-scope`.**\n', '@other-scope'],
+  ])('marks a scope named inside a span as in-code-span, despite %s', (_case, source, expected) => {
+    const [reference, ...rest] = lex(source);
+
+    expect(rest).toHaveLength(0);
+    expect(reference?.raw).toBe(expected);
+    expect(reference?.inCodeSpan).toBe(true);
+  });
+
+  it('leaves a reference OUTSIDE any span reachable', () => {
+    // The negative control. Truncating at a backtick must not make ordinary
+    // references vanish — a fix that silenced the false positives by dropping
+    // every candidate would pass the three cases above and break the feature.
+    const [reference, ...rest] = lex('See @docs/real-import.md for the rule.\n');
+
+    expect(rest).toHaveLength(0);
+    expect(reference?.raw).toBe('@docs/real-import.md');
+    expect(reference?.inCodeSpan).toBe(false);
+  });
+});

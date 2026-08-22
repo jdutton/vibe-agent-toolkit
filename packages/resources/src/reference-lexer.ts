@@ -149,6 +149,42 @@ export function stripTrailingPunctuation(token: string): string {
   return token.slice(0, end);
 }
 
+/**
+ * Cut a token at its closing backtick.
+ *
+ * ⛔ Not the same job as {@link stripTrailingPunctuation}, and it is why that
+ * function alone was not enough. Stripping walks in from the END and stops at
+ * the first character that is not punctuation, so a code span followed by a
+ * possessive or by emphasis keeps its closing backtick:
+ *
+ * ```text
+ *   `@scope/pkg`'s   ->  stops at `s`   ->  raw = @scope/pkg`'s
+ *   `@scope`**       ->  stops at `*`   ->  raw = @scope`**
+ * ```
+ *
+ * 🪤 The consequence is worse than a scruffy `raw`. `end` is derived from
+ * `raw.length`, so a token that runs past its closing backtick is no longer
+ * CONTAINED by the code-span range, `isWithin` returns false, and `inCodeSpan`
+ * is recorded as false on a reference that is plainly inside a code span. The
+ * closure's guard (`closure-extent.ts` — `if (reference.inFence ||
+ * reference.inCodeSpan) return false`) then never fires, and every npm scope an
+ * adopter names in prose becomes an unresolved-reference warning. A guard that
+ * exists and is silently defeated is worse than a missing one, because every
+ * reader downstream assumes it works.
+ *
+ * Truncating is safe because a backtick cannot occur inside a code span's own
+ * content — it would close the span — and this module already treats the
+ * character as never part of a reference, listing it in BOTH
+ * {@link LEADING_DELIMITERS} and {@link TRAILING_PUNCTUATION}.
+ *
+ * @param token - The token, already stripped of leading delimiters
+ * @returns The token up to its first backtick, or unchanged when it has none
+ */
+function truncateAtBacktick(token: string): string {
+  const close = token.indexOf('`');
+  return close === -1 ? token : token.slice(0, close);
+}
+
 /** Opening delimiters an author wraps a token in — the mirror of {@link TRAILING_PUNCTUATION}. */
 const LEADING_DELIMITERS = new Set(['`', '(', '[', '{', '"', "'", '<']);
 
@@ -289,7 +325,7 @@ function emitToken(
   out: LexicalReference[],
 ): void {
   const { token: undelimited, stripped } = stripLeadingDelimiters(token);
-  const raw = stripTrailingPunctuation(undelimited);
+  const raw = stripTrailingPunctuation(truncateAtBacktick(undelimited));
   if (!isCandidate(raw)) return;
   const start = lineOffset + index + stripped;
   const end = start + raw.length;
