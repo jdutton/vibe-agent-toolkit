@@ -449,16 +449,50 @@ export { blobReferencesFor } from './projection/blob-references.js';
 export { FilesystemExtentContributor } from './projection/contributors/filesystem-extent.js';
 
 // The agentic-convention classifier and its producer — the first contributor
-// that answers "what IS this file" rather than "does it exist", and the only
-// thing that puts rows in `resource_tags`.
+// that answers "what IS this file" rather than "does it exist".
+//
+// ⚠️ No longer the ONLY producer of `resource_tags`: `ClaudeRulesScopeContributor`
+// files `rule-scope` rows from the `closure` stratum, because the fact it
+// classifies on lives in frontmatter and `blobs` does not exist until after
+// `base` has run. It is still the only producer of `loading`, deliberately — see
+// that module for why a second one would end the one-loading-row-per-identity
+// invariant `strongestLoading` exists to hold.
 export { AgenticConventionContributor } from './projection/contributors/agentic-convention.js';
 export {
+  CLAUDE_MD_TAG,
   classifyPath,
   LOADING_TAG,
   pluginRootsFrom,
+  RULES_FILE_TAG,
   strongestLoading,
 } from './projection/agentic-tags.js';
 export type { AgenticTag, PluginRoots, TagLoading } from './projection/agentic-tags.js';
+
+// The Claude `@`-import closure: one extent per `CLAUDE.md` / `.claude/rules`
+// root, the roots discovered through `classifyPath` rather than a second glob.
+export {
+  CLAUDE_IMPORT_CONTRIBUTOR_ID_PREFIX,
+  CLAUDE_IMPORT_KIND,
+  ClaudeImportExtentContributor,
+  claudeImportContributorId,
+  claudeImportExtentDeclaration,
+  claudeImportRootsFrom,
+} from './projection/contributors/claude-import-extent.js';
+
+// The `rule-scope` producer: the frontmatter fact `classifyPath` structurally
+// cannot see, since it runs in `base` and `blobs` does not exist until after.
+export {
+  CLAUDE_RULES_SCOPE_KIND,
+  ClaudeRulesScopeContributor,
+  RULE_SCOPE_TAG,
+  ruleScopeFor,
+} from './projection/contributors/claude-rules-scope.js';
+export type { RuleScope } from './projection/contributors/claude-rules-scope.js';
+
+// The lane that assembles the three above. Its own lane, not a flag on the fast
+// repo-wide one: that one declares CONTENT_PARSING_SKIP and both classifiers
+// here read blob-keyed tables.
+export { buildClaudeContextPopulation } from './projection/claude-context-population.js';
 
 // One crawl API, two implementations (scanning-and-caching §3.3): the walk, and
 // git plus a bounded walk of only what git cannot see. Same population, two cost
@@ -529,6 +563,7 @@ export {
   ClosureNonConvergenceError,
   DISCARD_BLOB_POPULATION,
   populate,
+  populationOracles,
   type BlobPopulationReport,
   type ContentParsing,
   type ContributorTiming,
@@ -564,10 +599,18 @@ export {
   ExtentDeclarationSchema,
   ExtentRefusalRuleSchema,
   ExtentsConfigSchema,
+  ReferenceDialectSchema,
   type ExtentDeclaration,
   type ExtentRefusalRule,
   type ExtentsConfig,
+  type ReferenceDialect,
 } from './schemas/project-config.js';
+// How a declaration's `referenceDialect` is actually applied. Exported beside
+// the schema because a consumer that declares `claude-import` and then resolves
+// a token itself must reach the same reading the closure uses — a second
+// interpretation of the same field is the drift the declared dialect exists to
+// prevent.
+export { resolveDialectRef } from './projection/contributors/reference-dialect.js';
 
 // The blob-derivation stage the merge driver runs between the base and closure
 // strata: the step that turns the base's `contentKey` columns into the four

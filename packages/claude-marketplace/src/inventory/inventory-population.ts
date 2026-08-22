@@ -53,6 +53,7 @@ import {
   ContributorRegistry,
   FilesystemExtentContributor,
   populate,
+  populationOracles,
   type BlobPopulationReport,
   type JsonValue,
   type PopulationCache,
@@ -264,8 +265,7 @@ export async function buildInventoryPopulation(options: {
     registry,
     parameters,
     onBlobPopulation: options.onBlobPopulation,
-    ...(options.gitTracker !== undefined && { gitTracker: options.gitTracker }),
-    ...(options.cache !== undefined && { cache: options.cache }),
+    ...populationOracles(options),
   });
 
   return indexPopulation(root, options.skillMdPaths, projection);

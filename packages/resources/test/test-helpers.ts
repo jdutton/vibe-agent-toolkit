@@ -22,6 +22,7 @@ import {
   ResourceExtentRowSchema,
   ResourceRealizationRowSchema,
   ResourceRowSchema,
+  type ResourceRealizationRow,
 } from '../src/schemas/projection-resources.js';
 import { ResolutionContextRowSchema } from '../src/schemas/projection-zones.js';
 import type { HeadingNode, ResourceLink, ValidationIssue } from '../src/types.js';
@@ -762,4 +763,58 @@ export function useCorpusSuite(
   beforeEach(async () => {
     await writeCorpusFiles(suite.tempDir, directories, corpus);
   });
+}
+
+/**
+ * A schema-valid `resource_realizations` row for a hand-built projection base.
+ *
+ * Extracted because the projection suites were each deriving the same eight
+ * path-shaped columns (`pathLower`, `basenameLower`, `dir`, `depth`, `ext`, …)
+ * from a root-relative path with the same arithmetic. That derivation is not
+ * what any of them is testing, and every copy of it is another place a fixture
+ * can stop resembling what `relativize()` and the enumerators actually emit —
+ * which is precisely the failure mode that makes a green suite meaningless.
+ *
+ * The boolean state columns default to "an ordinary present file" and are
+ * overridable, because a suite exercising a `flags` refusal matcher has to plant
+ * a `gitignored` or non-existent row deliberately.
+ *
+ * @param row - The identity, extent, path and content key this realization has,
+ *   plus any boolean column the caller needs to differ from the default. A null
+ *   `contentKey` selects the `deferred` content state — enumerated, deliberately
+ *   not read — which is the only state the schema pairs with a null key
+ * @returns The full row
+ */
+export function projectionRealizationRow(row: {
+  resourceId: string;
+  extentId: string;
+  path: string;
+  contentKey: string | null;
+  isDirectory?: boolean;
+  exists?: boolean;
+  gitignored?: boolean;
+  isSymlink?: boolean;
+}): ResourceRealizationRow {
+  const lastSlash = row.path.lastIndexOf('/');
+  const basename = lastSlash === -1 ? row.path : row.path.slice(lastSlash + 1);
+  const dot = basename.lastIndexOf('.');
+  return {
+    resourceId: row.resourceId,
+    extentId: row.extentId,
+    path: row.path,
+    pathLower: row.path.toLowerCase(),
+    basenameLower: basename.toLowerCase(),
+    dir: lastSlash === -1 ? '' : row.path.slice(0, lastSlash),
+    // eslint-disable-next-line local/no-hardcoded-path-split -- fixture paths are authored forward-slashed, as `relativize()` emits them
+    depth: row.path.split('/').length,
+    ext: dot <= 0 ? '' : basename.slice(dot).toLowerCase(),
+    contentKey: row.contentKey,
+    contentState: row.contentKey === null ? 'deferred' : 'keyed',
+    mtime: null,
+    exists: row.exists ?? true,
+    isDirectory: row.isDirectory ?? false,
+    gitignored: row.gitignored ?? false,
+    isSymlink: row.isSymlink ?? false,
+    symlinkResolves: null,
+  };
 }

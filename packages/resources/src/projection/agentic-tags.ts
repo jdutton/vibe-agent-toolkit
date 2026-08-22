@@ -95,6 +95,19 @@ export type TagLoading = 'always' | 'selected';
 export const LOADING_TAG = 'loading';
 
 /**
+ * The tag a `CLAUDE.md` or `CLAUDE.local.md` carries.
+ *
+ * Exported so a consumer selecting these files NAMES the vocabulary this module
+ * owns instead of re-spelling the basename test. A second spelling drifts the
+ * first time either side changes, and the drift is silent: a consumer's private
+ * glob keeps matching what it always matched while the classifier moves on.
+ */
+export const CLAUDE_MD_TAG = 'claude-md';
+
+/** The tag a markdown file under a `.claude/rules/` directory carries — see {@link CLAUDE_MD_TAG}. */
+export const RULES_FILE_TAG = 'rules-file';
+
+/**
  * Directory a plugin's auto-discovered components live in, relative to its root.
  *
  * Mirrors `CONVENTIONAL_COMPONENT_DIRS` in
@@ -273,7 +286,7 @@ const CONVENTIONS: readonly Convention[] = [
   // are documented as loaded together — "CLAUDE.md and CLAUDE.local.md files in
   // the directory hierarchy above the working directory are loaded at launch".
   {
-    tag: 'claude-md',
+    tag: CLAUDE_MD_TAG,
     loading: 'always',
     matches: (b) => b === 'claude.md' || b === 'claude.local.md',
   },
@@ -288,7 +301,7 @@ const CONVENTIONS: readonly Convention[] = [
   // Tagged, but NOT charged — `paths:` frontmatter decides, and this classifier
   // does not read frontmatter. See the header.
   {
-    tag: 'rules-file',
+    tag: RULES_FILE_TAG,
     loading: null,
     matches: (b, p) => b.endsWith('.md') && underDirectory(p, '.claude/rules'),
   },

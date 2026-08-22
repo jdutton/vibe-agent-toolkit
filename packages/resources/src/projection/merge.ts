@@ -336,6 +336,30 @@ export interface PopulateOptions {
 }
 
 /**
+ * The two shared run inputs a population lane forwards to {@link populate}.
+ *
+ * Both are genuinely optional and both are typed `T | undefined` under
+ * `exactOptionalPropertyTypes`, which is why every lane spells them as a
+ * conditional spread rather than passing `undefined`: the two are different
+ * states, and `{ cache: undefined }` is not the same request as omitting
+ * `cache`. Restated once here because three lanes were each writing the same
+ * pair of spreads, and a fourth would have written a fourth copy — one of which
+ * would eventually pass `undefined` and quietly change what the store is asked.
+ *
+ * @param options - Whatever the lane received from ITS caller
+ * @returns A spreadable object carrying only the oracles that are actually present
+ */
+export function populationOracles(options: {
+  gitTracker?: GitTracker | undefined;
+  cache?: PopulationCache | undefined;
+}): Pick<PopulateOptions, 'gitTracker' | 'cache'> {
+  return {
+    ...(options.gitTracker !== undefined && { gitTracker: options.gitTracker }),
+    ...(options.cache !== undefined && { cache: options.cache }),
+  };
+}
+
+/**
  * The store this run may read from and will write to, and the tree it names.
  *
  * One object rather than two options, because neither half is usable alone: a

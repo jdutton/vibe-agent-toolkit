@@ -97,6 +97,7 @@ import {
   CONTENT_PARSING_SKIP,
   DISCARD_BLOB_POPULATION,
   populate,
+  populationOracles,
   type PopulationCache,
 } from './merge.js';
 
@@ -293,8 +294,7 @@ export async function buildResourcePopulation(options: {
     // observer at the same time — that is why it is spelled out here rather than
     // being an argument nobody passed.
     onBlobPopulation: DISCARD_BLOB_POPULATION,
-    ...(options.gitTracker !== undefined && { gitTracker: options.gitTracker }),
-    ...(options.cache !== undefined && { cache: options.cache }),
+    ...populationOracles(options),
   });
 
   const paths: string[] = [];

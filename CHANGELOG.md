@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- **(library) A closure extent declaration now carries `referenceDialect`.** Parsed
+  `ExtentDeclaration` objects gain the field; it defaults to `'href'`, so every existing declaration
+  behaves exactly as before. Code that compares a parsed declaration structurally must account for
+  it.
+
+  The reason it exists: `ClosureExtentContributor` handed `rawRef` — the token *exactly as
+  authored*, `@` and all — straight to `resolveLocalHref`, an RFC 3986 resolver with no `@` branch.
+  So `@README.md` in a `CLAUDE.md` resolved to a file named `@README.md`, found nothing, and every
+  Claude import in every corpus landed as an unresolved reference. `referenceDialect:
+  'claude-import'` is the vendor's reading: a leading `@` is stripped, `~/` expands to the home
+  directory, and a leading `/` is filesystem-absolute rather than root-relative.
+
 - **Resource scanning now uses the projection lane with the git enumerator by default.** The
   incumbent link walk is still there: set `VAT_RESOURCES_CRAWL=walk` to restore it, or
   `VAT_EXTENT_SOURCE=filesystem` to keep the projection and enumerate without git. Outside a usable
@@ -57,6 +69,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `classifyFilenameCaseFrom(await fillSiblingNames([p], cache), p)`.
 
 ### Added
+
+- **(library) Claude `@`-import closures are now projected.** `ClaudeImportExtentContributor`
+  registers one closure extent per `CLAUDE.md` / `CLAUDE.local.md` / `.claude/rules` file, following
+  only `at-prefixed` tokens, to the vendor's documented four-hop bound. Roots are discovered through
+  the shipped `classifyPath()` rather than a second glob. `buildClaudeContextPopulation()` assembles
+  the lane. Dangling `@` imports become visible for the first time — they land as
+  `CLOSURE_REFERENCE_UNRESOLVED` conditions, and an escaping `@~/…` import lands as
+  `CLOSURE_REFERENCE_OUTSIDE_ROOT`, named but never charged. No CLI command reads these rows yet.
+
+- **(library) `.claude/rules` files carry a `rule-scope` tag.** `ClaudeRulesScopeContributor` reads
+  `paths:` off `blobs.frontmatter` and files `root`, `nested` or `path-scoped` — the producer a path
+  classifier structurally could not supply, since it runs before `blobs` exists. Deliberately *not*
+  a second `loading` producer: `resource_tags` keys on `(resourceId, tag, value, source)` with
+  `value` in the key, so a second producer could file two contradictory `loading` rows for one
+  identity and a `GROUP BY resourceId` would double-count.
 
 - **(library) `resource_tags` is now populated.** `AgenticConventionContributor`, `classifyPath()`
   and `pluginRootsFrom()` are exported from `@vibe-agent-toolkit/resources`; the contributor tags
