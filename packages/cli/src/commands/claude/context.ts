@@ -78,6 +78,24 @@ export type ContextOutputFormat = 'text' | 'yaml' | 'json';
 export interface ClaudeContextOptions {
   format?: ContextOutputFormat;
   debug?: boolean;
+  all?: boolean;
+}
+
+/**
+ * The envelope every run emits, however many paths were asked about.
+ *
+ * ⛔ `answers` is an array **even for one path**, so a consumer never branches on
+ * arity. The single-path shape is the N=1 case of the sweep, not a different
+ * document — a caller that special-cased "one path means a bare object" is the
+ * defect this shape exists to prevent, and pre-1.0 is when to pay for it.
+ *
+ * `root` rides here rather than on each answer because it is a property of the
+ * POPULATION, and one run populates exactly one tree. Repeating it per answer
+ * would invite a reader to believe two answers could carry different roots.
+ */
+export interface ContextEnvelope {
+  readonly root: string;
+  readonly answers: readonly (ContextAnswerDocument | ContextUnknownDocument)[];
 }
 
 /**
@@ -130,7 +148,10 @@ export function createContextCommand(): Command {
   const command = new Command('context');
   command
     .description('Report what Claude Code loads into context at a path, why, and what it costs')
-    .argument('[path]', 'File or directory to answer for (default: the current directory)')
+    .argument(
+      '[paths...]',
+      'Files or directories to answer for (default: the current directory)',
+    )
     .addOption(
       new Option('--format <format>', 'Output format: text (default), yaml, or json').choices([
         'text',
@@ -138,6 +159,7 @@ export function createContextCommand(): Command {
         'json',
       ]).default('text'),
     )
+    .option('--all', 'Answer for every path the projection realized, instead of named paths')
     .option('--debug', 'Verbose logging to stderr')
     .action(claudeContextCommand)
     .addHelpText('after', `
@@ -147,11 +169,20 @@ Description:
   A FILE argument is exact; a directory argument answers path-scoped rules as
   "may fire here".
 
+  Several paths may be named at once. The tree is enumerated ONCE and every
+  path answered from that one population, so asking about ten paths together
+  costs what asking about one costs — not ten times it. No paths means the
+  current directory; --all sweeps every path the projection realized.
+
 Output:
+  - root:    the corpus root that was enumerated
+  - answers: one document per requested path, in the order requested — always
+             a list, even for a single path, so consumers never branch on count
   - totals:  always/on-demand token estimates, plus counts of rows whose size
              is unknown, skipped by the 4 MiB cliff, or pruned behind one
   - rows:    one per resource, with every predicate that admitted it
-  - limits:  what this answer deliberately does not settle, in both directions
+  - limits:  what these answers deliberately do not settle, in both directions,
+             stated once because they bound the method rather than any one path
 
   A path the projection never realized answers kind: unknown — never zero.
   Diagnostics and blob-stage refusals go to stderr; stdout is the document.
@@ -159,10 +190,10 @@ Output:
 Exit Codes:
   0 - An answer was produced (there is no threshold and no gate)
   1 - Invalid usage (unknown option, or an unsupported --format value)
-  2 - System error (path outside the corpus root, unreadable tree)
+  2 - System error (a path outside the corpus root, unreadable tree)
 
 Example:
-  $ vat claude context packages/cli/src/index.ts    # exact, file-scoped answer
+  $ vat claude context src/index.ts docs/ README.md   # one scan, three answers
 `);
   return command;
 }
@@ -174,24 +205,27 @@ Example:
  * @param options - The command's flags
  */
 export async function claudeContextCommand(
-  pathArg: string | undefined,
+  pathArgs: readonly string[],
   options: ClaudeContextOptions,
 ): Promise<void> {
   const logger = createLogger(options.debug === true ? { debug: true } : {});
   const startTime = Date.now();
+  const sweep = options.all === true;
   try {
     const root = findProjectRoot(process.cwd()) ?? process.cwd();
-    const target = targetPathWithin(root, pathArg);
+    // 🔑 Every argument is resolved BEFORE the population, not inside the map.
+    // A path outside the corpus is a usage error, and finding it afterwards
+    // would charge the caller a full population — minutes on a cold cache — to
+    // be told they mistyped. `--all` has no arguments to check.
+    const requested = sweep ? [] : targetsWithin(root, pathArgs);
     const projection = await populateContext(root, logger);
-    const answer = whatLoadsAt(projection, target);
+    const targets = sweep ? everyRealizedPath(projection) : requested;
     const format = options.format ?? 'text';
-
-    if (answer.kind === 'unknown') {
-      const document = unknownDocumentFor(answer.input, root);
-      emit(document, renderUnknownText(document), format);
-    } else {
-      emit(...answerRenderings(answer, projection), format);
-    }
+    // ONE population, N queries. `whatLoadsAt` is a pure read of materialised
+    // tables, so the marginal cost of another path is a map lookup — which is
+    // the whole reason this command takes a list rather than being run twice.
+    const answers = targets.map((target) => documentFor(target, projection, root));
+    emit({ root, answers }, renderEnvelopeText(answers), format);
     // ⛔ Always 0. There is no threshold in this command and there is not going
     // to be one — a number that fails a build is a number people learn to stop
     // reading. The explicit exit matches every other leaf here and guarantees the
@@ -203,20 +237,23 @@ export async function claudeContextCommand(
 }
 
 /**
- * The answer document and its text rendering, as one pair.
+ * The answer document for one query.
  *
  * Split from the handler so the handler stays a straight line: the accounting
  * call needs the `claude-md` identity set, and threading that through the
- * handler body put three statements between the query and its rendering.
+ * handler body put three statements between the query and its document.
+ *
+ * Returns the document alone — rendering moved to {@link renderEnvelopeText},
+ * which needs every document at once to print the limits exactly once.
  *
  * @param answer - The query's answer
  * @param projection - The populated projection, for the `claude-md` tag rows
- * @returns The document, and the text rendering of it
+ * @returns The answer document
  */
-function answerRenderings(
+function answerDocument(
   answer: LoadedContextAnswer,
   projection: Projection,
-): [ContextAnswerDocument, string] {
+): ContextAnswerDocument {
   // The cliff and root discovery read ONE vocabulary: these are the ids the
   // shipped `classifyPath` tagged, not a second basename rule invented here.
   const claudeMdIds = new Set(
@@ -242,7 +279,7 @@ function answerRenderings(
     limits: CLAUDE_CONTEXT_LIMITS,
     modelledBehaviours: CLAUDE_CONTEXT_MODELLED_BEHAVIOURS,
   };
-  return [document, renderAnswerText(document)];
+  return document;
 }
 
 /**
@@ -273,6 +310,100 @@ export function escapesCorpusRoot(normalizedRelative: string): boolean {
   return normalizedRelative === '..'
     || normalizedRelative.startsWith('../')
     || isAbsoluteAnyPlatform(normalizedRelative);
+}
+
+/**
+ * Resolve every requested path, defaulting to the current directory.
+ *
+ * No arguments means the current directory — NOT the whole corpus. `--all` is
+ * the sweep, spelled explicitly, because a bare `vat claude context` answering
+ * for thousands of paths would turn the friendliest invocation into the most
+ * expensive one.
+ *
+ * @param root - The discovered project root
+ * @param pathArgs - The path arguments, possibly empty
+ * @returns One root-relative target per argument, in argument order
+ */
+function targetsWithin(root: string, pathArgs: readonly string[]): string[] {
+  if (pathArgs.length === 0) return [targetPathWithin(root, undefined)];
+  return pathArgs.map((pathArg) => targetPathWithin(root, pathArg));
+}
+
+/**
+ * Every path the projection realized, sorted, for `--all`.
+ *
+ * Deduplicated because one identity may be realized at several paths and the
+ * question this command answers is asked of a PATH — two realizations of one
+ * identity are two legitimate questions, but the same path twice is not.
+ *
+ * ⚠️ Sorted by code point rather than left in table order: the table's order is
+ * an artefact of population, so a caller diffing two sweeps would see spurious
+ * churn. Sorting makes the sweep comparable across runs.
+ *
+ * @param projection - The populated projection
+ * @returns Root-relative paths, deduplicated and sorted
+ */
+function everyRealizedPath(projection: Projection): string[] {
+  return [...new Set(projection.resourceRealizations.map((row) => row.path))].sort(comparePaths);
+}
+
+/**
+ * Order two paths by code point.
+ *
+ * ⛔ Not `localeCompare`: this ordering is consumed by machines diffing two
+ * sweeps, and a locale-sensitive comparator makes the same corpus sort
+ * differently on two developers' machines — a diff that reports churn nobody
+ * caused.
+ *
+ * @param left - The first path
+ * @param right - The second path
+ * @returns Negative, zero or positive, per `Array#sort`
+ */
+function comparePaths(left: string, right: string): number {
+  if (left < right) return -1;
+  return left > right ? 1 : 0;
+}
+
+/**
+ * The document for one target, answer or non-answer.
+ *
+ * @param target - The root-relative path to answer for
+ * @param projection - The populated projection
+ * @param root - The corpus root, for the non-answer's explanation
+ * @returns The answer document, or the structurally-different unknown document
+ */
+function documentFor(
+  target: string,
+  projection: Projection,
+  root: string,
+): ContextAnswerDocument | ContextUnknownDocument {
+  const answer = whatLoadsAt(projection, target);
+  if (answer.kind === 'unknown') return unknownDocumentFor(answer.input, root);
+  return answerDocument(answer, projection);
+}
+
+/**
+ * Render every answer for a person, with the limits stated exactly once.
+ *
+ * ⛔ The limits are printed ONCE, after the last answer, rather than per answer.
+ * They are properties of the MEASUREMENT METHOD, not of any one path, so
+ * repeating them per path would read as though each answer carried its own
+ * caveats — and on a `--all` sweep would bury the answers under thousands of
+ * identical paragraphs. A sweep with no answered path prints no limits at all,
+ * for the same reason {@link unknownDocumentFor} omits them: nothing was
+ * measured, so there is no measurement to bound.
+ *
+ * @param documents - The answers, in requested order
+ * @returns The text rendering, newline-terminated
+ */
+function renderEnvelopeText(
+  documents: readonly (ContextAnswerDocument | ContextUnknownDocument)[],
+): string {
+  const bodies = documents.map((document) =>
+    document.kind === 'unknown' ? renderUnknownText(document) : renderAnswerText(document));
+  const measured = documents.find((document) => document.kind === 'answer');
+  if (measured === undefined) return bodies.join('\n');
+  return `${bodies.join('\n')}${limitSection(measured).join('\n')}\n`;
 }
 
 /**
@@ -390,7 +521,6 @@ function renderAnswerText(document: ContextAnswerDocument): string {
     ...listSection('Conditions', document.conditions.map(conditionLine)),
     ...listSection('Rules whose paths: list exceeded the vendor pattern budget', document.overBudgetRules),
     ...listSection('Imported files no importer could be attributed to', document.unattributedImports),
-    ...limitSection(document),
   ];
   return `${lines.join('\n')}\n`;
 }

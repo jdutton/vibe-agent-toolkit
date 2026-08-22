@@ -46,7 +46,7 @@ process" — a cross-process cache is the only kind that can help them.
 | `vat resources validate` | `crawl` | `resources/validate.ts` |
 | `vat skills list` | `crawl` | `skills/list.ts` |
 | `vat rag index` | `crawl` | `rag/index-command.ts` |
-| `vat claude context [path]` | `crawl` ×2 | `claude/context.ts` → `buildClaudeContextPopulation` → `FilesystemExtentContributor` → `crawlSourceFor` → `FilesystemCrawlSource` → `crawlDirectory` |
+| `vat claude context [paths...]` | `crawl` ×2 | `claude/context.ts` → `buildClaudeContextPopulation` → `FilesystemExtentContributor` → `crawlSourceFor` → `FilesystemCrawlSource` → `crawlDirectory` |
 | `vat claude marketplace validate` | `crawl` | `claude/marketplace/validate.ts` |
 | `vat claude org skills list` | `crawl` | `claude/org/skills.ts` |
 | `vat claude org skills install` | `crawl` | `claude/org/skills.ts` |

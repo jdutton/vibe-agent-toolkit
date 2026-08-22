@@ -1,5 +1,5 @@
 /**
- * System tests for `vat claude context [path]`.
+ * System tests for `vat claude context [paths...]`.
  *
  * ## Why these run against THIS repository rather than a temp fixture
  *
@@ -35,6 +35,13 @@ import { createSuiteContext, executeCli, getMonorepoRoot } from './test-common.j
 const context = createSuiteContext('vat-claude-context-', import.meta.url);
 const repoRoot = getMonorepoRoot(import.meta.url);
 
+/** A file inside the corpus — the EXACT query case. */
+const A_FILE = 'packages/cli/src/index.ts';
+/** A directory inside the corpus — the "may fire here" query case. */
+const A_DIRECTORY = 'docs';
+/** A path the projection never realizes — the `kind: unknown` case. */
+const AN_UNREALIZED_PATH = 'no/such/path';
+
 /** A row of the JSON document, narrowed to what these tests assert on. */
 interface AnswerRow {
   path: string;
@@ -53,21 +60,38 @@ interface ContextDocument {
   modelledBehaviours?: Array<{ behaviour: string; introducedIn: string }>;
 }
 
+/** The envelope every run emits, however many paths were asked about. */
+interface ContextEnvelope {
+  root: string;
+  answers: ContextDocument[];
+}
+
 /**
  * Run `vat claude context …` from the repository root and parse its JSON.
  *
+ * Returns the envelope AND its first answer. Most assertions here are about one
+ * path's answer, so unwrapping keeps them readable; `envelope` is there for the
+ * ones that are about the envelope itself, which is the only place the array
+ * shape can be pinned.
+ *
  * @param args - Arguments after `claude context`
- * @returns The exit status and the parsed document
+ * @returns The exit status, the envelope, and its first answer
  */
 async function contextJson(
   args: readonly string[],
-): Promise<{ status: number | null; document: ContextDocument }> {
+): Promise<{ status: number | null; document: ContextDocument; envelope: ContextEnvelope }> {
   const result = await executeCli(
     context.binPath,
     ['claude', 'context', ...args, '--format', 'json'],
     { cwd: repoRoot },
   );
-  return { status: result.status, document: JSON.parse(result.stdout) as ContextDocument };
+  const envelope = JSON.parse(result.stdout) as ContextEnvelope;
+  const first = envelope.answers[0];
+  // Loud rather than `!`: an envelope with no answers means the command stopped
+  // producing them, and every assertion downstream would then fail on `undefined`
+  // with a message that names the field instead of the cause.
+  if (first === undefined) throw new Error(`no answers in envelope for: ${args.join(' ')}`);
+  return { status: result.status, envelope, document: first };
 }
 
 describe('vat claude context --help', () => {
@@ -105,7 +129,7 @@ describe('vat claude context --help', () => {
     // function of the longest sibling term, and because `\s` would match the
     // newline and make the pattern ambiguous.
     expect(result.stdout)
-      .toMatch(/\n +context \[options\] \[path\] +Report what Claude Code loads/);
+      .toMatch(/\n +context \[options\] \[paths\.\.\.\] +Report what Claude Code loads/);
   });
 });
 
@@ -116,7 +140,7 @@ describe.skipIf(process.platform === 'win32')('vat claude context', () => {
   beforeAll(async () => {
     context.setup();
     // ONE population for every assertion about the answer document — see header.
-    const fetched = await contextJson(['docs']);
+    const fetched = await contextJson([A_DIRECTORY]);
     answerStatus = fetched.status;
     answer = fetched.document;
   });
@@ -157,7 +181,7 @@ describe.skipIf(process.platform === 'win32')('vat claude context', () => {
   });
 
   it("states its limits in the default text format, because they are the answer's shape", async () => {
-    const result = await executeCli(context.binPath, ['claude', 'context', 'docs'], {
+    const result = await executeCli(context.binPath, ['claude', 'context', A_DIRECTORY], {
       cwd: repoRoot,
     });
 
@@ -171,7 +195,7 @@ describe.skipIf(process.platform === 'win32')('vat claude context', () => {
   });
 
   it('answers unknown — not zero — for a path that is not in the tree', async () => {
-    const { status, document } = await contextJson(['no/such/path']);
+    const { status, document } = await contextJson([AN_UNREALIZED_PATH]);
 
     expect(status).toBe(0);
     expect(document).toMatchObject({ kind: 'unknown', reason: 'path-not-realized' });
@@ -189,5 +213,92 @@ describe.skipIf(process.platform === 'win32')('vat claude context', () => {
 
     expect(result.status).toBe(2);
     expect(result.stderr).toContain('outside the corpus root');
+  });
+});
+
+describe('vat claude context with several paths', () => {
+  beforeAll(context.setup);
+
+  it('answers every path, in the order asked, from one enumeration', async () => {
+    const { status, envelope } = await contextJson([
+      A_FILE,
+      A_DIRECTORY,
+      AN_UNREALIZED_PATH,
+    ]);
+
+    expect(status).toBe(0);
+    // Order is the ARGUMENT order, not the projection's. A caller zipping its
+    // own list against `answers` is the obvious use, and sorting here would
+    // silently misalign it.
+    expect(envelope.answers.map((answer) => answer.input)).toEqual([
+      A_FILE,
+      A_DIRECTORY,
+      AN_UNREALIZED_PATH,
+    ]);
+    // A miss among hits stays a miss — one unresolvable path must not degrade
+    // the answers around it, nor be quietly dropped from the list.
+    expect(envelope.answers.map((answer) => answer.kind)).toEqual([
+      'answer',
+      'answer',
+      'unknown',
+    ]);
+    expect(envelope.root).toContain('vibe-agent-toolkit');
+  });
+
+  it('emits a LIST for a single path, so a consumer never branches on count', async () => {
+    const { envelope } = await contextJson([A_DIRECTORY]);
+
+    expect(Array.isArray(envelope.answers)).toBe(true);
+    expect(envelope.answers).toHaveLength(1);
+  });
+
+  it('defaults to the current directory, NOT the whole corpus, when given no path', async () => {
+    const { status, envelope } = await contextJson([]);
+
+    expect(status).toBe(0);
+    // The guard on the friendliest invocation: a bare run must stay a
+    // one-answer question. `--all` is the sweep, and it is spelled out.
+    expect(envelope.answers).toHaveLength(1);
+  });
+
+  it('states the limits once for many paths, not once per path', async () => {
+    const result = await executeCli(
+      context.binPath,
+      ['claude', 'context', A_FILE, A_DIRECTORY, 'README.md'],
+      { cwd: repoRoot },
+    );
+
+    expect(result.status).toBe(0);
+    // Three answers, one limits section. The limits bound the METHOD, so
+    // repeating them per path would read as three independent sets of caveats.
+    const occurrences = result.stdout.split('What this answer does not settle').length - 1;
+    expect(occurrences).toBe(1);
+    expect(result.stdout).toContain(A_FILE);
+    expect(result.stdout).toContain('README.md');
+  });
+
+  it('rejects an out-of-corpus path BEFORE enumerating, even among valid ones', async () => {
+    const result = await executeCli(
+      context.binPath,
+      ['claude', 'context', A_DIRECTORY, '../..', '--format', 'json'],
+      { cwd: repoRoot },
+    );
+
+    // The refusal must survive being in position two. Resolving arguments after
+    // the population would charge a caller a full enumeration — minutes on a
+    // cold cache — only to then reject what they typed.
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('outside the corpus root');
+    // ⛔ NOT `toBe('')`. `handleCommandError` writes its `status: error` block to
+    // stdout even under `--format json` — a real defect, tracked separately, and
+    // asserting an empty stdout here would pin a fix this change does not make.
+    // What must hold is that a refused run publishes no MEASUREMENT: no
+    // envelope, no answers, nothing a consumer could read as context that loads.
+    //
+    // 🪤 Matched on FIELD names, never the word "answers" — the refusal's own
+    // prose says "vat claude context answers only for paths inside the root",
+    // so a bare-word check fails on the very message it is meant to allow.
+    expect(result.stdout).not.toContain('alwaysTokens');
+    expect(result.stdout).not.toContain('boundsStatement');
   });
 });

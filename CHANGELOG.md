@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- **`vat claude context` takes several paths, and its machine-readable output is now an envelope.**
+  The argument became `[paths...]`, and `--format json`/`yaml` emit `{ root, answers: [...] }` rather
+  than a bare answer document. `answers` is a list **even for a single path**, so a consumer never
+  branches on count; existing single-path callers read `answers[0]`.
+
+  The reason it exists: the enumeration is the entire cost of this command and it is independent of
+  the path asked about. Measured on a 8,235-blob adopter, a cold run costs ~72s and a warm one ~6s,
+  while the query itself is a pure read of materialised tables. Asking about ten paths used to mean
+  ten enumerations; it is now one. Every argument is also resolved *before* the enumeration, so a
+  mistyped path among valid ones is refused in milliseconds instead of after a full population.
+
+### Added
+
+- **`vat claude context --all`** answers for every path the projection realized, from the same single
+  enumeration. Bare `vat claude context` still means the current directory — the sweep is spelled
+  out, because making the friendliest invocation the most expensive one is a trap. Paths are
+  deduplicated and sorted by code point so two sweeps are diffable. On this repository it returns
+  6,217 answers and names the worst always-loaded path in the tree.
+
 - **(library) A closure extent declaration now carries `referenceDialect`.** Parsed
   `ExtentDeclaration` objects gain the field; it defaults to `'href'`, so every existing declaration
   behaves exactly as before. Code that compares a parsed declaration structurally must account for
