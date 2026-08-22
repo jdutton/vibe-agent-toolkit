@@ -1710,11 +1710,17 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     // --keep, which retains the harness dir for inspection but has no business
     // retaining the key), and never conditionally.
     removeVatOnlyDir(evalSuiteHoldDir);
-    // Per-eval workspaces are the executor's cwd — part of the run an operator
-    // inspects afterwards. Retain them on EXACTLY the terms the harness root is
-    // retained on (--keep, or a user-owned --out/--workdir location), so moving
-    // them out of the harness root did not quietly change what survives a run.
-    if (harnessCreated && opts.keep !== true) removeVatOnlyDir(workspacesRoot);
+    // Per-eval workspaces are the executor's cwd. `--keep` is the ONLY thing that
+    // retains them.
+    //
+    // Deliberately NOT mirrored on `cleanupHarness`'s rule (keep OR user-owned
+    // location). That rule exists because `--out`/`--workdir` name a directory the
+    // USER owns, so vat has no business deleting it. Since these moved out of the
+    // harness root they live under OS tmp, which the user did not choose and does
+    // not manage — carrying the rule across would orphan a
+    // `vat-skill-test-ws-<token>` dir on every `--out` run, forever. The location
+    // changed, so the retention policy has to change with it.
+    if (opts.keep !== true) removeVatOnlyDir(workspacesRoot);
   };
   const removeSignalCleanup = installSignalCleanup({ onSignal: cleanup });
 

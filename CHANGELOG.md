@@ -30,7 +30,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `<tmp>/vat-skill-test-ws-<token>/`, alongside the existing vat-only grader and eval-hold dirs.
   They previously sat as a sibling of `staged/` and the assembled plugin dir, leaving the control
   one `ls ..` from vat's own runnable copy. Breaking for anything that assumed
-  `<out>/workspaces/<id>`; `--keep` retains them.
+  `<out>/workspaces/<id>` — the run now reports the location back as `workspacesPath` on
+  `RunHarnessResult`, since the token is random and cannot be derived.
+
+  **`--keep` is now the only thing that retains them.** `cleanupHarness`'s other retention rule —
+  keep a user-owned `--out`/`--workdir` location — is deliberately *not* carried across: that rule
+  exists because the user chose the directory, and OS tmp is not a directory the user chose or
+  manages, so carrying it would orphan a `vat-skill-test-ws-<token>` dir on every `--out` run,
+  permanently. The location changed, so the retention policy changed with it.
 
   **Interpretation changed, not just behavior.** The delta A/Bs the skill's *instructions*, not its
   capability, and vat now says so in `--help` and the skill-testing guide (the guide's claim that

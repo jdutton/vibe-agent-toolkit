@@ -202,7 +202,9 @@ describe('eval answer-key isolation (canary)', () => {
     mkdirSyncReal(fixturesDir, { recursive: true });
     writeFileSync(safePath.join(fixturesDir, 'input.md'), '# fixture input\n', 'utf8');
 
-    const { exitCode, leaks, spawns, workspacesPath } = await runCanary(layout);
+    // `keep` because this asserts on the workspace AFTER the run: workspaces live
+    // under OS tmp now and are reaped on exit unless the operator asks to keep them.
+    const { exitCode, leaks, spawns, workspacesPath } = await runCanary(layout, { keep: true });
 
     expect(leaks).toEqual([]);
     expect(spawns).toBe(1);

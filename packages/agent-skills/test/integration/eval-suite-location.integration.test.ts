@@ -145,7 +145,10 @@ describe('${fixturesDir} wiring (integration)', () => {
     });
 
     const result = await runSkillTestHarness(
+      // `keep` because the assertions below inspect the workspace AFTER the run;
+      // workspaces live under OS tmp now and are reaped on exit otherwise.
       optsFor(subjectDir, fake.spawn, {
+        keep: true,
         env: { CUSTOMER_SNAPSHOT_PATH: '${fixturesDir}/snap.json' },
       }),
     );
@@ -179,7 +182,7 @@ describe('external eval suite (integration)', () => {
     });
 
     const result = await runSkillTestHarness(
-      optsFor(layout.subjectDir, fake.spawn, { evalsSubpath: layout.evalsPath }),
+      optsFor(layout.subjectDir, fake.spawn, { evalsSubpath: layout.evalsPath, keep: true }),
     );
 
     // Exit 3 is bootstrap — "no suite found, here is a template". Before the fix
@@ -205,6 +208,25 @@ describe('external eval suite (integration)', () => {
     expect(existsSync(safePath.join(layout.subjectDir, 'evals'))).toBe(false);
   });
 
+  // Workspaces moved OUT of the harness root to OS tmp, which the user never
+  // chose. `cleanupHarness`'s "retain a user-owned --out/--workdir location" rule
+  // must NOT be carried across: doing so orphans a vat-skill-test-ws-<token> dir
+  // in tmp on every --out run, forever. --keep is the only thing that retains.
+  it('reaps the tmp workspaces root on an --out run that did not ask to keep it', async () => {
+    const layout = writeExternalLayout();
+    const fake = makeHarnessFakeSpawn({});
+
+    const result = await runSkillTestHarness(
+      optsFor(layout.subjectDir, fake.spawn, { evalsSubpath: layout.evalsPath }),
+    );
+
+    expect(result.exitCode, result.summary).toBe(0);
+    expect(result.workspacesPath).toBeDefined();
+    // The user-owned --out dir survives, as it always has; the tmp dir does not.
+    expect(existsSync(safePath.join(tempDir, 'harness'))).toBe(true);
+    expect(existsSync(result.workspacesPath ?? ''), 'tmp workspaces root leaked').toBe(false);
+  });
+
   // Windows does not model POSIX permission bits, so this is Unix-only — the
   // same guard the sibling harness-root mode tests use.
   it.skipIf(process.platform === 'win32')(
@@ -223,7 +245,7 @@ describe('external eval suite (integration)', () => {
       const fake = makeHarnessFakeSpawn({});
 
       const result = await runSkillTestHarness(
-        optsFor(layout.subjectDir, fake.spawn, { evalsSubpath: layout.evalsPath }),
+        optsFor(layout.subjectDir, fake.spawn, { evalsSubpath: layout.evalsPath, keep: true }),
       );
 
       // results/ still sits under the harness root; workspaces/ moved out to its
