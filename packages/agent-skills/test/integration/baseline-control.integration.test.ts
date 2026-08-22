@@ -148,6 +148,41 @@ function spawnSurface(opts: Record<string, unknown>): string {
  * single-slash needle — so collapsing slash runs is what keeps these assertions
  * alive on Windows rather than merely green.
  */
+/**
+ * The integrity block read back off disk, which is the only place it reaches an
+ * operator. Reading it rather than trusting the in-memory result is the point:
+ * a block computed and never written is the failure this file already caught once.
+ */
+function readBaselineIntegrity(resultsDir: string = safePath.join(getTempDir(), 'harness', RETAINED_RESULTS_DIRNAME)): {
+  contaminated?: boolean;
+  signals?: string[];
+  findings?: Array<{ evalId?: string }>;
+} {
+  const baselinePath = safePath.join(resultsDir, BASELINE_JSON);
+  expect(existsSync(baselinePath), 'baseline.json was never written').toBe(true);
+  const parsed = JSON.parse(readFileSync(baselinePath, 'utf8')) as {
+    baselineIntegrity?: { contaminated?: boolean; signals?: string[]; findings?: Array<{ evalId?: string }> };
+  };
+  expect(parsed.baselineIntegrity, 'baselineIntegrity block missing').toBeDefined();
+  return parsed.baselineIntegrity ?? {};
+}
+
+/**
+ * Run a baseline harness to completion and hand back the integrity block it left
+ * on disk — the sequence every verdict assertion in this file needs, and the one
+ * whose middle step (the run actually succeeding) is what stops a later assertion
+ * passing against a file some earlier test wrote.
+ */
+async function runBaselineForIntegrity(
+  subjectDir: string,
+  spawn: RunHarnessOptions['spawn'],
+  extra: Partial<RunHarnessOptions> = {},
+): Promise<ReturnType<typeof readBaselineIntegrity>> {
+  const result = await runSkillTestHarness(baselineOpts(subjectDir, spawn, extra));
+  expect(result.exitCode, result.summary).toBe(0);
+  return readBaselineIntegrity();
+}
+
 function fold(value: string): string {
   // eslint-disable-next-line unicorn/prefer-string-replace-all -- test tsconfig lib predates String.replaceAll
   return toForwardSlash(value).replace(/\/{2,}/g, '/').toLowerCase();
@@ -311,35 +346,74 @@ describe('baseline control arm (integration)', () => {
           : undefined,
     });
 
-    const result = await runSkillTestHarness(baselineOpts(subjectDir, fake.spawn));
-    expect(result.exitCode, result.summary).toBe(0);
-
-    const baselinePath = safePath.join(getTempDir(), 'harness', RETAINED_RESULTS_DIRNAME, BASELINE_JSON);
-    expect(existsSync(baselinePath), 'baseline.json was never written').toBe(true);
-    const parsed = JSON.parse(readFileSync(baselinePath, 'utf8')) as {
-      baselineIntegrity?: { contaminated?: boolean; findings?: Array<{ evalId?: string }> };
-    };
-
-    expect(parsed.baselineIntegrity, 'baselineIntegrity block missing').toBeDefined();
-    expect(parsed.baselineIntegrity?.contaminated).toBe(true);
-    expect(parsed.baselineIntegrity?.findings?.[0]?.evalId).toBe(EVAL_ID);
+    const integrity = await runBaselineForIntegrity(subjectDir, fake.spawn);
+    expect(integrity.contaminated).toBe(true);
+    expect(integrity.findings?.[0]?.evalId).toBe(EVAL_ID);
   });
 
   // The block is unconditional: its ABSENCE must mean "this file predates the
   // check", never "checked and clean". Only an always-written field carries that.
   it('stamps a clean verdict into baseline.json when the control arm behaves', async () => {
     const { subjectDir } = writePluginFixture();
-    const fake = makeHarnessFakeSpawn({});
 
-    const result = await runSkillTestHarness(baselineOpts(subjectDir, fake.spawn));
-    expect(result.exitCode, result.summary).toBe(0);
+    const integrity = await runBaselineForIntegrity(subjectDir, makeHarnessFakeSpawn({}).spawn);
+    expect(integrity.contaminated).toBe(false);
+    expect(integrity.findings).toEqual([]);
+  });
 
-    const parsed = JSON.parse(
-      readFileSync(safePath.join(getTempDir(), 'harness', RETAINED_RESULTS_DIRNAME, BASELINE_JSON), 'utf8'),
-    ) as { baselineIntegrity?: { contaminated?: boolean; findings?: unknown[] } };
+  /**
+   * The executable-name signal must not fire on the control arm's OWN scratch
+   * files, and the only thing that tells them apart from a reach is a path root
+   * the harness has to thread in.
+   *
+   * A review found 8/8 realistic clean behaviours firing the old pattern —
+   * `python3 analyze.py` against a declared `scripts/analyze.py`, `Wrote
+   * report.md`, `saved to summary.txt` — each stamping `contaminated: true`, whose
+   * attached instruction is "discard the delta". A check that routinely destroys
+   * good runs is not erring safely; it teaches operators to ignore the one warning
+   * that matters.
+   *
+   * The pattern now requires a path, and the path must escape the arm's own
+   * workspace. The absolute self-reference below is the form that needs
+   * `armWorkspaceDir` WIRED rather than inferred: the executor prompt states the
+   * working directory absolutely, so the arm reuses that absolute path routinely,
+   * and every mention would otherwise read as an escape. Asserting it here rather
+   * than on the detector alone is the point — the unit tests pass `armWorkspaceDir`
+   * themselves, so they cannot see the harness failing to.
+   */
+  it('does not flag the control arm for running its own scratch script', async () => {
+    const { subjectDir } = writePluginFixture();
 
-    expect(parsed.baselineIntegrity?.contaminated).toBe(false);
-    expect(parsed.baselineIntegrity?.findings).toEqual([]);
+    const fake = makeHarnessFakeSpawn({
+      executorExtraStdout: (opts) =>
+        opts.pluginDirs.length === 0
+          ? JSON.stringify({
+              type: 'assistant',
+              message: {
+                content: [{
+                  type: 'tool_use',
+                  name: 'Bash',
+                  // Both clean forms in one transcript: the bare filename an arm
+                  // writes and reports, and its own workspace named ABSOLUTELY,
+                  // which is the spelling its prompt handed it.
+                  input: { command: `python3 summary.py && node ${opts.cwd ?? ''}/scripts/summary.mjs` },
+                }],
+              },
+            })
+          : undefined,
+    });
+
+    const integrity = await runBaselineForIntegrity(subjectDir, fake.spawn, {
+      declaredExecutables: [{ name: 'summary', howInvoked: 'python3 scripts/summary.py', kind: 'python' }],
+    });
+
+    // The signal must be ARMED — otherwise this passes because nothing looked,
+    // which is the failure mode `signals` exists to expose.
+    expect(integrity.signals, 'the executable signal was not armed').toContain('declared-executable');
+    expect(
+      integrity.contaminated,
+      `a clean control arm was reported contaminated: ${JSON.stringify(integrity.findings)}`,
+    ).toBe(false);
   });
 
   /**
@@ -440,10 +514,7 @@ describe('baseline control arm (integration)', () => {
 
       // baseline.json is not merely present — it still parses and still carries the
       // block the three prior rounds exist to make trustworthy.
-      const parsed = JSON.parse(
-        readFileSync(safePath.join(resultsDir, BASELINE_JSON), 'utf8'),
-      ) as { baselineIntegrity?: { contaminated?: boolean } };
-      expect(parsed.baselineIntegrity?.contaminated).toBe(false);
+      expect(readBaselineIntegrity(resultsDir).contaminated).toBe(false);
 
       // …and nothing else did. The staged subject tree is what cleanup is FOR.
       expect(readdirSync(result.harnessPath)).toEqual([RETAINED_RESULTS_DIRNAME]);

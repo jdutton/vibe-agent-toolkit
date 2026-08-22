@@ -1550,6 +1550,22 @@ function buildContaminationInput(transcript: string, ctx: EvalRunContext): Detec
       ctx.workspacesRoot,
       armDirSegment(ctx.armDirs, 'with'),
     ),
+    // The control arm's OWN root, the exact counterpart of the line above. Its
+    // absolute path is stated in the arm's own prompt, so the arm reuses it
+    // constantly; without this the executable-name signal reads every mention of
+    // the arm's own scratch script as a reach into the skill.
+    //
+    // Conditional because this builder also serves `contaminationSignalsFor`,
+    // which runs on EVERY run — and a non-baseline run mints no `without` arm, so
+    // `armDirSegment` would (correctly) throw rather than invent a segment.
+    ...(ctx.armDirs.without === undefined || ctx.armDirs.without === ''
+      ? {}
+      : {
+          armWorkspaceDir: safePath.joinUnderRoot(
+            ctx.workspacesRoot,
+            armDirSegment(ctx.armDirs, 'without'),
+          ),
+        }),
     // VAT's private tmp dirs: the held eval suite (the `expected_output` answer
     // key) and the grader dir (the run's integrity nonce). Both are SIBLINGS of
     // the arm's cwd under the OS temp dir — two hops or one `$TMPDIR` expansion

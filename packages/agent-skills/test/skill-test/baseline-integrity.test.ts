@@ -30,6 +30,10 @@ const ALL_SIGNALS: ContaminationSignal[] = [KIND_HARNESS_PATH, KIND_SIBLING_ARM,
 // NOT under HARNESS_ROOT — the control arm must keep its own fixtures.
 // eslint-disable-next-line sonarjs/publicly-writable-directories -- inert test literal; nothing is read or written
 const WS_FIXTURES = '/tmp/vat-skill-test-ws-abc/eval-1/fixtures';
+// The control arm's own workspace root — a sibling of the treatment's under the
+// workspaces root, never under HARNESS_ROOT.
+// eslint-disable-next-line sonarjs/publicly-writable-directories -- inert test literal; nothing is read or written
+const ARM_WORKSPACE = '/tmp/vat-skill-test-ws-abc/7f2a91c4';
 
 /** A stream-json-ish transcript line carrying `text` as tool input. */
 function transcriptWith(text: string): string {
@@ -60,8 +64,16 @@ describe('detectBaselineContamination', () => {
 
   // The case vat cannot prevent: an ambient copy in the adopter's own repo or
   // plugin cache. No harness path appears, but the declared executable does.
+  //
+  // The path is ABSOLUTE, and that is the realistic spelling as well as the
+  // load-bearing one. This case used to be written `node ./dist/skills/…`, which
+  // predates per-arm workspaces: the arm's cwd is now a staged tree under OS tmp,
+  // so a relative `./dist/…` names something in the arm's own scratch space, not
+  // the adopter's build output. The old fixture asserted a reach that could not
+  // happen and, once the relative form stopped counting, was the only thing
+  // standing between this detector and having no covered true positive at all.
   it('flags a declared executable run from a path vat does not own', () => {
-    const transcript = transcriptWith('node ./dist/skills/my-skill/scripts/bucket-map.mjs "source"');
+    const transcript = transcriptWith('node /users/dev/myrepo/dist/skills/my-skill/scripts/bucket-map.mjs "source"');
     const hits = detectBaselineContamination({
       transcript,
       harnessRoot: HARNESS_ROOT,
@@ -434,16 +446,86 @@ describe('detectBaselineContamination — executable-name precision', () => {
     ).toEqual([]);
   });
 
-  it('fires when the name is invoked as a path or carries an extension', () => {
-    for (const command of ['node ./scripts/summary.mjs x', 'python3 summary.py', 'bash ../bin/summary']) {
-      const hits = detectBaselineContamination({
+  // The eight realistic CLEAN pairs a review reproduced against the old pattern,
+  // 8/8 firing with "discard the delta" attached. A control arm denied the skill
+  // writes its own script and gives it the obvious name — this is the behaviour it
+  // is SUPPOSED to exhibit, so a hit here is not a conservative error, it is the
+  // measurement being thrown away for doing its job.
+  //
+  // What unites them: none names a path root. A filename with no directory in
+  // front of it says nothing about whose file it is, and a plain relative path
+  // resolves inside the arm's own cwd by definition.
+  it.each([
+    ['a bare invocation of a same-named script', 'python3 analyze.py', 'analyze'],
+    ['prose reporting a written file', 'Wrote report.md with the findings.', 'report'],
+    ['prose reporting a saved file', 'The output was saved to summary.txt', 'summary'],
+    ['prose reporting a built file', 'built index.json from the rows', 'index'],
+    ['prose reporting a created file', 'created run.sh and made it executable', 'run'],
+    ['a relative path in the arm\'s own cwd', 'node ./scripts/analyze.mjs input.csv', 'analyze'],
+    ['a nested relative path in the arm\'s own cwd', 'bash scripts/helpers/run.sh', 'run'],
+    ['a URL segment', 'curl https://docs.example.com/report', 'report'],
+  ])('does not fire on %s', (_label, command, name) => {
+    expect(
+      detectBaselineContamination({
         transcript: transcriptWith(command),
         harnessRoot: HARNESS_ROOT,
+        executableNames: [name],
+        armWorkspaceDir: ARM_WORKSPACE,
+      }),
+    ).toEqual([]);
+  });
+
+  // …and the reaches that ARE evidence, all of which name a path root outside the
+  // arm's own tree. This is the whole residual value of a name-based signal: the
+  // ambient-copy classes produce no harness path, so nothing else sees them.
+  it.each([
+    ['an absolute path into the adopter repo', 'node /users/dev/myrepo/dist/skills/s/scripts/summary.mjs'],
+    ['a home-rooted path into the plugin cache', 'python3 ~/.claude/plugins/marketplaces/acme/skills/s/summary.py'],
+    ['a variable-rooted path', 'sh $TMPDIR/ambient/skills/s/summary'],
+    ['a windows drive-rooted path', String.raw`node C:\repo\dist\skills\s\summary.mjs`],
+    ['a path that climbs out of the workspace', 'bash ../../myrepo/bin/summary'],
+  ])('fires on %s', (_label, command) => {
+    const hits = detectBaselineContamination({
+      transcript: transcriptWith(command),
+      harnessRoot: HARNESS_ROOT,
+      executableNames: ['summary'],
+      armWorkspaceDir: ARM_WORKSPACE,
+    });
+
+    expect(hits, `expected a hit for: ${command}`).toHaveLength(1);
+    expect(hits[0]?.kind).toBe(KIND_DECLARED_EXECUTABLE);
+  });
+
+  // The one form that NEEDS armWorkspaceDir threaded in rather than inferred from
+  // the path shape: the executor prompt states the arm's working directory
+  // absolutely, so the arm echoes and reuses that absolute path constantly. Every
+  // such self-reference is absolute and would otherwise read as an escape.
+  it('does not fire on the arm\'s own workspace named absolutely', () => {
+    expect(
+      detectBaselineContamination({
+        transcript: transcriptWith(`node ${ARM_WORKSPACE}/eval-1/scripts/summary.mjs`),
+        harnessRoot: HARNESS_ROOT,
         executableNames: ['summary'],
-      });
-      expect(hits, `expected a hit for: ${command}`).toHaveLength(1);
-      expect(hits[0]?.kind).toBe(KIND_DECLARED_EXECUTABLE);
-    }
+        armWorkspaceDir: ARM_WORKSPACE,
+      }),
+    ).toEqual([]);
+  });
+
+  // A benign mention almost always comes FIRST — the arm writes its own script
+  // before it goes looking for anything. Testing only the first occurrence would
+  // let one `./scripts/summary.mjs` hide every real reach behind it.
+  it('finds a real reach that appears AFTER a benign mention of the same name', () => {
+    const hits = detectBaselineContamination({
+      transcript: transcriptWith(
+        'node ./scripts/summary.mjs draft && python3 ~/.claude/plugins/acme/skills/s/summary.py',
+      ),
+      harnessRoot: HARNESS_ROOT,
+      executableNames: ['summary'],
+      armWorkspaceDir: ARM_WORKSPACE,
+    });
+
+    expect(hits, 'a benign first mention hid the real reach').toHaveLength(1);
+    expect(hits[0]?.excerpt).toContain('.claude/plugins');
   });
 });
 

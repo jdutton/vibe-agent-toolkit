@@ -478,6 +478,16 @@ export interface DetectBaselineContaminationInput {
    */
   executableNames?: readonly string[];
   /**
+   * The control arm's OWN workspace root, so a path under it is recognised as the
+   * arm's own scratch file rather than a reach. The executor prompt states the
+   * working directory absolutely, so the arm reuses that absolute path routinely;
+   * without this every such mention would read as an escape.
+   *
+   * Absent → nothing is suppressed, which is the conservative direction for a
+   * caller that has not threaded it: the check gets noisier, never blinder.
+   */
+  armWorkspaceDir?: string;
+  /**
    * The OTHER arm's workspace directory — for a skill-absent eval, the treatment
    * arm's live working directory.
    *
@@ -581,8 +591,8 @@ export function vatPrivateDirNeedles(dir: string): string[] {
 const MIN_EXECUTABLE_NAME_LENGTH = 3;
 
 /**
- * Match an executable name only where it is being INVOKED or pointed at, never as
- * a bare word.
+ * Match an executable name only where it is pointed at BY A PATH, never as a bare
+ * word and never as a bare filename.
  *
  * `deriveDeclaredExecutableNames` strips the extension, so `scripts/summary.py`
  * becomes the needle `summary` — a word that appears in ordinary assistant prose
@@ -592,26 +602,26 @@ const MIN_EXECUTABLE_NAME_LENGTH = 3;
  * the one warning that matters, so a false positive here is NOT the safe
  * direction — it is a different way to lose the measurement.
  *
- * Two accepted forms, both of which mean the name is a FILE:
- *   - preceded by a path separator: `scripts/summary`, `./summary`
- *   - followed by an extension: `summary.py`, `summary.mjs`
+ * This used to accept a second form, `name` followed by an extension anywhere
+ * (`summary.py`, `report.md`), and that form was the defect: a review found 8/8
+ * realistic CLEAN pairs firing, and 5 of them were exactly it — `python3
+ * analyze.py`, `Wrote report.md`, `saved to summary.txt`, `built index.json`,
+ * `created run.sh`. A control arm denied the skill writes its own script and gives
+ * it the obvious name; a filename with no directory in front of it says nothing
+ * about WHOSE file it is, so it can never be evidence. Only the path can be, and
+ * a path is what {@link reachEscapesOwnWorkspace} then judges.
  *
- * ⚠️ KNOWN OPEN, and the reason is that those two forms are exactly what a CLEAN
- * control arm produces. Denied the skill, it writes its own script and gives it the
- * obvious name — a review found 8/8 realistic pairs firing: `python3 analyze.py`
- * against a declared `scripts/analyze.py`, `Wrote report.md`, `saved to summary.txt`,
- * `built index.json`, `created run.sh`. A URL segment (`docs.example.com/report`)
- * fires too. So this needle currently reports `contaminated: true` on the behavior
- * the arm is SUPPOSED to exhibit, with "discard the delta" attached.
+ * The cost is the case this was already blind to and stays blind to: an executable
+ * invoked bare on PATH (`csvsum data.csv`), or invoked by basename after a `cd`
+ * into an ambient copy. The `cd` itself carries the path, which is what the other
+ * detectors read.
  *
- * It is not evidence on its own and should not stay wired as if it were. The fix is
- * one of: thread the arm's `workspaceDir` in and suppress any match whose surrounding
- * path resolves inside it (the arm's own scratch files are not contamination); or
- * demote `declared-executable` to an advisory that never sets `contaminated: true`
- * without a corroborating `harness-path` hit. Do NOT "fix" this by tightening the
- * pattern alone — it is already too tight in the other direction (a declared
- * executable invoked bare on PATH, `csvsum data.csv`, is invisible, and `howInvoked`
- * carries exactly that form and is deliberately unused).
+ * 📌 MEASURED, so nobody re-derives it: restoring the extension branch leaves the
+ * whole suite green, because {@link reachEscapesOwnWorkspace} rejects a token with
+ * no path root anyway. The branch is DEAD given that predicate, not merely
+ * redundant — which is why it is deleted rather than kept as belt-and-braces.
+ * Removing the predicate instead fails 4 tests, so that is where the work happens.
+ * Re-adding either form needs a reach that only it catches.
  */
 function executableInvocationPattern(name: string): RegExp {
   // Every regex metacharacter in `name` is escaped first, so the constructed
@@ -619,8 +629,100 @@ function executableInvocationPattern(name: string): RegExp {
   // pattern syntax. `name` also has no user-controlled quantifier, so this is not
   // a ReDoS surface.
   const escaped = name.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+  // Global because the caller walks EVERY occurrence — see `firstEscapingInvocation`.
+  // A fresh instance is built per name per call, so the stateful `lastIndex` of a
+  // `g` regex is never shared.
   // eslint-disable-next-line security/detect-non-literal-regexp -- source is built from the escaped literal above
-  return new RegExp(String.raw`(?:[/\\]${escaped}(?![\w-])|\b${escaped}\.[A-Za-z0-9]+)`);
+  return new RegExp(String.raw`[/\\]${escaped}(?![\w-])`, 'g');
+}
+
+/** Characters that continue a path token leftwards from a match. */
+const PATH_TOKEN_CHARS = /[\w./~$:-]/;
+
+/**
+ * Expand left from `index` to the start of the path token the match sits in, and
+ * return the token from there through the end of the match.
+ *
+ * The haystack is already normalized, so separators are `/` and the text is
+ * lowercased — this walks characters, not path components, because the token is
+ * embedded in free-form transcript text with no delimiters to parse against.
+ */
+function pathTokenEndingAt(haystack: string, index: number, length: number): string {
+  let start = index;
+  while (start > 0 && PATH_TOKEN_CHARS.test(haystack.charAt(start - 1))) start -= 1;
+  return haystack.slice(start, index + length);
+}
+
+/**
+ * Does this path reach OUTSIDE the control arm's own working tree?
+ *
+ * The whole question the executable-name signal has to answer is whose copy the
+ * arm ran, and the answer is in the path root, not the name. The arm's cwd IS its
+ * per-eval workspace, so a plain relative path is by definition its own scratch
+ * file and is not evidence; a reach into an ambient copy — the adopter's repo, the
+ * installed plugin cache — is absolute, `~`- or `$VAR`-rooted, or climbs out.
+ *
+ * Threading `armWorkspaceDir` in matters for exactly one form, and it is a real
+ * one: the executor prompt states the arm's working directory ABSOLUTELY, so the
+ * arm echoes and reuses that absolute path constantly. Without this suppression
+ * every such self-reference would read as an escape.
+ *
+ * Worked cases, all against a normalized token:
+ *   `<armWorkspaceDir>/analyze.py`     → false, the arm's own file, named absolutely
+ *   `scripts/analyze.py`, `./run.sh`   → false, relative to the arm's own cwd
+ *   `docs.example.com/report`          → false, a bare head is not a path root
+ *   `https://docs.example.com/report`  → false, a URI is not a filesystem path
+ *   `/users/dev/repo/dist/…/analyze`   → true, absolute and outside
+ *   `~/.claude/plugins/…/analyze.py`   → true, home-rooted
+ *   `$tmpdir/…/analyze`, `c:/…/analyze`→ true, variable- and drive-rooted
+ *   `../../repo/dist/…/analyze`        → true, climbs out
+ *
+ * Residual, accepted: an arm that `cd`s elsewhere and then uses relative paths
+ * reads as clean here. The `cd` carries the absolute path, and that is the other
+ * detectors' job — this one is not the last line of defence.
+ */
+/**
+ * The FIRST invocation of `name` whose path escapes the arm's own workspace, as
+ * `{ index, length }` into the normalized haystack — or `undefined` when every
+ * occurrence is the arm's own file.
+ *
+ * Scanning every occurrence rather than testing the first is the difference
+ * between a working detector and a decorative one: a control arm that writes
+ * `scripts/analyze.py` and later reads an ambient copy mentions the benign form
+ * first almost every time.
+ */
+function firstEscapingInvocation(
+  haystack: string,
+  normalizedName: string,
+  armWorkspaceDir: string,
+): { index: number; length: number } | undefined {
+  for (const match of haystack.matchAll(executableInvocationPattern(normalizedName))) {
+    const token = pathTokenEndingAt(haystack, match.index, match[0].length);
+    if (reachEscapesOwnWorkspace(token, armWorkspaceDir)) {
+      return { index: match.index, length: match[0].length };
+    }
+  }
+  return undefined;
+}
+
+function reachEscapesOwnWorkspace(token: string, armWorkspaceDir: string): boolean {
+  if (armWorkspaceDir !== '' && token.startsWith(armWorkspaceDir)) return false;
+  if (token.startsWith('/')) return true;
+  if (token.includes('../')) return true;
+  const separator = token.indexOf('/');
+  // No separator at all means no path root, so nothing says whose file it is —
+  // the plain `report.md` an arm writes and reports. The pattern above cannot
+  // currently produce such a token (it starts AT a separator), so this is stated
+  // rather than relied on: it is what makes the pattern's narrowness a statement
+  // of intent instead of the only thing holding the check together.
+  if (separator === -1) return false;
+  const head = token.slice(0, separator);
+  // A URI is not a filesystem path, so it can never be evidence that anything
+  // RAN. It reaches here because `https:/…` (the run-collapse eats the double
+  // slash) has the same shape as a Windows drive root — and the two are told
+  // apart by length, because a drive is exactly one letter.
+  if (head.endsWith(':')) return head.length === 2;
+  return !/^[\w.-]*$/.test(head);
 }
 
 /**
@@ -692,10 +794,14 @@ export function detectBaselineContamination(
   }
 
   const harnessHit = hits.length > 0;
+  const armDir = normalizeForMatch(input.armWorkspaceDir ?? '');
   for (const name of input.executableNames ?? []) {
     if (name.length < MIN_EXECUTABLE_NAME_LENGTH) continue;
-    const match = executableInvocationPattern(normalizeForMatch(name)).exec(haystack);
-    if (match === null) continue;
+    // Every occurrence, not just the first: the arm's own `scripts/analyze.py`
+    // routinely appears BEFORE any reach into an ambient copy, and stopping at the
+    // first match would let one benign mention hide every real one behind it.
+    const match = firstEscapingInvocation(haystack, normalizeForMatch(name), armDir);
+    if (match === undefined) continue;
     // A declared executable found via a harness path is already reported by the
     // hit above; recording it again would double-count one reach as two.
     // Compare the NORMALIZED name: excerpts come from the normalized haystack,
@@ -708,7 +814,7 @@ export function detectBaselineContamination(
     hits.push({
       kind: KIND_DECLARED_EXECUTABLE,
       match: name,
-      excerpt: excerptAround(haystack, match.index, match[0].length),
+      excerpt: excerptAround(haystack, match.index, match.length),
     });
   }
 
