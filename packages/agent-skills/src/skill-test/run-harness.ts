@@ -448,53 +448,76 @@ export function buildResolveCtx(harnessRoot: string, repoRoot: string): ResolveS
 }
 
 /**
- * Map of flags to dummy values used when probing for flag support.
+ * Match a flag name as a whole token in `claude --help` output.
  *
- * Each value is chosen so value-validation (e.g., enum checks) accepts it
- * before `--help` short-circuits the session. The empty string `''` for
- * `--setting-sources` is intentional — an empty comma-separated list is valid.
+ * The boundary matters: a bare `includes('--plugin-dir')` also matches
+ * `--plugin-dirs` or `--plugin-dir-cache`, and vat's own flag names are prefixes
+ * of each other (`--max-turns` / `--max-turns-per-eval` would collide). Neither
+ * side of the token may be a letter or a dash.
  */
-const FLAG_DUMMY_VALUES: Record<string, string> = {
-  '--plugin-dir': '.',
-  '--setting-sources': '',
-  '--output-format': 'stream-json',
-  '--permission-mode': 'bypassPermissions',
-  '--max-turns': '1',
-  '--max-budget-usd': '1',
-};
-
-/**
- * Return a sensible dummy value for a given CLI flag so that value-validation
- * doesn't reject the argument before `--help` can short-circuit the session.
- */
-export function flagDummyValueFor(flag: string): string {
-  return FLAG_DUMMY_VALUES[flag] ?? '1';
+export function helpTextDeclaresFlag(helpText: string, flag: string): boolean {
+  // A scan rather than a built regex: the flag is data (it comes from a list a
+  // future edit will extend), and building a pattern from data is both a lint
+  // error here and the kind of thing that silently changes meaning when someone
+  // adds a flag containing a metacharacter.
+  const isTokenChar = (ch: string | undefined): boolean =>
+    ch !== undefined && (ch === '-' || ch === '_' || /[a-z0-9]/i.test(ch));
+  for (let from = helpText.indexOf(flag); from !== -1; from = helpText.indexOf(flag, from + 1)) {
+    if (!isTokenChar(helpText[from - 1]) && !isTokenChar(helpText[from + flag.length])) return true;
+  }
+  return false;
 }
 
 /**
- * Build a token-free flag-parse probe.
- *
- * For each flag, runs `claude <flag> <dummyValue> --help` via safeExecResult.
- * Exit 0 means claude's parser accepts the flag; `--help` short-circuits before
- * any session or tokens are consumed.
- *
- * The dummy value is always included in the args, even when it is an empty
- * string — some flags (e.g., `--setting-sources`) require a value argument,
- * so omitting it causes exit 1 before `--help` can be reached.
- *
- * The probe is a closure — it is NOT spawned at module scope, only at call time
- * inside runPreflight.
+ * A flag name no `claude` will ever accept. It is probed alongside the real ones
+ * as a NEGATIVE CONTROL: if the probe reports this as supported, the probe is
+ * broken and its answer about every other flag is worthless.
  */
-function buildFlagParseProbe(): (flag: string) => boolean {
-  return (flag: string): boolean => {
-    const dummy = flagDummyValueFor(flag);
-    const result = safeExecResult('claude', [flag, dummy, '--help'], {
-      stdio: 'pipe',
-      encoding: 'utf8',
-      timeout: 15_000,
-    });
-    return result.success;
-  };
+export const FLAG_PROBE_SENTINEL = '--vat-probe-flag-that-cannot-exist';
+
+/**
+ * Build a token-free flag-support probe from `claude --help`.
+ *
+ * ⚠️ This REPLACES an exit-code probe (`claude <flag> <dummy> --help`, exit 0 ⇒
+ * supported) that could not discriminate at all. Verified against claude 2.x:
+ * `claude --no-such-flag-xyz 1 --help` exits **0**, because `--help` short-circuits
+ * before argument validation. Every one of preflight's `flag <name>` checks
+ * therefore reported "supported" unconditionally — including for flags that do not
+ * exist — so the gate that is supposed to stop vat spawning with an unsupported
+ * flag was decorative. (The same command without `--help` exits 1, but running it
+ * would start a real session and bill tokens, which is why `--help` was there.)
+ *
+ * Help-text matching does discriminate, and it is still token-free: one `--help`
+ * invocation for the whole run instead of one spawn per flag.
+ *
+ * The probe carries its own negative control ({@link FLAG_PROBE_SENTINEL}). If a
+ * future `claude` prints something that matches the sentinel — or `--help` fails
+ * outright — the probe reports EVERY flag unsupported rather than every flag
+ * supported. A probe that cannot tell must fail closed and be seen; the defect it
+ * replaces failed open and was invisible.
+ */
+export function buildFlagParseProbe(
+  runHelp: () => string | null = defaultClaudeHelp,
+): (flag: string) => boolean {
+  const helpText = runHelp();
+  // No help output, or a sentinel "match" ⇒ the probe is not trustworthy.
+  const usable = helpText !== null && !helpTextDeclaresFlag(helpText, FLAG_PROBE_SENTINEL);
+  return (flag: string): boolean =>
+    usable && helpTextDeclaresFlag(helpText ?? '', flag);
+}
+
+/** Run `claude --help` once, returning its combined output (null if unreachable). */
+function defaultClaudeHelp(): string | null {
+  const result = safeExecResult('claude', ['--help'], {
+    stdio: 'pipe',
+    encoding: 'utf8',
+    timeout: 15_000,
+  });
+  if (!result.success) return null;
+  // `stdout`/`stderr` are typed `Buffer | string`; `encoding: 'utf8'` makes them
+  // strings, and `String()` is correct either way. Both streams are read because
+  // a CLI is free to print its usage to either.
+  return `${String(result.stdout)}\n${String(result.stderr)}`;
 }
 
 export function buildPreflightInput(

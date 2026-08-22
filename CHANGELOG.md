@@ -94,6 +94,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whole options object, which a mutation routing the staged path through `model` — and onto argv —
   proved was necessary).
 
+- **Every `vat skill test` spawn now passes `--no-session-persistence`, and preflight fails closed
+  without it.** Claude Code writes each headless session to
+  `$CLAUDE_CONFIG_DIR/projects/<cwd-slug>/<uuid>.jsonl` — plaintext, mode 0600, retained
+  indefinitely — and vat forwards `CLAUDE_CONFIG_DIR` and `HOME` to the child because that is where
+  auth lives. Verified against real on-disk artifacts from prior runs on a developer machine: a
+  20-day-old grader transcript containing the run's `runNonce` verbatim, alongside
+  `expected_output`. Three stated guarantees were false at once — the nonce that
+  `spawnHeadlessClaude` streams via stdin *specifically* so untrusted skill code cannot read it back
+  and forge a passing `grading.json`; the answer key that `eval-suite-isolation.ts` exists solely to
+  keep off the executor's filesystem; and the `--baseline` control, which could read the treatment
+  arm's entire session by listing `projects/` for its slug. It leaked across runs, so no amount of
+  per-run randomness helped.
+
+  A `claude` without the flag now fails preflight with a message naming the nonce and the answer key,
+  rather than running and persisting.
+
+  🪤 The obvious alternative — an ephemeral per-spawn `CLAUDE_CONFIG_DIR` — was implemented in
+  design and abandoned on evidence: on macOS the subscription credential is a Keychain item whose
+  service name derives from the config-dir **path**, so a fresh directory reports `Not logged in`
+  even with the real `.claude.json` copied into it (verified). Materializing the OAuth token into a
+  directory the executor can read would have been strictly worse than the leak it closed.
+
+- **Preflight's flag-support checks now actually check something.** They probed
+  `claude <flag> <dummy> --help` and treated exit 0 as "supported" — but `--help` short-circuits
+  before argument validation, so `claude --no-such-flag-xyz 1 --help` also exits 0 (verified). All
+  six `flag <name>` checks reported "supported" unconditionally, including for flags that do not
+  exist; the gate meant to stop vat spawning with an unsupported flag was decorative. The probe now
+  matches flag names as whole tokens in `claude --help` (one invocation for the whole run instead of
+  one spawn per flag, still token-free) and carries its own **negative control**: if a sentinel flag
+  that cannot exist ever matches, or `--help` is unreachable, every flag reports unsupported rather
+  than every flag reporting supported. A probe that cannot discriminate now fails loudly instead of
+  silently.
+
+  `--max-turns` is functional but undocumented in `--help`, so it is reported as *unverifiable*
+  rather than either failed or falsely confirmed, and a drift test asserts every `--` flag in the
+  assembled spawn argv is covered by one of the two lists. Removed: `flagDummyValueFor` and the
+  `FLAG_DUMMY_VALUES` table, which existed only for the probe shape that did not work.
+
 - **`vat skill test run`'s `results/` directory now survives the run.** On the documented
   invocation — no `--out`, no `--workdir`, no `--keep`, the one the skill-testing guide's own
   copy-paste example uses — `cleanupHarness` `rm -rf`'d the harness root from

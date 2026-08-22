@@ -27,6 +27,7 @@ import type { GradingVerdict } from '../../src/skill-test/grading-adapter.js';
 import {
   buildDryRunSummary,
   buildEvalWorkItems,
+  buildFlagParseProbe,
   buildPreflightInput,
   buildResolveCtx,
   buildRunSummary,
@@ -36,9 +37,10 @@ import {
   cleanupHarness,
   computeCompositeVerdict,
   detectItemPluginLayout,
-  flagDummyValueFor,
+  FLAG_PROBE_SENTINEL,
   formatFrictionReport,
   formatRunCostSuffix,
+  helpTextDeclaresFlag,
   isAcknowledged,
   makeStageItem,
   partitionFragmentsByArm,
@@ -162,21 +164,57 @@ describe('resolveKnobs', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Flag dummy values
+// Flag-support probe
 // ---------------------------------------------------------------------------
 
-describe('flagDummyValueFor', () => {
-  it('maps known flags to their dummy values', () => {
-    expect(flagDummyValueFor('--output-format')).toBe('stream-json');
-    expect(flagDummyValueFor('--permission-mode')).toBe('bypassPermissions');
-    expect(flagDummyValueFor('--setting-sources')).toBe('');
-    expect(flagDummyValueFor('--plugin-dir')).toBe('.');
-    expect(flagDummyValueFor('--max-turns')).toBe('1');
-    expect(flagDummyValueFor('--max-budget-usd')).toBe('1');
+const PLUGIN_DIR_FLAG = '--plugin-dir';
+const HELP_FIXTURE = [
+  `  ${PLUGIN_DIR_FLAG} <dir>       Load a plugin`,
+  '  --setting-sources <s>    Settings sources',
+  '  --no-session-persistence Disable session persistence',
+  '  --max-budget-usd <n>     Budget',
+].join('\n');
+
+describe('helpTextDeclaresFlag', () => {
+  it('matches a documented flag as a whole token', () => {
+    expect(helpTextDeclaresFlag(HELP_FIXTURE, PLUGIN_DIR_FLAG)).toBe(true);
+    expect(helpTextDeclaresFlag(HELP_FIXTURE, '--no-session-persistence')).toBe(true);
   });
 
-  it('falls back to "1" for an unknown flag', () => {
-    expect(flagDummyValueFor('--totally-unknown')).toBe('1');
+  it('does not match an undocumented flag', () => {
+    expect(helpTextDeclaresFlag(HELP_FIXTURE, '--max-turns')).toBe(false);
+  });
+
+  // The whole point of the boundary: vat's flag names are prefixes of plausible
+  // neighbours, so a bare substring test would report a flag as supported because
+  // a LONGER one is documented.
+  it('does not let a longer flag stand in for a shorter one', () => {
+    expect(helpTextDeclaresFlag('  --plugin-dirs <d>', PLUGIN_DIR_FLAG)).toBe(false);
+    expect(helpTextDeclaresFlag('  --max-budget-usd-per-eval', '--max-budget-usd')).toBe(false);
+  });
+});
+
+describe('buildFlagParseProbe', () => {
+  it('reports documented flags supported and undocumented ones not', () => {
+    const probe = buildFlagParseProbe(() => HELP_FIXTURE);
+    expect(probe(PLUGIN_DIR_FLAG)).toBe(true);
+    expect(probe('--max-turns')).toBe(false);
+  });
+
+  // The negative control. The probe this replaced answered "supported" for a flag
+  // that does not exist (claude's `--help` short-circuits before arg validation,
+  // so the exit code was 0 either way) — so every preflight flag check passed
+  // vacuously. A probe that cannot discriminate must now say so by failing
+  // everything, which is loud, rather than passing everything, which was silent.
+  it('reports EVERY flag unsupported when the sentinel matches', () => {
+    const probe = buildFlagParseProbe(() => `${HELP_FIXTURE}\n  ${FLAG_PROBE_SENTINEL}`);
+    expect(probe(PLUGIN_DIR_FLAG)).toBe(false);
+    expect(probe(FLAG_PROBE_SENTINEL)).toBe(false);
+  });
+
+  it('reports every flag unsupported when claude --help is unreachable', () => {
+    const probe = buildFlagParseProbe(() => null);
+    expect(probe(PLUGIN_DIR_FLAG)).toBe(false);
   });
 });
 

@@ -77,6 +77,10 @@ excerpt to read.
 
 **Anti-forgery model.** The executor and grader are separate roles; the transcript never touches the skill's sandbox; the grader runs in a directory outside the harness root; and every grader fragment carries a secret per-run nonce (delivered only via the grader's stdin — never on disk or an argv) that VAT re-verifies before merging. So untrusted skill code running in the sandbox cannot forge its own passing grade, tamper with the transcript, or write a result VAT will accept. Full contract: `docs/skill-test-grading-schema.md`.
 
+> **Every spawn passes `--no-session-persistence`, and that is part of the model above, not housekeeping.** Claude Code otherwise writes each headless session to `$CLAUDE_CONFIG_DIR/projects/<cwd-slug>/<uuid>.jsonl` — plaintext, retained indefinitely — and VAT has to forward `CLAUDE_CONFIG_DIR` and `HOME` to the child because that is where auth lives. Those files carry the grading nonce, the eval `expected_output`, and (in a `--baseline` run) the treatment arm's whole transcript, all readable by the skill under test, and readable by the *next* run weeks later. Preflight fails closed (exit `2`) on a `claude` that does not support the flag rather than running without it.
+
+
+
 ## Exit Codes
 
 | Code | Meaning |

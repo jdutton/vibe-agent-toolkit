@@ -1,3 +1,4 @@
+import { assembleClaudeArgs } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { runPreflight, type PreflightInput } from '../../src/skill-test/preflight.js';
@@ -30,10 +31,48 @@ describe('runPreflight', () => {
     expect(r.checks.find(c => c.name.includes('claude'))?.passed).toBe(false);
   });
 
-  it('keeps the --max-turns parse-probe (functional-but-undocumented)', () => {
+  // `--max-turns` is functional but absent from `claude --help`, so a help-text
+  // probe cannot see it. Failing the run on that would refuse every working
+  // install; claiming it "supported" would be the lie the old exit-code probe
+  // told about every flag. It is reported as unverifiable and does not gate.
+  it('reports --max-turns as unverifiable without failing the run', () => {
     const r = runPreflight(baseInput({ flagParseProbe: (f) => f !== '--max-turns' }));
+    expect(r.passed).toBe(true);
+    const check = r.checks.find(c => c.name.includes('--max-turns'));
+    expect(check?.passed).toBe(true);
+    expect(check?.message).toMatch(/undocumented|not verifiable/i);
+  });
+
+  // The flag is what keeps the grading nonce and the answer key off a disk the
+  // untrusted executor reads. A claude that cannot suppress session persistence
+  // must stop the run, not silently persist.
+  it('fails closed when --no-session-persistence is unsupported, and says why', () => {
+    const r = runPreflight(baseInput({ flagParseProbe: (f) => f !== '--no-session-persistence' }));
     expect(r.passed).toBe(false);
-    expect(r.checks.some(c => c.name.includes('--max-turns'))).toBe(true);
+    const check = r.checks.find(c => c.name.includes('--no-session-persistence'));
+    expect(check?.passed).toBe(false);
+    expect(check?.suggestion).toMatch(/nonce|answer key/i);
+  });
+
+  // Every flag vat's argv actually carries must be checked by SOMETHING — either
+  // gated or explicitly declared unverifiable. This is the drift guard: adding a
+  // flag to the spawn without adding it to one of the two lists fails here.
+  it('reports on every flag the spawn argv passes', () => {
+    const r = runPreflight(baseInput());
+    const reported = new Set(
+      r.checks.filter(c => c.name.startsWith('flag ')).map(c => c.name.slice('flag '.length)),
+    );
+    const spawned = assembleClaudeArgs({
+      pluginDirs: ['/p'], sandboxDir: '/s', model: 'm', maxTurns: 1, maxBudgetUsd: 1,
+    }).filter(a => a.startsWith('--'));
+    // `--verbose`/`--add-dir`/`--model` are shape, not capability: their absence
+    // would break the spawn loudly and immediately. The gated set is the one whose
+    // silent absence would change BEHAVIOR without an error.
+    const exempt = new Set(['--verbose', '--add-dir', '--model']);
+    for (const flag of spawned) {
+      if (exempt.has(flag)) continue;
+      expect(reported, `spawn passes ${flag} but preflight never reports on it`).toContain(flag);
+    }
   });
 
   it('fails when the integrity manifest does not verify', () => {
