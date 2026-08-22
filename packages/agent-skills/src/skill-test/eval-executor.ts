@@ -19,11 +19,16 @@ export interface RunExecutorInput {
    */
   subjectStagedDir?: string;
   /**
-   * `<workspacesRoot>/<id>` — ALWAYS present, and empty when the eval declares
-   * no input `files`. It used to be absent in that case, which made the executor
-   * fall back to running IN the staged subject dir: for the skill-absent arm that
-   * put the control's cwd inside the skill it was supposed to be denied. Both arms
-   * now get the same per-eval workspace, so cwd is never a confound.
+   * `<workspacesRoot>/<arm>/<id>` — ALWAYS present, and empty when the eval
+   * declares no input `files`. It used to be absent in that case, which made the
+   * executor fall back to running IN the staged subject dir: for the skill-absent
+   * arm that put the control's cwd inside the skill it was supposed to be denied.
+   *
+   * The `<arm>` segment is NOT decoration. Both arms once shared one per-eval
+   * workspace and ran in it concurrently, so the control arm could read the
+   * treatment's output files and answer from them — with no harness path in its
+   * transcript for the detector to catch. Each arm now gets its own copy, staged
+   * identically. Do not collapse these back into one directory.
    */
   workspaceDir: string;
   pluginDirs: string[];

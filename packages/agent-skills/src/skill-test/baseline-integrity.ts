@@ -66,12 +66,16 @@ function normalizeForMatch(value: string): string {
 /** The directory name VAT puts every harness root under. See {@link harnessNeedles}. */
 const VAT_HARNESS_DIR_NAME = 'vat-skill-test';
 
-/**
- * Shortest needle we will match on. Below this a needle stops being evidence and
- * starts being noise: `--out /tmp/out` yields the suffix `tmp/out`, which fires on
- * `/tmp/output.csv` in a transcript that never went near the harness.
- */
-const MIN_NEEDLE_LENGTH = 8;
+// A `MIN_NEEDLE_LENGTH = 8` floor lived here and has been REMOVED. Its stated
+// rationale — that `--out /tmp/out` would otherwise fire on `/tmp/output.csv` — was
+// already false when it was written: the path-boundary match added in the SAME
+// commit rejects that (`t` continues the segment). It was belt over braces, and the
+// braces were harmful. It silently produced ZERO needles for any root under 8 chars,
+// so `--out /tmp/x` disabled the harness-path detector entirely and an absolute
+// reach straight into `<root>/staged/<skill>/SKILL.md` reported clean; a root whose
+// last two segments were short lost the suffix needle, silencing every relative
+// reach. Silent "clean" is the one failure this whole module exists to prevent.
+// Do not reintroduce a length floor without a `degraded` signal on the verdict.
 
 /**
  * The needles that mean "this transcript reached VAT's staged copies".
@@ -97,19 +101,15 @@ const MIN_NEEDLE_LENGTH = 8;
  * `vat-skill-test-ws-<token>/…`, where the next character is `-` rather than `/`,
  * so it is not a hit — which is the constraint any change here must preserve.
  *
- * A root too short or too generic to be evidence (`--out /`, `--out /tmp/out`)
- * yields NO harness needle rather than one that fires on every run.
+ * Needle 3 additionally requires a LEADING `/` (see {@link needsLeadingBoundary}),
+ * without which `ls` of the temp dir stamps every clean run contaminated.
  */
 export function harnessNeedles(harnessRoot: string): string[] {
   const normalized = normalizeForMatch(harnessRoot);
   if (normalized === '') return [];
   const segments = normalized.split('/').filter((s) => s !== '' && s !== '.');
-  const needles: string[] = [];
-  if (normalized.length >= MIN_NEEDLE_LENGTH) needles.push(normalized);
-  if (segments.length >= 2) {
-    const suffix = segments.slice(-2).join('/');
-    if (suffix.length >= MIN_NEEDLE_LENGTH) needles.push(suffix);
-  }
+  const needles: string[] = [normalized];
+  if (segments.length >= 2) needles.push(segments.slice(-2).join('/'));
   const vatDir = normalizeForMatch(VAT_HARNESS_DIR_NAME);
   if (segments.includes(vatDir)) needles.push(vatDir);
   return needles;
@@ -139,13 +139,43 @@ export function harnessNeedles(harnessRoot: string): string[] {
  */
 const PATH_SEGMENT_CONTINUATION = /[\w-]/;
 
+/**
+ * Does this needle also require a `/` immediately BEFORE it?
+ *
+ * For a bare directory-NAME needle (one with no separator of its own, i.e.
+ * `vat-skill-test`), yes — and it is not optional. Without it, `ls` of the OS temp
+ * dir stamps `contaminated: true` on a completely clean run: the arm's cwd is
+ * `<tmp>/vat-skill-test-ws-<token>/…`, so `ls ../../..` prints `vat-skill-test` on
+ * its own line, and a NEWLINE is not in {@link PATH_SEGMENT_CONTINUATION}, so the
+ * trailing boundary happily accepts it. "Where am I, what's around me" is the most
+ * common opening move an agent makes in an empty scratch directory — the arm saw a
+ * directory NAME, it did not read the skill, and the instruction attached to that
+ * verdict is "discard the delta".
+ *
+ * A leading `/` costs no real detection: every genuine reach carries one
+ * (`../../vat-skill-test/…`, `find ../../vat-skill-test`, `$TMPDIR/vat-skill-test`,
+ * and even `cd ../../vat-skill-test`, which keeps its preceding slash without a
+ * trailing one). A bare basename in a listing does not. The same rule stops this
+ * repo's own source and CHANGELOG — ~10 tracked files carry the literal — from
+ * firing when vat is dogfooded on itself.
+ *
+ * Needles 1 and 2 already contain a separator, so this returns false for them and
+ * their existing behavior is unchanged.
+ */
+function needsLeadingBoundary(needle: string): boolean {
+  return !needle.includes('/');
+}
+
 function indexOfPathAtBoundary(haystack: string, needle: string): number {
   if (needle === '') return -1;
+  const requireLeading = needsLeadingBoundary(needle);
   for (let from = 0; ; ) {
     const index = haystack.indexOf(needle, from);
     if (index === -1) return -1;
     const nextChar = haystack.charAt(index + needle.length);
-    if (nextChar === '' || !PATH_SEGMENT_CONTINUATION.test(nextChar)) return index;
+    const trailingOk = nextChar === '' || !PATH_SEGMENT_CONTINUATION.test(nextChar);
+    const leadingOk = !requireLeading || (index > 0 && haystack.charAt(index - 1) === '/');
+    if (trailingOk && leadingOk) return index;
     from = index + 1;
   }
 }
@@ -418,7 +448,13 @@ export function detectBaselineContamination(
     if (match === null) continue;
     // A declared executable found via a harness path is already reported by the
     // hit above; recording it again would double-count one reach as two.
-    if (harnessHit && hits.some(h => h.excerpt.includes(name))) continue;
+    // Compare the NORMALIZED name: excerpts come from the normalized haystack,
+    // which round 3 made unconditionally lowercased. Comparing the raw declared
+    // basename against it means any name carrying a capital (`Summarize`,
+    // `ParseCSV`) never matches its own excerpt, so one reach is reported twice.
+    // This dedupe worked on macOS/Linux until the fold became unconditional —
+    // widening a normalizer requires auditing every consumer of its output.
+    if (harnessHit && hits.some(h => h.excerpt.includes(normalizeForMatch(name)))) continue;
     hits.push({
       kind: 'declared-executable',
       match: name,

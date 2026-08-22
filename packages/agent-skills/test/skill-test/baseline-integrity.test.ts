@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   BaselineIntegritySchema,
   detectBaselineContamination,
+  harnessNeedles,
   scrubControlArmEnv,
   summarizeBaselineIntegrity,
   type BaselineContamination,
@@ -184,14 +185,76 @@ describe('detectBaselineContamination — real path forms', () => {
   // Absolutizing --out fixed only the two-character case. A short-but-absolute
   // --out still yielded a needle that matched mid-segment, so `/tmp/out` fired on
   // `/tmp/output.csv` — and the attached instruction is "discard the delta".
+  // Every row must have a NON-EMPTY needle set, or it passes because there was
+  // nothing to match rather than because the boundary works. Two earlier rows
+  // (`/tmp/h`, `/tmp`) were dead for exactly that reason — they stayed green with
+  // the boundary check replaced by a bare `indexOf`. Two reviewers found that
+  // independently, which is why the assertion below pins the needles first.
   it.each([
     /* eslint-disable sonarjs/publicly-writable-directories -- inert test literals; the detector is a pure string scan, nothing is read or written */
     ['/tmp/out', 'wc -l /tmp/output.csv'],
-    ['/tmp/h', 'reading /tmp/hello.txt now'],
-    ['/tmp', 'wrote /tmp/scratch/notes.md'],
+    ['/tmp/hold', 'reading /tmp/holdings.csv now'],
+    ['/tmp/vat-run', 'ls /tmp/vat-runner-cache'],
     /* eslint-enable sonarjs/publicly-writable-directories */
   ])('does not fire mid-segment for --out %s', (out, command) => {
+    expect(harnessNeedles(out).length, 'row is vacuous: no needle to match').toBeGreaterThan(0);
     expect(detectBaselineContamination({ transcript: transcriptWith(command), harnessRoot: out })).toEqual([]);
+  });
+
+  // The floor that used to live in harnessNeedles silently produced ZERO needles
+  // for a short root, disabling the harness-path check while the verdict still read
+  // "checked and clean". An absolute reach into the staged tree must still fire.
+  it('still detects an absolute reach under a very short --out', () => {
+    // eslint-disable-next-line sonarjs/publicly-writable-directories -- inert test literal
+    const harnessRoot = '/tmp/x';
+    const hits = detectBaselineContamination({
+      transcript: transcriptWith(`cat ${harnessRoot}/staged/my-skill/SKILL.md`),
+      harnessRoot,
+    });
+
+    expect(harnessNeedles(harnessRoot).length, 'a short root produced no needles at all').toBeGreaterThan(0);
+    expect(hits).toHaveLength(1);
+  });
+
+  // THE `ls` FALSE POSITIVE. The arm's cwd is <tmp>/vat-skill-test-ws-<token>/…, so
+  // looking around prints `vat-skill-test` as a bare basename on its own line. A
+  // newline is not a segment-continuation char, so the TRAILING boundary accepts it;
+  // only requiring a LEADING `/` on a bare-name needle rejects it. The arm saw a
+  // directory name — it did not read the skill.
+  it.each([
+    ['ls three levels up', 'ls ../../..'],
+    ['ls $TMPDIR filtered', 'ls -1 $TMPDIR | grep vat'],
+    ['a long listing', 'ls -la $TMPDIR'],
+  ])('does not fire when the arm merely LISTS a directory containing the harness: %s', (_label, command) => {
+    const transcript = `{"type":"user","message":{"content":[{"type":"tool_result","content":${JSON.stringify(
+      `${command}\nvat-skill-evals-9f3c\nvat-skill-grade-9f3c\nvat-skill-test\nvat-skill-test-ws-9f3c\n`,
+    )}}]}}`;
+
+    expect(detectBaselineContamination({ transcript, harnessRoot: HARNESS_ROOT })).toEqual([]);
+  });
+
+  // ...and vat tested on a checkout of ITSELF must not self-incriminate: this repo
+  // carries the literal `vat-skill-test` in ~10 tracked source and doc files.
+  it('does not fire on vat\'s own source text when vat is tested on itself', () => {
+    const transcript = transcriptWith(
+      "grep -rn vat-skill-test src | head -1 && echo \"harness-location.ts:38: safePath.join(base, 'vat-skill-test', key)\"",
+    );
+
+    expect(detectBaselineContamination({ transcript, harnessRoot: HARNESS_ROOT })).toEqual([]);
+  });
+
+  // Round 3 made the case-fold unconditional and did not audit its consumers: the
+  // dedupe compared a RAW declared name against a now-always-lowercased excerpt, so
+  // any name with a capital double-counted one reach as two hits.
+  it('does not double-count a mixed-case executable reached via a harness path', () => {
+    const hits = detectBaselineContamination({
+      transcript: transcriptWith(`node ${HARNESS_ROOT}/staged/s/scripts/Summarize.py`),
+      harnessRoot: HARNESS_ROOT,
+      executableNames: ['Summarize'],
+    });
+
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.kind).toBe(KIND_HARNESS_PATH);
   });
 
   // macOS ships case-insensitive APFS by default, so this reach SUCCEEDS on the
