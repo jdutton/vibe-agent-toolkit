@@ -9,177 +9,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
-- **`vat skill test run --baseline`'s control arm no longer runs inside — or is told the path to —
-  the skill it is supposed to be denied.** Reported by an adopter whose two suites showed a
-  one-expectation delta and an *inverted* delta; the control arm was answering correctly from the
-  skill's own bundled executable. `--baseline` withholds the skill's *declaration*
-  (`pluginDirs: []` + `--setting-sources ""`), which removes discovery but not capability — the
-  executor has unrestricted `Bash`. On top of that ambient reachability, vat was actively escorting
-  the control arm to the treatment in two ways, both now fixed:
+- **`vat skill test run --baseline`'s control arm is now genuinely denied the skill, so the delta
+  means something different than it did.** Reported by an adopter whose two suites showed a
+  one-expectation delta and an *inverted* delta: the control arm was answering correctly from the
+  skill's own bundled executable. A path reaches a child through four channels — prompt, argv, cwd
+  and environment — and vat was handing the control arm the staged subject directory through three
+  of them (named in the prompt, inherited as `CLAUDE_PLUGIN_ROOT` in the env, and, for an eval
+  declaring no input `files`, used as the working directory). All four are closed.
 
-  1. **The executor prompt named the staged subject dir to both arms** (`The relevant files are
-     located at …`). That directory holds the SKILL.md *and* any executable the skill ships, so a
-     control arm given the path could recover the entire treatment with one `cat`. The skill-absent
-     arm is no longer told where the subject is staged.
-  2. **An eval declaring no input `files` got no workspace**, so the executor fell back to running
-     *inside* the staged subject dir — the control's cwd was the skill. Every eval now gets its own
-     workspace (empty when it declares no `files`), identical across both arms, so cwd is never a
-     confound.
+  **What you must do:** re-run any `--baseline` numbers taken before this release — a previously
+  reported delta of zero may have been a contaminated control rather than a skill with no effect.
+  Read `baselineIntegrity` in `baseline.json` before trusting a delta.
 
-  Additionally, per-eval workspaces moved **out of the harness root** to
-  `<tmp>/vat-skill-test-ws-<token>/`, alongside the existing vat-only grader and eval-hold dirs.
-  They previously sat as a sibling of `staged/` and the assembled plugin dir, leaving the control
-  one `ls ..` from vat's own runnable copy. Breaking for anything that assumed
-  `<out>/workspaces/<id>` — the run now reports the location back as `workspacesPath` on
-  `RunHarnessResult`, since the token is random and cannot be derived.
+  **What `--baseline` measures, stated plainly:** the lift from the skill's *instructions*, not its
+  capability. Both arms share a filesystem and have unrestricted `Bash`, so an ambient copy of the
+  skill in your repo or plugin cache is still reachable; vat detects that and says so rather than
+  claiming to prevent it. `--help` and the skill-testing guide now say this (the guide's claim that
+  "the skill-absent arm has no tools to judge" was false and is corrected).
 
-  **`--keep` is now the only thing that retains them.** `cleanupHarness`'s other retention rule —
-  keep a user-owned `--out`/`--workdir` location — is deliberately *not* carried across: that rule
-  exists because the user chose the directory, and OS tmp is not a directory the user chose or
-  manages, so carrying it would orphan a `vat-skill-test-ws-<token>` dir on every `--out` run,
-  permanently. The location changed, so the retention policy changed with it.
+  **Per-eval workspaces moved out of the harness root** to `<tmp>/vat-skill-test-ws-<token>/`, with
+  a further opaque per-arm segment, so neither arm can reach vat's staged copies or the other arm's
+  working directory by climbing one level. Breaking for anything assuming `<out>/workspaces/<id>`:
+  the location is random and is reported back as `workspacesPath` on `RunHarnessResult`. **`--keep`
+  is now the only thing that retains them** — unlike the harness root, a `--out`/`--workdir` run no
+  longer keeps them, because they live under OS tmp, which you did not choose and do not manage.
 
-  3. **The control arm's ENVIRONMENT carried the path the prompt no longer did.** The run assembles
-     one env and handed it to both arms, so `CLAUDE_PLUGIN_ROOT` — pointing at the staged plugin
-     root — let any plugin-distributed subject's control arm recover the whole treatment with
-     `env | grep CLAUDE`. It also defeated the new detector, whose needle is the literal path while
-     the arm's command reads `$CLAUDE_PLUGIN_ROOT/…`. The control arm now drops that key and any
-     declared `env:` value containing the harness root. A path reaches a child through four
-     channels — prompt, argv, cwd, env — and the first three are not a closure.
-
-  4. **The two arms of one eval shared a working directory, and ran in it at the same time.**
-     `resolvePerEvalWorkspaceDir` keyed the workspace on the eval id alone, and the result was the
-     executor's `cwd` *and* `sandboxDir` for both arms — while `buildEvalWorkItems` queues the two
-     arms adjacently into a bounded-parallel pool. So the control arm could `ls`, read whatever the
-     treatment arm had just written into the shared directory, and answer from it: scoring like the
-     treatment, collapsing the delta, and producing a transcript with no harness path in it for the
-     detector to find. Workspaces are now `<workspacesRoot>/<arm>/<id>`, staged identically per arm.
-
-     This is a channel BETWEEN the arms rather than into one of them, which is why two rounds of
-     auditing "what does vat hand this process" did not surface it — each arm's cwd was correct in
-     isolation and wrong as a pair. The four-channel rule (prompt, argv, cwd, env) is necessary and
-     not sufficient; a shared writable directory is a fifth.
-
-  **The contamination detector was blind to any reach that did not spell the harness key.** Both
-  needles required the arm to type the 8-hex key from `deriveHarnessKey`, which it has no way to
-  know; every natural reach enumerates instead, and one `*` defeated the scheme
-  (`cat ../../vat-skill-test/*/staged/SKILL.md`, `find ../../vat-skill-test -name SKILL.md`,
-  `K=$(ls ../../vat-skill-test)` were all silent). The needle set now includes vat's own harness
-  directory name; every needle is matched at a **path boundary**, so the arm's legitimate
-  `vat-skill-test-ws-<token>` workspace is not evidence against it and a short `--out /tmp/out` no
-  longer fires on `/tmp/output.csv`. Case is folded on all platforms — macOS ships case-insensitive
-  APFS, so a case-shifted reach succeeds on the filesystem and read clean under the win32-only fold.
-
-  **The env scrub could break the control arm, which manufactures lift.** Its value scan had no path
-  boundary and no exemption for process essentials, so an `--out` under `PATH`'s value (`--out .`
-  from a repo root under `bun run`) spawned the control with **no `PATH`**, and a harness root that
-  was a string *prefix* of the workspaces root stripped the control arm's own `${fixturesDir}`. A
-  degraded control scores lower and reports as skill lift — worse than the leak being closed. Process
-  essentials are now retained and reported loudly instead, and both dropped and retained vars are
-  named on stderr rather than being computed and discarded.
-
-  **Grader-supplied `evalId` is no longer trusted.** It was schema-typed as any non-empty string and
-  echoed verbatim into the run summary and the `BASELINE CONTAMINATED` banner, so a grader talked
-  into emitting an id containing newlines and ANSI escapes — via the executor transcript, which
-  untrusted skill code controls — could paint a reassuring "known false positive" line under vat's
-  own warning. The id is taken from the request, never from the answer.
-
-  **Interpretation changed, not just behavior.** The delta A/Bs the skill's *instructions*, not its
-  capability, and vat now says so in `--help` and the skill-testing guide (the guide's claim that
-  "the skill-absent arm has no tools to judge" was false and is corrected). Two claims made by
-  earlier rounds of this same fix are also retracted in place: that vat keeps its own staged copies
-  "out of the control arm's reach" (they are one directory climb away under the shared temp dir —
-  the harness root has no random token), and that the baseline integration test asserts over the
-  whole spawn surface "by construction" (it enumerated five of seven fields; it now serializes the
-  whole options object, which a mutation routing the staged path through `model` — and onto argv —
-  proved was necessary).
-
-- **The `--baseline` arms' working directories no longer tell each arm which arm it is.** Round 3
-  gave each arm its own workspace at `<tmp>/vat-skill-test-ws-<token>/<arm>/<id>` — with `<arm>` as
-  the literal `with`/`without`. That path is quoted to the executor as its working directory, so the
-  skill-absent arm read `…/without/e1` in the one string it cannot avoid, while
-  `buildExecutorPrompt`'s own docblock promises the executor "must NEVER be told (directly or by
-  implication) that it is being tested, evaluated, or graded". The `BLINDING_BREAKERS` scan checks
-  four English phrases and caught none of it. It also handed each arm a guessable path to the other:
-  `../with/<id>/` is the treatment arm's live output, and `existsSync` on it returns true.
-
-  The segment is now an opaque random token minted per run, per arm, independent of each other —
-  fixing the unblinding and making the sibling's directory name unguessable in one change.
-  `StageEvalWorkspacesInput.arms` (a `readonly EvalArm[]`, where the empty array was a legal value
-  that staged nothing and left every executor with a non-existent cwd) is replaced by an
-  `ArmWorkspaceDirs` record whose `with` key is required, so "stage no arms" is no longer
-  expressible.
-
-  Detection follows prevention: `detectBaselineContamination` gains a `sibling-arm` hit kind and
-  needles for the other arm's workspace. A reach there contains no harness path at all, which is why
-  the harness-path needles could never see it. The bare-token needle requires a leading `/`, so
-  `ls ..` — which prints the sibling's directory name as a basename, an agent's most common opening
-  move — is not evidence, while every real reach is.
-
-- **Every `vat skill test` spawn now passes `--no-session-persistence`, and preflight fails closed
+- **Every `vat skill test` spawn now passes `--no-session-persistence`, and preflight refuses to run
   without it.** Claude Code writes each headless session to
-  `$CLAUDE_CONFIG_DIR/projects/<cwd-slug>/<uuid>.jsonl` — plaintext, mode 0600, retained
-  indefinitely — and vat forwards `CLAUDE_CONFIG_DIR` and `HOME` to the child because that is where
-  auth lives. Verified against real on-disk artifacts from prior runs on a developer machine: a
-  20-day-old grader transcript containing the run's `runNonce` verbatim, alongside
-  `expected_output`. Three stated guarantees were false at once — the nonce that
-  `spawnHeadlessClaude` streams via stdin *specifically* so untrusted skill code cannot read it back
-  and forge a passing `grading.json`; the answer key that `eval-suite-isolation.ts` exists solely to
-  keep off the executor's filesystem; and the `--baseline` control, which could read the treatment
-  arm's entire session by listing `projects/` for its slug. It leaked across runs, so no amount of
-  per-run randomness helped.
+  `$CLAUDE_CONFIG_DIR/projects/<cwd-slug>/<uuid>.jsonl` — plaintext, retained indefinitely — and vat
+  forwards `CLAUDE_CONFIG_DIR` and `HOME` to the child because that is where auth lives. Every run
+  before this release therefore left the eval's grading nonce and its `expected_output` answer key
+  on disk, readable by the skill under test and by *later* runs. Verified against real artifacts on
+  a developer machine: a 20-day-old grader transcript containing both.
 
-  A `claude` without the flag now fails preflight with a message naming the nonce and the answer key,
-  rather than running and persisting.
+  **What you must do:** if you have run `vat skill test` against a skill you do not fully trust,
+  the transcripts under `$CLAUDE_CONFIG_DIR/projects/` for those runs are stale and worth deleting.
+  A `claude` too old to support the flag now fails preflight (exit 2) instead of running.
 
-  🪤 The obvious alternative — an ephemeral per-spawn `CLAUDE_CONFIG_DIR` — was implemented in
-  design and abandoned on evidence: on macOS the subscription credential is a Keychain item whose
-  service name derives from the config-dir **path**, so a fresh directory reports `Not logged in`
-  even with the real `.claude.json` copied into it (verified). Materializing the OAuth token into a
-  directory the executor can read would have been strictly worse than the leak it closed.
+- **`vat skill test run` keeps `results/` after a default run.** With no `--out`, `--workdir` or
+  `--keep` — the invocation the docs give — cleanup removed the harness directory with
+  `grading.json`, `friction.json`, `tool-eval.json` and `baseline.json` inside it, before the
+  command printed the path it was pointing you at. The artifacts now survive; everything around them
+  (the staged skill bytes cleanup exists for) is still removed. The directory is reported on stderr
+  as `Results: <path>` and as `resultsPath` on `RunHarnessResult`.
 
-- **Preflight's flag-support checks now actually check something.** They probed
-  `claude <flag> <dummy> --help` and treated exit 0 as "supported" — but `--help` short-circuits
-  before argument validation, so `claude --no-such-flag-xyz 1 --help` also exits 0 (verified). All
-  six `flag <name>` checks reported "supported" unconditionally, including for flags that do not
-  exist; the gate meant to stop vat spawning with an unsupported flag was decorative. The probe now
-  matches flag names as whole tokens in `claude --help` (one invocation for the whole run instead of
-  one spawn per flag, still token-free) and carries its own **negative control**: if a sentinel flag
-  that cannot exist ever matches, or `--help` is unreachable, every flag reports unsupported rather
-  than every flag reporting supported. A probe that cannot discriminate now fails loudly instead of
-  silently.
+- **Preflight's `flag <name>` checks now verify something.** They probed
+  `claude <flag> <dummy> --help` and read exit 0 as "supported", but `--help` short-circuits before
+  argument validation, so a flag that does not exist also exits 0 — all six checks passed
+  unconditionally. They now match flag names in `claude --help` and carry a negative control, so a
+  probe that cannot discriminate reports every flag unsupported instead of every flag supported.
+  **Consequence:** preflight can now fail (exit 2) on a `claude` that previously passed it, which
+  means the spawn would have failed later anyway. `--max-turns` is undocumented in `--help` and is
+  reported as unverifiable rather than either failed or falsely confirmed.
 
-  `--max-turns` is functional but undocumented in `--help`, so it is reported as *unverifiable*
-  rather than either failed or falsely confirmed, and a drift test asserts every `--` flag in the
-  assembled spawn argv is covered by one of the two lists. Removed: `flagDummyValueFor` and the
-  `FLAG_DUMMY_VALUES` table, which existed only for the probe shape that did not work.
-
-- **`vat skill test run`'s `results/` directory now survives the run.** On the documented
-  invocation — no `--out`, no `--workdir`, no `--keep`, the one the skill-testing guide's own
-  copy-paste example uses — `cleanupHarness` `rm -rf`'d the harness root from
-  `runSkillTestHarness`'s `finally`, with `results/` inside it, before the CLI printed a single
-  line. The operator was handed a `Harness:` path to a directory that no longer existed and told by
-  `--help` to go read `baseline.json` and `grading.json` in it. Three rounds of work went into
-  making the `--baseline` number honest; nobody had checked that it was still on disk when the
-  command exited.
-
-  Cleanup now retains `results/` unconditionally and evicts everything around it — the staged
-  untrusted skill bytes are what cleanup is for, the artifacts are the product. (A run that ended
-  before the results dir existed still removes the root outright, so a preflight refusal leaves no
-  litter in tmp.) The directory is reported back as `resultsPath` on `RunHarnessResult` and echoed
-  as a `Results:` line on stderr, because on a default run it is now the only surviving child of
-  the harness root. Retention is deliberately not conditional on `--baseline`: every run's verdict
-  detail lives in the same place, and a rule that depends on a flag drifts away from the flag.
-
-  Every one of the five existing baseline tests passed `out:` or `keep: true`, which sets
-  `harnessCreated` false and makes cleanup a no-op — the suite was structurally incapable of seeing
-  the only path adopters take. The regression test added with this fix passes neither.
-
-  Two false claims in the skill-testing guide are corrected alongside it: `results/transcripts/`
-  was listed as an artifact and called "the most useful debugging artifact when an eval fails",
-  and nothing has ever written it — executor transcripts are held in memory by design, which is
-  what the anti-forgery model on the same page depends on. `baseline.json` and `provenance.json`,
-  which *are* written, were missing from the table.
 
 - **`--out` and `--workdir` are now mutually exclusive** (exit 2). `--out` names the harness root
   exactly; `--workdir` names the base it is derived under. Passing both silently discarded
@@ -235,7 +117,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   but a copy in the adopter's `dist/`, build output, or installed plugin cache is not vat's to
   remove — and a control arm that finds one produces a silently wrong delta: exit 0, well-formed
   JSON, plausible numbers. The skill-absent arm's transcript is now scanned for paths under the
-  harness root and for declared executable names, and the finding is stamped onto `baseline.json`
+  harness root, for declared executable names, and for the other arm's working directory, and the
+  finding is stamped onto `baseline.json`
   with per-eval evidence excerpts. The block is written on **every** baseline run, so its absence
   means "produced before this check existed" and never "checked and clean". A wrong number that
   announces itself is recoverable; a silent one gets believed, written down, and acted on.
