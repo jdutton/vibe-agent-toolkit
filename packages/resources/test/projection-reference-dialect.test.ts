@@ -11,8 +11,18 @@ import { resolveDialectRef } from '../src/projection/contributors/reference-dial
  * Deliberately not under `/tmp` (`sonarjs/publicly-writable-directories`), and
  * deliberately never created: this resolution is lexical, so a fixture needing
  * files on disk would be testing the wrong thing.
+ *
+ * 🪤 **Resolved rather than written as a literal, because a bare `/…` is not
+ * absolute on Windows.** `safePath.resolve` qualifies it with the current drive
+ * there (`D:/vat-corpus/…`) and returns it unchanged on POSIX — which is exactly
+ * what the resolver under test does to it. Held as a literal, every
+ * `` `${ROOT}/…` `` expectation below is missing the drive letter the production
+ * code correctly adds, and four tests fail on Windows for a defect that is
+ * entirely in the fixture. The `@/abs/notes.md` case further down already used
+ * `safePath.resolve` for this reason; the root did not, and that inconsistency
+ * is the whole bug.
  */
-const ROOT = '/vat-corpus/dialect-fixture';
+const ROOT = safePath.resolve('/vat-corpus/dialect-fixture');
 
 /** The file the references are authored in. */
 const SOURCE = `${ROOT}/docs/CLAUDE.md`;
