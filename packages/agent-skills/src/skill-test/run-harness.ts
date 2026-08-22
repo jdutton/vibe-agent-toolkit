@@ -36,10 +36,13 @@ import { resolveSkillSource } from '../skill-source/resolve-skill-source.js';
 import type { ResolvedSkillSource, ResolveSkillSourceContext, SkillSource } from '../skill-source/types.js';
 
 import {
+  activeContaminationSignals,
   detectBaselineContamination,
   scrubControlArmEnv,
   summarizeBaselineIntegrity,
   type BaselineContamination,
+  type ContaminationSignal,
+  type DetectBaselineContaminationInput,
 } from './baseline-integrity.js';
 import { assembleChildEnv, assertKnownEnvTokens, computeEnvTokens, resolveInjectEnv } from './declared-env.js';
 import { runExecutorForEval } from './eval-executor.js';
@@ -1513,11 +1516,16 @@ export function withoutGraderContamination(fragment: EvalFragment): EvalFragment
  *
  * Returns an empty patch when clean, so the caller spreads it unconditionally.
  */
-function baselineContaminationFor(
-  transcript: string,
-  ctx: EvalRunContext,
-): Pick<EvalFragment, 'contamination'> | Record<string, never> {
-  const hits = detectBaselineContamination({
+/**
+ * Build the detector input for the skill-absent arm. ONE builder, so the hits
+ * written per eval and the `signals` list stamped on the run-level integrity
+ * block are derived from the same values — a second construction site is how the
+ * block would come to claim a detector the scan never actually ran.
+ *
+ * `transcript` is supplied per call; everything else is per-run.
+ */
+function buildContaminationInput(transcript: string, ctx: EvalRunContext): DetectBaselineContaminationInput {
+  return {
     transcript,
     harnessRoot: ctx.harnessRoot,
     // Only ever called for the skill-absent arm, so the sibling is `with` — the
@@ -1541,8 +1549,24 @@ function baselineContaminationFor(
     ...(ctx.declaredExecutables === undefined
       ? {}
       : { executableNames: ctx.declaredExecutables.map((e) => e.name) }),
-  });
+  };
+}
+
+function baselineContaminationFor(
+  transcript: string,
+  ctx: EvalRunContext,
+): Pick<EvalFragment, 'contamination'> | Record<string, never> {
+  const hits = detectBaselineContamination(buildContaminationInput(transcript, ctx));
   return hits.length === 0 ? {} : { contamination: hits };
+}
+
+/**
+ * Which detectors this run armed, for the `signals` field on the integrity block.
+ * Derived from {@link buildContaminationInput} with an empty transcript — the
+ * armed set is a property of the run's paths, never of any one transcript.
+ */
+function contaminationSignalsFor(ctx: EvalRunContext): ContaminationSignal[] {
+  return activeContaminationSignals(buildContaminationInput('', ctx));
 }
 
 /** Outcome of a tier-ordered eval run: the fragments that RAN, plus (when the
@@ -1655,6 +1679,8 @@ function writeRunArtifactsAndReconcile(
   fragments: EvalFragment[],
   runNonce: string,
   paths: ArtifactPaths,
+  /** Which contamination detectors this run armed — see {@link contaminationSignalsFor}. */
+  signals: readonly ContaminationSignal[],
 ): { verdict: GradingVerdict; toolEval: ToolEvalReport } {
   const { withArm, withoutArm } = partitionFragmentsByArm(fragments);
 
@@ -1679,7 +1705,7 @@ function writeRunArtifactsAndReconcile(
     // baseline run, clean or not: a reader must be able to tell "checked and
     // clean" from "produced before this check existed", and only an
     // unconditional field does that.
-    const integrity = summarizeBaselineIntegrity(collectBaselineFindings(withoutArm));
+    const integrity = summarizeBaselineIntegrity(collectBaselineFindings(withoutArm), signals);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived results path
     writeFileSync(
       paths.baselineOut,
@@ -2249,7 +2275,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     // authoritative prose-expectation verdict from the WITH-arm per-expectation
     // `passed` flags — NOT any self-reported summary. An executor CLEAN failure
     // reaches here as a FAILing fragment → composite verdict → exit 4.
-    const { verdict, toolEval } = writeRunArtifactsAndReconcile(fragments, runNonce, artifacts);
+    const { verdict, toolEval } = writeRunArtifactsAndReconcile(fragments, runNonce, artifacts, contaminationSignalsFor(evalCtx));
 
     // D2 fail-closed gate: vat is the SOLE writer of results/, so a missing/unparseable/
     // invalid grading.json, friction.json, or tool-eval.json after the merge is a HARNESS

@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  activeContaminationSignals,
   BaselineIntegritySchema,
   detectBaselineContamination,
   harnessNeedles,
   siblingArmNeedles,
   vatPrivateDirNeedles,
+  type ContaminationSignal,
   scrubControlArmEnv,
   summarizeBaselineIntegrity,
   type BaselineContamination,
@@ -23,6 +25,7 @@ const KIND_HARNESS_PATH = 'harness-path' as const;
 const KIND_DECLARED_EXECUTABLE = 'declared-executable' as const;
 const KIND_SIBLING_ARM = 'sibling-arm' as const;
 const KIND_VAT_PRIVATE_DIR = 'vat-private-dir' as const;
+const ALL_SIGNALS: ContaminationSignal[] = [KIND_HARNESS_PATH, KIND_SIBLING_ARM, KIND_VAT_PRIVATE_DIR, KIND_DECLARED_EXECUTABLE];
 // A workspaces-root path: under the tmp root like the real one, but deliberately
 // NOT under HARNESS_ROOT — the control arm must keep its own fixtures.
 // eslint-disable-next-line sonarjs/publicly-writable-directories -- inert test literal; nothing is read or written
@@ -533,15 +536,89 @@ describe('scrubControlArmEnv', () => {
   });
 });
 
+/**
+ * The DERIVATION of the signal list, separate from the summary that renders it.
+ * Pinning only the render leaves this unwired — dropping a `signals.push` kept
+ * all 55 tests green until these existed, which is the "testing a pure helper
+ * never pins its wiring" class this suite has been bitten by before.
+ *
+ * Each case arms exactly ONE optional signal, so a detector that stops
+ * contributing shows up as its own failure rather than as a count that still
+ * happens to add up.
+ */
+describe('activeContaminationSignals', () => {
+  // eslint-disable-next-line sonarjs/publicly-writable-directories -- inert test literal; these are string needles
+  const PRIVATE_DIR = '/tmp/vat-skill-evals-1111aaaa2222bbbb';
+  // eslint-disable-next-line sonarjs/publicly-writable-directories -- inert test literal; these are string needles
+  const SIBLING_DIR = '/tmp/vat-skill-test-ws-abc/1111aaaa2222bbbb';
+
+  it('arms only the harness signal for the barest input', () => {
+    expect(activeContaminationSignals({ transcript: '', harnessRoot: HARNESS_ROOT })).toEqual([KIND_HARNESS_PATH]);
+  });
+
+  it.each([
+    [KIND_SIBLING_ARM, { siblingArmDir: SIBLING_DIR }],
+    [KIND_VAT_PRIVATE_DIR, { vatPrivateDirs: [PRIVATE_DIR] }],
+    [KIND_DECLARED_EXECUTABLE, { executableNames: [BUNDLE_NAME] }],
+  ])('arms %s when, and only when, its input is threaded through', (signal, extra) => {
+    expect(
+      activeContaminationSignals({ transcript: '', harnessRoot: HARNESS_ROOT, ...extra }),
+    ).toEqual([KIND_HARNESS_PATH, signal]);
+  });
+
+  // "Armed" must mean "has needles to match with", not "the field was present".
+  // An undefined dir in the list produces no needles and must not be counted.
+  it('does not arm a signal whose input yields no needles', () => {
+    expect(
+      activeContaminationSignals({
+        transcript: '',
+        harnessRoot: HARNESS_ROOT,
+        siblingArmDir: '',
+        vatPrivateDirs: [undefined],
+        // Below MIN_EXECUTABLE_NAME_LENGTH, so the detector skips it entirely.
+        executableNames: ['wc'],
+      }),
+    ).toEqual([KIND_HARNESS_PATH]);
+  });
+
+  // The whole point of the field: nothing was looking, so `contaminated` says
+  // nothing. An empty harness root is the only way to reach it today, but the
+  // block must be able to express it.
+  it('arms nothing at all when even the harness root is empty', () => {
+    expect(activeContaminationSignals({ transcript: '', harnessRoot: '' })).toEqual([]);
+  });
+});
+
 describe('summarizeBaselineIntegrity', () => {
   // The block is emitted even when clean, so a reader can tell "checked and
   // clean" from "written before this check existed".
   it('reports a clean run as not contaminated, with an explicit caveat', () => {
-    const integrity = summarizeBaselineIntegrity([]);
+    const integrity = summarizeBaselineIntegrity([], ALL_SIGNALS);
 
     expect(integrity.contaminated).toBe(false);
     expect(integrity.findings).toEqual([]);
     expect(integrity.summary).toContain('not a capability control');
+    expect(BaselineIntegritySchema.safeParse(integrity).success).toBe(true);
+  });
+
+  // Without this, `contaminated: false` reads the same whether four detectors
+  // were armed or one — and the executable signal, the only one that sees an
+  // ambient copy in the adopter's own repo, does not exist for a skill that
+  // ships no executables (the common case).
+  it('records which detectors were armed, and names them in the clean summary', () => {
+    const integrity = summarizeBaselineIntegrity([], [KIND_HARNESS_PATH, KIND_SIBLING_ARM]);
+
+    expect(integrity.signals).toEqual(['harness-path', 'sibling-arm']);
+    expect(integrity.summary).toContain('checked by: harness-path, sibling-arm');
+  });
+
+  // The loudest case: a clean verdict from a run where nothing was looking must
+  // not read like a clean verdict from a run where everything was.
+  it('says outright that a verdict with no armed detector is not evidence', () => {
+    const integrity = summarizeBaselineIntegrity([], []);
+
+    expect(integrity.signals).toEqual([]);
+    expect(integrity.summary).toContain('NO detector was armed');
     expect(BaselineIntegritySchema.safeParse(integrity).success).toBe(true);
   });
 
@@ -550,7 +627,7 @@ describe('summarizeBaselineIntegrity', () => {
       { evalId: 'lookup-1', hits: [{ kind: KIND_HARNESS_PATH, match: HARNESS_ROOT, excerpt: EXCERPT_ELLIPSIS }] },
       { evalId: 'lookup-2', hits: [{ kind: 'declared-executable', match: BUNDLE_NAME, excerpt: EXCERPT_ELLIPSIS }] },
     ];
-    const integrity = summarizeBaselineIntegrity(findings);
+    const integrity = summarizeBaselineIntegrity(findings, ALL_SIGNALS);
 
     expect(integrity.contaminated).toBe(true);
     expect(integrity.summary).toContain('lookup-1, lookup-2');

@@ -285,6 +285,23 @@ export function scrubControlArmEnv(
 }
 
 /** One piece of evidence that the skill-absent arm reached the skill anyway. */
+/**
+ * Every kind of contamination hit, which is also every DETECTOR — the two are
+ * 1:1, so one list serves both (see {@link ContaminationSignalSchema}).
+ */
+const CONTAMINATION_KINDS = [
+  'harness-path',
+  'declared-executable',
+  'sibling-arm',
+  'vat-private-dir',
+] as const;
+
+/** Named so the push sites below do not restate the string literals. */
+const KIND_HARNESS_PATH = 'harness-path';
+const KIND_DECLARED_EXECUTABLE = 'declared-executable';
+const KIND_SIBLING_ARM = 'sibling-arm';
+const KIND_VAT_PRIVATE_DIR = 'vat-private-dir';
+
 export const BaselineContaminationHitSchema = z.object({
   /**
    * What matched: a path under vat's harness root, a declared executable's name,
@@ -301,7 +318,7 @@ export const BaselineContaminationHitSchema = z.object({
    * reaching the answer key inflates BOTH arms, so it does not even show up as a
    * shrunken delta — see {@link vatPrivateDirNeedles}.
    */
-  kind: z.enum(['harness-path', 'declared-executable', 'sibling-arm', 'vat-private-dir']),
+  kind: z.enum(CONTAMINATION_KINDS),
   /** The matched token — the path prefix or the executable basename. */
   match: z.string().min(1),
   /**
@@ -335,10 +352,44 @@ export type BaselineContamination = z.infer<typeof BaselineContaminationSchema>;
  * always means "this baseline.json predates integrity checking" and never
  * "checked and clean".
  */
+/**
+ * A detector that can be ARMED for a run.
+ *
+ * Deliberately the SAME enum as a hit's `kind`, not a parallel list: each
+ * detector produces exactly one kind of hit, so two lists would be a drift
+ * hazard for no expressive gain. Which detectors were armed is the difference
+ * between "checked and clean" and "nothing was looking":
+ *
+ * - `harness-path` — vat's staged trees ({@link harnessNeedles}). Always armed.
+ * - `sibling-arm` — the other arm's live workspace. Armed only when there is one.
+ * - `vat-private-dir` — the held answer key and the grader dir
+ *   ({@link vatPrivateDirNeedles}).
+ * - `declared-executable` — the skill's executables by name. Armed ONLY for a
+ *   skill that ships executables; an instruction-only skill (the common case)
+ *   has no such name, so this signal is absent and a `contaminated: false` from
+ *   that run is a materially weaker statement.
+ */
+export const ContaminationSignalSchema = BaselineContaminationHitSchema.shape.kind;
+
+export type ContaminationSignal = z.infer<typeof ContaminationSignalSchema>;
+
 export const BaselineIntegritySchema = z.object({
   contaminated: z.boolean(),
   /** Human-readable verdict, safe to print verbatim. */
   summary: z.string().min(1),
+  /**
+   * Which detectors were ARMED for this run.
+   *
+   * Without it, `contaminated: false` is written identically whether four signals
+   * were active or one, so a clean verdict cannot be told apart from a blind one
+   * — and the difference is large: the executable-name signal is the only one
+   * that sees an ambient copy of the skill in the adopter's own repo, and it does
+   * not exist for a skill that ships no executables.
+   *
+   * An empty array is the loudest case: nothing was looking, and `contaminated`
+   * says nothing at all.
+   */
+  signals: z.array(ContaminationSignalSchema),
   findings: z.array(BaselineContaminationSchema),
 }).strict();
 
@@ -579,13 +630,13 @@ export function detectBaselineContamination(
   // reach is reported once, at the most specific spelling that matched.
   //
   // Harness needles = full root, its last two segments, VAT's own dir name.
-  const harnessMatch = firstNeedleHit(haystack, harnessNeedles(input.harnessRoot), 'harness-path');
+  const harnessMatch = firstNeedleHit(haystack, harnessNeedles(input.harnessRoot), KIND_HARNESS_PATH);
   if (harnessMatch !== undefined) hits.push(harnessMatch);
 
   // The other arm's working directory. Reported independently of the harness
   // needles above: a reach here contains no harness path at all, which is exactly
   // why the four-channel audit and the harness-path detector both missed it.
-  const siblingMatch = firstNeedleHit(haystack, siblingArmNeedles(input.siblingArmDir ?? ''), 'sibling-arm');
+  const siblingMatch = firstNeedleHit(haystack, siblingArmNeedles(input.siblingArmDir ?? ''), KIND_SIBLING_ARM);
   if (siblingMatch !== undefined) hits.push(siblingMatch);
 
   // VAT's private tmp dirs, scanned PER DIR rather than first-match-wins across
@@ -593,7 +644,7 @@ export function detectBaselineContamination(
   // different capabilities, and an operator triaging a contaminated run needs to
   // see both. Within one dir the needles still run longest-first and stop.
   for (const dir of input.vatPrivateDirs ?? []) {
-    const privateMatch = firstNeedleHit(haystack, vatPrivateDirNeedles(dir ?? ''), 'vat-private-dir');
+    const privateMatch = firstNeedleHit(haystack, vatPrivateDirNeedles(dir ?? ''), KIND_VAT_PRIVATE_DIR);
     if (privateMatch !== undefined) hits.push(privateMatch);
   }
 
@@ -612,7 +663,7 @@ export function detectBaselineContamination(
     // widening a normalizer requires auditing every consumer of its output.
     if (harnessHit && hits.some(h => h.excerpt.includes(normalizeForMatch(name)))) continue;
     hits.push({
-      kind: 'declared-executable',
+      kind: KIND_DECLARED_EXECUTABLE,
       match: name,
       excerpt: excerptAround(haystack, match.index, match[0].length),
     });
@@ -622,18 +673,56 @@ export function detectBaselineContamination(
 }
 
 /**
+ * Which contamination detectors are ARMED for a run, derived from the SAME input
+ * object handed to {@link detectBaselineContamination} so the two cannot disagree
+ * about what was checked. A signal counts as armed only when it has a non-empty
+ * needle set — a dir that was never threaded through produces no needles and must
+ * not be reported as "checked".
+ */
+export function activeContaminationSignals(
+  input: DetectBaselineContaminationInput,
+): ContaminationSignal[] {
+  const signals: ContaminationSignal[] = [];
+  if (harnessNeedles(input.harnessRoot).length > 0) signals.push(KIND_HARNESS_PATH);
+  if (siblingArmNeedles(input.siblingArmDir ?? '').length > 0) signals.push(KIND_SIBLING_ARM);
+  if ((input.vatPrivateDirs ?? []).some((dir) => vatPrivateDirNeedles(dir ?? '').length > 0)) {
+    signals.push(KIND_VAT_PRIVATE_DIR);
+  }
+  if ((input.executableNames ?? []).some((name) => name.length >= MIN_EXECUTABLE_NAME_LENGTH)) {
+    signals.push(KIND_DECLARED_EXECUTABLE);
+  }
+  return signals;
+}
+
+/** Render the armed-signal list for the human-readable summary line. */
+function describeSignals(signals: readonly ContaminationSignal[]): string {
+  return signals.length === 0
+    ? 'NO detector was armed for this run, so this verdict is not evidence of anything'
+    : `checked by: ${[...signals].join(', ')}`;
+}
+
+/**
  * Assemble the run-level integrity block from every WITHOUT-arm eval's findings.
  * `findings` is empty on a clean run — the block is still emitted, with
  * `contaminated: false`, so "checked and clean" is distinguishable from
  * "never checked".
+ *
+ * `signals` is REQUIRED, not defaulted. A default would silently make every
+ * caller's verdict claim more coverage than it had, which is the exact failure
+ * this field exists to expose — and "clean" is the direction where an overclaim
+ * gets believed.
  */
-export function summarizeBaselineIntegrity(findings: BaselineContamination[]): BaselineIntegrity {
+export function summarizeBaselineIntegrity(
+  findings: BaselineContamination[],
+  signals: readonly ContaminationSignal[],
+): BaselineIntegrity {
   if (findings.length === 0) {
     return {
       contaminated: false,
       summary:
         'No skill-absent eval was observed reaching the skill. The A/B delta is interpretable as instruction lift ' +
-        '(note: both arms still share a filesystem — this is not a capability control).',
+        `(note: both arms still share a filesystem — this is not a capability control; ${describeSignals(signals)}).`,
+      signals: [...signals],
       findings: [],
     };
   }
@@ -644,6 +733,7 @@ export function summarizeBaselineIntegrity(findings: BaselineContamination[]): B
       `BASELINE CONTAMINATED: the skill-absent arm reached the skill in ${findings.length} eval(s) [${ids}]. ` +
       'The reported delta is NOT a measure of skill lift — the control arm had the treatment. ' +
       'Most likely an ambient copy of the skill in this repo\'s build output or the installed plugin cache.',
+    signals: [...signals],
     findings,
   };
 }
