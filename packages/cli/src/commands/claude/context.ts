@@ -568,7 +568,7 @@ function listSection(title: string, entries: readonly string[]): string[] {
  *
  * Printed even when there is nothing else to say, because the limits are a
  * property of the METHOD rather than of this particular tree: an answer with no
- * conditions and no unknown rows is subject to exactly the same nine signed
+ * conditions and no unknown rows is subject to exactly the same signed
  * over/under-report bounds as a messy one.
  *
  * @param document - The answer document
