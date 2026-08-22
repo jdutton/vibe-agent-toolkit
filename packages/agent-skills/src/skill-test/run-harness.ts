@@ -12,7 +12,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -284,6 +284,14 @@ export interface RunHarnessResult {
    * workspaces were staged.
    */
   workspacesPath?: string;
+  /**
+   * Where this run's artifacts (`grading.json`, `friction.json`, `tool-eval.json`,
+   * and `baseline.json` on a `--baseline` run) were written. Reported rather than
+   * left to be derived from `harnessPath`, because it is the ONLY part of the
+   * harness root that survives cleanup on a default run — see
+   * {@link cleanupHarness}. Absent when the run ended before Step 7 created it.
+   */
+  resultsPath?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -1026,11 +1034,33 @@ export interface CleanupHarnessOptions {
 }
 
 /**
- * Remove the harness directory after a run so staged untrusted skill bytes and
- * prompts do not accumulate in OS tmp. No-op when the user asked to keep it, when
- * the dir is a user-supplied location (`--out`/`--workdir`), or when it is already
- * gone. Idempotent and never throws — it runs from a `finally`, so it must not
- * mask the run's real outcome.
+ * The one child of the harness root that cleanup NEVER removes. Cleanup exists to
+ * evict staged untrusted skill bytes and prompts from OS tmp; `results/` is the
+ * opposite — it is the run's product, written solely by vat.
+ */
+export const RETAINED_RESULTS_DIRNAME = 'results';
+
+/**
+ * Remove the harness directory's staged contents after a run so untrusted skill
+ * bytes and prompts do not accumulate in OS tmp. No-op when the user asked to keep
+ * it, when the dir is a user-supplied location (`--out`/`--workdir`), or when it is
+ * already gone. Idempotent and never throws — it runs from a `finally`, so it must
+ * not mask the run's real outcome.
+ *
+ * `results/` SURVIVES. It holds `grading.json`, `friction.json`, `tool-eval.json`
+ * and — for a `--baseline` run — `baseline.json`, i.e. every artifact the command's
+ * own help text tells the operator to go read. Removing the whole root on the
+ * DEFAULT invocation (no `--out`, no `--workdir`, no `--keep`) deleted those files
+ * inside this function's own `finally`, before `run.ts` had printed a single line:
+ * the operator was handed a `Harness:` path to a directory that no longer existed.
+ * That is the invocation `vat-skill-testing.md`'s copy-paste example uses.
+ *
+ * The retention is deliberately UNCONDITIONAL rather than `--baseline`-only: every
+ * run's verdict detail lives in the same directory, and a rule that depends on a
+ * flag is a rule that will drift away from the flag. The cost is bounded — the
+ * harness root is a deterministic function of the subject set, so a re-run reuses
+ * (and {@link wipeStaleArtifacts} clears) the same `results/`, rather than
+ * accumulating one per run.
  *
  * SAFETY: re-asserts the root is not a symlink immediately before removal (via
  * `lstat`, which does NOT follow the link). A root swapped to a symlink between
@@ -1047,7 +1077,19 @@ export function cleanupHarness(harnessRoot: string, opts: CleanupHarnessOptions)
     if (!existsSync(harnessRoot)) return;
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived harness root
     if (lstatSync(harnessRoot).isSymbolicLink()) return;
-    rmSync(harnessRoot, { recursive: true, force: true });
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived harness root
+    const entries = readdirSync(harnessRoot);
+    // Nothing to retain — a run that ended before Step 7 (preflight refusal, lock
+    // failure, a throw during staging) has no results/, so leaving an empty 0700
+    // dir behind in tmp would be pure litter. Remove the root outright.
+    if (!entries.includes(RETAINED_RESULTS_DIRNAME)) {
+      rmSync(harnessRoot, { recursive: true, force: true });
+      return;
+    }
+    for (const entry of entries) {
+      if (entry === RETAINED_RESULTS_DIRNAME) continue;
+      rmSync(safePath.joinUnderRoot(harnessRoot, entry), { recursive: true, force: true });
+    }
   } catch {
     // Swallow: a failed cleanup is not a run failure.
   }
@@ -2108,6 +2150,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     return {
       harnessPath: harnessRoot,
       workspacesPath: workspacesRoot,
+      resultsPath: resultsDir,
       exitCode: verdictExitCode(allPassed, opts.tolerateEvalFailure === true),
       summary,
     };

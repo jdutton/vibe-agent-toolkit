@@ -1263,6 +1263,15 @@ export async function runSkillTestRun(
     const result = await runSkillTestHarness(harnessOpts);
 
     process.stderr.write(`Harness: ${result.harnessPath}\n`);
+    // The artifacts this command's help text tells the operator to read
+    // (grading.json / friction.json / baseline.json). Reported separately from the
+    // harness path because on a default run — no --out, no --workdir, no --keep —
+    // results/ is the ONLY thing left under it: everything else is staged untrusted
+    // bytes that cleanup evicts. Pointing at the harness root alone made the
+    // operator guess which of its children still existed.
+    if (result.resultsPath !== undefined) {
+      process.stderr.write(`Results: ${result.resultsPath}\n`);
+    }
     // The executor's working directories live OUTSIDE the harness root under an
     // unguessable token, so the harness path no longer leads an operator to them.
     // Under --keep they survive holding everything the evals produced; unreported,
@@ -1370,6 +1379,12 @@ Description:
   full privileges (filesystem, network, shell) and a reachable auth credential.
   Only run skills you trust. You MUST pass --i-understand-this-runs-skill-code
   to acknowledge this and proceed.
+
+Artifacts:
+  grading.json (the verdict), friction.json, tool-eval.json, and -- with
+  --baseline -- baseline.json are written to a results/ directory whose path is
+  echoed to stderr ("Results: <path>"). That directory SURVIVES every run; the
+  staged skill bytes around it are removed unless you pass --keep.
 
 Model:
   --model <id> selects the model UNDER TEST (the executor spawn): passed

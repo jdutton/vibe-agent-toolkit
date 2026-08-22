@@ -434,6 +434,37 @@ describe('vat skill test run (output routing)', () => {
     expect(stderrCalls.some((s) => s.includes('Summary:'))).toBe(false); // Summary not on stderr
   });
 
+  // On a default run the harness root holds nothing but `results/` by the time the
+  // operator reads this — everything else was staged untrusted bytes that cleanup
+  // evicts. The `Harness:` line alone therefore points at a directory whose useful
+  // contents the operator has to guess at, so the artifact dir is named outright.
+  it('names the results dir on stderr when the harness reports one', async () => {
+    const { stderrCalls } = await runAndCaptureStreams({
+      // eslint-disable-next-line sonarjs/publicly-writable-directories -- test fixture path, not production code
+      harnessPath: '/tmp/h',
+      // eslint-disable-next-line sonarjs/publicly-writable-directories -- test fixture path, not production code
+      resultsPath: '/tmp/h/results',
+      exitCode: 0,
+      summary: 'PASS 2/2',
+    });
+
+    expect(stderrCalls.some((s) => s.includes('Results: /tmp/h/results'))).toBe(true);
+  });
+
+  // Absent for a run that ended before the results dir existed (a preflight
+  // refusal, a bootstrap scaffold) — an empty `Results:` line would send the
+  // operator to a path that was never created.
+  it('omits the results line when the run reported no results dir', async () => {
+    const { stderrCalls } = await runAndCaptureStreams({
+      // eslint-disable-next-line sonarjs/publicly-writable-directories -- test fixture path, not production code
+      harnessPath: '/tmp/h',
+      exitCode: 2,
+      summary: 'Security acknowledgment required.',
+    });
+
+    expect(stderrCalls.some((s) => s.includes('Results:'))).toBe(false);
+  });
+
   it('does not write Summary: to stderr on non-zero exit', async () => {
     const { stdoutCalls, stderrCalls } = await runAndCaptureStreams({
       // eslint-disable-next-line sonarjs/publicly-writable-directories -- test fixture path, not production code

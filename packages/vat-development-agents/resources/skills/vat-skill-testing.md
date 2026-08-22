@@ -60,7 +60,18 @@ Artifacts produced under `<harnessRoot>/results/`:
 | `grading.json` | Flat per-expectation grades + pass/fail summary (VAT-merged) |
 | `friction.json` | Packaging friction items (categories, severities, messages) |
 | `tool-eval.json` | Per-eval tool verdicts — always written (`{"evals": []}` when no eval declares `toolExpectations`) |
-| `transcripts/` | Per-eval executor conversation logs |
+| `baseline.json` | `--baseline` runs only: the skill-absent arm's merged grades + the `baselineIntegrity` block |
+| `provenance.json` | Subject identity, staged-manifest fingerprint, per-entry hashes, and whether the subject was rebuilt |
+
+**`results/` survives every run.** The harness root's path is echoed as `Harness:` and the
+results directory as `Results:` — use the latter. On a default run (no `--out`, `--workdir`
+or `--keep`) everything else under the harness root is removed when the command exits: the
+staged skill bytes are what cleanup is for, the artifacts are the product.
+
+**Executor transcripts are held in memory and never written to disk** — not to `results/`, not
+to the sandbox. That is the anti-forgery property below, not an omission; when an eval fails
+unexpectedly, the grader's per-expectation `evidence` in `grading.json` is the quoted transcript
+excerpt to read.
 
 **Anti-forgery model.** The executor and grader are separate roles; the transcript never touches the skill's sandbox; the grader runs in a directory outside the harness root; and every grader fragment carries a secret per-run nonce (delivered only via the grader's stdin — never on disk or an argv) that VAT re-verifies before merging. So untrusted skill code running in the sandbox cannot forge its own passing grade, tamper with the transcript, or write a result VAT will accept. Full contract: `docs/skill-test-grading-schema.md`.
 
@@ -445,6 +456,10 @@ After a run, check:
 2. **`results/grading.json`** — per-expectation verdicts, evidence, and the pass/fail summary.
 3. **`results/tool-eval.json`** — per-eval tool verdicts. **Always written** (`{"evals": []}` when no eval declared `toolExpectations`), so check `.evals.length`, not file existence.
 4. **`results/friction.json`** — packaging friction items; triage by severity and category (see above).
-5. **`results/transcripts/`** — executor conversation logs for failed evals; the most useful debugging artifact when an eval fails unexpectedly.
+5. **`results/baseline.json`** (`--baseline` runs) — the skill-absent arm's grades, and `baselineIntegrity`. Read the integrity block *first*: a contaminated control makes the delta meaningless.
+
+The `Results:` line on stderr names the directory. There are no executor transcript files to
+read — the transcript is never written to disk (see **Anti-forgery model** above); the grader's
+`evidence` strings in `grading.json` are the excerpts from it.
 
 A `FAIL N/M` (exit 4) means the harness worked but the composite verdict did not all pass. Fix the skill, rebuild (`vat build`), and re-run.

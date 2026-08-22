@@ -24,12 +24,16 @@
  * end is real or fake.
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it, vi } from 'vitest';
 
-import { runSkillTestHarness, type RunHarnessOptions } from '../../src/skill-test/run-harness.js';
+import {
+  runSkillTestHarness,
+  RETAINED_RESULTS_DIRNAME,
+  type RunHarnessOptions,
+} from '../../src/skill-test/run-harness.js';
 import { makeHarnessFakeSpawn } from '../skill-test/spawn-stub.js';
 import { setupTempDir } from '../test-helpers.js';
 
@@ -38,6 +42,8 @@ vi.mock('../../src/skill-test/preflight.js', async (io) => (await import('../ski
 const SKILL_NAME = 'control-skill';
 const EVAL_ID = 'no-files-eval';
 const SKILL_MD = `---\nname: ${SKILL_NAME}\ndescription: A fixture skill for the baseline control test.\n---\n\n# Control\n`;
+/** The `--baseline` arm's artifact — the file this whole lane exists to make honest. */
+const BASELINE_JSON = 'baseline.json';
 
 const { getTempDir } = setupTempDir('vat-baseline-control-');
 
@@ -46,8 +52,8 @@ const { getTempDir } = setupTempDir('vat-baseline-control-');
  * only shape for which `CLAUDE_PLUGIN_ROOT` is set at all. A standalone-skill
  * fixture would pass this test while the hole stayed wide open.
  */
-function writePluginFixture(): { subjectDir: string; pluginRoot: string } {
-  const pluginRoot = safePath.join(getTempDir(), 'src', 'my-plugin');
+function writePluginFixture(skillName: string = SKILL_NAME): { subjectDir: string; pluginRoot: string } {
+  const pluginRoot = safePath.join(getTempDir(), 'src', `plugin-${skillName}`);
   const manifestDir = safePath.join(pluginRoot, '.claude-plugin');
   mkdirSyncReal(manifestDir, { recursive: true });
   writeFileSync(
@@ -56,9 +62,10 @@ function writePluginFixture(): { subjectDir: string; pluginRoot: string } {
     'utf8',
   );
 
-  const subjectDir = safePath.join(pluginRoot, 'skills', SKILL_NAME);
+  const subjectDir = safePath.join(pluginRoot, 'skills', skillName);
   mkdirSyncReal(subjectDir, { recursive: true });
-  writeFileSync(safePath.join(subjectDir, 'SKILL.md'), SKILL_MD, 'utf8');
+  // eslint-disable-next-line unicorn/prefer-string-replace-all -- test tsconfig lib predates String.replaceAll
+  writeFileSync(safePath.join(subjectDir, 'SKILL.md'), SKILL_MD.replace(new RegExp(SKILL_NAME, 'g'), skillName), 'utf8');
 
   // An eval with NO input `files` — the case whose executor used to fall back to
   // running inside the staged subject dir.
@@ -67,7 +74,7 @@ function writePluginFixture(): { subjectDir: string; pluginRoot: string } {
   writeFileSync(
     safePath.join(evalsDir, 'evals.json'),
     JSON.stringify({
-      skill_name: SKILL_NAME,
+      skill_name: skillName,
       evals: [{ id: EVAL_ID, prompt: 'do the thing', expectations: ['it happened'] }],
     }) + '\n',
     'utf8',
@@ -92,6 +99,30 @@ function baselineOpts(
     ...(spawn === undefined ? {} : { spawn }),
     ...extra,
   };
+}
+
+/**
+ * The DEFAULT invocation: no `--out`, no `--workdir`, no `--keep` — the one
+ * `vat-skill-testing.md`'s copy-paste example uses, and the only one for which
+ * `harnessCreated` is true and cleanup actually fires.
+ *
+ * Every other test in this file passes `out:` or `keep: true`, which is exactly
+ * why none of them could see that cleanup deleted `results/baseline.json` inside
+ * the harness's own `finally` before the caller ever got the result back. The
+ * subject name is a parameter because the derived harness root is a pure function
+ * of it (`<tmp>/vat-skill-test/<sanitized>-<hash8>`) and lands in the REAL OS temp
+ * dir, shared with every other run on the machine — so this test needs a name no
+ * other test or developer run will collide with.
+ */
+function defaultRunOpts(
+  subjectDir: string,
+  spawn: RunHarnessOptions['spawn'],
+  subject: string,
+): RunHarnessOptions {
+  const opts = baselineOpts(subjectDir, spawn);
+  delete opts.out;
+  opts.subject = subject;
+  return opts;
 }
 
 /**
@@ -245,7 +276,7 @@ describe('baseline control arm (integration)', () => {
     const result = await runSkillTestHarness(baselineOpts(subjectDir, fake.spawn));
     expect(result.exitCode, result.summary).toBe(0);
 
-    const baselinePath = safePath.join(getTempDir(), 'harness', 'results', 'baseline.json');
+    const baselinePath = safePath.join(getTempDir(), 'harness', RETAINED_RESULTS_DIRNAME, BASELINE_JSON);
     expect(existsSync(baselinePath), 'baseline.json was never written').toBe(true);
     const parsed = JSON.parse(readFileSync(baselinePath, 'utf8')) as {
       baselineIntegrity?: { contaminated?: boolean; findings?: Array<{ evalId?: string }> };
@@ -266,10 +297,67 @@ describe('baseline control arm (integration)', () => {
     expect(result.exitCode, result.summary).toBe(0);
 
     const parsed = JSON.parse(
-      readFileSync(safePath.join(getTempDir(), 'harness', 'results', 'baseline.json'), 'utf8'),
+      readFileSync(safePath.join(getTempDir(), 'harness', RETAINED_RESULTS_DIRNAME, BASELINE_JSON), 'utf8'),
     ) as { baselineIntegrity?: { contaminated?: boolean; findings?: unknown[] } };
 
     expect(parsed.baselineIntegrity?.contaminated).toBe(false);
     expect(parsed.baselineIntegrity?.findings).toEqual([]);
+  });
+
+  /**
+   * Three rounds of work went into making the control arm's number honest. This is
+   * the test that asks whether the honest number is still on disk when the command
+   * exits — on the invocation the docs tell adopters to use.
+   *
+   * It ran on the DEFAULT path: `harnessCreated` true, so `cleanupHarness` fired
+   * from `runSkillTestHarness`'s own `finally` and `rmSync(recursive)`'d the harness
+   * root — with `results/` inside it — before `run.ts` printed the `Harness:` line
+   * that pointed at it. `--baseline --help` says to read `baselineIntegrity` in
+   * `baseline.json`; the run's help says failing evals live in `grading.json`;
+   * neither file existed by the time the process returned to the operator.
+   *
+   * The other half of the assertion matters just as much: cleanup must still evict
+   * the staged untrusted skill bytes. "Retain the results" must not quietly become
+   * "retain everything", or every default run leaves an executable copy of the
+   * subject in OS tmp.
+   */
+  it('leaves results/ on disk after a DEFAULT run (no --out, no --workdir, no --keep)', async () => {
+    // Distinct from SKILL_NAME: the harness root is derived from the subject name
+    // into the shared OS temp dir, so a name reused by another test would have the
+    // two runs fighting over one directory (and one lockfile).
+    const subject = 'default-run-retention-skill';
+    const { subjectDir } = writePluginFixture(subject);
+    const fake = makeHarnessFakeSpawn({});
+
+    const result = await runSkillTestHarness(defaultRunOpts(subjectDir, fake.spawn, subject));
+    try {
+      expect(result.exitCode, result.summary).toBe(0);
+
+      // Reported, not derived — the operator is handed this path, and it has to be
+      // the one that survived.
+      expect(result.resultsPath, 'the run did not report where its artifacts went').toBeDefined();
+      const resultsDir = result.resultsPath ?? '';
+
+      for (const artifact of [BASELINE_JSON, 'grading.json', 'friction.json', 'tool-eval.json']) {
+        expect(
+          existsSync(safePath.join(resultsDir, artifact)),
+          `${artifact} did not survive the default run's own cleanup`,
+        ).toBe(true);
+      }
+
+      // baseline.json is not merely present — it still parses and still carries the
+      // block the three prior rounds exist to make trustworthy.
+      const parsed = JSON.parse(
+        readFileSync(safePath.join(resultsDir, BASELINE_JSON), 'utf8'),
+      ) as { baselineIntegrity?: { contaminated?: boolean } };
+      expect(parsed.baselineIntegrity?.contaminated).toBe(false);
+
+      // …and nothing else did. The staged subject tree is what cleanup is FOR.
+      expect(readdirSync(result.harnessPath)).toEqual([RETAINED_RESULTS_DIRNAME]);
+    } finally {
+      // This harness root is in the machine's real temp dir, not the suite's
+      // per-test dir, so the suite has to reap what it deliberately made survive.
+      rmSync(result.harnessPath, { recursive: true, force: true });
+    }
   });
 });

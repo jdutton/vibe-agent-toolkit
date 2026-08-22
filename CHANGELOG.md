@@ -94,6 +94,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whole options object, which a mutation routing the staged path through `model` — and onto argv —
   proved was necessary).
 
+- **`vat skill test run`'s `results/` directory now survives the run.** On the documented
+  invocation — no `--out`, no `--workdir`, no `--keep`, the one the skill-testing guide's own
+  copy-paste example uses — `cleanupHarness` `rm -rf`'d the harness root from
+  `runSkillTestHarness`'s `finally`, with `results/` inside it, before the CLI printed a single
+  line. The operator was handed a `Harness:` path to a directory that no longer existed and told by
+  `--help` to go read `baseline.json` and `grading.json` in it. Three rounds of work went into
+  making the `--baseline` number honest; nobody had checked that it was still on disk when the
+  command exited.
+
+  Cleanup now retains `results/` unconditionally and evicts everything around it — the staged
+  untrusted skill bytes are what cleanup is for, the artifacts are the product. (A run that ended
+  before the results dir existed still removes the root outright, so a preflight refusal leaves no
+  litter in tmp.) The directory is reported back as `resultsPath` on `RunHarnessResult` and echoed
+  as a `Results:` line on stderr, because on a default run it is now the only surviving child of
+  the harness root. Retention is deliberately not conditional on `--baseline`: every run's verdict
+  detail lives in the same place, and a rule that depends on a flag drifts away from the flag.
+
+  Every one of the five existing baseline tests passed `out:` or `keep: true`, which sets
+  `harnessCreated` false and makes cleanup a no-op — the suite was structurally incapable of seeing
+  the only path adopters take. The regression test added with this fix passes neither.
+
+  Two false claims in the skill-testing guide are corrected alongside it: `results/transcripts/`
+  was listed as an artifact and called "the most useful debugging artifact when an eval fails",
+  and nothing has ever written it — executor transcripts are held in memory by design, which is
+  what the anti-forgery model on the same page depends on. `baseline.json` and `provenance.json`,
+  which *are* written, were missing from the table.
+
 - **`--out` and `--workdir` are now mutually exclusive** (exit 2). `--out` names the harness root
   exactly; `--workdir` names the base it is derived under. Passing both silently discarded
   `--workdir` — the path was never created — which is exactly what the adopter above tried in order

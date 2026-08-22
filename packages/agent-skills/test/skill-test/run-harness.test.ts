@@ -54,6 +54,7 @@ import {
   resolveScaffoldEvalsPath,
   resolveStallMs,
   resolveTimeoutMs,
+  RETAINED_RESULTS_DIRNAME,
   stageWorkspacesForRun,
   subjectSkillName,
   verdictExitCode,
@@ -77,6 +78,8 @@ const PLAIN_SKILL = 'plain-skill';
 const PLUGIN_NAME = 'my-plugin';
 const PLUGIN_SKILL_REL = 'skills/report-tools';
 const OVERRIDE_LOC = 'override-loc';
+/** The staged-bytes stand-in every cleanup fixture writes — what cleanup must evict. */
+const STAGED_FILE = 'staged.txt';
 
 /** Build a minimal RunHarnessOptions with the given subject and overrides. */
 function makeOpts(overrides: Partial<RunHarnessOptions> = {}): RunHarnessOptions {
@@ -98,7 +101,7 @@ function makePlainDir(tempDir: string, name: string): string {
 /** Create a populated harness-like directory (one staged file) and return its path. */
 function makeHarnessDir(tempDir: string, name: string): string {
   const root = makePlainDir(tempDir, name);
-  writeFileSync(safePath.join(root, 'staged.txt'), 'untrusted', 'utf-8');
+  writeFileSync(safePath.join(root, STAGED_FILE), 'untrusted', 'utf-8');
   return root;
 }
 
@@ -847,6 +850,28 @@ describe('cleanupHarness', () => {
     expect(existsSync(root)).toBe(false);
   });
 
+  // The artifacts are the run's PRODUCT — `baseline.json` is the number three
+  // rounds of isolation work exist to make honest, and this function used to
+  // delete it on the documented invocation before the caller ever saw it.
+  it('retains results/ while still evicting the staged bytes around it', () => {
+    const root = makeHarnessDir(getTempDir(), 'with-results');
+    const results = makePlainDir(root, RETAINED_RESULTS_DIRNAME);
+    writeFileSync(safePath.join(results, 'baseline.json'), '{}', 'utf-8');
+
+    cleanupHarness(root, { keep: false, created: true });
+
+    expect(existsSync(safePath.join(results, 'baseline.json'))).toBe(true);
+    expect(existsSync(safePath.join(root, STAGED_FILE))).toBe(false);
+  });
+
+  // A run that ended before Step 7 (preflight refusal, a throw during staging) has
+  // no results/, so retaining the root would leave an empty 0700 dir in tmp forever.
+  it('removes the root outright when there is no results/ to retain', () => {
+    const root = makeHarnessDir(getTempDir(), 'no-results');
+    cleanupHarness(root, { keep: false, created: true });
+    expect(existsSync(root)).toBe(false);
+  });
+
   it('retains the dir when keep is set', () => {
     const root = makeHarnessDir(getTempDir(), 'kept');
     cleanupHarness(root, { keep: true, created: true });
@@ -873,7 +898,7 @@ describe('cleanupHarness', () => {
       cleanupHarness(link, { keep: false, created: true });
       // The symlink target (and its contents) must survive — cleanup must not
       // follow a swapped symlink out of tmp.
-      expect(existsSync(safePath.join(target, 'staged.txt'))).toBe(true);
+      expect(existsSync(safePath.join(target, STAGED_FILE))).toBe(true);
     },
   );
 });
