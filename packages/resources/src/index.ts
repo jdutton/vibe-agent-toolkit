@@ -523,6 +523,22 @@ export {
   type ContextTotals,
 } from './projection/claude-context-accounting.js';
 
+// The COMPLEMENT of the query: what the loaded set POINTS AT in one hop and the
+// harness does not load. Its own row shape on purpose — a voluntary markdown link
+// has no honest `loadClass`, and folding it into `LoadedRow` would make the
+// on-demand total un-addable. The two answers partition: a target already in the
+// loaded set is excluded here.
+// The internals (`hasUriScheme`, `resolveTarget`) stay unexported for the same
+// reason `selectRules` does — pre-1.0, a published symbol is a contract.
+export {
+  discoverableFrom,
+  type DiscoverableContext,
+  type DiscoverableRow,
+  type DiscoveryCitation,
+  type DiscoveryReach,
+  type DiscoveryTotals,
+} from './projection/claude-context-discovery.js';
+
 // What the answer deliberately does not settle, as DATA rather than prose in a
 // doc: the command prints these beside every number, because a limit a reader has
 // to go and find is a limit that never reaches the person acting on the number.

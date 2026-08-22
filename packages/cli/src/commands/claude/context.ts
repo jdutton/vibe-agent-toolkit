@@ -48,10 +48,13 @@ import {
   CLAUDE_CONTEXT_LIMITS,
   CLAUDE_CONTEXT_MODELLED_BEHAVIOURS,
   CLAUDE_MD_TAG,
+  discoverableFrom,
   whatLoadsAt,
   type AccountedRow,
   type Admission,
   type ContextTotals,
+  type DiscoverableContext,
+  type DiscoverableRow,
   type GradedCondition,
   type LoadedContextAnswer,
   type ModelledBehaviour,
@@ -79,6 +82,7 @@ export interface ClaudeContextOptions {
   format?: ContextOutputFormat;
   debug?: boolean;
   all?: boolean;
+  discoverable?: boolean;
 }
 
 /**
@@ -116,6 +120,21 @@ export interface ContextAnswerDocument {
   readonly conditions: readonly GradedCondition[];
   readonly overBudgetRules: readonly string[];
   readonly unattributedImports: readonly string[];
+  /**
+   * What the loaded set POINTS AT in one hop and the harness does not load, or
+   * null when `--discoverable` was not asked for.
+   *
+   * ⛔ `null` rather than an empty object, and the difference is the whole
+   * reason the field is nullable: an empty `rows` array means "nothing here
+   * links anywhere", and a run that never looked must not be readable as that.
+   * The same distinction {@link ContextUnknownDocument} exists to draw, one
+   * level down.
+   *
+   * ⛔ Its tokens are NEVER added to `totals`. A markdown link is voluntary —
+   * nothing loads it — so folding it into a context-budget figure would charge
+   * a session for documents it may never open.
+   */
+  readonly discoverable: DiscoverableContext | null;
   readonly boundsStatement: string;
   readonly limits: readonly StatedLimit[];
   readonly modelledBehaviours: readonly ModelledBehaviour[];
@@ -160,6 +179,10 @@ export function createContextCommand(): Command {
       ]).default('text'),
     )
     .option('--all', 'Answer for every path the projection realized, instead of named paths')
+    .option(
+      '--discoverable',
+      'Also report what the loaded files LINK TO in one hop and the harness does not load',
+    )
     .option('--debug', 'Verbose logging to stderr')
     .action(claudeContextCommand)
     .addHelpText('after', `
@@ -175,6 +198,12 @@ Description:
   path answered from that one population, so asking about ten paths together
   costs what asking about one costs — not ten times it. No paths means the
   current directory; --all sweeps every path the projection realized.
+
+  --discoverable adds a second, DISJOINT set: what the loaded files LINK to in
+  one hop and the harness does not load. A markdown link is voluntary — nothing
+  loads it — so its tokens are reported separately and never added to the
+  estimate. A target already in the loaded set is excluded, so the two sets
+  partition and can be read alone or added.
 
 Output:
   - root:    the corpus root that was enumerated
@@ -226,7 +255,9 @@ export async function claudeContextCommand(
     // ONE population, N queries. `whatLoadsAt` is a pure read of materialised
     // tables, so the marginal cost of another path is a map lookup — which is
     // the whole reason this command takes a list rather than being run twice.
-    const answers = targets.map((target) => documentFor(target, projection, root));
+    const answers = targets.map(
+      (target) => documentFor(target, projection, root, options.discoverable === true),
+    );
     emit({ root, answers }, renderEnvelopeText(answers), format);
     // ⛔ Always 0. There is no threshold in this command and there is not going
     // to be one — a number that fails a build is a number people learn to stop
@@ -255,6 +286,7 @@ export async function claudeContextCommand(
 function answerDocument(
   answer: LoadedContextAnswer,
   projection: Projection,
+  discoverable: boolean,
 ): ContextAnswerDocument {
   // The cliff and root discovery read ONE vocabulary: these are the ids the
   // shipped `classifyPath` tagged, not a second basename rule invented here.
@@ -277,6 +309,10 @@ function answerDocument(
     conditions: answer.conditions,
     overBudgetRules: answer.overBudgetRules,
     unattributedImports: answer.unattributedImports,
+    // The ANSWER is passed, not recomputed: it is the authority for what is
+    // already loaded, and the two lenses partitioning depends on both reading
+    // one loaded set.
+    discoverable: discoverable ? discoverableFrom(projection, answer) : null,
     boundsStatement: CLAUDE_CONTEXT_BOUNDS_STATEMENT,
     limits: CLAUDE_CONTEXT_LIMITS,
     modelledBehaviours: CLAUDE_CONTEXT_MODELLED_BEHAVIOURS,
@@ -372,16 +408,18 @@ function comparePaths(left: string, right: string): number {
  * @param target - The root-relative path to answer for
  * @param projection - The populated projection
  * @param root - The corpus root, for the non-answer's explanation
+ * @param discoverable - Whether to compute the one-hop reachable set
  * @returns The answer document, or the structurally-different unknown document
  */
 function documentFor(
   target: string,
   projection: Projection,
   root: string,
+  discoverable: boolean,
 ): ContextAnswerDocument | ContextUnknownDocument {
   const answer = whatLoadsAt(projection, target);
   if (answer.kind === 'unknown') return unknownDocumentFor(answer.input, root);
-  return answerDocument(answer, projection);
+  return answerDocument(answer, projection, discoverable);
 }
 
 /**
@@ -523,8 +561,62 @@ function renderAnswerText(document: ContextAnswerDocument): string {
     ...listSection('Conditions', document.conditions.map(conditionLine)),
     ...listSection('Rules whose paths: list exceeded the vendor pattern budget', document.overBudgetRules),
     ...listSection('Imported files no importer could be attributed to', document.unattributedImports),
+    ...discoverySection(document.discoverable),
   ];
   return `${lines.join('\n')}\n`;
+}
+
+/**
+ * What the loaded files point at and the harness does not load.
+ *
+ * ⛔ Printed under its own heading with its own total, never merged into the
+ * token estimate. Nothing loads a markdown link, so this is an upper bound on a
+ * VOLUNTARY cost — what following every link once would add — and adding it to a
+ * context-budget figure would charge a session for documents it may never open.
+ * The heading says "not loaded" for a reader who sees only this section.
+ *
+ * A `null` argument means the lens was not asked for and prints NOTHING. An
+ * empty `rows` prints the heading with a zero, because "this file links nowhere"
+ * is a real and useful answer that must not be confused with "nobody looked".
+ *
+ * @param discoverable - The lens's answer, or null when `--discoverable` was off
+ * @returns The section's lines, or none when the lens did not run
+ */
+function discoverySection(discoverable: DiscoverableContext | null): string[] {
+  if (discoverable === null) return [];
+  const { rows, totals } = discoverable;
+  const lines = [
+    'Discoverable in one hop — LINKED from the loaded files, NOT loaded',
+    `  ${totals.discoverableTokens} tokens if every link were followed once (a ceiling, never a charge)`,
+    `  ${totals.unknownTokenRows} size unknown · ${totals.unrealizedRows} not in this tree`
+    + ` · ${totals.outsideRootRows} outside the root`,
+  ];
+  for (const row of rows) {
+    lines.push(`  ${displayPath(row.path)} — ${discoverableCost(row)}`);
+    for (const citation of row.citedBy) {
+      const text = citation.text === null ? '' : ` as "${citation.text}"`;
+      lines.push(`      linked from ${displayPath(citation.fromPath)}:${citation.line}${text}`);
+    }
+  }
+  lines.push('');
+  return lines;
+}
+
+/**
+ * What one discoverable row would cost, or why VAT cannot say.
+ *
+ * ⛔ Never `0` for an unmeasured row, the same rule {@link chargeText} enforces
+ * one section up. `unrealized` says what it is — an absence in THIS projection —
+ * rather than "broken": adjudicating a link is `vat resources validate`'s lane.
+ *
+ * @param row - The discoverable row
+ * @returns The cost phrase
+ */
+function discoverableCost(row: DiscoverableRow): string {
+  if (row.reach === 'outside-root') return 'outside the corpus root, so its size is unknowable here';
+  if (row.reach === 'unrealized') return 'not realized in this projection, so nothing is known of it';
+  if (row.tokens === null) return 'size unknown: no measured blob, so it is counted, not summed';
+  return `${row.tokens} tokens if opened`;
 }
 
 /**

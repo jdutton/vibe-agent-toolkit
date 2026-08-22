@@ -327,7 +327,7 @@ describe('the stated limits', () => {
     // grows or shrinks, which is what caught a draft that reused a published
     // slot. It cannot see an assumption made elsewhere in the lane and never
     // written down — see the by-name assertions below for what it is paired with.
-    expect(CLAUDE_CONTEXT_LIMITS).toHaveLength(21);
+    expect(CLAUDE_CONTEXT_LIMITS).toHaveLength(22);
     const directions = new Set(CLAUDE_CONTEXT_LIMITS.map((limit) => limit.direction));
     expect(directions.has('over-report')).toBe(true);
     expect(directions.has('under-report')).toBe(true);
@@ -388,6 +388,17 @@ describe('the stated limits', () => {
     // current.
     const ids = new Set(CLAUDE_CONTEXT_LIMITS.map((limit) => limit.id));
     expect(ids.has('directory-budget-unchecked')).toBe(false);
+  });
+
+  it('publishes the one-hop bound the discoverability lens is answered under', () => {
+    // Filed `scope`, not a report direction, and that is the classification the
+    // entry exists to make: the discoverable set is not an error in the loaded
+    // number, it is a DIFFERENT question. Nothing loads a markdown link, so its
+    // tokens are neither an over- nor an under-report of what enters context.
+    const limit = CLAUDE_CONTEXT_LIMITS.find((entry) => entry.id === 'discovery-one-hop');
+
+    expect(limit?.direction).toBe('scope');
+    expect(limit?.statement).toContain('ONE hop');
   });
 
   it('signs the existential classification as an under-report, because a rule can outlive its files', () => {
