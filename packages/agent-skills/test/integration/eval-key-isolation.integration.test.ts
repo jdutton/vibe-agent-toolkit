@@ -142,7 +142,7 @@ function canaryOpts(
 async function runCanary(
   layout: FixtureLayout,
   extra: Partial<RunHarnessOptions> = {},
-): Promise<{ exitCode: number; leaks: string[]; spawns: number }> {
+): Promise<{ exitCode: number; leaks: string[]; spawns: number; workspacesPath?: string }> {
   const harnessRoot = safePath.join(tempDir, 'harness');
   const leaks: string[] = [];
   let spawns = 0;
@@ -157,7 +157,12 @@ async function runCanary(
     },
   });
   const result = await runSkillTestHarness(canaryOpts(layout, fake.spawn, extra));
-  return { exitCode: result.exitCode, leaks, spawns };
+  return {
+    exitCode: result.exitCode,
+    leaks,
+    spawns,
+    ...(result.workspacesPath === undefined ? {} : { workspacesPath: result.workspacesPath }),
+  };
 }
 
 describe('eval answer-key isolation (canary)', () => {
@@ -197,15 +202,17 @@ describe('eval answer-key isolation (canary)', () => {
     mkdirSyncReal(fixturesDir, { recursive: true });
     writeFileSync(safePath.join(fixturesDir, 'input.md'), '# fixture input\n', 'utf8');
 
-    const { exitCode, leaks, spawns } = await runCanary(layout);
+    const { exitCode, leaks, spawns, workspacesPath } = await runCanary(layout);
 
     expect(leaks).toEqual([]);
     expect(spawns).toBe(1);
     expect(exitCode).toBe(0);
     // Removing the key must not have removed the eval's declared INPUT — fixtures
-    // are what the executor is meant to work on.
+    // are what the executor is meant to work on. Workspaces now live outside the
+    // harness root, so the run reports their location rather than it being derivable.
+    expect(workspacesPath).toBeDefined();
     expect(
-      existsSync(safePath.join(tempDir, 'harness', 'workspaces', 'with-files', 'fixtures', 'input.md')),
+      existsSync(safePath.join(workspacesPath ?? '', 'with-files', 'fixtures', 'input.md')),
     ).toBe(true);
   });
 

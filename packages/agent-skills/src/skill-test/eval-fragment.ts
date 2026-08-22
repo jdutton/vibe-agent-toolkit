@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { BaselineContaminationHitSchema } from './baseline-integrity.js';
 import { FrictionItemSchema } from './friction-schema.js';
 import { ToolVerdictBodySchema } from './tool-eval-schema.js';
 
@@ -41,6 +42,13 @@ export const EvalFragmentSchema = z.object({
   expectations: z.array(EvalFragmentExpectationSchema).min(1),
   friction: z.array(FrictionItemSchema).optional(),
   tool: ToolVerdictBodySchema.optional(),
+  /**
+   * WITHOUT-arm baseline-integrity hits (see baseline-integrity.ts). Like `arm`,
+   * this is attached by VAT after the strict parse — it is derived from the
+   * executor transcript, which the grader never sees, so a value arriving from a
+   * grader is meaningless and is overwritten rather than trusted.
+   */
+  contamination: z.array(BaselineContaminationHitSchema).optional(),
 }).strict();
 
 export type EvalFragment = z.infer<typeof EvalFragmentSchema>;

@@ -1,5 +1,5 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- tests use controlled temp directories */
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
@@ -226,22 +226,30 @@ describe('stageEvalWorkspaces', () => {
     expect(existsSync(safePath.join(workspacesRoot, 'dollar-quote-recovery', FIXTURES_DOC))).toBe(true);
   });
 
-  it('skips evals with no files', () => {
+  // An eval with no `files` still gets an EMPTY workspace. Before, it got none,
+  // and the executor fell back to running inside the staged subject dir — which
+  // for a --baseline run put the skill-absent arm's cwd inside the skill it was
+  // supposed to be denied. The directory existing is the fix.
+  it('creates an empty workspace for an eval with no files (never falls back to the subject dir)', () => {
     const { evalsDir, workspacesRoot } = setupEvalWorkspaces();
     const suite = { skill_name: 'demo', evals: [
       { id: 1, prompt: 'p', expected_output: 'o', expectations: ['e'] },
     ] };
     stageEvalWorkspaces({ suite, evalsDir, workspacesRoot });
-    expect(existsSync(safePath.join(workspacesRoot, '1'))).toBe(false);
+    const dir = safePath.join(workspacesRoot, '1');
+    expect(existsSync(dir)).toBe(true);
+    expect(readdirSync(dir)).toEqual([]);
   });
 
-  it('skips evals with an empty files array', () => {
+  it('creates an empty workspace for an eval with an empty files array', () => {
     const { evalsDir, workspacesRoot } = setupEvalWorkspaces();
     const suite = { skill_name: 'demo', evals: [
       { id: 2, prompt: 'p', expected_output: 'o', files: [], expectations: ['e'] },
     ] };
     stageEvalWorkspaces({ suite, evalsDir, workspacesRoot });
-    expect(existsSync(safePath.join(workspacesRoot, '2'))).toBe(false);
+    const dir = safePath.join(workspacesRoot, '2');
+    expect(existsSync(dir)).toBe(true);
+    expect(readdirSync(dir)).toEqual([]);
   });
 
   it('throws EvalInputError when a declared file is absent', () => {

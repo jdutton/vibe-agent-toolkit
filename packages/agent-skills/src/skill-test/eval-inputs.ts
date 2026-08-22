@@ -170,15 +170,23 @@ export interface StageEvalWorkspacesInput {
 
 /**
  * Materialize each eval's declared input `files` into `<workspacesRoot>/<id>/<relpath>`,
- * preserving relative structure. Evals without `files` are skipped. Throws
- * {@link EvalInputError} if a listed file does not exist (the eval cannot run without it).
- * Returns `workspacesRoot`.
+ * preserving relative structure. Throws {@link EvalInputError} if a listed file does
+ * not exist (the eval cannot run without it). Returns `workspacesRoot`.
+ *
+ * EVERY eval gets a directory, including one that declares no `files` — it is
+ * simply left empty. An eval without a workspace used to leave the executor with
+ * no cwd of its own, so it ran inside the staged subject dir instead; for the
+ * skill-absent arm of a `--baseline` run that placed the control's cwd inside the
+ * very skill the arm exists to withhold. An empty dir costs nothing and keeps cwd
+ * identical across both arms, which is what makes the A/B a comparison.
  */
 export function stageEvalWorkspaces(input: StageEvalWorkspacesInput): string {
   for (const entry of input.suite.evals) {
-    if (entry.files === undefined || entry.files.length === 0) continue;
     const evalWorkspace = safePath.joinUnderRoot(input.workspacesRoot, String(entry.id));
-    for (const rel of entry.files) {
+    // 0700 like the root above it — created for every eval, populated only by
+    // those declaring `files`.
+    mkdirSyncReal(evalWorkspace, { recursive: true, mode: 0o700 });
+    for (const rel of entry.files ?? []) {
       // Containment first: a `rel` that escapes evalsDir or the workspace is a
       // genuine "escapes the eval directory" problem and is reported as such.
       let src: string;

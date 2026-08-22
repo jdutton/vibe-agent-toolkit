@@ -35,6 +35,11 @@ import {
 import { resolveSkillSource } from '../skill-source/resolve-skill-source.js';
 import type { ResolvedSkillSource, ResolveSkillSourceContext, SkillSource } from '../skill-source/types.js';
 
+import {
+  detectBaselineContamination,
+  summarizeBaselineIntegrity,
+  type BaselineContamination,
+} from './baseline-integrity.js';
 import { assembleChildEnv, assertKnownEnvTokens, computeEnvTokens, resolveInjectEnv } from './declared-env.js';
 import { runExecutorForEval } from './eval-executor.js';
 import type { EvalFragment } from './eval-fragment.js';
@@ -55,7 +60,13 @@ import { FrictionReportSchema, type FrictionItem } from './friction-schema.js';
 import { DEFAULT_CONCURRENCY, DEFAULT_GRADER_MODEL } from './grader-model.js';
 import { reconcileGrading, type GradingVerdict } from './grading-adapter.js';
 import { GradingReportSchema } from './grading-schema.js';
-import { assertSafeHarnessRoot, assertSafeWorkdir, prepareHarnessRoot, resolveHarnessRoot } from './harness-location.js';
+import {
+  assertSafeHarnessRoot,
+  assertSafeWorkdir,
+  HarnessLocationError,
+  prepareHarnessRoot,
+  resolveHarnessRoot,
+} from './harness-location.js';
 import { acquireHarnessLock, installSignalCleanup } from './lock.js';
 import { runPipeline } from './pipeline.js';
 import { detectPluginLayout } from './plugin-layout.js';
@@ -264,6 +275,14 @@ export interface RunHarnessResult {
   harnessPath: string;
   exitCode: number;
   summary: string;
+  /**
+   * Where the executor's per-eval working directories were materialized. Lives
+   * OUTSIDE `harnessPath` on purpose (see {@link resolveWorkspacesRoot}), so it
+   * cannot be derived from the harness path and has to be reported. Retained on
+   * exactly the same terms as the harness root; absent when the run ended before
+   * workspaces were staged.
+   */
+  workspacesPath?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -689,17 +708,34 @@ export function resolveEvalSuitePath(input: {
   return safePath.join(input.holdDir, basename(input.evalsSubpath));
 }
 
+/**
+ * The per-run executor workspace root: `<tmp>/vat-skill-test-ws-<dirToken>/`.
+ *
+ * Deliberately OUTSIDE `harnessRoot`, alongside {@link resolveGraderOutDir} and
+ * {@link resolveEvalSuiteHoldDir}. The executor's cwd lives under here, and the
+ * harness root is where vat stages runnable copies of the skill (`staged/` and
+ * the assembled plugin dir). While the two were parent and child, the skill-absent
+ * arm of a `--baseline` run sat one `ls ..` away from the treatment it was
+ * supposed to be denied — the control could reach vat's own copy without ever
+ * leaving its working directory.
+ *
+ * Named by an unpredictable token, like the other vat-only dirs, and removed by
+ * the same cleanup. Pure (derives a path only).
+ */
+export function resolveWorkspacesRoot(dirToken: string): string {
+  return safePath.join(normalizedTmpdir(), `vat-skill-test-ws-${dirToken}`);
+}
+
 /** Parse the staged eval suite and materialize each eval's input `files` into
- * `<harnessRoot>/workspaces/<id>/`. Returns the workspaces root, the parsed
+ * `<workspacesRoot>/<id>/`. Returns the workspaces root, the parsed
  * {@link EvalSuite} (so the eval loop has the entries without re-reading), and the
  * declared eval count (derived from the suite). The dir is wiped first so a reused
- * harness root cannot leak a prior run's inputs. Throws {@link EvalInputError}
+ * root cannot leak a prior run's inputs. Throws {@link EvalInputError}
  * (mapped by the caller to exit 2) on a bad suite or a missing input file. */
 export function stageWorkspacesForRun(
   evalsPath: string,
-  harnessRoot: string,
+  workspacesRoot: string,
 ): { workspacesRoot: string; declaredEvalCount: number; suite: EvalSuite } {
-  const workspacesRoot = safePath.joinUnderRoot(harnessRoot, 'workspaces');
   rmSync(workspacesRoot, { recursive: true, force: true });
   // 0700, matching the harness root. These dirs hold each eval's declared input
   // files, which with an out-of-tree suite may be data that was never in the repo
@@ -731,9 +767,10 @@ function buildModelFlag(model: string | undefined): string {
 function attemptStageWorkspaces(
   evalsPath: string,
   harnessRoot: string,
+  workspacesRoot: string,
 ): { workspacesRoot: string; declaredEvalCount: number; suite: EvalSuite } | RunHarnessResult {
   try {
-    return stageWorkspacesForRun(evalsPath, harnessRoot);
+    return stageWorkspacesForRun(evalsPath, workspacesRoot);
   } catch (e) {
     if (e instanceof EvalInputError) {
       return {
@@ -1073,11 +1110,15 @@ export function resolveGraderOutDir(dirToken: string): string {
 
 /**
  * The executor working directory for one eval: its staged input workspace
- * `<workspacesRoot>/<id>` when the eval declares input `files`, else undefined
- * (the executor then defaults to the staged subject dir). Pure + unit-testable.
+ * `<workspacesRoot>/<id>`, ALWAYS — empty when the eval declares no input
+ * `files` (see {@link stageEvalWorkspaces}).
+ *
+ * This used to return undefined for a file-less eval, which made the executor
+ * fall back to running inside the staged subject dir. That fallback was the
+ * quiet half of the `--baseline` control defect: the skill-absent arm's cwd
+ * was the skill. Pure + unit-testable.
  */
-export function resolvePerEvalWorkspaceDir(entry: EvalEntry, workspacesRoot: string): string | undefined {
-  if (entry.files === undefined || entry.files.length === 0) return undefined;
+export function resolvePerEvalWorkspaceDir(entry: EvalEntry, workspacesRoot: string): string {
   return safePath.joinUnderRoot(workspacesRoot, String(entry.id));
 }
 
@@ -1132,6 +1173,13 @@ interface EvalRunContext {
   spawn?: typeof spawnHeadlessClaude;
   /** Shared spend accumulator — each worker folds in its executor + grader session cost. */
   costAccumulator: RunCostSummary;
+  /**
+   * The harness root, where vat stages runnable copies of the subject. Used ONLY
+   * as a contamination needle for the skill-absent arm (see baseline-integrity.ts):
+   * nothing points the control arm here any more, so a mention of this path in its
+   * transcript means it went looking and found vat's own copy.
+   */
+  harnessRoot: string;
 }
 
 /**
@@ -1152,25 +1200,32 @@ async function runEvalWorker(item: EvalWorkItem, ctx: EvalRunContext): Promise<E
   const workspaceDir = resolvePerEvalWorkspaceDir(item.entry, ctx.workspacesRoot);
   const onProgress = (chunk: string): void => { process.stderr.write(chunk); };
 
-  // Resolve the declared `env` against THIS eval's workspace. An eval that
-  // declares no input files has no workspace, so a value using ${fixturesDir}
-  // throws UnresolvableEnvTokenError (exit 2) instead of injecting a dead path.
+  // Resolve the declared `env` against THIS eval's workspace. Every eval now has
+  // one (empty when it declares no input files), so `${fixturesDir}` always
+  // resolves to a real directory.
   let executorEnv = ctx.executorEnv;
   if (ctx.perEvalEnv !== undefined) {
     const { input, logged } = ctx.perEvalEnv;
     executorEnv = resolveDeclaredChildEnv({
       ...input,
-      ...(workspaceDir === undefined ? {} : { workspaceDir }),
+      workspaceDir,
       quiet: logged.done,
     }).env;
     logged.done = true;
   }
 
+  // The skill-absent arm is not told where the subject is staged. Handing it that
+  // path would defeat the control outright: the staged dir holds the SKILL.md AND
+  // any executable the skill ships, so a control arm given the path can recover
+  // the entire treatment with one `cat`. Withholding the plugin dir while naming
+  // the staged dir in the prompt was the defect this arm's whole value rests on.
+  const isWithArm = item.arm === 'with';
+
   const outcome = await runExecutorForEval({
     evalId,
     task: item.entry.prompt,
-    subjectStagedDir: ctx.subjectStagedDir,
-    ...(workspaceDir === undefined ? {} : { workspaceDir }),
+    ...(isWithArm ? { subjectStagedDir: ctx.subjectStagedDir } : {}),
+    workspaceDir,
     pluginDirs: item.arm === 'without' ? [] : ctx.pluginDirs,
     env: executorEnv,
     ...(ctx.model === undefined ? {} : { model: ctx.model }),
@@ -1185,7 +1240,6 @@ async function runEvalWorker(item: EvalWorkItem, ctx: EvalRunContext): Promise<E
 
   // Tool expectations are about the SKILL's tools, so they ride the WITH arm ONLY —
   // the WITHOUT (skill-absent) arm has no skill, hence nothing to judge tools against.
-  const isWithArm = item.arm === 'with';
   const fragment = await runGraderForEval({
     evalId,
     transcript: outcome.transcript,
@@ -1211,7 +1265,37 @@ async function runEvalWorker(item: EvalWorkItem, ctx: EvalRunContext): Promise<E
     costSink: (usd) => recordSessionCost(ctx.costAccumulator, usd),
   });
 
-  return { ...fragment, arm: item.arm };
+  if (isWithArm) return { ...fragment, arm: item.arm };
+  return { ...fragment, arm: item.arm, ...baselineContaminationFor(outcome.transcript, ctx) };
+}
+
+/**
+ * Baseline integrity for ONE skill-absent eval: vat has removed its OWN copies
+ * from the control arm's reach, but an ambient copy in the adopter's repo or
+ * installed plugin cache is not vat's to remove — so the control arm can still,
+ * in principle, find and run the skill. Detect it from the transcript and return
+ * the fragment patch that carries the evidence to the merge step, which turns it
+ * into a loud caveat on baseline.json. A wrong number that announces itself is
+ * recoverable; a silent one gets believed.
+ *
+ * Returns an empty patch when clean, so the caller spreads it unconditionally.
+ */
+function baselineContaminationFor(
+  transcript: string,
+  ctx: EvalRunContext,
+): Pick<EvalFragment, 'contamination'> | Record<string, never> {
+  const hits = detectBaselineContamination({
+    transcript,
+    harnessRoot: ctx.harnessRoot,
+    // `name` is the executable's basename with the extension stripped
+    // (`scripts/csvsum.py` → `csvsum`) — a stable token appearing in both the
+    // command the arm ran and the output it got back. `howInvoked` is a command
+    // string, not a path, so it is deliberately NOT used here.
+    ...(ctx.declaredExecutables === undefined
+      ? {}
+      : { executableNames: ctx.declaredExecutables.map((e) => e.name) }),
+  });
+  return hits.length === 0 ? {} : { contamination: hits };
 }
 
 /** Outcome of a tier-ordered eval run: the fragments that RAN, plus (when the
@@ -1309,6 +1393,17 @@ export function wipeStaleArtifacts(paths: ArtifactPaths): void {
  * can compute the COMPOSITE verdict. Every fragment's per-run nonce is re-verified
  * inside {@link mergeFragmentsToGrading}.
  */
+/**
+ * Collect per-eval baseline-integrity findings from the WITHOUT-arm fragments.
+ * Fragments with no `contamination` are clean and contribute nothing. Pure.
+ */
+function collectBaselineFindings(withoutArm: EvalFragment[]): BaselineContamination[] {
+  return withoutArm
+    .filter((f): f is EvalFragment & { contamination: NonNullable<EvalFragment['contamination']> } =>
+      f.contamination !== undefined && f.contamination.length > 0)
+    .map((f) => ({ evalId: f.evalId, hits: f.contamination }));
+}
+
 function writeRunArtifactsAndReconcile(
   fragments: EvalFragment[],
   runNonce: string,
@@ -1332,8 +1427,19 @@ function writeRunArtifactsAndReconcile(
 
   if (withoutArm.length > 0) {
     const baseline = mergeFragmentsToGrading(withoutArm, runNonce);
+    // Stamp the integrity verdict onto baseline.json (GradingReportSchema is
+    // .passthrough(), so the extra field is contract-legal). Written on EVERY
+    // baseline run, clean or not: a reader must be able to tell "checked and
+    // clean" from "produced before this check existed", and only an
+    // unconditional field does that.
+    const integrity = summarizeBaselineIntegrity(collectBaselineFindings(withoutArm));
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived results path
-    writeFileSync(paths.baselineOut, JSON.stringify(baseline, null, 2) + '\n', 'utf-8');
+    writeFileSync(
+      paths.baselineOut,
+      JSON.stringify({ ...baseline, baselineIntegrity: integrity }, null, 2) + '\n',
+      'utf-8',
+    );
+    if (integrity.contaminated) process.stderr.write(`\n⚠️  ${integrity.summary}\n\n`);
   }
 
   return { verdict: reconcileGrading(grading), toolEval };
@@ -1482,7 +1588,28 @@ function assertVatWroteArtifacts(paths: ArtifactPaths): void {
  * Domain orchestrator for `vat skill test run`. Pure of process.exit — all
  * exit-code decisions live in the caller (run.ts).
  */
-export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunHarnessResult> {
+/**
+ * Resolve WHERE this run lives, and whether the harness owns that location.
+ *
+ * `--out` names the harness root exactly; `--workdir` names the BASE the root is
+ * derived under. They are mutually exclusive: passing both used to silently
+ * discard `--workdir` — the run went entirely to `--out` and the `--workdir` path
+ * was never even created — so an operator using the pair to separate the
+ * executor's cwd from the staged trees got no separation and no warning.
+ *
+ * `harnessCreated` is true only for the derived-under-OS-tmp case; an explicit
+ * `--out` or `--workdir` is a location the user owns and is never auto-removed.
+ */
+export function resolveHarnessLocation(
+  opts: Pick<RunHarnessOptions, 'out' | 'workdir' | 'subject'>,
+): { harnessRoot: string; harnessCreated: boolean } {
+  if (opts.out !== undefined && opts.workdir !== undefined) {
+    throw new HarnessLocationError(
+      '--out and --workdir are mutually exclusive: --out names the harness root exactly, ' +
+        '--workdir names the base it is derived under. Pass one.',
+    );
+  }
+
   // §7 workdir safety: refuse a --workdir whose ancestry contains CLAUDE.md/.claude
   // BEFORE deriving the harness root from it (defense in depth with --setting-sources "").
   if (opts.workdir !== undefined) {
@@ -1504,11 +1631,14 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     assertSafeWorkdir(opts.workdir, homedir());
   }
 
-  const harnessRoot = opts.out ?? resolveHarnessRoot([opts.subject], opts.workdir);
-  // Only auto-remove the dir the harness itself created under OS tmp. An explicit
-  // --out (exact dir) or --workdir (user-chosen base) is a location the user owns;
-  // treat it like --keep and never delete it.
-  const harnessCreated = opts.out === undefined && opts.workdir === undefined;
+  return {
+    harnessRoot: opts.out ?? resolveHarnessRoot([opts.subject], opts.workdir),
+    harnessCreated: opts.out === undefined && opts.workdir === undefined,
+  };
+}
+
+export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunHarnessResult> {
+  const { harnessRoot, harnessCreated } = resolveHarnessLocation(opts);
   const repoRoot = opts.repoRoot ?? harnessRoot;
   // Two distinct questions, deliberately not one value. `evalsRef` is what the
   // adopter ASKED FOR — a `test.evals`/`--evals` value, or `undefined` for the
@@ -1558,6 +1688,11 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
   // stays branch-free; removed by the same cleanup as the grader dir.
   const evalSuiteHoldDir = resolveEvalSuiteHoldDir(randomBytes(16).toString('hex'));
 
+  // The executor's per-eval working directories. Like the grader and hold dirs
+  // these live OUTSIDE harnessRoot — see resolveWorkspacesRoot for why that
+  // separation is load-bearing for --baseline — so they need their own cleanup.
+  const workspacesRoot = resolveWorkspacesRoot(randomBytes(16).toString('hex'));
+
   const cleanup = (): void => {
     // Reap any still-in-flight executor/grader children FIRST. On the concurrent
     // error path `Promise.all` rejects without cancelling its siblings, and a
@@ -1575,6 +1710,11 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     // --keep, which retains the harness dir for inspection but has no business
     // retaining the key), and never conditionally.
     removeVatOnlyDir(evalSuiteHoldDir);
+    // Per-eval workspaces are the executor's cwd — part of the run an operator
+    // inspects afterwards. Retain them on EXACTLY the terms the harness root is
+    // retained on (--keep, or a user-owned --out/--workdir location), so moving
+    // them out of the harness root did not quietly change what survives a run.
+    if (harnessCreated && opts.keep !== true) removeVatOnlyDir(workspacesRoot);
   };
   const removeSignalCleanup = installSignalCleanup({ onSignal: cleanup });
 
@@ -1645,9 +1785,12 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     // Step 5.5: Parse the eval suite and stage per-eval input workspaces. The
     // parsed suite is threaded on so the eval loop has the entries without
     // re-reading; declaredEvalCount is derived from it (suite.evals.length).
-    const workspaceStageResult = attemptStageWorkspaces(evalsPath, harnessRoot);
+    const workspaceStageResult = attemptStageWorkspaces(evalsPath, harnessRoot, workspacesRoot);
     if ('exitCode' in workspaceStageResult) return workspaceStageResult;
-    const { workspacesRoot, declaredEvalCount, suite } = workspaceStageResult;
+    // `workspacesRoot` is resolved above (outside the try, so cleanup can reach it
+    // on a signal); staging returns it unchanged, so only the derived values are
+    // destructured here.
+    const { declaredEvalCount, suite } = workspaceStageResult;
 
     emitEvalLintWarnings(suite.evals, (opts.declaredExecutables ?? []).map((e) => e.name));
 
@@ -1773,6 +1916,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     const evalCtx: EvalRunContext = {
       subjectStagedDir,
       workspacesRoot,
+      harnessRoot,
       pluginDirs,
       graderOutDir,
       runNonce,
@@ -1837,6 +1981,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
 
     return {
       harnessPath: harnessRoot,
+      workspacesPath: workspacesRoot,
       exitCode: verdictExitCode(allPassed, opts.tolerateEvalFailure === true),
       summary,
     };

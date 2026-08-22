@@ -219,9 +219,32 @@ Keep *regression* evals (known-good behavior that should always pass) mentally s
 
 Put input files under `evals/fixtures/` and reference them via `files`. Use realistic, slightly messy data — the kind that surfaces real bugs, not toy data that everything passes.
 
-### A/B skill-lift (`--baseline`)
+### A/B instruction-lift (`--baseline`)
 
-A skill's value is its **lift over what the model already does without it**. `--baseline` runs each eval twice — with the skill and without — and reports the delta. If an expectation passes in *both* configurations it proves nothing about the skill; make the test harder, or focus the skill on where the model genuinely needs help. This is the single best way to answer "is this skill actually earning its place?"
+A skill's value is its **lift over what the model already does without it**. `--baseline` runs each eval twice — with the skill and without — and reports the delta. If an expectation passes in *both* configurations it proves nothing about the skill; make the test harder, or focus the skill on where the model genuinely needs help.
+
+**What the control arm actually withholds — read this before trusting a delta.** The skill-absent arm is denied the skill's *declaration*: no `--plugin-dir`, and `--setting-sources ""` suppresses user/project settings, so the agent is never told the skill exists. It is **not** denied *capability*. The executor runs with unrestricted `Bash`, and the harness is context isolation, **not an OS sandbox** — any copy of the skill still on the filesystem is reachable in principle.
+
+vat keeps its **own** copies out of that arm's way: the skill-absent arm's prompt does not name the staged subject, its working directory is a per-eval workspace outside the harness root, and it gets no plugin dir. What vat cannot remove is an **ambient copy you own** — your repo's `dist/`, a build output, or an installed plugin cache. If the control arm finds one of those and runs it, the delta stops measuring the skill.
+
+So `--baseline` A/Bs the skill's **instructions**, on the honest assumption that no ambient copy is reachable. Read the delta accordingly:
+
+- A near-zero delta on a skill that ships an executable is **suspect before it is meaningful** — check `baselineIntegrity` first.
+- The delta is **not** a capability measurement. It cannot tell you "the model can't do this without my tool"; it tells you "my prose changes what the model does."
+
+**`baselineIntegrity` in `baseline.json`.** Every baseline run stamps this block, clean or not (its absence means the file predates the check, never "checked and clean"):
+
+```json
+"baselineIntegrity": {
+  "contaminated": true,
+  "summary": "BASELINE CONTAMINATED: the skill-absent arm reached the skill in 2 eval(s) …",
+  "findings": [ { "evalId": "lookup-1", "hits": [ { "kind": "harness-path", "match": "…", "excerpt": "…" } ] } ]
+}
+```
+
+`contaminated: true` also prints a warning to stderr. When you see it, **discard the delta** — the control had the treatment. The usual cause is an ambient copy: uninstall the plugin, or run against a tree that has no built copy of the skill.
+
+**Writing prompts that don't defeat their own baseline.** An eval prompt that names the executable or its path (`run ${CLAUDE_SKILL_DIR}/scripts/tool.mjs …`) hands the skill-absent arm the answer, and no harness change can fix that. Describe the *task*, never the *mechanism* — that is also what makes the WITH arm a real test of whether the skill routes the model correctly.
 
 ### Tool expectations — what the skill should *run*
 
@@ -260,7 +283,7 @@ skills:
           howInvoked: uv run csvsum.py
 ```
 
-Tool verdicts land in their own **`tool-eval.json`** channel and never leak into `grading.json`. They ride the **WITH-arm only** in a `--baseline` run (the skill-absent arm has no tools to judge). `toolExpectations` is only meaningful for a **declared** skill subject (name, or a path that maps back to a declared skill) — a plain path/source subject has no `executables` manifest to resolve names against.
+Tool verdicts land in their own **`tool-eval.json`** channel and never leak into `grading.json`. They ride the **WITH-arm only** in a `--baseline` run — the skill-absent arm was never *given* the skill, so there is no declared tool use to hold it to. That is a statement about what the arm was handed, not a guarantee it reached no tool: if it found an ambient copy anyway, `baselineIntegrity` in `baseline.json` is what tells you. `toolExpectations` is only meaningful for a **declared** skill subject (name, or a path that maps back to a declared skill) — a plain path/source subject has no `executables` manifest to resolve names against.
 
 > **Only committed (or `files:`-injected) files stage.** A name-target build stages the skill via a **tracked-files** tree-copy, so an **untracked** script (a scratch `probe.mjs` you never `git add`-ed) silently won't be in the harness — a `mustRun` against it then fails because the file is *absent*, not because it ran. Commit test scripts, or inject non-artifact files through a `files:` entry (the same mechanism skills use to bundle a built CLI).
 
@@ -338,7 +361,7 @@ Two config homes: **per-skill** knobs live in `skills.config.<skill>.test`; the 
 | `--model <id>` | `model` | per-skill | **Executor** model, passed **verbatim** to `claude --model` (no mapping). Pin for reproducible runs. |
 | `--grader-model <id>` | `graderModel` | **global** | **Grader** (judge) model, independent of `--model`. Default `claude-sonnet-5`. |
 | `--concurrency <n>` | `concurrency` | **global** | Max evals run in parallel (default 4). |
-| `--baseline` | `baseline` | per-skill | Run the with/without A/B skill-lift comparison. |
+| `--baseline` | `baseline` | per-skill | A/B the skill's INSTRUCTIONS (skill declared vs withheld). Not a capability control — check `baselineIntegrity` in `baseline.json`. |
 | `--allow-eval-failure` | — | — | Opt out of the fail-closed default so a failing (or fail-fast-gated) eval exits `0` (interactive use). By **default** a failing eval exits `4`. |
 | `--with name=<src>` | `with` | per-skill | Stage a **required** companion skill the subject can invoke (`workspace:`/`npm:`/`url:`/`path:`/`vendored`). A `path:` source that maps to a **declared** skill is **built** first, exactly like the subject, so its `files:` artifacts are injected — a companion backed by a bundled executable stages functional. Its build failure fails the run. Unresolvable source, or a duplicate name across subject/`--with`/`--with-optional`, exits `2`. |
 | `--with-optional name=<src>` | `optional` | per-skill | Stage an **optional** companion; skipped with a stderr warning if its source can't be resolved. Also built when it maps to a declared skill, but a build failure falls back to the raw (unbuilt) source **only** when non-destructive — a `pool`-distribution build, or no build attempted (`--no-build`/`--dry-run`). A failed `plugin-local` build fails the run, because the marketplace build wipes its output tree first and staging would read from a deleted tree. |
@@ -387,7 +410,8 @@ vat skill test run ./dist/skills/my-skill/ --i-understand-this-runs-skill-code
 # Run evals after filling in evals.json
 vat skill test run ./dist/skills/my-skill/ --i-understand-this-runs-skill-code
 
-# A/B skill-lift: run each eval with AND without the skill, report the delta
+# A/B instruction-lift: run each eval with the skill declared AND withheld, report the delta
+# (check baselineIntegrity in baseline.json before trusting it)
 vat skill test run ./dist/skills/my-skill/ --baseline --i-understand-this-runs-skill-code
 
 # CI gate: a failing eval exits 4 by default (no flag needed). For interactive

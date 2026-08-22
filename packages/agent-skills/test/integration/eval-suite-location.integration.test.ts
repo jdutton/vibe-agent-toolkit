@@ -53,7 +53,11 @@ vi.mock('../../src/skill-test/preflight.js', async (io) => (await import('../ski
 const SKILL_NAME = 'suite-location-skill';
 const INTERNAL_EVAL_ID = 'reads-a-fixture';
 const EXTERNAL_EVAL_ID = 'reads-external-fixture';
-const WORKSPACES = 'workspaces';
+// The executor's per-eval workspaces live OUTSIDE the harness root (under OS tmp,
+// as `vat-skill-test-ws-<token>`) so the skill-absent arm of a --baseline run does
+// not sit beside vat's own staged copy of the skill. The run reports the location
+// back as `workspacesPath` — it carries a random token and cannot be derived.
+const WORKSPACES = 'vat-skill-test-ws-';
 const EVALS_JSON = 'evals.json';
 
 let tempDir: string;
@@ -189,9 +193,12 @@ describe('external eval suite (integration)', () => {
 
     // Fixtures resolve relative to the EXTERNAL suite dir, not the skill dir,
     // and land in the eval's own workspace.
+    expect(result.workspacesPath, 'the run did not report where workspaces were staged').toBeDefined();
     expect(
-      existsSync(safePath.join(tempDir, 'harness', WORKSPACES, EXTERNAL_EVAL_ID, 'fixtures', 'case.md')),
+      existsSync(safePath.join(result.workspacesPath ?? '', EXTERNAL_EVAL_ID, 'fixtures', 'case.md')),
     ).toBe(true);
+    // And they are NOT under the harness root, which holds vat's runnable copies.
+    expect(result.workspacesPath ?? '').not.toContain(safePath.join(tempDir, 'harness'));
 
     // And the external suite was never copied into the subject tree.
     expect(existsSync(safePath.join(layout.subjectDir, EVALS_JSON))).toBe(false);
@@ -215,15 +222,17 @@ describe('external eval suite (integration)', () => {
       const layout = writeExternalLayout();
       const fake = makeHarnessFakeSpawn({});
 
-      await runSkillTestHarness(
+      const result = await runSkillTestHarness(
         optsFor(layout.subjectDir, fake.spawn, { evalsSubpath: layout.evalsPath }),
       );
 
-      const harnessRoot = safePath.join(tempDir, 'harness');
-      for (const name of [WORKSPACES, 'results']) {
-        const dir = safePath.join(harnessRoot, name);
-        expect(existsSync(dir), `${name}/ was never created`).toBe(true);
-        expect(statSync(dir).mode & 0o777, `${name}/ is not 0700`).toBe(0o700);
+      // results/ still sits under the harness root; workspaces/ moved out to its
+      // own OS-tmp dir, which makes its 0700 mode load-bearing rather than
+      // inherited — nothing above it is guaranteed to be 0700 any more.
+      const dirs = [safePath.join(tempDir, 'harness', 'results'), result.workspacesPath ?? ''];
+      for (const dir of dirs) {
+        expect(existsSync(dir), `${dir} was never created`).toBe(true);
+        expect(statSync(dir).mode & 0o777, `${dir} is not 0700`).toBe(0o700);
       }
     },
   );

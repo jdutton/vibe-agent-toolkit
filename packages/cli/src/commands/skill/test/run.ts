@@ -1317,7 +1317,10 @@ export function createSkillTestRunCommand(): Command {
     .option('--dry-run', 'Build and stage exactly as a real run would, then stop without spawning Claude (no tokens spent). Combine with --no-build to skip the build too.')
     .option('--auth <mode>', 'Auth mechanism: inherit | subscription | api-key | auto')
     .option('--require-auth <mech>', 'Require a specific auth mechanism: subscription | api-key')
-    .option('--baseline', 'Enable A/B baseline run (with/without skill)')
+    .option(
+      '--baseline',
+      "A/B the skill's INSTRUCTIONS (declared vs withheld). Both arms share a filesystem — not a capability control; see baselineIntegrity in baseline.json",
+    )
     .option(
       '--allow-eval-failure',
       'Opt out of the fail-closed default: exit 0 even when an eval fails (for interactive use). By DEFAULT a failing eval exits 4, distinct from the harness-broke codes (1/2/3) so CI can gate on it.',

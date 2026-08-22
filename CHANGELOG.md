@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- **`vat skill test run --baseline`'s control arm no longer runs inside — or is told the path to —
+  the skill it is supposed to be denied.** Reported by an adopter whose two suites showed a
+  one-expectation delta and an *inverted* delta; the control arm was answering correctly from the
+  skill's own bundled executable. `--baseline` withholds the skill's *declaration*
+  (`pluginDirs: []` + `--setting-sources ""`), which removes discovery but not capability — the
+  executor has unrestricted `Bash`. On top of that ambient reachability, vat was actively escorting
+  the control arm to the treatment in two ways, both now fixed:
+
+  1. **The executor prompt named the staged subject dir to both arms** (`The relevant files are
+     located at …`). That directory holds the SKILL.md *and* any executable the skill ships, so a
+     control arm given the path could recover the entire treatment with one `cat`. The skill-absent
+     arm is no longer told where the subject is staged.
+  2. **An eval declaring no input `files` got no workspace**, so the executor fell back to running
+     *inside* the staged subject dir — the control's cwd was the skill. Every eval now gets its own
+     workspace (empty when it declares no `files`), identical across both arms, so cwd is never a
+     confound.
+
+  Additionally, per-eval workspaces moved **out of the harness root** to
+  `<tmp>/vat-skill-test-ws-<token>/`, alongside the existing vat-only grader and eval-hold dirs.
+  They previously sat as a sibling of `staged/` and the assembled plugin dir, leaving the control
+  one `ls ..` from vat's own runnable copy. Breaking for anything that assumed
+  `<out>/workspaces/<id>`; `--keep` retains them.
+
+  **Interpretation changed, not just behavior.** The delta A/Bs the skill's *instructions*, not its
+  capability, and vat now says so in `--help` and the skill-testing guide (the guide's claim that
+  "the skill-absent arm has no tools to judge" was false and is corrected).
+
+- **`--out` and `--workdir` are now mutually exclusive** (exit 2). `--out` names the harness root
+  exactly; `--workdir` names the base it is derived under. Passing both silently discarded
+  `--workdir` — the path was never created — which is exactly what the adopter above tried in order
+  to separate the executor's cwd from the staged copies, getting no separation and no warning.
+
 - **The parse cache is namespaced per build of VAT, and both hand-bumped version constants are
   gone.** `CONTENT_KEY_SCHEMA_VERSION` and `PARSE_CACHE_SCHEMA_VERSION` are removed from
   `@vibe-agent-toolkit/resources`. Entries now live under
@@ -52,6 +84,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   report every file under it as absent.
 
 ### Added
+
+- **`baselineIntegrity` in `baseline.json`, plus a stderr warning when a `--baseline` control arm
+  reached the skill anyway.** vat can keep its *own* copies of the skill away from the control arm,
+  but a copy in the adopter's `dist/`, build output, or installed plugin cache is not vat's to
+  remove — and a control arm that finds one produces a silently wrong delta: exit 0, well-formed
+  JSON, plausible numbers. The skill-absent arm's transcript is now scanned for paths under the
+  harness root and for declared executable names, and the finding is stamped onto `baseline.json`
+  with per-eval evidence excerpts. The block is written on **every** baseline run, so its absence
+  means "produced before this check existed" and never "checked and clean". A wrong number that
+  announces itself is recoverable; a silent one gets believed, written down, and acted on.
 
 - **`isFilesystemAccessError(err)`**, exported from `@vibe-agent-toolkit/utils` and its `./fs` subpath. Answers whether an error is the filesystem refusing a path (`EACCES`, `ENOENT`, `ENOSPC`, …) rather than a bug, which is the question a tool has to answer before deciding to carry on over a tree it does not own. VAT uses it in `vat audit` and in skill packaging so both agree on what counts as the environment's fault.
 

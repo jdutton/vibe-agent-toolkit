@@ -47,8 +47,10 @@ import {
   resolveArtifactPaths,
   resolveCompositeAllPassed,
   resolveGraderOutDir,
+  resolveHarnessLocation,
   resolveKnobs,
   resolvePerEvalWorkspaceDir,
+  resolveWorkspacesRoot,
   resolveScaffoldEvalsPath,
   resolveStallMs,
   resolveTimeoutMs,
@@ -270,11 +272,47 @@ describe('resolveGraderOutDir', () => {
   });
 });
 
+describe('resolveWorkspacesRoot', () => {
+  // The executor's cwd must NOT live under the harness root: that root holds
+  // `staged/` and the assembled plugin dir, so a control arm working inside it is
+  // one `ls ..` from the skill it was denied.
+  it('lands under OS tmp, not under any harness root', () => {
+    expect(safePath.relative(normalizedTmpdir(), resolveWorkspacesRoot('cafebabe')))
+      .toBe('vat-skill-test-ws-cafebabe');
+  });
+});
+
+describe('resolveHarnessLocation', () => {
+  // Passing both used to silently discard --workdir, so an operator trying to
+  // separate the executor's cwd from the staged trees got neither the separation
+  // nor a warning — the --workdir path was never even created.
+  it('refuses --out and --workdir together instead of silently dropping one', () => {
+    expect(() => resolveHarnessLocation({ subject: 'demo', out: '/o', workdir: '/w' }))
+      .toThrow(/mutually exclusive/);
+  });
+
+  it('treats an explicit --out as user-owned (never auto-removed)', () => {
+    const { harnessRoot, harnessCreated } = resolveHarnessLocation({ subject: 'demo', out: '/o' });
+    expect(harnessRoot).toBe('/o');
+    expect(harnessCreated).toBe(false);
+  });
+
+  it('derives under OS tmp and claims ownership when neither flag is given', () => {
+    const { harnessRoot, harnessCreated } = resolveHarnessLocation({ subject: 'demo' });
+    expect(harnessCreated).toBe(true);
+    expect(toForwardSlash(harnessRoot)).toContain('/vat-skill-test/');
+  });
+});
+
 describe('resolvePerEvalWorkspaceDir', () => {
   const workspacesRoot = '/harness/workspaces';
 
-  it('returns undefined when the eval declares no files', () => {
-    expect(resolvePerEvalWorkspaceDir(makeEvalEntry({ id: '1' }), workspacesRoot)).toBeUndefined();
+  // No undefined case any more: an eval without `files` used to get no workspace,
+  // which made the executor run inside the staged subject dir — the skill-absent
+  // arm's cwd was then the skill itself.
+  it('routes to <workspacesRoot>/<id> even when the eval declares no files', () => {
+    const dir = resolvePerEvalWorkspaceDir(makeEvalEntry({ id: '1' }), workspacesRoot);
+    expect(toForwardSlash(dir).endsWith('/workspaces/1')).toBe(true);
   });
 
   it('routes to <workspacesRoot>/<id> when the eval declares files', () => {
