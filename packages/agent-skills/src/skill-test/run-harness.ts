@@ -1396,10 +1396,19 @@ function scrubAndReportControlArmEnv(
   // that stops being a silent assumption: the day vat forwards a model var, this
   // line fails to compile and someone decides, instead of the scrub quietly
   // dropping it and running the control arm on a different model.
-  const { env: scrubbed, dropped, retainedLeaks } = scrubControlArmEnv(env, harnessRoot, []);
-  if (dropped.length > 0) {
+  const { env: scrubbed, droppedForbiddenKey, droppedNamingRoot, retainedLeaks } =
+    scrubControlArmEnv(env, harnessRoot, []);
+  // Two rules, two reasons, two lines. One merged line said "naming the harness
+  // root" about both, which is false for every rule-1 drop — those go by NAME and
+  // their value may name nothing in the harness at all.
+  const withheld: ReadonlyArray<readonly [readonly string[], string]> = [
+    [droppedForbiddenKey, 'by name, whatever their value'],
+    [droppedNamingRoot, 'because their value names the harness root'],
+  ];
+  for (const [names, why] of withheld) {
+    if (names.length === 0) continue;
     process.stderr.write(
-      `control arm (${evalId}): withheld ${dropped.length} env var(s) naming the harness root: ${dropped.join(', ')}\n`,
+      `control arm (${evalId}): withheld ${names.length} env var(s) ${why}: ${names.join(', ')}\n`,
     );
   }
   if (retainedLeaks.length > 0) {

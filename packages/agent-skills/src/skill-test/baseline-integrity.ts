@@ -260,8 +260,17 @@ const CONTROL_ARM_FORBIDDEN_ENV_KEYS = ['CLAUDE_PLUGIN_ROOT'] as const;
  * control arm keeps its declared input files — the arms stay identical in
  * everything except the skill itself.
  *
- * Pure. Returns the scrubbed env, the names dropped, and the protected names retained
- * despite naming the harness root — all three for the transparency line.
+ * Pure. Returns the scrubbed env and three disjoint name lists for the transparency
+ * lines: the rule-1 drops, the rule-2 drops, and the protected names RETAINED
+ * despite naming the harness root.
+ *
+ * The two drop lists are separate because they mean opposite things to an operator.
+ * A rule-1 drop is routine — `CLAUDE_PLUGIN_ROOT` is withheld on every plugin-layout
+ * baseline run by design, and its value may name nothing in the harness at all (the
+ * installed-plugin-cache case). A rule-2 drop says the operator's OWN declared `env:`
+ * named the harness root, which is the one worth acting on. Merged into one list under
+ * one "naming the harness root" sentence, the routine drop was both mislabelled and
+ * loud enough to bury the interesting one.
  */
 export function scrubControlArmEnv(
   env: NodeJS.ProcessEnv,
@@ -273,11 +282,19 @@ export function scrubControlArmEnv(
    * the output. Pass `[]` when the run genuinely has none.
    */
   modelVars: readonly string[],
-): { env: NodeJS.ProcessEnv; dropped: string[]; retainedLeaks: string[] } {
+): {
+  env: NodeJS.ProcessEnv;
+  /** Rule 1: dropped by NAME, whatever the value. */
+  droppedForbiddenKey: string[];
+  /** Rule 2: dropped because the VALUE names the harness root. */
+  droppedNamingRoot: string[];
+  retainedLeaks: string[];
+} {
   const needle = normalizeForMatch(harnessRoot);
   const protectedNames = protectedEnvNames(modelVars);
   const scrubbed: NodeJS.ProcessEnv = {};
-  const dropped: string[] = [];
+  const droppedForbiddenKey: string[] = [];
+  const droppedNamingRoot: string[] = [];
   const retainedLeaks: string[] = [];
 
   for (const [key, value] of Object.entries(env)) {
@@ -293,14 +310,21 @@ export function scrubControlArmEnv(
       scrubbed[key] = value;
       continue;
     }
-    if (forbiddenKey || leaksPath) {
-      dropped.push(key);
+    // Rule 1 first, and it wins outright: a forbidden key is withheld whatever its
+    // value, so reporting it as "its value named the harness root" would be a guess
+    // that is wrong whenever the key points somewhere else entirely.
+    if (forbiddenKey) {
+      droppedForbiddenKey.push(key);
+      continue;
+    }
+    if (leaksPath) {
+      droppedNamingRoot.push(key);
       continue;
     }
     scrubbed[key] = value;
   }
 
-  return { env: scrubbed, dropped, retainedLeaks };
+  return { env: scrubbed, droppedForbiddenKey, droppedNamingRoot, retainedLeaks };
 }
 
 /** One piece of evidence that the skill-absent arm reached the skill anyway. */

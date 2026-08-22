@@ -451,7 +451,7 @@ describe('scrubControlArmEnv', () => {
   // The channel the first fix missed: prompt, argv and cwd were closed while the
   // run's single assembled env — CLAUDE_PLUGIN_ROOT included — went to both arms.
   it('drops CLAUDE_PLUGIN_ROOT and any value containing the harness root', () => {
-    const { env, dropped } = scrubControlArmEnv(
+    const { env, droppedForbiddenKey, droppedNamingRoot } = scrubControlArmEnv(
       {
         CLAUDE_PLUGIN_ROOT: `${HARNESS_ROOT}/my-plugin`,
         SNAPSHOT: `${HARNESS_ROOT}/staged/s/data.json`,
@@ -464,7 +464,11 @@ describe('scrubControlArmEnv', () => {
 
     expect(env).not.toHaveProperty('CLAUDE_PLUGIN_ROOT');
     expect(env).not.toHaveProperty('SNAPSHOT');
-    expect([...dropped].sort((a: string, b: string) => a.localeCompare(b))).toEqual(['CLAUDE_PLUGIN_ROOT', 'SNAPSHOT']);
+    // Reported by the rule that caught them, not merged. CLAUDE_PLUGIN_ROOT's value
+    // ALSO names the harness root here, so a merged list could not tell an operator
+    // which rule fired — and the operator only needs to act on the rule-2 one.
+    expect(droppedForbiddenKey).toEqual(['CLAUDE_PLUGIN_ROOT']);
+    expect(droppedNamingRoot).toEqual(['SNAPSHOT']);
     // The arms must stay identical in everything except the skill: the control
     // keeps its own fixtures (under the workspaces root) and its auth.
     expect(env['FIXTURES']).toBe(WS_FIXTURES);
@@ -472,12 +476,12 @@ describe('scrubControlArmEnv', () => {
   });
 
   it('drops a value that names the harness root in the other separator form', () => {
-    const { dropped } = scrubControlArmEnv(
+    const { droppedNamingRoot } = scrubControlArmEnv(
       { WIN: String.raw`C:\tmp\vat-skill-test\s\x` },
       'C:/tmp/vat-skill-test/s',
       [],
     );
-    expect(dropped).toEqual(['WIN']);
+    expect(droppedNamingRoot).toEqual(['WIN']);
   });
 
   // The two rules masked each other: in every fixture CLAUDE_PLUGIN_ROOT's value
@@ -489,21 +493,29 @@ describe('scrubControlArmEnv', () => {
     // The installed-plugin-cache case: the key is meaningless to an arm spawned
     // with `pluginDirs: []`, and pointing it anywhere is still handing the control
     // arm a plugin root. Only rule 1 can catch this.
-    const { env, dropped } = scrubControlArmEnv(
+    const { env, droppedForbiddenKey, droppedNamingRoot } = scrubControlArmEnv(
       { CLAUDE_PLUGIN_ROOT: '/Users/dev/.claude/plugins/marketplaces/acme' },
       HARNESS_ROOT,
       [],
     );
 
-    expect(dropped).toEqual(['CLAUDE_PLUGIN_ROOT']);
+    expect(droppedForbiddenKey).toEqual(['CLAUDE_PLUGIN_ROOT']);
+    // …and NOT reported as naming the harness root, because it does not. This is the
+    // case that makes the merged wording a lie rather than merely imprecise.
+    expect(droppedNamingRoot).toEqual([]);
     expect(env).not.toHaveProperty('CLAUDE_PLUGIN_ROOT');
   });
 
   it('drops an unlisted key by VALUE when it names the harness root', () => {
     // Only rule 2 can catch this — SNAPSHOT is in no key list anywhere.
-    const { env, dropped } = scrubControlArmEnv({ SNAPSHOT: `${HARNESS_ROOT}/staged/s/x.json` }, HARNESS_ROOT, []);
+    const { env, droppedForbiddenKey, droppedNamingRoot } = scrubControlArmEnv(
+      { SNAPSHOT: `${HARNESS_ROOT}/staged/s/x.json` },
+      HARNESS_ROOT,
+      [],
+    );
 
-    expect(dropped).toEqual(['SNAPSHOT']);
+    expect(droppedNamingRoot).toEqual(['SNAPSHOT']);
+    expect(droppedForbiddenKey).toEqual([]);
     expect(env).not.toHaveProperty('SNAPSHOT');
   });
 
@@ -516,14 +528,14 @@ describe('scrubControlArmEnv', () => {
   // control arm ON A DIFFERENT MODEL — a confound that reads as skill lift and
   // appears nowhere in the output.
   it('retains a MODEL var that names the harness root, when the run declares one', () => {
-    const { env, dropped, retainedLeaks } = scrubControlArmEnv(
+    const { env, droppedNamingRoot, retainedLeaks } = scrubControlArmEnv(
       { ANTHROPIC_MODEL: `${HARNESS_ROOT}/models/pinned` },
       HARNESS_ROOT,
       ['ANTHROPIC_MODEL'],
     );
 
     expect(env['ANTHROPIC_MODEL'], 'the control arm lost its model pin').toBeDefined();
-    expect(dropped).toEqual([]);
+    expect(droppedNamingRoot).toEqual([]);
     expect(retainedLeaks).toEqual(['ANTHROPIC_MODEL']);
   });
 
@@ -532,25 +544,25 @@ describe('scrubControlArmEnv', () => {
   // this, the test above would pass on a `protectedEnvNames()` that ignores its
   // argument entirely, which is exactly the bug being fixed.
   it('drops that same var when the run declares no model vars', () => {
-    const { dropped } = scrubControlArmEnv(
+    const { droppedNamingRoot } = scrubControlArmEnv(
       { ANTHROPIC_MODEL: `${HARNESS_ROOT}/models/pinned` },
       HARNESS_ROOT,
       [],
     );
 
-    expect(dropped).toEqual(['ANTHROPIC_MODEL']);
+    expect(droppedNamingRoot).toEqual(['ANTHROPIC_MODEL']);
   });
 
   it('retains a process-essential var that names the harness root, and reports it', () => {
     const repoRoot = '/Users/dev/myrepo';
-    const { env, dropped, retainedLeaks } = scrubControlArmEnv(
+    const { env, droppedNamingRoot, retainedLeaks } = scrubControlArmEnv(
       { PATH: `${repoRoot}/node_modules/.bin:/usr/bin:/bin`, HOME: repoRoot },
       repoRoot,
       [],
     );
 
     expect(env['PATH'], 'the control arm was spawned with no PATH').toBeDefined();
-    expect(dropped).toEqual([]);
+    expect(droppedNamingRoot).toEqual([]);
     expect([...retainedLeaks].sort((a: string, b: string) => a.localeCompare(b))).toEqual(['HOME', 'PATH']);
   });
 
@@ -563,9 +575,9 @@ describe('scrubControlArmEnv', () => {
     const harnessRoot = '/tmp/vat-skill-test';
     const fixtures = '/tmp/vat-skill-test-ws-9f3c/lookup-1/fixtures';
     /* eslint-enable sonarjs/publicly-writable-directories */
-    const { env, dropped } = scrubControlArmEnv({ FIXTURES: fixtures }, harnessRoot, []);
+    const { env, droppedNamingRoot } = scrubControlArmEnv({ FIXTURES: fixtures }, harnessRoot, []);
 
-    expect(dropped, 'a prefix collision stripped the control arm fixtures').toEqual([]);
+    expect(droppedNamingRoot, 'a prefix collision stripped the control arm fixtures').toEqual([]);
     expect(env['FIXTURES']).toBe(fixtures);
   });
 });

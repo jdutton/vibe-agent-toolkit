@@ -343,6 +343,61 @@ describe('baseline control arm (integration)', () => {
   });
 
   /**
+   * The scrub must SAY what it withheld, and say it truthfully — the withholding is
+   * the only visible sign that the control arm was degraded, and a degraded control
+   * scores lower, which reports as skill lift.
+   *
+   * Two things were wrong. The mutation audit found the stderr write was pinned by
+   * nothing: every assertion was on `scrubControlArmEnv`'s RETURN VALUE, so deleting
+   * the write left the suite green — the same "testing a pure helper never pins its
+   * wiring" class this lane has now hit four times. And the one line it did write
+   * described a merged list as "naming the harness root" when half of it is dropped
+   * by NAME whatever its value: on this very run CLAUDE_PLUGIN_ROOT's value is under
+   * the harness root only incidentally, and in the installed-plugin-cache case it is
+   * not under it at all.
+   *
+   * So this asserts at the CALL SITE, on a run that triggers BOTH rules — plugin
+   * layout supplies the rule-1 key, the declared `env:` supplies the rule-2 value —
+   * and pins each name to the reason that actually caught it.
+   */
+  it('says on stderr what it withheld from the control arm, and by which rule', async () => {
+    const { subjectDir } = writePluginFixture();
+    const fake = makeHarnessFakeSpawn({});
+    const stderr: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown): boolean => {
+      stderr.push(String(chunk));
+      return true;
+    });
+
+    let result: Awaited<ReturnType<typeof runSkillTestHarness>>;
+    try {
+      result = await runSkillTestHarness(
+        baselineOpts(subjectDir, fake.spawn, {
+          // Interpolated at stage time, so the value genuinely names this run's
+          // harness root rather than a literal a test author guessed.
+          env: { SNAPSHOT: '${harnessRoot}/staged/data.json' },
+        }),
+      );
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(result.exitCode, result.summary).toBe(0);
+    const withheld = stderr.filter((line) => line.includes('withheld'));
+
+    const byName = withheld.find((line) => line.includes('by name, whatever their value'));
+    expect(byName, `no rule-1 withholding line on stderr:\n${withheld.join('')}`).toBeDefined();
+    expect(byName).toContain('CLAUDE_PLUGIN_ROOT');
+    // The rule-2 line's wording must not be applied to it — that was the bug.
+    expect(byName).not.toContain('SNAPSHOT');
+
+    const byValue = withheld.find((line) => line.includes('because their value names the harness root'));
+    expect(byValue, `no rule-2 withholding line on stderr:\n${withheld.join('')}`).toBeDefined();
+    expect(byValue).toContain('SNAPSHOT');
+    expect(byValue).not.toContain('CLAUDE_PLUGIN_ROOT');
+  });
+
+  /**
    * Three rounds of work went into making the control arm's number honest. This is
    * the test that asks whether the honest number is still on disk when the command
    * exits — on the invocation the docs tell adopters to use.
