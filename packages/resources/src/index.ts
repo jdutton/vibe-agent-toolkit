@@ -494,6 +494,48 @@ export type { RuleScope } from './projection/contributors/claude-rules-scope.js'
 // here read blob-keyed tables.
 export { buildClaudeContextPopulation } from './projection/claude-context-population.js';
 
+// The §6 query over that lane's projection — "what loads at this path, and why".
+// `claudeAncestry` and `selectRules` are deliberately NOT exported: they are this
+// function's internals, nothing outside the package calls them, and pre-1.0 an
+// unexported symbol costs nothing while a published one is a contract.
+export {
+  whatLoadsAt,
+  type Admission,
+  type GradedCondition,
+  type LoadClass,
+  type LoadedContext,
+  type LoadedContextAnswer,
+  type LoadedRow,
+} from './projection/claude-context-query.js';
+
+// What the harness actually CHARGES for what the query says is loaded — the
+// 4 MiB `CLAUDE.md` cliff, the subtree it prunes behind it, and the counters that
+// stop a sum being read as the whole story.
+// `OVERSIZE_BYTES` is deliberately NOT among them: the cliff is `account`'s to
+// apply, no consumer re-derives it, and the one test that needs the boundary
+// imports it from the module directly. Pre-1.0, an unexported symbol costs
+// nothing while a published one is a contract.
+export {
+  account,
+  type AccountedContext,
+  type AccountedRow,
+  type ChargeState,
+  type ContextTotals,
+} from './projection/claude-context-accounting.js';
+
+// What the answer deliberately does not settle, as DATA rather than prose in a
+// doc: the command prints these beside every number, because a limit a reader has
+// to go and find is a limit that never reaches the person acting on the number.
+// The bounds statement ships WITH the list, so a consumer that renders the limits
+// cannot reach them without also reaching the sentence that frames them.
+export {
+  CLAUDE_CONTEXT_BOUNDS_STATEMENT,
+  CLAUDE_CONTEXT_LIMITS,
+  CLAUDE_CONTEXT_MODELLED_BEHAVIOURS,
+  type ModelledBehaviour,
+  type StatedLimit,
+} from './projection/claude-context-limits.js';
+
 // One crawl API, two implementations (scanning-and-caching §3.3): the walk, and
 // git plus a bounded walk of only what git cannot see. Same population, two cost
 // models — which is exactly what makes them differentially testable.

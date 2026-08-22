@@ -1,14 +1,11 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- every path below is joined from this suite's own mkdtemp root */
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { LOADING_TAG } from '../../src/projection/agentic-tags.js';
-import { buildClaudeContextPopulation } from '../../src/projection/claude-context-population.js';
 import { CLAUDE_IMPORT_KIND } from '../../src/projection/contributors/claude-import-extent.js';
 import { RULE_SCOPE_TAG } from '../../src/projection/contributors/claude-rules-scope.js';
 import type { Projection } from '../../src/projection/projection.js';
+
+import { buildClaudeContextTree, byCodePoint, removeClaudeContextTree } from './claude-context-tree.js';
 
 /**
  * A real on-disk tree, because this test is about WIRING: that root discovery
@@ -17,49 +14,34 @@ import type { Projection } from '../../src/projection/projection.js';
  * other's rows. The behaviour those contributors implement is unit-tested
  * against hand-built bases; only the assembly needs a filesystem.
  */
-let suiteDir: string;
+let suiteDir: string | undefined;
 let projection: Projection;
 
 /** The one hop-2 import chain, so the lane is proven to walk past depth 1. */
 const HANDBOOK = 'docs/handbook.md';
 
+/** This suite's tree — `buildClaudeContextTree` writes it and populates it. */
+const TREE: Record<string, string> = {
+  'CLAUDE.md': `# Root\n\n@${HANDBOOK}\n`,
+  [HANDBOOK]: '# Handbook\n\n@deeper.md\n',
+  'docs/deeper.md': '# Deeper\n',
+  'docs/CLAUDE.md': '# Docs\n\n@missing.md\n',
+  '.claude/rules/always.md': '---\ndescription: always on\n---\n\nAlways.\n',
+  '.claude/rules/typescript.md': '---\npaths: ["**/*.ts"]\n---\n\nTS only.\n',
+  'packages/cli/.claude/rules/local.md': '---\ndescription: nested\n---\n\nNested.\n',
+};
+
 beforeAll(async () => {
-  // `normalizedTmpdir`, not `os.tmpdir()`: on Windows the raw value can be an
-  // 8.3 short name (`RUNNER~1`), which does not compare equal to the long path
-  // every realization row is stated against.
-  suiteDir = await mkdtemp(safePath.join(normalizedTmpdir(), 'vat-claude-context-'));
-  await mkdir(safePath.join(suiteDir, 'docs'), { recursive: true });
-  await mkdir(safePath.join(suiteDir, '.claude/rules'), { recursive: true });
-  await mkdir(safePath.join(suiteDir, 'packages/cli/.claude/rules'), { recursive: true });
-
-  await writeFile(safePath.join(suiteDir, 'CLAUDE.md'), `# Root\n\n@${HANDBOOK}\n`);
-  await writeFile(safePath.join(suiteDir, HANDBOOK), '# Handbook\n\n@deeper.md\n');
-  await writeFile(safePath.join(suiteDir, 'docs/deeper.md'), '# Deeper\n');
-  await writeFile(safePath.join(suiteDir, 'docs/CLAUDE.md'), '# Docs\n\n@missing.md\n');
-  await writeFile(
-    safePath.join(suiteDir, '.claude/rules/always.md'),
-    '---\ndescription: always on\n---\n\nAlways.\n',
-  );
-  await writeFile(
-    safePath.join(suiteDir, '.claude/rules/typescript.md'),
-    '---\npaths: ["**/*.ts"]\n---\n\nTS only.\n',
-  );
-  await writeFile(
-    safePath.join(suiteDir, 'packages/cli/.claude/rules/local.md'),
-    '---\ndescription: nested\n---\n\nNested.\n',
-  );
-
-  projection = await buildClaudeContextPopulation({
-    root: suiteDir,
-    onBlobPopulation: () => undefined,
-  });
+  const tree = await buildClaudeContextTree(TREE);
+  suiteDir = tree.dir;
+  projection = tree.projection;
 }, 60_000);
 
 afterAll(async () => {
   // Generous, and deliberately so: a recursive `rm` over a temp tree has timed
   // out at Vitest's 10s hook default on Windows CI, which fails the whole file
   // for a reason that has nothing to do with what it tests.
-  await rm(suiteDir, { recursive: true, force: true });
+  await removeClaudeContextTree(suiteDir);
 }, 60_000);
 
 /** The extent id of one root's import closure, read back off provenance. */
@@ -82,18 +64,6 @@ function membersOf(extentId: string): string[] {
     .filter((row) => row.extentId === extentId)
     .map((row) => row.path)
     .sort(byCodePoint);
-}
-
-/**
- * Order two paths by UTF-16 code point.
- *
- * Deliberately not `String.localeCompare`, which `sonarjs` suggests by default:
- * it is ICU- and locale-dependent, and an expectation that changes with the
- * machine's locale is not an expectation.
- */
-function byCodePoint(left: string, right: string): number {
-  if (left === right) return 0;
-  return left < right ? -1 : 1;
 }
 
 describe('buildClaudeContextPopulation', () => {

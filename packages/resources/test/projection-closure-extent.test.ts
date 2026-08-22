@@ -1,10 +1,5 @@
-import { createHash } from 'node:crypto';
-
-import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-import { parseMarkdownContent } from '../src/link-parser.js';
-import { blobReferencesFor } from '../src/projection/blob-references.js';
 import type { ExtentContribution } from '../src/projection/contributor.js';
 import {
   CLOSURE_DEPTH_EXCEEDED,
@@ -17,11 +12,10 @@ import { extentContextId } from '../src/projection/contributors/context-id.js';
 import { rootIdFor } from '../src/projection/identity.js';
 import { ProjectionBuilder, type ProjectionBase } from '../src/projection/projection.js';
 import { ExtentDeclarationSchema, ProjectConfigSchema } from '../src/schemas/project-config.js';
-import type { BlobReferenceRow, ReferenceSyntacticForm } from '../src/schemas/projection-blobs.js';
 import { CONDITION_WITHOUT_REFERENCE } from '../src/schemas/projection-resources.js';
-import type { ResourceRealizationRow } from '../src/schemas/projection-resources.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
+import { addFile, MARKDOWN_LINK, type FixtureFile } from './helpers/claude-context-fixture.js';
 import { expectContributionRowsValid } from './test-helpers.js';
 
 /**
@@ -39,9 +33,6 @@ const SKILL_KIND = 'skill';
 
 /** The extent name — the within-root discriminator of the closure extent's id. */
 const EXTENT_NAME = 'my-skill-bundle';
-
-/** The extent the hand-built base realizes its files in. */
-const BASE_EXTENT = 'ctx-filesystem-fixture';
 
 const ROOT_DOC = 'skills/foo/SKILL.md';
 const DOC_B = 'skills/foo/b.md';
@@ -93,158 +84,27 @@ function refusalRule(label: string, matchers: Record<string, JsonValue>): Record
   return { label, ...matchers };
 }
 
-const MARKDOWN_LINK: ReferenceSyntacticForm = 'markdown-link';
-
 /**
- * The notional line width the hand-built fixtures lay their reference spans out
- * on, so successive rows never overlap. No fixture reference comes near it.
- */
-const MAX_FIXTURE_LINE_LENGTH = 200;
-
-/** One reference candidate to plant in a fixture blob. */
-interface FixtureRef {
-  rawRef: string;
-  syntacticForm?: ReferenceSyntacticForm;
-  inFence?: boolean;
-}
-
-/** One fixture file: a path in the base extent plus the references its blob holds. */
-interface FixtureFile {
-  path: string;
-  refs: readonly FixtureRef[];
-  /**
-   * Markdown source to run through the REAL parse pipeline, instead of planting
-   * hand-built rows from {@link FixtureFile.refs}.
-   *
-   * 🪤 The reason this field exists: a hand-built row can pair a `rawRef` with a
-   * `syntacticForm` its own producer could never assign — `{ rawRef: 'b.md',
-   * syntacticForm: 'at-prefixed' }` is the case that shipped, and it left the
-   * `@`-following path green while never once resolving a real `@` token,
-   * because anything the lexer classifies `at-prefixed` starts with `@` by
-   * definition. When a test exercises a row type a pipeline stage emits, at
-   * least one case must come from that stage, or the test pins the mock.
-   */
-  markdown?: string;
-  /** The `resources.kind` this entity gets. Defaults to `file`. */
-  kind?: string;
-  /**
-   * Boolean realization columns overriding the defaults, for `flags` rules.
-   *
-   * A `Partial` of the row rather than named booleans, so a column added to
-   * `ResourceRealizationRow` becomes fixture-settable without touching this
-   * type — the same reason the matcher itself is keyed by column name.
-   */
-  columns?: Partial<Pick<ResourceRealizationRow, 'exists' | 'gitignored' | 'isSymlink'>>;
-}
-
-/** A schema-valid content key (`<parserKind>.<sha256>`) derived from a seed. */
-function markdownKey(seed: string): string {
-  return `markdown.${createHash('sha256').update(seed).digest('hex')}`;
-}
-
-/** The realization row the base carries for one fixture path. */
-function realizationRow(resourceId: string, path: string, contentKey: string): ResourceRealizationRow {
-  const lastSlash = path.lastIndexOf('/');
-  const basename = lastSlash === -1 ? path : path.slice(lastSlash + 1);
-  const dot = basename.lastIndexOf('.');
-  return {
-    resourceId,
-    extentId: BASE_EXTENT,
-    path,
-    pathLower: path.toLowerCase(),
-    basenameLower: basename.toLowerCase(),
-    dir: lastSlash === -1 ? '' : path.slice(0, lastSlash),
-    // eslint-disable-next-line local/no-hardcoded-path-split -- fixture paths are authored forward-slashed, as `relativize()` emits them
-    depth: path.split('/').length,
-    ext: dot <= 0 ? '' : basename.slice(dot).toLowerCase(),
-    contentKey,
-    // Non-null key, so the only state the schema's superRefine admits.
-    contentState: 'keyed',
-    mtime: null,
-    exists: true,
-    isDirectory: false,
-    gitignored: false,
-    isSymlink: false,
-    symlinkResolves: null,
-  };
-}
-
-/**
- * One `blob_references` row for a planted reference.
+ * `FixtureFile`, `addFile`, `MARKDOWN_LINK` and `closureFixtureFrom` all live
+ * in `test/helpers/claude-context-fixture.ts` — `projection-claude-context-
+ * query.test.ts` needs the same real-lexer machinery, and a second copy is
+ * exactly the drift risk `FixtureFile.markdown`'s own docstring warns about.
  *
- * The span columns are synthesized from the ordinal rather than left off: they
- * are required by `BlobReferenceRowSchema` and must be a half-open
- * `[startOffset, endOffset)`, so a row missing them is not one the producer
- * could emit. One notional line per reference keeps successive rows' spans
- * disjoint, which is the only property a fixture here depends on.
- */
-function referenceRow(blob: string, ordinal: number, ref: FixtureRef): BlobReferenceRow {
-  const startOffset = ordinal * MAX_FIXTURE_LINE_LENGTH;
-  return {
-    blob,
-    ordinal,
-    rawRef: ref.rawRef,
-    text: null,
-    line: ordinal + 1,
-    column: 1,
-    startOffset,
-    endOffset: startOffset + ref.rawRef.length,
-    syntacticForm: ref.syntacticForm ?? MARKDOWN_LINK,
-    hasExtension: true,
-    leadingAt: false,
-    slashCount: 0,
-    variableExpansion: null,
-    inCodeSpan: false,
-    inFence: ref.inFence ?? false,
-  };
-}
-
-/**
- * The `blob_references` rows one fixture file contributes.
+ * ⛔ `closureFixtureFrom` was exported from HERE and imported by
+ * `projection-closure-provenance.test.ts`, which re-registered all 47 cases
+ * below inside that file: this suite ran TWICE in every `test:unit`, and the
+ * provenance suite reported 53 tests for the 6 it declares. Importing a
+ * `.test.ts` runs it. Shared fixtures go in `test/helpers/`.
  *
- * A file declaring `markdown` gets rows from the shipped producer chain —
- * `parseMarkdownContent` then `blobReferencesFor` — so every column, including
- * `syntacticForm`, `leadingAt`, `hasExtension`, `slashCount`, `inFence` and
- * `inCodeSpan`, is whatever the real lexer computes. Everything else keeps the
- * hand-built path, which is still the right tool for planting a column
- * combination deliberately (a `gitignored` target, say) that no source text
- * would produce.
- *
- * @param contentKey - The blob's content key
- * @param file - The fixture file
- * @returns Its reference rows, in producer order
+ * This suite still owns everything downstream: the fixture graphs below, and
+ * `buildBase`, which calls the imported `addFile`.
  */
-function referenceRowsFor(contentKey: string, file: FixtureFile): BlobReferenceRow[] {
-  if (file.markdown !== undefined) {
-    const parsed = parseMarkdownContent(file.markdown, Buffer.byteLength(file.markdown));
-    return blobReferencesFor(contentKey, parsed);
-  }
-  return file.refs.map((ref, ordinal) => referenceRow(contentKey, ordinal, ref));
-}
-
-/** Add one fixture file's resource, realization and reference rows to the base. */
-function addFile(builder: ProjectionBuilder, file: FixtureFile): void {
-  const resourceId = builder.identities.idFor(safePath.join(ROOT, file.path));
-  const contentKey = markdownKey(file.path);
-  builder.addResource({
-    resourceId,
-    kind: file.kind ?? 'file',
-    origin: 'filesystem',
-    observed: true,
-    fromEnumeration: true,
-    vatId: null,
-  });
-  builder.addRealization({ ...realizationRow(resourceId, file.path, contentKey), ...file.columns });
-  for (const row of referenceRowsFor(contentKey, file)) {
-    builder.addBlobReference(row);
-  }
-}
 
 /** A base projection holding exactly these files and their reference candidates. */
 function buildBase(files: readonly FixtureFile[]): ProjectionBase {
   const builder = new ProjectionBuilder(ROOT);
   for (const file of files) {
-    addFile(builder, file);
+    addFile(builder, file, ROOT);
   }
   return builder.base();
 }
@@ -302,6 +162,20 @@ const FLAG_FIXTURE: readonly FixtureFile[] = [
   { path: DOC_BEHIND, refs: [] },
   { path: DOC_B, refs: [] },
   { path: DOC_C, refs: [], columns: { gitignored: true, exists: false } },
+];
+
+/**
+ * `SKILL.md` importing `@b.md` the way a CLAUDE.md authors an import, run
+ * through the REAL lexer so `rawRef` keeps its `@` and `leadingAt` is true.
+ *
+ * Shared by the `claude-import` case and its `href` control precisely BECAUSE
+ * the two must differ in the declared dialect and in nothing else: two copies
+ * are free to drift a character apart, at which point the control stops
+ * controlling for the thing it was written to control for.
+ */
+const AT_TOKEN_IMPORT: readonly FixtureFile[] = [
+  { path: ROOT_DOC, refs: [], markdown: 'See @b.md for the rest.\n' },
+  { path: DOC_B, refs: [] },
 ];
 
 /** A cycle `SKILL.md → b.md → c.md → SKILL.md`, which only the visited set can terminate. */
@@ -879,12 +753,7 @@ describe('ClosureExtentContributor', () => {
     // Under the `href` dialect this resolves `skills/foo/@b.md`, finds nothing,
     // and reports CLOSURE_REFERENCE_UNRESOLVED. Under `claude-import` it must
     // resolve `skills/foo/b.md` and admit it.
-    const files: readonly FixtureFile[] = [
-      { path: ROOT_DOC, refs: [], markdown: 'See @b.md for the rest.\n' },
-      { path: DOC_B, refs: [] },
-    ];
-
-    const contribution = await contributeOver(files, declarationOf({
+    const contribution = await contributeOver(AT_TOKEN_IMPORT, declarationOf({
       follow: ['at-prefixed'],
       referenceDialect: 'claude-import',
     }));
@@ -899,12 +768,10 @@ describe('ClosureExtentContributor', () => {
     // `href` is VAT's general RFC 3986 resolver and has no `@` branch; a
     // declaration that did not ASK for the vendor dialect must not get it, or
     // every existing extent silently changes meaning.
-    const files: readonly FixtureFile[] = [
-      { path: ROOT_DOC, refs: [], markdown: 'See @b.md for the rest.\n' },
-      { path: DOC_B, refs: [] },
-    ];
-
-    const contribution = await contributeOver(files, declarationOf({ follow: ['at-prefixed'] }));
+    const contribution = await contributeOver(
+      AT_TOKEN_IMPORT,
+      declarationOf({ follow: ['at-prefixed'] }),
+    );
 
     expect(memberPaths(contribution)).toEqual([ROOT_DOC]);
     expect(contribution.conditions[0]?.code).toBe(CLOSURE_REFERENCE_UNRESOLVED);

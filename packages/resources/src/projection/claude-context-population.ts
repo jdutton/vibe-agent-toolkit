@@ -30,10 +30,18 @@
  * the direction a context-budget answer cannot tolerate.
  *
  * The cost is real, and is stated here rather than discovered later: a gitignored
- * directory holding a second copy of the tree — `.claude/worktrees/` in VAT's own
- * repository does exactly this — contributes its own `CLAUDE.md` and
- * `.claude/rules/` set, so root discovery registers a contributor per copy and
- * the population grows with them.
+ * directory holding a second copy of the tree — a vendored dependency checkout, a
+ * generated site bundle, a release staging directory — contributes its own
+ * `CLAUDE.md` and `.claude/rules/` set, so root discovery registers a contributor
+ * per copy and the population grows with them.
+ *
+ * ⚠️ Git worktrees are NOT an instance of this, and naming them as one was wrong.
+ * Both `.worktrees` and `.claude/worktrees` have entries in
+ * `NEVER_CRAWL_GLOBS` (`file-crawler.ts`), which `crawl-source.ts` passes to
+ * `crawlDirectory` on the filesystem arm AND on the git arm's walk of the
+ * ignored territory git declines to hold. Neither arm can descend into a
+ * worktree copy, so it contributes nothing to enumerate. Only a gitignored copy
+ * that survives that list costs anything here.
  *
  * It does not double any ANSWER, and the two reasons are worth separating:
  * a copy's `CLAUDE.md` is only ever an ancestor of paths *inside* that copy, so

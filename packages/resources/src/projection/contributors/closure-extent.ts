@@ -127,7 +127,7 @@ import type {
 import type { JsonValue } from '../../schemas/projection-shared.js';
 import type { ResolutionContextRow } from '../../schemas/projection-zones.js';
 import type { ContributorStratum, ExtentContribution, ExtentContributor } from '../contributor.js';
-import type { ProjectionBase } from '../projection.js';
+import type { Projection, ProjectionBase } from '../projection.js';
 import { relativize } from '../realizations.js';
 
 import { extentContextId } from './context-id.js';
@@ -340,13 +340,90 @@ export class ClosureExtentContributor implements ExtentContributor {
 }
 
 /**
- * Breadth-first traversal from `closureFrom`, bounded by depth and excludes.
+ * One admitted member of a closure, as the traversal reaches it.
  *
- * Two independent guards stop it, and they are deliberately not interchangeable:
- * the **visited set** terminates cycles (a cycle at `maxDepth: 'full'` has no
- * depth to exceed), and the **depth cap** bounds an acyclic chain (a chain has
- * nothing to revisit). A fixture that could not tell them apart would leave one
- * of them unfalsifiable.
+ * `viaPath` is null for exactly one member — the declared root, which is seeded
+ * rather than reached. Every other member was reached from a real reference in a
+ * real file, and saying so is §6.2's whole requirement.
+ */
+interface AdmittedHop {
+  readonly path: string;
+  readonly depth: number;
+  readonly viaPath: string | null;
+}
+
+/**
+ * The breadth-first traversal itself — the ONE copy.
+ *
+ * Extracted from {@link walkClosure} because the closure has two consumers that
+ * need the same walk and different projections of it: the contributor maps these
+ * hops to rows, and {@link closureProvenance} maps them to a parent/depth map for
+ * the §6 query. Materialising that map as a table was refused — `projection.ts`
+ * places edges in the derived-per-lens column, and `lens_entry_points` was left
+ * unpopulated on the same ground — so the query re-runs this walk instead.
+ *
+ * Splitting it is what keeps that from being two implementations: a change to the
+ * hop budget, the fence filter or the self-link rule lands here once, and neither
+ * consumer can drift from it because neither owns a walk of its own.
+ *
+ * @param walk - The traversal's indexed inputs
+ * @param conditions - Collector for references that resolve to nothing. The
+ *   provenance consumer passes an array it discards: the projection already holds
+ *   the contributor's conditions, and a second copy would double-report
+ * @returns Every admitted member, in breadth-first order, root first
+ */
+function traverseClosure(
+  walk: WalkContext,
+  conditions: RealizationConditionRow[],
+): AdmittedHop[] {
+  const rootPath = walk.declaration.closureFrom;
+  if (!walk.byPath.has(rootPath)) {
+    // Empty, but never *unexplained* empty: the condition says which declared
+    // path the base never realized, so this extent cannot be read as a complete
+    // one. Reported rather than thrown, because one typo in one declaration must
+    // not abort a whole population.
+    conditions.push(rootAbsentCondition(walk.extentId, rootPath));
+    return [];
+  }
+
+  const admitted: AdmittedHop[] = [{ path: rootPath, depth: 0, viaPath: null }];
+  const visited = new Set<string>([rootPath]);
+  const queue: Hop[] = [[rootPath, 0]];
+
+  while (queue.length > 0) {
+    const hop = queue.shift();
+    if (hop === undefined) break;
+    const [path, depth] = hop;
+
+    // ⚠️ NO depth guard here, deliberately. A member at `maxDepth` still has its
+    // references ENUMERATED and EVALUATED — the hop budget decides what is
+    // ADMITTED, never what is looked at. That split is `walk-link-graph.ts`'s
+    // own: `processLink` runs `checkExclusions` before `processRegistryResource`
+    // reaches the depth check, so the walker records an exclusion for a link out
+    // of a member at the frontier and simply declines to bundle its target.
+    // Guarding here instead made the closure SILENT at the boundary — same
+    // membership, fewer facts. The budget lives at the single point that turns a
+    // candidate into a hop ({@link hopFor}).
+    for (const next of outboundHops(path, walk.byPath.get(path) ?? [], depth, walk, conditions)) {
+      if (visited.has(next[0])) continue;
+      visited.add(next[0]);
+      admitted.push({ path: next[0], depth: next[1], viaPath: path });
+      queue.push(next);
+    }
+  }
+
+  return admitted;
+}
+
+/**
+ * The extent's tables, projected from the traversal.
+ *
+ * Two independent guards stop the walk, and they are deliberately not
+ * interchangeable: the **visited set** terminates cycles (a cycle at
+ * `maxDepth: 'full'` has no depth to exceed), and the **depth cap** bounds an
+ * acyclic chain (a chain has nothing to revisit). A fixture that could not tell
+ * them apart would leave one of them unfalsifiable. Both live in
+ * {@link traverseClosure}.
  *
  * @param walk - The traversal's inputs, indexed once
  * @returns Every table except `contexts`, which the caller owns
@@ -357,56 +434,124 @@ function walkClosure(walk: WalkContext): Omit<ExtentContribution, 'contexts'> {
   const memberships: ResourceExtentRow[] = [];
   const conditions: RealizationConditionRow[] = [];
 
-  const rootPath = walk.declaration.closureFrom;
-  if (!walk.byPath.has(rootPath)) {
-    // Empty, but never *unexplained* empty: the condition says which declared
-    // path the base never realized, so this extent cannot be read as a complete
-    // one. Reported rather than thrown, because one typo in one declaration must
-    // not abort a whole population.
-    conditions.push(rootAbsentCondition(walk.extentId, rootPath));
-    return { resources, realizations, memberships, tags: [], conditions };
-  }
-
-  const visited = new Set<string>([rootPath]);
-  const queue: Hop[] = [[rootPath, 0]];
-
-  while (queue.length > 0) {
-    const hop = queue.shift();
-    if (hop === undefined) break;
-    const [path, depth] = hop;
-
-    const rows = walk.byPath.get(path) ?? [];
+  for (const hop of traverseClosure(walk, conditions)) {
+    const rows = walk.byPath.get(hop.path) ?? [];
     // The FIRST realization in base order wins. A closure extent does not
     // re-observe the path — it inherits the columns of the first extent that
     // did — so this is a stated tie-break rather than whichever extent happened
     // to be registered last.
     const first = rows[0];
-    if (first !== undefined) {
-      resources.push(memberResource(first.resourceId, walk));
-      realizations.push({ ...first, extentId: walk.extentId });
-      memberships.push({ resourceId: first.resourceId, extentId: walk.extentId });
-    }
-
-    // ⚠️ NO depth guard here, deliberately. A member at `maxDepth` still has its
-    // references ENUMERATED and EVALUATED — the hop budget decides what is
-    // ADMITTED, never what is looked at. That split is `walk-link-graph.ts`'s
-    // own: `processLink` runs `checkExclusions` before `processRegistryResource`
-    // reaches the depth check, so the walker records an exclusion for a link out
-    // of a member at the frontier and simply declines to bundle its target.
-    // Guarding here instead made the closure SILENT at the boundary — same
-    // membership, fewer facts — and a comparison against the walker had to
-    // tolerate the missing rows rather than the code closing the gap. The
-    // budget now lives at the single point that turns a candidate into a hop
-    // ({@link hopFor}), which is the only place it can bound membership without
-    // also bounding what gets reported.
-    for (const next of outboundHops(path, rows, depth, walk, conditions)) {
-      if (visited.has(next[0])) continue;
-      visited.add(next[0]);
-      queue.push(next);
-    }
+    if (first === undefined) continue;
+    resources.push(memberResource(first.resourceId, walk));
+    realizations.push({ ...first, extentId: walk.extentId });
+    memberships.push({ resourceId: first.resourceId, extentId: walk.extentId });
   }
 
   return { resources, realizations, memberships, tags: [], conditions };
+}
+
+/**
+ * The `extentId` {@link closureProvenance} runs under.
+ *
+ * It reaches only the condition rows the provenance walk discards, so it is never
+ * stored and never joined. Spelled unmistakably rather than plausibly: an id that
+ * looked like a real extent's would eventually be read as one.
+ */
+const PROVENANCE_ONLY_EXTENT_ID = 'closure-provenance:no-extent';
+
+/**
+ * What {@link closureProvenance} needs — and deliberately no more.
+ *
+ * Structurally satisfied by a `ProjectionBase`, and by a built `Projection`
+ * paired with its root, which is the case that matters: §6's query holds a
+ * `Projection` (possibly rehydrated from the store) and never a base. Every
+ * field here is a MATERIALISED table, so a cached answer and a freshly derived
+ * one attribute identically.
+ */
+export interface ClosureProvenanceInput {
+  /** Absolute, already-resolved corpus root — `roots[0].path`. */
+  readonly root: string;
+  readonly resourceRealizations: readonly ResourceRealizationRow[];
+  readonly blobReferences: readonly BlobReferenceRow[];
+  /** The declaration the extent ran under — `zone_provenance.parameterSet`. */
+  readonly declaration: ExtentDeclaration;
+}
+
+/**
+ * Where each member of a closure came from, and how far in.
+ *
+ * `depth` is hops from the declared root, which is itself 0. `viaPath` is the
+ * member whose reference admitted this one — null only for the root.
+ */
+export interface ImportProvenance {
+  readonly depth: number;
+  readonly viaPath: string | null;
+}
+
+/**
+ * Re-derive one closure's parent/depth map without materialising an edge table.
+ *
+ * ⛔ This is NOT a second resolver. It runs {@link traverseClosure} — the same
+ * walk, the same `hopFor`, the same dialect — and projects it differently. The
+ * alternative was an `extent_edges` table, and `projection.ts:85-91` states that
+ * edges are *"the output of evaluating a lens rather than rows anything
+ * populates"*; Ruling B declined to materialise `lens_entry_points` on that exact
+ * ground and computed ancestry in the query instead. This is the same shape.
+ *
+ * The conditions the walk produces are computed and DROPPED: the projection
+ * already holds the contributor's copies, and emitting a second set would
+ * double-report every dangling `@`.
+ *
+ * @param input - The root, the two materialised tables, and the declaration
+ * @returns Root-relative path → its provenance, for every admitted member
+ * @throws When the declaration carries refusal rules. The no-op refusal matcher
+ *   below is EQUIVALENT to the real one only when `refusals` is empty — not an
+ *   approximation of it — and a silently different membership would be a wrong
+ *   answer wearing a right one's shape. `claudeImportExtentDeclaration` always
+ *   declares `refusals: []`, so this is a boundary, not a reachable failure
+ */
+export function closureProvenance(
+  input: ClosureProvenanceInput,
+): ReadonlyMap<string, ImportProvenance> {
+  if (input.declaration.refusals.length > 0) {
+    throw new Error(
+      `closureProvenance cannot answer for a declaration carrying ${input.declaration.refusals.length} refusals rule(s):`
+      + ' it substitutes a no-op refusal matcher, which is equivalent to the real one only when none are declared.'
+      + ' Either declare no refusals, or materialise the membership this query would have to guess at.',
+    );
+  }
+
+  // Just the two columns the two indexers below read, plus `root` for
+  // `resolveReference`. NOT cast to `IndexableBase` for those two calls — that
+  // widened signature accepts this object directly. The cast to `ProjectionBase`
+  // below is sound only because `WalkContext.base` is consumed by
+  // `resolveReference` (for `base.root`) and by `memberResource` (for
+  // `base.identities`), and this function's walk reaches the first and never
+  // the second — `closureProvenance` never calls `memberResource`.
+  const partialBase = {
+    root: input.root,
+    resourceRealizations: input.resourceRealizations,
+    blobReferences: input.blobReferences,
+  };
+
+  const walk: WalkContext = {
+    base: partialBase as unknown as ProjectionBase,
+    declaration: input.declaration,
+    // Never read on this path: no row is emitted, so nothing is keyed to an
+    // extent. Named rather than faked with a plausible id, so a future reader
+    // cannot mistake it for a real extent this map belongs to.
+    extentId: PROVENANCE_ONLY_EXTENT_ID,
+    byPath: indexRealizationsByPath(partialBase),
+    byBlob: referencesByBlobFor(partialBase),
+    // Sound only under the guard above.
+    refusalOf: () => undefined,
+  };
+
+  const provenance = new Map<string, ImportProvenance>();
+  for (const hop of traverseClosure(walk, [])) {
+    provenance.set(hop.path, { depth: hop.depth, viaPath: hop.viaPath });
+  }
+  return provenance;
 }
 
 /**
@@ -1257,12 +1402,21 @@ function rootAbsentCondition(extentId: string, rootPath: string): RealizationCon
 }
 
 /**
+ * Just the two columns {@link indexRealizationsByPath} and
+ * {@link referencesByBlobFor} read — see {@link closureProvenance}, whose whole
+ * reason for widening these two signatures is that it holds neither a
+ * `ProjectionBase` nor a `Projection`, only these two materialised tables plus
+ * the root `WalkContext.base` separately needs.
+ */
+type IndexableBase = Pick<Projection, 'resourceRealizations' | 'blobReferences'>;
+
+/**
  * Index the base's realizations by root-relative path, preserving base order.
  *
  * @param base - The projection built so far
  * @returns Path → its realization rows
  */
-function indexRealizationsByPath(base: ProjectionBase): ReadonlyMap<string, readonly ResourceRealizationRow[]> {
+function indexRealizationsByPath(base: IndexableBase): ReadonlyMap<string, readonly ResourceRealizationRow[]> {
   const byPath = new Map<string, ResourceRealizationRow[]>();
   for (const row of base.resourceRealizations) {
     const rows = byPath.get(row.path);
@@ -1297,7 +1451,7 @@ function indexRealizationsByPath(base: ProjectionBase): ReadonlyMap<string, read
  * answer. That is the difference between a cache and a bug.
  */
 const referencesByBlobMemo = new WeakMap<
-  ProjectionBase,
+  IndexableBase,
   { readonly rowCount: number; readonly index: ReadonlyMap<string, readonly BlobReferenceRow[]> }
 >();
 
@@ -1307,7 +1461,7 @@ const referencesByBlobMemo = new WeakMap<
  * @param base - The projection built so far
  * @returns `contentKey` → its reference rows, ordinal-ordered
  */
-function referencesByBlobFor(base: ProjectionBase): ReadonlyMap<string, readonly BlobReferenceRow[]> {
+function referencesByBlobFor(base: IndexableBase): ReadonlyMap<string, readonly BlobReferenceRow[]> {
   const cached = referencesByBlobMemo.get(base);
   if (cached?.rowCount === base.blobReferences.length) {
     return cached.index;
@@ -1327,7 +1481,7 @@ function referencesByBlobFor(base: ProjectionBase): ReadonlyMap<string, readonly
  * @param base - The projection built so far
  * @returns `contentKey` → its reference rows, ordinal-ordered
  */
-function indexReferencesByBlob(base: ProjectionBase): ReadonlyMap<string, readonly BlobReferenceRow[]> {
+function indexReferencesByBlob(base: IndexableBase): ReadonlyMap<string, readonly BlobReferenceRow[]> {
   const byBlob = new Map<string, BlobReferenceRow[]>();
   for (const row of base.blobReferences) {
     const rows = byBlob.get(row.blob);

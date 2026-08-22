@@ -70,13 +70,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`vat claude context <path>`** — reports which `CLAUDE.md` files, `.claude/rules` files and
+  `@`-imported files load into an agent's context at that path, why each one is there, and its
+  estimated token cost. A file argument is exact; a directory answers path-scoped rules as "may fire
+  here". The report publishes its own limits: the number is neither a floor nor a ceiling.
+
+- **(library) `closureProvenance()`** — which member of a closure pulled in which, and at what depth,
+  computed from the same traversal the closure contributor runs rather than from a stored edge table.
+
 - **(library) Claude `@`-import closures are now projected.** `ClaudeImportExtentContributor`
   registers one closure extent per `CLAUDE.md` / `CLAUDE.local.md` / `.claude/rules` file, following
   only `at-prefixed` tokens, to the vendor's documented four-hop bound. Roots are discovered through
   the shipped `classifyPath()` rather than a second glob. `buildClaudeContextPopulation()` assembles
   the lane. Dangling `@` imports become visible for the first time — they land as
   `CLOSURE_REFERENCE_UNRESOLVED` conditions, and an escaping `@~/…` import lands as
-  `CLOSURE_REFERENCE_OUTSIDE_ROOT`, named but never charged. No CLI command reads these rows yet.
+  `CLOSURE_REFERENCE_OUTSIDE_ROOT`, named but never charged. `vat claude context` reports them.
 
 - **(library) `.claude/rules` files carry a `rule-scope` tag.** `ClaudeRulesScopeContributor` reads
   `paths:` off `blobs.frontmatter` and files `root`, `nested` or `path-scoped` — the producer a path
