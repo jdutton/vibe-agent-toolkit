@@ -283,6 +283,16 @@ const EXCERPT_RADIUS = 60;
 /**
  * A short excerpt around the first occurrence of `token`, collapsed to one line.
  * Bounded so a huge tool result cannot bloat `baseline.json`.
+ *
+ * ⚠️ KNOWN OPEN — nothing here is redacted, and two things leak. (1) The ±60 chars
+ * are raw transcript: a hit inside an `env` dump has been observed carrying
+ * `AWS_SECRET_ACCESS_KEY=…`, `GITHUB_TOKEN=ghp_…` and `HOME=/Users/<name>` into
+ * `baseline.json` — the same values `formatForwardedEnvLine` bothers to mask on
+ * stderr. (2) Needles run longest-first, so `match` on a full-path reach is the
+ * entire absolute harness root, which on Windows is
+ * `C:/Users/<username>/AppData/…` — putting the username in a field whose own
+ * docstring carries no sensitivity note. Fix: mask `KEY=value` pairs here, and
+ * report only the suffix needle in `match`.
  */
 function excerptAround(haystack: string, index: number, tokenLength: number): string {
   const start = Math.max(0, index - EXCERPT_RADIUS);
@@ -331,6 +341,23 @@ const MIN_EXECUTABLE_NAME_LENGTH = 3;
  * Two accepted forms, both of which mean the name is a FILE:
  *   - preceded by a path separator: `scripts/summary`, `./summary`
  *   - followed by an extension: `summary.py`, `summary.mjs`
+ *
+ * ⚠️ KNOWN OPEN, and the reason is that those two forms are exactly what a CLEAN
+ * control arm produces. Denied the skill, it writes its own script and gives it the
+ * obvious name — a review found 8/8 realistic pairs firing: `python3 analyze.py`
+ * against a declared `scripts/analyze.py`, `Wrote report.md`, `saved to summary.txt`,
+ * `built index.json`, `created run.sh`. A URL segment (`docs.example.com/report`)
+ * fires too. So this needle currently reports `contaminated: true` on the behavior
+ * the arm is SUPPOSED to exhibit, with "discard the delta" attached.
+ *
+ * It is not evidence on its own and should not stay wired as if it were. The fix is
+ * one of: thread the arm's `workspaceDir` in and suppress any match whose surrounding
+ * path resolves inside it (the arm's own scratch files are not contamination); or
+ * demote `declared-executable` to an advisory that never sets `contaminated: true`
+ * without a corroborating `harness-path` hit. Do NOT "fix" this by tightening the
+ * pattern alone — it is already too tight in the other direction (a declared
+ * executable invoked bare on PATH, `csvsum data.csv`, is invisible, and `howInvoked`
+ * carries exactly that form and is deliberately unused).
  */
 function executableInvocationPattern(name: string): RegExp {
   // Every regex metacharacter in `name` is escaped first, so the constructed
