@@ -94,6 +94,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whole options object, which a mutation routing the staged path through `model` — and onto argv —
   proved was necessary).
 
+- **The `--baseline` arms' working directories no longer tell each arm which arm it is.** Round 3
+  gave each arm its own workspace at `<tmp>/vat-skill-test-ws-<token>/<arm>/<id>` — with `<arm>` as
+  the literal `with`/`without`. That path is quoted to the executor as its working directory, so the
+  skill-absent arm read `…/without/e1` in the one string it cannot avoid, while
+  `buildExecutorPrompt`'s own docblock promises the executor "must NEVER be told (directly or by
+  implication) that it is being tested, evaluated, or graded". The `BLINDING_BREAKERS` scan checks
+  four English phrases and caught none of it. It also handed each arm a guessable path to the other:
+  `../with/<id>/` is the treatment arm's live output, and `existsSync` on it returns true.
+
+  The segment is now an opaque random token minted per run, per arm, independent of each other —
+  fixing the unblinding and making the sibling's directory name unguessable in one change.
+  `StageEvalWorkspacesInput.arms` (a `readonly EvalArm[]`, where the empty array was a legal value
+  that staged nothing and left every executor with a non-existent cwd) is replaced by an
+  `ArmWorkspaceDirs` record whose `with` key is required, so "stage no arms" is no longer
+  expressible.
+
+  Detection follows prevention: `detectBaselineContamination` gains a `sibling-arm` hit kind and
+  needles for the other arm's workspace. A reach there contains no harness path at all, which is why
+  the harness-path needles could never see it. The bare-token needle requires a leading `/`, so
+  `ls ..` — which prints the sibling's directory name as a basename, an agent's most common opening
+  move — is not evidence, while every real reach is.
+
 - **Every `vat skill test` spawn now passes `--no-session-persistence`, and preflight fails closed
   without it.** Claude Code writes each headless session to
   `$CLAUDE_CONFIG_DIR/projects/<cwd-slug>/<uuid>.jsonl` — plaintext, mode 0600, retained

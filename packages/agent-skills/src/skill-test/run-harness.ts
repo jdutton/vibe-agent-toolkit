@@ -45,7 +45,16 @@ import { assembleChildEnv, assertKnownEnvTokens, computeEnvTokens, resolveInject
 import { runExecutorForEval } from './eval-executor.js';
 import type { EvalFragment } from './eval-fragment.js';
 import { runGraderForEval } from './eval-grader.js';
-import { EvalInputError, parseEvalSuite, stageEvalWorkspaces, type EvalArm, type EvalEntry, type EvalSuite } from './eval-inputs.js';
+import {
+  armDirSegment,
+  EvalInputError,
+  parseEvalSuite,
+  stageEvalWorkspaces,
+  type ArmWorkspaceDirs,
+  type EvalArm,
+  type EvalEntry,
+  type EvalSuite,
+} from './eval-inputs.js';
 import { lintEvalExpectations, lintToolExpectationExecutables } from './eval-lint.js';
 import { DEFAULT_EVALS_SUBPATH } from './eval-suite-isolation.js';
 import { writeEvalsTemplate } from './evals-template.js';
@@ -765,10 +774,25 @@ export function resolveWorkspacesRoot(dirToken: string): string {
  * dir is wiped first so a reused root cannot leak a prior run's inputs. Throws
  * {@link EvalInputError} (mapped by the caller to exit 2) on a bad suite or a
  * missing input file. */
+/**
+ * Mint this run's opaque per-arm workspace directory segments.
+ *
+ * Independent random tokens, NOT the arm names and not derived from one another:
+ * the segment ends up in the executor's cwd, which the prompt states verbatim, so
+ * a name like `without` unblinds the control arm outright — and a name like `with`
+ * hands it a guessable path to the treatment arm's live output one directory over.
+ * 8 bytes is ample for "not guessable within a run that lasts minutes"; these are
+ * blinding/anti-enumeration tokens, not secrets protecting data at rest.
+ */
+export function mintArmWorkspaceDirs(baseline: boolean): ArmWorkspaceDirs {
+  const token = (): string => randomBytes(8).toString('hex');
+  return baseline ? { with: token(), without: token() } : { with: token() };
+}
+
 export function stageWorkspacesForRun(
   evalsPath: string,
   workspacesRoot: string,
-  baseline: boolean,
+  armDirs: ArmWorkspaceDirs,
 ): { workspacesRoot: string; declaredEvalCount: number; suite: EvalSuite } {
   rmSync(workspacesRoot, { recursive: true, force: true });
   // 0700, matching the harness root. These dirs hold each eval's declared input
@@ -789,7 +813,7 @@ export function stageWorkspacesForRun(
       suite,
       evalsDir: dirname(evalsPath),
       workspacesRoot,
-      arms: baseline ? (['with', 'without'] as const) : (['with'] as const),
+      armDirs,
     }),
     declaredEvalCount: suite.evals.length,
     suite,
@@ -813,10 +837,10 @@ function attemptStageWorkspaces(
   evalsPath: string,
   harnessRoot: string,
   workspacesRoot: string,
-  baseline: boolean,
+  armDirs: ArmWorkspaceDirs,
 ): { workspacesRoot: string; declaredEvalCount: number; suite: EvalSuite } | RunHarnessResult {
   try {
-    return stageWorkspacesForRun(evalsPath, workspacesRoot, baseline);
+    return stageWorkspacesForRun(evalsPath, workspacesRoot, armDirs);
   } catch (e) {
     if (e instanceof EvalInputError) {
       return {
@@ -1198,18 +1222,25 @@ export function resolveGraderOutDir(dirToken: string): string {
  * quiet half of the `--baseline` control defect: the skill-absent arm's cwd
  * was the skill.
  *
- * The `arm` segment closes the OTHER half, found a round later: without it both
+ * The per-arm segment closes the OTHER half, found a round later: without it both
  * arms of one eval shared a single writable directory AND ran concurrently, so
  * the control arm could read the treatment arm's output files and answer from
  * them. Keyed on the eval id alone this is a pure function of the eval; the arm
- * is what makes the two runs independent. Pure + unit-testable.
+ * is what makes the two runs independent.
+ *
+ * The segment is an OPAQUE per-run token, never the arm's name — this path is
+ * quoted verbatim to the executor as its working directory, so `…/without/e1`
+ * told the control arm it was the control, and `../with/e1` told it where to look.
+ * See {@link mintArmWorkspaceDirs}. Pure + unit-testable.
  */
 export function resolvePerEvalWorkspaceDir(
   entry: EvalEntry,
   workspacesRoot: string,
   arm: EvalArm,
+  armDirs: ArmWorkspaceDirs,
 ): string {
-  return safePath.joinUnderRoot(safePath.joinUnderRoot(workspacesRoot, arm), String(entry.id));
+  const armRoot = safePath.joinUnderRoot(workspacesRoot, armDirSegment(armDirs, arm));
+  return safePath.joinUnderRoot(armRoot, String(entry.id));
 }
 
 /**
@@ -1235,6 +1266,8 @@ export function removeVatOnlyDir(dir: string | undefined): void {
 interface EvalRunContext {
   subjectStagedDir: string;
   workspacesRoot: string;
+  /** This run's opaque per-arm workspace segments (see {@link mintArmWorkspaceDirs}). */
+  armDirs: ArmWorkspaceDirs;
   pluginDirs: string[];
   graderOutDir: string;
   runNonce: string;
@@ -1345,7 +1378,7 @@ function scrubAndReportControlArmEnv(
 
 async function runEvalWorker(item: EvalWorkItem, ctx: EvalRunContext): Promise<EvalFragment> {
   const evalId = String(item.entry.id);
-  const workspaceDir = resolvePerEvalWorkspaceDir(item.entry, ctx.workspacesRoot, item.arm);
+  const workspaceDir = resolvePerEvalWorkspaceDir(item.entry, ctx.workspacesRoot, item.arm, ctx.armDirs);
   const onProgress = (chunk: string): void => { process.stderr.write(chunk); };
 
   // Resolve the declared `env` against THIS eval's workspace.
@@ -1461,6 +1494,13 @@ function baselineContaminationFor(
   const hits = detectBaselineContamination({
     transcript,
     harnessRoot: ctx.harnessRoot,
+    // Only ever called for the skill-absent arm, so the sibling is `with` — the
+    // treatment arm's live working directory, one `ls ..` away and containing no
+    // harness path for the needles above to find.
+    siblingArmDir: safePath.joinUnderRoot(
+      ctx.workspacesRoot,
+      armDirSegment(ctx.armDirs, 'with'),
+    ),
     // `name` is the executable's basename with the extension stripped
     // (`scripts/csvsum.py` → `csvsum`) — a stable token appearing in both the
     // command the arm ran and the output it got back. `howInvoked` is a command
@@ -1873,6 +1913,12 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
   // separation is load-bearing for --baseline — so they need their own cleanup.
   const workspacesRoot = resolveWorkspacesRoot(randomBytes(16).toString('hex'));
 
+  // The opaque per-arm segments beneath it. Minted here, with the roots, so the
+  // same values reach staging, the executor's cwd, and the contamination
+  // detector's sibling-arm needle — one source of truth for a value whose whole
+  // job is to be unguessable and to carry no meaning.
+  const armDirs = mintArmWorkspaceDirs(opts.baseline === true);
+
   const cleanup = (): void => {
     // Reap any still-in-flight executor/grader children FIRST. On the concurrent
     // error path `Promise.all` rejects without cancelling its siblings, and a
@@ -1975,7 +2021,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
       evalsPath,
       harnessRoot,
       workspacesRoot,
-      opts.baseline === true,
+      armDirs,
     );
     if ('exitCode' in workspaceStageResult) return workspaceStageResult;
     // `workspacesRoot` is resolved above (outside the try, so cleanup can reach it
@@ -2107,6 +2153,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     const evalCtx: EvalRunContext = {
       subjectStagedDir,
       workspacesRoot,
+      armDirs,
       harnessRoot,
       pluginDirs,
       graderOutDir,

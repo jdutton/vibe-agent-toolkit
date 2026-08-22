@@ -206,15 +206,41 @@ function setupEvalWorkspaces(): { evalsDir: string; workspacesRoot: string } {
   return { evalsDir, workspacesRoot };
 }
 
+/**
+ * A non-baseline run's arm dirs. The token is opaque ON PURPOSE — it is quoted to
+ * the executor as its working directory, so an arm-named segment tells a control
+ * arm which side of the A/B it is on. These tests reference `.with` rather than a
+ * literal so they keep testing the LAYOUT rather than pinning the naming scheme.
+ */
+const WITH_ONLY = { with: 'a1b2c3d4e5f60718' } as const;
+
 describe('stageEvalWorkspaces', () => {
+  // The segment must not spell the arm. A regression here is silent and total:
+  // every control-arm prompt would carry `/without/` in its cwd.
+  it('never puts an arm NAME in the path', () => {
+    const { evalsDir, workspacesRoot } = setupEvalWorkspaces();
+    const armDirs = { with: 'aaaa1111bbbb2222', without: 'cccc3333dddd4444' };
+    const suite = { skill_name: 'demo', evals: [
+      { id: 9, prompt: 'p', expected_output: 'o', expectations: ['e'] },
+    ] };
+    stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, armDirs });
+
+    const byName = (a: string, b: string): number => a.localeCompare(b);
+    expect([...readdirSync(workspacesRoot)].sort(byName)).toEqual(
+      [armDirs.with, armDirs.without].sort(byName),
+    );
+    expect(readdirSync(workspacesRoot)).not.toContain('with');
+    expect(readdirSync(workspacesRoot)).not.toContain('without');
+  });
+
   it('copies declared files into <workspacesRoot>/<id>/ preserving structure', () => {
     const { evalsDir, workspacesRoot } = setupEvalWorkspaces();
     const suite = { skill_name: 'demo', evals: [
       { id: 7, prompt: 'fix', expected_output: 'fixed', files: [FIXTURES_DOC], expectations: ['ok'] },
     ] };
-    const returned = stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, arms: ['with'] });
+    const returned = stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, armDirs: WITH_ONLY });
     expect(returned).toBe(workspacesRoot);
-    expect(existsSync(safePath.join(workspacesRoot, 'with', '7', FIXTURES_DOC))).toBe(true);
+    expect(existsSync(safePath.join(workspacesRoot, WITH_ONLY.with, '7', FIXTURES_DOC))).toBe(true);
   });
 
   it('stages files under a string id directory (filesystem-safe via joinUnderRoot)', () => {
@@ -222,8 +248,8 @@ describe('stageEvalWorkspaces', () => {
     const suite = { skill_name: 'demo', evals: [
       { id: 'dollar-quote-recovery', prompt: 'fix', expected_output: 'fixed', files: [FIXTURES_DOC], expectations: ['ok'] },
     ] };
-    stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, arms: ['with'] });
-    expect(existsSync(safePath.join(workspacesRoot, 'with', 'dollar-quote-recovery', FIXTURES_DOC))).toBe(true);
+    stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, armDirs: WITH_ONLY });
+    expect(existsSync(safePath.join(workspacesRoot, WITH_ONLY.with, 'dollar-quote-recovery', FIXTURES_DOC))).toBe(true);
   });
 
   // An eval with no `files` still gets an EMPTY workspace. Before, it got none,
@@ -235,8 +261,8 @@ describe('stageEvalWorkspaces', () => {
     const suite = { skill_name: 'demo', evals: [
       { id: 1, prompt: 'p', expected_output: 'o', expectations: ['e'] },
     ] };
-    stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, arms: ['with'] });
-    const dir = safePath.join(workspacesRoot, 'with', '1');
+    stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, armDirs: WITH_ONLY });
+    const dir = safePath.join(workspacesRoot, WITH_ONLY.with, '1');
     expect(existsSync(dir)).toBe(true);
     expect(readdirSync(dir)).toEqual([]);
   });
@@ -246,8 +272,8 @@ describe('stageEvalWorkspaces', () => {
     const suite = { skill_name: 'demo', evals: [
       { id: 2, prompt: 'p', expected_output: 'o', files: [], expectations: ['e'] },
     ] };
-    stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, arms: ['with'] });
-    const dir = safePath.join(workspacesRoot, 'with', '2');
+    stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, armDirs: WITH_ONLY });
+    const dir = safePath.join(workspacesRoot, WITH_ONLY.with, '2');
     expect(existsSync(dir)).toBe(true);
     expect(readdirSync(dir)).toEqual([]);
   });
@@ -257,7 +283,7 @@ describe('stageEvalWorkspaces', () => {
     const suite = { skill_name: 'demo', evals: [
       { id: 3, prompt: 'p', expected_output: 'o', files: ['fixtures/nope.md'], expectations: ['e'] },
     ] };
-    expect(() => stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, arms: ['with'] })).toThrow(EvalInputError);
+    expect(() => stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, armDirs: WITH_ONLY })).toThrow(EvalInputError);
   });
 
   it('throws EvalInputError (not raw Error) when a declared file contains a path traversal escape', () => {
@@ -265,6 +291,6 @@ describe('stageEvalWorkspaces', () => {
     const suite = { skill_name: 'demo', evals: [
       { id: 4, prompt: 'p', expected_output: 'o', files: ['../escape.md'], expectations: ['e'] },
     ] };
-    expect(() => stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, arms: ['with'] })).toThrow(EvalInputError);
+    expect(() => stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, armDirs: WITH_ONLY })).toThrow(EvalInputError);
   });
 });

@@ -43,6 +43,7 @@ import {
   helpTextDeclaresFlag,
   isAcknowledged,
   makeStageItem,
+  mintArmWorkspaceDirs,
   partitionFragmentsByArm,
   renderPreflightSummary,
   recordSessionCost,
@@ -370,20 +371,23 @@ describe('resolveHarnessLocation', () => {
   });
 });
 
+/** A baseline run's arm dirs — opaque tokens, as production mints them. */
+const ARM_DIRS = { with: '1111aaaa2222bbbb', without: '3333cccc4444dddd' } as const;
+
 describe('resolvePerEvalWorkspaceDir', () => {
   const workspacesRoot = '/harness/workspaces';
 
   // No undefined case any more: an eval without `files` used to get no workspace,
   // which made the executor run inside the staged subject dir — the skill-absent
   // arm's cwd was then the skill itself.
-  it('routes to <workspacesRoot>/<arm>/<id> even when the eval declares no files', () => {
-    const dir = resolvePerEvalWorkspaceDir(makeEvalEntry({ id: '1' }), workspacesRoot, 'with');
-    expect(toForwardSlash(dir).endsWith('/workspaces/with/1')).toBe(true);
+  it('routes to <workspacesRoot>/<armDir>/<id> even when the eval declares no files', () => {
+    const dir = resolvePerEvalWorkspaceDir(makeEvalEntry({ id: '1' }), workspacesRoot, 'with', ARM_DIRS);
+    expect(toForwardSlash(dir).endsWith(`/workspaces/${ARM_DIRS.with}/1`)).toBe(true);
   });
 
-  it('routes to <workspacesRoot>/<arm>/<id> when the eval declares files', () => {
-    const dir = resolvePerEvalWorkspaceDir(makeEvalEntry({ id: '7', files: ['a.md'] }), workspacesRoot, 'with');
-    expect(toForwardSlash(dir ?? '').endsWith('/workspaces/with/7')).toBe(true);
+  it('routes to <workspacesRoot>/<armDir>/<id> when the eval declares files', () => {
+    const dir = resolvePerEvalWorkspaceDir(makeEvalEntry({ id: '7', files: ['a.md'] }), workspacesRoot, 'with', ARM_DIRS);
+    expect(toForwardSlash(dir ?? '').endsWith(`/workspaces/${ARM_DIRS.with}/7`)).toBe(true);
   });
 
   // The two arms of one eval run CONCURRENTLY. Sharing a directory let the control
@@ -392,12 +396,49 @@ describe('resolvePerEvalWorkspaceDir', () => {
   // collapsed to zero. Neither arm may sit inside the other, either.
   it('gives the two arms of one eval disjoint directories', () => {
     const entry = makeEvalEntry({ id: '1' });
-    const withDir = toForwardSlash(resolvePerEvalWorkspaceDir(entry, workspacesRoot, 'with'));
-    const withoutDir = toForwardSlash(resolvePerEvalWorkspaceDir(entry, workspacesRoot, 'without'));
+    const withDir = toForwardSlash(resolvePerEvalWorkspaceDir(entry, workspacesRoot, 'with', ARM_DIRS));
+    const withoutDir = toForwardSlash(resolvePerEvalWorkspaceDir(entry, workspacesRoot, 'without', ARM_DIRS));
 
     expect(withDir).not.toBe(withoutDir);
     expect(toForwardSlash(withDir).startsWith(toForwardSlash(withoutDir) + '/')).toBe(false);
     expect(toForwardSlash(withoutDir).startsWith(toForwardSlash(withDir) + '/')).toBe(false);
+  });
+
+  // The path is quoted to the executor as its working directory. `…/without/1`
+  // told the skill-absent arm it was the control — in the one string it cannot
+  // avoid reading — and `../with/1` told it where the treatment was working.
+  it('puts no arm name in the path either arm is handed', () => {
+    const entry = makeEvalEntry({ id: '1' });
+    for (const arm of ['with', 'without'] as const) {
+      const segments = toForwardSlash(
+        resolvePerEvalWorkspaceDir(entry, workspacesRoot, arm, ARM_DIRS),
+      ).split('/');
+      expect(segments, `the ${arm} arm's cwd names an arm`).not.toContain('with');
+      expect(segments, `the ${arm} arm's cwd names an arm`).not.toContain('without');
+    }
+  });
+});
+
+describe('mintArmWorkspaceDirs', () => {
+  it('mints only the with arm when baseline is off', () => {
+    const dirs = mintArmWorkspaceDirs(false);
+    expect(dirs.with).not.toBe('');
+    expect(dirs.without).toBeUndefined();
+  });
+
+  // Independent, not derived: if `without` were a function of `with` (a suffix, a
+  // counter, a hash), an arm that learned its own token would know its sibling's.
+  it('mints two independent, non-arm-named tokens under baseline', () => {
+    const dirs = mintArmWorkspaceDirs(true);
+    expect(dirs.without).toBeDefined();
+    expect(dirs.without).not.toBe(dirs.with);
+    for (const token of [dirs.with, dirs.without ?? '']) {
+      expect(token).not.toContain('with');
+      expect(token).not.toContain('without');
+      expect(token.length).toBeGreaterThanOrEqual(16);
+    }
+    // Fresh per run — two runs of the same suite must not share a directory.
+    expect(mintArmWorkspaceDirs(true).with).not.toBe(dirs.with);
   });
 });
 
@@ -1104,9 +1145,9 @@ describe('stageWorkspacesForRun', () => {
     const { workspacesRoot, declaredEvalCount } = stageWorkspacesForRun(
       safePath.join(evalsDir, EVALS_JSON),
       harnessRoot,
-      false,
+      { with: ARM_DIRS.with },
     );
-    expect(existsSync(safePath.join(workspacesRoot, 'with', '5', 'fixtures', 'doc.md'))).toBe(true);
+    expect(existsSync(safePath.join(workspacesRoot, ARM_DIRS.with, '5', 'fixtures', 'doc.md'))).toBe(true);
     expect(declaredEvalCount).toBe(1);
   });
 
@@ -1124,11 +1165,11 @@ describe('stageWorkspacesForRun', () => {
     const harnessRoot = safePath.join(root, 'harness-baseline');
     mkdirSyncReal(harnessRoot, { recursive: true });
 
-    const { workspacesRoot } = stageWorkspacesForRun(safePath.join(evalsDir, EVALS_JSON), harnessRoot, true);
+    const { workspacesRoot } = stageWorkspacesForRun(safePath.join(evalsDir, EVALS_JSON), harnessRoot, ARM_DIRS);
 
-    for (const arm of ['with', 'without']) {
+    for (const [arm, dir] of Object.entries(ARM_DIRS)) {
       expect(
-        existsSync(safePath.join(workspacesRoot, arm, '5', 'fixtures', 'doc.md')),
+        existsSync(safePath.join(workspacesRoot, dir, '5', 'fixtures', 'doc.md')),
         `${arm} arm did not get its own copy of the declared input`,
       ).toBe(true);
     }
@@ -1145,6 +1186,6 @@ describe('stageWorkspacesForRun', () => {
     }), 'utf-8');
     const harnessRoot = safePath.join(root, 'harness');
     mkdirSyncReal(harnessRoot, { recursive: true });
-    expect(() => stageWorkspacesForRun(evalsPath, harnessRoot, false)).toThrow(EvalInputError);
+    expect(() => stageWorkspacesForRun(evalsPath, harnessRoot, { with: ARM_DIRS.with })).toThrow(EvalInputError);
   });
 });

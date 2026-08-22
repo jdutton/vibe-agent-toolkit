@@ -104,10 +104,22 @@ const VAT_HARNESS_DIR_NAME = 'vat-skill-test';
  * Needle 3 additionally requires a LEADING `/` (see {@link needsLeadingBoundary}),
  * without which `ls` of the temp dir stamps every clean run contaminated.
  */
+/**
+ * Split an ALREADY-NORMALIZED path into its meaningful segments.
+ *
+ * The `no-hardcoded-path-split` rule exists because splitting a raw path on `/`
+ * breaks on Windows — but every caller here passes the output of
+ * {@link normalizeForMatch}, which has already folded `\` to `/`. That is the
+ * whole point of this module: it compares one canonical spelling, and a
+ * `basename()` would reintroduce the platform separator the normalizer removed.
+ */
+const normalizedSegments = (normalized: string): string[] =>
+  normalized.split('/').filter((s) => s !== '' && s !== '.');
+
 export function harnessNeedles(harnessRoot: string): string[] {
   const normalized = normalizeForMatch(harnessRoot);
   if (normalized === '') return [];
-  const segments = normalized.split('/').filter((s) => s !== '' && s !== '.');
+  const segments = normalizedSegments(normalized);
   const needles: string[] = [normalized];
   if (segments.length >= 2) needles.push(segments.slice(-2).join('/'));
   const vatDir = normalizeForMatch(VAT_HARNESS_DIR_NAME);
@@ -263,8 +275,16 @@ export function scrubControlArmEnv(
 
 /** One piece of evidence that the skill-absent arm reached the skill anyway. */
 export const BaselineContaminationHitSchema = z.object({
-  /** What matched: a path under vat's harness root, or a declared executable's name. */
-  kind: z.enum(['harness-path', 'declared-executable']),
+  /**
+   * What matched: a path under vat's harness root, a declared executable's name,
+   * or the OTHER arm's workspace directory.
+   *
+   * `sibling-arm` is a materially different finding from the other two. Those mean
+   * the arm found a copy of the skill; this one means it read the treatment arm's
+   * live working directory, so the control may be echoing an answer the treatment
+   * produced seconds earlier rather than solving anything.
+   */
+  kind: z.enum(['harness-path', 'declared-executable', 'sibling-arm']),
   /** The matched token — the path prefix or the executable basename. */
   match: z.string().min(1),
   /**
@@ -346,6 +366,47 @@ export interface DetectBaselineContaminationInput {
    * `deriveDeclaredExecutableNames`.
    */
   executableNames?: readonly string[];
+  /**
+   * The OTHER arm's workspace directory — for a skill-absent eval, the treatment
+   * arm's live working directory.
+   *
+   * Not a path into vat's staged copies, so no harness needle can see it: the two
+   * arm dirs are siblings under one workspaces root, and `existsSync` on
+   * `../<sibling>/<id>/fixtures/input.md` from the control arm returns TRUE. Round 3
+   * gave each arm its own directory, which stopped them writing over each other; it
+   * did not stop one READING the other, and reading the treatment arm's output
+   * mid-run lets the control score like the treatment while producing a transcript
+   * with no harness path in it at all.
+   *
+   * Prevention is now the opaque per-arm token (the sibling's directory name is
+   * unguessable and no longer spells `with`), so this is the detection half: if the
+   * arm names it anyway — because it enumerated `..` — say so.
+   *
+   * The ABSOLUTE path to that directory; the needles are derived from it.
+   */
+  siblingArmDir?: string;
+}
+
+/**
+ * The needles that mean "this transcript named the OTHER arm's workspace".
+ *
+ * Two: the full path, and the bare per-arm token. The token is 16 hex characters
+ * minted per run, so a boundary-anchored match on it is essentially free of false
+ * positives — the arm's own token is different, and nothing else on the machine
+ * spells it.
+ *
+ * The LEADING `/` requirement (via {@link needsLeadingBoundary}) is what keeps
+ * `ls ..` honest: listing the parent prints the sibling's directory name as a bare
+ * basename on its own line, which is "I looked around", not "I read the other arm".
+ * Every genuine reach — `cat ../<token>/e1/out.md`, an absolute path, `find ..
+ * -name '*.md'` printing `../<token>/…` — carries the slash.
+ */
+export function siblingArmNeedles(siblingArmDir: string): string[] {
+  const full = normalizeForMatch(siblingArmDir);
+  if (full === '') return [];
+  const token = normalizedSegments(full).at(-1);
+  // Longest first, so one reach is reported at its most specific spelling.
+  return token === undefined || token === full ? [full] : [full, token];
 }
 
 /**
@@ -435,6 +496,20 @@ export function detectBaselineContamination(
     if (index === -1) continue;
     hits.push({
       kind: 'harness-path',
+      match: needle,
+      excerpt: excerptAround(haystack, index, needle.length),
+    });
+    break;
+  }
+
+  // The other arm's working directory. Reported independently of the harness
+  // needles above: a reach here contains no harness path at all, which is exactly
+  // why the four-channel audit and the harness-path detector both missed it.
+  for (const needle of siblingArmNeedles(input.siblingArmDir ?? '')) {
+    const index = indexOfPathAtBoundary(haystack, needle);
+    if (index === -1) continue;
+    hits.push({
+      kind: 'sibling-arm',
       match: needle,
       excerpt: excerptAround(haystack, index, needle.length),
     });

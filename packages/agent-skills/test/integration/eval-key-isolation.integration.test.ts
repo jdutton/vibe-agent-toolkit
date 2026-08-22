@@ -31,6 +31,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { runSkillTestHarness, type RunHarnessOptions } from '../../src/skill-test/run-harness.js';
 import { makeHarnessFakeSpawn } from '../skill-test/spawn-stub.js';
+import { soleArmWorkspace } from '../test-helpers.js';
 
 vi.mock('../../src/skill-test/preflight.js', async (io) => (await import('../skill-test/preflight-stub.js')).passingPreflight(io));
 
@@ -222,11 +223,11 @@ describe('eval answer-key isolation (canary)', () => {
     // are what the executor is meant to work on. Workspaces now live outside the
     // harness root, so the run reports their location rather than it being derivable.
     expect(workspacesPath).toBeDefined();
-    // `with/` is the arm segment: each arm of a `--baseline` run gets its own copy
-    // of every workspace so the two cannot observe each other mid-run. A non-baseline
-    // run stages the `with` arm only.
+    // Each arm of a `--baseline` run gets its own copy of every workspace so the two
+    // cannot observe each other mid-run; a non-baseline run stages one arm. The
+    // segment naming that arm is an opaque per-run token, never the arm's name.
     expect(
-      existsSync(safePath.join(workspacesPath ?? '', 'with', 'with-files', 'fixtures', 'input.md')),
+      existsSync(safePath.join(soleArmWorkspace(workspacesPath ?? '', 'with-files'), 'fixtures', 'input.md')),
     ).toBe(true);
   });
 

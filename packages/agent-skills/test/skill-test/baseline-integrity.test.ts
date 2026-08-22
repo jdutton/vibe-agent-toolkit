@@ -4,6 +4,7 @@ import {
   BaselineIntegritySchema,
   detectBaselineContamination,
   harnessNeedles,
+  siblingArmNeedles,
   scrubControlArmEnv,
   summarizeBaselineIntegrity,
   type BaselineContamination,
@@ -19,6 +20,7 @@ const BUNDLE_NAME = 'bucket-map';
 const EXCERPT_ELLIPSIS = '…';
 const KIND_HARNESS_PATH = 'harness-path' as const;
 const KIND_DECLARED_EXECUTABLE = 'declared-executable' as const;
+const KIND_SIBLING_ARM = 'sibling-arm' as const;
 // A workspaces-root path: under the tmp root like the real one, but deliberately
 // NOT under HARNESS_ROOT — the control arm must keep its own fixtures.
 // eslint-disable-next-line sonarjs/publicly-writable-directories -- inert test literal; nothing is read or written
@@ -266,6 +268,66 @@ describe('detectBaselineContamination — real path forms', () => {
     );
 
     expect(detectBaselineContamination({ transcript, harnessRoot })).toHaveLength(1);
+  });
+});
+
+/**
+ * The FIFTH channel's detection half. Round 3 gave each arm its own directory, so
+ * they stop overwriting each other; nothing stopped the control arm READING the
+ * treatment's live output one directory over, and such a reach contains no harness
+ * path at all — which is precisely why the four-channel audit and the harness-path
+ * needles both missed it.
+ */
+describe('detectBaselineContamination — the sibling arm', () => {
+  // eslint-disable-next-line sonarjs/publicly-writable-directories -- inert test literal; the detector is a pure string scan
+  const WS_ROOT = '/tmp/vat-skill-test-ws-abc';
+  const SIBLING = `${WS_ROOT}/1111aaaa2222bbbb`;
+
+  it.each([
+    ['relative reach', 'cat ../1111aaaa2222bbbb/e1/answer.md'],
+    ['absolute reach', `cat ${SIBLING}/e1/answer.md`],
+    ['a find that printed it', 'find .. -name "*.md" -> ../1111aaaa2222bbbb/e1/out.md'],
+  ])('fires on a %s into the other arm', (_label, command) => {
+    const hits = detectBaselineContamination({
+      transcript: transcriptWith(command),
+      harnessRoot: HARNESS_ROOT,
+      siblingArmDir: SIBLING,
+    });
+    expect(hits, `read clean: ${command}`).toHaveLength(1);
+    expect(hits[0]?.kind).toBe(KIND_SIBLING_ARM);
+  });
+
+  // `ls ..` prints the sibling's directory name as a bare basename on its own
+  // line. That is "where am I" — an agent's most common opening move — not "I read
+  // the other arm", and stamping it contaminated would train operators to ignore
+  // the flag. The leading-`/` rule is what separates the two.
+  it('does not fire when the arm merely LISTED its parent', () => {
+    const transcript = transcriptWith('ls ..\n1111aaaa2222bbbb\n3333cccc4444dddd\n');
+
+    expect(
+      detectBaselineContamination({ transcript, harnessRoot: HARNESS_ROOT, siblingArmDir: SIBLING }),
+    ).toEqual([]);
+  });
+
+  // Its own workspace is where it is supposed to be working.
+  it('does not fire on the arm working in its own directory', () => {
+    const transcript = transcriptWith(`cd ${WS_ROOT}/3333cccc4444dddd/e1 && cat data.csv`);
+
+    expect(
+      detectBaselineContamination({ transcript, harnessRoot: HARNESS_ROOT, siblingArmDir: SIBLING }),
+    ).toEqual([]);
+  });
+
+  // Absent for the WITH arm (it has no sibling worth naming) — the needle set must
+  // then be empty rather than matching everything.
+  it('is inert when no sibling is supplied', () => {
+    expect(siblingArmNeedles('')).toEqual([]);
+    expect(
+      detectBaselineContamination({
+        transcript: transcriptWith(`cat ${SIBLING}/e1/answer.md`),
+        harnessRoot: HARNESS_ROOT,
+      }),
+    ).toEqual([]);
   });
 });
 

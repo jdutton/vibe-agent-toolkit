@@ -166,24 +166,61 @@ export function parseEvalSuite(jsonText: string): EvalSuite {
  */
 export type EvalArm = 'with' | 'without';
 
+/**
+ * The opaque directory segment each arm's workspaces live under, minted fresh per
+ * run. `with` is required and `without` present only under `--baseline`, so the
+ * set of arms is the keys — a shape that cannot express "stage nothing", unlike
+ * the `readonly EvalArm[]` this replaced (an empty array was a legal input that
+ * silently left every executor with a non-existent cwd).
+ *
+ * ⚠️ The VALUES must not be the literal arm names, and must not be derivable from
+ * each other. See {@link stageEvalWorkspaces}.
+ */
+export interface ArmWorkspaceDirs {
+  with: string;
+  without?: string;
+}
+
+/** The arms an {@link ArmWorkspaceDirs} covers, in dispatch order. */
+export function armsOf(dirs: ArmWorkspaceDirs): readonly EvalArm[] {
+  return dirs.without === undefined ? (['with'] as const) : (['with', 'without'] as const);
+}
+
+/**
+ * The directory segment for one arm. Throws rather than falling back to the arm
+ * NAME: a silent fallback would reinstate the unblinding this indirection exists
+ * to remove, and would do it invisibly.
+ */
+export function armDirSegment(dirs: ArmWorkspaceDirs, arm: EvalArm): string {
+  const segment = arm === 'with' ? dirs.with : dirs.without;
+  if (segment === undefined || segment === '') {
+    throw new EvalInputError(
+      `Internal: no workspace directory was minted for the "${arm}" arm. ` +
+        'Every arm this run dispatches must have one; falling back to the arm name would ' +
+        'tell the executor which side of the A/B it is on.',
+    );
+  }
+  return segment;
+}
+
 export interface StageEvalWorkspacesInput {
   /** Parsed suite (Task 1). */
   suite: EvalSuite;
   /** Directory containing evals.json — the base for each eval's relative `files`. */
   evalsDir: string;
-  /** `<harnessRoot>/workspaces` — per-arm, per-eval dirs are created beneath it. */
+  /** Per-run workspaces root — per-arm, per-eval dirs are created beneath it. */
   workspacesRoot: string;
   /**
-   * The arms this run will execute — `['with']` normally, `['with','without']`
-   * under `--baseline`. Each arm gets its OWN copy of every workspace; see the
-   * note on the layout below for why that is not an optimization to undo.
+   * Opaque per-arm directory segments. Each arm gets its OWN copy of every
+   * workspace; see the note on the layout below for why that is not an
+   * optimization to undo.
    */
-  arms: readonly EvalArm[];
+  armDirs: ArmWorkspaceDirs;
 }
 
 /**
  * Materialize each eval's declared input `files` into
- * `<workspacesRoot>/<arm>/<id>/<relpath>`, preserving relative structure. Throws
+ * `<workspacesRoot>/<armDir>/<id>/<relpath>`, preserving relative structure. Throws
  * {@link EvalInputError} if a listed file does not exist (the eval cannot run
  * without it). Returns `workspacesRoot`.
  *
@@ -203,16 +240,26 @@ export interface StageEvalWorkspacesInput {
  * channels into a process (prompt, argv, cwd, env) did not surface it: each arm's
  * own cwd was correct in isolation, and wrong as a pair. The arms must be
  * byte-identical at start and unable to observe each other after it.
+ *
+ * WHY THE SEGMENT IS AN OPAQUE TOKEN and not the arm's name. It used to be the
+ * literal `with`/`without`, which made the executor's own working directory the
+ * loudest possible unblinding: the prompt tells each arm `Your working directory
+ * is …/vat-skill-test-ws-<token>/without/e1`, so the skill-absent arm was told, in
+ * the one string it cannot avoid reading, which side of the experiment it was on —
+ * while `buildExecutorPrompt`'s docblock promises it "must NEVER be told (directly
+ * or by implication) that it is being tested, evaluated, or graded". It also named
+ * the sibling: `../with/<id>/` was a guessable path to the treatment arm's live
+ * output. Independent random tokens fix both, and cost nothing.
  */
 export function stageEvalWorkspaces(input: StageEvalWorkspacesInput): string {
-  for (const arm of input.arms) {
+  for (const arm of armsOf(input.armDirs)) {
     stageEvalWorkspacesForArm(input, arm);
   }
   return input.workspacesRoot;
 }
 
 function stageEvalWorkspacesForArm(input: StageEvalWorkspacesInput, arm: EvalArm): void {
-  const armRoot = safePath.joinUnderRoot(input.workspacesRoot, arm);
+  const armRoot = safePath.joinUnderRoot(input.workspacesRoot, armDirSegment(input.armDirs, arm));
   mkdirSyncReal(armRoot, { recursive: true, mode: 0o700 });
   for (const entry of input.suite.evals) {
     const evalWorkspace = safePath.joinUnderRoot(armRoot, String(entry.id));

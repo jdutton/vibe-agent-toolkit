@@ -225,6 +225,44 @@ describe('baseline control arm (integration)', () => {
     expect(treatmentCwd.startsWith(controlCwd + '/')).toBe(false);
   });
 
+  /**
+   * BLINDING. `buildExecutorPrompt`'s docblock promises the executor "must NEVER
+   * be told (directly or by implication) that it is being tested, evaluated, or
+   * graded" — and the workspace layout was quietly breaking that promise in the
+   * loudest possible place. The prompt states the working directory verbatim, and
+   * the directory was `…/vat-skill-test-ws-<token>/without/e1`, so each arm read
+   * which side of the A/B it was on in a string it cannot avoid. It also named
+   * the sibling: `../with/<id>/` was a guessable path to the treatment arm's live
+   * output.
+   *
+   * The assertion is over the WHOLE spawn surface, not the prompt alone: the same
+   * path is also the `cwd`, the `sandboxDir`, and an `--add-dir` argv slot, so
+   * checking one field would leave three telling the arm the same thing.
+   */
+  it('never tells either arm which arm it is', async () => {
+    const { subjectDir } = writePluginFixture();
+    const seen = new Map<string, string>();
+
+    const fake = makeHarnessFakeSpawn({
+      onExecutorSpawn: (opts) => {
+        seen.set(opts.pluginDirs.length === 0 ? 'control' : 'treatment', spawnSurface({ ...opts }));
+      },
+    });
+
+    const result = await runSkillTestHarness(baselineOpts(subjectDir, fake.spawn));
+    expect(result.exitCode, result.summary).toBe(0);
+    expect(seen.size, 'both arms must have spawned').toBe(2);
+
+    for (const [arm, surface] of seen) {
+      // Path SEGMENTS, not a substring scan: "with" occurs in ordinary prose, and
+      // the prompt legitimately contains English.
+      // eslint-disable-next-line local/no-hardcoded-path-split -- `fold` already forward-slashed this; splitting on separators is the point
+      const segments = new Set(fold(surface).split(/[/"\\,\s]+/));
+      expect(segments, `the ${arm} arm was handed a path segment naming an arm`).not.toContain('with');
+      expect(segments, `the ${arm} arm was handed a path segment naming an arm`).not.toContain('without');
+    }
+  });
+
   it("runs the control arm in its own workspace, never in the staged skill", async () => {
     const { subjectDir } = writePluginFixture();
     let controlCwd: string | undefined;
