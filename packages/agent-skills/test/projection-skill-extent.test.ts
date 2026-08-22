@@ -311,6 +311,11 @@ describe('skillExtentDeclaration', () => {
       closureFrom: SKILL_REL,
       maxDepth: DEFAULT_DEPTH,
       follow: ['markdown-link', 'markdown-link-reference', 'markdown-definition'],
+      // The schema default, materialized by `parse`. A skill bundle's links are
+      // markdown hrefs and are read under RFC 3986; Claude Code's `@`-import
+      // dialect is declared only where an `@` token really is an import, and
+      // picking it up here would change what a skill BUNDLES.
+      referenceDialect: 'href',
       // In `classifyExclusion`'s own branch order — see the next test for why
       // that order is now behaviour rather than presentation.
       // A config-less skill declares no exclude rules, so the cascade's last

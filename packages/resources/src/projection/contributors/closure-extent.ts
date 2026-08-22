@@ -126,12 +126,12 @@ import type {
 } from '../../schemas/projection-resources.js';
 import type { JsonValue } from '../../schemas/projection-shared.js';
 import type { ResolutionContextRow } from '../../schemas/projection-zones.js';
-import { resolveLocalHref } from '../../utils.js';
 import type { ContributorStratum, ExtentContribution, ExtentContributor } from '../contributor.js';
 import type { ProjectionBase } from '../projection.js';
 import { relativize } from '../realizations.js';
 
 import { extentContextId } from './context-id.js';
+import { resolveDialectRef } from './reference-dialect.js';
 
 /** Every closure contributor's id begins here, so one prefix scan identifies them. */
 export const CLOSURE_CONTRIBUTOR_ID_PREFIX = 'closure:';
@@ -624,6 +624,15 @@ type ReferenceResolution =
  * naming a target would mean resolving the href a second time, here, against a
  * rule this module does not own. It stays `unrealized`, which is what it was.
  *
+ * ⚠️ **Resolution is DIALECT-dependent.** `declaration.referenceDialect` decides
+ * whether a leading `/` means root-relative or filesystem-absolute, whether `~/`
+ * expands, and whether a leading `@` is part of the filename. The default is
+ * `href`, which is `resolveLocalHref` unchanged, so every declaration written
+ * before that field existed resolves exactly as it did. See
+ * `reference-dialect.ts` for why the choice is DECLARED rather than global — the
+ * short version is that `@` is not always an import, so a global reading would
+ * turn `@scope/pkg` into a resolvable path.
+ *
  * @param rawRef - The reference exactly as authored
  * @param fromPath - Root-relative path of the file holding the reference
  * @param walk - The traversal's indexed inputs
@@ -643,7 +652,12 @@ function resolveReference(
   const startedAt = crawlTimingStart();
   try {
     const { root } = walk.base;
-    const resolution = resolveLocalHref(rawRef, joinRoot(root, fromPath), root);
+    const resolution = resolveDialectRef(
+      walk.declaration.referenceDialect,
+      rawRef,
+      joinRoot(root, fromPath),
+      root,
+    );
     if (resolution.kind !== 'resolved') return { kind: 'unrealized' };
     const relative = relativize(resolution.resolvedPath, root);
     if (escapesRoot(relative)) return { kind: 'outside-root', path: relative };

@@ -63,6 +63,11 @@ describe('inventoryExtentDeclaration', () => {
 			// `maxDepth: Infinity` at the call site — the declaration's spelling of it.
 			maxDepth: INVENTORY_MAX_DEPTH,
 			follow: ['markdown-link', 'markdown-link-reference', 'markdown-definition'],
+			// The schema default, materialized by `parse`. This lane reads hrefs the
+			// way the walker does — RFC 3986 — and must NOT pick up Claude Code's
+			// `@`-import dialect, which is declared only where an `@` token really is
+			// an import.
+			referenceDialect: 'href',
 			refusals: [
 				rule(INVENTORY_REFUSED_DIRECTORY_TARGET, { kinds: ['directory'] }),
 				// Ungated, unlike the packaging translation: the call site passes the

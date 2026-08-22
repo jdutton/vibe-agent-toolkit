@@ -441,6 +441,26 @@ export const ExtentRefusalRuleSchema = z.object({
 
 export type ExtentRefusalRule = z.infer<typeof ExtentRefusalRuleSchema>;
 
+/**
+ * How a closure INTERPRETS the reference tokens it follows.
+ *
+ * A `blob_references` row carries the token *exactly as authored*, so
+ * interpretation is a property of the reader — and different readers genuinely
+ * disagree. `href` is VAT's general RFC 3986 reading, through
+ * `resolveLocalHref`. `claude-import` is Claude Code's `@`-import dialect, in
+ * which three of those rules are different: a leading `@` is stripped, `~/`
+ * expands to the home directory, and a leading `/` is filesystem-absolute rather
+ * than root-relative.
+ *
+ * The vocabulary lives here, beside the declaration that carries it; the
+ * BEHAVIOUR lives in `projection/contributors/reference-dialect.ts`, which
+ * delegates to `resolveLocalHref` rather than reimplementing it.
+ */
+export const ReferenceDialectSchema = z.enum(['href', 'claude-import'])
+  .describe('How reference tokens are interpreted — RFC 3986 ("href") or Claude Code\'s @-import dialect ("claude-import")');
+
+export type ReferenceDialect = z.infer<typeof ReferenceDialectSchema>;
+
 export const ExtentDeclarationSchema = z.object({
   kind: ZoneKindSchema
     .describe('The resolution_contexts.kind this extent has, e.g. "skill". Open vocabulary; must match the kind the contributor is registered under.'),
@@ -448,6 +468,8 @@ export const ExtentDeclarationSchema = z.object({
     .describe('Root-relative path of the extent root — the one member admitted unconditionally, before any traversal. A reference that resolves BACK to it is skipped in silence: the root is a member by declaration, so a self-link has nothing left to refuse and nothing for the hop budget to hold back, and a row about it would contradict the admission. That is the same verdict walk-link-graph.ts gives a link back to its own skillRootPath.'),
   follow: z.array(ReferenceSyntacticFormSchema).default(['markdown-link', 'markdown-link-reference', 'markdown-definition'])
     .describe('Which blob_references syntactic forms the closure traverses. Defaults to the three markdown forms; an @-prefixed or bare token is ambiguous at the blob layer, so following one is an explicit choice.'),
+  referenceDialect: ReferenceDialectSchema.default('href')
+    .describe('How this closure INTERPRETS the tokens it follows. Defaults to "href" — RFC 3986 through resolveLocalHref — so every declaration written before this field existed is unchanged. "claude-import" is the only correct reading of an at-prefixed token in a CLAUDE.md or .claude/rules file: a leading @ is stripped, ~/ expands to the home directory (landing OUTSIDE the corpus, which is the healthy state the vendor recommends for sharing instructions across worktrees), and a leading / is filesystem-absolute rather than root-relative. Inert data, so it rides onto zone_provenance.parameterSet verbatim and the store correctly treats two runs over one tree under different dialects as two different questions.'),
   maxDepth: z.union([z.number().int().min(0), z.literal('full')]).default('full')
     .describe('Reference hops from the root, or "full" for an unbounded closure. Same union as skills packaging linkFollowDepth, so one concept has one spelling.'),
   refusals: z.array(ExtentRefusalRuleSchema).default([])
