@@ -1390,7 +1390,13 @@ function scrubAndReportControlArmEnv(
   harnessRoot: string,
   evalId: string,
 ): NodeJS.ProcessEnv {
-  const { env: scrubbed, dropped, retainedLeaks } = scrubControlArmEnv(env, harnessRoot);
+  // `[]` because vat does not declare model env vars today — `resolveAuth` is
+  // called with no `modelVars`, so none is ever forwarded and the exemption set
+  // has nothing extra to hold. The parameter is REQUIRED rather than defaulted so
+  // that stops being a silent assumption: the day vat forwards a model var, this
+  // line fails to compile and someone decides, instead of the scrub quietly
+  // dropping it and running the control arm on a different model.
+  const { env: scrubbed, dropped, retainedLeaks } = scrubControlArmEnv(env, harnessRoot, []);
   if (dropped.length > 0) {
     process.stderr.write(
       `control arm (${evalId}): withheld ${dropped.length} env var(s) naming the harness root: ${dropped.join(', ')}\n`,

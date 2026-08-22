@@ -1,4 +1,4 @@
-import { protectedEnvNames } from '@vibe-agent-toolkit/utils';
+import { isProtectedName, protectedEnvNames } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
 /**
@@ -239,8 +239,16 @@ const CONTROL_ARM_FORBIDDEN_ENV_KEYS = ['CLAUDE_PLUGIN_ROOT'] as const;
  * (`A=/tmp/vat-skill-test` + `B=/<key>/…`) and the per-value scan never joins them.
  * The adversarial control is that the path is not REACHABLE, not that it is unnamed.
  *
- * Rule 2 exempts {@link protectedEnvNames}. Those are the vars a child cannot run
- * without — `PATH`, `HOME`, `TMPDIR` — and an `--out` under any of their values (e.g.
+ * Rule 2 exempts {@link protectedEnvNames}, which is WIDER than the three names the
+ * paragraph below uses as its example: it is every process essential, the auth
+ * allowlist, every inference credential, the whole `CREDENTIAL_ROUTING_DENY` list,
+ * AND this run's `modelVars`. The model vars are the ones that matter most here and
+ * were missing until they were threaded in: dropping a model var because its value
+ * happens to sit under `--out` runs the control arm ON A DIFFERENT MODEL, which is
+ * a far worse confound than the missing PATH this exemption exists to prevent, and
+ * one no operator would think to look for.
+ *
+ * The three named below are the illustration. An `--out` under any of their values (e.g.
  * `--out .` from a repo root, which puts `<repo>/node_modules/.bin` on PATH inside a
  * `bun run`) would otherwise spawn the control arm with no PATH at all. That does not
  * fail; it DEGRADES the control, which scores lower, which reports as skill lift. A
@@ -258,9 +266,16 @@ const CONTROL_ARM_FORBIDDEN_ENV_KEYS = ['CLAUDE_PLUGIN_ROOT'] as const;
 export function scrubControlArmEnv(
   env: NodeJS.ProcessEnv,
   harnessRoot: string,
+  /**
+   * This run's model env var names. REQUIRED, not defaulted: an omitted list
+   * silently narrows the exemption set, and the var it drops decides which model
+   * the control arm runs — a defect that reads as skill lift and is invisible in
+   * the output. Pass `[]` when the run genuinely has none.
+   */
+  modelVars: readonly string[],
 ): { env: NodeJS.ProcessEnv; dropped: string[]; retainedLeaks: string[] } {
   const needle = normalizeForMatch(harnessRoot);
-  const protectedNames = protectedEnvNames();
+  const protectedNames = protectedEnvNames(modelVars);
   const scrubbed: NodeJS.ProcessEnv = {};
   const dropped: string[] = [];
   const retainedLeaks: string[] = [];
@@ -269,7 +284,11 @@ export function scrubControlArmEnv(
     const forbiddenKey = (CONTROL_ARM_FORBIDDEN_ENV_KEYS as readonly string[]).includes(key);
     const leaksPath =
       typeof value === 'string' && containsPathAtBoundary(normalizeForMatch(value), needle);
-    if (leaksPath && !forbiddenKey && protectedNames.has(key)) {
+    // `isProtectedName`, not `protectedNames.has`: on win32 env names are
+    // case-insensitive, so a `Path` that names the harness root would miss the
+    // exemption and be dropped — spawning the control arm with no PATH on the one
+    // platform where the spelling varies.
+    if (leaksPath && !forbiddenKey && isProtectedName(key, protectedNames)) {
       retainedLeaks.push(key);
       scrubbed[key] = value;
       continue;

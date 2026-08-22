@@ -459,6 +459,7 @@ describe('scrubControlArmEnv', () => {
         ANTHROPIC_API_KEY: 'sk-test',
       },
       HARNESS_ROOT,
+      [],
     );
 
     expect(env).not.toHaveProperty('CLAUDE_PLUGIN_ROOT');
@@ -474,6 +475,7 @@ describe('scrubControlArmEnv', () => {
     const { dropped } = scrubControlArmEnv(
       { WIN: String.raw`C:\tmp\vat-skill-test\s\x` },
       'C:/tmp/vat-skill-test/s',
+      [],
     );
     expect(dropped).toEqual(['WIN']);
   });
@@ -490,6 +492,7 @@ describe('scrubControlArmEnv', () => {
     const { env, dropped } = scrubControlArmEnv(
       { CLAUDE_PLUGIN_ROOT: '/Users/dev/.claude/plugins/marketplaces/acme' },
       HARNESS_ROOT,
+      [],
     );
 
     expect(dropped).toEqual(['CLAUDE_PLUGIN_ROOT']);
@@ -498,7 +501,7 @@ describe('scrubControlArmEnv', () => {
 
   it('drops an unlisted key by VALUE when it names the harness root', () => {
     // Only rule 2 can catch this — SNAPSHOT is in no key list anywhere.
-    const { env, dropped } = scrubControlArmEnv({ SNAPSHOT: `${HARNESS_ROOT}/staged/s/x.json` }, HARNESS_ROOT);
+    const { env, dropped } = scrubControlArmEnv({ SNAPSHOT: `${HARNESS_ROOT}/staged/s/x.json` }, HARNESS_ROOT, []);
 
     expect(dropped).toEqual(['SNAPSHOT']);
     expect(env).not.toHaveProperty('SNAPSHOT');
@@ -508,11 +511,42 @@ describe('scrubControlArmEnv', () => {
   // which is strictly worse than the leak it closes. `--out .` from a repo root
   // under `bun run` puts <repo>/node_modules/.bin on PATH, making PATH itself
   // "contain the harness root".
+  // The worst outcome this exemption prevents, and the one nobody would look for.
+  // Dropping a model var because its value happens to sit under `--out` runs the
+  // control arm ON A DIFFERENT MODEL — a confound that reads as skill lift and
+  // appears nowhere in the output.
+  it('retains a MODEL var that names the harness root, when the run declares one', () => {
+    const { env, dropped, retainedLeaks } = scrubControlArmEnv(
+      { ANTHROPIC_MODEL: `${HARNESS_ROOT}/models/pinned` },
+      HARNESS_ROOT,
+      ['ANTHROPIC_MODEL'],
+    );
+
+    expect(env['ANTHROPIC_MODEL'], 'the control arm lost its model pin').toBeDefined();
+    expect(dropped).toEqual([]);
+    expect(retainedLeaks).toEqual(['ANTHROPIC_MODEL']);
+  });
+
+  // The negative control for the case above: same var, same value, but NOT
+  // declared as a model var — so it is ordinary env and rule 2 drops it. Without
+  // this, the test above would pass on a `protectedEnvNames()` that ignores its
+  // argument entirely, which is exactly the bug being fixed.
+  it('drops that same var when the run declares no model vars', () => {
+    const { dropped } = scrubControlArmEnv(
+      { ANTHROPIC_MODEL: `${HARNESS_ROOT}/models/pinned` },
+      HARNESS_ROOT,
+      [],
+    );
+
+    expect(dropped).toEqual(['ANTHROPIC_MODEL']);
+  });
+
   it('retains a process-essential var that names the harness root, and reports it', () => {
     const repoRoot = '/Users/dev/myrepo';
     const { env, dropped, retainedLeaks } = scrubControlArmEnv(
       { PATH: `${repoRoot}/node_modules/.bin:/usr/bin:/bin`, HOME: repoRoot },
       repoRoot,
+      [],
     );
 
     expect(env['PATH'], 'the control arm was spawned with no PATH').toBeDefined();
@@ -529,7 +563,7 @@ describe('scrubControlArmEnv', () => {
     const harnessRoot = '/tmp/vat-skill-test';
     const fixtures = '/tmp/vat-skill-test-ws-9f3c/lookup-1/fixtures';
     /* eslint-enable sonarjs/publicly-writable-directories */
-    const { env, dropped } = scrubControlArmEnv({ FIXTURES: fixtures }, harnessRoot);
+    const { env, dropped } = scrubControlArmEnv({ FIXTURES: fixtures }, harnessRoot, []);
 
     expect(dropped, 'a prefix collision stripped the control arm fixtures').toEqual([]);
     expect(env['FIXTURES']).toBe(fixtures);

@@ -68,6 +68,7 @@ const BARREL_EXPORTS = [
   'isGitUrl',
   'isGlob',
   'isPathLike',
+  'isProtectedName',
   'issueLocation',
   'isToolAvailable',
   'isZodNullable',
