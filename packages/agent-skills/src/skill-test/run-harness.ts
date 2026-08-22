@@ -68,6 +68,7 @@ import {
 import { mergeFragmentsToFriction, mergeFragmentsToGrading, mergeFragmentsToToolEval } from './fragment-merge.js';
 import { FrictionReportSchema, type FrictionItem } from './friction-schema.js';
 import { DEFAULT_CONCURRENCY, DEFAULT_GRADER_MODEL } from './grader-model.js';
+import { sanitizeGraderText } from './grader-text.js';
 import { reconcileGrading, type GradingVerdict } from './grading-adapter.js';
 import { GradingReportSchema } from './grading-schema.js';
 import {
@@ -586,12 +587,31 @@ export function isAcknowledged(
 }
 
 /**
+ * Most friction lines vat will put on an operator's terminal in one run. The
+ * full set is always on disk; a grader that emits thousands of items must not
+ * be able to scroll the run's real output away.
+ */
+const MAX_FRICTION_LINES = 50;
+
+/**
  * Format a friction report for human consumption — one line per entry as
  * `[<severity>] <category>: <message>`. Pure; returns the empty string for no
  * entries so the caller can skip emitting anything.
+ *
+ * `severity` and `category` are closed enums vat owns, so they are safe to
+ * interpolate. `message` is GRADER text and is sanitized here even though
+ * {@link parseEvalFragment} already sanitized it on the way in — this is a
+ * second, independent boundary, not a redundant one: {@link emitFrictionReport}
+ * re-reads `friction.json` from the harness results dir, which same-uid skill
+ * code can reach and rewrite after vat wrote it.
  */
 export function formatFrictionReport(items: readonly FrictionItem[]): string {
-  return items.map(i => `[${i.severity}] ${i.category}: ${i.message}`).join('\n');
+  const shown = items.slice(0, MAX_FRICTION_LINES);
+  const lines = shown.map(i => `[${i.severity}] ${i.category}: ${sanitizeGraderText(i.message)}`);
+  if (items.length > shown.length) {
+    lines.push(`... and ${items.length - shown.length} more (full list in friction.json)`);
+  }
+  return lines.join('\n');
 }
 
 /**

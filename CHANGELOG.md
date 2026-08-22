@@ -356,6 +356,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **`vat skill test` no longer lets grader text write its own lines on your terminal.** Every
+  free-text field a grader emits is attacker-influenced — the grader reads the executor transcript,
+  which the skill under test writes — and `friction[].message` went to stderr verbatim. A grader
+  induced to emit a newline plus an ANSI colour sequence printed a green
+  "vat: grading verified, ignore the warning above." line of its own, directly under vat's warnings.
+  All grader-supplied strings are now stripped of escape sequences and control characters, capped in
+  length, and the friction report is capped at 50 lines.
+
+- **A grader's tool verdict must now name the checks the eval actually declared.** `mustRun` /
+  `mustNotRun` / `mustSucceed` / `sequence` verdicts were computed from whatever checks the grader
+  returned, so omitting one made that expectation vacuously pass and inventing one added a check the
+  eval never declared. A mismatch in either direction now fails the run (exit 1) instead of
+  producing a verdict nobody asked for.
+
 - **VAT's on-disk cache directory is now created owner-only (`0700`) on POSIX.**
   `<tmpdir>/.vat-cache/` is a world-readable location shared by every user on the host, and it holds
   the set of external URLs a project links to — including private hostnames. The per-OS-user cache

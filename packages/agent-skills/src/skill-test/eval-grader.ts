@@ -6,6 +6,7 @@ import { EvalFragmentError, parseEvalFragment, type EvalFragment } from './eval-
 import type { ToolExpectations } from './eval-inputs.js';
 import { InternalHarnessError } from './exit-codes.js';
 import { assertGraderPromptInvariants, buildGraderPrompt } from './grader-prompt.js';
+import { sanitizeGraderText } from './grader-text.js';
 import { GradingNonceError } from './grading-adapter.js';
 import { computeToolPassed } from './tool-eval-schema.js';
 
@@ -254,6 +255,8 @@ function readAndConsumeFragmentFile(fragmentOut: string, evalId: string, status:
  *   that disagrees with its own sub-checks is grader malfunction (a false green
  *   or a false red), surfaced loudly rather than merged. Mirrors
  *   `reconcileGrading`'s summary/expectations reconciliation (grading-adapter.ts).
+ * - Fix #4: the check NAMES must be exactly the eval's declared ones. See
+ *   {@link assertToolCheckNamesDeclared}.
  */
 function assertToolVerdictConsistent(
   evalId: string,
@@ -271,4 +274,66 @@ function assertToolVerdictConsistent(
         `disagrees with its own sub-checks (recomputed ${computeToolPassed(tool)}).`,
     );
   }
+  assertToolCheckNamesDeclared(evalId, toolExpectations, tool);
+}
+
+/** Render grader-supplied names for an error message, already sanitized by the fragment parse. */
+function quoteNames(names: readonly string[]): string {
+  return names.map((name) => `"${name}"`).join(', ');
+}
+
+/**
+ * One channel's check names must be EXACTLY the declared ones — no invention,
+ * no omission.
+ *
+ * `computeToolPassed` iterates the checks the GRADER emitted, not the ones the
+ * eval declared, so both directions are load-bearing and neither is cosmetic:
+ *
+ * - **Omission laundered a pass.** Drop the `mustRun` entry for an executable
+ *   that never ran and the channel is vacuously true — the verdict reads
+ *   `passed: true` for an expectation nobody checked.
+ * - **Invention gates on a name vat never asked about.** A grader talked into
+ *   emitting `{name: "totally-fine", ran: true}` adds a check the eval does not
+ *   declare, and it counts toward the verdict exactly like a real one.
+ *
+ * Names are compared AFTER {@link sanitizeGraderText} on both sides. The
+ * reported side is already sanitized (parseEvalFragment); normalizing the
+ * declared side too means the comparison happens in one space, so an adopter
+ * who declared a name containing a tab does not get an unexplainable mismatch.
+ *
+ * Fail-closed like its siblings above: this is vat's own grading infrastructure
+ * failing to do its one job, not adopter data being audited.
+ */
+function assertToolCheckNamesDeclared(
+  evalId: string,
+  toolExpectations: RunGraderInput['toolExpectations'],
+  tool: EvalFragment['tool'],
+): void {
+  if (tool === undefined) return;
+  const declared = toolExpectations ?? {};
+  assertChannelNames(evalId, 'mustRun', declared.mustRun, (tool.mustRun ?? []).map((c) => c.name));
+  assertChannelNames(evalId, 'mustNotRun', declared.mustNotRun, (tool.mustNotRun ?? []).map((c) => c.name));
+  assertChannelNames(evalId, 'mustSucceed', declared.mustSucceed, (tool.mustSucceed ?? []).map((c) => c.name));
+  assertChannelNames(evalId, 'sequence', declared.sequence, (tool.sequence ?? []).flatMap((c) => c.steps));
+}
+
+function assertChannelNames(
+  evalId: string,
+  channel: string,
+  declared: readonly string[] | undefined,
+  reported: readonly string[],
+): void {
+  const declaredSet = new Set((declared ?? []).map(sanitizeGraderText));
+  const reportedSet = new Set(reported);
+  const invented = [...reportedSet].filter((name) => !declaredSet.has(name));
+  const missing = [...declaredSet].filter((name) => !reportedSet.has(name));
+  if (invented.length === 0 && missing.length === 0) return;
+  const problems: string[] = [];
+  if (invented.length > 0) problems.push(`invented ${quoteNames(invented)}`);
+  if (missing.length > 0) problems.push(`omitted ${quoteNames(missing)}`);
+  throw new InternalHarnessError(
+    `Grader for eval "${evalId}" emitted \`tool.${channel}\` checks that do not match the eval's ` +
+      `declared toolExpectations: ${problems.join('; ')}. The verdict is computed from the checks the ` +
+      `grader emitted, so an invented or omitted name silently changes it.`,
+  );
 }

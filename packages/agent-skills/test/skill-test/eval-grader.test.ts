@@ -276,6 +276,67 @@ describe('runGraderForEval', () => {
       );
     });
 
+    // `computeToolPassed` iterates the checks the GRADER emitted, not the ones
+    // the eval declared — so both an omitted and an invented name silently move
+    // the verdict. Fail-closed, like the two guards above it.
+    const NAME_MISMATCHES: Array<{
+      why: string;
+      tool: Record<string, unknown>;
+      toolExpectations?: RunGraderInput['toolExpectations'];
+    }> = [
+      {
+        // With no mustRun entry the channel is vacuously true, so the verdict
+        // reads passed:true for an executable nobody checked.
+        why: 'OMITTING a declared mustRun check, which would launder a vacuous pass',
+        tool: { mustRun: [], passed: true },
+        toolExpectations: { mustRun: ['csvsum'] },
+      },
+      {
+        why: 'INVENTING a mustRun check the eval never declared',
+        tool: { mustRun: [{ name: 'csvsum', ran: true }, { name: 'totally-fine', ran: true }], passed: true },
+        toolExpectations: { mustRun: ['csvsum'] },
+      },
+      {
+        // mergeFragmentsToToolEval carries any `tool` body into tool-eval.json,
+        // so an unsolicited verdict would land there as if vat had asked for it.
+        why: 'a whole tool verdict when the eval declared NO expectations at all',
+        tool: { mustRun: [{ name: 'invented', ran: true }], passed: true },
+      },
+      {
+        why: 'mismatched sequence STEPS, not just top-level check names',
+        tool: { sequence: [{ steps: ['parse', 'invented-step'], satisfied: true }], passed: true },
+        toolExpectations: { sequence: ['parse', 'report'] },
+      },
+    ];
+
+    it.each(NAME_MISMATCHES)('rejects $why', async ({ tool, toolExpectations }) => {
+      const { spawn } = stubWritingFragment(graderOutDir, { ...validFragmentFor(EVAL_ID, NONCE), tool });
+
+      await expectInternalHarnessError(() =>
+        runGraderForEval(
+          baseInput(graderOutDir, { spawn, ...(toolExpectations === undefined ? {} : { toolExpectations }) }),
+        ),
+      );
+    });
+
+    it('names still match when the grader decorates one with an escape sequence', async () => {
+      // The fragment parse sanitizes the reported name; the declared side is
+      // normalized the same way, so the comparison happens in one space and a
+      // decorated name is neither a false mismatch nor a way past the check.
+      const esc = String.fromCharCode(0x1b);
+      const fragment = {
+        ...validFragmentFor(EVAL_ID, NONCE),
+        tool: { mustRun: [{ name: `${esc}[32mcsvsum${esc}[0m`, ran: true }], passed: true },
+      };
+      const { spawn } = stubWritingFragment(graderOutDir, fragment);
+
+      const result = await runGraderForEval(
+        baseInput(graderOutDir, { spawn, toolExpectations: { mustRun: ['csvsum'] } }),
+      );
+
+      expect(result.tool?.mustRun?.[0]?.name).toBe('csvsum');
+    });
+
     it('a mustSucceed tool verdict whose `passed` agrees with its sub-checks parses through', async () => {
       const fragment = {
         ...validFragmentFor(EVAL_ID, NONCE),

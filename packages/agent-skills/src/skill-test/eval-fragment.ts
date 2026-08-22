@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { BaselineContaminationHitSchema } from './baseline-integrity.js';
 import { FrictionItemSchema } from './friction-schema.js';
+import { sanitizeGraderText, sanitizeGraderTextDeep } from './grader-text.js';
 import { ToolVerdictBodySchema } from './tool-eval-schema.js';
 
 /** One graded expectation inside a per-eval grader fragment. */
@@ -70,14 +71,30 @@ export class EvalFragmentError extends Error {
   }
 }
 
-/** Best-effort extraction of `evalId` from raw input for error messages, tolerating any shape. */
+/**
+ * Best-effort extraction of `evalId` from raw input for error messages,
+ * tolerating any shape. Sanitized: this value lands in a thrown message that a
+ * human reads on stderr, and at the point it is read the fragment has NOT been
+ * validated — so it is raw grader text with no schema between it and the
+ * terminal.
+ */
 function extractRawEvalId(raw: unknown): string {
   if (typeof raw === 'object' && raw !== null && 'evalId' in raw) {
     const value = (raw as Record<string, unknown>)['evalId'];
-    if (typeof value === 'string' && value.length > 0) return `"${value}"`;
+    if (typeof value === 'string' && value.length > 0) return `"${sanitizeGraderText(value)}"`;
   }
   return '(unknown)';
 }
+
+/**
+ * Fragment keys whose value must NOT be normalized.
+ *
+ * `runNonce` is compared byte-for-byte against the run's secret by the
+ * integrity gate in eval-grader.ts. Normalizing it would mean the gate no
+ * longer compares what the grader actually wrote — the one field in this
+ * fragment that exists to be compared exactly.
+ */
+const UNSANITIZED_FRAGMENT_KEYS: ReadonlySet<string> = new Set(['runNonce']);
 
 /**
  * Sanitize ONLY the (non-verdict-bearing) `friction` field before the strict
@@ -124,22 +141,36 @@ function sanitizeFrictionField(raw: unknown): { value: unknown; dropped: number 
  * leniently first (see {@link sanitizeFrictionField}); when items are dropped,
  * `onWarn` (if given) is called so the operator sees that friction was partial —
  * grading itself is never affected.
+ *
+ * THIS IS THE TEXT BOUNDARY. Every string in the fragment is run through
+ * {@link sanitizeGraderTextDeep} BEFORE anything else looks at it, so no
+ * grader-supplied newline or ANSI sequence can reach an artifact or an operator
+ * line downstream (see grader-text.ts for the threat). It runs first, ahead of
+ * the friction sanitizer and the strict parse, because both of those quote
+ * grader text into messages of their own.
  */
 export function parseEvalFragment(raw: unknown, onWarn?: (message: string) => void): EvalFragment {
-  const { value, dropped } = sanitizeFrictionField(raw);
+  const sanitized = sanitizeGraderTextDeep(raw, UNSANITIZED_FRAGMENT_KEYS);
+  const { value, dropped } = sanitizeFrictionField(sanitized);
   if (dropped > 0) {
     onWarn?.(
-      `grader fragment for eval ${extractRawEvalId(raw)} had ${dropped} malformed friction item(s) — ` +
+      `grader fragment for eval ${extractRawEvalId(sanitized)} had ${dropped} malformed friction item(s) — ` +
         `dropped them (friction is advisory; grading is unaffected).`,
     );
   }
   const result = EvalFragmentSchema.safeParse(value);
   if (!result.success) {
     const firstIssue = result.error.issues[0];
-    const path = firstIssue?.path.join('.') ?? '(root)';
-    const evalId = extractRawEvalId(raw);
+    // Both halves quote grader-chosen text. The path names the offending FIELD,
+    // and a `.strict()` failure puts the offending KEY inside zod's own issue
+    // MESSAGE ("Unrecognized key(s) in object: '<key>'") — the key never becomes
+    // fragment data, so the deep walk above cannot reach it, and it is the only
+    // route by which an unparseable fragment can still paint the terminal.
+    const path = sanitizeGraderText(firstIssue?.path.join('.') ?? '(root)');
+    const issue = sanitizeGraderText(firstIssue?.message ?? 'unknown');
+    const evalId = extractRawEvalId(sanitized);
     throw new EvalFragmentError(
-      `grader fragment for eval ${evalId} has an invalid shape: invalid field at "${path}" (${firstIssue?.message ?? 'unknown'})`,
+      `grader fragment for eval ${evalId} has an invalid shape: invalid field at "${path}" (${issue})`,
     );
   }
   return result.data;
