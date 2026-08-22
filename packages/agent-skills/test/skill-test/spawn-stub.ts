@@ -81,6 +81,13 @@ export interface HarnessFakeSpawnConfig {
   /** When true, the grader writes a WRONG runNonce (simulates a forged fragment). */
   forgeNonce?: boolean;
   /**
+   * Extra stream-json line the EXECUTOR emits, computed from its spawn `opts`.
+   * Lets a test simulate a control arm that went and found the skill — the only
+   * way to drive the baseline contamination detector, whose input is the
+   * transcript. Returning undefined emits nothing extra.
+   */
+  executorExtraStdout?: (opts: SpawnHeadlessOptions) => string | undefined;
+  /**
    * When the grader prompt carries a tool-verdict directive (the eval declared
    * `toolExpectations`), the fragment ALSO gets a `tool` body whose `passed` is
    * this value (default true). Set false to simulate a tool-expectation failure
@@ -153,6 +160,8 @@ export function makeHarnessFakeSpawn(cfg: HarnessFakeSpawnConfig = {}): HarnessF
     }
     cfg.onExecutorSpawn?.(opts);
     opts.onStdout?.(`${FAKE_EXECUTOR_LINE}\n`);
+    const extra = cfg.executorExtraStdout?.(opts);
+    if (extra !== undefined) opts.onStdout?.(`${extra}\n`);
     return { status: cfg.executorStatus ?? 0, timedOut: false, stalled: false };
   });
   return { spawn: spawn as unknown as typeof spawnHeadlessClaude, graderSandboxDirs, graderNonces };

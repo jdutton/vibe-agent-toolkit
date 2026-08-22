@@ -151,8 +151,17 @@ async function runCanary(
       spawns += 1;
       // The executor's REACHABLE world, not merely its cwd: cwd + --add-dir
       // sandbox + every --plugin-dir + the whole harness root.
+      // `safePath.join(opts.cwd, '..')` is the WORKSPACES ROOT. It used to be
+      // covered incidentally, because workspaces lived under `harnessRoot`; they
+      // now live outside it, so without this the walk covers only the ONE eval's
+      // own directory and this file's stated invariant — "every byte the executor
+      // could reach" — quietly became false. The executor has Bash, so sibling
+      // workspaces are one `ls ..` away.
       leaks.push(
-        ...filesContaining([opts.cwd, opts.sandboxDir, ...opts.pluginDirs, harnessRoot], ANSWER_KEY),
+        ...filesContaining(
+          [opts.cwd, safePath.join(opts.cwd ?? '.', '..'), opts.sandboxDir, ...opts.pluginDirs, harnessRoot],
+          ANSWER_KEY,
+        ),
       );
     },
   });

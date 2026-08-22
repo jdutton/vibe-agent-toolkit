@@ -37,6 +37,7 @@ import type { ResolvedSkillSource, ResolveSkillSourceContext, SkillSource } from
 
 import {
   detectBaselineContamination,
+  scrubControlArmEnv,
   summarizeBaselineIntegrity,
   type BaselineContamination,
 } from './baseline-integrity.js';
@@ -742,6 +743,12 @@ export function stageWorkspacesForRun(
   // at all. Inheriting the umask (0755) left them readable by any local user the
   // moment `--out` relocated the harness root out from under its 0700 parent.
   mkdirSyncReal(workspacesRoot, { recursive: true, mode: 0o700 });
+  // The same shared-tmp hardening the harness root gets. `mkdirSync(recursive)`
+  // on an existing path neither throws nor chmods, so without this an attacker
+  // winning the race between the rmSync and the mkdir owns the executor's working
+  // directory and nothing ever re-checks. Cheap: the leaf sits directly under the
+  // trusted tmp boundary, so the ancestry walk degrades to one lstat + stat.
+  assertSafeHarnessRoot(workspacesRoot, process.getuid?.() ?? -1);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- evalsPath is our staged-subject path
   const suite = parseEvalSuite(readFileSync(evalsPath, 'utf-8'));
   return {
@@ -1195,24 +1202,51 @@ interface EvalRunContext {
  * failure is NOT thrown — its transcript flows into the grader, whose failing
  * fragment surfaces as an eval failure (exit 4 via the verdict), never exit 1.
  */
+/**
+ * The executor env for ONE eval.
+ *
+ * `workspaceDir` is threaded to the token resolver ONLY when the eval actually
+ * declares input `files`, even though every eval now HAS a workspace. The two are
+ * different questions: the workspace is where the executor runs, while
+ * `${fixturesDir}` promises a staged `fixtures/` directory that EXISTS — and
+ * `stageEvalWorkspaces` creates that only for evals declaring files. Passing it
+ * unconditionally silently downgraded `UnresolvableEnvTokenError` (a loud exit 2
+ * naming the exact fix) into a dead path the skill discovers at runtime and is
+ * then blamed for.
+ */
+function resolveExecutorEnvForEval(
+  item: EvalWorkItem,
+  ctx: EvalRunContext,
+  workspaceDir: string,
+): NodeJS.ProcessEnv {
+  if (ctx.perEvalEnv === undefined) return ctx.executorEnv;
+  const declaresFiles = item.entry.files !== undefined && item.entry.files.length > 0;
+  const { input, logged } = ctx.perEvalEnv;
+  const env = resolveDeclaredChildEnv({
+    ...input,
+    ...(declaresFiles ? { workspaceDir } : {}),
+    quiet: logged.done,
+  }).env;
+  logged.done = true;
+  return env;
+}
+
 async function runEvalWorker(item: EvalWorkItem, ctx: EvalRunContext): Promise<EvalFragment> {
   const evalId = String(item.entry.id);
   const workspaceDir = resolvePerEvalWorkspaceDir(item.entry, ctx.workspacesRoot);
   const onProgress = (chunk: string): void => { process.stderr.write(chunk); };
 
-  // Resolve the declared `env` against THIS eval's workspace. Every eval now has
-  // one (empty when it declares no input files), so `${fixturesDir}` always
-  // resolves to a real directory.
-  let executorEnv = ctx.executorEnv;
-  if (ctx.perEvalEnv !== undefined) {
-    const { input, logged } = ctx.perEvalEnv;
-    executorEnv = resolveDeclaredChildEnv({
-      ...input,
-      workspaceDir,
-      quiet: logged.done,
-    }).env;
-    logged.done = true;
-  }
+  // Resolve the declared `env` against THIS eval's workspace.
+  //
+  // `workspaceDir` is threaded to the token resolver ONLY when the eval actually
+  // declares input `files`, even though every eval now HAS a workspace. The two
+  // are different questions: the workspace is where the executor runs, while
+  // `${fixturesDir}` promises a staged `fixtures/` directory that exists — and
+  // `stageEvalWorkspaces` creates that only for evals declaring files. Passing it
+  // unconditionally silently downgraded `UnresolvableEnvTokenError` (a loud exit 2
+  // naming the exact fix) into a dead path the skill discovers at runtime and gets
+  // blamed for.
+  let executorEnv = resolveExecutorEnvForEval(item, ctx, workspaceDir);
 
   // The skill-absent arm is not told where the subject is staged. Handing it that
   // path would defeat the control outright: the staged dir holds the SKILL.md AND
@@ -1220,6 +1254,12 @@ async function runEvalWorker(item: EvalWorkItem, ctx: EvalRunContext): Promise<E
   // the entire treatment with one `cat`. Withholding the plugin dir while naming
   // the staged dir in the prompt was the defect this arm's whole value rests on.
   const isWithArm = item.arm === 'with';
+
+  // ...and the same reasoning applied to the ENVIRONMENT, which is the channel the
+  // first round of this fix missed entirely: the run assembles ONE env and both
+  // arms were handed it verbatim, `CLAUDE_PLUGIN_ROOT` included. See
+  // scrubControlArmEnv — prompt, argv, cwd and env are four channels, not three.
+  if (!isWithArm) executorEnv = scrubControlArmEnv(executorEnv, ctx.harnessRoot).env;
 
   const outcome = await runExecutorForEval({
     evalId,
@@ -1265,8 +1305,25 @@ async function runEvalWorker(item: EvalWorkItem, ctx: EvalRunContext): Promise<E
     costSink: (usd) => recordSessionCost(ctx.costAccumulator, usd),
   });
 
-  if (isWithArm) return { ...fragment, arm: item.arm };
-  return { ...fragment, arm: item.arm, ...baselineContaminationFor(outcome.transcript, ctx) };
+  const graded = withoutGraderContamination(fragment);
+  if (isWithArm) return { ...graded, arm: item.arm };
+  return { ...graded, arm: item.arm, ...baselineContaminationFor(outcome.transcript, ctx) };
+}
+
+/**
+ * Strip any `contamination` the GRADER emitted, before VAT attaches its own.
+ *
+ * The grader's only input is the executor transcript, which untrusted skill code
+ * controls — so a prompt injection there could otherwise fabricate a
+ * `BASELINE CONTAMINATED` verdict carrying attacker-chosen strings into an
+ * operator-facing artifact. Spreading VAT's value last is NOT sufficient: it is
+ * `{}` on a clean run, so it overwrites nothing.
+ */
+function withoutGraderContamination(fragment: EvalFragment): EvalFragment {
+  if (fragment.contamination === undefined) return fragment;
+  const copy = { ...fragment };
+  delete copy.contamination;
+  return copy;
 }
 
 /**
@@ -1632,7 +1689,13 @@ export function resolveHarnessLocation(
   }
 
   return {
-    harnessRoot: opts.out ?? resolveHarnessRoot([opts.subject], opts.workdir),
+    // `--out` is RESOLVED to an absolute path, not taken verbatim. A relative
+    // `--out ./h` used to be stored as `./h` and then used as a contamination
+    // needle — a two-character string that matches almost any transcript, so every
+    // eval reported contaminated and the operator was told to discard a clean run.
+    harnessRoot: opts.out === undefined
+      ? resolveHarnessRoot([opts.subject], opts.workdir)
+      : safePath.resolve(opts.out),
     harnessCreated: opts.out === undefined && opts.workdir === undefined,
   };
 }

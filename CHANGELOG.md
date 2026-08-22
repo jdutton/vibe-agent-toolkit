@@ -39,6 +39,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   manages, so carrying it would orphan a `vat-skill-test-ws-<token>` dir on every `--out` run,
   permanently. The location changed, so the retention policy changed with it.
 
+  3. **The control arm's ENVIRONMENT carried the path the prompt no longer did.** The run assembles
+     one env and handed it to both arms, so `CLAUDE_PLUGIN_ROOT` — pointing at the staged plugin
+     root — let any plugin-distributed subject's control arm recover the whole treatment with
+     `env | grep CLAUDE`. It also defeated the new detector, whose needle is the literal path while
+     the arm's command reads `$CLAUDE_PLUGIN_ROOT/…`. The control arm now drops that key and any
+     declared `env:` value containing the harness root. A path reaches a child through four
+     channels — prompt, argv, cwd, env — and the first three are not a closure.
+
   **Interpretation changed, not just behavior.** The delta A/Bs the skill's *instructions*, not its
   capability, and vat now says so in `--help` and the skill-testing guide (the guide's claim that
   "the skill-absent arm has no tools to judge" was false and is corrected).
@@ -101,6 +109,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with per-eval evidence excerpts. The block is written on **every** baseline run, so its absence
   means "produced before this check existed" and never "checked and clean". A wrong number that
   announces itself is recoverable; a silent one gets believed, written down, and acted on.
+
+  Both sides of the match are normalized (separator direction, repeated slashes, Windows case) and
+  the harness signal matches a path **suffix** rather than one literal spelling. A naive
+  `indexOf(harnessRoot)` was dead on Windows (VAT derives forward slashes; the transcript carries
+  JSON-escaped backslashes), a coin-flip on macOS (VAT realpaths to `/private/var/…` while
+  `$TMPDIR` — which the child inherits — says `/var/…`), and blind on every platform to the
+  relative reach the new directory layout actually invites. Executable names match only where they
+  are invoked as a file (`scripts/x.py`, `./x`), not as bare words: stripped names like `summary`
+  or `run` otherwise fire on ordinary prose, and the instruction attached to a `true` verdict is
+  "discard the delta" — a check that routinely destroys clean runs trains people to ignore the one
+  warning that matters. `--out` is resolved to an absolute path before becoming a needle.
 
 - **`isFilesystemAccessError(err)`**, exported from `@vibe-agent-toolkit/utils` and its `./fs` subpath. Answers whether an error is the filesystem refusing a path (`EACCES`, `ENOENT`, `ENOSPC`, …) rather than a bug, which is the question a tool has to answer before deciding to carry on over a tree it does not own. VAT uses it in `vat audit` and in skill packaging so both agree on what counts as the environment's fault.
 

@@ -1263,6 +1263,13 @@ export async function runSkillTestRun(
     const result = await runSkillTestHarness(harnessOpts);
 
     process.stderr.write(`Harness: ${result.harnessPath}\n`);
+    // The executor's working directories live OUTSIDE the harness root under an
+    // unguessable token, so the harness path no longer leads an operator to them.
+    // Under --keep they survive holding everything the evals produced; unreported,
+    // they would be an orphan the operator cannot find to inspect or reap.
+    if (result.workspacesPath !== undefined) {
+      process.stderr.write(`Workspaces: ${result.workspacesPath}\n`);
+    }
     process.stdout.write(`Summary: ${result.summary}\n`);
     process.exit(result.exitCode);
     return;

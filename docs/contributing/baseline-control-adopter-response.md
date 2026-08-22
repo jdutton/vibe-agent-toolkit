@@ -12,11 +12,14 @@ Everything material. Verified against source, not taken on trust:
 
 | Your claim | Confirmed |
 |---|---|
-| Only `pluginDirs` distinguishes the arms | `run-harness.ts:1174` |
-| `staged/`, the assembled plugin dir and `workspaces/` are siblings under `--out` | `staging.ts:128,148`; `run-harness.ts:417,702` |
-| No `--workdir`/`--out` combination mitigates it | `run-harness.ts:1510` |
-| The control arm has unrestricted Bash | `spawn-claude.ts:30` — `--permission-mode bypassPermissions`, no allow/denylist |
-| The docs overclaim | `vat-skill-testing.md:261`, `run.ts:1320` |
+Cited by symbol, not line number — the commit that fixes these rewrites the files, so line
+citations rot the moment they are written.
+
+| Only `pluginDirs` distinguished the arms | `runEvalWorker` in `run-harness.ts` |
+| `staged/`, the assembled plugin dir and `workspaces/` were siblings under `--out` | `stageOneItem`/`buildResolveCtx` in `staging.ts`, `stageWorkspacesForRun` in `run-harness.ts` |
+| No `--workdir`/`--out` combination mitigates it | `resolveHarnessLocation` in `run-harness.ts` |
+| The control arm has unrestricted Bash | `assembleClaudeArgs` in `spawn-claude.ts` — `--permission-mode bypassPermissions`, no allow/denylist |
+| The docs overclaim | the `toolExpectations` section of `vat-skill-testing.md`; the `--baseline` option in `run.ts` |
 
 Your §7 was also right on all three counts, including the retraction: `pluginDirs: []` + `--setting-sources ""` *does* correctly suppress the installed plugin cache. Your first hypothesis was wrong and you caught it yourself.
 
@@ -40,10 +43,16 @@ The consequence is stronger than either of us stated. The staged dir holds the S
 
 1. **The skill-absent arm is no longer told where the subject is staged.** Its prompt carries the task and its own workspace, nothing else.
 2. **Every eval gets a workspace**, empty when it declares no `files`. Both arms get the same one, so cwd is never a confound — and it is never the skill.
-3. **Workspaces moved out of the harness root** to `<tmp>/vat-skill-test-ws-<token>/`, joining the grader and eval-hold dirs. They were a sibling of `staged/`; now `ls ..` from the control arm shows nothing. Returned as `workspacesPath` on the run result, since the token is random.
-4. **`baselineIntegrity` in `baseline.json`** — your §9, the thing you said would have saved you. The WITHOUT arm's transcript is scanned for harness paths and declared executable names; findings land in `baseline.json` with per-eval evidence excerpts, plus a stderr warning. Written on **every** baseline run, so its absence means "predates this check", never "checked and clean".
-5. **Docs corrected.** "The skill-absent arm has no tools to judge" was false and is gone. `--help` now says `A/B the skill's INSTRUCTIONS … not a capability control`.
-6. **`--out` + `--workdir` now errors** instead of silently discarding `--workdir`. That silent-ignore was a second real bug, and you found it without noticing — your §7 note that the `--workdir` path "was never created at all" was the symptom.
+3. **Workspaces moved out of the harness root** to `<tmp>/vat-skill-test-ws-<token>/`, joining the grader and eval-hold dirs. They were a *child* of the harness root; they are now a *sibling* of it under the OS temp dir. To be precise about what that does and does not buy: `ls ..` from the control arm still shows the temp dir, which contains `vat-skill-test/` — this raises the cost of a reach from "look down" to "climb and guess a name", it does not make the skill unreachable. That residual relative reach is exactly what the contamination detector in (4) is matched against. Returned as `workspacesPath` on the run result and printed by the CLI, since the token is random and cannot be derived.
+
+4. **The control arm's environment is scrubbed.** Added after review: the first version of this fix closed the prompt, argv and cwd channels and left the fourth open. The run assembles one environment and handed it to both arms, `CLAUDE_PLUGIN_ROOT` included — which points at the staged plugin root, so `env | grep CLAUDE` recovered the whole treatment for any plugin-distributed skill. The control arm now drops that key and any declared `env:` value containing the harness root.
+5. **`baselineIntegrity` in `baseline.json`** — your §9, the thing you said would have saved you. The WITHOUT arm's transcript is scanned for harness paths and declared executable names; findings land in `baseline.json` with per-eval evidence excerpts, plus a stderr warning. Written on **every** baseline run, so its absence means "predates this check", never "checked and clean". Both sides of the match are normalized, and the harness signal matches a path *suffix* rather than one literal spelling — without that it was dead on Windows (separator direction), a coin-flip on macOS (`$TMPDIR` vs the realpath), and blind to the relative reach described in (3) everywhere.
+6. **Docs corrected.** "The skill-absent arm has no tools to judge" was false and is gone. `--help` now says `A/B the skill's INSTRUCTIONS … not a capability control`.
+7. **`--out` + `--workdir` now errors** instead of silently discarding `--workdir`. That silent-ignore was a second real bug, and you found it without noticing — your §7 note that the `--workdir` path "was never created at all" was the symptom. `--out` is also resolved to an absolute path now; a relative one used to become the detector's needle and match nearly everything.
+
+### One caveat you should know about, because it affects your verification
+
+The ambient-copy half of the detector keys off your skill's **declared executables**, and that manifest only resolves for a *declared* subject — a skill name, or a path that maps back to one. Pointing `vat skill test run` at an already-built `./dist/skills/<name>/` resolves as a plain source path with no manifest, so that signal is off and only the harness-path signal remains. Prefer the skill **name** when you re-run, or the block will under-report.
 
 ## 4. Where I did not follow your recommendation
 
