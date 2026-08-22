@@ -422,8 +422,76 @@ export const ContaminationSignalSchema = BaselineContaminationHitSchema.shape.ki
 
 export type ContaminationSignal = z.infer<typeof ContaminationSignalSchema>;
 
+/** One eval whose two arms were graded against a different number of expectations. */
+export const BaselineArmSkewSchema = z.object({
+  evalId: z.string().min(1),
+  withTotal: z.number().int().nonnegative(),
+  withoutTotal: z.number().int().nonnegative(),
+}).strict();
+
+export type BaselineArmSkew = z.infer<typeof BaselineArmSkewSchema>;
+
+/** An eval's graded-expectation count on one arm, for the parity check. */
+export interface ArmEvalCount {
+  evalId: string;
+  total: number;
+}
+
+/**
+ * Evals whose two arms were graded against DIFFERENT numbers of expectations.
+ *
+ * `--baseline` sells a DELTA, and a delta between two differently-sized
+ * denominators is not a delta. vat computes each arm's `summary` from the
+ * fragments it received, so both reports are internally consistent by
+ * construction and `reconcileGrading` cannot see this — a grader that emitted 2
+ * entries for a 3-expectation eval on the control arm yields
+ * `baseline.summary = {passed:2,total:2}`, which reads as **100% without the
+ * skill**. That is the most damaging direction the number can be wrong in: it
+ * says the skill did nothing.
+ *
+ * Both directions count, and so does an eval graded on only one arm — the missing
+ * side is reported as 0 rather than dropped, since a silently absent eval skews
+ * the run total exactly as a short-graded one does.
+ *
+ * A stronger cousin exists and is NOT here: comparing each arm's count against the
+ * number of expectations the eval DECLARED, which would also catch a WITH arm
+ * grading short. It needs the suite threaded into the merge, and it does not
+ * protect the delta any better than parity does — parity is what the two arms
+ * being comparable actually means.
+ */
+export function armExpectationSkew(
+  withArm: readonly ArmEvalCount[],
+  withoutArm: readonly ArmEvalCount[],
+): BaselineArmSkew[] {
+  const withoutById = new Map(withoutArm.map((c) => [c.evalId, c.total]));
+  const skew: BaselineArmSkew[] = [];
+
+  for (const { evalId, total } of withArm) {
+    const withoutTotal = withoutById.get(evalId) ?? 0;
+    if (withoutTotal !== total) skew.push({ evalId, withTotal: total, withoutTotal });
+  }
+  // Evals the control arm graded and the treatment did not. Same disease, other
+  // direction, and invisible to the loop above.
+  const withIds = new Set(withArm.map((c) => c.evalId));
+  for (const { evalId, total } of withoutArm) {
+    if (!withIds.has(evalId)) skew.push({ evalId, withTotal: 0, withoutTotal: total });
+  }
+  return skew;
+}
+
 export const BaselineIntegritySchema = z.object({
   contaminated: z.boolean(),
+  /**
+   * Whether the two arms were graded against the same expectations, and so
+   * whether subtracting one summary from the other means anything.
+   *
+   * Separate from `contaminated` because they fail differently: contamination
+   * says the control HAD the treatment, comparability says the two numbers were
+   * never measuring the same thing. A run can be clean and incomparable.
+   */
+  comparable: z.boolean(),
+  /** The evals behind a `comparable: false`; empty when the arms agree. */
+  skew: z.array(BaselineArmSkewSchema),
   /** Human-readable verdict, safe to print verbatim. */
   summary: z.string().min(1),
   /**
@@ -1001,25 +1069,36 @@ function describeSignals(signals: readonly ContaminationSignal[]): string {
 export function summarizeBaselineIntegrity(
   findings: BaselineContamination[],
   signals: readonly ContaminationSignal[],
+  skew: readonly BaselineArmSkew[],
 ): BaselineIntegrity {
+  const base = { signals: [...signals], skew: [...skew], comparable: skew.length === 0 };
+  const skewNote =
+    skew.length === 0
+      ? ''
+      : ` ARMS NOT COMPARABLE: ${skew.length} eval(s) [${skew.map((s) => s.evalId).join(', ')}] were graded ` +
+        'against a different number of expectations on each arm, so the two summaries have different ' +
+        'denominators and subtracting them is meaningless — a short-graded control reads as a skill that did nothing.';
+
   if (findings.length === 0) {
     return {
+      ...base,
       contaminated: false,
       summary:
         'No skill-absent eval was observed reaching the skill. The A/B delta is interpretable as instruction lift ' +
-        `(note: both arms still share a filesystem — this is not a capability control; ${describeSignals(signals)}).`,
-      signals: [...signals],
+        `(note: both arms still share a filesystem — this is not a capability control; ${describeSignals(signals)}).` +
+        skewNote,
       findings: [],
     };
   }
   const ids = findings.map(f => f.evalId).join(', ');
   return {
+    ...base,
     contaminated: true,
     summary:
       `BASELINE CONTAMINATED: the skill-absent arm reached the skill in ${findings.length} eval(s) [${ids}]. ` +
       'The reported delta is NOT a measure of skill lift — the control arm had the treatment. ' +
-      'Most likely an ambient copy of the skill in this repo\'s build output or the installed plugin cache.',
-    signals: [...signals],
+      'Most likely an ambient copy of the skill in this repo\'s build output or the installed plugin cache.' +
+      skewNote,
     findings,
   };
 }

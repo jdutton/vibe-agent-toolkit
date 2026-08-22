@@ -101,6 +101,16 @@ export interface HarnessFakeSpawnConfig {
    * sandboxDir, pluginDirs) while the run is live. Never called for grader spawns.
    */
   onExecutorSpawn?: (opts: SpawnHeadlessOptions) => void;
+  /**
+   * How many expectation entries the grader writes for this fragment (default 1).
+   *
+   * Keyed on the fragment PATH because that is the only thing distinguishing the
+   * two arms at a grader spawn — vat writes each arm's fragment under
+   * `<graderOutDir>/<arm>/`, while the grader PROMPT is deliberately arm-blind.
+   * Lets a test simulate a grader that graded one arm against fewer expectations
+   * than the other, which is what makes the two summaries' denominators disagree.
+   */
+  graderExpectationCount?: (fragmentPath: string) => number;
 }
 
 export interface HarnessFakeSpawn {
@@ -148,7 +158,10 @@ export function makeHarnessFakeSpawn(cfg: HarnessFakeSpawnConfig = {}): HarnessF
           JSON.stringify({
             runNonce: cfg.forgeNonce === true ? 'f'.repeat(32) : nonce,
             evalId,
-            expectations: [{ text: 'graded', passed }],
+            expectations: Array.from(
+              { length: cfg.graderExpectationCount?.(fragmentPath) ?? 1 },
+              (_unused, i) => ({ text: `graded ${i}`, passed }),
+            ),
             ...(emitTool
               ? { tool: { mustRun: [{ name: 'csvsum', ran: toolPassed }], passed: toolPassed } }
               : {}),

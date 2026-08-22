@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   activeContaminationSignals,
+  armExpectationSkew,
   BaselineIntegritySchema,
   detectBaselineContamination,
   harnessNeedles,
@@ -849,11 +850,87 @@ describe('activeContaminationSignals', () => {
   });
 });
 
+/**
+ * `--baseline` sells a DELTA, and a delta between two differently-sized
+ * denominators is not one. vat computes each arm's `summary` from the fragments it
+ * received, so both reports are internally consistent by construction and
+ * `reconcileGrading` — the only cross-check that existed — cannot see this.
+ */
+describe('armExpectationSkew', () => {
+  it('is silent when both arms graded the same evals to the same depth', () => {
+    const counts = [{ evalId: 'e1', total: 3 }, { evalId: 'e2', total: 2 }];
+    expect(armExpectationSkew(counts, counts)).toEqual([]);
+  });
+
+  // The damaging direction, and the one from the report: a control arm graded
+  // against 2 of 3 expectations yields summary {passed:2,total:2} — 100% WITHOUT
+  // the skill, i.e. "the skill did nothing".
+  it('reports a control arm graded against fewer expectations', () => {
+    expect(
+      armExpectationSkew([{ evalId: 'e1', total: 3 }], [{ evalId: 'e1', total: 2 }]),
+    ).toEqual([{ evalId: 'e1', withTotal: 3, withoutTotal: 2 }]);
+  });
+
+  it('reports the opposite direction too', () => {
+    expect(
+      armExpectationSkew([{ evalId: 'e1', total: 2 }], [{ evalId: 'e1', total: 3 }]),
+    ).toEqual([{ evalId: 'e1', withTotal: 2, withoutTotal: 3 }]);
+  });
+
+  // An eval missing from one arm entirely skews the run total exactly as a
+  // short-graded one does, and the per-eval loop over the OTHER arm cannot see it.
+  it.each([
+    ['the control arm never graded it', [{ evalId: 'e1', total: 2 }], [], [{ evalId: 'e1', withTotal: 2, withoutTotal: 0 }]],
+    ['the treatment arm never graded it', [], [{ evalId: 'e1', total: 2 }], [{ evalId: 'e1', withTotal: 0, withoutTotal: 2 }]],
+  ])('reports an eval only one arm graded — %s', (_label, withArm, withoutArm, expected) => {
+    expect(armExpectationSkew(withArm, withoutArm)).toEqual(expected);
+  });
+});
+
 describe('summarizeBaselineIntegrity', () => {
+  const SKEW = [{ evalId: 'e1', withTotal: 3, withoutTotal: 2 }];
+
+  it('marks a run with matching arms comparable', () => {
+    const integrity = summarizeBaselineIntegrity([], ALL_SIGNALS, []);
+
+    expect(integrity.comparable).toBe(true);
+    expect(integrity.skew).toEqual([]);
+    expect(integrity.summary).not.toContain('NOT COMPARABLE');
+  });
+
+  // Clean AND incomparable is a real state, and the two must not be conflated:
+  // contamination says the control HAD the treatment, comparability says the two
+  // numbers were never measuring the same thing.
+  it('marks a CLEAN run incomparable when the arms disagree, and says so', () => {
+    const integrity = summarizeBaselineIntegrity([], ALL_SIGNALS, SKEW);
+
+    expect(integrity.contaminated).toBe(false);
+    expect(integrity.comparable).toBe(false);
+    expect(integrity.skew).toEqual(SKEW);
+    expect(integrity.summary).toContain('ARMS NOT COMPARABLE');
+    expect(integrity.summary).toContain('e1');
+    expect(BaselineIntegritySchema.safeParse(integrity).success).toBe(true);
+  });
+
+  it('reports both problems when a run is contaminated AND incomparable', () => {
+    const findings: BaselineContamination[] = [
+      { evalId: 'e1', hits: [{ kind: KIND_HARNESS_PATH, match: HARNESS_ROOT, excerpt: EXCERPT_ELLIPSIS }] },
+    ];
+    const integrity = summarizeBaselineIntegrity(findings, ALL_SIGNALS, SKEW);
+
+    expect(integrity.contaminated).toBe(true);
+    expect(integrity.comparable).toBe(false);
+    expect(integrity.summary).toContain('BASELINE CONTAMINATED');
+    expect(integrity.summary).toContain('ARMS NOT COMPARABLE');
+    expect(BaselineIntegritySchema.safeParse(integrity).success).toBe(true);
+  });
+});
+
+describe('summarizeBaselineIntegrity — contamination verdict', () => {
   // The block is emitted even when clean, so a reader can tell "checked and
   // clean" from "written before this check existed".
   it('reports a clean run as not contaminated, with an explicit caveat', () => {
-    const integrity = summarizeBaselineIntegrity([], ALL_SIGNALS);
+    const integrity = summarizeBaselineIntegrity([], ALL_SIGNALS, []);
 
     expect(integrity.contaminated).toBe(false);
     expect(integrity.findings).toEqual([]);
@@ -866,7 +943,7 @@ describe('summarizeBaselineIntegrity', () => {
   // ambient copy in the adopter's own repo, does not exist for a skill that
   // ships no executables (the common case).
   it('records which detectors were armed, and names them in the clean summary', () => {
-    const integrity = summarizeBaselineIntegrity([], [KIND_HARNESS_PATH, KIND_SIBLING_ARM]);
+    const integrity = summarizeBaselineIntegrity([], [KIND_HARNESS_PATH, KIND_SIBLING_ARM], []);
 
     expect(integrity.signals).toEqual(['harness-path', 'sibling-arm']);
     expect(integrity.summary).toContain('checked by: harness-path, sibling-arm');
@@ -875,7 +952,7 @@ describe('summarizeBaselineIntegrity', () => {
   // The loudest case: a clean verdict from a run where nothing was looking must
   // not read like a clean verdict from a run where everything was.
   it('says outright that a verdict with no armed detector is not evidence', () => {
-    const integrity = summarizeBaselineIntegrity([], []);
+    const integrity = summarizeBaselineIntegrity([], [], []);
 
     expect(integrity.signals).toEqual([]);
     expect(integrity.summary).toContain('NO detector was armed');
@@ -887,7 +964,7 @@ describe('summarizeBaselineIntegrity', () => {
       { evalId: 'lookup-1', hits: [{ kind: KIND_HARNESS_PATH, match: HARNESS_ROOT, excerpt: EXCERPT_ELLIPSIS }] },
       { evalId: 'lookup-2', hits: [{ kind: 'declared-executable', match: BUNDLE_NAME, excerpt: EXCERPT_ELLIPSIS }] },
     ];
-    const integrity = summarizeBaselineIntegrity(findings, ALL_SIGNALS);
+    const integrity = summarizeBaselineIntegrity(findings, ALL_SIGNALS, []);
 
     expect(integrity.contaminated).toBe(true);
     expect(integrity.summary).toContain('lookup-1, lookup-2');

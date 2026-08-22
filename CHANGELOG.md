@@ -122,7 +122,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the only signal that sees an **instruction-only** skill, which ships nothing to match by name or
   path. Findings are stamped onto `baseline.json` with per-eval evidence excerpts, alongside a
   `signals` list naming which detectors were armed, so a clean verdict can be told apart from a
-  blind one. The block is written on **every** baseline run, so its absence
+  blind one, and a `comparable` flag that goes false when the two arms were graded against a
+  different number of expectations — a short-graded control arm reads as **100% without the skill**,
+  i.e. as a skill that did nothing. The block is written on **every** baseline run, so its absence
   means "produced before this check existed" and never "checked and clean". A wrong number that
   announces itself is recoverable; a silent one gets believed, written down, and acted on.
 

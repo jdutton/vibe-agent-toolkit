@@ -37,7 +37,9 @@ import type { ResolvedSkillSource, ResolveSkillSourceContext, SkillSource } from
 
 import {
   activeContaminationSignals,
+  armExpectationSkew,
   detectBaselineContamination,
+  type ArmEvalCount,
   scrubControlArmEnv,
   skillContentNeedles,
   summarizeBaselineIntegrity,
@@ -1738,6 +1740,11 @@ export function wipeStaleArtifacts(paths: ArtifactPaths): void {
  * Collect per-eval baseline-integrity findings from the WITHOUT-arm fragments.
  * Fragments with no `contamination` are clean and contribute nothing. Pure.
  */
+/** Each eval's graded-expectation count on one arm, for {@link armExpectationSkew}. Pure. */
+function gradedCounts(fragments: EvalFragment[]): ArmEvalCount[] {
+  return fragments.map((f) => ({ evalId: f.evalId, total: f.expectations.length }));
+}
+
 function collectBaselineFindings(withoutArm: EvalFragment[]): BaselineContamination[] {
   return withoutArm
     .filter((f): f is EvalFragment & { contamination: NonNullable<EvalFragment['contamination']> } =>
@@ -1775,14 +1782,23 @@ function writeRunArtifactsAndReconcile(
     // baseline run, clean or not: a reader must be able to tell "checked and
     // clean" from "produced before this check existed", and only an
     // unconditional field does that.
-    const integrity = summarizeBaselineIntegrity(collectBaselineFindings(withoutArm), signals);
+    // Parity BEFORE the verdict prose, because it decides whether the number the
+    // prose is about means anything. Deliberately NOT a throw: the control arm's
+    // grader misbehaving must not discard a perfectly good treatment result — it
+    // must make the DELTA say, in writing, that it cannot be subtracted.
+    const skew = armExpectationSkew(gradedCounts(withArm), gradedCounts(withoutArm));
+    const integrity = summarizeBaselineIntegrity(collectBaselineFindings(withoutArm), signals, skew);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived results path
     writeFileSync(
       paths.baselineOut,
       JSON.stringify({ ...baseline, baselineIntegrity: integrity }, null, 2) + '\n',
       'utf-8',
     );
-    if (integrity.contaminated) process.stderr.write(`\n⚠️  ${integrity.summary}\n\n`);
+    // Either failure makes the delta unusable, and both are only visible on
+    // stderr — nobody opens baseline.json unprompted.
+    if (integrity.contaminated || !integrity.comparable) {
+      process.stderr.write(`\n⚠️  ${integrity.summary}\n\n`);
+    }
   }
 
   return { verdict: reconcileGrading(grading), toolEval };

@@ -183,20 +183,43 @@ const assistantBash = (command: string): unknown => ({
 });
 
 /**
+ * Run `body` with `process.stderr` captured, and hand back both its result and
+ * what was written. stderr is where the two "do not trust this delta" signals
+ * actually reach an operator, so more than one test has to read it — and the spy
+ * must be restored even when the body throws, or every later test in the file
+ * loses its output.
+ */
+async function captureStderr<T>(body: () => Promise<T>): Promise<{ result: T; lines: string[] }> {
+  const lines: string[] = [];
+  const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown): boolean => {
+    lines.push(String(chunk));
+    return true;
+  });
+  try {
+    return { result: await body(), lines };
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+/** As much of the integrity block as these tests assert on. */
+interface BlockShape {
+  contaminated?: boolean;
+  comparable?: boolean;
+  signals?: string[];
+  skew?: Array<{ evalId?: string; withTotal?: number; withoutTotal?: number }>;
+  findings?: Array<{ evalId?: string }>;
+}
+
+/**
  * The integrity block read back off disk, which is the only place it reaches an
  * operator. Reading it rather than trusting the in-memory result is the point:
  * a block computed and never written is the failure this file already caught once.
  */
-function readBaselineIntegrity(resultsDir: string = safePath.join(getTempDir(), 'harness', RETAINED_RESULTS_DIRNAME)): {
-  contaminated?: boolean;
-  signals?: string[];
-  findings?: Array<{ evalId?: string }>;
-} {
+function readBaselineIntegrity(resultsDir: string = safePath.join(getTempDir(), 'harness', RETAINED_RESULTS_DIRNAME)): BlockShape {
   const baselinePath = safePath.join(resultsDir, BASELINE_JSON);
   expect(existsSync(baselinePath), 'baseline.json was never written').toBe(true);
-  const parsed = JSON.parse(readFileSync(baselinePath, 'utf8')) as {
-    baselineIntegrity?: { contaminated?: boolean; signals?: string[]; findings?: Array<{ evalId?: string }> };
-  };
+  const parsed = JSON.parse(readFileSync(baselinePath, 'utf8')) as { baselineIntegrity?: BlockShape };
   expect(parsed.baselineIntegrity, 'baselineIntegrity block missing').toBeDefined();
   return parsed.baselineIntegrity ?? {};
 }
@@ -478,6 +501,44 @@ describe('baseline control arm (integration)', () => {
   });
 
   /**
+   * A delta between two differently-sized denominators is not a delta.
+   *
+   * vat computes each arm's `summary` from the fragments it received, so both
+   * reports are internally consistent by construction — `reconcileGrading`, the
+   * only cross-check that existed, cannot see this and is WITH-arm only anyway. A
+   * grader that graded the control arm against 1 of 2 expectations yields
+   * `baseline.summary = {passed:1,total:1}`, which reads as **100% without the
+   * skill**: the most damaging direction the number can be wrong in, because it
+   * says the skill did nothing.
+   *
+   * Deliberately not a throw. The control arm's grader misbehaving must not
+   * discard a perfectly good treatment result — it must make the delta say, in
+   * writing and on stderr, that it cannot be subtracted.
+   */
+  it('marks the run incomparable when the arms were graded to different depths', async () => {
+    const { subjectDir } = writePluginFixture();
+    // Keyed on the fragment path, the only thing that distinguishes the arms at a
+    // grader spawn: vat writes each arm's fragment under `<graderOutDir>/<arm>/`.
+    const fake = makeHarnessFakeSpawn({
+      graderExpectationCount: (fragmentPath) => (toForwardSlash(fragmentPath).includes('/without/') ? 1 : 2),
+    });
+
+    const { result: integrity, lines: stderr } = await captureStderr(() =>
+      runBaselineForIntegrity(subjectDir, fake.spawn),
+    );
+
+    expect(integrity.comparable, 'a short-graded control arm read as comparable').toBe(false);
+    expect(integrity.skew).toEqual([{ evalId: EVAL_ID, withTotal: 2, withoutTotal: 1 }]);
+    // Clean AND incomparable is a real state; conflating them would hide one.
+    expect(integrity.contaminated).toBe(false);
+    // …and it has to reach the operator, who does not open baseline.json.
+    expect(
+      stderr.some((line) => line.includes('ARMS NOT COMPARABLE')),
+      `nothing on stderr said the arms were incomparable:\n${stderr.join('')}`,
+    ).toBe(true);
+  });
+
+  /**
    * The scrub must SAY what it withheld, and say it truthfully — the withholding is
    * the only visible sign that the control arm was degraded, and a degraded control
    * scores lower, which reports as skill lift.
@@ -498,24 +559,16 @@ describe('baseline control arm (integration)', () => {
   it('says on stderr what it withheld from the control arm, and by which rule', async () => {
     const { subjectDir } = writePluginFixture();
     const fake = makeHarnessFakeSpawn({});
-    const stderr: string[] = [];
-    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown): boolean => {
-      stderr.push(String(chunk));
-      return true;
-    });
 
-    let result: Awaited<ReturnType<typeof runSkillTestHarness>>;
-    try {
-      result = await runSkillTestHarness(
+    const { result, lines: stderr } = await captureStderr(() =>
+      runSkillTestHarness(
         baselineOpts(subjectDir, fake.spawn, {
           // Interpolated at stage time, so the value genuinely names this run's
           // harness root rather than a literal a test author guessed.
           env: { SNAPSHOT: '${harnessRoot}/staged/data.json' },
         }),
-      );
-    } finally {
-      spy.mockRestore();
-    }
+      ),
+    );
 
     expect(result.exitCode, result.summary).toBe(0);
     const withheld = stderr.filter((line) => line.includes('withheld'));
