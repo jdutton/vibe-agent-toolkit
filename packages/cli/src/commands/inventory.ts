@@ -16,12 +16,13 @@ import {
 	projectionCrawlSelected,
 	type SharedPopulationSource,
 } from '@vibe-agent-toolkit/claude-marketplace';
-import { describeBlobRefusals, type PopulationCache } from '@vibe-agent-toolkit/resources';
+import { type PopulationCache } from '@vibe-agent-toolkit/resources';
 import { findProjectRoot, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { handleCommandError } from '../utils/command-error.js';
 import { createLogger, type Logger } from '../utils/logger.js';
+import { populationWiring } from '../utils/population-wiring.js';
 import { withPopulationCache } from '../utils/projection-store.js';
 
 import { gitTrackerForProjectRoot } from './audit/distributed-tree.js';
@@ -240,16 +241,9 @@ function populationProviderFor(
 		return buildInventoryPopulation({
 			root: projectRoot,
 			skillMdPaths,
-			// The observer this lane went without. `describeBlobRefusals` returns
-			// undefined on a run that refused nothing, so a clean inventory stays
-			// exactly as quiet as it was — which is the only thing that keeps the
-			// line worth reading when it does appear.
-			onBlobPopulation: (report) => {
-				const refusals = describeBlobRefusals(report);
-				if (refusals !== undefined) logger.warn(refusals);
-			},
-			...(gitTracker !== undefined && { gitTracker }),
-			...(cache !== undefined && { cache }),
+			// The observer this lane went without — see `populationWiring` for why
+			// the reporting half is written once rather than per lane.
+			...populationWiring(logger, gitTracker, cache),
 		});
 	};
 }

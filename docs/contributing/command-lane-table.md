@@ -4,10 +4,10 @@ Which of VAT's commands read the filesystem to build a resource population, and 
 entry point. This exists to replace the standing claim *"~70 commands, 5 examined"* with a bounded
 list, so the four-phase pipeline work knows exactly whose behaviour it must preserve.
 
-**Population: 64 commands** — 63 leaves plus `vat audit`, the only command group that is also
+**Population: 65 commands** — 64 leaves plus `vat audit`, the only command group that is also
 runnable in its own right (`vat audit [git-url-or-path]` alongside its `settings` subcommand).
 
-**22 enumerate. 42 do not.**
+**23 enumerate. 42 do not.**
 
 ## The three enumeration entry points
 
@@ -46,12 +46,21 @@ process" — a cross-process cache is the only kind that can help them.
 | `vat resources validate` | `crawl` | `resources/validate.ts` |
 | `vat skills list` | `crawl` | `skills/list.ts` |
 | `vat rag index` | `crawl` | `rag/index-command.ts` |
+| `vat claude context [path]` | `crawl` ×2 | `claude/context.ts` → `buildClaudeContextPopulation` → `FilesystemExtentContributor` → `crawlSourceFor` → `FilesystemCrawlSource` → `crawlDirectory` |
 | `vat claude marketplace validate` | `crawl` | `claude/marketplace/validate.ts` |
 | `vat claude org skills list` | `crawl` | `claude/org/skills.ts` |
 | `vat claude org skills install` | `crawl` | `claude/org/skills.ts` |
 | `vat claude org skills delete` | `crawl` | `claude/org/skills.ts` |
 | `vat claude org skills versions list` | `crawl` | `claude/org/skills.ts` |
 | `vat claude org skills versions delete` | `crawl` | `claude/org/skills.ts` |
+
+`vat claude context` is the one row marked `crawl` **×2**, and the doubling is structural rather than
+incidental: `ContributorRegistry` keys on `id` and partitions on `kind` before any `contribute` runs,
+so `discoverImportRoots` must enumerate once — under `CONTENT_PARSING_SKIP`, with `'deferred'`
+content, reading no bytes — purely to name the `@`-import contributors the real population then
+registers. Documented at the head of `claude-context-population.ts`. Its enumeration also reaches
+`GitCrawlSource` rather than `FilesystemCrawlSource` when `gitExtentSelected` holds, which is the
+`crawlSourceFor` opt-in and applies to every row in this table that goes through that function.
 
 ## Commands that do not enumerate
 
