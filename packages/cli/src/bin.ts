@@ -9,6 +9,7 @@
 import { describeStdioBlocking, makeStdioBlocking, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
+import { COMMAND_LOADERS } from './command-loaders.js';
 import { registerCacheControl } from './commands/cache/cache-control.js';
 import { loadVerboseHelp, writeHelpSync } from './utils/help-loader.js';
 import { createLogger } from './utils/logger.js';
@@ -159,60 +160,84 @@ if (process.argv.includes('agent') && process.argv.includes('--verbose')) {
   }
 }
 
-/**
- * Every top-level command, behind a loader.
- *
- * The factories are NOT called at module scope. Each one transitively pulls
- * `@vibe-agent-toolkit/resources` (~1.6s of module load on Windows, dominated
- * by the markdown toolchain), so importing all fifteen made every invocation
- * — `vat --version` included — pay for the whole CLI surface. Registration
- * order here is the order they appear in `--help`; audit is common, so first.
- */
-const COMMAND_LOADERS: Record<string, () => Promise<Command>> = {
-  audit: async () => (await import('./commands/audit.js')).createAuditCommand(),
-  corpus: async () => (await import('./commands/corpus/index.js')).createCorpusCommand(),
-  inventory: async () => (await import('./commands/inventory.js')).createInventoryCommand(),
-  resources: async () => (await import('./commands/resources/index.js')).createResourcesCommand(),
-  rag: async () => (await import('./commands/rag/index.js')).createRagCommand(),
-  agent: async () => (await import('./commands/agent/index.js')).createAgentCommand(),
-  mcp: async () => (await import('./commands/mcp/index.js')).createMCPCommand(),
-  skills: async () => (await import('./commands/skills/index.js')).createSkillsCommand(),
-  skill: async () => (await import('./commands/skill/index.js')).createSkillCommand(),
-  claude: async () => (await import('./commands/claude/index.js')).createClaudeCommand(),
-  cache: async () => (await import('./commands/cache/index.js')).createCacheCommand(),
-  build: async () => (await import('./commands/build.js')).createBuildTopLevelCommand(),
-  validate: async () => (await import('./commands/validate.js')).createValidateTopLevelCommand(),
-  verify: async () => (await import('./commands/verify.js')).createVerifyTopLevelCommand(),
-};
-
 /** Registers `doctor`, which attaches itself to the program rather than being added. */
 const loadDoctor = async (): Promise<void> =>
   (await import('./commands/doctor.js')).doctorCommand(program);
 
 /**
- * The command the user actually asked for, or `undefined`.
+ * Root flags that consume the argv token AFTER them.
  *
- * The first non-flag argument — `undefined` for `vat` and `vat --version`, and
- * an unrecognised name when the user typed something we do not have.
+ * Read off commander's own declarations rather than hardcoded, because the
+ * blast radius grows with every future value-taking root option. `--cwd <dir>`
+ * is the one that exists today.
  */
-const requestedCommand = process.argv.slice(2).find(arg => !arg.startsWith('-'));
+const valueTakingRootFlags = new Set<string>();
+for (const option of program.options) {
+  if (!option.required && !option.optional) continue;
+  if (option.short) valueTakingRootFlags.add(option.short);
+  if (option.long) valueTakingRootFlags.add(option.long);
+}
+
+/**
+ * The command the user actually asked for, or `undefined` when the whole tree
+ * is needed (or nothing is).
+ *
+ * This must model commander's grammar, not just "the first token without a
+ * dash". Two ways a naive scan got it wrong, both shipped and both verified:
+ *
+ * - **An option's VALUE is not a verb.** `--cwd <dir>` takes a value that does
+ *   not start with `-`, so `vat --cwd skills validate` picked `skills`,
+ *   registered only that, and left `validate` unregistered — while
+ *   `vat --cwd skills validate --help` printed ROOT help and exited **0**.
+ *   Only the space-separated form was affected; `--cwd=skills` carries its
+ *   value inline. The advertised `vat --cwd <dir> build` also lost the entire
+ *   startup saving, since a non-colliding directory matched no loader key and
+ *   fell through to loading everything.
+ * - **`--help` BEFORE the verb renders ROOT help**, which has to list every
+ *   command. Loading only the named one made `vat --help audit` print a help
+ *   page claiming the CLI has exactly one command, and exit 0. `vat audit
+ *   --help` is the other order and returns on the verb before reaching the
+ *   flag, so it still loads just `audit`.
+ */
+function readRequestedCommand(argv: readonly string[]): string | undefined {
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index];
+    /* c8 ignore next -- index is bounded by argv.length */
+    if (arg === undefined) continue;
+    if (arg === '--help' || arg === '-h') return undefined;
+    if (arg.startsWith('-')) {
+      if (!arg.includes('=') && valueTakingRootFlags.has(arg)) index++;
+      continue;
+    }
+    return arg;
+  }
+  return undefined;
+}
+
+const requestedCommand = readRequestedCommand(process.argv.slice(2));
 
 /**
  * Whether this invocation is answerable without any command module.
  *
- * Only `--version`/`-V` is: commander prints the version itself. A bare `vat`
- * and every unknown command render help, which must list the whole tree.
+ * Only `--version` is: commander prints the version itself. A bare `vat` and
+ * every unknown command render help, which must list the whole tree.
+ *
+ * `-V` is deliberately NOT here. The short flag is unregistered on purpose (see
+ * the `-v` incident above `.version()`), so commander errors on it and
+ * `showHelpAfterError()` renders help — which, from a program with zero
+ * commands loaded, had no `Commands:` section at all and told the user the tool
+ * has no subcommands.
  */
 const versionOnly =
   requestedCommand === undefined
   && process.argv.length > 2
-  && process.argv.slice(2).every(arg => arg === '--version' || arg === '-V');
+  && process.argv.slice(2).every(arg => arg === '--version');
 
 if (requestedCommand === 'doctor') {
   await loadDoctor();
-} else if (requestedCommand !== undefined && requestedCommand in COMMAND_LOADERS) {
+} else if (requestedCommand !== undefined && Object.hasOwn(COMMAND_LOADERS, requestedCommand)) {
   const load = COMMAND_LOADERS[requestedCommand];
-  /* c8 ignore next -- the `in` check above already proved the key is present */
+  /* c8 ignore next -- the hasOwn check above already proved the key is present */
   if (load) program.addCommand(await load());
 } else if (!versionOnly) {
   // Help, a bare `vat`, or an unknown command: the whole tree has to exist so

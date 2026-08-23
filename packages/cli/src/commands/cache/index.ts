@@ -1,19 +1,22 @@
 /**
  * Cache command group.
  *
- * The paired `--no-cache` control surface lives in `./cache-control.js` and is
- * re-exported here, so the two stay findable together: `--no-cache` decides
- * whether this run *writes* to the caches, `vat cache clear` decides whether the
- * caches *survive*. They are separate modules only because `bin.ts` registers
- * the flag on every invocation and must not pay for this command's imports to
- * do it.
+ * The paired `--no-cache` control surface lives in `./cache-control.js`:
+ * `--no-cache` decides whether this run *writes* to the caches, `vat cache
+ * clear` decides whether the caches *survive*. They are separate modules only
+ * because `bin.ts` registers the flag on every invocation and must not pay for
+ * this command's imports to do it.
+ *
+ * ⛔ Do NOT re-export `cache-control.js` from here for convenience. Importing it
+ * through this module pulls `./clear.js` and the whole resources package behind
+ * it — the exact ~1.2s that splitting the file removed — so a re-export leaves
+ * the expensive path one identical-looking import away, with nothing pinning
+ * the cheap one. Import from `./cache-control.js` directly.
  */
 
 import { Command } from 'commander';
 
 import { cacheClearCommand, type CacheClearOptions } from './clear.js';
-
-export { applyCacheControl, registerCacheControl, type CacheControlOptions } from './cache-control.js';
 
 
 export function createCacheCommand(): Command {

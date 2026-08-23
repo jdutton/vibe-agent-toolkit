@@ -7,8 +7,9 @@
  * that unavoidable call dragged in `./clear.js` and, behind it, the whole
  * resources package — measured at ~1.2s of module load on Windows, paid even by
  * `vat --version`. This module imports nothing but commander, so the always-on
- * path stays cheap; `index.ts` re-exports both functions so existing importers
- * are unaffected.
+ * path stays cheap — keep it that way: any import added here is paid by every
+ * `vat` invocation, and `index.ts` deliberately does not re-export it, so
+ * reaching these functions through the command group cannot happen by accident.
  */
 
 import type { Command } from 'commander';

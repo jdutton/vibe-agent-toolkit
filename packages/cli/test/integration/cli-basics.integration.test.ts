@@ -38,6 +38,102 @@ describe('CLI basics (integration)', () => {
 });
 
 /**
+ * The lazy dispatcher must model commander's grammar, not just "first token
+ * without a dash".
+ *
+ * Every case below regressed when the CLI started loading only the command it
+ * thought was named, and two of them failed with **exit 0** — the wrong
+ * document, reported as success, which no exit-code check can catch. That is
+ * why each assertion inspects the OUTPUT rather than the status alone.
+ *
+ * The suite could not have caught these before: every existing `--cwd` test
+ * passes an absolute `mkdtemp` path, which can never collide with a command
+ * name, so those fixtures cannot distinguish the bug from correct behaviour.
+ */
+describe('lazy dispatch models the option grammar', () => {
+  it('runs the verb when --cwd\'s value happens to be a command name', () => {
+    // `--cwd audit` is a directory, not the verb. Positive control first: the
+    // same command with a non-colliding directory must behave identically.
+    const control = runVat('--cwd', 'docs', 'inventory', '--help');
+    const collide = runVat('--cwd', 'audit', 'inventory', '--help');
+
+    expect(control.status).toBe(0);
+    expect(control.stdout).toContain('Usage: vat inventory');
+    expect(collide.status).toBe(0);
+    expect(collide.stdout).toContain('Usage: vat inventory');
+  });
+
+  it('does not silently print root help when --cwd collides', () => {
+    // The exit-0 failure mode: the user asked for `validate --help` and got the
+    // root help page with a success status.
+    const result = runVat('--cwd', 'skills', 'validate', '--help');
+
+    expect(result.stdout).toContain('Usage: vat validate');
+    expect(result.stdout).not.toMatch(/^Usage: vat \[options] \[command]/m);
+  });
+
+  it('lists every command for `--help` placed before a verb', () => {
+    // Root help renders when --help precedes the verb, so it must describe the
+    // whole CLI. Loading only `audit` produced a one-entry Commands section
+    // that exited 0 while misrepresenting the tool's surface.
+    const result = runVat('--help', 'audit');
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/^ {2}audit\b/m);
+    expect(result.stdout).toMatch(/^ {2}inventory\b/m);
+    expect(result.stdout).toMatch(/^ {2}verify\b/m);
+  });
+
+  it('still scopes help to the verb for `<verb> --help`', () => {
+    // The other order must NOT regress into loading everything.
+    const result = runVat('audit', '--help');
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('Usage: vat audit');
+  });
+
+  it('lists every command when erroring on the unregistered -V short flag', () => {
+    // `-V` is intentionally not registered. Commander errors and renders help;
+    // that help came from a program with zero commands loaded and so claimed
+    // the CLI had no subcommands at all.
+    const result = runVat('-V');
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("unknown option '-V'");
+    expect(result.stderr).toMatch(/^ {2}audit\b/m);
+    expect(result.stderr).toMatch(/^ {2}verify\b/m);
+  });
+});
+
+/**
+ * A prototype-inherited key is not a command.
+ *
+ * The lazy command dispatcher looks the requested verb up in a plain object
+ * literal, whose prototype is `Object.prototype`. Both `in` and a bare index
+ * see through to it, so `vat toString` resolved to `Object.prototype.toString`
+ * — a truthy function — which the dispatcher then called and handed to
+ * `program.addCommand()`. That throws "Command passed to .addCommand() must
+ * have a name", so these verbs crashed with an internal commander error
+ * instead of the unknown-command message every other unrecognised verb gets.
+ *
+ * Each assertion names the verb, so an empty or garbled stderr fails rather
+ * than passing by absence, and the second assertion pins the specific crash
+ * rather than merely "some non-zero exit" — the buggy build also exited
+ * non-zero, so `status !== 0` alone would have been true before the fix too.
+ */
+describe('prototype-inherited keys are not commands', () => {
+  for (const name of ['toString', 'valueOf', 'constructor', 'hasOwnProperty']) {
+    it(`rejects \`vat ${name}\` as an unknown command`, () => {
+      const result = runVat(name);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(`unknown command '${name}'`);
+      expect(result.stderr).not.toContain('must have a name');
+    });
+  }
+});
+
+/**
  * Absence pin for the deleted `vat pipeline` verb.
  *
  * `pipeline` was an internal dev instrument that appeared in the DEFAULT

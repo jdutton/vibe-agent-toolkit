@@ -19,6 +19,7 @@ import {
 import type { Command } from 'commander';
 import * as semver from 'semver';
 
+import { COMMAND_LOADERS } from '../command-loaders.js';
 import { loadConfig } from '../utils/config-loader.js';
 import { projectRootOrNull } from '../utils/project-root-policy.js';
 
@@ -122,6 +123,7 @@ const CHECK_NAME_CONFIG_VALID = 'Configuration valid';
 const CREATE_CONFIG_SUGGESTION = 'Create vibe-agent-toolkit.config.yaml in project root';
 const CHECK_NAME_VAT_VERSION = 'vat version';
 const CHECK_NAME_CLI_BUILD_STATUS = 'CLI build status';
+const CHECK_NAME_COMMAND_MODULES = 'Command modules';
 
 /**
  * Check Node.js version meets requirements
@@ -497,6 +499,58 @@ function isVatSourceTree(projectRoot: string | null): SourceTreeAnswer {
 }
 
 /**
+ * Check that every top-level command's module can actually be loaded.
+ *
+ * ## Why this check exists
+ *
+ * The CLI loads only the command named on the command line, so a `dist/` with
+ * one command module missing is no longer detected at startup. It used to be:
+ * every invocation imported all fifteen, so ANY of them missing crashed
+ * immediately, naming the file. After the change to lazy loading, `vat rag`
+ * died with a raw `ERR_MODULE_NOT_FOUND` while `vat doctor` — which loads only
+ * itself, and whose other checks compare version strings that a corrupt install
+ * leaves intact — reported a healthy setup and exited 0. The one command a user
+ * runs to diagnose a broken install was the one that could not see it.
+ *
+ * Loading the whole tree is the point here, so this check knowingly pays the
+ * startup cost the rest of the CLI now avoids. `doctor` is a diagnostic, not a
+ * hot path.
+ *
+ * Failures are reported by NAME, because "which command is broken" is the
+ * question a user with a half-extracted tarball actually has.
+ *
+ * @returns A failure listing every command whose module could not be loaded
+ */
+export async function checkCommandModules(): Promise<DoctorCheckResult> {
+  const broken: string[] = [];
+
+  for (const [name, load] of Object.entries(COMMAND_LOADERS)) {
+    try {
+      await load();
+    } catch {
+      broken.push(name);
+    }
+  }
+
+  const total = Object.keys(COMMAND_LOADERS).length;
+
+  if (broken.length > 0) {
+    return {
+      name: CHECK_NAME_COMMAND_MODULES,
+      outcome: 'fail',
+      message: `${broken.length} of ${total} command modules failed to load: ${broken.join(', ')}`,
+      suggestion: 'The installation is incomplete or corrupt. Reinstall vat, or re-run `bun run build` in a source tree.',
+    };
+  }
+
+  return {
+    name: CHECK_NAME_COMMAND_MODULES,
+    outcome: 'pass',
+    message: `All ${total} command modules load`,
+  };
+}
+
+/**
  * Check if CLI build is in sync with source code (development mode only)
  *
  * @param projectRoot - Pre-resolved project root from the CLI boundary (null if absent)
@@ -596,6 +650,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
     checkConfigFile(),
     checkConfigValid(),
     checkCliBuildSync(projectRoot),
+    await checkCommandModules(),
   ];
 
   // 3. Report every check plus the outcome distribution. Filtering is the
