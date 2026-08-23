@@ -5,6 +5,7 @@ import {
   UNPRINTABLE_PLACEHOLDER,
   sanitizeGraderText,
   sanitizeGraderTextDeep,
+  sanitizeTextPreservingLines,
 } from '../../src/skill-test/grader-text.js';
 
 /**
@@ -91,6 +92,105 @@ describe('sanitizeGraderText', () => {
 
   it('preserves non-ASCII text and surrogate pairs', () => {
     expect(sanitizeGraderText('café — 🎯 ok')).toBe('café — 🎯 ok');
+  });
+});
+
+/**
+ * The Cf class the C0/C1 scan stopped short of.
+ *
+ * These survived a sanitizer that ended at U+009F, and `JSON.stringify` only
+ * escapes below U+0020, so they also reached `baseline.json` and `friction.json`
+ * intact. U+202E is the loud one: it renders the REST of vat's own
+ * `[low] path-assumption: …` stderr line right-to-left, so a friction `message`
+ * repaints text vat wrote. The rest are invisible rather than loud, which is worse
+ * for anything that compares strings.
+ *
+ * Built with `String.fromCharCode` for the same reason grader-text.ts uses numbers:
+ * a literal U+202E in this file is invisible in a diff and unfindable by `grep`
+ * (this comment tripped the repo's own bidi-character lint when it carried one).
+ */
+describe('sanitizeGraderText — bidi and zero-width format characters', () => {
+  it.each([
+    ['U+00AD SOFT HYPHEN', 0x00ad],
+    ['U+061C ARABIC LETTER MARK', 0x061c],
+    ['U+180E MONGOLIAN VOWEL SEPARATOR', 0x180e],
+    ['U+200B ZERO WIDTH SPACE', 0x200b],
+    ['U+200C ZERO WIDTH NON-JOINER', 0x200c],
+    ['U+200D ZERO WIDTH JOINER', 0x200d],
+    ['U+200F RIGHT-TO-LEFT MARK', 0x200f],
+    ['U+202A LEFT-TO-RIGHT EMBEDDING', 0x202a],
+    ['U+202E RIGHT-TO-LEFT OVERRIDE', 0x202e],
+    ['U+2060 WORD JOINER', 0x2060],
+    ['U+2066 LEFT-TO-RIGHT ISOLATE', 0x2066],
+    ['U+206F NOMINAL DIGIT SHAPES', 0x206f],
+    ['U+FFF9 INTERLINEAR ANNOTATION ANCHOR', 0xfff9],
+  ])('neutralizes %s', (_label, code) => {
+    const out = sanitizeGraderText(`a${String.fromCharCode(code)}b`);
+    expect(out, 'the code point survived into an artifact').not.toContain(String.fromCharCode(code));
+    expect(out).toBe('a b');
+  });
+
+  // The verified end-to-end shape: one RLO in a friction message flips the tail of
+  // vat's own stderr line. Nothing after it may still be an override.
+  it('strips the override out of a friction-shaped message', () => {
+    const RLO = String.fromCharCode(0x202e);
+    const out = sanitizeGraderText(`path-assumption${RLO} assumed /tmp exists`);
+    expect(out).toBe('path-assumption assumed /tmp exists');
+  });
+
+  // ⚠️ and most emoji are spelled with U+FE0F, which is category Mn, not Cf.
+  // Dropping it would mangle ordinary text — including vat's own banner glyph.
+  it('leaves variation selectors alone, so emoji and ⚠️ survive', () => {
+    expect(sanitizeGraderText('⚠️ heads up 🎯')).toBe('⚠️ heads up 🎯');
+  });
+});
+
+/**
+ * The line-preserving variant. Its whole reason to exist is that the DEFAULT
+ * sanitizer degrades a multi-line schema error into one capped line, so the tests
+ * below pin both halves: the structure survives, and everything that can paint does
+ * not.
+ */
+describe('sanitizeTextPreservingLines', () => {
+  it('keeps the line structure a schema error carries its meaning in', () => {
+    const zodish = 'evals[17].toolExpecations\n  Unrecognized key\nevals[18].prompt\n  Required';
+    expect(sanitizeTextPreservingLines(zodish)).toBe(zodish);
+  });
+
+  it('still removes escape sequences, controls and bidi overrides', () => {
+    const RLO = String.fromCharCode(0x202e);
+    const out = sanitizeTextPreservingLines(`ok${ESC}[32m${NUL}${RLO}\nnext${CR}line`);
+    expect(out).toBe('ok  \nnext line');
+    expect(out).not.toContain(ESC);
+    expect(out).not.toContain(RLO);
+  });
+
+  // A newline is the whole attack the single-line sanitizer exists to stop, so the
+  // two must not be interchangeable — this is the assertion that says so out loud.
+  it('differs from the single-line sanitizer exactly by keeping newlines', () => {
+    expect(sanitizeGraderText('a\nb')).toBe('a b');
+    expect(sanitizeTextPreservingLines('a\nb')).toBe('a\nb');
+  });
+
+  // Vertical flooding is the failure the line cap exists for: 5000 one-character
+  // lines are 5000 rows of the operator's scrollback but only 10 KB of text, so a
+  // length cap alone would let all of them through.
+  it('caps the number of lines and says how many it dropped', () => {
+    const out = sanitizeTextPreservingLines('x\n'.repeat(5000));
+    const lines = out.split('\n');
+    expect(lines.length).toBeLessThan(50);
+    expect(lines.at(-1)).toContain('more line(s)');
+  });
+
+  it('caps total length for a flood that fits on few lines', () => {
+    const out = sanitizeTextPreservingLines('y'.repeat(100_000));
+    expect(out.length).toBeLessThan(5000);
+    expect(out.endsWith('(truncated)')).toBe(true);
+  });
+
+  it('substitutes the placeholder when everything sanitizes away', () => {
+    expect(sanitizeTextPreservingLines(`${ESC}[0m${NUL} `)).toBe(UNPRINTABLE_PLACEHOLDER);
+    expect(sanitizeTextPreservingLines('')).toBe('');
   });
 });
 

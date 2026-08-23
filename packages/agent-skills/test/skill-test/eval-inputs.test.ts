@@ -9,6 +9,34 @@ import { EvalInputError, parseEvalSuite, stageEvalWorkspaces } from '../../src/s
 const FIXTURES_DOC = 'fixtures/doc.md';
 const DESCRIPTIVE_ID = 'cast-smell-typed-column';
 
+// Built with `String.fromCharCode` on purpose: typing an escape into this source
+// normalizes it into a literal control byte on the way in, which makes the file
+// binary to `grep` and to the editing tools.
+const ESC = String.fromCharCode(0x1b);
+const CR = String.fromCharCode(0x0d);
+/** Clears the line vat just wrote, then continues in vat's own green. */
+const TERMINAL_PAINT = `${ESC}[2K${CR}${ESC}[32m`;
+
+/**
+ * The suite is adopter-authored, but `resolveEvalSuitePath` will harvest one out
+ * of a FETCHED npm/url artifact — i.e. out of the skill under test — so its
+ * strings are untrusted. `files[]` in particular is `z.array(z.string().min(1))`
+ * with no charset constraint (unlike `id`, which is regex-pinned because it names
+ * a directory), and these messages reach `process.stdout` through the `Summary:`
+ * line, the one channel deliberately kept machine-readable.
+ */
+function expectNoControlBytes(run: () => unknown): void {
+  let message = '';
+  try {
+    run();
+  } catch (err) {
+    message = (err as Error).message;
+  }
+  expect(message, 'the call was expected to throw').not.toBe('');
+  expect(message).not.toContain(ESC);
+  expect(message).not.toContain(CR);
+}
+
 const VALID = JSON.stringify({
   skill_name: 'demo',
   evals: [
@@ -32,6 +60,12 @@ describe('parseEvalSuite', () => {
 
   it('throws EvalInputError on invalid JSON', () => {
     expect(() => parseEvalSuite('{not json')).toThrow(EvalInputError);
+  });
+
+  it('sanitizes the V8 parse message, which quotes the offending bytes verbatim', () => {
+    // The message V8 builds embeds a raw slice of the input, so a suite file of
+    // nothing but control bytes reaches the operator's terminal unescaped.
+    expectNoControlBytes(() => parseEvalSuite(`${TERMINAL_PAINT}vat: suite ok.`));
   });
 
   it('tolerates adopter-owned extra fields (passthrough): per-eval category and top-level _category_note', () => {
@@ -189,6 +223,45 @@ describe('parseEvalSuite', () => {
     expect(() => parseEvalSuite(typo)).toThrow(/did you mean.*tier/i);
   });
 
+  /**
+   * The zod `.strict()`/schema failure text was the one suite-derived string
+   * reaching stderr with NO sanitizer on it, and it is not an obscure corner: the
+   * issue paths it lists ARE suite-authored keys, and `toolExpectations` is
+   * `.strict()`, so an adopter typo inside it is the normal way to see this
+   * message.
+   *
+   * ⚠️ THE CHARACTER CLASS MATTERS, and the obvious probe proves nothing.
+   * `ZodError.message` is `JSON.stringify`d, which escapes everything BELOW U+0020
+   * — so a 7-bit `ESC[2K` arrives as the harmless literal text `[2K` and a
+   * test built from it passes with no sanitizer at all (verified: it did). What
+   * `JSON.stringify` leaves ALONE is everything at or above U+0020: the 8-bit C1
+   * CSI introducer U+009B (`CSI 31m` in one byte — a real terminal attack), DEL,
+   * and the bidi overrides. Those are what actually reached stderr.
+   */
+  it('neutralizes a schema-failure message without collapsing its lines', () => {
+    // U+009B is the 8-bit form of `ESC[`; U+202E flips everything after it.
+    const C1_CSI = String.fromCharCode(0x9b);
+    const RLO = String.fromCharCode(0x202e);
+    const painted = JSON.stringify({ skill_name: 'demo', evals: [
+      { id: 1, prompt: 'p', expectations: ['e'], toolExpectations: { [`mustRun${C1_CSI}31m${RLO}`]: ['Read'] } },
+    ] });
+    let message = '';
+    try {
+      parseEvalSuite(painted);
+    } catch (err) {
+      message = (err as Error).message;
+    }
+
+    expect(message, 'the strict sub-schema was expected to reject the key').toContain('failed schema validation');
+    expect(message, 'an 8-bit CSI from a suite key reached the terminal').not.toContain(C1_CSI);
+    expect(message, 'a bidi override from a suite key reached the terminal').not.toContain(RLO);
+    // ...and the structure survived. A single-line sanitizer would fold zod's
+    // ten-line per-issue list into one capped string, which is the regression this
+    // guards: on a 200-eval suite that list is the only thing naming the bad entry.
+    expect(message.split('\n').length, 'the issue list was collapsed onto one line')
+      .toBeGreaterThan(1);
+  });
+
   it('still parses a normal suite without tier/toolExpectations (both remain optional)', () => {
     const suite = parseEvalSuite(VALID);
     expect(suite.evals[0]?.tier).toBeUndefined();
@@ -213,6 +286,15 @@ function setupEvalWorkspaces(): { evalsDir: string; workspacesRoot: string } {
  * literal so they keep testing the LAYOUT rather than pinning the naming scheme.
  */
 const WITH_ONLY = { with: 'a1b2c3d4e5f60718' } as const;
+
+/** Stage a one-eval suite declaring `rel`, asserting it throws with no control bytes in the message. */
+function expectStagingRejects(rel: string, id: number): void {
+  const { evalsDir, workspacesRoot } = setupEvalWorkspaces();
+  const suite = { skill_name: 'demo', evals: [
+    { id, prompt: 'p', expected_output: 'o', files: [rel], expectations: ['e'] },
+  ] };
+  expectNoControlBytes(() => stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, armDirs: WITH_ONLY }));
+}
 
 describe('stageEvalWorkspaces', () => {
   // The segment must not spell the arm. A regression here is silent and total:
@@ -292,5 +374,33 @@ describe('stageEvalWorkspaces', () => {
       { id: 4, prompt: 'p', expected_output: 'o', files: ['../escape.md'], expectations: ['e'] },
     ] };
     expect(() => stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, armDirs: WITH_ONLY })).toThrow(EvalInputError);
+  });
+
+  // All three staging failures interpolate the suite-authored `files[]` entry (and
+  // the derived path / OS error text built from it) into a message that reaches
+  // stdout via the `Summary:` line. Each site is asserted separately because each
+  // builds its message independently.
+  describe('suite-authored file paths reach the operator sanitized', () => {
+    it('on a containment escape', () => {
+      expectStagingRejects(`../${TERMINAL_PAINT}escape.md`, 5);
+    });
+
+    it('on an absent declared file', () => {
+      expectStagingRejects(`fixtures/${TERMINAL_PAINT}nope.md`, 6);
+    });
+
+    it('on a copy failure (the OS error text carries the path too)', () => {
+      const { evalsDir, workspacesRoot } = setupEvalWorkspaces();
+      const rel = `fixtures/${TERMINAL_PAINT}doc.md`;
+      writeFileSync(safePath.join(evalsDir, rel), 'content\n', 'utf-8');
+      // A directory already sitting where the file must land: cpSync refuses to
+      // overwrite it, and names both paths in the error it throws.
+      mkdirSyncReal(safePath.join(workspacesRoot, WITH_ONLY.with, '7', rel), { recursive: true });
+      const suite = { skill_name: 'demo', evals: [
+        { id: 7, prompt: 'p', expected_output: 'o', files: [rel], expectations: ['e'] },
+      ] };
+
+      expectNoControlBytes(() => stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, armDirs: WITH_ONLY }));
+    });
   });
 });

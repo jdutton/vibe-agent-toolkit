@@ -69,6 +69,40 @@ describe('mergeFragmentsToGrading', () => {
     expect(() => mergeFragmentsToGrading(fragments, nonce, 'with')).toThrow(/eval-2/);
   });
 
+  /**
+   * `runNonce` is the ONE field `sanitizeGraderTextDeep` is told to SKIP, because it
+   * must survive byte-exact to be compared — which makes it the one grader-supplied
+   * string in the fragment with no neutralization on it. The CLI prints an error's
+   * `message` raw, so quoting the value here printed attacker bytes by construction.
+   *
+   * This throw is currently unreachable (`runGraderForEval` rejects a mismatch one
+   * call earlier, quoting nothing), so it is defense in depth — and defense in depth
+   * that repaints the terminal is not defense.
+   */
+  it('reports a mismatched nonce by digest, never by value', () => {
+    const ESC = String.fromCharCode(0x1b);
+    const CR = String.fromCharCode(0x0d);
+    const forged = `${ESC}[2K${CR}${ESC}[32m vat: grading verified`;
+    let message = '';
+    try {
+      mergeFragmentsToGrading([makeFragment({ runNonce: forged })], nonce, 'with');
+    } catch (err) {
+      message = (err as Error).message;
+    }
+
+    expect(message, 'the merge accepted a forged nonce').not.toBe('');
+    expect(message, 'the fragment\'s own bytes reached the operator').not.toContain(ESC);
+    expect(message).not.toContain(CR);
+    expect(message).not.toContain(forged);
+    // ...and the EXPECTED nonce is not printed either: it is this run's live
+    // integrity secret, and a fragment that provoked the error would be handed it.
+    expect(message, 'the run\'s own nonce was disclosed in the error').not.toContain(nonce);
+    // The diagnostics that made the raw value useful survive: two runs are still
+    // distinguishable, and a truncated/padded nonce is still visible as a length.
+    expect(message).toContain('sha256:');
+    expect(message).toContain(`(${forged.length} chars)`);
+  });
+
   it('returns empty expectations for zero fragments (reconcileGrading guard fires downstream)', () => {
     const grading = mergeFragmentsToGrading([], nonce, 'with');
     expect(grading.expectations).toEqual([]);

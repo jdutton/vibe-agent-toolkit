@@ -86,6 +86,13 @@ export interface SkillTestRunOptions {
   dryRun?: boolean;
   auth?: string;
   requireAuth?: string;
+  /**
+   * Tri-state, and it must stay tri-state: `true` from `--baseline`, `false` from
+   * `--no-baseline`, `undefined` when neither was typed (config decides). Commander
+   * gives this shape because `--baseline` is declared BEFORE `--no-baseline`; a
+   * lone `--no-baseline` would default the value to `true` instead. See
+   * {@link resolveBaseline}.
+   */
   baseline?: boolean;
   allowUnverifiedSkillSource?: boolean;
   iUnderstandThisRunsSkillCode?: boolean;
@@ -365,7 +372,7 @@ function applyScalarMerges(opts: HarnessOpts, options: SkillTestRunOptions, conf
   if (authMode !== undefined) opts.auth = authMode as 'inherit' | 'subscription' | 'api-key' | 'auto';
   const authRequirement = options.requireAuth ?? config?.requireAuth;
   if (authRequirement !== undefined) opts.requireAuth = authRequirement as 'subscription' | 'api-key';
-  const baseline = options.baseline ?? config?.baseline;
+  const baseline = resolveBaseline(options.baseline, config?.baseline);
   if (baseline !== undefined) opts.baseline = baseline;
   const model = options.model ?? config?.model;
   if (model !== undefined) opts.model = model;
@@ -377,6 +384,40 @@ function applyScalarMerges(opts: HarnessOpts, options: SkillTestRunOptions, conf
   const evalsRef =
     options.evals === undefined ? config?.evals : resolveAssetReference(options.evals, process.cwd());
   if (evalsRef !== undefined) opts.evalsSubpath = evalsRef;
+}
+
+/**
+ * Resolve `--baseline` with flag > config precedence, ANNOUNCING a config-sourced
+ * enable on stderr.
+ *
+ * Same threat model as {@link resolveCappedKnob} next door — a value from a
+ * COMMITTED config rides along in an untrusted subject repo — applied to the one
+ * cost knob that has no cap to clamp. `baseline` is the LARGEST cost multiplier in
+ * this command: it runs every eval TWICE (skill declared vs withheld), and each arm
+ * is an executor spawn AND a grader spawn, so `skills.config.<skill>.test.baseline:
+ * true` roughly doubles the spend of every `vat skill test run` an operator types.
+ * `--max-budget-usd` is a PER-SPAWN cap, so the worst-case ceiling doubles with it.
+ *
+ * A boolean cannot be clamped to a ceiling, so it is announced instead, and
+ * `--no-baseline` exists so the operator can turn it back off for THIS run without
+ * hand-editing someone else's YAML. Precedence runs both directions: an explicit
+ * flag wins whether it says true or false (hence the `undefined` check rather than
+ * `??`-style falsiness, which would let a config `true` override `--no-baseline`).
+ *
+ * Only an ENABLE is announced. A config `false` costs nothing and needs no note.
+ */
+export function resolveBaseline(
+  flagValue: boolean | undefined,
+  configValue: boolean | undefined,
+): boolean | undefined {
+  if (flagValue !== undefined) return flagValue;
+  if (configValue !== true) return configValue;
+  process.stderr.write(
+    "Note: baseline is ON from this project's committed config ('skills.config.<skill>.test.baseline'), " +
+      'not from a flag; it runs every eval TWICE (an executor AND a grader spawn per arm), roughly doubling ' +
+      'the spawns and the spend. Pass --no-baseline to turn it off for this run.\n',
+  );
+  return true;
 }
 
 /**
@@ -1275,7 +1316,10 @@ export async function runSkillTestRun(
     // The executor's working directories live OUTSIDE the harness root under an
     // unguessable token, so the harness path no longer leads an operator to them.
     // Under --keep they survive holding everything the evals produced; unreported,
-    // they would be an orphan the operator cannot find to inspect or reap.
+    // they would be an orphan the operator cannot find to inspect or reap. On every
+    // other run cleanup deletes them, and the harness answers with no
+    // `workspacesPath` at all — the retention rule has ONE author, over there, so
+    // this stays a plain presence check and never a second copy of it.
     if (result.workspacesPath !== undefined) {
       process.stderr.write(`Workspaces: ${result.workspacesPath}\n`);
     }
@@ -1333,9 +1377,16 @@ export function createSkillTestRunCommand(): Command {
     .option('--dry-run', 'Build and stage exactly as a real run would, then stop without spawning Claude (no tokens spent). Combine with --no-build to skip the build too.')
     .option('--auth <mode>', 'Auth mechanism: inherit | subscription | api-key | auto')
     .option('--require-auth <mech>', 'Require a specific auth mechanism: subscription | api-key')
+    // `--baseline` MUST be declared before `--no-baseline`: Commander only leaves the
+    // value undefined-when-untyped if a positive option already exists, and that
+    // tri-state is what lets a flag beat config in BOTH directions (see resolveBaseline).
     .option(
       '--baseline',
-      "A/B the skill's INSTRUCTIONS (declared vs withheld) and report the lift on stderr. Both arms share a filesystem — not a capability control; see baselineDelta and baselineIntegrity in baseline.json",
+      "A/B the skill's INSTRUCTIONS (declared vs withheld) and report the lift on stderr. Runs every eval TWICE, so it roughly DOUBLES the spawns and the spend (--max-budget-usd is per-spawn). Both arms share a filesystem — not a capability control; see baselineDelta and baselineIntegrity in baseline.json",
+    )
+    .option(
+      '--no-baseline',
+      'Force the baseline A/B OFF for this run, overriding a committed `test.baseline: true` in the project config (which is announced on stderr when it applies).',
     )
     .option(
       '--allow-eval-failure',
@@ -1383,8 +1434,11 @@ Description:
 Artifacts:
   grading.json (the verdict), friction.json, tool-eval.json, and -- with
   --baseline -- baseline.json are written to a results/ directory whose path is
-  echoed to stderr ("Results: <path>"). That directory SURVIVES every run; the
-  staged skill bytes around it are removed unless you pass --keep.
+  echoed to stderr ("Results: <path>"). On a DEFAULT run (no --out, --workdir or
+  --keep) that directory SURVIVES and the staged skill bytes around it are
+  removed. Cleanup only ever touches a harness dir vat created, so with --out or
+  --workdir NOTHING is removed and the staged (untrusted) skill bytes stay until
+  you delete them yourself -- --keep or not.
 
   A --baseline run also echoes its lift to stderr ("Baseline delta: +2 (with
   skill: 3/3, without skill: 1/3)."), and stamps the same numbers into

@@ -110,7 +110,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   paths about to be judged, and answering a missing row as "unreadable directory" would silently
   report every file under it as absent.
 
+- **`assertGraderPromptInvariants`'s second parameter is now the run NONCE, not the transcript.**
+  Exported from `@vibe-agent-toolkit/agent-skills`; the signature moves from
+  `(prompt, transcript)` to `(prompt, nonce)`. The invariant checks must run against vat's own
+  scaffolding with every untrusted region excised first, and there is more than one such region —
+  the transcript, the subject manifest, and the suite's own `expectations`/`expected_output`, all of
+  which reach the prompt from the same fetched artifact the skill does. Excising by passing the
+  transcript string could only ever remove the one; the nonce locates all of them, because it is
+  what the fences are keyed on. **Migration:** pass the same nonce you passed to `buildGraderPrompt`.
+  It still defaults to `''`, which excises nothing — correct for a caller testing a bare scaffolding
+  string, and wrong for a real prompt, so supply it.
+
 ### Added
+
+- **`vat skill test run --no-baseline`, and a committed `baseline: true` can no longer double your
+  spend silently.** `--baseline` is the largest cost multiplier in the command — every eval runs
+  twice, an executor *and* a grader spawn per arm — and `--max-budget-usd` is a **per-spawn** cap, so
+  the worst-case ceiling doubles with it. `skills.config.<skill>.test.baseline: true` rides along in
+  whatever repo you point the command at, and until now it turned every `vat skill test run` into a
+  2x run with no note, no cap, and no way to turn it off short of hand-editing someone else's YAML:
+  `--baseline` was a plain boolean on both `run` and `configure`, so `configure` could only ever
+  write `true`. Two changes. A config-sourced enable now prints a one-line note on stderr naming the
+  config key and `--no-baseline`, in the same voice as the existing cost-knob clamp notes. And
+  `--no-baseline` forces it off for one run — an explicit flag beats config in **both** directions.
+  `--baseline`'s own `--help` line, and `configure --baseline`'s, now say that it doubles the spawns
+  and that it measures the skill's *instructions* rather than its capability. Nothing changes for a
+  project that does not set `baseline` in config.
 
 - **`--baseline` now reports the delta it always claimed to report.** It wrote two same-shaped
   artifacts and left you to do the arithmetic. A run now prints
@@ -400,6 +425,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not be cited as a cross-platform guarantee.
 
 ### Fixed
+
+- **`vat skill test run --help` no longer promises cleanup that `--out`/`--workdir` never perform.**
+  The Artifacts section said the results directory "SURVIVES every run" and the staged skill bytes
+  around it "are removed unless you pass `--keep`". Cleanup only ever touches a harness directory vat
+  itself created, so under `--out` or `--workdir` it is a complete no-op and the staged *untrusted*
+  skill bytes are retained whether or not you passed `--keep` — the opposite of what the operator was
+  told. The help text now carries the same scope the skill-testing guide always did: the claim holds
+  on a default run (no `--out`, `--workdir` or `--keep`), and a user-chosen location is yours to
+  clean up. Behaviour is unchanged; the documentation was wrong.
+
+- **The skill-testing guide's `--baseline` example no longer disarms the detector the same page tells
+  you to read.** The example passed a bare path to a built `dist/`, which resolves as a plain source
+  subject with no `executables` manifest — so the `declared-executable` contamination signal is
+  unarmed, on exactly the run whose `baselineIntegrity` block the surrounding prose says to check
+  first. The example now uses the by-**name** form the same page recommends two paragraphs earlier.
 
 - **`vat skills build` no longer dies on a `files:` glob that matches a symlink to a directory.** The build failed with a raw `ENOTSUP` that named neither the `files:` entry nor the path — and on macOS it renders as "operation not supported on socket", describing the object as something it is not. Anything a glob matches that cannot be packaged (a symlink to a directory, a dangling symlink, a FIFO, a socket, a device node) is now skipped and reported as **`FILES_GLOB_SKIPPED_NON_REGULAR_FILE`** (`warning`), and the rest of the entry ships. `vat skills validate` and `vat audit` report it before a build too.
 

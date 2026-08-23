@@ -395,7 +395,7 @@ Two config homes: **per-skill** knobs live in `skills.config.<skill>.test`; the 
 | `--model <id>` | `model` | per-skill | **Executor** model, passed **verbatim** to `claude --model` (no mapping). Pin for reproducible runs. |
 | `--grader-model <id>` | `graderModel` | **global** | **Grader** (judge) model, independent of `--model`. Default `claude-sonnet-5`. |
 | `--concurrency <n>` | `concurrency` | **global** | Max evals run in parallel (default 4). |
-| `--baseline` | `baseline` | per-skill | A/B the skill's INSTRUCTIONS (skill declared vs withheld). Not a capability control — check `baselineIntegrity` in `baseline.json`. |
+| `--baseline` / `--no-baseline` | `baseline` | per-skill | A/B the skill's INSTRUCTIONS (skill declared vs withheld). Not a capability control — check `baselineIntegrity` in `baseline.json`. Runs every eval **twice** (an executor *and* a grader spawn per arm), so it roughly **doubles** the spend, and `--max-budget-usd` is a per-spawn cap. A committed `baseline: true` therefore doubles every operator's run; it is announced on stderr when it applies, and `--no-baseline` turns it off for one run. |
 | `--allow-eval-failure` | — | — | Opt out of the fail-closed default so a failing (or fail-fast-gated) eval exits `0` (interactive use). By **default** a failing eval exits `4`. |
 | `--with name=<src>` | `with` | per-skill | Stage a **required** companion skill the subject can invoke (`workspace:`/`npm:`/`url:`/`path:`/`vendored`). A `path:` source that maps to a **declared** skill is **built** first, exactly like the subject, so its `files:` artifacts are injected — a companion backed by a bundled executable stages functional. Its build failure fails the run. Unresolvable source, or a duplicate name across subject/`--with`/`--with-optional`, exits `2`. |
 | `--with-optional name=<src>` | `optional` | per-skill | Stage an **optional** companion; skipped with a stderr warning if its source can't be resolved. Also built when it maps to a declared skill, but a build failure falls back to the raw (unbuilt) source **only** when non-destructive — a `pool`-distribution build, or no build attempted (`--no-build`/`--dry-run`). A failed `plugin-local` build fails the run, because the marketplace build wipes its output tree first and staging would read from a deleted tree. |
@@ -444,9 +444,11 @@ vat skill test run ./dist/skills/my-skill/ --i-understand-this-runs-skill-code
 # Run evals after filling in evals.json
 vat skill test run ./dist/skills/my-skill/ --i-understand-this-runs-skill-code
 
-# A/B instruction-lift: run each eval with the skill declared AND withheld, report the delta
-# (check baselineIntegrity in baseline.json before trusting it)
-vat skill test run ./dist/skills/my-skill/ --baseline --i-understand-this-runs-skill-code
+# A/B instruction-lift: run each eval with the skill declared AND withheld, report the delta.
+# By NAME, not by path — a path subject has no `executables` manifest, so the
+# declared-executable contamination detector is unarmed on the very run whose
+# baselineIntegrity you are about to read. Costs ~2x a normal run.
+vat skill test run my-skill --baseline --i-understand-this-runs-skill-code
 
 # CI gate: a failing eval exits 4 by default (no flag needed). For interactive
 # iteration, --allow-eval-failure downgrades that 4 to 0.

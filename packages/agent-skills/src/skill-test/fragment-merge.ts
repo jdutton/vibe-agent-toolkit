@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type { EvalFragment } from './eval-fragment.js';
 import { FrictionReportSchema, type FrictionReport } from './friction-schema.js';
 import { GradingArmError, GradingNonceError, type NormalizedGrading } from './grading-adapter.js';
@@ -34,6 +36,34 @@ import { ToolEvalReportSchema, type ToolEvalReport } from './tool-eval-schema.js
  * `GradingSkewError` on an empty `expectations[]`, so that case is NOT
  * special-cased here.
  */
+/** How much of the nonce digest to print — enough to tell two runs apart by eye. */
+const NONCE_FINGERPRINT_LENGTH = 12;
+
+/**
+ * A nonce rendered for an ERROR MESSAGE: never the value, always a digest of it.
+ *
+ * `runNonce` is the ONE field {@link import('./grader-text.js').sanitizeGraderTextDeep}
+ * is told to skip, because it must survive byte-exact to be compared — so it is
+ * also the one grader-supplied string in the fragment that reaches an operator
+ * with no neutralization at all. The CLI prints an error's `message` raw, so
+ * interpolating it here would print attacker bytes BY CONSTRUCTION: a fragment
+ * whose `runNonce` is `ESC[2K CR ESC[32m vat: verified` wipes vat's line and
+ * continues in vat's colour, from inside the very check that exists to catch a
+ * forged fragment.
+ *
+ * That path is currently unreachable — `runGraderForEval` compares the nonce one
+ * call earlier and throws a message quoting nothing — so this is defense in depth,
+ * and defense in depth that prints raw untrusted text is not defense. A digest
+ * keeps every diagnostic the value had (are the two the same? is the fragment from
+ * an older run?) and carries no bytes the fragment chose. Length is reported too,
+ * since a truncated or padded nonce is the likeliest honest mistake and the digest
+ * hides it.
+ */
+function nonceFingerprint(nonce: string): string {
+  const digest = createHash('sha256').update(nonce, 'utf8').digest('hex').slice(0, NONCE_FINGERPRINT_LENGTH);
+  return `sha256:${digest} (${nonce.length} chars)`;
+}
+
 export function mergeFragmentsToGrading(
   fragments: EvalFragment[],
   runNonce: string,
@@ -44,7 +74,8 @@ export function mergeFragmentsToGrading(
   for (const fragment of fragments) {
     if (fragment.runNonce !== runNonce) {
       throw new GradingNonceError(
-        `fragment for eval "${fragment.evalId}" carries runNonce "${fragment.runNonce}", expected "${runNonce}"`,
+        `fragment for eval "${fragment.evalId}" carries runNonce ${nonceFingerprint(fragment.runNonce)}, ` +
+          `expected ${nonceFingerprint(runNonce)}`,
       );
     }
     const fragmentArm = fragment.arm ?? 'with';

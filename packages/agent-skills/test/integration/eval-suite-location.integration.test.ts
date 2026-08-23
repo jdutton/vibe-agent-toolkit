@@ -33,7 +33,7 @@
    this test's own temp dir. */
 import { existsSync, statSync } from 'node:fs';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { cleanupTestTempDir, createTestTempDir } from '../../../cli/test/system/test-common.js';
@@ -215,17 +215,25 @@ describe('external eval suite (integration)', () => {
   // in tmp on every --out run, forever. --keep is the only thing that retains.
   it('reaps the tmp workspaces root on an --out run that did not ask to keep it', async () => {
     const layout = writeExternalLayout();
-    const fake = makeHarnessFakeSpawn({});
+    // The workspaces root has to come from the EXECUTOR's own cwd, not from the
+    // result: `workspacesPath` is reported only when the directory survives (i.e.
+    // only under `--keep`), precisely so the result never names a directory cleanup
+    // has already removed. On this run it is correctly absent, which leaves the
+    // spawn as the only witness to where the workspaces actually were.
+    let executorCwd = '';
+    const fake = makeHarnessFakeSpawn({ onExecutorSpawn: (opts) => { executorCwd = opts.cwd ?? ''; } });
 
     const result = await runSkillTestHarness(
       optsFor(layout.subjectDir, fake.spawn, { evalsSubpath: layout.evalsPath }),
     );
 
     expect(result.exitCode, result.summary).toBe(0);
-    expect(result.workspacesPath).toBeDefined();
+    expect(result.workspacesPath, 'a non-keep run named a workspaces dir it did not retain').toBeUndefined();
+    const workspacesRoot = /^(.*\/vat-skill-test-ws-[^/]+)\//.exec(toForwardSlash(executorCwd))?.[1];
+    expect(workspacesRoot, `no workspaces root in the executor cwd: ${executorCwd}`).toBeDefined();
     // The user-owned --out dir survives, as it always has; the tmp dir does not.
     expect(existsSync(safePath.join(tempDir, 'harness'))).toBe(true);
-    expect(existsSync(result.workspacesPath ?? ''), 'tmp workspaces root leaked').toBe(false);
+    expect(existsSync(workspacesRoot ?? ''), 'tmp workspaces root leaked').toBe(false);
   });
 
   // Windows does not model POSIX permission bits, so this is Unix-only — the

@@ -141,7 +141,10 @@ export function createSkillTestConfigureCommand(): Command {
     .option('--timeout <s>', 'Wall-clock timeout in seconds (positive integer)')
     .option('--stall <s>', 'Stall-watchdog seconds (positive integer)')
     .option('--model <id>', 'Pinned model ID for reproducibility')
-    .option('--baseline', 'Enable with/without A/B baseline run')
+    .option(
+      '--baseline',
+      "Make the with/without A/B PERMANENT for this skill: every later `skill test run` then runs each eval TWICE, roughly doubling its spend (override for one run with `run --no-baseline`). It measures the skill's INSTRUCTIONS, not capability -- both arms share a filesystem, so check baselineIntegrity in baseline.json before trusting a delta.",
+    )
     .option(
       '--evals <path>',
       "Path to evals.json, recorded in config as-is: relative to the skill source, absolute, or an npm bare specifier. (Note the asymmetry with `skill test run --evals`, which resolves against the current directory — config travels with the skill, a flag is typed by an operator.)",

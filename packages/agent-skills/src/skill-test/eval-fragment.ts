@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { BaselineContaminationHitSchema } from './baseline-integrity.js';
+import { BaselineContaminationHitSchema, BaselineScanDegradationSchema } from './baseline-integrity.js';
 import { FrictionItemSchema } from './friction-schema.js';
 import { sanitizeGraderText, sanitizeGraderTextDeep } from './grader-text.js';
 import { ToolVerdictBodySchema } from './tool-eval-schema.js';
@@ -50,6 +50,22 @@ export const EvalFragmentSchema = z.object({
    * grader is meaningless and is overwritten rather than trusted.
    */
   contamination: z.array(BaselineContaminationHitSchema).optional(),
+  /**
+   * Why THIS eval's contamination scan could not run at full strength, when it
+   * could not (see `BaselineScanDegradation`). Attached by VAT after the strict
+   * parse for exactly the reasons `contamination` is, and stripped from grader
+   * output for exactly the same reason: it is derived from the executor
+   * transcript's structure, which the grader never inspects, so a value arriving
+   * from a grader is meaningless — and this one is worse than meaningless,
+   * because a grader talked into omitting it turns a blind scan back into a
+   * confident clean one.
+   *
+   * This is the per-eval half of the run-level `baselineIntegrity.degraded` list.
+   * It exists because the degradation is detected per eval, deep inside a
+   * pipeline worker, while the block that has to report it is assembled once at
+   * the end from fragments — the fragment is the only channel between the two.
+   */
+  degraded: BaselineScanDegradationSchema.optional(),
 }).strict();
 
 export type EvalFragment = z.infer<typeof EvalFragmentSchema>;

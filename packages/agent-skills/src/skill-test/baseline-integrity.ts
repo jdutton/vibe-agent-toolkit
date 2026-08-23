@@ -1,4 +1,9 @@
-import { isProtectedName, protectedEnvNames } from '@vibe-agent-toolkit/utils';
+import {
+  isProtectedName,
+  parseStreamJsonTranscript,
+  protectedEnvNames,
+  type ParsedTranscript,
+} from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
 /**
@@ -45,9 +50,14 @@ import { z } from 'zod';
  *     derives, while a child's output is backslashed — and inside stream-json
  *     those backslashes are ESCAPED, so the raw transcript holds `\\`. Folding
  *     backslashes to `/` therefore yields `//`, which still would not match a
- *     single-slash needle; the run-collapse is what closes that, and is why
- *     excerpts are taken from the NORMALIZED haystack (this step does not
- *     preserve length, so an index into it does not address the original).
+ *     single-slash needle; the run-collapse is what closes that. ⚠️ THE
+ *     RUN-COLLAPSE DOES NOT PRESERVE LENGTH, so an index into normalized text
+ *     does not address the original. The structured scan therefore never mixes
+ *     the two: it takes excerpts from the RAW command using the raw token's own
+ *     index (which is also more useful for triage — the arm's own casing is
+ *     preserved), and matches needles against separately-normalized RESOLVED
+ *     paths. Only the degraded flat fallback indexes into normalized text, where
+ *     needle and excerpt come from that same string.
  *   - **Case.** Folded UNCONDITIONALLY, not just on win32. Windows is the obvious
  *     case-insensitive filesystem, but macOS ships case-insensitive APFS/HFS+ by
  *     default, so `cat /PRIVATE/VAR/…/VAT-SKILL-TEST/…/SKILL.md` succeeds there and
@@ -61,6 +71,69 @@ import { z } from 'zod';
  */
 function normalizeForMatch(value: string): string {
   return value.replaceAll('\\', '/').replaceAll(/\/{2,}/g, '/').toLowerCase();
+}
+
+/**
+ * A haystack the flat/content scans search: the normalized text they MATCH in,
+ * the raw text they QUOTE from, and the map between the two.
+ *
+ * WHY THE MAP EXISTS. `excerpt`'s whole job is triage — an operator takes it back
+ * to their transcript and looks. Slicing it out of the normalized haystack made
+ * that impossible: `SKILL.md` came back as `skill.md`, a Windows `\` came back as
+ * `/`, a JSON-escaped `\n` came back as `/n`, and none of those strings are in the
+ * file the operator greps. The structured scan never had this problem (it excerpts
+ * from `PathReach.text`, which is the raw command), so this closes the gap for the
+ * two remaining paths: the degraded flat match and the content signal.
+ *
+ * `source[i]` is the index in `raw` of the code unit that produced
+ * `normalized[i]`. It is ABSENT when the two could not be kept in step — see
+ * {@link scanHaystack} — in which case the excerpt falls back to the normalized
+ * slice and is no worse than it was.
+ */
+interface ScanHaystack {
+  raw: string;
+  normalized: string;
+  source?: number[];
+}
+
+/**
+ * Build a {@link ScanHaystack} from raw text.
+ *
+ * The separator fold and the run-collapse are done by hand rather than by
+ * `normalizeForMatch`'s two `replaceAll`s, because they are the length-CHANGING
+ * steps and this is where the correspondence has to be recorded (the collapse
+ * deletes code units, so an index into the output does not address the input —
+ * the warning {@link normalizeForMatch} has carried since it was written).
+ * Lowercasing is applied to the WHOLE folded string afterwards, exactly as
+ * `normalizeForMatch` does — not per character. That is what makes the two provably
+ * equal rather than approximately so: `toLowerCase` is context-sensitive (Greek
+ * final sigma is the real case), so a per-character fold here would quietly disagree
+ * with the needles, which are normalized the other way. Every needle-matching test
+ * in this suite runs through both functions and would fail on a divergence.
+ *
+ * `toLowerCase()` changes LENGTH for a small number of code points (U+0130 is the
+ * common one). That would desynchronize the map, so the map is dropped rather than
+ * silently skewed — an approximate excerpt pointing at the wrong bytes is worse
+ * than the folded one, because it looks precise.
+ */
+function scanHaystack(raw: string): ScanHaystack {
+  const units: string[] = [];
+  const source: number[] = [];
+  let previousWasSlash = false;
+  for (let i = 0; i < raw.length; i += 1) {
+    const ch = raw.charAt(i);
+    const folded = ch === '\\' ? '/' : ch;
+    const isSlash = folded === '/';
+    if (isSlash && previousWasSlash) continue;
+    previousWasSlash = isSlash;
+    units.push(folded);
+    source.push(i);
+  }
+  const folded = units.join('');
+  const normalized = folded.toLowerCase();
+  return normalized.length === folded.length
+    ? { raw, normalized, source }
+    : { raw, normalized };
 }
 
 /** The directory name VAT puts every harness root under. See {@link harnessNeedles}. */
@@ -155,21 +228,28 @@ const PATH_SEGMENT_CONTINUATION = /[\w-]/;
  * Does this needle also require a `/` immediately BEFORE it?
  *
  * For a bare directory-NAME needle (one with no separator of its own, i.e.
- * `vat-skill-test`), yes — and it is not optional. Without it, `ls` of the OS temp
- * dir stamps `contaminated: true` on a completely clean run: the arm's cwd is
+ * `vat-skill-test`), yes. Without it, `ls` of the OS temp dir stamps
+ * `contaminated: true` on a completely clean run: the arm's cwd is
  * `<tmp>/vat-skill-test-ws-<token>/…`, so `ls ../../..` prints `vat-skill-test` on
  * its own line, and a NEWLINE is not in {@link PATH_SEGMENT_CONTINUATION}, so the
- * trailing boundary happily accepts it. "Where am I, what's around me" is the most
- * common opening move an agent makes in an empty scratch directory — the arm saw a
- * directory NAME, it did not read the skill, and the instruction attached to that
- * verdict is "discard the delta".
+ * trailing boundary happily accepts it.
  *
- * A leading `/` costs no real detection: every genuine reach carries one
- * (`../../vat-skill-test/…`, `find ../../vat-skill-test`, `$TMPDIR/vat-skill-test`,
- * and even `cd ../../vat-skill-test`, which keeps its preceding slash without a
- * trailing one). A bare basename in a listing does not. The same rule stops this
- * repo's own source and CHANGELOG — ~10 tracked files carry the literal — from
- * firing when vat is dogfooded on itself.
+ * ⚠️ SCOPE, since this rule used to be the ONLY thing standing between a listing
+ * and a contaminated verdict: it now applies to the DEGRADED flat fallback only
+ * (see {@link flatPathHits}). The structured scan never matches a needle against
+ * tool OUTPUT at all, so a listing cannot reach a needle in the first place, and
+ * every path the structured scan DOES match is resolved absolute — so a bare-name
+ * needle always has its leading `/` there by construction.
+ *
+ * ⛔ AND THIS RULE IS WHY THE FLAT SCAN HAD TO GO. A leading `/` was claimed to
+ * cost no real detection, on the grounds that every genuine reach carries one —
+ * including `cd ../../vat-skill-test`, "which keeps its preceding slash". That is
+ * true of a ONE-SHOT `cd` and false of the two-step chain an agent actually types:
+ * the Bash tool KEEPS CWD ACROSS CALLS, so `cd ../../..` then `cd vat-skill-test`
+ * then `cat staged/…/SKILL.md` never writes a slash before the name, and a control
+ * arm that ran the skill's own bundled script read CLEAN with all four signals
+ * reported "armed". A leading-slash rule cannot be patched into correctness,
+ * because the missing slash is a consequence of a cwd the flat matcher cannot see.
  *
  * Needles 1 and 2 already contain a separator, so this returns false for them and
  * their existing behavior is unchanged.
@@ -364,16 +444,45 @@ export const BaselineContaminationHitSchema = z.object({
    * shrunken delta — see {@link vatPrivateDirNeedles}.
    */
   kind: z.enum(CONTAMINATION_KINDS),
-  /** The matched token — the path prefix or the executable basename. */
+  /**
+   * The matched token — a path SUFFIX, a verbatim skill line, or the executable
+   * basename.
+   *
+   * ⚠️ PATH MATCHES ARE TRUNCATED TO THEIR LAST TWO SEGMENTS ON PURPOSE, and that
+   * is not cosmetic. Needle sets run longest-first, so the needle that matches a
+   * full-path reach is the ENTIRE absolute root — on Windows
+   * `C:/Users/<username>/AppData/Local/Temp/vat-skill-test/<key>`, which puts the
+   * operator's login name in an artifact adopters attach to bug reports, in the one
+   * field that reads like a short opaque token. The last two segments identify the
+   * directory just as well (`vat-skill-test/<key>`) and name nobody. See
+   * {@link redactPathMatch}; the untruncated path is still visible in `excerpt`,
+   * which carries its own warning.
+   *
+   * A skill-content match is a verbatim line of the skill's own body and is NOT
+   * truncated — it has no `/`-separated structure to trim, and the whole point of
+   * that signal is that the operator can find the line in SKILL.md by eye.
+   */
   match: z.string().min(1),
   /**
    * A short excerpt of the transcript around the match, for triage.
    *
-   * NOT redacted — it is raw transcript, bounded and whitespace-collapsed. The
-   * most likely way a harness path reaches a transcript is an `env` dump, so this
-   * window can capture adjacent environment values, and `baseline.json` is a file
-   * adopters attach to reports. Treat it as sensitive; `grading.json` already
-   * quotes transcripts verbatim, so this is the same exposure, not a new one.
+   * RAW TRANSCRIPT — the arm's own bytes, its own casing, its own separators,
+   * bounded and whitespace-collapsed. That is a promise this field has to keep to
+   * be worth anything: its only use is to be carried back to the transcript and
+   * searched for, and it once came from the NORMALIZED haystack instead, so
+   * `SKILL.md` was reported as `skill.md` and a JSON-escaped `\n` as `/n` — an
+   * operator grepping for the reported excerpt found nothing, in a field that
+   * exists solely so they can. The structured scan quotes the raw tool input; the
+   * flat and content scans map their match back through {@link ScanHaystack}.
+   * (Whitespace collapse is the one transform that survives, and it is stated here:
+   * grep for a distinctive WORD from the excerpt, not for the whole line.)
+   *
+   * NOT redacted. The most likely way a harness path reaches a transcript is an
+   * `env` dump, so this window can capture adjacent environment values —
+   * `GITHUB_TOKEN=…`, `HOME=/Users/<name>` have both been observed — and
+   * `baseline.json` is a file adopters attach to reports. Treat it as sensitive;
+   * `grading.json` already quotes transcripts verbatim, so this is the same
+   * exposure, not a new one.
    */
   excerpt: z.string(),
 }).strict();
@@ -432,6 +541,33 @@ export const BaselineArmSkewSchema = z.object({
 export type BaselineArmSkew = z.infer<typeof BaselineArmSkewSchema>;
 
 /**
+ * One CONTROL-arm eval that produced no grade at all, and why.
+ *
+ * Distinct from {@link BaselineArmSkewSchema}, which describes two arms that both
+ * graded and disagreed about how deep. This describes an arm that never got as far
+ * as a verdict: its executor failed to spawn, stalled, hit the wall clock, or its
+ * grader exited non-zero / wrote no fragment / wrote something unparseable / echoed
+ * the wrong nonce / graded a different number of expectations than the eval declares.
+ *
+ * Every one of those used to propagate out of `runPipeline` and fail the WHOLE run
+ * (exit 1) — discarding fully-billed treatment work that was perfectly good, and
+ * writing no `grading.json` at all. The treatment arm still hard-fails that way,
+ * because without a treatment result there is nothing to salvage; the control arm
+ * does not, because the thing it feeds (the delta) has a way to say "I cannot be
+ * computed" and the thing the operator paid for (the treatment grading) does not.
+ *
+ * `detail` is the arm-named error message verbatim — it already carries the eval id
+ * and the failing stage, and it is the text an operator would otherwise have seen on
+ * stderr before the run died.
+ */
+export const BaselineControlArmFailureSchema = z.object({
+  evalId: z.string().min(1),
+  detail: z.string().min(1),
+}).strict();
+
+export type BaselineControlArmFailure = z.infer<typeof BaselineControlArmFailureSchema>;
+
+/**
  * What ONE arm actually graded for ONE eval: how many expectations it was graded
  * against, and how many of them passed.
  *
@@ -465,11 +601,31 @@ export interface ArmEvalGrade {
  * side is reported as 0 rather than dropped, since a silently absent eval skews
  * the run total exactly as a short-graded one does.
  *
- * A stronger cousin exists and is NOT here: comparing each arm's count against the
- * number of expectations the eval DECLARED, which would also catch a WITH arm
- * grading short. It needs the suite threaded into the merge, and it does not
- * protect the delta any better than parity does — parity is what the two arms
- * being comparable actually means.
+ * THE ONE-ARM CASE IS NOW THE LOAD-BEARING ONE, and it is why this function did not
+ * become redundant when the declared-count check landed. Both arms are pinned to the
+ * eval's DECLARED expectation count at the grader boundary
+ * (`assertExpectationCountDeclared` in eval-grader.ts), so two arms that both
+ * produced a fragment can no longer disagree about `total` — which reads like this
+ * check has nothing left to find. It has two live inputs it always had and only now
+ * carries alone:
+ *
+ * - an eval the CONTROL arm never graded at all, because its executor or grader
+ *   broke (see {@link BaselineControlArmFailureSchema}). That is not a hypothetical:
+ *   it is the routine outcome the run no longer aborts on, so it arrives here on
+ *   every such run.
+ * - an eval graded on one arm only for any other reason — a fragment lost, an arm
+ *   mislabelled, a future path that grades the arms from different suites.
+ *
+ * It is also the SINGLE AUTHORITY `computeBaselineDelta` consults before withholding
+ * (see baseline-delta.ts). Deleting it would leave the delta with no way to say
+ * "these two totals cannot be subtracted", which is the whole reason `null` exists.
+ *
+ * The declared-count check is the STRONGER cousin this docblock used to say was "NOT
+ * here … it needs the suite threaded into the merge". That premise was wrong: the
+ * declared list is already in hand at the grader boundary, one call before the
+ * fragment is returned, so no threading was needed and the check now lives there.
+ * It catches what parity structurally cannot — both graders drifting the SAME way,
+ * which keeps parity satisfied while every reported number is wrong.
  */
 export function armExpectationSkew(
   withArm: readonly ArmEvalGrade[],
@@ -491,8 +647,50 @@ export function armExpectationSkew(
   return skew;
 }
 
+/**
+ * Why one eval's scan could not run at full strength.
+ *
+ * The structured scan ({@link detectBaselineContamination}) needs two things the
+ * transcript is not contractually obliged to provide: parseable stream-json, and
+ * a cwd it can follow from the arm's own workspace through every `cd`. When
+ * either is missing the scan falls back to the flat text match this module used
+ * to be — which both over-reports (a `find` that PRINTS a path reads as a reach)
+ * and under-reports (a relative reach after a `cd` loses the leading slash a
+ * bare-name needle requires).
+ *
+ * A fallback that is not announced is the failure mode this whole module exists
+ * to prevent: `contaminated: false` from a degraded scan is written with exactly
+ * the same bytes as `contaminated: false` from a scan that actually looked.
+ * `signals` already separates "checked and clean" from "nothing was armed"; this
+ * separates "checked and clean" from "checked with the blunt instrument".
+ */
+export const BASELINE_SCAN_DEGRADATION_REASONS = [
+  /** The transcript yielded no stream-json events at all, so there was nothing structured to walk. */
+  'transcript-unparsed',
+  /** No `armWorkspaceDir` was threaded through, so no relative path can be anchored. */
+  'cwd-unknown',
+  /** A `cd` the walker could not evaluate (`cd "$SOMEVAR"`, `cd -`, bare `cd`) unanchored every later path. */
+  'cwd-untracked',
+] as const;
+
+export const BaselineScanDegradationSchema = z.object({
+  reason: z.enum(BASELINE_SCAN_DEGRADATION_REASONS),
+  /** Human-readable specifics — the offending `cd`, or what the parse produced. */
+  detail: z.string(),
+  /** Which eval degraded. Absent on the value the detector returns; stamped by the caller. */
+  evalId: z.string().min(1).optional(),
+}).strict();
+
+export type BaselineScanDegradation = z.infer<typeof BaselineScanDegradationSchema>;
+
 export const BaselineIntegritySchema = z.object({
   contaminated: z.boolean(),
+  /**
+   * The evals whose scan fell back to the flat text match, and why. Empty means
+   * every eval got the structured scan — which is the only state in which
+   * `contaminated: false` means "looked properly and found nothing".
+   */
+  degraded: z.array(BaselineScanDegradationSchema),
   /**
    * Whether the two arms were graded against the same expectations, and so
    * whether subtracting one summary from the other means anything.
@@ -504,6 +702,19 @@ export const BaselineIntegritySchema = z.object({
   comparable: z.boolean(),
   /** The evals behind a `comparable: false`; empty when the arms agree. */
   skew: z.array(BaselineArmSkewSchema),
+  /**
+   * Control-arm evals that produced no grade at all — see
+   * {@link BaselineControlArmFailureSchema}.
+   *
+   * A SEPARATE field from `skew` even though every entry here also produces a skew
+   * entry (an eval the control arm never graded has `withoutTotal: 0`), because the
+   * two say different things to an operator: skew says "the two graders disagreed
+   * about the job", this says "half the experiment did not run, and here is the
+   * spawn/grader failure that stopped it". Collapsing them would report a dead
+   * control arm as a grading-depth disagreement, which points triage at the grader
+   * prompt instead of at the timeout.
+   */
+  controlArmFailures: z.array(BaselineControlArmFailureSchema),
   /** Human-readable verdict, safe to print verbatim. */
   summary: z.string().min(1),
   /**
@@ -531,21 +742,58 @@ const EXCERPT_RADIUS = 60;
  * A short excerpt around the first occurrence of `token`, collapsed to one line.
  * Bounded so a huge tool result cannot bloat `baseline.json`.
  *
- * ⚠️ KNOWN OPEN — nothing here is redacted, and two things leak. (1) The ±60 chars
- * are raw transcript: a hit inside an `env` dump has been observed carrying
- * `AWS_SECRET_ACCESS_KEY=…`, `GITHUB_TOKEN=ghp_…` and `HOME=/Users/<name>` into
- * `baseline.json` — the same values `formatForwardedEnvLine` bothers to mask on
- * stderr. (2) Needles run longest-first, so `match` on a full-path reach is the
- * entire absolute harness root, which on Windows is
- * `C:/Users/<username>/AppData/…` — putting the username in a field whose own
- * docstring carries no sensitivity note. Fix: mask `KEY=value` pairs here, and
- * report only the suffix needle in `match`.
+ * ⚠️ KNOWN OPEN — nothing here is masked. The ±60 chars are raw transcript, and a
+ * hit inside an `env` dump has been observed carrying `AWS_SECRET_ACCESS_KEY=…`,
+ * `GITHUB_TOKEN=ghp_…` and `HOME=/Users/<name>` into `baseline.json` — the same
+ * values `formatForwardedEnvLine` bothers to mask on stderr. Fix: mask `KEY=value`
+ * pairs here. (The OTHER half of that note — that `match` leaked the absolute root
+ * — is CLOSED: see {@link redactPathMatch}. Do not restore the leak by reporting a
+ * raw needle.)
  */
 function excerptAround(haystack: string, index: number, tokenLength: number): string {
   const start = Math.max(0, index - EXCERPT_RADIUS);
   const end = Math.min(haystack.length, index + tokenLength + EXCERPT_RADIUS);
   const slice = haystack.slice(start, end).replaceAll(/\s+/g, ' ').trim();
   return `${start > 0 ? '…' : ''}${slice}${end < haystack.length ? '…' : ''}`;
+}
+
+/**
+ * The same excerpt, but taken from the RAW text a {@link ScanHaystack} was built
+ * from — so what is reported is what the arm actually typed.
+ *
+ * The span is mapped end-INCLUSIVE (`source[last] + 1`) rather than by looking up
+ * `source[index + length]`, which would be out of range for a needle that runs to
+ * the end of the haystack and would silently start the slice at 0.
+ */
+function excerptIn(haystack: ScanHaystack, index: number, length: number): string {
+  const { source } = haystack;
+  if (source === undefined) return excerptAround(haystack.normalized, index, length);
+  const start = source[index] ?? 0;
+  const end = (source[index + length - 1] ?? haystack.raw.length - 1) + 1;
+  return excerptAround(haystack.raw, start, end - start);
+}
+
+/** Most trailing segments of a path needle worth reporting in `match`. */
+const MATCH_SEGMENT_LIMIT = 2;
+
+/**
+ * A path needle, trimmed to something safe to write into an artifact.
+ *
+ * Needle sets are built longest-first, so the needle a full-path reach matches is
+ * the whole absolute root — which on Windows is `C:/Users/<username>/AppData/…`,
+ * and on macOS is routinely `/Users/<name>/…` when `--out` points into a checkout.
+ * `match` is short, opaque-looking and quoted into bug reports, so it is the last
+ * place anyone inspects for a username. The last two segments say exactly as much
+ * about WHICH directory was reached and name nobody.
+ *
+ * A needle of two segments or fewer is returned unchanged: `vat-skill-test`,
+ * `vat-skill-evals-` and a sibling-arm token carry no prefix to drop, and the
+ * `…/` marker on `/tmp/x` would only make it look truncated when it is not.
+ */
+function redactPathMatch(needle: string): string {
+  const segments = normalizedSegments(needle);
+  if (segments.length <= MATCH_SEGMENT_LIMIT) return needle;
+  return `…/${segments.slice(-MATCH_SEGMENT_LIMIT).join('/')}`;
 }
 
 export interface DetectBaselineContaminationInput {
@@ -573,6 +821,22 @@ export interface DetectBaselineContaminationInput {
    * caller that has not threaded it: the check gets noisier, never blinder.
    */
   armWorkspaceDir?: string;
+  /**
+   * The arm's actual STARTING working directory — the per-eval workspace
+   * `<armWorkspaceDir>/<evalId>`, which is what the executor is spawned in.
+   *
+   * Distinct from `armWorkspaceDir` on purpose, and the difference is one
+   * directory level that decides every relative reach in the transcript. The cwd
+   * walk anchors here; containment ("is this the arm's own file?") is judged
+   * against `armWorkspaceDir`, which covers the arm's whole tree. Anchoring the
+   * walk one level too high would resolve `cd ../../..` to the temp dir's PARENT,
+   * and every subsequent relative path — the entire class of reach this scan
+   * exists to catch — would land somewhere no needle can see, reporting clean.
+   *
+   * Defaults to `armWorkspaceDir` when absent, which is the closest anchor
+   * available and still better than none.
+   */
+  armCwd?: string;
   /**
    * Verbatim lines lifted from the staged SKILL.md by {@link skillContentNeedles}
    * — the ONLY signal that sees an ambient copy of an instruction-only skill,
@@ -710,16 +974,27 @@ const STRUCTURAL_LINE_PREFIXES = ['#', '|', '>', '---', '```'];
  *     anyone with);
  *   - fenced code is skipped, since a code block is often copied from a shared
  *     upstream and is the same in every skill that wraps the same tool;
- *   - headings, table rows and block quotes are skipped as structural;
- *   - a line carrying `"` or `\` is skipped: the transcript is stream-json, so
- *     those are ESCAPED inside it and {@link normalizeForMatch} then rewrites the
- *     escape — the needle would never match its own text.
+ *   - headings, table rows and block quotes are skipped as structural.
  *
- * `excludedText` is the run's own eval prompts and expectations, and it is not
- * optional care: an adopter who quotes a sentence of their SKILL.md in an eval
- * prompt would otherwise stamp EVERY run contaminated, including the arm that
- * merely read the prompt it was given. The skill's own words reaching the arm
- * through vat are not the arm reaching the skill.
+ * 📌 A rule that lines carrying `"` or `\` are unusable has been REMOVED. It was
+ * true while the haystack was the RAW stream-json, where such characters are
+ * escaped and {@link normalizeForMatch} then rewrites the escape, so the needle
+ * could never match its own text. The content signal now reads
+ * {@link contentHaystackFor} — the DECODED assistant text, tool inputs and tool
+ * results — where there is no escaping to defeat, so those lines are usable
+ * needles again, and dropping them was silently costing quote-heavy skills their
+ * only signal. Re-add the rule only if the content haystack goes back to raw JSON.
+ *
+ * `excludedText` is every channel through which VAT ITSELF hands the arm text:
+ * the run's eval prompts, its `expected_output`, its expectations, AND the
+ * contents of the input `files` fixtures VAT stages into the arm's workspace and
+ * tells it to work on. This is not optional care in any of the four. An adopter
+ * who quotes a sentence of their SKILL.md in a prompt — or ships a fixture that
+ * does — would otherwise stamp EVERY run contaminated, including the arm that
+ * merely read the input it was given, and the attached triage instruction
+ * ("uninstall the ambient copy of the plugin") would send the operator hunting
+ * something that does not exist. The skill's own words reaching the arm through
+ * vat are not the arm reaching the skill.
  */
 export function skillContentNeedles(skillMarkdown: string, excludedText = ''): string[] {
   const excluded = normalizeForMatch(excludedText);
@@ -766,10 +1041,6 @@ function skillBodyLines(skillMarkdown: string): string[] {
 /** Is this body line distinctive enough that quoting it means seeing the skill? */
 function isNeedleCandidate(line: string): boolean {
   if (line.length < MIN_SKILL_CONTENT_NEEDLE_LENGTH) return false;
-  // stream-json ESCAPES these, and `normalizeForMatch` then rewrites the escape —
-  // such a needle could never match its own text, so it would occupy one of the
-  // three slots while being silently dead.
-  if (line.includes('"') || line.includes('\\')) return false;
   return !STRUCTURAL_LINE_PREFIXES.some((prefix) => line.startsWith(prefix));
 }
 
@@ -811,8 +1082,12 @@ const MIN_EXECUTABLE_NAME_LENGTH = 3;
  * whole suite green, because {@link reachEscapesOwnWorkspace} rejects a token with
  * no path root anyway. The branch is DEAD given that predicate, not merely
  * redundant — which is why it is deleted rather than kept as belt-and-braces.
- * Removing the predicate instead fails 4 tests, so that is where the work happens.
  * Re-adding either form needs a reach that only it catches.
+ *
+ * ⚠️ DEGRADED-MODE ONLY. This regex, {@link pathTokenEndingAt} and
+ * {@link reachEscapesOwnWorkspace} are now reached solely by {@link flatPathHits}.
+ * The structured scan gets the same answer from a resolved absolute path and a
+ * prefix test ({@link pathEscapesWorkspace}), with no shape-guessing at all.
  */
 function executableInvocationPattern(name: string): RegExp {
   // Every regex metacharacter in `name` is escaped first, so the constructed
@@ -827,7 +1102,19 @@ function executableInvocationPattern(name: string): RegExp {
   return new RegExp(String.raw`[/\\]${escaped}(?![\w-])`, 'g');
 }
 
-/** Characters that continue a path token leftwards from a match. */
+/**
+ * Characters that continue a path token leftwards from a match.
+ *
+ * ⚠️ DEGRADED-MODE ONLY, and known-broken even there: SPACE is absent, so
+ * `python3 "/Users/dev/My Projects/skill/scripts/csvsum.py"` truncates at the last
+ * segment, the token loses its root, {@link reachEscapesOwnWorkspace} returns
+ * false, and the reach reads CLEAN. The same defeats
+ * `~/Library/Application Support/claude/plugins/…`, the standard macOS spelling of
+ * the installed-plugin cache. It is not fixed here because it cannot be: a
+ * character class scraping free text has no way to know where a quoted token ends.
+ * The structured scan reads shell QUOTING instead ({@link readShellWord}), which
+ * is where that class of path is now handled correctly.
+ */
 const PATH_TOKEN_CHARS = /[\w./~$:-]/;
 
 /**
@@ -868,14 +1155,22 @@ function pathTokenEndingAt(haystack: string, index: number, length: number): str
  *   `$tmpdir/…/analyze`, `c:/…/analyze`→ true, variable- and drive-rooted
  *   `../../repo/dist/…/analyze`        → true, climbs out
  *
- * Residual, accepted: an arm that `cd`s elsewhere and then uses relative paths
- * reads as clean here. The `cd` carries the absolute path, and that is the other
- * detectors' job — this one is not the last line of defence.
+ * ⛔ THE "RESIDUAL, ACCEPTED" NOTE THAT USED TO END THIS BLOCK WAS THE DEFECT.
+ * It said an arm that `cd`s elsewhere and then uses relative paths reads as clean
+ * here, and that this was fine because "the `cd` carries the absolute path, and
+ * that is the other detectors' job". It does not: `cd vat-skill-test` after
+ * `cd ../../..` carries no absolute path and no leading slash, so no detector saw
+ * it and the arm ran the skill's own script on a `contaminated: false` verdict.
+ * A blind spot handed to a neighbour who is also blind is not a residual.
+ * The structured scan resolves the cwd instead; this predicate is now reached
+ * only from the degraded flat fallback, where the same hole is still open and is
+ * declared as degradation rather than assumed away.
  */
 /**
  * The FIRST invocation of `name` whose path escapes the arm's own workspace, as
  * `{ index, length }` into the normalized haystack — or `undefined` when every
- * occurrence is the arm's own file.
+ * occurrence is the arm's own file. Degraded-mode only; the structured scan reads
+ * the same evidence off {@link PathReach}.
  *
  * Scanning every occurrence rather than testing the first is the difference
  * between a working detector and a decorative one: a control arm that writes
@@ -916,27 +1211,70 @@ function reachEscapesOwnWorkspace(token: string, armWorkspaceDir: string): boole
   return !/^[\w.-]*$/.test(head);
 }
 
-/**
- * Scan the skill-absent arm's transcript for proof it reached the skill.
+/* ══════════════════════════ the structured scan ══════════════════════════════
  *
- * Deliberately a raw-text scan rather than a structured walk of the stream-json
- * events: the evidence we care about (an absolute path in a Bash command, a tool
- * result quoting the bundle's output) shows up in several different event
- * shapes, and a scan cannot be defeated by an event type we failed to enumerate.
- * The cost of the looser match is a possible false POSITIVE, which produces a
- * warning the operator can dismiss — the right direction to err for a check
- * whose entire purpose is to stop a wrong number from being believed.
+ * WHAT REPLACED THE FLAT SCAN, AND WHY NO PATCH TO IT COULD WORK.
  *
- * Both sides are folded through {@link normalizeForMatch} before comparing, and
- * the harness signal matches {@link harnessNeedles} rather than one literal
- * spelling — without that, the check is dead on Windows (separator direction),
- * roughly a coin-flip on macOS (`$TMPDIR` vs the realpath), and blind to a
- * relative reach on every platform. Excerpts are taken from the NORMALIZED
- * haystack so a reported index always addresses the text that matched.
+ * This module used to flatten the whole stream-json transcript into one string
+ * and hunt needles in it. That single rule was wrong in BOTH directions, and both
+ * were demonstrated by running a control arm:
  *
- * Pure + unit-testable. Returns hits in a stable order (harness paths first,
- * then executables in declared order), at most one per distinct token.
+ *   (a) It CLEARED a real reach. The Bash tool KEEPS CWD ACROSS CALLS, so
+ *       `cd ../../..` → `cd vat-skill-test` → `cd <key>` → `cat staged/…/SKILL.md`
+ *       → `python3 staged/…/scripts/csvsum.py` never writes a `/` before the
+ *       harness directory NAME, and {@link needsLeadingBoundary} requires one. The
+ *       arm ran the skill's own bundled script and the verdict was
+ *       `contaminated: false` with all four signals reported "armed".
+ *
+ *   (b) It CONVICTED ordinary orientation. Anything that PRINTS a path supplies
+ *       the slash, so `find ../../.. -maxdepth 1 -type d` produced two
+ *       `vat-private-dir` hits — the verdict reserved for "reached the held answer
+ *       key" — and `find /private/var/folders -name data.csv`, the arm hunting the
+ *       fixture it was TOLD to work on, stamped `sibling-arm`. Nothing was opened
+ *       in any of them.
+ *
+ * The root cause is not a tunable: a name-based needle in flat text cannot tell
+ * "saw a name in a listing" from "reached in and read". `find` PRINTING a path and
+ * `cat` CONSUMING one are identical bytes to a string matcher. The structure that
+ * answers it was in the transcript the whole time and was being thrown away.
+ *
+ * So the scan now:
+ *   1. parses the stream-json into TOOL CALLS (name + full input);
+ *   2. tracks a virtual CWD from the arm's own workspace, interpreting `cd`
+ *      (including `cd a && cd b`) so a relative path resolves against the cwd in
+ *      force AT THAT POINT;
+ *   3. classifies each call's INTENT — retrieval (consumes content), enumeration
+ *      (lists names only), or other;
+ *   4. matches PATH needles against the resolved ABSOLUTE paths in tool INPUT,
+ *      never against tool OUTPUT. `find ../../..` has an input of `../../..`;
+ *      only its output names the harness. That is the whole of (b);
+ *   5. keeps CONTENT needles matching everything — inputs, outputs and assistant
+ *      text — because that is where skill text legitimately proves the arm READ
+ *      it: `grep -r "<phrase>" ../../..` must still fire, via content and not
+ *      via path.
+ *
+ * When the transcript will not parse, or a `cd` cannot be evaluated, the scan
+ * falls back to the flat match and says so — see {@link BaselineScanDegradation}.
  */
+
+/** What a tool call DOES with the paths in its input. */
+export type ToolIntent = 'retrieval' | 'enumeration' | 'other';
+
+/**
+ * One path a tool call named in its INPUT, resolved against the cwd in force at
+ * that call, plus enough of the surrounding text to quote in an excerpt.
+ */
+interface PathReach {
+  /** Normalized and absolute — or `~`/`$VAR`-rooted, which is "outside" by definition. */
+  resolved: string;
+  intent: ToolIntent;
+  /** The raw text the token was read out of (a Bash command, or a tool input's JSON). */
+  text: string;
+  /** Where in `text` the raw token sat, so the excerpt quotes what the arm actually typed. */
+  index: number;
+  length: number;
+}
+
 /**
  * The first needle in `needles` that matches at a path boundary, as a hit of
  * `kind` — or `undefined` when none does. Needle sets are ordered longest-first,
@@ -944,14 +1282,42 @@ function reachEscapesOwnWorkspace(token: string, armWorkspaceDir: string): boole
  * once rather than once per spelling of itself.
  */
 function firstNeedleHit(
-  haystack: string,
+  haystack: ScanHaystack,
   needles: readonly string[],
   kind: BaselineContaminationHit['kind'],
 ): BaselineContaminationHit | undefined {
   for (const needle of needles) {
-    const index = indexOfPathAtBoundary(haystack, needle);
+    const index = indexOfPathAtBoundary(haystack.normalized, needle);
     if (index === -1) continue;
-    return { kind, match: needle, excerpt: excerptAround(haystack, index, needle.length) };
+    return { kind, match: redactPathMatch(needle), excerpt: excerptIn(haystack, index, needle.length) };
+  }
+  return undefined;
+}
+
+/**
+ * The first RESOLVED PATH matching any of `needles`, as a hit of `kind`.
+ *
+ * Needles run in their declared longest-first order in the OUTER loop, so one
+ * reach is still reported at its most specific spelling; reaches run in
+ * transcript order inside it. `claimed` records the resolved path so the
+ * executable signal below does not report the same reach a second time.
+ */
+function firstReachHit(
+  reaches: readonly PathReach[],
+  needles: readonly string[],
+  kind: BaselineContaminationHit['kind'],
+  claimed: Set<string>,
+): BaselineContaminationHit | undefined {
+  for (const needle of needles) {
+    for (const reach of reaches) {
+      if (!containsPathAtBoundary(reach.resolved, needle)) continue;
+      claimed.add(reach.resolved);
+      return {
+        kind,
+        match: redactPathMatch(needle),
+        excerpt: excerptAround(reach.text, reach.index, reach.length),
+      };
+    }
   }
   return undefined;
 }
@@ -964,77 +1330,737 @@ function firstNeedleHit(
  * be defeated by. First match wins, as in every other group — one reach, one hit.
  */
 function firstContentHit(
-  haystack: string,
+  haystack: ScanHaystack,
   needles: readonly string[],
 ): BaselineContaminationHit | undefined {
   for (const needle of needles) {
-    const index = haystack.indexOf(needle);
+    const index = haystack.normalized.indexOf(needle);
     if (index !== -1) {
-      return { kind: KIND_SKILL_CONTENT, match: needle, excerpt: excerptAround(haystack, index, needle.length) };
+      return { kind: KIND_SKILL_CONTENT, match: needle, excerpt: excerptIn(haystack, index, needle.length) };
     }
   }
   return undefined;
 }
 
-export function detectBaselineContamination(
+/**
+ * The haystack the CONTENT signal reads: assistant prose, every tool input, and
+ * every tool RESULT — the decoded values, not the raw JSON line.
+ *
+ * Decoded matters twice over. Against the raw stream-json, a needle carrying a
+ * `"` or a `\` could never match its own text (the transcript holds the ESCAPED
+ * form), which is why {@link isNeedleCandidate} used to drop such lines on the
+ * floor. Against the decoded values there is no escaping to defeat, so those
+ * lines are usable needles again.
+ *
+ * Deliberately WIDER than "tool output and assistant text": an arm that writes a
+ * sentence of the skill into a file (`echo "<skill prose>" > notes.md`) has
+ * demonstrably seen it, and that evidence lives in a tool INPUT. Unlike a path,
+ * a verbatim line of skill prose cannot arrive by orientation — there is no `ls`
+ * that prints one — so widening the content haystack cannot reproduce defect (b).
+ */
+function contentHaystackFor(parsed: ParsedTranscript, transcript: string): ScanHaystack {
+  const parts = [parsed.text];
+  for (const use of parsed.toolUses) parts.push(use.command ?? renderToolInput(use.input));
+  for (const result of parsed.toolResults) parts.push(result.content);
+  const joined = parts.join('\n');
+  // A transcript we could not decode at all still gets scanned, in its raw form:
+  // a content needle found in escaped JSON is still a content needle found.
+  //
+  // The DECODED join is what the excerpt quotes from when there is one, which is
+  // the right raw text here: it is the arm's own prose and its own commands, with
+  // the stream-json escaping already undone. Quoting the JSON line instead would
+  // hand the operator a string that is not in their transcript either.
+  return scanHaystack(joined.trim() === '' ? transcript : joined);
+}
+
+function renderToolInput(input: unknown): string {
+  if (typeof input === 'string') return input;
+  if (input === undefined || input === null) return '';
+  try {
+    return JSON.stringify(input) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Did the transcript decode into anything at all?
+ *
+ * `parseStreamJsonTranscript` is deliberately tolerant — an unparseable line is
+ * skipped, not thrown on — so "it returned an object" is not evidence it worked.
+ * A non-empty transcript that produced no text, no tool calls, no tool results
+ * and no terminal `result` event was not stream-json, and the structured scan has
+ * nothing to walk.
+ */
+function transcriptDecoded(parsed: ParsedTranscript): boolean {
+  return (
+    parsed.text !== '' ||
+    parsed.toolUses.length > 0 ||
+    parsed.toolResults.length > 0 ||
+    parsed.result !== undefined
+  );
+}
+
+/** The tool names whose input paths are LISTED rather than consumed. */
+const ENUMERATION_TOOLS = new Set(['glob', 'ls', 'listdir']);
+/** The tool names that read a file's CONTENT. */
+const RETRIEVAL_TOOLS = new Set(['read', 'grep', 'notebookread']);
+
+function toolIntent(name: string): ToolIntent {
+  const lower = name.toLowerCase();
+  if (ENUMERATION_TOOLS.has(lower)) return 'enumeration';
+  if (RETRIEVAL_TOOLS.has(lower)) return 'retrieval';
+  return 'other';
+}
+
+/**
+ * Walk the transcript's tool calls in order, resolving every path they name
+ * against the cwd in force at that point.
+ *
+ * `untracked` is set the moment a `cd` cannot be evaluated. Everything after such
+ * a `cd` is anchored to a cwd we know to be wrong, so the caller throws the whole
+ * structured result away rather than reporting half of it — a half-tracked walk
+ * is exactly the "quietly wrong measurement" this module exists to prevent.
+ */
+function walkToolReaches(
+  parsed: ParsedTranscript,
+  startCwd: string,
+): { reaches: PathReach[]; untracked?: BaselineScanDegradation } {
+  const reaches: PathReach[] = [];
+  let cwd = startCwd;
+
+  for (const use of parsed.toolUses) {
+    if (use.command !== undefined) {
+      const walked = walkBashCommand(use.command, cwd);
+      reaches.push(...walked.reaches);
+      cwd = walked.cwd;
+      if (walked.untracked !== undefined) return { reaches, untracked: walked.untracked };
+      continue;
+    }
+    reaches.push(...structuredToolReaches(use.name, use.input, cwd));
+  }
+  return { reaches };
+}
+
+/**
+ * Paths named by a NON-Bash tool call.
+ *
+ * Every string leaf of the input is considered, rather than a per-tool list of
+ * "the field that holds the path": the tool surface is the vendor's and changes
+ * without notice, and a detector that only knows `Read.file_path` goes silently
+ * blind the day a tool renames it. {@link isPathCandidate} is what keeps that
+ * cheap — a leaf with no separator in it is not a path and is skipped.
+ */
+function structuredToolReaches(name: string, input: unknown, cwd: string): PathReach[] {
+  const intent = toolIntent(name);
+  const text = renderToolInput(input);
+  const reaches: PathReach[] = [];
+  for (const leaf of stringLeaves(input)) {
+    if (!isPathCandidate(leaf)) continue;
+    const resolved = resolvePathToken(leaf, cwd);
+    if (resolved === undefined) continue;
+    const index = text.indexOf(leaf);
+    reaches.push({
+      resolved,
+      intent,
+      text,
+      index: index === -1 ? 0 : index,
+      length: index === -1 ? text.length : leaf.length,
+    });
+  }
+  return reaches;
+}
+
+/** Every string in a tool input, however deeply nested. Bounded by the input itself. */
+function stringLeaves(value: unknown): string[] {
+  if (typeof value === 'string') return [value];
+  if (Array.isArray(value)) return value.flatMap((v) => stringLeaves(v));
+  if (value !== null && typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>).flatMap((v) => stringLeaves(v));
+  }
+  return [];
+}
+
+/* ────────────────────────── shell reading ────────────────────────── */
+
+/**
+ * Shell control operators, LONGEST FIRST so `&&` is never read as two `&` and
+ * `>>` is never read as two `>`.
+ *
+ * The first six end a command; `<`, `>` and `>>` only end a WORD, because their
+ * operand belongs to the command that owns them (`sort < ../../skill/notes.md`
+ * reaches through a redirect, not through a new command).
+ */
+const SHELL_OPERATORS = ['&&', '||', '>>', ';', '|', '&', '<', '>', '\n'] as const;
+const SEGMENT_OPERATORS = new Set(['&&', '||', ';', '|', '&', '\n']);
+const INPUT_REDIRECT = '<';
+
+/**
+ * Characters a backslash may escape.
+ *
+ * Deliberately a SET rather than "the next character, whatever it is": a Windows
+ * path (`C:\repo\dist\summary.mjs`) is a perfectly ordinary token in a transcript,
+ * and an unconditional escape rule eats its separators and leaves
+ * `c:repodistsummary.mjs` — which matches no needle and reports clean. The
+ * members here are the ones a shell actually needs escaped, and `\ ` is the one
+ * that matters: `/Users/dev/My\ Projects/…` is a single path token.
+ */
+const SHELL_ESCAPABLE = new Set([' ', '\t', '"', "'", '\\', '$', '&', '|', ';', '(', ')', '<', '>', '*', '?', '`']);
+
+interface ShellToken {
+  /** The token with quoting and escapes resolved. */
+  text: string;
+  /** Index of the token in the ORIGINAL command, so an excerpt quotes what was typed. */
+  index: number;
+  /** Length in the ORIGINAL command, quotes included. */
+  length: number;
+  /** True for a control operator rather than a word. */
+  operator: boolean;
+}
+
+function matchOperator(command: string, at: number): string | undefined {
+  return SHELL_OPERATORS.find((op) => command.startsWith(op, at));
+}
+
+/**
+ * Read one shell WORD, honouring `'…'`, `"…"` and backslash escapes.
+ *
+ * Quote-awareness is not cosmetic. `PATH_TOKEN_CHARS` — the flat scan's way of
+ * finding a path — excludes space, so it truncated `python3 "/Users/dev/My
+ * Projects/skill/scripts/csvsum.py"` at the last segment, left the token with no
+ * root, and reported CLEAN. The same held for
+ * `~/Library/Application Support/claude/plugins/…`, which is the standard macOS
+ * spelling of the installed-plugin cache this detector mainly exists to catch.
+ */
+function readShellWord(command: string, start: number): ShellToken {
+  let text = '';
+  let i = start;
+  while (i < command.length) {
+    const ch = command.charAt(i);
+    if (ch === ' ' || ch === '\t' || ch === '\r') break;
+    if (matchOperator(command, i) !== undefined) break;
+    if (ch === "'" || ch === '"') {
+      const close = command.indexOf(ch, i + 1);
+      if (close === -1) {
+        text += command.slice(i + 1);
+        i = command.length;
+        break;
+      }
+      text += command.slice(i + 1, close);
+      i = close + 1;
+      continue;
+    }
+    if (ch === '\\' && SHELL_ESCAPABLE.has(command.charAt(i + 1))) {
+      text += command.charAt(i + 1);
+      i += 2;
+      continue;
+    }
+    text += ch;
+    i += 1;
+  }
+  return { text, index: start, length: i - start, operator: false };
+}
+
+function tokenizeShell(command: string): ShellToken[] {
+  const tokens: ShellToken[] = [];
+  let i = 0;
+  while (i < command.length) {
+    const ch = command.charAt(i);
+    if (ch === ' ' || ch === '\t' || ch === '\r') {
+      i += 1;
+      continue;
+    }
+    const operator = matchOperator(command, i);
+    if (operator !== undefined) {
+      tokens.push({ text: operator, index: i, length: operator.length, operator: true });
+      i += operator.length;
+      continue;
+    }
+    const word = readShellWord(command, i);
+    tokens.push(word);
+    // A zero-length word would spin forever; it cannot happen (the operator and
+    // whitespace branches above consume every character that would produce one),
+    // so this is a guard on the invariant rather than a case.
+    i = word.length === 0 ? i + 1 : word.index + word.length;
+  }
+  return tokens;
+}
+
+/** Split a tokenized command at the operators that END a command. */
+function shellSegments(tokens: readonly ShellToken[]): ShellToken[][] {
+  const segments: ShellToken[][] = [[]];
+  for (const token of tokens) {
+    if (token.operator && SEGMENT_OPERATORS.has(token.text)) {
+      segments.push([]);
+      continue;
+    }
+    segments.at(-1)?.push(token);
+  }
+  return segments.filter((s) => s.length > 0);
+}
+
+/* ────────────────────────── intent ────────────────────────── */
+
+/**
+ * Commands that CONSUME a file's content. An interpreter is here because running
+ * a script is the strongest possible form of reading it.
+ */
+const RETRIEVAL_COMMANDS = new Set([
+  'cat', 'head', 'tail', 'less', 'more', 'bat', 'nl', 'xxd', 'od', 'strings', 'tac', 'rev',
+  'source', '.',
+  'grep', 'rg', 'egrep', 'fgrep', 'ack', 'ag',
+  'awk', 'sed', 'jq', 'yq', 'cut', 'tr', 'sort', 'uniq', 'wc',
+  'python', 'python3', 'node', 'bun', 'deno', 'bash', 'sh', 'zsh', 'ruby', 'perl', 'php', 'osascript',
+  'cp', 'mv', 'rsync', 'install', 'tar', 'unzip', 'gunzip', 'zcat',
+  'diff', 'cmp', 'md5', 'md5sum', 'sha1sum', 'sha256sum', 'shasum',
+  'open', 'code', 'vim', 'vi', 'nano', 'emacs',
+]);
+
+/**
+ * Commands that only produce NAMES. Their input paths still count as a reach —
+ * `find ../../vat-skill-test` chose vat's staged tree as its search root, which
+ * the arm could only do by going looking — but their OUTPUT is never scanned, and
+ * they can never be evidence that a declared executable RAN.
+ */
+const ENUMERATION_COMMANDS = new Set([
+  'ls', 'dir', 'find', 'tree', 'fd', 'du', 'df', 'stat', 'file',
+  'basename', 'dirname', 'realpath', 'readlink', 'pwd', 'which', 'type', 'test', '[',
+]);
+
+/** Words that prefix a command without being it. */
+const COMMAND_PREFIXES = new Set(['sudo', 'time', 'nohup', 'exec', 'command', 'builtin', 'nice', 'xargs']);
+
+/**
+ * The last `/`- or `\`-separated segment of a token.
+ *
+ * Both separators, and no `basename()`: the input here is a raw shell token that
+ * may carry EITHER platform's separator regardless of the platform we are running
+ * on (a Windows path can appear in a transcript captured anywhere), which is the
+ * one case `node:path` cannot answer.
+ */
+function basenameOf(token: string): string {
+  const at = Math.max(token.lastIndexOf('/'), token.lastIndexOf('\\'));
+  return at === -1 ? token : token.slice(at + 1);
+}
+
+/**
+ * The command a segment actually runs, skipping `VAR=value` prefixes and wrappers
+ * like `sudo`. Returns the head token too, because `./scripts/run.sh` is both the
+ * command AND a path reach into whatever it points at.
+ */
+function segmentHead(words: readonly ShellToken[]): { head: string; headToken?: ShellToken; args: ShellToken[] } {
+  for (const [index, token] of words.entries()) {
+    if (/^[A-Za-z_]\w*=/.test(token.text)) continue;
+    const base = basenameOf(token.text).toLowerCase();
+    if (COMMAND_PREFIXES.has(base)) continue;
+    return { head: base, headToken: token, args: words.slice(index + 1) };
+  }
+  return { head: '', args: [] };
+}
+
+function commandIntent(head: string, headToken: ShellToken | undefined, words: readonly ShellToken[]): ToolIntent {
+  if (ENUMERATION_COMMANDS.has(head)) return 'enumeration';
+  if (RETRIEVAL_COMMANDS.has(head)) return 'retrieval';
+  // `< file` feeds a file's CONTENT to whatever runs, whether or not we recognise
+  // the command — so the redirect decides the intent when the command name did not.
+  if (words.some((t) => t.operator && t.text === INPUT_REDIRECT)) return 'retrieval';
+  // `./tool` or `/opt/bin/tool`: executing a file by path is retrieval regardless
+  // of what it is called, and this is the branch that covers a skill's own bundled
+  // script invoked directly rather than through an interpreter.
+  if (headToken !== undefined && isPathCandidate(headToken.text)) return 'retrieval';
+  return 'other';
+}
+
+/* ────────────────────────── path resolution ────────────────────────── */
+
+/**
+ * Is this token worth resolving as a path at all?
+ *
+ * A BARE WORD IS NOT A PATH, and that rule is load-bearing in both directions.
+ * Without it `grep -rn vat-skill-test src` — vat dogfooded on its own checkout,
+ * where ~10 tracked files carry the literal — resolves `vat-skill-test` against
+ * the cwd and stamps the run contaminated. With it, the only cost is a reach into
+ * the arm's OWN cwd by bare filename, which is not evidence of anything.
+ */
+function isPathCandidate(word: string): boolean {
+  if (word === '') return false;
+  // A `--flag` with a separator in it (`--out=/tmp/x`) still names a path; one
+  // without (`-maxdepth`, `-type`) never does.
+  if (/^-{1,2}[A-Za-z]/.test(word) && !word.includes('/') && !word.includes('\\')) return false;
+  return (
+    word.includes('/') ||
+    word.includes('\\') ||
+    word.startsWith('~') ||
+    /^\$\w/.test(word) ||
+    /^[A-Za-z]:$/.test(word)
+  );
+}
+
+/** `scheme://` on the RAW token — {@link normalizeForMatch} collapses the `//` away. */
+const URI_SCHEME = /^[A-Za-z][\w+.-]*:\/\//;
+
+/**
+ * Fold `.` and `..` out of an already-normalized path.
+ *
+ * `..` beyond the root is clamped rather than escaping, which is what a real
+ * filesystem does, and what makes `cd ../../../../..` from a temp workspace land
+ * at `/` instead of producing a token no needle can match.
+ *
+ * Splitting on `/` is safe here for the same reason it is in
+ * {@link normalizedSegments}: the input has already been through
+ * {@link normalizeForMatch}, which folded every `\` away. A `basename()` would
+ * reintroduce the platform separator the normalizer just removed.
+ */
+function normalizeDotSegments(normalized: string): string {
+  const absolute = normalized.startsWith('/');
+  const out: string[] = [];
+  for (const segment of normalized.split('/')) {
+    if (segment === '' || segment === '.') continue;
+    if (segment === '..') {
+      if (out.length > 0 && out.at(-1) !== '..') out.pop();
+      continue;
+    }
+    out.push(segment);
+  }
+  return (absolute ? '/' : '') + out.join('/');
+}
+
+/**
+ * Resolve one token to a comparable absolute path, or `undefined` when it is not
+ * a filesystem path at all.
+ *
+ * A `~`- or `$VAR`-rooted token is returned AS WRITTEN. We cannot expand it, and
+ * we must not: pretending `~/x` is relative would resolve it inside the arm's own
+ * workspace and suppress exactly the installed-plugin-cache reach this detector
+ * exists for. Left unexpanded it is not under the arm's workspace, so it reads as
+ * an escape — the conservative direction.
+ */
+function resolvePathToken(token: string, cwd: string): string | undefined {
+  if (URI_SCHEME.test(token)) return undefined;
+  const normalized = normalizeForMatch(token);
+  if (normalized === '') return undefined;
+  if (normalized.startsWith('~') || normalized.startsWith('$')) return normalized;
+  if (normalized.startsWith('/') || /^[a-z]:\//.test(normalized)) return normalizeDotSegments(normalized);
+  return normalizeDotSegments(`${cwd}/${normalized}`);
+}
+
+/* ────────────────────────── the Bash walk ────────────────────────── */
+
+/** A `cd` argument we cannot evaluate — everything after it is anchored to a lie. */
+function untrackableCd(target: string | undefined): boolean {
+  if (target === undefined || target === '' || target === '-') return true;
+  return target.includes('$') || target.includes('`');
+}
+
+function firstOperand(args: readonly ShellToken[]): ShellToken | undefined {
+  return args.find((t) => !t.operator && !/^-{1,2}[A-Za-z]/.test(t.text));
+}
+
+/**
+ * Walk ONE Bash command: collect the paths its segments name and carry the cwd
+ * forward across them.
+ *
+ * Carrying cwd ACROSS calls (the caller's job) and across `&&` within one call
+ * (this function's) is the entire fix for defect (a). The Bash tool keeps its
+ * working directory between invocations, so a `cd` in call 3 governs call 9.
+ */
+function walkBashCommand(
+  command: string,
+  startCwd: string,
+): { reaches: PathReach[]; cwd: string; untracked?: BaselineScanDegradation } {
+  const reaches: PathReach[] = [];
+  let cwd = startCwd;
+
+  for (const segment of shellSegments(tokenizeShell(command))) {
+    const { head, headToken, args } = segmentHead(segment);
+    if (head === 'cd') {
+      const target = firstOperand(args);
+      if (untrackableCd(target?.text)) return { reaches, cwd, untracked: untrackedCd(target?.text) };
+      const moved = cdReach(target, cwd, command);
+      if (moved !== undefined) {
+        reaches.push(moved);
+        cwd = moved.resolved;
+      }
+      continue;
+    }
+    const candidates = headToken === undefined ? args : [headToken, ...args];
+    reaches.push(...segmentReaches(candidates, commandIntent(head, headToken, segment), cwd, command));
+  }
+  return { reaches, cwd };
+}
+
+/**
+ * Where a `cd` landed, as a reach in its own right.
+ *
+ * A `cd` argument is ALWAYS resolved, even when it is a BARE NAME that
+ * {@link isPathCandidate} would reject everywhere else — `cd vat-skill-test`
+ * after `cd ../../..` is precisely the step the flat scan could not see, and
+ * skipping it would leave the cwd stale and the rest of the walk anchored wrong.
+ * The rejection rule exists to stop a `grep` PATTERN being read as a path; a `cd`
+ * operand is never a pattern.
+ *
+ * The target is reported as a reach because navigating INTO vat's staged tree is
+ * not orientation, whatever the arm does once it is there.
+ */
+function cdReach(target: ShellToken | undefined, cwd: string, command: string): PathReach | undefined {
+  if (target === undefined) return undefined;
+  const resolved = resolvePathToken(target.text, cwd);
+  if (resolved === undefined) return undefined;
+  return { resolved, intent: 'other', text: command, index: target.index, length: target.length };
+}
+
+function untrackedCd(target: string | undefined): BaselineScanDegradation {
+  const spelled = `cd ${target ?? ''}`;
+  return {
+    reason: 'cwd-untracked',
+    detail: `could not evaluate "${spelled}" — every later relative path is unanchored`,
+  };
+}
+
+/** Every path one segment's words name, resolved against the cwd in force there. */
+function segmentReaches(
+  words: ReadonlyArray<ShellToken | undefined>,
+  intent: ToolIntent,
+  cwd: string,
+  command: string,
+): PathReach[] {
+  const reaches: PathReach[] = [];
+  for (const word of words) {
+    if (word === undefined || word.operator || !isPathCandidate(word.text)) continue;
+    const resolved = resolvePathToken(word.text, cwd);
+    if (resolved === undefined) continue;
+    reaches.push({ resolved, intent, text: command, index: word.index, length: word.length });
+  }
+  return reaches;
+}
+
+/* ────────────────────────── assembling the verdict ────────────────────────── */
+
+/** The stem of a path's basename, extension stripped — `bucket-map.mjs` → `bucket-map`. */
+function executableStem(resolved: string): { base: string; stem: string } {
+  const base = basenameOf(resolved);
+  const dot = base.lastIndexOf('.');
+  return { base, stem: dot > 0 ? base.slice(0, dot) : base };
+}
+
+/**
+ * Does this resolved path lie OUTSIDE the arm's own workspace?
+ *
+ * In the structured scan this is the whole of the question the old
+ * {@link reachEscapesOwnWorkspace} answered by inspecting the token's shape: the
+ * path is already absolute, so containment is a prefix test and nothing else. The
+ * shape-inspection version survives only in the degraded flat fallback, where
+ * there is no cwd to resolve against.
+ */
+function pathEscapesWorkspace(resolved: string, armWorkspaceDir: string): boolean {
+  if (armWorkspaceDir === '') return true;
+  return resolved !== armWorkspaceDir && !resolved.startsWith(`${armWorkspaceDir}/`);
+}
+
+function structuredExecutableHits(
   input: DetectBaselineContaminationInput,
+  reaches: readonly PathReach[],
+  armWorkspaceDir: string,
+  claimed: ReadonlySet<string>,
 ): BaselineContaminationHit[] {
   const hits: BaselineContaminationHit[] = [];
-  const haystack = normalizeForMatch(input.transcript);
-
-  // First needle wins, per group: every needle set runs longest-first, so one
-  // reach is reported once, at the most specific spelling that matched.
-  //
-  // Harness needles = full root, its last two segments, VAT's own dir name.
-  const harnessMatch = firstNeedleHit(haystack, harnessNeedles(input.harnessRoot), KIND_HARNESS_PATH);
-  if (harnessMatch !== undefined) hits.push(harnessMatch);
-
-  // The other arm's working directory. Reported independently of the harness
-  // needles above: a reach here contains no harness path at all, which is exactly
-  // why the four-channel audit and the harness-path detector both missed it.
-  const siblingMatch = firstNeedleHit(haystack, siblingArmNeedles(input.siblingArmDir ?? ''), KIND_SIBLING_ARM);
-  if (siblingMatch !== undefined) hits.push(siblingMatch);
-
-  // VAT's private tmp dirs, scanned PER DIR rather than first-match-wins across
-  // all of them: reaching the answer key and reaching the grader dir are two
-  // different capabilities, and an operator triaging a contaminated run needs to
-  // see both. Within one dir the needles still run longest-first and stop.
-  for (const dir of input.vatPrivateDirs ?? []) {
-    const privateMatch = firstNeedleHit(haystack, vatPrivateDirNeedles(dir ?? ''), KIND_VAT_PRIVATE_DIR);
-    if (privateMatch !== undefined) hits.push(privateMatch);
-  }
-
-  // Content, which needs no path boundary: these needles are whole verbatim lines
-  // of prose, and there is no shorter spelling of one to guard against.
-  const contentMatch = firstContentHit(haystack, input.skillContentNeedles ?? []);
-  if (contentMatch !== undefined) hits.push(contentMatch);
-
-  const harnessHit = hits.length > 0;
-  const armDir = normalizeForMatch(input.armWorkspaceDir ?? '');
   for (const name of input.executableNames ?? []) {
     if (name.length < MIN_EXECUTABLE_NAME_LENGTH) continue;
-    // Every occurrence, not just the first: the arm's own `scripts/analyze.py`
+    const needle = normalizeForMatch(name);
+    // Every reach, not just the first: the arm's own `scripts/analyze.py`
     // routinely appears BEFORE any reach into an ambient copy, and stopping at the
-    // first match would let one benign mention hide every real one behind it.
-    const match = firstEscapingInvocation(haystack, normalizeForMatch(name), armDir);
-    if (match === undefined) continue;
-    // A declared executable found via a harness path is already reported by the
-    // hit above; recording it again would double-count one reach as two.
-    // Compare the NORMALIZED name: excerpts come from the normalized haystack,
-    // which round 3 made unconditionally lowercased. Comparing the raw declared
-    // basename against it means any name carrying a capital (`Summarize`,
-    // `ParseCSV`) never matches its own excerpt, so one reach is reported twice.
-    // This dedupe worked on macOS/Linux until the fold became unconditional —
-    // widening a normalizer requires auditing every consumer of its output.
-    if (harnessHit && hits.some(h => h.excerpt.includes(normalizeForMatch(name)))) continue;
+    // first mention would let one benign one hide every real one behind it.
+    const reach = reaches.find((r) => {
+      if (r.intent !== 'retrieval') return false;
+      const { base, stem } = executableStem(r.resolved);
+      return (base === needle || stem === needle) && pathEscapesWorkspace(r.resolved, armWorkspaceDir);
+    });
+    // A reach already reported as a harness / sibling / private-dir hit is ONE
+    // reach; reporting it again as an executable would double-count it. Deduping
+    // on the RESOLVED PATH rather than on excerpt text is what makes this
+    // case-proof — the old excerpt-substring test compared a raw declared name
+    // against an unconditionally lowercased excerpt, so any name with a capital
+    // (`Summarize`) escaped the dedupe and was reported twice.
+    if (reach === undefined || claimed.has(reach.resolved)) continue;
     hits.push({
       kind: KIND_DECLARED_EXECUTABLE,
       match: name,
-      excerpt: excerptAround(haystack, match.index, match.length),
+      excerpt: excerptAround(reach.text, reach.index, reach.length),
     });
   }
-
   return hits;
+}
+
+/** Path/dir hits from the structured walk, in the stable per-group order. */
+function structuredPathHits(
+  input: DetectBaselineContaminationInput,
+  reaches: readonly PathReach[],
+  armWorkspaceDir: string,
+): { dirHits: BaselineContaminationHit[]; executableHits: BaselineContaminationHit[] } {
+  const dirHits: BaselineContaminationHit[] = [];
+  const claimed = new Set<string>();
+  const push = (hit: BaselineContaminationHit | undefined): void => {
+    if (hit !== undefined) dirHits.push(hit);
+  };
+
+  push(firstReachHit(reaches, harnessNeedles(input.harnessRoot), KIND_HARNESS_PATH, claimed));
+  push(firstReachHit(reaches, siblingArmNeedles(input.siblingArmDir ?? ''), KIND_SIBLING_ARM, claimed));
+  // Per dir, not first-match-wins across all of them: reaching the answer key and
+  // reaching the grader dir are two different capabilities, and an operator
+  // triaging a contaminated run needs to see both.
+  for (const dir of input.vatPrivateDirs ?? []) {
+    push(firstReachHit(reaches, vatPrivateDirNeedles(dir ?? ''), KIND_VAT_PRIVATE_DIR, claimed));
+  }
+  return { dirHits, executableHits: structuredExecutableHits(input, reaches, armWorkspaceDir, claimed) };
+}
+
+/**
+ * The DEGRADED scan: the flat text match this module used to be.
+ *
+ * Kept verbatim in behaviour, not because it is right — the module docblock above
+ * lists both directions in which it is wrong — but because "no scan at all" is
+ * worse than "a scan that over- and under-reports and SAYS SO". Every caller of
+ * this path attaches a {@link BaselineScanDegradation}.
+ */
+function flatPathHits(
+  input: DetectBaselineContaminationInput,
+): { dirHits: BaselineContaminationHit[]; executableHits: BaselineContaminationHit[] } {
+  const haystack = scanHaystack(input.transcript);
+  const dirHits: BaselineContaminationHit[] = [];
+  const dirNeedles: string[] = [];
+  const push = (needles: readonly string[], kind: BaselineContaminationHit['kind']): void => {
+    const hit = firstNeedleHit(haystack, needles, kind);
+    if (hit === undefined) return;
+    dirHits.push(hit);
+    // The needle as MATCHED, not as reported: `hit.match` has been through
+    // {@link redactPathMatch} and is no longer a substring of anything.
+    dirNeedles.push(...needles);
+  };
+
+  push(harnessNeedles(input.harnessRoot), KIND_HARNESS_PATH);
+  push(siblingArmNeedles(input.siblingArmDir ?? ''), KIND_SIBLING_ARM);
+  for (const dir of input.vatPrivateDirs ?? []) {
+    push(vatPrivateDirNeedles(dir ?? ''), KIND_VAT_PRIVATE_DIR);
+  }
+
+  const armDir = normalizeForMatch(input.armWorkspaceDir ?? '');
+  const executableHits: BaselineContaminationHit[] = [];
+  for (const name of input.executableNames ?? []) {
+    if (name.length < MIN_EXECUTABLE_NAME_LENGTH) continue;
+    const match = firstEscapingInvocation(haystack.normalized, normalizeForMatch(name), armDir);
+    if (match === undefined) continue;
+    if (reachedViaReportedDir(haystack.normalized, match, dirNeedles)) continue;
+    executableHits.push({
+      kind: KIND_DECLARED_EXECUTABLE,
+      match: name,
+      excerpt: excerptIn(haystack, match.index, match.length),
+    });
+  }
+  return { dirHits, executableHits };
+}
+
+/**
+ * Was this executable invocation reached THROUGH a directory already reported?
+ *
+ * The dedupe this replaces asked a much weaker question: "does any dir hit's
+ * EXCERPT contain the executable's name?" — where the excerpt is ±60 characters of
+ * surrounding transcript, and the guard was armed by `hits.length > 0` over the
+ * sibling-arm and private-dir hits as well as the harness one. A SKILL.md line
+ * naming the script it ships sits well inside 60 characters of any path to that
+ * SKILL.md, so the normal case suppressed the second signal — and that second
+ * signal is the whole difference between "the arm READ an ambient copy" and "the
+ * arm RAN it", which is the first thing an operator triaging a contaminated run
+ * wants to know.
+ *
+ * The right question is about ONE REACH, not about proximity: the executable's own
+ * path token either contains a reported directory or it does not. `cat
+ * <root>/staged/s/scripts/csvsum.py` is one reach reported twice and is still
+ * deduped; a `csvsum` run from an ambient copy sixty characters away from an
+ * unrelated `find ../..` is two reaches and is now reported as two.
+ *
+ * Degraded-mode only. The structured scan dedupes on the RESOLVED PATH (`claimed`),
+ * which is the same question asked where the answer is exact.
+ */
+function reachedViaReportedDir(
+  haystack: string,
+  match: { index: number; length: number },
+  dirNeedles: readonly string[],
+): boolean {
+  if (dirNeedles.length === 0) return false;
+  const token = pathTokenEndingAt(haystack, match.index, match.length);
+  return dirNeedles.some((needle) => containsPathAtBoundary(token, needle));
+}
+
+/** What a scan of one skill-absent transcript produced. */
+export interface BaselineContaminationScan {
+  /**
+   * Stable order: harness path, sibling arm, vat private dirs, skill content,
+   * then declared executables in declared order. At most one per group.
+   */
+  hits: BaselineContaminationHit[];
+  /** Present only when the structured scan could not run — see the schema. */
+  degraded?: BaselineScanDegradation;
+}
+
+/**
+ * Which scan can run for this transcript, and why not the good one.
+ *
+ * Order matters: an unparseable transcript is reported as such even when
+ * `armWorkspaceDir` is also missing, because it is the more fundamental failure
+ * and the one an operator can act on (the executor did not capture stream-json).
+ */
+function scanDegradation(
+  input: DetectBaselineContaminationInput,
+  parsed: ParsedTranscript,
+): BaselineScanDegradation | undefined {
+  if (input.transcript.trim() !== '' && !transcriptDecoded(parsed)) {
+    return {
+      reason: 'transcript-unparsed',
+      detail: `${input.transcript.length} chars of transcript yielded no stream-json events`,
+    };
+  }
+  if (normalizeForMatch(input.armWorkspaceDir ?? '') === '') {
+    return {
+      reason: 'cwd-unknown',
+      detail: 'no armWorkspaceDir was supplied, so no relative path in the transcript can be anchored',
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Scan the skill-absent arm's transcript for proof it reached the skill.
+ *
+ * Pure + unit-testable. See the module-level block above {@link ToolIntent} for
+ * the architecture and for the two demonstrated defects that forced it.
+ */
+export function detectBaselineContamination(
+  input: DetectBaselineContaminationInput,
+): BaselineContaminationScan {
+  const parsed = parseStreamJsonTranscript(input.transcript);
+  // Content is scanned identically in both modes: a verbatim line of skill prose
+  // is evidence wherever it appears, and unlike a path it cannot arrive by
+  // orientation. So degradation never costs this signal anything.
+  const contentHit = firstContentHit(
+    contentHaystackFor(parsed, input.transcript),
+    input.skillContentNeedles ?? [],
+  );
+
+  const degraded = scanDegradation(input, parsed);
+  const armDir = normalizeForMatch(input.armWorkspaceDir ?? '');
+  const startCwd = normalizeForMatch(input.armCwd ?? '') || armDir;
+  const walked = degraded === undefined ? walkToolReaches(parsed, startCwd) : undefined;
+  const fellBack = degraded ?? walked?.untracked;
+
+  const { dirHits, executableHits } =
+    walked === undefined || walked.untracked !== undefined
+      ? flatPathHits(input)
+      : structuredPathHits(input, walked.reaches, armDir);
+
+  return {
+    hits: [...dirHits, ...(contentHit === undefined ? [] : [contentHit]), ...executableHits],
+    ...(fellBack === undefined ? {} : { degraded: fellBack }),
+  };
 }
 
 /**
@@ -1068,28 +2094,82 @@ function describeSignals(signals: readonly ContaminationSignal[]): string {
 }
 
 /**
+ * Everything the run-level integrity block is assembled from.
+ *
+ * An OBJECT, and every field REQUIRED — no optionals, no defaults. Each of these
+ * five is a coverage claim, and every one of them is believed in the same
+ * direction: an absent `signals` reads as "checked by nothing", an absent
+ * `degraded` reads as "every scan was structured", an absent `controlArmFailures`
+ * reads as "both arms ran". A default on any of them lets a caller overclaim
+ * silently; a required field is a compile error the day a new call site appears.
+ *
+ * `degraded` was defaulted to `[]` for exactly one release and the harness never
+ * passed it, so `baseline.json` read identically whether the contamination scan
+ * walked the transcript or fell back blind. That is the whole reason the rule is
+ * written down here rather than assumed.
+ */
+export interface SummarizeBaselineIntegrityInput {
+  /** Per-eval contamination findings; empty on a clean run. */
+  findings: readonly BaselineContamination[];
+  /** Which detectors were ARMED for this run — see {@link activeContaminationSignals}. */
+  signals: readonly ContaminationSignal[];
+  /** Evals whose two arms are not comparable — see {@link armExpectationSkew}. */
+  skew: readonly BaselineArmSkew[];
+  /** Evals whose scan fell back to flat matching — see {@link BaselineScanDegradationSchema}. */
+  degraded: readonly BaselineScanDegradation[];
+  /** Control-arm evals that never produced a grade — see {@link BaselineControlArmFailureSchema}. */
+  controlArmFailures: readonly BaselineControlArmFailure[];
+}
+
+/**
  * Assemble the run-level integrity block from every WITHOUT-arm eval's findings.
  * `findings` is empty on a clean run — the block is still emitted, with
  * `contaminated: false`, so "checked and clean" is distinguishable from
  * "never checked".
  *
- * `signals` is REQUIRED, not defaulted. A default would silently make every
- * caller's verdict claim more coverage than it had, which is the exact failure
- * this field exists to expose — and "clean" is the direction where an overclaim
- * gets believed.
+ * `comparable` is derived from `skew` ALONE, deliberately, even though a
+ * `controlArmFailures` entry also means the arms cannot be subtracted. `skew` is
+ * the single authority `computeBaselineDelta` consults, and a second input to
+ * `comparable` here would let this block say "not comparable" while the delta block
+ * beside it printed a number — the exact two-blocks-disagreeing failure this module
+ * keeps warning about. It costs nothing: a control-arm failure removes that eval's
+ * control grade entirely, and {@link armExpectationSkew} reports a one-armed eval as
+ * skew by construction, so the two always agree. See the run-harness test that pins
+ * that derivation end to end rather than trusting this sentence.
  */
-export function summarizeBaselineIntegrity(
-  findings: BaselineContamination[],
-  signals: readonly ContaminationSignal[],
-  skew: readonly BaselineArmSkew[],
-): BaselineIntegrity {
-  const base = { signals: [...signals], skew: [...skew], comparable: skew.length === 0 };
+export function summarizeBaselineIntegrity(input: SummarizeBaselineIntegrityInput): BaselineIntegrity {
+  const { findings, signals, skew, degraded, controlArmFailures } = input;
+  const base = {
+    signals: [...signals],
+    skew: [...skew],
+    comparable: skew.length === 0,
+    degraded: [...degraded],
+    controlArmFailures: [...controlArmFailures],
+  };
+  const degradedIds = degraded.map((d) => `${d.evalId ?? '?'}: ${d.reason}`).join('; ');
+  const degradedNote =
+    degraded.length === 0
+      ? ''
+      : ` ⚠️ DEGRADED SCAN: ${degraded.length} eval(s) fell back to flat text matching ` +
+        `[${degradedIds}], which both over- and under-reports. A clean verdict from a degraded ` +
+        'scan is not the same claim as a clean structured scan.';
   const skewNote =
     skew.length === 0
       ? ''
       : ` ARMS NOT COMPARABLE: ${skew.length} eval(s) [${skew.map((s) => s.evalId).join(', ')}] were graded ` +
         'against a different number of expectations on each arm, so the two summaries have different ' +
         'denominators and subtracting them is meaningless — a short-graded control reads as a skill that did nothing.';
+  // Printed BEFORE the skew note it causes: a dead control arm is also a skew
+  // entry, and an operator who reads only the skew sentence goes and audits the
+  // grader prompt for a run whose grader never got to speak.
+  const controlCauses = controlArmFailures.map((f) => `${f.evalId}: ${f.detail}`).join('; ');
+  const controlNote =
+    controlArmFailures.length === 0
+      ? ''
+      : ` CONTROL ARM DID NOT RUN: ${controlArmFailures.length} eval(s) produced no skill-absent grade — ` +
+        `${controlCauses}. ` +
+        'The treatment arm was graded and its artifacts are complete; only the comparison is missing. ' +
+        'Re-run --baseline to recover the delta — the treatment result you already paid for stands.';
 
   if (findings.length === 0) {
     return {
@@ -1098,7 +2178,9 @@ export function summarizeBaselineIntegrity(
       summary:
         'No skill-absent eval was observed reaching the skill. The A/B delta is interpretable as instruction lift ' +
         `(note: both arms still share a filesystem — this is not a capability control; ${describeSignals(signals)}).` +
-        skewNote,
+        controlNote +
+        skewNote +
+        degradedNote,
       findings: [],
     };
   }
@@ -1110,7 +2192,9 @@ export function summarizeBaselineIntegrity(
       `BASELINE CONTAMINATED: the skill-absent arm reached the skill in ${findings.length} eval(s) [${ids}]. ` +
       'The reported delta is NOT a measure of skill lift — the control arm had the treatment. ' +
       'Most likely an ambient copy of the skill in this repo\'s build output or the installed plugin cache.' +
-      skewNote,
-    findings,
+      controlNote +
+      skewNote +
+      degradedNote,
+    findings: [...findings],
   };
 }

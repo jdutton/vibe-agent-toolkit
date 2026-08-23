@@ -3,12 +3,55 @@ import { cpSync, existsSync } from 'node:fs';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
+import { sanitizeGraderText, sanitizeTextPreservingLines } from './grader-text.js';
+
 /** Raised for any eval-input problem (bad JSON, schema failure, missing input file). Maps to exit 2. */
 export class EvalInputError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'EvalInputError';
   }
+}
+
+/**
+ * Neutralize a SUITE-AUTHORED string before it is quoted into an
+ * {@link EvalInputError}, whose message reaches `process.stdout` on the
+ * `Summary:` line — the one channel deliberately kept machine-readable — and
+ * renders twice on the way there.
+ *
+ * The suite is nominally adopter-authored, but `resolveEvalSuitePath` will
+ * harvest one out of a FETCHED npm/url artifact, i.e. out of the skill under
+ * test, so treat it as untrusted. `files[]` is the sharp edge: it is
+ * `z.array(z.string().min(1))` with NO charset constraint, in deliberate
+ * contrast to `id`, which is regex-pinned precisely because it names a
+ * directory. A derived path or an OS error text built from such an entry
+ * carries the same bytes, so those are sanitized here too, not just the entry.
+ *
+ * Reuses {@link sanitizeGraderText} rather than growing a second neutralizer:
+ * the threat and the remedy (drop escape sequences whole, fold every remaining
+ * control code to a space, collapse, cap) are identical — only the source of
+ * the untrusted text differs.
+ */
+function quoteSuiteText(value: string): string {
+  return sanitizeGraderText(value);
+}
+
+/**
+ * The same neutralization for a suite-derived string that is ALREADY multi-line
+ * and whose lines carry the meaning — today, exactly one: zod's schema-failure
+ * text.
+ *
+ * That message is a list of issues, one per offending path, and every one of the
+ * paths in it is a SUITE-AUTHORED KEY (`evals[17].toolExpecations`) reaching
+ * stderr unsanitized. It cannot go through {@link quoteSuiteText}: that collapses
+ * the list onto one capped line, which is the difference between "your suite has
+ * a typo, here is where" and "your suite has a typo". Degrading the common case to
+ * neutralize the rare one is a bad trade, so the sanitizer that keeps lines is
+ * used instead. See {@link sanitizeTextPreservingLines} for why it is not the
+ * default anywhere else.
+ */
+function quoteSuiteBlock(value: string): string {
+  return sanitizeTextPreservingLines(value);
 }
 
 /**
@@ -111,7 +154,9 @@ export const EvalEntrySchema = z
       if (near !== undefined) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: `unknown eval field "${key}" — did you mean "${near}"? (other custom fields are allowed and ignored)`,
+          // `key` is a suite-authored object key with no charset constraint, and
+          // this message is surfaced through `result.error.message` below.
+          message: `unknown eval field "${quoteSuiteText(key)}" — did you mean "${near}"? (other custom fields are allowed and ignored)`,
           path: [key],
         });
       }
@@ -143,11 +188,14 @@ export function parseEvalSuite(jsonText: string): EvalSuite {
   try {
     raw = JSON.parse(jsonText);
   } catch (e) {
-    throw new EvalInputError(`evals.json is not valid JSON: ${(e as Error).message}`);
+    // V8 quotes a verbatim, unescaped slice of the offending bytes into its
+    // SyntaxError message — a suite file that is nothing but ANSI escapes would
+    // otherwise repaint the operator's terminal from vat's own error line.
+    throw new EvalInputError(`evals.json is not valid JSON: ${quoteSuiteText((e as Error).message)}`);
   }
   const result = EvalSuiteSchema.safeParse(raw);
   if (!result.success) {
-    throw new EvalInputError(`evals.json failed schema validation: ${result.error.message}`);
+    throw new EvalInputError(`evals.json failed schema validation: ${quoteSuiteBlock(result.error.message)}`);
   }
   // Compare ids as strings: each id names a working directory via String(id),
   // so a numeric `1` and a string `"1"` would collide on disk even though they
@@ -276,12 +324,15 @@ function stageEvalWorkspacesForArm(input: StageEvalWorkspacesInput, arm: EvalArm
         dest = safePath.joinUnderRoot(evalWorkspace, rel);
       } catch (err) {
         throw new EvalInputError(
-          `eval ${entry.id} declares input file "${rel}" that escapes the eval directory: ${(err as Error).message}`,
+          `eval ${entry.id} declares input file "${quoteSuiteText(rel)}" that escapes the eval directory: ` +
+            quoteSuiteText((err as Error).message),
         );
       }
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- src is contained under evalsDir via joinUnderRoot; suite is developer-authored
       if (!existsSync(src)) {
-        throw new EvalInputError(`eval ${entry.id} declares input file "${rel}" but it is absent at ${src}`);
+        throw new EvalInputError(
+          `eval ${entry.id} declares input file "${quoteSuiteText(rel)}" but it is absent at ${quoteSuiteText(src)}`,
+        );
       }
       // Copy failures (permissions, illegal filename on the host, disk) are
       // reported accurately rather than mislabeled as a containment escape.
@@ -292,7 +343,8 @@ function stageEvalWorkspacesForArm(input: StageEvalWorkspacesInput, arm: EvalArm
         cpSync(src, dest, { recursive: true });
       } catch (err) {
         throw new EvalInputError(
-          `eval ${entry.id} failed to stage input file "${rel}" into the workspace: ${(err as Error).message}`,
+          `eval ${entry.id} failed to stage input file "${quoteSuiteText(rel)}" into the workspace: ` +
+            quoteSuiteText((err as Error).message),
         );
       }
     }

@@ -44,6 +44,7 @@ describe('parseStreamJsonTranscript', () => {
         id: 'toolu_1',
         name: 'Bash',
         command: 'echo hi',
+        input: { command: 'echo hi' },
         inputSummary: JSON.stringify({ command: 'echo hi' }),
         parentToolUseId: null,
       },
@@ -106,8 +107,80 @@ describe('parseStreamJsonTranscript', () => {
     );
 
     expect(parsed.toolResults).toEqual([
-      { toolUseId: 'toolu_1', isError: true, contentSummary: JSON.stringify('boom') },
+      { toolUseId: 'toolu_1', isError: true, contentSummary: JSON.stringify('boom'), content: 'boom' },
     ]);
+  });
+
+  // The whole reason the full fields exist: the summaries are capped at 200
+  // characters, so anything that has to REASON about a call (which path did it
+  // read? did the output quote the skill?) cannot be done through them. A long
+  // path or a grep hit 200 characters in simply is not present in the summary.
+  it('keeps the FULL tool input and result alongside the 200-char summaries', () => {
+    const longPath = `/private/var/folders/${'d'.repeat(300)}/staged/s/SKILL.md`;
+    const longOutput = `${'x'.repeat(400)} the verbatim sentence lifted from the skill body`;
+    const parsed = parseStreamJsonTranscript(
+      stream(
+        {
+          type: 'assistant',
+          parent_tool_use_id: null,
+          message: {
+            content: [{ type: 'tool_use', id: 'toolu_1', name: 'Read', input: { file_path: longPath } }],
+          },
+        },
+        {
+          type: 'user',
+          parent_tool_use_id: null,
+          message: {
+            content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: longOutput }],
+          },
+        },
+      ),
+    );
+
+    expect(parsed.toolUses[0]?.input).toEqual({ file_path: longPath });
+    expect(parsed.toolUses[0]?.inputSummary, 'the summary must stay truncated').toHaveLength(200);
+    expect(parsed.toolUses[0]?.inputSummary).not.toContain('SKILL.md');
+
+    expect(parsed.toolResults[0]?.content).toBe(longOutput);
+    expect(parsed.toolResults[0]?.contentSummary).toHaveLength(200);
+    expect(parsed.toolResults[0]?.contentSummary).not.toContain('verbatim sentence');
+  });
+
+  // The array-of-blocks shape is why `content` is not just JSON.stringify: the
+  // stringified form buries the text behind escaped quotes, and a consumer
+  // scanning for a verbatim sentence would never find it.
+  it('flattens an array-of-blocks tool_result to plain text', () => {
+    const parsed = parseStreamJsonTranscript(
+      stream({
+        type: 'user',
+        parent_tool_use_id: null,
+        message: {
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'toolu_1',
+              content: [{ type: 'text', text: 'first line' }, { type: 'text', text: 'second line' }],
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(parsed.toolResults[0]?.content).toBe('first line\nsecond line');
+  });
+
+  it('renders a non-text tool_result content shape without throwing', () => {
+    const parsed = parseStreamJsonTranscript(
+      stream({
+        type: 'user',
+        parent_tool_use_id: null,
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: { rows: 3 } }],
+        },
+      }),
+    );
+
+    expect(parsed.toolResults[0]?.content).toBe(JSON.stringify({ rows: 3 }));
   });
 
   it('defaults isError to false when tool_result omits is_error', () => {

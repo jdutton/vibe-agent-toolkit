@@ -93,7 +93,16 @@ function fragmentWarnRouter(
 }
 
 export async function runGraderForEval(input: RunGraderInput): Promise<EvalFragment> {
-  mkdirSyncReal(input.graderOutDir, { recursive: true });
+  // 0700, like every other vat-only directory this codebase creates (the grader
+  // root in `resolveGraderOutDir`, the workspaces root and every eval workspace in
+  // `stageEvalWorkspaces`). This is the per-ARM subdirectory of an already-0700
+  // parent, so nothing is exposed today — traversal into it is blocked one level
+  // up. It is made explicit because the rule is only worth anything while it is
+  // uniform: an unmoded `mkdir` here is the one place a reader would have to prove
+  // the parent's mode to know the fragment (which echoes the run's integrity nonce)
+  // is unreadable, and the day this dir is created somewhere else that proof is
+  // gone. Fragments are consumed-on-read anyway; this is the resting-state half.
+  mkdirSyncReal(input.graderOutDir, { recursive: true, mode: 0o700 });
 
   // evalId is validated `[A-Za-z0-9_-]+` upstream (eval-inputs.ts) so a plain
   // join is safe, but `joinUnderRoot` is used defensively — it costs nothing
@@ -113,10 +122,14 @@ export async function runGraderForEval(input: RunGraderInput): Promise<EvalFragm
   });
   // Defense-in-depth (parity with eval-executor.ts's build→assert→use pattern):
   // re-verify the built grader prompt still carries its required invariants
-  // (STOP, fragment path, browser/iteration forbids, nonce directive) before
-  // spawning, so a regressed buildGraderPrompt is caught here, not by a grader
-  // that silently misbehaves.
-  assertGraderPromptInvariants(prompt, input.transcript);
+  // (STOP, fragment path, browser/iteration forbids, nonce directive, and the
+  // untrusted-data fences) before spawning, so a regressed buildGraderPrompt is
+  // caught here, not by a grader that silently misbehaves. The nonce is handed
+  // over so the assertion can cut out every fenced region — transcript, subject
+  // manifest, and the suite's own expectations/expected_output — and none of
+  // that attacker-controlled text can satisfy an invariant on the builder's
+  // behalf.
+  assertGraderPromptInvariants(prompt, input.nonce);
 
   const spawn = input.spawn ?? spawnHeadlessClaude;
 
@@ -189,6 +202,7 @@ export async function runGraderForEval(input: RunGraderInput): Promise<EvalFragm
     );
   }
 
+  assertExpectationCountDeclared(input.evalId, input.expectations, fragment.expectations);
   assertToolVerdictConsistent(input.evalId, input.toolExpectations, fragment.tool);
 
   // The grader's only input is the executor transcript, which untrusted skill code
@@ -228,8 +242,17 @@ function readAndConsumeFragmentFile(fragmentOut: string, evalId: string, status:
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- fragmentOut is our own derived path (joinUnderRoot-guarded)
     raw = JSON.parse(readFileSync(fragmentOut, 'utf-8'));
   } catch (err) {
+    // V8 embeds a VERBATIM slice of the offending bytes in its SyntaxError
+    // message, unescaped — and this is one of the few grader-controlled strings
+    // that reaches an operator WITHOUT passing `parseEvalFragment`, the
+    // documented text boundary, because the parse it would have gone through is
+    // the one that just failed. The CLI writes it as `Error: ${err.message}`, so
+    // an unsanitized fragment of `ESC[2K CR ESC[32m…` wipes the line vat just
+    // printed and continues in vat's own colour (and a <=16-byte file gets its
+    // whole `ESC[2J ESC[H` echoed, clearing the screen).
     throw new EvalFragmentError(
-      `grader fragment for eval "${evalId}" at ${fragmentOut} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+      `grader fragment for eval "${evalId}" at ${fragmentOut} is not valid JSON: ` +
+        sanitizeGraderText(err instanceof Error ? err.message : String(err)),
     );
   }
   try {
@@ -239,6 +262,63 @@ function readAndConsumeFragmentFile(fragmentOut: string, evalId: string, status:
     // Swallow: cleanup removes the grader dir regardless.
   }
   return raw;
+}
+
+/**
+ * The OUTPUT channel's declared-vs-reported check — the exact thing
+ * {@link assertToolCheckNamesDeclared} does for the TOOL channel, applied to the
+ * channel every reported number is computed from.
+ *
+ * Each arm's `summary`, the pass/fail verdict `reconcileGrading` produces, and
+ * the `--baseline` delta between the arms are all computed over
+ * `fragment.expectations` — i.e. over however many entries the grader chose to
+ * write. The prompt ASKS for "one per expectation above" and, until this check,
+ * nothing verified it:
+ *
+ * - **Omission laundered a pass, on EVERY run.** A grader that skips a FAILING
+ *   expectation leaves a fragment where the survivors all passed, so
+ *   `reconcileGrading` reports `allPassed: true` and the run exits 0.
+ * - **Invention inflated the delta.** A suite declaring 1 expectation whose two
+ *   graders each emit 3 of their own yields `Baseline delta: +3` where the
+ *   maximum legal lift is +1.
+ *
+ * The existing `armExpectationSkew` cannot see either: it compares the two ARMS
+ * to each other, and both graders receive the same declared list from the same
+ * template, so they drift together and parity holds while a confident wrong
+ * number prints.
+ *
+ * COUNT, not text. The grader is asked to echo each expectation's `text`, but it
+ * routinely reworks the wording, and a reworded text is not a wrong verdict —
+ * whereas a missing or extra ENTRY always is, because the entry is the unit
+ * every score counts.
+ *
+ * Fail-closed like its siblings below: this is vat's own grading infrastructure
+ * failing its one job, not adopter data being audited.
+ *
+ * FAIL-CLOSED IS NOT FAIL-THE-RUN, and the distinction is the caller's to make, not
+ * this function's. Throwing here is unconditional and stays that way: a fragment
+ * whose entry count does not match the declaration is not a verdict, and returning
+ * it "leniently" for the control arm would put an unchecked number straight into the
+ * delta — which is the hole this check was added to close. What changed is where the
+ * throw lands. `runEvalWorker` (run-harness.ts) catches a CONTROL-arm throw, records
+ * it as a control-arm failure, and lets the run finish; a TREATMENT-arm throw still
+ * propagates and fails the run. So a control-arm grader miscount now withholds the
+ * delta as `null` with the reason attached, instead of destroying fully-billed
+ * treatment work that was never in doubt. Do not soften this assert to get that
+ * behaviour — it is already there, one level up, where the arm is known.
+ */
+function assertExpectationCountDeclared(
+  evalId: string,
+  declared: readonly string[],
+  reported: EvalFragment['expectations'],
+): void {
+  if (reported.length === declared.length) return;
+  throw new InternalHarnessError(
+    `Grader for eval "${evalId}" returned ${reported.length} expectation entr${reported.length === 1 ? 'y' : 'ies'} ` +
+      `for an eval that declares ${declared.length}. Every score vat reports — each arm's summary and the ` +
+      `--baseline delta between them — is computed over the entries the grader emitted, so an invented or ` +
+      `omitted entry silently changes it.`,
+  );
 }
 
 /**

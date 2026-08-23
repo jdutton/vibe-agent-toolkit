@@ -25,6 +25,7 @@ import { DuplicateStagedSkillError, SkillTestExitCode } from '../../src/skill-te
 import type { FrictionItem } from '../../src/skill-test/friction-schema.js';
 import type { GradingVerdict } from '../../src/skill-test/grading-adapter.js';
 import {
+  assertVatWroteArtifacts,
   buildDryRunSummary,
   buildEvalWorkItems,
   buildFlagParseProbe,
@@ -38,6 +39,7 @@ import {
   computeCompositeVerdict,
   detectItemPluginLayout,
   FLAG_PROBE_SENTINEL,
+  formatBaselineReport,
   formatFrictionReport,
   formatRunCostSuffix,
   helpTextDeclaresFlag,
@@ -313,7 +315,26 @@ describe('withoutGraderContamination', () => {
     expect(cleaned.evalId).toBe('e1');
   });
 
-  it('leaves a fragment without the field untouched', () => {
+  /**
+   * `degraded` is the second VAT-attached field, and its INVENTION direction is what
+   * this strip covers: VAT spreads its own value last, so a grader cannot re-hide a
+   * degradation VAT detected — but a grader that invents one stamps a blind-scan
+   * warning on a run that scanned properly, and an operator who learns to ignore that
+   * warning stops reading the real ones.
+   */
+  it('drops a `degraded` field the grader emitted', () => {
+    const forged = {
+      ...makeFragment('e1', 'without'),
+      degraded: { reason: 'transcript-unparsed', detail: 'ATTACKER-CHOSEN', evalId: 'e1' },
+    } as unknown as EvalFragment;
+
+    const cleaned = withoutGraderContamination(forged);
+
+    expect(cleaned).not.toHaveProperty('degraded');
+    expect(cleaned.evalId).toBe('e1');
+  });
+
+  it('leaves a fragment without either field untouched', () => {
     const fragment = makeFragment('e1', 'without');
     expect(withoutGraderContamination(fragment)).toEqual(fragment);
   });
@@ -358,9 +379,13 @@ describe('resolveHarnessLocation', () => {
       .toThrow(/mutually exclusive/);
   });
 
+  // Derive the expectation rather than spelling it: `resolveHarnessLocation`
+  // resolves --out, and a POSIX-absolute literal is NOT absolute on Windows —
+  // `safePath.resolve('/o')` picks up the current drive there, so a hardcoded
+  // '/o' is a macOS/Linux-only assertion that reds the Windows leg only.
   it('treats an explicit --out as user-owned (never auto-removed)', () => {
     const { harnessRoot, harnessCreated } = resolveHarnessLocation({ subject: 'demo', out: '/o' });
-    expect(harnessRoot).toBe('/o');
+    expect(harnessRoot).toBe(safePath.resolve('/o'));
     expect(harnessCreated).toBe(false);
   });
 
@@ -464,6 +489,142 @@ describe('resolveArtifactPaths + wipeStaleArtifacts', () => {
     expect(existsSync(paths.baselineOut)).toBe(false);
     // Idempotent: wiping already-absent artifacts must not throw.
     expect(() => wipeStaleArtifacts(paths)).not.toThrow();
+  });
+});
+
+/**
+ * The post-merge fail-closed gate. vat is the SOLE writer of `results/`, so a
+ * missing or invalid artifact here is a HARNESS bug — and `baseline.json` was
+ * EXEMPT from that reasoning for as long as the gate existed, despite being the
+ * only durable record of the thing `--baseline` sells, on a branch that has already
+ * been bitten once by a default run deleting `results/`.
+ */
+const EMPTY_GRADING = { summary: { passed: 0, total: 0 }, expectations: [] };
+const EMPTY_DELTA = {
+  with: { passed: 0, total: 0 },
+  without: { passed: 0, total: 0 },
+  delta: 0,
+  perEval: [],
+  controlArmFailures: [],
+  truncated: null,
+};
+const CLEAN_INTEGRITY = {
+  contaminated: false,
+  degraded: [],
+  comparable: true,
+  skew: [],
+  controlArmFailures: [],
+  summary: 'nothing was observed',
+  signals: [],
+  findings: [],
+};
+
+/** Write the three artifacts every run produces, plus whatever `baseline` says. */
+function writeArtifacts(
+  resultsDir: string,
+  baseline?: Record<string, unknown>,
+): ReturnType<typeof resolveArtifactPaths> {
+  const paths = resolveArtifactPaths(resultsDir);
+  writeFileSync(paths.gradingOut, JSON.stringify(EMPTY_GRADING), 'utf-8');
+  writeFileSync(paths.frictionOut, JSON.stringify({ items: [] }), 'utf-8');
+  writeFileSync(paths.toolEvalOut, JSON.stringify({ evals: [] }), 'utf-8');
+  if (baseline !== undefined) writeFileSync(paths.baselineOut, JSON.stringify(baseline), 'utf-8');
+  return paths;
+}
+
+describe('assertVatWroteArtifacts', () => {
+  const { getTempDir } = setupTempDir('vat-artifact-gate-');
+
+  it('does not ask about baseline.json on a run that never requested one', () => {
+    expect(() => assertVatWroteArtifacts(writeArtifacts(getTempDir()), false)).not.toThrow();
+  });
+
+  // Fail-CLOSED means the absence is the failure. An "if it exists, check it" gate
+  // would pass on exactly the case that matters: vat asked for a baseline and wrote
+  // nothing.
+  it('fails a baseline run whose baseline.json is missing', () => {
+    expect(() => assertVatWroteArtifacts(writeArtifacts(getTempDir()), true)).toThrow(/baseline\.json/);
+  });
+
+  it('accepts a well-formed baseline.json', () => {
+    const paths = writeArtifacts(getTempDir(), {
+      ...EMPTY_GRADING,
+      baselineIntegrity: CLEAN_INTEGRITY,
+      baselineDelta: EMPTY_DELTA,
+    });
+    expect(() => assertVatWroteArtifacts(paths, true)).not.toThrow();
+  });
+
+  // The gate is only worth adding because it validates the two blocks, which is
+  // where a merge bug shows up. A `9/3` arm total or a delta that is not the
+  // difference between the arms now stops the run instead of being written down.
+  it.each([
+    // The arithmetic stays consistent (9 − 0 = 9) so this row is rejected ONLY by
+    // `passed <= total`; leaving `delta` at 0 would have been caught by the
+    // arithmetic refine instead and this row would prove nothing about the other.
+    ['an arm total above its own denominator', { ...EMPTY_DELTA, with: { passed: 9, total: 3 }, delta: 9 }],
+    ['a delta that is not the difference between the arms', { ...EMPTY_DELTA, delta: 7 }],
+  ])('fails a baseline.json carrying %s', (_label, baselineDelta) => {
+    const paths = writeArtifacts(getTempDir(), {
+      ...EMPTY_GRADING,
+      baselineIntegrity: CLEAN_INTEGRITY,
+      baselineDelta,
+    });
+    expect(() => assertVatWroteArtifacts(paths, true)).toThrow(/baseline\.json.*schema/s);
+  });
+
+  // An absent `baselineIntegrity` is precisely the "written before the check
+  // existed" state the block was made unconditional to rule out.
+  it('fails a baseline.json with no integrity block at all', () => {
+    const paths = writeArtifacts(getTempDir(), { ...EMPTY_GRADING, baselineDelta: EMPTY_DELTA });
+    expect(() => assertVatWroteArtifacts(paths, true)).toThrow(/baseline\.json/);
+  });
+});
+
+/**
+ * The delta line and the ⚠️ banner are RETURNED rather than written, so the
+ * orchestrator can emit packaging friction (up to 50 lines × 2000 chars ≈ 1250
+ * terminal rows) BEFORE them. Printing them at composition time put that much
+ * scrollback between the operator and the only line saying the number above is
+ * meaningless.
+ */
+describe('formatBaselineReport', () => {
+  const DELTA = {
+    with: { passed: 3, total: 3 },
+    without: { passed: 1, total: 3 },
+    delta: 2,
+    perEval: [],
+    controlArmFailures: [],
+    truncated: null,
+  };
+  const integrity = (overrides: Record<string, unknown>) => ({
+    contaminated: false,
+    degraded: [],
+    comparable: true,
+    skew: [],
+    controlArmFailures: [],
+    summary: 'THE BANNER TEXT',
+    signals: [],
+    findings: [],
+    ...overrides,
+  });
+
+  it('reports the delta alone on a clean, comparable run', () => {
+    const out = formatBaselineReport(DELTA, integrity({}));
+    expect(out).toContain('Baseline delta: +2');
+    expect(out).not.toContain('⚠️');
+  });
+
+  it.each([
+    ['a contaminated run', { contaminated: true }],
+    ['a run whose arms are not comparable', { comparable: false }],
+  ])('appends the banner for %s, and puts it LAST', (_label, overrides) => {
+    const out = formatBaselineReport(DELTA, integrity(overrides));
+    expect(out).toContain('⚠️  THE BANNER TEXT');
+    // Order is the point: the number first, then the caveat that explains it —
+    // and nothing of vat's own after the caveat.
+    expect(out.indexOf('Baseline delta:')).toBeLessThan(out.indexOf('⚠️'));
+    expect(out.trimEnd().endsWith('THE BANNER TEXT')).toBe(true);
   });
 });
 
@@ -806,8 +967,10 @@ function makeDryRunInput(overrides: Partial<DryRunSummaryInput> = {}): DryRunSum
     provenanceEntryCount: 3,
     modelFlag: '--model claude-sonnet-5',
     evalCount: 2,
+    baseline: false,
     concurrency: 4,
     graderModel: 'claude-sonnet-5',
+    maxBudgetUsd: 1,
     ...overrides,
   };
 }
@@ -855,13 +1018,55 @@ describe('buildDryRunSummary', () => {
     const summary = buildDryRunSummary(
       makeDryRunInput({ modelFlag: '--model opus', evalCount: 3, concurrency: 6, graderModel: 'claude-sonnet-5' }),
     );
-    expect(summary).toContain('Would run 3 evals as executor→grader spawn pairs at concurrency 6.');
+    expect(summary).toContain('Would run 3 executor→grader spawn pairs at concurrency 6 — 6 claude sessions');
     expect(summary).toContain('Executor --model opus; grader model claude-sonnet-5');
   });
 
   it('uses singular phrasing for a single eval', () => {
     const summary = buildDryRunSummary(makeDryRunInput({ evalCount: 1 }));
-    expect(summary).toContain('Would run 1 eval as executor→grader spawn pair at concurrency');
+    expect(summary).toContain('Would run 1 executor→grader spawn pair at concurrency');
+  });
+
+  /**
+   * The ONLY pre-spend number an operator ever sees, and under `--baseline` it was
+   * wrong by exactly 2x. `--baseline` emits two work items per eval and each work
+   * item is a full executor→grader PAIR, so a 3-eval suite is 6 pairs / 12 sessions
+   * — the preview said "3".
+   *
+   * The other estimate is dead and cannot cover for this: `buildPreflightInput`
+   * hardcodes `evalCount: 1`, `renderPreflightSummary` returns only FAILING checks
+   * and is called only inside the `if (!passed)` branch, and preflight runs AFTER
+   * the dry-run short-circuit — so a passing run prints no estimate and a dry run
+   * never reaches preflight at all.
+   */
+  describe('a --baseline dry run', () => {
+    const baselineSummary = buildDryRunSummary(makeDryRunInput({ evalCount: 3, baseline: true, maxBudgetUsd: 2 }));
+
+    it.each([
+      ['doubles the pair count for the two arms', '6 executor→grader spawn pairs'],
+      ['shows the arithmetic rather than just the doubled number', '3 evals × 2 arms'],
+      ['says why there are two arms', 'with AND without the skill'],
+      ['reports the claude session count, which is twice the pairs', '12 claude sessions'],
+      ['says --max-budget-usd is PER SPAWN', '--max-budget-usd is PER SPAWN ($2)'],
+      // 6 pairs × 2 sessions each × $2 per spawn.
+      ['multiplies that ceiling out across every session', 'worst case ≈ $24.00 across those 12 sessions'],
+    ])('%s', (_label, needle) => {
+      expect(baselineSummary).toContain(needle);
+    });
+
+    // The regression in one assertion: the suite size must no longer be presented
+    // as the spawn count.
+    it('never reports the SUITE SIZE as the pair count', () => {
+      expect(baselineSummary).not.toContain('Would run 3 executor→grader spawn');
+    });
+
+    it('leaves a non-baseline run at one pair per eval, with no arm note', () => {
+      const summary = buildDryRunSummary(makeDryRunInput({ evalCount: 3, baseline: false, maxBudgetUsd: 2 }));
+
+      expect(summary).toContain('Would run 3 executor→grader spawn pairs');
+      expect(summary).toContain('6 claude sessions');
+      expect(summary).not.toContain('arms');
+    });
   });
 
   it('includes entry count and fingerprint in the manifest line', () => {
@@ -942,6 +1147,17 @@ describe('buildPreflightInput', () => {
     expect(input.authMode).toBe('api-key');
     expect(input.requireAuth).toBe('api-key');
     expect(input.costEstimate.maxBudgetUsd).toBe(2);
+  });
+
+  // `configurations` IS the A/B dimension, and it is the half of this estimate that
+  // does not need the suite (which preflight runs before parsing). The `evalCount`
+  // placeholder beside it is documented dead — see the function's own docblock.
+  it.each([
+    ['counts the two arms as two configurations under --baseline', { baseline: true }, 2],
+    ['counts one configuration without it', {}, 1],
+  ])('%s', (_label, over, expected) => {
+    const input = buildPreflightInput(evalsPath, pluginDirs, makeOpts(over), { maxBudgetUsd: 1 });
+    expect(input.costEstimate.configurations).toBe(expected);
   });
 });
 

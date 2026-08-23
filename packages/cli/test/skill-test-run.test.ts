@@ -18,6 +18,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as yaml from 'yaml';
 
 import * as pluginBuild from '../src/commands/claude/plugin/build.js';
+import { createSkillTestConfigureCommand } from '../src/commands/skill/test/configure.js';
 import {
   buildMemoKey,
   createSkillTestRunCommand,
@@ -25,6 +26,7 @@ import {
   descriptorsToRecord,
   isPathSourceTarget,
   parseWithFlags,
+  resolveBaseline,
   resolveCappedKnob,
   resolveCompanionSources,
   resolveCompanionSpec,
@@ -58,6 +60,41 @@ const SONNET_MODEL = 'claude-sonnet-5';
 /** A fresh per-call build memo (run.ts creates one per run; unit tests create their own). */
 function newBuildMemo(): BuildMemo {
   return new Set();
+}
+
+/** The baseline A/B flag and its Commander negation — asserted by several suites below. */
+const BASELINE_FLAG = '--baseline';
+const NO_BASELINE_FLAG = '--no-baseline';
+
+/** Silence + capture stderr so a one-line note is observable AND its absence assertable. */
+function spyStderr() {
+  return vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never);
+}
+
+/**
+ * Parse `--baseline`/`--no-baseline` through the REAL command. `parseOptions`
+ * populates `opts()` WITHOUT invoking the action, so no run is attempted.
+ */
+function parseBaselineFlag(argv: string[]): unknown {
+  const command = createSkillTestRunCommand();
+  command.parseOptions(['my-skill', ...argv]);
+  return command.opts().baseline;
+}
+
+/**
+ * Render the `.addHelpText('after', …)` epilogue, which `helpInformation()` alone
+ * does NOT include — it is emitted by `outputHelp()`, so the writer has to be
+ * captured. That epilogue is where the Artifacts/Model/Exit Codes prose lives.
+ */
+function renderFullHelp(command: ReturnType<typeof createSkillTestRunCommand>): string {
+  let buffer = '';
+  command.configureOutput({
+    writeOut: (s: string) => {
+      buffer += s;
+    },
+  });
+  command.outputHelp();
+  return buffer;
 }
 
 /** Write a minimal SKILL.md into a mock-built dist dir (verifyBuiltDist requires it). */
@@ -158,6 +195,8 @@ async function runAndCaptureStreams(result: {
   harnessPath: string;
   exitCode: number;
   summary: string;
+  resultsPath?: string;
+  workspacesPath?: string;
 }): Promise<{ stdoutCalls: string[]; stderrCalls: string[] }> {
   vi.spyOn(harness, 'runSkillTestHarness').mockResolvedValue(result);
   vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
@@ -284,6 +323,46 @@ describe('resolveCappedKnob (config may lower a cap but never raise it)', () => 
   });
 });
 
+// `baseline` is the LARGEST cost multiplier in the command — every eval runs twice,
+// an executor AND a grader spawn per arm — and it is the one cost knob with no cap
+// to clamp, so resolveCappedKnob's asymmetry cannot apply to it. resolveBaseline
+// applies the same threat model (a COMMITTED config rides along in an untrusted
+// subject repo) the only way a boolean allows: the config-sourced ENABLE is
+// announced rather than silent, and an explicit flag wins in BOTH directions so
+// `--no-baseline` can turn a committed `test.baseline: true` back off.
+describe('resolveBaseline (a committed config may not silently double the spend)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('returns undefined when neither flag nor config set it (harness default applies)', () => {
+    expect(resolveBaseline(undefined, undefined)).toBeUndefined();
+  });
+
+  it('announces on stderr when the CONFIG, not a flag, turned baseline on', () => {
+    const stderr = spyStderr();
+    expect(resolveBaseline(undefined, true)).toBe(true);
+    expect(stderr).toHaveBeenCalledOnce();
+    const note = String(stderr.mock.calls[0]?.[0]);
+    expect(note).toContain('committed config');
+    expect(note).toContain(NO_BASELINE_FLAG);
+  });
+
+  it('lets --no-baseline override a config that enabled it, with no note', () => {
+    const stderr = spyStderr();
+    expect(resolveBaseline(false, true)).toBe(false);
+    expect(stderr).not.toHaveBeenCalled();
+  });
+
+  it('lets --baseline win over a config that disabled it', () => {
+    expect(resolveBaseline(true, false)).toBe(true);
+  });
+
+  it('passes a config `false` through silently (it costs nothing, so nothing to announce)', () => {
+    const stderr = spyStderr();
+    expect(resolveBaseline(undefined, false)).toBe(false);
+    expect(stderr).not.toHaveBeenCalled();
+  });
+});
+
 // Asserts a usage-level flag fails preflight: runSkillTestRun rejects with the
 // preflight exit code (2, via a process.exit mock that throws) and the harness
 // is never invoked.
@@ -299,20 +378,31 @@ async function expectPreflightExit2(
   expect(harnessSpy).not.toHaveBeenCalled();
 }
 
+/**
+ * Install the standard run mocks (harness, process.exit, stdout, stderr) and hand
+ * BOTH spies back. One installation point on purpose: re-spying an already-spied
+ * method shadows the earlier spy, so a test that installs its own stderr spy around
+ * a helper that installs another records nothing and silently asserts on an empty
+ * call list.
+ */
+function installRunSpies() {
+  const harnessSpy = vi
+    .spyOn(harness, 'runSkillTestHarness')
+    .mockResolvedValue({ harnessPath: '/h', exitCode: 0, summary: 'PASS 1/1' });
+  vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+  vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as never);
+  return { harnessSpy, stderrSpy: spyStderr() };
+}
+
 // Mocks runSkillTestHarness, runs runSkillTestRun, and returns the RunHarnessOptions
 // the mock received so tests can assert env/passEnv plumbing.
 async function runAndCaptureOpts(
   subject: string,
   options: Parameters<typeof runSkillTestRun>[1],
 ): Promise<Record<string, unknown>> {
-  const spy = vi
-    .spyOn(harness, 'runSkillTestHarness')
-    .mockResolvedValue({ harnessPath: '/h', exitCode: 0, summary: 'PASS 1/1' });
-  vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
-  vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as never);
-  vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never);
+  const { harnessSpy } = installRunSpies();
   await runSkillTestRun(subject, options);
-  return spy.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
+  return harnessSpy.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
 }
 
 const ENV_TEST_SKILL = './acme-skill';
@@ -465,6 +555,39 @@ describe('vat skill test run (output routing)', () => {
     expect(stderrCalls.some((s) => s.includes('Results:'))).toBe(false);
   });
 
+  // The executor's working directories sit outside the harness root under an
+  // unguessable token, so nothing else in the output leads an operator to them.
+  // Under --keep they survive holding everything the evals produced.
+  it('names the workspaces dir on stderr when the harness reports one', async () => {
+    const { stderrCalls } = await runAndCaptureStreams({
+      // eslint-disable-next-line sonarjs/publicly-writable-directories -- test fixture path, not production code
+      harnessPath: '/tmp/h',
+      // eslint-disable-next-line sonarjs/publicly-writable-directories -- test fixture path, not production code
+      workspacesPath: '/tmp/vat-skill-test-ws-abc',
+      exitCode: 0,
+      summary: 'PASS 2/2',
+    });
+
+    expect(stderrCalls.some((s) => s.includes('Workspaces: /tmp/vat-skill-test-ws-abc'))).toBe(true);
+  });
+
+  // The other direction, and the one that regressed: on a default run (no --keep)
+  // the harness DELETES the workspaces in its own finally, before the result ever
+  // reaches this command — so it reports no path, and printing a `Workspaces:` line
+  // anyway would send the operator to a directory that no longer exists.
+  it('omits the workspaces line when the run reported no workspaces dir', async () => {
+    const { stderrCalls } = await runAndCaptureStreams({
+      // eslint-disable-next-line sonarjs/publicly-writable-directories -- test fixture path, not production code
+      harnessPath: '/tmp/h',
+      // eslint-disable-next-line sonarjs/publicly-writable-directories -- test fixture path, not production code
+      resultsPath: '/tmp/h/results',
+      exitCode: 0,
+      summary: 'PASS 2/2',
+    });
+
+    expect(stderrCalls.some((s) => s.includes('Workspaces:'))).toBe(false);
+  });
+
   it('does not write Summary: to stderr on non-zero exit', async () => {
     const { stdoutCalls, stderrCalls } = await runAndCaptureStreams({
       // eslint-disable-next-line sonarjs/publicly-writable-directories -- test fixture path, not production code
@@ -565,6 +688,27 @@ describe('vat skill test run (path target honors declared test: config — #7)',
     const opts = await runAndCaptureOpts(fx.pluginDistDir(PL), { iUnderstandThisRunsSkillCode: true });
     expect(opts.model).toBe(SONNET_MODEL);
     expect(opts.subjectScaffoldDir).toBeDefined(); // anchored at the plugin skill's source
+  });
+
+  it('a committed test.baseline: true reaches the harness, and --no-baseline turns it back off', async () => {
+    const BASELINED = 'baselined-skill';
+    const fx = setupReferenceFixture({ pool: [BASELINED], poolTest: { [BASELINED]: { baseline: true } } });
+    resetSkillDiscoveryCache();
+    const { harnessSpy, stderrSpy } = installRunSpies();
+    await runSkillTestRun(fx.poolDistDir(BASELINED), { iUnderstandThisRunsSkillCode: true });
+    expect((harnessSpy.mock.calls[0]?.[0] as unknown as Record<string, unknown>).baseline).toBe(true);
+    // ...and the doubling is ANNOUNCED, not silent — the merge must route through
+    // resolveBaseline, not a bare `??`.
+    expect(stderrSpy.mock.calls.some((c) => String(c[0]).includes('committed config'))).toBe(true);
+
+    resetSkillDiscoveryCache();
+    // `--no-baseline` reaches the action as `baseline: false` (Commander's negation),
+    // and false must BEAT the config — a `??` merge would have let the config win.
+    const overridden = await runAndCaptureOpts(fx.poolDistDir(BASELINED), {
+      baseline: false,
+      iUnderstandThisRunsSkillCode: true,
+    });
+    expect(overridden.baseline).toBe(false);
   });
 
   it('a config-blind path (matches no declared skill) applies NO test config', async () => {
@@ -1494,6 +1638,72 @@ describe('createSkillTestRunCommand (single-subject argument + companion help te
     const withOptionalOption = command.options.find((o) => o.long === '--with-optional');
     expect(withOptionalOption?.description).toContain('OPTIONAL companion skill');
     expect(withOptionalOption?.description).toContain('Staged from its raw (unbuilt) source with a warning');
+  });
+});
+
+// --baseline must stay TRI-state (undefined / true / false) so an explicit flag beats
+// a committed `skills.config.<skill>.test.baseline` in BOTH directions. Commander only
+// gives that shape because `--baseline` is declared BEFORE `--no-baseline`; declaring
+// the negated form alone would default the value to `true` and make every run a
+// baseline run. Parsed through the REAL command so a reordering regresses here.
+describe('createSkillTestRunCommand (--baseline / --no-baseline tri-state)', () => {
+  it('leaves baseline undefined when neither flag is typed (config decides)', () => {
+    expect(parseBaselineFlag([])).toBeUndefined();
+  });
+
+  it('sets baseline true on --baseline', () => {
+    expect(parseBaselineFlag([BASELINE_FLAG])).toBe(true);
+  });
+
+  it('sets baseline FALSE on --no-baseline (not true — the Commander negation trap)', () => {
+    expect(parseBaselineFlag([NO_BASELINE_FLAG])).toBe(false);
+  });
+
+  it('declares --no-baseline as a negated option pointing at the committed config', () => {
+    const command = createSkillTestRunCommand();
+    const negated = command.options.find((o) => o.long === NO_BASELINE_FLAG);
+    expect(negated?.negate).toBe(true);
+    expect(negated?.description).toContain('committed');
+  });
+
+  it("warns in --baseline's own description that it roughly DOUBLES the spend", () => {
+    const command = createSkillTestRunCommand();
+    const baselineOption = command.options.find((o) => o.long === BASELINE_FLAG);
+    expect(baselineOption?.description).toContain('TWICE');
+    expect(baselineOption?.description).toContain('DOUBLES');
+    expect(baselineOption?.description).toContain('--max-budget-usd is per-spawn');
+  });
+});
+
+// The Artifacts epilogue used to promise results/ "SURVIVES every run" and the staged
+// bytes "removed unless you pass --keep" — both false under --out/--workdir, where
+// cleanup is a complete no-op (it only touches a dir vat itself created). The scope
+// the skill-testing guide always carried is now in --help too.
+describe('createSkillTestRunCommand (Artifacts help is scoped to a DEFAULT run)', () => {
+  it('scopes the results/-survives + cleanup claim to a run with no --out/--workdir/--keep', () => {
+    const help = renderFullHelp(createSkillTestRunCommand());
+    expect(help).toContain('On a DEFAULT run (no --out, --workdir or\n  --keep)');
+  });
+
+  it('says a --out/--workdir run removes NOTHING, --keep or not', () => {
+    const help = renderFullHelp(createSkillTestRunCommand());
+    expect(help).toContain('with --out or\n  --workdir NOTHING is removed');
+    expect(help).toContain('--keep or not');
+  });
+});
+
+// `configure` is the surface that makes --baseline PERMANENT for every future operator
+// of the skill, so the cost and the instructions-not-capability caveat matter more here
+// than on `run`, where the operator typed the flag themselves for one run.
+describe('createSkillTestConfigureCommand (--baseline carries the run-surface caveat)', () => {
+  it('describes the persisted baseline as doubling every later run and pointing at baselineIntegrity', () => {
+    const command = createSkillTestConfigureCommand();
+    const baselineOption = command.options.find((o) => o.long === BASELINE_FLAG);
+    expect(baselineOption?.description).toContain('PERMANENT');
+    expect(baselineOption?.description).toContain('TWICE');
+    expect(baselineOption?.description).toContain('INSTRUCTIONS');
+    expect(baselineOption?.description).toContain('baselineIntegrity');
+    expect(baselineOption?.description).toContain(NO_BASELINE_FLAG);
   });
 });
 

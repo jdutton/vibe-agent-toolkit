@@ -35,7 +35,13 @@ import {
 import { resolveSkillSource } from '../skill-source/resolve-skill-source.js';
 import type { ResolvedSkillSource, ResolveSkillSourceContext, SkillSource } from '../skill-source/types.js';
 
-import { computeBaselineDelta, formatBaselineDeltaLine } from './baseline-delta.js';
+import {
+  BaselineArtifactSchema,
+  computeBaselineDelta,
+  formatBaselineDeltaLine,
+  type BaselineDelta,
+  type DeltaTruncation,
+} from './baseline-delta.js';
 import {
   activeContaminationSignals,
   armExpectationSkew,
@@ -45,6 +51,9 @@ import {
   skillContentNeedles,
   summarizeBaselineIntegrity,
   type BaselineContamination,
+  type BaselineControlArmFailure,
+  type BaselineIntegrity,
+  type BaselineScanDegradation,
   type ContaminationSignal,
   type DetectBaselineContaminationInput,
 } from './baseline-integrity.js';
@@ -86,7 +95,7 @@ import {
   resolveHarnessRoot,
 } from './harness-location.js';
 import { acquireHarnessLock, installSignalCleanup } from './lock.js';
-import { runPipeline } from './pipeline.js';
+import { RateLimitSignal, runPipeline } from './pipeline.js';
 import { detectPluginLayout } from './plugin-layout.js';
 import { runPreflight, type PreflightInput } from './preflight.js';
 import { descriptorToSource, stageHarness, type StageItem } from './staging.js';
@@ -296,9 +305,14 @@ export interface RunHarnessResult {
   /**
    * Where the executor's per-eval working directories were materialized. Lives
    * OUTSIDE `harnessPath` on purpose (see {@link resolveWorkspacesRoot}), so it
-   * cannot be derived from the harness path and has to be reported. Retained on
-   * exactly the same terms as the harness root; absent when the run ended before
-   * workspaces were staged.
+   * cannot be derived from the harness path and has to be reported.
+   *
+   * Present ONLY when those directories SURVIVE the run — i.e. under `--keep`,
+   * the sole thing that retains them (NOT `--out`/`--workdir`, unlike the harness
+   * root). Cleanup runs in the harness's own `finally`, before this result reaches
+   * any caller, so a populated value is a promise that the path is still there:
+   * anything that reports it (the CLI's `Workspaces:` line) may print it as-is.
+   * Also absent when the run ended before workspaces were staged.
    */
   workspacesPath?: string;
   /**
@@ -537,6 +551,25 @@ function defaultClaudeHelp(): string | null {
   return `${String(result.stdout)}\n${String(result.stderr)}`;
 }
 
+/**
+ * ⚠️ KNOWN OPEN — `costEstimate` here is DEAD, in three independent ways, and none
+ * of them is fixable from inside this function:
+ *
+ * 1. `evalCount: 1` is a placeholder. The suite is not parsed until Step 5.5, which
+ *    runs AFTER preflight, so the real count does not exist yet. Making it real means
+ *    either moving preflight after the suite parse (it currently gates that parse) or
+ *    adding a second reader of `evals.json` — and two readers of the answer key is
+ *    precisely the drift this module refuses elsewhere.
+ * 2. `renderPreflightSummary` returns only FAILING checks, and it is called only
+ *    inside the `if (!preflightResult.passed)` branch — so on a passing run the
+ *    estimate never reaches a terminal at all.
+ * 3. Preflight runs after the `--dry-run` short-circuit, so a dry run never gets here.
+ *
+ * The consequence is that {@link buildDryRunSummary}'s spawn-count line is the ONLY
+ * pre-spend number an operator ever sees. Fix the count before making the check
+ * reachable: a reachable estimate that says "1 evals × 2 config" is worse than a
+ * silent one, because it is quotable.
+ */
 export function buildPreflightInput(
   evalsPath: string,
   pluginDirs: string[],
@@ -545,7 +578,10 @@ export function buildPreflightInput(
 ): PreflightInput {
   const costEstimate: PreflightInput['costEstimate'] = {
     evalCount: 1,
-    configurations: 1,
+    // `configurations` IS the A/B dimension: `--baseline` runs every eval under two
+    // configurations (skill declared, skill withheld). Correct even while
+    // `evalCount` is a placeholder, and it is the half that does not need the suite.
+    configurations: opts.baseline === true ? 2 : 1,
     runsPerQuery: 1,
     maxBudgetUsd: knobs.maxBudgetUsd,
   };
@@ -644,6 +680,18 @@ function emitFrictionReport(frictionPath: string | undefined): void {
   if (!parsed.success || parsed.data.items.length === 0) return;
   process.stderr.write(`\nPackaging friction (${parsed.data.items.length}):\n`);
   process.stderr.write(formatFrictionReport(parsed.data.items) + '\n');
+}
+
+/**
+ * Write the `--baseline` delta line and ⚠️ banner to stderr, if this run produced
+ * one. A no-op on a non-baseline run.
+ *
+ * A function rather than an `if` at the call site purely to keep the orchestrator
+ * inside its cognitive-complexity budget; the ORDER it is called in is the part
+ * that matters, and that is documented where it is called.
+ */
+function emitBaselineReport(report: string | undefined): void {
+  if (report !== undefined) process.stderr.write(report);
 }
 
 /**
@@ -1004,10 +1052,29 @@ export interface DryRunSummaryInput {
   modelFlag: string;
   /** Number of declared evals a real run would execute. */
   evalCount: number;
+  /**
+   * Whether `--baseline` is set, i.e. whether every eval runs TWICE.
+   *
+   * Without this the preview reported the SUITE SIZE and called it the spawn count,
+   * which under `--baseline` under-reports the run by exactly 2x: a 3-eval suite
+   * previewed as "3 evals as executor→grader spawn pairs" and then launched 6 pairs
+   * — twelve `claude` sessions. This is the ONLY pre-spend number an operator ever
+   * sees (see {@link buildPreflightInput} for why the other one never reaches a
+   * terminal), so a 2x understatement here is the whole cost estimate being wrong.
+   */
+  baseline: boolean;
   /** Bounded-parallel executor→grader pipeline width a real run would use. */
   concurrency: number;
   /** Pinned grader/judge model a real run would grade with. */
   graderModel: string;
+  /**
+   * The PER-SPAWN budget ceiling (`--max-budget-usd`), not a run total. Reported
+   * because the two facts only mean something together: the worst case is
+   * `pairs × 2 × maxBudgetUsd`, and an operator who reads the flag name as a run
+   * budget under-provisions by the session count — which under `--baseline` is
+   * four times the eval count.
+   */
+  maxBudgetUsd: number;
 }
 
 /**
@@ -1045,6 +1112,40 @@ export function buildStaleDistWarningLines(roleLabel?: string): string[] {
  * Always includes the assembled spawn command, the staged-manifest entry count +
  * fingerprint, and the provenance.json path so a stale tree is visible at a glance.
  */
+/** `s` unless the count is exactly one — the plural the two spawn-plan lines share. */
+function plural(count: number): string {
+  return count === 1 ? '' : 's';
+}
+
+/**
+ * The two lines that say WHAT A REAL RUN WOULD COST, in PAIRS — not evals.
+ *
+ * `--baseline` runs every eval on both arms and each arm is a full executor→grader
+ * pair, so the spawn count is `evals × arms` and the `claude` session count is twice
+ * that. Reporting the eval count as the pair count understated a baseline run by
+ * exactly 2x: a 3-eval suite previewed as "3 evals as executor→grader spawn pairs"
+ * and then launched 6 pairs / 12 sessions.
+ *
+ * The arm count is spelled out rather than folded silently into the number, because
+ * "6 pairs" for a 3-eval suite reads as a bug until you are told why. And the budget
+ * flag is labelled PER SPAWN with the ceiling multiplied out, because the name
+ * `--max-budget-usd` reads as a run total — under `--baseline` that misreading
+ * under-provisions by a factor of four times the eval count.
+ */
+function buildSpawnPlanLines(input: DryRunSummaryInput): string[] {
+  const pairs = input.evalCount * (input.baseline ? 2 : 1);
+  const sessions = pairs * 2;
+  const armNote = input.baseline
+    ? ` (${input.evalCount} eval${plural(input.evalCount)} × 2 arms — --baseline runs each eval with AND without the skill)`
+    : '';
+  return [
+    `[dry-run] Would run ${pairs} executor→grader spawn pair${plural(pairs)}${armNote} ` +
+      `at concurrency ${input.concurrency} — ${sessions} claude session${plural(sessions)} in total.`,
+    `[dry-run] --max-budget-usd is PER SPAWN ($${input.maxBudgetUsd}), not per run: worst case ≈ ` +
+      `$${(sessions * input.maxBudgetUsd).toFixed(2)} across those ${sessions} sessions.`,
+  ];
+}
+
 export function buildDryRunSummary(input: DryRunSummaryInput): string {
   const lines: string[] = [];
 
@@ -1081,8 +1182,7 @@ export function buildDryRunSummary(input: DryRunSummaryInput): string {
   const stagedFromUnbuiltTree = input.wouldBuild && input.dryRunStagedExistingDist !== undefined;
   const provisional = stagedFromUnbuiltTree ? ' (PROVISIONAL — not rebuilt)' : '';
   lines.push(
-    `[dry-run] Would run ${input.evalCount} eval${input.evalCount === 1 ? '' : 's'} as executor→grader spawn ` +
-      `pair${input.evalCount === 1 ? '' : 's'} at concurrency ${input.concurrency}.`,
+    ...buildSpawnPlanLines(input),
     `[dry-run] Executor ${input.modelFlag}; grader model ${input.graderModel} (prompt via stdin).`,
     `[dry-run] Staged manifest: ${count} entr${count === 1 ? 'y' : 'ies'} | ` +
       `fingerprint: ${input.provenanceFingerprint}${provisional}`,
@@ -1351,10 +1451,9 @@ interface EvalRunContext {
  * absent). Grader fragments are written under a PER-ARM subdir of the vat-only
  * grader dir so a WITH and WITHOUT run of the same eval id cannot collide.
  *
- * Throws propagate: an executor/grader {@link InternalHarnessError} (timeout,
- * stall, spawn error, grader failure/missing-fragment) fails the whole run
- * (exit 1); a RateLimitSignal is retried by the pipeline. An executor CLEAN
- * failure is NOT thrown — its transcript flows into the grader, whose failing
+ * Throws, and the caller ({@link runEvalWorker}) decides what a throw costs — see
+ * its docblock for why that depends on the arm. An executor CLEAN failure is NOT
+ * thrown on either arm: its transcript flows into the grader, whose failing
  * fragment surfaces as an eval failure (exit 4 via the verdict), never exit 1.
  */
 /**
@@ -1430,7 +1529,7 @@ function scrubAndReportControlArmEnv(
   return scrubbed;
 }
 
-async function runEvalWorker(item: EvalWorkItem, ctx: EvalRunContext): Promise<EvalFragment> {
+async function gradeOneArm(item: EvalWorkItem, ctx: EvalRunContext): Promise<EvalFragment> {
   const evalId = String(item.entry.id);
   const workspaceDir = resolvePerEvalWorkspaceDir(item.entry, ctx.workspacesRoot, item.arm, ctx.armDirs);
   const onProgress = (chunk: string): void => { process.stderr.write(chunk); };
@@ -1511,24 +1610,140 @@ async function runEvalWorker(item: EvalWorkItem, ctx: EvalRunContext): Promise<E
 
   const graded = withoutGraderContamination(fragment);
   if (isWithArm) return { ...graded, arm: item.arm };
-  return { ...graded, arm: item.arm, ...baselineContaminationFor(outcome.transcript, ctx) };
+  return { ...graded, arm: item.arm, ...baselineContaminationFor(outcome.transcript, ctx, evalId) };
 }
 
 /**
- * Strip any `contamination` the GRADER emitted, before VAT attaches its own.
+ * Run one work item and decide what its failure costs the RUN.
+ *
+ * TREATMENT arm: rethrow. `grading.json` is the treatment arm, the verdict is
+ * computed from it, and a run that cannot produce one has produced nothing — there
+ * is no partial result worth writing, so the throw propagates through `runPipeline`
+ * to `mapErrorToExitCode` exactly as before (exit 1).
+ *
+ * CONTROL arm: record and continue. Every failure mode of this arm — executor spawn
+ * error, stall, wall-timeout, grader non-zero exit, grader wrote no fragment,
+ * fragment is not valid JSON, nonce mismatch, and (newest) a grader that returned a
+ * different number of expectations than the eval declares — used to propagate out of
+ * `runPipeline` and annihilate the treatment work already completed and billed. A
+ * two-eval probe was measured doing precisely that: both treatment executors ran,
+ * both treatment graders ran, the control arm's executor timed out, the run threw,
+ * and `results/` was left holding `provenance.json` and nothing else. The operator
+ * paid for the whole run and got no grading.json, no baseline.json, and an error
+ * that did not even say which arm had died.
+ *
+ * Recording it instead costs the DELTA, which is the only thing the control arm
+ * feeds, and the delta already has a truthful way to be absent (`null`). The
+ * treatment artifacts are written, the failure is named on stderr as it happens and
+ * again in `baselineIntegrity.controlArmFailures`, and `armExpectationSkew` sees an
+ * eval graded on one arm only and withholds the number.
+ *
+ * A {@link RateLimitSignal} is rethrown on BOTH arms — it is not a failure, it is the
+ * pipeline's retry protocol, and swallowing it on the control arm would convert every
+ * transient rate limit into a permanently dead control arm.
+ */
+async function runEvalWorker(item: EvalWorkItem, ctx: EvalRunContext): Promise<EvalWorkOutcome> {
+  try {
+    return { fragment: await gradeOneArm(item, ctx) };
+  } catch (err) {
+    if (err instanceof RateLimitSignal || item.arm === 'with') throw nameTheArm(err, item.arm);
+    const named = nameTheArm(err, item.arm);
+    // `detail` is schema-required non-empty: an error that stringifies to nothing
+    // would otherwise fail the artifact write and take down the run this whole
+    // branch exists to keep alive.
+    const detail =
+      (named instanceof Error ? named.message : String(named)) ||
+      `[${ARM_LABEL[item.arm]}] failed for eval "${String(item.entry.id)}" with a non-descriptive error`;
+    process.stderr.write(
+      `\n⚠️  ${detail}\n` +
+        '   The control arm for this eval is unusable, so the --baseline delta will be WITHHELD. ' +
+        'The treatment arm is unaffected and the run continues — its grading is what you paid for.\n',
+    );
+    return { controlFailure: { evalId: String(item.entry.id), detail } };
+  }
+}
+
+/**
+ * Fragment fields VAT derives itself and therefore never accepts FROM a grader.
+ *
+ * Both are computed from the executor transcript's structure, which the grader is
+ * shown as opaque text and never asked about — so a value in either from a grader
+ * is not merely redundant, it is a claim the grader is in no position to make.
+ */
+const VAT_ATTACHED_FRAGMENT_KEYS = ['contamination', 'degraded'] as const;
+
+/**
+ * Strip the fields VAT attaches itself, before VAT attaches them.
  *
  * The grader's only input is the executor transcript, which untrusted skill code
  * controls — so a prompt injection there could otherwise fabricate a
  * `BASELINE CONTAMINATED` verdict carrying attacker-chosen strings into an
- * operator-facing artifact. Spreading VAT's value last is NOT sufficient: it is
- * `{}` on a clean run, so it overwrites nothing.
+ * operator-facing artifact, or (via `degraded`) claim a scan degraded that did not.
+ * Spreading VAT's value last is NOT sufficient: it is absent on a clean run, so it
+ * overwrites nothing — which is exactly why the omission direction matters more
+ * than the invention one for `degraded`. A grader that omits it cannot re-hide a
+ * degradation VAT detected, because VAT's value is spread after this strip; a
+ * grader that INVENTS it would otherwise stamp a blind-scan warning on a run that
+ * scanned properly, and an operator who learns to ignore that warning stops reading
+ * the real ones.
  */
 export function withoutGraderContamination(fragment: EvalFragment): EvalFragment {
-  if (fragment.contamination === undefined) return fragment;
+  if (VAT_ATTACHED_FRAGMENT_KEYS.every((key) => fragment[key] === undefined)) return fragment;
   const copy = { ...fragment };
-  delete copy.contamination;
+  for (const key of VAT_ATTACHED_FRAGMENT_KEYS) delete copy[key];
   return copy;
 }
+
+/**
+ * How each arm is named in every message that can only be about one of them.
+ *
+ * Spelled out rather than `'with'`/`'without'`: the internal names are a preposition
+ * apart and the operator-facing question is "which half of my experiment died", so
+ * `Executor timed out for eval "e1"` — the actual text a destroyed run used to print
+ * — named neither the arm nor the fact that the OTHER arm had already succeeded and
+ * been thrown away.
+ */
+const ARM_LABEL: Readonly<Record<EvalArm, string>> = {
+  with: 'treatment arm (skill available)',
+  without: 'control arm (skill withheld)',
+};
+
+/**
+ * Prefix a worker error's message with the arm it came from, IN PLACE.
+ *
+ * Mutating rather than re-wrapping is deliberate. `mapErrorToExitCode` dispatches on
+ * the error's CLASS, and so does the run's own regression test for a forged grader
+ * nonce (`rejects.toThrow(GradingNonceError)`); wrapping every failure in a fresh
+ * `InternalHarnessError` to get a better message would flatten
+ * `EvalFragmentError`/`GradingNonceError`/`RateLimitSignal` into one class and lose
+ * both. The stack is preserved for the same reason.
+ *
+ * Idempotent — a worker error passes through here exactly once, but a retried item
+ * must not accumulate prefixes.
+ */
+function nameTheArm<E>(err: E, arm: EvalArm): E {
+  const prefix = `[${ARM_LABEL[arm]}] `;
+  if (err instanceof Error && !err.message.startsWith(prefix)) err.message = `${prefix}${err.message}`;
+  return err;
+}
+
+/**
+ * What one work item produced: a graded fragment, or — CONTROL ARM ONLY — a
+ * recorded failure that the run carries on past.
+ *
+ * The asymmetry is the whole point and it is not a subjective call. A treatment-arm
+ * failure leaves nothing to salvage: `grading.json` IS the treatment arm, so a run
+ * that cannot produce it has produced nothing and may as well stop. A control-arm
+ * failure destroys only the second half of a comparison whose first half is already
+ * bought and paid for — and the artifact that reports that comparison already has a
+ * way to say "I do not exist here" (`delta: null`). Failing the whole run on a
+ * control-arm timeout threw away every treatment executor and grader spawn that had
+ * already completed, wrote no `grading.json` at all, and left `results/` holding
+ * only `provenance.json`.
+ */
+type EvalWorkOutcome =
+  | { readonly fragment: EvalFragment; readonly controlFailure?: undefined }
+  | { readonly fragment?: undefined; readonly controlFailure: BaselineControlArmFailure };
 
 /**
  * Lift the run's content needles off the STAGED SKILL.md.
@@ -1537,16 +1752,32 @@ export function withoutGraderContamination(fragment: EvalFragment): EvalFragment
  * is given, so a needle taken from it is exactly the text an ambient copy of the
  * same build would carry.
  *
- * The exclusion set is the suite's own prompts and expectations. An adopter who
- * quotes a sentence of their SKILL.md in an eval prompt would otherwise stamp
- * every run contaminated, including the arm that merely read the prompt vat gave
- * it — the skill's words arriving THROUGH vat are not the arm reaching the skill.
+ * The exclusion set is EVERY channel through which vat itself hands the arm text:
+ * the suite's prompts, its `expected_output`, its expectations, and the CONTENTS
+ * of the input `files` fixtures vat stages into the arm's workspace and instructs
+ * it to operate on. An adopter who quotes a sentence of their SKILL.md through any
+ * of the four would otherwise stamp every run contaminated, including the arm that
+ * merely read the input vat gave it — the skill's words arriving THROUGH vat are
+ * not the arm reaching the skill. The fixture channel is the one that was missed,
+ * and it is the worst of the four to get wrong: the summary attached to that
+ * verdict tells the operator to go uninstall an ambient copy of the plugin that
+ * does not exist.
+ *
+ * Fixtures are read from the STAGED workspace rather than the suite directory, for
+ * the same reason the SKILL.md is: that is byte-for-byte what the arm was handed.
  *
  * Returns `[]` when the file cannot be read. A missing SKILL.md is not this
  * function's error to raise (staging has already validated the subject), and an
- * unarmed signal is reported as unarmed rather than claimed as clean.
+ * unarmed signal is reported as unarmed rather than claimed as clean. An
+ * unreadable FIXTURE is skipped for the same reason, and errs the safe way: a
+ * fixture we could not exclude can only make the signal noisier, never blinder.
  */
-function resolveSkillContentNeedles(subjectStagedDir: string, evals: readonly EvalEntry[]): string[] {
+function resolveSkillContentNeedles(
+  subjectStagedDir: string,
+  evals: readonly EvalEntry[],
+  /** One arm's staged workspace root — `<workspacesRoot>/<armDir>`; each eval's fixtures live under `<id>/`. */
+  stagedWorkspaceRoot: string,
+): string[] {
   const skillMdPath = safePath.join(subjectStagedDir, 'SKILL.md');
   let markdown: string;
   try {
@@ -1556,9 +1787,30 @@ function resolveSkillContentNeedles(subjectStagedDir: string, evals: readonly Ev
     return [];
   }
   const excluded = evals
-    .flatMap((entry) => [entry.prompt, entry.expected_output ?? '', ...entry.expectations])
+    .flatMap((entry) => [
+      entry.prompt,
+      entry.expected_output ?? '',
+      ...entry.expectations,
+      ...readStagedFixtures(stagedWorkspaceRoot, entry),
+    ])
     .join('\n');
   return skillContentNeedles(markdown, excluded);
+}
+
+/** The text of one eval's staged input files. Unreadable/binary fixtures are skipped. */
+function readStagedFixtures(stagedWorkspaceRoot: string, entry: EvalEntry): string[] {
+  const texts: string[] = [];
+  for (const rel of entry.files ?? []) {
+    try {
+      const staged = safePath.joinUnderRoot(safePath.joinUnderRoot(stagedWorkspaceRoot, String(entry.id)), rel);
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is contained under vat's own staged workspace
+      texts.push(readFileSync(staged, 'utf8'));
+    } catch {
+      // A fixture vat could not read cannot have reached the arm through vat
+      // either; skipping it leaves the signal noisier, which is the safe way.
+    }
+  }
+  return texts;
 }
 
 /**
@@ -1578,9 +1830,25 @@ function resolveSkillContentNeedles(subjectStagedDir: string, evals: readonly Ev
  * block are derived from the same values — a second construction site is how the
  * block would come to claim a detector the scan never actually ran.
  *
- * `transcript` is supplied per call; everything else is per-run.
+ * `transcript` and `evalId` are supplied per call; everything else is per-run.
+ *
+ * `evalId` is what turns the arm's workspace ROOT into the arm's actual starting
+ * CWD (`<armWorkspaceDir>/<evalId>` — see {@link resolvePerEvalWorkspaceDir}).
+ * The detector needs both and they are one directory apart: containment is judged
+ * against the root (the arm's whole tree is its own), while the cwd walk must
+ * start exactly where the executor did, or every relative climb in the transcript
+ * resolves one level too high and lands where no needle can see it. Absent for
+ * `contaminationSignalsFor`, which asks only which detectors are armed.
  */
-function buildContaminationInput(transcript: string, ctx: EvalRunContext): DetectBaselineContaminationInput {
+function buildContaminationInput(
+  transcript: string,
+  ctx: EvalRunContext,
+  evalId?: string,
+): DetectBaselineContaminationInput {
+  const armRoot =
+    ctx.armDirs.without === undefined || ctx.armDirs.without === ''
+      ? undefined
+      : safePath.joinUnderRoot(ctx.workspacesRoot, armDirSegment(ctx.armDirs, 'without'));
   return {
     transcript,
     harnessRoot: ctx.harnessRoot,
@@ -1599,14 +1867,13 @@ function buildContaminationInput(transcript: string, ctx: EvalRunContext): Detec
     // Conditional because this builder also serves `contaminationSignalsFor`,
     // which runs on EVERY run — and a non-baseline run mints no `without` arm, so
     // `armDirSegment` would (correctly) throw rather than invent a segment.
-    ...(ctx.armDirs.without === undefined || ctx.armDirs.without === ''
+    ...(armRoot === undefined ? {} : { armWorkspaceDir: armRoot }),
+    // ...and the eval's own subdirectory under it, which is where the executor was
+    // actually spawned. Absent without an evalId, in which case the walk anchors
+    // at the root — one level high, but the best anchor available.
+    ...(armRoot === undefined || evalId === undefined
       ? {}
-      : {
-          armWorkspaceDir: safePath.joinUnderRoot(
-            ctx.workspacesRoot,
-            armDirSegment(ctx.armDirs, 'without'),
-          ),
-        }),
+      : { armCwd: safePath.joinUnderRoot(armRoot, evalId) }),
     // VAT's private tmp dirs: the held eval suite (the `expected_output` answer
     // key) and the grader dir (the run's integrity nonce). Both are SIBLINGS of
     // the arm's cwd under the OS temp dir — two hops or one `$TMPDIR` expansion
@@ -1628,9 +1895,31 @@ function buildContaminationInput(transcript: string, ctx: EvalRunContext): Detec
 function baselineContaminationFor(
   transcript: string,
   ctx: EvalRunContext,
-): Pick<EvalFragment, 'contamination'> | Record<string, never> {
-  const hits = detectBaselineContamination(buildContaminationInput(transcript, ctx));
-  return hits.length === 0 ? {} : { contamination: hits };
+  evalId: string,
+): Pick<EvalFragment, 'contamination' | 'degraded'> {
+  const { hits, degraded } = detectBaselineContamination(buildContaminationInput(transcript, ctx, evalId));
+  // A scan that fell back to flat text matching writes `contaminated: false` with
+  // exactly the same bytes as one that walked the transcript properly, so silence
+  // here would be the "quietly wrong measurement" this whole module exists to
+  // prevent. It goes to BOTH surfaces, and neither substitutes for the other:
+  // stderr reaches the operator watching the run, and the fragment carries it to
+  // `baselineIntegrity.degraded` in baseline.json, which is what a reader has
+  // months later when the stderr scrollback is gone.
+  //
+  // The `evalId` is stamped HERE rather than by the detector: the detector is pure
+  // and scans one transcript with no idea which eval it belongs to, and an
+  // unattributed degradation in a run-level list is unactionable.
+  if (degraded !== undefined) {
+    process.stderr.write(
+      `⚠️  control arm (${evalId}): contamination scan DEGRADED (${degraded.reason}) — ${degraded.detail}. ` +
+        'It fell back to flat text matching, which both over- and under-reports; a clean verdict from ' +
+        'this eval is weaker evidence than a clean structured scan.\n',
+    );
+  }
+  return {
+    ...(hits.length === 0 ? {} : { contamination: hits }),
+    ...(degraded === undefined ? {} : { degraded: { ...degraded, evalId } }),
+  };
 }
 
 /**
@@ -1642,10 +1931,18 @@ function contaminationSignalsFor(ctx: EvalRunContext): ContaminationSignal[] {
   return activeContaminationSignals(buildContaminationInput('', ctx));
 }
 
-/** Outcome of a tier-ordered eval run: the fragments that RAN, plus (when the
- *  fail-fast gate fired with higher tiers pending) which tiers were SKIPPED. */
+/** Outcome of a tier-ordered eval run: the fragments that RAN, the control-arm
+ *  evals that broke without stopping the run, plus (when the fail-fast gate fired
+ *  with higher tiers pending) which tiers were SKIPPED. */
 interface TieredEvalRun {
   fragments: EvalFragment[];
+  /**
+   * Control-arm evals that produced no fragment — see {@link runEvalWorker}. Always
+   * present (empty on a healthy run) rather than optional: an absent list and an
+   * empty one would be the same bytes downstream, and "the control arm was fine" is
+   * a claim the caller stamps into `baseline.json`.
+   */
+  controlFailures: BaselineControlArmFailure[];
   skipped?: SkippedEvalsSummary;
 }
 
@@ -1654,8 +1951,8 @@ interface RunEvalsTieredInput {
   evals: readonly EvalEntry[];
   /** Whether to also run each eval's WITHOUT (baseline) arm. */
   baseline: boolean;
-  /** Run one tier's work items bounded-parallel and return their graded fragments. */
-  runTier: (items: EvalWorkItem[]) => Promise<EvalFragment[]>;
+  /** Run one tier's work items bounded-parallel and return their outcomes. */
+  runTier: (items: EvalWorkItem[]) => Promise<EvalWorkOutcome[]>;
 }
 
 /**
@@ -1673,9 +1970,16 @@ interface RunEvalsTieredInput {
 async function runEvalsTiered(input: RunEvalsTieredInput): Promise<TieredEvalRun> {
   const groups = groupEvalsByTier(input.evals);
   const fragments: EvalFragment[] = [];
+  const controlFailures: BaselineControlArmFailure[] = [];
   for (const [index, group] of groups.entries()) {
-    const tierFragments = await input.runTier(buildEvalWorkItems(group.evals, input.baseline));
+    const outcomes = await input.runTier(buildEvalWorkItems(group.evals, input.baseline));
+    const tierFragments = outcomes.flatMap((o) => (o.fragment === undefined ? [] : [o.fragment]));
+    controlFailures.push(...outcomes.flatMap((o) => (o.controlFailure === undefined ? [] : [o.controlFailure])));
     fragments.push(...tierFragments);
+    // A control-arm failure deliberately does NOT gate. The gate asks whether the
+    // SKILL failed a cheap expectation before spending on expensive ones, and the
+    // control arm is not the skill — treating its executor timeout as a gating
+    // failure would stop a run whose treatment tier passed everything.
     const withArm = tierFragments.filter((f) => f.arm !== 'without');
     if (!shouldGateAfterTier(withArm)) continue;
     const remaining = groups.slice(index + 1);
@@ -1684,9 +1988,9 @@ async function runEvalsTiered(input: RunEvalsTieredInput): Promise<TieredEvalRun
     // Legibility (required): name the skipped tiers on stderr so a fail-fast run is
     // never mistaken for a smaller passing suite. stdout stays machine-readable.
     process.stderr.write(formatSkippedTiersSummary(skipped) + '\n');
-    return { fragments, skipped };
+    return { fragments, controlFailures, skipped };
   }
-  return { fragments };
+  return { fragments, controlFailures };
 }
 
 /** The results/ artifacts vat is the SOLE writer of, resolved for one run. */
@@ -1755,21 +2059,101 @@ function gradedCounts(fragments: EvalFragment[]): ArmEvalGrade[] {
   }));
 }
 
-function collectBaselineFindings(withoutArm: EvalFragment[]): BaselineContamination[] {
-  return withoutArm
-    .filter((f): f is EvalFragment & { contamination: NonNullable<EvalFragment['contamination']> } =>
-      f.contamination !== undefined && f.contamination.length > 0)
-    .map((f) => ({ evalId: f.evalId, hits: f.contamination }));
+/**
+ * Both per-eval integrity channels the WITHOUT-arm fragments carry, lifted in ONE
+ * pass: what the scan FOUND (`findings`) and how well it was able to look
+ * (`degraded`).
+ *
+ * Together, not separately, because they are read together: `contaminated: false`
+ * means "looked properly and found nothing" only when `degraded` is empty, and a
+ * caller that collects one and forgets the other publishes the first half of that
+ * sentence as if it were the whole of it. That is not hypothetical — the degradation
+ * was detected, schema'd, summarised and rendered, and then never collected, so
+ * every `baseline.json` shipped claiming a clean scan it had not necessarily run.
+ */
+function collectBaselineFindings(withoutArm: EvalFragment[]): {
+  findings: BaselineContamination[];
+  degraded: BaselineScanDegradation[];
+} {
+  return {
+    findings: withoutArm
+      .filter((f): f is EvalFragment & { contamination: NonNullable<EvalFragment['contamination']> } =>
+        f.contamination !== undefined && f.contamination.length > 0)
+      .map((f) => ({ evalId: f.evalId, hits: f.contamination })),
+    degraded: withoutArm.flatMap((f) => (f.degraded === undefined ? [] : [f.degraded])),
+  };
+}
+
+/**
+ * Restate a {@link SkippedEvalsSummary} as the delta block's truncation record.
+ *
+ * A separate shape rather than embedding the tier summary wholesale: the delta cares
+ * about WHAT IS MISSING FROM ITS TOTALS, which is the flat set of evals that never
+ * ran on either arm, while `SkippedEvalsSummary` is organised for the tier reporter.
+ * Pure.
+ */
+function deltaTruncationFor(skipped: SkippedEvalsSummary | undefined): DeltaTruncation | null {
+  if (skipped === undefined || skipped.totalSkipped === 0) return null;
+  return {
+    gatedByTier: skipped.gatedByTier,
+    firstSkippedTier: skipped.firstSkippedTier,
+    totalSkipped: skipped.totalSkipped,
+    evalIds: skipped.tiers.flatMap((tier) => tier.evalIds),
+  };
+}
+
+/**
+ * The stderr report for a `--baseline` run: the delta line, then the ⚠️ banner when
+ * the run is unusable. Pure — the caller decides WHEN it goes out, which is the
+ * whole point (see the call site).
+ *
+ * Composed on EVERY baseline run, including a withheld one: "the delta is
+ * unavailable, and here is why" is the report an operator needs, and a run that
+ * silently prints nothing is indistinguishable from a vat that still does not
+ * compute a delta at all. The delta line comes FIRST so an unusable run reads as the
+ * number followed by the caveat that explains it, which also leaves the banner —
+ * the only line that says the number means nothing — LAST on the screen.
+ *
+ * A CONTAMINATED run still reports its number, deliberately. Contamination does not
+ * make the subtraction illegal — both arms were graded to the same depth, so the
+ * arithmetic is sound; what it invalidates is INTERPRETING that number as skill
+ * lift, which is precisely what the ⚠️ line says ("The reported delta is NOT a
+ * measure of skill lift"), and what `vat-skill-testing.md` turns into the
+ * instruction "discard the delta". Withholding it here would (a) leave that sentence
+ * referring to a number that was never reported, and (b) spend `null` — which means
+ * "these arms cannot be subtracted", a different failure with a different remedy —
+ * on a run where they can be. A contaminated delta is also diagnostic in its own
+ * right: it collapses toward zero, which is corroboration, not noise.
+ */
+export function formatBaselineReport(delta: BaselineDelta, integrity: BaselineIntegrity): string {
+  const line = `\n${formatBaselineDeltaLine(delta)}\n`;
+  // Either failure makes the delta unusable, and both are only visible on stderr —
+  // nobody opens baseline.json unprompted.
+  if (!integrity.contaminated && integrity.comparable) return line;
+  return `${line}\n⚠️  ${integrity.summary}\n\n`;
+}
+
+/** Everything {@link writeRunArtifactsAndReconcile} needs. An object, not seven
+ *  positional arguments — four of the seven are arrays and two of those are arrays
+ *  of records with an `evalId`, which is a swap this repo would never catch. */
+interface WriteRunArtifactsInput {
+  fragments: EvalFragment[];
+  runNonce: string;
+  paths: ArtifactPaths;
+  /** Which contamination detectors this run armed — see {@link contaminationSignalsFor}. */
+  signals: readonly ContaminationSignal[];
+  /** Control-arm evals that never graded — see {@link runEvalWorker}. */
+  controlFailures: readonly BaselineControlArmFailure[];
+  /** What the fail-fast gate cut off, or `undefined` when the whole suite ran. */
+  skipped: SkippedEvalsSummary | undefined;
 }
 
 function writeRunArtifactsAndReconcile(
-  fragments: EvalFragment[],
-  runNonce: string,
-  paths: ArtifactPaths,
-  /** Which contamination detectors this run armed — see {@link contaminationSignalsFor}. */
-  signals: readonly ContaminationSignal[],
-): { verdict: GradingVerdict; toolEval: ToolEvalReport } {
+  input: WriteRunArtifactsInput,
+): { verdict: GradingVerdict; toolEval: ToolEvalReport; baselineReport?: string } {
+  const { fragments, runNonce, paths, signals, controlFailures } = input;
   const { withArm, withoutArm } = partitionFragmentsByArm(fragments);
+  let baselineReport: string | undefined;
 
   const grading = mergeFragmentsToGrading(withArm, runNonce, 'with');
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived results path
@@ -1785,7 +2169,13 @@ function writeRunArtifactsAndReconcile(
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived results path
   writeFileSync(paths.toolEvalOut, JSON.stringify(toolEval, null, 2) + '\n', 'utf-8');
 
-  if (withoutArm.length > 0) {
+  // `controlFailures` is the second disjunct, and it is load-bearing: when EVERY
+  // control eval died there are no WITHOUT-arm fragments at all, and gating on the
+  // fragment count alone would write no baseline.json — so the one run that most
+  // needs to say "the control arm did not happen" would say nothing, exactly like a
+  // run where `--baseline` was never passed. `mergeFragmentsToGrading` over an empty
+  // arm yields a zero/zero report, which is the honest shape for it.
+  if (withoutArm.length > 0 || controlFailures.length > 0) {
     const baseline = mergeFragmentsToGrading(withoutArm, runNonce, 'without');
     // Stamp the integrity verdict onto baseline.json (GradingReportSchema is
     // .passthrough(), so the extra field is contract-legal). Written on EVERY
@@ -1805,13 +2195,34 @@ function writeRunArtifactsAndReconcile(
     const withGrades = gradedCounts(withArm);
     const withoutGrades = gradedCounts(withoutArm);
     const skew = armExpectationSkew(withGrades, withoutGrades);
-    const integrity = summarizeBaselineIntegrity(collectBaselineFindings(withoutArm), signals, skew);
+    const { findings, degraded } = collectBaselineFindings(withoutArm);
+    const integrity = summarizeBaselineIntegrity({
+      findings,
+      signals,
+      skew,
+      degraded,
+      controlArmFailures: controlFailures,
+    });
     // The SUBTRACTION `--baseline` exists to perform, and until this it was never
     // performed anywhere: vat wrote two same-shaped artifacts and left the operator
     // to do the arithmetic by hand while the docs said it "reports the delta".
     // `skew` is passed rather than re-checked so the withholding decision has
     // exactly one author.
-    const delta = computeBaselineDelta(withGrades, withoutGrades, skew);
+    // `truncated` rides along rather than withholding: fail-fast stops BOTH arms at
+    // the same tier boundary, so the arithmetic over the tiers that ran is sound —
+    // what it changes is the SCOPE of the claim. Without it, a tier-0 failure in an
+    // 8-eval suite printed `+1 (with skill: 2/2, without skill: 1/2)`, which is
+    // byte-identical to a complete 2-eval suite. And this is the COMMON case, not a
+    // corner: `--baseline` exists to measure a skill that may not be helping, so a
+    // WITH-arm failure — the thing that fires the gate — is the expected state of an
+    // interesting baseline run.
+    const delta = computeBaselineDelta({
+      withArm: withGrades,
+      withoutArm: withoutGrades,
+      skew,
+      controlArmFailures: controlFailures,
+      truncated: deltaTruncationFor(input.skipped),
+    });
     // A SIBLING of `baselineIntegrity`, not a field inside it, because they answer
     // different questions: integrity answers "may I subtract these two arms?", and
     // the delta IS the subtraction. Burying the number inside the block that
@@ -1824,32 +2235,23 @@ function writeRunArtifactsAndReconcile(
       JSON.stringify({ ...baseline, baselineIntegrity: integrity, baselineDelta: delta }, null, 2) + '\n',
       'utf-8',
     );
-    // Printed on EVERY baseline run, including a withheld one: "the delta is
-    // unavailable, and here is why" is the report an operator needs, and a run that
-    // silently prints nothing is indistinguishable from a vat that still does not
-    // compute a delta at all. It comes BEFORE the ⚠️ below so an unusable run reads
-    // as the delta line followed by the caveat that explains it.
-    //
-    // A CONTAMINATED run still prints its number, deliberately. Contamination does
-    // not make the subtraction illegal — both arms were graded to the same depth, so
-    // the arithmetic is sound; what it invalidates is INTERPRETING that number as
-    // skill lift, which is precisely what the ⚠️ line immediately below says ("The
-    // reported delta is NOT a measure of skill lift"), and what `vat-skill-testing.md`
-    // turns into the instruction "discard the delta". Withholding it here would (a)
-    // leave that sentence referring to a number that was never reported, and (b)
-    // spend `null` — which means "these arms cannot be subtracted", a different
-    // failure with a different remedy — on a run where they can be. A contaminated
-    // delta is also diagnostic in its own right: it collapses toward zero, which is
-    // corroboration, not noise.
-    process.stderr.write(`\n${formatBaselineDeltaLine(delta)}\n`);
-    // Either failure makes the delta unusable, and both are only visible on
-    // stderr — nobody opens baseline.json unprompted.
-    if (integrity.contaminated || !integrity.comparable) {
-      process.stderr.write(`\n⚠️  ${integrity.summary}\n\n`);
-    }
+    // RETURNED, not written. The delta line and the ⚠️ banner are the LAST two
+    // things an operator should see, and they were not: `emitFrictionReport` runs
+    // from the harness `finally`, long after this point, and its two caps (50 lines
+    // × 2000 chars) allow 101,245 characters — about 1250 rows of an 80-column
+    // terminal — between the banner and the prompt. The banner is the only line that
+    // says the number above it is meaningless, so pushing it off-screen is the same
+    // failure as not printing it. Handing the text back lets the caller emit
+    // friction FIRST and this LAST; a total-output budget on friction would only
+    // shorten the distance, not end it.
+    baselineReport = formatBaselineReport(delta, integrity);
   }
 
-  return { verdict: reconcileGrading(grading), toolEval };
+  return {
+    verdict: reconcileGrading(grading),
+    toolEval,
+    ...(baselineReport === undefined ? {} : { baselineReport }),
+  };
 }
 
 /**
@@ -1977,14 +2379,38 @@ function assertVatWroteArtifact(path: string, validate: (raw: unknown) => void, 
 
 /**
  * Post-merge D2 gate over the vat-written results artifacts (vat is SOLE writer):
- * grading.json, friction.json, and tool-eval.json must each exist + parse + validate.
- * A separate, explicit check (NOT folded into any prompt-invariant linter) — fail-closed
- * and safe because vat wrote every one of these itself just above.
+ * grading.json, friction.json, tool-eval.json — and, on a baseline run, baseline.json
+ * — must each exist + parse + validate. A separate, explicit check (NOT folded into
+ * any prompt-invariant linter) — fail-closed and safe because vat wrote every one of
+ * these itself just above.
+ *
+ * `baseline.json` was EXEMPT from this gate for as long as the gate has existed, and
+ * it is the artifact the exemption fits worst: on a `--baseline` run it is the only
+ * durable record of the thing the command sells, and this branch has already been
+ * bitten once by a default run deleting `results/` out from under it. Its validation
+ * is also the strictest of the four — {@link BaselineArtifactSchema} carries the
+ * `passed <= total` and `delta === with − without` refines, so a merge that produced
+ * a self-contradicting number fails the run here instead of being written down.
+ *
+ * `baselineRun` gates it rather than "does the file exist", deliberately: an
+ * existence check would pass on the one failure that matters (vat asked for a
+ * baseline and wrote nothing), which is exactly what a fail-CLOSED gate must not do.
+ * A non-baseline run writes no baseline.json at all and is not asked about one.
  */
-function assertVatWroteArtifacts(paths: ArtifactPaths): void {
+export function assertVatWroteArtifacts(paths: ArtifactPaths, baselineRun: boolean): void {
   assertVatWroteArtifact(paths.gradingOut, (raw) => { GradingReportSchema.parse(raw); }, 'grading.json');
   assertVatWroteArtifact(paths.frictionOut, (raw) => { FrictionReportSchema.parse(raw); }, 'friction.json');
   assertVatWroteArtifact(paths.toolEvalOut, (raw) => { ToolEvalReportSchema.parse(raw); }, 'tool-eval.json');
+  if (!baselineRun) return;
+  assertVatWroteArtifact(
+    paths.baselineOut,
+    (raw) => {
+      // Both halves: the grading report it IS, and the two blocks vat stamps onto it.
+      GradingReportSchema.parse(raw);
+      BaselineArtifactSchema.parse(raw);
+    },
+    'baseline.json',
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -2106,6 +2532,23 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
   // separation is load-bearing for --baseline — so they need their own cleanup.
   const workspacesRoot = resolveWorkspacesRoot(randomBytes(16).toString('hex'));
 
+  // Whether those workspaces OUTLIVE the run. `--keep` is the ONLY thing that
+  // retains them.
+  //
+  // Deliberately NOT mirrored on `cleanupHarness`'s rule (keep OR user-owned
+  // location). That rule exists because `--out`/`--workdir` name a directory the
+  // USER owns, so vat has no business deleting it. Since these moved out of the
+  // harness root they live under OS tmp, which the user did not choose and does
+  // not manage — carrying the rule across would orphan a
+  // `vat-skill-test-ws-<token>` dir on every `--out` run, forever. The location
+  // changed, so the retention policy has to change with it.
+  //
+  // Decided ONCE, here, because two consumers ask the question — cleanup (delete
+  // or not) and the returned `workspacesPath` (report or not) — and a second copy
+  // of the predicate would drift, which is exactly how the result came to name a
+  // directory cleanup had already removed.
+  const retainWorkspaces = opts.keep === true;
+
   // The opaque per-arm segments beneath it. Minted here, with the roots, so the
   // same values reach staging, the executor's cwd, and the contamination
   // detector's sibling-arm needle — one source of truth for a value whose whole
@@ -2129,17 +2572,9 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     // --keep, which retains the harness dir for inspection but has no business
     // retaining the key), and never conditionally.
     removeVatOnlyDir(evalSuiteHoldDir);
-    // Per-eval workspaces are the executor's cwd. `--keep` is the ONLY thing that
-    // retains them.
-    //
-    // Deliberately NOT mirrored on `cleanupHarness`'s rule (keep OR user-owned
-    // location). That rule exists because `--out`/`--workdir` name a directory the
-    // USER owns, so vat has no business deleting it. Since these moved out of the
-    // harness root they live under OS tmp, which the user did not choose and does
-    // not manage — carrying the rule across would orphan a
-    // `vat-skill-test-ws-<token>` dir on every `--out` run, forever. The location
-    // changed, so the retention policy has to change with it.
-    if (opts.keep !== true) removeVatOnlyDir(workspacesRoot);
+    // Per-eval workspaces are the executor's cwd; `retainWorkspaces` (minted with
+    // the root above) is the single author of whether they survive.
+    if (!retainWorkspaces) removeVatOnlyDir(workspacesRoot);
   };
   const removeSignalCleanup = installSignalCleanup({ onSignal: cleanup });
 
@@ -2150,6 +2585,22 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
   // once merging succeeded; on a pre-merge throw the finally simply finds no
   // friction.json and emits nothing (a no-op).
   let frictionOut: string | undefined;
+  /**
+   * Emit the friction report AT MOST ONCE per run.
+   *
+   * There are now two call sites, and they exist for different reasons that must
+   * not become two reports: the happy path calls it deliberately BEFORE the
+   * baseline delta/banner (so the banner stays last on screen — see the call
+   * site), and the `finally` calls it for the throw paths, where no happy-path
+   * call ever happened. A flag rather than a "did we already return normally?"
+   * test, because the throw can land anywhere between the two.
+   */
+  let frictionEmitted = false;
+  const emitFrictionOnce = (): void => {
+    if (frictionEmitted) return;
+    frictionEmitted = true;
+    emitFrictionReport(frictionOut);
+  };
 
   try {
     // Step 3: Stage the harness FIRST — the subject's own evals/evals.json lands
@@ -2330,8 +2781,12 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
           provenanceEntryCount: provenance.entries.length,
           modelFlag,
           evalCount: declaredEvalCount,
+          // The one fact that doubles the spawn count, and the one the preview was
+          // blind to — `opts.baseline` was in scope here the whole time.
+          baseline: opts.baseline === true,
           concurrency,
           graderModel,
+          maxBudgetUsd: knobs.maxBudgetUsd,
         }),
       };
     }
@@ -2365,7 +2820,11 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
       pluginDirs,
       graderOutDir,
       evalSuiteHoldDir,
-      skillContentNeedles: resolveSkillContentNeedles(subjectStagedDir, suite.evals),
+      skillContentNeedles: resolveSkillContentNeedles(
+        subjectStagedDir,
+        suite.evals,
+        safePath.joinUnderRoot(workspacesRoot, armDirs.with),
+      ),
       runNonce,
       graderModel,
       costAccumulator,
@@ -2390,15 +2849,17 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     // higher (more expensive) tiers are SKIPPED (never graded, never passed), so a
     // broken foundational expectation stops the run from spending on hard tiers.
     // Each tier is one runPipeline: bounded-parallel, retrying a RateLimitSignal
-    // per item. An InternalHarnessError thrown by any executor/grader (timeout/
-    // stall/spawn-error, grader failure, missing fragment, nonce mismatch)
-    // propagates OUT unhandled → mapErrorToExitCode → exit 1; a spawn or grader
-    // break is never laundered into a pass/fail verdict (R1 no-laundering).
-    const { fragments, skipped } = await runEvalsTiered({
+    // per item. An InternalHarnessError thrown by a TREATMENT-arm executor/grader
+    // (timeout/stall/spawn-error, grader failure, missing fragment, nonce mismatch,
+    // declared-count mismatch) propagates OUT unhandled → mapErrorToExitCode →
+    // exit 1; a spawn or grader break is never laundered into a pass/fail verdict
+    // (R1 no-laundering). The same break on the CONTROL arm is recorded and the run
+    // continues — see runEvalWorker for why the two arms are not symmetric.
+    const { fragments, controlFailures, skipped } = await runEvalsTiered({
       evals: suite.evals,
       baseline: opts.baseline === true,
       runTier: (items) =>
-        runPipeline<EvalWorkItem, EvalFragment>({
+        runPipeline<EvalWorkItem, EvalWorkOutcome>({
           items,
           concurrency,
           worker: (item) => runEvalWorker(item, evalCtx),
@@ -2410,12 +2871,31 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     // authoritative prose-expectation verdict from the WITH-arm per-expectation
     // `passed` flags — NOT any self-reported summary. An executor CLEAN failure
     // reaches here as a FAILing fragment → composite verdict → exit 4.
-    const { verdict, toolEval } = writeRunArtifactsAndReconcile(fragments, runNonce, artifacts, contaminationSignalsFor(evalCtx));
+    const { verdict, toolEval, baselineReport } = writeRunArtifactsAndReconcile({
+      fragments,
+      runNonce,
+      paths: artifacts,
+      signals: contaminationSignalsFor(evalCtx),
+      controlFailures,
+      // `skipped` was in scope here and simply not passed, which is how the delta
+      // block and its printed line came to describe a truncated run as a complete one.
+      skipped,
+    });
 
     // D2 fail-closed gate: vat is the SOLE writer of results/, so a missing/unparseable/
-    // invalid grading.json, friction.json, or tool-eval.json after the merge is a HARNESS
-    // bug (exit 1), never a skill fault. A SEPARATE explicit check, not a prompt invariant.
-    assertVatWroteArtifacts(artifacts);
+    // invalid grading.json, friction.json, tool-eval.json — or, on a baseline run,
+    // baseline.json — after the merge is a HARNESS bug (exit 1), never a skill fault.
+    // A SEPARATE explicit check, not a prompt invariant.
+    assertVatWroteArtifacts(artifacts, opts.baseline === true);
+
+    // Friction FIRST, then the baseline report — the ORDER is the point. Friction is
+    // capped at 50 lines of 2000 characters, so emitting it after the ⚠️ contaminated
+    // banner (which is what the `finally` used to do) could put ~1250 terminal rows
+    // between the operator and the only line saying the delta above is meaningless.
+    // Emitting it here leaves the banner last on screen; `emitFrictionOnce` keeps the
+    // `finally` call a no-op so a normal run reports it exactly once.
+    emitFrictionOnce();
+    emitBaselineReport(baselineReport);
 
     // Composite verdict: the run passes only when BOTH output expectations AND every
     // tool-expectation verdict passed — so an output all-pass where a `mustRun` never
@@ -2428,7 +2908,11 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
 
     return {
       harnessPath: harnessRoot,
-      workspacesPath: workspacesRoot,
+      // Reported ONLY when the workspaces outlive the run. The `finally` below
+      // runs cleanup BEFORE this value ever reaches a caller, so reporting it
+      // unconditionally handed the operator a path to a directory that no longer
+      // existed. Same predicate as cleanup's, by construction.
+      ...(retainWorkspaces ? { workspacesPath: workspacesRoot } : {}),
       resultsPath: resultsDir,
       exitCode: verdictExitCode(allPassed, opts.tolerateEvalFailure === true),
       summary,
@@ -2437,8 +2921,10 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     // Surface any packaging-fidelity friction VAT merged into friction.json to
     // STDERR BEFORE cleanup removes the harness dir. Best-effort + stderr-only
     // (stdout stays machine-readable); a no-op when the path is unassigned (a
-    // pre-merge throw) or friction.json is absent or empty.
-    emitFrictionReport(frictionOut);
+    // pre-merge throw) or friction.json is absent or empty. On a run that reached
+    // the verdict this is ALREADY a no-op — the happy path emits it earlier, ahead
+    // of the baseline banner — so what is left here is the throw paths.
+    emitFrictionOnce();
     // Remove the signal handlers first (no listener leak across runs), then run
     // the same cleanup: release the lock, remove the harness dir, and remove the
     // vat-only grader dir (which lives outside harnessRoot).
