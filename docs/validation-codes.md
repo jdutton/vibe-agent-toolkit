@@ -920,6 +920,22 @@ Scope in v1: detectors run against SKILL.md and its transitively linked markdown
 - **Why it matters:** Absence of a target declaration is not the same as "compatible everywhere." Surfacing the gap lets adopters make the choice explicit.
 - **Fix:** Declare targets in `vibe-agent-toolkit.config.yaml` (`skills.config.<name>.targets`), `plugin.json`, or marketplace defaults.
 
+## Context Budget Codes
+
+*Fire from the resource projection — the always-loaded context a working directory pays before an agent reads a single line of the task.*
+
+Every other code in this document is about one file. These are about a *position
+in the tree*: what an agent starting work in a given directory is charged for
+having started there.
+
+### `ALWAYS_LOADED_CONTEXT_BUDGET`
+
+- **Default:** `info`
+- **What:** A working directory's always-loaded context exceeds the configured token budget. The measured chain is the repo-root `CLAUDE.md`/`AGENTS.md`, every one on the directory path down to the working directory, and one level of `@` imports from each of those.
+- **Why it matters:** This context is not optional and not lazy — it is prepended to the session before any task text, so it is paid in full on every single turn started in that directory, whether or not a word of it is relevant. The cost is also *inherited*: an oversized repo-root file is charged again to every directory beneath it, so one file can put an entire tree over budget while each individual file looks reasonable. The budget makes that inheritance visible; without it, the growth is invisible because no single edit ever looks expensive.
+- **Why `info` and not `warning`:** New rules ship at `info` or `warning` per [validation rule design](./validation-rule-design.md), and the threshold here is calibrated but has no corpus evidence behind it yet. The one production repository known to enforce an equivalent always-loaded chain budget ships its check deliberately warn-only for the same reason. A number that fails a build is a number people learn to stop reading; this one has to earn the right to block via the documented graduation path.
+- **Fix:** Raise or lower `resources.validation.thresholds.alwaysLoadedContextTokens` in `vibe-agent-toolkit.config.yaml` to move the budget, or set `resources.validation.severity.ALWAYS_LOADED_CONTEXT_BUDGET` to `ignore` to stop reporting it. Neither is usually the real fix: shrink an **ancestor** `CLAUDE.md` instead, because one oversized root file is paid in full by every directory beneath it, so trimming it is the single edit that lowers every reported directory at once.
+
 ## Meta Codes
 
 *Stance: see [Configuration Meta](./skill-quality-and-compatibility.md#configuration-meta).*

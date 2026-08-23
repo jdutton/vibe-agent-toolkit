@@ -535,6 +535,30 @@ export {
   type ContextTotals,
 } from './projection/claude-context-accounting.js';
 
+// The always-loaded budget over those charges — VAT's flagship projection check,
+// as a pure predicate. The threshold constant IS exported (unlike `OVERSIZE_BYTES`
+// above) because the CLI's config default reads it: a number the command
+// re-spelled would be a second copy of a measured quantity.
+export {
+  DEFAULT_ALWAYS_LOADED_CONTEXT_TOKENS,
+  alwaysLoadedBudget,
+  type AlwaysLoadedBudget,
+  type BudgetContributor,
+} from './projection/claude-context-budget.js';
+
+// That budget over the WHOLE tree, from one query per distinct instruction chain
+// rather than one per directory — 9 queries instead of 819 on VAT's own corpus.
+// The internals (`representativeFor`, `workingLocations`) stay unexported for the
+// reason `selectRules` does: pre-1.0, a published symbol is a contract, and the
+// collapse's soundness is guarded by the suite's differential oracle rather than
+// by anyone calling its pieces.
+export {
+  sweepAlwaysLoadedBudgets,
+  type BudgetSweep,
+  type BudgetSweepOptions,
+  type LocationBudget,
+} from './projection/claude-context-budget-sweep.js';
+
 // The COMPLEMENT of the query: what the loaded set POINTS AT in one hop and the
 // harness does not load. Its own row shape on purpose — a voluntary markdown link
 // has no honest `loadClass`, and folding it into `LoadedRow` would make the

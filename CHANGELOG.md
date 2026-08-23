@@ -78,6 +78,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`ALWAYS_LOADED_CONTEXT_BUDGET` — a default-on check on the always-loaded context a directory
+  pays.** `vat resources validate` (and so `vat validate`) now reports, at `info`, any working
+  directory whose always-loaded context exceeds a token budget. The measured chain is the repo-root
+  `CLAUDE.md`/`AGENTS.md`, every one on the directory path down to it, and **one level** of `@`
+  imports. Rules files are excluded — they are `selected`, not `always`.
+
+  **It reports, it does not gate.** `info` findings do not change the exit code, so no build goes red
+  from an upgrade. This is the first check to consume the resource projection, and it is a TypeScript
+  predicate over the projection's row model rather than SQL — no default-on check may require a query
+  engine.
+
+  - **Threshold: `resources.validation.thresholds.alwaysLoadedContextTokens`, default 12,000.** The
+    default is a property of the pipeline, not of the config file: a project with no
+    `vibe-agent-toolkit.config.yaml` runs the same check at the same number. Set the key to move the
+    budget, `resources.validation.severity.ALWAYS_LOADED_CONTEXT_BUDGET: ignore` to silence it, or
+    pass `--no-context-budget` to skip the work entirely. `--collection` skips it too — the budget is
+    a property of a position in the tree, not of a collection.
+  - **One finding per distinct context chain, not per directory.** Directories that load the same set
+    of files share one finding, which names how many working locations pay it. In this repository 819
+    directories collapse to 9 such chains — 553 of them load only the root `CLAUDE.md` — so a single
+    oversized root file produces one finding rather than 553 identical ones.
+  - **Gitignored directories are not working locations.** Build output still loads context (the
+    harness reads the filesystem, not git) but nobody works there, so `dist/`, `coverage/` and
+    friends are excluded from the report.
+  - **The total is a lower bound, and says so.** A global `~/.claude/CLAUDE.md` and the enabled skill
+    index are real always-loaded cost that a tree-only projection cannot see, and no per-directory
+    budget could act on them. Where rows were seen but not estimated, the message names the counts.
+
 - **`vat claude context <path>`** — reports which `CLAUDE.md` files, `.claude/rules` files and
   `@`-imported files load into an agent's context at that path, why each one is there, and its
   estimated token cost. A file argument is exact; a directory answers path-scoped rules as "may fire

@@ -62,7 +62,15 @@ and each takes it by default unless its escape hatch is set: `vat resources scan
 `› withResourcePopulationSource()` — both gated by `› resourcesProjectionCrawlSelected()`, which is
 `!== 'walk'`; `vat inventory` on a plugin directory; and `vat claude context`, which has no walk arm
 at all. Four more inherit one: `vat build`, `vat validate` and `vat verify` through the phases they
-spawn, and `vat skill test run` by re-entering `vat claude plugin build`. The raw `readdir`
+spawn, and `vat skill test run` by re-entering `vat claude plugin build`.
+
+⚠️ **`vat resources validate` is the first command to carry TWO projections in one process**, and
+they are not the same population: the resource population from `loadResourcesWithConfig()`, and the
+claude-context population `buildClaudeContextPopulation` builds for the default-on
+`ALWAYS_LOADED_CONTEXT_BUDGET` check. They answer different questions — *what files are here* versus
+*what does the harness load* — and the second deliberately does NOT decline gitignored paths, so the
+two disagree about the tree on purpose. Neither shares the other's enumeration. A reader counting
+"one projection per command" will get this row wrong. The raw `readdir`
 populations several commands build for themselves are un-modelled here on the same terms.
 `docs/architecture/command-population-matrix.md` §2–§5 is the accounting for the projection lane and
 those other routes — their selectors, extents and content stages; this table is deliberately not a
@@ -90,7 +98,7 @@ process" — a cross-process cache is the only kind that can help them.
 | `vat skill review` | `crawl` + `registry-md-html` | `skill/review.ts` |
 | `vat corpus scan` | `crawl` + `registry-md-html` | `corpus/index.ts` (inline; see limits) |
 | `vat resources scan` | `crawl` | `resources/scan.ts` |
-| `vat resources validate` | `crawl` | `resources/validate.ts` |
+| `vat resources validate` | `crawl` ×3 | `resources/validate.ts` — `crawl` once for the resource population via `packages/cli/src/utils/resource-loader.ts › loadResourcesWithConfig()`, **plus `crawl` ×2** for a SECOND, independent population: `› buildClaudeContextPopulation` behind the default-on `ALWAYS_LOADED_CONTEXT_BUDGET` check, which enumerates twice for the same root-discovery reason the `vat claude context` row gives. Skipped under `--no-context-budget` or `--collection` |
 | `vat skills list` | `crawl` | `skills/list.ts` |
 | `vat rag index` | `crawl` | `rag/index-command.ts` |
 | `vat claude context [paths...]` | `crawl` ×2 | `claude/context.ts` → `buildClaudeContextPopulation` → `FilesystemExtentContributor` → `crawlSourceFor` → `GitCrawlSource` **by default**, or `FilesystemCrawlSource` → `crawlDirectory` (this cell named only the filesystem source until 2026-08-22) |
