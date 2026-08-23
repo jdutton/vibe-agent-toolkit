@@ -9,21 +9,7 @@
 import { describeStdioBlocking, makeStdioBlocking, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
-import { createAgentCommand, showAgentVerboseHelp } from './commands/agent/index.js';
-import { createAuditCommand } from './commands/audit.js';
-import { createBuildTopLevelCommand } from './commands/build.js';
-import { createCacheCommand, registerCacheControl } from './commands/cache/index.js';
-import { createClaudeCommand } from './commands/claude/index.js';
-import { createCorpusCommand } from './commands/corpus/index.js';
-import { doctorCommand } from './commands/doctor.js';
-import { createInventoryCommand } from './commands/inventory.js';
-import { createMCPCommand } from './commands/mcp/index.js';
-import { createRagCommand, showRagVerboseHelp } from './commands/rag/index.js';
-import { createResourcesCommand, showResourcesVerboseHelp } from './commands/resources/index.js';
-import { createSkillCommand } from './commands/skill/index.js';
-import { createSkillsCommand } from './commands/skills/index.js';
-import { createValidateTopLevelCommand } from './commands/validate.js';
-import { createVerifyTopLevelCommand } from './commands/verify.js';
+import { registerCacheControl } from './commands/cache/cache-control.js';
 import { loadVerboseHelp, writeHelpSync } from './utils/help-loader.js';
 import { createLogger } from './utils/logger.js';
 import { version, getVersionString, type VersionContext } from './version.js';
@@ -140,7 +126,7 @@ if (process.argv.includes('resources') && process.argv.includes('--verbose')) {
   const hasSubcommand = afterResources.some(arg => !arg.startsWith('-'));
 
   if (!hasSubcommand) {
-    showResourcesVerboseHelp();
+    (await import('./commands/resources/index.js')).showResourcesVerboseHelp();
     process.exit(0);
   }
 }
@@ -154,7 +140,7 @@ if (process.argv.includes('rag') && process.argv.includes('--verbose')) {
   const hasSubcommand = afterRag.some(arg => !arg.startsWith('-'));
 
   if (!hasSubcommand) {
-    showRagVerboseHelp();
+    (await import('./commands/rag/index.js')).showRagVerboseHelp();
     process.exit(0);
   }
 }
@@ -168,31 +154,72 @@ if (process.argv.includes('agent') && process.argv.includes('--verbose')) {
   const hasSubcommand = afterAgent.some(arg => !arg.startsWith('-'));
 
   if (!hasSubcommand) {
-    showAgentVerboseHelp();
+    (await import('./commands/agent/index.js')).showAgentVerboseHelp();
     process.exit(0);
   }
 }
 
-// Add command groups (audit is common, should be first)
-program.addCommand(createAuditCommand());
-program.addCommand(createCorpusCommand());
-program.addCommand(createInventoryCommand());
-program.addCommand(createResourcesCommand());
-program.addCommand(createRagCommand());
-program.addCommand(createAgentCommand());
-program.addCommand(createMCPCommand());
-program.addCommand(createSkillsCommand());
-program.addCommand(createSkillCommand());
-program.addCommand(createClaudeCommand());
-program.addCommand(createCacheCommand());
+/**
+ * Every top-level command, behind a loader.
+ *
+ * The factories are NOT called at module scope. Each one transitively pulls
+ * `@vibe-agent-toolkit/resources` (~1.6s of module load on Windows, dominated
+ * by the markdown toolchain), so importing all fifteen made every invocation
+ * — `vat --version` included — pay for the whole CLI surface. Registration
+ * order here is the order they appear in `--help`; audit is common, so first.
+ */
+const COMMAND_LOADERS: Record<string, () => Promise<Command>> = {
+  audit: async () => (await import('./commands/audit.js')).createAuditCommand(),
+  corpus: async () => (await import('./commands/corpus/index.js')).createCorpusCommand(),
+  inventory: async () => (await import('./commands/inventory.js')).createInventoryCommand(),
+  resources: async () => (await import('./commands/resources/index.js')).createResourcesCommand(),
+  rag: async () => (await import('./commands/rag/index.js')).createRagCommand(),
+  agent: async () => (await import('./commands/agent/index.js')).createAgentCommand(),
+  mcp: async () => (await import('./commands/mcp/index.js')).createMCPCommand(),
+  skills: async () => (await import('./commands/skills/index.js')).createSkillsCommand(),
+  skill: async () => (await import('./commands/skill/index.js')).createSkillCommand(),
+  claude: async () => (await import('./commands/claude/index.js')).createClaudeCommand(),
+  cache: async () => (await import('./commands/cache/index.js')).createCacheCommand(),
+  build: async () => (await import('./commands/build.js')).createBuildTopLevelCommand(),
+  validate: async () => (await import('./commands/validate.js')).createValidateTopLevelCommand(),
+  verify: async () => (await import('./commands/verify.js')).createVerifyTopLevelCommand(),
+};
 
-// Add top-level orchestration commands
-program.addCommand(createBuildTopLevelCommand());
-program.addCommand(createValidateTopLevelCommand());
-program.addCommand(createVerifyTopLevelCommand());
+/** Registers `doctor`, which attaches itself to the program rather than being added. */
+const loadDoctor = async (): Promise<void> =>
+  (await import('./commands/doctor.js')).doctorCommand(program);
 
-// Add standalone commands
-doctorCommand(program);
+/**
+ * The command the user actually asked for, or `undefined`.
+ *
+ * The first non-flag argument — `undefined` for `vat` and `vat --version`, and
+ * an unrecognised name when the user typed something we do not have.
+ */
+const requestedCommand = process.argv.slice(2).find(arg => !arg.startsWith('-'));
+
+/**
+ * Whether this invocation is answerable without any command module.
+ *
+ * Only `--version`/`-V` is: commander prints the version itself. A bare `vat`
+ * and every unknown command render help, which must list the whole tree.
+ */
+const versionOnly =
+  requestedCommand === undefined
+  && process.argv.length > 2
+  && process.argv.slice(2).every(arg => arg === '--version' || arg === '-V');
+
+if (requestedCommand === 'doctor') {
+  await loadDoctor();
+} else if (requestedCommand !== undefined && requestedCommand in COMMAND_LOADERS) {
+  const load = COMMAND_LOADERS[requestedCommand];
+  /* c8 ignore next -- the `in` check above already proved the key is present */
+  if (load) program.addCommand(await load());
+} else if (!versionOnly) {
+  // Help, a bare `vat`, or an unknown command: the whole tree has to exist so
+  // `--help` lists it and `command:*` can report what was not recognised.
+  for (const load of Object.values(COMMAND_LOADERS)) program.addCommand(await load());
+  await loadDoctor();
+}
 
 // Handle unknown commands
 program.on('command:*', (operands) => {
