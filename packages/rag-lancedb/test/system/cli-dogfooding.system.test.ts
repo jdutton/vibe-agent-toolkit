@@ -194,13 +194,20 @@ describe('RAG CLI (Node.js dogfooding)', () => {
     // Pinned, not `> 0`: a chunker change is the thing most likely to move
     // indexing cost, and `> 0` cannot see it.
     //
-    // What the 8 is made of, and why it is not just a file count:
+    // What the 12 is made of, and why it is not just a file count:
     //   5 heading-section chunks — `overview.md` has two headings,
     //     `configuration.md`, `glossary.md` and `retrieval.md` one each, and
     //     every one of those sections is short enough to survive whole;
-    //   3 token-split chunks — `chunk-sizing.md` is a single ~1110-token
-    //     section, well past the effective target (`targetChunkSize` 512 ×
-    //     `paddingFactor` 0.9 = 460), so `chunkByTokens` divides it.
+    //   7 token-split chunks — `chunk-sizing.md` is a single ~1110-token
+    //     section, well past the effective target, so `chunkByTokens` divides it.
+    //
+    // The effective target is now DERIVED from the embedding provider rather
+    // than fixed: `targetChunkSize` defaults to the provider's own
+    // `maxInputTokens` (256 for the local all-MiniLM-L6-v2) and `paddingFactor`
+    // to 0.84, giving 215. It used to be a hardcoded 512 × 0.9 = 460 handed to a
+    // model that reads 256 — which truncated 84-86% of chunks and dropped 42-44%
+    // of the corpus before inference. This count went 8 → 12 because chunks now
+    // fit the model.
     //
     // That second term is the entire point of `chunk-sizing.md`.
     // `chunkResource` is a HYBRID: it splits on heading boundaries first and
@@ -211,11 +218,12 @@ describe('RAG CLI (Node.js dogfooding)', () => {
     // assumed: over the four short files this fixture started as, indexing
     // reported 5 chunks at `targetChunkSize` 64 AND at 2048, identically.
     // With `chunk-sizing.md` in the corpus the count now tracks the setting:
-    // 64 → 29, 512 → 8, 2048 → 6 (the long section fits whole again).
+    // 64 → 29, 215 (the derived default) → 12, 460 → 8, 2048 → 6 (the long
+    // section fits whole again).
     //
     // If this number changes, decide whether the chunker change was intended —
     // do not simply update it.
-    expect(output.chunksCreated).toBe(8);
+    expect(output.chunksCreated).toBe(12);
   }, 30000);
 
   it('should query indexed documentation via CLI', () => {

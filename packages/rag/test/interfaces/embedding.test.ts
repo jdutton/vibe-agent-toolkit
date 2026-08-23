@@ -13,6 +13,7 @@ describe('EmbeddingProvider Interface', () => {
       name: 'test-provider',
       model: 'test-model',
       dimensions: 384,
+      maxInputTokens: 8192,
       embed: (_text: string): Promise<number[]> => Promise.resolve([]),
       embedBatch: (_texts: string[]): Promise<number[][]> => Promise.resolve([]),
     };
@@ -21,6 +22,10 @@ describe('EmbeddingProvider Interface', () => {
     expect(mockProvider.name).toBe('test-provider');
     expect(mockProvider.model).toBe('test-model');
     expect(mockProvider.dimensions).toBe(384);
+    // Required, not optional: a provider that omits its real limit forces the
+    // consumer to guess one, which is exactly how 8191 ended up governing a
+    // 256-token local model.
+    expect(mockProvider.maxInputTokens).toBe(8192);
     expect(mockProvider.embed).toBeDefined();
     expect(mockProvider.embedBatch).toBeDefined();
   });
@@ -30,6 +35,7 @@ describe('EmbeddingProvider Interface', () => {
       name: 'test',
       model: 'test',
       dimensions: 384,
+      maxInputTokens: 8192,
       embed: (_text: string): Promise<number[]> => Promise.resolve([]),
       embedBatch: (): Promise<number[][]> => Promise.resolve([]),
     };
@@ -44,6 +50,7 @@ describe('EmbeddingProvider Interface', () => {
       name: 'test',
       model: 'test',
       dimensions: 384,
+      maxInputTokens: 8192,
       embed: (): Promise<number[]> => Promise.resolve([]),
       embedBatch: (_texts: string[]): Promise<number[][]> => Promise.resolve([]),
     };

@@ -8,9 +8,28 @@ import type { ChunkingConfig, RawChunk } from './types.js';
 import { calculateEffectiveTarget, splitByParagraphs } from './utils.js';
 
 /**
+ * The token budget one chunk may actually occupy.
+ *
+ * The caller's target is only half the story: a chunk the model cannot read is
+ * a chunk whose tail is silently discarded at inference time, so the budget is
+ * capped by `modelTokenLimit` regardless of how optimistic `targetChunkSize` is.
+ *
+ * @param config - Chunking configuration
+ * @returns Effective per-chunk token budget, never above the model's limit
+ */
+function chunkBudget(config: ChunkingConfig): number {
+  const target = calculateEffectiveTarget(config.targetChunkSize, config.paddingFactor);
+  return Math.min(target, config.modelTokenLimit);
+}
+
+/**
  * Chunk a large paragraph by lines
  *
  * When a single paragraph exceeds the effective target, split it into smaller chunks by lines.
+ *
+ * This is the last splitting strategy available: a line that on its own exceeds
+ * the model's limit cannot be made to fit by any boundary this chunker knows
+ * about, and is reported rather than embedded (and silently truncated).
  *
  * @param paragraph - The large paragraph to split
  * @param text - Original text for line number tracking
@@ -19,6 +38,7 @@ import { calculateEffectiveTarget, splitByParagraphs } from './utils.js';
  * @param config - Chunking configuration
  * @param metadata - Metadata to attach to chunks
  * @returns Array of raw chunks from this paragraph
+ * @throws If a single line exceeds the model's token limit
  */
 function chunkLargeParagraphByLines(
   paragraph: string,
@@ -29,7 +49,7 @@ function chunkLargeParagraphByLines(
   metadata?: { headingPath?: string; headingLevel?: number; startLine?: number; endLine?: number }
 ): RawChunk[] {
   const { tokenCounter } = config;
-  const effectiveTarget = calculateEffectiveTarget(config.targetChunkSize, config.paddingFactor);
+  const effectiveTarget = chunkBudget(config);
   const chunks: RawChunk[] = [];
 
   const lines = paragraph.split('\n');
@@ -39,6 +59,14 @@ function chunkLargeParagraphByLines(
 
   for (const line of lines) {
     const lineTokens = tokenCounter.count(line);
+
+    if (lineTokens > config.modelTokenLimit) {
+      throw new Error(
+        `A single line of ${lineTokens} tokens exceeds the model token limit ` +
+          `(${config.modelTokenLimit}) and has no paragraph or line boundary left to split on. ` +
+          'Consider splitting by sentences or reducing content.'
+      );
+    }
 
     // If adding this line would exceed target, save current chunk
     if (lineChunkTokens > 0 && lineChunkTokens + lineTokens > effectiveTarget) {
@@ -97,20 +125,17 @@ function createChunkWithLineNumbers(
 /**
  * Chunk text by token count
  *
- * Splits text when it exceeds the effective target size (targetChunkSize * paddingFactor).
+ * Splits text when it exceeds the effective target size (targetChunkSize * paddingFactor,
+ * capped by the model's own limit — see {@link chunkBudget}).
  * Respects paragraph boundaries when possible, falls back to line splitting for large paragraphs.
- *
- * Complexity note: This function handles multiple chunking strategies (early return, paragraph-level,
- * line-level fallback) with position tracking for accurate line numbers. The core loop requires
- * coordinated state management that doesn't simplify well into smaller functions without losing
- * clarity. Helper functions already extracted for line-level chunking and chunk creation.
+ * A paragraph over the model's limit is therefore split, not rejected; only a single line
+ * that still exceeds the limit — nothing left to split on — is reported as an error.
  *
  * @param text - Text to chunk
  * @param config - Chunking configuration
  * @param metadata - Optional metadata to attach to chunks
  * @returns Array of raw chunks
  */
-// eslint-disable-next-line sonarjs/cognitive-complexity
 export function chunkByTokens(
   text: string,
   config: ChunkingConfig,
@@ -120,8 +145,8 @@ export function chunkByTokens(
     return [];
   }
 
-  const { targetChunkSize, modelTokenLimit, paddingFactor, tokenCounter } = config;
-  const effectiveTarget = calculateEffectiveTarget(targetChunkSize, paddingFactor);
+  const { tokenCounter } = config;
+  const effectiveTarget = chunkBudget(config);
 
   // Check if entire text fits
   const totalTokens = tokenCounter.count(text);
@@ -149,14 +174,6 @@ export function chunkByTokens(
 
   for (const paragraph of paragraphs) {
     const paragraphTokens = tokenCounter.count(paragraph);
-
-    // Check if paragraph itself exceeds model limit
-    if (paragraphTokens > modelTokenLimit) {
-      throw new Error(
-        `Paragraph exceeds model token limit (${paragraphTokens} > ${modelTokenLimit}). ` +
-          'Consider splitting by sentences or reducing content.'
-      );
-    }
 
     // Find this paragraph in the original text
     const paragraphIndex = text.indexOf(paragraph.trim(), textPosition);

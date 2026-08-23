@@ -173,8 +173,9 @@ const tokens = counter.count('Hello world'); // ~3 tokens (bytes/4)
 **Characteristics:**
 - **Speed**: Very fast (< 1ms for long text)
 - **Accuracy**: ~75% accurate for English text
-- **Recommended padding factor**: 0.8 (80% of target)
-- **Use case**: Quick validation, ResourceRegistry estimation
+- **Use case**: Quick validation, ResourceRegistry estimation — not chunking for
+  embedding (the derived chunk budget is calibrated against cl100k counts, which
+  this counter does not produce)
 
 #### ApproximateTokenCounter
 
@@ -190,36 +191,49 @@ const tokens = counter.count('Hello world'); // 2 tokens (accurate)
 **Characteristics:**
 - **Speed**: Fast (< 10ms for long text)
 - **Accuracy**: ~95% accurate (GPT-3.5/GPT-4 tokenization)
-- **Recommended padding factor**: 0.9 (90% of target)
-- **Use case**: RAG chunking, embedding preparation
+- **Use case**: RAG chunking, embedding preparation — this is the counter the
+  derived padding factor assumes
 
 ### Choosing a Token Counter
 
-| Counter | Speed | Accuracy | Padding Factor | Use Case |
-|---------|-------|----------|----------------|----------|
-| FastTokenCounter | Very Fast | ~75% | 0.8 | Quick estimation |
-| ApproximateTokenCounter | Fast | ~95% | 0.9 | RAG chunking |
+| Counter | Speed | Accuracy | Use Case |
+|---------|-------|----------|----------|
+| FastTokenCounter | Very Fast | ~75% | Quick estimation |
+| ApproximateTokenCounter | Fast | ~95% | RAG chunking |
+
+The padding factor is deliberately absent from this table: it is not a property
+of the counter you pick. It is derived from the *model's* token limit — see below.
 
 ### Padding Factor
 
 The padding factor provides a safety margin to avoid exceeding embedding model token limits:
 
 ```typescript
-const targetChunkSize = 512; // tokens
-const paddingFactor = 0.9; // 90%
-const effectiveTarget = targetChunkSize * paddingFactor; // 460 tokens
+const targetChunkSize = embeddingProvider.maxInputTokens; // e.g. 256 locally
+const paddingFactor = 0.84;
+const effectiveTarget = targetChunkSize * paddingFactor; // 215 tokens
 
 // Chunk to effective target to avoid splits from estimation error
 ```
 
+You should not compute this yourself: `resolveChunkingConfig()` in
+`@vibe-agent-toolkit/rag-lancedb` derives both numbers from the provider and
+warns when an override puts chunks back over the model's limit.
+
 **Why padding matters:**
 - Token estimation may be imperfect
 - Targeting exact limit might exceed it, forcing inefficient splits
-- Lower accuracy = lower padding factor (more safety margin)
+- The counter and the model may not share a tokenizer at all: the counters here
+  measure in cl100k, while a local BERT model splits the same text into ~1.13-1.18x
+  more WordPiece tokens. The margin has to cover that gap plus `[CLS]`/`[SEP]`,
+  or full chunks overflow even when the target equals the model's limit exactly.
 
 ## Embedding Providers
 
 Embedding providers convert text to vector embeddings for semantic search.
+
+Full guide — the interface contract, both built-in providers, custom providers,
+and troubleshooting: [Embedding Providers](../../docs/embedding-providers.md).
 
 ### Available Implementations
 
@@ -246,9 +260,21 @@ const embeddings = await provider.embedBatch(['text1', 'text2', 'text3']);
 - **Cost**: Free (no API calls)
 - **API Key**: Not required
 - **Dimensions**: 384 (all-MiniLM-L6-v2)
+- **Max input tokens**: 256 — all-MiniLM-L6-v2 was trained at 256 positions, so
+  this is a property of the model, not a tunable. The `maxSequenceLength` config
+  option publishes it as `maxInputTokens`; raising it to make chunks "fit" only
+  moves the truncation from the chunker to the model.
 - **Use case**: Default choice for most projects
 
 **First run**: Downloads model (~23MB int8-quantized for all-MiniLM-L6-v2)
+
+**Teardown**: implements `dispose()`. The WASM backend has no finalizer, so a
+session that is never released leaks for the life of the process. The provider
+reloads transparently if it is used again after disposal.
+
+**Truncation reporting**: exposes a `truncationStats` snapshot and an
+`onTruncation` callback — non-zero `tokensDropped` means the corpus that was
+indexed is not the corpus the model saw.
 
 #### OpenAIEmbeddingProvider (Optional)
 
@@ -279,16 +305,22 @@ const customProvider = new OpenAIEmbeddingProvider({
 - **Cost**: Paid (per token)
 - **API Key**: Required
 - **Dimensions**: 1536 (small) or 3072 (large)
+- **Max input tokens**: 8192 for `text-embedding-3-*`, 8191 for ada-002 — looked
+  up per model, with 8191 (the lowest documented limit) for an unrecognized one
 - **Use case**: Production agents requiring highest quality
 
 **Installation**: `bun add openai` (optional dependency)
 
 ### Choosing an Embedding Provider
 
-| Provider | Speed | Quality | Cost | Dimensions | Use Case |
-|----------|-------|---------|------|------------|----------|
-| OnnxEmbeddingProvider | Fast | Good | Free | 384 | Default choice |
-| OpenAIEmbeddingProvider | Medium | Excellent | Paid | 1536-3072 | Production, high quality |
+| Provider | Speed | Quality | Cost | Dimensions | `maxInputTokens` | Use Case |
+|----------|-------|---------|------|------------|------------------|----------|
+| OnnxEmbeddingProvider | Fast | Good | Free | 384 | 256 | Default choice |
+| OpenAIEmbeddingProvider | Medium | Excellent | Paid | 1536-3072 | 8192 (8191 ada-002) | Production, high quality |
+
+Dimensions tell you nothing about the input limit — these two differ by 32x on
+it. Anything that sizes text for a model must read the limit off the provider in
+use.
 
 ### Model Selection Guidelines
 
@@ -321,6 +353,7 @@ Chunking utilities split documents into semantic chunks for embedding and retrie
 ```typescript
 import { chunkResource, enrichChunks } from '@vibe-agent-toolkit/rag';
 import { ApproximateTokenCounter } from '@vibe-agent-toolkit/rag';
+import { resolveChunkingConfig } from '@vibe-agent-toolkit/rag-lancedb';
 import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
 
 // 1. Get resource from ResourceRegistry
@@ -334,12 +367,20 @@ const frontmatter = /* parse frontmatter */;
 const resource = { ...metadata, content, frontmatter };
 
 // 3. Configure chunking
-const config = {
-  targetChunkSize: 512,         // Ideal chunk size
-  modelTokenLimit: 8191,         // Hard limit (embedding model)
-  paddingFactor: 0.9,            // 90% of target (safety margin)
+//
+// Prefer `resolveChunkingConfig()` from `@vibe-agent-toolkit/rag-lancedb`, which
+// derives the whole budget from the provider and returns warnings. Spelled out
+// here only to show what it produces; every number comes off the provider, never
+// from a constant.
+const { config, warnings } = resolveChunkingConfig({
+  embeddingProvider,
   tokenCounter: new ApproximateTokenCounter(),
-};
+  targetChunkSize: undefined,    // derive from the provider
+  paddingFactor: undefined,      // derive from the provider
+});
+for (const warning of warnings) console.warn(warning);
+// => { targetChunkSize: 256, modelTokenLimit: 256, paddingFactor: 0.84, ... }
+//    for the default local model; 8192 / 8192 / 0.84 for text-embedding-3-small.
 
 // 4. Chunk the resource
 const result = chunkResource(resource, config);
@@ -355,27 +396,33 @@ const ragChunks = enrichChunks(
   result.chunks,
   resource,
   embeddings,
-  'text-embedding-3-small'
+  embeddingProvider.model
 );
 ```
 
 ### Configuration
 
-| Option | Description | Example |
-|--------|-------------|---------|
-| `targetChunkSize` | Ideal chunk size in tokens | 512 |
-| `modelTokenLimit` | Hard limit (embedding model) | 8191 (OpenAI) |
-| `paddingFactor` | Safety margin (0.8-1.0) | 0.9 (ApproximateTokenCounter) |
+| Option | Description | Source |
+|--------|-------------|--------|
+| `targetChunkSize` | Ideal chunk size in tokens | `embeddingProvider.maxInputTokens` |
+| `modelTokenLimit` | Hard limit — read it off the provider, never hardcode | `embeddingProvider.maxInputTokens` |
+| `paddingFactor` | Safety margin (0.8-1.0) | derived by `resolveChunkingConfig()`; ~0.84 for both built-in providers |
 | `tokenCounter` | Token counter to use | ApproximateTokenCounter |
-| `minChunkSize` | Minimum chunk size (optional) | 50 |
+| `minChunkSize` | Minimum chunk size (optional) | declared on `ChunkingConfig`, but no chunker currently reads it — setting it has no effect |
+
+Every `EmbeddingProvider` publishes `maxInputTokens`, its model's real per-input
+token limit, as a required member precisely so no consumer has to guess. Why it
+is required and how to source it for a custom provider:
+[Embedding Providers](../../docs/embedding-providers.md#maxinputtokens-is-a-measurement-not-a-setting).
 
 ### Padding Factor Guidelines
 
-See [Token Counters](#token-counters) for padding factor recommendations:
-- **FastTokenCounter**: 0.8 (80% of target)
-- **ApproximateTokenCounter**: 0.9 (90% of target)
-
-Lower accuracy = lower padding factor (more safety margin)
+Don't pick one. `resolveChunkingConfig()` derives it from the model's limit as
+roughly `(limit - 2) / (limit * 1.18)` — the two special tokens plus the gap
+between the chunker's cl100k counts and the model's own tokenizer — which lands
+near **0.84** for both built-in providers. There are no longer per-counter
+recommendations: a factor chosen for the counter (0.9, say) overruns a
+256-token model, and `resolveChunkingConfig()` will warn if you pass one.
 
 ### Utilities
 
@@ -398,8 +445,8 @@ const paragraphs = splitByParagraphs(text);
 // Generate content hash for change detection
 const hash = generateContentHash(content);
 
-// Calculate effective target with padding
-const effectiveTarget = calculateEffectiveTarget(512, 0.9); // 460
+// Calculate effective target with padding (both numbers derived, not chosen)
+const effectiveTarget = calculateEffectiveTarget(256, 0.84); // 215
 ```
 
 ## API Reference
@@ -437,13 +484,43 @@ Interface for embedding providers (onnx, OpenAI, etc.)
 
 ```typescript
 interface EmbeddingProvider {
+  /** Provider name: "openai", "onnx", etc. */
   name: string;
+
+  /** Model name: "text-embedding-3-small", "all-MiniLM-L6-v2", etc. */
   model: string;
+
+  /** Embedding vector dimensions */
   dimensions: number;
+
+  /**
+   * Maximum number of tokens this provider's model reads for a single input,
+   * INCLUDING whatever special tokens its tokenizer adds.
+   *
+   * Required, deliberately: it is a hard property of the model, and text beyond
+   * it is discarded before inference. Look it up per model — never copy one
+   * constant across models, and never restate it in a decorator (delegate to
+   * the wrapped provider instead).
+   */
+  maxInputTokens: number;
+
   embed(text: string): Promise<number[]>;
+
   embedBatch(texts: string[]): Promise<number[][]>;
+
+  /**
+   * Release any resources held by the provider (optional).
+   *
+   * Implement it only if the provider holds a native or long-lived resource
+   * (an inference session, a socket). No-op for pure-JS/HTTP providers.
+   */
+  dispose?(): Promise<void>;
 }
 ```
+
+Writing your own provider: see
+[Embedding Providers](../../docs/embedding-providers.md#creating-a-custom-provider)
+for a complete worked implementation and the rules around `maxInputTokens`.
 
 #### TokenCounter
 

@@ -20,6 +20,24 @@ export interface EmbeddingProvider {
   dimensions: number;
 
   /**
+   * Maximum number of tokens this provider's model reads for a single input,
+   * INCLUDING whatever special tokens its tokenizer adds.
+   *
+   * This is a hard property of the model, not a preference: text beyond it is
+   * discarded before inference, so anything that decides how much text to hand
+   * over (a chunker, a batcher) must size its work against THIS number.
+   *
+   * Required, deliberately. It was previously absent, and the only consumer —
+   * the chunker in `@vibe-agent-toolkit/rag-lancedb` — filled the hole with a
+   * hardcoded 8191 (OpenAI ada-002's limit) for every provider, including a
+   * local model that reads 256. The result was 84-86% of chunks truncated and
+   * 42-44% of every corpus never reaching the model, with the "exceeds model
+   * token limit" guard permanently unable to fire. An optional field with a
+   * fallback would reproduce exactly that bug for any provider that forgot it.
+   */
+  maxInputTokens: number;
+
+  /**
    * Embed a single text chunk
    *
    * @param text - Text to embed

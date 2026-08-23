@@ -12,4 +12,6 @@ export {
 export {
   OnnxEmbeddingProvider,
   type OnnxEmbeddingConfig,
+  type TruncationEvent,
+  type TruncationStats,
 } from './onnx-embedding-provider.js';

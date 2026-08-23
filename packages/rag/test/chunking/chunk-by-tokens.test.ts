@@ -97,8 +97,9 @@ describe('chunkByTokens', () => {
     });
   });
 
-  it('should throw error if single paragraph exceeds model limit', () => {
-    const longText = 'word '.repeat(10000); // Very long text
+  it('should throw error if a single unsplittable line exceeds model limit', () => {
+    // One line, no paragraph or line boundary to split on: genuinely unsplittable.
+    const longText = 'word '.repeat(10000);
     const config = {
       targetChunkSize: 512,
       modelTokenLimit: 100, // Very small limit
@@ -107,5 +108,51 @@ describe('chunkByTokens', () => {
     };
 
     expect(() => chunkByTokens(longText, config)).toThrow();
+  });
+
+  it('should split a multi-line paragraph larger than the model limit instead of rejecting it', () => {
+    // A prose block with no blank lines is ONE paragraph, so its token count
+    // exceeds any realistic model limit — but every individual line fits, so it
+    // is splittable and must not be rejected.
+    const paragraph = Array.from(
+      { length: 20 },
+      (_, i) =>
+        `Line ${i + 1}: detailed content for line ${i + 1} with extensive information about methodology, results and analysis.`,
+    ).join('\n');
+    const config = {
+      targetChunkSize: 256,
+      modelTokenLimit: 256, // The real limit of the default local model
+      paddingFactor: 0.84,
+      tokenCounter,
+    };
+
+    const chunks = chunkByTokens(paragraph, config);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(tokenCounter.count(chunk.content)).toBeLessThanOrEqual(config.modelTokenLimit);
+    }
+  });
+
+  it('should never emit a chunk above the model limit when targetChunkSize exceeds it', () => {
+    // Misconfigured caller: target is above what the model can read. The budget
+    // must be capped by the model limit, not by the caller's optimism.
+    const text = Array.from(
+      { length: 12 },
+      (_, i) => `Paragraph ${i + 1} carries roughly forty tokens of ordinary prose about a topic of no importance whatsoever.`,
+    ).join('\n\n');
+    const config = {
+      targetChunkSize: 512,
+      modelTokenLimit: 64,
+      paddingFactor: 0.9,
+      tokenCounter,
+    };
+
+    const chunks = chunkByTokens(text, config);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(tokenCounter.count(chunk.content)).toBeLessThanOrEqual(config.modelTokenLimit);
+    }
   });
 });

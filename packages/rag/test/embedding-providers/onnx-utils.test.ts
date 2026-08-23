@@ -362,6 +362,37 @@ describe('BertTokenizer', () => {
       expect(result.inputIds).toEqual([CLS_TOKEN, SEP_TOKEN]);
       expect(result.attentionMask).toEqual([1, 1]);
     });
+
+    it('should report exactly how many content tokens truncation dropped', () => {
+      // Truncation used to `break` out of the loop with no throw, warning,
+      // counter or flag — 42-44% of a real corpus vanished into the model
+      // without a single observable signal. The dropped count is that signal.
+      const maxLength = 5; // [CLS] + 3 content + [SEP]
+      // longPhrase is 8 in-vocab single-piece words => 8 content tokens.
+      const expectedDropped = 5;
+
+      const result = tokenizer.tokenize(longPhrase, maxLength);
+
+      expect(result.droppedTokens).toBe(expectedDropped);
+    });
+
+    it('should report zero dropped tokens when the text fits', () => {
+      const result = tokenizer.tokenize(helloWorld);
+
+      expect(result.droppedTokens).toBe(0);
+    });
+
+    it('should report the dropped count without altering the truncated ids', () => {
+      // The counter must be a pure observation: same ids as before, plus a number.
+      const maxLength = 5;
+
+      const result = tokenizer.tokenize(longPhrase, maxLength);
+
+      expect(result.inputIds.length).toBe(maxLength);
+      expect(safeGet(result.inputIds, 0)).toBe(CLS_TOKEN);
+      expect(safeGet(result.inputIds, result.inputIds.length - 1)).toBe(SEP_TOKEN);
+      expect(result.attentionMask.length).toBe(result.inputIds.length);
+    });
   });
 
   describe('tokenizeBatch', () => {
@@ -419,6 +450,23 @@ describe('BertTokenizer', () => {
       // "hello world" = [CLS] + hello + world + [SEP] = 4 tokens
       const expectedMaxLen = 4;
       expect(result.maxLen).toBe(expectedMaxLen);
+    });
+
+    it('should report how many texts in the batch were truncated and what it cost', () => {
+      const maxLength = 5; // [CLS] + 3 content + [SEP]
+      const expectedDropped = 5; // only longPhrase overflows: 8 content tokens, 3 kept
+
+      const result = tokenizer.tokenizeBatch([helloWorld, longPhrase], maxLength);
+
+      expect(result.truncatedTexts).toBe(1);
+      expect(result.droppedTokens).toBe(expectedDropped);
+    });
+
+    it('should report no truncation for a batch that fits', () => {
+      const result = tokenizer.tokenizeBatch(['hello', helloWorld]);
+
+      expect(result.truncatedTexts).toBe(0);
+      expect(result.droppedTokens).toBe(0);
     });
   });
 });

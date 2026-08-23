@@ -27,6 +27,7 @@ import { rm } from 'node:fs/promises';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { resolveChunkingConfig } from '../../src/chunking-config.js';
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
 import { createTempDir, createTestMarkdownFile, createTestResource } from '../test-helpers.js';
 
@@ -53,7 +54,12 @@ async function indexTestChunksWithMetadata<TMetadata extends Record<string, unkn
   );
   const chunks = chunkResource(
     { ...resource, content: parseResult.content, frontmatter: {} },
-    { targetChunkSize: 512, modelTokenLimit: 8191, paddingFactor: 0.9, tokenCounter: new ApproximateTokenCounter() }
+    resolveChunkingConfig({
+      embeddingProvider: provider['config'].embeddingProvider,
+      tokenCounter: new ApproximateTokenCounter(),
+      targetChunkSize: undefined,
+      paddingFactor: undefined,
+    }).config
   );
   const embeddings = await provider['config'].embeddingProvider.embedBatch(
     chunks.chunks.map((c) => c.content)
@@ -455,7 +461,12 @@ Content for section 4 with even more text.`
       );
       const securityChunks = chunkResource(
         { ...securityResource, content: securityParseResult.content, frontmatter: {} },
-        { targetChunkSize: 512, modelTokenLimit: 8191, tokenCounter: new ApproximateTokenCounter() }
+        resolveChunkingConfig({
+          embeddingProvider: customProvider['config'].embeddingProvider,
+          tokenCounter: new ApproximateTokenCounter(),
+          targetChunkSize: undefined,
+          paddingFactor: undefined,
+        }).config
       );
       const securityEmbeddings = await customProvider['config'].embeddingProvider.embedBatch(
         securityChunks.chunks.map((c) => c.content)
@@ -484,7 +495,12 @@ Content for section 4 with even more text.`
       );
       const apiChunks = chunkResource(
         { ...apiResource, content: apiParseResult.content, frontmatter: {} },
-        { targetChunkSize: 512, modelTokenLimit: 8191, tokenCounter: new ApproximateTokenCounter() }
+        resolveChunkingConfig({
+          embeddingProvider: customProvider['config'].embeddingProvider,
+          tokenCounter: new ApproximateTokenCounter(),
+          targetChunkSize: undefined,
+          paddingFactor: undefined,
+        }).config
       );
       const apiEmbeddings = await customProvider['config'].embeddingProvider.embedBatch(
         apiChunks.chunks.map((c) => c.content)
