@@ -41,6 +41,7 @@ export {
   type ToolVerdictBody,
 } from './tool-eval-schema.js';
 export {
+  GradingArmError,
   GradingNonceError,
   GradingSkewError,
   parseGradingJson,

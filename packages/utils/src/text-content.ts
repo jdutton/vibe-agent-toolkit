@@ -336,9 +336,9 @@ function decodeUtf32(
  * Count the U+FFFD in a string that a fatal decode already refused.
  *
  * Only ever called on input known to be malformed, which is what keeps the O(n)
- * scan off the common path. `charCodeAt` rather than a regex or a split: U+FFFD
- * is a BMP character, so a code-unit comparison is exact here and allocates
- * nothing on a string that may be megabytes long.
+ * scan off the common path. A scan rather than a regex or a split: it allocates
+ * nothing on a string that may be megabytes long. U+FFFD is a BMP character, so
+ * the comparison is exact whether the index lands on it or on a surrogate half.
  *
  * @param text - The substituting decoder's output
  * @returns How many replacement characters it contains
@@ -346,7 +346,7 @@ function decodeUtf32(
 function countReplacementCharacters(text: string): number {
   let count = 0;
   for (let index = 0; index < text.length; index += 1) {
-    if (text.charCodeAt(index) === REPLACEMENT_CODE_POINT) count += 1;
+    if (text.codePointAt(index) === REPLACEMENT_CODE_POINT) count += 1;
   }
   return count;
 }

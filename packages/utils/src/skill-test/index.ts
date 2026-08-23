@@ -2,6 +2,7 @@ export {
   applyDeclaredEnv,
   buildForwardedEnv,
   formatForwardedEnvLine,
+  isProtectedName,
   protectedEnvNames,
   type DeclaredEnvInput,
   type DeclaredEnvResult,

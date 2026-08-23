@@ -28,6 +28,14 @@ export interface SkillTestConfigureOptions {
   timeout?: string;
   stall?: string;
   model?: string;
+  /**
+   * Tri-state, like `run`'s: `true` from `--baseline`, `false` from
+   * `--no-baseline`, `undefined` when neither was typed — and only `undefined`
+   * leaves an existing `baseline:` in the config alone. Commander gives this shape
+   * only because `--baseline` is declared BEFORE `--no-baseline`; declaring the
+   * negation first would default it to `true` and make every `configure` call
+   * silently commit a baseline.
+   */
   baseline?: boolean;
   evals?: string;
   print?: boolean;
@@ -50,7 +58,16 @@ function parsePositiveFloat(value: string, flag: string): number {
   return n;
 }
 
-function buildKnobs(
+/**
+ * Assemble the knob patch handed to `upsertTestConfig`. Exported for testing: the
+ * option DECLARATIONS were pinned (Commander's `--baseline`/`--no-baseline`
+ * tri-state) and `upsertTestConfig` writes `false` correctly, but the assembly
+ * between them — the step that decides which typed flags become knobs at all — was
+ * not, so both `if (options.baseline === true)` (a `--no-baseline` that silently
+ * does nothing, i.e. the exact regression `--no-baseline` exists to prevent) and
+ * deleting the branch outright left the whole CLI suite green.
+ */
+export function buildKnobs(
   options: SkillTestConfigureOptions,
 ): Parameters<typeof upsertTestConfig>[2] {
   const knobs: Parameters<typeof upsertTestConfig>[2] = {};
@@ -137,11 +154,23 @@ export function createSkillTestConfigureCommand(): Command {
     .argument('<skill>', 'Skill name (key under skills.config)')
     .option('--auth <mode>', 'Auth mechanism: inherit | subscription | api-key | auto')
     .option('--max-turns <n>', 'Per-spawn cap on executor/grader turns (positive integer)')
-    .option('--max-budget-usd <n>', 'Hard USD budget cap (positive number)')
+    .option('--max-budget-usd <n>', 'Per-spawn USD budget cap, applied to EACH executor and grader spawn (positive number). Not a whole-run ceiling: a baseline run has twice the spawns, so twice the worst-case spend.')
     .option('--timeout <s>', 'Wall-clock timeout in seconds (positive integer)')
     .option('--stall <s>', 'Stall-watchdog seconds (positive integer)')
     .option('--model <id>', 'Pinned model ID for reproducibility')
-    .option('--baseline', 'Enable with/without A/B baseline run')
+    // `--baseline` MUST stay declared BEFORE `--no-baseline`, for the same Commander
+    // reason it is on `run`: only a pre-existing positive option leaves the value
+    // undefined when neither flag is typed. A lone negated option defaults it to
+    // `true`, which here would write `baseline: true` into the config on every
+    // `configure` invocation that never mentioned baseline at all.
+    .option(
+      '--baseline',
+      "Make the with/without A/B PERMANENT for this skill: every later `skill test run` then runs each eval TWICE, roughly doubling its spend (override for one run with `run --no-baseline`). It measures the skill's INSTRUCTIONS, not capability -- both arms share a filesystem, so check baselineIntegrity in baseline.json before trusting a delta.",
+    )
+    .option(
+      '--no-baseline',
+      'Persist `baseline: false` for this skill, turning a committed baseline back OFF. Without it the setting could only ever be written true by this command and had to be removed by hand. Omit both flags to leave the knob untouched.',
+    )
     .option(
       '--evals <path>',
       "Path to evals.json, recorded in config as-is: relative to the skill source, absolute, or an npm bare specifier. (Note the asymmetry with `skill test run --evals`, which resolves against the current directory — config travels with the skill, a flag is typed by an operator.)",

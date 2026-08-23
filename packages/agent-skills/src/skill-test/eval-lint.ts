@@ -12,7 +12,7 @@
  * backstop for eval quality.
  */
 
-import { isSingleEditAway, type EvalEntry } from './eval-inputs.js';
+import { isSingleEditAway, quoteSuiteText, type EvalEntry } from './eval-inputs.js';
 
 /** One advisory finding: `evalId` names the offending eval, `message` is the full advisory text. */
 export interface EvalLintWarning {
@@ -142,6 +142,19 @@ function probableDeclaredTypoTarget(
  * not close to any declared name (a deliberate built-in/system tool reference), is
  * never flagged. When the skill declares no executables there is nothing to compare
  * against, so it returns no warnings. Pure + side-effect free.
+ *
+ * ⚠️ EVERY INTERPOLATED NAME IS NEUTRALIZED WITH {@link quoteSuiteText}, at the point
+ * of CONSTRUCTION rather than at the stderr write, so the message is safe wherever it
+ * is later carried. Both populations here are untrusted: `toolExpectations.*` is
+ * `z.array(z.string().min(1))` with no charset constraint on a `.passthrough()` entry,
+ * and `resolveEvalSuitePath` will harvest the suite out of a FETCHED artifact — i.e.
+ * out of the skill under test; the declared names come from that same skill's
+ * manifest. `run-harness.ts` writes this text with no sanitizer of its own, and does
+ * it at Step 5.5 — AHEAD of the `--i-understand-this-runs-skill-code` gate and ahead
+ * of the `--dry-run` short-circuit, so an unsanitized name repaints the terminal of a
+ * run that spawned nothing and that the operator believes never executed skill code.
+ * Matching still happens on the RAW value, so neutralization cannot change which
+ * names are flagged.
  */
 export function lintToolExpectationExecutables(
   evals: EvalEntry[],
@@ -150,7 +163,7 @@ export function lintToolExpectationExecutables(
   const warnings: EvalLintWarning[] = [];
   const declared = declaredExecutableNames.map((original) => ({ original, normalized: normalizeExecutableName(original) }));
   if (declared.length === 0) return warnings;
-  const declaredList = declared.map((d) => d.original).join(', ');
+  const declaredList = declared.map((d) => quoteSuiteText(d.original)).join(', ');
   for (const entry of evals) {
     const evalId = String(entry.id);
     const seen = new Set<string>();
@@ -162,8 +175,8 @@ export function lintToolExpectationExecutables(
       warnings.push({
         evalId,
         message:
-          `eval "${evalId}": toolExpectation references executable "${name}", which no declared executable matches — ` +
-          `did you mean "${target}"? A name that never matches a real tool makes mustRun/mustSucceed/sequence fail ` +
+          `eval "${evalId}": toolExpectation references executable "${quoteSuiteText(name)}", which no declared executable matches — ` +
+          `did you mean "${quoteSuiteText(target)}"? A name that never matches a real tool makes mustRun/mustSucceed/sequence fail ` +
           `for the wrong reason (or mustNotRun pass vacuously). Declared executables: ${declaredList}.`,
       });
     }

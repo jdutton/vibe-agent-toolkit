@@ -1,6 +1,8 @@
+import { createHash } from 'node:crypto';
+
 import type { EvalFragment } from './eval-fragment.js';
 import { FrictionReportSchema, type FrictionReport } from './friction-schema.js';
-import { GradingNonceError, type NormalizedGrading } from './grading-adapter.js';
+import { GradingArmError, GradingNonceError, type NormalizedGrading } from './grading-adapter.js';
 import { ToolEvalReportSchema, type ToolEvalReport } from './tool-eval-schema.js';
 
 /**
@@ -15,18 +17,76 @@ import { ToolEvalReportSchema, type ToolEvalReport } from './tool-eval-schema.js
  * stale, or left behind by untrusted skill code in the shared sandbox) and is
  * rejected via {@link GradingNonceError}, never silently dropped.
  *
+ * The nonce is CONSUMED here, not republished: the returned report carries none.
+ * It used to, and the caller writes that report verbatim to `results/grading.json`
+ * — so the one value four separate docblocks promise "never touches disk" was on
+ * disk in two artifacts, in a directory `--out`/`--keep` can place inside a repo.
+ *
+ * Every fragment must ALSO belong to the `arm` being assembled (a fragment with
+ * no `arm` of its own is a default-'with' fragment — see
+ * {@link import('./eval-fragment.js').EvalFragmentSchema}); a fragment from the
+ * other arm is rejected via {@link GradingArmError} for the same reason a stale
+ * nonce is: the merged count would no longer be a measurement of one arm, and
+ * that is exactly the number `--baseline` subtracts. `arm` is REQUIRED, not
+ * defaulted, because a default is precisely how a caller would silently
+ * mislabel the control artifact as the treatment one.
+ *
+ * The returned report carries that `arm`, and every merged expectation carries
+ * its source fragment's `evalId` — together these are what let a reader holding
+ * ONE of the two `--baseline` artifacts say which arm it is, and line the two up
+ * per eval to compute a delta at all.
+ *
  * Zero fragments in → zero expectations out. This is deliberate: the existing
  * "graded nothing" guard in `reconcileGrading` already throws
  * `GradingSkewError` on an empty `expectations[]`, so that case is NOT
  * special-cased here.
  */
-export function mergeFragmentsToGrading(fragments: EvalFragment[], runNonce: string): NormalizedGrading {
+/** How much of the nonce digest to print — enough to tell two runs apart by eye. */
+const NONCE_FINGERPRINT_LENGTH = 12;
+
+/**
+ * A nonce rendered for an ERROR MESSAGE: never the value, always a digest of it.
+ *
+ * `runNonce` is the ONE field {@link import('./grader-text.js').sanitizeGraderTextDeep}
+ * is told to skip, because it must survive byte-exact to be compared — so it is
+ * also the one grader-supplied string in the fragment that reaches an operator
+ * with no neutralization at all. The CLI prints an error's `message` raw, so
+ * interpolating it here would print attacker bytes BY CONSTRUCTION: a fragment
+ * whose `runNonce` is `ESC[2K CR ESC[32m vat: verified` wipes vat's line and
+ * continues in vat's colour, from inside the very check that exists to catch a
+ * forged fragment.
+ *
+ * That path is currently unreachable — `runGraderForEval` compares the nonce one
+ * call earlier and throws a message quoting nothing — so this is defense in depth,
+ * and defense in depth that prints raw untrusted text is not defense. A digest
+ * keeps every diagnostic the value had (are the two the same? is the fragment from
+ * an older run?) and carries no bytes the fragment chose. Length is reported too,
+ * since a truncated or padded nonce is the likeliest honest mistake and the digest
+ * hides it.
+ */
+function nonceFingerprint(nonce: string): string {
+  const digest = createHash('sha256').update(nonce, 'utf8').digest('hex').slice(0, NONCE_FINGERPRINT_LENGTH);
+  return `sha256:${digest} (${nonce.length} chars)`;
+}
+
+export function mergeFragmentsToGrading(
+  fragments: EvalFragment[],
+  runNonce: string,
+  arm: 'with' | 'without',
+): NormalizedGrading {
   const expectations: NormalizedGrading['expectations'] = [];
 
   for (const fragment of fragments) {
     if (fragment.runNonce !== runNonce) {
       throw new GradingNonceError(
-        `fragment for eval "${fragment.evalId}" carries runNonce "${fragment.runNonce}", expected "${runNonce}"`,
+        `fragment for eval "${fragment.evalId}" carries runNonce ${nonceFingerprint(fragment.runNonce)}, ` +
+          `expected ${nonceFingerprint(runNonce)}`,
+      );
+    }
+    const fragmentArm = fragment.arm ?? 'with';
+    if (fragmentArm !== arm) {
+      throw new GradingArmError(
+        `fragment for eval "${fragment.evalId}" is from the "${fragmentArm}" arm, expected "${arm}"`,
       );
     }
     for (const expectation of fragment.expectations) {
@@ -34,12 +94,20 @@ export function mergeFragmentsToGrading(fragments: EvalFragment[], runNonce: str
         text: expectation.text,
         passed: expectation.passed,
         ...(expectation.evidence === undefined ? {} : { evidence: expectation.evidence }),
+        evalId: fragment.evalId,
       });
     }
   }
 
   const passed = expectations.filter(e => e.passed).length;
-  return { summary: { passed, total: expectations.length }, expectations, runNonce };
+  // `runNonce` is deliberately NOT carried onto the returned report. The report is
+  // `JSON.stringify`d straight into `results/grading.json` (and `baseline.json` on a
+  // `--baseline` run), so carrying it wrote the run's integrity secret to disk —
+  // breaking a guarantee stated in four docblocks, and the same guarantee that
+  // justifies unlinking each grader fragment the instant it is read. Nothing
+  // consumed it: `reconcileGrading` ignores it, and `parseGradingJson`'s `runNonce`
+  // comes from an externally produced grading.json, a different producer entirely.
+  return { summary: { passed, total: expectations.length }, expectations, arm };
 }
 
 /**

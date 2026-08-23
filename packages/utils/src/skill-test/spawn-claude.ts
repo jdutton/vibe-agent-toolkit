@@ -17,6 +17,34 @@ export interface ClaudeSpawnArgs {
  * `--prompt-file` flag — the prompt is fed to the child's stdin by
  * {@link spawnHeadlessClaude} instead. `--setting-sources ""` suppresses
  * user/project settings; built-in skills remain (§5).
+ *
+ * `--no-session-persistence` is load-bearing for the harness's integrity model,
+ * not a tidiness flag. Claude Code otherwise writes every headless session to
+ * `$CLAUDE_CONFIG_DIR/projects/<cwd-slug>/<uuid>.jsonl` — plaintext, mode 0600,
+ * retained indefinitely — and `CLAUDE_CONFIG_DIR` and `HOME` are both forwarded
+ * to the child (they have to be: that is where auth lives). That file falsifies
+ * three of the harness's stated guarantees at once:
+ *
+ *   - the per-run grading NONCE, which {@link SpawnHeadlessOptions.prompt} keeps
+ *     off disk precisely so untrusted skill code cannot read it back and forge a
+ *     passing grading.json — the grader's own session file contains it verbatim;
+ *   - the eval ANSWER KEY (`expected_output`), which `eval-suite-isolation.ts`
+ *     exists solely to keep off the executor's filesystem;
+ *   - the `--baseline` control, which could read the treatment arm's entire
+ *     session by listing `projects/` for its slug.
+ *
+ * And it leaks ACROSS runs: a transcript from one run is still readable weeks
+ * later by the next run's executor, so no per-run randomness helps.
+ *
+ * VERIFIED on macOS with claude 2.x, both directions: without the flag one
+ * `.jsonl` lands under the config dir per spawn; with it, zero, and the session
+ * still authenticates. It is `--print`-only, which is exactly this spawn's shape.
+ *
+ * 🪤 An ephemeral per-spawn `CLAUDE_CONFIG_DIR` — the obvious alternative — does
+ * NOT work: on macOS the subscription credential is a Keychain item whose service
+ * name is derived from the config-dir PATH, so a fresh dir reports "Not logged
+ * in" even with the real `.claude.json` copied in (verified). Materializing the
+ * token into a dir the executor can read would be strictly worse than the leak.
  */
 export function assembleClaudeArgs(opts: ClaudeSpawnArgs): string[] {
   const args: string[] = [
@@ -27,6 +55,7 @@ export function assembleClaudeArgs(opts: ClaudeSpawnArgs): string[] {
     '--output-format', 'stream-json',
     '--verbose',
     '--setting-sources', '',
+    '--no-session-persistence',
     '--permission-mode', 'bypassPermissions',
     '--add-dir', opts.sandboxDir,
   ];
@@ -162,6 +191,26 @@ export async function spawnHeadlessClaude(opts: SpawnHeadlessOptions): Promise<S
     // Register immediately after spawn so the child is reapable by
     // killAllActiveClaudeChildren() for the entire time it can be in flight.
     activeClaudeChildren.add(child);
+
+    // Decode BOTH output streams as UTF-8 at the stream, not per chunk.
+    //
+    // A pipe hands the reader whatever bytes have arrived (typically capped at
+    // 64 KiB) with no regard for character boundaries, so `chunk.toString()` on
+    // each Buffer independently mangles any multi-byte character that straddles a
+    // boundary into replacement characters on both sides of the split. That
+    // corruption lands INSIDE a stream-json line, and it costs the harness
+    // evidence two ways: the line can stop parsing, silently deleting the tool
+    // call in it (see ParsedTranscript.malformedLineCount), or — worse, because
+    // nothing reports it — the line still parses with a mangled VALUE, so a
+    // contamination needle no longer matches the path the arm actually reached.
+    //
+    // `setEncoding` runs the stream's own StringDecoder, which holds a partial
+    // sequence back until the rest arrives AND flushes whatever is left at EOF, so
+    // a genuinely truncated tail still surfaces (as U+FFFD) rather than vanishing.
+    // Set before any listener is attached, so no chunk is ever seen undecoded.
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+
     let timedOut = false;
     let stalled = false;
 
@@ -217,8 +266,10 @@ export async function spawnHeadlessClaude(opts: SpawnHeadlessOptions): Promise<S
     // child's real exit status).
     child.stdin.on('error', () => { /* ignore EPIPE on early child exit */ });
     promptStream.pipe(child.stdin);
-    child.stdout.on('data', (d: Buffer) => { opts.onStdout?.(d.toString()); });
-    child.stderr.on('data', (d: Buffer) => { opts.onStderr?.(d.toString()); });
+    // `d` is already a string: setEncoding('utf8') above put the stream's
+    // StringDecoder in front of these listeners. Never call `.toString()` here.
+    child.stdout.on('data', (d: string) => { opts.onStdout?.(d); });
+    child.stderr.on('data', (d: string) => { opts.onStderr?.(d); });
     // Reap on 'error' too: clearAllTimers() unregisters the child, so if 'error'
     // ever fires while the process is actually alive we would otherwise drop it
     // from the reap set without killing it (the exact orphan this file guards

@@ -3,9 +3,17 @@ import { PromptInvariantError } from './prompt-invariants.js';
 export interface BuildExecutorPromptOptions {
   /** The eval's `prompt` field, verbatim — the task the executor must perform. */
   task: string;
-  /** Path to the staged subject (skill/plugin under test). */
-  subjectPath: string;
-  /** `<workspacesRoot>/<id>` when the eval declares input `files` — the project the executor should operate on. */
+  /**
+   * Path to the staged subject (skill/plugin under test).
+   *
+   * OMITTED for the skill-absent (WITHOUT) arm of a `--baseline` run. Naming it
+   * there would hand the control arm the exact thing the arm exists to withhold:
+   * the staged dir holds both the skill's SKILL.md and any executable it ships,
+   * so a control arm told this path can recover the whole treatment with one
+   * `cat`/`ls`. The A/B is only a measurement while this stays absent.
+   */
+  subjectPath?: string;
+  /** The eval's working directory — the project the executor should operate on. */
   workspaceDir?: string;
 }
 
@@ -18,17 +26,20 @@ export interface BuildExecutorPromptOptions {
  * knowledge would change its behavior and invalidate the eval.
  *
  * `subjectPath` is where the skill/plugin under test is staged (context the
- * executor's environment provides); `workspaceDir`, when the eval declares
- * input `files`, is the project the executor is actually meant to operate on.
+ * executor's environment provides) and is OMITTED for the skill-absent arm;
+ * `workspaceDir` is the project the executor is actually meant to operate on.
  *
  * Pure function: same inputs always produce the same prompt.
  */
 export function buildExecutorPrompt(opts: BuildExecutorPromptOptions): string {
-  const lines = [opts.task, '', `The relevant files are located at ${opts.subjectPath}.`];
-  if (opts.workspaceDir !== undefined) {
-    lines.push(`Your working directory is ${opts.workspaceDir} — the project to operate on.`);
+  const context: string[] = [];
+  if (opts.subjectPath !== undefined) {
+    context.push(`The relevant files are located at ${opts.subjectPath}.`);
   }
-  return lines.join('\n');
+  if (opts.workspaceDir !== undefined) {
+    context.push(`Your working directory is ${opts.workspaceDir} — the project to operate on.`);
+  }
+  return context.length === 0 ? opts.task : [opts.task, '', ...context].join('\n');
 }
 
 /**

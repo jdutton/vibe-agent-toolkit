@@ -638,11 +638,18 @@ describe('vat skill test run (system)', () => {
       // grading.json must NOT be written
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- test path, controlled by this file
       expect(fs.existsSync(safePath.join(outDir, 'results', 'grading.json'))).toBe(false);
-      // Provenance must exist (written before the dry-run short-circuit)
-      const provenance = readProvenance(outDir);
-      // Summary must reference the provenance fingerprint and path
-      expect(result.stdout).toContain(String(provenance['fingerprint']));
+      // Provenance must NOT exist: a dry run names the path it WOULD write and writes
+      // nothing under results/. (It used to be written ahead of the dry-run
+      // short-circuit, which is also what let a dry run wipe a previous real run's
+      // artifacts — see the --dry-run must not touch results/ suite.)
+      const provenancePath = safePath.join(outDir, 'results', 'provenance.json');
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test path, controlled by this file
+      expect(fs.existsSync(provenancePath)).toBe(false);
+      // …but the summary must still tell the operator where it would go, and still
+      // report the staged fingerprint (which now comes from the summary, not from disk).
+      expect(result.stdout).toContain('Provenance would be written to:');
       expect(result.stdout).toContain('provenance.json');
+      expect(result.stdout).toMatch(/fingerprint: \S+/);
     });
 
     it('--no-build --dry-run for a declared pool skill (existing dist): says it did NOT build, flags stale', async () => {

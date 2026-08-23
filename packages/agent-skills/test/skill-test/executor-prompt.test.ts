@@ -34,6 +34,25 @@ describe('buildExecutorPrompt', () => {
     expect(prompt).toMatch(/working directory/i);
   });
 
+  // The skill-absent arm of a --baseline run. The staged subject dir holds the
+  // SKILL.md AND any executable the skill ships, so naming it hands the control
+  // the whole treatment — the prompt must be silent about it.
+  it('omits the subject clause entirely when subjectPath is absent', () => {
+    const prompt = buildExecutorPrompt({ task: baseOpts.task });
+
+    expect(prompt).toBe(baseOpts.task);
+    expect(prompt).not.toContain(SUBJECT_PATH);
+    expect(prompt).not.toMatch(/relevant files/i);
+  });
+
+  it('still states the working directory when subjectPath is absent', () => {
+    const prompt = buildExecutorPrompt({ task: baseOpts.task, workspaceDir: '/w/eval-1' });
+
+    expect(prompt).toContain('/w/eval-1');
+    expect(prompt).not.toMatch(/relevant files/i);
+    expect(() => assertExecutorPromptInvariants(prompt, baseOpts.task)).not.toThrow();
+  });
+
   it('never mentions testing, evaluation, or grading', () => {
     const prompt = buildExecutorPrompt({ ...baseOpts, workspaceDir: '/w/eval-1' });
     expect(() => assertExecutorPromptInvariants(prompt, baseOpts.task)).not.toThrow();
