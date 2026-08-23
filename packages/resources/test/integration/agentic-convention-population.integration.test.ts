@@ -24,14 +24,25 @@
 
 import { mkdtempSync, rmSync } from 'node:fs';
 
-import { compareCodeUnits, normalizedTmpdir, resetProjectRootCaches, safePath } from '@vibe-agent-toolkit/utils';
+import {
+  compareCodeUnits,
+  createSymlink,
+  mkdirSyncReal,
+  normalizedTmpdir,
+  resetProjectRootCaches,
+  safePath,
+  symlinkCapability,
+} from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { classifyPath, pluginRootsFrom } from '../../src/projection/agentic-tags.js';
 import { ContributorRegistry } from '../../src/projection/contributor.js';
 import { AgenticConventionContributor } from '../../src/projection/contributors/agentic-convention.js';
 import { FilesystemExtentContributor } from '../../src/projection/contributors/filesystem-extent.js';
 import { CONTENT_PARSING_SKIP, DISCARD_BLOB_POPULATION, populate } from '../../src/projection/merge.js';
 import type { Projection } from '../../src/projection/projection.js';
+import { ProjectionBuilder } from '../../src/projection/projection.js';
+import { collectRealization } from '../../src/projection/realizations.js';
 import { writeFileIn as plant } from '../test-helpers.js';
 
 /** The contributor id, which is also its `resource_tags.source` and its kind. */
@@ -47,6 +58,28 @@ const CLI_COMMAND_DOC = 'packages/cli/src/commands/build.md';
 const NESTED_RULE = '.claude/rules/frontend/style.md';
 /** A subagent under a non-root `.claude/` — the monorepo shape with no coverage. */
 const NESTED_SUBAGENT = 'apps/web/.claude/agents/reviewer.md';
+/**
+ * 🪤 A DIRECTORY whose basename classifies.
+ *
+ * `.claude/rules/**\/*.md` is a path test, and a directory named `notes.md`
+ * satisfies it exactly as a file would. Without a member of this shape the
+ * `isDirectory` guard in the contributor changes no row, and the test that
+ * names it cannot fail — see 'never tags a directory' below.
+ */
+const RULES_DIR_NAMED_MD = '.claude/rules/notes.md';
+/** A real, always-loaded file that a second name also reaches. */
+const ALIAS_TARGET = 'docs/CLAUDE.md';
+/**
+ * A symlink to {@link ALIAS_TARGET}, sited where it classifies `subagent`.
+ *
+ * One identity, two realizations, two different loading classes — the only
+ * shape in which "strongest wins across an identity's realizations" is
+ * observable at all.
+ */
+const ALIAS_SUBAGENT = '.claude/agents/alias.md';
+
+/** Probed once (the helper memoizes); gates both the fixture and the suite. */
+const SYMLINK_CAP = symlinkCapability();
 
 let projection: Projection;
 let root: string;
@@ -82,6 +115,14 @@ beforeAll(async () => {
   // 🪤 The false positive. 60+ real files sit under this shape in this monorepo.
   plant(root, CLI_COMMAND_DOC, '# build command notes\n');
   plant(root, 'src/index.ts', 'export const x = 1;\n');
+  // 🪤 Makes `.claude/rules/notes.md` a DIRECTORY that classifies — see the
+  // constant. Planting a child is how the directory comes to exist.
+  plant(root, `${RULES_DIR_NAMED_MD}/detail.md`, '# detail\n');
+  plant(root, ALIAS_TARGET, '# nested instructions\n');
+  if (SYMLINK_CAP !== null) {
+    mkdirSyncReal(safePath.join(root, '.claude/agents'), { recursive: true });
+    createSymlink(SYMLINK_CAP, safePath.join(root, ALIAS_TARGET), safePath.join(root, ALIAS_SUBAGENT));
+  }
 
   const registry = new ContributorRegistry();
   registry.register(new FilesystemExtentContributor(undefined, 'deferred'));
@@ -183,12 +224,99 @@ describe('the shape of the table', () => {
     expect([...perResource.values()].filter((count) => count !== 1)).toEqual([]);
   });
 
-  it('never tags a directory', () => {
-    const directories = new Set(
-      projection.resourceRealizations.filter((row) => row.isDirectory).map((row) => row.resourceId),
+  it('never tags a directory, and the fixture holds one that WOULD classify', () => {
+    const directories = projection.resourceRealizations.filter((row) => row.isDirectory);
+
+    // ⛔ The control that makes the guard observable. "Directories exist" is not
+    // it: every directory in the predecessor's fixture was named `docs`, `src`
+    // or `apps`, so `classifyPath` answered `[]` for all of them and deleting
+    // the `isDirectory` guard changed not one row — the assertion below was
+    // true either way, which is a test that cannot fail. A directory named
+    // `notes.md` under `.claude/rules/` satisfies the `rules-file` path test
+    // exactly as a file would, so the guard is the only thing keeping it out.
+    const pluginRoots = pluginRootsFrom(projection.resourceRealizations.map((row) => row.path));
+    const wouldClassify = directories
+      .filter((row) => classifyPath(row.path, row.basenameLower, pluginRoots).length > 0)
+      .map((row) => row.path);
+    expect(wouldClassify).toContain(RULES_DIR_NAMED_MD);
+
+    const directoryIds = new Set(directories.map((row) => row.resourceId));
+    expect(projection.resourceTags.filter((row) => directoryIds.has(row.resourceId))).toEqual([]);
+  });
+});
+
+/**
+ * The invariant the contributor's header devotes a whole section to, and which
+ * nothing pinned: **strongest wins across an identity's realizations.**
+ *
+ * 'gives each identity at most one loading row' above asserts CARDINALITY, and
+ * is structurally blind to the VALUE — replacing `strongestLoading(...)` with
+ * `loadings[0]` still writes exactly one row per identity, so that test stays
+ * green while a budget check under-reports an always-loaded file as `selected`.
+ * Distinguishing the two needs ONE identity realized at TWO differently
+ * classifying paths.
+ *
+ * ## ⚠️ Why this drives `contribute` at its seam instead of through `populate`
+ *
+ * The identity collapse is real and is measured below with the shipped
+ * `ResourceIdentityMap`: a symlink and its target really do mint one id,
+ * because `canonicalPathFor` resolves through `realpathSync.native`. What is
+ * NOT real today is any shipped enumerator handing that pair to a contributor —
+ * measured, both ways:
+ *
+ * - the **filesystem** extent never realizes a symlink's own path. Its walk
+ *   runs `followSymlinks: false`, and its git-snapshot route drops mode
+ *   `120000` explicitly (`crawl-source.ts`, "A SYMLINK IS NOT A MEMBER HERE").
+ * - the **git** extent does realize one — but only inside a repository, where
+ *   `canonicalPathFor` takes git's index path instead of resolving, so the link
+ *   and its target mint two ids and never collapse. That is the state
+ *   `projection-git-extent-symlink.test.ts` pins as `distinctResourceIds() === 3`.
+ *
+ * So the reduction guards a shape the current base contributors cannot produce.
+ * It is still the contract — `resource_tags` is keyed `(resourceId, tag, value,
+ * source)` and cannot hold two contradictory `loading` rows — and the next
+ * contributor to realize an aliased path gets it right by construction. Pinning
+ * it at the seam is the honest way to say that: the collapse is measured, the
+ * enumeration is stipulated.
+ *
+ * ⚠️ Skipped where the process cannot create symlinks — Windows without
+ * Developer Mode — so this does not execute on Windows CI.
+ */
+describe.skipIf(SYMLINK_CAP === null)('identity collapse — one identity, two loading classes', () => {
+  it('reduces the classes with strongest-wins, not with the first realization seen', async () => {
+    const builder = new ProjectionBuilder(root);
+    const base = builder.base();
+    const absolute = (relativePath: string): string => safePath.join(root, relativePath);
+
+    // The collapse, MEASURED rather than assumed — and the control for
+    // everything below. Two ids here and the fixture degenerates into two
+    // unrelated identities carrying one class each, where first-wins and
+    // strongest-wins agree and the mutation is unobservable.
+    const targetId = base.identities.idFor(absolute(ALIAS_TARGET));
+    const aliasId = base.identities.idFor(absolute(ALIAS_SUBAGENT));
+    expect(aliasId).toBe(targetId);
+
+    // The WEAKER realization first, on purpose: `loadings[0]` must differ from
+    // the reduced answer, or the test cannot discriminate. Ordered explicitly
+    // rather than inherited from a crawl, so it cannot silently stop doing so.
+    const extentId = 'extent-identity-collapse-fixture';
+    const realizations = [
+      await collectRealization(absolute(ALIAS_SUBAGENT), aliasId, { root, extentId }),
+      await collectRealization(absolute(ALIAS_TARGET), targetId, { root, extentId }),
+    ];
+    expect(realizations.map((row) => row.path)).toEqual([ALIAS_SUBAGENT, ALIAS_TARGET]);
+
+    const contribution = await new AgenticConventionContributor().contribute(
+      { ...base, resourceRealizations: realizations },
+      null,
     );
-    expect(directories.size).toBeGreaterThan(0);
-    const tagged = projection.resourceTags.filter((row) => directories.has(row.resourceId));
-    expect(tagged).toEqual([]);
+
+    // `subagent`/selected at the link, `claude-md`/always at the target — one
+    // row for the union of the tags, one `loading` row, and it says `always`.
+    expect(
+      contribution.tags
+        .map((row) => (row.value === null ? row.tag : `${row.tag}=${row.value}`))
+        .sort(compareCodeUnits),
+    ).toEqual(['claude-md', 'loading=always', 'subagent']);
   });
 });

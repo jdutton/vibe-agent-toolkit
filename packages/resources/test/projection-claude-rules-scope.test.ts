@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto';
-
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
@@ -11,16 +9,11 @@ import {
   ruleScopeFor,
 } from '../src/projection/contributors/claude-rules-scope.js';
 import { ProjectionBuilder, type ProjectionBase } from '../src/projection/projection.js';
-import type { BlobRow } from '../src/schemas/projection-blobs.js';
-import type { JsonValue } from '../src/schemas/projection-shared.js';
 
-import { projectionRealizationRow } from './test-helpers.js';
+import { addFile } from './helpers/claude-context-fixture.js';
 
 /** A root that is never touched on disk — this classifier reads rows, not files. */
 const ROOT = '/vat-corpus/rules-scope-fixture';
-
-/** The extent the hand-built base realizes its files in. */
-const BASE_EXTENT = 'ctx-filesystem-fixture';
 
 /** A paths-less rule directly under the PROJECT-ROOT `.claude/rules/`. */
 const ROOT_RULE = '.claude/rules/style.md';
@@ -82,42 +75,25 @@ describe('ruleScopeFor', () => {
   });
 });
 
-/** A schema-valid content key (`<parserKind>.<sha256>`) derived from a seed. */
-function markdownKey(seed: string): string {
-  return `markdown.${createHash('sha256').update(seed).digest('hex')}`;
-}
-
 /**
- * A schema-valid `blobs` row carrying the one column this contributor reads.
+ * One fixture file: a path, and the markdown whose REAL parse supplies its
+ * blob — frontmatter included.
  *
- * Every other column is filled with a real zero rather than cast away: a row
- * that does not satisfy `BlobRowSchema` is not a row the blob stage could
- * produce, and a fixture the producer could never emit is what let the `@`
- * defect ship green in the first place.
+ * 🪤 There is deliberately no hand-built blob row here any more, and no
+ * hand-built content key. The key used to be `markdown.sha256(<path>)`, which
+ * made this fixture's keys one-to-one with paths — a shape production never
+ * has. `content-key.ts` is explicit that a key is a function of bytes and
+ * parser kind alone, so `blobs` is a per-CONTENT table and two byte-identical
+ * rules files in different directories share ONE row. A path-keyed fixture
+ * cannot express that at all, which is exactly how a lens that collapsed two
+ * citers into one content key passed every in-memory test and failed only
+ * against a real tree. {@link addFile} keys by content, as production does.
  */
-function blobRow(contentKey: string, frontmatter: Record<string, JsonValue> | null): BlobRow {
-  return {
-    contentKey,
-    bytes: 0,
-    encoding: 'utf-8',
-    encodingSource: 'assumed',
-    replacementCharacters: 0,
-    tokenEstimate: 0,
-    frontmatter,
-    frontmatterError: null,
-    wordCount: 0,
-    proseCodeUnits: 0,
-    codeBlockCodeUnits: 0,
-    linkCount: 0,
-    headingCount: 0,
-    sectionCount: 0,
-  };
-}
-
-/** One fixture file: a path and the frontmatter its blob parsed to. */
 interface FixtureFile {
   path: string;
-  frontmatter: Record<string, JsonValue> | null;
+  markdown: string;
+  /** Force `contentState: 'deferred'` — enumerated, never read, so no blob. */
+  deferred?: boolean;
 }
 
 /** A base projection holding these files, their blobs, and their identities. */
@@ -128,24 +104,12 @@ function buildBase(files: readonly FixtureFile[]): {
   const builder = new ProjectionBuilder(ROOT);
   const ids = new Map<string, string>();
   for (const file of files) {
-    const resourceId = builder.identities.idFor(safePath.join(ROOT, file.path));
-    const contentKey = markdownKey(file.path);
-    ids.set(file.path, resourceId);
-    builder.addResource({
-      resourceId,
-      kind: 'file',
-      origin: 'filesystem',
-      observed: true,
-      fromEnumeration: true,
-      vatId: null,
-    });
-    builder.addRealization(projectionRealizationRow({
-      resourceId,
-      extentId: BASE_EXTENT,
-      path: file.path,
-      contentKey,
-    }));
-    builder.addBlob(blobRow(contentKey, file.frontmatter));
+    ids.set(file.path, builder.identities.idFor(safePath.join(ROOT, file.path)));
+    addFile(
+      builder,
+      { path: file.path, refs: [], markdown: file.markdown, deferred: file.deferred ?? false },
+      ROOT,
+    );
   }
   return {
     base: builder.base(),
@@ -157,13 +121,19 @@ function buildBase(files: readonly FixtureFile[]): {
   };
 }
 
+/** A paths-less body — whatever the file says, it declares no `paths:`. */
+const NO_FRONTMATTER = '# House style\n\nPrefer clarity over cleverness.\n';
+
+/** Real YAML frontmatter carrying {@link TS_GLOBS}, parsed by the shipped parser. */
+const TS_PATHS_FRONTMATTER = '---\npaths:\n  - "**/*.ts"\n---\n\n# TypeScript rules\n';
+
 /** The tree every membership case below runs over. */
 const RULES_FIXTURE: readonly FixtureFile[] = [
-  { path: ROOT_RULE, frontmatter: null },
-  { path: SCOPED_RULE, frontmatter: { paths: TS_GLOBS } },
-  { path: NESTED_RULE, frontmatter: null },
-  { path: 'CLAUDE.md', frontmatter: null },
-  { path: 'docs/README.md', frontmatter: null },
+  { path: ROOT_RULE, markdown: NO_FRONTMATTER },
+  { path: SCOPED_RULE, markdown: TS_PATHS_FRONTMATTER },
+  { path: NESTED_RULE, markdown: '# Local rules\n\nPackage-specific guidance.\n' },
+  { path: 'CLAUDE.md', markdown: '# Project\n' },
+  { path: 'docs/README.md', markdown: '# Docs\n' },
 ];
 
 describe('ClaudeRulesScopeContributor', () => {
@@ -243,11 +213,79 @@ describe('ClaudeRulesScopeContributor', () => {
     // the frontmatter lookup misses. Answering `root` rather than throwing is
     // the under-charge-nothing direction: the rule is still located and still
     // tagged, and a consumer sees a scope it can act on.
-    const { base, idOf } = buildBase([{ path: ROOT_RULE, frontmatter: null }]);
+    //
+    // `deferred: true` is the honest spelling of "never keyed": the realization
+    // carries `contentKey: null` and there is no `blobs` row at all, which is
+    // what the production state looks like. A keyed row whose frontmatter
+    // happened to be `null` would exercise the other branch entirely.
+    const { base, idOf } = buildBase([{ path: ROOT_RULE, markdown: NO_FRONTMATTER, deferred: true }]);
     const contribution = await new ClaudeRulesScopeContributor().contribute(base, null);
 
     expect(contribution.tags).toEqual([
       { resourceId: idOf(ROOT_RULE), tag: RULE_SCOPE_TAG, value: 'root', source: CLAUDE_RULES_SCOPE_KIND },
     ]);
+  });
+});
+
+/** The nested twin of {@link ROOT_RULE} — same basename, same bytes, different depth. */
+const NESTED_TWIN = 'packages/cli/.claude/rules/style.md';
+
+describe('ClaudeRulesScopeContributor — two rules files sharing ONE blob', () => {
+  /** Both twins, byte-identical, plus nothing else. */
+  const TWINS: readonly FixtureFile[] = [
+    { path: ROOT_RULE, markdown: NO_FRONTMATTER },
+    { path: NESTED_TWIN, markdown: NO_FRONTMATTER },
+  ];
+
+  it('files both realizations under ONE content key, as production would', () => {
+    // 🪤 The pin that makes the two cases below mean anything. A content key is
+    // a function of bytes and parser kind ONLY, so two byte-identical rules
+    // files share a key and the `blobs` table holds a single row for both. When
+    // this fixture keyed by PATH instead, that many-to-one shape was
+    // unreachable: every consumer under test saw a private blob per path and a
+    // key→path map looked one-to-one, which is precisely the illusion that let a
+    // last-write-wins collapse ship green.
+    const { base } = buildBase(TWINS);
+
+    const keys = base.resourceRealizations.map((row) => row.contentKey);
+    expect(new Set(keys).size).toBe(1);
+    expect(base.blobs).toHaveLength(1);
+  });
+
+  it('scopes each PATH on its own, though both read the same bytes', async () => {
+    // Scope is a function of LOCATION, and location is the one thing the shared
+    // key cannot carry. A classifier that reached for "the path that owns this
+    // blob" would answer `root` twice or `nested` twice; the honest answer is
+    // one of each, and the identities must differ too — a single tag row here
+    // would mean one of the two rules had silently vanished from the budget.
+    const { base, idOf } = buildBase(TWINS);
+
+    const contribution = await new ClaudeRulesScopeContributor().contribute(base, null);
+
+    expect(contribution.tags).toEqual([
+      { resourceId: idOf(ROOT_RULE), tag: RULE_SCOPE_TAG, value: 'root', source: CLAUDE_RULES_SCOPE_KIND },
+      { resourceId: idOf(NESTED_TWIN), tag: RULE_SCOPE_TAG, value: 'nested', source: CLAUDE_RULES_SCOPE_KIND },
+    ]);
+    expect(contribution.memberships.map((row) => row.resourceId))
+      .toEqual([idOf(ROOT_RULE), idOf(NESTED_TWIN)]);
+  });
+
+  it('reads the shared blob\'s frontmatter for BOTH twins, not just the last one', async () => {
+    // The same shape with `paths:` in the bytes: one blob row, two lookups
+    // against it. `path-scoped` is location-independent, so both must get it —
+    // and a frontmatter map that had been keyed by anything path-shaped would
+    // find the entry for only one of them and silently fall back to paths-less
+    // for the other, mislabelling a rule that loads on demand as one that loads
+    // at launch.
+    const { base, idOf } = buildBase([
+      { path: ROOT_RULE, markdown: TS_PATHS_FRONTMATTER },
+      { path: NESTED_TWIN, markdown: TS_PATHS_FRONTMATTER },
+    ]);
+
+    const contribution = await new ClaudeRulesScopeContributor().contribute(base, null);
+
+    expect(contribution.tags.map((row) => row.value)).toEqual([PATH_SCOPED, PATH_SCOPED]);
+    expect(contribution.tags.map((row) => row.resourceId))
+      .toEqual([idOf(ROOT_RULE), idOf(NESTED_TWIN)]);
   });
 });

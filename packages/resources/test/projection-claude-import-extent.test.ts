@@ -1,10 +1,6 @@
-import { createHash } from 'node:crypto';
-
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-import { parseMarkdownContent } from '../src/link-parser.js';
-import { blobReferencesFor } from '../src/projection/blob-references.js';
 import type { ExtentContribution } from '../src/projection/contributor.js';
 import {
   CLAUDE_IMPORT_KIND,
@@ -21,6 +17,7 @@ import {
 import { ProjectionBuilder, type ProjectionBase } from '../src/projection/projection.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
+import { addFile } from './helpers/claude-context-fixture.js';
 import { projectionRealizationRow } from './test-helpers.js';
 
 /**
@@ -48,6 +45,12 @@ const DOCS_README = 'docs/README.md';
 /** A rules file in the PROJECT-ROOT `.claude/rules/`, the root-scoped location. */
 const ROOT_RULES_FILE = '.claude/rules/style.md';
 
+/** One of a byte-identical importer pair — see the shared-blob case below. */
+const A_CLAUDE_MD = 'a/CLAUDE.md';
+
+/** Its twin, in a sibling directory. */
+const B_CLAUDE_MD = 'b/CLAUDE.md';
+
 /**
  * One fixture file: a path, and the markdown whose REAL parse supplies its
  * references.
@@ -61,41 +64,66 @@ const ROOT_RULES_FILE = '.claude/rules/style.md';
 interface FixtureFile {
   path: string;
   markdown: string;
-  /** The `resources.kind` this entity gets. Defaults to `file`. */
+  /** `'directory'` builds a keyless directory realization instead of a file. */
   kind?: string;
 }
 
-/** A schema-valid content key (`<parserKind>.<sha256>`) derived from a seed. */
-function markdownKey(seed: string): string {
-  return `markdown.${createHash('sha256').update(seed).digest('hex')}`;
+/**
+ * Add one keyless directory realization.
+ *
+ * The one shape {@link addFile} genuinely cannot express: its realization is
+ * always a FILE (`isDirectory: false`, a content key, a blob), and the shared
+ * fixture's own directory writer is private to it. A directory row is built
+ * here rather than routed through a content key it must not have — a directory
+ * has no bytes, so `contentState: 'none'` is the truth and any key at all would
+ * be a fiction.
+ *
+ * @param builder - The builder under construction
+ * @param path - Root-relative, forward-slashed directory path
+ */
+function addDirectory(builder: ProjectionBuilder, path: string): void {
+  const resourceId = builder.identities.idFor(safePath.join(ROOT, path));
+  builder.addResource({
+    resourceId,
+    kind: 'directory',
+    origin: 'filesystem',
+    observed: true,
+    fromEnumeration: true,
+    vatId: null,
+  });
+  builder.addRealization({
+    ...projectionRealizationRow({
+      resourceId,
+      extentId: BASE_EXTENT,
+      path,
+      contentKey: null,
+      isDirectory: true,
+    }),
+    contentState: 'none',
+  });
 }
 
-/** A base projection holding exactly these files, with references from the REAL parser. */
+/**
+ * A base projection holding exactly these files, with references from the REAL
+ * parser and content keys derived from the REAL bytes.
+ *
+ * 🪤 Keys used to be `markdown.sha256(<path>)`, and that was not a harmless
+ * shortcut. `content-key.ts` is explicit that a key is a function of bytes and
+ * parser kind alone, so `blob_references` is a per-CONTENT table and two
+ * byte-identical documents in different directories share ONE blob and ONE set
+ * of reference rows. Path-keying made this fixture's keys one-to-one with paths
+ * — a shape production never has — so any consumer that mapped a key back to
+ * "the path that wrote this" looked correct here and collapsed against a real
+ * tree. {@link addFile} keys by content, exactly as production does.
+ */
 function buildBase(files: readonly FixtureFile[]): ProjectionBase {
   const builder = new ProjectionBuilder(ROOT);
   for (const file of files) {
-    const resourceId = builder.identities.idFor(safePath.join(ROOT, file.path));
-    const contentKey = markdownKey(file.path);
-    const isDirectory = file.kind === 'directory';
-    builder.addResource({
-      resourceId,
-      kind: file.kind ?? 'file',
-      origin: 'filesystem',
-      observed: true,
-      fromEnumeration: true,
-      vatId: null,
-    });
-    builder.addRealization(projectionRealizationRow({
-      resourceId,
-      extentId: BASE_EXTENT,
-      path: file.path,
-      contentKey,
-      isDirectory,
-    }));
-    const parsed = parseMarkdownContent(file.markdown, Buffer.byteLength(file.markdown));
-    for (const row of blobReferencesFor(contentKey, parsed)) {
-      builder.addBlobReference(row);
+    if (file.kind === 'directory') {
+      addDirectory(builder, file.path);
+      continue;
     }
+    addFile(builder, { path: file.path, refs: [], markdown: file.markdown }, ROOT);
   }
   return builder.base();
 }
@@ -188,11 +216,11 @@ describe('claudeImportRootsFrom', () => {
     // reproducible.
     const base = buildBase([
       { path: 'z/CLAUDE.md', markdown: '' },
-      { path: 'a/CLAUDE.md', markdown: '' },
+      { path: A_CLAUDE_MD, markdown: '' },
       { path: 'm/CLAUDE.md', markdown: '' },
     ]);
     expect(claudeImportRootsFrom(base.resourceRealizations))
-      .toEqual(['a/CLAUDE.md', 'm/CLAUDE.md', 'z/CLAUDE.md']);
+      .toEqual([A_CLAUDE_MD, 'm/CLAUDE.md', 'z/CLAUDE.md']);
   });
 });
 
@@ -376,6 +404,41 @@ describe('ClaudeImportExtentContributor — remaining §10 cases', () => {
 
     expect(memberPaths(contribution)).toEqual([ROOT_CLAUDE_MD]);
     expect(conditionCodes(contribution)).toEqual([]);
+  });
+
+  it('resolves ONE shared blob against each importer, not against an owning path', async () => {
+    // 🪤 The shape the old path-keyed fixture could not build. `a/CLAUDE.md` and
+    // `b/CLAUDE.md` are byte-identical, so they share a single content key and a
+    // single `blob_references` row — one edge, two importers. The walk goes
+    // path → realization → contentKey → references and resolves each `rawRef`
+    // against the REFERRING PATH, so the same edge must reach `a/notes.md` from
+    // one and `b/notes.md` from the other. A consumer that instead asked the key
+    // "which path wrote you?" gets a many-to-one map, last write wins, and one
+    // of these two closures silently imports the other directory's file — which
+    // is the defect that shipped green in the discovery lens for exactly as long
+    // as every fixture gave each path a private blob.
+    const shared = '@notes.md\n';
+    const files: readonly FixtureFile[] = [
+      { path: A_CLAUDE_MD, markdown: shared },
+      { path: B_CLAUDE_MD, markdown: shared },
+      { path: 'a/notes.md', markdown: '# notes for a\n' },
+      { path: 'b/notes.md', markdown: '# notes for b\n' },
+    ];
+
+    // The pin that makes the two assertions below mean something: without it a
+    // fixture that quietly went back to one-blob-per-path would still pass them.
+    const base = buildBase(files);
+    const importerKeys = base.resourceRealizations
+      .filter((row) => row.path === A_CLAUDE_MD || row.path === B_CLAUDE_MD)
+      .map((row) => row.contentKey);
+    expect(importerKeys).toHaveLength(2);
+    expect(new Set(importerKeys).size).toBe(1);
+    expect(base.blobReferences.filter((row) => row.blob === importerKeys[0])).toHaveLength(1);
+
+    expect(memberPaths(await contributeFrom(files, A_CLAUDE_MD)))
+      .toEqual([A_CLAUDE_MD, 'a/notes.md']);
+    expect(memberPaths(await contributeFrom(files, B_CLAUDE_MD)))
+      .toEqual([B_CLAUDE_MD, 'b/notes.md']);
   });
 
   it('resolves a cycle without hanging and admits each member once', async () => {

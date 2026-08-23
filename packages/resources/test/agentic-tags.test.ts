@@ -27,6 +27,7 @@ import {
 
 /** Basenames that appear in both the positive and the negative table. */
 const SETTINGS_JSON = 'settings.json';
+const SETTINGS_LOCAL_JSON = 'settings.local.json';
 const PLUGIN_JSON = 'plugin.json';
 const MCP_JSON = '.mcp.json';
 const README_MD = 'readme.md';
@@ -100,7 +101,7 @@ describe('classifyPath — the built-in vocabulary', () => {
     ['.claude/agents/reviewer.md', REVIEWER_MD, SUBAGENT],
     ['.claude/commands/ship.md', 'ship.md', COMMAND],
     [`.claude/${SETTINGS_JSON}`, SETTINGS_JSON, SETTINGS],
-    ['.claude/settings.local.json', 'settings.local.json', SETTINGS],
+    [`.claude/${SETTINGS_LOCAL_JSON}`, SETTINGS_LOCAL_JSON, SETTINGS],
     ['.claude.json', '.claude.json', SETTINGS],
     [MCP_JSON, MCP_JSON, MCP_CONFIG],
     ['README.md', README_MD, 'readme'],
@@ -128,6 +129,21 @@ describe('classifyPath — the built-in vocabulary', () => {
     ['.claude/rules-archive/x.md', 'x.md'],
     ['packages/cli/.claude/commands-draft/ship.md', 'ship.md'],
     ['.claude/agentsold/a.md', 'a.md'],
+    // 🪤 SLASH-FREE paths — the arm of `directlyInside` no other fixture
+    // reaches. Every anchored fixture above has a parent segment to compare, so
+    // the `lastIndexOf('/') === -1` early return is only ever taken here; flip
+    // it to `true` and a root-level `settings.json`, `plugin.json` or
+    // `marketplace.json` becomes harness configuration it is not.
+    [SETTINGS_JSON, SETTINGS_JSON],
+    [SETTINGS_LOCAL_JSON, SETTINGS_LOCAL_JSON],
+    [PLUGIN_JSON, PLUGIN_JSON],
+    [MARKETPLACE_JSON, MARKETPLACE_JSON],
+    // 🪤 The nearest miss for `skill.md`, which this suite's own stated
+    // principle demands and did not have. `'myskill.md'.endsWith('skill.md')`
+    // is true, so an `===` relaxed to a suffix test tags both of these
+    // `skill-md`/`selected` — a file the harness never indexes, charged.
+    ['skills/thing/myskill.md', 'myskill.md'],
+    ['docs/not-skill.md', 'not-skill.md'],
   ])('leaves %s unclassified', ([path, basename]) => {
     expect(classifyPath(path as string, basename as string, NO_PLUGINS)).toEqual([]);
   });
@@ -279,6 +295,37 @@ describe('loading classes', () => {
   it('does not charge AGENTS.md, because the import graph decides', () => {
     expect(tagsOf('AGENTS.md', 'agents.md')).toEqual(['agents-md']);
     expect(loadingOf('AGENTS.md', 'agents.md')).toBeUndefined();
+  });
+
+  // ⛔ The FULL row array, not a projection of it. Both helpers above are
+  // blind to a `{ tag: 'loading', value: null }` row: `tagsOf` filters
+  // LOADING_TAG out entirely, and `loadingOf` coalesces `null ?? undefined`, so
+  // "a loading row that says nothing" and "no loading row" read identically
+  // through either. That is a real state the classifier can reach — drop the
+  // `convention.loading !== null` guard and every `rules-file`, `agents-md`,
+  // `readme` and manifest carries one — and the only thing keeping it out of
+  // `resource_tags` today is the contributor's own `tag.value !== null` test,
+  // one module away. Pin it where it is produced.
+  it.for([
+    [ROOT_RULE, 'x.md', RULES_FILE],
+    ['AGENTS.md', 'agents.md', 'agents-md'],
+    ['README.md', README_MD, 'readme'],
+    [`.claude-plugin/${PLUGIN_JSON}`, PLUGIN_JSON, PLUGIN_MANIFEST],
+  ])('emits NO loading row at all for %s — the whole row array is just its tag', ([path, basename, tag]) => {
+    expect(classifyPath(path as string, basename as string, NO_PLUGINS)).toEqual([
+      { tag, value: null },
+    ]);
+  });
+
+  it('emits exactly one loading row, carrying its value, for a charged path', () => {
+    expect(classifyPath('CLAUDE.md', 'claude.md', NO_PLUGINS)).toEqual([
+      { tag: 'claude-md', value: null },
+      { tag: LOADING_TAG, value: 'always' },
+    ]);
+    expect(classifyPath('.claude/commands/ship.md', 'ship.md', NO_PLUGINS)).toEqual([
+      { tag: COMMAND, value: null },
+      { tag: LOADING_TAG, value: 'selected' },
+    ]);
   });
 
   it('still charges a file whose other convention answers', () => {
