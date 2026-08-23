@@ -181,6 +181,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   user-correctable preflight condition by every other rule in that file. The message now names the
   lock path so a stale lock can be cleared by hand.
 
+- **`UnresolvableEnvTokenError` now exits 2, not 1.** An eval that interpolates `${FIXTURES_DIR}`
+  into an `env` value while declaring no input `files` is a suite typo you can fix, not a harness
+  failure; CI recipes that read 1 as "the harness broke" no longer fire on it.
+
 - **A duplicate expectation string within one eval is now rejected at parse time** (exit 2), instead
   of throwing `InternalHarnessError` mid-run on the treatment arm and destroying a fully-billed run
   over a suite typo. Two *different* evals may still share expectation text.
@@ -361,8 +365,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `⚠️ … scan DEGRADED` line vat had just written and re-rendered it in green as vat's own voice — on
   the exact warning that says the detector went blind. Sanitized at construction rather than at the
   write, so the artifact copy is covered too. This is the third occurrence of this class in this
-  module family; the sanitizer's boundary list, which claimed two boundaries while being applied at
-  four, is now accurate.
+  module family; the sanitizer now documents every boundary it is applied at, rather than a stale
+  subset of them.
 
 - **`parseGradingJson` echoed attacker-controlled bytes into an operator-facing error.** zod's enum
   error quotes the *received value* verbatim, and `arm` is read straight off an externally produced

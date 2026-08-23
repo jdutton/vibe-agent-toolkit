@@ -826,6 +826,40 @@ describe('buildContaminationInput', () => {
     expect(input.armWorkspaceDir).toBeUndefined();
     expect(input.armCwd).toBeUndefined();
   });
+
+  /**
+   * The detector is fed the executable's skill-relative PATH, never its
+   * extension-stripped `name`. An ambient copy of the skill is a COPY, so it
+   * reproduces `scripts/csvsum.py` under whatever root it sits at and still
+   * matches; a bare `csvsum` would also convict the control arm's own
+   * `/tmp/csvsum` scratch file. The input TYPE cannot catch this — its
+   * `executableNames?: never` tripwire rejects the old FIELD NAME, and is blind to
+   * the wrong VALUE under the right one — so swapping `e.path` back to `e.name`
+   * typechecks cleanly and, without this test, leaves the whole unit suite green.
+   */
+  it('feeds the detector the declared PATH, never the extension-stripped name', () => {
+    const input = buildContaminationInput(
+      '',
+      {
+        ...CONTAMINATION_CTX,
+        declaredExecutables: [
+          { name: 'csvsum', howInvoked: 'uv run csvsum.py', kind: 'python', path: 'scripts/csvsum.py' },
+        ],
+      },
+      'e1',
+    );
+    expect(input.executablePaths).toEqual(['scripts/csvsum.py']);
+    // Spelled out so the intent survives a reader who only skims: the `name` is
+    // the wrong value here, and `howInvoked` is a command string, not a path.
+    expect(input.executablePaths).not.toEqual(['csvsum']);
+    expect(input.executablePaths?.[0]).toContain('/');
+  });
+
+  it('omits executablePaths entirely when the skill declares no executables', () => {
+    // Pin the KEY's absence, not `undefined`: an `executablePaths: []` would arm the
+    // detector with an empty needle list, which is a different thing from unarmed.
+    expect(Object.keys(buildContaminationInput('', CONTAMINATION_CTX, 'e1'))).not.toContain('executablePaths');
+  });
 });
 
 // Longer than the 48-character needle floor, and plain body prose so both are

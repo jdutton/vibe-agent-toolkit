@@ -139,10 +139,48 @@ const SELF_DECLARED_EXIT_CODES: ReadonlySet<number> = new Set<number>([
  * the process's exit code. Requiring an `Error` whose value is one of the three
  * throwable codes above keeps the mechanism to errors that meant to opt in, and
  * leaves everything else on the `instanceof` fallback below.
+ *
+ * ⚠️ THE READ IS GUARDED, because reading a property is not a total operation and the
+ * `instanceof` chain it replaced was. A getter or `Proxy` that throws on `exitCode`
+ * propagated straight out of {@link mapErrorToExitCode} — and BOTH of its call sites
+ * are inside `catch` blocks, so that throw escaped the handler entirely: no summary
+ * line, no chosen exit code, a bare stack. An error whose own `exitCode` cannot be
+ * read has not opted in to anything, so it takes the Internal default.
+ *
+ * ⚠️ IT IS NOT AN OWN-PROPERTY READ. An `exitCode` inherited from a PROTOTYPE is
+ * honoured, verified — `Base.prototype.exitCode = 3` maps to 3. That is what makes
+ * subclassing work (a subclass of `InternalHarnessError` keeps its code without
+ * redeclaring the field), and it is also what widens the residual below by one hop.
+ *
+ * ⚠️ RESIDUAL, KNOWN AND UNCLOSED. The value test rejects everything outside
+ * {1,2,3} but nothing INSIDE it, so a foreign error carrying `exitCode: 2` picks
+ * Preflight — "your environment is wrong" — for a crash. A walk of the reachable
+ * dependency closure found `spawnSync`, `execSync`, `fs`, `JSON.parse`, `ZodError`,
+ * `YAMLParseError`, `adm-zip`, `fetch`, `DOMException`, Anthropic's `APIError` and
+ * VAT's own `CommandExecutionError` all leaving `exitCode` undefined — but
+ * `commander`, a direct `@vibe-agent-toolkit/cli` dependency, defines `exitCode` on
+ * `CommanderError` and carries `2`. It is unreachable today (`exitOverride` and
+ * `CommanderError` appear nowhere in `packages/cli/src`), and adopting
+ * `exitOverride()` — the standard testability pattern — would silently arm it.
+ *
+ * Closing it means a VAT-OWNED BRAND rather than a name every ecosystem uses: a
+ * `Symbol.for('vat.exitCode')` key, which (unlike `instanceof` or a shared base
+ * class) is registry-global and so survives the `src`/`dist` boundary this read
+ * exists to cross. That is a mechanical change across all eleven declaring classes —
+ * five here, plus `lock.ts`, `build-hook.ts`, `declared-env.ts` (two),
+ * `harness-location.ts` and `utils`' `auth-resolver.ts` — and a half-migration would
+ * leave two mechanisms with the hole still open, so it is one change or none. The
+ * behaviour is pinned by a RESIDUAL row in `exit-codes.test.ts` so the migration
+ * has a test to flip rather than a comment to find.
  */
 function selfDeclaredExitCode(err: unknown): number | undefined {
   if (!(err instanceof Error)) return undefined;
-  const declared = (err as { exitCode?: unknown }).exitCode;
+  let declared: unknown;
+  try {
+    declared = (err as { exitCode?: unknown }).exitCode;
+  } catch {
+    return undefined;
+  }
   return typeof declared === 'number' && SELF_DECLARED_EXIT_CODES.has(declared) ? declared : undefined;
 }
 
@@ -158,18 +196,26 @@ function selfDeclaredExitCode(err: unknown): number | undefined {
  * disagreed at any time with no test able to tell.
  *
  * So: an error that declares one of the three throwable codes ({@link
- * selfDeclaredExitCode}) decides its own exit code, and the `instanceof` chain now
- * covers only the classes that declare nothing —
- * `PromptInvariantError` (a defense-in-depth failure over VAT's OWN generated
- * executor/grader prompts: a required safety directive missing from a prompt VAT
- * built, surfaced as a user-visible preflight-class problem) → 2, and
+ * selfDeclaredExitCode}) decides its own exit code, and what remains of the
+ * `instanceof` chain is exactly ONE row — `PromptInvariantError` (a
+ * defense-in-depth failure over VAT's OWN generated executor/grader prompts: a
+ * required safety directive missing from a prompt VAT built, surfaced as a
+ * user-visible preflight-class problem) → 2, the only class that declares nothing and
+ * still needs a code other than the default.
+ *
  * `GradingSkewError` (aggregate grading.json shape skew), `EvalFragmentError`
  * (per-eval grader fragment parse failure) and `GradingNonceError`
- * (forged/mismatched per-fragment grader nonce) → 1. Everything unknown → 1.
+ * (forged/mismatched per-fragment grader nonce) reach 1 through the FALLBACK, not
+ * through a row — they are indistinguishable here from `new Error('boom')`. That is
+ * correct (1 is what they want) but it is not dispatch, and saying otherwise implies
+ * a pin that does not exist: deleting any of the three changes nothing. Everything
+ * unknown → 1.
  *
  * A side benefit of reading the field: it works across a `src`/`dist` boundary, where
  * `instanceof` silently cannot — a `dist` copy of a class never matches a `src`
- * instance of it, and this module is imported from both.
+ * instance of it, and this module is imported from both. The surviving
+ * `PromptInvariantError` row carries exactly that risk; it is kept because the class
+ * declares no field to read.
  *
  * Note: SkillTestExitCode.EvalFailure (4) is NOT produced here — it is an
  * outcome of a completed run (an eval failed, the fail-closed default unless

@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { BuildHookError } from '../../src/skill-test/build-hook.js';
 import { UnknownEnvTokenError } from '../../src/skill-test/declared-env.js';
 import { EvalFragmentError } from '../../src/skill-test/eval-fragment.js';
+import { EvalInputError } from '../../src/skill-test/eval-inputs.js';
 import {
   BootstrapNeededError,
   DuplicateStagedSkillError,
@@ -91,6 +92,60 @@ describe('mapErrorToExitCode', () => {
 
   it('ignores exitCode on a non-Error throw (a bare object cannot claim a code)', () => {
     expect(mapErrorToExitCode({ exitCode: SkillTestExitCode.Bootstrap })).toBe(SkillTestExitCode.Internal);
+  });
+
+  /**
+   * The rejection table above only ever offers values OUTSIDE the accepted set, so it
+   * demonstrates the guard for the population it was always going to reject. THIS is
+   * the residual it cannot see: a foreign error carrying a value INSIDE the set —
+   * `commander`'s `CommanderError` is a direct `@vibe-agent-toolkit/cli` dependency
+   * and carries `exitCode: 2`, which would report "your environment is wrong" for a
+   * crash. Not reachable today (`exitOverride` appears nowhere in `packages/cli/src`),
+   * and PINNED HERE as the current, deliberate behaviour: see the residual note on
+   * {@link selfDeclaredExitCode} for what closing it costs.
+   */
+  it.each([
+    ['Preflight', 2],
+    ['Bootstrap', 3],
+  ])('RESIDUAL: a foreign Error carrying exitCode %s is honoured (duck-typed opt-in)', (_label, exitCode) => {
+    expect(mapErrorToExitCode(Object.assign(new Error('execa-shaped'), { exitCode }))).toBe(exitCode);
+  });
+
+  /**
+   * Reading a property is not a total operation. Both call sites in
+   * `packages/cli/src/commands/skill/test/run.ts` are inside `catch` blocks, so a
+   * throw from the read escapes the handler entirely: no summary line, no chosen exit
+   * code, a bare stack. The `instanceof` chain this read replaced was total.
+   */
+  it('a throwing exitCode getter maps to Internal (1) instead of escaping the handler', () => {
+    const err = new Error('getter');
+    Object.defineProperty(err, 'exitCode', {
+      get() { throw new Error('BOOM from getter'); },
+    });
+    expect(() => mapErrorToExitCode(err)).not.toThrow();
+    expect(mapErrorToExitCode(err)).toBe(SkillTestExitCode.Internal);
+  });
+
+  it('a Proxy that throws on get maps to Internal (1) instead of escaping the handler', () => {
+    const err = new Proxy(new Error('proxy'), {
+      get(target, key, receiver): unknown {
+        if (key === 'exitCode') throw new Error('BOOM from proxy');
+        return Reflect.get(target, key, receiver) as unknown;
+      },
+    });
+    expect(() => mapErrorToExitCode(err)).not.toThrow();
+    expect(mapErrorToExitCode(err)).toBe(SkillTestExitCode.Internal);
+  });
+
+  /**
+   * `EvalInputError`'s docblock says "Maps to exit 2", and only ONE of its two routes
+   * delivered that: `attemptStageWorkspaces` has an explicit handler, but the instance
+   * thrown from `armDirSegment` fires deep in the eval loop, outside it, and reported
+   * 1. This commit's thesis is that the FIELD is the mechanism — so the field is what
+   * makes the docblock true on both routes.
+   */
+  it('EvalInputError → 2 on every route, not just the staging handler', () => {
+    expect(mapErrorToExitCode(new EvalInputError('bad suite'))).toBe(SkillTestExitCode.Preflight);
   });
   it('exposes Ok = 0', () => {
     expect(SkillTestExitCode.Ok).toBe(0);

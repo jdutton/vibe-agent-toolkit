@@ -5,8 +5,20 @@ import { z } from 'zod';
 
 import { sanitizeGraderText, sanitizeTextPreservingLines } from './grader-text.js';
 
-/** Raised for any eval-input problem (bad JSON, schema failure, missing input file). Maps to exit 2. */
+/**
+ * Raised for any eval-input problem (bad JSON, schema failure, missing input file).
+ * Maps to exit 2.
+ *
+ * The FIELD is what makes that sentence true, and until it was added only one of this
+ * class's two routes delivered it. `attemptStageWorkspaces` catches the staging
+ * instance and maps it explicitly; the instance thrown from {@link armDirSegment}
+ * fires deep in the eval loop, outside that handler, and reached
+ * `mapErrorToExitCode`'s Internal default — reporting 1 for a preflight-class
+ * problem while the docblock above claimed 2. Exit 2 for the internal-invariant case
+ * too is consistent with every sibling in this feature.
+ */
 export class EvalInputError extends Error {
+  readonly exitCode = 2 as const;
   constructor(message: string) {
     super(message);
     this.name = 'EvalInputError';
@@ -31,8 +43,16 @@ export class EvalInputError extends Error {
  * the threat and the remedy (drop escape sequences whole, fold every remaining
  * control code to a space, collapse, cap) are identical — only the source of
  * the untrusted text differs.
+ *
+ * EXPORTED because the suite reaches an operator surface from more than this
+ * module: `eval-lint.ts` quotes `toolExpectations.*` entries — the same
+ * unconstrained `z.array(z.string().min(1))` shape as `files[]` — into an advisory
+ * that `run-harness.ts` writes to stderr verbatim, and does it at Step 5.5, ahead
+ * of both the security-ack gate and the `--dry-run` short-circuit. Every new
+ * suite-authored string bound for a terminal goes through HERE, so the trust model
+ * above stays stated in one place.
  */
-function quoteSuiteText(value: string): string {
+export function quoteSuiteText(value: string): string {
   return sanitizeGraderText(value);
 }
 

@@ -65,23 +65,29 @@
  * - `eval-inputs.ts` — `quoteSuiteText` / `quoteSuiteBlock`, for SUITE-authored text
  *   (untrusted too: `resolveEvalSuitePath` will harvest a suite out of a fetched
  *   artifact, i.e. out of the skill under test).
+ * - `eval-lint.ts` — `lintToolExpectationExecutables`, via `quoteSuiteText`. Every
+ *   executable name it quotes comes from the suite (`toolExpectations.*`, an
+ *   unconstrained `z.array(z.string().min(1))` on a `.passthrough()` entry) or from
+ *   the subject skill's own manifest, and `run-harness.ts` writes the advisory to
+ *   stderr with no sanitizer of its own — at Step 5.5, AHEAD of the
+ *   `--i-understand-this-runs-skill-code` gate and ahead of the `--dry-run`
+ *   short-circuit, so this one paints a run that spawned nothing.
+ * - `baseline-integrity.ts` — `BaselineScanDegradation.detail`, built from a `cd`
+ *   argument lifted verbatim out of the CONTROL ARM's transcript. Sanitized where the
+ *   detail is CONSTRUCTED, not at the stderr write, so the one call covers both
+ *   surfaces: `run-harness.ts` (`baselineContaminationFor`) writes it to stderr AND
+ *   vat stamps the same bytes into `baselineIntegrity.degraded` in `baseline.json` —
+ *   which a stderr-side fix would miss, because `degraded` is attached to the
+ *   fragment AFTER `parseEvalFragment` has sanitized it.
+ * - `grading-adapter.ts` — the schema path and message quoted when the aggregate
+ *   `grading.json` parse fails.
  *
- * ⚠️ A FIFTH BOUNDARY IS STILL OPEN, and it is the sharpest one, because it is the
- * warning that says the contamination scan went blind. `baseline-integrity.ts`
- * builds `BaselineScanDegradation.detail` by interpolating a `cd` argument lifted
- * verbatim out of the CONTROL ARM's transcript; `run-harness.ts`
- * (`baselineContaminationFor`) writes that detail into `process.stderr` with ESC and
- * CR intact, and stamps the same bytes into `baselineIntegrity.degraded` in
- * `baseline.json`. A control arm running
- * `cd "$D<ESC>[2K<CR><ESC>[32mvat: control arm verified clean<ESC>[0m"` erases vat's
- * own `⚠️` line and re-renders it in green as vat's voice.
- *
- * The fix is {@link sanitizeGraderText} — no new helper: the detail is interpolated
- * MID-SENTENCE, so a surviving newline is the whole attack and the single-line
- * sanitizer is exactly right. Apply it where the detail is CONSTRUCTED (in
- * `baseline-integrity.ts`), not at the stderr write: that one call then covers both
- * surfaces, including the artifact, which the stderr-side fix would miss because vat
- * attaches `degraded` to the fragment AFTER `parseEvalFragment` has sanitized it.
+ * That list is the whole of it, and keeping it whole is the point: this file's own
+ * standard is that a function's docblock and its behaviour disagreeing is how a
+ * security claim rots, and a LIST that has fallen behind the call sites rots the same
+ * way in the other direction — it under-claims, so a reader goes looking for a hole
+ * that was closed and trusts a boundary that was never added. `git grep
+ * 'sanitizeGraderText\|sanitizeTextPreservingLines'` is the check.
  */
 
 /**

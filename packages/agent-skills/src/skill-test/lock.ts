@@ -63,8 +63,17 @@ export interface HarnessLock {
  * call-site wrapper is invisible to the compiler: reverting it to a bare
  * `lock.release()` left the whole unit suite AND the integration suite green, so
  * nothing but review stood between the fix and its own silent removal. Owning the
- * contract in the type — `release()` never throws — means there is no unwrapped call
- * site left to lose.
+ * contract in the definition — `release()` never throws — means there is no unwrapped
+ * call site left to lose. Note what that does NOT mean: `release(): void` encodes
+ * nothing about throwing, because TypeScript has no throws clause. The contract is
+ * held up by the two nested `try`s below and by the tests that pin each one, not by
+ * the signature.
+ *
+ * BOTH statements of the catch are guarded, and the second one is why: the warning
+ * write is itself an fd-level operation, and a synchronous EBADF/EPIPE on a file- or
+ * TTY-backed fd 2 threw straight back out — reinstating the exact failure the outer
+ * catch was added to prevent, on a path only reachable once something had already
+ * gone wrong. A test that mocks `process.stderr.write` to RETURN cannot see it.
  *
  * The failure is not silent: a lockfile that could not be removed will fail the NEXT
  * run of this skill with a "busy" error, and an operator who saw nothing here has no
@@ -94,11 +103,20 @@ export function acquireHarnessLock(harnessRoot: string, opts: { wait?: boolean }
       try {
         rmSync(lockPath, { force: true });
       } catch (err) {
-        process.stderr.write(
-          `warning: could not remove the harness lockfile ${lockPath} (the run's result stands): ` +
-            `${err instanceof Error ? err.message : String(err)}. ` +
-            'The next run of this skill will report the lock as busy until it is deleted.\n',
-        );
+        try {
+          process.stderr.write(
+            `warning: could not remove the harness lockfile ${lockPath} (the run's result stands): ` +
+              `${err instanceof Error ? err.message : String(err)}. ` +
+              'The next run of this skill will report the lock as busy until it is deleted.\n',
+          );
+        } catch {
+          // The REPORTING channel is what failed — an EBADF/EPIPE on a file- or
+          // TTY-backed fd 2 throws synchronously out of `write`. There is nowhere
+          // left to report it to, and rethrowing here would do exactly what the
+          // outer catch exists to prevent: destroy a good result from the harness
+          // `finally`. Swallowed deliberately, and it is the only swallow in this
+          // module that has no alternative surface.
+        }
       }
     },
   };

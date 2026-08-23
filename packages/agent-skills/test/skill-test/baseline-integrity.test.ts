@@ -80,6 +80,7 @@ const KIND_VAT_PRIVATE_DIR = 'vat-private-dir' as const;
 const KIND_SKILL_CONTENT = 'skill-content' as const;
 const REASON_CWD_UNTRACKED = 'cwd-untracked' as const;
 const REASON_UNPARSED = 'transcript-unparsed' as const;
+const REASON_CWD_UNKNOWN = 'cwd-unknown' as const;
 /** A scratch file in the arm's own cwd — the innocuous read every session makes. */
 const OWN_NOTES = 'cat notes.md';
 const ALL_SIGNALS: ContaminationSignal[] = [
@@ -117,6 +118,11 @@ const READ_SKILL_MD = 'cat SKILL.md';
 const REACH_FROM_HARNESS_DIR = 'cat my-skill-abc12345/staged/s/SKILL.md';
 /** ...and the one that only resolves from the harness ROOT. */
 const REACH_FROM_HARNESS_ROOT = 'cat staged/s/SKILL.md';
+/** A relative path that lands in the staged tree from the OS temp dir. */
+const RELATIVE_INTO_HARNESS = 'vat-skill-test/my-skill-abc12345/staged/s/SKILL.md';
+/** The two harmless one-command `-C` moves, which cost their own segment and no more. */
+const GIT_C_STATUS = 'git -C ../repo status';
+const ENV_C_LS = 'env -C ../repo ls';
 
 let toolCallSeq = 0;
 
@@ -2875,6 +2881,23 @@ describe('detectBaselineContamination — an interpreter one-liner carries an op
     expect(scan.hits.map((h) => h.kind), `the one-liner read clean: ${command}`).toEqual([KIND_HARNESS_PATH]);
   });
 
+  // ⛔ THE OTHER HALF OF THE SAME FLAG. On this family `-c` means COUNT and takes
+  // NO VALUE, so listing it as pattern-carrying swallowed TWO operands: the token
+  // after it was marked prose as a "pattern", and the first-operand rule then
+  // claimed the next unclaimed operand — THE FILE. `grep -c foo <harness>/staged/s/
+  // SKILL.md` produced `hits: []` with no degradation, byte-identical to a clean
+  // scan, while the same command spelled `-n` fired. The FILE is always a reach.
+  it.each([
+    ['grep -c', `grep -c foo ${REACH}`],
+    ['rg -c', `rg -c foo ${REACH}`],
+    ['jq -c', `jq -c . ${REACH}`],
+  ])('sees the FILE a counting %s is pointed at', (_label, command) => {
+    const scan = scanOf(transcriptWith(command));
+
+    expect(scan.degraded, 'blinded, and silent about it').toBeUndefined();
+    expect(scan.hits.map((h) => h.kind), `both operands were swallowed: ${command}`).toEqual([KIND_HARNESS_PATH]);
+  });
+
   // ...and the flags still mean "pattern" on the family they were written for, which
   // is the half that made them prose in the first place.
   it.each([
@@ -2977,8 +3000,8 @@ describe('detectBaselineContamination — a nested shell does not unanchor the w
     ['a nested sh -c', 'sh -c "echo hi"', false],
     ['a nested bash -c that cds inside itself', 'bash -c "cd ../../.. && ls"', false],
     ['a directory-stack print', 'dirs', false],
-    ['a one-command git -C', 'git -C ../repo status', true],
-    ['a one-command env -C', 'env -C ../repo ls', true],
+    ['a one-command git -C', GIT_C_STATUS, true],
+    ['a one-command env -C', ENV_C_LS, true],
   ])('keeps the reach chain tracked through a leading %s', (_label, lead, degrades) => {
     const scan = scanOf(bashSession(lead, ...CHAIN));
 
@@ -3004,6 +3027,151 @@ describe('detectBaselineContamination — a nested shell does not unanchor the w
       expect(scanOf(bashSession(...steps, REACH_FROM_HARNESS_ROOT)).degraded?.reason).toBe(REASON_CWD_UNTRACKED);
     },
   );
+});
+
+/**
+ * `MIN_EXECUTABLE_PATH_LENGTH` IS ENFORCED AT THREE SITES AND WAS PINNED AT ONE.
+ *
+ * A one- or two-character declaration (`x`, `go`) occurs constantly in ordinary
+ * prose and JSON, so the floor is what stops `declared-executable` — the strongest
+ * verdict this module issues about RUNNING something — firing on every run. It is
+ * checked in the structured scan, again in the degraded flat scan, and once more in
+ * {@link activeContaminationSignals}.
+ *
+ * ⛔ ONLY THE THIRD WAS PINNED. Measured: deleting the floor from the structured
+ * scan left the suite GREEN, and deleting it from the flat scan left the suite
+ * GREEN; only the signals site had a test (`executablePaths: ['wc']`). The two
+ * sub-floor declarations anywhere in the suite were `['wc','a']` and `['wc']`, and
+ * neither produces an ESCAPING reach, so neither could distinguish the guard.
+ *
+ * Each pair below is BELOW the floor and AT it, differing by one character, so a
+ * row that passes because nothing could fire fails its partner.
+ */
+describe('detectBaselineContamination — the declared-executable length floor', () => {
+  /** Two characters, and the same name one character longer. */
+  const BELOW_FLOOR = 'ab';
+  const AT_FLOOR = 'abc';
+  /** An ESCAPING reach at the declared name — the shape the floor has to judge. */
+  const reachTo = (declared: string): string => `cat ${TMP_DIR}/x/${declared}`;
+  const FLOOR_ROWS: ReadonlyArray<readonly [string, string, string[]]> = [
+    ['skips a declaration below the floor', BELOW_FLOOR, []],
+    ['convicts a declaration at the floor', AT_FLOOR, [KIND_DECLARED_EXECUTABLE]],
+  ];
+
+  it.each(FLOOR_ROWS)('the structured scan %s', (_label, declared, kinds) => {
+    const scan = scanOf(transcriptWith(reachTo(declared)), { executablePaths: [declared] });
+
+    expect(scan.degraded, 'this row never reached the structured path').toBeUndefined();
+    expect(scan.hits.map((h) => h.kind), `wrong verdict for a ${declared.length}-char declaration`).toEqual(kinds);
+  });
+
+  // The SECOND site, which the structured pair above cannot reach: an empty
+  // `armWorkspaceDir` degrades the scan to the flat text matcher, which enforces
+  // the floor again in its own loop.
+  it.each(FLOOR_ROWS)('the DEGRADED flat scan %s', (_label, declared, kinds) => {
+    const scan = scanOf(transcriptWith(reachTo(declared)), { executablePaths: [declared], armWorkspaceDir: '' });
+
+    expect(scan.degraded?.reason, 'this row never reached the FLAT path').toBe(REASON_CWD_UNKNOWN);
+    expect(scan.hits.map((h) => h.kind), `wrong verdict for a ${declared.length}-char declaration`).toEqual(kinds);
+  });
+
+  // The THIRD site. Already pinned by the `['wc']` row in the signals block, but
+  // pinned there as one clause of a five-field assertion; this is the pair.
+  it.each(FLOOR_ROWS)('the armed-signal list %s', (_label, declared, kinds) => {
+    const armed = activeContaminationSignals({ transcript: '', harnessRoot: HARNESS_ROOT, executablePaths: [declared] });
+
+    expect(armed.includes(KIND_DECLARED_EXECUTABLE), `wrong arming for a ${declared.length}-char declaration`)
+      .toBe(kinds.length > 0);
+  });
+});
+
+/**
+ * A SCOPED `-C` UNANCHORS RELATIVE OPERANDS, NOT THE WHOLE SEGMENT.
+ *
+ * {@link scopedCwdChange}'s docblock says "only that segment's own operands are
+ * unanchored" — and an ABSOLUTE operand is anchored whatever `-C` does. The code
+ * `continue`d past `segmentReaches` entirely, so the segment was never resolved at
+ * all: `env -C /tmp cat <harness>/staged/s/SKILL.md` reported `hits: []` while the
+ * identical `cat` without the launcher fired `harness-path`. The `cwd-untracked`
+ * degradation makes that a QUIET miss rather than a silent one, but a degradation
+ * is a warning and a hit is a verdict, and this reach earns the verdict.
+ */
+describe('detectBaselineContamination — a scoped -C does not unanchor an ABSOLUTE reach', () => {
+  const REACH = `${HARNESS_ROOT}/staged/s/SKILL.md`;
+
+  it.each([
+    ['env -C', `env -C ../repo cat ${REACH}`],
+    ['git -C', `git -C ../repo show ${REACH}`],
+    ['tar -C', `tar -C ../repo -xf ${REACH}`],
+  ])('sees the absolute reach a %s segment carries', (_label, command) => {
+    const scan = scanOf(transcriptWith(command));
+
+    expect(scan.hits.map((h) => h.kind), `the whole segment was dropped: ${command}`).toEqual([KIND_HARNESS_PATH]);
+    expect(scan.degraded?.reason, 'the one-command hole must still be reported').toBe(REASON_CWD_UNTRACKED);
+  });
+
+  // The negative control, and the reason the segment is walked with NO cwd rather
+  // than with the walk's own: a RELATIVE operand really is unanchored here, because
+  // `-C` moved the directory it would have resolved against.
+  //
+  // ⚠️ THE `cd` IS `/tmp` AND NOT THE HARNESS DIR, which the first spelling of this
+  // test got wrong: `cd vat-skill-test` is ITSELF reported as a reach, so the row
+  // was green on a `harness-path` hit the third command never made and could not
+  // have discriminated anything. The pair below is what makes it discriminate — the
+  // same relative operand WITHOUT the launcher fires.
+  it.each([
+    ['dropped behind a scoped -C', `env -C ../repo cat ${RELATIVE_INTO_HARNESS}`, 0],
+    ['resolved when nothing moved the cwd', `cat ${RELATIVE_INTO_HARNESS}`, 1],
+  ])('a relative reach is %s', (_label, command, hits) => {
+    const scan = scanOf(bashSession(`cd ${TMP_DIR}`, command));
+
+    expect(scan.hits, `a relative operand was resolved against a cwd the -C had moved: ${command}`)
+      .toHaveLength(hits);
+  });
+});
+
+/**
+ * THE WORST DEGRADATION WINS, NOT THE FIRST ONE SEEN.
+ *
+ * Both `untracked` slots were `??=`, so whichever hole the walk met first kept the
+ * slot for the rest of the transcript. A harmless one-command `git -C` therefore
+ * MASKED a genuinely unevaluable `cd` further down — and the operator was handed
+ * {@link untrackedScope}'s sentence, which says in so many words that "later ones
+ * are not" unanchored, on a run where every later path was.
+ *
+ * A false REASSURANCE about the scan's own coverage is worse than the coverage
+ * hole: the reason `cwd-untracked` exists is to stop a silent clean verdict, and a
+ * scoped detail printed over a full loss is a silent clean verdict with a footnote.
+ */
+describe('detectBaselineContamination — a scoped degradation does not mask a full one', () => {
+  /** The full loss, and the scoped one that must not be allowed to stand in for it. */
+  const FULL_LOSS = 'every later relative path is unanchored';
+  const SCOPED_LOSS = 'the paths in that ONE command are unanchored';
+
+  it.each([
+    ['a leading git -C', [GIT_C_STATUS, 'cd $D']],
+    ['a leading env -C', [ENV_C_LS, 'cd $D']],
+    ['a scoped change in the SAME Bash call', [`${GIT_C_STATUS} && cd $D`]],
+  ])('reports the FULL cwd loss behind %s', (_label, steps) => {
+    const scan = scanOf(bashSession(...steps, READ_SKILL_MD));
+
+    expect(scan.degraded?.reason).toBe(REASON_CWD_UNTRACKED);
+    expect(scan.degraded?.detail, 'the scoped hole took the slot and told the operator later paths were fine')
+      .toContain(FULL_LOSS);
+    expect(scan.degraded?.detail).toContain('cd $D');
+  });
+
+  // ...and the scoped degradation is still REPORTED when it is the only hole there
+  // is, which is the half that stops this being fixed by dropping it entirely.
+  it.each([
+    ['git -C', GIT_C_STATUS],
+    ['env -C', ENV_C_LS],
+  ])('still reports the scoped loss when %s is the only hole', (_label, command) => {
+    const scan = scanOf(bashSession(command, READ_SKILL_MD));
+
+    expect(scan.degraded?.reason).toBe(REASON_CWD_UNTRACKED);
+    expect(scan.degraded?.detail, `the one-command hole went unreported: ${command}`).toContain(SCOPED_LOSS);
+  });
 });
 
 /**
@@ -3112,6 +3280,16 @@ describe('detectBaselineContamination — an unexpandable glob is not a clean sc
     ['a glob standing for the whole directory name', `cat ${UP_TO_TMP}/vat-*/*/staged/*/SKILL.md`],
     ['a glob standing for part of it', `cat ${UP_TO_TMP}/vat-skill-t*/*/staged/*/SKILL.md`],
     ['a bracket class', `cat ${UP_TO_TMP}/vat-skill-tes[tT]/*/staged/*/SKILL.md`],
+    // ⛔ BRACE EXPANSION IS A SHELL EXPANSION EXACTLY LIKE `*`, and the class this
+    // degradation was added for is "a metacharacter standing for a directory
+    // segment defeats all three literal needles". Both spellings below read
+    // `hits: []` with no degradation — the same bytes as a clean scan — while the
+    // `*` spelling of the identical reach degraded.
+    ['a brace standing for the whole directory name', `cat ${UP_TO_TMP}/{vat-skill-test,zz}/k/staged/s/SKILL.md`],
+    ['a brace standing for part of it', `cat ${UP_TO_TMP}/vat-skill-{test,x}/k/staged/s/SKILL.md`],
+    // The literal run does not have to be a PREFIX of the needle segment to be
+    // consistent with it — a glob in the middle leaves a literal on each side.
+    ['a glob between two literal runs', `cat ${UP_TO_TMP}/vat-*-test/k/staged/s/SKILL.md`],
   ])('degrades rather than reporting clean on %s', (_label, command) => {
     const scan = scanOf(transcriptWith(command));
 
@@ -3129,6 +3307,70 @@ describe('detectBaselineContamination — an unexpandable glob is not a clean sc
 
     expect(scan.hits).toHaveLength(hits);
     expect(scan.degraded, `spurious degradation: ${command}`).toBeUndefined();
+  });
+
+  // ⛔ THE ARM'S WORKSPACE IS A SUBDIRECTORY OF THE OS TEMP DIR, so "escapes the
+  // workspace" is true of EVERY glob over the arm's own `/tmp` scratch — and the
+  // enumeration narrowing does not help, because `cat`/`wc`/`diff` are retrieval.
+  // Eleven of the fourteen commands below degraded a clean run, and a degradation
+  // stamps `⚠️ DEGRADED SCAN` on the verdict and a warning on stderr. A glob in the
+  // BASENAME cannot be standing for a directory needle; only a glob with a `/`
+  // after it can.
+  it.each([
+    ['a report basename', `cat ${TMP_DIR}/report-*.json`],
+    ['a home-relative basename', 'cat ~/Downloads/*.csv'],
+    ['an interpreter over a basename', `python3 ${TMP_DIR}/scratch/*.py`],
+    ['a bare-stem basename', `wc -l ${TMP_DIR}/out*.txt`],
+    ['two globbed basenames', `diff ${TMP_DIR}/a-*.txt ${TMP_DIR}/b-*.txt`],
+    ['a log basename', 'head -5 /var/log/*.log'],
+    ['a grep FILE list', `grep -l x ${TMP_DIR}/*.md`],
+    ['a tar listing', `tar -tf ${TMP_DIR}/*.tar`],
+    ['a checksum list', `md5sum ${TMP_DIR}/*.bin`],
+    ['a cleanup', `rm -f ${TMP_DIR}/*.tmp`],
+    ['a bracket class in the basename, which is not even a glob', `cat ${TMP_DIR}/report[1].md`],
+    // The negative control for the brace metacharacters: a brace hides a directory
+    // only when a `/` follows it, exactly like every other metacharacter.
+    ['a brace in the basename', `cat ${TMP_DIR}/out-{1,2}.txt`],
+    // ...and the rows that need the needle-consistency half. These DO glob a
+    // directory segment, so "is there a `/` after the metacharacter" cannot clear
+    // them — but `build-`, `node_modu` and `dist` cannot expand to any needle
+    // segment, so nothing could have been hidden behind them and there is nothing
+    // for the operator to act on.
+    ['a copy out of a globbed build directory', `cp ${TMP_DIR}/build-*/out.md .`],
+    ['a read out of a globbed package directory', 'cat /users/dev/node_modu*/pkg/README.md'],
+    ['a glob whose literal run cannot reach a needle', `wc -l ${TMP_DIR}/dist-*/report.csv`],
+  ])('does not degrade on an ordinary escaping glob: %s', (_label, command) => {
+    const scan = scanOf(transcriptWith(command));
+
+    expect(scan.hits).toEqual([]);
+    expect(scan.degraded, `a clean run was stamped DEGRADED: ${command}`).toBeUndefined();
+  });
+
+  // The commit's own flagship innocent fixture — the arm writes a scratch file and
+  // reads it back — spelled with the wildcard an agent actually types.
+  it('does not degrade on the scratch-file round trip spelled with a wildcard', () => {
+    const scan = scanOf(bashSession(`sort data.csv > ${TMP_DIR}/out-1.txt`, `cat ${TMP_DIR}/out-*.txt`));
+
+    expect(scan.hits).toEqual([]);
+    expect(scan.degraded).toBeUndefined();
+  });
+
+  // ⚠️ THE CASE WHERE A GREEN RESULT WOULD OTHERWISE MEAN "NOTHING LOOKED". With no
+  // directory needle armed at all there is nothing a glob could be hiding, so the
+  // degradation must not fire — and the row above it is what stops this passing
+  // because the fixture cannot degrade at all. The needle-set assertion is what
+  // stops it passing because the input was malformed in some other way.
+  it.each([
+    ['no needle is armed', '', 0],
+    ['the harness needles are armed', HARNESS_ROOT, 1],
+  ])('degrades only when %s', (_label, harnessRoot, degradations) => {
+    expect(harnessNeedles(harnessRoot).length, 'row is vacuous: wrong number of needles')
+      .toBe(harnessRoot === '' ? 0 : 3);
+    const scan = scanOf(transcriptWith(`cat ${UP_TO_TMP}/vat-*/k/staged/s/SKILL.md`), { harnessRoot });
+
+    expect(scan.hits).toEqual([]);
+    expect(scan.degraded === undefined ? 0 : 1, 'a glob was called blinding with nothing to blind')
+      .toBe(degradations);
   });
 });
 

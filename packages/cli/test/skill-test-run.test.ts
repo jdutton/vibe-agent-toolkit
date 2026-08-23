@@ -1979,6 +1979,66 @@ describe('createSkillTestConfigureCommand (--baseline / --no-baseline tri-state)
   });
 });
 
+/**
+ * `buildKnobs` was exported to close the baseline assembly gap — but the same
+ * diagnosis applies verbatim to every OTHER flag `configure` declares: the option
+ * declarations are pinned and `upsertTestConfig` writes what it is given, while
+ * the step that decides which typed flags become knobs at all was pinned for
+ * `baseline` alone. Deleting the `model` branch makes `configure --model opus`
+ * silently write nothing, with the whole CLI suite green.
+ */
+type ConfigureOptions = Parameters<typeof buildKnobs>[0];
+
+const EVALS_PATH = 'evals/suite.yaml';
+
+/** Every flag `configure` declares, typed the way Commander hands them over. */
+const ALL_CONFIGURE_OPTIONS = {
+  auth: 'subscription',
+  maxTurns: '40',
+  maxBudgetUsd: '2.5',
+  timeout: '600',
+  stall: '90',
+  model: 'opus',
+  baseline: true,
+  evals: EVALS_PATH,
+} satisfies ConfigureOptions;
+
+/** Order-insensitive comparison of key lists (locale-aware, per sonarjs/no-alphabetical-sort). */
+function sortedStrings(values: readonly string[]): string[] {
+  return [...values].sort((a, b) => a.localeCompare(b));
+}
+
+describe('buildKnobs (every declared flag reaches the config writer)', () => {
+  it.each<[string, ConfigureOptions, ReturnType<typeof buildKnobs>]>([
+    ['auth', { auth: 'subscription' }, { auth: 'subscription' }],
+    ['maxTurns, parsed to a number', { maxTurns: '40' }, { maxTurns: 40 }],
+    ['maxBudgetUsd, parsed to a float', { maxBudgetUsd: '2.5' }, { maxBudgetUsd: 2.5 }],
+    ['timeout, parsed to a number', { timeout: '600' }, { timeout: 600 }],
+    ['stall, parsed to a number', { stall: '90' }, { stall: 90 }],
+    ['model, passed through verbatim', { model: 'opus' }, { model: 'opus' }],
+    ['evals, recorded as-is', { evals: EVALS_PATH }, { evals: EVALS_PATH }],
+  ])('carries %s into the knob patch', (_label, options, expected) => {
+    expect(buildKnobs(options)).toEqual(expected);
+  });
+
+  it('assembles a knob for EVERY declared flag — a new flag without a branch fires this', () => {
+    // The drift guard for the table above: a flag added to the command and to the
+    // options type but never wired into the assembly produces no knob, so its key is
+    // simply missing here. Pinning the KEY LIST (not the values) is what makes that a
+    // red test rather than a silent no-op the operator discovers in production.
+    expect(sortedStrings(Object.keys(buildKnobs(ALL_CONFIGURE_OPTIONS)))).toEqual([
+      'auth',
+      'baseline',
+      'evals',
+      'maxBudgetUsd',
+      'maxTurns',
+      'model',
+      'stall',
+      'timeout',
+    ]);
+  });
+});
+
 // `configure` is the surface that makes --baseline PERMANENT for every future operator
 // of the skill, so the cost and the instructions-not-capability caveat matter more here
 // than on `run`, where the operator typed the flag themselves for one run.

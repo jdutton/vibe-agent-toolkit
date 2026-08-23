@@ -5,6 +5,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { acquireHarnessLock, HarnessLockBusyError, installSignalCleanup } from '../../src/skill-test/lock.js';
 
+/**
+ * Make the lockfile unremovable, so `rmSync` inside `release()` is guaranteed to
+ * throw. A NON-EMPTY DIRECTORY at the lock path does it on every platform: `rmSync`
+ * without `recursive` throws `ERR_FS_EISDIR` from Node itself, so no `node:fs` mock
+ * and no dependence on POSIX permission bits.
+ */
+function makeLockfileUnremovable(root: string): void {
+  const lockPath = safePath.join(root, '.vat-skill-test.lock');
+  rmSync(lockPath);
+  mkdirSyncReal(safePath.join(lockPath, 'occupied'), { recursive: true });
+}
+
 describe('acquireHarnessLock', () => {
   let root: string;
   beforeEach(() => { root = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-lock-')); });
@@ -34,9 +46,7 @@ describe('acquireHarnessLock', () => {
    */
   it('never throws out of release(), even when the lockfile cannot be removed', () => {
     const lock = acquireHarnessLock(root);
-    const lockPath = safePath.join(root, '.vat-skill-test.lock');
-    rmSync(lockPath);
-    mkdirSyncReal(safePath.join(lockPath, 'occupied'), { recursive: true });
+    makeLockfileUnremovable(root);
 
     const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
     try {
@@ -44,6 +54,31 @@ describe('acquireHarnessLock', () => {
       // Swallowed, NOT silent: the next run of this skill will report the lock as
       // busy, and an operator who saw nothing here cannot connect the two.
       expect(stderr).toHaveBeenCalledWith(expect.stringContaining('.vat-skill-test.lock'));
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  /**
+   * The SECOND statement of that `catch` is the warning write, and it was unguarded.
+   * A synchronous fd-level failure on stderr (EBADF on a file- or TTY-backed fd 2)
+   * throws straight back out of `release()` — from the harness `finally`, replacing an
+   * already-good result with exit 1 and no summary. The test above cannot observe
+   * this by construction: its spy returns `true`.
+   *
+   * `release(): void` encodes nothing about throwing — TypeScript has no throws
+   * clause — so this is the only thing holding the "NEVER THROWS" contract up.
+   */
+  it('never throws out of release() when the WARNING WRITE itself fails (EBADF on fd 2)', () => {
+    const lock = acquireHarnessLock(root);
+    makeLockfileUnremovable(root);
+
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => {
+      throw Object.assign(new Error('EBADF: bad file descriptor, write'), { code: 'EBADF' });
+    });
+    try {
+      expect(() => lock.release()).not.toThrow();
+      expect(stderr).toHaveBeenCalledTimes(1); // it DID try to warn — the throw is real, not skipped
     } finally {
       stderr.mockRestore();
     }

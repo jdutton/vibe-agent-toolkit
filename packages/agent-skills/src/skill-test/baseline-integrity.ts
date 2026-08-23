@@ -1724,7 +1724,7 @@ function walkToolReaches(
 ): { reaches: PathReach[]; untracked?: BaselineScanDegradation } {
   const reaches: PathReach[] = [];
   const cwds = new Map<string | null, string | undefined>();
-  let untracked: BaselineScanDegradation | undefined;
+  const holes = noCwdHoles();
 
   for (const use of parsed.toolUses) {
     const context = use.parentToolUseId;
@@ -1736,8 +1736,12 @@ function walkToolReaches(
     const walked = walkBashCommand(use.command, cwd, ctx);
     reaches.push(...walked.reaches);
     cwds.set(context, walked.cwd);
-    untracked ??= walked.untracked;
+    // ⛔ THE WIDEST HOLE, ACROSS CALLS TOO — not the first one the transcript
+    // happened to contain. See {@link CwdHoles}.
+    holes.full ??= walked.holes.full;
+    holes.scoped ??= walked.holes.scoped;
   }
+  const untracked = worstCwdHole(holes);
   return { reaches, ...(untracked === undefined ? {} : { untracked }) };
 }
 
@@ -2284,7 +2288,7 @@ const PATTERN_FLAGS = new Set([
 /**
  * Pattern flags that belong to ONE COMMAND FAMILY and mean something else elsewhere.
  *
- * ⛔ `-e` AND `-c` USED TO BE UNCONDITIONAL, and that blinded every interpreter
+ * ⛔ `-e` USED TO BE UNCONDITIONAL, and that blinded every interpreter
  * one-liner: `python3 -c "print(open('<harness>/staged/s/SKILL.md').read())"`
  * produced `hits: []` — and `python`/`node`/`perl`/`ruby` are not in
  * a nested shell, so NO degradation was recorded either and the verdict read
@@ -2292,8 +2296,17 @@ const PATTERN_FLAGS = new Set([
  * `harness-path`, which is how narrow the hole was. An interpreter's `-c`/`-e`
  * carries a SCRIPT, and a script contains real operands; only on the pattern family
  * is the token after it a thing to search FOR.
+ *
+ * ⛔ `-c` IS NOT A MEMBER — see {@link SCRIPT_CARRYING_FLAGS}, which says the same
+ * thing from the other side. Scoping it to the family did not make it safe: on the
+ * family `-c` means COUNT and takes NO VALUE, so marking the token after it as a
+ * pattern swallowed the pattern AND left the first-operand rule to claim the next
+ * unclaimed operand — THE FILE. `grep -c foo <harness>/staged/s/SKILL.md`,
+ * `rg -c` and `jq -c` all produced `hits: []` with no degradation, which is the
+ * same bytes as a clean scan; `grep -n` on the identical path fired. Left off both
+ * lists, `grep -c pat file` reads as pattern-then-file, which is what it is.
  */
-const FAMILY_PATTERN_FLAGS = new Set(['-e', '--expression', '--regexp', '-c']);
+const FAMILY_PATTERN_FLAGS = new Set(['-e', '--expression', '--regexp']);
 
 /**
  * ⚠️ THE CHARACTER CLASS EXCLUDES `-` ON PURPOSE. Widening it to `[A-Za-z-]` makes
@@ -2643,27 +2656,37 @@ function walkBashCommand(
   ctx: WalkContext,
   /** Recursion guard for {@link substitutionBodies}; a body's own bodies are not walked. */
   depth = 0,
-): { reaches: PathReach[]; cwd: string | undefined; untracked?: BaselineScanDegradation } {
+): { reaches: PathReach[]; cwd: string | undefined; holes: CwdHoles } {
   const reaches: PathReach[] = depth === 0 ? substitutionReaches(command, startCwd, ctx) : [];
   const enclosing: Array<string | undefined> = [];
   const state = { cwd: startCwd, conditional: false };
-  let untracked: BaselineScanDegradation | undefined;
+  const holes = noCwdHoles();
 
   for (const { words, separator } of shellSegments(tokenizeShell(command))) {
     applySeparator(separator, enclosing, state);
     const { head, headToken, args } = segmentHead(words);
     const change = cwdChangeFor(head, args, words);
-    // A `-C`/`-execdir` moves the cwd for THIS COMMAND ONLY, so its own operands
-    // are unanchored and the walk's cwd is not — see {@link scopedCwdChange}.
+    // A `-C`/`-execdir` moves the cwd for THIS COMMAND ONLY, so its own RELATIVE
+    // operands are unanchored and the walk's cwd is not — see
+    // {@link scopedCwdChange}.
+    //
+    // ⛔ THE SEGMENT IS STILL WALKED. It used to `continue` past
+    // {@link segmentReaches} entirely, which dropped its ABSOLUTE operands too —
+    // and an absolute operand is anchored whatever `-C` does, which is what
+    // {@link scopedCwdChange}'s own docblock says. Measured: `env -C /tmp cat
+    // <harness>/staged/s/SKILL.md`, and the `git -C`/`tar -C` spellings of it, all
+    // reported `hits: []`, while the bare `cat` of the same path fired. Walking it
+    // with NO cwd is exactly the stated rule: {@link resolvePathToken} drops a
+    // relative token without one and keeps an absolute one.
+    let segmentCwd = state.cwd;
     if (change?.kind === 'scoped') {
-      untracked ??= untrackedScope(change.spelled);
-      continue;
-    }
-    if (change !== undefined) {
+      holes.scoped ??= untrackedScope(change.spelled);
+      segmentCwd = undefined;
+    } else if (change !== undefined) {
       const moved = applyCd(change, state.conditional, state.cwd, command);
       if (moved.reach !== undefined) reaches.push(moved.reach);
       state.cwd = moved.cwd;
-      untracked ??= moved.untracked;
+      holes.full ??= moved.untracked;
       continue;
     }
     const intent = commandIntent(head, headToken, words);
@@ -2675,13 +2698,13 @@ function walkBashCommand(
       ...segmentReaches(
         { head, args, words, ...(headToken === undefined ? {} : { headToken }) },
         intent,
-        state.cwd,
+        segmentCwd,
         command,
         ctx,
       ),
     );
   }
-  return { reaches, cwd: state.cwd, ...(untracked === undefined ? {} : { untracked }) };
+  return { reaches, cwd: state.cwd, holes };
 }
 
 /**
@@ -2839,6 +2862,34 @@ function untrackedScope(spelled: string): BaselineScanDegradation {
   );
 }
 
+/**
+ * The cwd holes one walk found, kept APART by how wide they are.
+ *
+ * ⛔ ONE `??=` SLOT USED TO HOLD BOTH, so the FIRST hole seen won and a harmless
+ * one-command `git -C ../repo status` masked a genuinely unevaluable `cd $D` that
+ * came after it. That is not merely a lost degradation: {@link untrackedScope}'s
+ * sentence says in so many words that later paths ARE anchored, so the operator was
+ * handed a written reassurance about the scan's own coverage on a run where the cwd
+ * was lost for the whole remainder. Confirmed: `cd $D` alone reported "every later
+ * relative path is unanchored"; the same `cd $D` behind a `git -C` reported "the
+ * paths in that ONE command are unanchored, later ones are not".
+ */
+interface CwdHoles {
+  /** A `cd` the walk could not follow — every later relative path is unanchored. */
+  full: BaselineScanDegradation | undefined;
+  /** A `-C`/`-execdir` — that command's own operands, and nothing after it. */
+  scoped: BaselineScanDegradation | undefined;
+}
+
+function noCwdHoles(): CwdHoles {
+  return { full: undefined, scoped: undefined };
+}
+
+/** The hole to REPORT: the WIDEST one found, never merely the first one met. */
+function worstCwdHole(holes: CwdHoles): BaselineScanDegradation | undefined {
+  return holes.full ?? holes.scoped;
+}
+
 /** One `cwd-untracked` degradation, sanitized at construction for both surfaces. */
 function cwdDegradation(detail: string): BaselineScanDegradation {
   return { reason: 'cwd-untracked', detail: sanitizeGraderText(detail) };
@@ -2966,8 +3017,109 @@ function structuredExecutableHits(
  *
  * `~` is deliberately absent — {@link resolvePathToken} keeps a `~`-rooted token as
  * written on purpose, and that is a KNOWN root, not an unknown segment.
+ *
+ * ⛔ `{`/`}` USED TO BE ABSENT TOO, and brace expansion is a shell expansion exactly
+ * like `*`. Measured: `cat ../../../{vat-skill-test,zz}/k/staged/s/SKILL.md` and
+ * `cat ../../../vat-skill-{test,x}/k/staged/s/SKILL.md` both reported `hits: []`
+ * with no degradation — the same bytes as a clean scan — while
+ * `cat ../../../vat-*&#47;k/staged/s/SKILL.md`, the identical reach, degraded. A brace
+ * around a directory name defeats all three literal needles for the same reason a
+ * `*` does.
  */
-const GLOB_METACHARACTERS = /[*?[]/;
+const GLOB_METACHARACTERS = /[*?[{}]/;
+
+/**
+ * The LITERAL segments of every directory needle, as one set.
+ *
+ * Derived from the needles the scan already builds rather than from a second
+ * hand-maintained list. A second list that has to agree with the first is the
+ * failure this module keeps having, and it would go stale the first time a needle
+ * builder changed shape.
+ */
+function needleSegmentSet(needles: readonly PathNeedle[]): ReadonlySet<string> {
+  const segments = new Set<string>();
+  for (const { needle } of needles) for (const segment of normalizedSegments(needle)) segments.add(segment);
+  return segments;
+}
+
+/** The index of the LAST glob metacharacter in `segment`, or `-1`. */
+function lastMetacharacterIndex(segment: string): number {
+  for (let index = segment.length - 1; index >= 0; index -= 1) {
+    if (GLOB_METACHARACTERS.test(segment.charAt(index))) return index;
+  }
+  return -1;
+}
+
+/**
+ * Could this globbed path segment expand to something a needle segment names?
+ *
+ * ⚠️ DELIBERATELY CONSERVATIVE, AND CONSERVATIVE MEANS DEGRADING. Only the LITERAL
+ * RUN BEFORE the first metacharacter and the one AFTER the last are consulted; a
+ * literal caught BETWEEN two metacharacters is ignored, because for a brace
+ * (`{a,b}`) the text inside is a set of alternatives rather than something that
+ * must appear, and a rule that cannot tell the two apart must not convict on the
+ * middle. That leaves `vat-&#42;` consistent with `vat-skill-test`, `vat-&#42;-test`
+ * consistent with it from both ends, `&#42;` consistent with everything — and
+ * `build-&#42;` consistent with nothing this scan is looking for.
+ *
+ * This is NOT a glob matcher and must not grow into one. It answers one question:
+ * is there any way this segment could have been standing where a needle segment
+ * was? When in doubt the answer is yes.
+ */
+function globSegmentCouldHideANeedle(segment: string, needleSegments: ReadonlySet<string>): boolean {
+  const first = segment.search(GLOB_METACHARACTERS);
+  if (first === -1) return false;
+  const prefix = segment.slice(0, first);
+  const suffix = segment.slice(lastMetacharacterIndex(segment) + 1);
+  for (const needle of needleSegments) {
+    if (prefix.length + suffix.length > needle.length) continue;
+    if (needle.startsWith(prefix) && needle.endsWith(suffix)) return true;
+  }
+  return false;
+}
+
+/**
+ * Does this reach's glob stand where a NEEDLE SEGMENT could have been hidden?
+ *
+ * ⛔ "ESCAPES THE WORKSPACE" IS NOT A NARROWING ON ITS OWN, and treating it as one
+ * made this degradation fire on ordinary work. The arm's workspace is a
+ * SUBDIRECTORY of the OS temp dir, so every glob over the arm's own `/tmp` scratch
+ * escapes it, and the enumeration narrowing does not help because `cat`, `wc`,
+ * `diff`, `tar` and `md5sum` are all retrieval. Measured: `cat /tmp/report-*.json`,
+ * `cat ~/Downloads/*.csv`, `wc -l /tmp/out*.txt`, `rm -f /tmp/*.tmp` and seven more
+ * ordinary commands each stamped `⚠️ DEGRADED SCAN` on a clean verdict — including
+ * this module's own flagship innocent fixture, the arm writing a scratch file and
+ * reading it back, spelled `cat /tmp/out-*.txt`.
+ *
+ * TWO QUESTIONS, and the second is what makes the claim actionable:
+ *
+ *   - **Is the glob in a DIRECTORY segment?** The blindness this exists for is a
+ *     metacharacter standing where a LITERAL NEEDLE SEGMENT would be: all three
+ *     harness needles are literal path segments, so
+ *     `cat ../../vat-&#42;/&#42;/staged/&#42;/SKILL.md` defeats every one of them. A glob in
+ *     the BASENAME hides no directory and can defeat no segment needle.
+ *   - **Could that segment have BEEN a needle segment?** See
+ *     {@link globSegmentCouldHideANeedle}. Without this the degradation says only
+ *     "a glob appeared somewhere outside the workspace", which is true of
+ *     `cp /tmp/build-&#42;/out.md .` and tells an operator nothing they can act on. A
+ *     warning that fires where nothing could have been hidden is noise, and noise
+ *     on this verdict is what teaches people to ignore the one that matters.
+ *
+ * ⚠️ AN EMPTY NEEDLE SET DEGRADES NOTHING — with no directory needle armed there is
+ * nothing for a glob to hide, and a warning there would mean "nothing looked".
+ *
+ * 📌 AN EXPLICIT `needleSegments.size === 0` EARLY RETURN WAS MEASURED OUT AS DEAD:
+ * {@link globSegmentCouldHideANeedle} loops over the set, so an empty one already
+ * answers `false`, and deleting the guard left all tests green. The behaviour is
+ * pinned by a test rather than by a branch a mutation cannot kill.
+ */
+function globCouldHideANeedle(resolved: string, needleSegments: ReadonlySet<string>): boolean {
+  // `slice(0, -1)` drops the BASENAME: a glob there stands for a filename, and no
+  // directory needle segment can be hiding behind a filename.
+  return normalizedSegments(resolved)
+    .slice(0, -1)
+    .some((segment) => globSegmentCouldHideANeedle(segment, needleSegments));
+}
 
 /**
  * The degradation owed by a reach whose glob nobody could expand and no needle
@@ -2980,9 +3132,9 @@ const GLOB_METACHARACTERS = /[*?[]/;
  * `cat ../../vat-*&#47;*&#47;staged/*&#47;SKILL.md` and
  * `cat ../../vat-skill-t*&#47;*&#47;staged/*&#47;SKILL.md` do not.
  *
- * TWO NARROWINGS, both measured against the existing clean fixtures rather than
- * assumed, because a degradation on every clean run costs exactly what the
- * executable false positive cost:
+ * THREE NARROWINGS, all measured against real clean commands rather than assumed,
+ * because a degradation on every clean run costs exactly what the executable false
+ * positive cost:
  *
  *   - the reach must ESCAPE the arm's own workspace. A glob inside its own tree
  *     (`cat ./fixtures/*.md`) is the ordinary shape of ordinary work.
@@ -2990,15 +3142,18 @@ const GLOB_METACHARACTERS = /[*?[]/;
  *     are orientation — the module already refuses to convict on either — and a glob
  *     is what enumeration is FOR, so degrading there would fire constantly while
  *     saying nothing.
+ *   - the metacharacter must stand where a NEEDLE SEGMENT could have been — see
+ *     {@link globCouldHideANeedle}.
  */
 function globDegradation(
   reaches: readonly PathReach[],
   armWorkspaceDir: string,
   claimed: ReadonlySet<string>,
+  needleSegments: ReadonlySet<string>,
 ): BaselineScanDegradation | undefined {
   const blind = reaches.find(
     (r) => r.intent !== 'enumeration'
-      && GLOB_METACHARACTERS.test(r.resolved)
+      && globCouldHideANeedle(r.resolved, needleSegments)
       && !claimed.has(r.resolved)
       && pathEscapesWorkspace(r.resolved, armWorkspaceDir),
   );
@@ -3031,16 +3186,28 @@ function structuredPathHits(
     if (hit !== undefined) dirHits.push(hit);
   };
 
-  push(firstReachHit(reaches, harnessNeedles(input.harnessRoot), KIND_HARNESS_PATH, claimed));
-  push(firstReachHit(reaches, siblingArmNeedles(input.siblingArmDir ?? ''), KIND_SIBLING_ARM, claimed));
+  // Built ONCE and reused by {@link globDegradation}, so the segments it asks about
+  // are the segments this scan actually looked for — not a second list to keep in
+  // step with these three builders.
+  const harness = harnessNeedles(input.harnessRoot);
+  const sibling = siblingArmNeedles(input.siblingArmDir ?? '');
+  const privateDirs = (input.vatPrivateDirs ?? []).map((dir) => vatPrivateDirNeedles(dir ?? ''));
+
+  push(firstReachHit(reaches, harness, KIND_HARNESS_PATH, claimed));
+  push(firstReachHit(reaches, sibling, KIND_SIBLING_ARM, claimed));
   // Per dir, not first-match-wins across all of them: reaching the answer key and
   // reaching the grader dir are two different capabilities, and an operator
   // triaging a contaminated run needs to see both.
-  for (const dir of input.vatPrivateDirs ?? []) {
-    push(firstReachHit(reaches, vatPrivateDirNeedles(dir ?? ''), KIND_VAT_PRIVATE_DIR, claimed));
+  for (const needles of privateDirs) {
+    push(firstReachHit(reaches, needles, KIND_VAT_PRIVATE_DIR, claimed));
   }
   const executableHits = structuredExecutableHits(input, reaches, armWorkspaceDir, claimed);
-  const blindGlob = globDegradation(reaches, armWorkspaceDir, claimed);
+  const blindGlob = globDegradation(
+    reaches,
+    armWorkspaceDir,
+    claimed,
+    needleSegmentSet([harness, sibling, ...privateDirs].flat()),
+  );
   return { dirHits, executableHits, ...(blindGlob === undefined ? {} : { blindGlob }) };
 }
 
