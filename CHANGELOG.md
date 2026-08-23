@@ -11,49 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`vat claude context` directory queries no longer charge every path-scoped rule.** A rule is now
   reported as ∀ (its glob covers every file in the directory) or ∃ (some file there matches, and the
-  answer names it), or left out entirely — on a 116-rule adopter, three directories that all reported
-  73,958 on-demand tokens now report 1,393, 5,513 and 1,393. `glob-rule-may-fire` admissions gained
-  `pattern` and `examplePath`, and a new `glob-rule-covers-dir` kind joins them: a consumer comparing
-  admission objects structurally must account for both. The `directory-budget-unchecked` stated limit
-  is retired and `existential-needs-a-file` replaces it.
+  answer names it), or left out entirely, so a directory's reported on-demand token count drops
+  sharply. `glob-rule-may-fire` admissions gained `pattern` and `examplePath`, and a new
+  `glob-rule-covers-dir` kind joins them: a consumer comparing admission objects structurally must
+  account for both. The `directory-budget-unchecked` stated limit is retired and
+  `existential-needs-a-file` replaces it.
 
 - **`vat claude context` takes several paths, and its machine-readable output is now an envelope.**
   The argument became `[paths...]`, and `--format json`/`yaml` emit `{ root, answers: [...] }` rather
   than a bare answer document. `answers` is a list **even for a single path**, so a consumer never
-  branches on count; existing single-path callers read `answers[0]`.
-
-  The reason it exists: the enumeration is the entire cost of this command and it is independent of
-  the path asked about. Measured on a 8,235-blob adopter, a cold run costs ~72s and a warm one ~6s,
-  while the query itself is a pure read of materialised tables. Asking about ten paths used to mean
-  ten enumerations; it is now one. Every argument is also resolved *before* the enumeration, so a
-  mistyped path among valid ones is refused in milliseconds instead of after a full population.
+  branches on count; existing single-path callers read `answers[0]`. Asking about several paths costs
+  one enumeration rather than one per path, and every argument is resolved before that enumeration,
+  so a mistyped path is refused immediately.
 
 - **`vat claude context --format json`/`yaml`: `limits`, `modelledBehaviours` and `boundsStatement`
   moved off every answer onto the envelope, beside `root`.** They bound the method, not any one
   path. Read them from the envelope — `answers[i]` no longer carries them.
-
-### Added
-
-- **`vat claude context --discoverable`** adds a second, disjoint set: what the loaded files link to
-  in one hop that the harness does not load. Its tokens are reported separately and never added to
-  the estimate — a markdown link is voluntary, so the figure is a ceiling, not a charge. A target the
-  loaded set already contains is excluded, so the two sets can be read alone or added.
-
-- **`vat claude context --all`** answers for every path the projection realized, from one
-  enumeration. Bare `vat claude context` still means the current directory; paths are
-  deduplicated and sorted by code point, so two sweeps are diffable.
-
-- **(library) A closure extent declaration now carries `referenceDialect`.** Parsed
-  `ExtentDeclaration` objects gain the field; it defaults to `'href'`, so every existing declaration
-  behaves exactly as before. Code that compares a parsed declaration structurally must account for
-  it.
-
-  The reason it exists: `ClosureExtentContributor` handed `rawRef` — the token *exactly as
-  authored*, `@` and all — straight to `resolveLocalHref`, an RFC 3986 resolver with no `@` branch.
-  So `@README.md` in a `CLAUDE.md` resolved to a file named `@README.md`, found nothing, and every
-  Claude import in every corpus landed as an unresolved reference. `referenceDialect:
-  'claude-import'` is the vendor's reading: a leading `@` is stripped, `~/` expands to the home
-  directory, and a leading `/` is filesystem-absolute rather than root-relative.
 
 - **Resource scanning now uses the projection lane with the git enumerator by default.** The
   incumbent link walk is still there: set `VAT_RESOURCES_CRAWL=walk` to restore it, or
@@ -65,11 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `LINK_BROKEN_FILE` is no longer reported. If you rely on it, set `VAT_RESOURCES_CRAWL=walk` and
   tell us — closing the gap properly is a separate change.
 
-- **Every resource crawl now sees uncommitted files.** Inside a git working tree these lanes were
-  answered by `git ls-files`, so a markdown file you had written but not committed was invisible to
-  validation and the command reported a confident green over a corpus it had not fully seen. The
-  population is now `tracked ∪ (untracked ∧ ¬ignored)`; gitignored files stay out. **Expect new
-  findings on trees with uncommitted work** — that is the fix, not a regression.
+- **Every resource crawl now sees uncommitted files.** Inside a git working tree the population is
+  `tracked ∪ (untracked ∧ ¬ignored)` rather than `git ls-files`; gitignored files stay out. **Expect
+  new findings on trees with uncommitted work** — that is the fix, not a regression.
 
 - **`vat inventory` no longer emits a `schema:` version label.** Scripts reading
   `schema == "vat.inventory/v1alpha"` must drop the check and switch on `kind` instead.
@@ -89,13 +60,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   ⚠️ **Behaviour change, not only a signature change.** `vat inventory --user` and marketplace roots
   now answer gitignore questions from a tracker's active set rather than a `git check-ignore` spawn
-  per target. The two oracles differ on paths reached through a symlinked ancestor, inside a
-  submodule, or under `.git/`, so a skill's `files.linked` can change in such a tree. Across 766 real
-  skills, not one linked set changed.
+  per target, so a skill's `files.linked` can change in a tree that reaches paths through a symlinked
+  ancestor, inside a submodule, or under `.git/`.
 
 - **(library) `@vibe-agent-toolkit/resource-compiler`'s `parseMarkdown` is now `toMarkdownResource`.**
-  Rename the binding. It collided with `@vibe-agent-toolkit/resources`' `parseMarkdown`, which takes
-  a path rather than content and keeps its name.
+  Rename the binding. `@vibe-agent-toolkit/resources`' own `parseMarkdown`, which takes a path rather
+  than content, keeps its name.
 
 - **(library) `@vibe-agent-toolkit/utils` no longer exports `verifyCaseSensitiveFilename`.** Use
   `fillSiblingNames(paths, fsCache)` to build a table once, then `classifyFilenameCaseFrom(table, path)`
@@ -109,23 +79,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   estimated token cost. A file argument is exact; a directory answers path-scoped rules as "may fire
   here". The report publishes its own limits: the number is neither a floor nor a ceiling.
 
-- **(library) `closureProvenance()`** — which member of a closure pulled in which, and at what depth,
-  computed from the same traversal the closure contributor runs rather than from a stored edge table.
+- **`vat claude context --discoverable`** adds a second, disjoint set: what the loaded files link to
+  in one hop that the harness does not load. Its tokens are reported separately and never added to
+  the estimate — a markdown link is voluntary, so the figure is a ceiling, not a charge. A target the
+  loaded set already contains is excluded, so the two sets can be read alone or added.
+
+- **`vat claude context --all`** answers for every path the projection realized, from one
+  enumeration. Bare `vat claude context` still means the current directory; paths are
+  deduplicated and sorted by code point, so two sweeps are diffable.
+
+- **(library) `closureProvenance()`** — which member of a closure pulled in which, and at what depth.
 
 - **(library) Claude `@`-import closures are now projected.** `ClaudeImportExtentContributor`
   registers one closure extent per `CLAUDE.md` / `CLAUDE.local.md` / `.claude/rules` file, following
-  only `at-prefixed` tokens, to the vendor's documented four-hop bound. Roots are discovered through
-  the shipped `classifyPath()` rather than a second glob. `buildClaudeContextPopulation()` assembles
-  the lane. Dangling `@` imports become visible for the first time — they land as
-  `CLOSURE_REFERENCE_UNRESOLVED` conditions, and an escaping `@~/…` import lands as
-  `CLOSURE_REFERENCE_OUTSIDE_ROOT`, named but never charged. `vat claude context` reports them.
+  only `at-prefixed` tokens, to the vendor's documented four-hop bound.
+  `buildClaudeContextPopulation()` assembles the lane. Dangling `@` imports become visible for the
+  first time — they land as `CLOSURE_REFERENCE_UNRESOLVED` conditions, and an escaping `@~/…` import
+  as `CLOSURE_REFERENCE_OUTSIDE_ROOT`, named but never charged. `vat claude context` reports them.
+
+- **(library) A closure extent declaration now carries `referenceDialect`.** It defaults to `'href'`,
+  so every existing declaration behaves exactly as before; `'claude-import'` selects the vendor's
+  reading of a Claude import — a leading `@` is stripped, `~/` expands to the home directory, and a
+  leading `/` is filesystem-absolute rather than root-relative. Code that compares a parsed
+  `ExtentDeclaration` structurally must account for the new field.
 
 - **(library) `.claude/rules` files carry a `rule-scope` tag.** `ClaudeRulesScopeContributor` reads
-  `paths:` off `blobs.frontmatter` and files `root`, `nested` or `path-scoped` — the producer a path
-  classifier structurally could not supply, since it runs before `blobs` exists. Deliberately *not*
-  a second `loading` producer: `resource_tags` keys on `(resourceId, tag, value, source)` with
-  `value` in the key, so a second producer could file two contradictory `loading` rows for one
-  identity and a `GROUP BY resourceId` would double-count.
+  `paths:` off `blobs.frontmatter` and files `root`, `nested` or `path-scoped`.
 
 - **(library) `resource_tags` is now populated.** `AgenticConventionContributor`, `classifyPath()`
   and `pluginRootsFrom()` are exported from `@vibe-agent-toolkit/resources`; the contributor tags
@@ -135,16 +114,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **(library) `removeScratchDir()` on `@vibe-agent-toolkit/utils`** — a best-effort temp-directory
   teardown for test suites, which warns and returns instead of failing when removal errors or
-  outruns its own budget. A plain `rm` in an `afterAll` can fail a suite whose every assertion
-  passed, purely from machine contention; this cannot. `setupAsyncTempDirSuite` and
-  `setupSyncTempDirSuite` now use it, so their teardowns are bounded too — note that
-  `setupSyncTempDirSuite`'s `afterAll` is consequently `async` (a removal cannot be bounded without
-  a race, and `rmSync` cannot be raced). Its `beforeEach` and `getTempDir` stay synchronous. Both
-  suite helpers take an optional second argument forwarded to `removeScratchDir`, because the
-  default budget is sized against the unit tier's hook timeout and a suite in a tier with a longer
-  one (or with a heavy fixture tree) should raise it. Note what the bound does and does not buy:
-  the *hook* always resolves in time, but an abandoned removal is a pending libuv request that runs
-  to completion regardless — it is not cancelled, and it keeps its worker alive until it finishes.
+  outruns its own budget. `setupAsyncTempDirSuite` and `setupSyncTempDirSuite` now use it and take an
+  optional second argument forwarded to it, so a suite with a longer hook timeout or a heavy fixture
+  tree can raise the default budget. `setupSyncTempDirSuite`'s `afterAll` is consequently `async`;
+  its `beforeEach` and `getTempDir` stay synchronous.
 
 - **The resource projection** — a populated, queryable model of a project's documents, blobs, links
   and membership, replacing ad-hoc crawling as the substrate for the resource commands. `vat
@@ -165,8 +138,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`externalSource` on a marketplace plugin entry** — reference a plugin published elsewhere rather
   than vendoring it.
 
-- **Two new rules in the published ESLint pack** — `@vibe-agent-toolkit/no-raw-text-decode` and
-  `@vibe-agent-toolkit/no-self-package-import`.
+- **Three new rules in the published ESLint pack** — `@vibe-agent-toolkit/no-raw-text-decode`,
+  `@vibe-agent-toolkit/no-self-package-import` and `@vibe-agent-toolkit/no-bare-symlink-in-tests`.
+  Like its siblings, `no-bare-symlink-in-tests` reports an unanchored `exemptFiles` entry: ESLint
+  filenames are absolute, so a bare filename exempts every file of that name anywhere in the tree.
 
 - **`decodeTextContent()` on the new `@vibe-agent-toolkit/utils/text` subpath**, and `runGit()` /
   `runGitOrThrow()` on the barrel.
@@ -177,8 +152,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **`vat audit` and `vat inventory` no longer spawn a `git check-ignore` process per link target.**
-  Measured on a 1,484-document monorepo: 786 spawns and 9.2 s of the run, now zero, taking the whole
-  command from 12.5 s to 2.5 s. Reports are byte-identical across the change.
+  On a 1,484-document monorepo the whole command goes from 12.5 s to 2.5 s. Reports are unchanged.
 
 - **The RAG backend is no longer loaded by every `vat` command, and can be omitted from an install**
   — it moved to `optionalDependencies`, and the four `vat rag` subcommands load it on demand.
@@ -213,26 +187,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **`vat agent install --force` could not replace a broken dev-mode symlink.** The already-installed
-  check used `fs.access()`, which *follows* a symlink — so a link left dangling by a rebuild that
-  removed `dist/` read as "nothing installed here". That skipped the `--force` removal entirely and
-  let the install fail with a bare `EEXIST` a moment later, and the advice it printed
-  ("install without `--dev`") hit the same stale entry and failed too. The check now uses
-  `fs.lstat()`, which stats the link itself, so `--force` clears it whether or not its target still
-  exists.
+- **`vat agent install --force` could not replace a broken dev-mode symlink**, such as one left
+  dangling by a rebuild that removed `dist/`. The install failed with a bare `EEXIST`, and the advice
+  it printed ("install without `--dev`") failed the same way. `--force` now clears the link whether
+  or not its target still exists.
 
-- **A failed `vat claude plugin install --dev` no longer denies the state it leaves behind.** The
-  symlink step throws from inside a loop, after the previous marketplace directory has already been
-  removed and the plugin's non-skill content copied — so some skills are linked, the rest are not,
-  and the plugin is never registered. The error now says the install is incomplete and to re-run,
-  instead of offering only "check that the destination directory is writable".
-
-- **`local/no-bare-symlink-in-tests` silently accepted an unanchored `exemptFiles` entry.** Every
-  other rule in the pack that takes `exemptFiles` reports a bare filename, because ESLint filenames
-  are absolute and a bare entry exempts *every* file with that name anywhere in the tree — including
-  files added later by someone who never saw the config. This rule shipped the option without that
-  advisory, which began to matter when the rule was extended past test files and `exemptFiles`
-  became load-bearing. It now reports `unanchoredExemptFile` like its three siblings.
+- **A failed `vat claude plugin install --dev` no longer denies the state it leaves behind.** A
+  partial install — some skills linked, the rest not, the plugin unregistered — now says the install
+  is incomplete and to re-run, instead of offering only "check that the destination directory is
+  writable".
 
 - **Git commands run from inside a git hook could read — or write — the wrong repository.** Worst
   case, `vat claude marketplace publish` switched a branch and landed a commit in the repository you
