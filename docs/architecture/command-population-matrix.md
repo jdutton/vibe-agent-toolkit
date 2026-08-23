@@ -55,32 +55,42 @@ and what
 [a verb whose subject is deliberately build output](./command-population-open-questions.md#should-a-packaging-or-verify-verb-see-gitignored-build-output-deliberately)
 owes it.
 
-## 2. The three selectors, and their opposite defaults
+## 2. The three selectors, and the opt-outs they answer to
 
-🪤 **The three environment selectors default in different directions.** This is the live footgun; it
-is stated here once so no row has to restate it.
+🪤 **All three selectors now default to the new lane, and each spells its escape hatch
+differently.** That is the live footgun, and it is the reverse of the one this section carried until
+2026-08-22: it read *"the three environment selectors default in different directions"* and marked
+two of the three as opt-**in**, which had stopped being true of both. Stated here once so no row has
+to restate it.
 
 | selector | values | default | what it selects | declared |
 |---|---|---|---|---|
-| `VAT_RESOURCES_CRAWL` | unset · `projection` | **walk** (opt-**in** to the projection) | whether the resources/packaging population comes from `crawlDirectory` or from a base-only projection | [the resources selector](#the-resources-selector) |
-| `VAT_INVENTORY_CRAWL` | unset · `projection` · `walker` | **projection** (opt-**out** to the walk) | whether `vat inventory` membership is answered by a projection or the incumbent link walk | [the inventory selector](#the-inventory-selector) |
-| `VAT_EXTENT_SOURCE` | unset · `git` | **filesystem walk** (opt-**in** to git) | *within* the projection, which implementation enumerates the `filesystem` extent | `packages/resources/src/projection/crawl-source.ts › EXTENT_SOURCE_ENV`, resolved at `› crawlSourceFor()` |
+| `VAT_RESOURCES_CRAWL` | unset · `walk` — any other value, the historical `projection` included, leaves the projection selected | **projection** (opt-**out** via `walk`) | whether the resources/packaging population comes from `crawlDirectory` or from a base-only projection | [the resources selector](#the-resources-selector) |
+| `VAT_INVENTORY_CRAWL` | unset · `projection` · `walker` | **projection** (opt-**out** via `walker`) | whether `vat inventory` membership is answered by a projection or the incumbent link walk | [the inventory selector](#the-inventory-selector) |
+| `VAT_EXTENT_SOURCE` | unset · `filesystem` — `EXTENT_SOURCE_GIT` is exported but no production code tests for it | **git wherever the root has a readable `.git`**, the filesystem walk elsewhere (opt-**out** via `filesystem`) | *within* the projection, which implementation enumerates the `filesystem` extent | `packages/resources/src/projection/crawl-source.ts › EXTENT_SOURCE_ENV`, decided at `› gitExtentSelected()`, applied at `› crawlSourceFor()` |
 
 Three properties that are easy to get wrong:
 
-- **`VAT_INVENTORY_CRAWL` is the only one whose default is the new lane**, and the asymmetry is
-  deliberate rather than an oversight: the inventory flip was provable as a byte-for-byte no-op, and
-  the resources flip is provably *not* one — it drops committed symlinks, because the `filesystem`
-  extent crawls with `followSymlinks: false` and records no link's own path
-  ([the resources selector](#the-resources-selector)). That is the whole of the disagreement between
-  the two resources lanes; the default lane honours §1.
-- **An unrecognized value never throws.** `VAT_INVENTORY_CRAWL` treats anything that is not exactly
-  `walker` as the projection ([the inventory selector](#the-inventory-selector)); the other two treat
-  anything that is not exactly their opt-in spelling as the default. A typo'd selector silently
-  selects a lane.
-- **`VAT_EXTENT_SOURCE=git` falls back silently** when the root is not in a repository, so the
-  selector and the outcome come apart. That is why a scan reports `extentSource` as a fact about the
-  run rather than by re-reading the environment — see
+- **No default is the incumbent any more, and one of the three flips was not a no-op.** The
+  inventory flip was provable as byte-for-byte; the resources flip is provably *not* one and shipped
+  anyway. Both projection extents omit a **committed symlink** — the `filesystem` extent crawls with
+  `followSymlinks: false` and records no link's own path, and `GitCrawlSource` skips mode `120000`
+  to match it — so a broken committed symlink that the walk reports as `LINK_BROKEN_FILE` produces
+  no finding on the default lane. `packages/cli/src/utils/resource-loader.ts ›
+  resourcesProjectionCrawlSelected()` states that loss and accepts it, with `walk` as the escape
+  hatch ([the resources selector](#the-resources-selector)). ⚠️ A committed symlink is *tracked*, so
+  this default is narrower than the universe §1 rules binding, and the two have not been reconciled
+  here: the divergence is real, it is recorded at the call site, and the waiver §7 requires for it
+  has not been filed.
+- **An unrecognized value never throws, and now they all fail the same way.** Each selector treats
+  anything that is not exactly its opt-out spelling — `walk`, `walker`, `filesystem` — as the new
+  lane. A typo'd selector silently selects the projection, where it used to silently select the
+  incumbent.
+- **`VAT_EXTENT_SOURCE`'s default falls back silently** when the root is not in a repository, or
+  when the `.git` it finds has no readable `HEAD`, so the selector and the outcome come apart — and
+  `gitExtentSelected()` is therefore a function of the root, not of the environment alone. That is
+  why a scan reports `extentSource` as a fact about the run rather than by re-reading the
+  environment — see
   [the request and the outcome are different facts](#the-request-and-the-outcome-are-different-facts).
 
 ## 3. Population source and selector, per command
@@ -88,6 +98,13 @@ Three properties that are easy to get wrong:
 Only commands that enumerate a file population appear here.
 [§6](#6-commands-that-enumerate-no-file-population) lists the rest, so that every registered command
 appears in this document exactly once.
+
+⚠️ **Three `(default)` cells below predate the resources flip and are stale.** `vat resources scan`,
+`vat resources validate` and `vat rag index` are written as `crawlDirectory` walks; that is what
+`VAT_RESOURCES_CRAWL=walk` buys now, not what an unset environment gets. The same inversion carries
+into their [§4](#4-what-each-command-sees) rows, where the projection line is written as the
+opted-in case. Re-writing those rows is a per-lane read that has not been done here — where they and
+[§2](#2-the-three-selectors-and-the-opt-outs-they-answer-to) disagree, §2 is current.
 
 | command | population source (default) | selector | declared |
 |---|---|---|---|
@@ -196,7 +213,7 @@ no blob stage — it reads and parses each admitted resource directly, charged a
 
 | lane | `contentDemand` at enumeration | resulting `contentState` | blob stage (`contentParsing`) |
 |---|---|---|---|
-| resources projection (`vat resources scan/validate`, `vat rag index`, and the packaging registries under `VAT_RESOURCES_CRAWL=projection`) | `deferred` — enumerate every path, read none of them ([the filesystem extent keys lazily](#the-filesystem-extent-keys-lazily)) | `deferred` for every file row, `none` for a directory. `contentKey` is always null | **`CONTENT_PARSING_SKIP`** — the stage is ~90% of this lane's cold cost and not one blob row is read ([the blob stage default and its refusal](#the-blob-stage-default-and-its-refusal)) |
+| resources projection (`vat resources scan/validate`, `vat rag index`, and the packaging registries — the default lane, per [§2](#2-the-three-selectors-and-the-opt-outs-they-answer-to)) | `deferred` — enumerate every path, read none of them ([the filesystem extent keys lazily](#the-filesystem-extent-keys-lazily)) | `deferred` for every file row, `none` for a directory. `contentKey` is always null | **`CONTENT_PARSING_SKIP`** — the stage is ~90% of this lane's cold cost and not one blob row is read ([the blob stage default and its refusal](#the-blob-stage-default-and-its-refusal)) |
 | inventory projection (`vat inventory`, plugin dir) | `deferGitignored`, from the same contributor — key eagerly, except where the row's own `gitignored` column is true | `keyed`, or `deferred` for an ignored row, or `none`/`unreadable` | **`CONTENT_PARSING_DERIVE`** (the default). Mandatory here, not a choice: the closure contributor reads the blob-keyed tables, and `populate()` **throws** rather than silently reducing every extent to its own root |
 
 **Zero file-content reads on this lane, and a gate holds it there.** The demand is the caller's
@@ -402,6 +419,17 @@ it out — the only route in VAT that reports an ignored file instead of droppin
 - [Command Population — Open Questions](./command-population-open-questions.md) — the backlog half:
   every `⚠️ undeclared` cell above as a question, and every claim a document makes that the code does
   not support.
+- [Command → enumeration lane](../contributing/command-lane-table.md) — the same population read from
+  the entry-point side: which of three enumeration sinks each command reaches, derived from the built
+  CLI and cross-checked at runtime. It records the sink a route reaches, not which enumerator did the
+  work, so a projection lane shows up there as `crawl` — defensible, because `FilesystemCrawlSource`
+  and `GitCrawlSource`'s descent into what git declines to describe both call `crawlDirectory`, and
+  incomplete, because the git snapshot that does the bulk of the enumeration under the default, the
+  selectors and the content stages have no column there.
+  Those are **this** document's §2–§5. Where the two disagree about whether a command enumerates at
+  all, this one is the specification and that one is a reachability finding: it listed
+  `vat inventory` as enumerating nothing until 2026-08-22, while §3 has always carried both of that
+  command's lanes.
 - [Resource Scanning and Object Caching](./resource-scanning-and-caching.md) — the mechanism behind
   every route named here: the two lanes, the git plumbing, the symlink divergences, the measurements.
 - [Resource Projection](./resource-projection.md) — the output side: what gets built from the bytes a
