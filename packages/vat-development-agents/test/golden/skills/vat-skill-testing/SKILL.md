@@ -236,7 +236,11 @@ Put input files under `evals/fixtures/` and reference them via `files`. Use real
 
 ### A/B instruction-lift (`--baseline`)
 
-A skill's value is its **lift over what the model already does without it**. `--baseline` runs each eval twice — with the skill and without — and reports the delta. If an expectation passes in *both* configurations it proves nothing about the skill; make the test harder, or focus the skill on where the model genuinely needs help.
+A skill's value is its **lift over what the model already does without it**. `--baseline` runs each eval twice — with the skill and without — and reports the delta on stderr and in `baseline.json`. If an expectation passes in *both* configurations it proves nothing about the skill; make the test harder, or focus the skill on where the model genuinely needs help.
+
+```
+Baseline delta: +2 (with skill: 3/3, without skill: 1/3).
+```
 
 **What the control arm actually withholds — read this before trusting a delta.** The skill-absent arm is denied the skill's *declaration*: no `--plugin-dir`, and `--setting-sources ""` suppresses user/project settings, so the agent is never told the skill exists. It is **not** denied *capability*. The executor runs with unrestricted `Bash`, and the harness is context isolation, **not an OS sandbox** — any copy of the skill still on the filesystem is reachable in principle.
 
@@ -257,7 +261,20 @@ So `--baseline` A/Bs the skill's **instructions**, on the honest assumption that
 }
 ```
 
-`contaminated: true` also prints a warning to stderr. When you see it, **discard the delta** — the control had the treatment. The usual cause is an ambient copy: uninstall the plugin, or run against a tree that has no built copy of the skill.
+`contaminated: true` also prints a warning to stderr. When you see it, **discard the delta** — the control had the treatment. The usual cause is an ambient copy: uninstall the plugin, or run against a tree that has no built copy of the skill. The number is still printed: contamination does not make the arithmetic wrong, it makes *interpreting the result as skill lift* wrong, and the warning sits directly under the number that it disqualifies.
+
+**`baselineDelta` in `baseline.json`.** The subtraction itself, run-level and per-eval:
+
+```json
+"baselineDelta": {
+  "with":    { "passed": 3, "total": 3 },
+  "without": { "passed": 1, "total": 3 },
+  "delta": 2,
+  "perEval": [ { "evalId": "lookup-1", "withPassed": 3, "withTotal": 3, "withoutPassed": 1, "withoutTotal": 3, "delta": 2 } ]
+}
+```
+
+`delta: 0` and `delta: null` mean different things and have different remedies. **`0` is a measurement** — the skill lifted nothing on those expectations, which is a real finding about the skill. **`null` is a refusal to measure**: that eval's two arms were graded against a different number of expectations, so the totals have different denominators and subtracting them would not be a delta. `null` appears per-eval for each skewed eval and run-level if *any* eval is skewed; the evals behind it are listed in `baselineIntegrity.skew`, and `comparable` goes false. The usual cause is a misbehaving grader, not an ambient copy — so it is reported separately from `contaminated`, and a run can be clean and incomparable at once.
 
 **What the block can and cannot see.** `signals` lists which detectors were armed for the run, so a clean verdict can be told apart from a blind one — an empty list means nothing was looking. The harness-path signal always runs. The declared-executable signal needs the subject's `executables` manifest, which resolves only for a **declared** subject (a skill name, or a path that maps back to one) — exactly the same restriction `toolExpectations` carries. Test by **name** for the fuller check; a bare path to a built `dist/` leaves that signal unarmed. It also fires only on a path that reaches OUTSIDE the arm's own workspace (absolute, `~`- or `$VAR`-rooted, or climbing out): a control arm denied the skill writes its own `analyze.py` and says so, and that is the behaviour it is supposed to exhibit, not a reach. The `skill-content` signal covers what the others cannot — an **instruction-only** skill found as an ambient copy names no path and no executable, so vat matches verbatim lines of your SKILL.md body instead. Lines your eval prompts or expectations already quote are excluded (the arm read them from vat, not from the skill), so a skill whose body is entirely quoted by its own suite leaves that signal unarmed. The block raises the floor on silent contamination; it does not prove a clean run.
 
@@ -458,11 +475,11 @@ vat skill test run --help
 
 After a run, check:
 
-1. **Printed summary** — `PASS N/N`, `FAIL N/M`, a `(K tool)` suffix for tool-verdict failures, and any `SKIPPED (fail-fast)` tier line.
+1. **Printed summary** — `PASS N/N`, `FAIL N/M`, a `(K tool)` suffix for tool-verdict failures, and any `SKIPPED (fail-fast)` tier line. On a `--baseline` run, a `Baseline delta:` line on stderr as well.
 2. **`results/grading.json`** — per-expectation verdicts, evidence, and the pass/fail summary.
 3. **`results/tool-eval.json`** — per-eval tool verdicts. **Always written** (`{"evals": []}` when no eval declared `toolExpectations`), so check `.evals.length`, not file existence.
 4. **`results/friction.json`** — packaging friction items; triage by severity and category (see above).
-5. **`results/baseline.json`** (`--baseline` runs) — the skill-absent arm's grades, and `baselineIntegrity`. Read the integrity block *first*: a contaminated control makes the delta meaningless.
+5. **`results/baseline.json`** (`--baseline` runs) — the skill-absent arm's grades, plus `baselineDelta` (the lift, run-level and per-eval) and `baselineIntegrity`. Read the integrity block *first*: a contaminated control makes the delta meaningless. Both files carry an `arm` field and per-expectation `evalId`, so the two are self-describing and line up per eval.
 
 The `Results:` line on stderr names the directory. There are no executor transcript files to
 read — the transcript is never written to disk (see **Anti-forgery model** above); the grader's

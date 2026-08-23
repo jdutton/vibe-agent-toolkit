@@ -29,12 +29,13 @@ import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'no
 import { mkdirSyncReal, safePath, toForwardSlash, type SpawnHeadlessOptions } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it, vi } from 'vitest';
 
+import { BaselineDeltaSchema, type BaselineDelta } from '../../src/skill-test/baseline-delta.js';
 import {
   runSkillTestHarness,
   RETAINED_RESULTS_DIRNAME,
   type RunHarnessOptions,
 } from '../../src/skill-test/run-harness.js';
-import { makeHarnessFakeSpawn } from '../skill-test/spawn-stub.js';
+import { makeHarnessFakeSpawn, type HarnessFakeSpawnConfig } from '../skill-test/spawn-stub.js';
 import { setupTempDir } from '../test-helpers.js';
 
 vi.mock('../../src/skill-test/preflight.js', async (io) => (await import('../skill-test/preflight-stub.js')).passingPreflight(io));
@@ -212,16 +213,43 @@ interface BlockShape {
 }
 
 /**
- * The integrity block read back off disk, which is the only place it reaches an
- * operator. Reading it rather than trusting the in-memory result is the point:
- * a block computed and never written is the failure this file already caught once.
+ * `baseline.json` parsed back OFF DISK, which is the only place either of its two
+ * blocks reaches an operator. Reading it rather than trusting the in-memory result
+ * is the point: a block computed and never written is the failure this file already
+ * caught once, and it is the same shape of defect the `dropped` field hit before it.
  */
-function readBaselineIntegrity(resultsDir: string = safePath.join(getTempDir(), 'harness', RETAINED_RESULTS_DIRNAME)): BlockShape {
-  const baselinePath = safePath.join(resultsDir, BASELINE_JSON);
+function readBaselineJson(resultsDir?: string): {
+  baselineIntegrity?: BlockShape;
+  baselineDelta?: unknown;
+} {
+  const dir = resultsDir ?? safePath.join(getTempDir(), 'harness', RETAINED_RESULTS_DIRNAME);
+  const baselinePath = safePath.join(dir, BASELINE_JSON);
   expect(existsSync(baselinePath), 'baseline.json was never written').toBe(true);
-  const parsed = JSON.parse(readFileSync(baselinePath, 'utf8')) as { baselineIntegrity?: BlockShape };
+  return JSON.parse(readFileSync(baselinePath, 'utf8')) as {
+    baselineIntegrity?: BlockShape;
+    baselineDelta?: unknown;
+  };
+}
+
+/** The integrity block: "may I subtract these two arms?" */
+function readBaselineIntegrity(resultsDir?: string): BlockShape {
+  const parsed = readBaselineJson(resultsDir);
   expect(parsed.baselineIntegrity, 'baselineIntegrity block missing').toBeDefined();
   return parsed.baselineIntegrity ?? {};
+}
+
+/**
+ * The delta block: the subtraction itself, and the entire product of `--baseline`.
+ *
+ * Parsed through the SHIPPED schema rather than an `as` cast, so a block that was
+ * written but written malformed — a stringified number, a stray key, a `perEval`
+ * that lost its `evalId` — fails here loudly instead of satisfying a hand-written
+ * structural assertion that happens to look at the two fields that survived.
+ */
+function readBaselineDelta(): BaselineDelta {
+  const parsed = readBaselineJson();
+  expect(parsed.baselineDelta, 'baselineDelta block missing from baseline.json').toBeDefined();
+  return BaselineDeltaSchema.parse(parsed.baselineDelta);
 }
 
 /**
@@ -230,6 +258,54 @@ function readBaselineIntegrity(resultsDir: string = safePath.join(getTempDir(), 
  * whose middle step (the run actually succeeding) is what stops a later assertion
  * passing against a file some earlier test wrote.
  */
+/**
+ * Run a whole baseline harness with the given grader behaviour and hand back
+ * everything the run wrote to stderr.
+ *
+ * One helper for every delta assertion because the three interesting outcomes —
+ * a measured lift, a measured zero, a withheld delta — differ only in how the
+ * fake grader behaves. Anything else varying between them would make a
+ * disagreement between two of the tests unattributable.
+ *
+ * It deliberately does NOT also read the block off disk. The delta has two
+ * independent destinations, artifact and terminal, and folding both into one
+ * helper would make a test that asserts on the terminal fail when the ARTIFACT
+ * write breaks — so a mutation pass could no longer tell the two apart, and each
+ * would look covered by the other's test.
+ */
+async function runBaselineCapturingStderr(cfg: HarnessFakeSpawnConfig): Promise<string[]> {
+  const { subjectDir } = writePluginFixture();
+  const fake = makeHarnessFakeSpawn(cfg);
+  const { result, lines } = await captureStderr(() =>
+    runSkillTestHarness(baselineOpts(subjectDir, fake.spawn)),
+  );
+  expect(result.exitCode, result.summary).toBe(0);
+  return lines;
+}
+
+/** True for the SKILL-ABSENT arm's grader fragment — vat writes it under `<graderOutDir>/without/`. */
+const isControlArmFragment = (fragmentPath: string): boolean =>
+  toForwardSlash(fragmentPath).includes('/without/');
+
+/**
+ * The grader behaviour that produces a REAL, non-zero lift: the treatment arm
+ * passes its expectation and the control arm fails the same one. A delta test in
+ * which both arms score alike cannot tell a working subtraction from a constant
+ * zero.
+ */
+const CONTROL_ARM_FAILS: HarnessFakeSpawnConfig = {
+  graderPassedFor: (_evalId, fragmentPath) => !isControlArmFragment(fragmentPath),
+};
+
+/**
+ * The grader behaviour that makes the arms INCOMPARABLE: the control arm is graded
+ * against 1 expectation where the treatment got 2. Shared with the integrity test
+ * below, which asserts the other half of the same run.
+ */
+const ARMS_GRADED_TO_DIFFERENT_DEPTHS: HarnessFakeSpawnConfig = {
+  graderExpectationCount: (fragmentPath) => (isControlArmFragment(fragmentPath) ? 1 : 2),
+};
+
 async function runBaselineForIntegrity(
   subjectDir: string,
   spawn: RunHarnessOptions['spawn'],
@@ -519,9 +595,7 @@ describe('baseline control arm (integration)', () => {
     const { subjectDir } = writePluginFixture();
     // Keyed on the fragment path, the only thing that distinguishes the arms at a
     // grader spawn: vat writes each arm's fragment under `<graderOutDir>/<arm>/`.
-    const fake = makeHarnessFakeSpawn({
-      graderExpectationCount: (fragmentPath) => (toForwardSlash(fragmentPath).includes('/without/') ? 1 : 2),
-    });
+    const fake = makeHarnessFakeSpawn(ARMS_GRADED_TO_DIFFERENT_DEPTHS);
 
     const { result: integrity, lines: stderr } = await captureStderr(() =>
       runBaselineForIntegrity(subjectDir, fake.spawn),
@@ -535,6 +609,103 @@ describe('baseline control arm (integration)', () => {
     expect(
       stderr.some((line) => line.includes('ARMS NOT COMPARABLE')),
       `nothing on stderr said the arms were incomparable:\n${stderr.join('')}`,
+    ).toBe(true);
+  });
+
+  /**
+   * THE PRODUCT. `--baseline` runs every eval twice and its entire output is the
+   * LIFT between the two arms — and until this test, vat computed no delta
+   * anywhere: it wrote two same-shaped artifacts and left the operator to subtract
+   * by hand while the shipped docs said it "reports the delta".
+   *
+   * The arms deliberately score DIFFERENTLY here. A baseline fixture in which both
+   * arms pass cannot tell a working subtraction from a hard-coded zero, and cannot
+   * tell `withPassed − withoutPassed` from its own negation — so a test built on
+   * one measures magnitude, not lift.
+   *
+   * Read back off disk, and through the shipped schema: the delta only exists for
+   * an operator if it survived into the artifact in the shape the artifact promises.
+   */
+  it('computes the lift between the two arms and writes it into baseline.json', async () => {
+    await runBaselineCapturingStderr(CONTROL_ARM_FAILS);
+    const delta = readBaselineDelta();
+
+    // Both arms' totals, not just the difference: a delta printed beside two
+    // numbers it is not actually the difference of is the "close enough" number
+    // that gets quoted without its caveat.
+    expect(delta.with).toEqual({ passed: 1, total: 1 });
+    expect(delta.without).toEqual({ passed: 0, total: 1 });
+    expect(delta.delta, 'the skill lifted one expectation and the delta did not say so').toBe(1);
+    expect(delta.perEval).toEqual([
+      { evalId: EVAL_ID, withPassed: 1, withTotal: 1, withoutPassed: 0, withoutTotal: 1, delta: 1 },
+    ]);
+  });
+
+  /**
+   * …and it has to reach the operator, who does not open `baseline.json`. Two
+   * earlier rounds of this lane shipped findings that existed only inside an
+   * artifact; the delta is the one number the command exists to produce, so a
+   * delta that lands on disk and nowhere else has still not been reported.
+   *
+   * The SIGN is asserted, not merely the digit: `+1` says the skill lifted, `-1`
+   * says the control outscored it, and a line printing a bare magnitude reads the
+   * same in both directions.
+   */
+  it('prints the delta to stderr, with its sign', async () => {
+    const stderr = await runBaselineCapturingStderr(CONTROL_ARM_FAILS);
+
+    expect(
+      stderr.some((line) => line.includes('Baseline delta: +1')),
+      `nothing on stderr reported the delta:\n${stderr.join('')}`,
+    ).toBe(true);
+  });
+
+  /**
+   * The withheld case, end to end. `armExpectationSkew` says the two arms were
+   * graded to different depths, so subtracting their summaries is not a delta —
+   * and a number here would lie in the most damaging direction, because a
+   * short-graded control reads as "100% without the skill", i.e. "the skill did
+   * nothing".
+   *
+   * Both halves are asserted because they fail independently: `delta: null` on
+   * disk is worthless if stderr prints a number anyway, and "unavailable" on
+   * stderr is worthless if the artifact an adopter attaches to a report carries a
+   * fabricated figure.
+   */
+  it('withholds the delta, on disk and on stderr, when the arms are not comparable', async () => {
+    const stderr = await runBaselineCapturingStderr(ARMS_GRADED_TO_DIFFERENT_DEPTHS);
+    const delta = readBaselineDelta();
+
+    expect(delta.delta, 'a delta was computed across mismatched denominators').toBeNull();
+    expect(delta.perEval[0]?.delta, 'the incomparable eval still reported a lift').toBeNull();
+    // The arms' own totals are still reported — they are what the withholding is
+    // ABOUT, and an operator cannot check the skew claim without them.
+    expect(delta.with).toEqual({ passed: 2, total: 2 });
+    expect(delta.without).toEqual({ passed: 1, total: 1 });
+
+    const line = stderr.find((l) => l.includes('Baseline delta:'));
+    expect(line, `nothing on stderr mentioned the delta at all:\n${stderr.join('')}`).toBeDefined();
+    expect(line, 'stderr reported a delta the artifact refused to compute').toContain('unavailable');
+  });
+
+  /**
+   * `0` and `null` are DIFFERENT FINDINGS and must never collapse into each other.
+   * `0` is "measured, and the skill lifted nothing" — a perfectly valid, publishable
+   * result and often the most useful thing a baseline run can tell an author. `null`
+   * is "no delta exists here". A future simplification that treats a falsy delta as
+   * absent, or renders `0` as "unavailable", turns a real finding into a
+   * non-measurement, and this is the assertion that stops it.
+   */
+  it('records a measured zero as 0, never as a withheld delta', async () => {
+    const stderr = await runBaselineCapturingStderr({});
+    const delta = readBaselineDelta();
+
+    expect(delta.delta, 'a measured zero was collapsed into a withheld delta').toBe(0);
+    expect(delta.with).toEqual({ passed: 1, total: 1 });
+    expect(delta.without).toEqual({ passed: 1, total: 1 });
+    expect(
+      stderr.some((line) => line.includes('Baseline delta: +0')),
+      `stderr did not report the measured zero as a number:\n${stderr.join('')}`,
     ).toBe(true);
   });
 

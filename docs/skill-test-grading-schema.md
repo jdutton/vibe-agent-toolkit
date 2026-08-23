@@ -81,6 +81,17 @@ untrusted skill code in the shared sandbox is detected: that code never receives
 the nonce, so it cannot mint a fragment vat will accept. External tooling
 validating a grading.json off-line need not supply it.
 
+`arm` (`"with"` | `"without"`) and `expectations[].evalId` (string) are the
+attribution fields vat stamps when it assembles the aggregate from per-eval
+grader fragments. A `--baseline` run produces **two files of this same shape** —
+`results/grading.json` from the arm that had the skill declared, and
+`results/baseline.json` from the control arm that did not — so without `arm` a
+reader holding one of them cannot tell which is which, and without `evalId` the
+two cannot be lined up per eval to say which eval actually moved. Both are
+optional in the schema because a grading.json produced by external tooling
+carries no such provenance; when present, `arm` must be one of the two arm names
+(vat refuses to merge a fragment from the other arm into either file).
+
 ## What is rejected
 
 A **per-eval nested** shape is the common mistake — the grader (an LLM) reaches

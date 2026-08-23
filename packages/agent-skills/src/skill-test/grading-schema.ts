@@ -35,6 +35,16 @@ export const GradedExpectationSchema = z
     text: z.string(),
     passed: z.boolean(),
     evidence: z.string().optional(),
+    /**
+     * Which eval this expectation was graded under. vat stamps it when it
+     * assembles the aggregate from per-eval grader fragments, so that a
+     * `--baseline` run's two artifacts can be lined up PER EVAL rather than only
+     * in aggregate — without it, a reader can compare two totals but cannot say
+     * which eval moved. Optional because a grading.json produced by external
+     * tooling (skill-creator's own) carries no per-eval attribution; the schema
+     * documents the field vat now emits rather than tightening the contract.
+     */
+    evalId: z.string().optional(),
   })
   .passthrough();
 
@@ -77,6 +87,15 @@ export const GradingReportSchema = z
      * by untrusted skill code is rejected.
      */
     runNonce: z.string().optional(),
+    /**
+     * Which `--baseline` arm produced this report: `'with'` (the skill declared)
+     * or `'without'` (the control arm run with the skill withheld). vat writes
+     * the two arms to two files of the SAME shape — `grading.json` and
+     * `baseline.json` — so without this field a reader holding one of them
+     * cannot tell which arm it is looking at. Optional for the same reason
+     * `runNonce` is: an externally produced grading.json has no arm to declare.
+     */
+    arm: z.enum(['with', 'without']).optional(),
   })
   .passthrough();
 

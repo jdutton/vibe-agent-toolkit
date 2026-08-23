@@ -6,7 +6,8 @@ import {
   mergeFragmentsToGrading,
   mergeFragmentsToToolEval,
 } from '../../src/skill-test/fragment-merge.js';
-import { GradingNonceError, reconcileGrading } from '../../src/skill-test/grading-adapter.js';
+import { GradingArmError, GradingNonceError, reconcileGrading } from '../../src/skill-test/grading-adapter.js';
+import { partitionFragmentsByArm } from '../../src/skill-test/run-harness.js';
 
 const nonce = 'run-nonce-1';
 const TMP_ASSUMPTION_MESSAGE = 'assumed /tmp exists';
@@ -34,12 +35,12 @@ describe('mergeFragmentsToGrading', () => {
       makeFragment({ evalId: 'eval-2', expectations: [{ text: 'c', passed: true }] }),
     ];
 
-    const grading = mergeFragmentsToGrading(fragments, nonce);
+    const grading = mergeFragmentsToGrading(fragments, nonce, 'with');
 
     expect(grading.expectations).toEqual([
-      { text: 'a', passed: true },
-      { text: 'b', passed: false },
-      { text: 'c', passed: true },
+      { text: 'a', passed: true, evalId: 'eval-1' },
+      { text: 'b', passed: false, evalId: 'eval-1' },
+      { text: 'c', passed: true, evalId: 'eval-2' },
     ]);
     expect(grading.summary).toEqual({ passed: 2, total: 3 });
 
@@ -51,13 +52,13 @@ describe('mergeFragmentsToGrading', () => {
     const fragments: EvalFragment[] = [
       makeFragment({ expectations: [{ text: 'a', passed: true, evidence: 'saw it happen' }] }),
     ];
-    const grading = mergeFragmentsToGrading(fragments, nonce);
-    expect(grading.expectations).toEqual([{ text: 'a', passed: true, evidence: 'saw it happen' }]);
+    const grading = mergeFragmentsToGrading(fragments, nonce, 'with');
+    expect(grading.expectations).toEqual([{ text: 'a', passed: true, evidence: 'saw it happen', evalId: 'eval-1' }]);
   });
 
   it('throws GradingNonceError when a fragment nonce does not match the run nonce', () => {
     const fragments: EvalFragment[] = [makeFragment({ runNonce: 'wrong-nonce' })];
-    expect(() => mergeFragmentsToGrading(fragments, nonce)).toThrow(GradingNonceError);
+    expect(() => mergeFragmentsToGrading(fragments, nonce, 'with')).toThrow(GradingNonceError);
   });
 
   it('throws GradingNonceError naming the offending eval even when an earlier fragment matches', () => {
@@ -65,14 +66,82 @@ describe('mergeFragmentsToGrading', () => {
       makeFragment({ evalId: 'eval-1' }),
       makeFragment({ evalId: 'eval-2', runNonce: 'wrong-nonce' }),
     ];
-    expect(() => mergeFragmentsToGrading(fragments, nonce)).toThrow(/eval-2/);
+    expect(() => mergeFragmentsToGrading(fragments, nonce, 'with')).toThrow(/eval-2/);
   });
 
   it('returns empty expectations for zero fragments (reconcileGrading guard fires downstream)', () => {
-    const grading = mergeFragmentsToGrading([], nonce);
+    const grading = mergeFragmentsToGrading([], nonce, 'with');
     expect(grading.expectations).toEqual([]);
     expect(grading.summary).toEqual({ passed: 0, total: 0 });
     expect(() => reconcileGrading(grading)).toThrow(/zero expectations/);
+  });
+
+  // The `arm` label is what lets a reader holding ONE artifact say which
+  // `--baseline` arm produced it (grading.json = WITH, baseline.json = WITHOUT);
+  // both values are exercised because a merge that hardcodes 'with' passes a
+  // single-value test.
+  it.each([
+    { merged: 'with' as const, fragmentArm: 'with' as const, note: "an explicitly-'with' fragment" },
+    { merged: 'without' as const, fragmentArm: 'without' as const, note: "a 'without' fragment" },
+    { merged: 'with' as const, fragmentArm: undefined, note: 'an arm-less fragment (absent means the default arm)' },
+  ])('stamps arm "$merged" on the merged report from $note', ({ merged, fragmentArm }) => {
+    const fragments: EvalFragment[] = [
+      makeFragment(fragmentArm === undefined ? {} : { arm: fragmentArm }),
+    ];
+
+    const grading = mergeFragmentsToGrading(fragments, nonce, merged);
+
+    expect(grading.arm).toBe(merged);
+  });
+
+  // A fragment from the other arm invalidates whatever number is merged from it,
+  // so the merge refuses rather than mislabelling an artifact that then reads as
+  // authoritative — the same posture as the runNonce check.
+  it.each([
+    { merged: 'with' as const, fragmentArm: 'without' as const, note: "a 'without' fragment merged as WITH" },
+    { merged: 'without' as const, fragmentArm: 'with' as const, note: "a 'with' fragment merged as WITHOUT" },
+    { merged: 'without' as const, fragmentArm: undefined, note: 'an arm-less fragment merged as WITHOUT' },
+  ])('throws GradingArmError naming the eval for $note', ({ merged, fragmentArm }) => {
+    const fragments: EvalFragment[] = [
+      makeFragment({ evalId: 'eval-1' }),
+      makeFragment({ evalId: 'eval-2', ...(fragmentArm === undefined ? {} : { arm: fragmentArm }) }),
+    ];
+    // The first fragment is on the merged arm when merging WITH; when merging
+    // WITHOUT it is the arm-less default, so give it the merged arm explicitly.
+    if (merged === 'without') fragments[0] = makeFragment({ evalId: 'eval-1', arm: 'without' });
+
+    expect(() => mergeFragmentsToGrading(fragments, nonce, merged)).toThrow(GradingArmError);
+    expect(() => mergeFragmentsToGrading(fragments, nonce, merged)).toThrow(/eval-2/);
+  });
+
+  // The pairing invariant the run-harness call sites must satisfy:
+  // `partitionFragmentsByArm().withArm` is merged as 'with' and `.withoutArm` as
+  // 'without'. `writeRunArtifactsAndReconcile` is module-private I/O, so a unit
+  // test cannot observe those two literals directly — this pins the contract
+  // between the two exported halves it composes, which is what a swap violates.
+  it('pairs each partitioned arm with its own label, and refuses the swapped pairing', () => {
+    const mixed: EvalFragment[] = [
+      makeFragment({ evalId: 'eval-1', arm: 'with' }),
+      makeFragment({ evalId: 'eval-2', arm: 'without' }),
+    ];
+    const { withArm, withoutArm } = partitionFragmentsByArm(mixed);
+
+    expect(mergeFragmentsToGrading(withArm, nonce, 'with').arm).toBe('with');
+    expect(mergeFragmentsToGrading(withoutArm, nonce, 'without').arm).toBe('without');
+
+    expect(() => mergeFragmentsToGrading(withArm, nonce, 'without')).toThrow(GradingArmError);
+    expect(() => mergeFragmentsToGrading(withoutArm, nonce, 'with')).toThrow(GradingArmError);
+  });
+
+  it('stamps each merged expectation with its OWN fragment evalId, not a constant', () => {
+    const fragments: EvalFragment[] = [
+      makeFragment({ evalId: 'eval-alpha', expectations: [{ text: 'a', passed: true }] }),
+      makeFragment({ evalId: 'eval-beta', expectations: [{ text: 'b', passed: true }] }),
+    ];
+
+    const grading = mergeFragmentsToGrading(fragments, nonce, 'with');
+
+    expect(grading.expectations.map(e => e.evalId)).toEqual(['eval-alpha', 'eval-beta']);
   });
 });
 

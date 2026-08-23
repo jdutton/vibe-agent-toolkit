@@ -76,8 +76,20 @@ export interface HarnessFakeSpawnConfig {
    * by eval id. When it returns a boolean that wins; `undefined` falls back to
    * {@link graderPassed}. Lets a tiered test fail ONE tier's eval while the
    * others pass (issue #145 Phase G fail-fast gating).
+   *
+   * `fragmentPath` is the SECOND key, and it is what makes this knob able to
+   * decide the two `--baseline` arms differently: the eval id is identical on
+   * both arms and the grader prompt is deliberately arm-blind, so the fragment
+   * path — which vat writes under `<graderOutDir>/<arm>/` — is the only thing at
+   * a grader spawn that says which arm is being graded. Without it a test could
+   * only make BOTH arms pass or BOTH fail, i.e. only ever produce a zero delta,
+   * which is precisely the value a broken lift computation also produces.
+   *
+   * This widens the existing knob rather than adding a per-arm sibling on
+   * purpose: two knobs both deciding grader pass/fail would be free to disagree,
+   * and the one that lost would be invisible.
    */
-  graderPassedFor?: (evalId: string) => boolean | undefined;
+  graderPassedFor?: (evalId: string, fragmentPath: string) => boolean | undefined;
   /** When true, the grader writes a WRONG runNonce (simulates a forged fragment). */
   forgeNonce?: boolean;
   /**
@@ -151,8 +163,11 @@ export function makeHarnessFakeSpawn(cfg: HarnessFakeSpawnConfig = {}): HarnessF
       // toolExpectations (WITH arm) — mirror that by emitting a `tool` body then.
       const emitTool = opts.prompt.includes('"tool" object');
       const toolPassed = cfg.graderToolPassed ?? true;
-      const passed = cfg.graderPassedFor?.(evalId) ?? cfg.graderPassed ?? true;
       if (fragmentPath !== undefined) {
+        // Resolved INSIDE the guard so `graderPassedFor` always receives a real
+        // path rather than an empty-string stand-in — an arm predicate handed
+        // `''` would silently take its fallback branch for every spawn.
+        const passed = cfg.graderPassedFor?.(evalId, fragmentPath) ?? cfg.graderPassed ?? true;
         writeFileSync(
           fragmentPath,
           JSON.stringify({

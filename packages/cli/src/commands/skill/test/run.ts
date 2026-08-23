@@ -1335,7 +1335,7 @@ export function createSkillTestRunCommand(): Command {
     .option('--require-auth <mech>', 'Require a specific auth mechanism: subscription | api-key')
     .option(
       '--baseline',
-      "A/B the skill's INSTRUCTIONS (declared vs withheld). Both arms share a filesystem — not a capability control; see baselineIntegrity in baseline.json",
+      "A/B the skill's INSTRUCTIONS (declared vs withheld) and report the lift on stderr. Both arms share a filesystem — not a capability control; see baselineDelta and baselineIntegrity in baseline.json",
     )
     .option(
       '--allow-eval-failure',
@@ -1385,6 +1385,14 @@ Artifacts:
   --baseline -- baseline.json are written to a results/ directory whose path is
   echoed to stderr ("Results: <path>"). That directory SURVIVES every run; the
   staged skill bytes around it are removed unless you pass --keep.
+
+  A --baseline run also echoes its lift to stderr ("Baseline delta: +2 (with
+  skill: 3/3, without skill: 1/3)."), and stamps the same numbers into
+  baseline.json as baselineDelta, run-level and per eval. A delta of 0 means the
+  skill lifted nothing; a delta of null means the two arms were graded against a
+  different number of expectations and cannot be subtracted at all -- see
+  baselineIntegrity.skew for which evals, and prefer null over a number that
+  would read as "100% without the skill".
 
 Model:
   --model <id> selects the model UNDER TEST (the executor spawn): passed

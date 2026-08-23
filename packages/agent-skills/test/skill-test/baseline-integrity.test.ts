@@ -12,6 +12,7 @@ import {
   scrubControlArmEnv,
   skillContentNeedles,
   summarizeBaselineIntegrity,
+  type ArmEvalGrade,
   type BaselineContamination,
 } from '../../src/skill-test/baseline-integrity.js';
 import { resolveHarnessRoot } from '../../src/skill-test/harness-location.js';
@@ -857,8 +858,12 @@ describe('activeContaminationSignals', () => {
  * `reconcileGrading` — the only cross-check that existed — cannot see this.
  */
 describe('armExpectationSkew', () => {
+  // `passed` is carried by ArmEvalGrade for the delta block's benefit; this check
+  // reads only `total`, so the value here is deliberately inert.
+  const graded = (evalId: string, total: number): ArmEvalGrade => ({ evalId, passed: 0, total });
+
   it('is silent when both arms graded the same evals to the same depth', () => {
-    const counts = [{ evalId: 'e1', total: 3 }, { evalId: 'e2', total: 2 }];
+    const counts = [graded('e1', 3), graded('e2', 2)];
     expect(armExpectationSkew(counts, counts)).toEqual([]);
   });
 
@@ -867,21 +872,21 @@ describe('armExpectationSkew', () => {
   // the skill, i.e. "the skill did nothing".
   it('reports a control arm graded against fewer expectations', () => {
     expect(
-      armExpectationSkew([{ evalId: 'e1', total: 3 }], [{ evalId: 'e1', total: 2 }]),
+      armExpectationSkew([graded('e1', 3)], [graded('e1', 2)]),
     ).toEqual([{ evalId: 'e1', withTotal: 3, withoutTotal: 2 }]);
   });
 
   it('reports the opposite direction too', () => {
     expect(
-      armExpectationSkew([{ evalId: 'e1', total: 2 }], [{ evalId: 'e1', total: 3 }]),
+      armExpectationSkew([graded('e1', 2)], [graded('e1', 3)]),
     ).toEqual([{ evalId: 'e1', withTotal: 2, withoutTotal: 3 }]);
   });
 
   // An eval missing from one arm entirely skews the run total exactly as a
   // short-graded one does, and the per-eval loop over the OTHER arm cannot see it.
   it.each([
-    ['the control arm never graded it', [{ evalId: 'e1', total: 2 }], [], [{ evalId: 'e1', withTotal: 2, withoutTotal: 0 }]],
-    ['the treatment arm never graded it', [], [{ evalId: 'e1', total: 2 }], [{ evalId: 'e1', withTotal: 0, withoutTotal: 2 }]],
+    ['the control arm never graded it', [graded('e1', 2)], [], [{ evalId: 'e1', withTotal: 2, withoutTotal: 0 }]],
+    ['the treatment arm never graded it', [], [graded('e1', 2)], [{ evalId: 'e1', withTotal: 0, withoutTotal: 2 }]],
   ])('reports an eval only one arm graded — %s', (_label, withArm, withoutArm, expected) => {
     expect(armExpectationSkew(withArm, withoutArm)).toEqual(expected);
   });

@@ -1,6 +1,6 @@
 import type { EvalFragment } from './eval-fragment.js';
 import { FrictionReportSchema, type FrictionReport } from './friction-schema.js';
-import { GradingNonceError, type NormalizedGrading } from './grading-adapter.js';
+import { GradingArmError, GradingNonceError, type NormalizedGrading } from './grading-adapter.js';
 import { ToolEvalReportSchema, type ToolEvalReport } from './tool-eval-schema.js';
 
 /**
@@ -15,12 +15,30 @@ import { ToolEvalReportSchema, type ToolEvalReport } from './tool-eval-schema.js
  * stale, or left behind by untrusted skill code in the shared sandbox) and is
  * rejected via {@link GradingNonceError}, never silently dropped.
  *
+ * Every fragment must ALSO belong to the `arm` being assembled (a fragment with
+ * no `arm` of its own is a default-'with' fragment — see
+ * {@link import('./eval-fragment.js').EvalFragmentSchema}); a fragment from the
+ * other arm is rejected via {@link GradingArmError} for the same reason a stale
+ * nonce is: the merged count would no longer be a measurement of one arm, and
+ * that is exactly the number `--baseline` subtracts. `arm` is REQUIRED, not
+ * defaulted, because a default is precisely how a caller would silently
+ * mislabel the control artifact as the treatment one.
+ *
+ * The returned report carries that `arm`, and every merged expectation carries
+ * its source fragment's `evalId` — together these are what let a reader holding
+ * ONE of the two `--baseline` artifacts say which arm it is, and line the two up
+ * per eval to compute a delta at all.
+ *
  * Zero fragments in → zero expectations out. This is deliberate: the existing
  * "graded nothing" guard in `reconcileGrading` already throws
  * `GradingSkewError` on an empty `expectations[]`, so that case is NOT
  * special-cased here.
  */
-export function mergeFragmentsToGrading(fragments: EvalFragment[], runNonce: string): NormalizedGrading {
+export function mergeFragmentsToGrading(
+  fragments: EvalFragment[],
+  runNonce: string,
+  arm: 'with' | 'without',
+): NormalizedGrading {
   const expectations: NormalizedGrading['expectations'] = [];
 
   for (const fragment of fragments) {
@@ -29,17 +47,24 @@ export function mergeFragmentsToGrading(fragments: EvalFragment[], runNonce: str
         `fragment for eval "${fragment.evalId}" carries runNonce "${fragment.runNonce}", expected "${runNonce}"`,
       );
     }
+    const fragmentArm = fragment.arm ?? 'with';
+    if (fragmentArm !== arm) {
+      throw new GradingArmError(
+        `fragment for eval "${fragment.evalId}" is from the "${fragmentArm}" arm, expected "${arm}"`,
+      );
+    }
     for (const expectation of fragment.expectations) {
       expectations.push({
         text: expectation.text,
         passed: expectation.passed,
         ...(expectation.evidence === undefined ? {} : { evidence: expectation.evidence }),
+        evalId: fragment.evalId,
       });
     }
   }
 
   const passed = expectations.filter(e => e.passed).length;
-  return { summary: { passed, total: expectations.length }, expectations, runNonce };
+  return { summary: { passed, total: expectations.length }, expectations, runNonce, arm };
 }
 
 /**

@@ -19,9 +19,26 @@ export class GradingSkewError extends Error {
 
 export interface NormalizedGrading {
   summary: { passed: number; total: number };
-  expectations: { text: string; passed: boolean; evidence?: string }[];
+  /**
+   * Every graded expectation, flattened across all evals. `evalId` names the eval
+   * the entry came from — it is what lets a reader line the two `--baseline`
+   * artifacts up PER EVAL instead of only in aggregate. Optional for the same
+   * reason `runNonce` is: {@link parseGradingJson} builds a `NormalizedGrading`
+   * from an externally produced grading.json, which carries no such attribution.
+   */
+  expectations: { text: string; passed: boolean; evidence?: string; evalId?: string }[];
   /** Per-run integrity nonce the experimenter copied from its prompt (if present). */
   runNonce?: string;
+  /**
+   * Which `--baseline` arm produced this report: `'with'` (the skill declared —
+   * grading.json) or `'without'` (the control — baseline.json). Stamped by
+   * {@link import('./fragment-merge.js').mergeFragmentsToGrading}, which is the
+   * only producer that knows the arm. Optional for the same reason `runNonce` is:
+   * {@link parseGradingJson} normalizes an externally produced grading.json that
+   * legitimately carries no arm, and inventing one there would be a lie about
+   * provenance rather than a missing field.
+   */
+  arm?: 'with' | 'without';
 }
 
 /**
@@ -40,6 +57,30 @@ export class GradingNonceError extends Error {
         'means the fragment was not produced by the grader we prompted and is rejected.',
     );
     this.name = 'GradingNonceError';
+  }
+}
+
+/**
+ * Thrown when a per-eval grader fragment's `arm` disagrees with the arm the
+ * merge was told it is assembling. Deliberately distinct from
+ * {@link GradingNonceError}: a fragment can carry a perfectly valid nonce for
+ * THIS run and still belong to the other arm, and that is a different failure —
+ * not a forgery, but a mix-up that would fold a control-arm verdict into the
+ * treatment number (or the reverse). Either way the merged total is no longer a
+ * measurement of one arm, which is the entire premise of the `--baseline` A/B,
+ * so the merge refuses rather than emit a mislabelled artifact that downstream
+ * readers would take as authoritative.
+ */
+export class GradingArmError extends Error {
+  constructor(message: string) {
+    super(
+      `grader fragment arm mismatch: ${message}. Each --baseline arm is merged into its own ` +
+        'artifact (grading.json = the WITH arm, baseline.json = the WITHOUT/control arm), and ' +
+        'every fragment merged into one must come from that arm — a fragment with no `arm` ' +
+        "belongs to the default 'with' arm. Mixing arms would make the merged pass count a " +
+        'measurement of neither.',
+    );
+    this.name = 'GradingArmError';
   }
 }
 

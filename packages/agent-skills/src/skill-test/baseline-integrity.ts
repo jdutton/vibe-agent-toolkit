@@ -431,9 +431,21 @@ export const BaselineArmSkewSchema = z.object({
 
 export type BaselineArmSkew = z.infer<typeof BaselineArmSkewSchema>;
 
-/** An eval's graded-expectation count on one arm, for the parity check. */
-export interface ArmEvalCount {
+/**
+ * What ONE arm actually graded for ONE eval: how many expectations it was graded
+ * against, and how many of them passed.
+ *
+ * Deliberately ONE type feeding two consumers. {@link armExpectationSkew} reads only
+ * `total` — whether subtracting the arms is legal at all — while the delta block
+ * reads `passed` to do the subtraction. Deriving those from two separate shapes is
+ * exactly the drift this module keeps warning about: the two blocks would be free to
+ * disagree about what each arm graded, and the one that disagreed quietly would be
+ * believed. `passed` is carried here even though the parity check ignores it so that
+ * a single derivation at the call site feeds both.
+ */
+export interface ArmEvalGrade {
   evalId: string;
+  passed: number;
   total: number;
 }
 
@@ -460,8 +472,8 @@ export interface ArmEvalCount {
  * being comparable actually means.
  */
 export function armExpectationSkew(
-  withArm: readonly ArmEvalCount[],
-  withoutArm: readonly ArmEvalCount[],
+  withArm: readonly ArmEvalGrade[],
+  withoutArm: readonly ArmEvalGrade[],
 ): BaselineArmSkew[] {
   const withoutById = new Map(withoutArm.map((c) => [c.evalId, c.total]));
   const skew: BaselineArmSkew[] = [];

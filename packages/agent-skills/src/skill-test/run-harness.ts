@@ -35,11 +35,12 @@ import {
 import { resolveSkillSource } from '../skill-source/resolve-skill-source.js';
 import type { ResolvedSkillSource, ResolveSkillSourceContext, SkillSource } from '../skill-source/types.js';
 
+import { computeBaselineDelta, formatBaselineDeltaLine } from './baseline-delta.js';
 import {
   activeContaminationSignals,
   armExpectationSkew,
   detectBaselineContamination,
-  type ArmEvalCount,
+  type ArmEvalGrade,
   scrubControlArmEnv,
   skillContentNeedles,
   summarizeBaselineIntegrity,
@@ -1740,9 +1741,18 @@ export function wipeStaleArtifacts(paths: ArtifactPaths): void {
  * Collect per-eval baseline-integrity findings from the WITHOUT-arm fragments.
  * Fragments with no `contamination` are clean and contribute nothing. Pure.
  */
-/** Each eval's graded-expectation count on one arm, for {@link armExpectationSkew}. Pure. */
-function gradedCounts(fragments: EvalFragment[]): ArmEvalCount[] {
-  return fragments.map((f) => ({ evalId: f.evalId, total: f.expectations.length }));
+/**
+ * What one arm graded, per eval — the SINGLE derivation behind both the parity check
+ * ({@link armExpectationSkew}, which reads `total`) and the A/B delta (which reads
+ * `passed`). Deriving those separately would let the two blocks in `baseline.json`
+ * disagree about the same arm. Pure.
+ */
+function gradedCounts(fragments: EvalFragment[]): ArmEvalGrade[] {
+  return fragments.map((f) => ({
+    evalId: f.evalId,
+    passed: f.expectations.filter((e) => e.passed).length,
+    total: f.expectations.length,
+  }));
 }
 
 function collectBaselineFindings(withoutArm: EvalFragment[]): BaselineContamination[] {
@@ -1761,7 +1771,7 @@ function writeRunArtifactsAndReconcile(
 ): { verdict: GradingVerdict; toolEval: ToolEvalReport } {
   const { withArm, withoutArm } = partitionFragmentsByArm(fragments);
 
-  const grading = mergeFragmentsToGrading(withArm, runNonce);
+  const grading = mergeFragmentsToGrading(withArm, runNonce, 'with');
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived results path
   writeFileSync(paths.gradingOut, JSON.stringify(grading, null, 2) + '\n', 'utf-8');
 
@@ -1776,7 +1786,7 @@ function writeRunArtifactsAndReconcile(
   writeFileSync(paths.toolEvalOut, JSON.stringify(toolEval, null, 2) + '\n', 'utf-8');
 
   if (withoutArm.length > 0) {
-    const baseline = mergeFragmentsToGrading(withoutArm, runNonce);
+    const baseline = mergeFragmentsToGrading(withoutArm, runNonce, 'without');
     // Stamp the integrity verdict onto baseline.json (GradingReportSchema is
     // .passthrough(), so the extra field is contract-legal). Written on EVERY
     // baseline run, clean or not: a reader must be able to tell "checked and
@@ -1786,14 +1796,52 @@ function writeRunArtifactsAndReconcile(
     // prose is about means anything. Deliberately NOT a throw: the control arm's
     // grader misbehaving must not discard a perfectly good treatment result — it
     // must make the DELTA say, in writing, that it cannot be subtracted.
-    const skew = armExpectationSkew(gradedCounts(withArm), gradedCounts(withoutArm));
+    // ONE derivation per arm, feeding BOTH the parity check and the delta. The
+    // whole reason `ArmEvalGrade` carries `passed` alongside `total` is that these
+    // two blocks must provably be talking about the same numbers — re-deriving the
+    // counts for the delta would let `baselineIntegrity.skew` and `baselineDelta`
+    // disagree about one run, and a reader holding two contradicting blocks has no
+    // way to tell which one to believe.
+    const withGrades = gradedCounts(withArm);
+    const withoutGrades = gradedCounts(withoutArm);
+    const skew = armExpectationSkew(withGrades, withoutGrades);
     const integrity = summarizeBaselineIntegrity(collectBaselineFindings(withoutArm), signals, skew);
+    // The SUBTRACTION `--baseline` exists to perform, and until this it was never
+    // performed anywhere: vat wrote two same-shaped artifacts and left the operator
+    // to do the arithmetic by hand while the docs said it "reports the delta".
+    // `skew` is passed rather than re-checked so the withholding decision has
+    // exactly one author.
+    const delta = computeBaselineDelta(withGrades, withoutGrades, skew);
+    // A SIBLING of `baselineIntegrity`, not a field inside it, because they answer
+    // different questions: integrity answers "may I subtract these two arms?", and
+    // the delta IS the subtraction. Burying the number inside the block that
+    // qualifies it would also mean a reader who wants only the lift has to
+    // understand the contamination vocabulary first. (GradingReportSchema is
+    // .passthrough(), so both extra keys are contract-legal — see the comment above.)
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived results path
     writeFileSync(
       paths.baselineOut,
-      JSON.stringify({ ...baseline, baselineIntegrity: integrity }, null, 2) + '\n',
+      JSON.stringify({ ...baseline, baselineIntegrity: integrity, baselineDelta: delta }, null, 2) + '\n',
       'utf-8',
     );
+    // Printed on EVERY baseline run, including a withheld one: "the delta is
+    // unavailable, and here is why" is the report an operator needs, and a run that
+    // silently prints nothing is indistinguishable from a vat that still does not
+    // compute a delta at all. It comes BEFORE the ⚠️ below so an unusable run reads
+    // as the delta line followed by the caveat that explains it.
+    //
+    // A CONTAMINATED run still prints its number, deliberately. Contamination does
+    // not make the subtraction illegal — both arms were graded to the same depth, so
+    // the arithmetic is sound; what it invalidates is INTERPRETING that number as
+    // skill lift, which is precisely what the ⚠️ line immediately below says ("The
+    // reported delta is NOT a measure of skill lift"), and what `vat-skill-testing.md`
+    // turns into the instruction "discard the delta". Withholding it here would (a)
+    // leave that sentence referring to a number that was never reported, and (b)
+    // spend `null` — which means "these arms cannot be subtracted", a different
+    // failure with a different remedy — on a run where they can be. A contaminated
+    // delta is also diagnostic in its own right: it collapses toward zero, which is
+    // corroboration, not noise.
+    process.stderr.write(`\n${formatBaselineDeltaLine(delta)}\n`);
     // Either failure makes the delta unusable, and both are only visible on
     // stderr — nobody opens baseline.json unprompted.
     if (integrity.contaminated || !integrity.comparable) {

@@ -112,6 +112,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`--baseline` now reports the delta it always claimed to report.** It wrote two same-shaped
+  artifacts and left you to do the arithmetic. A run now prints
+  `Baseline delta: +2 (with skill: 3/3, without skill: 1/3).` to stderr and stamps the same numbers
+  into `baseline.json` as `baselineDelta`, run-level and per eval. A delta of `0` means the skill
+  lifted nothing; `null` means the two arms were graded against a different number of expectations
+  and cannot be subtracted at all — withheld rather than fudged, because the fudge reads as "100%
+  without the skill". `grading.json` and `baseline.json` also gain an `arm` field and a per-
+  expectation `evalId`, so the two files say which arm they are and line up eval by eval.
+
 - **`baselineIntegrity` in `baseline.json`, plus a stderr warning when a `--baseline` control arm
   reached the skill anyway.** vat can keep its *own* copies of the skill away from the control arm,
   but a copy in the adopter's `dist/`, build output, or installed plugin cache is not vat's to
