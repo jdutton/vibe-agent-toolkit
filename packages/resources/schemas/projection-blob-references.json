@@ -59,7 +59,8 @@
             "markdown-definition",
             "at-prefixed",
             "env-anchored",
-            "bare-token"
+            "bare-token",
+            "html-link"
           ],
           "description": "Syntactic form of a reference candidate, as a lexer sees it"
         },

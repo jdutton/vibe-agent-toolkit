@@ -31,11 +31,20 @@ export type LinkType = z.infer<typeof LinkTypeSchema>;
  * - `link`: Inline link `[text](href)`
  * - `linkReference`: Reference-style usage `[text][ref]`
  * - `definition`: Reference-style definition `[ref]: url`
+ * - `htmlAttribute`: A URL-bearing HTML attribute — `<a href>`, `<img src>`
+ *
+ * The first three come from mdast, the fourth from parse5. `htmlAttribute` is
+ * stated rather than inferred from the absence of the other three: the HTML
+ * parser used to leave `nodeType` unset, and every consumer that switched on it
+ * therefore had to treat "absent" as "markdown", which is how HTML rows reached
+ * `blob_references` labelled `markdown-link`. An absent `nodeType` now means
+ * only that some producer did not say, never that the link is markdown.
  */
 export const LinkNodeTypeSchema = z.enum([
   'link',
   'linkReference',
   'definition',
+  'htmlAttribute',
 ]).describe('AST node type that produced this link');
 
 export type LinkNodeType = z.infer<typeof LinkNodeTypeSchema>;

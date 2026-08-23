@@ -32,10 +32,12 @@
  * ## The two skip counters are not equally clean, and the test says so
  *
  * `blobSectionsFor` and `blobReferencesFor` both **skip** an input that carries
- * no source line rather than defaulting it to line 1. Headings: measured **0**,
+ * no position rather than defaulting it to line 1. Headings need a line;
+ * references need a line **and both offsets** (`hasReferenceSpan`), which is
+ * not the same test — see that predicate's docstring. Headings: measured **0**,
  * a real invariant, asserted as one.
  *
- * References: **not** 0 — 80 of them on 2026-08-13. Remark hands
+ * References: **not** 0 — 80 of them on 2026-08-13, 97 on 2026-08-23. Remark hands
  * `toResourceLink` a `link` node with `position === undefined` for a GFM
  * autolink literal in certain quoted / parenthesised contexts, and this corpus's
  * non-markdown blobs are full of them
@@ -59,12 +61,14 @@ import {
   skillExtentDeclaration,
 } from '@vibe-agent-toolkit/agent-skills';
 import {
+  AST_SYNTACTIC_FORMS,
   ClosureNonConvergenceError,
   ContributorRegistry,
   FilesystemExtentContributor,
   GitExtentContributor,
   PackageExtentContributor,
   defaultParseCache,
+  hasReferenceSpan,
   parseKeyed,
   populate,
   readContentWithKey,
@@ -96,13 +100,6 @@ const ROOT = safePath.resolve(__dirname, '..', '..', '..', '..');
  * that genuinely needed more than this would be the finding.
  */
 const PROBE_CEILING = 6;
-
-/** The three `syntacticForm` values only the markdown AST produces. */
-const MARKDOWN_FORMS: ReadonlySet<string> = new Set([
-  'markdown-link',
-  'markdown-link-reference',
-  'markdown-definition',
-]);
 
 /** The prefix a content key carries when its bytes routed to the HTML parser. */
 const HTML_KEY_PREFIX = 'html.';
@@ -243,18 +240,34 @@ async function probeConvergence(
 /**
  * References the blob stage dropped, per blob, derived from the rows alone.
  *
- * `blobs.linkCount` is `parsed.links.length`, and the markdown AST is the only
- * producer of the three `markdown-*` syntactic forms, so the difference between
- * them is exactly the AST links that carried no line. The lexer's rows cannot
- * contribute: `LexicalReference.line` is a required `number`.
+ * `blobs.linkCount` is `parsed.links.length` — every link the blob's parser
+ * found — so the difference between it and the blob's *parser-derived* rows is
+ * exactly the links that could not be positioned. The lexer's rows cannot
+ * contribute to either side: `LexicalReference.line`, `startOffset` and
+ * `endOffset` are all required, so a lexical candidate is never dropped, and
+ * `AST_SYNTACTIC_FORMS` is the producer's own statement of which forms are not
+ * the lexer's.
+ *
+ * ⛔ This used to hold its own hand-listed `MARKDOWN_FORMS` triple and call it
+ * "the three values only the markdown AST produces". That was true only while
+ * mdast was the sole producer whose links survived to a row. The moment HTML
+ * references got a span and their own `html-link` form, every one of them fell
+ * outside the triple and this function reported them as dropped — 102 against
+ * the stage's own 98, a disagreement of exactly the corpus's four HTML
+ * references, none of which was dropped at all. The number was never the
+ * problem: a consumer that re-derives a producer's partition by hand goes stale
+ * the next time a parser is added, silently and in the direction of a false
+ * alarm. Reading `AST_SYNTACTIC_FORMS` keeps the two measurements independent
+ * (the counter is still `candidates - rows`, computed inside the stage) while
+ * making them agree by construction rather than by coincidence.
  *
  * @param projection - The populated projection
- * @returns Content key → number of AST links dropped for want of a line
+ * @returns Content key → number of parser links dropped for want of a span
  */
 function droppedReferencesByBlob(projection: Projection): Map<string, number> {
   const astRows = new Map<string, number>();
   for (const row of projection.blobReferences) {
-    if (!MARKDOWN_FORMS.has(row.syntacticForm)) continue;
+    if (!AST_SYNTACTIC_FORMS.has(row.syntacticForm)) continue;
     astRows.set(row.blob, (astRows.get(row.blob) ?? 0) + 1);
   }
 
@@ -311,13 +324,20 @@ async function collectDroppedReferences(
 }
 
 /**
- * Re-read one blob and report every link the parser gave no source line.
+ * Re-read one blob and report every link the row builder could not position.
+ *
+ * The predicate is `hasReferenceSpan`, the producer's own — not a local
+ * `line === undefined`. `astCandidates` rejects on the line **and** both
+ * offsets, so a narrower question here would enumerate fewer references than
+ * the count above claims were dropped, and the missing ones would be exactly
+ * the shape (a line, no offsets) that hid the HTML under-report in the first
+ * place: counted, never named, never resolved, never asserted on.
  *
  * @param contentKey - The blob's key, re-confirmed against the bytes read now
  * @param from - Root-relative path the bytes are read from
  * @param realizedPaths - Every path the projection realizes
  * @param cache - The content-addressed parse cache, already warm from population
- * @returns One entry per position-less link, empty when the bytes have changed
+ * @returns One entry per unpositionable link, empty when the bytes have changed
  */
 async function droppedInBlob(
   contentKey: string,
@@ -330,9 +350,9 @@ async function droppedInBlob(
   if (keyed.key !== contentKey) return [];
   const parsed = await parseKeyed(keyed, cache);
 
-  return parsed.links.flatMap<DroppedReference>((link) => link.line === undefined
-    ? [{ from, href: link.href, resolvesTo: resolveWithin(link.href, from, realizedPaths) }]
-    : []);
+  return parsed.links.flatMap<DroppedReference>((link) => hasReferenceSpan(link)
+    ? []
+    : [{ from, href: link.href, resolvesTo: resolveWithin(link.href, from, realizedPaths) }]);
 }
 
 /**
@@ -490,7 +510,7 @@ describe('whole-corpus population', () => {
     expect(total).toBe(blobCounts.referencesSkippedForMissingLine);
 
     const references = await collectDroppedReferences(probe.projection, dropped);
-    console.log(`[skips] ${references.length} reference(s) dropped for want of a source line`);
+    console.log(`[skips] ${references.length} reference(s) dropped for want of a source span`);
     console.log(`  distinct hrefs: ${JSON.stringify([
       ...new Set(references.map((reference) => reference.href)),
     ].slice(0, 10))}`);
