@@ -3394,3 +3394,136 @@ describe('detectBaselineContamination — an empty transcript', () => {
     expect(scan.hits).toEqual([]);
   });
 });
+
+/** The declared executable, run out of an ambient copy in the adopter's build output. */
+const AMBIENT_RUN = 'python3 /users/dev/myrepo/dist/skills/my-skill/scripts/summary.py data.csv';
+
+/**
+ * The armed-signal list and the hits, from ONE input object — which is the whole
+ * point: the defect below is only visible when the two are read off the same call.
+ */
+function armedAndHits(
+  over: Partial<DetectBaselineContaminationInput>,
+): { armed: ContaminationSignal[]; hits: string[]; degraded: string | undefined } {
+  const input: DetectBaselineContaminationInput = {
+    transcript: transcriptWith(AMBIENT_RUN),
+    harnessRoot: HARNESS_ROOT,
+    armWorkspaceDir: ARM_WORKSPACE,
+    armCwd: ARM_CWD,
+    ...over,
+  };
+  const scan = detectBaselineContamination(input);
+  return {
+    armed: activeContaminationSignals(input),
+    hits: scan.hits.map((h) => h.kind),
+    degraded: scan.degraded?.reason,
+  };
+}
+
+/**
+ * A SIGNAL MUST BE ARMED BY THE SAME VALUE THE MATCHER USES.
+ *
+ * `signals` exists so an operator can tell "checked and clean" from "nothing
+ * looked", and it was answering the first when the truth was the second.
+ * `activeContaminationSignals` armed `declared-executable` on a LENGTH CHECK over
+ * the RAW declaration, while the matcher built its needle by prefixing the raw
+ * declaration with `/`. The two therefore disagreed for every spelling that is not
+ * already normalized, and the disagreement was SILENT:
+ *
+ *   declared="scripts/summary.py"     armed=true  hits=["declared-executable"]
+ *   declared="./scripts/summary.py"   armed=true  hits=[]
+ *   declared="/scripts/summary.py"    armed=true  hits=[]
+ *   declared="scripts/./summary.py"   armed=true  hits=[]
+ *   declared="///"                    armed=true  hits=[]
+ *
+ * All four silent rows are the same ambient-copy reach — the ONE class this signal
+ * exists to see, since nothing else in this module sees a copy of the skill in the
+ * adopter's own repo. The producing schema is `path: z.string().min(1)` with no
+ * shape constraint, and `./scripts/csvsum.py` is a legal, natural thing to write in
+ * `vibe-agent-toolkit.config.yaml`.
+ *
+ * The rule this block pins, in both directions: a declaration that CAN match must
+ * arm, and a declaration that CANNOT must not.
+ */
+describe('detectBaselineContamination — armed means the needle can match', () => {
+  /** Every legal spelling of ONE declaration, all naming the same file. */
+  const SPELLINGS: ReadonlyArray<readonly [string, string]> = [
+    ['already normalized', 'scripts/summary.py'],
+    ['with a leading ./', './scripts/summary.py'],
+    ['with a leading /', '/scripts/summary.py'],
+    ['with an interior dot segment', 'scripts/./summary.py'],
+  ];
+
+  it.each(SPELLINGS)('convicts the ambient copy for a declaration %s', (_label, declared) => {
+    const { armed, hits, degraded } = armedAndHits({ executablePaths: [declared] });
+
+    expect(degraded, 'this row never reached the structured path').toBeUndefined();
+    expect(armed, `the ${declared} declaration was not even armed`).toContain(KIND_DECLARED_EXECUTABLE);
+    expect(hits, `the ${declared} declaration armed a needle that cannot match`).toEqual([KIND_DECLARED_EXECUTABLE]);
+  });
+
+  // The SECOND site: the degraded flat matcher builds its own needle from the same
+  // declaration and was broken by the same non-normalization.
+  it.each(SPELLINGS)('the DEGRADED flat scan convicts it too for a declaration %s', (_label, declared) => {
+    const { armed, hits, degraded } = armedAndHits({ executablePaths: [declared], armWorkspaceDir: '' });
+
+    expect(degraded, 'this row never reached the FLAT path').toBe(REASON_CWD_UNKNOWN);
+    expect(armed).toContain(KIND_DECLARED_EXECUTABLE);
+    expect(hits).toEqual([KIND_DECLARED_EXECUTABLE]);
+  });
+
+  /**
+   * The half that makes `signals` honest. Each of these NORMALIZES to something
+   * below the declared-executable length floor — or to nothing at all — so no
+   * needle can be built from it, and the old length check over the raw string
+   * armed every one.
+   */
+  it.each([
+    ['nothing but separators', '///'],
+    ['a dot-prefixed name below the floor', './ab'],
+    ['a root-prefixed name below the floor', '/ab'],
+    ['a bare dot segment', './'],
+  ])('does not arm a declaration that is %s', (_label, declared) => {
+    const { armed, hits } = armedAndHits({ executablePaths: [declared] });
+
+    expect(armed, `"${declared}" builds no needle, so nothing was checked`).not.toContain(KIND_DECLARED_EXECUTABLE);
+    expect(hits, `"${declared}" produced a hit it has no needle for`).toEqual([]);
+  });
+
+  /**
+   * The same class one field over. A harness root carrying a dot segment yields a
+   * needle no RESOLVED path can ever contain — every resolved reach is dot-folded —
+   * so `harness-path` reported "armed" over a needle that is inert by construction.
+   *
+   * ⚠️ `harnessRoot: '/'` is NOT a member: its needle `/` is degenerate but it does
+   * match (`cat /` fires `harness-path`), so arming on it is honest and it stays.
+   * Measured rather than assumed — the audit that raised this listed `/` and `x` as
+   * inert, and both are matchable.
+   */
+  it.each([
+    ['a bare dot', '.'],
+    ['a dot with a separator', './'],
+  ])('does not arm the harness signal for a root that is %s', (_label, harnessRoot) => {
+    const { armed } = armedAndHits({ harnessRoot });
+
+    expect(armed, `"${harnessRoot}" builds a needle no resolved path can contain`).not.toContain(KIND_HARNESS_PATH);
+  });
+
+  it('keeps the harness signal armed for a root whose needle can still match', () => {
+    const { armed, hits } = armedAndHits({ harnessRoot: '/', transcript: transcriptWith('cat /') });
+
+    expect(armed).toContain(KIND_HARNESS_PATH);
+    expect(hits, 'the degenerate root needle stopped matching').toEqual([KIND_HARNESS_PATH]);
+  });
+
+  it('folds a dot segment out of a harness root that still names a real tree', () => {
+    const { armed, hits } = armedAndHits({
+      harnessRoot: `${HARNESS_DIR}/./my-skill-abc12345`,
+      transcript: transcriptWith(`cat ${HARNESS_ROOT}/staged/s/SKILL.md`),
+    });
+
+    expect(armed).toContain(KIND_HARNESS_PATH);
+    expect(hits, 'an unfolded dot segment made the harness needle inert').toEqual([KIND_HARNESS_PATH]);
+  });
+});
+

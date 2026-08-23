@@ -76,6 +76,34 @@ function normalizeForMatch(value: string): string {
 }
 
 /**
+ * The canonical spelling of a path a CALLER declared, for use as a needle.
+ *
+ * ⚠️ THE RULE THIS ENCODES, because this class has now bitten twice: A SIGNAL MUST
+ * BE ARMED BY THE SAME VALUE THE MATCHER USES. `signals` answers "which detectors
+ * actually looked?", so a detector reporting itself armed over a needle that cannot
+ * match writes "checked and clean" where the truth is "nothing looked" — and the
+ * two are byte-identical in `baseline.json`. Where a value can be armed-but-INERT,
+ * that is a defect regardless of how it got there. It is not a cosmetic
+ * disagreement between two code paths; it is the one claim this module exists to
+ * make, made falsely.
+ *
+ * So every caller-declared path is folded HERE, ONCE, and both the arming test and
+ * the matcher read the result — they cannot disagree because there is only one
+ * string. {@link normalizeForMatch} folds separators and case;
+ * {@link normalizeDotSegments} folds `.` and `..`, which is what the RESOLVED side
+ * of every comparison has already had done to it. A needle carrying a `.` segment
+ * is inert BY CONSTRUCTION: no resolved path can contain one.
+ *
+ * 📌 MEASURED: without the dot fold, `harnessRoot: '.'` and `'./'` reported
+ * `harness-path` armed over the needles `.` and `./`, which fire on nothing.
+ * `harnessRoot: '/'` is NOT in that set — its needle is degenerate but `cat /`
+ * does match it, so it stays armed.
+ */
+function foldDeclaredPath(value: string): string {
+  return normalizeDotSegments(normalizeForMatch(value));
+}
+
+/**
  * A haystack the flat/content scans search: the normalized text they MATCH in,
  * the raw text they QUOTE from, and the map between the two.
  *
@@ -192,7 +220,7 @@ const normalizedSegments = (normalized: string): string[] =>
   normalized.split('/').filter((s) => s !== '' && s !== '.');
 
 export function harnessNeedles(harnessRoot: string): PathNeedle[] {
-  const normalized = normalizeForMatch(harnessRoot);
+  const normalized = foldDeclaredPath(harnessRoot);
   if (normalized === '') return [];
   const segments = normalizedSegments(normalized);
   const loginNames = loginNameSegments(normalized);
@@ -727,6 +755,54 @@ export const BASELINE_SCAN_DEGRADATION_REASONS = [
   'glob-unexpanded',
 ] as const;
 
+/*
+ * ⛔ A `needle-seen-unresolved` REASON WAS BUILT HERE AND MEASURED OUT. DO NOT
+ * REBUILD IT WITHOUT READING THIS.
+ *
+ * The proposal: run the flat substring scan for the three DIRECTORY needles
+ * alongside the structured walk on every scan, and where the flat scan sees a
+ * needle the walk produced no hit for, record a DEGRADATION (never a hit, so the
+ * "a mention does not convict" ruling is untouched). The motivation is sound — the
+ * walk statically interprets arbitrary LLM-written shell, so its blind spots are
+ * unbounded, and several confirmed false negatives (shell variable indirection, a
+ * heredoc, `awk`'s bare first operand) leave the literal harness path in the
+ * transcript reading `hits: [] degraded: none`, byte-identical to a clean run.
+ *
+ * MEASURED AGAINST THIS SUITE'S OWN INNOCENT FIXTURES, in three progressively
+ * narrower forms:
+ *
+ *   - over the whole transcript ......................... 23 clean fixtures degraded
+ *   - only over Bash commands the walk resolved
+ *     NOTHING out of (tool output and non-Bash inputs
+ *     excluded) ......................................... 12 clean fixtures degraded
+ *   - ...and only on the FULL-PATH needle of each group
+ *     (dropping the two-segment suffix and bare-name
+ *     spellings) ........................................  5 clean fixtures degraded
+ *
+ * A degradation costs what a false positive costs — it stamps `⚠️ DEGRADED SCAN`
+ * on a verdict that was fine — and the previous round already had to narrow a new
+ * degradation that fired on 11 of 14 innocent commands.
+ *
+ * THE FIVE THAT SURVIVE THE NARROWEST FORM ARE WHY IT CANNOT BE NARROWED FURTHER,
+ * and they are all one shape: `find . -name "<root>/x"`, `sed -e "s|x|<root>/y|"
+ * notes.md`, `echo "…<root>…" >> notes.md`, `curl https://example.com<root>/…`, and
+ * a heredoc body. In every one the walk DID tokenize the needle-bearing word and
+ * classified it as a pattern, a script, emitted text, a URI or data — decisions
+ * this module spent four review rounds establishing. So the flat scan is not seeing
+ * something the walk missed; it is seeing the same text and refusing to make the
+ * distinction. Shipping the check means overturning five deliberate rulings.
+ *
+ * The one further narrowing considered — record every operand word the walk
+ * EXAMINED, and degrade only where the needle is in none of them — clears four of
+ * the five but keeps the heredoc (which contradicts "a heredoc body is DATA"), and
+ * costs the `awk` true positive, whose program IS an examined operand. That leaves
+ * the detector firing on one of the eight known false negatives, for new machinery
+ * inside the walk. Not worth it.
+ *
+ * Anything that revisits this needs a signal the flat scan does not have, not a
+ * narrower flat scan.
+ */
+
 export const BaselineScanDegradationSchema = z.object({
   reason: z.enum(BASELINE_SCAN_DEGRADATION_REASONS),
   /** Human-readable specifics — the offending `cd`, or what the parse produced. */
@@ -1044,7 +1120,7 @@ export interface DetectBaselineContaminationInput {
  * -name '*.md'` printing `../<token>/…` — carries the slash.
  */
 export function siblingArmNeedles(siblingArmDir: string): PathNeedle[] {
-  const full = normalizeForMatch(siblingArmDir);
+  const full = foldDeclaredPath(siblingArmDir);
   if (full === '') return [];
   const loginNames = loginNameSegments(full);
   const token = normalizedSegments(full).at(-1);
@@ -1082,7 +1158,7 @@ export function siblingArmNeedles(siblingArmDir: string): PathNeedle[] {
  * on every single clean run.
  */
 export function vatPrivateDirNeedles(dir: string): PathNeedle[] {
-  const full = normalizeForMatch(dir);
+  const full = foldDeclaredPath(dir);
   if (full === '') return [];
   const segments = normalizedSegments(full);
   const loginNames = loginNameSegments(full);
@@ -1209,6 +1285,34 @@ function isNeedleCandidate(line: string): boolean {
  * detection falls back to the harness-path signal.
  */
 const MIN_EXECUTABLE_PATH_LENGTH = 3;
+
+/**
+ * The needle for one declared executable, or `undefined` when the declaration
+ * cannot produce one.
+ *
+ * ⛔ THE ONE PLACE THE FLOOR AND THE FOLD ARE APPLIED. Every consumer —
+ * {@link activeContaminationSignals}, {@link structuredExecutableHits},
+ * {@link flatPathHits}, and the walk's `declaredBasenames` — goes through here, so
+ * "armed" and "can match" are the SAME TEST rather than two tests that have to
+ * agree. See {@link foldDeclaredPath} for why that is not a style preference.
+ *
+ * The floor is applied to the FOLDED value, not the raw one, and that is the half
+ * that makes `signals` honest: `'///'` and `'./ab'` are respectively 3 and 4
+ * characters of raw string and each armed the detector, while folding to `''` and
+ * `'ab'` — nothing a needle can be built from.
+ *
+ * A leading `/` is STRIPPED because `executablePaths` is skill-RELATIVE by
+ * contract: `/scripts/summary.py` is a legal spelling of `scripts/summary.py` in
+ * `vibe-agent-toolkit.config.yaml`, whose schema is `path: z.string().min(1)` with
+ * no shape constraint at all. Left on, it produced the needle `/scripts/summary.py`
+ * and the matcher then asked whether a resolved path ends with
+ * `//scripts/summary.py`, which no normalized path ever does.
+ */
+function declaredExecutableNeedle(declared: string): string | undefined {
+  const folded = foldDeclaredPath(declared);
+  const relative = folded.startsWith('/') ? folded.slice(1) : folded;
+  return relative.length < MIN_EXECUTABLE_PATH_LENGTH ? undefined : relative;
+}
 
 /**
  * Does this resolved reach point AT the skill's declared executable — i.e. does it
@@ -2981,8 +3085,8 @@ function structuredExecutableHits(
 ): BaselineContaminationHit[] {
   const hits: BaselineContaminationHit[] = [];
   for (const declaredPath of input.executablePaths ?? []) {
-    if (declaredPath.length < MIN_EXECUTABLE_PATH_LENGTH) continue;
-    const needle = normalizeForMatch(declaredPath);
+    const needle = declaredExecutableNeedle(declaredPath);
+    if (needle === undefined) continue;
     // ⛔ EVERY REACH, NOT JUST THE FIRST — which the comment here has always said
     // and the code stopped doing. `reaches.find(…)` returned the FIRST escaping
     // name-matching reach and the `claimed` test then DISCARDED it, never looking at
@@ -3170,11 +3274,48 @@ function globDegradation(
   };
 }
 
+/**
+ * The three DIRECTORY needle groups, built ONCE per scan.
+ *
+ * ⛔ ONE LIST, EVERY READER. {@link structuredPathHits}, {@link flatPathHits} and
+ * {@link globDegradation} all read this object, so the needles one of them reports
+ * on are literally the needles the others searched for. The two scans used to build
+ * their own from the same three functions, which is a second list that has to agree
+ * with the first — the failure this module keeps having. See
+ * {@link needleSegmentSet} for the same rule stated one level down.
+ */
+interface DirectoryNeedles {
+  harness: PathNeedle[];
+  sibling: PathNeedle[];
+  /** One group per declared private dir, kept separate — see {@link structuredPathHits}. */
+  privateDirs: PathNeedle[][];
+}
+
+function directoryNeedles(input: DetectBaselineContaminationInput): DirectoryNeedles {
+  return {
+    harness: harnessNeedles(input.harnessRoot),
+    sibling: siblingArmNeedles(input.siblingArmDir ?? ''),
+    privateDirs: (input.vatPrivateDirs ?? []).map((dir) => vatPrivateDirNeedles(dir ?? '')),
+  };
+}
+
+/** Every directory needle group, paired with the hit kind it produces. */
+function directoryNeedleGroups(
+  needles: DirectoryNeedles,
+): ReadonlyArray<readonly [BaselineContaminationHit['kind'], readonly PathNeedle[]]> {
+  return [
+    [KIND_HARNESS_PATH, needles.harness],
+    [KIND_SIBLING_ARM, needles.sibling],
+    ...needles.privateDirs.map((group) => [KIND_VAT_PRIVATE_DIR, group] as const),
+  ];
+}
+
 /** Path/dir hits from the structured walk, in the stable per-group order. */
 function structuredPathHits(
   input: DetectBaselineContaminationInput,
   reaches: readonly PathReach[],
   armWorkspaceDir: string,
+  { harness, sibling, privateDirs }: DirectoryNeedles,
 ): {
   dirHits: BaselineContaminationHit[];
   executableHits: BaselineContaminationHit[];
@@ -3185,13 +3326,6 @@ function structuredPathHits(
   const push = (hit: BaselineContaminationHit | undefined): void => {
     if (hit !== undefined) dirHits.push(hit);
   };
-
-  // Built ONCE and reused by {@link globDegradation}, so the segments it asks about
-  // are the segments this scan actually looked for — not a second list to keep in
-  // step with these three builders.
-  const harness = harnessNeedles(input.harnessRoot);
-  const sibling = siblingArmNeedles(input.siblingArmDir ?? '');
-  const privateDirs = (input.vatPrivateDirs ?? []).map((dir) => vatPrivateDirNeedles(dir ?? ''));
 
   push(firstReachHit(reaches, harness, KIND_HARNESS_PATH, claimed));
   push(firstReachHit(reaches, sibling, KIND_SIBLING_ARM, claimed));
@@ -3221,30 +3355,27 @@ function structuredPathHits(
  */
 function flatPathHits(
   input: DetectBaselineContaminationInput,
+  needles: DirectoryNeedles,
 ): { dirHits: BaselineContaminationHit[]; executableHits: BaselineContaminationHit[] } {
   const haystack = scanHaystack(input.transcript);
   const dirHits: BaselineContaminationHit[] = [];
   const dirNeedles: string[] = [];
-  const push = (needles: readonly PathNeedle[], kind: BaselineContaminationHit['kind']): void => {
-    const hit = firstNeedleHit(haystack, needles, kind);
-    if (hit === undefined) return;
+
+  for (const [kind, group] of directoryNeedleGroups(needles)) {
+    const hit = firstNeedleHit(haystack, group, kind);
+    if (hit === undefined) continue;
     dirHits.push(hit);
     // The needle as MATCHED, not as reported: `hit.match` has been redacted and is
     // no longer a substring of anything (see {@link pathNeedle}).
-    dirNeedles.push(...needles.map((n) => n.needle));
-  };
-
-  push(harnessNeedles(input.harnessRoot), KIND_HARNESS_PATH);
-  push(siblingArmNeedles(input.siblingArmDir ?? ''), KIND_SIBLING_ARM);
-  for (const dir of input.vatPrivateDirs ?? []) {
-    push(vatPrivateDirNeedles(dir ?? ''), KIND_VAT_PRIVATE_DIR);
+    dirNeedles.push(...group.map((n) => n.needle));
   }
 
   const armDir = normalizeForMatch(input.armWorkspaceDir ?? '');
   const executableHits: BaselineContaminationHit[] = [];
   for (const declaredPath of input.executablePaths ?? []) {
-    if (declaredPath.length < MIN_EXECUTABLE_PATH_LENGTH) continue;
-    const match = firstEscapingInvocation(haystack.normalized, normalizeForMatch(declaredPath), armDir);
+    const needle = declaredExecutableNeedle(declaredPath);
+    if (needle === undefined) continue;
+    const match = firstEscapingInvocation(haystack.normalized, needle, armDir);
     if (match === undefined) continue;
     if (reachedViaReportedDir(haystack.normalized, match, dirNeedles)) continue;
     executableHits.push({
@@ -3397,7 +3528,10 @@ export function detectBaselineContamination(
   const startCwd = normalizeForMatch(input.armCwd ?? '') || armDir;
   const ctx: WalkContext = {
     declaredBasenames: new Set(
-      (input.executablePaths ?? []).map((declared) => basenameOf(normalizeForMatch(declared))),
+      (input.executablePaths ?? [])
+        .map((declared) => declaredExecutableNeedle(declared))
+        .filter((needle) => needle !== undefined)
+        .map((needle) => basenameOf(needle)),
     ),
   };
   const walked = blind === undefined ? walkToolReaches(parsed, startCwd, ctx) : undefined;
@@ -3416,10 +3550,11 @@ export function detectBaselineContamination(
   // so one corrupted tool call DELETED a contamination hit under a confident verdict.
   const malformed = malformedTranscriptLines(parsed);
 
+  const needles = directoryNeedles(input);
   const { dirHits, executableHits, blindGlob } =
     walked === undefined
-      ? { ...flatPathHits(input), blindGlob: undefined }
-      : structuredPathHits(input, walked.reaches, armDir);
+      ? { ...flatPathHits(input, needles), blindGlob: undefined }
+      : structuredPathHits(input, walked.reaches, armDir, needles);
 
   // Ordered by how much of the scan each one costs: no structured scan at all, then
   // a cwd hole, then a transcript hole, then a single reach nothing could expand.
@@ -3452,7 +3587,10 @@ export function activeContaminationSignals(
     signals.push(KIND_VAT_PRIVATE_DIR);
   }
   if ((input.skillContentNeedles ?? []).length > 0) signals.push(KIND_SKILL_CONTENT);
-  if ((input.executablePaths ?? []).some((declared) => declared.length >= MIN_EXECUTABLE_PATH_LENGTH)) {
+  // The NEEDLE, not the raw string's length: see {@link declaredExecutableNeedle}.
+  // This is the arming test and the matching test at once, which is the only shape
+  // in which they cannot disagree.
+  if ((input.executablePaths ?? []).some((declared) => declaredExecutableNeedle(declared) !== undefined)) {
     signals.push(KIND_DECLARED_EXECUTABLE);
   }
   return signals;
