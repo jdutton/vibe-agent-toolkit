@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  BaselineArtifactSchema,
   BaselineDeltaSchema,
   computeBaselineDelta,
+  DeltaTruncationSchema,
   formatBaselineDeltaLine,
   type DeltaTruncation,
 } from '../../src/skill-test/baseline-delta.js';
@@ -460,5 +462,75 @@ describe('formatBaselineDeltaLine', () => {
       expect(line).toContain('CONTROL arm');
       expect(line).toContain('PARTIAL SUITE');
     });
+  });
+});
+
+/**
+ * The two blocks vat stamps onto `baseline.json`, and the gate that re-reads them.
+ *
+ * `baselineIntegrity`'s required-ness was pinned; `baselineDelta`'s was not — making
+ * it `.optional()` failed ZERO tests, while the docblock claims BOTH are required
+ * because "an absent key is precisely the 'written before the check existed' state
+ * the block was made unconditional to rule out". Half of that was enforced, and the
+ * unenforced half is the block holding the number the command sells.
+ */
+describe('BaselineArtifactSchema', () => {
+  const GRADING = { summary: { passed: 0, total: 0 }, expectations: [] };
+  const INTEGRITY = {
+    contaminated: false,
+    degraded: [],
+    comparable: true,
+    skew: [],
+    controlArmFailures: [],
+    summary: 'nothing was observed',
+    signals: [],
+    findings: [],
+  };
+  const DELTA = deltaOf([], []);
+
+  it('accepts an artifact carrying both blocks', () => {
+    const artifact = { ...GRADING, baselineIntegrity: INTEGRITY, baselineDelta: DELTA };
+    expect(BaselineArtifactSchema.safeParse(artifact).success).toBe(true);
+  });
+
+  it.each([
+    ['baselineDelta', { ...GRADING, baselineIntegrity: INTEGRITY }],
+    ['baselineIntegrity', { ...GRADING, baselineDelta: DELTA }],
+  ])('rejects an artifact with no %s block at all', (_label, artifact) => {
+    expect(BaselineArtifactSchema.safeParse(artifact).success).toBe(false);
+  });
+
+  // `.passthrough()`, so the grading fields it rides alongside are its own business.
+  it('passes the grading fields through rather than rejecting them as unknown', () => {
+    const parsed = BaselineArtifactSchema.parse({
+      ...GRADING,
+      arm: 'without',
+      baselineIntegrity: INTEGRITY,
+      baselineDelta: DELTA,
+    });
+    expect(parsed).toMatchObject({ arm: 'without', summary: { passed: 0, total: 0 } });
+  });
+});
+
+/**
+ * `deltaTruncationFor` returns `null` on zero, so `.positive()` is unreachable from
+ * THAT producer — which is exactly why it needs its own pin. The schema is EXPORTED
+ * and re-validates an artifact read back off disk, so the consumer one level out is
+ * a `baseline.json` somebody else wrote, where `totalSkipped: 0` claims "the run was
+ * truncated, and nothing was cut off" — the contradiction the field exists to refuse.
+ */
+describe('DeltaTruncationSchema', () => {
+  const VALID = { gatedByTier: 0, firstSkippedTier: 1, totalSkipped: 2, evalIds: ['e2', 'e3'] };
+
+  it('accepts a truncation that actually cut something off', () => {
+    expect(DeltaTruncationSchema.safeParse(VALID).success).toBe(true);
+  });
+
+  it.each([
+    ['zero', 0],
+    ['negative', -1],
+    ['fractional', 1.5],
+  ])('rejects a %s totalSkipped — a truncation record that truncated nothing whole', (_label, totalSkipped) => {
+    expect(DeltaTruncationSchema.safeParse({ ...VALID, totalSkipped }).success).toBe(false);
   });
 });

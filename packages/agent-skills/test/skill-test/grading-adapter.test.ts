@@ -150,3 +150,59 @@ describe('parseGradingJson — runNonce passthrough', () => {
     expect(parseGradingJson(VALID).runNonce).toBeUndefined();
   });
 });
+
+describe('parseGradingJson — attribution passthrough', () => {
+  // `evalId` and `arm` are optional because an externally produced grading.json
+  // legitimately carries no attribution. That is a reason to OMIT an absent field,
+  // never to discard a present one — the schema parses both, and `evalId` is what
+  // lets a reader line the two --baseline artifacts up per eval.
+  it('carries a per-expectation evalId onto the normalized grading', () => {
+    const g = parseGradingJson({
+      ...VALID,
+      expectations: [{ text: 'uses bundled script', passed: true, evalId: 'e1' }],
+    });
+    expect(g.expectations[0]?.evalId).toBe('e1');
+  });
+
+  it('carries a top-level arm onto the normalized grading', () => {
+    expect(parseGradingJson({ ...VALID, arm: 'without' }).arm).toBe('without');
+  });
+
+  it('leaves evalId and arm undefined when the report carries no attribution', () => {
+    const g = parseGradingJson(VALID);
+    expect(g.arm).toBeUndefined();
+    expect(g.expectations[0]?.evalId).toBeUndefined();
+  });
+});
+
+describe('parseGradingJson — the rejection message is not a paint surface', () => {
+  // The reachable route is zod's ENUM error, which echoes the RECEIVED VALUE verbatim:
+  // `Invalid enum value. Expected 'with' | 'without', received '<whatever the report said>'`.
+  // `arm` is read straight off an externally produced grading.json, so that value is
+  // attacker-controlled and lands in an operator-facing message.
+  //
+  // Measured, so nobody re-derives it: the unrecognized-KEY route does NOT exist here —
+  // GradingReportSchema is `.passthrough()`, so a forged key is accepted rather than
+  // reported (that route belongs to the `.strict()` fragment schema in a sibling module).
+  // A type mismatch on `passed`/`text` names the type, never the value. An earlier draft
+  // of this test used the forged-key fixture and passed with the sanitizer REMOVED.
+  const ESC = String.fromCharCode(27);
+  const CR = String.fromCharCode(13);
+  const forged = `x${ESC}[2K${CR}${ESC}[32mvat: grading verified${ESC}[0m`;
+
+  it('strips escape and control bytes a report smuggled through a rejected enum value', () => {
+    let message = '';
+    try {
+      parseGradingJson({ ...VALID, arm: forged });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).not.toBe('');
+    expect(message).not.toContain(ESC);
+    expect(message).not.toContain(CR);
+  });
+
+  it('still names the offending field, so sanitizing did not blind the operator', () => {
+    expect(() => parseGradingJson({ ...VALID, arm: forged })).toThrow(/invalid field at "arm"/);
+  });
+});

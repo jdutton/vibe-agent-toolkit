@@ -2,9 +2,33 @@ import { closeSync, openSync, rmSync } from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 
+/**
+ * The harness root for a subject set is already locked.
+ *
+ * Exit 2 (PREFLIGHT), not 1. This is the most user-correctable condition in the
+ * command — the remedy is "wait, or delete one file" — and it was the ONE error
+ * class in this feature with no `exitCode`, so it fell through
+ * `mapErrorToExitCode`'s default to Internal (1). The published CI recipe reads 1
+ * as "the harness broke, fail the build", which is exactly the wrong verdict for a
+ * lock held by the operator's own second terminal.
+ *
+ * The message names `lockPath` because the lockfile is created `O_EXCL` in the
+ * DETERMINISTIC harness root and released only on normal exit or SIGINT/SIGTERM —
+ * a SIGKILL, an OOM, or a crash leaves it behind and every later run of that skill
+ * fails here, with no `--force` to escape. Until the staleness protocol (pid +
+ * timestamp + liveness probe + `--force`) lands in its own lane, naming the path
+ * and saying to delete it IS the escape hatch, so it belongs in the message rather
+ * than in a doc the operator is not currently reading.
+ */
 export class HarnessLockBusyError extends Error {
-  constructor(lockPath: string) {
-    super(`Another vat skill test run holds the harness lock: ${lockPath}. Wait for it to finish or use a different subject set.`);
+  readonly exitCode = 2 as const;
+  constructor(public readonly lockPath: string) {
+    super(
+      `Another vat skill test run holds the harness lock: ${lockPath}. ` +
+        'Wait for it to finish, or use a different subject set. ' +
+        'If no other run is in progress the lock is stale (a previous run was killed, ' +
+        `crashed, or ran out of memory) — delete ${lockPath} and re-run.`,
+    );
     this.name = 'HarnessLockBusyError';
   }
 }

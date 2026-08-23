@@ -9,7 +9,7 @@
  *   - exit 1  when an internal/parse-failure error is thrown (InternalHarnessError)
  */
 
-import { writeFileSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import * as harness from '@vibe-agent-toolkit/agent-skills';
@@ -17,6 +17,17 @@ import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/uti
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as yaml from 'yaml';
 
+// Imported from SOURCE, not through the `@vibe-agent-toolkit/agent-skills` barrel
+// the rest of this file uses. That barrel resolves through the package's `exports`
+// map to `dist/`, so a domain change made in the same commit as its CLI-visible
+// consequence would be invisible here until someone rebuilt — and an `instanceof`
+// against a dist copy of the class can never match a src instance anyway. These
+// three modules are asserted about DIRECTLY (their contract is the exit code and
+// the published schema), so they come from src, exactly as agent-skills' own unit
+// tests import them.
+import { mapErrorToExitCode } from '../../agent-skills/src/skill-test/exit-codes.js';
+import { GradingReportJsonSchema, GradingSummarySchema } from '../../agent-skills/src/skill-test/grading-schema.js';
+import { HarnessLockBusyError } from '../../agent-skills/src/skill-test/lock.js';
 import * as pluginBuild from '../src/commands/claude/plugin/build.js';
 import { createSkillTestConfigureCommand } from '../src/commands/skill/test/configure.js';
 import {
@@ -82,6 +93,33 @@ function parseBaselineFlag(argv: string[]): unknown {
 }
 
 /**
+ * The `summary` subschema as PUBLISHED, wherever zodToJsonSchema nested it (named
+ * generation puts the root under `definitions`, anonymous generation inlines it).
+ * Tolerating both means a change in that layout surfaces as the "publishes a summary
+ * subschema at all" control failing, rather than as the invariant assertions
+ * silently passing over an empty object.
+ */
+function publishedSummarySchema(): Record<string, unknown> {
+  const schema = GradingReportJsonSchema as {
+    definitions?: Record<string, { properties?: Record<string, unknown> }>;
+    properties?: Record<string, unknown>;
+  };
+  const root = schema.properties ?? Object.values(schema.definitions ?? {})[0]?.properties ?? {};
+  return root.summary as Record<string, unknown>;
+}
+
+/**
+ * The `configure` analog of {@link parseBaselineFlag} — `configure` persists the
+ * setting, so its own negation has to round-trip through the same Commander
+ * tri-state (and the same declaration-order trap).
+ */
+function parseConfigureBaselineFlag(argv: string[]): unknown {
+  const command = createSkillTestConfigureCommand();
+  command.parseOptions(['my-skill', ...argv]);
+  return command.opts().baseline;
+}
+
+/**
  * Render the `.addHelpText('after', …)` epilogue, which `helpInformation()` alone
  * does NOT include — it is emitted by `outputHelp()`, so the writer has to be
  * captured. That epilogue is where the Artifacts/Model/Exit Codes prose lives.
@@ -95,6 +133,15 @@ function renderFullHelp(command: ReturnType<typeof createSkillTestRunCommand>): 
   });
   command.outputHelp();
   return buffer;
+}
+
+/**
+ * {@link renderFullHelp} with every whitespace run collapsed to one space, so a
+ * PROSE assertion pins the sentence rather than Commander's line wrapping —
+ * re-wording a paragraph must not have to be mirrored into an expected `\n  `.
+ */
+function renderFullHelpFlat(command: ReturnType<typeof createSkillTestRunCommand>): string {
+  return renderFullHelp(command).replaceAll(/\s+/g, ' ');
 }
 
 /** Write a minimal SKILL.md into a mock-built dist dir (verifyBuiltDist requires it). */
@@ -187,6 +234,33 @@ function setupDeclaredPoolFixtureWithPkgSpy() {
   vi.spyOn(process, 'cwd').mockReturnValue(fx.root);
   const pkg = spyPackageSkillCreatingDist();
   return { fx, pkg };
+}
+
+/**
+ * Real temp dirs standing in for a harness root, so the `Harness:` presence check
+ * is exercised against the FILESYSTEM (what the CLI actually asks) rather than a
+ * re-derived keep/--out/--workdir predicate.
+ */
+const harnessTempDirs: string[] = [];
+
+/** A harness root that SURVIVED the run — the directory exists on disk. */
+function liveHarnessDir(): string {
+  const dir = createTestTempDir('vat-harness-live-');
+  harnessTempDirs.push(dir);
+  return dir;
+}
+
+/** A harness root cleanup already removed — a real path that no longer exists. */
+function reapedHarnessDir(): string {
+  const dir = createTestTempDir('vat-harness-reaped-');
+  rmSync(dir, { recursive: true, force: true });
+  return dir;
+}
+
+function cleanupHarnessTempDirs(): void {
+  while (harnessTempDirs.length > 0) {
+    rmSync(harnessTempDirs.pop() as string, { recursive: true, force: true });
+  }
 }
 
 // Mocks runSkillTestHarness with the given result, captures stdout/stderr writes
@@ -509,12 +583,14 @@ describe('vat skill test run (--evals resolves against the cwd)', () => {
 });
 
 describe('vat skill test run (output routing)', () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    cleanupHarnessTempDirs();
+  });
 
   it('writes Summary: to stdout and Harness: to stderr', async () => {
     const { stdoutCalls, stderrCalls } = await runAndCaptureStreams({
-      // eslint-disable-next-line sonarjs/publicly-writable-directories -- test fixture path, not production code
-      harnessPath: '/tmp/h',
+      harnessPath: liveHarnessDir(),
       exitCode: 0,
       summary: 'PASS 2/2',
     });
@@ -522,6 +598,38 @@ describe('vat skill test run (output routing)', () => {
     expect(stdoutCalls.some((s) => s.includes('Summary:'))).toBe(true); // Summary → stdout
     expect(stderrCalls.some((s) => s.includes('Harness:'))).toBe(true); // Harness debug → stderr
     expect(stderrCalls.some((s) => s.includes('Summary:'))).toBe(false); // Summary not on stderr
+  });
+
+  // The `Workspaces:` line above is guarded by a presence check because "a populated
+  // value is a promise that the path is still there". `Harness:` was not, and the
+  // harness's own cleanup runs in its `finally` BEFORE the result reaches this
+  // command: a run that ends before Step 7 creates `results/` (the security-ack
+  // refusal, a preflight failure reachable from an auth mismatch) has its harness
+  // root removed OUTRIGHT, and the CLI then printed the dead path.
+  it('omits the Harness: line when cleanup already removed the harness root', async () => {
+    const { stderrCalls } = await runAndCaptureStreams({
+      harnessPath: reapedHarnessDir(),
+      exitCode: 2,
+      summary: 'Security acknowledgment required.',
+    });
+
+    expect(stderrCalls.some((s) => s.includes('Harness:'))).toBe(false);
+  });
+
+  // The other direction: a run whose harness root survived (a default run that
+  // produced results/, --keep, or a user-owned --out/--workdir location) still
+  // names it. Asked of the PATH itself rather than re-derived from keep/out/workdir,
+  // so this can never drift from the retention rule in cleanupHarness.
+  it('names the harness root when it survived the run', async () => {
+    const dir = liveHarnessDir();
+    const { stderrCalls } = await runAndCaptureStreams({
+      harnessPath: dir,
+      resultsPath: safePath.join(dir, 'results'),
+      exitCode: 0,
+      summary: 'PASS 2/2',
+    });
+
+    expect(stderrCalls.some((s) => s.includes(`Harness: ${dir}`))).toBe(true);
   });
 
   // On a default run the harness root holds nothing but `results/` by the time the
@@ -1677,18 +1785,138 @@ describe('createSkillTestRunCommand (--baseline / --no-baseline tri-state)', () 
 
 // The Artifacts epilogue used to promise results/ "SURVIVES every run" and the staged
 // bytes "removed unless you pass --keep" — both false under --out/--workdir, where
-// cleanup is a complete no-op (it only touches a dir vat itself created). The scope
-// the skill-testing guide always carried is now in --help too.
+// cleanup does not touch the harness ROOT (it only removes a dir vat itself created).
+// The scope the skill-testing guide always carried is now in --help too.
 describe('createSkillTestRunCommand (Artifacts help is scoped to a DEFAULT run)', () => {
   it('scopes the results/-survives + cleanup claim to a run with no --out/--workdir/--keep', () => {
-    const help = renderFullHelp(createSkillTestRunCommand());
-    expect(help).toContain('On a DEFAULT run (no --out, --workdir or\n  --keep)');
+    const help = renderFullHelpFlat(createSkillTestRunCommand());
+    expect(help).toContain('On a DEFAULT run (no --out, --workdir or --keep)');
   });
 
-  it('says a --out/--workdir run removes NOTHING, --keep or not', () => {
-    const help = renderFullHelp(createSkillTestRunCommand());
-    expect(help).toContain('with --out or\n  --workdir NOTHING is removed');
-    expect(help).toContain('--keep or not');
+  // The replaced claim said `--out`/`--workdir` made cleanup "a complete no-op" and
+  // that NOTHING is removed. Three vat-only directories live OUTSIDE the harness root
+  // — the grader out dir, the eval-suite hold dir, and the per-eval workspaces root —
+  // and are reaped on a rule that ignores both flags. The workspaces one is
+  // operator-visible: an `--out` run without `--keep` returns no `workspacesPath` and
+  // the directory is gone, so the evals' own output cannot be inspected.
+  it('does not claim --out/--workdir removes NOTHING', () => {
+    const help = renderFullHelpFlat(createSkillTestRunCommand());
+    expect(help).not.toContain('NOTHING is removed');
+  });
+
+  it('says --out/--workdir spares only the harness ROOT, and that --keep alone retains the workspaces', () => {
+    const help = renderFullHelpFlat(createSkillTestRunCommand());
+    expect(help).toContain('--out or --workdir spares only the harness ROOT');
+    expect(help).toContain('--keep is the only flag that retains the workspaces');
+  });
+
+  // provenance.json is written into results/ and survives cleanup exactly like the
+  // other four, so an Artifacts list that omits it under-reports what the operator
+  // can go read.
+  it('lists provenance.json among the artifacts', () => {
+    const help = renderFullHelpFlat(createSkillTestRunCommand());
+    expect(help).toContain('provenance.json');
+  });
+});
+
+// `--max-budget-usd` is a PER-SPAWN cap, and both the `--baseline` flag description
+// and the dry-run output say so. Its OWN help said "Hard USD budget cap", which reads
+// as a whole-run ceiling — the one reading that makes a --baseline run cost twice what
+// the operator budgeted.
+describe('--max-budget-usd help states the per-spawn scope', () => {
+  it('says per-spawn on `run`', () => {
+    const option = createSkillTestRunCommand().options.find((o) => o.long === '--max-budget-usd');
+    expect(option?.description).toContain('Per-spawn');
+    expect(option?.description).not.toContain('Hard USD budget cap');
+  });
+
+  it('says per-spawn on `configure`', () => {
+    const option = createSkillTestConfigureCommand().options.find((o) => o.long === '--max-budget-usd');
+    expect(option?.description).toContain('Per-spawn');
+    expect(option?.description).not.toContain('Hard USD budget cap');
+  });
+});
+
+// `--refresh` is declared, threaded into RunHarnessOptions, and read by nothing:
+// staging is a full re-stage every run, so there is no existing staged content for
+// the flag to ignore. Deleting a shipped flag is a breaking change for another PR;
+// until then the help must not promise behaviour the flag does not have.
+describe('--refresh help tells the truth about the flag being inert', () => {
+  it('says the flag currently changes nothing', () => {
+    const option = createSkillTestRunCommand().options.find((o) => o.long === '--refresh');
+    expect(option?.description).toContain('No-op');
+    expect(option?.description).toContain('full re-stage');
+  });
+});
+
+// A stale lockfile (SIGKILL, OOM, a crash — none of which reach the release path)
+// bricks a skill's deterministic harness root forever. The staleness protocol is a
+// separate lane; what must not ALSO be wrong is the exit code, because the published
+// CI recipe reads 1 as "the harness broke, fail the build" while this is the most
+// user-correctable preflight condition there is: delete the file.
+describe('HarnessLockBusyError is a preflight condition (exit 2), not an internal failure', () => {
+  const LOCK_PATH = '/var/folders/xy/vat-skill-test/my-skill/.vat-skill-test.lock';
+
+  it('carries exitCode 2 like every other user-correctable preflight error', () => {
+    expect(new HarnessLockBusyError(LOCK_PATH).exitCode).toBe(2);
+  });
+
+  it('maps to Preflight (2) rather than falling through to Internal (1)', () => {
+    expect(mapErrorToExitCode(new HarnessLockBusyError(LOCK_PATH))).toBe(2);
+  });
+
+  it('names the lock path and how to clear it, so the operator can act without reading the source', () => {
+    const message = new HarnessLockBusyError(LOCK_PATH).message;
+    expect(message).toContain(LOCK_PATH);
+    expect(message).toContain('delete');
+  });
+});
+
+// zodToJsonSchema DISCARDS `.refine()`, so the published JSON Schema accepted
+// `{passed: 9, total: 3}` — the exact shape the Zod validator rejects, and the exact
+// shape that produced a confident `delta: -8`. JSON Schema cannot express a
+// cross-property comparison in any draft, so the emitted artifact must at minimum
+// CARRY the invariant rather than silently dropping it.
+describe('GradingReportJsonSchema records the passed <= total invariant', () => {
+  it('publishes a summary subschema at all', () => {
+    expect(publishedSummarySchema()).toBeDefined();
+  });
+
+  it('states the cross-field invariant in the emitted schema, not only in the Zod refine', () => {
+    expect(JSON.stringify(publishedSummarySchema())).toContain('summary.passed must not exceed summary.total');
+  });
+
+  it('says the constraint is not machine-enforceable by JSON Schema, so a consumer knows to check it', () => {
+    expect(JSON.stringify(publishedSummarySchema())).toContain('cannot express');
+  });
+
+  it('still rejects passed > total through the Zod schema the artifact is generated from', () => {
+    expect(GradingSummarySchema.safeParse({ passed: 9, total: 3 }).success).toBe(false);
+  });
+});
+
+// `configure --baseline` could turn the committed setting ON and never OFF: the one
+// command that writes `baseline: true` had no way to write `baseline: false`, so the
+// only way back was hand-editing the YAML. The declaration ORDER carries the same
+// Commander trap as `run` — a lone `--no-baseline` defaults the value to `true`.
+describe('createSkillTestConfigureCommand (--baseline / --no-baseline tri-state)', () => {
+  it('leaves baseline undefined when neither flag is typed (the knob is left alone)', () => {
+    expect(parseConfigureBaselineFlag([])).toBeUndefined();
+  });
+
+  it('sets baseline true on --baseline', () => {
+    expect(parseConfigureBaselineFlag([BASELINE_FLAG])).toBe(true);
+  });
+
+  it('sets baseline FALSE on --no-baseline, so a committed true can be turned off', () => {
+    expect(parseConfigureBaselineFlag([NO_BASELINE_FLAG])).toBe(false);
+  });
+
+  it('declares --baseline BEFORE --no-baseline (order is load-bearing for the tri-state)', () => {
+    const command = createSkillTestConfigureCommand();
+    const longs = command.options.map((o) => o.long);
+    expect(longs.indexOf(BASELINE_FLAG)).toBeGreaterThanOrEqual(0);
+    expect(longs.indexOf(BASELINE_FLAG)).toBeLessThan(longs.indexOf(NO_BASELINE_FLAG));
   });
 });
 

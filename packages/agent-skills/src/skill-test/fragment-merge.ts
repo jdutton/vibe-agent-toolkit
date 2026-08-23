@@ -17,6 +17,11 @@ import { ToolEvalReportSchema, type ToolEvalReport } from './tool-eval-schema.js
  * stale, or left behind by untrusted skill code in the shared sandbox) and is
  * rejected via {@link GradingNonceError}, never silently dropped.
  *
+ * The nonce is CONSUMED here, not republished: the returned report carries none.
+ * It used to, and the caller writes that report verbatim to `results/grading.json`
+ * — so the one value four separate docblocks promise "never touches disk" was on
+ * disk in two artifacts, in a directory `--out`/`--keep` can place inside a repo.
+ *
  * Every fragment must ALSO belong to the `arm` being assembled (a fragment with
  * no `arm` of its own is a default-'with' fragment — see
  * {@link import('./eval-fragment.js').EvalFragmentSchema}); a fragment from the
@@ -95,7 +100,14 @@ export function mergeFragmentsToGrading(
   }
 
   const passed = expectations.filter(e => e.passed).length;
-  return { summary: { passed, total: expectations.length }, expectations, runNonce, arm };
+  // `runNonce` is deliberately NOT carried onto the returned report. The report is
+  // `JSON.stringify`d straight into `results/grading.json` (and `baseline.json` on a
+  // `--baseline` run), so carrying it wrote the run's integrity secret to disk —
+  // breaking a guarantee stated in four docblocks, and the same guarantee that
+  // justifies unlinking each grader fragment the instant it is read. Nothing
+  // consumed it: `reconcileGrading` ignores it, and `parseGradingJson`'s `runNonce`
+  // comes from an externally produced grading.json, a different producer entirely.
+  return { summary: { passed, total: expectations.length }, expectations, arm };
 }
 
 /**

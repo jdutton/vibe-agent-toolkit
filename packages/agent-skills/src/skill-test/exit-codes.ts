@@ -5,6 +5,7 @@ import { UnknownEnvTokenError } from './declared-env.js';
 import { EvalFragmentError } from './eval-fragment.js';
 import { GradingNonceError, GradingSkewError } from './grading-adapter.js';
 import { HarnessLocationError } from './harness-location.js';
+import { HarnessLockBusyError } from './lock.js';
 import { PromptInvariantError } from './prompt-invariants.js';
 
 /** Exit codes for `vat skill test` (spec §6d). */
@@ -37,16 +38,35 @@ export type SkillTestExitCodeValue = (typeof SkillTestExitCode)[keyof typeof Ski
  * annotated starter template.
  *
  * In a real run the harness has already written that template, and the message
- * says so. Under `--dry-run` nothing is written — a dry run must never touch the
- * filesystem — so the message instead describes what a real run *would* scaffold
- * and where, while surfacing the same exit-3 "bootstrap needed" signal.
+ * says so. Under `--dry-run` the TEMPLATE is not written, so the message instead
+ * describes what a real run *would* scaffold and where, while surfacing the same
+ * exit-3 "bootstrap needed" signal.
+ *
+ * That scope is exact, and it used to read "a dry run must never touch the
+ * filesystem", which is not true of this command. A dry run is not a read-only
+ * mode: it takes the harness lock, creates the harness root, stages BOTH arms'
+ * per-eval workspaces, and — once `--i-understand-this-runs-skill-code` is passed —
+ * runs the repo's `test.build` hook and builds the subject. What it never does is
+ * SPAWN: no executor session, no grader session, no tokens.
+ *
+ * It also never touches `results/`: it neither creates the directory, nor writes
+ * `provenance.json`, nor wipes the previous run's artifacts. That last one is the
+ * reason the ordering matters — the wipe used to sit AHEAD of the dry-run
+ * short-circuit, so a free `--dry-run` (or any failure after it) destroyed the
+ * `grading.json` / `baseline.json` / `friction.json` / `tool-eval.json` of the
+ * expensive real run an operator was about to read. The summary now names the
+ * provenance path it WOULD write rather than writing it.
+ *
+ * The scaffold is the other filesystem effect a dry run deliberately withholds,
+ * and for a different reason: that write lands in the AUTHOR's source
+ * tree rather than in vat's own scratch space.
  */
 export class BootstrapNeededError extends Error {
   readonly exitCode = 3 as const;
   constructor(public readonly expectedPath: string, opts?: { dryRun?: boolean }) {
     super(
       opts?.dryRun === true
-        ? `[dry-run] No evals.json found. A real run would scaffold an annotated template at ${expectedPath} — fill it in and re-run. (dry-run: nothing was written.)`
+        ? `[dry-run] No evals.json found. A real run would scaffold an annotated template at ${expectedPath} — fill it in and re-run. (dry-run: nothing was written to your source tree.)`
         : `Wrote an evals.json template at ${expectedPath} — fill it in and re-run.`,
     );
     this.name = 'BootstrapNeededError';
@@ -117,7 +137,9 @@ export class InternalHarnessError extends Error {
  * failure → 2; a SecurityAckError is a missing security ack before a build → 2;
  * an UnknownEnvTokenError is a bad ${token} in a
  * declared env value → 2; a DuplicateStagedSkillError is a staged-name collision
- * across subject/--with/--with-optional → 2; GradingSkewError (aggregate grading.json shape skew),
+ * across subject/--with/--with-optional → 2; a HarnessLockBusyError is a harness
+ * root already locked by another run (or by a stale lockfile the operator deletes)
+ * → 2; GradingSkewError (aggregate grading.json shape skew),
  * EvalFragmentError (per-eval grader fragment parse failure), and
  * GradingNonceError (forged/mismatched per-fragment grader nonce) are all → 1;
  * everything unknown → 1.
@@ -133,6 +155,7 @@ export function mapErrorToExitCode(err: unknown): number {
     err instanceof AuthPreflightError ||
     err instanceof BuildHookError ||
     err instanceof HarnessLocationError ||
+    err instanceof HarnessLockBusyError ||
     err instanceof PromptInvariantError ||
     err instanceof SecurityAckError ||
     err instanceof SkillBuildError ||

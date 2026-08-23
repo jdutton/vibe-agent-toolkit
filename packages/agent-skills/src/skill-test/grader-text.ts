@@ -21,19 +21,22 @@
  * - **Remaining C0/C1 controls become a space.** This is what kills the
  *   forged-line attack: no newline survives, so grader text can never occupy a
  *   line of its own. It also covers CR (line overwrite) and BS.
- * - **Bidi and zero-width FORMAT characters become a space too.** Stopping at
- *   U+009F left the whole Unicode Cf class alive, and it is not decoration: one
- *   U+202E (RIGHT-TO-LEFT OVERRIDE) in a friction `message` renders the REST of
- *   vat's own `[low] path-assumption: …` stderr line right-to-left, so the
- *   grader repaints text it did not write. `JSON.stringify` only escapes below
- *   U+0020, so the same code point also survives verbatim into `baseline.json`
- *   and `friction.json`. The zero-width members (U+200B/C/D, U+2060…) are the
- *   quieter half: they let a grader smuggle a marker through any downstream
- *   string comparison while rendering as nothing at all.
+ * - **Bidi controls and invisible non-spelling characters become a space too.**
+ *   Stopping at U+009F left them alive, and they are not decoration: one U+202E
+ *   (RIGHT-TO-LEFT OVERRIDE) in a friction `message` renders the REST of vat's own
+ *   `[low] path-assumption: …` stderr line right-to-left, so the grader repaints
+ *   text it did not write. `JSON.stringify` only escapes below U+0020, so the same
+ *   code point also survives verbatim into `baseline.json` and `friction.json`. The
+ *   invisible members (U+200B, U+2060…) are the quieter half: they let a grader
+ *   smuggle a marker through any downstream string comparison while rendering as
+ *   nothing at all. This is NOT the whole Cf class — see
+ *   {@link INVISIBLE_CODE_RANGES} for the two admission tests and for the joiners
+ *   and variation selectors deliberately left alone, because ordinary words are
+ *   spelled with them and a grader quoting a file must get the file back.
  * - **Whitespace runs collapse and the value is trimmed.** After the previous
- *   step a 200-newline message would be 200 spaces of padding, and the collapse
- *   also folds the Unicode line/paragraph separators that some renderers break
- *   lines on.
+ *   step a 200-newline message would be 200 spaces of padding. (The Unicode
+ *   line/paragraph separators are NOT left to the collapse: the scan folds them,
+ *   because {@link sanitizeTextPreservingLines} has no collapse to leave them to.)
  * - **Length is capped.** Bounds a flooding grader. The cap is generous enough
  *   for real evidence prose; the untruncated value is preserved nowhere, which
  *   is deliberate — an artifact nobody can trust to render is worse than a
@@ -49,10 +52,36 @@
  * the way in), which makes the module binary to `grep` and unreviewable in a
  * diff. A forward scan over code units says the same thing in plain ASCII.
  *
- * Applied at TWO boundaries on purpose, not once redundantly: `parseEvalFragment`
- * (everything entering vat from a grader) and `formatFrictionReport` (the stderr
- * render, which re-reads `friction.json` from a harness dir that same-uid skill
- * code can reach).
+ * WHERE IT IS APPLIED. Not once, and not redundantly — each of these is a distinct
+ * crossing from untrusted bytes to an operator surface or a vat artifact, and none
+ * of them is downstream of another:
+ * - `eval-fragment.ts` — `parseEvalFragment` walks EVERY string entering vat from a
+ *   grader, plus the schema path/message it quotes when the parse fails.
+ * - `eval-grader.ts` — the grader-invocation error text, and both sides of the
+ *   declared-vs-observed executable-name comparison (names are compared AFTER
+ *   sanitizing, so an invisible smuggled into one side cannot split the match).
+ * - `run-harness.ts` — `formatFrictionReport`, the stderr render, which re-reads
+ *   `friction.json` from a harness dir that same-uid skill code can reach.
+ * - `eval-inputs.ts` — `quoteSuiteText` / `quoteSuiteBlock`, for SUITE-authored text
+ *   (untrusted too: `resolveEvalSuitePath` will harvest a suite out of a fetched
+ *   artifact, i.e. out of the skill under test).
+ *
+ * ⚠️ A FIFTH BOUNDARY IS STILL OPEN, and it is the sharpest one, because it is the
+ * warning that says the contamination scan went blind. `baseline-integrity.ts`
+ * builds `BaselineScanDegradation.detail` by interpolating a `cd` argument lifted
+ * verbatim out of the CONTROL ARM's transcript; `run-harness.ts`
+ * (`baselineContaminationFor`) writes that detail into `process.stderr` with ESC and
+ * CR intact, and stamps the same bytes into `baselineIntegrity.degraded` in
+ * `baseline.json`. A control arm running
+ * `cd "$D<ESC>[2K<CR><ESC>[32mvat: control arm verified clean<ESC>[0m"` erases vat's
+ * own `⚠️` line and re-renders it in green as vat's voice.
+ *
+ * The fix is {@link sanitizeGraderText} — no new helper: the detail is interpolated
+ * MID-SENTENCE, so a surviving newline is the whole attack and the single-line
+ * sanitizer is exactly right. Apply it where the detail is CONSTRUCTED (in
+ * `baseline-integrity.ts`), not at the stderr write: that one call then covers both
+ * surfaces, including the artifact, which the stderr-side fix would miss because vat
+ * attaches `degraded` to the fragment AFTER `parseEvalFragment` has sanitized it.
  */
 
 /**
@@ -81,6 +110,9 @@ const CSI_FINAL_MAX = 0x7e;
 /** Intermediate bytes of an nF escape sequence (` `..`/`), e.g. the `(` of `ESC ( B`. */
 const INTERMEDIATE_MIN = 0x20;
 const INTERMEDIATE_MAX = 0x2f;
+/** The leading half of a surrogate pair; see {@link capLength}. */
+const HIGH_SURROGATE_MIN = 0xd800;
+const HIGH_SURROGATE_MAX = 0xdbff;
 
 const WHITESPACE_RUN = /\s+/gu;
 
@@ -91,54 +123,87 @@ const MAX_SANITIZE_DEPTH = 20;
 const LINE_FEED = 0x0a;
 
 /**
- * Format (Unicode general category **Cf**) code points that reorder, join or hide
- * the text AROUND them. Neutralized exactly like a C0/C1 control, because they do
- * the same job by other means.
+ * Invisible code points above U+009F that are neutralized exactly like a C0/C1
+ * control, because they do the same job by other means.
  *
  * ⚠️ WRITTEN AS NUMBERS, like every other constant in this file, and for the same
  * reason: a `\u202E` escape in a regex literal gets normalized into the real code
  * point by editors and tooling on the way in, which makes the module unreviewable
  * in a diff and unfindable by `grep`. Build test inputs with `String.fromCharCode`.
  *
- * The set is bounded to the members that change RENDERING, not the whole Cf class:
- * - U+00AD SOFT HYPHEN — invisible, splits a word wherever a renderer likes.
- * - U+061C ARABIC LETTER MARK — a bidi control.
- * - U+180E MONGOLIAN VOWEL SEPARATOR — invisible, historically whitespace.
- * - U+200B…U+200F — zero-width space/non-joiner/joiner, plus LRM and RLM.
- * - U+202A…U+202E — the bidi embeddings and OVERRIDES. U+202E is the one verified
- *   to repaint vat's own stderr line.
- * - U+2060…U+2064 — word joiner and the invisible math operators.
- * - U+2066…U+206F — the bidi ISOLATES (U+2066 LRI verified surviving) and the
- *   deprecated format controls above them.
- * - U+FFF9…U+FFFB — interlinear annotation, which hides its own payload.
+ * THE RULE, and it is not "the Cf class". Two admission tests; a code point has to
+ * pass one of them:
  *
- * DELIBERATELY ABSENT: U+FE00…U+FE0F (variation selectors, category Mn, not Cf).
- * They are how `⚠️` and most emoji are spelled — dropping them would mangle
- * ordinary text, including vat's own banner characters if this were ever pointed
- * at one. U+FEFF is absent too: it is `\s`, so the whitespace collapse below
- * already eats it (verified by the existing whitespace rule).
+ * (a) **It is a bidi or shaping control** — it changes how the text AROUND it is
+ *     ordered or directed, which is the forgery this module exists to stop. U+202E
+ *     is the verified case: it renders the REST of vat's own
+ *     `[low] path-assumption: …` stderr line right-to-left.
+ * (b) **It is invisible AND spells nothing** — no word in any script is written with
+ *     it, so removing it cannot change what a quotation says, while keeping it lets
+ *     a grader hide a difference from a reader and from every downstream string
+ *     comparison (`eval-grader.ts` compares tool names across both sides of a run,
+ *     sanitized on each).
+ *
+ * Member by member:
+ * - U+00AD SOFT HYPHEN — (b) a hyphenation HINT; no word is spelled with one.
+ * - U+061C ARABIC LETTER MARK — (a) the Arabic analogue of LRM/RLM.
+ * - U+200B ZERO WIDTH SPACE — (b) a line-break hint, invisible, spells nothing.
+ * - U+200E…U+200F LRM/RLM — (a) directional MARKS: they re-resolve the direction of
+ *   the neutral characters beside them, so they reorder text they did not write.
+ * - U+2028…U+2029 LINE and PARAGRAPH SEPARATOR — some renderers break a line on
+ *   them, which is the "occupy a line of your own" attack spelled with a different
+ *   code point. Folded to a space, never to LF, even in the line-preserving path.
+ * - U+202A…U+202E — (a) the bidi embeddings and OVERRIDES.
+ * - U+2060…U+2064 — (b) word joiner and the invisible math operators.
+ * - U+2066…U+2069 — (a) the bidi ISOLATES (U+2066 LRI verified surviving).
+ * - U+206A…U+206F — (a) the deprecated shaping controls (inhibit symmetric swapping,
+ *   Arabic form shaping, nominal digit shapes); absent from modern text entirely.
+ * - U+FEFF ZERO WIDTH NO-BREAK SPACE — (b). It is `\s`, so {@link sanitizeGraderText}'s
+ *   whitespace collapse would eat it anyway; {@link sanitizeTextPreservingLines} has
+ *   no collapse and used to ship it to stderr intact, so it is neutralized HERE.
+ * - U+FFF9…U+FFFB — (b) interlinear annotation, which hides its own payload.
+ *
+ * DELIBERATELY ABSENT, because they fail BOTH tests — zero directional power, and
+ * real words ARE spelled with them:
+ * - U+FE00…U+FE0F variation selectors (category Mn, not Cf). How `⚠️` and most emoji
+ *   are spelled, vat's own banner glyph included.
+ * - U+200C ZERO WIDTH NON-JOINER — orthographically load-bearing in Persian, Hindi,
+ *   Bengali and Malayalam. `می<ZWNJ>خواهم` is two words; folding it to a space gave
+ *   back a different string than the file the grader was quoting.
+ * - U+200D ZERO WIDTH JOINER — how a multi-person emoji and a flag sequence are
+ *   spelled. Folding it turned `👨<ZWJ>👩<ZWJ>👧` into three separate glyphs.
+ * - U+180E MONGOLIAN VOWEL SEPARATOR — orthographic in Mongolian (it selects the
+ *   letterform of the syllable before it) and reorders nothing.
+ *
+ * The residual cost of that exclusion is real and accepted: a grader can still
+ * smuggle an invisible joiner into a string a human compares by eye. It is the same
+ * trade the variation-selector exclusion always made, and the standard this file
+ * already stated — "dropping them would mangle ordinary text" — decides it the same
+ * way. What it must NOT do is state that standard and then break it.
  */
-const FORMAT_CODE_RANGES: ReadonlyArray<readonly [number, number]> = [
+const INVISIBLE_CODE_RANGES: ReadonlyArray<readonly [number, number]> = [
   [0x00ad, 0x00ad],
   [0x061c, 0x061c],
-  [0x180e, 0x180e],
-  [0x200b, 0x200f],
+  [0x200b, 0x200b],
+  [0x200e, 0x200f],
+  [0x2028, 0x2029],
   [0x202a, 0x202e],
   [0x2060, 0x2064],
   [0x2066, 0x206f],
+  [0xfeff, 0xfeff],
   [0xfff9, 0xfffb],
 ];
 
-/** Lowest code point in {@link FORMAT_CODE_RANGES}, so ASCII bails on one compare. */
-const FORMAT_CODE_MIN = 0x00ad;
+/** Lowest code point in {@link INVISIBLE_CODE_RANGES}, so ASCII bails on one compare. */
+const INVISIBLE_CODE_MIN = 0x00ad;
 
-function isFormatCode(code: number): boolean {
-  if (code < FORMAT_CODE_MIN) return false;
-  return FORMAT_CODE_RANGES.some(([low, high]) => code >= low && code <= high);
+function isInvisibleCode(code: number): boolean {
+  if (code < INVISIBLE_CODE_MIN) return false;
+  return INVISIBLE_CODE_RANGES.some(([low, high]) => code >= low && code <= high);
 }
 
 function isControlCode(code: number): boolean {
-  return code <= C0_MAX || (code >= DEL && code <= C1_MAX) || isFormatCode(code);
+  return code <= C0_MAX || (code >= DEL && code <= C1_MAX) || isInvisibleCode(code);
 }
 
 /** Index of the first code unit AFTER a CSI sequence whose parameters start at `from`. */
@@ -215,10 +280,33 @@ function stripEscapesAndControls(value: string, preserveNewlines = false): strin
   return out.join('');
 }
 
-/** Truncate to `max` code units, spending the tail on a marker that says so. */
+/**
+ * Truncate to at most `max` code units, spending the tail on a marker that says so.
+ *
+ * THE CUT BACKS OFF ONE CODE UNIT rather than landing between the halves of a
+ * surrogate pair. A naive `slice` on a value ending in an astral character (1984
+ * ASCII characters plus one emoji is enough) leaves a LONE HIGH SURROGATE, which
+ * persists into `grading.json` and `baseline.json`. The artifact stays valid JSON —
+ * Node's `JSON.stringify` is well-formed and escapes it — but a consumer decoding
+ * it gets an unpaired surrogate, and stderr renders U+FFFD. Well-formedness is a
+ * correctness property of what this function emits, so it is enforced here.
+ *
+ * GRAPHEME CLUSTERS ARE DELIBERATELY NOT HANDLED. A cut inside a cluster — between
+ * a base and its combining mark, or inside a ZWJ emoji sequence (now that the
+ * joiners survive, see {@link INVISIBLE_CODE_RANGES}) — yields a WELL-FORMED string
+ * that renders as two glyphs instead of one. That is cosmetic. Segmenting for it
+ * would mean `Intl.Segmenter` over the whole value on every capped field, for a
+ * locale-dependent answer, to fix an appearance rather than a defect. The line is
+ * well-formedness, not beauty.
+ */
 function capLength(value: string, max: number): string {
   if (value.length <= max) return value;
-  return value.slice(0, max - TRUNCATION_MARKER.length) + TRUNCATION_MARKER;
+  const cut = max - TRUNCATION_MARKER.length;
+  // A high surrogate immediately before the cut has its partner AT the cut (or is
+  // itself already lone) — either way it must not be the last thing kept.
+  const last = value.charCodeAt(cut - 1);
+  const safeCut = last >= HIGH_SURROGATE_MIN && last <= HIGH_SURROGATE_MAX ? cut - 1 : cut;
+  return value.slice(0, safeCut) + TRUNCATION_MARKER;
 }
 
 /** Sanitize one grader-supplied string. Pure. See the module docblock for the rules. */
@@ -252,7 +340,17 @@ const MAX_MULTILINE_TEXT_LENGTH = 4000;
  * case (a real typo in a real suite) gets materially worse in exchange for
  * neutralizing bytes the suite author almost never wrote. This keeps the shape and
  * still removes everything that can paint: escape sequences whole, every C0/C1
- * control except LF, and the bidi/zero-width format characters.
+ * control except LF, and every member of {@link INVISIBLE_CODE_RANGES}.
+ *
+ * THAT LAST CLAUSE USED TO BE FALSE, and the sibling's whitespace collapse was why.
+ * U+FEFF, U+2028 and U+2029 were left OUT of the scan on the grounds that they are
+ * `\s` and "the collapse eats them" — true of exactly one of the two consumers.
+ * This function has no collapse, so all three reached `process.stderr` through
+ * `quoteSuiteBlock` -> `EvalInputError` intact, two of them being separators some
+ * renderers break a line on. They are neutralized in the SCAN now, which is the only
+ * place both consumers share. A function's docblock and its behaviour disagreeing is
+ * how a security claim rots; on a terminal-bound path, the code moves to meet the
+ * docblock and not the other way round.
  *
  * It is NOT a replacement for {@link sanitizeGraderText} and must not be used for
  * grader free text: a surviving newline is exactly what lets a value occupy a line

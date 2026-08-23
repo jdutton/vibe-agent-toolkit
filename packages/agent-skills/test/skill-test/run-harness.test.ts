@@ -14,10 +14,10 @@
  */
 
 /* eslint-disable security/detect-non-literal-fs-filename -- tests use controlled temp directories */
-import { existsSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { EvalFragment } from '../../src/skill-test/eval-fragment.js';
 import { EvalInputError, type EvalEntry } from '../../src/skill-test/eval-inputs.js';
@@ -26,6 +26,7 @@ import type { FrictionItem } from '../../src/skill-test/friction-schema.js';
 import type { GradingVerdict } from '../../src/skill-test/grading-adapter.js';
 import {
   assertVatWroteArtifacts,
+  buildContaminationInput,
   buildDryRunSummary,
   buildEvalWorkItems,
   buildFlagParseProbe,
@@ -42,6 +43,7 @@ import {
   formatBaselineReport,
   formatFrictionReport,
   formatRunCostSuffix,
+  gradedCounts,
   helpTextDeclaresFlag,
   isAcknowledged,
   makeStageItem,
@@ -49,12 +51,14 @@ import {
   partitionFragmentsByArm,
   renderPreflightSummary,
   recordSessionCost,
+  rejectedArtifactPath,
   resolveArtifactPaths,
   resolveCompositeAllPassed,
   resolveGraderOutDir,
   resolveHarnessLocation,
   resolveKnobs,
   resolvePerEvalWorkspaceDir,
+  resolveSkillContentNeedles,
   resolveWorkspacesRoot,
   resolveScaffoldEvalsPath,
   resolveStallMs,
@@ -62,9 +66,11 @@ import {
   RETAINED_RESULTS_DIRNAME,
   stageWorkspacesForRun,
   subjectSkillName,
+  swallowCleanupFailure,
   verdictExitCode,
   wipeStaleArtifacts,
   withoutGraderContamination,
+  type ContaminationCtx,
   type DryRunSummaryInput,
   type RunHarnessOptions,
 } from '../../src/skill-test/run-harness.js';
@@ -490,6 +496,20 @@ describe('resolveArtifactPaths + wipeStaleArtifacts', () => {
     // Idempotent: wiping already-absent artifacts must not throw.
     expect(() => wipeStaleArtifacts(paths)).not.toThrow();
   });
+
+  // A quarantined artifact is still a PRIOR run's artifact, so it has to be wiped
+  // by the same sweep — otherwise `results/` accumulates one `.rejected` per broken
+  // run and the newest of them is indistinguishable from the oldest.
+  it('also removes a prior run\'s quarantined (.rejected) artifacts', () => {
+    const paths = resolveArtifactPaths(getTempDir());
+    writeFileSync(rejectedArtifactPath(paths.baselineOut), 'STALE-REJECT', 'utf-8');
+    writeFileSync(rejectedArtifactPath(paths.gradingOut), 'STALE-REJECT', 'utf-8');
+
+    wipeStaleArtifacts(paths);
+
+    expect(existsSync(rejectedArtifactPath(paths.baselineOut))).toBe(false);
+    expect(existsSync(rejectedArtifactPath(paths.gradingOut))).toBe(false);
+  });
 });
 
 /**
@@ -579,6 +599,46 @@ describe('assertVatWroteArtifacts', () => {
     const paths = writeArtifacts(getTempDir(), { ...EMPTY_GRADING, baselineDelta: EMPTY_DELTA });
     expect(() => assertVatWroteArtifacts(paths, true)).toThrow(/baseline\.json/);
   });
+
+  /**
+   * The gate throws, `results/` is deliberately RETAINED, and the file that failed
+   * the gate used to be left sitting there under its authoritative name — the one
+   * artifact whose schema violation is BY DEFINITION a harness bug, indistinguishable
+   * in a CI archive from a good one until the next run's wipe overwrote it.
+   */
+  it('moves a schema-failing baseline.json aside instead of leaving it looking authoritative', () => {
+    const bad = { ...EMPTY_GRADING, baselineIntegrity: CLEAN_INTEGRITY, baselineDelta: { ...EMPTY_DELTA, delta: 7 } };
+    const paths = writeArtifacts(getTempDir(), bad);
+
+    expect(() => assertVatWroteArtifacts(paths, true)).toThrow(/baseline\.json/);
+
+    expect(existsSync(paths.baselineOut), 'the rejected artifact kept its authoritative name').toBe(false);
+    const quarantined = rejectedArtifactPath(paths.baselineOut);
+    expect(existsSync(quarantined), 'the evidence was destroyed rather than set aside').toBe(true);
+    // Set ASIDE, not rewritten: the bytes that failed the gate are what a maintainer
+    // needs in order to see which refine tripped.
+    expect(JSON.parse(readFileSync(quarantined, 'utf-8'))).toEqual(bad);
+  });
+
+  // ...and the operator is TOLD where it went, since the throw is all they see.
+  it('names the quarantine path in the error it throws', () => {
+    const paths = writeArtifacts(getTempDir(), {
+      ...EMPTY_GRADING,
+      baselineIntegrity: CLEAN_INTEGRITY,
+      baselineDelta: { ...EMPTY_DELTA, delta: 7 },
+    });
+    expect(() => assertVatWroteArtifacts(paths, true)).toThrow(/\.rejected/);
+  });
+
+  it('quarantines an unparseable artifact too, not only a schema-invalid one', () => {
+    const resultsDir = getTempDir();
+    const paths = writeArtifacts(resultsDir);
+    writeFileSync(paths.gradingOut, '{ not json', 'utf-8');
+
+    expect(() => assertVatWroteArtifacts(paths, false)).toThrow(/grading\.json/);
+    expect(existsSync(paths.gradingOut)).toBe(false);
+    expect(readFileSync(rejectedArtifactPath(paths.gradingOut), 'utf-8')).toBe('{ not json');
+  });
 });
 
 /**
@@ -588,6 +648,8 @@ describe('assertVatWroteArtifacts', () => {
  * scrollback between the operator and the only line saying the number above is
  * meaningless.
  */
+const BANNER_TEXT = 'THE BANNER TEXT';
+
 describe('formatBaselineReport', () => {
   const DELTA = {
     with: { passed: 3, total: 3 },
@@ -603,28 +665,233 @@ describe('formatBaselineReport', () => {
     comparable: true,
     skew: [],
     controlArmFailures: [],
-    summary: 'THE BANNER TEXT',
+    summary: BANNER_TEXT,
     signals: [],
     findings: [],
     ...overrides,
   });
 
-  it('reports the delta alone on a clean, comparable run', () => {
-    const out = formatBaselineReport(DELTA, integrity({}));
+  // "Clean" here means all THREE: not contaminated, comparable, AND scanned with
+  // the structured walker. The degraded list is spelled out rather than left to the
+  // default, because it is the member this assertion used to be blind to.
+  it('reports the delta alone on a clean, comparable, structurally-scanned run', () => {
+    const out = formatBaselineReport(DELTA, integrity({ degraded: [] }));
     expect(out).toContain('Baseline delta: +2');
     expect(out).not.toContain('⚠️');
+    expect(out).not.toContain(BANNER_TEXT);
   });
 
   it.each([
     ['a contaminated run', { contaminated: true }],
     ['a run whose arms are not comparable', { comparable: false }],
+    // A degraded scan is NEITHER contaminated nor incomparable, so the two-clause
+    // gate printed `Baseline delta: +2 (…)` and nothing else — while baseline.json
+    // carried the ⚠️ DEGRADED SCAN sentence the operator never saw. The artifact
+    // told the truth and the terminal did not.
+    [
+      'a run whose contamination scan fell back to flat text matching',
+      { degraded: [{ reason: 'cwd-untracked', detail: 'cd $MYSTERY_DIR', evalId: 'e1' }] },
+    ],
   ])('appends the banner for %s, and puts it LAST', (_label, overrides) => {
     const out = formatBaselineReport(DELTA, integrity(overrides));
-    expect(out).toContain('⚠️  THE BANNER TEXT');
+    expect(out).toContain(`⚠️  ${BANNER_TEXT}`);
     // Order is the point: the number first, then the caveat that explains it —
     // and nothing of vat's own after the caveat.
     expect(out.indexOf('Baseline delta:')).toBeLessThan(out.indexOf('⚠️'));
-    expect(out.trimEnd().endsWith('THE BANNER TEXT')).toBe(true);
+    expect(out.trimEnd().endsWith(BANNER_TEXT)).toBe(true);
+  });
+});
+
+/**
+ * `lock.release()` and `killAllActiveClaudeChildren()` were the only steps of the
+ * harness `finally` outside the throw-swallowing discipline the rest of cleanup
+ * follows explicitly ("it must not mask the run's real outcome").
+ * `rmSync(lockPath, {force: true})` swallows only ENOENT, so an EPERM/EACCES/EROFS
+ * on the lockfile replaced an already-good return value with an error, exit 1 and no
+ * summary — with every artifact sitting on disk.
+ */
+describe('swallowCleanupFailure', () => {
+  it('does not let a cleanup step\'s throw escape and replace the run\'s outcome', () => {
+    expect(() => {
+      swallowCleanupFailure(() => {
+        throw Object.assign(new Error('EPERM: operation not permitted, unlink'), { code: 'EPERM' });
+      });
+    }).not.toThrow();
+  });
+
+  it('runs the step (it is a guard, not a skip)', () => {
+    let ran = false;
+    swallowCleanupFailure(() => { ran = true; });
+    expect(ran).toBe(true);
+  });
+
+  // Swallowed, not silent: a lockfile that could not be removed breaks the NEXT run
+  // with a "busy" error, and an operator who saw nothing here cannot connect the two.
+  it('reports the failure on stderr', () => {
+    const written: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      written.push(String(chunk));
+      return true;
+    });
+    try {
+      swallowCleanupFailure(() => { throw new Error('EROFS: read-only file system'); });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(written.join('')).toContain('EROFS: read-only file system');
+    expect(written.join('')).toContain('the run\'s result stands');
+  });
+});
+
+/**
+ * The SINGLE derivation behind both `baselineIntegrity.skew` (which reads `total`)
+ * and `baselineDelta` (which reads `passed`). Setting `passed` to `total` here failed
+ * ZERO unit tests — every unit fixture graded everything it declared, so the two
+ * fields were numerically identical in all of them and only the integration suite
+ * noticed.
+ */
+describe('gradedCounts', () => {
+  it('counts PASSED expectations separately from TOTAL, per eval', () => {
+    const counts = gradedCounts([
+      {
+        runNonce: 'n',
+        evalId: 'e1',
+        expectations: [
+          { text: 'a', passed: true },
+          { text: 'b', passed: false },
+          { text: 'c', passed: false },
+        ],
+      },
+      { runNonce: 'n', evalId: 'e2', expectations: [{ text: 'd', passed: true }] },
+    ]);
+
+    expect(counts).toEqual([
+      { evalId: 'e1', passed: 1, total: 3 },
+      { evalId: 'e2', passed: 1, total: 1 },
+    ]);
+  });
+
+  it('reports an eval that passed nothing as 0 of its own denominator, not as absent', () => {
+    expect(gradedCounts([{ runNonce: 'n', evalId: 'e1', expectations: [{ text: 'a', passed: false }] }]))
+      .toEqual([{ evalId: 'e1', passed: 0, total: 1 }]);
+  });
+});
+
+/**
+ * The detector honours `armCwd` (dropping it there kills three tests); the WIRING
+ * that supplies it did not, and a dropped `armCwd` anchors every relative climb in
+ * the transcript one directory too high — where no needle can see it. Its two
+ * siblings (`vatPrivateDirs`, `siblingArmDir`) are pinned by the integration suite;
+ * this one was the gap.
+ */
+const WORKSPACES_ROOT = '/scratch/vat-skill-test-ws-tok';
+/** `<workspacesRoot>/<the WITHOUT arm's opaque segment>` — the control arm's own root. */
+const CONTROL_ARM_ROOT = `${WORKSPACES_ROOT}/bbb`;
+
+const CONTAMINATION_CTX = {
+  harnessRoot: '/scratch/vat-skill-test/demo-abcd1234',
+  workspacesRoot: WORKSPACES_ROOT,
+  armDirs: { with: 'aaa', without: 'bbb' },
+  evalSuiteHoldDir: '/scratch/vat-skill-evals-hold',
+  graderOutDir: '/scratch/vat-skill-grade-tok',
+  skillContentNeedles: ['a distinctive sentence from the skill body'],
+} satisfies ContaminationCtx;
+
+describe('buildContaminationInput', () => {
+  it('anchors the cwd walk at the EVAL subdirectory, one level below the arm root', () => {
+    const input = buildContaminationInput('', CONTAMINATION_CTX, 'e1');
+    expect(input.armWorkspaceDir).toBe(CONTROL_ARM_ROOT);
+    // The eval id is what turns the arm ROOT into the directory the executor was
+    // actually spawned in. Equal to the root would mean the walk starts one level high.
+    expect(input.armCwd).toBe(`${CONTROL_ARM_ROOT}/e1`);
+    expect(input.armCwd).not.toBe(input.armWorkspaceDir);
+  });
+
+  it('omits armCwd (not the arm root) when asked only which detectors are armed', () => {
+    const input = buildContaminationInput('', CONTAMINATION_CTX);
+    expect(input.armWorkspaceDir).toBe(CONTROL_ARM_ROOT);
+    expect(input.armCwd).toBeUndefined();
+  });
+
+  it('omits BOTH arm paths on a non-baseline run, which mints no control arm', () => {
+    const input = buildContaminationInput('', { ...CONTAMINATION_CTX, armDirs: { with: 'aaa' } }, 'e1');
+    expect(input.armWorkspaceDir).toBeUndefined();
+    expect(input.armCwd).toBeUndefined();
+  });
+});
+
+// Longer than the 48-character needle floor, and plain body prose so both are
+// candidates. Two sentences, so an exclusion can be shown to be SCOPED rather than a
+// blanket disarm.
+const QUOTED = 'Always reconcile the ledger before closing the accounting period.';
+const OTHER = 'Never send a payment without a countersigned authorization form.';
+const NEEDLE_SKILL_MD = `---\nname: demo\n---\n\n${QUOTED}\n\n${OTHER}\n`;
+
+/**
+ * Needles for one eval declaring `files`, against a staged workspace holding
+ * `fixtures` (keyed by path relative to the eval's own workspace dir).
+ */
+function needlesFor(root: string, files: string[], fixtures: Record<string, string>): string[] {
+  const subject = safePath.join(root, 'staged');
+  mkdirSyncReal(subject, { recursive: true });
+  writeFileSync(safePath.join(subject, 'SKILL.md'), NEEDLE_SKILL_MD, 'utf8');
+  const workspace = safePath.join(root, 'ws');
+  for (const [rel, body] of Object.entries(fixtures)) {
+    const target = safePath.join(workspace, 'e1', rel);
+    mkdirSyncReal(safePath.resolve(target, '..'), { recursive: true });
+    writeFileSync(target, body, 'utf8');
+  }
+  return resolveSkillContentNeedles(subject, [makeEvalEntry({ id: 'e1', files })], workspace);
+}
+
+/**
+ * The exclusion set is every channel through which vat itself hands the arm the
+ * skill's words. The `files[]` FIXTURE channel is the one that was missed, and it is
+ * the worst to get wrong: a false `contaminated: true` is actioned by discarding the
+ * run and going to uninstall an ambient plugin copy that does not exist.
+ *
+ * The integration fixture that "covered" this routed the text through the PROMPT, so
+ * dropping the fixture channel entirely stayed green.
+ */
+describe('resolveSkillContentNeedles', () => {
+  const { getTempDir } = setupTempDir('vat-needles-');
+
+  it('lifts needles off the staged SKILL.md when nothing excludes them', () => {
+    expect(needlesFor(getTempDir(), [], {})).toContain(QUOTED.toLowerCase());
+  });
+
+  it('excludes text vat handed the arm through a FILE fixture', () => {
+    const needles = needlesFor(getTempDir(), ['input.md'], { 'input.md': `${QUOTED}\n` });
+    expect(needles).not.toContain(QUOTED.toLowerCase());
+    // The sentence the fixture did NOT carry is still a live needle — the exclusion
+    // is scoped to what vat actually handed over, not a blanket disarm.
+    expect(needles).toContain(OTHER.toLowerCase());
+  });
+
+  /**
+   * `entry.files` legitimately accepts a DIRECTORY (staging does `existsSync` then a
+   * recursive `cpSync`). The reader called `readFileSync` on it, got EISDIR, and the
+   * `catch {}` skipped it — so the directory's contents were in the arm's cwd and
+   * absent from the exclusion set. Two runs differing ONLY in how the same bytes are
+   * declared reported `contaminated: false` and `contaminated: true`.
+   */
+  it('excludes text handed over inside a DIRECTORY fixture, recursively', () => {
+    const needles = needlesFor(getTempDir(), ['inputs'], {
+      'inputs/nested/deep.md': `${QUOTED}\n`,
+      'inputs/other.md': `${OTHER}\n`,
+    });
+    expect(needles).not.toContain(QUOTED.toLowerCase());
+    expect(needles).not.toContain(OTHER.toLowerCase());
+  });
+
+  it('declares the same bytes two ways and gets the same needles either way', () => {
+    const asFile = needlesFor(safePath.join(getTempDir(), 'a'), ['input.md'], { 'input.md': `${QUOTED}\n` });
+    const asDir = needlesFor(safePath.join(getTempDir(), 'b'), ['inputs'], { 'inputs/input.md': `${QUOTED}\n` });
+    expect(asDir).toEqual(asFile);
+  });
+
+  it('returns [] when the staged SKILL.md cannot be read', () => {
+    expect(resolveSkillContentNeedles(safePath.join(getTempDir(), 'nope'), [], getTempDir())).toEqual([]);
   });
 });
 
@@ -1083,10 +1350,13 @@ describe('buildDryRunSummary', () => {
     expect(summary).not.toContain('1 entries');
   });
 
-  it('includes the provenance path in the summary', () => {
+  // A dry run does not write it, so the line says WOULD. The old wording ("Provenance:
+  // <path>") named a file the preview had in fact just written — from the same block
+  // that wiped the previous run's grading/friction/baseline artifacts.
+  it('names where a real run WOULD write provenance, without claiming it wrote it', () => {
     const customPath = '/harness/custom/results/provenance.json';
     const summary = buildDryRunSummary(makeDryRunInput({ provenancePath: customPath }));
-    expect(summary).toContain(`Provenance: ${customPath}`);
+    expect(summary).toContain(`Provenance would be written to: ${customPath}`);
   });
 });
 

@@ -8,6 +8,8 @@ import { EvalInputError, parseEvalSuite, stageEvalWorkspaces } from '../../src/s
 
 const FIXTURES_DOC = 'fixtures/doc.md';
 const DESCRIPTIVE_ID = 'cast-smell-typed-column';
+/** A stock expectation string, shared so the duplicate/uniqueness cases read against one literal. */
+const DID_THE_THING = 'it did the thing';
 
 // Built with `String.fromCharCode` on purpose: typing an escape into this source
 // normalizes it into a literal control byte on the way in, which makes the file
@@ -40,7 +42,7 @@ function expectNoControlBytes(run: () => unknown): void {
 const VALID = JSON.stringify({
   skill_name: 'demo',
   evals: [
-    { id: 1, prompt: 'do a thing', expected_output: 'a thing is done', expectations: ['it did the thing'] },
+    { id: 1, prompt: 'do a thing', expected_output: 'a thing is done', expectations: [DID_THE_THING] },
     { id: 2, prompt: 'fix link', expected_output: 'link fixed', files: [FIXTURES_DOC], expectations: ['link resolves'] },
   ],
 });
@@ -117,6 +119,38 @@ describe('parseEvalSuite', () => {
       { id: 1, prompt: 'p2', expected_output: 'o2', expectations: ['e2'] },
     ] });
     expect(() => parseEvalSuite(dup)).toThrow(/unique/i);
+  });
+
+  /**
+   * Every number vat reports is counted over `fragment.expectations`, and
+   * `runGraderForEval` fails the run when that count differs from the DECLARED
+   * one. A suite declaring the same expectation string twice hands the grader
+   * "1. x / 2. x" and gets one entry back — a plausible grader response, and one
+   * that destroys a fully-billed treatment run with an InternalHarnessError
+   * mid-flight. Caught at parse instead: same class as the duplicate-id check
+   * above, same exit code (2, user-correctable), before anything is spawned.
+   */
+  it('throws EvalInputError on a duplicate expectation within one eval', () => {
+    const dup = JSON.stringify({ skill_name: 'demo', evals: [
+      { id: 1, prompt: 'p', expected_output: 'o', expectations: [DID_THE_THING, DID_THE_THING] },
+    ] });
+    expect(() => parseEvalSuite(dup)).toThrow(EvalInputError);
+    expect(() => parseEvalSuite(dup)).toThrow(/duplicate expectation/i);
+  });
+
+  it('allows the SAME expectation text in two DIFFERENT evals (each is graded on its own)', () => {
+    const shared = JSON.stringify({ skill_name: 'demo', evals: [
+      { id: 1, prompt: 'p', expectations: [DID_THE_THING] },
+      { id: 2, prompt: 'p2', expectations: [DID_THE_THING] },
+    ] });
+    expect(() => parseEvalSuite(shared)).not.toThrow();
+  });
+
+  it('sanitizes the duplicated expectation quoted into the message (suite text is untrusted)', () => {
+    const painted = JSON.stringify({ skill_name: 'demo', evals: [
+      { id: 1, prompt: 'p', expectations: [`${TERMINAL_PAINT}ok`, `${TERMINAL_PAINT}ok`] },
+    ] });
+    expectNoControlBytes(() => parseEvalSuite(painted));
   });
 
   it('treats numeric 1 and string "1" as colliding ids (both name the same workspace dir)', () => {

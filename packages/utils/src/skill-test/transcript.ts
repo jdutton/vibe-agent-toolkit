@@ -5,7 +5,10 @@
  *
  * The stream-json schema is informally documented and may shift between
  * Claude Code releases. This parser is intentionally tolerant of unknown
- * event kinds — anything we don't recognise is appended to `raw`.
+ * event kinds — an event whose `type` we do not recognise is simply not
+ * consumed. Tolerance stops at unknown SHAPES: a line that is not JSON at all is
+ * counted into {@link ParsedTranscript.malformedLineCount}, because that is data
+ * loss, not forward compatibility.
  *
  * Shape notes (empirically verified):
  * - `tool_use` content blocks carry `input.command` for Bash calls.
@@ -21,7 +24,21 @@ export interface ParsedTranscript {
   text: string;
   toolUseEvents: Array<{ name: string; inputSummary: string }>;
   errors: string[];
-  raw: string[];
+  /**
+   * How many non-empty lines failed `JSON.parse` and were therefore NOT consumed.
+   *
+   * This is the only thing that distinguishes "parsed fine, nothing found" from
+   * "we lost the evidence". A corrupted line drops its whole event — the tool call
+   * in it, and any contamination it proves — while every other line, including the
+   * terminal `result`, still parses. Every downstream "did this transcript decode?"
+   * test is an any-of over the populated fields, so the surviving `result` line on
+   * its own certifies the transcript as decoded and the loss goes unremarked.
+   *
+   * Non-zero means the scan that consumed this transcript ran on less than the
+   * whole transcript and its verdict must be reported as DEGRADED, never clean.
+   * Zero is a positive statement, not an absence: every line was accounted for.
+   */
+  malformedLineCount: number;
   toolUses: Array<{
     id: string | null;
     name: string;
@@ -222,22 +239,25 @@ export function parseStreamJsonTranscript(streamText: string): ParsedTranscript 
     text: '',
     toolUseEvents: [],
     errors: [],
-    raw: [],
     toolUses: [],
     toolResults: [],
     rateLimited: false,
+    malformedLineCount: 0,
   };
   const lines = streamText.split('\n');
 
   for (const line of lines) {
     const trimmed = line.trim();
     if (trimmed.length === 0) continue;
-    out.raw.push(trimmed);
 
     let parsed: MessageEvent;
     try {
       parsed = JSON.parse(trimmed) as MessageEvent;
     } catch {
+      // Counted, not thrown on, and never pushed into `errors`: `errors` reports
+      // what the AGENT hit, this reports what the PARSER lost. Conflating them
+      // would make a harness defect look like a run failure and vice versa.
+      out.malformedLineCount += 1;
       continue;
     }
 

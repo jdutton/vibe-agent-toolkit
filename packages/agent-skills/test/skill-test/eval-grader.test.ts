@@ -5,7 +5,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { EvalFragmentError } from '../../src/skill-test/eval-fragment.js';
 import { runGraderForEval, type RunGraderInput } from '../../src/skill-test/eval-grader.js';
+import { assertGraderPromptInvariants } from '../../src/skill-test/grader-prompt.js';
 import { GradingNonceError } from '../../src/skill-test/grading-adapter.js';
+import { PromptInvariantError } from '../../src/skill-test/prompt-invariants.js';
 
 import {
   expectInternalHarnessError,
@@ -141,6 +143,34 @@ describe('runGraderForEval', () => {
     expect(calls[0]?.sandboxDir).toBe(graderOutDir);
     expect(calls[0]?.cwd).toBe(graderOutDir);
     expect(calls[0]?.model).toBe('claude-grader-model');
+  });
+
+  /**
+   * The WIRING pin, not another test of the helper.
+   *
+   * `grader-prompt.test.ts` calls `assertGraderPromptInvariants` directly with a
+   * nonce and pins what it does. Nothing pinned that the PRODUCTION call passes
+   * this run's nonce: a mutation audit confirmed that dropping the second
+   * argument, or reverting it to the pre-fix `input.transcript`, failed zero tests
+   * across unit AND integration — the exact bug this commit range fixed was
+   * re-introducible green. This is the recurring "testing a pure helper never pins
+   * its wiring" failure in this lane, so the pin lives at the call site.
+   *
+   * Two facts together are the pin: (1) the assert runs BEFORE the spawn, so a
+   * spawn happening at all proves it did not throw; (2) on this very prompt, the
+   * ONLY nonce that does not throw is the run's own.
+   */
+  it("asserts the built prompt against THIS run's nonce, not the transcript", async () => {
+    const { spawn, calls } = stubWritingFragment(graderOutDir, validFragmentFor(EVAL_ID, NONCE));
+    const input = baseInput(graderOutDir, { spawn });
+
+    await runGraderForEval(input);
+
+    expect(calls).toHaveLength(1);
+    const prompt = calls[0]?.prompt ?? '';
+    expect(() => assertGraderPromptInvariants(prompt, NONCE)).not.toThrow();
+    expect(() => assertGraderPromptInvariants(prompt, input.transcript)).toThrow(PromptInvariantError);
+    expect(() => assertGraderPromptInvariants(prompt, '')).toThrow(PromptInvariantError);
   });
 
   it('forwards stdout chunks to onProgress', async () => {

@@ -96,6 +96,44 @@ export function isSingleEditAway(key: string, target: string): boolean {
   return key.slice(i) === target.slice(i + 1); // insertion into key
 }
 
+/**
+ * Reject an expectation string an eval declares TWICE.
+ *
+ * The entry, not the text, is the unit every reported score counts:
+ * `runGraderForEval`'s declared-vs-graded check compares `fragment.expectations`
+ * against `expectations.length`, and each arm's summary and the `--baseline` delta
+ * are computed over those entries. A suite that declares the same string twice
+ * hands the grader "1. x / 2. x" and gets ONE entry back for it — a perfectly
+ * reasonable grader response, and one that fails the count check mid-run with an
+ * `InternalHarnessError`, destroying a fully-billed treatment run over an input
+ * defect nothing looked at.
+ *
+ * So it is caught at PARSE, exactly like the duplicate-id rule in
+ * {@link parseEvalSuite}: exit 2, user-correctable, before anything is spawned.
+ * Scoped to one eval — two different evals may legitimately share expectation
+ * text, since each is graded from its own transcript.
+ *
+ * `expectations` is `z.array(z.string().min(1))` with no charset constraint and
+ * the message reaches stdout, so the offending string is sanitized on the way in.
+ */
+function addDuplicateExpectationIssues(expectations: string[], ctx: z.RefinementCtx): void {
+  const seen = new Set<string>();
+  for (const [index, expectation] of expectations.entries()) {
+    if (!seen.has(expectation)) {
+      seen.add(expectation);
+      continue;
+    }
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        `duplicate expectation "${quoteSuiteText(expectation)}" — an eval must declare each expectation ` +
+        'once. Every reported score counts fragment ENTRIES, and a grader handed the same text twice ' +
+        'returns one entry for it, which fails the declared-count check mid-run.',
+      path: ['expectations', index],
+    });
+  }
+}
+
 // evals.json is adopter-authored input that VAT *reads* — so per the project's
 // Postel's Law (read the outside world liberally), we validate only the fields
 // VAT actually consumes and pass everything else through untouched. `id` accepts
@@ -148,6 +186,7 @@ export const EvalEntrySchema = z
   })
   .passthrough()
   .superRefine((entry, ctx) => {
+    addDuplicateExpectationIssues(entry.expectations, ctx);
     for (const key of Object.keys(entry)) {
       if ((RECOGNIZED_EVAL_FIELDS as readonly string[]).includes(key)) continue;
       const near = RECOGNIZED_EVAL_FIELDS.find((field) => isSingleEditAway(key.toLowerCase(), field.toLowerCase()));

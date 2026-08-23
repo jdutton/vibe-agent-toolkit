@@ -1,3 +1,4 @@
+import { sanitizeGraderText } from './grader-text.js';
 import { GradingReportSchema } from './grading-schema.js';
 
 /**
@@ -105,19 +106,34 @@ export function parseGradingJson(raw: unknown): NormalizedGrading {
           'graded expectation across all evals',
       );
     }
+    // Both halves are attacker-reachable and land in an operator-facing message: a
+    // `.strict()` rejection puts the grader-CHOSEN KEY inside zod's own issue message,
+    // and `path` is built from that same key. Sanitize both — this is the route that
+    // has already been found twice in sibling modules, and it must not reopen here just
+    // because today's only callers are tests.
     const firstIssue = result.error.issues[0];
-    const path = firstIssue?.path.join('.') ?? '(root)';
-    throw new GradingSkewError(`missing/invalid field at "${path}" (${firstIssue?.message ?? 'unknown'})`);
+    const path = sanitizeGraderText(firstIssue?.path.join('.') ?? '(root)');
+    const detail = sanitizeGraderText(firstIssue?.message ?? 'unknown');
+    throw new GradingSkewError(`missing/invalid field at "${path}" (${detail})`);
   }
-  const { summary, expectations, runNonce } = result.data;
+  const { summary, expectations, runNonce, arm } = result.data;
+  // Pass `evalId`/`arm` through WHEN PRESENT. The docblocks on NormalizedGrading
+  // explain why they are optional — an externally produced grading.json legitimately
+  // carries no attribution, and inventing one would be a lie about provenance. That
+  // argues for omitting an ABSENT field, not for discarding a present one: the schema
+  // already parses both, so dropping them silently narrowed the declared type and
+  // threw away exactly the key a reader needs to line the two --baseline artifacts
+  // up per eval.
   return {
     summary: { passed: summary.passed, total: summary.total },
     expectations: expectations.map(e => ({
       text: e.text,
       passed: e.passed,
       ...(e.evidence === undefined ? {} : { evidence: e.evidence }),
+      ...(e.evalId === undefined ? {} : { evalId: e.evalId }),
     })),
     ...(runNonce === undefined ? {} : { runNonce }),
+    ...(arm === undefined ? {} : { arm }),
   };
 }
 

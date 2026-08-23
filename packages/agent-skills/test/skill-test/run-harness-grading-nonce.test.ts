@@ -25,7 +25,7 @@
  *    defect no test of either component could see.
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it, vi } from 'vitest';
@@ -53,7 +53,14 @@ function runHarness(
   tempDir: string,
   authoredDir: string,
   spawn: FakeSpawn,
-  extra?: { tolerateEvalFailure?: boolean; baseline?: boolean; dryRun?: boolean },
+  extra?: {
+    tolerateEvalFailure?: boolean;
+    baseline?: boolean;
+    dryRun?: boolean;
+    env?: Record<string, string>;
+    /** Collapse the pipeline's rate-limit backoff so the retry budget is spent instantly. */
+    fastRateLimitRetries?: boolean;
+  },
 ): ReturnType<typeof runSkillTestHarness> {
   return runSkillTestHarness({
     subject: 'my-skill',
@@ -66,7 +73,20 @@ function runHarness(
     ...(extra?.tolerateEvalFailure === undefined ? {} : { tolerateEvalFailure: extra.tolerateEvalFailure }),
     ...(extra?.baseline === undefined ? {} : { baseline: extra.baseline }),
     ...(extra?.dryRun === undefined ? {} : { dryRun: extra.dryRun }),
+    ...(extra?.env === undefined ? {} : { env: extra.env }),
+    ...(extra?.fastRateLimitRetries === true ? { rateLimitBackoffMs: () => 0 } : {}),
   });
+}
+
+/** Every file currently in the run's `results/`, name → bytes. */
+function snapshotResults(tempDir: string): Record<string, string> {
+  const dir = safePath.join(tempDir, 'harness', 'results');
+  if (!existsSync(dir)) return {};
+  return Object.fromEntries(
+    readdirSync(dir)
+      .sort((a, b) => a.localeCompare(b))
+      .map((name) => [name, readFileSync(safePath.join(dir, name), 'utf8')]),
+  );
 }
 
 /** One eval declaring exactly one expectation, optionally in a named tier. */
@@ -108,12 +128,15 @@ interface BaselineArtifact {
 
 /** The treatment arm's aggregate verdict artifact — read in several of these tests. */
 const GRADING_JSON = 'grading.json';
+const BASELINE_JSON = 'baseline.json';
+/** Everything the merge writes BESIDES grading.json — all four must survive a broken arm. */
+const OTHER_MERGED_ARTIFACTS = ['friction.json', 'tool-eval.json', BASELINE_JSON];
 
 function readResult(tempDir: string, name: string): unknown {
   return JSON.parse(readFileSync(safePath.join(tempDir, 'harness', 'results', name), 'utf8'));
 }
 
-const readBaseline = (tempDir: string): BaselineArtifact => readResult(tempDir, 'baseline.json') as BaselineArtifact;
+const readBaseline = (tempDir: string): BaselineArtifact => readResult(tempDir, BASELINE_JSON) as BaselineArtifact;
 
 /**
  * A control arm (`pluginDirs: []`) whose executor is killed by the wall-clock
@@ -202,7 +225,7 @@ describe('runSkillTestHarness — a CONTROL-arm failure must not destroy the run
 
     // The treatment arm ran both evals to a verdict; that is the whole product.
     expect(readResult(tempDir, GRADING_JSON)).toMatchObject({ summary: { passed: 2, total: 2 } });
-    for (const name of ['friction.json', 'tool-eval.json', 'baseline.json']) {
+    for (const name of OTHER_MERGED_ARTIFACTS) {
       expect(existsSync(safePath.join(tempDir, 'harness', 'results', name))).toBe(true);
     }
   });
@@ -269,6 +292,39 @@ describe('runSkillTestHarness — a CONTROL-arm failure must not destroy the run
     expect(summary).toEqual({ passed: 0, total: 0 });
     expect(baselineDelta.delta).toBeNull();
     expect(baselineIntegrity.controlArmFailures).toHaveLength(1);
+  });
+
+  /**
+   * ...and it must not describe that run as CHECKED. With both control arms dead and
+   * ZERO transcripts scanned, `baseline.json` said `"contaminated": false` with a full
+   * `checked by: harness-path, sibling-arm, vat-private-dir, skill-content` — while
+   * the shipped docs teach `signals` as exactly the discriminator between a clean
+   * verdict and a blind one ("an empty list means nothing was looking"). The list was
+   * full and nothing was looking.
+   *
+   * `signals` is a property of the paths this run ARMED, which is why it was computed
+   * unconditionally — but the block it lands on is a claim about what was OBSERVED,
+   * and with no transcript there is no observation to make a claim about.
+   */
+  it('claims NO armed detector when not one control transcript was scanned', async () => {
+    const tempDir = getTempDir();
+    await runHarness(tempDir, getAuthoredDir(), controlExecutorTimesOut().spawn, { baseline: true });
+
+    const { baselineIntegrity } = readBaseline(tempDir);
+    expect(baselineIntegrity.signals).toEqual([]);
+    expect(baselineIntegrity.summary).toContain('NO detector was armed');
+    expect(baselineIntegrity.summary).not.toContain('checked by:');
+  });
+
+  // The converse, so the assertion above is a discriminator rather than a constant:
+  // a run whose control arm DID produce a transcript reports the detectors it ran.
+  it('reports the armed detectors when a control transcript WAS scanned', async () => {
+    const tempDir = getTempDir();
+    await runHarness(tempDir, getAuthoredDir(), makeHarnessFakeSpawn().spawn, { baseline: true });
+
+    const { baselineIntegrity } = readBaseline(tempDir);
+    expect(baselineIntegrity.signals.length).toBeGreaterThan(0);
+    expect(baselineIntegrity.summary).toContain('checked by:');
   });
 
   // The asymmetry, stated as a test: without a treatment result there is nothing to
@@ -390,5 +446,208 @@ describe('runSkillTestHarness — the --dry-run spawn plan', () => {
 
     expect(summary).toContain(pairsNeedle);
     expect(summary).toContain(sessionsNeedle);
+  });
+});
+
+/**
+ * "WHAT WOULD THIS COST NEXT TIME?" DESTROYED THE RUN YOU WERE ABOUT TO READ.
+ *
+ * `wipeStaleArtifacts` ran at Step 7 — BEFORE the dry-run short-circuit at Step 8,
+ * and before every remaining pre-pipeline failure point. The harness root is a
+ * deterministic function of the subject, so a real `--baseline` run left
+ * `[baseline, friction, grading, provenance, tool-eval].json` and a subsequent
+ * `--dry-run` against the same subject left `[provenance.json]` — the one file the
+ * dry run itself rewrote.
+ *
+ * A dry run must touch NOTHING under `results/`: it neither wipes, nor writes
+ * provenance, nor creates the directory.
+ */
+describe('runSkillTestHarness — a --dry-run must not touch results/', () => {
+  const { getTempDir, getAuthoredDir } = setupStubbedHarnessSubject('vat-dryrun-safe-', vi.mocked(stageHarness));
+
+  const REAL_RUN_ARTIFACTS = [BASELINE_JSON, 'friction.json', GRADING_JSON, 'provenance.json', 'tool-eval.json'];
+
+  it('leaves every artifact of the previous run byte-identical', async () => {
+    const tempDir = getTempDir();
+    await runHarness(tempDir, getAuthoredDir(), makeHarnessFakeSpawn().spawn, { baseline: true });
+    const before = snapshotResults(tempDir);
+    expect(Object.keys(before)).toEqual(REAL_RUN_ARTIFACTS);
+
+    await runHarness(tempDir, getAuthoredDir(), makeHarnessFakeSpawn().spawn, { dryRun: true });
+
+    expect(snapshotResults(tempDir)).toEqual(before);
+  });
+
+  /**
+   * The same wipe also ran ahead of Step 7.5, where declared-env token resolution
+   * hard-fails — so a dry run that ERRORED took the prior run's grading.json and
+   * baseline.json with it on the way out.
+   */
+  it('leaves them intact even when the dry run itself fails before spawning', async () => {
+    const tempDir = getTempDir();
+    await runHarness(tempDir, getAuthoredDir(), makeHarnessFakeSpawn().spawn, { baseline: true });
+    const before = snapshotResults(tempDir);
+
+    await expect(
+      runHarness(tempDir, getAuthoredDir(), makeHarnessFakeSpawn().spawn, {
+        dryRun: true,
+        env: { FOO: '${bogusToken}' },
+      }),
+    ).rejects.toThrow();
+
+    expect(snapshotResults(tempDir)).toEqual(before);
+  });
+
+  it('creates no results/ directory at all when none existed', async () => {
+    const tempDir = getTempDir();
+    await runHarness(tempDir, getAuthoredDir(), makeHarnessFakeSpawn().spawn, { dryRun: true });
+
+    expect(existsSync(safePath.join(tempDir, 'harness', 'results'))).toBe(false);
+  });
+
+  // ...and the preview says WOULD, since it no longer writes the file it names.
+  it('describes provenance as something a real run would write', async () => {
+    const { summary } = await runHarness(getTempDir(), getAuthoredDir(), makeHarnessFakeSpawn().spawn, {
+      dryRun: true,
+    });
+    expect(summary).toMatch(/Provenance would be written to: .*provenance\.json/);
+  });
+
+  // A REAL run still wipes — the cross-run leak that motivated the wipe is untouched
+  // by moving it past the short-circuit.
+  it('still wipes a prior run\'s artifacts on a REAL run', async () => {
+    const tempDir = getTempDir();
+    await runHarness(tempDir, getAuthoredDir(), makeHarnessFakeSpawn().spawn, { baseline: true });
+    // A baseline.json a NON-baseline re-run must not leave lying around.
+    expect(snapshotResults(tempDir)[BASELINE_JSON]).toBeDefined();
+
+    await runHarness(tempDir, getAuthoredDir(), makeHarnessFakeSpawn().spawn);
+
+    expect(snapshotResults(tempDir)[BASELINE_JSON]).toBeUndefined();
+  });
+});
+
+/**
+ * A CONTROL-ARM RATE LIMIT THAT OUTLIVES THE RETRY BUDGET STILL ANNIHILATED THE RUN.
+ *
+ * `runEvalWorker` rethrows a `RateLimitSignal` on BOTH arms — correctly, it is the
+ * pipeline's retry protocol, and swallowing it would make one transient 429 a
+ * permanently dead control arm. But the signal carried no exhausted-vs-retryable
+ * discriminator, and `pipeline.ts` rethrows the IDENTICAL class once the budget is
+ * spent: after five retries the run threw, both treatment executors and both
+ * treatment graders having already run and been billed, and `results/` held
+ * `provenance.json` and nothing else — verbatim the failure `runEvalWorker`'s own
+ * docblock quotes as the thing it was written to eliminate.
+ *
+ * `--baseline` doubles the spawn count, so it is the run most likely to hit one.
+ */
+/** A rate-limit event plus a cut-off (non-zero) status — together, what makes the executor signal. */
+const RATE_LIMIT_LINE = JSON.stringify({ type: 'rate_limit_event' });
+const CUT_OFF = { status: 1, timedOut: false, stalled: false };
+
+/**
+ * A spawn stub that rate-limits ONE arm on every attempt, plus a count of how many
+ * times that arm was actually spawned — which is what distinguishes "retried the
+ * budget, then recorded it" from "swallowed the first 429".
+ *
+ * `pluginDirs.length === 0` is how a test picks the control arm; see the spawn stub.
+ */
+function alwaysRateLimits(isTargetArm: (pluginDirCount: number) => boolean): {
+  stub: ReturnType<typeof makeHarnessFakeSpawn>;
+  targetSpawns: () => number;
+} {
+  const executorSpawns: number[] = [];
+  const stub = makeHarnessFakeSpawn({
+    onExecutorSpawn: (o) => executorSpawns.push(o.pluginDirs.length),
+    executorExtraStdout: (o) => (isTargetArm(o.pluginDirs.length) ? RATE_LIMIT_LINE : undefined),
+    executorResultFor: (o) => (isTargetArm(o.pluginDirs.length) ? CUT_OFF : undefined),
+  });
+  return { stub, targetSpawns: () => executorSpawns.filter((n) => isTargetArm(n)).length };
+}
+
+const CONTROL_ARM = (pluginDirCount: number): boolean => pluginDirCount === 0;
+
+describe('runSkillTestHarness — an EXHAUSTED control-arm rate limit', () => {
+  const { getTempDir, getAuthoredDir } = setupStubbedHarnessSubject('vat-ratelimit-', vi.mocked(stageHarness));
+
+  it('completes the run and writes the treatment artifacts the operator already paid for', async () => {
+    const tempDir = getTempDir();
+    const { stub } = alwaysRateLimits(CONTROL_ARM);
+
+    const result = await runHarness(tempDir, getAuthoredDir(), stub.spawn, {
+      baseline: true,
+      fastRateLimitRetries: true,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(readResult(tempDir, GRADING_JSON)).toMatchObject({ summary: { passed: 1, total: 1 } });
+    for (const name of OTHER_MERGED_ARTIFACTS) {
+      expect(existsSync(safePath.join(tempDir, 'harness', 'results', name))).toBe(true);
+    }
+  });
+
+  it('records it as a control-arm failure that names the arm and the cause', async () => {
+    const tempDir = getTempDir();
+    const { stub } = alwaysRateLimits(CONTROL_ARM);
+    await runHarness(tempDir, getAuthoredDir(), stub.spawn, { baseline: true, fastRateLimitRetries: true });
+
+    const { baselineIntegrity, baselineDelta } = readBaseline(tempDir);
+    expect(baselineDelta.delta).toBeNull();
+    expect(baselineDelta.controlArmFailures.map((f) => f.evalId)).toEqual(['1']);
+    expect(baselineIntegrity.controlArmFailures[0]?.detail).toContain('control arm (skill withheld)');
+    expect(baselineIntegrity.controlArmFailures[0]?.detail).toContain('rate-limited');
+  });
+
+  /**
+   * The RETRYABLE half, which must not regress. Removing `runEvalWorker`'s
+   * `RateLimitSignal` rethrow entirely failed ZERO tests — no test constructed a
+   * control-arm rate limit at all — and swallowing it on the first 429 turns every
+   * transient limit into a permanently dead control arm. Six spawns = the first
+   * attempt plus the five the pipeline is budgeted for.
+   */
+  it('spends the whole retry budget on the control arm before giving up', async () => {
+    const { stub, targetSpawns } = alwaysRateLimits(CONTROL_ARM);
+    await runHarness(getTempDir(), getAuthoredDir(), stub.spawn, { baseline: true, fastRateLimitRetries: true });
+
+    expect(targetSpawns()).toBe(6);
+  });
+
+  // The asymmetry holds here too: with no treatment result there is nothing to save.
+  it('STILL hard-fails when the TREATMENT arm exhausts its retries, with the arm named', async () => {
+    const { stub } = alwaysRateLimits((n) => n > 0);
+
+    await expect(
+      runHarness(getTempDir(), getAuthoredDir(), stub.spawn, { baseline: true, fastRateLimitRetries: true }),
+    ).rejects.toThrow(/treatment arm \(skill available\)/);
+  });
+});
+
+/**
+ * THE RUN NONCE IS DOCUMENTED IN FOUR PLACES AS NEVER TOUCHING DISK.
+ *
+ * `spawn-claude.ts` ("keeps it off disk precisely so untrusted skill code cannot read
+ * it back and forge a passing grading.json"), `prompt-invariants.ts` ("delivered only
+ * via stdin, never written to disk"), `eval-grader.ts` (a whole docblock justifying
+ * unlinking the fragment because "a fragment left on disk lets skill code … read the
+ * echoed nonce at leisure"), and `run-harness.ts` ("travels only via grader stdin").
+ * The merge carried it into the report and the harness wrote that report verbatim.
+ */
+describe('runSkillTestHarness — the run nonce reaches no artifact', () => {
+  const { getTempDir, getAuthoredDir } = setupStubbedHarnessSubject('vat-nonce-disk-', vi.mocked(stageHarness));
+
+  it('writes no runNonce into any results/ file', async () => {
+    const tempDir = getTempDir();
+    const stub = makeHarnessFakeSpawn();
+    await runHarness(tempDir, getAuthoredDir(), stub.spawn, { baseline: true });
+
+    // The nonce the graders were actually handed, so this cannot pass by looking for
+    // a value the run never minted.
+    const nonce = stub.graderNonces[0];
+    expect(nonce, 'no grader was prompted, so the assertion below proves nothing').toBeTruthy();
+
+    for (const [name, body] of Object.entries(snapshotResults(tempDir))) {
+      expect(body, `${name} carries the run's integrity nonce`).not.toContain(nonce);
+      expect(body, `${name} carries a runNonce field`).not.toContain('runNonce');
+    }
   });
 });

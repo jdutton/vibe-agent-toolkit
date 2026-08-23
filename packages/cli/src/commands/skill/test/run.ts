@@ -1303,7 +1303,22 @@ export async function runSkillTestRun(
     if (withOptional !== undefined) harnessOpts.withOptional = withOptional;
     const result = await runSkillTestHarness(harnessOpts);
 
-    process.stderr.write(`Harness: ${result.harnessPath}\n`);
+    // Same rule as the `Workspaces:` line below — "a populated value is a promise
+    // that the path is still there" — applied to the sibling it was written next to
+    // and not applied to. Harness cleanup runs inside the harness's own `finally`,
+    // BEFORE this result reaches the CLI: a run that returns before Step 7 creates
+    // `results/` (the §12 security-ack refusal, and the preflight-failure branch
+    // reachable from a `--require-auth` mismatch) leaves the harness root with no
+    // `results/` child, and cleanup removes the ROOT outright. Printing the path
+    // anyway hands the operator a directory that no longer exists.
+    //
+    // Asked of the PATH rather than re-derived from --keep/--out/--workdir on
+    // purpose: the retention rule has ONE author (cleanupHarness), and a second copy
+    // of its predicate here would drift from it. The filesystem cannot.
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- harness root path returned by our own domain call
+    if (existsSync(result.harnessPath)) {
+      process.stderr.write(`Harness: ${result.harnessPath}\n`);
+    }
     // The artifacts this command's help text tells the operator to read
     // (grading.json / friction.json / baseline.json). Reported separately from the
     // harness path because on a default run — no --out, no --workdir, no --keep —
@@ -1369,7 +1384,7 @@ export function createSkillTestRunCommand(): Command {
       '--pass-env <key...>',
       'Forward a host env var by NAME to the executor spawn if present (repeatable). Protected names (PATH, auth, model) are ignored.',
     )
-    .option('--refresh', 'Force a full re-stage (ignore existing staged content)')
+    .option('--refresh', 'No-op today, accepted for forward compatibility: staging already does a full re-stage on every run, so there is no retained staged content for this flag to ignore. Nothing reads it — passing it changes nothing.')
     .option('--no-build', 'Skip building declared skills (subject and any --with/--with-optional companion); stage existing dist instead. Errors if absent for the subject or a REQUIRED companion; an OPTIONAL companion falls back to raw source with a warning.')
     .option('--workdir <dir>', 'Override the harness working directory')
     .option('--out <dir>', 'Override the harness output directory')
@@ -1407,7 +1422,7 @@ export function createSkillTestRunCommand(): Command {
       "Eval suite to grade against: a path to an evals.json (resolved against the CURRENT DIRECTORY, so it may point outside the skill's tree) or an npm bare specifier honoring that package's exports map. Overrides `test.evals`, which is resolved against the skill source instead. Use this to test a skill you did not author — a correctly packaged skill ships no evals, because the suite is the answer key.",
     )
     .option('--max-turns <n>', 'Per-spawn cap on executor/grader turns (positive integer)')
-    .option('--max-budget-usd <n>', 'Hard USD budget cap (positive number)')
+    .option('--max-budget-usd <n>', 'Per-spawn USD budget cap, applied to EACH executor and grader spawn (positive number). Not a whole-run ceiling: a --baseline run has twice the spawns, so twice the worst-case spend.')
     .option('--timeout <s>', 'Wall-clock timeout in seconds (positive integer)')
     .option('--stall <s>', 'Stall-watchdog in seconds (positive integer)')
     .option('--concurrency <n>', 'Max evals graded in parallel (positive integer; default 4)')
@@ -1432,13 +1447,22 @@ Description:
   to acknowledge this and proceed.
 
 Artifacts:
-  grading.json (the verdict), friction.json, tool-eval.json, and -- with
-  --baseline -- baseline.json are written to a results/ directory whose path is
-  echoed to stderr ("Results: <path>"). On a DEFAULT run (no --out, --workdir or
-  --keep) that directory SURVIVES and the staged skill bytes around it are
-  removed. Cleanup only ever touches a harness dir vat created, so with --out or
-  --workdir NOTHING is removed and the staged (untrusted) skill bytes stay until
-  you delete them yourself -- --keep or not.
+  grading.json (the verdict), friction.json, tool-eval.json, provenance.json,
+  and -- with --baseline -- baseline.json are written to a results/ directory
+  whose path is echoed to stderr ("Results: <path>"). On a DEFAULT run (no --out,
+  --workdir or --keep) that directory SURVIVES and the staged skill bytes around
+  it are removed.
+
+  --out or --workdir spares only the harness ROOT: it is a location you own, so
+  vat never deletes it, and the staged (untrusted) skill bytes inside it stay
+  until you delete them yourself. It is NOT a blanket "keep everything". Three
+  vat-owned directories live OUTSIDE that root -- the grader's output dir, the
+  held eval suite, and the per-eval executor WORKSPACES (every eval's working
+  directory and everything the evals wrote) -- and they are reaped on a rule that
+  ignores --out and --workdir entirely. --keep is the only flag that retains the
+  workspaces; without it they are gone before this command prints, which is why
+  the "Workspaces: <path>" line appears only under --keep. Pass --keep when you
+  intend to inspect what the evals produced.
 
   A --baseline run also echoes its lift to stderr ("Baseline delta: +2 (with
   skill: 3/3, without skill: 1/3)."), and stamps the same numbers into

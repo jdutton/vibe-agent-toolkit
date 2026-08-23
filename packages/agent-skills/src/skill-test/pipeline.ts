@@ -25,6 +25,22 @@ export interface RunPipelineOptions<T, R> {
   readonly onRateLimit?: (attempt: number) => number;
   /** Injectable for tests; defaults to a real `setTimeout`-based sleep. */
   readonly sleep?: (ms: number) => Promise<void>;
+  /**
+   * What to do when an item's retry budget is SPENT, instead of failing the run.
+   *
+   * The pipeline is the only layer that knows retries are exhausted: a worker sees a
+   * `RateLimitSignal` and cannot tell whether it is the first of five or the last.
+   * That is why a control-arm rate limit still destroyed a `--baseline` run — the
+   * worker correctly rethrew the signal (it is the retry protocol, not a failure),
+   * `runItemWithRetry` rethrew the IDENTICAL class once the budget was gone, and
+   * nothing downstream could distinguish the two.
+   *
+   * Returning a result records the exhaustion as an outcome and lets the run
+   * continue; the handler may still throw for items whose failure IS fatal. Absent →
+   * rethrow, which is the historical behaviour and stays the default so a caller
+   * that has not thought about it does not silently swallow a dead item.
+   */
+  readonly onRetriesExhausted?: (item: T, index: number, error: RateLimitSignal) => Promise<R> | R;
 }
 
 /** Bounded retries on RateLimitSignal before giving up and rethrowing. */
@@ -47,26 +63,31 @@ function defaultSleep(ms: number): Promise<void> {
  * Runs a single item to completion, retrying on {@link RateLimitSignal} up to
  * {@link MAX_RATE_LIMIT_RETRIES} times using the provided backoff + sleep.
  */
-async function runItemWithRetry<T, R>(
-  item: T,
-  index: number,
-  worker: (item: T, index: number) => Promise<R>,
-  onRateLimit: (attempt: number) => number,
-  sleep: (ms: number) => Promise<void>,
-): Promise<R> {
+interface RunItemDeps<T, R> {
+  worker: (item: T, index: number) => Promise<R>;
+  onRateLimit: (attempt: number) => number;
+  sleep: (ms: number) => Promise<void>;
+  onRetriesExhausted?: (item: T, index: number, error: RateLimitSignal) => Promise<R> | R;
+}
+
+async function runItemWithRetry<T, R>(item: T, index: number, deps: RunItemDeps<T, R>): Promise<R> {
   let attempt = 0;
   for (;;) {
     try {
-      return await worker(item, index);
+      return await deps.worker(item, index);
     } catch (error) {
       if (!(error instanceof RateLimitSignal)) {
         throw error;
       }
       attempt += 1;
       if (attempt > MAX_RATE_LIMIT_RETRIES) {
-        throw error;
+        // Budget spent. This is the ONE place that can tell an exhausted signal from
+        // a retryable one, so it is the only place that can offer the caller the
+        // choice — see {@link RunPipelineOptions.onRetriesExhausted}.
+        if (deps.onRetriesExhausted === undefined) throw error;
+        return await deps.onRetriesExhausted(item, index, error);
       }
-      await sleep(onRateLimit(attempt));
+      await deps.sleep(deps.onRateLimit(attempt));
     }
   }
 }
@@ -81,6 +102,12 @@ export async function runPipeline<T, R>(o: RunPipelineOptions<T, R>): Promise<R[
   }
 
   const results: R[] = new Array(items.length);
+  const deps: RunItemDeps<T, R> = {
+    worker,
+    onRateLimit,
+    sleep,
+    ...(o.onRetriesExhausted === undefined ? {} : { onRetriesExhausted: o.onRetriesExhausted }),
+  };
   let nextIndex = 0;
 
   async function runWorkerLoop(): Promise<void> {
@@ -92,7 +119,7 @@ export async function runPipeline<T, R>(o: RunPipelineOptions<T, R>): Promise<R[
       }
       // Non-null: index < items.length was just checked above.
       const item = items[index] as T;
-      results[index] = await runItemWithRetry(item, index, worker, onRateLimit, sleep);
+      results[index] = await runItemWithRetry(item, index, deps);
     }
   }
 

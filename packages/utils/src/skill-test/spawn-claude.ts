@@ -191,6 +191,26 @@ export async function spawnHeadlessClaude(opts: SpawnHeadlessOptions): Promise<S
     // Register immediately after spawn so the child is reapable by
     // killAllActiveClaudeChildren() for the entire time it can be in flight.
     activeClaudeChildren.add(child);
+
+    // Decode BOTH output streams as UTF-8 at the stream, not per chunk.
+    //
+    // A pipe hands the reader whatever bytes have arrived (typically capped at
+    // 64 KiB) with no regard for character boundaries, so `chunk.toString()` on
+    // each Buffer independently mangles any multi-byte character that straddles a
+    // boundary into replacement characters on both sides of the split. That
+    // corruption lands INSIDE a stream-json line, and it costs the harness
+    // evidence two ways: the line can stop parsing, silently deleting the tool
+    // call in it (see ParsedTranscript.malformedLineCount), or — worse, because
+    // nothing reports it — the line still parses with a mangled VALUE, so a
+    // contamination needle no longer matches the path the arm actually reached.
+    //
+    // `setEncoding` runs the stream's own StringDecoder, which holds a partial
+    // sequence back until the rest arrives AND flushes whatever is left at EOF, so
+    // a genuinely truncated tail still surfaces (as U+FFFD) rather than vanishing.
+    // Set before any listener is attached, so no chunk is ever seen undecoded.
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+
     let timedOut = false;
     let stalled = false;
 
@@ -246,8 +266,10 @@ export async function spawnHeadlessClaude(opts: SpawnHeadlessOptions): Promise<S
     // child's real exit status).
     child.stdin.on('error', () => { /* ignore EPIPE on early child exit */ });
     promptStream.pipe(child.stdin);
-    child.stdout.on('data', (d: Buffer) => { opts.onStdout?.(d.toString()); });
-    child.stderr.on('data', (d: Buffer) => { opts.onStderr?.(d.toString()); });
+    // `d` is already a string: setEncoding('utf8') above put the stream's
+    // StringDecoder in front of these listeners. Never call `.toString()` here.
+    child.stdout.on('data', (d: string) => { opts.onStdout?.(d); });
+    child.stderr.on('data', (d: string) => { opts.onStderr?.(d); });
     // Reap on 'error' too: clearAllTimers() unregisters the child, so if 'error'
     // ever fires while the process is actually alive we would otherwise drop it
     // from the reap set without killing it (the exact orphan this file guards

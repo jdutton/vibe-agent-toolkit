@@ -10,6 +10,8 @@ import { GradingArmError, GradingNonceError, reconcileGrading } from '../../src/
 import { partitionFragmentsByArm } from '../../src/skill-test/run-harness.js';
 
 const nonce = 'run-nonce-1';
+/** A nonce that is NOT this run's — the signature of a forged or left-behind fragment. */
+const WRONG_NONCE = 'wrong-nonce';
 const TMP_ASSUMPTION_MESSAGE = 'assumed /tmp exists';
 const PATH_ASSUMPTION_CATEGORY = 'path-assumption';
 
@@ -57,14 +59,14 @@ describe('mergeFragmentsToGrading', () => {
   });
 
   it('throws GradingNonceError when a fragment nonce does not match the run nonce', () => {
-    const fragments: EvalFragment[] = [makeFragment({ runNonce: 'wrong-nonce' })];
+    const fragments: EvalFragment[] = [makeFragment({ runNonce: WRONG_NONCE })];
     expect(() => mergeFragmentsToGrading(fragments, nonce, 'with')).toThrow(GradingNonceError);
   });
 
   it('throws GradingNonceError naming the offending eval even when an earlier fragment matches', () => {
     const fragments: EvalFragment[] = [
       makeFragment({ evalId: 'eval-1' }),
-      makeFragment({ evalId: 'eval-2', runNonce: 'wrong-nonce' }),
+      makeFragment({ evalId: 'eval-2', runNonce: WRONG_NONCE }),
     ];
     expect(() => mergeFragmentsToGrading(fragments, nonce, 'with')).toThrow(/eval-2/);
   });
@@ -101,6 +103,42 @@ describe('mergeFragmentsToGrading', () => {
     // distinguishable, and a truncated/padded nonce is still visible as a length.
     expect(message).toContain('sha256:');
     expect(message).toContain(`(${forged.length} chars)`);
+    // The digest is TRUNCATED — "enough to tell two runs apart by eye", which is the
+    // whole justification for printing a digest at all. Lengthening it to the full
+    // 64-hex sha256 failed no assertion: the prefix and the `(N chars)` suffix were
+    // pinned and the thing between them was not.
+    expect(message).toMatch(/sha256:[0-9a-f]{12} \(/);
+  });
+
+  /**
+   * THE NONCE NEVER TOUCHES DISK — a guarantee stated in four separate docblocks
+   * (`spawn-claude.ts`, `prompt-invariants.ts`, `eval-grader.ts`, `run-harness.ts`)
+   * and broken by this one line. The merged report was `JSON.stringify`d straight
+   * into `results/grading.json`, and into `baseline.json` on a `--baseline` run.
+   *
+   * Nothing reads it back: `reconcileGrading` ignores it, and `parseGradingJson`'s
+   * `runNonce` comes from an EXTERNALLY produced grading.json, a different producer
+   * entirely. So it was pure passthrough — the cost with none of the use.
+   *
+   * Exploitability is limited today (both writes happen after every spawn completes),
+   * but `--out`/`--keep` can put `results/` in a repo-local, committable location,
+   * and the consume-on-read machinery next door is justified by the very guarantee
+   * this write breaks.
+   */
+  it('leaves the run nonce OFF the merged report, which is written to disk verbatim', () => {
+    const grading = mergeFragmentsToGrading([makeFragment()], nonce, 'with');
+
+    expect(grading.runNonce).toBeUndefined();
+    // The bytes, not the field: a nonce that survived under some other key would
+    // still be on disk. This is the assertion that matches what actually happens.
+    expect(JSON.stringify(grading)).not.toContain(nonce);
+  });
+
+  // ...and the merge still REJECTS a fragment whose nonce is wrong. Dropping the
+  // field from the output is not dropping the check that consumed it.
+  it('still verifies every fragment nonce even though it publishes none of them', () => {
+    expect(() => mergeFragmentsToGrading([makeFragment({ runNonce: WRONG_NONCE })], nonce, 'with'))
+      .toThrow(GradingNonceError);
   });
 
   it('returns empty expectations for zero fragments (reconcileGrading guard fires downstream)', () => {
