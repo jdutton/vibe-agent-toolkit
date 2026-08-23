@@ -21,6 +21,11 @@
  *    `perf-capture.test.ts` pins the other side of that boundary with the same
  *    probe.
  *
+ * The two pure classifiers are exercised on synthetic `RunResult`s rather than
+ * on spawned children, because what they decide is arithmetic over exit codes:
+ * whether a code means the run COMPLETED (the command declares that), and
+ * whether the repeats agreed on which of the accepted codes they produced.
+ *
  * No vat binary is spawned. The instrument is `node <probe.cjs>` from
  * `command-probe.ts`, a stand-in that logs its argv and the two environment
  * variables into its working directory — which is also why no test asserts the
@@ -35,6 +40,7 @@ import {
   materializeArgs,
   runRepeats,
   SUBJECT_TOKEN,
+  summarizeRepeatFailures,
 } from '../src/harness/repeat.js';
 import type { RunResult } from '../src/harness/types.js';
 
@@ -48,6 +54,12 @@ const PREFIX = 'lab-repeat-';
 /** The value set for {@link PROBE_BASE_ENV}, asserted in every child's log line. */
 const BASE_VALUE = 'base-value';
 
+/** What a command that only completes at 0 accepts. */
+const ONLY_ZERO: readonly number[] = [0];
+
+/** What a findings command accepts: 0 (nothing to report) and 1 (findings). */
+const ZERO_OR_FINDINGS: readonly number[] = [0, 1];
+
 /**
  * Build a `RunResult` for the pure classification tests.
  *
@@ -56,6 +68,16 @@ const BASE_VALUE = 'base-value';
  */
 function result(overrides: Partial<RunResult> = {}): RunResult {
   return { wallMs: 1, exitCode: 0, stdout: '', stderr: '', spawnError: null, ...overrides };
+}
+
+/**
+ * A set of repeats that each exited with the given code and nothing else.
+ *
+ * @param codes - One exit code per repeat, in order
+ * @returns The results, ready for {@link summarizeRepeatFailures}
+ */
+function resultsExiting(...codes: readonly number[]): RunResult[] {
+  return codes.map((exitCode) => result({ exitCode }));
 }
 
 describe('materializeArgs', () => {
@@ -77,28 +99,118 @@ describe('materializeArgs', () => {
 
 describe('classifyRunFailure', () => {
   it('calls a clean exit no failure', () => {
-    expect(classifyRunFailure(result())).toBeNull();
+    expect(classifyRunFailure(result(), ONLY_ZERO)).toBeNull();
   });
 
   it('reports a spawn failure IN PREFERENCE to any exit code', () => {
     // A process that never ran has no exit code worth reporting. The fixture
     // supplies both, so a classifier testing them in the wrong order returns
     // the 'exited 3' string and fails here.
-    const failure = classifyRunFailure(result({ exitCode: 3, spawnError: 'ENOENT: no such file' }));
+    const failure = classifyRunFailure(
+      result({ exitCode: 3, spawnError: 'ENOENT: no such file' }),
+      ONLY_ZERO,
+    );
 
     expect(failure).toBe('ENOENT: no such file');
   });
 
+  it('reports a spawn failure even when the exit code it carries is an ACCEPTED one', () => {
+    // The ordering guarantee where it actually bites now that codes can be
+    // accepted: a classifier that consulted `completedExitCodes` before
+    // `spawnError` would return null here and admit a process that never ran
+    // into a median.
+    const failure = classifyRunFailure(
+      result({ exitCode: 1, spawnError: 'killed after timeout' }),
+      ZERO_OR_FINDINGS,
+    );
+
+    expect(failure).toBe('killed after timeout');
+  });
+
   it('reports a non-zero exit with the code and the start of stderr', () => {
-    const failure = classifyRunFailure(result({ exitCode: 3, stderr: '  no config found\n' }));
+    const failure = classifyRunFailure(
+      result({ exitCode: 3, stderr: '  no config found\n' }),
+      ONLY_ZERO,
+    );
 
     expect(failure).toBe('exited 3: no config found');
   });
 
+  it('treats a code the command declared as completed as no failure at all', () => {
+    // The defect this replaces: `vat validate` exits 1 on any project with
+    // findings, which is every real project, so its every repeat was a
+    // "failure" and its row could never carry a number.
+    expect(classifyRunFailure(result({ exitCode: 1 }), ZERO_OR_FINDINGS)).toBeNull();
+  });
+
+  it('still fails the same exit 1 when the command did NOT declare it completed', () => {
+    // The pair to the case above, on the identical result: only the accepted
+    // set differs, so the fixture can genuinely tell the two answers apart.
+    const failure = classifyRunFailure(result({ exitCode: 1, stderr: 'broken' }), ONLY_ZERO);
+
+    expect(failure).toBe('exited 1: broken');
+  });
+
+  it('never accepts exit 2 — a system error is a run that did not complete', () => {
+    const failure = classifyRunFailure(
+      result({ exitCode: 2, stderr: 'no config found' }),
+      ZERO_OR_FINDINGS,
+    );
+
+    expect(failure).toBe('exited 2: no config found');
+  });
+
+  it('fails a run with no exit code at all, whatever is accepted', () => {
+    expect(classifyRunFailure(result({ exitCode: null }), ZERO_OR_FINDINGS)).toBe('exited null: ');
+  });
+
   it('caps the stderr excerpt so one loud failure cannot swamp a report', () => {
-    const failure = classifyRunFailure(result({ exitCode: 1, stderr: 'x'.repeat(500) }));
+    const failure = classifyRunFailure(result({ exitCode: 1, stderr: 'x'.repeat(500) }), ONLY_ZERO);
 
     expect(failure).toBe(`exited 1: ${'x'.repeat(200)}`);
+  });
+});
+
+describe('summarizeRepeatFailures', () => {
+  it('says nothing when every repeat exited with the same accepted code', () => {
+    expect(summarizeRepeatFailures(resultsExiting(1, 1, 1), ZERO_OR_FINDINGS)).toBeNull();
+  });
+
+  it('counts the failures against the whole set', () => {
+    const failure = summarizeRepeatFailures(
+      [result(), result({ exitCode: 3, stderr: 'boom' }), result()],
+      ONLY_ZERO,
+    );
+
+    expect(failure).toBe('1 of 3 repeats failed — exited 3: boom');
+  });
+
+  it('fails a row whose repeats exited with DIFFERENT accepted codes, naming both', () => {
+    // Nothing failed: 0 and 1 are both completed runs for this command. But one
+    // repeat found something to report and the other did not, so they did
+    // different amounts of work and a median over them describes neither.
+    const failure = summarizeRepeatFailures(resultsExiting(0, 1, 0), ZERO_OR_FINDINGS);
+
+    expect(failure).toBe(
+      '3 repeats exited 0 and 1 — every repeat completed, but not with the same amount of work ' +
+        'done, so a statistic over them describes neither run',
+    );
+  });
+
+  it('reports the outright failure, not the disagreement, when both are present', () => {
+    // A set that is non-uniform AND has a real failure in it: the failure is
+    // the more actionable thing to say, and saying both would be two sentences
+    // for one row.
+    const failure = summarizeRepeatFailures(
+      [result({ exitCode: 0 }), result({ exitCode: 1 }), result({ exitCode: 2, stderr: 'gone' })],
+      ZERO_OR_FINDINGS,
+    );
+
+    expect(failure).toBe('1 of 3 repeats failed — exited 2: gone');
+  });
+
+  it('says nothing about a set with no repeats — that is the facet\'s own case', () => {
+    expect(summarizeRepeatFailures([], ONLY_ZERO)).toBeNull();
   });
 });
 

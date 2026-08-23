@@ -26,8 +26,14 @@ export const PERF_FACET = 'perf';
  * Bumped whenever the shape below changes. Two `perf` reports at different body
  * versions are refused against each other, because differences across a schema
  * change belong to the schema rather than to the subject.
+ *
+ * **2 — `exitCode` changed meaning.** In v1 a successful row always published
+ * `0`; it now publishes the accepted code the repeats actually produced, so a
+ * v1 row saying `0` and a v2 row saying `0` are not the same claim (the v1 one
+ * could not have said `1`). The refusal above is the point of the bump: a v1
+ * baseline held beside a v2 candidate must not be compared silently.
  */
-export const PERF_FACET_VERSION = 1;
+export const PERF_FACET_VERSION = 2;
 
 /** The measured result for one command. */
 export interface PerfCommandStats {
@@ -51,19 +57,30 @@ export interface PerfCommandStats {
   /** Every sample, so a reader can check the statistics rather than trust them. */
   readonly samplesMs: readonly number[];
   /**
-   * `0` when every repeat exited cleanly, and `null` otherwise.
+   * The one accepted code every repeat exited with, and `null` when the row
+   * failed.
    *
-   * Deliberately not "the code the failing repeat produced". Once any repeat
+   * **On a successful row this is the observed code, not a constant.** A command
+   * may declare that more than one code means "finished its work" — a vat
+   * validator exits `1` when it has findings and `0` when it has none, and both
+   * ran the whole corpus (see `MeasuredCommandSpec.completedExitCodes`). Two rows
+   * with identical medians where one exited `0` and one exited `1` are not the
+   * same measurement, and a reader who cannot tell them apart cannot tell a
+   * clean project from one whose findings the run had to render. It is always a
+   * single code: repeats that disagreed are a failed row, per rule 2 of
+   * `summarizeRepeatFailures`.
+   *
+   * **On a failed row it stays `null`**, and that reasoning is unchanged.
+   * Deliberately not "the code the failing repeat produced": once any repeat
    * fails, this row is not timing one behaviour, and the *interesting* thing is
    * no longer a number — it is which repeats failed and why, which
    * {@link PerfCommandStats.failure} says in words. Publishing one repeat's exit
    * code here would invite a reader to treat it as the row's outcome when the
-   * other repeats may have exited differently.
-   *
-   * So `null` covers both mixed results and a uniform failure: two repeats that
-   * both exited 3 still report `null`, because a row whose statistics are empty
-   * has no exit code to speak of. {@link PerfCommandStats.failed} is the flag to
-   * branch on; this field is never the tell.
+   * other repeats may have exited differently. So `null` covers both mixed
+   * results and a uniform failure: two repeats that both exited 3 still report
+   * `null`, because a row whose statistics are empty has no exit code to speak
+   * of. {@link PerfCommandStats.failed} is the flag to branch on; this field is
+   * never the tell.
    */
   readonly exitCode: number | null;
   /**

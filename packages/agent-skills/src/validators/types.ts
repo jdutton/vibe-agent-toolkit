@@ -1,4 +1,4 @@
-import type { SeverityCounts, ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import type { SeverityCounts, ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 import type { EvidenceRecord } from '../evidence/index.js';
 

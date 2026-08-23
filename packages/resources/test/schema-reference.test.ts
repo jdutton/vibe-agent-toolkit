@@ -7,7 +7,7 @@
  * - Validation mode behavior (strict vs permissive)
  */
 
-import { createRegistryIssue } from '@vibe-agent-toolkit/agent-schema';
+import { createRegistryIssue } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
 import type { SchemaReference } from '../src/types.js';

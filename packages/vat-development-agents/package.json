@@ -71,7 +71,7 @@
     "test:system": "vitest run --config vitest.system.config.ts"
   },
   "dependencies": {
-    "@vibe-agent-toolkit/agent-schema": "workspace:*",
+    "@vibe-agent-toolkit/schema": "workspace:*",
     "@vibe-agent-toolkit/cli": "workspace:*",
     "yaml": "^2.8.2"
   },

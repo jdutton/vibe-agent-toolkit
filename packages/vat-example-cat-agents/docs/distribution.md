@@ -153,17 +153,17 @@ npm publish ./dist/cat-agents-skill.tgz
 
 ```bash
 # Global installation
-npm install -g @vibe-agent-toolkit/cat-agents-skill
+npm install -g @vibe-agent-toolkit/vat-example-cat-agents
 
 # Project-local installation
-npm install @vibe-agent-toolkit/cat-agents-skill
+npm install @vibe-agent-toolkit/vat-example-cat-agents
 ```
 
 **package.json structure:**
 
 ```json
 {
-  "name": "@vibe-agent-toolkit/cat-agents-skill",
+  "name": "@vibe-agent-toolkit/vat-example-cat-agents",
   "version": "0.1.0",
   "description": "Cat agents orchestration skill for Claude Code",
   "main": "SKILL.md",
@@ -498,7 +498,7 @@ Use this template in your README for user-facing documentation:
 ### Option 2: Install from npm
 
 ```bash
-npm install -g @vibe-agent-toolkit/cat-agents-skill
+npm install -g @vibe-agent-toolkit/vat-example-cat-agents
 ```
 
 ### Option 3: Dev Mode (For Contributors)

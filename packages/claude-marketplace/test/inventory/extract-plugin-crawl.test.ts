@@ -5,6 +5,7 @@ import { mkdirSyncReal, safePath, setupAsyncTempDirSuite } from '@vibe-agent-too
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { extractClaudePluginInventory } from '../../src/inventory/extract-plugin.js';
+import { NO_GIT_TRACKER } from '../../src/inventory/extract-skill.js';
 import type { ClaudePluginInventory } from '../../src/inventory/types.js';
 
 /**
@@ -74,6 +75,15 @@ function buildFixture(root: string): string[] {
 	return [root, claudePluginDir, alpha, beta, docs, nested, nestedManifestDir];
 }
 
+/**
+ * The tracker-less walk, said out loud.
+ *
+ * These fixtures have no git repository behind them, so no tracker could
+ * answer for them and none of these assertions is about gitignore. Naming the
+ * choice is the point: the extractors REQUIRE a source precisely so a suite
+ * cannot land in the tracker-less state by leaving an argument off, which is how
+ * the walker/closure divergence stayed invisible for three commits.
+ */
 describe('extractClaudePluginInventory whole-tree crawl', () => {
 	const suite = setupAsyncTempDirSuite('extract-plugin-crawl');
 	let root = '';
@@ -88,7 +98,7 @@ describe('extractClaudePluginInventory whole-tree crawl', () => {
 		root = safePath.join(suite.getTempDir(), 'plugin');
 		crawlOnlyDirs = buildFixture(root);
 		readdirCalls.length = 0;
-		inventory = await extractClaudePluginInventory(root);
+		inventory = await extractClaudePluginInventory(root, { gitTrackerSource: NO_GIT_TRACKER });
 	});
 
 	it('reads every crawl-only directory exactly once', () => {

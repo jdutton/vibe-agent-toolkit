@@ -29,8 +29,8 @@
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import { type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import type { SkillPackagingConfig } from '@vibe-agent-toolkit/resources';
+import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { isGlob, issueLocation, safePath, staticGlobBase, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { type SkillFileEntry } from './files-config.js';

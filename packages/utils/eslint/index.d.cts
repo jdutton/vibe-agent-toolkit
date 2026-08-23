@@ -47,10 +47,13 @@ declare namespace plugin {
     rules: Record<string, RuleModule>;
     configs: {
       /**
-       * The cross-platform safety core: 18 of the 21 rules, 15 `error` / 3 `warn`.
-       * `no-test-scoped-functions` and `require-justified-skip` are excluded — they
-       * are positions on test style, not portability facts. Both still ship in
-       * `rules` and are enabled by naming them.
+       * The cross-platform safety core: 18 of the 22 rules, 15 `error` / 3 `warn`.
+       * Four are excluded, for three reasons: `no-test-scoped-functions` and
+       * `require-justified-skip` are positions on test style rather than
+       * portability facts; `no-unsafe-root-join` keys on naming rather than taint;
+       * and `no-raw-text-decode` names a decoding seam that only exists in the
+       * consuming repo. All four still ship in `rules` and are enabled by naming
+       * them.
        */
       recommended: FlatConfig;
     };

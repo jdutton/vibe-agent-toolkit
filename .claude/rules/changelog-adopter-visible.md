@@ -5,6 +5,51 @@ paths:
 
 # You are editing CHANGELOG.md — it is an adopter contract, not a work log
 
+## ⛔ Write what the reader must DO, not what you found out
+
+This is the rule that gets missed on the first draft, every time, including by people who
+have already read this file. You have just finished the work; the investigation is vivid and
+the mechanism feels like the interesting part. **It is not the deliverable.** The reader did
+not do the work, will never do the work, and is scanning to answer one question: *does this
+affect me, and what do I change?*
+
+**The three-line ceiling.** An entry gets **one line naming the change**, and at most two more
+only if the reader must act. Something genuinely subtle earns a fourth. If yours is a
+paragraph, you are narrating.
+
+**The deletion test — apply it before saving, not after Jeff asks.** Draft the entry, then
+strike every sentence that survives the question *"would the reader still know what to do
+without this?"* Sentences that always go:
+
+- How the bug works internally, and why it is hard to notice.
+- What you measured, and the fixture you measured it with.
+- Which other component behaves differently and why yours is right.
+- Any sentence beginning "Measured", "The result is not", "This is deliberately".
+
+Keep numbers only where the number changes a decision (a size limit, a version, a count that
+tells someone whether they are affected). Cut numbers that merely prove you did the work.
+
+```
+❌  **`vat foo` could write to the wrong repository.** The command builds a throwaway repo
+    under the temp directory and runs init, checkout -b, add and commit in it — but an
+    inherited GIT_DIR overrides the cwd those were given. Measured from inside a worktree
+    pre-commit hook against a bystander repository: its branch was switched, its index
+    rewritten and a commit landed in it, with the push next in line, while every command
+    reported success. The same class of failure hit ... [140 more words]
+
+✅  **`vat foo` could commit into the wrong repository when run from inside a git hook.**
+    Fixed; no action needed.
+```
+
+The long version is not more helpful, it is less: the one fact the reader needed —
+*"from inside a git hook"* — is the fifteenth thing they read.
+
+**Where the detail belongs instead:** the code, as a comment at the site; the commit message;
+or memory. All three keep it for the people who need it. The changelog is the one place it
+costs every reader and helps none.
+
+## The baseline
+
 **The baseline is the LAST STABLE RELEASE, never the last RC.** Every entry answers one
 question: *what changes for someone upgrading from the last `## [X.Y.Z]` heading?* RC tags
 publish to `next` for testing and are **never** given their own heading — `[Unreleased]`

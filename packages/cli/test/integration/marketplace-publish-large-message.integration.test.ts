@@ -18,7 +18,7 @@
  * then read the message back) so it verifies the message survives intact on
  * every platform rather than merely that the call did not throw.
  */
-import { safeExecSync, safePath } from '@vibe-agent-toolkit/utils';
+import { runGitOrThrow, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { publishToGitBranch } from '../../src/commands/claude/marketplace/git-publish.js';
@@ -48,7 +48,7 @@ describe('marketplace publish with an oversized commit message', () => {
 
     fs.mkdirSync(bareRemote, { recursive: true });
     fs.mkdirSync(publishDir, { recursive: true });
-    safeExecSync('git', ['init', '--bare', '--initial-branch=main', bareRemote], { cwd: root });
+    runGitOrThrow(['init', '--bare', '--initial-branch=main', bareRemote], { cwd: root });
 
     fs.writeFileSync(
       safePath.join(publishDir, 'marketplace.json'),
@@ -81,9 +81,8 @@ describe('marketplace publish with an oversized commit message', () => {
     });
 
     const landed = String(
-      safeExecSync('git', ['log', '-1', '--format=%B', 'claude-marketplace'], {
+      runGitOrThrow(['log', '-1', '--format=%B', 'claude-marketplace'], {
         cwd: bareRemote,
-        encoding: 'utf-8',
       }),
     );
 

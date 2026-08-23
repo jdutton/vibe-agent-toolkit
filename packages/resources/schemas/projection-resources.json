@@ -1,0 +1,51 @@
+{
+  "$ref": "#/definitions/projection-resources",
+  "definitions": {
+    "projection-resources": {
+      "type": "object",
+      "properties": {
+        "resourceId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "hash(rootId, canonicalPath at first observation) — opaque"
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Entity kind — open vocabulary, e.g. \"file\", \"directory\", \"skill\", \"plugin\", \"marketplace\""
+        },
+        "origin": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Where this row's knowledge came from. Deliberately an open string, not an enum: resource-scanning-and-caching.md has not yet settled the full non-git-lane taxonomy this column needs to cover."
+        },
+        "observed": {
+          "type": "boolean",
+          "description": "False for a synthetic entity declared by config (e.g. a packaging files: target, or a plugin named in a marketplace manifest) that has never been seen"
+        },
+        "fromEnumeration": {
+          "type": "boolean",
+          "description": "False for an entity first discovered during parse (e.g. a resolved link target) and back-filled afterward"
+        },
+        "vatId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "VAT-assigned resource id (frontmatter id, or a generated fallback), or null when not yet assigned"
+        }
+      },
+      "required": [
+        "resourceId",
+        "kind",
+        "origin",
+        "observed",
+        "fromEnumeration",
+        "vatId"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the path-dependent `resources` table — one entity, zero or more realizations"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

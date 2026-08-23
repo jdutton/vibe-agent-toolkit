@@ -13,7 +13,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-import { normalizedTmpdir, safeExecSync, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, runGitOrThrow, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { fetchSource } from '../../src/compat-empirical/corpus/fetch-sources.js';
@@ -28,9 +28,8 @@ let upstreamWorkPath: string;
 let cacheDir: string;
 
 function runGit(cwd: string, args: string[]): string {
-  return safeExecSync('git', args, {
+  return runGitOrThrow(args, {
     cwd,
-    encoding: 'utf8',
     env: {
       ...process.env,
       GIT_AUTHOR_NAME: 'vat-test',

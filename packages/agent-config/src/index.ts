@@ -3,14 +3,14 @@
  * @packageDocumentation
  */
 
-// Re-export types from agent-schema for convenience
+// Re-export types from schema for convenience
 export type {
   AgentManifest,
   AgentMetadata,
   AgentSpec,
   LLMConfig,
   Tool,
-} from '@vibe-agent-toolkit/agent-schema';
+} from '@vibe-agent-toolkit/schema';
 
 // Loader
 export {

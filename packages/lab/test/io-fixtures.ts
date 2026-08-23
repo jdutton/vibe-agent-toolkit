@@ -23,19 +23,7 @@ import {
 } from '../src/facets/io/types.js';
 import type { LoadReadings } from '../src/harness/types.js';
 
-import { makeReport } from './report-fixtures.js';
-
-/** A quiet machine, so contamination is never an accidental variable. */
-export const CLEAN_LOAD: LoadReadings = {
-  before: 1,
-  after: 1.2,
-  cpus: 8,
-  available: true,
-  contaminated: false,
-};
-
-/** The same readings, but taken while the machine was busy. */
-export const BUSY_LOAD: LoadReadings = { ...CLEAN_LOAD, before: 40, after: 44, contaminated: true };
+import { CLEAN_LOAD, makeReport } from './report-fixtures.js';
 
 /**
  * One call site, defaulting to necessary work — 436 reads of 436 distinct files.

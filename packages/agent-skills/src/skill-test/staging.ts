@@ -2,9 +2,14 @@ import { createHash } from 'node:crypto';
 import { cpSync, existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename } from 'node:path';
 
-import type { ResolveSkillSourceContext, ResolvedSkillSource, SkillSource } from '@vibe-agent-toolkit/agent-skills';
 import type { SkillSourceDescriptor } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+
+import type {
+  ResolveSkillSourceContext,
+  ResolvedSkillSource,
+  SkillSource,
+} from '../skill-source/types.js';
 
 import { DEFAULT_EVALS_SUBPATH, isolateEvalSuite } from './eval-suite-isolation.js';
 import { assertSafeHarnessRoot } from './harness-location.js';

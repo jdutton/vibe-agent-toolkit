@@ -16,12 +16,12 @@
  * a false alarm.
  */
 
+import type { PackageSkillResult } from '@vibe-agent-toolkit/agent-skills';
 import {
   countBySeverity,
   type SeverityCounts,
   type ValidationIssue,
-} from '@vibe-agent-toolkit/agent-schema';
-import type { PackageSkillResult } from '@vibe-agent-toolkit/agent-skills';
+} from '@vibe-agent-toolkit/schema';
 
 import { formatIssueAnchor } from './issue-anchor.js';
 

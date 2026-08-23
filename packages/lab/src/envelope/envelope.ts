@@ -25,8 +25,14 @@ import { type Coordinate, CoordinateSchema } from './coordinate.js';
  * Bumped only when the header changes shape. A bump invalidates every stored
  * report, which is the point: an envelope that cannot be read the same way is
  * not comparable to one that can.
+ *
+ * **2 — `instrument.dirty` arrived.** A v1 report cannot say whether the build
+ * that measured it came from a dirty checkout, and the commonest reason to hold
+ * an old report beside a new one is an A/B between two builds. Reading a v1
+ * header as if the field were merely absent would silently restore the defect
+ * the field fixes: the missing label would read as "clean".
  */
-export const REPORT_FORMAT_VERSION = 1;
+export const REPORT_FORMAT_VERSION = 2;
 
 /** A measurement of one facet at one coordinate. */
 export interface ReportEnvelope<TBody = unknown> {

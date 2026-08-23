@@ -21,8 +21,8 @@
  * }
  */
 
-import { createSuccess } from '@vibe-agent-toolkit/agent-schema';
-import type { Agent, OneShotAgentOutput } from '@vibe-agent-toolkit/agent-schema';
+import { createSuccess } from '@vibe-agent-toolkit/schema';
+import type { Agent, OneShotAgentOutput } from '@vibe-agent-toolkit/schema';
 import { photoAnalyzerAgent } from '@vibe-agent-toolkit/vat-example-cat-agents';
 
 import { StdioMCPGateway } from '../src/server/stdio-transport.js';

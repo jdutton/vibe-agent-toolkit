@@ -1,9 +1,10 @@
-import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
 
 import {
   nonInteractiveGitOverrides,
+  runGit as runGitSafely,
   safePath,
+  type GitRunResult,
   type ParsedGitUrl,
 } from '@vibe-agent-toolkit/utils';
 
@@ -27,7 +28,12 @@ export interface GitCloneResult {
  * spawnSync sets `.error` (code `ETIMEDOUT`) and kills the process — surface a
  * clear error instead of letting a generic non-zero-status message swallow it.
  *
- * `envOverlay` is merged over the inherited environment. It is empty for every
+ * `envOverlay` is merged over the inherited environment, *after* the inherited
+ * `GIT_*` redirection is scrubbed — every invocation here targets the clone
+ * destination, a caller-supplied path. Measured: the clone itself survives an
+ * inherited `GIT_DIR`, but the `rev-parse HEAD` that follows reports the
+ * *ambient* repository's commit, so a correctly-cloned source is stamped with a
+ * provenance SHA from somewhere else. `envOverlay` is empty for every
  * invocation except the clone of a shorthand-inferred URL — see
  * `nonInteractiveGitOverrides`.
  */
@@ -35,13 +41,10 @@ function runGit(
   args: string[],
   envOverlay: Record<string, string>,
   cwd?: string,
-): SpawnSyncReturns<string> {
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git is a standard system command
-  const result = spawnSync('git', args, {
+): GitRunResult {
+  const result = runGitSafely(args, {
     ...(cwd === undefined ? {} : { cwd }),
-    env: { ...process.env, ...envOverlay },
-    encoding: 'utf-8',
-    stdio: ['pipe', 'pipe', 'pipe'],
+    env: envOverlay,
     timeout: GIT_TIMEOUT_MS,
     maxBuffer: GIT_MAX_BUFFER,
   });

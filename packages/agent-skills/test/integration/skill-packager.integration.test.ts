@@ -901,8 +901,19 @@ describe('skill-packager: depth-limited packaging', () => {
     expect(skillContent).not.toContain('[the roster](');
     expect(skillContent).not.toContain(rosterYaml);
 
-    // No post-build integrity issues should surface.
-    expect(result.postBuildIssues ?? []).toEqual([]);
+    // No post-build integrity PROBLEM should surface — but the exclusion itself
+    // is now reported rather than silent, so this asserts the severity split
+    // instead of an empty list. `[]` was the old expectation, and it was exactly
+    // the silence that made "why did this file not ship?" unanswerable: the rule
+    // fired, the YAML was dropped, the link was rewritten, and nothing said so.
+    const issues = result.postBuildIssues ?? [];
+    expect(issues.filter((issue) => issue.severity !== 'info')).toEqual([]);
+
+    // …and the info line is present and names the rule that fired. Asserted
+    // positively, because a filter over severity would also pass if the
+    // exclusion had gone back to reporting nothing at all.
+    expect(issues.map((issue) => issue.code)).toContain('LINK_EXCLUDED_BY_PATTERN');
+    expect(issues.some((issue) => issue.message.includes('**/data/**'))).toBe(true);
   });
 });
 

@@ -24,6 +24,8 @@
  * lives elsewhere so that the arithmetic can be tested without one.
  */
 
+import { quantile } from '../../harness/estimator.js';
+
 import type { PerfCommandStats } from './types.js';
 
 /**
@@ -42,39 +44,6 @@ export type PerfSummary = Pick<PerfCommandStats, 'medianMs' | 'minMs' | 'maxMs' 
  * {@link isSignificant} without unpacking it first.
  */
 export type MedianWithSpread = Pick<PerfCommandStats, 'medianMs' | 'iqrMs'>;
-
-/**
- * Quantile of an already-sorted sample, by linear interpolation between the
- * order statistics.
- *
- * **The method, stated once so every quantile in this file uses the same one:**
- * for `n` samples and probability `p`, the zero-based position is
- * `h = (n - 1) * p`, and the result is
- * `x[floor(h)] + (h - floor(h)) * (x[ceil(h)] - x[floor(h)])`. This is the R
- * type-7 / NumPy-default definition. *Which* of the several plausible
- * definitions is used matters far less than using one consistently — a median
- * computed one way and an IQR another produces a spread that does not describe
- * the centre it is attached to.
- *
- * Consequences worth knowing: at `n = 1` every quantile is the single sample, so
- * the IQR is exactly `0`; at `n = 2` the quartiles sit a quarter of the way in
- * from each end rather than on the samples themselves.
- *
- * @param sorted - Samples in ascending order; must be non-empty
- * @param p - Probability in `[0, 1]`
- * @returns The interpolated quantile
- * @throws When `sorted` is empty, which would otherwise index off the end
- */
-function quantile(sorted: readonly number[], p: number): number {
-  const h = (sorted.length - 1) * p;
-  const lowIndex = Math.floor(h);
-  const lowValue = sorted[lowIndex];
-  const highValue = sorted[Math.ceil(h)];
-  if (lowValue === undefined || highValue === undefined) {
-    throw new Error('quantile: no samples — an empty measurement has no quantiles');
-  }
-  return lowValue + (highValue - lowValue) * (h - lowIndex);
-}
 
 /**
  * Reduce a set of repeats to the statistics the report carries.

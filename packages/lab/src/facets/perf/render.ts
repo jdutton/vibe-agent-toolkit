@@ -13,6 +13,7 @@
  */
 
 import type { ReportEnvelope } from '../../envelope/envelope.js';
+import { coordinateLines } from '../../harness/render.js';
 
 import type { PerfComparisonResult } from './compare.js';
 import type { PerfBody, PerfCommandStats } from './types.js';
@@ -40,9 +41,14 @@ function rowLine(row: PerfCommandStats): string {
   if (row.failed) {
     return `  ${row.name}: FAILED — ${row.failure ?? 'unknown'}`;
   }
+  // A completed run that exited non-zero says so. A command may declare a
+  // findings exit a completed run (see `MeasuredCommandSpec.completedExitCodes`),
+  // and two rows with the same median where one exited 0 and one exited 1 are
+  // not the same measurement — the second one also rendered its findings.
+  const exit = row.exitCode === 0 || row.exitCode === null ? '' : `, exit ${String(row.exitCode)}`;
   return (
     `  ${row.name}: ${ms(row.medianMs)} median ` +
-    `(±${ms(row.iqrMs)} IQR, ${ms(row.minMs)}–${ms(row.maxMs)}, ${String(row.runs)} runs, ${row.cache})`
+    `(±${ms(row.iqrMs)} IQR, ${ms(row.minMs)}–${ms(row.maxMs)}, ${String(row.runs)} runs, ${row.cache}${exit})`
   );
 }
 
@@ -69,21 +75,11 @@ function loadLine(body: PerfBody): string {
  * @returns Text for a terminal
  */
 export function renderPerfReport(report: ReportEnvelope<PerfBody>): string {
-  const { subject, subjectVersion, instrument } = report.coordinate;
-  let versionLine: string;
-  if (subjectVersion.kind === 'git') {
-    // A dirty tree is measurable but says so — the bytes measured were not the
-    // bytes at that commit, and a reader comparing later must know that.
-    const dirty = subjectVersion.dirty ? ' (DIRTY working tree)' : '';
-    versionLine = `${subjectVersion.commit.slice(0, 8)}${dirty}`;
-  } else {
-    versionLine = `snapshot ${subjectVersion.fingerprint.slice(0, 8)} (${String(subjectVersion.fileCount)} files)`;
-  }
-  const build = instrument.commit === null ? 'released' : instrument.commit.slice(0, 8);
-
   return [
-    `Subject:    ${subject.id} @ ${versionLine}`,
-    `Instrument: vat ${instrument.version} (${build})`,
+    // The shared header, not a third hand-written copy of it. This one used to
+    // be its own, and so was the only renderer that would not have picked up the
+    // instrument's DIRTY label when axis C finally acquired one.
+    ...coordinateLines(report.coordinate),
     loadLine(report.body),
     '',
     ...report.body.commands.map((row) => rowLine(row)),

@@ -9,11 +9,20 @@
  * exposes directly.
  */
 
-import type { ResourceRegistry } from '@vibe-agent-toolkit/resources';
+import {
+  collectRealization,
+  relativize,
+  type ResourceRegistry,
+} from '@vibe-agent-toolkit/resources';
 import { crawlDirectory, gitFindRoot, GitTracker, safePath } from '@vibe-agent-toolkit/utils';
 
+import {
+  markAliases,
+  ORACLE_EXTENT_ID,
+  ORACLE_RESOURCE_ID,
+  toEnumerationRow,
+} from './aliases.js';
 import type { LaneDefinition } from './lanes.js';
-import { collectPathFacts, markAliases, relativize } from './path-facts.js';
 import type {
   CollisionRow,
   EnumerationRoute,
@@ -58,7 +67,12 @@ export async function captureEnumerationSnapshot(
   const crawled = await crawlDirectory(lane.crawlOptions(corpusRoot));
   const enumerated: EnumerationRow[] = [];
   for (const absolutePath of crawled) {
-    enumerated.push(await collectPathFacts(absolutePath, { corpusRoot, gitTracker }));
+    const realization = await collectRealization(absolutePath, ORACLE_RESOURCE_ID, {
+      root: corpusRoot,
+      extentId: ORACLE_EXTENT_ID,
+      ...(gitTracker !== undefined && { gitTracker }),
+    });
+    enumerated.push(toEnumerationRow(realization, absolutePath, corpusRoot));
   }
   // Aliasing is a property of the population, not of a path, so it can only be
   // answered once the whole lane has been walked.

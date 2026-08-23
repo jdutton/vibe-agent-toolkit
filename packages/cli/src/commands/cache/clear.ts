@@ -28,13 +28,27 @@ export interface CacheClearOptions {
   debug?: boolean;
 }
 
-/** What a clear did, as published on stdout. */
+/**
+ * What a clear did, as published on stdout.
+ *
+ * `partial` is not a failure mode bolted on — it is the *common* outcome when
+ * something else on the machine is writing to the shared tree, and it has to be
+ * reportable. A recursive delete that gives up part-way has already removed most
+ * of the cache; surfacing that as a bare thrown error told the operator only
+ * that the command failed, while leaving them to guess how much of their cache
+ * still existed. An honest count of what went and what stayed is the whole
+ * point of a report.
+ */
 export interface CacheClearReport {
-  status: 'success';
+  status: 'success' | 'partial';
   cacheDir: string;
   existed: boolean;
-  /** Top-level entries that were deleted, sorted. Empty when nothing was there. */
+  /** Top-level entries that are gone, sorted. Empty when nothing was there. */
   removed: string[];
+  /** Top-level entries that survived a partial clear, sorted. Absent on success. */
+  remaining?: string[];
+  /** Why the delete stopped short. Absent on success. */
+  reason?: string;
   entriesRemoved: number;
   bytesRemoved: number;
 }
@@ -45,6 +59,25 @@ interface TreeUsage {
 }
 
 const EMPTY_USAGE: TreeUsage = { entries: 0, bytes: 0 };
+
+/**
+ * Retry budget for the recursive delete.
+ *
+ * Not defensive padding — observed. `<tmpdir>/.vat-cache` is shared by every VAT
+ * on the machine: other worktrees, other sessions, and any adopter running an
+ * *installed* vat all write into it under their own namespace. A `vat cache
+ * clear` issued while one of them is mid-run walks a tree that is growing
+ * underneath it and `rmdir` fails `ENOTEMPTY` on a shard that gained a file
+ * between the listing and the removal. Reproduced twice against a concurrent
+ * `vat verify`; the same command succeeded immediately once that run finished.
+ *
+ * Node retries exactly this error class (`EBUSY`, `EMFILE`, `ENFILE`,
+ * `ENOTEMPTY`, `EPERM`) with a linear backoff, which clears a short overlap.
+ * It cannot win against a writer that keeps going for the whole window — that
+ * case still surfaces as an error, which is correct: "some of your cache is
+ * gone and something is still writing" must not be reported as success.
+ */
+const RM_RETRY: { maxRetries: number; retryDelay: number } = { maxRetries: 5, retryDelay: 100 };
 
 /**
  * The shared cache root, `<tmpdir>/.vat-cache`.
@@ -113,16 +146,67 @@ export async function clearCacheDirectory(cacheDir: string): Promise<CacheClearR
   }
 
   const usage = await measureEntries(cacheDir, entries);
-  await fs.rm(cacheDir, { recursive: true, force: true });
+  const names = entries.map((entry) => entry.name);
+
+  try {
+    await fs.rm(cacheDir, { recursive: true, force: true, ...RM_RETRY });
+  } catch (error) {
+    return partialReport(cacheDir, names, usage, error);
+  }
 
   return {
     status: 'success',
     cacheDir,
     existed: true,
-    removed: entries.map((entry) => entry.name).sort((a, b) => a.localeCompare(b)),
+    removed: sorted(names),
     entriesRemoved: usage.entries,
     bytesRemoved: usage.bytes,
   };
+}
+
+/**
+ * Describe a delete that stopped part-way, by re-reading the tree.
+ *
+ * The survivors are read back off disk rather than inferred from the error,
+ * because the error names one path and says nothing about the other ninety-nine
+ * percent. Re-measuring what remains and subtracting is the only way the counts
+ * describe what actually happened rather than what was attempted.
+ *
+ * A concurrent writer can make the remainder *larger* than the original
+ * measurement, so the subtraction is floored at zero: reporting a negative
+ * number of removed bytes would be worse than reporting none.
+ *
+ * @param cacheDir - The tree that was being removed
+ * @param names - Top-level entry names as they were before the delete
+ * @param before - Usage measured before the delete
+ * @param error - Whatever `fs.rm` threw
+ * @returns A report naming what went, what stayed, and why
+ */
+async function partialReport(
+  cacheDir: string,
+  names: string[],
+  before: TreeUsage,
+  error: unknown,
+): Promise<CacheClearReport> {
+  const survivors = (await readdirOrNull(cacheDir)) ?? [];
+  const remaining = new Set(survivors.map((entry) => entry.name));
+  const after = await measureEntries(cacheDir, survivors);
+
+  return {
+    status: 'partial',
+    cacheDir,
+    existed: true,
+    removed: sorted(names.filter((name) => !remaining.has(name))),
+    remaining: sorted([...remaining]),
+    reason: error instanceof Error ? error.message : String(error),
+    entriesRemoved: Math.max(0, before.entries - after.entries),
+    bytesRemoved: Math.max(0, before.bytes - after.bytes),
+  };
+}
+
+/** Stable ordering for the reported entry lists. */
+function sorted(names: readonly string[]): string[] {
+  return [...names].sort((left, right) => left.localeCompare(right));
 }
 
 /**
@@ -138,7 +222,11 @@ export async function cacheClearCommand(options: CacheClearOptions = {}): Promis
     const report = await clearCacheDirectory(vatCacheRoot());
     logger.debug(`Cleared ${String(report.entriesRemoved)} cache entries from ${report.cacheDir}`);
     writeYamlOutput(report);
-    process.exit(0);
+    // A partial clear publishes its report and *then* fails. Exiting through
+    // `handleCommandError` instead would suppress the report entirely, which is
+    // the defect this branch exists to fix: the operator most needs to know how
+    // much of the cache survived precisely when the command did not finish.
+    process.exit(report.status === 'partial' ? 1 : 0);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'CacheClear');
   }

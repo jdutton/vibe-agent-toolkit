@@ -35,9 +35,13 @@
 
 import { basename, dirname } from 'node:path';
 
-import { isLocalFileLink, parserKindForPath, resolveLocalHref } from '@vibe-agent-toolkit/resources';
+import {
+  isLocalFileLink,
+  parserKindForPath,
+  resolveLocalHref,
+} from '@vibe-agent-toolkit/resources';
 import type { DeferredArtifacts, ResourceLink, ResourceMetadata } from '@vibe-agent-toolkit/resources';
-import { FsLookupCache, type GitTracker, isGitIgnored, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
+import { CRAWL_PASS_INSIDE, CRAWL_WALKER_GITIGNORE_ID, CRAWL_WALKER_ID, crawlTimingStart, FsLookupCache, type GitTracker, isGitIgnored, recordCrawlPass, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 
 import { isAgentInstructionBasename, isNavigationBasename } from './validators/validation-rules.js';
@@ -549,9 +553,16 @@ function readGitignored(targetPath: string, options: WalkLinkGraphOptions, state
   const cached = state.gitignoreFacts.get(targetPath);
   if (cached !== undefined) return cached;
 
+  // Charged on the MISS path only, so `calls` counts oracle READS rather than
+  // asks — a memo hit costs nothing worth a bracket, and counting it would make
+  // the row's ms/call meaningless. This is the branch that can spawn
+  // `git check-ignore`, which is why it is separated from the walk's own row at
+  // all: the walk's cost and the oracle's cost move for different reasons.
+  const startedAt = crawlTimingStart();
   const isIgnored = options.gitTracker === undefined
     ? isGitIgnored(targetPath, options.projectRoot)
     : options.gitTracker.isIgnoredByActiveSet(targetPath);
+  recordCrawlPass(CRAWL_WALKER_GITIGNORE_ID, 'crawl', CRAWL_PASS_INSIDE, startedAt);
   state.gitignoreFacts.set(targetPath, isIgnored);
   return isIgnored;
 }
@@ -905,6 +916,37 @@ function processRegistryResource(
  * @returns Graph walk result with bundled resources, assets, and exclusions
  */
 export function walkLinkGraph(
+  skillResourceId: string,
+  registry: WalkableRegistry,
+  options: WalkLinkGraphOptions,
+): LinkGraphResult {
+  // This walker is not a projection contributor, so the merge driver never sees
+  // it and it has no stratum of its own. It records under the synthetic id
+  // `walk-link-graph:walk` in the `crawl` stratum — declared in
+  // `crawl-timing.ts`, deliberately not an ad-hoc string here, because a
+  // synthetic id that arrives by accident is indistinguishable in the dump from
+  // a real contributor's.
+  //
+  // `try`/`finally` rather than a record before each `return`: the early exit
+  // for an unknown skill id is a real (cheap) call and must still be counted,
+  // and a throw must not silently drop a bracket.
+  const startedAt = crawlTimingStart();
+  try {
+    return walkLinkGraphBody(skillResourceId, registry, options);
+  } finally {
+    recordCrawlPass(CRAWL_WALKER_ID, 'crawl', CRAWL_PASS_INSIDE, startedAt);
+  }
+}
+
+/**
+ * The walk itself, with no timing concern in it.
+ *
+ * @param skillResourceId - The resource ID of the skill's SKILL.md in the registry
+ * @param registry - A walkable registry with pre-parsed resources
+ * @param options - Walk options (depth, excludes, etc.)
+ * @returns Graph walk result with bundled resources, assets, and exclusions
+ */
+function walkLinkGraphBody(
   skillResourceId: string,
   registry: WalkableRegistry,
   options: WalkLinkGraphOptions,

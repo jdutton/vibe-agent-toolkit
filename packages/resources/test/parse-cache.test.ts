@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { computeContentKey, type KeyedContent, type ParserKind } from '../src/content-key.js';
@@ -9,6 +10,7 @@ import { type ParseResult, parseMarkdownContent } from '../src/link-parser.js';
 import {
   ParseCache,
   type ParseCacheOptions,
+  type ParseFacts,
   defaultParseCache,
   dehydrate,
   parseCacheDirectory,
@@ -80,6 +82,17 @@ cyc: &anchor
 [link](./x.md)
 `;
 
+/**
+ * Two reference candidates the markdown AST cannot produce: an `@`-prefixed
+ * token, and a variable-anchored path inside a code span.
+ *
+ * The code span is the load-bearing half for a *serialization* test: it makes
+ * `inCodeSpan` true and `variableExpansion` non-null on the second row, so a
+ * round trip that dropped or defaulted either boolean/enum column would be
+ * visible rather than coincidentally equal.
+ */
+const LEXICAL_DOC = '@docs/x.md\n\nUse `${CLAUDE_PLUGIN_ROOT}/s.js` here.\n';
+
 const MALFORMED_FRONTMATTER_DOC = `---
 title: [unclosed
 ---
@@ -144,8 +157,13 @@ const isWindows = process.platform === 'win32';
 // ---------------------------------------------------------------------------
 
 function keyedFromBytes(bytes: Uint8Array, parserKind: ParserKind = 'markdown'): KeyedContent {
+  // Through the real decoder, exactly as `readContentWithKey` does it — which is
+  // also where `decoding` comes from. Hand-building that struct here would let
+  // this helper claim a provenance the bytes do not have.
+  const { text, ...decoding } = decodeTextContent(bytes);
   return {
-    content: Buffer.from(bytes).toString('utf-8'),
+    content: text,
+    decoding,
     key: computeContentKey(bytes, parserKind),
     parserKind,
     byteLength: bytes.byteLength,
@@ -242,6 +260,32 @@ async function reseatEntry(
   await writeEntry(entryPath, JSON.stringify(mutate(await readEntry(entryPath))));
 }
 
+/**
+ * Rewrite the first stored link of an entry, leaving everything else intact.
+ *
+ * The element-shape cases need to corrupt exactly one field of exactly one
+ * array member. An entry that is wrong at the top level proves nothing about
+ * whether the validator ever looks *inside* an array — which is precisely what
+ * the predicate this schema replaced never did.
+ */
+function withFirstLink(
+  entry: Record<string, unknown>,
+  mutate: (link: Record<string, unknown>) => Record<string, unknown>,
+): Record<string, unknown> {
+  const facts = entry['facts'] as { links: Record<string, unknown>[] };
+  const [first, ...rest] = facts.links;
+  if (first === undefined) throw new Error('fixture has no stored link to rewrite');
+  return { ...entry, facts: { ...facts, links: [mutate(first), ...rest] } };
+}
+
+/** `link` without the named keys — the "this entry predates the field" arrangement. */
+function withoutKeys(
+  link: Record<string, unknown>,
+  ...dropped: readonly string[]
+): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(link).filter(([key]) => !dropped.includes(key)));
+}
+
 async function exists(target: string): Promise<boolean> {
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only: path under self-created tempDir
@@ -286,6 +330,31 @@ const MISS_ROUTES: readonly MissRoute[] = [
     arrange: async (suite) => {
       const keyed = keyedFromText(SIMPLE_DOC);
       await reseatEntry(suite, keyed, () => ({ facts: { links: 'not-an-array' } }));
+      return { cache: suite.makeCache(), keyed };
+    },
+  },
+  {
+    // The hole the hand-written predicate left, and the reason a schema
+    // replaced it: `Array.isArray(links)` is satisfied by an array of anything.
+    name: 'an entry whose stored link is the wrong shape inside the array',
+    arrange: async (suite) => {
+      const keyed = keyedFromText(SIMPLE_DOC);
+      await reseatEntry(suite, keyed, (entry) =>
+        withFirstLink(entry, (link) => ({ ...link, line: 'not-a-number' })));
+      return { cache: suite.makeCache(), keyed };
+    },
+  },
+  {
+    // `.strict()` on the envelope: an entry carrying a fact this build has no
+    // field for disagrees about what an entry *contains*, which is worth a
+    // reparse. This is the direction that catches a field REMOVAL.
+    name: 'an entry carrying a fact this build does not know',
+    arrange: async (suite) => {
+      const keyed = keyedFromText(SIMPLE_DOC);
+      await reseatEntry(suite, keyed, (entry) => ({
+        ...entry,
+        facts: { ...(entry['facts'] as Record<string, unknown>), retiredFact: [] },
+      }));
       return { cache: suite.makeCache(), keyed };
     },
   },
@@ -375,6 +444,7 @@ describe('dehydrate', () => {
 
     expect(Object.keys(facts).toSorted((a, b) => a.localeCompare(b))).toEqual([
       'anchors',
+      'contentMeasures',
       'estimatedTokenCount',
       'headings',
       'links',
@@ -433,6 +503,33 @@ describe('rehydrate', () => {
 
     expect(fresh.frontmatterError).toBeDefined();
     expect(result.frontmatterError).toBe(fresh.frontmatterError);
+  });
+});
+
+describe('dehydrate / rehydrate — lexical references', () => {
+  it('round-trips lexical references exactly', () => {
+    const keyed = keyedFromText(LEXICAL_DOC);
+    const parsed = freshParse(keyed);
+
+    // Through real JSON, not through the object. `structuredClone` would NOT
+    // do here even though it is the usual deep-copy answer: an entry on disk is
+    // a JSON *string*, and JSON is the encoding that drops undefined-valued
+    // keys. Naming the string is the point of the test, not an artifact of it.
+    const serialized = JSON.stringify(dehydrate(parsed));
+    const revived = rehydrate(JSON.parse(serialized) as ParseFacts, keyed);
+
+    // Not a vacuous pass: the fixture really does produce rows, and the second
+    // one really does carry the two columns a defaulting round trip would flip.
+    expect(parsed.lexicalReferences).toHaveLength(2);
+    expect(revived.lexicalReferences?.[1]?.inCodeSpan).toBe(true);
+    expect(revived.lexicalReferences?.[1]?.variableExpansion).toBe('brace');
+    expect(revived.lexicalReferences).toStrictEqual(parsed.lexicalReferences);
+  });
+
+  it('sets no own key valued undefined when a document has no lexical references', () => {
+    const facts = dehydrate(freshParse(keyedFromText('# Title\n')));
+
+    expect(Object.hasOwn(facts, 'lexicalReferences')).toBe(false);
   });
 });
 
@@ -552,6 +649,49 @@ describe('ParseCache misses', () => {
     );
 
     expect(await suite.makeCache().get(keyed)).toBeNull();
+  });
+});
+
+describe('ParseFactsSchema — the boundary, and the one thing it cannot see', () => {
+  const suite = setupParseCacheTestSuite();
+
+  it('CANNOT tell an entry written before an OPTIONAL field from one that never had it', async () => {
+    // The honest negative, pinned so nobody reads the schema as total coverage.
+    // `ResourceLink.startOffset` is optional because remark reports no position
+    // for a quoted, parenthesised GFM autolink — so "this entry predates the
+    // span columns" and "this link never had one" are the same bytes, and no
+    // validator can separate them. The answer to that class is one level up:
+    // `parseFactsShapeSource()` feeds the schema's shape into the cache
+    // namespace, so entries from before the field never sit in the same
+    // directory as entries from after it. See schemas/parse-facts.ts.
+    const keyed = keyedFromText(SIMPLE_DOC);
+
+    // Fixture guard: deleting a field the fixture never carried would make this
+    // pass for the wrong reason.
+    expect(freshParse(keyed).links[0]?.startOffset).toEqual(expect.any(Number));
+
+    await reseatEntry(suite, keyed, (entry) =>
+      withFirstLink(entry, (link) => withoutKeys(link, 'startOffset', 'endOffset')));
+
+    const hit = await suite.makeCache().get(keyed);
+
+    expect(hit).not.toBeNull();
+    expect(hit?.links[0]?.startOffset).toBeUndefined();
+  });
+
+  it('strips an unknown key from INSIDE an element rather than rejecting the entry', async () => {
+    // The counterpart to the envelope's `.strict()`: a stale field on a link is
+    // a field this build no longer reads, which harms nothing. Turning every
+    // such entry cold would spend a reparse on a change that cannot produce a
+    // wrong answer.
+    const keyed = keyedFromText(SIMPLE_DOC);
+    await reseatEntry(suite, keyed, (entry) =>
+      withFirstLink(entry, (link) => ({ ...link, retiredColumn: 'stale' })));
+
+    const hit = await suite.makeCache().get(keyed);
+
+    expect(hit).not.toBeNull();
+    expect(hit?.links[0]).not.toHaveProperty('retiredColumn');
   });
 });
 

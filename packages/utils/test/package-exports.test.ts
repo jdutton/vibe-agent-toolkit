@@ -39,6 +39,7 @@ describe('utils package manifest', () => {
     ['.', 'index'],
     ['./path', 'path'],
     ['./fs', 'fs'],
+    ['./text', 'text'],
     ['./process', 'process'],
     ['./git', 'git'],
     ['./glob', 'glob'],
@@ -150,6 +151,7 @@ describe('utils package manifest', () => {
       './project',
       './template',
       './testing',
+      './text',
       './yaml',
       './zod',
     ]);

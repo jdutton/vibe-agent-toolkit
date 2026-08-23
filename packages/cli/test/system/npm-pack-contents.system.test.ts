@@ -1,5 +1,7 @@
 /**
- * Packaging pin for the published `@vibe-agent-toolkit/cli` tarball.
+ * Packaging pin for the published `@vibe-agent-toolkit/cli` tarball, whose
+ * contents are not obvious from the source tree: it must NOT ship two `dist/`
+ * directories.
  *
  * `src/pipeline-oracles/` and `src/qa-snapshot/` are this repo's correctness-oracle
  * TEST instrumentation. They deliberately live under `src/` — that is what keeps them
@@ -57,34 +59,43 @@ interface PackReport {
   files: { path: string; size: number }[];
 }
 
-let report: PackReport;
-/** Every packed entry path, normalised to forward slashes for comparison on Windows. */
-let packedPaths: string[];
+/** A captured report plus its entry paths, forward-slashed once at capture. */
+interface CapturedPack {
+  report: PackReport;
+  packedPaths: string[];
+}
+
+let cliPack: CapturedPack;
 
 /** Packed entry paths starting with `prefix`. */
-function entriesUnder(prefix: string): string[] {
+function entriesUnder(pack: CapturedPack, prefix: string): string[] {
   // `packedPaths` is already forward-slashed at capture, but the comparison site is
   // where the rule can see that — normalising again here is idempotent and keeps the
   // Windows guarantee local to the comparison rather than to a distant assignment.
-  return packedPaths.filter((packedPath) => toForwardSlash(packedPath).startsWith(prefix));
+  return pack.packedPaths.filter((packedPath) => toForwardSlash(packedPath).startsWith(prefix));
 }
 
-beforeAll(() => {
-  const distDir = safePath.join(PACKAGE_DIR, 'dist');
+/**
+ * Run `npm pack --dry-run --json` for one package.
+ *
+ * @param packageDir - Selects the package: cwd, NOT `--prefix`. See the header.
+ * @param buildHint - Printed when `dist/` is absent, because a tarball with no
+ *   build output satisfies every assertion here vacuously.
+ */
+function capturePack(packageDir: string, buildHint: string): CapturedPack {
+  const distDir = safePath.join(packageDir, 'dist');
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- path derived from this test file's own location, not from input
   if (!existsSync(distDir)) {
     throw new Error(
       `${distDir} does not exist, so "npm pack" would report a tarball with no build ` +
-        `output and every exclusion assertion in this file would pass vacuously. ` +
-        `Build first: bunx tsc --build packages/cli/tsconfig.json`,
+        `output and every assertion about it would pass vacuously. Build first: ${buildHint}`,
     );
   }
 
-  // cwd — NOT --prefix — is what selects the package npm packs. See the header.
   // `safeExecSync` resolves `npm` on PATH and handles the Windows `npm.cmd` shell
   // wrapper, so this is not a hand-rolled platform branch.
   const stdout = safeExecSync('npm', ['pack', '--dry-run', '--json'], {
-    cwd: PACKAGE_DIR,
+    cwd: packageDir,
     encoding: 'utf8',
     stdio: 'pipe',
     maxBuffer: 64 * 1024 * 1024,
@@ -95,29 +106,32 @@ beforeAll(() => {
   if (!first) {
     throw new Error(`npm pack --dry-run --json reported nothing (stdout: ${stdout.slice(0, 500)})`);
   }
-  report = first;
-  packedPaths = report.files.map((file) => toForwardSlash(file.path));
+  return { report: first, packedPaths: first.files.map((file) => toForwardSlash(file.path)) };
+}
+
+beforeAll(() => {
+  cliPack = capturePack(PACKAGE_DIR, 'bunx tsc --build packages/cli/tsconfig.json');
 }, 180_000);
 
 describe('published @vibe-agent-toolkit/cli tarball', () => {
   it('packs the CLI package itself, not the surrounding workspace', () => {
-    expect(report.name).toBe('@vibe-agent-toolkit/cli');
-    expect(packedPaths.length).toBe(report.entryCount);
-    expect(report.unpackedSize).toBeGreaterThan(0);
+    expect(cliPack.report.name).toBe('@vibe-agent-toolkit/cli');
+    expect(cliPack.packedPaths.length).toBe(cliPack.report.entryCount);
+    expect(cliPack.report.unpackedSize).toBeGreaterThan(0);
   });
 
   // POSITIVE CONTROL for the exclusion assertions below: without it, packing the wrong
   // package, an empty file list, or a silently mis-parsed report would all satisfy
   // "no entry starts with dist/pipeline-oracles/".
   it('still ships the real CLI: bin, commands, docs and README', () => {
-    expect(packedPaths).toContain('dist/bin/vat.js');
-    expect(packedPaths).toContain('README.md');
-    expect(entriesUnder('dist/bin/').length).toBeGreaterThan(0);
-    expect(entriesUnder('dist/commands/').length).toBeGreaterThan(100);
-    expect(entriesUnder('docs/').length).toBeGreaterThan(0);
+    expect(cliPack.packedPaths).toContain('dist/bin/vat.js');
+    expect(cliPack.packedPaths).toContain('README.md');
+    expect(entriesUnder(cliPack, 'dist/bin/').length).toBeGreaterThan(0);
+    expect(entriesUnder(cliPack, 'dist/commands/').length).toBeGreaterThan(100);
+    expect(entriesUnder(cliPack, 'docs/').length).toBeGreaterThan(0);
 
     // Non-empty, not merely present — a zero-byte entry would otherwise read as shipped.
-    const binEntry = report.files.find((file) => toForwardSlash(file.path) === 'dist/bin/vat.js');
+    const binEntry = cliPack.report.files.find((file) => toForwardSlash(file.path) === 'dist/bin/vat.js');
     expect(binEntry?.size).toBeGreaterThan(0);
   });
 
@@ -125,7 +139,7 @@ describe('published @vibe-agent-toolkit/cli tarball', () => {
   // later per-case gating written here would throw on the one platform that needs it.
   for (const prefix of EXCLUDED_PREFIXES) {
     it(`ships no ${prefix} entries`, () => {
-      expect(entriesUnder(prefix)).toEqual([]);
+      expect(entriesUnder(cliPack, prefix)).toEqual([]);
     });
   }
 });

@@ -276,6 +276,7 @@ describe('parse-fact snapshot', () => {
       sizeBytes: 10,
       estimatedTokenCount: 3,
       links: [],
+      lexicalReferences: null,
       headings: [],
       frontmatterSource: null,
       frontmatterFields: null,

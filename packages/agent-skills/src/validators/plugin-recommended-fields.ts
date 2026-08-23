@@ -12,7 +12,7 @@
  * "Recommended Metadata" section.
  */
 
-import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 
 interface PluginManifestSubset {

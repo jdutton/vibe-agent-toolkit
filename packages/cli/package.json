@@ -47,13 +47,11 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",
     "@vibe-agent-toolkit/agent-config": "workspace:*",
-    "@vibe-agent-toolkit/agent-schema": "workspace:*",
+    "@vibe-agent-toolkit/schema": "workspace:*",
     "@vibe-agent-toolkit/agent-skills": "workspace:*",
     "@vibe-agent-toolkit/claude-marketplace": "workspace:*",
     "@vibe-agent-toolkit/discovery": "workspace:*",
     "@vibe-agent-toolkit/gateway-mcp": "workspace:*",
-    "@vibe-agent-toolkit/rag": "workspace:*",
-    "@vibe-agent-toolkit/rag-lancedb": "workspace:*",
     "@vibe-agent-toolkit/resources": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
     "adm-zip": "^0.6.0",
@@ -81,5 +79,10 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/jdutton/vibe-agent-toolkit.git"
+  },
+  "optionalDependencies": {
+    "@vibe-agent-toolkit/projection-sqlite": "workspace:*",
+    "@vibe-agent-toolkit/rag": "workspace:*",
+    "@vibe-agent-toolkit/rag-lancedb": "workspace:*"
   }
 }

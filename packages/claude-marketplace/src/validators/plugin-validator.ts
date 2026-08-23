@@ -1,7 +1,6 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- File paths are validated before use */
 import { existsSync, readFileSync } from 'node:fs';
 
-import { calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import {
 	type AnchorRootOptions,
 	detectHostedIncompatibleShape,
@@ -12,6 +11,7 @@ import {
 	resolveAnchorRoot,
 	type ValidationResult,
 } from '@vibe-agent-toolkit/agent-skills';
+import { calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
 import { ClaudePluginSchema } from '../schemas/claude-plugin.js';

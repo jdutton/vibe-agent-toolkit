@@ -25,7 +25,7 @@ import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 
 import { vatCacheNamespace } from '@vibe-agent-toolkit/resources';
-import { safeExecResult, safePath } from '@vibe-agent-toolkit/utils';
+import { runGit, safePath } from '@vibe-agent-toolkit/utils';
 
 import { resolveBinPath } from '../commands/phase-utils.js';
 import {
@@ -500,19 +500,19 @@ const UNTRACKED_SAMPLE_SIZE = 5;
 /**
  * Run one `git` invocation in the corpus, swallowing every failure.
  *
+ * `cwd` is the corpus — a caller-supplied path — so the inherited `GIT_*`
+ * redirection is scrubbed. Without it, a capture taken from inside a worktree
+ * git hook records the *committing* repository's provenance under the corpus's
+ * name, at exit 0, which the `success` check below cannot distinguish from a
+ * correct answer.
+ *
  * @param cwd - Directory to run in
  * @param args - Arguments after `git`
  * @returns Trimmed stdout, or null when the command did not succeed
  */
 function gitOutput(cwd: string, args: string[]): string | null {
-  try {
-    const result = safeExecResult('git', args, { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS });
-    return result.success ? result.stdout.toString().trim() : null;
-  } catch {
-    // `safeExecResult` is documented not to throw. The guard is here anyway
-    // because a capture must never die on provenance.
-    return null;
-  }
+  const result = runGit(args, { cwd, timeout: GIT_TIMEOUT_MS });
+  return result.ok ? result.stdout : null;
 }
 
 /**

@@ -11,16 +11,29 @@
 
 import { createHash } from 'node:crypto';
 
-import { parseHtml, parseMarkdown, parserKindForPath, readContentWithKey } from '@vibe-agent-toolkit/resources';
-import type { HeadingNode, ParserKind, ParseResult, ResourceLink } from '@vibe-agent-toolkit/resources';
+import {
+  flattenHeadings,
+  parseHtml,
+  parseMarkdown,
+  parserKindForPath,
+  readContentWithKey,
+  relativize,
+} from '@vibe-agent-toolkit/resources';
+import type {
+  HeadingNode,
+  LexicalReference,
+  ParserKind,
+  ParseResult,
+  ResourceLink,
+} from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
-import { relativize } from './path-facts.js';
 import type {
   ConditionFact,
   FrontmatterFieldFact,
   HeadingFact,
   KeyDisagreement,
+  LexicalReferenceFact,
   LinkFact,
   OptionalArrayState,
   ParseFactRow,
@@ -61,7 +74,9 @@ type CapturedParseResultField =
   | 'estimatedTokenCount'
   | 'anchors'
   | 'parseErrors'
-  | 'unresolvedReferences';
+  | 'unresolvedReferences'
+  | 'lexicalReferences'
+  | 'contentMeasures';
 
 /**
  * Fields deliberately not recorded verbatim, each with the assertion that
@@ -216,7 +231,10 @@ function toRow(contentKey: string, parserKind: ParserKind, parsed: ParseResult):
     sizeBytes: parsed.sizeBytes,
     estimatedTokenCount: parsed.estimatedTokenCount,
     links: parsed.links.map(toLinkFact),
-    headings: flattenHeadings(parsed.headings),
+    // Same absent-is-not-empty rule as `anchors` below: the key is omitted
+    // rather than emitted as `[]` when a document has no candidates.
+    lexicalReferences: parsed.lexicalReferences?.map(toLexicalReferenceFact) ?? null,
+    headings: flattenHeadings(parsed.headings).map(toHeadingFact),
     // Read off the parse result, not re-derived from the bytes. This module
     // used to carry its own regex delimiter — a second implementation of
     // frontmatter delimiting, which existed only because `ParseResult` did not
@@ -227,12 +245,24 @@ function toRow(contentKey: string, parserKind: ParserKind, parsed: ParseResult):
     // Absent stays distinguishable from empty: both parsers omit the key rather
     // than emitting `[]`, so `null` and `[]` are different observations.
     anchors: parsed.anchors === undefined ? null : [...parsed.anchors],
+    // Copied column by column rather than by reference, so the row cannot
+    // alias the parse result, and `null` when absent on the `anchors`
+    // precedent.
+    contentMeasures:
+      parsed.contentMeasures === undefined
+        ? null
+        : {
+            wordCount: parsed.contentMeasures.wordCount,
+            proseCodeUnits: parsed.contentMeasures.proseCodeUnits,
+            codeBlockCodeUnits: parsed.contentMeasures.codeBlockCodeUnits,
+          },
     decodedLength: parsed.content.length,
     conditions: collectConditions(parsed),
     optionalArrays: [
       { field: 'anchors', state: arrayState(parsed.anchors) },
       { field: 'parseErrors', state: arrayState(parsed.parseErrors) },
       { field: 'unresolvedReferences', state: arrayState(parsed.unresolvedReferences) },
+      { field: 'lexicalReferences', state: arrayState(parsed.lexicalReferences) },
     ],
   };
 }
@@ -355,31 +385,47 @@ function toLinkFact(link: ResourceLink, index: number): LinkFact {
 }
 
 /**
- * Flatten the heading tree into document order with ordinals.
+ * One lexical reference candidate with its ordinal.
  *
- * `HeadingNode` nests children, which is the right shape for a table of
- * contents and the wrong shape for diffing: a heading moving one level changes
- * the whole subtree's position in the nested rendering. Flat + explicit level
- * makes the diff say what actually changed.
+ * Every column is copied verbatim rather than summarised. They are all scalars
+ * a lossy round-trip can silently replace with a plausible default — and one of
+ * them, `inCodeSpan`, is what decides whether an `@` token counts as an import
+ * at all, so a wrong value is a changed meaning rather than a missing row.
  */
-function flattenHeadings(headings: readonly HeadingNode[]): HeadingFact[] {
-  const flat: HeadingFact[] = [];
-  const walk = (nodes: readonly HeadingNode[]): void => {
-    for (const node of nodes) {
-      flat.push({
-        ordinal: flat.length,
-        level: node.level,
-        text: node.text,
-        slug: node.slug,
-        line: node.line ?? null,
-      });
-      if (node.children !== undefined) {
-        walk(node.children);
-      }
-    }
+function toLexicalReferenceFact(reference: LexicalReference, index: number): LexicalReferenceFact {
+  return {
+    ordinal: index,
+    raw: reference.raw,
+    line: reference.line,
+    column: reference.column,
+    syntacticForm: reference.syntacticForm,
+    hasExtension: reference.hasExtension,
+    leadingAt: reference.leadingAt,
+    slashCount: reference.slashCount,
+    variableExpansion: reference.variableExpansion,
+    inCodeSpan: reference.inCodeSpan,
+    inFence: reference.inFence,
   };
-  walk(headings);
-  return flat;
+}
+
+/**
+ * One already-flattened heading, with its document-order ordinal.
+ *
+ * The flattening itself lives in `resources` (`flattenHeadings`) because the
+ * projection's `blob_sections` rows need the identical walk; duplicating it here
+ * would let the golden and the projection disagree about document order. What
+ * stays here is the golden's own shape: an explicit `ordinal`, and `line`
+ * widened from optional to `null` so an absent position is a recorded fact
+ * rather than a missing key.
+ */
+function toHeadingFact(node: HeadingNode, ordinal: number): HeadingFact {
+  return {
+    ordinal,
+    level: node.level,
+    text: node.text,
+    slug: node.slug,
+    line: node.line ?? null,
+  };
 }
 
 /**

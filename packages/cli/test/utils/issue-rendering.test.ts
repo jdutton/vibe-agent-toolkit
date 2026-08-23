@@ -14,16 +14,16 @@
  * extracted to fix.
  */
 
-import {
-  countBySeverity,
-  type SeverityCounts,
-  type ValidationIssue,
-} from '@vibe-agent-toolkit/agent-schema';
 import type {
   PackageSkillResult,
   PackagingValidationResult,
   ValidationResult,
 } from '@vibe-agent-toolkit/agent-skills';
+import {
+  countBySeverity,
+  type SeverityCounts,
+  type ValidationIssue,
+} from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
 import { summarizePackagedSkillIssues } from '../../src/commands/claude/plugin/build.js';

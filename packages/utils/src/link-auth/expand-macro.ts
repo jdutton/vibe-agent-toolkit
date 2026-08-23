@@ -41,7 +41,13 @@ function getMacros(): Record<string, Record<string, unknown>> {
   // Path is derived from `import.meta.url`, not user input — points at the
   // shipped macros.yaml asset next to this module in both src and dist trees.
   const macrosPath = fileURLToPath(new URL('./macros.yaml', import.meta.url));
-  // eslint-disable-next-line security/detect-non-literal-fs-filename
+  // Not a content read: `macros.yaml` is an asset THIS PACKAGE authors, commits
+  // and publishes beside this module, so the encoding was chosen at the write
+  // rather than discovered at the read. Left on the raw reader deliberately —
+  // the lazy-load note above documents that tests elsewhere mock
+  // `readFileSync`, and routing this through another module's import of it is
+  // gratuitous risk for a file whose bytes we control.
+  // eslint-disable-next-line security/detect-non-literal-fs-filename, local/no-raw-text-decode -- our own published asset; writer is this package
   const macrosFileContent = readFileSync(macrosPath, 'utf8');
   const parsed = parseYaml(macrosFileContent) as unknown;
 

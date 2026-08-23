@@ -289,7 +289,7 @@ describe('the ./eslint subpath ships', () => {
   it('includes the rule pack in the published file set', () => {
     expect(project.packedFiles).toContain('eslint/index.cjs');
     expect(project.packedFiles).toContain('eslint/rules/no-os-tmpdir.cjs');
-    // 21 registered rules + three shared factories (`eslint-rule-factory`,
+    // 24 registered rules + three shared factories (`eslint-rule-factory`,
     // `path-function-rule-factory`, `no-command-direct-factory`) + `exempt-path-matcher`
     // + `safe-import` (the autofix target and the already-bound check)
     // + `dead-import` (removing the binding a fixer orphaned).
@@ -297,7 +297,7 @@ describe('the ./eslint subpath ships', () => {
     // npm reports manifest paths POSIX-style; normalize anyway so the count cannot
     // quietly become zero on a platform that reports them otherwise.
     const rules = project.packedFiles.filter((file) => toForwardSlash(file).startsWith('eslint/rules/'));
-    expect(rules).toHaveLength(27);
+    expect(rules).toHaveLength(30);
   });
 
   it('ships the hand-written types alongside them', () => {

@@ -11,7 +11,7 @@
  * signal before any promotion.
  */
 
-import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 
 // Targeted modals only — excludes "are" and "did" so we match instructional

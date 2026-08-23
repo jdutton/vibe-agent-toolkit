@@ -1,4 +1,4 @@
-import type { OneShotAgentOutput } from '@vibe-agent-toolkit/agent-schema';
+import type { OneShotAgentOutput } from '@vibe-agent-toolkit/schema';
 import type { expect } from 'vitest';
 
 import type { CatCharacteristics } from '../src/types/schemas.js';

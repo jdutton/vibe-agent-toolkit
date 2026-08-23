@@ -16,7 +16,7 @@
  * stated the dependency in the body.
  */
 
-import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 
 /** Document-internal pointer — belongs in `ValidationIssue.field`, not `location`. */

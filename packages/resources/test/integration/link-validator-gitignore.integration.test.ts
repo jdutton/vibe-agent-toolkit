@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { createSymlink, normalizedTmpdir, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { fragmentIndex, validateLink } from '../../src/link-validator.js';
@@ -126,7 +126,8 @@ describe('isWithinProject', () => {
   // realpath-symmetry regression for symlinked roots (e.g. macOS /tmp →
   // /private/tmp); the logic is platform-agnostic and covered on POSIX CI, so
   // skip on Windows.
-  it.skipIf(process.platform === 'win32')('handles symlinked projectRoot symmetrically', () => {
+  it('handles symlinked projectRoot symmetrically', ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
     // Regression for asymmetric realpath: when a caller passes a projectRoot
     // that traverses a symlink (e.g. macOS /tmp → /private/tmp, or any bind
     // mount), isWithinProject must canonicalize BOTH sides. Otherwise a file
@@ -135,8 +136,7 @@ describe('isWithinProject', () => {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are from temp dir
     const realRoot = fs.realpathSync(suite.tempDir);
     const symlinkRoot = realRoot + '-symlink';
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are from temp dir
-    fs.symlinkSync(realRoot, symlinkRoot);
+    createSymlink(cap, realRoot, symlinkRoot);
     try {
       const fileInsideRealRoot = safePath.join(realRoot, 'inside.md');
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are from temp dir

@@ -15,8 +15,8 @@
  */
 import * as fs from 'node:fs';
 
-import { ValidationIssueSchema, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
-import { GitTracker, isAbsoluteAnyPlatform, mkdirSyncReal, normalizedTmpdir, safeExecSync, safePath } from '@vibe-agent-toolkit/utils';
+import { ValidationIssueSchema, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { GitTracker, isAbsoluteAnyPlatform, mkdirSyncReal, normalizedTmpdir, runGitOrThrow, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { validateSkillForPackaging } from '../../src/validators/packaging-validator.js';
@@ -81,11 +81,11 @@ beforeAll(async () => {
   // exercise the non-repo path. With one but WITHOUT a commit, `git ls-files`
   // returns empty and the registry is empty, so no link issue is produced at
   // all. Both halves are required for this gate to see anything.
-  safeExecSync('git', ['init', '-q', '-b', 'main'], { cwd: tempDir });
-  safeExecSync('git', ['config', 'user.email', 'test@test'], { cwd: tempDir });
-  safeExecSync('git', ['config', 'user.name', 'test'], { cwd: tempDir });
-  safeExecSync('git', ['add', '-A'], { cwd: tempDir });
-  safeExecSync('git', ['commit', '-q', '-m', 'init'], { cwd: tempDir });
+  runGitOrThrow(['init', '-q', '-b', 'main'], { cwd: tempDir });
+  runGitOrThrow(['config', 'user.email', 'test@test'], { cwd: tempDir });
+  runGitOrThrow(['config', 'user.name', 'test'], { cwd: tempDir });
+  runGitOrThrow(['add', '-A'], { cwd: tempDir });
+  runGitOrThrow(['commit', '-q', '-m', 'init'], { cwd: tempDir });
 
   // Drive the packaging lane the way `vat audit` does — with a pre-populated
   // GitTracker. The tracker's active set is the O(1) ignore oracle in real

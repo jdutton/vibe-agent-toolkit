@@ -4,19 +4,47 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import { normalizedTmpdir, resetProjectRootCaches, safePath } from '@vibe-agent-toolkit/utils';
-import { expect, type Assertion } from 'vitest';
+import { GitTracker, mkdirSyncReal, normalizedTmpdir, removeScratchDir, resetProjectRootCaches, safePath } from '@vibe-agent-toolkit/utils';
+import { afterAll, beforeAll, beforeEach, expect, type Assertion } from 'vitest';
 
 import { ExternalLinkValidator } from '../src/external-link-validator.js';
 import { parseMarkdown } from '../src/link-parser.js';
 import type { FragmentIndex, ValidateLinkOptions as LinkValidatorOptions } from '../src/link-validator.js';
 import { validateLink } from '../src/link-validator.js';
+import type { ExtentContribution, ExtentContributor } from '../src/projection/contributor.js';
+import { ProjectionBuilder } from '../src/projection/projection.js';
 import { ResourceRegistry } from '../src/resource-registry.js';
+import {
+  ResourceExtentRowSchema,
+  ResourceRealizationRowSchema,
+  ResourceRowSchema,
+  type ResourceRealizationRow,
+} from '../src/schemas/projection-resources.js';
+import { ResolutionContextRowSchema } from '../src/schemas/projection-zones.js';
 import type { HeadingNode, ResourceLink, ValidationIssue } from '../src/types.js';
+
+/**
+ * Write a fixture file under `rootDir`, creating its parent directories.
+ *
+ * Synchronous and root-relative because every fixture tree in this package is
+ * built the same way: a list of root-relative paths planted before anything
+ * reads them. Lives here rather than in each suite so the two crawl fixtures
+ * cannot drift into two spellings of one operation.
+ *
+ * @param rootDir - Root the path is relative to
+ * @param relativePath - Root-relative, forward-slashed
+ * @param contents - Bytes to write
+ */
+export function writeFileIn(rootDir: string, relativePath: string, contents: string): void {
+  const absolutePath = safePath.resolve(rootDir, relativePath);
+  mkdirSyncReal(safePath.resolve(absolutePath, '..'), { recursive: true });
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture path beneath a caller-owned temp root
+  writeFileSync(absolutePath, contents, 'utf-8');
+}
 
 /**
  * Initialize a git repository in the specified directory.
@@ -224,7 +252,11 @@ export function setupSubdirTestSuite(suitePrefix: string): {
       suite.suiteDir = await mkdtemp(safePath.join(normalizedTmpdir(), suitePrefix));
     },
     afterAll: async () => {
-      await rm(suite.suiteDir, { recursive: true, force: true });
+      // Bounded, like the two `utils` suite helpers. This is the third shared
+      // helper of the same shape and it was missed by that migration — it backs
+      // the projection suites, whose fixture trees are the heaviest in the repo
+      // and therefore the likeliest to lose a teardown to contention.
+      await removeScratchDir(suite.suiteDir);
     },
     beforeEach: async () => {
       testCounter++;
@@ -599,4 +631,190 @@ export async function createTwoFilesWithSameContent(
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- test helper
   await writeFile(file2, content, 'utf-8');
   return { file1, file2 };
+}
+
+/**
+ * Assert every row in an {@link ExtentContribution} parses against its shipped schema.
+ *
+ * Two extent-contributor test files independently wrote this same four-table
+ * loop, which is the shape jscpd counts as a clone. It is a genuinely shared
+ * assertion rather than a deliberate independent restatement, so it belongs in
+ * one place — unlike the pipeline oracle, whose duplication of production logic
+ * is the instrument itself.
+ *
+ * `contexts` is looped rather than indexed so a contributor declaring several
+ * extents at once (the package extent emits one per package) is fully covered.
+ *
+ * @param contribution - The rows a contributor returned
+ */
+export function expectContributionRowsValid(contribution: ExtentContribution): void {
+  for (const row of contribution.contexts) {
+    expect(() => ResolutionContextRowSchema.parse(row)).not.toThrow();
+  }
+  for (const row of contribution.resources) {
+    expect(() => ResourceRowSchema.parse(row)).not.toThrow();
+  }
+  for (const row of contribution.realizations) {
+    expect(() => ResourceRealizationRowSchema.parse(row)).not.toThrow();
+  }
+  for (const row of contribution.memberships) {
+    expect(() => ResourceExtentRowSchema.parse(row)).not.toThrow();
+  }
+}
+
+/**
+ * Build one extent contribution against a fixture repository.
+ *
+ * The tracker → builder → `contribute` sequence is identical for every extent
+ * contributor, and repeating it per suite is a jscpd clone. Generic over the
+ * contributor so the git and filesystem lanes share one implementation rather
+ * than two near-copies. `rootId` comes back too, so a caller can derive extent
+ * context ids without constructing a second builder.
+ *
+ * @param root - Fixture repository root
+ * @param contributor - The extent contributor to run
+ * @returns The rows it emitted, plus the builder's root identity
+ */
+export async function buildExtentContribution(
+  root: string,
+  contributor: ExtentContributor
+): Promise<{ contribution: ExtentContribution; rootId: string }> {
+  const tracker = new GitTracker(root);
+  await tracker.initialize({ includeUntracked: true });
+  const builder = new ProjectionBuilder(root, tracker);
+
+  return {
+    contribution: await contributor.contribute(builder.base(), null),
+    rootId: builder.identities.rootId,
+  };
+}
+
+/** One fixture document: where it goes under the root, and what is in it. */
+export interface CorpusFile {
+  /** Root-relative, forward-slashed. */
+  readonly path: string;
+  readonly content: string;
+}
+
+/**
+ * Write a fixture corpus beneath a temp root, creating the directories it needs.
+ *
+ * Extracted because two suites build the same corpus the same way in the same
+ * `beforeEach` — `crawl-timing.test.ts` and `projection-store-roundtrip.test.ts`
+ * both measure the projection driver over a linked chain of documents, so their
+ * fixtures are identical by intent rather than by accident. Sharing it is what
+ * keeps them measuring the same subject when one of them is edited.
+ *
+ * @param root - The temp root to write beneath
+ * @param directories - Directories to create first, root-relative
+ * @param corpus - The documents to write
+ */
+export async function writeCorpusFiles(
+  root: string,
+  directories: readonly string[],
+  corpus: readonly CorpusFile[],
+): Promise<void> {
+  for (const directory of directories) {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture directory beneath a mkdtemp root
+    await mkdir(safePath.join(root, directory), { recursive: true });
+  }
+  await Promise.all(
+    corpus.map((file) =>
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture path beneath a mkdtemp root
+      writeFile(safePath.join(root, file.path), file.content, 'utf-8'),
+    ),
+  );
+}
+
+/** The shape {@link setupSubdirTestSuite} hands back. */
+export interface SubdirTestSuite {
+  suiteDir: string;
+  tempDir: string;
+  beforeAll: () => Promise<void>;
+  afterAll: () => Promise<void>;
+  beforeEach: () => Promise<void>;
+}
+
+/**
+ * Register the standard per-test temp-root lifecycle and write a corpus into it.
+ *
+ * Registers hooks rather than returning them, which is the point: two suites
+ * were repeating the same four `beforeAll`/`afterAll`/`beforeEach` lines
+ * verbatim, and boilerplate restated is boilerplate that drifts — one suite
+ * gaining a fixture the other silently lacks is a difference nobody reads a
+ * lifecycle block closely enough to notice.
+ *
+ * Each suite keeps its OWN `afterEach`, deliberately: what a suite must reset is
+ * a fact about what that suite touches, and hiding it here would make a leak
+ * between tests invisible at the place it has to be reasoned about.
+ *
+ * @param suite - The suite handle from {@link setupSubdirTestSuite}
+ * @param directories - Directories to create under the temp root, root-relative
+ * @param corpus - The documents to write
+ */
+export function useCorpusSuite(
+  suite: SubdirTestSuite,
+  directories: readonly string[],
+  corpus: readonly CorpusFile[],
+): void {
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+  beforeEach(suite.beforeEach);
+  beforeEach(async () => {
+    await writeCorpusFiles(suite.tempDir, directories, corpus);
+  });
+}
+
+/**
+ * A schema-valid `resource_realizations` row for a hand-built projection base.
+ *
+ * Extracted because the projection suites were each deriving the same eight
+ * path-shaped columns (`pathLower`, `basenameLower`, `dir`, `depth`, `ext`, …)
+ * from a root-relative path with the same arithmetic. That derivation is not
+ * what any of them is testing, and every copy of it is another place a fixture
+ * can stop resembling what `relativize()` and the enumerators actually emit —
+ * which is precisely the failure mode that makes a green suite meaningless.
+ *
+ * The boolean state columns default to "an ordinary present file" and are
+ * overridable, because a suite exercising a `flags` refusal matcher has to plant
+ * a `gitignored` or non-existent row deliberately.
+ *
+ * @param row - The identity, extent, path and content key this realization has,
+ *   plus any boolean column the caller needs to differ from the default. A null
+ *   `contentKey` selects the `deferred` content state — enumerated, deliberately
+ *   not read — which is the only state the schema pairs with a null key
+ * @returns The full row
+ */
+export function projectionRealizationRow(row: {
+  resourceId: string;
+  extentId: string;
+  path: string;
+  contentKey: string | null;
+  isDirectory?: boolean;
+  exists?: boolean;
+  gitignored?: boolean;
+  isSymlink?: boolean;
+}): ResourceRealizationRow {
+  const lastSlash = row.path.lastIndexOf('/');
+  const basename = lastSlash === -1 ? row.path : row.path.slice(lastSlash + 1);
+  const dot = basename.lastIndexOf('.');
+  return {
+    resourceId: row.resourceId,
+    extentId: row.extentId,
+    path: row.path,
+    pathLower: row.path.toLowerCase(),
+    basenameLower: basename.toLowerCase(),
+    dir: lastSlash === -1 ? '' : row.path.slice(0, lastSlash),
+    // eslint-disable-next-line local/no-hardcoded-path-split -- fixture paths are authored forward-slashed, as `relativize()` emits them
+    depth: row.path.split('/').length,
+    ext: dot <= 0 ? '' : basename.slice(dot).toLowerCase(),
+    contentKey: row.contentKey,
+    contentState: row.contentKey === null ? 'deferred' : 'keyed',
+    mtime: null,
+    exists: row.exists ?? true,
+    isDirectory: row.isDirectory ?? false,
+    gitignored: row.gitignored ?? false,
+    isSymlink: row.isSymlink ?? false,
+    symlinkResolves: null,
+  };
 }

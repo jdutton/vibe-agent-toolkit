@@ -1,9 +1,16 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "tasks": {
+    // `*.tsbuildinfo` is a build output and must be cached with `dist/**`, not left
+    // behind. Restoring `dist/` without it puts the package in a state TypeScript
+    // reads as "never built": the next `tsc` re-emits every file even though the
+    // output is already correct, and a `tsc --build` elsewhere in the repo would
+    // conclude this project is stale and emit into *this* package's `dist/` from
+    // outside turbo's ordering. Both are pure write traffic against a directory
+    // other tasks are concurrently reading.
     "build": {
       "dependsOn": ["^build"],
-      "outputs": ["dist/**", "**/*.schema.json"],
+      "outputs": ["dist/**", "*.tsbuildinfo", "**/*.schema.json", "schemas/**"],
       "cache": true
     },
     // --- Adopter packages ---
@@ -15,11 +22,30 @@
     // To register a new adopter package, add a "<pkg>#build" entry below.
     "@vibe-agent-toolkit/vat-development-agents#build": {
       "dependsOn": ["@vibe-agent-toolkit/cli#build", "^build"],
-      "outputs": ["dist/**", "agents/**"],
+      "outputs": ["dist/**", "*.tsbuildinfo", "agents/**"],
       "cache": true
     },
     "build:skills": {
       "dependsOn": ["build"],
+      "outputs": ["dist/skills/**"],
+      "cache": true
+    },
+    // cat-agents runs the CLI *binary* from `build:skills`, not from `build`, so the
+    // adopter registration above does not cover it. Without this edge turbo is free to
+    // start `node ../cli/dist/bin/vat.js skills build` while a transitive dependency of
+    // the CLI is mid-rebuild. Observed as a hard, repeating failure: gateway-mcp's
+    // `dist/` was removed at the instant the CLI tried to import it
+    // (`ERR_MODULE_NOT_FOUND` on gateway-mcp/dist/index.js), turbo then killed the
+    // gateway build (130) so nothing was cached, and the next run raced identically.
+    // Warm caches hid it until a change upstream of gateway-mcp forced a cache miss.
+    //
+    // `tsc-clean-build.ts` no longer deletes `dist/` before emitting, so an
+    // undeclared edge now degrades to "the reader sees the previous complete build"
+    // instead of a crash. That is a safety net, not a substitute: keep declaring the
+    // edge. Any task that runs the CLI binary reads a dozen packages' `dist/`, and
+    // only an explicit edge makes turbo order them — or rebuild the CLI when they change.
+    "@vibe-agent-toolkit/vat-example-cat-agents#build:skills": {
+      "dependsOn": ["@vibe-agent-toolkit/cli#build", "build"],
       "outputs": ["dist/skills/**"],
       "cache": true
     },
@@ -75,5 +101,13 @@
     "vitest.setup.js",
     "packages/dev-tools/src/copy-yaml-assets.ts"
   ],
-  "globalEnv": ["CI", "NET_AVAILABLE", "UPDATE_DRIFT_GOLDEN"]
+  "globalEnv": [
+    "CI",
+    "NET_AVAILABLE",
+    "UPDATE_DRIFT_GOLDEN",
+    "VAT_EXTENT_SOURCE",
+    "VAT_INVENTORY_CRAWL",
+    "VAT_PROJECTION_STORE",
+    "VAT_RESOURCES_CRAWL"
+  ]
 }

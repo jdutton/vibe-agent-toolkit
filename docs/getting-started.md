@@ -243,7 +243,7 @@ The project uses `.editorconfig` which is supported by most modern IDEs:
 bun run build:clean
 
 # Remove all node_modules and reinstall
-bun run clean
+bun run clean:deps
 bun install
 ```
 

@@ -17,7 +17,7 @@
 
 import { existsSync } from 'node:fs';
 
-import { type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { crawlDirectorySync, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
 import { normalizeRelPath } from '../files-config.js';

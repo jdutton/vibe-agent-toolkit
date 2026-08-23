@@ -95,7 +95,7 @@ export {
   validateAgentInput,
 } from './agent-helpers.js';
 
-// Re-export result constructors and constants from agent-schema for convenience
+// Re-export result constructors and constants from schema for convenience
 // This allows users to import everything they need from agent-runtime
 export {
   createSuccess,
@@ -119,7 +119,7 @@ export {
   type ExecutionMetadata,
   type LLMError,
   type ExternalEventError,
-} from '@vibe-agent-toolkit/agent-schema';
+} from '@vibe-agent-toolkit/schema';
 
 // NOTE: resultMatchers is NOT exported from main index to avoid importing vitest
 // in production code. Import directly from './test-helpers.js' in test files.

@@ -1,7 +1,7 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- tmpdir paths constructed in test setup */
-import { mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { createSymlink, mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { stageDirInto } from '../../src/skill-source/stage.js';
@@ -42,11 +42,12 @@ describe('stageDirInto', () => {
   });
 
   // Needs real symlink creation, which requires admin/Developer Mode on Windows.
-  // The refusal logic is platform-agnostic and fully covered on POSIX CI, so skip
-  // on Windows rather than carry a privilege probe for near-zero extra coverage.
-  it.skipIf(process.platform === 'win32')('refuses to copy through a symlinked entry in the source tree', async () => {
+  // The refusal logic is platform-agnostic and fully covered on POSIX CI, so this
+  // probes the real capability rather than gating on raw platform.
+  it('refuses to copy through a symlinked entry in the source tree', async ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
     mkdirSyncReal(safePath.join(src, 'sub'));
-    symlinkSync('/etc', safePath.join(src, 'sub', 'evil'));
+    createSymlink(cap, '/etc', safePath.join(src, 'sub', 'evil'));
     await expect(stageDirInto(src, ctx, 'sym')).rejects.toThrow(/symlink/i);
   });
 

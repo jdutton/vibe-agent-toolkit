@@ -31,7 +31,7 @@
 
 import fs from 'node:fs';
 
-import { countBySeverity, type SeverityCounts, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { countBySeverity, type SeverityCounts, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 

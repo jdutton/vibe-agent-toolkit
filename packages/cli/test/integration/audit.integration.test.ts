@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import { dirname } from 'node:path';
 
-import { countBySeverity } from '@vibe-agent-toolkit/agent-schema';
+import { countBySeverity } from '@vibe-agent-toolkit/schema';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 

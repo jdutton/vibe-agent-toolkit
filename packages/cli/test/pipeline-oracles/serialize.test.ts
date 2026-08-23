@@ -6,15 +6,40 @@
  * argument that a restructure preserved each lane's population — rests on it.
  */
 
+import { relativize } from '@vibe-agent-toolkit/resources';
 import { describe, expect, it } from 'vitest';
 
-import { relativize } from '../../src/pipeline-oracles/path-facts.js';
 import {
   renderEnumerationSnapshot,
   renderEnumerationSnapshotUnordered,
   renderParseFactSnapshot,
 } from '../../src/pipeline-oracles/serialize.js';
-import type { EnumerationRow, EnumerationSnapshot, ParseFactSnapshot } from '../../src/pipeline-oracles/types.js';
+import type {
+  ContentMeasuresFact,
+  EnumerationRow,
+  EnumerationSnapshot,
+  LexicalReferenceFact,
+  ParseFactSnapshot,
+} from '../../src/pipeline-oracles/types.js';
+
+/**
+ * The plainest lexical reference candidate: an `@`-prefixed token in prose,
+ * outside any code context and with no variable expansion. Tests that care
+ * about one column override just that column.
+ */
+const AT_PREFIXED_REFERENCE: LexicalReferenceFact = {
+  ordinal: 0,
+  raw: '@docs/x.md',
+  line: 5,
+  column: 1,
+  syntacticForm: 'at-prefixed',
+  hasExtension: true,
+  leadingAt: true,
+  slashCount: 1,
+  variableExpansion: null,
+  inCodeSpan: false,
+  inFence: false,
+};
 
 /** A row with sensible defaults, so a test states only what it is about. */
 function row(path: string, overrides: Partial<EnumerationRow> = {}): EnumerationRow {
@@ -148,6 +173,7 @@ describe('renderParseFactSnapshot', () => {
         links: [
           { ordinal: 0, href: './x.md', text: 'x', type: 'local_file', line: 3, nodeType: 'link', resolvedId: null },
         ],
+        lexicalReferences: [AT_PREFIXED_REFERENCE],
         headings: [{ ordinal: 0, level: 1, text: 'Title', slug: 'title', line: 1 }],
         frontmatterSource: 'title: T\nvalue: .inf',
         frontmatterFields: [
@@ -155,12 +181,14 @@ describe('renderParseFactSnapshot', () => {
           { key: 'value', typeName: 'number', valueDigest: 'bbbbbbbbbbbb' },
         ],
         anchors: ['top'],
+        contentMeasures: { wordCount: 7, proseCodeUnits: 30, codeBlockCodeUnits: 12 },
         decodedLength: 42,
         conditions: [{ code: 'PARSE_ODDITY', message: 'something\nmultiline', line: 2 }],
         optionalArrays: [
           { field: 'anchors', state: 'present' },
           { field: 'parseErrors', state: 'absent' },
           { field: 'unresolvedReferences', state: 'empty' },
+          { field: 'lexicalReferences', state: 'present' },
         ],
       },
     ],
@@ -210,6 +238,71 @@ describe('renderParseFactSnapshot', () => {
     expect(rendered).toContain('  0\th1\tslug=title\tline=1\ttext=Title');
   });
 
+  /** Render one row with `lexicalReferences` replaced wholesale. */
+  const withLexicalReferences = (references: LexicalReferenceFact[] | null): string =>
+    renderParseFactSnapshot({
+      ...facts,
+      rows: facts.rows.map((entry) => ({ ...entry, lexicalReferences: references })),
+    });
+
+  it('records every lexical-reference column, not a count or a summary', () => {
+    // The whole row is asserted rather than a prefix: a prefix assertion keeps
+    // passing when a column is appended, so it silently stops covering
+    // everything to its right.
+    expect(renderParseFactSnapshot(facts).split('\n')).toContain(
+      '  0\tat-prefixed\tline=5\tcol=1\text=true\tat=true\tslashes=1\tvar=-\tcodeSpan=false\tfence=false\traw=@docs/x.md',
+    );
+    expect(renderParseFactSnapshot(facts)).toContain('lexicalReferences: 1');
+  });
+
+  it('keeps a code-span token distinguishable from the same token in prose', () => {
+    // `inCodeSpan` is the load-bearing column. Anthropic documents that Claude
+    // Code's import parser skips code spans and fenced blocks, so this boolean
+    // decides whether an `@` token is an import at all — a round-trip that
+    // defaulted it to false would leave the raw token, its position and every
+    // other column identical while reversing what the row means.
+    const inCode = withLexicalReferences([{ ...AT_PREFIXED_REFERENCE, inCodeSpan: true }]);
+    expect(inCode).toContain('codeSpan=true');
+    expect(inCode).not.toBe(renderParseFactSnapshot(facts));
+  });
+
+  it('renders a variable expansion by name and its absence as -', () => {
+    // `null` is a real state, not a missing one: `@docs/x.md` contains no
+    // expansion while `${CLAUDE_PLUGIN_ROOT}/scripts/x.js` does, and the two
+    // resolve by completely different rules.
+    const expanded = withLexicalReferences([
+      {
+        ...AT_PREFIXED_REFERENCE,
+        raw: '${CLAUDE_PLUGIN_ROOT}/scripts/x.js',
+        syntacticForm: 'env-anchored',
+        leadingAt: false,
+        slashCount: 2,
+        variableExpansion: 'brace',
+        inCodeSpan: true,
+      },
+    ]);
+    expect(expanded.split('\n')).toContain(
+      '  0\tenv-anchored\tline=5\tcol=1\text=true\tat=false\tslashes=2\tvar=brace\tcodeSpan=true\tfence=false\traw=${CLAUDE_PLUGIN_ROOT}/scripts/x.js',
+    );
+    expect(renderParseFactSnapshot(facts)).toContain('\tvar=-\t');
+  });
+
+  it('keeps an ABSENT lexical-reference list distinct from a present empty one', () => {
+    // Both parsers omit the key rather than emitting `[]`, so a layer that
+    // normalised `undefined` into an empty array is a contract change — and
+    // HTML documents leave the field undefined always, which is what makes the
+    // absent state reachable rather than defensive.
+    const absent = withLexicalReferences(null);
+    const empty = withLexicalReferences([]);
+    expect(absent).toContain('lexicalReferences: -');
+    expect(empty).toContain('lexicalReferences: 0');
+    expect(absent).not.toBe(empty);
+  });
+
+  it('escapes a tab inside a raw token, which would otherwise forge a column', () => {
+    expect(withLexicalReferences([{ ...AT_PREFIXED_REFERENCE, raw: 'a\tb' }])).toContain(String.raw`raw=a\tb`);
+  });
+
   it('shows a resolvedId, which on a fresh parse should always be absent', () => {
     // `resolvedId` is the one field of a parsed link that production code
     // mutates in place after parsing (skill-packager stamps it while bundling,
@@ -226,6 +319,35 @@ describe('renderParseFactSnapshot', () => {
     });
     expect(stamped).toContain('resolvedId=leaked-from-another-skill');
     expect(stamped).not.toBe(renderParseFactSnapshot(facts));
+  });
+
+  /** Render one row with `contentMeasures` replaced wholesale. */
+  const withContentMeasures = (measures: ContentMeasuresFact | null): string =>
+    renderParseFactSnapshot({
+      ...facts,
+      rows: facts.rows.map((entry) => ({ ...entry, contentMeasures: measures })),
+    });
+
+  it('labels each measure, so a transposition of two counts is visible', () => {
+    // All three are bare integers. Positionally, swapping proseCodeUnits and
+    // codeBlockCodeUnits renders identically to not swapping them — and those
+    // two are exactly the pair a mistake would swap.
+    expect(renderParseFactSnapshot(facts).split('\n')).toContain(
+      'contentMeasures: words=7 prose=30 code=12',
+    );
+    expect(withContentMeasures({ wordCount: 7, proseCodeUnits: 12, codeBlockCodeUnits: 30 })).not.toBe(
+      renderParseFactSnapshot(facts),
+    );
+  });
+
+  it('keeps absent measures distinct from an all-zero measurement', () => {
+    // An empty document measures {0,0,0}; a parse result that omitted the field
+    // measured nothing at all. Rendering both as zeros would make a parser that
+    // stopped producing the field indistinguishable from an empty corpus.
+    expect(withContentMeasures(null)).toContain('contentMeasures: -');
+    expect(withContentMeasures(null)).not.toBe(
+      withContentMeasures({ wordCount: 0, proseCodeUnits: 0, codeBlockCodeUnits: 0 }),
+    );
   });
 
   it('renders absent frontmatter as - rather than as an empty block', () => {
@@ -350,7 +472,7 @@ describe('renderParseFactSnapshot', () => {
     // `conditions` folds parseErrors and unresolvedReferences through `?? []`,
     // so absent and empty collapse there. The contract distinguishes them.
     expect(renderParseFactSnapshot(facts)).toContain(
-      'optionalArrays: anchors=present parseErrors=absent unresolvedReferences=empty',
+      'optionalArrays: anchors=present parseErrors=absent unresolvedReferences=empty lexicalReferences=present',
     );
   });
 

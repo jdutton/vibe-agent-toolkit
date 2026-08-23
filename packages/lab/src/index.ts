@@ -38,6 +38,62 @@ export {
   ReportEnvelopeSchema,
 } from './envelope/envelope.js';
 
+export { captureCrawl, type CaptureCrawlOptions } from './facets/crawl/capture.js';
+export {
+  compareCrawl,
+  type CompareCrawlOptions,
+  type CrawlCommandDiff,
+  type CrawlCommandVerdict,
+  type CrawlComparison,
+  type CrawlComparisonRefused,
+  type CrawlComparisonResult,
+  type CrawlCountDelta,
+  type CrawlMovement,
+  type CrawlMsDelta,
+  type CrawlRowMovement,
+  type CrawlRowMovementKind,
+} from './facets/crawl/compare.js';
+export {
+  CRAWL_DUMP_VERSION,
+  CRAWL_INCUMBENT_STRATUM,
+  CRAWL_SHARED_STRATUM,
+  CRAWL_TIMING_DIR_ENV,
+  crawlAttributionOf,
+  type CrawlDump,
+  type CrawlDumpEntry,
+  type CrawlDumpProcess,
+  CrawlDumpSchema,
+  type CrawlDumpsAccepted,
+  crawlEntryKey,
+  type CrawlProcessRecord,
+  crawlRoleTotalOf,
+  crawlRowRole,
+  type MergedCrawlDumps,
+  type MergedCrawlDumpsResult,
+  mergeCrawlDumps,
+  readCrawlDumps,
+  sameCrawlWork,
+} from './facets/crawl/dump.js';
+export { renderCrawlComparison, renderCrawlReport } from './facets/crawl/render.js';
+export {
+  CRAWL_FACET,
+  CRAWL_FACET_VERSION,
+  CRAWL_ROW_ROLES,
+  type CrawlAttribution,
+  type CrawlBody,
+  CrawlBodySchema,
+  type CrawlCommandStats,
+  crawlEntryShape,
+  type CrawlEntryStats,
+  crawlProcessShape,
+  type CrawlProcessStats,
+  type CrawlRoleTotals,
+  type CrawlRowRole,
+  type CrawlSeamRow,
+  crawlSeamRowShape,
+  type CrawlStratumStats,
+} from './facets/crawl/types.js';
+
 export { captureIo, type CaptureIoOptions } from './facets/io/capture.js';
 export {
   compareIo,
@@ -60,7 +116,6 @@ export {
 } from './facets/io/render.js';
 export {
   type DumpsAccepted,
-  type DumpsRefusal,
   IO_DUMP_VERSION,
   type IoClass,
   type IoDump,
@@ -82,6 +137,52 @@ export {
   type IoCommandStats,
   type IoSite,
 } from './facets/io/types.js';
+
+export { captureParse, type CaptureParseOptions } from './facets/parse/capture.js';
+export {
+  compareParse,
+  type CompareParseOptions,
+  type ParseCommandDiff,
+  type ParseCommandVerdict,
+  type ParseComparison,
+  type ParseComparisonRefused,
+  type ParseComparisonResult,
+  type ParseCountDelta,
+  type ParseMovement,
+  type ParseMsDelta,
+  type ParsePassMovement,
+  type ParsePassMovementKind,
+} from './facets/parse/compare.js';
+export {
+  attributionOf,
+  type MergedParseDumps,
+  type MergedParseDumpsResult,
+  type MergedParseKind,
+  mergeParseDumps,
+  PARSE_DUMP_VERSION,
+  PARSE_TIMING_DIR_ENV,
+  type ParseDump,
+  type ParseDumpKind,
+  type ParseDumpPass,
+  type ParseDumpProcess,
+  type ParseDumpsAccepted,
+  ParseDumpSchema,
+  parseTotalName,
+  readParseDumps,
+  sameParseWork,
+} from './facets/parse/dump.js';
+export { renderParseComparison, renderParseReport } from './facets/parse/render.js';
+export {
+  PARSE_FACET,
+  PARSE_FACET_VERSION,
+  type ParseAttribution,
+  type ParseBody,
+  ParseBodySchema,
+  type ParseCommandStats,
+  type ParseKindStats,
+  parsePassShape,
+  type ParsePassStats,
+} from './facets/parse/types.js';
 
 export { capturePerf, type CapturePerfOptions } from './facets/perf/capture.js';
 export {
@@ -112,9 +213,114 @@ export {
 } from './facets/perf/types.js';
 
 export {
+  capturePopulation,
+  type CapturePopulationOptions,
+} from './facets/population/capture.js';
+export {
+  comparePopulation,
+  type PopulationCommandDiff,
+  type PopulationCommandVerdict,
+  type PopulationComparison,
+  type PopulationComparisonResult,
+} from './facets/population/compare.js';
+export {
+  type PopulationDocument,
+  type PopulationDocumentResult,
+  readPopulationDocument,
+  samePopulation,
+} from './facets/population/document.js';
+export {
+  renderPopulationComparison,
+  renderPopulationReport,
+} from './facets/population/render.js';
+export {
+  POPULATION_FACET,
+  POPULATION_FACET_VERSION,
+  type PopulationAttribution,
+  type PopulationBody,
+  PopulationBodySchema,
+  type PopulationCommandStats,
+  type PopulationEntry,
+} from './facets/population/types.js';
+
+export {
+  type AbArmSummary,
+  type AbCommandResult,
+  abExitCondition,
+  type AbNoiseVerdict,
+  type AbResult,
+  type AbSpec,
+  CHANGED_VERDICT,
+  type ComparisonLike,
+  type FacetEstimate,
+  type FacetFunctions,
+  type RefusalLike,
+  renderAb,
+  runAb,
+  UNMEASURABLE_VERDICT,
+} from './harness/ab.js';
+export {
+  completedExitCodesOf,
+  DEFAULT_COMPLETED_EXIT_CODES,
   DEFAULT_MEASURED_COMMANDS,
+  MEASURABLE_COMMAND_NAMES,
+  MEASURABLE_COMMANDS,
+  measurableCommand,
   type MeasuredCommandSpec,
+  POPULATION_MEASURED_COMMANDS,
 } from './harness/commands.js';
+export {
+  type CountDelta,
+  countDelta,
+  DEFAULT_MIN_ABSOLUTE_MS,
+  DEFAULT_MIN_RELATIVE,
+  type DeltaThresholds,
+  type LabelledRow,
+  labelledMovements,
+  type MsDelta,
+  msDelta,
+  type RowMovement,
+  type RowMovementKind,
+} from './harness/delta.js';
+export { bothSides, pairByKey, type Pairing } from './harness/diff.js';
+export { captureCommandRows } from './harness/dump-capture.js';
+export {
+  type BodyParser,
+  cacheModeCaveat,
+  type CommandBody,
+  type CommandDiff,
+  type CommandsCompared,
+  type ComparableRow,
+  compareCommandRows,
+  type ComparisonOpened,
+  type ComparisonOpening,
+  type ComparisonRefusal,
+  diffPairedCommand,
+  type FacetContract,
+  failureCaveat,
+  type OneSidedVerdict,
+  openComparison,
+  unmeasurableReasonFor,
+} from './harness/facet-compare.js';
+export { type Estimate, estimate, quantile } from './harness/estimator.js';
+export {
+  describeIssues,
+  type DumpFilesAccepted,
+  type DumpFilesResult,
+  type DumpKind,
+  type DumpParser,
+  type DumpsRefusal,
+  messageOf,
+  readDumpFiles,
+  refuseDumps,
+  withDumpDirs,
+} from './harness/dumps.js';
+export {
+  type GitOutcome,
+  hasUncommittedChanges,
+  runGit,
+  trackedPaths,
+} from './harness/git-state.js';
 export { resolveInstrument } from './harness/instrument.js';
 export {
   DEFAULT_LOAD_PER_CPU_THRESHOLD,
@@ -126,12 +332,43 @@ export {
 export {
   classifyRunFailure,
   materializeArgs,
+  measureSpec,
   type RepeatSpec,
   runRepeats,
   runRepeatsFor,
+  type SpecMeasurement,
   SUBJECT_TOKEN,
   summarizeRepeatFailures,
 } from './harness/repeat.js';
+export {
+  type ComparisonFrame,
+  comparisonHeading,
+  comparisonText,
+  coordinateLines,
+  countMovement,
+  facetReportText,
+  instrumentLabel,
+  instrumentTrustNotes,
+  type LoadPhrasing,
+  loadLine,
+  movementMark,
+  type MovementMark,
+  ms,
+  msMovement,
+  msPair,
+  noMeasurementLines,
+  oneSidedLines,
+  perUnit,
+  renderFacetComparison,
+  renderFacetReport,
+  share,
+  SHORT_HASH,
+  signedMs,
+  tally,
+  unmeasuredBlock,
+  verdictBlock,
+  versionLabel,
+} from './harness/render.js';
 export { buildReportEnvelope } from './harness/report.js';
 export { runCommand } from './harness/run.js';
 export { resolveSubject } from './harness/subject.js';

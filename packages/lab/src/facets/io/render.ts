@@ -12,10 +12,13 @@
  *   report that then showed only the remainder would let a reader conclude "vat
  *   barely touches the disk", and "6,371 were bucketed out" versus "there were
  *   only 40" support opposite conclusions. {@link IoCommandStats.processes} is
- *   the same hazard in reverse: it is printed even when it is 1, because 1 means
- *   the counter never propagated into vat's real binary and every other number
- *   on the line describes the launcher alone. {@link IoCommandStats.stable} is
- *   printed next to the counts it qualifies, not in a footnote.
+ *   the same hazard in reverse, and the qualifier that goes with it is NOT the
+ *   count: since `tree:` began resolving `packages/cli/dist/bin.js` rather than
+ *   the context-detecting wrapper, a measured vat runs in ONE process, so 1 is
+ *   ordinary and treating it as a failure warned on every correct report. The
+ *   launcher signature is a counted process with no `fs.` site at all — see
+ *   {@link measuredLauncherOnly}. {@link IoCommandStats.stable} is printed next
+ *   to the counts it qualifies, not in a footnote.
  * - **The absence of a delta is never rendered as good news.** `unmeasurable`
  *   and `unwarranted` get their own words, because a reader scanning for green
  *   will otherwise count a broken or unattributable command as a pass.
@@ -40,15 +43,19 @@
  * every spawn site — the most convincing wrong finding this renderer has produced.
  */
 
-import type { Coordinate, SubjectVersion } from '../../envelope/coordinate.js';
 import type { ReportEnvelope } from '../../envelope/envelope.js';
-import type { LoadReadings } from '../../harness/types.js';
+import {
+  comparisonText,
+  coordinateLines,
+  type LoadPhrasing,
+  loadLine,
+  noMeasurementLines,
+  oneSidedLines,
+  tally,
+} from '../../harness/render.js';
 
 import type { IoComparisonResult, IoCountDelta, IoMovement, IoSiteMovement } from './compare.js';
 import type { IoBody, IoCommandStats, IoSite } from './types.js';
-
-/** How many characters of a hash identify it in a header. */
-const SHORT_HASH = 8;
 
 /** Decimal places used for a repetition ratio. */
 const RATIO_PRECISION = 1;
@@ -72,10 +79,15 @@ const COUNTING_LEGEND =
   'Counted: Node fs and child_process calls. One fs.readFile is one call into ' +
   "Node's library, whatever the kernel then does with it.";
 
-/** Said when only one process was counted. See {@link IoCommandStats.processes}. */
+/**
+ * Said when the counted process looks like a launcher rather than the command.
+ *
+ * See {@link measuredLauncherOnly} for why the process count alone is not the
+ * test, and {@link IoCommandStats.processes} for what that field now means.
+ */
 const PROPAGATION_WARNING =
-  '      ⚠ COUNTER DID NOT PROPAGATE — only one process was counted, so these numbers ' +
-  "describe vat's launcher rather than the command it spawned.";
+  '      ⚠ COUNTER DID NOT PROPAGATE — one process was counted and it made no fs calls at all, ' +
+  'so these numbers describe a launcher that spawned the real command rather than the command itself.';
 
 /**
  * Said where a distinct-argument count would otherwise go.
@@ -92,20 +104,6 @@ const CONTAMINATION_NOTE =
   '⚠ At least one side was captured on a contaminated machine. Call counts do not move with ' +
   'machine load, so the deltas below still stand — but the run was competing for the filesystem, ' +
   'and any perf report from the same session is suspect.';
-
-/**
- * Group a count for reading.
- *
- * Explicitly `en-US` rather than the ambient locale: a report rendered on one
- * machine and pasted next to a report rendered on another must not differ by
- * thousands separator alone.
- *
- * @param value - A call count
- * @returns The grouped rendering
- */
-function tally(value: number): string {
-  return value.toLocaleString('en-US');
-}
 
 /**
  * Render a difference with its sign.
@@ -142,56 +140,17 @@ function quantity(value: number, singular: string, plural: string): string {
 }
 
 /**
- * Name a subject version for a header.
- *
- * @param version - Axis B
- * @returns A short label
- */
-function versionLabel(version: SubjectVersion): string {
-  if (version.kind === 'snapshot') {
-    return `snapshot ${version.fingerprint.slice(0, SHORT_HASH)} (${tally(version.fileCount)} files)`;
-  }
-  // A dirty tree is measurable but says so — the bytes measured were not the
-  // bytes at that commit, and a reader comparing later must know that.
-  return `${version.commit.slice(0, SHORT_HASH)}${version.dirty ? ' (DIRTY working tree)' : ''}`;
-}
-
-/**
- * The two coordinate lines at the top of a report.
- *
- * @param coordinate - Where the report was measured
- * @returns The subject line and the instrument line
- */
-function coordinateLines(coordinate: Coordinate): readonly string[] {
-  const { subject, subjectVersion, instrument } = coordinate;
-  const build = instrument.commit === null ? 'released' : instrument.commit.slice(0, SHORT_HASH);
-  return [
-    `Subject:    ${subject.id} @ ${versionLabel(subjectVersion)}`,
-    `Instrument: vat ${instrument.version} (${build})`,
-  ];
-}
-
-/**
- * Describe the machine the capture ran on.
+ * How this facet's numbers are qualified when the machine was not idle.
  *
  * Carried even though call counts do not move with load: a capture that was
  * fighting for CPU may also have been fighting for the filesystem, and a reader
  * holding this beside a `perf` report from the same session needs the same tell
  * on both.
- *
- * @param load - The readings taken around the capture
- * @returns A single line
  */
-function loadLine(load: LoadReadings): string {
-  const span = `${String(load.before)} -> ${String(load.after)} over ${tally(load.cpus)} CPUs`;
-  if (!load.available) {
-    return 'Machine load: NOT MEASURED on this platform — these counts carry no contamination check.';
-  }
-  if (load.contaminated) {
-    return `Machine load: CONTAMINATED (${span}) — the counts stand, but the run was competing for the machine.`;
-  }
-  return `Machine load: clean (${span}).`;
-}
+const LOAD_PHRASING: LoadPhrasing = {
+  unmeasured: 'these counts carry no contamination check.',
+  contaminated: 'the counts stand, but the run was competing for the machine.',
+};
 
 /**
  * Say how repetitive a site's calls were, when they were repetitive at all.
@@ -273,6 +232,45 @@ function summaryLine(row: IoCommandStats): string {
 }
 
 /**
+ * Whether this row measured a launcher instead of the command it spawned.
+ *
+ * ## Why the process count alone is no longer the test
+ *
+ * This warning used to fire on `processes === 1`, on the premise its own field
+ * documented: *"the launcher spawns a second node process for the binary, and
+ * the counter propagates into it"*, so one process meant the counter had failed.
+ *
+ * **That premise died when the instrument was fixed.** `tree:` and `dist:` now
+ * resolve `packages/cli/dist/bin.js` — the real binary — and naming the
+ * context-detecting wrapper is an explicit refusal (`resolveBinPath`). A vat the
+ * lab launches therefore does its work in ONE process, and the bare count fired
+ * on every run of every arm. Measured on an 8,548-file adopter tree:
+ * `resources-scan` reported
+ * 40,698 user calls across 1,372 sites, including 20,908 `fs.lstatSync` inside
+ * `resources/dist/projection/realizations.js`, and still printed "these numbers
+ * describe vat's launcher". A warning that cries wolf on correct data is worse
+ * than no warning: it was cited as grounds to distrust a valid crucible report.
+ *
+ * ## What the failure actually looks like
+ *
+ * A launcher that spawned and waited does no filesystem work of its own — its
+ * loader calls are bucketed out of {@link IoCommandStats.sites}, leaving the
+ * spawn and nothing else. So the signature is one process **with no `fs.` site
+ * at all**, which is exact rather than a threshold. A real command always
+ * touches the filesystem; a process that touched it is the process doing the
+ * work, however many of them there were.
+ *
+ * ⚠️ Still reachable, and deliberately kept: `npx:` runs the published package's
+ * `bin`, which IS the wrapper, and cannot be fixed the way `tree:` was.
+ *
+ * @param row - The command's statistics
+ * @returns True when the counted process did no filesystem work
+ */
+function measuredLauncherOnly(row: IoCommandStats): boolean {
+  return row.processes === 1 && !row.sites.some((site) => site.method.startsWith('fs.'));
+}
+
+/**
  * Every line for one measured command.
  *
  * @param row - The command's statistics
@@ -283,7 +281,7 @@ function commandLines(row: IoCommandStats, maxSites: number): readonly string[] 
   if (row.failed) return [`  ${row.name}: FAILED — ${row.failure ?? 'unknown'}`];
 
   const lines = [summaryLine(row), stabilityLine(row)];
-  if (row.processes === 1) lines.push(PROPAGATION_WARNING);
+  if (measuredLauncherOnly(row)) lines.push(PROPAGATION_WARNING);
   lines.push(...row.sites.slice(0, maxSites).map((site) => siteLine(site)));
 
   const withheld = row.sites.length - Math.min(row.sites.length, maxSites);
@@ -316,7 +314,7 @@ export function renderIoReport(
   const maxSites = options.maxSites ?? DEFAULT_MAX_SITES;
   return [
     ...coordinateLines(report.coordinate),
-    loadLine(report.body.load),
+    loadLine(report.body.load, LOAD_PHRASING),
     COUNTING_LEGEND,
     '',
     ...report.body.commands.flatMap((row) => commandLines(row, maxSites)),
@@ -414,13 +412,11 @@ function diffLines(diff: IoComparisonResult['commands'][number]): readonly strin
       ];
     }
     case 'unmeasurable': {
-      return [`  ${diff.name}: NO MEASUREMENT — ${verdict.reason}`];
+      return noMeasurementLines(diff.name, verdict.reason);
     }
-    case 'added': {
-      return [`  ${diff.name}: new, no baseline to compare against`];
-    }
+    case 'added':
     case 'removed': {
-      return [`  ${diff.name}: gone, present only in the baseline`];
+      return oneSidedLines(diff.name, verdict.kind);
     }
   }
 }
@@ -432,15 +428,10 @@ function diffLines(diff: IoComparisonResult['commands'][number]): readonly strin
  * @returns Text for a terminal
  */
 export function renderIoComparison(comparison: IoComparisonResult): string {
-  const heading =
-    comparison.axis === null
-      ? 'Comparing two reports at the same coordinate'
-      : `Comparing along one axis: ${comparison.axis}`;
-  return [
-    heading,
-    ...(comparison.contaminated ? [CONTAMINATION_NOTE] : []),
-    COUNTING_LEGEND,
-    '',
-    ...comparison.commands.flatMap((diff) => diffLines(diff)),
-  ].join('\n');
+  return comparisonText({
+    axis: comparison.axis,
+    notes: comparison.contaminated ? [CONTAMINATION_NOTE] : [],
+    legend: COUNTING_LEGEND,
+    blocks: comparison.commands.flatMap((diff) => diffLines(diff)),
+  });
 }

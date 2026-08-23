@@ -7,8 +7,18 @@ import {
 	type WalkableRegistry,
 } from '@vibe-agent-toolkit/agent-skills';
 import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
-import { crawlDirectory, findProjectRoot, safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
+import {
+	compareCodeUnits,
+	CRAWL_REGISTRY_ENUMERATE_ID,
+	crawlDirectory,
+	crawlTimingStart,
+	findProjectRoot,
+	type GitTracker,
+	recordRegistryPass,
+	safePath,
+} from '@vibe-agent-toolkit/utils';
 
+import { type InventoryPopulation } from './inventory-population.js';
 import { ClaudeSkillInventory } from './types.js';
 
 type ParseErrors = ClaudeSkillInventory['parseErrors'];
@@ -66,7 +76,14 @@ export type SharedRegistrySource =
  * `git ls-files`, and the caller already has the cache that must be shared with
  * the rest of its scan (`getOrCreateGitTracker` in the CLI's audit lane). Return
  * `undefined` for a root you cannot or do not want to answer for — the walk then
- * behaves exactly as it does with no source at all.
+ * falls back to the `git check-ignore` oracle, exactly as {@link NO_GIT_TRACKER}
+ * does for every root.
+ *
+ * That is also why the source is REQUIRED rather than defaulted: the obligation
+ * belongs to the caller that owns the cache, and having the extractor build its
+ * own tracker would both reverse this decision and walk straight into the
+ * staleness hazard below. See {@link NO_GIT_TRACKER} for choosing the
+ * tracker-less walk on purpose.
  *
  * ## Staleness bound — safe for read-only lanes only
  *
@@ -75,9 +92,69 @@ export type SharedRegistrySource =
  * `isIgnoredByActiveSet` reports it **ignored**. That is safe for inventory and
  * audit, which only read; it is NOT safe for a lane that writes between walks
  * (`packageSkill` writes `dist/` per skill), which must build a fresh tracker or
- * pass none.
+ * pass {@link NO_GIT_TRACKER}.
+ *
+ * ⚠️ "Safe" here means the read-only lane cannot corrupt anything — NOT that the
+ * two oracles agree. They demonstrably do not: a post-snapshot file is `ignored`
+ * to the active set and not ignored to `git check-ignore`, so the same skill's
+ * `files.linked` differs by that file depending on which oracle answered. The
+ * divergence suite in `test/inventory/extract-skill.test.ts` pins exactly that
+ * pair of answers, and is the only thing in this package's tests that can.
  */
 export type GitTrackerSource = (projectRoot: string) => Promise<GitTracker | undefined>;
+
+/**
+ * The {@link GitTrackerSource} that answers for nothing — the explicit spelling
+ * of "walk this skill with no tracker".
+ *
+ * Naming it is the point. A caller that genuinely has no tracker to offer says
+ * so at the call site, in a form that greps, instead of arriving in that state
+ * by leaving an argument off.
+ */
+export const NO_GIT_TRACKER: GitTrackerSource = async () => undefined;
+
+/**
+ * What {@link extractClaudeSkillInventory} needs besides the skill path.
+ *
+ * An options object rather than two more positionals: both members are
+ * FUNCTIONS of similar shape, so a positional pair is exactly the arrangement a
+ * caller can silently transpose. It also lets the required member sit after the
+ * optional one, which positional parameters cannot express — `sharedRegistry`
+ * was already optional when `gitTrackerSource` had to become required.
+ */
+export interface ClaudeSkillInventoryOptions {
+	/**
+	 * REQUIRED. How to obtain the tracker for whatever project root this walk
+	 * lands on; pass {@link NO_GIT_TRACKER} to choose the tracker-less walk.
+	 *
+	 * ⚠️ Required-ness does not eliminate the tracker-less state, and is not
+	 * claimed to: this source may still return `undefined` for a root, and
+	 * `gitTrackerFor` deliberately swallows a source that throws (a failing
+	 * source is a missing optimization, not a defect in the skill). What it buys
+	 * is that the state is now CHOSEN rather than defaulted into — and, in
+	 * particular, that a test cannot land in it by omission. That omission is how
+	 * the divergence this parameter governs stayed hidden: a projection's
+	 * `gitignored` column is filled only from a tracker that was handed in, while
+	 * the incumbent walker falls back to `git check-ignore` per link target, so a
+	 * no-tracker fixture produced walker=3 against closure=5 linked files.
+	 */
+	gitTrackerSource: GitTrackerSource;
+	/** Optional pre-crawled registry (or a way to get one) — see {@link SharedRegistrySource}. */
+	sharedRegistry?: SharedRegistrySource;
+	/**
+	 * Optional pre-populated projection to answer membership from INSTEAD of the
+	 * link walk — see {@link InventoryPopulation}.
+	 *
+	 * Already resolved, unlike `sharedRegistry`: a population must know every
+	 * skill before it runs, so only a caller holding the whole list can build one,
+	 * and deferring it to here would defer it past the point the list is known.
+	 *
+	 * Supplying it does not force its use. It is honoured only for a population
+	 * rooted at exactly this skill's `projectRoot`, and only when that population
+	 * holds an extent for this skill; anything else falls back to the walk.
+	 */
+	sharedPopulation?: InventoryPopulation | undefined;
+}
 
 /**
  * Build a SkillInventory for a single SKILL.md.
@@ -88,14 +165,13 @@ export type GitTrackerSource = (projectRoot: string) => Promise<GitTracker | und
  */
 export async function extractClaudeSkillInventory(
 	skillMdPath: string,
-	sharedRegistry?: SharedRegistrySource,
-	gitTrackerSource?: GitTrackerSource,
+	options: ClaudeSkillInventoryOptions,
 ): Promise<ClaudeSkillInventory> {
 	const absolute = safePath.resolve(skillMdPath);
 	const parseErrors: ParseErrors = [];
 
 	const { name, description } = await parseFrontmatterFields(absolute, parseErrors);
-	const linked = await walkLinkedFiles(absolute, parseErrors, sharedRegistry, gitTrackerSource);
+	const linked = await walkLinkedFiles(absolute, parseErrors, options);
 
 	return new ClaudeSkillInventory({
 		path: absolute,
@@ -137,8 +213,30 @@ async function parseFrontmatterFields(
  * additionally pulls in every ignored tree AND abandons `git ls-files` for a
  * full recursive walk — 39.6 s versus 16 ms for the same file set on a
  * ~1,200-document monorepo.
+ *
+ * ## Why the enumeration is bracketed HERE and not inside `ResourceRegistry`
+ *
+ * The other five registry-construction routes go through `ResourceRegistry.crawl`,
+ * whose own `crawlDirectory` call the seam already brackets. This route does not:
+ * it enumerates for itself and hands the paths to `addResources`, so its
+ * enumeration sits outside the class and outside that bracket, and
+ * `resources/test/crawl-timing.test.ts` pins that absence at the class level
+ * deliberately.
+ *
+ * Left unbracketed, this is a ONE-SIDED under-count rather than a symmetric one:
+ * it is the registry the INCUMBENT walker consumes and the projection never
+ * builds, so every millisecond of it was missing from exactly the arm the flip
+ * decision is being taken against. It files the same `resource-registry:enumerate`
+ * row the class does — the same accounting unit, and the two never both run for
+ * one registry, so they cannot double-charge each other.
+ *
+ * `recordRegistryPass` rather than a stratum named here, for the reason that
+ * function states: this route is reachable from a projection contributor in
+ * principle, and a call site that names an arm it cannot know is how one arm's
+ * work lands on the other's total.
  */
 export async function crawlSkillLinkRegistry(projectRoot: string): Promise<ResourceRegistry> {
+	const enumerationStartedAt = crawlTimingStart();
 	const files = await crawlDirectory({
 		baseDir: projectRoot,
 		include: ['**/*.md'],
@@ -146,6 +244,7 @@ export async function crawlSkillLinkRegistry(projectRoot: string): Promise<Resou
 		filesOnly: true,
 		includeUntracked: true,
 	});
+	recordRegistryPass(CRAWL_REGISTRY_ENUMERATE_ID, enumerationStartedAt);
 	const registry = new ResourceRegistry({ baseDir: projectRoot });
 	await registry.addResources(files);
 	registry.resolveLinks();
@@ -155,23 +254,62 @@ export async function crawlSkillLinkRegistry(projectRoot: string): Promise<Resou
 async function walkLinkedFiles(
 	absolute: string,
 	parseErrors: ParseErrors,
-	sharedRegistry?: SharedRegistrySource,
-	gitTrackerSource?: GitTrackerSource,
+	options: ClaudeSkillInventoryOptions,
 ): Promise<string[]> {
 	const linked: string[] = [];
 	try {
 		// Library fallback to skill dir; see plan 2026-05-17 / spec §7.
 		const projectRoot = findProjectRoot(dirname(absolute)) ?? dirname(absolute);
-		const registry = await registryFor(projectRoot, sharedRegistry);
+
+		// The projection lane, when one was supplied for exactly this root. Ahead of
+		// the registry so the incumbent's whole-corpus crawl is not paid and then
+		// discarded — the point of the lane is that it replaces that crawl, and a
+		// version that ran both would measure neither.
+		const projected = membersFromPopulation(projectRoot, absolute, options.sharedPopulation);
+		if (projected !== undefined) return [...projected];
+
+		const registry = await registryFor(projectRoot, options.sharedRegistry);
 		const skillResource = registry.getResource(absolute);
 		if (skillResource !== undefined) {
-			const gitTracker = await gitTrackerFor(projectRoot, gitTrackerSource);
+			const gitTracker = await gitTrackerFor(projectRoot, options.gitTrackerSource);
 			collectLinkedFiles(skillResource.id, registry, absolute, projectRoot, linked, gitTracker);
 		}
 	} catch (e) {
 		parseErrors.push({ path: absolute, message: `link walk failed: ${(e as Error).message}` });
 	}
 	return linked;
+}
+
+/**
+ * This skill's membership from a supplied population, or `undefined` to fall back
+ * to the walk.
+ *
+ * Two independent guards, and both have to hold:
+ *
+ * 1. **Exact-root equality**, the same rule and the same reason as
+ *    {@link registryFor}: membership is resolved relative to a root, so a
+ *    population rooted elsewhere answers a different question. Ancestry is not
+ *    enough.
+ * 2. **The population holds an extent for this skill.** A population built from a
+ *    stale skill list — one skill added since — would otherwise report that skill
+ *    as having no linked files, which is a confident wrong answer rather than a
+ *    missing one. `membersOf` returns `undefined` for that case and an empty array
+ *    for a skill that genuinely links to nothing, and the two must not be
+ *    conflated here.
+ *
+ * @param projectRoot - The root this skill's walk resolves against
+ * @param skillMdPath - Absolute path to the skill's SKILL.md
+ * @param population - The caller's population, if any
+ * @returns Absolute linked-file paths, or `undefined` when the walk must run
+ */
+function membersFromPopulation(
+	projectRoot: string,
+	skillMdPath: string,
+	population: InventoryPopulation | undefined,
+): readonly string[] | undefined {
+	if (population === undefined) return undefined;
+	if (safePath.resolve(population.root) !== safePath.resolve(projectRoot)) return undefined;
+	return population.membersOf(skillMdPath);
 }
 
 /**
@@ -204,21 +342,26 @@ async function registryFor(
 }
 
 /**
- * The tracker for this walk, or `undefined` when the caller supplied no source
- * or the source could not answer.
+ * The tracker for this walk, or `undefined` when the source could not answer.
  *
- * A source that fails is a MISSING OPTIMIZATION, not a bad skill: the walk still
- * produces the same answer, one `git check-ignore` per link target instead of an
- * active-set lookup. So the throw is swallowed here rather than allowed to reach
+ * There is no longer a "caller supplied no source" case — the source is a
+ * required option — but there are still two ways to end up without a tracker:
+ * the source returns `undefined` for this root, or it throws. A source that
+ * fails is a MISSING OPTIMIZATION, not a bad skill: the walk still produces its
+ * answer, one `git check-ignore` per link target instead of an active-set
+ * lookup. So the throw is swallowed here rather than allowed to reach
  * `walkLinkedFiles`'s catch, which would file it as a `link walk failed`
  * parseError against the skill's own path — a fabricated defect in a file that
  * has none.
+ *
+ * ⚠️ Both remaining routes produce the SAME walk the missing argument used to,
+ * so required-ness narrows who can arrive here by accident; it does not close
+ * the state. `NO_GIT_TRACKER` is the third, deliberate route.
  */
 async function gitTrackerFor(
 	projectRoot: string,
-	gitTrackerSource: GitTrackerSource | undefined,
+	gitTrackerSource: GitTrackerSource,
 ): Promise<GitTracker | undefined> {
-	if (gitTrackerSource === undefined) return undefined;
 	try {
 		return await gitTrackerSource(projectRoot);
 	} catch {
@@ -241,8 +384,9 @@ function collectLinkedFiles(
 	// and an explicit `undefined` both satisfy, and it never uses `in`. What
 	// actually forbids the literal is `exactOptionalPropertyTypes`, under which
 	// assigning `undefined` to an optional property is a compile error. The object
-	// still ends up key-for-key identical to the pre-change one when no source is
-	// supplied, which is the property this bite is held to.
+	// still ends up key-for-key identical to the pre-tracker one whenever no
+	// tracker is in hand — which, now that the source is required, means a source
+	// that declined or threw rather than an argument nobody passed.
 	const walkOptions: Parameters<typeof walkLinkGraph>[2] = {
 		maxDepth: Infinity,
 		excludeRules: [],
@@ -260,4 +404,24 @@ function collectLinkedFiles(
 	for (const a of result.bundledAssets) {
 		linked.push(a);
 	}
+	// Sorted, and with the SAME comparator the projection lane uses
+	// (`inventory-population.ts`) rather than a second one that happens to agree
+	// today. Two reasons, and the first is the load-bearing one:
+	//
+	// 1. **It makes the crawler swap invisible in the output.** The projection
+	//    emits members sorted; this lane emitted them in walk-discovery order —
+	//    resources first, then assets, each in traversal order. Same SET, different
+	//    YAML, which meant flipping the crawler would have churned every adopter's
+	//    `vat inventory` output and buried any REAL divergence inside a diff that
+	//    was mostly reordering. Normalising here first means the flip has to be a
+	//    byte-for-byte no-op or it is wrong, which is a far stronger gate than
+	//    comparing the two as unordered sets.
+	// 2. Walk-discovery order is not a fact anyone can rely on: it is a function of
+	//    link order within each document and of the resource/asset split, so
+	//    inserting one link near the top of a SKILL.md reshuffles the tail.
+	//
+	// `compareCodeUnits` and never `localeCompare` — that function's own docstring
+	// has the argument, and it exists because three private copies of this rule had
+	// already grown independently.
+	linked.sort(compareCodeUnits);
 }

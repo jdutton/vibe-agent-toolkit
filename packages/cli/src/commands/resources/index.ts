@@ -2,7 +2,7 @@
  * Resources command group
  */
 
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 
 import { scanCommand } from './scan.js';
 import { validateCommand } from './validate.js';
@@ -30,12 +30,20 @@ Configuration:
     .option('--debug', 'Enable debug logging')
     .option('--verbose', 'Show full file list with details')
     .option('--collection <id>', 'Filter by collection ID')
+    .addOption(
+      new Option('--format <format>', 'Output format: yaml (default) or json').choices([
+        'yaml',
+        'json',
+      ]).default('yaml'),
+    )
     .action(scanCommand)
     .addHelpText(
       'after',
       `
 Description:
-  Scans for markdown files and reports statistics. Outputs YAML to stdout.
+  Scans for markdown files and reports statistics. Outputs YAML to stdout,
+  or JSON with --format json (the same document, for consumers without a
+  YAML parser).
 
 Path Argument Behavior:
   WITH path: Scans all *.md/*.html recursively under path, still applying the
@@ -48,6 +56,8 @@ Filtering:
 
 Output Fields:
   status, filesScanned, linksFound, anchorsFound, durationSecs
+  root: The one absolute path every reported file path is relative to
+  lane: Which enumerator produced the population — 'walk' or 'projection'
   collections: Per-collection resource counts (resourceCount)
   files: (only with --verbose) Array with per-file details
 

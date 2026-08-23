@@ -272,6 +272,54 @@ describe('GitTracker', () => {
     });
   });
 
+  describe('indexPathFor()', () => {
+    const INDEX_CASED = 'docs/Getting-Started.MD';
+    const ON_DISK_CASED = '/project/docs/getting-started.md';
+
+    it('returns the casing git recorded, whatever casing the caller asks with', async () => {
+      vi.spyOn(gitUtils, 'gitLsFiles').mockReturnValue([INDEX_CASED]);
+      const tracker = new GitTracker(projectRoot);
+      await tracker.initialize();
+
+      expect(tracker.indexPathFor(ON_DISK_CASED)).toBe(INDEX_CASED);
+      expect(tracker.indexPathFor(`/project/${INDEX_CASED}`)).toBe(INDEX_CASED);
+    });
+
+    it('returns a root-relative path for a path git listed', async () => {
+      const tracker = new GitTracker(projectRoot);
+      await tracker.initialize();
+
+      expect(tracker.indexPathFor(GUIDE_PATH)).toBe('docs/guide.md');
+      expect(tracker.indexPathFor(README_PATH)).toBe('README.md');
+    });
+
+    it('returns null for a path git has no record of', async () => {
+      const tracker = new GitTracker(projectRoot);
+      await tracker.initialize();
+
+      expect(tracker.indexPathFor(NODE_MODULES_PATH)).toBeNull();
+    });
+
+    it('returns null when git did not answer, rather than guessing a spelling', async () => {
+      vi.spyOn(gitUtils, 'gitLsFiles').mockReturnValue(null);
+      const tracker = new GitTracker(projectRoot);
+      await tracker.initialize();
+
+      expect(tracker.isUsable()).toBe(false);
+      expect(tracker.indexPathFor(README_PATH)).toBeNull();
+    });
+
+    it('forgets every spelling on clear()', async () => {
+      const tracker = new GitTracker(projectRoot);
+      await tracker.initialize();
+      expect(tracker.indexPathFor(README_PATH)).toBe('README.md');
+
+      tracker.clear();
+
+      expect(tracker.indexPathFor(README_PATH)).toBeNull();
+    });
+  });
+
   describe('hasActiveDescendant()', () => {
     it('should return true for active-set files', async () => {
       const tracker = new GitTracker(projectRoot);
@@ -351,6 +399,45 @@ describe('GitTracker', () => {
 
         // Still no git check-ignore spawn for existing in-project paths
         expect(gitUtils.isGitIgnored).not.toHaveBeenCalled();
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it('should trust knownToExist:true over the disk, skipping its own existsSync probe', async () => {
+      // The disk state deliberately CONTRADICTS the argument: nothing is at this
+      // path. If the probe still ran, the answer would be `false` via the
+      // check-ignore fallback. `true` is only reachable by believing the caller,
+      // which is what makes this able to tell the parameter from a no-op.
+      vi.mocked(gitUtils.isGitIgnored).mockReturnValue(false);
+
+      const tracker = new GitTracker(projectRoot);
+      await tracker.initialize();
+
+      expect(tracker.isIgnoredByActiveSet('/project/dist/never-written.js', true)).toBe(true);
+      expect(gitUtils.isGitIgnored).not.toHaveBeenCalled();
+    });
+
+    it('should trust knownToExist:false over the disk, falling back for a path that IS there', async () => {
+      // The mirror, and the half that guards the dangling-symlink narrowing: a
+      // real file on disk, reported absent by the caller, must still reach
+      // `git check-ignore` rather than be called ignored from the set alone.
+      const root = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-git-tracker-'));
+      try {
+        mkdirSyncReal(safePath.join(root, 'dist'), { recursive: true });
+        writeFileSync(safePath.join(root, 'dist', 'foo.js'), 'x\n');
+        vi.mocked(gitUtils.gitLsFiles).mockReturnValue(['README.md']);
+        vi.mocked(gitUtils.isGitIgnored).mockReturnValue(false);
+
+        const tracker = new GitTracker(root);
+        await tracker.initialize();
+
+        const present = safePath.join(root, 'dist/foo.js');
+        // Without the argument the file is there, so the active set is authoritative: ignored.
+        expect(tracker.isIgnoredByActiveSet(present)).toBe(true);
+        // With `false` the set has no opinion and git is asked instead.
+        expect(tracker.isIgnoredByActiveSet(present, false)).toBe(false);
+        expect(gitUtils.isGitIgnored).toHaveBeenCalledWith(present, root);
       } finally {
         rmSync(root, { recursive: true, force: true });
       }

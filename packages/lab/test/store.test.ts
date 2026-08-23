@@ -45,8 +45,30 @@ describe('reportFileName', () => {
     // The case the whole scheme exists for: every dev build carries the semver
     // of the release it branched from. If the name keyed on version alone, a
     // dev-vs-release comparison would write both sides to one file.
-    const dev = reportAt({ instrument: { version: '0.1.42', commit: '2'.repeat(40) } });
+    const dev = reportAt({ instrument: { version: '0.1.42', commit: '2'.repeat(40), dirty: false } });
     expect(reportFileName(report())).not.toBe(reportFileName(dev));
+  });
+
+  it('separates a dirty instrument from the clean commit it was built on', () => {
+    // Axis C's half of the rule directly above. A dirty build and the commit it
+    // branched from are different binaries, so sharing a filename would let one
+    // overwrite the other's measurement.
+    const dirty = reportAt({
+      instrument: { version: '0.1.42', commit: '1'.repeat(40), dirty: true },
+    });
+    expect(reportFileName(report())).not.toBe(reportFileName(dirty));
+  });
+
+  it('separates two runs of one dirty instrument by when they were observed', () => {
+    // Unlike a dirty SUBJECT there is no fingerprint to fall back on: what ran
+    // is the built output, not the checkout. So a dirty instrument is pinned by
+    // observation time — weaker than an identity, and deliberately so, but it
+    // does guarantee the second run never silently overwrites the first.
+    const instrument = { version: '0.1.42', commit: '1'.repeat(40), dirty: true };
+    const first = { ...reportAt({ instrument }), capturedAt: '2026-08-14T10:00:00.000Z' };
+    const second = { ...reportAt({ instrument }), capturedAt: '2026-08-14T11:30:00.000Z' };
+
+    expect(reportFileName(first)).not.toBe(reportFileName(second));
   });
 
   it('separates two dirty states of one commit', () => {

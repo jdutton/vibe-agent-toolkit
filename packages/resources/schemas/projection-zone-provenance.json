@@ -1,0 +1,64 @@
+{
+  "$ref": "#/definitions/projection-zone-provenance",
+  "definitions": {
+    "projection-zone-provenance": {
+      "type": "object",
+      "properties": {
+        "contextId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Foreign key to resolution_contexts.contextId"
+        },
+        "contributorId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Identity of the contributor that produced these memberships"
+        },
+        "parameterSet": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/projection-zone-provenance/properties/parameterSet",
+                "description": "An arbitrary JSON value (frontmatter, condition payloads, etc.)"
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/definitions/projection-zone-provenance/properties/parameterSet/anyOf/4/items"
+              }
+            }
+          ],
+          "description": "The parameters this contributor ran under, verbatim"
+        },
+        "extentDigest": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Digest over the membership set this contributor produced — what makes two runs comparable"
+        }
+      },
+      "required": [
+        "contextId",
+        "contributorId",
+        "parameterSet",
+        "extentDigest"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the path-dependent `zone_provenance` table"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

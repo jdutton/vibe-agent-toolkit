@@ -15,7 +15,7 @@ import {
 import {
   RESULT_IN_PROGRESS,
   RESULT_SUCCESS,
-} from '@vibe-agent-toolkit/agent-schema';
+} from '@vibe-agent-toolkit/schema';
 
 // Import compiled resources from markdown
 import * as BreedAdvisorResources from '../../generated/resources/agents/breed-advisor.js';

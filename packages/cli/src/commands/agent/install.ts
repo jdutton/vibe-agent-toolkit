@@ -53,9 +53,18 @@ export async function installAgent(
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path constructed from validated scope location
     await fs.mkdir(targetLocation, { recursive: true });
 
-    // Check if already installed
+    // Check if already installed.
+    //
+    // `lstat`, not `access`: `access` FOLLOWS symlinks, so a dangling dev-mode
+    // link — precisely what `build:clean` orphans by deleting `dist/` under a
+    // previous `--dev` install — answered ENOENT here. That fell into the catch
+    // below as "not installed", which skipped the `--force` removal and left the
+    // link in place for `fs.symlink` to reject with EEXIST. `--force` was inert
+    // against the one state it most needed to clear. `lstat` stats the link
+    // itself, so the entry is seen whether or not its target still exists.
     try {
-      await fs.access(installPath);
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- installPath is built from a validated scope location
+      await fs.lstat(installPath);
       if (!force) {
         logger.error(
           `\n${agentName} already installed at ${installPath}\n` +
@@ -70,9 +79,7 @@ export async function installAgent(
     }
 
     if (dev) {
-      // Symlink for development
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Paths from validated sources
-      await fs.symlink(builtSkillPath, installPath, 'dir');
+      await linkForDevelopment(builtSkillPath, installPath);
       logger.info(`✓ Symlinked ${agentName} to ${installPath} (dev mode)`);
       logger.info(`  Rebuild agent to see changes immediately`);
     } else {
@@ -87,6 +94,42 @@ export async function installAgent(
     process.exit(0);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'Install');
+  }
+}
+
+/**
+ * Symlink a built bundle into place for `--dev`, failing legibly where the OS
+ * refuses.
+ *
+ * ⚠️ **This is POSIX-only in practice, and not by anything written here.**
+ * `installAgent` refuses `dev` on win32 before this is reachable, naming WSL
+ * and copy mode. So Windows never gets this far, and any Windows-specific
+ * handling added here would be dead code — an earlier revision added exactly
+ * that, relabelling a `SeCreateSymbolicLinkPrivilege` EPERM that cannot occur.
+ * If `--dev` is ever to work on Windows, the change belongs at that guard (a
+ * junction takes no elevation, as `dev-tools/src/link-workspace-packages.ts`
+ * already does), not in this catch.
+ *
+ * Deliberately does NOT fall back to copying. `--dev` exists so a rebuild is
+ * picked up live; a copy that reported success would leave someone editing
+ * sources and wondering why nothing changes — a silent wrong answer in place of
+ * a loud, correct refusal.
+ *
+ * @param builtSkillPath - Absolute path to the built bundle
+ * @param installPath - Where the link should be created
+ * @throws When the link cannot be created, naming the remedy
+ */
+async function linkForDevelopment(builtSkillPath: string, installPath: string): Promise<void> {
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename, local/no-bare-symlink-in-tests -- eyes open: win32 is refused by the guard in `installAgent` before this runs, so the Windows privilege hazard the rule names cannot be reached here.
+    await fs.symlink(builtSkillPath, installPath, 'dir');
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Could not create the dev-mode symlink at ${installPath}: ${detail}\n` +
+        `Re-run with --force to replace whatever is already at ${installPath}, ` +
+        'or install without --dev to copy the bundle instead of linking it.',
+    );
   }
 }
 

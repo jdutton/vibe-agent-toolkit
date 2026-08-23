@@ -1,4 +1,4 @@
-import { RESULT_SUCCESS, type OneShotAgentOutput } from '@vibe-agent-toolkit/agent-schema';
+import { RESULT_SUCCESS, type OneShotAgentOutput } from '@vibe-agent-toolkit/schema';
 
 import type { MCPToolResult } from '../types.js';
 

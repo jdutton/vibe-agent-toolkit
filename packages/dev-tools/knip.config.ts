@@ -38,8 +38,8 @@ const config: KnipConfig = {
       project: [SRC_TS],
     },
 
-    // agent-schema: scripts/ uses utils for JSON Schema generation
-    'packages/agent-schema': {
+    // schema: scripts/ uses utils for JSON Schema generation
+    'packages/schema': {
       entry: [SRC_TS, 'scripts/**/*.ts'],
     },
 
@@ -111,7 +111,7 @@ const config: KnipConfig = {
     'packages/vat-development-agents': {
       entry: ['src/agents/*.ts'],
       ignoreDependencies: [
-        '@vibe-agent-toolkit/agent-schema',
+        '@vibe-agent-toolkit/schema',
         // Invoked as `tspc` via `--compiler=tspc` passed to tsc-clean-build.ts — knip's
         // script-token scanner only matches a bin name as its own token, not inside a flag value.
         'ts-patch',

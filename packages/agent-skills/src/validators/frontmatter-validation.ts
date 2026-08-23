@@ -9,7 +9,7 @@
  */
 
 
-import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 import { AgentSkillFrontmatterSchema, VATAgentSkillFrontmatterSchema } from '../schemas/agent-skill-frontmatter.js';
 

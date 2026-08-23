@@ -1,0 +1,129 @@
+/**
+ * The value codec, and above all its round trip.
+ *
+ * A value that encodes plausibly and decodes into something else is the failure
+ * mode worth testing here — a `Date` that reads back as a string, a `false` that
+ * reads back as truthy, a JSON `null` that reads back as the four-character
+ * string. None of those throw, and all of them corrupt a row quietly.
+ */
+
+import type { ProjectionColumnKind } from '@vibe-agent-toolkit/resources';
+import { describe, expect, it } from 'vitest';
+
+import { decodeValue, encodeValue } from '../src/values.js';
+
+/** A fixed instant, named once so the timestamp cases share one literal. */
+const INSTANT = '2026-08-18T12:34:56.789Z';
+
+/** A second instant, for the coerce-from-string case. */
+const MIDNIGHT = '2026-08-18T00:00:00.000Z';
+
+/** Encode then decode, which is the only property that matters. */
+function roundTrip(kind: ProjectionColumnKind, value: unknown): unknown {
+  return decodeValue(kind, encodeValue(kind, value));
+}
+
+describe('encodeValue', () => {
+  it('stores a boolean as 0 or 1', () => {
+    expect(encodeValue('boolean', true)).toBe(1);
+    expect(encodeValue('boolean', false)).toBe(0);
+  });
+
+  it('stores an instant as UTC ISO-8601', () => {
+    expect(encodeValue('timestamp', new Date(INSTANT)))
+      .toBe(INSTANT);
+  });
+
+  it('accepts a date-shaped string, because mtime is a z.coerce.date()', () => {
+    expect(encodeValue('timestamp', MIDNIGHT)).toBe(MIDNIGHT);
+  });
+
+  it('reports an invalid instant as one, rather than as RangeError from toISOString', () => {
+    expect(() => encodeValue('timestamp', 'not a date')).toThrow(/not a valid instant/u);
+  });
+
+  it('serializes a JSON column', () => {
+    expect(encodeValue('json', { a: [1, 'two'] })).toBe('{"a":[1,"two"]}');
+  });
+
+  it('stores SQL NULL for both null and undefined', () => {
+    expect(encodeValue('text', null)).toBeNull();
+    expect(encodeValue('text', undefined)).toBeNull();
+    expect(encodeValue('json', null)).toBeNull();
+  });
+
+  it('refuses a non-boolean in a boolean column instead of storing a truthy 1', () => {
+    expect(() => encodeValue('boolean', 'true')).toThrow(TypeError);
+    expect(() => encodeValue('boolean', 1)).toThrow(TypeError);
+  });
+
+  it('refuses a non-number in a numeric column', () => {
+    expect(() => encodeValue('integer', '7')).toThrow(TypeError);
+  });
+});
+
+describe('decodeValue', () => {
+  it('reads 0 as false, not as a falsy number', () => {
+    expect(decodeValue('boolean', 0)).toBe(false);
+    expect(decodeValue('boolean', 1)).toBe(true);
+  });
+
+  it('reads a stored instant back as a Date', () => {
+    expect(decodeValue('timestamp', MIDNIGHT)).toBeInstanceOf(Date);
+  });
+
+  it('narrows a bigint to a number, since every integer column is a count or an offset', () => {
+    expect(decodeValue('integer', 42n)).toBe(42);
+  });
+
+  it('reads SQL NULL as null for every kind', () => {
+    const kinds: readonly ProjectionColumnKind[] = ['text', 'integer', 'real', 'boolean', 'timestamp', 'json'];
+    for (const kind of kinds) {
+      expect(decodeValue(kind, null), kind).toBeNull();
+    }
+  });
+});
+
+describe('round trip', () => {
+  it('preserves a Date to the millisecond', () => {
+    const instant = new Date(INSTANT);
+    expect((roundTrip('timestamp', instant) as Date).getTime()).toBe(instant.getTime());
+  });
+
+  it('preserves false, which a truthiness test would lose', () => {
+    expect(roundTrip('boolean', false)).toBe(false);
+  });
+
+  it('preserves an empty string, which a null test would lose', () => {
+    expect(roundTrip('text', '')).toBe('');
+  });
+
+  it('preserves zero', () => {
+    expect(roundTrip('integer', 0)).toBe(0);
+  });
+
+  it('keeps a JSON null and the string "null" distinguishable', () => {
+    // The trap this rules out: storing the token `null` for a JS null would make
+    // these two decode identically.
+    expect(roundTrip('json', null)).toBeNull();
+    expect(roundTrip('json', 'null')).toBe('null');
+  });
+
+  it('preserves a nested JSON structure', () => {
+    const payload = { sources: ['a', 'b'], model: { status: 'modeled' }, count: 3, ok: true, missing: null };
+    expect(roundTrip('json', payload)).toEqual(payload);
+  });
+
+  it('preserves a JSON array at the top level', () => {
+    expect(roundTrip('json', [1, [2, 3]])).toEqual([1, [2, 3]]);
+  });
+
+  it('preserves text with quotes, newlines and non-ASCII bytes', () => {
+    const awkward = 'a"b\'c\n\td — ünïcode \0tail';
+    expect(roundTrip('text', awkward)).toBe(awkward);
+  });
+
+  it('preserves a negative and a fractional real', () => {
+    expect(roundTrip('real', -1.5)).toBe(-1.5);
+  });
+});

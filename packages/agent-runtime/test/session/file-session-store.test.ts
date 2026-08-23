@@ -1,7 +1,17 @@
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 
 
-import { SessionNotFoundError } from '@vibe-agent-toolkit/agent-runtime';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { describe, expect, it, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
+
+// Everything under test comes from `src`, never from this package's own name.
+// Vitest resolves a self-name import to `dist/`, so mixing the two gives the
+// suite a `SessionNotFoundError` from `dist` and a `FileSessionStore` from `src`
+// — two different classes, and every `instanceof`/`rejects.toThrow(...)` between
+// them fails for a reason that has nothing to do with the behaviour under test.
+// `memory-session-store.test.ts` has always taken one consistent origin.
+import { FileSessionStore } from '../../src/session/file-session-store.js';
+import { SessionNotFoundError } from '../../src/session/index.js';
 import {
   registerCommonSessionStoreTests,
   registerTests,
@@ -10,11 +20,7 @@ import {
   testSaveMethod,
   TEST_CONSTANTS,
   type SessionStoreTestSuite,
-} from '@vibe-agent-toolkit/agent-runtime/session/test-helpers';
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { describe, expect, it, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
-
-import { FileSessionStore } from '../../src/session/file-session-store.js';
+} from '../../src/session/test-helpers/index.js';
 
 describe('FileSessionStore', () => {
   let suiteDir: string;

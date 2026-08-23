@@ -18,7 +18,7 @@ import {
   type LLMError,
   type OneShotAgentOutput,
   type StatefulAgentResult,
-} from '@vibe-agent-toolkit/agent-schema';
+} from '@vibe-agent-toolkit/schema';
 
 /**
  * Map success value, propagate errors.

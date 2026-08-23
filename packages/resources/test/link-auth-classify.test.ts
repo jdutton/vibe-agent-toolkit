@@ -108,7 +108,7 @@ describe('classifyAuthenticatedResponse — returned code is a real CODE_REGISTR
   it('every non-null returned code matches a literal LINK_AUTH_* registry key', async () => {
     // External-constant cross-check: assert the classifier's outputs match the
     // exact registry keys, not via the classifier itself.
-    const { CODE_REGISTRY } = await import('@vibe-agent-toolkit/agent-schema');
+    const { CODE_REGISTRY } = await import('@vibe-agent-toolkit/schema');
     const codes = [
       classifyAuthenticatedResponse(401, DEAD).code,
       classifyAuthenticatedResponse(403, DEAD).code,

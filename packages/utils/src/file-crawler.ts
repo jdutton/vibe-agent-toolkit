@@ -118,6 +118,40 @@ export const BUILD_OUTPUT_GLOBS = ['**/dist/**'] as const;
 const DEFAULT_EXCLUDE: string[] = [...NEVER_CRAWL_GLOBS, ...BUILD_OUTPUT_GLOBS];
 
 /**
+ * THE include/exclude decision, compiled once — "is this base-relative path a
+ * member of the crawl?"
+ *
+ * Extracted because it is asked from three places that must never drift: the
+ * `git ls-files` branch below, the manual walk below it, and — since the
+ * projection-backed lane landed — a population that arrives already enumerated
+ * and still has to be narrowed to what the caller's globs admit. A lane that
+ * approximated this with its own picomatch call would be measuring the corpus
+ * with a different matcher than the one that ships, which is how a "clean" A/B
+ * comes to compare two different questions.
+ *
+ * The `+ '/'` retry is the load-bearing subtlety, not a defensive extra: a
+ * directory-shaped exclude like `docs/legacy/**` does not match the bare path
+ * `docs/legacy`, so without it an excluded directory is admitted as a member
+ * whenever a caller enumerates directories as well as files.
+ *
+ * @param include - Include globs, base-relative, forward-slashed
+ * @param exclude - Exclude globs, same basis; an empty list excludes nothing
+ * @returns A predicate over base-relative, forward-slashed paths
+ */
+export function crawlPathFilter(
+  include: readonly string[],
+  exclude: readonly string[],
+): (relativePath: string) => boolean {
+  const isIncluded = picomatch([...include], PICOMATCH_OPTIONS);
+  const isExcluded =
+    exclude.length > 0 ? picomatch([...exclude], PICOMATCH_OPTIONS) : (): boolean => false;
+  return (relativePath: string): boolean => {
+    const normalized = toForwardSlash(relativePath);
+    return isIncluded(normalized) && !isExcluded(normalized) && !isExcluded(`${normalized}/`);
+  };
+}
+
+/**
  * Crawl a directory tree and return matching files (async)
  *
  * Uses picomatch for glob pattern matching (same as Vitest)
@@ -218,15 +252,10 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
         // entry, not a drive-by fix here.
         //
         // Git ls-files succeeded - filter using glob patterns
-        const isIncluded = picomatch(include, picoOptions);
-        const isExcluded = exclude.length > 0 ? picomatch(exclude, picoOptions) : (): boolean => false;
+        const isMember = crawlPathFilter(include, exclude);
 
         return gitFiles
-          .filter((relativePath) => {
-            const normalizedPath = toForwardSlash(relativePath);
-            // Check both include and exclude patterns
-            return isIncluded(normalizedPath) && !isExcluded(normalizedPath) && !isExcluded(normalizedPath + '/');
-          })
+          .filter((relativePath) => isMember(relativePath))
           .map((relativePath) => {
             // git ls-files returns paths relative to cwd
             return absolute ? safePath.resolve(resolvedBaseDir, relativePath) : relativePath;

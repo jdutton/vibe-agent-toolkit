@@ -1,4 +1,4 @@
-import type { OneShotAgentOutput } from '@vibe-agent-toolkit/agent-schema';
+import type { OneShotAgentOutput } from '@vibe-agent-toolkit/schema';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { andThen, mapResult, match, unwrap, withRetry, withTiming } from '../src/result-helpers.js';

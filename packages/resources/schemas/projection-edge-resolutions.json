@@ -1,0 +1,81 @@
+{
+  "$ref": "#/definitions/projection-edge-resolutions",
+  "definitions": {
+    "projection-edge-resolutions": {
+      "type": "object",
+      "properties": {
+        "src": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Source resource id"
+        },
+        "refOrdinal": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Matches blob_references.ordinal for the src blob. Null for an implicit edge, which has no authored reference."
+        },
+        "contextId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Foreign key to resolution_contexts.contextId — resolution is per-context"
+        },
+        "candidateOrdinal": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0-based rank among this edge's candidates — 0 is the best candidate this context found"
+        },
+        "dstResource": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Resolved target resource id, or null when this candidate resolves to nothing"
+        },
+        "dstAnchor": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Fragment target, or null"
+        },
+        "score": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Confidence for an inferred candidate, or null for a certain resolution"
+        }
+      },
+      "required": [
+        "src",
+        "refOrdinal",
+        "contextId",
+        "candidateOrdinal",
+        "dstResource",
+        "dstAnchor",
+        "score"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the path-dependent `edge_resolutions` table"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

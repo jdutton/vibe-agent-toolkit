@@ -1,4 +1,4 @@
-import type { Agent, OneShotAgentOutput } from '@vibe-agent-toolkit/agent-schema';
+import type { Agent, OneShotAgentOutput } from '@vibe-agent-toolkit/schema';
 
 /**
  * Brand types for session identity (strong typing)

@@ -5,6 +5,7 @@ import { beforeAll, beforeEach, afterAll, describe, expect, it } from 'vitest';
 import {
   BUILD_OUTPUT_GLOBS,
   crawlDirectorySync,
+  crawlPathFilter,
   NEVER_CRAWL_GLOBS,
 } from '../src/file-crawler.js';
 import { mkdirSyncReal, safePath, toForwardSlash } from '../src/path-utils.js';
@@ -44,6 +45,36 @@ describe('the canonical crawl-exclusion lists', () => {
   // moves it to the other list has to argue with this line.
   it('does not classify .turbo as build output', () => {
     expect([...BUILD_OUTPUT_GLOBS]).not.toContain(TURBO_GLOB);
+  });
+});
+
+describe('crawlPathFilter — the one matcher both crawl lanes and the projection share', () => {
+  it('excludes a directory named by a directory-shaped glob, via the trailing-slash retry', () => {
+    const isMember = crawlPathFilter(['**/*'], ['docs/legacy/**']);
+
+    // The retry's whole reason for existing: `docs/legacy/**` does not match the
+    // bare path `docs/legacy`, so without `+ '/'` an excluded directory is
+    // admitted as a member by any caller that enumerates directories — which the
+    // projection's filesystem extent deliberately does.
+    expect(isMember('docs/legacy')).toBe(false);
+    expect(isMember('docs/legacy/old.md')).toBe(false);
+    // Negative control: the exclude is narrow, not a blanket refusal.
+    expect(isMember('docs/current.md')).toBe(true);
+  });
+
+  it("reaches inside a dot-directory, because visibility is git's decision and not picomatch's", () => {
+    const isMember = crawlPathFilter(['**/*.md'], []);
+
+    // picomatch's `dot: false` default refuses to let `**` traverse `.claude/`,
+    // which is Claude's own home for the artifacts VAT exists to validate. An
+    // adopter lost 68 tracked files to exactly this.
+    expect(isMember('.claude/skills/a.md')).toBe(true);
+  });
+
+  it('normalizes separators, so a Windows-shaped path meets the same globs', () => {
+    const isMember = crawlPathFilter(['docs/**/*.md'], []);
+
+    expect(isMember(String.raw`docs\guide.md`)).toBe(true);
   });
 });
 

@@ -15,7 +15,7 @@
  * intents may share a context signature while expecting different codes.
  */
 
-import { CODE_REGISTRY, type IssueCode, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { CODE_REGISTRY, type IssueCode, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 import type { FileKind, RuleContext } from './rule-context.js';
 
@@ -33,9 +33,12 @@ const EXCLUDED_FILE_KIND_CODES: Partial<Record<FileKind, IssueCode>> = {
 
 /**
  * Decide the code for a **reference edge** (`subject: 'edge'`). Ordered: the
- * first matching intent wins. Returns `null` for edges that are valid (a
- * navigational directory link, a pattern-excluded reference, a normally-bundled
- * link).
+ * first matching intent wins. Returns `null` ONLY for an edge that resolves to a
+ * file the bundle actually carries — every edge the walker declined to bundle
+ * now reaches a code, at a severity that says how much it matters. A directory
+ * link and a pattern-excluded reference are both perfectly legitimate and both
+ * reported (warning / info respectively); "acceptable" decides the severity, it
+ * does not buy silence.
  */
 function evaluateEdge(ctx: RuleContext): IssueCode | null {
   // An unreadable target (present on disk, unstattable anyway) is reported
@@ -50,10 +53,14 @@ function evaluateEdge(ctx: RuleContext): IssueCode | null {
   // never be bundled regardless of anything else about the edge.
   if (ctx.outsideProject) return 'LINK_OUTSIDE_PROJECT';
 
-  // Directory targets: an error ONLY for a typed single-file slot (the contract
-  // demanded a file). A navigational directory link is a valid target (#126).
+  // Directory targets: an ERROR only for a typed single-file slot (the contract
+  // demanded a file). A navigational directory link is still a valid target
+  // (#126) — but valid is not the same as unreportable, and it used to return
+  // `null` here, which made the drop invisible: the directory never travels, so
+  // the packaged link points at nothing and the author heard nothing about it.
+  // The two arms are two different findings, not one finding at two severities.
   if (ctx.fileKind === 'directory') {
-    return ctx.typedSingleFileSlot ? 'LINK_TARGETS_DIRECTORY' : null;
+    return ctx.typedSingleFileSlot ? 'LINK_TARGETS_DIRECTORY' : 'LINK_TO_UNBUNDLED_DIRECTORY';
   }
 
   // Linking another skill's SKILL.md duplicates skill definitions on bundle.
@@ -85,8 +92,12 @@ function evaluateEdge(ctx: RuleContext): IssueCode | null {
  * sequence and the combined order is unchanged.
  */
 function evaluateWalkDecision(ctx: RuleContext): IssueCode | null {
-  // Excluded by an author-configured pattern — intentional, not an issue.
-  if (ctx.patternExcluded) return null;
+  // Excluded by an author-configured pattern. Intentional — hence `info` in the
+  // registry rather than a warning — but reported, not swallowed. It returned
+  // `null` here, and "the author asked for it" justified the low severity, never
+  // the total absence of a receipt: the one lane that knows why a file did not
+  // ship is the one an author asking that question needs to hear from.
+  if (ctx.patternExcluded) return 'LINK_EXCLUDED_BY_PATTERN';
 
   // Beyond the configured linkFollowDepth.
   if (ctx.droppedByDepth) return 'LINK_DROPPED_BY_DEPTH';

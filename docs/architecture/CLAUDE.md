@@ -11,3 +11,5 @@ Cross-cutting architectural concerns worth knowing before editing any validator 
 - **Skill packaging shapes** — Four recognized artifact types (standalone skill, skill-claude-plugin, claude-plugin, claude-marketplace). See [`skill-packaging.md`](./skill-packaging.md). Audit's surface enumeration returns all present; never assume a single shape.
 
 - **Validation codes reference** — [`../validation-codes.md`](../validation-codes.md) enumerates every emittable code by name, default severity, and when it fires.
+
+- **Anything touching link resolution, packaging visibility, or "why does this resolve here but not there"** — read [`zones.md`](./zones.md) first. Several shipped behaviours (`NON_PORTABLE_ASSET_REFERENCE`, `LINK_FROM_NON_ROUTABLE_FILE`, the `files:`-blindness family) are per-zone facts currently written as bespoke rules. 🔷 Proposed, not built — but don't add another special case without checking whether it's a zone fact.

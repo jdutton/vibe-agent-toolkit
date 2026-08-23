@@ -37,7 +37,7 @@
 
 import { existsSync, readdirSync, statSync } from 'node:fs';
 
-import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 /** How many bin/ entries to name in the message before eliding. */

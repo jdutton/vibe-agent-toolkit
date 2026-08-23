@@ -17,7 +17,7 @@
  */
 import { cpSync, readFileSync, writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, safeExecSync, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, runGitOrThrow, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -58,7 +58,7 @@ function setupFixtureRepo(fixtureName: string): FixtureRepos {
   mkdirSyncReal(sourceRepo, { recursive: true });
 
   // Bare remote
-  safeExecSync('git', ['init', '--bare', '-q'], { cwd: bareRemote });
+  runGitOrThrow(['init', '--bare', '-q'], { cwd: bareRemote });
 
   // Copy fixture tree into source repo
   const fixturePath = getFixturePath(import.meta.url, fixtureName);
@@ -92,9 +92,7 @@ async function runVatExpectSuccess(cwd: string, args: string[]): Promise<string>
  */
 function cloneBranchToInspect(bareRemote: string, branch: string): string {
   const inspectDir = createTempDir();
-  safeExecSync(
-    'git',
-    ['clone', '-q', '--branch', branch, '--single-branch', bareRemote, inspectDir],
+  runGitOrThrow(['clone', '-q', '--branch', branch, '--single-branch', bareRemote, inspectDir],
     { cwd: bareRemote },
   );
   return inspectDir;
@@ -192,9 +190,8 @@ describe('multi-plugin marketplace — end-to-end build + publish (integration)'
     // version, so the commit subject must NOT carry a misleading `v<X>` (which
     // historically came from the project root package.json).
     const commitSubject = String(
-      safeExecSync('git', ['log', '-1', '--pretty=%s', 'HEAD'], {
+      runGitOrThrow(['log', '-1', '--pretty=%s', 'HEAD'], {
         cwd: inspectDir,
-        encoding: 'utf-8',
       }),
     ).trim();
     expect(commitSubject).toBe('publish multi-plugin');
@@ -236,8 +233,8 @@ describe('multi-plugin marketplace — end-to-end build + publish (integration)'
         '## [0.1.0] - 2026-05-09\n\n### Added\n- Initial release of plugin-a\n',
     );
 
-    safeExecSync('git', ['add', '-A'], { cwd: sourceRepo });
-    safeExecSync('git', ['commit', '-q', '-m', 'bump plugin-a to 0.2.0'], {
+    runGitOrThrow(['add', '-A'], { cwd: sourceRepo });
+    runGitOrThrow(['commit', '-q', '-m', 'bump plugin-a to 0.2.0'], {
       cwd: sourceRepo,
     });
 

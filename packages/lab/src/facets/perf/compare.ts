@@ -47,7 +47,9 @@ export type PerfCommandVerdict =
     }
   | {
       /**
-       * One or both sides did not produce a usable measurement.
+       * The two rows cannot yield a delta — either a side produced no usable
+       * measurement, or both did but of different things (see
+       * {@link unmeasurableReason} for the full list, which the `reason` names).
        *
        * Kept as its own verdict rather than folded into `unchanged`: "we could
        * not measure this" and "this did not move" are different facts, and a
@@ -125,6 +127,20 @@ function readPerfBody(
 /**
  * Why a pair of rows cannot yield a delta, or `null` when it can.
  *
+ * Three classes, and the order they are tested in is part of the contract:
+ *
+ * 1. **A side did not produce a measurement.** Its statistics are empty, so
+ *    there is nothing to subtract. This stays first because a failed row's
+ *    `exitCode` is `null` by design — reporting "exit codes differ (null vs 0)"
+ *    for a baseline that crashed would name the wrong cause and send the reader
+ *    looking for a finding-count change that never happened.
+ * 2. **The cache modes differ.** A warm run and a cold run are not two
+ *    measurements of one thing.
+ * 3. **The accepted exit codes differ.** Both sides finished their work, but
+ *    not the same amount of it: a vat validator exits `1` when it has findings
+ *    and `0` when it has none, and rendering findings is work the other side
+ *    never did. The delta is real and it is not about speed.
+ *
  * @param before - The baseline row
  * @param after - The compared row
  * @returns A reason, or `null`
@@ -136,6 +152,23 @@ function unmeasurableReason(before: PerfCommandStats, after: PerfCommandStats): 
   if (before.cache !== after.cache) {
     // A warm run and a cold run are not two measurements of one thing.
     return `cache mode differs (${before.cache} vs ${after.cache})`;
+  }
+  if (before.exitCode !== after.exitCode) {
+    // Sibling of the cache check, and deliberately after it: both say "these are
+    // not two measurements of one thing", but a cache-mode mismatch is a knob
+    // the operator set and can simply re-run, while this one sends the reader
+    // off to investigate the subject. Name the cheaper cause first when a pair
+    // manages to trip both.
+    //
+    // Both sides completed here — the `failed` trio above already returned — so
+    // these are two ACCEPTED codes, and a validator that exited 1 rendered
+    // findings the 0 side had none of. Timing them against each other would
+    // charge that extra work to speed.
+    return (
+      `accepted exit codes differ (${String(before.exitCode)} vs ${String(after.exitCode)}) — ` +
+      'one side had findings the other did not, so the two runs did not do the same amount of ' +
+      'work; find out why the finding count moved before reading anything into the timing'
+    );
   }
   return null;
 }

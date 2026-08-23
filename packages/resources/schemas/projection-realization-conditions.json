@@ -1,0 +1,146 @@
+{
+  "$ref": "#/definitions/projection-realization-conditions",
+  "definitions": {
+    "projection-realization-conditions": {
+      "type": "object",
+      "properties": {
+        "extentId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Foreign key to resolution_contexts.contextId, species \"extent\""
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path the condition is about, stated against the root. Root-relative for every condition about something the projection realizes, and \"../\"-prefixed for the one class that is deliberately about a path OUTSIDE the root (CLOSURE_REFERENCE_OUTSIDE_ROOT): a reference may name a real file the population was never defined over, and the row has to be able to name it. Never a bare absolute path."
+        },
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "description": "An enum member, e.g. \"REALIZATION_PATH_COLLISION\" — open vocabulary"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "error",
+            "warning",
+            "info"
+          ],
+          "description": "Severity of a projection condition row"
+        },
+        "message": {
+          "type": "string"
+        },
+        "resourceId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The identity this condition concerns, or null"
+        },
+        "sourcePath": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Root-relative path of the file whose reference provoked this condition — the file an author opens. Null when no reference provoked it (a collision, an absent declared root)."
+        },
+        "sourceLine": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "1-based line of that reference within sourcePath, or null when no reference provoked this condition. The reference's column is deliberately NOT carried: nothing consumes it, and a column with no consumer and no counterpart to compare against cannot be shown to be right."
+        },
+        "sourceRef": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The reference exactly as authored (blob_references.rawRef — anchor and all), or null when no reference provoked this condition. Not min(1): an empty href is authorable markdown."
+        },
+        "targetExists": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Whether the referenced target existed when the contributor classified it. Null when nothing observed the target — including CLOSURE_REFERENCE_UNRESOLVED, where \"no realization holds this path\" is a statement about the projection and not about the filesystem, and CLOSURE_REFERENCE_OUTSIDE_ROOT, where the target lies outside the population entirely. A consumer comparing this column against a walker that stats the path must exclude those two codes rather than read the null as \"absent\"."
+        },
+        "matchedPattern": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The FIRST glob declared by the refusal rule that matched — the rule's identifying pattern, read the same way packaging-validator.ts reads matchedRule.patterns[0]. Names WHICH rule, not which of its globs fired; the code column already says why. Null when the matching rule declares no patterns (it refused by basename, kind or flag), and for every condition no refusal rule produced."
+        },
+        "matchedPayload": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/projection-realization-conditions/properties/matchedPayload",
+                "description": "An arbitrary JSON value (frontmatter, condition payloads, etc.)"
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/definitions/projection-realization-conditions/properties/matchedPayload/anyOf/4/items"
+              }
+            }
+          ],
+          "description": "The matched refusal rule's OPAQUE payload, copied verbatim from the declaration and never interpreted — the channel for caller vocabulary the primitive has no column for (the skill translation carries an excludeReferencesFromBundle rule's index and its template here). Null when the rule declared none, and for every condition no refusal rule produced."
+        }
+      },
+      "required": [
+        "extentId",
+        "path",
+        "code",
+        "severity",
+        "message",
+        "resourceId",
+        "sourcePath",
+        "sourceLine",
+        "sourceRef",
+        "targetExists",
+        "matchedPattern",
+        "matchedPayload"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the path-dependent `realization_conditions` table"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

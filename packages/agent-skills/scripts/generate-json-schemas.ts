@@ -3,14 +3,12 @@
  * Generate JSON Schema files from Zod schemas
  */
 
-import { writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
-import { type ZodType, type ZodTypeDef } from 'zod';
-import { zodToJsonSchema } from 'zod-to-json-schema';
+import { safePath } from '@vibe-agent-toolkit/utils';
 
+import { createJsonSchemaWriter } from '../../dev-tools/src/json-schema-writer.js';
 import {
   AgentSkillFrontmatterSchema,
   VATAgentSkillFrontmatterSchema
@@ -22,18 +20,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const SCHEMAS_DIR = safePath.join(__dirname, '..', 'schemas');
 
-mkdirSyncReal(SCHEMAS_DIR, { recursive: true });
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function writeJsonSchema(name: string, schema: ZodType<any, ZodTypeDef, any>, postProcess?: (s: Record<string, unknown>) => void): void {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const jsonSchema = zodToJsonSchema(schema, name) as Record<string, any>;
-  if (postProcess) postProcess(jsonSchema);
-  const path = safePath.join(SCHEMAS_DIR, `${name}.json`);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename
-  writeFileSync(path, JSON.stringify(jsonSchema, null, 2) + '\n');
-  console.log(`✅ Generated: ${name}.json`);
-}
+const writeJsonSchema = createJsonSchemaWriter(SCHEMAS_DIR);
 
 /**
  * Post-process marketplace-manifest schema to add path traversal constraint.

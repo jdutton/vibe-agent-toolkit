@@ -9,7 +9,7 @@
 
 import { inspect } from 'node:util';
 
-import { countBySeverity, type SeverityCounts, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { countBySeverity, type SeverityCounts, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 import type { Logger } from './logger.js';
 import { writeYamlOutput } from './output.js';

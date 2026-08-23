@@ -1,4 +1,4 @@
-import type { Agent, OneShotAgentOutput } from '@vibe-agent-toolkit/agent-schema';
+import type { Agent, OneShotAgentOutput } from '@vibe-agent-toolkit/schema';
 
 import { ResultTranslator } from '../server/result-translator.js';
 import type { ArchetypeAdapter, ConnectionId, MCPToolDefinition, MCPToolResult } from '../types.js';

@@ -36,6 +36,34 @@
  * checkout to ask, and a published tarball does not carry its provenance. Null
  * there is a fact, not a guess.
  *
+ * ## A commit is not enough on its own
+ *
+ * A `tree` build made from a checkout with uncommitted changes was, until this
+ * was added, stamped with HEAD and nothing else — so the report claimed to
+ * describe a commit whose bytes never ran, and every A/B it took part in
+ * attributed the delta to a diff that was not the one under test. The subject
+ * side had detected and printed `(DIRTY working tree)` for exactly this since it
+ * was written; axis C simply did not ask. It asks now, with the *same* function
+ * (see `git-state.ts`), and {@link InstrumentVersion.dirty} carries the answer
+ * into every report and every rendered header.
+ *
+ * The same failure has a second door, and it does not look like a fallback at
+ * all: `dist/bin/vat.js` is not the CLI, it is a *wrapper* that re-resolves
+ * which vat to run from `process.cwd()`. The harness runs every measured command
+ * with `cwd` set to the subject, so an instrument pointed at that wrapper hands
+ * the choice of binary to the thing being measured — an adopter with vat
+ * installed has its own copy measured on both arms of an A/B, while the two
+ * reports carry the versions and commits read off the two checkouts that never
+ * ran. That is exactly the fallback this module refuses to perform, relocated
+ * inside the binary. So {@link TREE_BIN_RELATIVE} and
+ * {@link DIST_BIN_CANDIDATES} name `dist/bin.js`, the CLI's own entry point, and
+ * a caller who names the wrapper by hand is told why rather than obeyed.
+ *
+ * `kind: 'npx'` is the one route still exposed to this: `npx` runs the published
+ * package's `bin`, which *is* the wrapper, so a published instrument remains
+ * subject to cwd re-resolution. Known limitation, recorded rather than papered
+ * over.
+ *
  * ## Windows
  *
  * Paths are produced through `safePath` (forward slashes everywhere). The `npx`
@@ -48,21 +76,49 @@
  */
 
 import { readFile, realpath, stat } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { basename, dirname } from 'node:path';
 
-import { safeExecResult, safePath } from '@vibe-agent-toolkit/utils';
+import { runGit, safePath } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
+import { hasUncommittedChanges } from './git-state.js';
 import type { InstrumentSource, ResolvedInstrument } from './types.js';
 
-/** Where a vat checkout keeps its built entry point, relative to the tree root. */
-const TREE_BIN_RELATIVE = 'packages/cli/dist/bin/vat.js';
+/**
+ * Where a vat checkout keeps its built entry point, relative to the tree root.
+ *
+ * `dist/bin.js` — the CLI itself — and deliberately **not** `dist/bin/vat.js`,
+ * which is the context-detecting wrapper `package.json` maps `vat` to. That
+ * wrapper re-resolves which vat to run from `process.cwd()`, and the harness
+ * runs every measured command with `cwd` set to the subject, so measuring
+ * through it would spawn whatever vat the *subject* has installed while the
+ * report went on naming the build under test. The vat CLI made this same call
+ * for the same reason: see `resolveBinPath()` in
+ * `packages/cli/src/commands/phase-utils.ts`, which spawns `bin.js` directly so
+ * a phase subprocess cannot be diverted to an adopter's local install.
+ */
+const TREE_BIN_RELATIVE = 'packages/cli/dist/bin.js';
 
 /** Where a vat checkout keeps the manifest that carries the version. */
 const TREE_PACKAGE_JSON_RELATIVE = 'packages/cli/package.json';
 
-/** Entry points looked for when `kind: 'dist'` names a directory rather than a file. */
-const DIST_BIN_CANDIDATES = ['bin/vat.js', 'vat.js'] as const;
+/**
+ * Entry points looked for when `kind: 'dist'` names a directory rather than a
+ * file.
+ *
+ * A published `@vibe-agent-toolkit/cli` ships both `dist/bin.js` and
+ * `dist/bin/vat.js`; only the former may be measured, for the reason given on
+ * {@link TREE_BIN_RELATIVE}. The wrapper is not a second candidate to fall back
+ * to — it is the thing `bin.js` gets spawned *by*.
+ */
+const DIST_BIN_CANDIDATES = ['bin.js'] as const;
+
+/** The wrapper, relative to a `dist/` directory — recognised only to refuse it. */
+const WRAPPER_RELATIVE = 'bin/vat.js';
+
+/** Basename of the wrapper, and of the directory it sits directly inside. */
+const WRAPPER_BASENAME = 'vat.js';
+const WRAPPER_DIR_BASENAME = 'bin';
 
 /** Lowercase hex, the alphabet of a git object id. */
 const HEX = /^[0-9a-f]+$/;
@@ -159,6 +215,42 @@ async function isRegularFile(path: string): Promise<boolean> {
 }
 
 /**
+ * Refuse an entry point that is vat's context-detecting wrapper.
+ *
+ * Recognised by shape rather than by content: a file named `vat.js` sitting
+ * directly inside a directory named `bin`. Both routes into this module can
+ * arrive at one — `dist` because it accepts a file path verbatim, `tree` because
+ * the constant it joins is the one thing standing between the harness and this
+ * mistake — so the check lives at a single seam that both pass through, and
+ * neither can quietly drift away from the other.
+ *
+ * Silence here would be the module's worst outcome, not its safest: the wrapper
+ * runs *something*, so every run succeeds and every report is complete. See the
+ * module header.
+ *
+ * @param binPath - The entry point about to be stamped as the instrument
+ * @param kind - The instrument kind, for the error message
+ * @throws {Error} when `binPath` is the wrapper rather than the CLI
+ */
+function assertNotContextWrapper(binPath: string, kind: string): void {
+  if (
+    basename(binPath) !== WRAPPER_BASENAME ||
+    basename(dirname(binPath)) !== WRAPPER_DIR_BASENAME
+  ) {
+    return;
+  }
+
+  const sibling = safePath.join(dirname(dirname(binPath)), 'bin.js');
+  throw new Error(
+    `resolveInstrument({ kind: '${kind}' }): ${binPath} is vat's context-detecting wrapper, ` +
+      'not the CLI. It re-resolves which vat to run from process.cwd(), and every measured ' +
+      'command runs with cwd set to the subject — so this instrument would run whatever vat the ' +
+      'subject has installed while the report kept naming the build you asked for. ' +
+      `Point at ${sibling} instead. ${NO_FALLBACK_NOTE}`,
+  );
+}
+
+/**
  * Read the `version` field out of a `package.json`.
  *
  * @param manifestPath - Absolute path to the manifest
@@ -236,9 +328,8 @@ async function findNearestManifest(startDir: string, subject: string): Promise<s
  * @throws {Error} when the path is not a git checkout, or not the root of one
  */
 async function readTreeCommit(treeRoot: string): Promise<string> {
-  const result = safeExecResult('git', ['rev-parse', '--show-toplevel', 'HEAD'], {
+  const result = runGit(['rev-parse', '--show-toplevel', 'HEAD'], {
     cwd: treeRoot,
-    encoding: 'utf-8',
   });
 
   const lines = String(result.stdout)
@@ -247,7 +338,7 @@ async function readTreeCommit(treeRoot: string): Promise<string> {
     .filter((line) => line.length > 0);
   const [toplevel, commit] = lines;
 
-  if (!result.success || toplevel === undefined || commit === undefined) {
+  if (!result.ok || toplevel === undefined || commit === undefined) {
     const detail = String(result.stderr).trim();
     const why = detail === '' ? `exit ${String(result.status)}` : detail;
     throw new Error(
@@ -287,6 +378,7 @@ async function readTreeCommit(treeRoot: string): Promise<string> {
 async function resolveTree(path: string): Promise<ResolvedInstrument> {
   const treeRoot = safePath.resolve(path);
   const binPath = safePath.join(treeRoot, TREE_BIN_RELATIVE);
+  assertNotContextWrapper(binPath, 'tree');
 
   if (!(await isRegularFile(binPath))) {
     throw new Error(
@@ -300,11 +392,16 @@ async function resolveTree(path: string): Promise<ResolvedInstrument> {
     'tree',
   );
   const commit = await readTreeCommit(treeRoot);
+  // Asked with the SAME function the subject side asks with — see
+  // `harness/git-state.ts`. A second implementation here could count untracked
+  // files differently and label one report's two axes by two definitions of
+  // "dirty", which no reader could see.
+  const dirty = hasUncommittedChanges(treeRoot, `the instrument checkout at ${treeRoot}`);
 
   return {
     command: process.execPath,
     leadingArgs: [binPath],
-    version: { version, commit },
+    version: { version, commit, dirty },
     root: treeRoot,
   };
 }
@@ -315,19 +412,34 @@ async function resolveTree(path: string): Promise<ResolvedInstrument> {
  *
  * @param target - Absolute path to a dist directory or bin file
  * @returns Absolute path to the entry point
- * @throws {Error} when nothing is there, or a directory holds no entry point
+ * @throws {Error} when nothing is there, when a directory holds no entry point,
+ *   or when the file named is the context-detecting wrapper
  */
 async function locateDistBin(target: string): Promise<string> {
-  if (await isRegularFile(target)) return target;
+  if (await isRegularFile(target)) {
+    assertNotContextWrapper(target, 'dist');
+    return target;
+  }
 
   const candidates = DIST_BIN_CANDIDATES.map((relative) => safePath.join(target, relative));
   for (const candidate of candidates) {
     if (await isRegularFile(candidate)) return candidate;
   }
 
+  // A dist with the wrapper but no `bin.js` is a specific, diagnosable state —
+  // half a build, or a `bin/` directory mistaken for the entry point. Saying
+  // "no vat entry point" over a directory that visibly contains a `vat.js`
+  // reads as a bug in the harness rather than as the answer it is.
+  const wrapper = safePath.join(target, WRAPPER_RELATIVE);
+  const wrapperNote = (await isRegularFile(wrapper))
+    ? ` ${wrapper} exists, but it is the context-detecting wrapper, not the CLI: it re-resolves ` +
+      'vat from process.cwd(), which here is the subject being measured. It is never an ' +
+      'acceptable substitute.'
+    : '';
+
   throw new Error(
     `resolveInstrument({ kind: 'dist' }): no vat entry point at ${target} ` +
-      `(tried it as a file, then ${candidates.join(', ')}). ${NO_FALLBACK_NOTE}`,
+      `(tried it as a file, then ${candidates.join(', ')}).${wrapperNote} ${NO_FALLBACK_NOTE}`,
   );
 }
 
@@ -348,7 +460,10 @@ async function resolveDist(path: string): Promise<ResolvedInstrument> {
   return {
     command: process.execPath,
     leadingArgs: [binPath],
-    version: { version, commit: null },
+    // `dirty: null` for the same reason `commit` is: there is no checkout to
+    // ask. A `false` here would be a confident claim of cleanliness over a build
+    // whose provenance nobody inspected.
+    version: { version, commit: null, dirty: null },
     // The package root, not the path the caller named: `dist:` accepts a bin
     // file as readily as a directory, and rooting sites at the file's own
     // directory would make every site outside `dist/bin` look foreign.
@@ -397,7 +512,9 @@ function resolveNpx(spec: string): ResolvedInstrument {
     // Bare on purpose — the spawn wrappers resolve it (and `npx.cmd` on Windows).
     command: 'npx',
     leadingArgs: ['--yes', trimmed],
-    version: { version, commit: null },
+    // A published tarball carries no provenance: no commit, and therefore
+    // nothing that could have been dirty.
+    version: { version, commit: null, dirty: null },
   };
 }
 

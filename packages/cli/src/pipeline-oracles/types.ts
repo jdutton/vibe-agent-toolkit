@@ -76,7 +76,7 @@ export interface EnumerationRow {
    * Does another enumerated path in this same lane resolve to the same file?
    *
    * A set-level fact, so it is filled in by a pass over the whole population
-   * rather than by {@link collectPathFacts}. Recorded rather than deduplicated
+   * rather than by the per-path `collectRealization`. Recorded rather than deduplicated
    * on purpose: collapsing aliases here would be judgement in phase 1, and the
    * measured reality is that every symlink divergence in Anthropic's own
    * shipped plugin trees is an alias — one blob, two names, two generated ids.
@@ -162,6 +162,55 @@ export interface LinkFact {
   resolvedId: string | null;
 }
 
+/**
+ * One reference candidate the markdown AST cannot produce, with its ordinal.
+ *
+ * Recorded for the same reason `links` is, and with the same ordinal for the
+ * same reason: a token's `raw` text is not an identity, since one document may
+ * write `@docs/x.md` in ten places, and "candidate 7 moved" is a different
+ * finding from "a candidate changed target".
+ *
+ * Every column the lexer produces is here rather than a summary, because each
+ * one is a boolean or a small scalar that a lossy round-trip can silently
+ * default to a plausible value. `inCodeSpan` is the load-bearing one: Anthropic
+ * documents that Claude Code's import parser skips code spans and fenced
+ * blocks, so this column is what decides whether an `@` token is an import at
+ * all. A cache that lost it would not drop a row — it would hand back a row
+ * that quietly claims the opposite meaning.
+ */
+export interface LexicalReferenceFact {
+  ordinal: number;
+  /** The token as authored, with trailing sentence punctuation stripped. */
+  raw: string;
+  /** 1-based line. */
+  line: number;
+  /** 1-based column of the token's first character. */
+  column: number;
+  /** `at-prefixed` / `env-anchored` / `bare-token`. */
+  syntacticForm: string;
+  hasExtension: boolean;
+  leadingAt: boolean;
+  slashCount: number;
+  /** The expansion syntax the token uses, or `null` when it contains none. */
+  variableExpansion: string | null;
+  inCodeSpan: boolean;
+  inFence: boolean;
+}
+
+/**
+ * The three measure columns of one blob, as the parse reported them.
+ *
+ * Declared here rather than imported from `@vibe-agent-toolkit/resources` for
+ * the same reason {@link LexicalReferenceFact} is: a golden row is a record of
+ * what a version of the parser said, and it must keep its shape even if the
+ * producing interface changes underneath it.
+ */
+export interface ContentMeasuresFact {
+  wordCount: number;
+  proseCodeUnits: number;
+  codeBlockCodeUnits: number;
+}
+
 /** One heading, with the slug anchors resolve against. */
 export interface HeadingFact {
   ordinal: number;
@@ -219,6 +268,23 @@ export interface ParseFactRow {
   sizeBytes: number;
   estimatedTokenCount: number;
   links: LinkFact[];
+  /**
+   * Reference candidates the markdown AST cannot produce, or `null` when the
+   * field is absent from the parse result.
+   *
+   * Recorded because it is **carried in the parse cache**, and this snapshot's
+   * whole claim is that a cached parse differing from a fresh one moves a row
+   * here. A cache that dropped, reordered or mangled this list would otherwise
+   * change every `@`-import and variable-anchored reference VAT sees while
+   * `links`, `headings` and both frontmatter columns held perfectly still.
+   *
+   * `null` rather than `[]` when absent, on the {@link anchors} precedent:
+   * `ParseResult.lexicalReferences` is optional under
+   * `exactOptionalPropertyTypes` and the parsers omit the key rather than
+   * emitting an empty array, so a layer that normalises one into the other is a
+   * contract change and must show up as a diff.
+   */
+  lexicalReferences: LexicalReferenceFact[] | null;
   headings: HeadingFact[];
   /**
    * The frontmatter block **as written**, delimiters excluded, as
@@ -266,6 +332,23 @@ export interface ParseFactRow {
    * anchor validation across the whole corpus while every other fact held.
    */
   anchors: string[] | null;
+  /**
+   * Word and code-unit accounting split by code context, or `null` when the
+   * parse result omits the field.
+   *
+   * Recorded because it is **carried in the parse cache** and because it is the
+   * only fact in a row derived from the AST's `code` node offsets — a cache
+   * that dropped or mangled it would change `BlobRow`'s three measure columns
+   * for every document while `links`, `headings` and both frontmatter columns
+   * held perfectly still.
+   *
+   * `proseCodeUnits` and `codeBlockCodeUnits` are **UTF-16 code units**, the
+   * same unit {@link decodedLength} is in — so `wordCount` aside,
+   * `proseCodeUnits + codeBlockCodeUnits === decodedLength` is a general
+   * invariant of every row, astral characters included. A row where the two
+   * disagree is a row whose measures were counted in some other unit.
+   */
+  contentMeasures: ContentMeasuresFact | null;
   /**
    * Length of `ParseResult.content` in UTF-16 code units, as the parser
    * returned it.

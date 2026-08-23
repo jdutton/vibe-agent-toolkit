@@ -19,7 +19,7 @@
  * `resolveAssetReference` and `resolveSkillReference` in CLAUDE.md.
  */
 
-import { type IssueCode, resolveSeverity, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { type IssueCode, resolveSeverity, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 /** A `validation.severity` map as it appears in config, or nothing. */
 export interface SeverityOverrides {

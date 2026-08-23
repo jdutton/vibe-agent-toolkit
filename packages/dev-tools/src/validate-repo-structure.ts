@@ -22,7 +22,7 @@
  *
  * ORIGINAL RULES:
  * - No /examples directories in runtime packages
- * - No /scripts directories (except dev-tools, agent-schema, agent-skills)
+ * - No /scripts directories (except dev-tools, schema, agent-skills)
  * - No shell scripts (.sh, .ps1, .bat, .cmd) - use TypeScript
  * - No /staging directories in test/fixtures
  * - Test fixtures follow size guidelines (over 100KB must be compressed)
@@ -39,7 +39,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { safeExecSync, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { runGitOrThrow, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import {
   loadTokens,
@@ -107,9 +107,11 @@ const TEXT_FILE_EXTENSIONS = new Set([
 async function forEachTrackedTextFile(
   handler: (relPath: string, contents: Buffer) => void,
 ): Promise<void> {
-  const tracked = safeExecSync('git', ['ls-files', '-z'], {
+  // `trim: false` — the listing is NUL-delimited, and a path beginning with a
+  // space sorts first, so a trim would rename it out of the population.
+  const tracked = runGitOrThrow(['ls-files', '-z'], {
     cwd: REPO_ROOT,
-    encoding: 'utf8',
+    trim: false,
   }) as string;
 
   for (const relPath of tracked.split('\0')) {
@@ -239,7 +241,7 @@ async function validateNoRuntimeExamples(): Promise<void> {
 /**
  * Rule 2: Only specific packages can have /scripts
  * Prevents utility sprawl across packages
- * Allowed: dev-tools (repo utilities), agent-schema, agent-skills (schema generation)
+ * Allowed: dev-tools (repo utilities), schema, agent-skills (schema generation)
  */
 async function validateScriptsLocation(): Promise<void> {
   const packagesDir = safePath.join(REPO_ROOT, 'packages');
@@ -247,7 +249,7 @@ async function validateScriptsLocation(): Promise<void> {
 
   const allowedScriptsPackages = new Set([
     'dev-tools',
-    'agent-schema',
+    'schema',
     'agent-skills',
     'vat-example-cat-agents', // Uses resource-compiler post-build script
     'vat-development-agents', // Uses resource-compiler post-build script
@@ -263,7 +265,7 @@ async function validateScriptsLocation(): Promise<void> {
       errors.push({
         type: ERROR_TYPES.FORBIDDEN_DIRECTORY,
         path: `packages/${entry.name}/scripts/`,
-        message: `Only dev-tools, agent-schema, and agent-skills should have /scripts directories. Move utilities to dev-tools package.`,
+        message: `Only dev-tools, schema, and agent-skills should have /scripts directories. Move utilities to dev-tools package.`,
         severity: 'error',
       });
     }
@@ -419,8 +421,8 @@ async function validateSourceFileLocations(): Promise<void> {
         return;
       }
 
-      // Allow agent-schema/scripts (build tooling for JSON Schema generation)
-      if (normalizedPath.startsWith('packages/agent-schema/scripts/')) {
+      // Allow schema/scripts (build tooling for JSON Schema generation)
+      if (normalizedPath.startsWith('packages/schema/scripts/')) {
         return;
       }
 
@@ -542,7 +544,9 @@ async function validateNoContrabandTokens(): Promise<void> {
   }
   console.log(`   contraband scan: ${tokens.length} token(s) from ${tokensPath ?? 'an unnamed source'}`);
 
-  const lsFiles = String(safeExecSync('git', ['ls-files', '-z'], { cwd: REPO_ROOT, encoding: 'utf8' }));
+  // `trim: false` — NUL-delimited, and this population is a confidentiality
+  // gate: a path dropped from it is a file the scan never reads.
+  const lsFiles = String(runGitOrThrow(['ls-files', '-z'], { cwd: REPO_ROOT, trim: false }));
   const tracked = lsFiles
     .split('\0')
     .filter((p: string) => p.length > 0)

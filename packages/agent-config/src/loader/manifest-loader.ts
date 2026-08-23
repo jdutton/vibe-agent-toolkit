@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 
-import { AgentManifestSchema, type AgentManifest } from '@vibe-agent-toolkit/agent-schema';
+import { AgentManifestSchema, type AgentManifest } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { parse as parseYaml } from 'yaml';
 

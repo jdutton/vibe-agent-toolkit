@@ -158,7 +158,7 @@ Requirements:
       'after',
       `
 Description:
-  Validates agent manifest schema (using @vibe-agent-toolkit/agent-schema),
+  Validates agent manifest schema (using @vibe-agent-toolkit/schema),
   LLM configuration, tool definitions, and resource availability. Outputs
   YAML validation report to stdout, errors to stderr.
 

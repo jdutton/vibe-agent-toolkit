@@ -7,7 +7,7 @@
   },
   "references": [
     { "path": "../agent-runtime" },
-    { "path": "../agent-schema" },
+    { "path": "../schema" },
     { "path": "../utils" },
     { "path": "../resource-compiler" }
   ],

@@ -10,7 +10,7 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 
-import type { SeverityCounts } from '@vibe-agent-toolkit/agent-schema';
+import type { SeverityCounts } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';
 

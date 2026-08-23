@@ -46,9 +46,10 @@
 
 import { resolveAuthenticatedUrl, type LinkAuthConfig } from '@vibe-agent-toolkit/utils';
 
-import { type ContentCache, type ContentMetadata } from './content-cache.js';
+import { type ContentCache } from './content-cache.js';
 import { type LinkAuthDeps } from './link-auth-deps-memo.js';
 import { authTransport, type AuthTransportOptions } from './link-auth-transport.js';
+import { type ContentMetadata } from './schemas/content-cache.js';
 
 export interface FetchAuthenticatedOptions {
   /** Content cache to read from and write to. Omit to skip caching entirely. */

@@ -17,6 +17,16 @@ export * from './spawn-hardened.js';
 // Cross-platform path utilities
 export * from './path-utils.js';
 
+// THE content-decoding seam: bytes to text, in one place. `decodeTextContent` is
+// pure and also reachable from the dependency-free `./text` entry; the two
+// file-reading wrappers need `node:fs` and are also on `./fs`. Other routes from
+// bytes to text — `buf.toString('utf-8')`, `new TextDecoder()`,
+// `readFile(p, 'utf-8')` — are a lint error under `local/no-raw-text-decode`
+// WHERE IT IS REGISTERED (this package's `src` and `resources`' `src`); the rest
+// of the repo is a migration ledger in `eslint.config.js`, not a covered claim.
+export * from './text-content.js';
+export * from './text-file.js';
+
 // Blocking stdio for published bins (process.exit must not truncate output)
 export * from './stdio-blocking.js';
 
@@ -82,11 +92,19 @@ export * from './file-crawler.js';
 // Git ignore checking
 export * from './gitignore-checker.js';
 
+// The one way to run git: scrubbed by default, `ambient: true` to opt out.
+// safeExecSync/safeExecResult refuse `git` and point here. The scrub itself,
+// and dirty-corrected tree snapshots, come from `@vibe-validate/git`.
+export * from './git-run.js';
+
 // Git URL parsing (parse/detect git URLs, GitHub shorthand, SSH forms)
 export * from './git-url.js';
 
 // Git utilities (using git commands directly)
 export * from './git-utils.js';
+
+// Dirty-corrected tree snapshots: paths, on-disk blob OIDs and modes in one call
+export * from './git-snapshot.js';
 
 // Project root discovery (canonical: config → git → null).
 // CLI-boundary use only — see docs/concepts/roots-and-config.md.
@@ -135,3 +153,68 @@ export * from './fs/file-hash.js';
 export * from './yaml/surgical-yaml.js';
 
 export { parseWholeNumberAtLeast } from './numeric-args.js';
+
+// Machine-independent string ordering for hashed/serialized output — never `localeCompare`.
+export { compareCodeUnits } from './compare-code-units.js';
+
+// The crawl-timing seam: which contributor, stratum and fixpoint pass owns the
+// time it takes to FIND documents.
+//
+// It lives HERE, at the bottom of the graph, because the work it measures is
+// spread across four packages above this one — `resources` builds the registry,
+// `agent-skills` walks the link graph, `claude-marketplace` enumerates an
+// inventory, and `utils` itself initializes the `GitTracker` both crawlers
+// consume. Both arms must record through ONE recorder or the two are not
+// comparable, and only `utils` is beneath all of them. See the module header.
+//
+// Named rather than `export *`: the accumulator internals (`addEntry`,
+// `keyOf`, `recordInheritedPass`) are not surface, and `timing-dump.ts` is
+// plumbing shared with `resources`' package-internal `parse-timing.ts` — a star
+// re-export would publish both the moment either grew a symbol.
+export {
+  CRAWL_BLOB_POPULATE_ID,
+  CRAWL_CLOSURE_CONTRIBUTE_ID,
+  CRAWL_CLOSURE_RESOLVE_ID,
+  CRAWL_PASS_INSIDE,
+  CRAWL_REGISTRY_ADD_RESOURCE_ID,
+  CRAWL_REGISTRY_ENUMERATE_ID,
+  CRAWL_REGISTRY_ID_PREFIX,
+  CRAWL_REGISTRY_RESOLVE_LINKS_ID,
+  // Exported so the READER can pin itself against the WRITER. `@vibe-agent-toolkit/lab`
+  // hard-refuses a dump whose version it does not recognise, and the two constants
+  // used to be unrelated literals in two packages — drift was silent, and its symptom
+  // is every dump being refused rather than a subtly wrong number.
+  CRAWL_SEAM_DUMP_VERSION,
+  CRAWL_SHARED_GIT_TRACKER_ID,
+  CRAWL_STORE_READ_ID,
+  CRAWL_STORE_WRITE_ID,
+  CRAWL_STRATA,
+  CRAWL_WALKER_GITIGNORE_ID,
+  CRAWL_WALKER_ID,
+  crawlTimingStart,
+  recordContributorInvocation,
+  recordCrawlPass,
+  recordRegistryPass,
+  recordSharedPass,
+  withContributorStratum,
+  withOuterBracket,
+  type CrawlDriverStratum,
+  type CrawlStratum,
+  type CrawlTimingDump,
+  type CrawlTimingEntry,
+  type CrawlTimingProcess,
+  __readCrawlTimingSnapshot,
+  __setCrawlTimingForTest,
+  __writeCrawlTimingDumpForTest,
+} from './crawl-timing.js';
+
+// The on-disk plumbing both timing seams share. Exported because
+// `resources`' `parse-timing.ts` is the other consumer and now sits a package
+// away; nothing else should reach for it.
+export {
+  ensureTimingDirectory,
+  normalizeTimingDirectory,
+  readTimingProcess,
+  type TimingProcess,
+  writeTimingDump,
+} from './timing-dump.js';

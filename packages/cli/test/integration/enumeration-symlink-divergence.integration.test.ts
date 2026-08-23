@@ -40,7 +40,7 @@
  */
 import { mkdtempSync, rmSync } from 'node:fs';
 
-import { canCreateSymlinks, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -48,6 +48,7 @@ import {
   laneById,
   materializeTrapCorpus,
 } from '../../src/pipeline-oracles/index.js';
+import { RESOURCES_CRAWL_ENV, RESOURCES_CRAWL_WALK } from '../../src/utils/resource-loader.js';
 
 const roots: string[] = [];
 
@@ -130,7 +131,7 @@ describe('a committed dangling *.md symlink is reported, not fatal', () => {
   it('completes the git route and records the unreadable file', async () => {
     const gitRoot = makeRoot('dangling-git');
     const walkRoot = makeRoot('dangling-walk');
-    if (!canCreateSymlinks(gitRoot)) {
+    if (!symlinkCapability()) {
       console.warn('enumeration-symlink-divergence: symlinks unavailable; the dangling-symlink path was NOT exercised');
       return;
     }
@@ -167,29 +168,48 @@ describe('a committed dangling *.md symlink is reported, not fatal', () => {
 
   it('reports RESOURCE_UNREADABLE naming the file, rather than failing silently', async () => {
     const root = makeRoot('dangling-issue');
-    if (!canCreateSymlinks(root)) {
+    if (!symlinkCapability()) {
       console.warn('enumeration-symlink-divergence: symlinks unavailable; RESOURCE_UNREADABLE was NOT exercised');
       return;
     }
     const built = materializeTrapCorpus(root, { initGit: true, includeDanglingSymlink: true });
     expect(built.gitInitialized, GIT_INIT_FAILED).toBe(true);
 
-    const registry = await laneById('resources').build(root);
+    // ⚠️ THE GAP, PINNED AS TODAY'S BEHAVIOUR. Both projection extents omit a
+    // symlink's own path — `FilesystemCrawlSource` crawls `followSymlinks:
+    // false` and `GitCrawlSource` drops mode `120000` to match it — so on the
+    // default lane the entry is never admitted, and a path that is never
+    // admitted cannot fail to be read. The finding is GONE, not merely quiet.
+    //
+    // Asserted rather than deleted so that closing the gap turns this red and
+    // says so, instead of the capability silently reappearing untested.
+    const onProjection = await laneById('resources').build(root);
+    expect(onProjection.getUnreadableResources()).toHaveLength(0);
 
-    // The raw log first: a caller reconciling enumerated-vs-admitted needs the
-    // path, not a rendered message.
-    const unreadable = registry.getUnreadableResources();
-    expect(unreadable).toHaveLength(1);
-    expect(toForwardSlash(unreadable[0]?.filePath ?? '')).toContain(DANGLING);
-    expect(unreadable[0]?.code).toBe('ENOENT');
+    // ...and the capability itself still exists, on the lane that enumerates
+    // the link. Every assertion below is the one this test has always made;
+    // only the lane it is made against is new.
+    process.env[RESOURCES_CRAWL_ENV] = RESOURCES_CRAWL_WALK;
+    try {
+      const registry = await laneById('resources').build(root);
 
-    // Then the finding, which is what a user actually sees. A stderr notice
-    // would not count: the report has to carry it.
-    const result = await registry.validate();
-    const issue = result.issues.find((candidate) => candidate.code === 'RESOURCE_UNREADABLE');
-    expect(issue, 'validate() did not report the unreadable file').toBeDefined();
-    expect(issue?.severity).toBe('error');
-    expect(issue?.message).toContain('dangling.md');
-    expect(issue?.message).toMatch(/skipped/i);
+      // The raw log first: a caller reconciling enumerated-vs-admitted needs the
+      // path, not a rendered message.
+      const unreadable = registry.getUnreadableResources();
+      expect(unreadable).toHaveLength(1);
+      expect(toForwardSlash(unreadable[0]?.filePath ?? '')).toContain(DANGLING);
+      expect(unreadable[0]?.code).toBe('ENOENT');
+
+      // Then the finding, which is what a user actually sees. A stderr notice
+      // would not count: the report has to carry it.
+      const result = await registry.validate();
+      const issue = result.issues.find((candidate) => candidate.code === 'RESOURCE_UNREADABLE');
+      expect(issue, 'validate() did not report the unreadable file').toBeDefined();
+      expect(issue?.severity).toBe('error');
+      expect(issue?.message).toContain('dangling.md');
+      expect(issue?.message).toMatch(/skipped/i);
+    } finally {
+      delete process.env[RESOURCES_CRAWL_ENV];
+    }
   });
 });

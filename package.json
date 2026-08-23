@@ -54,9 +54,9 @@
   },
   "scripts": {
     "build": "turbo run build && turbo run build:skills",
-    "build:packages": "tsc --build && cd packages/agent-schema && bun run generate:schemas",
+    "build:packages": "tsc --build && cd packages/schema && bun run generate:schemas",
     "build:cli": "bun --filter @vibe-agent-toolkit/cli run build",
-    "build:clean": "tsc --build --clean && tsc --build && cd packages/agent-schema && bun run generate:schemas",
+    "build:clean": "bun run clean && turbo run build --force && turbo run build:skills --force",
     "test": "echo \"❌ Direct test execution not supported. Use: vv validate (full validation) or bun run test:unit / test:integration / test:system\" && exit 1",
     "test:unit": "turbo run test:unit",
     "test:cli": "bun --filter @vibe-agent-toolkit/cli run test:unit",
@@ -77,8 +77,8 @@
     "validate-structure": "tsx packages/dev-tools/src/validate-repo-structure.ts",
     "validate-version": "tsx packages/dev-tools/src/validate-version.ts",
     "pre-commit": "vibe-validate pre-commit",
-    "clean": "tsc --build --clean && rimraf node_modules 'packages/*/.test-output'",
-    "clean:test-output": "rimraf 'packages/*/.test-output'",
+    "clean": "rimraf --glob 'packages/*/dist' 'packages/*/*.tsbuildinfo' 'packages/*/.tsc-staging' 'packages/*/.test-output'",
+    "clean:test-output": "rimraf --glob 'packages/*/.test-output'",
     "postinstall": "tsx packages/dev-tools/src/link-workspace-packages.ts",
     "prepare": "husky",
     "bump-version": "tsx packages/dev-tools/src/bump-version.ts",
@@ -93,7 +93,8 @@
     "prepare-cli-bin": "cd packages/cli && tsx ../dev-tools/src/prepare-bin.ts",
     "vat": "node packages/cli/dist/bin/vat.js",
     "link-all": "tsx packages/dev-tools/src/link-all.ts",
-    "unlink-all": "tsx packages/dev-tools/src/unlink-all.ts"
+    "unlink-all": "tsx packages/dev-tools/src/unlink-all.ts",
+    "clean:deps": "rimraf --glob node_modules 'packages/*/node_modules'"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
@@ -105,7 +106,7 @@
     "@typescript-eslint/eslint-plugin": "^8.65.0",
     "@typescript-eslint/parser": "^8.65.0",
     "@vibe-agent-toolkit/utils": "workspace:*",
-    "@vibe-validate/cli": "0.19.6",
+    "@vibe-validate/cli": "0.20.1",
     "@vitest/coverage-v8": "^3.2.7",
     "adm-zip": "^0.6.0",
     "eslint": "^9.39.5",
@@ -123,7 +124,7 @@
     "tsx": "^4.23.1",
     "turbo": "2.10.5",
     "typescript": "^5.9.3",
-    "vibe-validate": "0.19.6",
+    "vibe-validate": "0.20.1",
     "vitest": "3.2.6",
     "yaml": "2.8.3"
   },

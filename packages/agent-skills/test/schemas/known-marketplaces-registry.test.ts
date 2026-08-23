@@ -1,4 +1,4 @@
-import { CODE_REGISTRY } from '@vibe-agent-toolkit/agent-schema';
+import { CODE_REGISTRY } from '@vibe-agent-toolkit/schema';
 import { afterEach, describe, expect, it } from 'vitest';
 
 

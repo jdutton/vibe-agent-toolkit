@@ -14,16 +14,16 @@ import { existsSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import {
-  calculateValidationStatus,
-  countBySeverity,
-  type ValidationIssue,
-} from '@vibe-agent-toolkit/agent-schema';
-import {
   resolveAnchorRoot,
   validateSkillForPackaging,
   type PackagingValidationResult,
 } from '@vibe-agent-toolkit/agent-skills';
 import type { Target } from '@vibe-agent-toolkit/claude-marketplace';
+import {
+  calculateValidationStatus,
+  countBySeverity,
+  type ValidationIssue,
+} from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 import * as yaml from 'yaml';
@@ -128,7 +128,7 @@ function renderHumanReport(
   grouped: Map<ChecklistSection, ValidationIssue[]>,
   logger: Logger,
 ): void {
-  // One collapse, from agent-schema: `allErrors` carries info issues despite the
+  // One collapse, from schema: `allErrors` carries info issues despite the
   // name, and there is no `activeInfo` bucket to read them from.
   const counts = countBySeverity(result.allErrors);
 

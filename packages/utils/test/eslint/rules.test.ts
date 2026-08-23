@@ -177,6 +177,126 @@ const BARREL = '@vibe-agent-toolkit/utils';
 const SAFE_IMPORT = `import { safePath } from '${SAFE_PATH_MODULE}';`;
 const PATH_NAMESPACE_IMPORT = "import path from 'node:path';";
 const LINTED_FILE = 'packages/cli/src/example.ts';
+
+/** The seam this rule points at, and the file that implements it. */
+const TEXT_SEAM = '@vibe-agent-toolkit/resources';
+const TEXT_SEAM_IMPL = 'packages/resources/src/text-content.ts';
+const TEXT_DECODE_OPTIONS = [{ safeModule: TEXT_SEAM, exemptFiles: [TEXT_SEAM_IMPL] }];
+
+/** The archetypal offending decode, reused as both the invalid and the exempt case. */
+const BUFFER_UTF8_DECODE = "const t = buf.toString('utf-8');";
+
+/**
+ * `no-raw-text-decode`.
+ *
+ * The valid half is where this rule earns its keep or loses it: a decoder guard
+ * that also fires on `n.toString(16)` and `buf.toString('base64')` would be
+ * disabled by the first person it inconvenienced. Every one of those is pinned.
+ */
+const NO_RAW_TEXT_DECODE_CASES: RuleCases = {
+  valid: [
+    // The seam itself.
+    { code: "const d = new TextDecoder('utf-8');", filename: TEXT_SEAM_IMPL, options: TEXT_DECODE_OPTIONS },
+    { code: BUFFER_UTF8_DECODE, filename: TEXT_SEAM_IMPL, options: TEXT_DECODE_OPTIONS },
+    // Binary-to-text codecs are not character encodings.
+    { code: "const b = buf.toString('base64');", filename: LINTED_FILE, options: TEXT_DECODE_OPTIONS },
+    { code: "const b = buf.toString('base64url');", filename: LINTED_FILE, options: TEXT_DECODE_OPTIONS },
+    { code: "const h = buf.toString('hex');", filename: LINTED_FILE, options: TEXT_DECODE_OPTIONS },
+    { code: "const h = buf.toString('HEX');", filename: LINTED_FILE, options: TEXT_DECODE_OPTIONS },
+    { code: "const raw = await readFile(p, 'hex');", filename: LINTED_FILE, options: TEXT_DECODE_OPTIONS },
+    { code: "const raw = readFileSync(p, { encoding: 'base64' });", filename: LINTED_FILE, options: TEXT_DECODE_OPTIONS },
+    // Not encodings at all.
+    { code: 'const s = n.toString(16);', filename: LINTED_FILE, options: TEXT_DECODE_OPTIONS },
+    { code: 'const s = value.toString();', filename: LINTED_FILE, options: TEXT_DECODE_OPTIONS },
+    { code: 'const s = big.toString(radix);', filename: LINTED_FILE, options: TEXT_DECODE_OPTIONS },
+    // Reads that ask for bytes.
+    { code: 'const bytes = await readFile(p);', filename: LINTED_FILE, options: TEXT_DECODE_OPTIONS },
+    { code: 'const bytes = readFileSync(p, { encoding: null });', filename: LINTED_FILE, options: TEXT_DECODE_OPTIONS },
+    { code: 'const bytes = await fsModule.readFile(p);', filename: LINTED_FILE, options: TEXT_DECODE_OPTIONS },
+    // A callback-style read: the same SHAPE as an encoding argument, and the
+    // reason a non-literal second argument is deliberately not reported.
+    { code: 'readFile(p, done);', filename: LINTED_FILE, options: TEXT_DECODE_OPTIONS },
+    // The seam's own API.
+    { code: 'const { text } = decodeTextContent(bytes);', filename: LINTED_FILE, options: TEXT_DECODE_OPTIONS },
+    // A writer, not a reader. `update(s, 'utf-8')` ENCODES a string to bytes.
+    { code: "createHash('sha256').update(content, 'utf-8');", filename: LINTED_FILE, options: TEXT_DECODE_OPTIONS },
+    { code: "await writeFile(p, text, 'utf-8');", filename: LINTED_FILE, options: TEXT_DECODE_OPTIONS },
+  ],
+  invalid: [
+    {
+      code: BUFFER_UTF8_DECODE,
+      filename: LINTED_FILE,
+      options: TEXT_DECODE_OPTIONS,
+      errors: [{ messageId: 'bufferTextDecode' }],
+    },
+    {
+      code: "const t = Buffer.concat(chunks).toString('utf8');",
+      filename: LINTED_FILE,
+      options: TEXT_DECODE_OPTIONS,
+      errors: [{ messageId: 'bufferTextDecode' }],
+    },
+    // An encoding nobody put on a list: the exclusion test fails CLOSED.
+    {
+      code: "const t = buf.toString('windows-1252');",
+      filename: LINTED_FILE,
+      options: TEXT_DECODE_OPTIONS,
+      errors: [{ messageId: 'bufferTextDecode' }],
+    },
+    {
+      code: 'const t = buf.toString(`latin1`);',
+      filename: LINTED_FILE,
+      options: TEXT_DECODE_OPTIONS,
+      errors: [{ messageId: 'bufferTextDecode' }],
+    },
+    {
+      code: 'const d = new TextDecoder();',
+      filename: LINTED_FILE,
+      options: TEXT_DECODE_OPTIONS,
+      errors: [{ messageId: 'textDecoderConstruct' }],
+    },
+    {
+      code: "const t = new TextDecoder('utf-16be').decode(bytes);",
+      filename: LINTED_FILE,
+      options: TEXT_DECODE_OPTIONS,
+      errors: [{ messageId: 'textDecoderConstruct' }],
+    },
+    {
+      code: "const t = await readFile(p, 'utf-8');",
+      filename: LINTED_FILE,
+      options: TEXT_DECODE_OPTIONS,
+      errors: [{ messageId: 'fsReadTextEncoding' }],
+    },
+    {
+      code: "const t = readFileSync(p, 'utf8');",
+      filename: LINTED_FILE,
+      options: TEXT_DECODE_OPTIONS,
+      errors: [{ messageId: 'fsReadTextEncoding' }],
+    },
+    {
+      code: "const t = await fs.promises.readFile(p, { encoding: 'utf-8' });",
+      filename: LINTED_FILE,
+      options: TEXT_DECODE_OPTIONS,
+      errors: [{ messageId: 'fsReadTextEncoding' }],
+    },
+    // An INJECTED fs module is still an fs read — the rule keys on the method
+    // name, not on whether the receiver is literally `fs`.
+    {
+      code: "const t = await fsModule.readFile(p, 'utf-8');",
+      filename: LINTED_FILE,
+      options: TEXT_DECODE_OPTIONS,
+      errors: [{ messageId: 'fsReadTextEncoding' }],
+    },
+    // An unanchored exemption is reported even where the code is clean, and the
+    // exemption itself does NOT take effect from a bare basename.
+    {
+      code: BUFFER_UTF8_DECODE,
+      filename: 'packages/somewhere/else/text-content.ts',
+      options: [{ safeModule: TEXT_SEAM, exemptFiles: ['text-content.ts'] }],
+      errors: [{ messageId: 'unanchoredExemptFile' }],
+    },
+  ],
+};
+
 const PATH_CORE_IMPL = 'packages/utils/src/path-core.ts';
 const PATH_UTILS_IMPL = 'packages/utils/src/path-utils.ts';
 const PATH_UTILS_SPEC = 'packages/utils/test/path-utils.test.ts';
@@ -849,7 +969,83 @@ const NO_UNIX_SHELL_COMMANDS_CASES: RuleCases = {
   ],
 };
 
+/**
+ * `no-bare-symlink-in-tests` fires on BOTH sides of the test boundary, with a
+ * different `messageId` on each — `noBareSymlink` in test files, where
+ * `createSymlink(cap, …)` is the remedy, and `unguardedSymlink` in shipped
+ * code, where it is not (that helper lives on the `utils/testing` subpath, so
+ * pointing production at it would be worse advice than the bare call). Both ids
+ * are asserted below so the two remedies cannot silently collapse into one.
+ *
+ * No auto-fix: the replacement needs a capability token threaded from a probe
+ * call, a placement judgment a mechanical fixer cannot make.
+ *
+ * The exempt path deliberately ends in `.test.ts` (a real backlog entry, not
+ * the implementation file) so the anchoring decoy below actually exercises
+ * `exempt-path-matcher.cjs` rather than being filtered out by `isTestFile`
+ * first for an unrelated reason.
+ */
+const SYMLINK_TEST_FILE = 'packages/cli/test/example.test.ts';
+const SYMLINK_EXEMPT = 'packages/resources/test/resolve-local-href.test.ts';
+const SYMLINK_SYNC_NAMED = "import { symlinkSync } from 'node:fs';\nsymlinkSync(a, b);";
+const SYMLINK_SYNC_MEMBER = "import fs from 'node:fs';\nfs.symlinkSync(a, b);";
+const SYMLINK_ASYNC_MEMBER = "import fs from 'node:fs/promises';\nawait fs.symlink(a, b);";
+const SYMLINK_ASYNC_NAMED = "import { symlink } from 'node:fs/promises';\nawait symlink(a, b);";
+const SYMLINK_ASYNC_CHAINED_MEMBER = "import fs from 'node:fs';\nawait fs.promises.symlink(a, b);";
+const NO_BARE_SYMLINK_CASES: RuleCases = {
+  valid: [
+    { code: SYMLINK_SYNC_NAMED, filename: SYMLINK_EXEMPT, options: [{ exemptFiles: [SYMLINK_EXEMPT] }] },
+    { code: SYMLINK_SYNC_NAMED, filename: `/Users/dev/vat/${SYMLINK_EXEMPT}`, options: [{ exemptFiles: [SYMLINK_EXEMPT] }] },
+    // A same-named method on an unrelated receiver is not this module's call.
+    {
+      code: "const env = { symlinkSync: () => {} };\nenv.symlinkSync();",
+      filename: SYMLINK_TEST_FILE,
+      options: [{ exemptFiles: [SYMLINK_EXEMPT] }],
+    },
+  ],
+  invalid: [
+    { code: SYMLINK_SYNC_NAMED, filename: SYMLINK_TEST_FILE, options: [{ exemptFiles: [SYMLINK_EXEMPT] }], errors: [{ messageId: 'noBareSymlink' }] },
+    { code: SYMLINK_SYNC_MEMBER, filename: SYMLINK_TEST_FILE, options: [{ exemptFiles: [SYMLINK_EXEMPT] }], errors: [{ messageId: 'noBareSymlink' }] },
+    { code: SYMLINK_ASYNC_MEMBER, filename: SYMLINK_TEST_FILE, options: [{ exemptFiles: [SYMLINK_EXEMPT] }], errors: [{ messageId: 'noBareSymlink' }] },
+    { code: SYMLINK_ASYNC_NAMED, filename: SYMLINK_TEST_FILE, options: [{ exemptFiles: [SYMLINK_EXEMPT] }], errors: [{ messageId: 'noBareSymlink' }] },
+    { code: SYMLINK_ASYNC_CHAINED_MEMBER, filename: SYMLINK_TEST_FILE, options: [{ exemptFiles: [SYMLINK_EXEMPT] }], errors: [{ messageId: 'noBareSymlink' }] },
+    // DECOY — same basename as the exempt entry, different directory: must still fire.
+    { code: SYMLINK_SYNC_NAMED, filename: 'packages/other/test/resolve-local-href.test.ts', options: [{ exemptFiles: [SYMLINK_EXEMPT] }], errors: [{ messageId: 'noBareSymlink' }] },
+    // Shipped code is covered too, with the OTHER message. It cannot `skip()`,
+    // and `createSymlink()` lives on the `utils/testing` subpath, so pointing
+    // production code at a test helper would be worse advice than the bare
+    // call — hence a distinct messageId rather than a reworded one.
+    // Asserting the id, not just "it errors", is what stops the two remedies
+    // silently collapsing into one.
+    { code: SYMLINK_SYNC_NAMED, filename: LINTED_FILE, options: [{ exemptFiles: [SYMLINK_EXEMPT] }], errors: [{ messageId: 'unguardedSymlink' }] },
+    { code: SYMLINK_ASYNC_MEMBER, filename: LINTED_FILE, options: [{ exemptFiles: [SYMLINK_EXEMPT] }], errors: [{ messageId: 'unguardedSymlink' }] },
+    // UNCONFIGURED — with no `exemptFiles` option nothing is exempt, including the backlog path.
+    { code: SYMLINK_SYNC_NAMED, filename: SYMLINK_EXEMPT, errors: [{ messageId: 'noBareSymlink' }] },
+    // An unanchored `exemptFiles` entry is reported, exactly as every other
+    // consumer of `exempt-path-matcher.cjs` reports it. Extending this rule past
+    // test files is what made `exemptFiles` load-bearing here, and it shipped
+    // the option without the advisory the matcher module documents as
+    // mandatory — so a bare basename silently exempted that name tree-wide.
+    {
+      code: SYMLINK_SYNC_NAMED,
+      filename: LINTED_FILE,
+      options: [{ exemptFiles: ['test-helpers.ts'] }],
+      errors: [{ messageId: 'unanchoredExemptFile' }, { messageId: 'unguardedSymlink' }],
+    },
+    // …and on the file the bare entry DOES match, which is exempt only because
+    // the entry is unanchored. The symlink finding is correctly suppressed; the
+    // advisory is what stops that suppression being invisible.
+    {
+      code: SYMLINK_SYNC_NAMED,
+      filename: 'packages/anything/src/deep/test-helpers.ts',
+      options: [{ exemptFiles: ['test-helpers.ts'] }],
+      errors: [{ messageId: 'unanchoredExemptFile' }],
+    },
+  ],
+};
+
 const SUITES: readonly RuleSuite[] = [
+  { name: 'no-raw-text-decode', cases: NO_RAW_TEXT_DECODE_CASES },
   { name: 'no-url-pathname-for-fs', cases: NO_URL_PATHNAME_FOR_FS_CASES },
   { name: 'no-bare-dynamic-import-path', cases: NO_BARE_DYNAMIC_IMPORT_PATH_CASES },
   { name: 'no-file-url-string-concat', cases: NO_FILE_URL_STRING_CONCAT_CASES },
@@ -857,6 +1053,7 @@ const SUITES: readonly RuleSuite[] = [
   { name: 'no-unsafe-root-join', cases: NO_UNSAFE_ROOT_JOIN_CASES },
   { name: 'require-justified-skip', cases: REQUIRE_JUSTIFIED_SKIP_CASES },
   { name: 'no-unix-shell-commands', cases: NO_UNIX_SHELL_COMMANDS_CASES },
+  { name: 'no-bare-symlink-in-tests', cases: NO_BARE_SYMLINK_CASES },
   { name: PATH_FACTORY_RULE, cases: pathFunctionRuleCases('join') },
   { name: RULE.resolve, cases: pathFunctionRuleCases('resolve') },
   { name: RULE.relative, cases: pathFunctionRuleCases('relative') },
@@ -953,6 +1150,9 @@ const SUITES: readonly RuleSuite[] = [
   },
 ];
 
+/** Shared title for the `ruleTester.run(...)` leg every rule suite below has. */
+const RULE_TESTER_CASES = 'passes RuleTester cases';
+
 describe.each(SUITES)('$name', ({ name, cases }) => {
   const rule = loadLocalRule(`${name}.cjs`);
 
@@ -960,7 +1160,7 @@ describe.each(SUITES)('$name', ({ name, cases }) => {
     expect(rule.meta?.type).toBe('problem');
   });
 
-  it('passes RuleTester cases', () => {
+  it(RULE_TESTER_CASES, () => {
     expect(() => { ruleTester.run(name, rule, cases); }).not.toThrow();
   });
 });
@@ -988,10 +1188,13 @@ describe('no-command-direct-factory', () => {
     availableFunctions: ['executeGitCommand()'],
     exemptPackage: 'packages/git/',
   });
+  // Deliberately the pattern this rule EXISTS to catch. It is a fixture, not a
+  // call site: a bulk migration that "fixes" it silently disarms the rule's
+  // entire invalid[] leg, which then passes by finding nothing to report.
   const gitCode = "safeExecSync('git', ['status']);";
   const errors = [{ messageId: 'noGitDirect' }];
 
-  it('passes RuleTester cases', () => {
+  it(RULE_TESTER_CASES, () => {
     expect(() => {
       ruleTester.run('no-git-commands-direct', rule, {
         valid: [
@@ -1030,7 +1233,7 @@ describe('no-command-direct-factory', () => {
  * below RENDERS every one of these rules and asserts no placeholder survives.
  *
  * The set of rules is pinned by MEMBERSHIP, not by count: each one must have a
- * snippet here that provokes it. Seven of the twenty-one have no RuleTester
+ * snippet here that provokes it. Seven of the twenty-two have no RuleTester
  * suite at all, so a check that merely counted would let exactly those drift.
  */
 const PATH_IMPORT = "import path from 'node:path';\n";
@@ -1053,6 +1256,7 @@ const SAFE_MODULE_RULE_TRIGGERS: Record<string, string> = {
   [RULE.execSync]: `${namedImport('execSync', NODE_CHILD_PROCESS)}\nexecSync('ls');`,
   'no-url-pathname-for-fs': "const p = new URL('../fixtures/x.yaml', import.meta.url).pathname;",
   'no-bare-dynamic-import-path': 'const m = await import(configPath);',
+  'no-raw-text-decode': BUFFER_UTF8_DECODE,
 };
 
 describe('every {{safeModule}} placeholder is backed by the option that fills it', () => {
@@ -2066,5 +2270,105 @@ describe('reportDeadUnsafeImports only ever removes a listed module', () => {
   ])('%s removable=%s', (module, removable) => {
     const source = `import dead from '${module}';\nexport const x = 1;`;
     expect(removedFrom(source).includes(`'${module}'`)).toBe(!removable);
+  });
+});
+
+/**
+ * `no-self-package-import` is told which package it is inside, via a required
+ * `packageName` option — it reads no files, because every module on the `./eslint`
+ * subpath must require nothing at all (`subpath-purity.test.ts`). That also makes
+ * these cases independent of the working directory the suite runs from.
+ *
+ * The load-bearing case is `selfImportOfTheShippedDefect`: the exact import that
+ * reddened CI on both ubuntu and windows at `0e8b74f9`. A guard nobody has
+ * watched fire on the real defect is an assumption, not a guard.
+ *
+ * The other one worth naming is the `rag` / `rag-lancedb` leg. Matching a
+ * self-reference with `startsWith(packageName)` alone would report
+ * `@vibe-agent-toolkit/rag-lancedb` as a self-import of `@vibe-agent-toolkit/rag`
+ * — the same unanchored-prefix bug the exempt-path matchers were written to kill.
+ */
+describe('no-self-package-import', () => {
+  const rule = loadLocalRule('no-self-package-import.cjs');
+  const AGENT_RUNTIME = [{ packageName: '@vibe-agent-toolkit/agent-runtime' }];
+
+  it('is registered with a valid schema', () => {
+    expect(rule.meta?.type).toBe('problem');
+  });
+
+  it(RULE_TESTER_CASES, () => {
+    const withTs = <T extends object>(cases: T[]): T[] =>
+      cases.map((testCase) => ({ ...testCase, languageOptions: { parser: tsParser } }));
+
+    expect(() => {
+      ruleTester.run('no-self-package-import', rule, {
+        valid: withTs([
+          {
+            name: 'the relative import that replaced the defect',
+            options: AGENT_RUNTIME,
+            code: "import type { SessionStore } from './types.js';",
+          },
+          {
+            name: 'a genuinely different package',
+            options: AGENT_RUNTIME,
+            code: "import { safePath } from '@vibe-agent-toolkit/utils';",
+          },
+          {
+            name: 'a sibling whose name merely EXTENDS this one',
+            options: [{ packageName: '@vibe-agent-toolkit/rag' }],
+            code: "import { connect } from '@vibe-agent-toolkit/rag-lancedb';",
+          },
+          {
+            name: 'a node builtin',
+            options: AGENT_RUNTIME,
+            code: "import { readFile } from 'node:fs/promises';",
+          },
+        ]),
+        invalid: withTs([
+          {
+            name: 'selfImportOfTheShippedDefect',
+            options: AGENT_RUNTIME,
+            code: "import type { SessionStore } from '@vibe-agent-toolkit/agent-runtime';",
+            errors: [{ messageId: 'useRelativeImport' }],
+          },
+          {
+            name: 'a declared subpath of the same package',
+            options: AGENT_RUNTIME,
+            code: "import { makeSession } from '@vibe-agent-toolkit/agent-runtime/session/test-helpers';",
+            errors: [{ messageId: 'useRelativeImport' }],
+          },
+          {
+            name: 'a barrel re-exporting through its own name',
+            options: AGENT_RUNTIME,
+            code: "export * from '@vibe-agent-toolkit/agent-runtime';",
+            errors: [{ messageId: 'useRelativeImport' }],
+          },
+          {
+            name: 'a named re-export through its own name',
+            options: AGENT_RUNTIME,
+            code: "export { SessionNotFoundError } from '@vibe-agent-toolkit/agent-runtime';",
+            errors: [{ messageId: 'useRelativeImport' }],
+          },
+          {
+            name: 'a dynamic import',
+            options: AGENT_RUNTIME,
+            code: "const m = await import('@vibe-agent-toolkit/agent-runtime');",
+            errors: [{ messageId: 'useRelativeImport' }],
+          },
+          {
+            name: 'an import() in TYPE position, which no other visitor reaches',
+            options: AGENT_RUNTIME,
+            code: "type S = import('@vibe-agent-toolkit/agent-runtime').SessionStore;",
+            errors: [{ messageId: 'useRelativeImport' }],
+          },
+          {
+            name: 'a require() call',
+            options: AGENT_RUNTIME,
+            code: "const m = require('@vibe-agent-toolkit/agent-runtime');",
+            errors: [{ messageId: 'useRelativeImport' }],
+          },
+        ]),
+      });
+    }).not.toThrow();
   });
 });

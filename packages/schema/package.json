@@ -1,0 +1,57 @@
+{
+  "name": "@vibe-agent-toolkit/schema",
+  "version": "0.2.0-rc.2",
+  "description": "JSON Schema definitions and TypeScript types for VAT agent manifest format",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./schemas/*": "./schemas/*"
+  },
+  "files": [
+    "dist/",
+    "schemas/",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsx ../dev-tools/src/tsc-clean-build.ts && bun run generate:schemas",
+    "generate:schemas": "tsx scripts/generate-json-schemas.ts",
+    "test:unit": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "keywords": [
+    "vat",
+    "agent",
+    "schema",
+    "json-schema",
+    "validation"
+  ],
+  "dependencies": {
+    "picomatch": "^4.0.3",
+    "zod": "^3.23.8",
+    "zod-to-json-schema": "^3.23.5"
+  },
+  "devDependencies": {
+    "@types/picomatch": "^4.0.2",
+    "@vibe-agent-toolkit/utils": "workspace:*",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jdutton/vibe-agent-toolkit.git",
+    "directory": "packages/schema"
+  },
+  "author": "Jeff Dutton",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

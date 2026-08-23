@@ -131,8 +131,8 @@ describe('Language Service Plugin Integration', () => {
     suite.beforeAll();
   });
 
-  afterAll(() => {
-    suite.afterAll();
+  afterAll(async () => {
+    await suite.afterAll();
     clearCache();
   });
 

@@ -1,0 +1,27 @@
+{
+  "$ref": "#/definitions/projection-resource-extents",
+  "definitions": {
+    "projection-resource-extents": {
+      "type": "object",
+      "properties": {
+        "resourceId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Foreign key to resources.resourceId"
+        },
+        "extentId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Foreign key to resolution_contexts.contextId, species \"extent\""
+        }
+      },
+      "required": [
+        "resourceId",
+        "extentId"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the path-dependent `resource_extents` table"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

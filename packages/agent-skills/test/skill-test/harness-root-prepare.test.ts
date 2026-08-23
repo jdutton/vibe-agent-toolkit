@@ -8,7 +8,7 @@
 
 import { chmodSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 
-import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -61,14 +61,11 @@ describe('prepareHarnessRoot', () => {
     },
   );
 
-  it(
-    'still throws HarnessLocationError when the path is a symlink',
-    { skip: process.platform === 'win32' },
-    () => {
-      const { link } = createSymlinkedDir(tmpBase);
-      expect(() => prepareHarnessRoot(link)).toThrow(HarnessLocationError);
-    },
-  );
+  it('still throws HarnessLocationError when the path is a symlink', ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    const { link } = createSymlinkedDir(tmpBase, cap);
+    expect(() => prepareHarnessRoot(link)).toThrow(HarnessLocationError);
+  });
 
   it(
     'chmod from 0644 to 0700 (any non-0700 mode is tightened)',

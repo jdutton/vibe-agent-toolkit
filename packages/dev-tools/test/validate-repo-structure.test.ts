@@ -120,7 +120,7 @@ describe('classifySeverityCountsLane — named status types', () => {
     // recogniser keys on, so without a dedicated arm the improved file reads as
     // a REGRESSION — which is exactly what happened to `corpus/report.ts`.
     const derived = `
-      import type { SeverityCounts } from '@vibe-agent-toolkit/agent-schema';
+      import type { SeverityCounts } from '@vibe-agent-toolkit/schema';
       export type GateStatus = 'success' | 'error';
       export interface GateSummary extends SeverityCounts { files_scanned: number; }
       export interface GateResult { status: GateStatus; summary: GateSummary; }
@@ -164,7 +164,7 @@ describe('classifySeverityCountsLane — named status types', () => {
     // `import type { SeverityCounts }` line that a bare-name match would have
     // accepted on its own — silently certifying the very deletion under test.
     const regressed = `
-      import type { SeverityCounts } from '@vibe-agent-toolkit/agent-schema';
+      import type { SeverityCounts } from '@vibe-agent-toolkit/schema';
       export type GateStatus = 'success' | 'error';
       export interface GateResult { status: GateStatus; findings: string[]; }
       export function toCounts(c: SeverityCounts): SeverityCounts { return c; }

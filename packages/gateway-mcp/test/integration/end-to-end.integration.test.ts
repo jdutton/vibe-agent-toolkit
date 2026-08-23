@@ -6,8 +6,8 @@
  */
 
 
-import { createSuccess, RESULT_SUCCESS } from '@vibe-agent-toolkit/agent-schema';
-import type { Agent, OneShotAgentOutput } from '@vibe-agent-toolkit/agent-schema';
+import { createSuccess, RESULT_SUCCESS } from '@vibe-agent-toolkit/schema';
+import type { Agent, OneShotAgentOutput } from '@vibe-agent-toolkit/schema';
 import { haikuValidatorAgent } from '@vibe-agent-toolkit/vat-example-cat-agents';
 import { describe, expect, it } from 'vitest';
 

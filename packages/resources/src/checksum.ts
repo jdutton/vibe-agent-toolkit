@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { promises as fs } from 'node:fs';
+
+import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 
 import type { SHA256 } from './schemas/checksum.js';
 import { SHA256Schema } from './schemas/checksum.js';
@@ -34,7 +35,10 @@ export function calculateChecksumFromContent(content: string): SHA256 {
  * @throws Error if file cannot be read
  */
 export async function calculateChecksum(filePath: string): Promise<SHA256> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename
-  const content = await fs.readFile(filePath, 'utf-8');
-  return calculateChecksumFromContent(content);
+  // Through the one decoder, so this keyspace is a function of the file's
+  // CHARACTERS and not of a guess about its encoding. On the ASCII corpus this
+  // changes nothing; on a UTF-16 or BOM-carrying file it is the difference
+  // between checksumming the document and checksumming mojibake.
+  const { text } = await readTextContent(filePath);
+  return calculateChecksumFromContent(text);
 }

@@ -1,7 +1,7 @@
 import * as os from 'node:os';
 
-import { countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import type { ValidationResult } from '@vibe-agent-toolkit/agent-skills';
+import { countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
 import { buildHierarchicalOutput } from '../../../src/commands/audit/hierarchical-output.js';

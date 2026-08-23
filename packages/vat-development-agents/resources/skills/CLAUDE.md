@@ -85,7 +85,7 @@ When a quality issue is caught manually (in code review, by the user noticing an
 **Canonical example**: the `RESERVED_WORD_IN_NAME` rule. The `claude`/`anthropic` naming restriction was discovered through an install-time rejection — the kind of failure a developer hits once, remembers forever, but new contributors keep re-hitting. Encoding it as a validator (warning severity, fires at `vat audit` / `vat skills validate` time) shifts the discovery left from "Claude Code rejects my install" to "validator warns me before I commit."
 
 When you add a validator:
-1. Register the code in `packages/agent-schema/src/validation-codes.ts` (the `CODE_REGISTRY`) with default severity, description, fix hint, and a `reference` anchor into `docs/validation-codes.md`
+1. Register the code in `packages/schema/src/validation-codes.ts` (the `CODE_REGISTRY`) with default severity, description, fix hint, and a `reference` anchor into `docs/validation-codes.md`
 2. Wire it into the appropriate validator pipeline (frontmatter, link, packaging) so it actually fires
 3. Add a checklist entry in `vat-skill-review` that references the same code (so the manual rubric and the automated check stay aligned)
 4. Default severity is **warning** unless the issue genuinely blocks distribution — even then, prefer warning + clear fix hint per the [validation-rule-design policy](../../../../docs/validation-rule-design.md)

@@ -9,31 +9,60 @@ import { buildClaudeUserPaths, getClaudeUserPaths } from '../paths/claude-paths.
 
 import { extractClaudeMarketplaceInventory } from './extract-marketplace.js';
 import { extractClaudePluginInventory } from './extract-plugin.js';
+import type { GitTrackerSource } from './extract-skill.js';
 import { ClaudeInstallInventory } from './types.js';
 
 type ParseErrors = ClaudeInstallInventory['parseErrors'];
+
+/**
+ * What {@link extractClaudeInstallInventory} needs.
+ *
+ * An options object rather than two positionals, for the reason the skill
+ * extractor's is one: the install root is OPTIONAL (omit it for `~/.claude`) and
+ * the tracker source is REQUIRED, and positional parameters cannot put a
+ * required one after an optional one. No `SharedRegistrySource`, for the reason
+ * `ClaudeMarketplaceInventoryOptions` states — every cached plugin sits in its
+ * own directory, so one registry matches none of their skills' project roots.
+ */
+export interface ClaudeInstallInventoryOptions {
+	/**
+	 * REQUIRED. How to obtain the tracker for each cached plugin's skills.
+	 *
+	 * This is the `vat inventory --user` lane and it walks EVERY cached plugin
+	 * under `~/.claude/plugins/cache`, so it is the largest population in the
+	 * product whose gitignore answers this parameter decides. It was omitted
+	 * here until 2026-08-15, and `extract-plugin.ts` substituted the
+	 * tracker-less walk on its behalf without either end saying so.
+	 */
+	gitTrackerSource: GitTrackerSource;
+	/**
+	 * Where the install lives.
+	 *
+	 * A ClaudeUserPaths object for testing or when the caller has already
+	 * resolved the install root; a string path to build paths from that root;
+	 * omit for the default user install (`~/.claude`).
+	 */
+	pathsOrRoot?: ClaudeUserPaths | string;
+}
 
 /**
  * Build an InstallInventory by walking a Claude install root (default: ~/.claude).
  * Discovers marketplaces under plugins/marketplaces/<name>/ and cached plugins under
  * plugins/cache/<marketplace>/<name>/<version>/. Never throws — all failures surface
  * via parseErrors[].
- *
- * Pass a ClaudeUserPaths object directly for testing or when the caller has already
- * resolved the install root; pass a string path to build paths automatically from
- * that root; omit entirely to use the default user install (~/.claude).
  */
 export async function extractClaudeInstallInventory(
-	pathsOrRoot?: ClaudeUserPaths | string,
+	options: ClaudeInstallInventoryOptions,
 ): Promise<ClaudeInstallInventory> {
-	const paths = resolvePaths(pathsOrRoot);
+	const { gitTrackerSource } = options;
+	const paths = resolvePaths(options.pathsOrRoot);
 	const root = paths.claudeDir;
 	const parseErrors: ParseErrors = [];
 	const marketplaces: MarketplaceInventory[] = [];
 	const plugins: PluginInventory[] = [];
 
-	await collectMarketplaces(paths.marketplacesDir, marketplaces, parseErrors);
-	await collectCachedPlugins(paths.pluginsCacheDir, plugins, parseErrors);
+	await collectMarketplaces(paths.marketplacesDir, marketplaces, parseErrors, gitTrackerSource);
+	await collectCachedPlugins(paths.pluginsCacheDir, plugins, parseErrors, gitTrackerSource);
 
 	return new ClaudeInstallInventory({
 		path: root,
@@ -54,6 +83,7 @@ async function collectMarketplaces(
 	marketplacesDir: string,
 	marketplaces: MarketplaceInventory[],
 	parseErrors: ParseErrors,
+	gitTrackerSource: GitTrackerSource,
 ): Promise<void> {
 	// eslint-disable-next-line security/detect-non-literal-fs-filename -- path from validated ClaudeUserPaths
 	if (!existsSync(marketplacesDir)) return;
@@ -63,7 +93,7 @@ async function collectMarketplaces(
 		for (const entry of entries) {
 			if (!entry.isDirectory()) continue;
 			const mpPath = safePath.join(marketplacesDir, entry.name);
-			marketplaces.push(await extractClaudeMarketplaceInventory(mpPath));
+			marketplaces.push(await extractClaudeMarketplaceInventory(mpPath, { gitTrackerSource }));
 		}
 	} catch (e) {
 		parseErrors.push({ path: marketplacesDir, message: (e as Error).message });
@@ -74,6 +104,7 @@ async function collectCachedPlugins(
 	cacheDir: string,
 	plugins: PluginInventory[],
 	parseErrors: ParseErrors,
+	gitTrackerSource: GitTrackerSource,
 ): Promise<void> {
 	// eslint-disable-next-line security/detect-non-literal-fs-filename -- path from validated ClaudeUserPaths
 	if (!existsSync(cacheDir)) return;
@@ -90,7 +121,7 @@ async function collectCachedPlugins(
 	}
 
 	for (const mpDir of marketplaceDirs) {
-		await collectPluginsInMarketplaceCache(mpDir, plugins, parseErrors);
+		await collectPluginsInMarketplaceCache(mpDir, plugins, parseErrors, gitTrackerSource);
 	}
 }
 
@@ -98,6 +129,7 @@ async function collectPluginsInMarketplaceCache(
 	mpDir: string,
 	plugins: PluginInventory[],
 	parseErrors: ParseErrors,
+	gitTrackerSource: GitTrackerSource,
 ): Promise<void> {
 	let pluginNameDirs: string[];
 	try {
@@ -140,7 +172,7 @@ async function collectPluginsInMarketplaceCache(
 				// 1.5x SLOWER than the N+1. UNVERIFIED whether cached plugin dirs under
 				// ~/.claude typically HAVE a project root at all; if they mostly do not, the
 				// guard makes this a no-op and the win is smaller than the numbers above imply.
-				plugins.push(await extractClaudePluginInventory(versionDir));
+				plugins.push(await extractClaudePluginInventory(versionDir, { gitTrackerSource }));
 			} catch (e) {
 				parseErrors.push({ path: versionDir, message: (e as Error).message });
 			}

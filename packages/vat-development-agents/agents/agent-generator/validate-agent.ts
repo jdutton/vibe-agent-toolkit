@@ -3,7 +3,7 @@
 /**
  * Validation script for agent.yaml
  *
- * Validates agent-generator's manifest against @vibe-agent-toolkit/agent-schema.
+ * Validates agent-generator's manifest against @vibe-agent-toolkit/schema.
  * This is the forcing function to discover schema refinements needed for Phase 1.
  */
 
@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 
 import { parse as parseYaml } from 'yaml';
 
-import { AgentManifestSchema } from '../../../../packages/agent-schema/dist/index.js';
+import { AgentManifestSchema } from '../../../../packages/schema/dist/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);

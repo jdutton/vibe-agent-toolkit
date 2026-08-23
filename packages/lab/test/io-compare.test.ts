@@ -34,14 +34,13 @@ import {
 } from '../src/facets/io/types.js';
 
 import {
-  BUSY_LOAD,
   compareOneCommand,
   ioBody,
   ioCommand,
   ioReport,
   ioSite,
 } from './io-fixtures.js';
-import { COORDINATE, makeReport } from './report-fixtures.js';
+import { BUSY_LOAD, COORDINATE, makeReport } from './report-fixtures.js';
 
 /** A second subject, so axis A can be moved. */
 const OTHER_SUBJECT = { id: 'other-project', source: '/srv/other-project' };

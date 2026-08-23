@@ -5,7 +5,7 @@
 **CRITICAL**: All packages in this monorepo share the same version. When any package changes, all packages are bumped together. This ensures compatibility and simplifies dependency management.
 
 Current packages (19 published, 1 private):
-- @vibe-agent-toolkit/agent-schema
+- @vibe-agent-toolkit/schema
 - @vibe-agent-toolkit/utils
 - @vibe-agent-toolkit/discovery
 - @vibe-agent-toolkit/resources
@@ -171,7 +171,7 @@ npm install -g vibe-agent-toolkit          # Everything
 
 Packages are published in dependency order:
 
-1. agent-schema, utils (parallel - no deps)
+1. schema, utils (parallel - no deps)
 2. discovery, resources (parallel - depend on utils)
 3. rag (depends on resources, utils)
 4. rag-lancedb, agent-config (parallel)
@@ -179,7 +179,7 @@ Packages are published in dependency order:
 6. runtime-claude-agent-sdk, agent-skills, runtime-langchain, runtime-openai, runtime-vercel-ai-sdk (parallel - runtime adapters)
 7. transports (depends on agent-runtime)
 8. cli
-9. gateway-mcp (depends on agent-schema, utils, vat-example-cat-agents)
+9. gateway-mcp (depends on schema, utils, vat-example-cat-agents)
 10. vat-development-agents
 11. vat-example-cat-agents
 12. vibe-agent-toolkit (umbrella - published last)

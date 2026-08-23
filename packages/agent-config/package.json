@@ -16,7 +16,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsx ../dev-tools/src/tsc-clean-build.ts --build",
+    "build": "tsx ../dev-tools/src/tsc-clean-build.ts",
     "build:watch": "tsc --build --watch",
     "clean": "rm -rf dist",
     "test:unit": "vitest run",
@@ -26,7 +26,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@vibe-agent-toolkit/agent-schema": "workspace:*",
+    "@vibe-agent-toolkit/schema": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
     "yaml": "^2.3.4"
   },

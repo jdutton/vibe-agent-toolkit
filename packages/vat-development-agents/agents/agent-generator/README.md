@@ -19,7 +19,7 @@ agent-generator guides users through a structured 4-phase workflow to design hig
 
 ### Why This Agent Exists
 
-- **Forcing function**: Validates VAT agent-schema through real-world usage
+- **Forcing function**: Validates VAT schema through real-world usage
 - **Best practices**: Incorporates research from Anthropic, Databricks, Microsoft Azure
 - **Consistency**: Ensures all VAT agents follow proven design patterns
 - **Accessibility**: Makes agent design approachable for non-experts
@@ -115,7 +115,7 @@ See `examples/example-input.md` for complete PR review agent scenario.
 
 **Phase 4: GENERATE**
 - Agent creates all file contents
-- Validates agent.yaml against `@vibe-agent-toolkit/agent-schema`
+- Validates agent.yaml against `@vibe-agent-toolkit/schema`
 - Returns structured output (wrapper writes files)
 
 ### LLM Configuration
@@ -133,7 +133,7 @@ See `examples/example-input.md` for complete PR review agent scenario.
 ### Tools
 
 **validate_agent_schema** (required)
-- Package: `@vibe-agent-toolkit/agent-schema`
+- Package: `@vibe-agent-toolkit/schema`
 - Function: `AgentManifestSchema.safeParse()`
 - Used in GENERATE phase to ensure correctness
 
@@ -160,7 +160,7 @@ See `examples/example-input.md` for complete PR review agent scenario.
 
 ## Design Validation
 
-This agent design has been validated against `@vibe-agent-toolkit/agent-schema`:
+This agent design has been validated against `@vibe-agent-toolkit/schema`:
 
 - ✅ `agent.yaml` passes `AgentManifestSchema.safeParse()`
 - ✅ Input/output schemas are valid JSON Schema Draft 07

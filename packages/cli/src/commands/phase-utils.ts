@@ -4,7 +4,7 @@
 
 import { spawnSync } from 'node:child_process';
 
-import { type SeverityCounts } from '@vibe-agent-toolkit/agent-schema';
+import { type SeverityCounts } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { type Command, Option } from 'commander';
 import * as YAML from 'yaml';

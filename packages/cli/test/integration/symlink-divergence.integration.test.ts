@@ -20,10 +20,10 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 
 import {
-  canCreateSymlinks,
   mkdirSyncReal,
   normalizedTmpdir,
   safePath,
+  symlinkCapability,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -70,7 +70,7 @@ describe('symlink divergence — non-git corpus (walk route only)', () => {
   beforeAll(async () => {
     const made = makeHazardCorpus('nogit');
     enclosing = made.enclosing;
-    symlinksAvailable = canCreateSymlinks(made.root);
+    symlinksAvailable = symlinkCapability() !== null;
     if (!symlinksAvailable) return;
 
     const built = materializeTrapCorpus(made.root, { includeSymlinkHazards: true });
@@ -154,7 +154,7 @@ describe('symlink divergence — git corpus (both routes available)', () => {
   beforeAll(async () => {
     const made = makeHazardCorpus('git');
     enclosing = made.enclosing;
-    available = canCreateSymlinks(made.root);
+    available = symlinkCapability() !== null;
     if (!available) return;
 
     const built = materializeTrapCorpus(made.root, { includeSymlinkHazards: true, initGit: true });

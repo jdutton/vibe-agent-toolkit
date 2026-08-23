@@ -15,6 +15,7 @@ export {
   type PackageSkillOptions,
   type PackageSkillResult,
   type PackagingTarget,
+  type ProjectRegistryOptions,
   type SkillBuildSpec,
   type SkillMetadata,
   type SkillPackageOutcome,
@@ -28,6 +29,25 @@ export {
   type WalkableRegistry,
   type WalkLinkGraphOptions,
 } from './walk-link-graph.js';
+
+// The skill extent (zones §7.3): the closure primitive under a skill's name,
+// plus the translation of `SkillPackagingConfig` into the declaration that
+// shapes it. Deliberately NOT a second walker — see the module note for the
+// measured boundary between what the declaration expresses and what only
+// `walkLinkGraph`'s ordered cascade can.
+export {
+  SKILL_EXTENT_CONTRIBUTOR_ID_PREFIX,
+  skillExtentContributorId,
+  SKILL_EXTENT_KIND,
+  SKILL_REFUSED_AGENT_INSTRUCTION_FILE,
+  SKILL_REFUSED_DIRECTORY_TARGET,
+  SKILL_REFUSED_GITIGNORED,
+  SKILL_REFUSED_NAVIGATION_FILE,
+  SKILL_REFUSED_PATTERN_MATCHED,
+  SKILL_REFUSED_SKILL_DEFINITION,
+  SkillExtentContributor,
+  skillExtentDeclaration,
+} from './projection/skill-extent.js';
 
 export {
   getTargetSubdir,
@@ -95,6 +115,7 @@ export {
   crawlAndResolveRegistry,
   resetPackagingRegistryCache,
   validateSkillForPackaging,
+  type CrawlRegistryOptions,
   type ExcludedReferenceDetail,
   type PackagingValidationResult,
   type SkillPackagingConfig,
@@ -182,7 +203,6 @@ export {
   isSkillInventory,
   serializeInventory,
   serializeInventoryShallow,
-  INVENTORY_SCHEMA_VERSION,
   detectDeclaredButMissing,
   detectMarketplacePluginSourceMissing,
   detectPresentButUndeclared,

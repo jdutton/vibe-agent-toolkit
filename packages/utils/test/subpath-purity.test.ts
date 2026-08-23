@@ -88,7 +88,12 @@ function reachedFromEntry(entryFile: string): { builtins: string[]; thirdParty: 
 }
 
 describe('pure subpath entries reach no Node builtin', () => {
-  it.each(['zod.ts', 'yaml.ts', 'template-entry.ts'])(
+  // `text.ts` is here BY DESIGN, not by accident: `decodeTextContent` decides
+  // what bytes say and never fetches them, so bytes from a git blob, an HTTP
+  // body or a zip entry decode through the same function as bytes from disk. The
+  // read-a-file half deliberately lives on `./fs` instead. If this row ever gains
+  // a builtin, that split has been undone.
+  it.each(['zod.ts', 'yaml.ts', 'template-entry.ts', 'text.ts'])(
     '%s has an empty node: builtin set',
     (entry) => {
       expect(reachedFromEntry(entry).builtins).toEqual([]);
@@ -110,10 +115,14 @@ describe('pure subpath entries reach no Node builtin', () => {
  * "is it empty") means adding a dependency to a *non*-portable entry also has to
  * be a deliberate, reviewed edit.
  */
+/** The git package `runGit` wraps; reached by every entry that can run git. */
+const VV_GIT = '@vibe-validate/git';
+
 describe('every subpath entry reaches exactly the third-party packages the README documents', () => {
   it.each([
     { entry: 'path.ts', thirdParty: [] },
     { entry: 'zod.ts', thirdParty: [] },
+    { entry: 'text.ts', thirdParty: [] },
     { entry: 'glob.ts', thirdParty: [] },
     { entry: 'fs.ts', thirdParty: [] },
     { entry: 'testing.ts', thirdParty: [] },
@@ -124,10 +133,19 @@ describe('every subpath entry reaches exactly the third-party packages the READM
     { entry: 'project.ts', thirdParty: [] },
     { entry: 'yaml.ts', thirdParty: ['yaml'] },
     { entry: 'template-entry.ts', thirdParty: ['handlebars'] },
-    { entry: 'process.ts', thirdParty: ['which'] },
-    { entry: 'git.ts', thirdParty: ['ignore', 'which'] },
-    { entry: 'crawl.ts', thirdParty: ['picomatch', 'which'] },
-    { entry: 'index.ts', thirdParty: ['handlebars', 'ignore', 'picomatch', 'which', 'yaml'] },
+    // `@vibe-validate/git` arrived on these four with `runGit`, which is now a
+    // wrapper over that package's `executeGitCommand`. Note `which` LEAVING
+    // `git.ts` and `crawl.ts` in the same change: those entries used to resolve
+    // the git binary themselves, and no longer run git at all except through
+    // `runGit`. An entry regaining `which` here means a second spawn route has
+    // reappeared, which is the thing that chokepoint exists to prevent.
+    { entry: 'process.ts', thirdParty: [VV_GIT, 'which'] },
+    { entry: 'git.ts', thirdParty: [VV_GIT, 'ignore'] },
+    { entry: 'crawl.ts', thirdParty: [VV_GIT, 'picomatch'] },
+    {
+      entry: 'index.ts',
+      thirdParty: [VV_GIT, 'handlebars', 'ignore', 'picomatch', 'which', 'yaml'],
+    },
   ])('$entry reaches $thirdParty', ({ entry, thirdParty }) => {
     expect(reachedFromEntry(entry).thirdParty).toEqual(thirdParty);
   });

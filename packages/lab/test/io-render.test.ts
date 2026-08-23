@@ -9,8 +9,10 @@
  *    Node's own module loader, and the facet buckets those out of the site list.
  *    A report that showed only the 40 remaining would let a reader conclude "vat
  *    barely touches the disk", which is the opposite of true. `processes` is the
- *    same shape of hazard in reverse: 1 means the counter never propagated into
- *    vat's real binary, so the report describes the launcher alone.
+ *    same shape of hazard in reverse — but the qualifier is NOT the count: since
+ *    `tree:` began resolving the real binary instead of the wrapper, 1 process is
+ *    the ordinary case, and the warning belongs to a process that did no `fs`
+ *    work at all.
  * 2. **The absence of a delta is never rendered as good news.** `unmeasurable`
  *    and `unwarranted` get their own words, and a case below proves those words
  *    are not the words `unchanged` uses.
@@ -26,8 +28,8 @@ import { compareIo } from '../src/facets/io/compare.js';
 import { renderIoComparison, renderIoReport } from '../src/facets/io/render.js';
 import type { IoCommandStats } from '../src/facets/io/types.js';
 
-import { BUSY_LOAD, compareOneCommand, ioCommand, ioReport, ioSite } from './io-fixtures.js';
-import { COORDINATE } from './report-fixtures.js';
+import { compareOneCommand, ioCommand, ioReport, ioSite } from './io-fixtures.js';
+import { BUSY_LOAD, COORDINATE } from './report-fixtures.js';
 
 /**
  * The real N+1 this facet was built to surface.
@@ -41,6 +43,9 @@ const N_PLUS_ONE = ioSite({
   count: 28,
   distinctArgs: 14,
 });
+
+/** The warning under test, named once so the three cases cannot drift apart. */
+const PROPAGATION_WARNING = 'COUNTER DID NOT PROPAGATE';
 
 /**
  * The row that made this defect visible — a spawn site, on the real `vat audit`
@@ -135,16 +140,33 @@ describe('renderIoReport — aggregates that must never be hidden', () => {
   it('CONTROL: a healthy two-process run carries no propagation warning', () => {
     // The negative half of the case below. Without it, an unconditional warning
     // would pass the positive assertion while shouting on every clean report.
-    expect(render()).not.toContain('COUNTER DID NOT PROPAGATE');
+    expect(render()).not.toContain(PROPAGATION_WARNING);
   });
 
-  it('warns loudly when only one process was counted', () => {
-    // 1 means the preload never reached vat's real binary, so every number on
-    // the line describes the launcher — a report that looks healthy and is empty.
-    const text = render({ processes: 1 });
+  it('CONTROL: one process that DID filesystem work is the ordinary case, not a failure', () => {
+    // The regression this pair exists to prevent. `processes === 1` used to be
+    // the whole test, on the premise that the launcher always spawns a second
+    // node process — true only while the lab measured the context-detecting
+    // wrapper. `tree:`/`dist:` now resolve `packages/cli/dist/bin.js` and refuse
+    // the wrapper, so ONE process is correct and the warning fired on every run.
+    // Measured on an 8,548-file adopter tree: 40,698 user calls across 1,372 sites, including
+    // 20,908 `fs.lstatSync` in resources/dist/projection/realizations.js — and
+    // it still printed "these numbers describe vat's launcher".
+    const text = render({ processes: 1, sites: [N_PLUS_ONE] });
 
     expect(text).toContain('1 process');
-    expect(text).toContain('COUNTER DID NOT PROPAGATE');
+    expect(text).not.toContain(PROPAGATION_WARNING);
+  });
+
+  it('warns loudly when the one counted process made no filesystem calls at all', () => {
+    // The failure the warning actually exists for: a launcher that spawned and
+    // waited. Its loader calls are bucketed out, so what remains is the spawn
+    // and nothing else — a report that looks healthy and is empty. No `fs.` site
+    // is the exact signature, rather than a threshold on how few there were.
+    const text = render({ processes: 1, sites: [SPAWN_NO_READING] });
+
+    expect(text).toContain('1 process');
+    expect(text).toContain(PROPAGATION_WARNING);
   });
 });
 

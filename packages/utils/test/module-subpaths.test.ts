@@ -73,6 +73,24 @@ describe('whole-module subpath entries', () => {
     expect(typeof barrel['resetProjectRootCaches']).toBe('function');
   });
 
+  /**
+   * `./text` exists so the one bytes-to-text seam can be reached without
+   * `node:fs` — see `subpath-purity.test.ts` for the assertion that it stays
+   * pure. The file-reading half is asserted on `./fs`, deliberately not here.
+   */
+  it('./text exposes the content-decoding seam, and only the pure half', async () => {
+    const mod: Record<string, unknown> = await import('../src/text.js');
+    expect(typeof mod['decodeTextContent']).toBe('function');
+    expect('readTextContent' in mod).toBe(false);
+    expect('readTextContentSync' in mod).toBe(false);
+  });
+
+  it('./fs exposes the file-reading half of the same seam', async () => {
+    const mod = await import('../src/fs.js');
+    expect(typeof mod.readTextContent).toBe('function');
+    expect(typeof mod.readTextContentSync).toBe('function');
+  });
+
   it('./glob exposes the glob pattern helpers', async () => {
     const mod = await import('../src/glob.js');
     expect(typeof mod.isGlob).toBe('function');
@@ -99,6 +117,9 @@ describe('whole-module subpath entries', () => {
     expect(typeof mod.getTestOutputDir).toBe('function');
     expect(typeof mod.setupAsyncTempDirSuite).toBe('function');
     expect(typeof mod.setupSyncTempDirSuite).toBe('function');
+    // The bounded teardown both suite helpers delegate to. A consumer wiring
+    // its own `afterAll` needs it from the same subpath as the helpers.
+    expect(typeof mod.removeScratchDir).toBe('function');
   });
 
   it('./asset exposes asset reference resolution', async () => {

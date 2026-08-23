@@ -1,0 +1,83 @@
+{
+  "$ref": "#/definitions/projection-blob-sections",
+  "definitions": {
+    "projection-blob-sections": {
+      "type": "object",
+      "properties": {
+        "blob": {
+          "type": "string",
+          "pattern": "^(?:markdown|html)\\.[0-9a-f]{64}$",
+          "description": "Foreign key to blobs.contentKey"
+        },
+        "ordinal": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0-based document order — NOT the heading tree order"
+        },
+        "depth": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 6,
+          "description": "Heading level, 1 for #"
+        },
+        "title": {
+          "type": "string"
+        },
+        "slug": {
+          "type": "string",
+          "description": "GitHub-slugger slug, WITHOUT the -N occurrence suffix — see slugOccurrence"
+        },
+        "slugOccurrence": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0 for the first heading with this slug in the blob, 1 for the second, etc."
+        },
+        "parentOrdinal": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ordinal of the enclosing heading, or null at the top of the tree"
+        },
+        "lineStart": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "lineEnd": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "UTF-8 bytes spanned by this section, including nested subsections"
+        },
+        "tokens": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "blob",
+        "ordinal",
+        "depth",
+        "title",
+        "slug",
+        "slugOccurrence",
+        "parentOrdinal",
+        "lineStart",
+        "lineEnd",
+        "bytes",
+        "tokens"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the blob-keyed `blob_sections` table"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

@@ -105,6 +105,34 @@ describe('copyResources', () => {
     expect(existsSync(safePath.join(targetDir, 'test.txt'))).toBe(true);
   });
 
+  const SKILLS_DIR = 'skills';
+  const EXCLUDED_SUBDIR = `${SKILLS_DIR}/evals`;
+  const SIBLING_SUBDIR = `${SKILLS_DIR}/evals-notes`;
+
+  it('should exclude a specified subdirectory and its contents', () => {
+    mkdirSyncReal(safePath.join(sourceDir, EXCLUDED_SUBDIR, 'fixtures'), { recursive: true });
+    writeFileSync(safePath.join(sourceDir, SKILLS_DIR, 'SKILL.js'), 'skill', 'utf-8');
+    writeFileSync(safePath.join(sourceDir, EXCLUDED_SUBDIR, 'evals.json'), '{}', 'utf-8');
+    writeFileSync(safePath.join(sourceDir, EXCLUDED_SUBDIR, 'fixtures', 'fixture.js'), 'fixture', 'utf-8');
+
+    copyResources({ sourceDir, targetDir, exclude: [EXCLUDED_SUBDIR] });
+
+    expect(existsSync(safePath.join(targetDir, SKILLS_DIR, 'SKILL.js'))).toBe(true);
+    expect(existsSync(safePath.join(targetDir, EXCLUDED_SUBDIR))).toBe(false);
+  });
+
+  it('should leave sibling paths that merely share a prefix with an excluded entry untouched', () => {
+    mkdirSyncReal(safePath.join(sourceDir, EXCLUDED_SUBDIR), { recursive: true });
+    mkdirSyncReal(safePath.join(sourceDir, SIBLING_SUBDIR), { recursive: true });
+    writeFileSync(safePath.join(sourceDir, EXCLUDED_SUBDIR, 'evals.json'), '{}', 'utf-8');
+    writeFileSync(safePath.join(sourceDir, SIBLING_SUBDIR, 'note.txt'), 'note', 'utf-8');
+
+    copyResources({ sourceDir, targetDir, exclude: [EXCLUDED_SUBDIR] });
+
+    expect(existsSync(safePath.join(targetDir, EXCLUDED_SUBDIR))).toBe(false);
+    expect(existsSync(safePath.join(targetDir, SIBLING_SUBDIR, 'note.txt'))).toBe(true);
+  });
+
   it('should wrap copy errors with context', () => {
     // Setup source
     mkdirSyncReal(sourceDir);

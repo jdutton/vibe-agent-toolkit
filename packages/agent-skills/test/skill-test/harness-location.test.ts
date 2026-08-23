@@ -1,6 +1,6 @@
 import { mkdtempSync, statSync, writeFileSync, rmSync } from 'node:fs';
 
-import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -65,14 +65,11 @@ describe('assertSafeHarnessRoot', () => {
     expect(() => assertSafeHarnessRoot(dir, dirUid(tmpBase))).not.toThrow();
   });
 
-  it(
-    'throws when the harness root is a symlink',
-    { skip: process.platform === 'win32' },
-    () => {
-      const { target, link } = createSymlinkedDir(tmpBase);
-      expect(() => assertSafeHarnessRoot(link, dirUid(target))).toThrow(HarnessLocationError);
-    },
-  );
+  it('throws when the harness root is a symlink', ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    const { target, link } = createSymlinkedDir(tmpBase, cap);
+    expect(() => assertSafeHarnessRoot(link, dirUid(target))).toThrow(HarnessLocationError);
+  });
 
   it(
     'throws (mentioning 0700) when the directory mode is not 0700',
@@ -95,20 +92,17 @@ describe('assertSafeHarnessRoot', () => {
     },
   );
 
-  it(
-    'throws when an INTERMEDIATE path component (not just the leaf) is a symlink',
-    { skip: process.platform === 'win32' },
-    () => {
-      // link -> target; the real leaf lives under target, reached via the symlink.
-      const { target, link } = createSymlinkedDir(tmpBase);
-      const realLeaf = safePath.join(target, 'child');
-      mkdirSyncReal(realLeaf, { mode: 0o700 });
-      // The leaf itself is a real 0700 dir; only the `link` ancestor is a symlink.
-      // tmpBase is the trusted boundary so the walk reaches the `link` component.
-      const leafViaLink = safePath.join(link, 'child');
-      expect(() => assertSafeHarnessRoot(leafViaLink, dirUid(target), tmpBase)).toThrow(HarnessLocationError);
-    },
-  );
+  it('throws when an INTERMEDIATE path component (not just the leaf) is a symlink', ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    // link -> target; the real leaf lives under target, reached via the symlink.
+    const { target, link } = createSymlinkedDir(tmpBase, cap);
+    const realLeaf = safePath.join(target, 'child');
+    mkdirSyncReal(realLeaf, { mode: 0o700 });
+    // The leaf itself is a real 0700 dir; only the `link` ancestor is a symlink.
+    // tmpBase is the trusted boundary so the walk reaches the `link` component.
+    const leafViaLink = safePath.join(link, 'child');
+    expect(() => assertSafeHarnessRoot(leafViaLink, dirUid(target), tmpBase)).toThrow(HarnessLocationError);
+  });
 });
 
 describe('assertSafeWorkdir', () => {
