@@ -126,9 +126,14 @@ const RULES_SEGMENT = '/.claude/rules/';
 /**
  * The pattern tails that make a glob-free prefix universal over its subtree.
  *
- * Longest first, because `/**\/*` also ends with `/*` and testing the short form
- * first would leave a `/**` behind in the prefix — the same longest-first
- * discipline the UTF-32/UTF-16 BOM guard needs, and for the same reason.
+ * ⚠️ The ORDER DOES NOT MATTER, and the comment that used to stand here said it
+ * did: *"longest first, because `/**\/*` also ends with `/*`."* `/*` is not a
+ * member of this list, and no string ends with both `/**\/*` and `/**`, so the
+ * two are mutually exclusive and `find` returns the same tail either way —
+ * mutation-verified by reversing the array, which left every test green. Kept in
+ * this order only because it reads as most-specific-first; there is no
+ * longest-first discipline being observed here, and a reader should not go
+ * looking for the overlap the old comment invented.
  */
 const UNIVERSAL_TAILS = ['/**/*', '/**'] as const;
 
@@ -431,10 +436,17 @@ function firstMatchUnder(
  * The literal directory prefix a pattern's matches must all live under.
  *
  * Segments are taken while they contain no glob metacharacter, so
- * `packages/some-pkg/src/thing*.ts` yields `packages/some-pkg/src`. A wholly
- * literal pattern yields ITSELF — a file path, not a directory — which is
- * harmless: it is used only for at-or-below tests, and a longer prefix prunes
- * strictly more.
+ * `packages/some-pkg/src/thing*.ts` yields `packages/some-pkg/src`.
+ *
+ * ⛔ A wholly literal pattern yields ITSELF — a FILE path, not a directory —
+ * because `.` is not in {@link GLOB_META}, and that is NOT harmless. This comment
+ * used to claim it was, on the grounds that the prefix "is used only for
+ * at-or-below tests"; it is not. {@link candidateRange} also uses it as a STRING
+ * BOUND over the sorted file list, and a bound of `prefix + '/'` asked for the
+ * children of a file — none exist, so every wholly-literal `paths:` entry was
+ * silently dropped from every directory query. Callers must treat the return
+ * value as "the longest path all matches live at or below", which a file
+ * satisfies only inclusively.
  *
  * @param pattern - One `paths:` entry
  * @returns The literal prefix, possibly empty
@@ -455,8 +467,23 @@ function literalPrefix(pattern: string): string {
  *
  * `dirFiles` is already restricted to `queryDir`, so a prefix at or above it
  * bounds nothing new and the whole array is the range. A prefix BELOW it names a
- * contiguous run, because the array is sorted by code point and every path under
- * `P` shares the literal `P/`.
+ * contiguous run, because the array is sorted by code point and every string
+ * beginning with `P` sorts together.
+ *
+ * ⛔ The bound is `P`, NOT `P/`, and the difference is a silent under-report
+ * rather than a slower scan. {@link literalPrefix} returns the WHOLE pattern when
+ * it is wholly literal — `.` is not a glob metacharacter — so `P` is then a FILE,
+ * `P/` has no children by construction, `start >= end`, and the rule disappeared
+ * from every directory query while the file query for that same path admitted it.
+ * Bounding on `P` admits the exact-`P` entry.
+ *
+ * ⚠️ And the run is scanned on `P`, not `P/`, for the DIRECTORY case: `.` (0x2E)
+ * sorts before `/` (0x2F), so a sibling `docs/foo.bak` lands between the bound
+ * `docs/foo` and the run `docs/foo/…`. Stopping at the first entry not under
+ * `docs/foo/` would stop on the sibling and lose the whole directory. Widening
+ * past the sibling costs one `isMatch` call, which is the correct trade: this
+ * range is only a PRUNE, and {@link firstMatchUnder}'s compiled matcher is the
+ * real filter — too wide is slower, too narrow is wrong.
  *
  * @param dirFiles - Path-sorted realized files at or below the query directory
  * @param prefix - The pattern's literal prefix
@@ -469,10 +496,9 @@ function candidateRange(
   queryDir: string,
 ): [number, number] {
   if (prefix === '' || isAtOrBelow(queryDir, prefix)) return [0, dirFiles.length];
-  const bound = `${prefix}/`;
-  const start = lowerBound(dirFiles, bound);
+  const start = lowerBound(dirFiles, prefix);
   let end = start;
-  while (end < dirFiles.length && (dirFiles[end] ?? '').startsWith(bound)) end += 1;
+  while (end < dirFiles.length && (dirFiles[end] ?? '').startsWith(prefix)) end += 1;
   return [start, end];
 }
 

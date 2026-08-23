@@ -145,6 +145,50 @@ describe('selectRules', () => {
     expect(result.rules).toEqual([]);
   });
 
+  it('admits a WHOLLY-LITERAL paths entry on a DIRECTORY query, naming that file as the ∃ witness', () => {
+    // 🪤 The under-report, and the case no other fixture in this suite reached:
+    // every other `paths:` entry here contains a `*`, so `literalPrefix` always
+    // returned a real DIRECTORY. A wholly-literal entry returns the FILE itself,
+    // and `candidateRange` then binary-searched for CHILDREN of that file, which
+    // cannot exist — so the range was empty, ∃ found no witness, and the rule
+    // vanished from the directory answer while the FILE query for the very same
+    // path admitted it. Both halves are asserted, because a widening that broke
+    // the file query would trade one under-report for another.
+    const path = '.claude/rules/one-file.md';
+    const input = {
+      realizations: [queryRealization(path), queryRealization(SUBJECT_TS)],
+      tags: [scopeTag(path, PATH_SCOPED)],
+      blobs: [blob(path, [SUBJECT_TS])],
+      queryDir: PACKAGES_CLI_SRC,
+    };
+
+    expect(selectRules({ ...input, queryFile: null }).rules[0]?.admission)
+      .toEqual({ kind: MAY_FIRE, pattern: SUBJECT_TS, examplePath: SUBJECT_TS });
+    expect(selectRules({ ...input, queryFile: SUBJECT_TS }).rules[0]?.admission)
+      .toEqual({ kind: 'glob-rule', pattern: SUBJECT_TS });
+  });
+
+  it('reaches a prefix directory past a sibling file sorting between the prefix and its children', () => {
+    // ⚠️ The case a CARELESS widening of `candidateRange` breaks. `.` (0x2E)
+    // sorts before `/` (0x2F), so `docs/foo.bak` lands between the bound
+    // `docs/foo` and the run `docs/foo/…`. A scan that starts at `docs/foo` and
+    // stops at the first entry not under `docs/foo/` stops on the sibling and
+    // loses the whole directory — an under-report of exactly the shape the test
+    // above pins, reintroduced by the fix for it.
+    const path = '.claude/rules/foo.md';
+    const pattern = 'docs/foo/*.md';
+    const witness = 'docs/foo/x.md';
+    const result = selectRules({
+      realizations: [
+        queryRealization(path), queryRealization('docs/foo.bak'), queryRealization(witness),
+      ],
+      tags: [scopeTag(path, PATH_SCOPED)],
+      blobs: [blob(path, [pattern])], queryDir: 'docs', queryFile: null,
+    });
+
+    expect(result.rules[0]?.admission).toEqual({ kind: MAY_FIRE, pattern, examplePath: witness });
+  });
+
   it('classifies a rule whose glob covers the whole query directory as ∀, without enumerating a file', () => {
     // ⚠️ The realization list holds ONLY the rule — no file under the query
     // directory exists at all. ∀ is pure pattern containment, and a fixture that
