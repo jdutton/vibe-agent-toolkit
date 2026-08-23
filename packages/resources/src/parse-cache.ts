@@ -519,10 +519,23 @@ export async function parseKeyed(keyed: KeyedContent, cache: ParseCache): Promis
   // disk (see link-parser.ts and content-key.ts).
   // Imported here, past the hit-path return, rather than at module scope: the
   // remark stack behind `parseMarkdownContent` costs ~730ms of module load on
-  // Windows (and parse5 another ~38ms), which a fully warm run — every document
-  // a hit, nothing ever parsed — otherwise paid for a parser it never called.
-  // A miss loads exactly the one parser this document needs; the ESM cache
-  // makes every subsequent miss in the run free.
+  // Windows, which a fully warm run — every document a hit, nothing ever
+  // parsed — would otherwise pay for a parser it never called. A miss loads
+  // exactly the one parser this document needs; the ESM cache makes every
+  // subsequent miss in the run free.
+  //
+  // Only the markdown half actually saves anything. parse5 (~38ms) is loaded
+  // eagerly regardless, because `html-transform.ts` imports html-link-parser
+  // statically for the SYNCHRONOUS `rewriteHtmlLinks`; deferring that needs it
+  // to become async first.
+  //
+  // ⚠️ This only pays off while `index.ts` keeps `parseMarkdown` / `parseHtml`
+  // as LAZY WRAPPERS. They were plain value re-exports until this was measured:
+  // the package publishes only `"."`, so every consumer goes through the
+  // barrel, and the barrel evaluated both parser modules before this line ever
+  // ran. Verified then with NODE_V8_COVERAGE on a warm `vat resources scan` —
+  // remark-parse loaded, parseMarkdownContent called zero times. Restore either
+  // re-export and this deferral silently buys nothing again.
   const result =
     keyed.parserKind === 'html'
       ? (await import('./html-link-parser.js')).parseHtmlContent(keyed.content, keyed.byteLength)

@@ -26,6 +26,11 @@
  * ```
  */
 
+// Type-only, so it is erased and does NOT pull the parser into this barrel's
+// module graph — which is the whole point of the lazy `parseMarkdown` /
+// `parseHtml` wrappers below.
+import type { ParseResult } from './link-parser.js';
+
 // Export main ResourceRegistry class and ID generation utility
 export {
   ResourceRegistry,
@@ -282,8 +287,37 @@ export {
 export type { ContentMeasures, LexicalReference } from './schemas/parse-facts.js';
 
 // Export parser interface for advanced use cases
-export { parseMarkdown, type ParseResult } from './link-parser.js';
+export type { ParseResult } from './link-parser.js';
 export { classifyLink, isLocalFileLink } from './link-classify.js';
+
+/**
+ * Parse a markdown file from disk.
+ *
+ * ## Why this is a wrapper and not `export { parseMarkdown } from ...`
+ *
+ * A value re-export makes the parser part of this barrel's module graph, so
+ * importing ANY symbol from `@vibe-agent-toolkit/resources` evaluated the whole
+ * remark stack — ~730ms on Windows — before a single line of caller code ran.
+ * Every consumer reaches this package through the barrel (the package publishes
+ * only `"."` and `"./schemas/*"`), so that cost was unavoidable and it silently
+ * cancelled the parser deferral in `parse-cache.ts`: a fully warm scan, which
+ * parses nothing, still paid for the parser.
+ *
+ * Deferring it here instead of dropping the export keeps the public signature
+ * byte-identical — this function was already `async`, so a caller cannot tell
+ * the difference — and needs no `exports` subpath.
+ *
+ * ⚠️ Keep this a wrapper. Restoring the plain re-export re-loads remark for
+ * every consumer of every symbol in this package and is invisible in review;
+ * `packages/cli/test/integration/module-load-budget.integration.test.ts` is
+ * what fails if you do.
+ *
+ * @param filePath - Path to the markdown file
+ * @returns Links, headings, frontmatter and measures for the document
+ */
+export async function parseMarkdown(filePath: string): Promise<ParseResult> {
+  return (await import('./link-parser.js')).parseMarkdown(filePath);
+}
 
 // The content-decoding seam is NOT re-exported here. It is a `utils` primitive
 // (`@vibe-agent-toolkit/utils/text` for `decodeTextContent`,
@@ -331,7 +365,20 @@ export {
   type ParseCacheStats,
 } from './parse-cache.js';
 
-export { parseHtml } from './html-link-parser.js';
+/**
+ * Parse an HTML file from disk.
+ *
+ * Lazy for the same reason as {@link parseMarkdown} above — a value re-export
+ * put parse5 in this barrel's module graph for every consumer of every symbol.
+ * The signature is unchanged; it was already `async`.
+ *
+ * @param filePath - Path to the HTML file
+ * @returns Links, headings and measures for the document
+ */
+export async function parseHtml(filePath: string): Promise<ParseResult> {
+  return (await import('./html-link-parser.js')).parseHtml(filePath);
+}
+
 // HtmlParseError is Zod-sourced (single source of truth) — see schemas/resource-metadata.ts.
 export type { HtmlParseError } from './schemas/resource-metadata.js';
 export { rewriteHtmlLinks, type UnappliedRewrite } from './html-transform.js';

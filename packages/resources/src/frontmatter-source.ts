@@ -9,9 +9,9 @@
  * warm scan, in which nothing is ever parsed, still paid to load a markdown
  * parser it never called.
  *
- * `link-parser.js` re-exports this, and `parseMarkdownContent` still calls it,
- * so cold and warm continue to run the same code — the property the docstring
- * below exists to protect.
+ * `link-parser.js` imports it and `parseMarkdownContent` still calls it, so cold
+ * and warm continue to run the same code — the property the docstring below
+ * exists to protect.
  */
 
 import * as yaml from 'yaml';

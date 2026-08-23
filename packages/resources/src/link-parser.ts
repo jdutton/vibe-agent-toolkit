@@ -41,8 +41,6 @@ import type { HtmlParseError } from './schemas/resource-metadata.js';
 import type { HeadingNode, ResourceLink, UnresolvedReference } from './types.js';
 import { findUnresolvedReferences } from './unresolved-references.js';
 
-
-
 /**
  * Result of parsing a resource file (markdown or HTML).
  */
@@ -123,7 +121,6 @@ export interface ParseResult {
    */
   contentMeasures?: ContentMeasures;
 }
-
 
 /**
  * Parse a markdown file and extract all links, headings, and metadata.

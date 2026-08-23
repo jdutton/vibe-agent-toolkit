@@ -681,11 +681,52 @@ async function readTarget(
 }
 
 /**
+ * Node's codes for "the module could not be loaded", as opposed to "the code in
+ * it threw". Every one of these means the installation is wrong, never that the
+ * bytes being parsed are.
+ */
+const MODULE_LOAD_FAILURE_CODES: ReadonlySet<string> = new Set([
+  'ERR_MODULE_NOT_FOUND',
+  'MODULE_NOT_FOUND',
+  'ERR_UNSUPPORTED_DIR_IMPORT',
+  'ERR_UNKNOWN_FILE_EXTENSION',
+  'ERR_INVALID_MODULE_SPECIFIER',
+  'ERR_PACKAGE_PATH_NOT_EXPORTED',
+  'ERR_REQUIRE_ESM',
+]);
+
+/**
+ * Whether an error is the module loader failing, not a parser failing.
+ *
+ * @param error - The thrown value, which may be anything
+ * @returns `true` when the error carries a module-loader code
+ */
+function isModuleLoadFailure(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null || !('code' in error)) return false;
+  const { code } = error as { code?: unknown };
+  return typeof code === 'string' && MODULE_LOAD_FAILURE_CODES.has(code);
+}
+
+/**
  * Parse a blob, recording a condition instead of propagating a throw.
  *
  * Reachable rather than defensive: every keyed blob is derived, including the
  * non-markdown ones, so the markdown parser is handed arbitrary bytes by design.
  * One of them failing must not abort a whole population.
+ *
+ * ⚠️ A broken INSTALL must not be reported as a broken DOCUMENT. `parseKeyed`
+ * reaches the parser through `await import(...)`, so a module that cannot be
+ * resolved — a half-extracted tarball, a quarantined file — now reaches this
+ * catch, a class of error that could not while the import was static (the
+ * process died at load, naming the file). Reported here it would read
+ * `The markdown parser threw on the bytes at "<path>" (ERR_MODULE_NOT_FOUND)`,
+ * blaming an innocent document once per document while the exit code stayed 0.
+ * {@link isModuleLoadFailure} rethrows that class instead.
+ *
+ * Not covered, because it cannot be told apart by inspecting the error: a
+ * module that THROWS while evaluating, and a raw filesystem errno from the
+ * loader's own read (`EMFILE` under fd pressure), which is indistinguishable
+ * from the parse cache's own IO failing.
  *
  * @param builder - The builder to record a condition on
  * @param target - The blob and its path
@@ -704,6 +745,14 @@ async function parseTarget(
   try {
     return await parseKeyed(keyed, cache);
   } catch (error) {
+    // A broken INSTALL is not a broken DOCUMENT. `parseKeyed` reaches the
+    // parser through `await import(...)`, so a module that cannot be resolved
+    // or throws while evaluating arrives here — a class of error that could not
+    // reach this catch while the import was static, because the process died at
+    // load naming the file. Swallowing it would blame an innocent document,
+    // once per document, and still exit 0. Let it propagate: the caller's
+    // handler prints it and exits non-zero, which is the old, correct shape.
+    if (isModuleLoadFailure(error)) throw error;
     counts.blobsParseFailed += 1;
     builder.addBlobCondition(condition(
       target.contentKey,
