@@ -784,7 +784,11 @@ describe('gradedCounts', () => {
  * siblings (`vatPrivateDirs`, `siblingArmDir`) are pinned by the integration suite;
  * this one was the gap.
  */
-const WORKSPACES_ROOT = '/scratch/vat-skill-test-ws-tok';
+// Resolved, not a bare POSIX literal: the builder composes its arm roots with
+// `safePath.joinUnderRoot`, which resolves the root — and on Windows resolving
+// '/scratch/...' prepends the cwd's drive ('D:/scratch/...'). A literal-rooted
+// expectation therefore fails on Windows and nowhere else.
+const WORKSPACES_ROOT = safePath.resolve('/scratch/vat-skill-test-ws-tok');
 /** `<workspacesRoot>/<the WITHOUT arm's opaque segment>` — the control arm's own root. */
 const CONTROL_ARM_ROOT = `${WORKSPACES_ROOT}/bbb`;
 

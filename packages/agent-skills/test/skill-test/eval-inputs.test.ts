@@ -423,7 +423,12 @@ describe('stageEvalWorkspaces', () => {
       expectStagingRejects(`fixtures/${TERMINAL_PAINT}nope.md`, 6);
     });
 
-    it('on a copy failure (the OS error text carries the path too)', () => {
+    // Skipped on Windows, where the scenario cannot be built: this case needs a
+    // REAL file whose NAME carries the paint, and the Win32 API rejects every
+    // character below 0x20 in a filename, so `writeFileSync` fails ENOENT before
+    // staging is ever reached. The sanitizer itself is covered on every platform
+    // by the two sibling cases above, which reject before touching the disk.
+    it.skipIf(process.platform === 'win32')('on a copy failure (the OS error text carries the path too)', () => {
       const { evalsDir, workspacesRoot } = setupEvalWorkspaces();
       const rel = `fixtures/${TERMINAL_PAINT}doc.md`;
       writeFileSync(safePath.join(evalsDir, rel), 'content\n', 'utf-8');
