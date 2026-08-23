@@ -216,12 +216,17 @@ describe('FilesystemExtentContributor declining the ignored half', () => {
   });
 
   // 🪤 The skip predicate's one safety precondition — that no symlink ever
-  // reaches it — is NOT pinned here, deliberately. It is already pinned, with a
-  // better fixture, by `projection-git-extent-symlink.test.ts`'s "is contradicted
-  // by the filesystem extent, which skips the links entirely". A second copy here
-  // would assert the same source-level fact against a weaker fixture and go stale
-  // separately. See `declinedPathFilter` in `filesystem-extent.ts` for why that
-  // precondition is what makes `knownToExist: true` sound.
+  // reaches it — is NOT pinned here, deliberately. It is pinned in
+  // `projection-filesystem-extent-symlink.test.ts`, which injects BOTH crawl
+  // sources explicitly and asserts each one drops the link, with a regular file
+  // planted alongside as the positive control. The filesystem assertion inside
+  // `projection-git-extent-symlink.test.ts` is a control for that file's own
+  // claim, not this pin: it exercises whichever single enumerator
+  // `crawlSourceFor` selects on the host, so it leaves the other arm unpinned. A
+  // third copy here — no symlink in the fixture, no per-arm injection — would
+  // assert the same source-level fact against the weakest fixture of the three
+  // and go stale separately. See `declinedPathFilter` in `filesystem-extent.ts`
+  // for why that precondition is what makes `knownToExist: true` sound.
 });
 
 describe('FilesystemExtentContributor identity', () => {

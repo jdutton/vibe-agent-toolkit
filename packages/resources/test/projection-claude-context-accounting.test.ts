@@ -43,6 +43,13 @@ import type {
 /** The closure root every fixture here is rooted at. */
 const ROOT_CLAUDE_MD = 'CLAUDE.md';
 
+/**
+ * The one signed direction this file names three times — as a member of the
+ * `direction` vocabulary, as one entry's value, and as a word a statement must
+ * SAY. Hoisted for `sonarjs/no-duplicate-string`, which counts all three.
+ */
+const UNDER_REPORT = 'under-report';
+
 /** The oversize file that sits in the MIDDLE of an otherwise intact closure. */
 const MIDDLE_CLAUDE_MD = 'docs/CLAUDE.md';
 
@@ -330,7 +337,7 @@ describe('the stated limits', () => {
     expect(CLAUDE_CONTEXT_LIMITS).toHaveLength(22);
     const directions = new Set(CLAUDE_CONTEXT_LIMITS.map((limit) => limit.direction));
     expect(directions.has('over-report')).toBe(true);
-    expect(directions.has('under-report')).toBe(true);
+    expect(directions.has(UNDER_REPORT)).toBe(true);
     expect(directions.has('scope')).toBe(true);
     expect(directions.has('assumption')).toBe(true);
   });
@@ -410,7 +417,7 @@ describe('the stated limits', () => {
     // a direction a reader can hedge against.
     const limit = CLAUDE_CONTEXT_LIMITS.find((entry) => entry.id === 'existential-needs-a-file');
 
-    expect(limit?.direction).toBe('under-report');
+    expect(limit?.direction).toBe(UNDER_REPORT);
     expect(limit?.statement).toContain('∀ half is immune');
   });
 
@@ -423,6 +430,33 @@ describe('the stated limits', () => {
 
     expect(estimate?.direction).toBe('assumption');
     expect(estimate?.statement).toContain('BOTH directions');
+  });
+
+  it('states the symlink version gate without claiming dedup rests on a realpath collapse', () => {
+    // ⛔ The claim this replaces was FALSE in shipped output: *"Dedup relies on
+    // `realpathSync.native` collapsing symlink aliases"*. It does not.
+    // `canonicalPathFor` asks `GitTracker.indexPathFor` FIRST and returns from
+    // it, so the `realPathOrSelf` fallback is unreachable for any path
+    // `git ls-files --cached --others` lists — a link and its target mint TWO ids
+    // on the default lane (`identity.ts`, *"🪤 A symlink and its target do NOT
+    // reliably share one identity"*; pinned as `distinctResourceIds() === 3`).
+    // Nothing in this answer ever depended on that collapse: the Claude-context
+    // lane registers the filesystem extent alone, and a symlink path is not a
+    // member of it, which is also what makes the vendor gate an UNDER-report
+    // rather than a double charge.
+    const limit = CLAUDE_CONTEXT_LIMITS.find((entry) => entry.id === 'version-gated');
+
+    // Still a `scope` entry: its subject is that no version FLOOR is pinned.
+    expect(limit?.direction).toBe('scope');
+    expect(limit?.statement).toContain('pins no floor');
+    // The vendor fact survives — it is the citation the modelled list carries.
+    expect(limit?.statement).toContain('v2.1.198');
+    expect(limit?.statement).toContain('path-scoped rule');
+    // ...and the direction the gate actually runs in is stated, not left to the reader.
+    expect(limit?.statement).toContain(UNDER_REPORT);
+    // Both halves of the false mechanism claim are gone.
+    expect(limit?.statement).not.toContain('realpathSync');
+    expect(limit?.statement).not.toContain('Dedup');
   });
 
   it('names no single assumed Claude Code version, only dated per-behaviour citations', () => {

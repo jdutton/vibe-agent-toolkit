@@ -27,9 +27,13 @@
  *
  * ## Dedup is by `resourceId`, never by path and never over edges
  *
- * Two `CLAUDE.md` files importing one `README.md` load it once. `resourceId`
- * canonicalises through `realpathSync.native`, so a symlink alias collapses onto
- * one identity — but only if the sum is over identities. One row per identity,
+ * Two `CLAUDE.md` files importing one `README.md` load it once. The diamond is
+ * what forces the key to be the identity: one target reached by two edges is one
+ * row only if the sum is over identities rather than over edges. 🪤 **Not**
+ * because `resourceId` collapses a symlink alias — it does not wherever git
+ * answers, since `canonicalPathFor` returns git's spelling before it can reach
+ * `realpathSync.native`; see *"🪤 A symlink and its target do NOT reliably share
+ * one identity"* in `identity.ts`. One row per identity,
  * carrying every admission the ANSWER recorded — which for a diamond is one, not
  * two: the closure's visited set declines the second edge, so that edge is a hop
  * the traversal refused rather than an admission the row is hiding.

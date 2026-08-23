@@ -82,7 +82,16 @@ describe('mintResourceId', () => {
 });
 
 describe('canonicalPathFor', () => {
-  it('resolves a symlink to its target, so both share one identity', ({ skip }) => {
+  it('resolves a symlink to its target WHERE NO GIT TRACKER ANSWERS, so both share one identity there', ({ skip }) => {
+    // ⚠️ The name states the NON-GIT branch, and only that branch. The context
+    // below carries no `gitTracker`, so `canonicalPathFor` cannot take its git
+    // branch and falls through to `realPathOrSelf`. Wherever git lists the path
+    // the link and its target mint TWO ids — pinned as `distinctResourceIds()
+    // === 3` by `projection-git-extent-symlink.test.ts`, and explained under
+    // *"🪤 A symlink and its target do NOT reliably share one identity"* in
+    // `../src/projection/identity.ts`. Do not read this green test as the
+    // general rule.
+    //
     // Creating a symlink on Windows needs the privilege Developer Mode grants,
     // which most dev boxes lack — `symlinkSync` throws EPERM there. Skip loudly
     // rather than no-op: a silently skipped symlink case reads as a pass.
@@ -136,7 +145,12 @@ describe('canonicalPathFor', () => {
 });
 
 describe('ResourceIdentityMap', () => {
-  it('returns one id for two names of one file', ({ skip }) => {
+  it('returns one id for two names of one file WHEN CONSTRUCTED WITHOUT A GIT TRACKER', ({ skip }) => {
+    // ⚠️ NON-GIT branch only, for the same reason as the `canonicalPathFor` case
+    // above: `new ResourceIdentityMap(root)` is constructed with no `GitTracker`,
+    // so nothing can supply git's spelling and `realPathOrSelf` reduces both
+    // names. Given a usable tracker the two names mint two ids — see the trap
+    // note on `canonicalPathFor` in `../src/projection/identity.ts`.
     const cap = symlinkCapability() ?? skip();
     const { root, target, alias } = makeAliasedDoc(cap);
 

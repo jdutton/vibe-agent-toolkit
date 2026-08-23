@@ -72,6 +72,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to judge. A single ad-hoc check migrates as
   `classifyFilenameCaseFrom(await fillSiblingNames([p], cache), p)`.
 
+- **(library) `EmbeddingProvider` implementations must expose `maxInputTokens`.** Report the model's
+  real input-token limit: chunk budgets and the over-length guard now read it instead of a
+  hardcoded constant.
+
 ### Added
 
 - **`vat claude context <path>`** — reports which `CLAUDE.md` files, `.claude/rules` files and
@@ -111,6 +115,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each resource with the harness convention its path carries (`claude-md`, `skill-md`, `subagent`,
   `command`, `settings`, `mcp-config`, `plugin-manifest`, `readme`, …) plus a `loading` row valued
   `always` or `selected`. No CLI command reads these rows yet.
+
+- **(library) HTML files now contribute `blob_references` rows.** `<a href>` and `<img src>` are
+  projected with a source span, under a `html-link` syntactic form of their own. `html-link` is not
+  in any closure's `follow` default, so HTML references are reported but never traversed — projected
+  membership still matches what `vat build` bundles.
 
 - **(library) `removeScratchDir()` on `@vibe-agent-toolkit/utils`** — a best-effort temp-directory
   teardown for test suites, which warns and returns instead of failing when removal errors or
@@ -186,6 +195,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `@vibe-validate/utils` and `yaml` to the installed tree.
 
 ### Fixed
+
+- **`vat rag index` embedded only the first 256 tokens of each chunk, silently discarding ~43% of
+  every corpus.** Chunks are now sized to the embedding model's real limit, and dropped tokens are
+  reported instead of ignored. **Re-index existing databases** — stored vectors are incomplete.
 
 - **`vat agent install --force` could not replace a broken dev-mode symlink**, such as one left
   dangling by a rebuild that removed `dist/`. The install failed with a bare `EEXIST`, and the advice

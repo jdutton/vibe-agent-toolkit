@@ -44,6 +44,24 @@ export interface EmbeddingProvider {
   dimensions: number;
 
   /**
+   * Maximum number of tokens this provider's model reads for a single input,
+   * INCLUDING whatever special tokens its tokenizer adds.
+   *
+   * This is a hard property of the model, not a preference: text beyond it is
+   * discarded before inference, so anything that decides how much text to hand
+   * over (a chunker, a batcher) must size its work against THIS number.
+   *
+   * Required, deliberately. It was previously absent, and the only consumer —
+   * the chunker in `@vibe-agent-toolkit/rag-lancedb` — filled the hole with a
+   * hardcoded 8191 (OpenAI ada-002's limit) for every provider, including a
+   * local model that reads 256. The result was 84-86% of chunks truncated and
+   * 42-44% of every corpus never reaching the model, with the "exceeds model
+   * token limit" guard permanently unable to fire. An optional field with a
+   * fallback would reproduce exactly that bug for any provider that forgot it.
+   */
+  maxInputTokens: number;
+
+  /**
    * Embed a single text chunk
    *
    * @param text - Text to embed
@@ -58,6 +76,15 @@ export interface EmbeddingProvider {
    * @returns Array of vector embeddings
    */
   embedBatch(texts: string[]): Promise<number[][]>;
+
+  /**
+   * Release any resources held by the provider (optional).
+   *
+   * Extension point for providers that hold onto a native or long-lived
+   * resource (an inference session, a socket) and need explicit teardown.
+   * No-op for pure-JS/HTTP providers.
+   */
+  dispose?(): Promise<void>;
 }
 ```
 
@@ -65,15 +92,40 @@ export interface EmbeddingProvider {
 
 - `embed(text)` - Convert single text to vector. Use for query embedding.
 - `embedBatch(texts)` - Convert multiple texts efficiently. Use for indexing documents.
+- `dispose()` - Optional. Implement it only if your provider holds a native session or socket.
+
+### `maxInputTokens` is a measurement, not a setting
+
+`maxInputTokens` is the one member you cannot guess at. The chunker reads it —
+`resolveChunkingConfig()` in `@vibe-agent-toolkit/rag-lancedb` derives the entire
+chunk budget from it — so a number that is too high means chunks the model
+silently truncates before inference, with no error anywhere. That is not
+hypothetical: it is the measured bug this member exists to prevent.
+
+Two rules follow:
+
+1. **Look the number up for your specific model, per model, the way
+   `OpenAIEmbeddingProvider` does with its `MODEL_INPUT_TOKEN_LIMITS` table.** If a
+   provider offers several models with different windows, one constant is already
+   wrong for all but one of them.
+2. **If your provider wraps another provider, delegate — never restate.** A
+   decorator that hardcodes a limit is worse than no limit at all, because it
+   lies with authority about a model it does not own.
 
 ## Built-in Providers
 
 ### Comparison Table
 
-| Provider | Speed | Quality | Cost | API Key | Dimensions | Runtime | Install |
-|----------|-------|---------|------|---------|------------|---------|---------|
-| **ONNX** | Fast | Good | Free | No | 384 | WASM (`onnxruntime-web`) | Batteries-included — no extra install |
-| **OpenAI** | Medium | Excellent | $$ | Yes | 1536/3072 | Cloud API | `npm install openai` |
+| Provider | Speed | Quality | Cost | API Key | Dimensions | `maxInputTokens` | Runtime | Install |
+|----------|-------|---------|------|---------|------------|------------------|---------|---------|
+| **ONNX** | Fast | Good | Free | No | 384 | 256 | WASM (`onnxruntime-web`) | Batteries-included — no extra install |
+| **OpenAI** | Medium | Excellent | $$ | Yes | 1536/3072 | 8192 (8191 for ada-002) | Cloud API | `npm install openai` |
+
+Note how far apart those input limits are — 32x — and that dimensions tell you
+nothing about them. The default local model produces 384-dimension vectors from
+at most 256 tokens of text; OpenAI's small model produces 1536-dimension vectors
+from up to 8192. Anything that sizes text for a model has to read the limit off
+the provider it is actually using.
 
 **When to use each:**
 
@@ -110,6 +162,7 @@ const vectors = await provider.embedBatch([
 **Details:**
 - **Model**: `Xenova/all-MiniLM-L6-v2` (default) - ~23MB int8-quantized download on first run
 - **Dimensions**: 384 (default)
+- **`maxInputTokens`**: 256 — all-MiniLM-L6-v2 was *trained* at 256 positions, so this is a property of the model, not a tuning knob. Two of those 256 go to `[CLS]`/`[SEP]` before any of your content does.
 - **No API key required**
 - **Pure WASM (`onnxruntime-web`)** - No native addon, no build step, no platform-specific binaries. Runs identically everywhere Node.js runs, and safe to co-load with other native addons (e.g. LanceDB) in the same process.
 - **Pure TypeScript tokenizer** - No additional native dependencies
@@ -120,11 +173,17 @@ const vectors = await provider.embedBatch([
 const provider = new OnnxEmbeddingProvider({
   modelPath: '/path/to/pre-downloaded/model',  // Skip auto-download
   quantized: false,                              // Use full fp32 weights instead of int8
-  maxSequenceLength: 512,                         // Override max tokens
   cacheDir: '/custom/cache/dir',                  // Override cache location
   numThreads: 1,                                  // WASM threads (default: 1)
+  // maxSequenceLength: 256,                      // ONLY to describe a DIFFERENT model
 });
 ```
+
+`maxSequenceLength` is what the provider publishes as `maxInputTokens`, so it is
+not a way to make chunks fit. Raising it to 512 for all-MiniLM-L6-v2 does not
+give the model a 512-token window — the model still reads 256 and drops the
+rest — it only stops the chunker from knowing that. Set it only when you point
+`modelPath` at a different model that genuinely has a different window.
 
 ### OpenAIEmbeddingProvider
 
@@ -154,9 +213,16 @@ const vectors = await provider.embedBatch([
 ```
 
 **Available models:**
-- `text-embedding-3-small` - 1536 dims (default, best cost/quality)
-- `text-embedding-3-large` - 3072 dims (highest quality)
-- `text-embedding-ada-002` - 1536 dims (legacy)
+- `text-embedding-3-small` - 1536 dims, 8192 input tokens (default, best cost/quality)
+- `text-embedding-3-large` - 3072 dims, 8192 input tokens (highest quality)
+- `text-embedding-ada-002` - 1536 dims, 8191 input tokens (legacy)
+
+The provider keeps that as a `MODEL_INPUT_TOKEN_LIMITS` lookup beside its
+dimensions table and falls back to 8191 — the lowest documented OpenAI limit —
+for a model it does not recognise. Copy that shape for your own provider: a
+per-model table plus a conservative fallback, so an unknown model under-claims
+rather than over-claims. (The ada-002 off-by-one is the entire provenance of the
+8191 that used to be hardcoded into the chunker and applied to every provider.)
 
 **Details:**
 - **API key required** - Get from https://platform.openai.com/api-keys
@@ -196,19 +262,52 @@ import type { EmbeddingProvider } from '@vibe-agent-toolkit/rag';
 export interface OllamaEmbeddingConfig {
   baseUrl?: string;  // Default: http://localhost:11434
   model?: string;    // Default: nomic-embed-text
+  /**
+   * Ollama serves a model inside a context window (`num_ctx`) that may be
+   * SMALLER than the model's architectural maximum, and it truncates silently
+   * when it is. If you have narrowed `num_ctx` in a Modelfile or in the request
+   * options, pass that number here — it, not the model's spec sheet, is what
+   * this server will actually read.
+   */
+  maxInputTokens?: number;
 }
+
+/**
+ * Per-model input windows, in tokens. One constant would be wrong the moment
+ * you switch models, so this is a table — the same shape OpenAIEmbeddingProvider
+ * uses. `dimensions` and `maxInputTokens` are independent: look both up.
+ */
+const OLLAMA_MODELS: Record<string, { dimensions: number; maxInputTokens: number }> = {
+  'nomic-embed-text': { dimensions: 768, maxInputTokens: 8192 },
+  'mxbai-embed-large': { dimensions: 1024, maxInputTokens: 512 },
+  'all-minilm': { dimensions: 384, maxInputTokens: 256 },
+};
 
 export class OllamaEmbeddingProvider implements EmbeddingProvider {
   readonly name = 'ollama';
   readonly model: string;
   readonly dimensions: number;
+  readonly maxInputTokens: number;
 
   private readonly baseUrl: string;
 
   constructor(config: OllamaEmbeddingConfig = {}) {
     this.baseUrl = config.baseUrl ?? 'http://localhost:11434';
     this.model = config.model ?? 'nomic-embed-text';
-    this.dimensions = 768; // nomic-embed-text dimensions
+
+    const spec = OLLAMA_MODELS[this.model];
+    if (!spec) {
+      // Refuse to guess. A wrong maxInputTokens is invisible data loss, so an
+      // unknown model is an error at construction, not a plausible default.
+      throw new Error(
+        `Unknown Ollama embedding model '${this.model}'. Add its dimensions and ` +
+          'input-token window to OLLAMA_MODELS before using it.'
+      );
+    }
+
+    this.dimensions = spec.dimensions;
+    // An explicitly narrowed num_ctx wins: the server's window is the real limit.
+    this.maxInputTokens = config.maxInputTokens ?? spec.maxInputTokens;
   }
 
   async embed(text: string): Promise<number[]> {
@@ -239,6 +338,13 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
   }
 }
 ```
+
+The three entries in `OLLAMA_MODELS` are the published windows for those model
+weights (`nomic-embed-text` 8192, `mxbai-embed-large` 512, `all-minilm` 256).
+Check the model card for anything you add, and check your own Modelfile: Ollama
+will happily serve an 8192-token model behind a 2048-token `num_ctx` and drop
+the difference without telling you, which is exactly the case `maxInputTokens`
+in the config exists to cover.
 
 ### Step 2: Use with LanceDBRAGProvider
 
@@ -305,17 +411,42 @@ export interface CohereEmbeddingConfig {
   model?: string;
 }
 
+/**
+ * Per-model dimensions and input windows for Cohere's v3 embed family.
+ *
+ * These make the point that the two numbers are unrelated: embed-english-v3.0
+ * emits a 1024-dimension vector but reads only 512 tokens of text. A provider
+ * that inferred one from the other would be wrong by 16x here.
+ */
+const COHERE_MODELS: Record<string, { dimensions: number; maxInputTokens: number }> = {
+  'embed-english-v3.0': { dimensions: 1024, maxInputTokens: 512 },
+  'embed-multilingual-v3.0': { dimensions: 1024, maxInputTokens: 512 },
+  'embed-english-light-v3.0': { dimensions: 384, maxInputTokens: 512 },
+  'embed-multilingual-light-v3.0': { dimensions: 384, maxInputTokens: 512 },
+};
+
 export class CohereEmbeddingProvider implements EmbeddingProvider {
   readonly name = 'cohere';
   readonly model: string;
   readonly dimensions: number;
+  readonly maxInputTokens: number;
 
   private readonly apiKey: string;
 
   constructor(config: CohereEmbeddingConfig) {
     this.apiKey = config.apiKey;
     this.model = config.model ?? 'embed-english-v3.0';
-    this.dimensions = 1024; // embed-english-v3.0 dimensions
+
+    const spec = COHERE_MODELS[this.model];
+    if (!spec) {
+      throw new Error(
+        `Unknown Cohere embedding model '${this.model}'. Add its dimensions and ` +
+          'input-token window to COHERE_MODELS before using it.'
+      );
+    }
+
+    this.dimensions = spec.dimensions;
+    this.maxInputTokens = spec.maxInputTokens;
   }
 
   async embed(text: string): Promise<number[]> {
@@ -369,6 +500,12 @@ export class CohereEmbeddingProvider implements EmbeddingProvider {
   }
 }
 ```
+
+Note that Cohere's `/v1/embed` truncates over-length input by default rather
+than rejecting it, and returns a normal-looking 200 either way. Nothing in the
+response tells you content was dropped — which is precisely why the chunker has
+to be told the truth up front, and why a plausible-looking wrong number here is
+worse than a loud crash.
 
 **Usage:**
 
@@ -454,22 +591,81 @@ await ragProvider.query({ query: 'test' }); // Won't work - dimension mismatch
 
 ### Lazy Initialization
 
-Defer model loading until first use:
+Defer the expensive part — loading the model — until first use, without
+deferring the provider's description of itself:
 
 ```typescript
-export class LazyEmbeddingProvider implements EmbeddingProvider {
-  private pipelinePromise: Promise<Pipeline> | null = null;
+import type { EmbeddingProvider } from '@vibe-agent-toolkit/rag';
 
-  private async getPipeline(): Promise<Pipeline> {
+export class LazyEmbeddingProvider implements EmbeddingProvider {
+  readonly name: string;
+  readonly model: string;
+  readonly dimensions: number;
+  readonly maxInputTokens: number;
+
+  private innerPromise: Promise<EmbeddingProvider> | null = null;
+
+  /**
+   * @param spec - Identity of the model that WILL be loaded. Known up front
+   *   because it is what selects the model, not something the load discovers.
+   * @param load - Constructs the real provider on first use.
+   */
+  constructor(
+    spec: Pick<EmbeddingProvider, 'name' | 'model' | 'dimensions' | 'maxInputTokens'>,
+    private readonly load: () => Promise<EmbeddingProvider>,
+  ) {
+    this.name = spec.name;
+    this.model = spec.model;
+    this.dimensions = spec.dimensions;
+    this.maxInputTokens = spec.maxInputTokens;
+  }
+
+  private async getInner(): Promise<EmbeddingProvider> {
     // Load only once, cache for future calls
-    this.pipelinePromise ??= this.loadPipeline();
-    return this.pipelinePromise;
+    this.innerPromise ??= this.load();
+    return this.innerPromise;
   }
 
   async embed(text: string): Promise<number[]> {
-    const pipeline = await this.getPipeline();
-    return pipeline.embed(text);
+    return (await this.getInner()).embed(text);
   }
+
+  async embedBatch(texts: string[]): Promise<number[][]> {
+    return (await this.getInner()).embedBatch(texts);
+  }
+
+  async dispose(): Promise<void> {
+    // Nothing to release if the model was never loaded.
+    if (!this.innerPromise) return;
+    await (await this.innerPromise).dispose?.();
+  }
+}
+```
+
+**Why `maxInputTokens` cannot be lazy.** `dimensions` and `maxInputTokens` are
+plain synchronous properties, and the chunker reads `maxInputTokens` *before*
+your first `embed()` call — that is the whole point of it, sizing text to the
+model. So there is no `await` available to go and ask the loaded model. Pass the
+numbers in with the model identity that selects the weights in the first place;
+if you find yourself unable to state them without loading, the load is choosing
+the model, and that decision belongs to the caller.
+
+Belt and braces: assert the loaded provider matches what you promised, so a
+mismatch surfaces as an error rather than as truncated corpus.
+
+```typescript
+private async getInner(): Promise<EmbeddingProvider> {
+  this.innerPromise ??= this.load().then((inner) => {
+    if (inner.maxInputTokens !== this.maxInputTokens || inner.dimensions !== this.dimensions) {
+      throw new Error(
+        `LazyEmbeddingProvider declared ${this.model} as ${this.dimensions}d/` +
+          `${this.maxInputTokens} tokens, but loaded ${inner.model} as ` +
+          `${inner.dimensions}d/${inner.maxInputTokens} tokens.`,
+      );
+    }
+    return inner;
+  });
+  return this.innerPromise;
 }
 ```
 
@@ -496,22 +692,50 @@ async embed(text: string): Promise<number[]> {
 
 ### Rate Limiting
 
-Add rate limiting for cloud APIs:
+Add rate limiting for cloud APIs. This one is a pure decorator: it changes *when*
+requests go out and nothing about the model, so every descriptive member is
+delegated to the provider it wraps.
 
 ```typescript
 import pLimit from 'p-limit';
+import type { EmbeddingProvider } from '@vibe-agent-toolkit/rag';
 
 export class RateLimitedProvider implements EmbeddingProvider {
   private limiter = pLimit(10); // Max 10 concurrent requests
 
+  constructor(private readonly inner: EmbeddingProvider) {}
+
+  get name(): string { return this.inner.name; }
+  get model(): string { return this.inner.model; }
+  get dimensions(): number { return this.inner.dimensions; }
+
+  // Delegated, never restated. This wrapper does not know which model it is in
+  // front of, and a decorator that hardcoded a limit here would quietly
+  // mis-size every chunk for every provider it was ever pointed at.
+  get maxInputTokens(): number { return this.inner.maxInputTokens; }
+
+  async embed(text: string): Promise<number[]> {
+    return this.limiter(() => this.inner.embed(text));
+  }
+
   async embedBatch(texts: string[]): Promise<number[][]> {
     const tasks = texts.map(text =>
-      this.limiter(() => this.embed(text))
+      this.limiter(() => this.inner.embed(text))
     );
     return Promise.all(tasks);
   }
+
+  async dispose(): Promise<void> {
+    await this.inner.dispose?.();
+  }
 }
 ```
+
+**The rule for any wrapper** — rate limiting, caching, retries, metrics: forward
+`dimensions` and `maxInputTokens` to the wrapped provider as getters rather than
+copying them in the constructor. A getter cannot go stale, and it makes the
+wrapper's honesty structural rather than something a future edit can quietly
+break.
 
 ## Troubleshooting
 
@@ -559,6 +783,27 @@ const provider = new OpenAIEmbeddingProvider({
 });
 ```
 
+### Retrieval quality is poor and nothing errored
+
+**Problem:** Queries return chunks that look truncated, or documents you know are
+indexed never come back. No error, no warning — indexing reported success.
+
+**Likely cause:** your provider's `maxInputTokens` is larger than what the model
+actually reads, so the chunker sized text the model then discarded before
+inference. This is silent by construction: both ONNX and hosted APIs truncate
+rather than reject.
+
+**Check, in order:**
+
+1. Print it — `console.log(provider.model, provider.maxInputTokens)` — and compare
+   against the model card, not against what the code says.
+2. If the provider wraps another provider, confirm `maxInputTokens` is a getter
+   delegating to the inner one, not a constant.
+3. For `OnnxEmbeddingProvider`, watch for its truncation warning, or pass
+   `onTruncation` to count exactly what was dropped.
+4. If the limit was wrong, fix it and **re-index** — the bad chunks are already
+   in the database.
+
 ### Model download hangs (ONNX)
 
 **Problem:** First run hangs downloading model.
@@ -571,5 +816,6 @@ const provider = new OpenAIEmbeddingProvider({
 ## Related Documentation
 
 - [RAG Usage Guide](./guides/rag-usage-guide.md) - Using RAG providers with embedding providers
+- [RAG Architecture](./architecture/rag.md) - Chunking strategy and how the budget derives from `maxInputTokens`
 - [Resources Package](../packages/resources/README.md) - Parsing markdown for RAG indexing
-- [LanceDB RAG Provider](../packages/rag-lancedb/README.md) - Vector database implementation
+- [LanceDB RAG Provider](../packages/rag-lancedb/README.md) - Vector database implementation — `resolveChunkingConfig()` lives here

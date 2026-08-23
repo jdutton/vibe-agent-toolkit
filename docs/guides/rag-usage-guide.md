@@ -187,6 +187,10 @@ rag:
       provider: openai
       model: text-embedding-3-small
     chunking:
+      # Both values below are deliberate downsizes for retrieval granularity.
+      # text-embedding-3-small reads 8192 tokens, so there is headroom here; the
+      # derived default would be 8192. Overriding UPWARD is never available — the
+      # ceiling belongs to the model.
       targetSize: 256  # Smaller chunks for API docs
 
   stores:
@@ -198,7 +202,7 @@ rag:
       db: ./dist/examples-rag
       resources: examples
       chunking:
-        targetSize: 512  # Larger chunks for examples
+        targetSize: 512  # Larger chunks for examples (still well under 8192)
 ```
 
 **Usage**:
@@ -253,9 +257,11 @@ rag:
     embedding:
       provider: onnx
       model: Xenova/all-MiniLM-L6-v2
-    chunking:
-      targetSize: 512
-      paddingFactor: 0.9
+    # No chunking block: the budget derives from the provider. This model's
+    # maxInputTokens is 256, so the derived target is 256 and the derived
+    # paddingFactor ~0.84. Writing `targetSize: 512, paddingFactor: 0.9` here
+    # would be asking for chunks twice the size the model can read — clamped and
+    # warned about now, but it was silent data loss before the limit was required.
 
   stores:
     agent-knowledge:
@@ -268,7 +274,7 @@ rag:
       db: ./dist/api-rag
       resources: api-reference
       chunking:
-        targetSize: 256  # Smaller for API docs
+        targetSize: 128  # Deliberately finer-grained than the derived 256
 ```
 
 ---

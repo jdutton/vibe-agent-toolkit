@@ -258,11 +258,14 @@ describe('the shape of the table', () => {
  *
  * ## ⚠️ Why this drives `contribute` at its seam instead of through `populate`
  *
- * The identity collapse is real and is measured below with the shipped
- * `ResourceIdentityMap`: a symlink and its target really do mint one id,
- * because `canonicalPathFor` resolves through `realpathSync.native`. What is
- * NOT real today is any shipped enumerator handing that pair to a contributor —
- * measured, both ways:
+ * The identity collapse is real **in this fixture** and is measured below with
+ * the shipped `ResourceIdentityMap`: `new ProjectionBuilder(root)` is handed no
+ * `GitTracker`, so `canonicalPathFor` never takes its git branch, falls through
+ * to `realPathOrSelf`, and a symlink and its target really do mint one id. That
+ * is the NON-GIT branch, not the general rule — see *"🪤 A symlink and its target
+ * do NOT reliably share one identity"* in `src/projection/identity.ts`. What is
+ * NOT real today, in either tracker state, is any shipped enumerator handing that
+ * pair to a contributor — measured, both ways:
  *
  * - the **filesystem** extent never realizes a symlink's own path. Its walk
  *   runs `followSymlinks: false`, and its git-snapshot route drops mode

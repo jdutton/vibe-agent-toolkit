@@ -174,9 +174,15 @@ export class FilesystemCrawlSource implements CrawlSource {
       baseDir: this.#root,
       exclude: [...NEVER_CRAWL_GLOBS],
       // `followSymlinks` is three decisions — re-entry, membership and reach —
-      // and all three come out the same way. Identity already collapses a
-      // symlink onto its target, so following links would enumerate one blob
-      // many times under distinct paths, each losing the `(extentId, path)` race.
+      // and all three come out the same way: following links would enumerate one
+      // blob many times, under a distinct path each time.
+      // 🪤 Do NOT justify that with "identity already collapses a symlink onto
+      // its target" — it does not wherever git answers, because
+      // `canonicalPathFor` takes git's spelling before it can reach `realpath`
+      // (see *"🪤 A symlink and its target do NOT reliably share one identity"*
+      // in `identity.ts`). So the duplicates arrive as extra MEMBERS, not merely
+      // as extra realizations of one identity, which makes the case for
+      // declining stronger rather than weaker.
       followSymlinks: false,
       // Directories are resources, not merely containers of them.
       filesOnly: false,

@@ -74,7 +74,8 @@ export interface CanonicalPathContext {
    */
   realRoot: string;
   /**
-   * Supplies git-index casing where the path is tracked. Absent outside a repo.
+   * Supplies git's spelling for any path `git ls-files` lists — tracked or
+   * untracked-but-unignored, not committed-only. Absent outside a repo.
    *
    * Must be rooted at the same `root`: `indexPathFor` answers relative to the
    * tracker's own project root, so a tracker rooted elsewhere would return a
@@ -86,8 +87,9 @@ export interface CanonicalPathContext {
 /**
  * The one spelling of a path that identity is minted from.
  *
- * **Git-index casing where the path is tracked, otherwise the on-disk casing
- * from `realpathSync.native`, with symlinks resolved.** Not optional precision:
+ * **Git's own spelling wherever `git ls-files` lists the path — tracked *or*
+ * untracked-but-unignored — otherwise the on-disk casing from
+ * `realpathSync.native`, with symlinks resolved.** Not optional precision:
  * `pathLower`/`basenameLower` exist so case-insensitive matching is a column
  * rather than a function call, and hashing a raw path defeats them. On a
  * case-insensitive filesystem `docs/Readme.md` seen through the filesystem
@@ -95,9 +97,40 @@ export interface CanonicalPathContext {
  * identities for one inode — and Node's two `realpath` implementations disagree
  * about which casing they return, so this is not hypothetical.
  *
- * Consequences, both intended: a symlink and its target share one identity, and
- * a symlinked directory loop mints one identity per real file rather than one
- * per traversal.
+ * ## 🪤 A symlink and its target do NOT reliably share one identity
+ *
+ * The obvious reading of the paragraph above — this resolves symlinks, therefore
+ * a link and its target collapse onto one id — is false wherever git answers,
+ * and git answers for far more paths than "committed". The order below is the
+ * mechanism: `GitTracker.indexPathFor` is asked FIRST and returned from, so the
+ * `realPathOrSelf` fallback is never reached for a path git listed. That map is
+ * filled from `gitLsFiles({ includeUntracked: true })` — i.e.
+ * `git ls-files --cached --others --exclude-standard`, see `initialize` in
+ * `packages/utils/src/git-tracker.ts` — so it covers untracked-but-unignored
+ * paths too. The link and its target therefore hash two different spellings and
+ * mint two different ids **whether the link is committed or merely present**.
+ * Pinned as `distinctResourceIds() === 3` by
+ * `packages/resources/test/projection-git-extent-symlink.test.ts`.
+ *
+ * The collapse is real only where git does not answer — outside a repo, under an
+ * ignored path, or with no usable tracker. There `realPathOrSelf` reduces both
+ * spellings to the target's real path, and a symlinked directory loop mints one
+ * identity per real file rather than one per traversal.
+ *
+ * For the shipped extents the question mostly does not arise, because no
+ * enumerator offers a link's own path except the git one: `FilesystemCrawlSource`
+ * walks with `followSymlinks: false` and `GitCrawlSource` drops the mode-`120000`
+ * entry (`crawl-source.ts`, *"A SYMLINK IS NOT A MEMBER HERE"*). Pinned
+ * per-enumerator, each source injected rather than selected by `crawlSourceFor`
+ * and with a regular file planted alongside as the positive control, by
+ * `packages/resources/test/projection-filesystem-extent-symlink.test.ts`.
+ *
+ * ⚠️ **Open, and deliberately not settled here:** whether this function *should*
+ * realpath a symlink instead of taking git's spelling. Answering it changes the
+ * population, so it awaits a ruling rather than a comment. What the current
+ * behaviour means for the tables downstream is written up under *"Identity
+ * collapse"* in `contributors/agentic-convention.ts`, which is about
+ * classification; this note is about identity, and the two must stay consistent.
  *
  * @param absolutePath - Path to canonicalize
  * @param context - Corpus root and optional git oracle

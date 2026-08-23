@@ -180,14 +180,23 @@ export class ClaudeRulesScopeContributor implements ExtentContributor {
       if (row.isDirectory) continue;
       const classified = classifyPath(row.path, row.basenameLower, pluginRoots);
       if (!classified.some((tag) => tag.tag === RULES_FILE_TAG)) continue;
-      // One row per IDENTITY. `resourceId` canonicalises through
-      // `realpathSync.native`, and the vendor supports symlinked `.claude/rules/`
-      // directories — so two realizations of one identity are a real state, and
-      // they can sit at paths that classify differently (`root` at one, `nested`
-      // at the other). `value` is in the table's key, so both rows would survive
-      // and a consumer reading "the" scope would find two. The first realization
-      // in base order wins, which is the same tie-break `resolveReference`
-      // applies when it picks a row for a resolved path.
+      // One row per IDENTITY. Two realizations of one identity are the ordinary
+      // state, not a corner case: `resource_realizations` is keyed
+      // `(extentId, path)`, so one file realized by the filesystem extent and by
+      // the git extent is two rows carrying one `resourceId`. `value` is in
+      // `resource_tags`' key, so both rows would survive and a consumer reading
+      // "the" scope would find two. The first realization in base order wins,
+      // which is the same tie-break `resolveReference` applies when it picks a
+      // row for a resolved path.
+      //
+      // 🪤 The earlier justification here — a symlinked `.claude/rules/` giving
+      // one identity two paths that classify differently (`root` at one, `nested`
+      // at the other) — is not a shape anything shipped produces. `resourceId`
+      // does NOT collapse a link onto its target wherever git answers (see *"🪤 A
+      // symlink and its target do NOT reliably share one identity"* in
+      // `../identity.ts`), and no enumerator reports anything BENEATH a symlinked
+      // directory in the first place (`crawl-source.ts`). The dedup stands on the
+      // multi-extent case above, which is measured every run.
       if (seen.has(row.resourceId)) continue;
       seen.add(row.resourceId);
 

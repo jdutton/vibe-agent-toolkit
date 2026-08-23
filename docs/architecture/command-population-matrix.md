@@ -73,15 +73,30 @@ Three properties that are easy to get wrong:
 
 - **No default is the incumbent any more, and one of the three flips was not a no-op.** The
   inventory flip was provable as byte-for-byte; the resources flip is provably *not* one and shipped
-  anyway. Both projection extents omit a **committed symlink** — the `filesystem` extent crawls with
-  `followSymlinks: false` and records no link's own path, and `GitCrawlSource` skips mode `120000`
-  to match it — so a broken committed symlink that the walk reports as `LINK_BROKEN_FILE` produces
-  no finding on the default lane. `packages/cli/src/utils/resource-loader.ts ›
-  resourcesProjectionCrawlSelected()` states that loss and accepts it, with `walk` as the escape
-  hatch ([the resources selector](#the-resources-selector)). ⚠️ A committed symlink is *tracked*, so
-  this default is narrower than the universe §1 rules binding, and the two have not been reconciled
-  here: the divergence is real, it is recorded at the call site, and the waiver §7 requires for it
-  has not been filed.
+  anyway. **This is a KNOWN DIVERGENCE, `BUG:` territory under [§7](#7-how-to-audit-this), and the
+  waiver has NOT been filed** — see the paragraph below for what is still owed.
+
+  Measured facts, both arms, on a planted committed symlink:
+
+  | extent | what a planted symlink yields | why |
+  |---|---|---|
+  | `filesystem` | **ZERO realizations** — the link contributes no row of its own | the walk runs `followSymlinks: false` (`packages/resources/src/projection/crawl-source.ts:180,424`), whose `processSymlink` returns before recording the link's own path (`:293`) |
+  | `git` | **ZERO realizations** for the link *as a link* | `GitCrawlSource` drops mode `120000` explicitly, to match the filesystem arm (`packages/resources/src/projection/crawl-source.ts:30,295,318`) |
+  | `git`, identity minting | **TWO distinct ids** where a symlink and its target are *both* tracked | `canonicalPathFor` short-circuits to `gitTracker.indexPathFor()` for any tracked path and never reaches `realPathOrSelf` (`packages/resources/src/projection/identity.ts:106-115`), so the link path and the target path each mint their own id — defeating the "a symlink and its target share one identity" consequence that same docstring declares at `:98-100` |
+
+  Consequence for findings: a broken committed symlink that the incumbent walk reports as
+  `LINK_BROKEN_FILE` produces **no finding at all** on the default lane, and where the link is not
+  broken the git arm can still double-count it. `packages/cli/src/utils/resource-loader.ts ›
+  resourcesProjectionCrawlSelected()` states the first loss and accepts it, with `walk` as the escape
+  hatch ([the resources selector](#the-resources-selector)); the second — the two-ids case — is
+  stated nowhere in the code.
+
+  ⚠️ **Still owed, and deliberately not done here.** A committed symlink is *tracked*, so this
+  default is narrower than the universe [§1](#1-the-governing-ruling) rules binding. Under §7 that
+  makes it a `BUG:`-annotated cell, and §7's second rule is that *entry is defended by the key* — the
+  annotation and the CODEOWNERS-guarded baseline row (carrying the divergence's `file › symbol`) must
+  land **in the same commit**. That baseline edit is out of scope for this doc pass, so the
+  divergence is recorded here with its measurements and the `BUG:` filing remains open.
 - **An unrecognized value never throws, and now they all fail the same way.** Each selector treats
   anything that is not exactly its opt-out spelling — `walk`, `walker`, `filesystem` — as the new
   lane. A typo'd selector silently selects the projection, where it used to silently select the
@@ -99,18 +114,22 @@ Only commands that enumerate a file population appear here.
 [§6](#6-commands-that-enumerate-no-file-population) lists the rest, so that every registered command
 appears in this document exactly once.
 
-⚠️ **Three `(default)` cells below predate the resources flip and are stale.** `vat resources scan`,
-`vat resources validate` and `vat rag index` are written as `crawlDirectory` walks; that is what
-`VAT_RESOURCES_CRAWL=walk` buys now, not what an unset environment gets. The same inversion carries
-into their [§4](#4-what-each-command-sees) rows, where the projection line is written as the
-opted-in case. Re-writing those rows is a per-lane read that has not been done here — where they and
+✅ **The three `(default)` cells for `vat resources scan`, `vat resources validate` and `vat rag index`
+were rewritten from a per-lane read on 2026-08-23.** They previously read `crawlDirectory` walk —
+which is what `VAT_RESOURCES_CRAWL=walk` buys, not what an unset environment gets. All three reach
+the same seam, `packages/cli/src/utils/resource-loader.ts › loadResourcesWithConfig()`, whose lane is
+decided by `› resourcesProjectionCrawlSelected()` — a single `!==` against the string `walk`, so
+**unset means projection**.
+
+⚠️ The same inversion still stands uncorrected in their [§4](#4-what-each-command-sees) rows, which
+are labelled below rather than rewritten. Where §4 and
 [§2](#2-the-three-selectors-and-the-opt-outs-they-answer-to) disagree, §2 is current.
 
 | command | population source (default) | selector | declared |
 |---|---|---|---|
-| `vat resources scan` | `crawlDirectory` walk | `VAT_RESOURCES_CRAWL` | [the resources selector](#the-resources-selector) |
-| `vat resources validate` | `crawlDirectory` walk | `VAT_RESOURCES_CRAWL` | [the resources selector](#the-resources-selector) |
-| `vat rag index` | `crawlDirectory` walk (same loader) | `VAT_RESOURCES_CRAWL` | [the resources selector](#the-resources-selector) |
+| `vat resources scan` | **projection**, via `loadResourcesWithConfig()` → `› populationSourceFor()` → `packages/resources/src/projection/resource-population.ts › buildResourcePopulation()`. Extent chosen by `VAT_EXTENT_SOURCE`: **git** wherever the root has a readable `.git`, the `filesystem` walk elsewhere. Enumerates with `contentDemand: 'deferred'` and `CONTENT_PARSING_SKIP`, so **no file bytes are read at enumeration** ([§5](#5-content-reads-and-the-blob-stage)). Root is `projectRootOrLoudCwd(pathArg ?? cwd)`. Alone among the three, it **reports the lane it took** — `lane` and `extentSource` are fields of its YAML output (`packages/cli/src/commands/resources/scan.ts:130,162-163`). `VAT_RESOURCES_CRAWL=walk` is the escape hatch back to `crawlDirectory` | `VAT_RESOURCES_CRAWL`, plus `VAT_EXTENT_SOURCE` *within* the projection | [the resources selector](#the-resources-selector), [the blob stage default and its refusal](#the-blob-stage-default-and-its-refusal) |
+| `vat resources validate` | **projection**, same loader and same extent rule as `scan`; root is likewise `projectRootOrLoudCwd(pathArg ?? cwd)`. Differs only in what it takes back from the loader — it keeps the `GitTracker` for downstream checks and **does not** surface `lane`/`extentSource` in its output, so a validate run gives the reader no way to tell which lane produced it (`packages/cli/src/commands/resources/validate.ts:606-610`) | `VAT_RESOURCES_CRAWL`, plus `VAT_EXTENT_SOURCE` | [the resources selector](#the-resources-selector) |
+| `vat rag index` | **projection**, same loader — but on a **different root basis**: it resolves `projectRootOrNull(process.cwd())` and falls back to `process.cwd()` when that is null, so unlike the two above the root is derived from the cwd and never from `pathArg` (`packages/cli/src/commands/rag/index-command.ts:30,39-40`). Same deferred-content enumeration; no lane reporting | `VAT_RESOURCES_CRAWL`, plus `VAT_EXTENT_SOURCE` | [the resources selector](#the-resources-selector) |
 | `vat inventory` (plugin dir) | **projection** | `VAT_INVENTORY_CRAWL` | [the inventory selector](#the-inventory-selector) |
 | `vat inventory` (marketplace root, `--user`, single `SKILL.md`) | incumbent link walk — the projection lane is **plugin-directory-only** | none; the selector does not reach these shapes | `packages/cli/src/commands/inventory.ts › routeInventory()`, gated at `› populationProviderFor()` |
 | `vat skills validate` | skill discovery: `crawlDirectory` walk · link registry: `crawlDirectory` walk | `VAT_RESOURCES_CRAWL` (registry only) | [the resources selector](#the-resources-selector), [skill discovery includes untracked files](#skill-discovery-includes-untracked-files) |
@@ -163,6 +182,15 @@ and nothing declares which route a new command should reach for.
 
 The two visibility questions the ruling in §1 turns on. `n/a` means the command reaches this
 mechanism through a route where the concept does not apply.
+
+⚠️ **The first four rows are written with the lanes inverted.** The `vat resources scan`,
+`vat resources validate` and `vat rag index` rows describe the `crawlDirectory` walk, which is now
+reachable only via `VAT_RESOURCES_CRAWL=walk`; the row that follows them describes the projection as
+`VAT_RESOURCES_CRAWL=projection`, which is the **default**, not an opt-in (any value that is not
+exactly `walk` selects it — `packages/cli/src/utils/resource-loader.ts:184`). The *answers* in the
+two right-hand columns are the same on both lanes, which is why the rows were left standing rather
+than deleted; only the labels are wrong. [§3](#3-population-source-and-selector-per-command) carries
+the corrected per-lane read.
 
 | command | in a git working tree | NOT in a git working tree | sees untracked-not-ignored? | sees gitignored (e.g. `dist/`)? |
 |---|---|---|---|---|
