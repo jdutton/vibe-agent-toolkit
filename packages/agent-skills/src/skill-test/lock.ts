@@ -12,6 +12,10 @@ import { safePath } from '@vibe-agent-toolkit/utils';
  * as "the harness broke, fail the build", which is exactly the wrong verdict for a
  * lock held by the operator's own second terminal.
  *
+ * The field below is what `mapErrorToExitCode` READS — it is not decoration
+ * mirroring an `instanceof` row, which is what it was when it was added. Deleting it
+ * turns this back into an exit 1.
+ *
  * The message names `lockPath` because the lockfile is created `O_EXCL` in the
  * DETERMINISTIC harness root and released only on normal exit or SIGINT/SIGTERM —
  * a SIGKILL, an OOM, or a crash leaves it behind and every later run of that skill
@@ -34,6 +38,10 @@ export class HarnessLockBusyError extends Error {
 }
 
 export interface HarnessLock {
+  /**
+   * Release the lock. NEVER THROWS — see {@link acquireHarnessLock}. Callers run
+   * this from a cleanup path and must be able to call it bare.
+   */
   release(): void;
 }
 
@@ -42,6 +50,25 @@ export interface HarnessLock {
  * vat-vs-vat staging/result races for the same subject set. `wait: false`
  * fails fast; the default `wait: true` is reserved for the CLI to poll (v1
  * keeps the simple fail-fast — the CLI surfaces the busy message).
+ *
+ * ACQUIRING can throw (that is the whole point: EEXIST → {@link HarnessLockBusyError}).
+ * RELEASING cannot, and that asymmetry is deliberate. `rmSync(..., {force: true})`
+ * swallows only ENOENT, so an EPERM/EACCES/EROFS on the lockfile — a read-only
+ * volume, a `root`-owned temp dir, a Windows handle still open — threw out of the
+ * harness `finally` and REPLACED an already-good result (verdict computed, artifacts
+ * written, summary composed) with exit 1 and no summary, every artifact sitting
+ * unread on disk.
+ *
+ * The guard lives HERE rather than at the call site, where it originally went. A
+ * call-site wrapper is invisible to the compiler: reverting it to a bare
+ * `lock.release()` left the whole unit suite AND the integration suite green, so
+ * nothing but review stood between the fix and its own silent removal. Owning the
+ * contract in the type — `release()` never throws — means there is no unwrapped call
+ * site left to lose.
+ *
+ * The failure is not silent: a lockfile that could not be removed will fail the NEXT
+ * run of this skill with a "busy" error, and an operator who saw nothing here has no
+ * way to connect the two.
  */
 export function acquireHarnessLock(harnessRoot: string, opts: { wait?: boolean } = {}): HarnessLock {
   const lockPath = safePath.joinUnderRoot(harnessRoot, '.vat-skill-test.lock');
@@ -64,7 +91,15 @@ export function acquireHarnessLock(harnessRoot: string, opts: { wait?: boolean }
     release(): void {
       if (released) return;
       released = true;
-      rmSync(lockPath, { force: true });
+      try {
+        rmSync(lockPath, { force: true });
+      } catch (err) {
+        process.stderr.write(
+          `warning: could not remove the harness lockfile ${lockPath} (the run's result stands): ` +
+            `${err instanceof Error ? err.message : String(err)}. ` +
+            'The next run of this skill will report the lock as busy until it is deleted.\n',
+        );
+      }
     },
   };
 }

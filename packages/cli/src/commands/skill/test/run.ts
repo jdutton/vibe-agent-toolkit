@@ -182,26 +182,46 @@ function coerceKnobs(options: SkillTestRunOptions): {
 type HarnessOpts = Parameters<typeof runSkillTestHarness>[0];
 type SkillSourceSpec = NonNullable<HarnessOpts['withSources']>[string];
 
-/** The declared-executable recognition aid the harness forwards to the WITH-arm grader. */
+/**
+ * The declared-executable record the harness carries: the recognition aid it forwards
+ * to the WITH-arm grader, plus the skill-relative PATH the baseline contamination
+ * detector needs.
+ *
+ * ⚠️ BOTH FIELDS ARE LOAD-BEARING, for different consumers, and neither can be derived
+ * from the other. The grader aid and `lintToolExpectationExecutables` compare an
+ * extension-stripped NAME (`csvsum`); `detectBaselineContamination` matches an escaping
+ * reach against the declared PATH, because matching the stem instead convicted a clean
+ * control arm of reading its own `/tmp/summary.txt`. This is an alias of the harness
+ * shape, not a widening of it — the harness type owns `path` so the detector's wiring
+ * is checked at the call site rather than resting on a local intersection here.
+ */
 type DeclaredExecutable = NonNullable<HarnessOpts['declaredExecutables']>[number];
 
 /**
  * Map a resolved skill's packaging-config `executables` (SkillExecutableEntry[]) to
  * the grader's recognition-aid shape (issue #145 Phase T): each entry's stable NAME
  * is its `path` basename with the extension stripped (`scripts/csvsum.py` → `csvsum`),
- * carried alongside its `howInvoked` + `kind`. Returns undefined for absent/empty
- * input so the harness omits the aid entirely (the grader still matches tools by the
- * commands in the transcript). Pure + unit-testable.
+ * carried alongside its `howInvoked`, `kind` and the declared `path` itself. Returns
+ * undefined for absent/empty input so the harness omits the aid entirely (the grader
+ * still matches tools by the commands in the transcript). Pure + unit-testable.
+ *
+ * ⛔ THE `path` USED TO BE READ AND DISCARDED. It is the ONLY thing that separates
+ * an ambient copy of the skill — which is a copy, so it reproduces
+ * `…/scripts/csvsum.py` under whatever root it sits at — from the control arm's own
+ * scratch file of the same name. Forward-slashed at the derivation rather than at the
+ * consumer, because every needle and every resolved reach inside the detector is
+ * `/`-normalized and a `\` would silently match nothing.
  */
 export function deriveDeclaredExecutableNames(
   executables: SkillPackagingConfig['executables'],
 ): DeclaredExecutable[] | undefined {
   if (executables === undefined || executables.length === 0) return undefined;
   return executables.map((e) => {
-    const base = basename(toForwardSlash(e.path));
+    const path = toForwardSlash(e.path);
+    const base = basename(path);
     const ext = extname(base);
     const name = ext === '' ? base : base.slice(0, -ext.length);
-    return { name, howInvoked: e.howInvoked, kind: e.kind };
+    return { name, howInvoked: e.howInvoked, kind: e.kind, path };
   });
 }
 

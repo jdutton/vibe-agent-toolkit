@@ -58,7 +58,16 @@ function parsePositiveFloat(value: string, flag: string): number {
   return n;
 }
 
-function buildKnobs(
+/**
+ * Assemble the knob patch handed to `upsertTestConfig`. Exported for testing: the
+ * option DECLARATIONS were pinned (Commander's `--baseline`/`--no-baseline`
+ * tri-state) and `upsertTestConfig` writes `false` correctly, but the assembly
+ * between them — the step that decides which typed flags become knobs at all — was
+ * not, so both `if (options.baseline === true)` (a `--no-baseline` that silently
+ * does nothing, i.e. the exact regression `--no-baseline` exists to prevent) and
+ * deleting the branch outright left the whole CLI suite green.
+ */
+export function buildKnobs(
   options: SkillTestConfigureOptions,
 ): Parameters<typeof upsertTestConfig>[2] {
   const knobs: Parameters<typeof upsertTestConfig>[2] = {};

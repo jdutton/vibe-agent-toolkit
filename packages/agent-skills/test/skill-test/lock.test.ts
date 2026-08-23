@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { acquireHarnessLock, HarnessLockBusyError, installSignalCleanup } from '../../src/skill-test/lock.js';
 
@@ -19,6 +19,34 @@ describe('acquireHarnessLock', () => {
     const lock = acquireHarnessLock(root);
     expect(() => acquireHarnessLock(root, { wait: false })).toThrow(HarnessLockBusyError);
     lock.release();
+  });
+
+  /**
+   * `release()` runs from the harness `finally`, so a throw there REPLACES an
+   * already-good result — verdict computed, artifacts written — with exit 1 and no
+   * summary. `rmSync(..., {force: true})` swallows only ENOENT, so an
+   * EPERM/EACCES/EROFS on the lockfile escaped.
+   *
+   * The unremovable lockfile is faked as a NON-EMPTY DIRECTORY at the lock path:
+   * `rmSync` on a directory without `recursive` throws `ERR_FS_EISDIR` from Node
+   * itself, so this reproduces "the unlink failed" on every platform without
+   * mocking `node:fs` or depending on POSIX permission bits.
+   */
+  it('never throws out of release(), even when the lockfile cannot be removed', () => {
+    const lock = acquireHarnessLock(root);
+    const lockPath = safePath.join(root, '.vat-skill-test.lock');
+    rmSync(lockPath);
+    mkdirSyncReal(safePath.join(lockPath, 'occupied'), { recursive: true });
+
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    try {
+      expect(() => lock.release()).not.toThrow();
+      // Swallowed, NOT silent: the next run of this skill will report the lock as
+      // busy, and an operator who saw nothing here cannot connect the two.
+      expect(stderr).toHaveBeenCalledWith(expect.stringContaining('.vat-skill-test.lock'));
+    } finally {
+      stderr.mockRestore();
+    }
   });
 
   it('can re-acquire after release', () => {

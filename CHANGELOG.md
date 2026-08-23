@@ -62,7 +62,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   means the spawn would have failed later anyway. `--max-turns` is undocumented in `--help` and is
   reported as unverifiable rather than either failed or falsely confirmed.
 
-
 - **`--out` and `--workdir` are now mutually exclusive** (exit 2). `--out` names the harness root
   exactly; `--workdir` names the base it is derived under. Passing both silently discarded
   `--workdir` — the path was never created — which is exactly what the adopter above tried in order
@@ -193,8 +192,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--no-baseline` declared first makes the untyped value default to `true` and turns every run into a
   baseline run.
 
-- **A `transcript-malformed` contamination-scan degradation**, raised from the transcript parser's
-  new `malformedLineCount`. A scan with a hole in it now says so instead of reporting full strength.
+- **Two more contamination-scan degradation reasons, `transcript-malformed` and `glob-unexpanded`.**
+  A scan with a hole in it, or one whose reach was spelled with a glob it could not expand, now says
+  so instead of reporting full strength. Anything switching on the reason enum must accept both.
 
 - **`vat skill test run --no-baseline`, and a committed `baseline: true` can no longer double your
   spend silently.** `--baseline` is the largest cost multiplier in the command — every eval runs
@@ -235,18 +235,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   means "produced before this check existed" and never "checked and clean". A wrong number that
   announces itself is recoverable; a silent one gets believed, written down, and acted on.
 
-  Both sides of the match are normalized (separator direction, repeated slashes, Windows case) and
-  the harness signal matches a path **suffix** rather than one literal spelling. A naive
-  `indexOf(harnessRoot)` was dead on Windows (VAT derives forward slashes; the transcript carries
-  JSON-escaped backslashes), a coin-flip on macOS (VAT realpaths to `/private/var/…` while
-  `$TMPDIR` — which the child inherits — says `/var/…`), and blind on every platform to the
-  relative reach the new directory layout actually invites. Executable names match only where they
-  are invoked as a file (`scripts/x.py`, `./x`), not as bare words: stripped names like `summary`
-  or `run` otherwise fire on ordinary prose, and the instruction attached to a `true` verdict is
-  "discard the delta" — a check that routinely destroys clean runs trains people to ignore the one
-  warning that matters. `--out` is resolved to an absolute path before becoming a needle.
+  Both sides of the match are normalized (separator direction, repeated slashes, Windows case), and
+  a declared executable matches on the skill-relative **path** it was declared with — an ambient
+  copy reproduces the skill's own layout; the control arm's `/tmp/summary.txt` does not.
 
 - **`isFilesystemAccessError(err)`**, exported from `@vibe-agent-toolkit/utils` and its `./fs` subpath. Answers whether an error is the filesystem refusing a path (`EACCES`, `ENOENT`, `ENOSPC`, …) rather than a bug, which is the question a tool has to answer before deciding to carry on over a tree it does not own. VAT uses it in `vat audit` and in skill packaging so both agree on what counts as the environment's fault.
+
 - **`vat claude context <path>`** — reports which `CLAUDE.md` files, `.claude/rules` files and
   `@`-imported files load into an agent's context at that path, why each one is there, and its
   estimated token cost. A file argument is exact; a directory answers path-scoped rules as "may fire
@@ -425,7 +419,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **`vat skill test run --dry-run destroyed the previous run's artifacts.** `wipeStaleArtifacts` ran
+- **`vat skill test run --dry-run` destroyed the previous run's artifacts.** `wipeStaleArtifacts` ran
   before the dry-run short-circuit, so the free "what would this cost?" invocation deleted
   `grading.json`, `baseline.json`, `friction.json` and `tool-eval.json` from the `results/` of the
   expensive real run you were about to read — as did any failure after that point, such as a bad
@@ -527,9 +521,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   two `--baseline` artifacts up per eval. Absent fields are still omitted, which is what the
   "inventing provenance would be a lie" reasoning actually argued for.
 
-- **`vat skill test configure` could turn `baseline` on but never off** — it shipped `--baseline`
-  with no negation, so a committed `baseline: true` could not be undone by the command that set it.
-
 - **`vat skill test run --help` no longer promises cleanup that `--out`/`--workdir` never perform.**
   The Artifacts section said the results directory "SURVIVES every run" and the staged skill bytes
   around it "are removed unless you pass `--keep`". Cleanup only ever touches a harness directory vat
@@ -549,7 +540,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unarmed, on exactly the run whose `baselineIntegrity` block the surrounding prose says to check
   first. The example now uses the by-**name** form the same page recommends two paragraphs earlier.
 
-- **`vat skills build` no longer dies on a `files:` glob that matches a symlink to a directory.** The build failed with a raw `ENOTSUP` that named neither the `files:` entry nor the path — and on macOS it renders as "operation not supported on socket", describing the object as something it is not. Anything a glob matches that cannot be packaged (a symlink to a directory, a dangling symlink, a FIFO, a socket, a device node) is now skipped and reported as **`FILES_GLOB_SKIPPED_NON_REGULAR_FILE`** (`warning`), and the rest of the entry ships. `vat skills validate` and `vat audit` report it before a build too.
 - **`vat agent install --force` could not replace a broken dev-mode symlink**, such as one left
   dangling by a rebuild that removed `dist/`. The install failed with a bare `EEXIST`, and the advice
   it printed ("install without `--dev`") failed the same way. `--force` now clears the link whether
@@ -597,8 +587,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`--debug` produced no debug output from any command**, and an unexpected failure printed no stack.
 
-- **`vat skills build` no longer dies on a `files:` glob that matches a symlink to a directory**, and
-  a `files:` entry that cannot be copied now names which entry it was.
+- **`vat skills build` no longer dies on a `files:` glob that matches a symlink to a directory** —
+  anything a glob matches that cannot be packaged is skipped and reported as
+  `FILES_GLOB_SKIPPED_NON_REGULAR_FILE` (a warning), and the rest of the entry ships. A `files:`
+  entry that cannot be copied now names which entry it was.
 
 - **`vat audit` no longer aborts when its own config cannot be read**, and no longer throws away
   every finding when it hits one unreadable file or directory.

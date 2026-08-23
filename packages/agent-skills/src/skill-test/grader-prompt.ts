@@ -183,8 +183,6 @@ function buildToolExpectationsLines(
     ...buildToolChannelDataLines(toolExpectations),
     fenceClose(TOOL_EXPECTATIONS_FENCE, nonce),
     '',
-  );
-  lines.push(
     'In the SAME fragment JSON described below, ALSO include a "tool" object shaped exactly as:',
     '{"mustRun": [{"name","ran","evidence"}], "mustNotRun": [{"name","ran","evidence"}],',
     '"mustSucceed": [{"name","succeeded","evidence"}], "sequence": [{"steps": [...], "satisfied","evidence"}],',

@@ -295,8 +295,14 @@ export interface RunHarnessOptions {
    * does not — issue #145 Phase T). Passed to the grader on the WITH arm ONLY as
    * a recognition aid alongside each eval's `toolExpectations`. Absent → the
    * grader still matches tools by the commands it sees in the transcript.
+   *
+   * `path` serves a SECOND consumer with a different need: `detectBaselineContamination`
+   * matches an escaping reach against the skill-relative PATH, because an ambient copy
+   * of the skill reproduces `…/scripts/csvsum.py` under whatever root it sits at, while
+   * the control arm's own `/tmp/summary.txt` does not. Matching the extension-stripped
+   * `name` instead convicted clean control arms of reading their own scratch files.
    */
-  declaredExecutables?: Array<{ name: string; howInvoked: string; kind: string }>;
+  declaredExecutables?: Array<{ name: string; howInvoked: string; kind: string; path: string }>;
 
   /**
    * Opt-OUT of eval gating (for interactive use). By DEFAULT (false/absent) a
@@ -1383,8 +1389,23 @@ export function resolvePerEvalWorkspaceDir(
   arm: EvalArm,
   armDirs: ArmWorkspaceDirs,
 ): string {
-  const armRoot = safePath.joinUnderRoot(workspacesRoot, armDirSegment(armDirs, arm));
-  return safePath.joinUnderRoot(armRoot, String(entry.id));
+  return safePath.joinUnderRoot(armWorkspaceRoot(workspacesRoot, armDirs, arm), String(entry.id));
+}
+
+/**
+ * `<workspacesRoot>/<that arm's opaque segment>` — ONE arm's staged workspace root,
+ * derived in exactly one place.
+ *
+ * The consolidation is the point, not the line count. Every consumer that wants an
+ * arm root wants this join, and a consumer that takes the result as a bare `string`
+ * has no way to tell an arm root from the workspaces ROOT one level above it:
+ * handing {@link resolveSkillContentNeedles} `workspacesRoot` instead of
+ * `<workspacesRoot>/<withSegment>` type-checked, ran, and left all 2270 unit tests
+ * green while every fixture exclusion silently missed. Callers now pass the two
+ * inputs and let this derive the path.
+ */
+function armWorkspaceRoot(workspacesRoot: string, armDirs: ArmWorkspaceDirs, arm: EvalArm): string {
+  return safePath.joinUnderRoot(workspacesRoot, armDirSegment(armDirs, arm));
 }
 
 /**
@@ -1399,9 +1420,17 @@ export function resolvePerEvalWorkspaceDir(
  * The discipline every other step in the harness `finally` already follows, stated
  * once: a cleanup failure is not a run failure, and letting one out REPLACES an
  * already-good result — verdict computed, artifacts written, summary composed — with
- * an error and exit 1. The two steps that were outside this discipline
- * (`killAllActiveClaudeChildren`, `lock.release`) live in modules this file does not
- * own, so the guard is applied at the call site instead of inside them.
+ * an error and exit 1.
+ *
+ * ⚠️ A CALL-SITE GUARD IS THE WEAK FORM, and this helper is a last resort rather
+ * than the pattern to copy. It is invisible to the compiler and to the test suite:
+ * reverting either of its two original call sites to a bare call left the unit suite
+ * AND the integration suite green, so nothing but review stood between the fix and
+ * its own silent removal. `lock.release()` was therefore made non-throwing at its own
+ * definition instead (see {@link acquireHarnessLock}), which is a contract the type
+ * carries and no edit here can undo. That leaves ONE caller —
+ * `killAllActiveClaudeChildren`, which lives in `@vibe-agent-toolkit/utils` and is
+ * only contractually non-throwing as long as that package says so.
  *
  * The failure is reported on stderr rather than silently dropped: a lockfile that
  * could not be removed will break the NEXT run with a "busy" error, and an operator
@@ -1471,8 +1500,8 @@ interface EvalRunContext {
   perEvalEnv: PerEvalEnvAssembly | undefined;
   /** AUTH-ONLY env for the grader spawn (trusted vat infra loads no skill). */
   graderEnv: NodeJS.ProcessEnv;
-  /** Declared executables (WITH-arm grader recognition aid); absent when unreachable. */
-  declaredExecutables?: Array<{ name: string; howInvoked: string; kind: string }>;
+  /** Declared executables (WITH-arm grader aid + the detector's path needles); absent when unreachable. */
+  declaredExecutables?: Array<{ name: string; howInvoked: string; kind: string; path: string }>;
   spawn?: typeof spawnHeadlessClaude;
   /** Shared spend accumulator — each worker folds in its executor + grader session cost. */
   costAccumulator: RunCostSummary;
@@ -1849,9 +1878,18 @@ type EvalWorkOutcome =
 export function resolveSkillContentNeedles(
   subjectStagedDir: string,
   evals: readonly EvalEntry[],
-  /** One arm's staged workspace root — `<workspacesRoot>/<armDir>`; each eval's fixtures live under `<id>/`. */
-  stagedWorkspaceRoot: string,
+  /**
+   * Where the staged fixtures live, as the two inputs an arm root is DERIVED from
+   * rather than as the pre-joined path itself — see {@link armWorkspaceRoot}. Taking
+   * a bare `string` here let the call site pass `workspacesRoot` (one level too high,
+   * so every `<id>/` fixture lookup missed) with the whole unit suite still green.
+   *
+   * The `with` arm, because the fixture BYTES are what matter and both arms are
+   * staged from the same source — and `with` is the only arm every run mints.
+   */
+  workspaces: { workspacesRoot: string; armDirs: ArmWorkspaceDirs },
 ): string[] {
+  const stagedWorkspaceRoot = armWorkspaceRoot(workspaces.workspacesRoot, workspaces.armDirs, 'with');
   const skillMdPath = safePath.join(subjectStagedDir, 'SKILL.md');
   let markdown: string;
   try {
@@ -1972,34 +2010,55 @@ export type ContaminationCtx = Pick<
  * The detector needs both and they are one directory apart: containment is judged
  * against the root (the arm's whole tree is its own), while the cwd walk must
  * start exactly where the executor did, or every relative climb in the transcript
- * resolves one level too high and lands where no needle can see it. Absent for
- * `contaminationSignalsFor`, which asks only which detectors are armed.
+ * resolves one level too high and lands where no needle can see it.
+ *
+ * `evalId` is REQUIRED here, and the signals-only caller gets its own entry point
+ * ({@link buildContaminationSignalsInput}) rather than sharing an optional third
+ * argument. An optional parameter is a pin the compiler cannot hold: dropping the
+ * argument at the SCAN call site left all 2270 unit tests green and was caught only
+ * by the integration suite — which this repo's fast implementer loop explicitly says
+ * not to run. That is the same shape as the dropped `armCwd` that anchored the whole
+ * walk one directory too high, also green.
  */
 export function buildContaminationInput(
   transcript: string,
   ctx: ContaminationCtx,
-  evalId?: string,
+  evalId: string,
+): DetectBaselineContaminationInput {
+  return contaminationInput(transcript, ctx, evalId);
+}
+
+/**
+ * The same input built for the "which detectors are ARMED?" question, which is asked
+ * once per run with no transcript and no eval — so it can honestly supply neither,
+ * and `armCwd` is correctly absent rather than accidentally dropped.
+ */
+export function buildContaminationSignalsInput(ctx: ContaminationCtx): DetectBaselineContaminationInput {
+  return contaminationInput('', ctx, undefined);
+}
+
+function contaminationInput(
+  transcript: string,
+  ctx: ContaminationCtx,
+  evalId: string | undefined,
 ): DetectBaselineContaminationInput {
   const armRoot =
     ctx.armDirs.without === undefined || ctx.armDirs.without === ''
       ? undefined
-      : safePath.joinUnderRoot(ctx.workspacesRoot, armDirSegment(ctx.armDirs, 'without'));
+      : armWorkspaceRoot(ctx.workspacesRoot, ctx.armDirs, 'without');
   return {
     transcript,
     harnessRoot: ctx.harnessRoot,
     // Only ever called for the skill-absent arm, so the sibling is `with` — the
     // treatment arm's live working directory, one `ls ..` away and containing no
     // harness path for the needles above to find.
-    siblingArmDir: safePath.joinUnderRoot(
-      ctx.workspacesRoot,
-      armDirSegment(ctx.armDirs, 'with'),
-    ),
+    siblingArmDir: armWorkspaceRoot(ctx.workspacesRoot, ctx.armDirs, 'with'),
     // The control arm's OWN root, the exact counterpart of the line above. Its
     // absolute path is stated in the arm's own prompt, so the arm reuses it
     // constantly; without this the executable-name signal reads every mention of
     // the arm's own scratch script as a reach into the skill.
     //
-    // Conditional because this builder also serves `contaminationSignalsFor`,
+    // Conditional because this builder also serves `buildContaminationSignalsInput`,
     // which runs on EVERY run — and a non-baseline run mints no `without` arm, so
     // `armDirSegment` would (correctly) throw rather than invent a segment.
     ...(armRoot === undefined ? {} : { armWorkspaceDir: armRoot }),
@@ -2017,13 +2076,14 @@ export function buildContaminationInput(
     // in this list: it is the arm's own legitimate cwd.
     vatPrivateDirs: [ctx.evalSuiteHoldDir, ctx.graderOutDir],
     skillContentNeedles: ctx.skillContentNeedles,
-    // `name` is the executable's basename with the extension stripped
-    // (`scripts/csvsum.py` → `csvsum`) — a stable token appearing in both the
-    // command the arm ran and the output it got back. `howInvoked` is a command
-    // string, not a path, so it is deliberately NOT used here.
+    // The skill-relative PATH (`scripts/csvsum.py`), not the extension-stripped
+    // `name`. An ambient copy of the skill is a COPY, so it reproduces the skill's
+    // internal layout under whatever root it sits at and still matches; the control
+    // arm's own `/tmp/summary.txt` no longer does. `howInvoked` is a command string,
+    // not a path, so it is deliberately NOT used here.
     ...(ctx.declaredExecutables === undefined
       ? {}
-      : { executableNames: ctx.declaredExecutables.map((e) => e.name) }),
+      : { executablePaths: ctx.declaredExecutables.map((e) => e.path) }),
   };
 }
 
@@ -2064,7 +2124,7 @@ function baselineContaminationFor(
  * armed set is a property of the run's paths, never of any one transcript.
  */
 function contaminationSignalsFor(ctx: EvalRunContext): ContaminationSignal[] {
-  return activeContaminationSignals(buildContaminationInput('', ctx));
+  return activeContaminationSignals(buildContaminationSignalsInput(ctx));
 }
 
 /** Outcome of a tier-ordered eval run: the fragments that RAN, the control-arm
@@ -2818,15 +2878,13 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     // process (true for the CLI). A library embedding two concurrent runs in one
     // process would need per-run child scoping instead.
     //
-    // These two were the only steps of an otherwise throw-proof cleanup that could
-    // escape. `cleanupHarness` and `removeVatOnlyDir` each swallow explicitly, for
-    // the stated reason that cleanup "must not mask the run's real outcome" — but
-    // `lock.release()`'s `rmSync(lockPath, {force: true})` swallows only ENOENT, so
-    // an EPERM/EACCES/EROFS on the lockfile replaced an already-good return value
-    // with an error, exit 1 and no summary, with every artifact sitting on disk.
-    // The swallow belongs at the call site because `lock.ts` is shared.
+    // `cleanupHarness`, `removeVatOnlyDir` and `lock.release()` each swallow
+    // explicitly at their own definition, for the stated reason that cleanup "must
+    // not mask the run's real outcome". `killAllActiveClaudeChildren` lives in
+    // another package, so its guard is applied here — see {@link swallowCleanupFailure}
+    // for why a call-site guard is the weaker of the two forms.
     swallowCleanupFailure(killAllActiveClaudeChildren);
-    swallowCleanupFailure(() => { lock.release(); });
+    lock.release();
     cleanupHarness(harnessRoot, { keep: opts.keep === true, created: harnessCreated });
     removeVatOnlyDir(graderOutDir);
     // The held eval suite is the answer key: reap it on EVERY exit path (including
@@ -3079,11 +3137,10 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
       pluginDirs,
       graderOutDir,
       evalSuiteHoldDir,
-      skillContentNeedles: resolveSkillContentNeedles(
-        subjectStagedDir,
-        suite.evals,
-        safePath.joinUnderRoot(workspacesRoot, armDirs.with),
-      ),
+      skillContentNeedles: resolveSkillContentNeedles(subjectStagedDir, suite.evals, {
+        workspacesRoot,
+        armDirs,
+      }),
       runNonce,
       graderModel,
       costAccumulator,

@@ -938,7 +938,7 @@ describe('baseline control arm (integration)', () => {
       {
         extra: {
           declaredExecutables: [
-            { name: 'summary', howInvoked: 'python3 scripts/summary.py', kind: 'python' },
+            { name: 'summary', howInvoked: 'python3 scripts/summary.py', kind: 'python', path: 'scripts/summary.py' },
           ],
         },
       },
@@ -1580,7 +1580,7 @@ describe('baseline control arm (integration)', () => {
       },
       {
         extra: {
-          declaredExecutables: [{ name: 'summary', howInvoked: 'node scripts/summary.mjs', kind: 'node' }],
+          declaredExecutables: [{ name: 'summary', howInvoked: 'node scripts/summary.mjs', kind: 'node', path: 'scripts/summary.mjs' }],
         },
       },
     );

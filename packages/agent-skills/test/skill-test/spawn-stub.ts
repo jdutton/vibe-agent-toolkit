@@ -242,7 +242,7 @@ export function makeHarnessFakeSpawn(cfg: HarnessFakeSpawnConfig = {}): HarnessF
             // LAST, so a test can override a field the stub derived correctly —
             // `evalId` above is read out of the prompt, i.e. always the id vat
             // asked about, which is the one value a divergence test needs to break.
-            ...(cfg.graderFragmentOverrides?.(fragmentPath) ?? {}),
+            ...cfg.graderFragmentOverrides?.(fragmentPath),
           }),
           'utf8',
         );

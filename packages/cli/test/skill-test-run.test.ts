@@ -29,7 +29,7 @@ import { mapErrorToExitCode } from '../../agent-skills/src/skill-test/exit-codes
 import { GradingReportJsonSchema, GradingSummarySchema } from '../../agent-skills/src/skill-test/grading-schema.js';
 import { HarnessLockBusyError } from '../../agent-skills/src/skill-test/lock.js';
 import * as pluginBuild from '../src/commands/claude/plugin/build.js';
-import { createSkillTestConfigureCommand } from '../src/commands/skill/test/configure.js';
+import { buildKnobs, createSkillTestConfigureCommand } from '../src/commands/skill/test/configure.js';
 import {
   buildMemoKey,
   createSkillTestRunCommand,
@@ -713,22 +713,61 @@ describe('vat skill test run (output routing)', () => {
 // declared skill) — distinct from a NAME target (buildable) and from a path that DOES
 // map to a declared skill (linkedToDeclaredSkill). The warning fires only for the blind case.
 describe('deriveDeclaredExecutableNames (Phase T grader recognition aid)', () => {
+  /** The worked example throughout: one declaration, in both of its spellings. */
+  const CSVSUM_PATH = 'scripts/csvsum.py';
+  const CSVSUM_INVOKED = 'uv run csvsum.py';
+
   it('returns undefined for absent or empty executables', () => {
     expect(deriveDeclaredExecutableNames(undefined)).toBeUndefined();
     expect(deriveDeclaredExecutableNames([])).toBeUndefined();
   });
 
-  it('maps each executable to { name: basename-without-ext, howInvoked, kind }', () => {
+  it('maps each executable to { name: basename-without-ext, howInvoked, kind, path }', () => {
     const out = deriveDeclaredExecutableNames([
-      { path: 'scripts/csvsum.py', kind: 'python', howInvoked: 'uv run csvsum.py' },
+      { path: CSVSUM_PATH, kind: 'python', howInvoked: CSVSUM_INVOKED },
       { path: 'dist/csvsum.mjs', kind: 'node', howInvoked: 'node dist/csvsum.mjs' },
       { path: 'bin/csvsum', kind: 'binary', howInvoked: './csvsum' },
     ]);
     expect(out).toEqual([
-      { name: 'csvsum', howInvoked: 'uv run csvsum.py', kind: 'python' },
-      { name: 'csvsum', howInvoked: 'node dist/csvsum.mjs', kind: 'node' },
-      { name: 'csvsum', howInvoked: './csvsum', kind: 'binary' },
+      { name: 'csvsum', howInvoked: CSVSUM_INVOKED, kind: 'python', path: CSVSUM_PATH },
+      { name: 'csvsum', howInvoked: 'node dist/csvsum.mjs', kind: 'node', path: 'dist/csvsum.mjs' },
+      { name: 'csvsum', howInvoked: './csvsum', kind: 'binary', path: 'bin/csvsum' },
     ]);
+  });
+
+  /**
+   * ⛔ THE PATH IS THE CONTAMINATION SIGNAL, and this function used to THROW IT AWAY.
+   *
+   * `name` is the grader's recognition aid and the eval-lint typo target — an
+   * extension-stripped basename, which is what those two want. The baseline
+   * contamination detector wants the opposite: matching an escaping reach on the
+   * STEM convicted a clean control arm for `cat /tmp/summary.txt` (a skill shipping
+   * `scripts/summary.py`) and for `cat /etc/hosts` (one shipping `scripts/hosts.sh`).
+   * An ambient copy preserves the skill's layout, so the relative PATH separates a
+   * real reach from the arm's own scratch file and the stem cannot.
+   *
+   * These rows are the reviewer's confirmed false positives, asserted at the
+   * derivation: three declarations whose stems are IDENTICAL and whose paths are not.
+   */
+  it('keeps the declared path distinct even when every stem collides', () => {
+    const out = deriveDeclaredExecutableNames([
+      { path: 'scripts/summary.py', kind: 'python', howInvoked: 'uv run summary.py' },
+      { path: 'scripts/hosts.sh', kind: 'shell', howInvoked: './hosts.sh' },
+    ]);
+
+    expect(out?.map((e) => e.path)).toEqual(['scripts/summary.py', 'scripts/hosts.sh']);
+    expect(out?.map((e) => e.name), 'the grader aid still gets the short name').toEqual(['summary', 'hosts']);
+  });
+
+  // A Windows-spelled declaration must not reach the detector with `\` separators:
+  // every needle and every resolved reach in the detector is `/`-normalized, so a
+  // backslash path would end with nothing it can match and the signal goes silent.
+  it('forward-slashes a Windows-spelled declaration', () => {
+    const out = deriveDeclaredExecutableNames([
+      { path: String.raw`scripts\csvsum.py`, kind: 'python', howInvoked: CSVSUM_INVOKED },
+    ]);
+
+    expect(out?.[0]?.path).toBe(CSVSUM_PATH);
   });
 });
 
@@ -1917,6 +1956,26 @@ describe('createSkillTestConfigureCommand (--baseline / --no-baseline tri-state)
     const longs = command.options.map((o) => o.long);
     expect(longs.indexOf(BASELINE_FLAG)).toBeGreaterThanOrEqual(0);
     expect(longs.indexOf(BASELINE_FLAG)).toBeLessThan(longs.indexOf(NO_BASELINE_FLAG));
+  });
+
+  /**
+   * The three tests above pin the option DECLARATION, and `upsertTestConfig` writes
+   * `false` correctly on its own — but nothing pinned the step BETWEEN them, which is
+   * where the value is either carried into the YAML writer or dropped. Both the
+   * "`--no-baseline` silently does nothing" mutation (`options.baseline === true`)
+   * and deleting the branch entirely left this whole file green.
+   */
+  it.each([
+    ['--no-baseline (false must reach the writer, or a committed true can never be turned off)', false],
+    ['--baseline (true, the case the feature was originally built for)', true],
+  ])('carries baseline into the knob patch: %s', (_label, baseline) => {
+    expect(buildKnobs({ baseline })).toEqual({ baseline });
+  });
+
+  it('omits the baseline knob entirely when neither flag is typed, leaving a committed value alone', () => {
+    // `toEqual({})` would pass on `{ baseline: undefined }`, which `upsertTestConfig`
+    // would read as a typed flag — pin the KEY LIST, not the shape.
+    expect(Object.keys(buildKnobs({}))).toEqual([]);
   });
 });
 

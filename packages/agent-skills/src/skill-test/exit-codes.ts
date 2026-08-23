@@ -1,11 +1,3 @@
-import { AuthPreflightError } from '@vibe-agent-toolkit/utils';
-
-import { BuildHookError } from './build-hook.js';
-import { UnknownEnvTokenError } from './declared-env.js';
-import { EvalFragmentError } from './eval-fragment.js';
-import { GradingNonceError, GradingSkewError } from './grading-adapter.js';
-import { HarnessLocationError } from './harness-location.js';
-import { HarnessLockBusyError } from './lock.js';
 import { PromptInvariantError } from './prompt-invariants.js';
 
 /** Exit codes for `vat skill test` (spec §6d). */
@@ -128,21 +120,56 @@ export class InternalHarnessError extends Error {
 }
 
 /**
- * Map any thrown error to the process exit code. Errors that carry their own
- * `exitCode` (Bootstrap/Auth/HarnessLocation/Internal) are authoritative;
- * a PromptInvariantError is a defense-in-depth failure over VAT's OWN generated
- * executor/grader prompts (a required safety directive missing from a prompt VAT
- * built) — surfaced as a user-visible preflight-class problem → 2; a BuildHookError
- * is a pre-stage build failure → 2; a SkillBuildError is a declared-skill build
- * failure → 2; a SecurityAckError is a missing security ack before a build → 2;
- * an UnknownEnvTokenError is a bad ${token} in a
- * declared env value → 2; a DuplicateStagedSkillError is a staged-name collision
- * across subject/--with/--with-optional → 2; a HarnessLockBusyError is a harness
- * root already locked by another run (or by a stale lockfile the operator deletes)
- * → 2; GradingSkewError (aggregate grading.json shape skew),
- * EvalFragmentError (per-eval grader fragment parse failure), and
- * GradingNonceError (forged/mismatched per-fragment grader nonce) are all → 1;
- * everything unknown → 1.
+ * The codes an error is allowed to declare for itself. `Ok` is not a failure and
+ * `EvalFailure` is an outcome rather than a throw (see below), so neither may be
+ * claimed by a thrown object — that also keeps a stray `exitCode: 0` from turning a
+ * crash into a green build.
+ */
+const SELF_DECLARED_EXIT_CODES: ReadonlySet<number> = new Set<number>([
+  SkillTestExitCode.Internal,
+  SkillTestExitCode.Preflight,
+  SkillTestExitCode.Bootstrap,
+]);
+
+/**
+ * The error's own declared exit code, if it has a usable one.
+ *
+ * Narrow ON PURPOSE. `exitCode` is a common property name on foreign errors (child
+ * processes, HTTP clients), so an unrestricted read would let an unrelated throw pick
+ * the process's exit code. Requiring an `Error` whose value is one of the three
+ * throwable codes above keeps the mechanism to errors that meant to opt in, and
+ * leaves everything else on the `instanceof` fallback below.
+ */
+function selfDeclaredExitCode(err: unknown): number | undefined {
+  if (!(err instanceof Error)) return undefined;
+  const declared = (err as { exitCode?: unknown }).exitCode;
+  return typeof declared === 'number' && SELF_DECLARED_EXIT_CODES.has(declared) ? declared : undefined;
+}
+
+/**
+ * Map any thrown error to the process exit code.
+ *
+ * ⚠️ THE `exitCode` FIELD IS THE PRIMARY MECHANISM, and until this rewrite it was
+ * not a mechanism at all. Ten error classes across five modules carried a
+ * `readonly exitCode`, this docblock called them "authoritative", and NOTHING read
+ * one: dispatch was a hand-maintained `instanceof` chain that happened to agree with
+ * every field. Deleting any of those fields changed nothing, so each new class added
+ * a fifth, then a sixth member to an inert pattern — and the two lists could have
+ * disagreed at any time with no test able to tell.
+ *
+ * So: an error that declares one of the three throwable codes ({@link
+ * selfDeclaredExitCode}) decides its own exit code, and the `instanceof` chain now
+ * covers only the classes that declare nothing —
+ * `PromptInvariantError` (a defense-in-depth failure over VAT's OWN generated
+ * executor/grader prompts: a required safety directive missing from a prompt VAT
+ * built, surfaced as a user-visible preflight-class problem) → 2, and
+ * `GradingSkewError` (aggregate grading.json shape skew), `EvalFragmentError`
+ * (per-eval grader fragment parse failure) and `GradingNonceError`
+ * (forged/mismatched per-fragment grader nonce) → 1. Everything unknown → 1.
+ *
+ * A side benefit of reading the field: it works across a `src`/`dist` boundary, where
+ * `instanceof` silently cannot — a `dist` copy of a class never matches a `src`
+ * instance of it, and this module is imported from both.
  *
  * Note: SkillTestExitCode.EvalFailure (4) is NOT produced here — it is an
  * outcome of a completed run (an eval failed, the fail-closed default unless
@@ -150,27 +177,8 @@ export class InternalHarnessError extends Error {
  * directly (see verdictExitCode).
  */
 export function mapErrorToExitCode(err: unknown): number {
-  if (err instanceof BootstrapNeededError) return SkillTestExitCode.Bootstrap;
-  if (
-    err instanceof AuthPreflightError ||
-    err instanceof BuildHookError ||
-    err instanceof HarnessLocationError ||
-    err instanceof HarnessLockBusyError ||
-    err instanceof PromptInvariantError ||
-    err instanceof SecurityAckError ||
-    err instanceof SkillBuildError ||
-    err instanceof UnknownEnvTokenError ||
-    err instanceof DuplicateStagedSkillError
-  ) {
-    return SkillTestExitCode.Preflight;
-  }
-  if (
-    err instanceof EvalFragmentError ||
-    err instanceof GradingNonceError ||
-    err instanceof GradingSkewError ||
-    err instanceof InternalHarnessError
-  ) {
-    return SkillTestExitCode.Internal;
-  }
+  const declared = selfDeclaredExitCode(err);
+  if (declared !== undefined) return declared;
+  if (err instanceof PromptInvariantError) return SkillTestExitCode.Preflight;
   return SkillTestExitCode.Internal;
 }

@@ -27,6 +27,7 @@ import type { GradingVerdict } from '../../src/skill-test/grading-adapter.js';
 import {
   assertVatWroteArtifacts,
   buildContaminationInput,
+  buildContaminationSignalsInput,
   buildDryRunSummary,
   buildEvalWorkItems,
   buildFlagParseProbe,
@@ -812,7 +813,10 @@ describe('buildContaminationInput', () => {
   });
 
   it('omits armCwd (not the arm root) when asked only which detectors are armed', () => {
-    const input = buildContaminationInput('', CONTAMINATION_CTX);
+    // A SEPARATE entry point, not `buildContaminationInput` minus its third argument:
+    // an optional `evalId` made "dropped by mistake" and "legitimately absent" the same
+    // call, and dropping it at the scan site left the entire unit suite green.
+    const input = buildContaminationSignalsInput(CONTAMINATION_CTX);
     expect(input.armWorkspaceDir).toBe(CONTROL_ARM_ROOT);
     expect(input.armCwd).toBeUndefined();
   });
@@ -831,6 +835,9 @@ const QUOTED = 'Always reconcile the ledger before closing the accounting period
 const OTHER = 'Never send a payment without a countersigned authorization form.';
 const NEEDLE_SKILL_MD = `---\nname: demo\n---\n\n${QUOTED}\n\n${OTHER}\n`;
 
+/** The treatment arm's opaque workspace segment — `<root>/<ARM_SEGMENT>/<evalId>/…`. */
+const ARM_SEGMENT = 'ws';
+
 /**
  * Needles for one eval declaring `files`, against a staged workspace holding
  * `fixtures` (keyed by path relative to the eval's own workspace dir).
@@ -839,13 +846,18 @@ function needlesFor(root: string, files: string[], fixtures: Record<string, stri
   const subject = safePath.join(root, 'staged');
   mkdirSyncReal(subject, { recursive: true });
   writeFileSync(safePath.join(subject, 'SKILL.md'), NEEDLE_SKILL_MD, 'utf8');
-  const workspace = safePath.join(root, 'ws');
+  const workspace = safePath.join(root, ARM_SEGMENT);
   for (const [rel, body] of Object.entries(fixtures)) {
     const target = safePath.join(workspace, 'e1', rel);
     mkdirSyncReal(safePath.resolve(target, '..'), { recursive: true });
     writeFileSync(target, body, 'utf8');
   }
-  return resolveSkillContentNeedles(subject, [makeEvalEntry({ id: 'e1', files })], workspace);
+  // The arm root is DERIVED from these two, not handed over pre-joined — passing
+  // `workspacesRoot` where the arm root belonged type-checked and stayed green.
+  return resolveSkillContentNeedles(subject, [makeEvalEntry({ id: 'e1', files })], {
+    workspacesRoot: root,
+    armDirs: { with: ARM_SEGMENT },
+  });
 }
 
 /**
@@ -895,7 +907,12 @@ describe('resolveSkillContentNeedles', () => {
   });
 
   it('returns [] when the staged SKILL.md cannot be read', () => {
-    expect(resolveSkillContentNeedles(safePath.join(getTempDir(), 'nope'), [], getTempDir())).toEqual([]);
+    expect(
+      resolveSkillContentNeedles(safePath.join(getTempDir(), 'nope'), [], {
+        workspacesRoot: getTempDir(),
+        armDirs: { with: ARM_SEGMENT },
+      }),
+    ).toEqual([]);
   });
 });
 

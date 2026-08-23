@@ -36,7 +36,27 @@ const GRADER_DIR = '/tmp/vat-skill-grade-3333cccc4444dddd';
 /* eslint-enable sonarjs/publicly-writable-directories */
 /** The treatment arm's live working directory, one `ls ..` from the control's. */
 const SIBLING_ARM = `${WS_ROOT}/1111aaaa2222bbbb`;
-const BUNDLE_NAME = 'bucket-map';
+/**
+ * The skill's declared executable, spelled as the SKILL DECLARES IT.
+ *
+ * `executablePaths` carries the packaging config's relative path, not a stripped
+ * basename: an ambient copy is a COPY, so it reproduces `scripts/…` under whatever
+ * root it sits at, while the arm's own `/tmp/summary.txt` does not.
+ */
+const BUNDLE_PATH = 'scripts/bucket-map.mjs';
+/** The `summary` script most fixtures below use, in both of its shipped spellings. */
+const DECLARED_MJS = 'scripts/summary.mjs';
+const DECLARED_PY = 'scripts/summary.py';
+/** The `csvsum` script, for the fixtures that use the other worked example. */
+const DECLARED_CSVSUM = 'scripts/csvsum.py';
+/** An executable declared at the skill ROOT rather than under `scripts/`. */
+const DECLARED_BIN = 'bin/summary';
+/** The step that puts the arm inside `<tmp>/vat-skill-test` by bare name. */
+const CD_INTO_HARNESS_DIR = 'cd vat-skill-test';
+/** The canonical installed-plugin-cache reach, spelled in one shot. */
+const PLUGIN_CACHE_RUN = 'python3 ~/.claude/plugins/acme/skills/s/scripts/summary.py';
+/** The assertion message for every login-name redaction row. */
+const NAMES_A_PERSON = 'the operator\'s login name reached baseline.json';
 /** The directory name vat puts every harness root under — needle 3. */
 const VAT_HARNESS_DIR_NAME = 'vat-skill-test';
 const EXCERPT_ELLIPSIS = '…';
@@ -218,19 +238,19 @@ describe('detectBaselineContamination', () => {
     const hits = scanHits({
       transcript: transcriptWith('node /users/dev/myrepo/dist/skills/my-skill/scripts/bucket-map.mjs "source"'),
       harnessRoot: HARNESS_ROOT,
-      executableNames: [BUNDLE_NAME],
+      executablePaths: [BUNDLE_PATH],
     });
 
     expect(hits).toHaveLength(1);
     expect(hits[0]?.kind).toBe(KIND_DECLARED_EXECUTABLE);
-    expect(hits[0]?.match).toBe(BUNDLE_NAME);
+    expect(hits[0]?.match).toBe(BUNDLE_PATH);
   });
 
   it('does not double-count one reach as both a harness path and an executable', () => {
     const hits = scanHits({
       transcript: transcriptWith(`node ${HARNESS_ROOT}/staged/s/scripts/bucket-map.mjs x`),
       harnessRoot: HARNESS_ROOT,
-      executableNames: [BUNDLE_NAME],
+      executablePaths: [BUNDLE_PATH],
     });
 
     expect(hits).toHaveLength(1);
@@ -244,7 +264,7 @@ describe('detectBaselineContamination', () => {
       scanHits({
         transcript: transcriptWith('echo "a b c" | wc -l'),
         harnessRoot: HARNESS_ROOT,
-        executableNames: ['wc', 'a'],
+        executablePaths: ['wc', 'a'],
       }),
     ).toEqual([]);
   });
@@ -283,7 +303,7 @@ describe('detectBaselineContamination — the cwd is carried across calls', () =
       ['cat staged/my-skill/SKILL.md', '# my skill'],
       ['python3 staged/my-skill/scripts/csvsum.py ../data.csv', 'rows=3 total=42'],
     );
-    const hits = scanHits({ transcript, harnessRoot: HARNESS, executableNames: ['csvsum'] });
+    const hits = scanHits({ transcript, harnessRoot: HARNESS, executablePaths: [DECLARED_CSVSUM] });
 
     expect(hits.map((h) => h.kind), 'the cd chain read clean').toContain(KIND_HARNESS_PATH);
     // Not merely "a hit": the FULL-root needle, which only a correct three-step cwd
@@ -310,7 +330,7 @@ describe('detectBaselineContamination — the cwd is carried across calls', () =
   // once it is there — so the `cd` target is itself a reach.
   it('flags a cd into the harness even when nothing is read afterwards', () => {
     const hits = scanHits({
-      transcript: bashSession(`cd ${UP_TO_TMP}`, 'cd vat-skill-test'),
+      transcript: bashSession(`cd ${UP_TO_TMP}`, CD_INTO_HARNESS_DIR),
       harnessRoot: HARNESS_ROOT,
     });
 
@@ -410,7 +430,7 @@ describe('detectBaselineContamination — a listing is not a reach', () => {
       scanHits({
         transcript: bashSession(['ls /users/dev/myrepo/dist/skills', 'scripts/summary.mjs\n']),
         harnessRoot: HARNESS_ROOT,
-        executableNames: ['summary'],
+        executablePaths: [DECLARED_MJS],
       }),
     ).toEqual([]);
   });
@@ -420,11 +440,11 @@ describe('detectBaselineContamination — a listing is not a reach', () => {
   it('does not fire the executable signal on an enumeration of the same path', () => {
     const path = '/users/dev/myrepo/dist/skills/s/scripts/summary.mjs';
     expect(
-      scanHits({ transcript: transcriptWith(`ls -l ${path}`), harnessRoot: HARNESS_ROOT, executableNames: ['summary'] }),
+      scanHits({ transcript: transcriptWith(`ls -l ${path}`), harnessRoot: HARNESS_ROOT, executablePaths: [DECLARED_MJS] }),
       'listing a path was reported as running it',
     ).toEqual([]);
     expect(
-      scanHits({ transcript: transcriptWith(`node ${path}`), harnessRoot: HARNESS_ROOT, executableNames: ['summary'] }),
+      scanHits({ transcript: transcriptWith(`node ${path}`), harnessRoot: HARNESS_ROOT, executablePaths: [DECLARED_MJS] }),
       'running the same path was NOT reported',
     ).toHaveLength(1);
   });
@@ -517,13 +537,13 @@ describe('detectBaselineContamination — degraded scans', () => {
   // predicate is the ONLY thing separating them once the structured scan is out of
   // play: a positive alone stays green with the predicate hard-wired to "escapes".
   it.each([
-    ['a home-rooted reach into the plugin cache', 'python3 ~/.claude/plugins/acme/skills/s/summary.py', 1],
+    ['a home-rooted reach into the plugin cache', PLUGIN_CACHE_RUN, 1],
     ['the arm\'s own relative script', 'node ./scripts/summary.mjs input.csv', 0],
   ])('still judges an executable reach by path shape in the fallback: %s', (_label, command, expected) => {
     const scan = detectBaselineContamination({
       transcript: `not stream-json: ${command}`,
       harnessRoot: HARNESS_ROOT,
-      executableNames: ['summary'],
+      executablePaths: [DECLARED_PY, DECLARED_MJS],
       armWorkspaceDir: ARM_WORKSPACE,
     });
 
@@ -693,7 +713,7 @@ describe('detectBaselineContamination — real path forms', () => {
     const hits = scanHits({
       transcript: transcriptWith(`node ${HARNESS_ROOT}/staged/s/scripts/Summarize.py`),
       harnessRoot: HARNESS_ROOT,
-      executableNames: ['Summarize'],
+      executablePaths: ['scripts/Summarize.py'],
     });
 
     expect(hits).toHaveLength(1);
@@ -747,13 +767,15 @@ describe('detectBaselineContamination — non-Bash tools', () => {
   // `declared-executable` verdict is that a Glob lists names rather than reading
   // them. Its `Read` twin below is what proves the discrimination runs both ways.
   const ESCAPING_GLOB = '/users/dev/myrepo/dist/skills/s/**/summary.mjs';
+  /** Declared at the skill ROOT, so the glob and its Read twin both match by path. */
+  const DECLARED_ROOT_MJS = 'summary.mjs';
 
   it('does not fire the executable signal on a Glob, which only lists names', () => {
     expect(
       scanHits({
         transcript: toolTranscript('Glob', { pattern: ESCAPING_GLOB, path: '/users/dev/myrepo/dist' }),
         harnessRoot: HARNESS_ROOT,
-        executableNames: ['summary'],
+        executablePaths: [DECLARED_ROOT_MJS],
       }),
     ).toEqual([]);
   });
@@ -762,7 +784,7 @@ describe('detectBaselineContamination — non-Bash tools', () => {
     const hits = scanHits({
       transcript: toolTranscript(tool, { file_path: '/users/dev/myrepo/dist/skills/s/summary.mjs' }),
       harnessRoot: HARNESS_ROOT,
-      executableNames: ['summary'],
+      executablePaths: [DECLARED_ROOT_MJS],
     });
 
     expect(hits, `a ${tool} of an ambient copy read as a listing`).toHaveLength(1);
@@ -929,16 +951,16 @@ describe('detectBaselineContamination — vat private dirs', () => {
   });
 });
 
-describe('detectBaselineContamination — executable-name precision', () => {
-  // deriveDeclaredExecutableNames strips the extension, so `scripts/summary.py`
-  // yields the needle `summary` — a word in ordinary assistant prose. Firing on
-  // it means telling the operator to discard a clean run.
+describe('detectBaselineContamination — executable-path precision', () => {
+  // The declared BASENAME is an ordinary English word (`summary`, `totals`), which
+  // is exactly why the signal is anchored on the declared PATH: firing on the word
+  // means telling the operator to discard a clean run.
   it('does not fire on a declared name used as an ordinary English word', () => {
     expect(
       scanHits({
         transcript: transcriptWith('echo "I read the CSV and wrote a summary of the totals."'),
         harnessRoot: HARNESS_ROOT,
-        executableNames: ['summary', 'totals'],
+        executablePaths: [DECLARED_PY, 'scripts/totals.py'],
       }),
     ).toEqual([]);
   });
@@ -953,17 +975,17 @@ describe('detectBaselineContamination — executable-name precision', () => {
   // filename with no directory in front of it says nothing about whose file it is,
   // and a plain relative path resolves inside the arm's own cwd by definition.
   it.each([
-    ['a bare invocation of a same-named script', 'python3 analyze.py', 'analyze'],
-    ['prose reporting a written file', 'echo "Wrote report.md with the findings."', 'report'],
-    ['prose reporting a saved file', 'echo "The output was saved to summary.txt"', 'summary'],
-    ['prose reporting a built file', 'echo "built index.json from the rows"', 'index'],
-    ['prose reporting a created file', 'echo "created run.sh and made it executable"', 'run'],
-    ['a relative path in the arm\'s own cwd', 'node ./scripts/analyze.mjs input.csv', 'analyze'],
-    ['a nested relative path in the arm\'s own cwd', 'bash scripts/helpers/run.sh', 'run'],
-    ['a URL segment', 'curl https://docs.example.com/report', 'report'],
-  ])('does not fire on %s', (_label, command, name) => {
+    ['a bare invocation of a same-named script', 'python3 analyze.py', 'scripts/analyze.py'],
+    ['prose reporting a written file', 'echo "Wrote report.md with the findings."', 'scripts/report.py'],
+    ['prose reporting a saved file', 'echo "The output was saved to summary.txt"', DECLARED_PY],
+    ['prose reporting a built file', 'echo "built index.json from the rows"', 'scripts/index.js'],
+    ['prose reporting a created file', 'echo "created run.sh and made it executable"', 'scripts/run.sh'],
+    ['a relative path in the arm\'s own cwd', 'node ./scripts/analyze.mjs input.csv', 'scripts/analyze.mjs'],
+    ['a nested relative path in the arm\'s own cwd', 'bash scripts/helpers/run.sh', 'helpers/run.sh'],
+    ['a URL segment', 'curl https://docs.example.com/report', 'bin/report'],
+  ])('does not fire on %s', (_label, command, declared) => {
     expect(
-      scanHits({ transcript: transcriptWith(command), harnessRoot: HARNESS_ROOT, executableNames: [name] }),
+      scanHits({ transcript: transcriptWith(command), harnessRoot: HARNESS_ROOT, executablePaths: [declared] }),
     ).toEqual([]);
   });
 
@@ -971,28 +993,37 @@ describe('detectBaselineContamination — executable-name precision', () => {
   // arm's own tree. This is the whole residual value of a name-based signal: the
   // ambient-copy classes produce no harness path, so nothing else sees them.
   it.each([
-    ['an absolute path into the adopter repo', 'node /users/dev/myrepo/dist/skills/s/scripts/summary.mjs'],
-    ['a home-rooted path into the plugin cache', 'python3 ~/.claude/plugins/marketplaces/acme/skills/s/summary.py'],
-    ['a variable-rooted path', 'sh $TMPDIR/ambient/skills/s/summary'],
-    ['a windows drive-rooted path', String.raw`node C:\repo\dist\skills\s\summary.mjs`],
-    ['a path that climbs out of the workspace', 'bash ../../../myrepo/bin/summary'],
-    ['the executable invoked directly by path', '/users/dev/myrepo/dist/skills/s/summary --in data.csv'],
+    ['an absolute path into the adopter repo', 'node /users/dev/myrepo/dist/skills/s/scripts/summary.mjs', DECLARED_MJS],
+    [
+      'a home-rooted path into the plugin cache',
+      'python3 ~/.claude/plugins/marketplaces/acme/skills/s/scripts/summary.py',
+      DECLARED_PY,
+    ],
+    ['a variable-rooted path', 'sh $TMPDIR/ambient/skills/s/bin/summary', DECLARED_BIN],
+    ['a windows drive-rooted path', String.raw`node C:\repo\dist\skills\s\scripts\summary.mjs`, DECLARED_MJS],
+    ['a path that climbs out of the workspace', 'bash ../../../myrepo/bin/summary', DECLARED_BIN],
+    [
+      'the executable invoked directly by path',
+      '/users/dev/myrepo/dist/skills/s/bin/summary --in data.csv',
+      DECLARED_BIN,
+    ],
     // A SPACE IN THE PATH used to kill this signal outright: the flat scan found
     // the token by walking a character class that excludes space, so it truncated
     // at the last segment, the token lost its root, and the reach read CLEAN.
-    ['a quoted path containing a space', 'python3 "/Users/dev/My Projects/skill/scripts/summary.py"'],
-    ['a backslash-escaped space', String.raw`python3 /Users/dev/My\ Projects/skill/scripts/summary.py`],
+    ['a quoted path containing a space', 'python3 "/Users/dev/My Projects/skill/scripts/summary.py"', DECLARED_PY],
+    ['a backslash-escaped space', String.raw`python3 /Users/dev/My\ Projects/skill/scripts/summary.py`, DECLARED_PY],
     // The standard macOS spelling of the installed-plugin cache — the single most
     // likely ambient copy on the platform this is usually run on.
     [
       'the macOS plugin cache, which has a space in it',
-      'node "~/Library/Application Support/claude/plugins/acme/skills/s/summary.mjs"',
+      'node "~/Library/Application Support/claude/plugins/acme/skills/s/scripts/summary.mjs"',
+      DECLARED_MJS,
     ],
-  ])('fires on %s', (_label, command) => {
+  ])('fires on %s', (_label, command, declared) => {
     const hits = scanHits({
       transcript: transcriptWith(command),
       harnessRoot: HARNESS_ROOT,
-      executableNames: ['summary'],
+      executablePaths: [declared],
     });
 
     expect(hits, `expected a hit for: ${command}`).toHaveLength(1);
@@ -1008,7 +1039,7 @@ describe('detectBaselineContamination — executable-name precision', () => {
       scanHits({
         transcript: transcriptWith(`node ${ARM_WORKSPACE}/lookup-1/scripts/summary.mjs`),
         harnessRoot: HARNESS_ROOT,
-        executableNames: ['summary'],
+        executablePaths: [DECLARED_MJS],
       }),
     ).toEqual([]);
   });
@@ -1019,11 +1050,11 @@ describe('detectBaselineContamination — executable-name precision', () => {
   it('finds a real reach that appears AFTER a benign mention of the same name', () => {
     const hits = scanHits({
       transcript: bashSession(
-        'node ./scripts/summary.mjs draft',
-        'python3 ~/.claude/plugins/acme/skills/s/summary.py',
+        'node ./scripts/summary.py draft',
+        PLUGIN_CACHE_RUN,
       ),
       harnessRoot: HARNESS_ROOT,
-      executableNames: ['summary'],
+      executablePaths: [DECLARED_PY],
     });
 
     expect(hits, 'a benign first mention hid the real reach').toHaveLength(1);
@@ -1048,7 +1079,7 @@ describe('detectBaselineContamination — what `match` is allowed to carry', () 
     });
 
     expect(hits).toHaveLength(1);
-    expect(hits[0]?.match, 'the operator\'s login name reached baseline.json').not.toContain('j.doe');
+    expect(hits[0]?.match, NAMES_A_PERSON).not.toContain('j.doe');
     expect(hits[0]?.match).toBe(`${REDACTED}vat-skill-test/my-skill-abc12345`);
   });
 
@@ -1143,7 +1174,7 @@ describe('detectBaselineContamination — one reach is deduped, two reaches are 
       harnessRoot: HARNESS_ROOT,
       siblingArmDir: SIBLING_ARM,
       armWorkspaceDir: ARM_WORKSPACE,
-      executableNames: ['csvsum'],
+      executablePaths: [DECLARED_CSVSUM],
     });
 
     expect(scan.degraded, 'this must exercise the flat fallback').toBeDefined();
@@ -1161,7 +1192,7 @@ describe('detectBaselineContamination — one reach is deduped, two reaches are 
       harnessRoot: HARNESS_ROOT,
       armWorkspaceDir: ARM_WORKSPACE,
       skillContentNeedles: [needle],
-      executableNames: ['csvsum'],
+      executablePaths: [DECLARED_CSVSUM],
     });
 
     expect(scan.hits.map((h) => h.kind)).toEqual([KIND_SKILL_CONTENT, KIND_DECLARED_EXECUTABLE]);
@@ -1174,7 +1205,7 @@ describe('detectBaselineContamination — one reach is deduped, two reaches are 
       transcript: `not stream-json: python3 ${HARNESS_ROOT}/staged/s/scripts/csvsum.py`,
       harnessRoot: HARNESS_ROOT,
       armWorkspaceDir: ARM_WORKSPACE,
-      executableNames: ['csvsum'],
+      executablePaths: [DECLARED_CSVSUM],
     });
 
     expect(scan.hits.map((h) => h.kind)).toEqual([KIND_HARNESS_PATH]);
@@ -1538,7 +1569,7 @@ describe('activeContaminationSignals', () => {
     [KIND_SIBLING_ARM, { siblingArmDir: SIBLING_ARM }],
     [KIND_VAT_PRIVATE_DIR, { vatPrivateDirs: [HOLD_DIR] }],
     [KIND_SKILL_CONTENT, { skillContentNeedles: ['a sentence long enough to be a real content needle'] }],
-    [KIND_DECLARED_EXECUTABLE, { executableNames: [BUNDLE_NAME] }],
+    [KIND_DECLARED_EXECUTABLE, { executablePaths: [BUNDLE_PATH] }],
   ])('arms %s when, and only when, its input is threaded through', (signal, extra) => {
     expect(
       activeContaminationSignals({ transcript: '', harnessRoot: HARNESS_ROOT, ...extra }),
@@ -1557,8 +1588,8 @@ describe('activeContaminationSignals', () => {
         // A SKILL.md whose body yields no line distinctive enough to accuse
         // anyone with — the signal is genuinely unarmed, and must say so.
         skillContentNeedles: [],
-        // Below MIN_EXECUTABLE_NAME_LENGTH, so the detector skips it entirely.
-        executableNames: ['wc'],
+        // Below MIN_EXECUTABLE_PATH_LENGTH, so the detector skips it entirely.
+        executablePaths: ['wc'],
       }),
     ).toEqual([KIND_HARNESS_PATH]);
   });
@@ -1818,7 +1849,7 @@ describe('summarizeBaselineIntegrity — contamination verdict', () => {
   it('names every contaminated eval and says the delta is not skill lift', () => {
     const findings: BaselineContamination[] = [
       { evalId: 'lookup-1', hits: [{ kind: KIND_HARNESS_PATH, match: HARNESS_ROOT, excerpt: EXCERPT_ELLIPSIS }] },
-      { evalId: 'lookup-2', hits: [{ kind: 'declared-executable', match: BUNDLE_NAME, excerpt: EXCERPT_ELLIPSIS }] },
+      { evalId: 'lookup-2', hits: [{ kind: 'declared-executable', match: BUNDLE_PATH, excerpt: EXCERPT_ELLIPSIS }] },
     ];
     const integrity = summarize({ findings });
 
@@ -1916,31 +1947,37 @@ describe('detectBaselineContamination — a path in PROSE is not a reach', () =>
  * of having redirected `sort` into a file.
  */
 describe('detectBaselineContamination — a write DESTINATION is not a run', () => {
+  /** An ambient copy's directory — so every destination below MATCHES by path. */
+  const AMBIENT_DIR = '/users/dev/myrepo/dist/plugins/s';
+  const DECLARED = [DECLARED_PY, 'scripts/report.py', 'scripts/index.js'];
+
+  // ⚠️ EVERY DESTINATION REPRODUCES THE DECLARED LAYOUT, which is what keeps these
+  // rows discriminating now that the signal is anchored on the declared PATH. Aimed
+  // at `/tmp/summary.txt` (their original spelling) they would pass because the name
+  // no longer matches, proving nothing about intent.
   it.each([
-    ['a redirect target', 'sort data.csv > /tmp/summary.txt'],
-    ['an append target', 'wc -l data.csv >> /tmp/summary.txt'],
-    ['a cp destination', 'cp notes.md /tmp/summary.md'],
-    ['an mv destination', 'mv draft.md /tmp/report.md'],
-    ['a glob concatenation target', 'cat parts/*.json > /tmp/index.json'],
+    ['a redirect target', `sort data.csv > ${AMBIENT_DIR}/scripts/summary.py`],
+    ['an append target', `wc -l data.csv >> ${AMBIENT_DIR}/scripts/summary.py`],
+    ['a cp destination', `cp notes.md ${AMBIENT_DIR}/scripts/summary.py`],
+    ['an mv destination', `mv draft.md ${AMBIENT_DIR}/scripts/report.py`],
+    ['a glob concatenation target', `cat parts/*.json > ${AMBIENT_DIR}/scripts/index.js`],
+    // Item 4's own row: `echo`'s destination is now a resolved operand rather than
+    // prose, so this one reaches the write/retrieval distinction for the first time.
+    ['an echo into a destination', `echo x > ${AMBIENT_DIR}/scripts/summary.py`],
   ])(STAYS_CLEAN, (_label, command) => {
     expect(
-      scanHits({
-        transcript: transcriptWith(command),
-        harnessRoot: HARNESS_ROOT,
-        executableNames: ['summary', 'report', 'index'],
-      }),
+      scanHits({ transcript: transcriptWith(command), harnessRoot: HARNESS_ROOT, executablePaths: DECLARED }),
     ).toEqual([]);
   });
 
   // The controls that were ALREADY clean and must stay so, since a fix that simply
   // stopped resolving destinations would pass the rows above for the wrong reason.
   it.each([
-    ['a relative destination', 'cp notes.md ./summary.md'],
-    ['a destination inside the arm workspace', `cp notes.md ${ARM_WORKSPACE}/e1/summary.md`],
-    ['an echo into a destination', 'echo x > /tmp/summary.md'],
+    ['a relative destination', 'cp notes.md ./scripts/summary.py'],
+    ['a destination inside the arm workspace', `cp notes.md ${ARM_WORKSPACE}/e1/scripts/summary.py`],
   ])(STAYS_CLEAN, (_label, command) => {
     expect(
-      scanHits({ transcript: transcriptWith(command), harnessRoot: HARNESS_ROOT, executableNames: ['summary'] }),
+      scanHits({ transcript: transcriptWith(command), harnessRoot: HARNESS_ROOT, executablePaths: [DECLARED_PY] }),
     ).toEqual([]);
   });
 
@@ -2021,7 +2058,11 @@ describe('detectBaselineContamination — cd forms that were silently wrong', ()
     ['make -C', ['make -C ../.. build']],
     ['tar -C', ['tar -C ../.. -xf a.tar']],
     ['find -execdir', ['find . -execdir cat {} ;']],
-    ['a nested shell script we do not parse', ['bash -c "cd ../../.. && ls"']],
+    // ⛔ `bash -c "cd ../../.. && ls"` USED TO BE A ROW HERE and is now the opposite
+    // assertion, in "a nested shell does not unanchor the walk". A nested shell
+    // cannot change its CALLER's directory, so there is nothing to degrade about —
+    // the row was pinning a wrong answer, and one leading `sh -c "echo hi"` was
+    // enough to blind the whole rest of the transcript.
   ])('degrades rather than guessing on %s', (_label, steps) => {
     const scan = scanOf(bashSession(...steps, REACH_FROM_HARNESS_ROOT));
 
@@ -2066,7 +2107,7 @@ describe('detectBaselineContamination — cd forms that were silently wrong', ()
       scanHits({
         transcript: transcriptWith(`ls -la \\\n${AMBIENT_SCRIPT}`),
         harnessRoot: HARNESS_ROOT,
-        executableNames: ['summary'],
+        executablePaths: [DECLARED_MJS],
       }),
     ).toEqual([]);
   });
@@ -2075,7 +2116,7 @@ describe('detectBaselineContamination — cd forms that were silently wrong', ()
   // against `/` — and reported the arm's own script as an ambient copy.
   it('does not accuse the arm of running an ambient copy of its own script after cd ~', () => {
     const scan = scanOf(bashSession('cd ~ && cd ..', 'python3 scripts/bucket-map.mjs data.csv'), {
-      executableNames: [BUNDLE_NAME],
+      executablePaths: [BUNDLE_PATH],
     });
 
     expect(scan.hits).toEqual([]);
@@ -2099,7 +2140,7 @@ describe('detectBaselineContamination — degradation runs forward, not backward
   it('keeps a reach resolved BEFORE the cd it could not evaluate', () => {
     const scan = scanOf(bashSession(
       `cd ${UP_TO_TMP}`,
-      'cd vat-skill-test',
+      CD_INTO_HARNESS_DIR,
       'cd my-skill-abc12345',
       REACH_FROM_HARNESS_ROOT,
       'cd $HOME',
@@ -2237,7 +2278,7 @@ describe('detectBaselineContamination — launcher prefixes', () => {
     const hits = scanHits({
       transcript: transcriptWith(command),
       harnessRoot: HARNESS_ROOT,
-      executableNames: ['summary'],
+      executablePaths: [DECLARED_MJS],
     });
 
     expect(hits, `exec-blind through: ${command}`).toHaveLength(1);
@@ -2263,7 +2304,7 @@ describe('detectBaselineContamination — a claimed reach does not hide the ones
     const hits = scanHits({
       transcript: bashSession(...steps),
       harnessRoot: HARNESS_ROOT,
-      executableNames: ['summary'],
+      executablePaths: [DECLARED_MJS],
     });
 
     expect(hits.map((h) => h.kind)).toEqual([KIND_HARNESS_PATH, KIND_DECLARED_EXECUTABLE]);
@@ -2354,7 +2395,36 @@ describe('detectBaselineContamination — `match` names nobody', () => {
     });
 
     expect(hits).toHaveLength(1);
-    expect(hits[0]?.match, 'the operator\'s login name reached baseline.json').not.toContain('jeffdutton');
+    expect(hits[0]?.match, NAMES_A_PERSON).not.toContain('jeffdutton');
+    expect(hits[0]?.match).toContain('<user>');
+  });
+
+  /**
+   * ...and the two needle builders the rule was never pinned for.
+   *
+   * Measured by mutation: zeroing `loginNames` inside `siblingArmNeedles` and
+   * `vatPrivateDirNeedles` left 252/252 green, while zeroing it in
+   * `harnessNeedles` killed exactly the three rows above. Both unpinned builders
+   * root at `normalizedTmpdir()`, which on WINDOWS is `C:/Users/<login>/…` — the
+   * platform CI covers, and the reason `users` is in `HOME_PARENT_SEGMENTS` at all.
+   *
+   * The login name has to fall inside the last two segments for the mask to be
+   * OBSERVABLE — `pathNeedle` drops everything before them — so these are the
+   * `TMPDIR`-points-at-the-home-directory shape rather than the AppData default.
+   */
+  it.each([
+    ['a sibling arm under a Windows home', 'siblingArmDir', '1111aaaa2222bbbb', KIND_SIBLING_ARM],
+    ['a vat private dir under a Windows home', 'vatPrivateDirs', 'vat-skill-evals-1111aaaa', KIND_VAT_PRIVATE_DIR],
+  ])('masks the login name in %s', (_label, field, leaf, kind) => {
+    const dir = `C:/Users/jeffdutton/${leaf}`;
+    const hits = scanHits({
+      transcript: transcriptWith(`cat ${dir}/evals.json`),
+      harnessRoot: HARNESS_ROOT,
+      ...(field === 'siblingArmDir' ? { siblingArmDir: dir } : { vatPrivateDirs: [dir] }),
+    });
+
+    expect(hits.map((h) => h.kind)).toEqual([kind]);
+    expect(hits[0]?.match, NAMES_A_PERSON).not.toContain('jeffdutton');
     expect(hits[0]?.match).toContain('<user>');
   });
 
@@ -2467,7 +2537,7 @@ describe('detectBaselineContamination — constructs nothing was standing on', (
     ['reading one through an absolute cat', `/bin/cat ${AMBIENT_SCRIPT}`, 1],
   ])('tells enumeration from retrieval when the head is a path: %s', (_label, command, expected) => {
     expect(
-      scanHits({ transcript: transcriptWith(command), harnessRoot: HARNESS_ROOT, executableNames: ['summary'] }),
+      scanHits({ transcript: transcriptWith(command), harnessRoot: HARNESS_ROOT, executablePaths: [DECLARED_MJS] }),
     ).toHaveLength(expected);
   });
 
@@ -2501,7 +2571,7 @@ describe('detectBaselineContamination — constructs nothing was standing on', (
     const hits = scanHits({
       transcript: transcriptWith(`echo done $(cat ${AMBIENT_SCRIPT})`),
       harnessRoot: HARNESS_ROOT,
-      executableNames: ['summary'],
+      executablePaths: [DECLARED_MJS],
     });
 
     expect(hits.map((h) => h.kind)).toEqual([KIND_DECLARED_EXECUTABLE]);
@@ -2521,7 +2591,7 @@ describe('detectBaselineContamination — constructs nothing was standing on', (
     const hits = scanHits({
       transcript: transcriptWith(`somecmd --flag < ${AMBIENT_SCRIPT}`),
       harnessRoot: HARNESS_ROOT,
-      executableNames: ['summary'],
+      executablePaths: [DECLARED_MJS],
     });
 
     expect(hits.map((h) => h.kind)).toEqual([KIND_DECLARED_EXECUTABLE]);
@@ -2532,7 +2602,7 @@ describe('detectBaselineContamination — constructs nothing was standing on', (
     const hits = scanHits({
       transcript: transcriptWith(`node ${ARM_WORKSPACE}-other/scripts/summary.mjs`),
       harnessRoot: HARNESS_ROOT,
-      executableNames: ['summary'],
+      executablePaths: [DECLARED_MJS],
     });
 
     expect(hits.map((h) => h.kind)).toEqual([KIND_DECLARED_EXECUTABLE]);
@@ -2547,7 +2617,9 @@ describe('detectBaselineContamination — constructs nothing was standing on', (
         harnessRoot: HARNESS_ROOT,
         armWorkspaceDir: workspace,
         armCwd: `${workspace}/e1`,
-        executableNames: ['summary'],
+        // Declared at the skill root, so the path DOES match and only the
+        // containment predicate stands between it and a verdict.
+        executablePaths: ['summary'],
       }).hits,
     ).toEqual([]);
   });
@@ -2565,7 +2637,7 @@ describe('detectBaselineContamination — constructs nothing was standing on', (
     const hits = scanHits({
       transcript: bashSession('cd ../../../../../../../..', 'python3 s/summary.mjs data.csv'),
       harnessRoot: HARNESS_ROOT,
-      executableNames: ['summary'],
+      executablePaths: ['summary.mjs'],
     });
 
     expect(hits.map((h) => h.kind), 'the climb never moved, so the reach read as the arm\'s own file').toEqual([
@@ -2712,5 +2784,371 @@ describe('summarizeBaselineIntegrity — a run where no control arm was scanned'
 
     expect(integrity.contaminated).toBe(false);
     expect(BaselineIntegritySchema.safeParse(integrity).success).toBe(true);
+  });
+});
+
+/**
+ * THE INNOCENT POPULATION, which this suite did not have.
+ *
+ * Every escaping-path fixture above is an AMBIENT COPY — `/users/dev/myrepo/dist/…`,
+ * `~/.claude/plugins/…` — so 252 green tests said nothing at all about the far more
+ * common transcript: a control arm doing entirely ordinary work in `/tmp`, in its
+ * home, or against a system file. Two independent reviewers drove these through the
+ * real detector and every one of them stamped `declared-executable`,
+ * `contaminated: true`, with "discard the delta" attached — plus an operator
+ * instruction to uninstall an ambient copy that does not exist.
+ *
+ * The cause was matching the extension-stripped STEM of a declared executable
+ * (`scripts/summary.py` → `summary`) against the basename of any escaping reach. A
+ * declared executable is now matched by its RELATIVE PATH at a path boundary: an
+ * ambient copy preserves the skill's internal layout, and `/tmp/summary.txt` does not.
+ */
+describe('detectBaselineContamination — the arm\'s own scratch files are not the skill', () => {
+  /** [what the arm was doing, the command, the executable the skill declares]. */
+  const OWN_WORK: ReadonlyArray<readonly [label: string, command: string, declared: string]> = [
+    ['a scratch file it wrote and read back', `cat ${TMP_DIR}/summary.txt`, DECLARED_PY],
+    ['a scratch script it wrote in tmp', `python3 ${TMP_DIR}/summary.py`, DECLARED_PY],
+    ['a shell script it wrote in tmp', `bash ${TMP_DIR}/run.sh`, 'scripts/run.sh'],
+    ['a scratch script in its own home', 'python3 ~/analyze.py', 'scripts/analyze.py'],
+    ['a diff of two scratch files', `diff ${TMP_DIR}/summary.txt ${TMP_DIR}/other.txt`, DECLARED_PY],
+    ['a file under a mktemp directory', `cat ${TMP_DIR}/tmp.XyZ/summary.txt`, DECLARED_PY],
+    ['a system file the skill happens to share a name with', 'cat /etc/hosts', 'scripts/hosts.sh'],
+  ];
+
+  it.each(OWN_WORK)('does not convict the control arm for %s', (_label, command, declared) => {
+    expect(
+      scanHits({ transcript: transcriptWith(command), harnessRoot: HARNESS_ROOT, executablePaths: [declared] }),
+      `a clean control arm was told to discard its run: ${command}`,
+    ).toEqual([]);
+  });
+
+  // The flagship pair, across two Bash calls — the arm writes its own summary and
+  // reads it back, which is the behaviour a control arm is SUPPOSED to exhibit.
+  it('does not convict the arm for writing a scratch file and reading it back', () => {
+    expect(
+      scanHits({
+        transcript: bashSession(`sort data.csv > ${TMP_DIR}/summary.txt`, `cat ${TMP_DIR}/summary.txt`),
+        harnessRoot: HARNESS_ROOT,
+        executablePaths: [DECLARED_PY],
+      }),
+    ).toEqual([]);
+  });
+
+  // ...and the direction that must NOT be lost: an ambient copy reproduces the
+  // skill's own layout, so the declared relative path is present in the reach.
+  it.each([
+    ['the adopter\'s build output', 'python3 /users/dev/myrepo/dist/plugins/s/scripts/summary.py data.csv'],
+    ['the installed plugin cache', PLUGIN_CACHE_RUN],
+  ])('still fires when the reach reproduces the skill layout: %s', (_label, command) => {
+    const hits = scanHits({
+      transcript: transcriptWith(command),
+      harnessRoot: HARNESS_ROOT,
+      executablePaths: [DECLARED_PY],
+    });
+
+    expect(hits.map((h) => h.kind)).toEqual([KIND_DECLARED_EXECUTABLE]);
+    expect(hits[0]?.match, 'the hit names the declaration, so an operator can find it').toBe(DECLARED_PY);
+  });
+});
+
+/**
+ * `-c` AND `-e` BELONG TO THE grep/sed FAMILY, NOT TO AN INTERPRETER.
+ *
+ * `patternFlagValues` treated the token after `-c`/`-e` as a pattern whatever the
+ * command was, so every interpreter one-liner went unread — and `python`/`node`/
+ * `perl`/`ruby` are not nested shells, so NO degradation was recorded either. The
+ * verdict read as a full-strength clean scan of a transcript that opened the staged
+ * SKILL.md.
+ */
+describe('detectBaselineContamination — an interpreter one-liner carries an operand', () => {
+  const REACH = `${HARNESS_ROOT}/staged/s/SKILL.md`;
+
+  it.each([
+    ['python3 -c', `python3 -c "print(open('${REACH}').read())"`],
+    ['perl -e', `perl -e 'open(F,"${REACH}");'`],
+    ['ruby -e', `ruby -e 'puts File.read("${REACH}")'`],
+    ['node -e', `node -e 'console.log(require("fs").readFileSync("${REACH}","utf8"))'`],
+  ])('sees the path inside a %s script', (_label, command) => {
+    const scan = scanOf(transcriptWith(command));
+
+    expect(scan.degraded, 'blinded, and silent about it').toBeUndefined();
+    expect(scan.hits.map((h) => h.kind), `the one-liner read clean: ${command}`).toEqual([KIND_HARNESS_PATH]);
+  });
+
+  // ...and the flags still mean "pattern" on the family they were written for, which
+  // is the half that made them prose in the first place.
+  it.each([
+    ['grep -e, whose value is the pattern', `grep -e "${HARNESS_DIR}" notes.md`],
+    ['sed -e, whose value is a script', `sed -e "s|x|${HARNESS_ROOT}/y|" notes.md`],
+    ['grep -c, which counts and still leads with the pattern', `grep -c "${HARNESS_DIR}" notes.md`],
+    ['grep --regexp', `grep --regexp "${HARNESS_DIR}" notes.md`],
+  ])(STAYS_CLEAN, (_label, command) => {
+    expect(scanHits({ transcript: transcriptWith(command), harnessRoot: HARNESS_ROOT })).toEqual([]);
+  });
+});
+
+/**
+ * `||` IS NOT A LATCH.
+ *
+ * `applySeparator` set `state.conditional` on `||` and nothing ever cleared it, so
+ * every later segment of the same Bash call — including after a `;` or a newline —
+ * was treated as an unevaluable branch. `mkdir -p out || true ; cd out` therefore
+ * unanchored the whole rest of the transcript, and agents write `|| true` constantly.
+ */
+describe('detectBaselineContamination — `||` scopes to its own AND-OR list', () => {
+  it('clears the conditional at a `;`, so a later cd is still tracked', () => {
+    const scan = scanOf(bashSession(
+      `mkdir -p out || true ; cd ${UP_TO_TMP}`,
+      CD_INTO_HARNESS_DIR,
+      REACH_FROM_HARNESS_DIR,
+    ));
+
+    expect(scan.degraded, 'one `|| true` blinded every later segment').toBeUndefined();
+    expect(scan.hits[0]?.match).toBe(`${REDACTED}vat-skill-test/my-skill-abc12345`);
+  });
+
+  it('clears the conditional at a NEWLINE, so a cd on its own line is still tracked', () => {
+    const scan = scanOf(bashSession(`mkdir -p out || true\ncd ${UP_TO_TMP}/vat-skill-test`, REACH_FROM_HARNESS_DIR));
+
+    expect(scan.degraded, 'a cd on its own line was reported as an unevaluable || branch').toBeUndefined();
+    expect(scan.hits[0]?.match).toBe(`${REDACTED}vat-skill-test/my-skill-abc12345`);
+  });
+
+  // ...and the right-hand side of the `||` itself is still unevaluable, with an
+  // operator-facing detail DERIVED from that fact rather than from whether the
+  // command text happens to contain a `||` somewhere.
+  it('still refuses a cd on the right of a ||, and says so accurately', () => {
+    const scan = scanOf(bashSession(`cd one || cd ${UP_TO_TMP}`, READ_SKILL_MD));
+
+    expect(scan.degraded?.reason).toBe(REASON_CWD_UNTRACKED);
+    expect(scan.degraded?.detail).toContain(`|| cd ${UP_TO_TMP}`);
+  });
+});
+
+/**
+ * A REDIRECT DESTINATION IS AN OPERAND EVEN WHEN `echo` OWNS IT.
+ *
+ * `segmentReaches` asked `prose.has(word)` before it asked `targets.has(word)`, and
+ * `proseOperands` marks every non-flag operand of `echo`/`printf` as prose — the
+ * token after `>` included. So the control arm OVERWRITING the treatment arm's staged
+ * SKILL.md produced `hits: []`, while `cat x > <same path>` fired correctly.
+ */
+describe('detectBaselineContamination — an echo redirect still names its destination', () => {
+  it.each([
+    ['echo', `echo boom > ${HARNESS_ROOT}/staged/s/SKILL.md`],
+    ['printf', `printf boom > ${HARNESS_ROOT}/staged/s/SKILL.md`],
+    ['an append', `echo boom >> ${HARNESS_ROOT}/staged/s/SKILL.md`],
+  ])('sees a %s redirect INTO vat\'s staged tree', (_label, command) => {
+    expect(
+      scanHits({ transcript: transcriptWith(command), harnessRoot: HARNESS_ROOT }).map((h) => h.kind),
+      `the arm overwrote the staged skill unseen: ${command}`,
+    ).toEqual([KIND_HARNESS_PATH]);
+  });
+
+  // The half that must not regress: what `echo` EMITS is still prose, and a
+  // destination still cannot support the executable signal.
+  it.each([
+    ['the text echo emits', `echo "I did not look in ${HARNESS_ROOT}/staged"`, {}],
+    [
+      'a destination that reproduces the skill layout',
+      'echo x > /users/dev/myrepo/dist/plugins/s/scripts/summary.py',
+      { executablePaths: [DECLARED_PY] },
+    ],
+  ])(STAYS_CLEAN, (_label, command, over) => {
+    expect(scanHits({ transcript: transcriptWith(command), harnessRoot: HARNESS_ROOT, ...over })).toEqual([]);
+  });
+});
+
+/**
+ * A NESTED SHELL CANNOT MOVE THE CALLER, AND `dirs` MOVES NOTHING AT ALL.
+ *
+ * `opaqueCwdChange` treated `sh -c`, `git -C`, `env -C` and `dirs` as permanent,
+ * unknowable cwd moves, so a single leading `sh -c "echo hi"` made the canonical
+ * four-step reach chain report `hits: []`. The module already reasons correctly this
+ * way for `( … )` subshells; `-c` is the same containment and `dirs` only PRINTS.
+ * The `-C` family really does move the cwd — for the duration of ONE command — so it
+ * costs that segment's reaches and nothing else.
+ */
+describe('detectBaselineContamination — a nested shell does not unanchor the walk', () => {
+  const CHAIN = [`cd ${UP_TO_TMP}`, CD_INTO_HARNESS_DIR, REACH_FROM_HARNESS_DIR] as const;
+  const FULL_ROOT = `${REDACTED}vat-skill-test/my-skill-abc12345`;
+
+  it.each([
+    ['a nested sh -c', 'sh -c "echo hi"', false],
+    ['a nested bash -c that cds inside itself', 'bash -c "cd ../../.. && ls"', false],
+    ['a directory-stack print', 'dirs', false],
+    ['a one-command git -C', 'git -C ../repo status', true],
+    ['a one-command env -C', 'env -C ../repo ls', true],
+  ])('keeps the reach chain tracked through a leading %s', (_label, lead, degrades) => {
+    const scan = scanOf(bashSession(lead, ...CHAIN));
+
+    expect(scan.hits[0]?.match, `the leading "${lead}" unanchored the whole walk`).toBe(FULL_ROOT);
+    expect(scan.degraded !== undefined, `wrong degradation for: ${lead}`).toBe(degrades);
+  });
+
+  // A nested shell's script is still TEXT WE CAN READ, and reading it is the whole
+  // reason not to treat the segment as opaque.
+  it('sees a harness path inside a nested shell script', () => {
+    expect(
+      scanHits({
+        transcript: transcriptWith(`sh -c "cat ${HARNESS_ROOT}/staged/s/SKILL.md"`),
+        harnessRoot: HARNESS_ROOT,
+      }).map((h) => h.kind),
+    ).toEqual([KIND_HARNESS_PATH]);
+  });
+
+  // ...and `pushd`/`popd`, which really do persist across Bash calls, still degrade.
+  it.each([['pushd', ['pushd ..']], ['popd', ['pushd ..', 'popd']]])(
+    'still degrades on %s',
+    (_label, steps) => {
+      expect(scanOf(bashSession(...steps, REACH_FROM_HARNESS_ROOT)).degraded?.reason).toBe(REASON_CWD_UNTRACKED);
+    },
+  );
+});
+
+/**
+ * A BARE NAME AFTER A `cd` INTO AN AMBIENT COPY WAS INVISIBLE.
+ *
+ * `isPathCandidate` requires a separator, and the docblock justified that by saying
+ * the cost is covered by the `cd` that put the arm there. True for vat's OWN
+ * directories, which have needles; false for the adopter's repo and the plugin
+ * cache, which have none — and `declared-executable` is the only signal that sees
+ * either of those.
+ */
+describe('detectBaselineContamination — a bare declared executable after a cd', () => {
+  const AMBIENT_DIR = '/users/dev/myrepo/dist/plugins/myskill/scripts';
+
+  it.each([
+    ['a bare name', 'python3 csvsum.py data.csv'],
+    ['a dot-slash spelling, which always worked', 'python3 ./csvsum.py data.csv'],
+  ])('resolves %s run from an ambient copy', (_label, command) => {
+    const hits = scanHits({
+      transcript: bashSession(`cd ${AMBIENT_DIR}`, command),
+      harnessRoot: HARNESS_ROOT,
+      executablePaths: [DECLARED_CSVSUM],
+    });
+
+    expect(hits.map((h) => h.kind), `invisible: ${command}`).toEqual([KIND_DECLARED_EXECUTABLE]);
+  });
+
+  // The rule the bare-word guard exists for is untouched: an ordinary bare operand
+  // is still not a path, or vat dogfooded on its own checkout convicts itself.
+  it.each([
+    ['a grep pattern and its search root', 'grep -rn vat-skill-test src'],
+    ['the arm running its OWN copy of a same-named script', 'python3 ./csvsum.py data.csv'],
+  ])(STAYS_CLEAN, (_label, command) => {
+    expect(
+      scanHits({
+        transcript: transcriptWith(command),
+        harnessRoot: HARNESS_ROOT,
+        executablePaths: [DECLARED_CSVSUM],
+      }),
+    ).toEqual([]);
+  });
+});
+
+/**
+ * `cd ~/…` IS THE INSTALLED-PLUGIN-CACHE REACH, AND IT WAS REFUSED WHOLESALE.
+ *
+ * `cdDestination` rejected any target starting with `~`. The reason its docblock
+ * gives applies only to the BARE `cd ~` case, where the cwd `"~"` plus a `cd ..`
+ * yields `""` and every later relative token resolves against `/`. `cd ~/sub` has no
+ * such problem, and the one-shot `python3 ~/.claude/plugins/…/csvsum.py` already
+ * fired — so the detector saw the reach only when the arm did not navigate first.
+ */
+describe('detectBaselineContamination — cd into a home-rooted directory', () => {
+  it('follows a cd into the installed plugin cache', () => {
+    const hits = scanHits({
+      transcript: bashSession('cd ~/.claude/plugins/myskill/scripts', 'python3 ./csvsum.py'),
+      harnessRoot: HARNESS_ROOT,
+      executablePaths: [DECLARED_CSVSUM],
+    });
+
+    expect(hits.map((h) => h.kind), 'the canonical plugin-cache reach read clean').toEqual([KIND_DECLARED_EXECUTABLE]);
+  });
+
+  it.each([
+    ['a bare tilde, which goes home', 'cd ~'],
+    ['another user\'s home, which we cannot locate', 'cd ~otheruser'],
+  ])('still refuses %s', (_label, command) => {
+    expect(scanOf(bashSession(command, READ_SKILL_MD)).degraded?.reason).toBe(REASON_CWD_UNTRACKED);
+  });
+
+  /**
+   * The clamp, asserted through the ONE predicate that can see where a climb landed.
+   *
+   * Every needle is a path SUFFIX, so `~` and `""` are indistinguishable to all of
+   * them — a relative reach reproduces the same tail under either. Workspace
+   * CONTAINMENT is a prefix test and does tell them apart: with the climb clamped at
+   * the home root the reach stays `~`-rooted and escapes, while an unclamped `""`
+   * makes it absolute and lands INSIDE a top-level arm workspace, reporting clean.
+   */
+  it('clamps a climb at the home root instead of falling through to /', () => {
+    const workspace = '/vat-ws-abc';
+    const hits = scanHits({
+      transcript: bashSession('cd ~/projects/site', 'cd ../../..', 'python3 vat-ws-abc/summary.py'),
+      harnessRoot: HARNESS_ROOT,
+      armWorkspaceDir: workspace,
+      armCwd: `${workspace}/lookup-1`,
+      executablePaths: ['summary.py'],
+    });
+
+    expect(hits.map((h) => h.kind), 'the climb popped past `~` and landed at the filesystem root').toEqual([
+      KIND_DECLARED_EXECUTABLE,
+    ]);
+  });
+});
+
+/**
+ * A GLOB INSIDE THE DIRECTORY NAME DEFEATS ALL THREE HARNESS NEEDLES.
+ *
+ * Needle 3 exists because one `*` defeated the suffix scheme — but it is still a
+ * LITERAL segment, so a glob standing for the harness directory NAME matches
+ * nothing and reports `degraded: none`, which is the same silence as a clean run.
+ * No expansion is attempted; the scan says it could not tell.
+ */
+describe('detectBaselineContamination — an unexpandable glob is not a clean scan', () => {
+  it.each([
+    ['a glob standing for the whole directory name', `cat ${UP_TO_TMP}/vat-*/*/staged/*/SKILL.md`],
+    ['a glob standing for part of it', `cat ${UP_TO_TMP}/vat-skill-t*/*/staged/*/SKILL.md`],
+    ['a bracket class', `cat ${UP_TO_TMP}/vat-skill-tes[tT]/*/staged/*/SKILL.md`],
+  ])('degrades rather than reporting clean on %s', (_label, command) => {
+    const scan = scanOf(transcriptWith(command));
+
+    expect(scan.hits).toEqual([]);
+    expect(scan.degraded?.reason, `silently clean: ${command}`).toBe('glob-unexpanded');
+  });
+
+  // The two directions that must NOT degrade: a glob that matched a needle anyway,
+  // and a glob that never left the arm's own tree.
+  it.each([
+    ['a glob whose literal segments still carry the needle', `cat ${UP_TO_TMP}/vat-skill-test/*/staged/*/SKILL.md`, 1],
+    ['a glob inside the arm\'s own workspace', 'cat ./fixtures/*.md', 0],
+  ])('does not degrade on %s', (_label, command, hits) => {
+    const scan = scanOf(transcriptWith(command));
+
+    expect(scan.hits).toHaveLength(hits);
+    expect(scan.degraded, `spurious degradation: ${command}`).toBeUndefined();
+  });
+});
+
+/**
+ * AN EMPTY CONTROL TRANSCRIPT SCANNED "CLEAN AND UNDEGRADED".
+ *
+ * The `transcript-unparsed` branch was guarded by `transcript.trim() !== ''`, so a
+ * genuinely empty transcript fell through to a walk over zero tool uses: `hits: []`,
+ * no degradation — and it then COUNTED as an observed eval, so the run summary
+ * claimed nothing was seen reaching the skill on an eval where nothing was seen at all.
+ */
+describe('detectBaselineContamination — an empty transcript', () => {
+  it.each([
+    ['a genuinely empty transcript', ''],
+    ['a whitespace-only transcript', '  \n\t\n '],
+  ])('reports %s as unscanned rather than clean', (_label, transcript) => {
+    const scan = scanOf(transcript);
+
+    expect(scan.degraded?.reason, 'an eval that produced nothing was counted as looked at').toBe(REASON_UNPARSED);
+    expect(scan.degraded?.detail).toContain('empty');
+    expect(scan.hits).toEqual([]);
   });
 });

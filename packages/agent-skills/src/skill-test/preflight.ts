@@ -111,13 +111,11 @@ export function runPreflight(input: PreflightInput): PreflightResult {
   const checks: PreflightCheck[] = [];
 
   const version = input.claudeVersionProbe();
-  checks.push(version
-    ? { name: 'claude binary', passed: true, message: version }
-    : { name: 'claude binary', passed: false, message: 'not reachable', suggestion: 'Install Claude Code CLI.' });
-
-  checks.push(...flagChecks(input.flagParseProbe));
-
   checks.push(
+    version
+      ? { name: 'claude binary', passed: true, message: version }
+      : { name: 'claude binary', passed: false, message: 'not reachable', suggestion: 'Install Claude Code CLI.' },
+    ...flagChecks(input.flagParseProbe),
     input.integrityOk()
       ? { name: 'vendored skill-creator integrity', passed: true, message: 'manifest verified' }
       : { name: 'vendored skill-creator integrity', passed: false, message: 'hash manifest mismatch', suggestion: 'Re-sync the vendored copy.' },

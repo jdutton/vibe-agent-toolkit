@@ -124,6 +124,16 @@ export function parseGradingJson(raw: unknown): NormalizedGrading {
   // already parses both, so dropping them silently narrowed the declared type and
   // threw away exactly the key a reader needs to line the two --baseline artifacts
   // up per eval.
+  //
+  // 📌 STATE OF PLAY, so nobody mistakes this for load-bearing code: NOTHING IN
+  // SHIPPED CODE READS THESE TWO TODAY. `parseGradingJson` itself is reachable only
+  // from the package barrel and this module's own test file — the harness builds its
+  // NormalizedGrading from per-eval fragments, not by re-parsing an aggregate
+  // grading.json — so the two spreads are written-but-never-read outside tests. They
+  // stay anyway, because the cost of keeping a parsed field is zero and the cost of
+  // reopening the discard is a reader who cannot attribute an expectation to an eval
+  // or an arm. Treat "no production caller" as a reason to leave this alone, not as
+  // permission to delete it.
   return {
     summary: { passed: summary.passed, total: summary.total },
     expectations: expectations.map(e => ({
