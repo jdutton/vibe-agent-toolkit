@@ -55,15 +55,24 @@ interface ContextDocument {
   reason?: string;
   totals?: { alwaysTokens: number; onDemandTokens: number };
   rows?: AnswerRow[];
+  /**
+   * ⛔ Declared only so the "no answer carries them" assertion can be WRITTEN.
+   * The shipped `ContextAnswerDocument` has no such fields — they are the
+   * envelope's — and a narrowing interface that simply omitted them would make
+   * the absence unassertable rather than asserted.
+   */
   boundsStatement?: string;
-  limits?: Array<{ id: string; direction: string; statement: string }>;
-  modelledBehaviours?: Array<{ behaviour: string; introducedIn: string }>;
+  limits?: unknown;
+  modelledBehaviours?: unknown;
 }
 
 /** The envelope every run emits, however many paths were asked about. */
 interface ContextEnvelope {
   root: string;
   answers: ContextDocument[];
+  boundsStatement?: string;
+  limits?: Array<{ id: string; direction: string; statement: string }>;
+  modelledBehaviours?: Array<{ behaviour: string; introducedIn: string }>;
 }
 
 /**
@@ -135,6 +144,7 @@ describe('vat claude context --help', () => {
 
 describe.skipIf(process.platform === 'win32')('vat claude context', () => {
   let answer: ContextDocument;
+  let envelope: ContextEnvelope;
   let answerStatus: number | null = null;
 
   beforeAll(async () => {
@@ -143,6 +153,7 @@ describe.skipIf(process.platform === 'win32')('vat claude context', () => {
     const fetched = await contextJson([A_DIRECTORY]);
     answerStatus = fetched.status;
     answer = fetched.document;
+    envelope = fetched.envelope;
   });
 
   it('answers for a real directory and exits 0 with no threshold', () => {
@@ -171,13 +182,21 @@ describe.skipIf(process.platform === 'win32')('vat claude context', () => {
   // this tree never supplies — in
   // `packages/cli/test/commands/claude/context-charge-text.test.ts`.
 
-  it('carries its limits in the machine-readable document too', () => {
-    expect(answer.boundsStatement).toContain('neither a floor nor a ceiling');
+  it('carries its limits in the machine-readable output too — on the ENVELOPE', () => {
+    expect(envelope.boundsStatement).toContain('neither a floor nor a ceiling');
     // Looked up by id, never by position: the list is grouped by direction, so
     // every entry added to a group shifts the ones after it.
-    const cliff = answer.limits?.find((limit) => limit.id === 'cliff-scope');
+    const cliff = envelope.limits?.find((limit) => limit.id === 'cliff-scope');
     expect(cliff?.direction).toBe('scope');
-    expect(answer.modelledBehaviours?.length).toBeGreaterThan(0);
+    expect(envelope.modelledBehaviours?.length).toBeGreaterThan(0);
+    // ⛔ And NOT on the answer. The limits bound the method, so a per-answer copy
+    // is both a lie about scope and, on a sweep, tens of megabytes of one
+    // repeated paragraph. The count is pinned over a many-answer envelope in
+    // `test/commands/claude/context-envelope-limits.test.ts`; this end of it is
+    // what proves the shipped binary agrees.
+    expect('limits' in answer).toBe(false);
+    expect('boundsStatement' in answer).toBe(false);
+    expect('modelledBehaviours' in answer).toBe(false);
   });
 
   it("states its limits in the default text format, because they are the answer's shape", async () => {

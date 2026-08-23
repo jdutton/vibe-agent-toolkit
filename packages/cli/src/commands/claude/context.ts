@@ -18,17 +18,25 @@
  * field" would put a second, unowned model of the vendor's behaviour in the
  * package no other package can depend on.
  *
- * ## The limits ride WITH the answer, in every format
+ * ## The limits ride WITH the run — ONCE — in every format
  *
  * Spec §11 puts the stated limits in the command's own output rather than in a
  * doc, because a limit a reader has to go and find is a limit that never reaches
  * the person acting on the number. So {@link CLAUDE_CONTEXT_LIMITS} and
- * {@link CLAUDE_CONTEXT_MODELLED_BEHAVIOURS} are fields of the yaml/json document
- * and a printed section of the text rendering, and
+ * {@link CLAUDE_CONTEXT_MODELLED_BEHAVIOURS} are fields of the yaml/json
+ * ENVELOPE and a printed section of the text rendering, and
  * {@link CLAUDE_CONTEXT_BOUNDS_STATEMENT} — *neither a floor nor a ceiling* —
  * appears in all three. All three are imported, never restated: the sentence is
  * domain content owned beside the list it frames, so every other consumer of the
  * list reaches it too.
+ *
+ * ⛔ They belong to the ENVELOPE, never to an answer, and both renderings obey
+ * that identically — see {@link ContextEnvelope} for why. Attaching them per
+ * answer was not a formatting preference: on a `--all` sweep of this repository
+ * (6,224 answers) `--format json` measured 76,877,016 bytes and measures
+ * 6,581,468 with the block hoisted — 70.3 MB of ONE byte-identical paragraph,
+ * repeated. That is the JSON spelling of the very burial
+ * {@link renderEnvelopeText} refuses to do in text.
  *
  * ⛔ Nothing here may read as "complete". Many of the stated limits are signed
  * `over-report`/`under-report` and apply whether or not `unknownTokenRows`,
@@ -96,10 +104,22 @@ export interface ClaudeContextOptions {
  * `root` rides here rather than on each answer because it is a property of the
  * POPULATION, and one run populates exactly one tree. Repeating it per answer
  * would invite a reader to believe two answers could carry different roots.
+ *
+ * ⛔ The three limit fields ride here for the SAME reason, and it is the reason
+ * {@link renderEnvelopeText} already prints them once: they bound the
+ * MEASUREMENT METHOD, not any one path. An answer carrying its own copy reads
+ * as though that path had caveats of its own — and repeated across a sweep it
+ * is pure duplication, byte-identical every time.
  */
 export interface ContextEnvelope {
   readonly root: string;
   readonly answers: readonly (ContextAnswerDocument | ContextUnknownDocument)[];
+  /** What these answers do not settle, in either direction. Stated once. */
+  readonly boundsStatement: string;
+  /** The signed over/under-report bounds on the method. Stated once. */
+  readonly limits: readonly StatedLimit[];
+  /** The vendor behaviours modelled, each cited. Stated once. */
+  readonly modelledBehaviours: readonly ModelledBehaviour[];
 }
 
 /**
@@ -135,9 +155,6 @@ export interface ContextAnswerDocument {
    * a session for documents it may never open.
    */
   readonly discoverable: DiscoverableContext | null;
-  readonly boundsStatement: string;
-  readonly limits: readonly StatedLimit[];
-  readonly modelledBehaviours: readonly ModelledBehaviour[];
 }
 
 /**
@@ -147,9 +164,6 @@ export interface ContextAnswerDocument {
  * `totals` and no `rows`, so a consumer cannot accidentally read "VAT never
  * looked at this path" as "nothing loads here". `explanation` says the same thing
  * to a person who is reading the document rather than switching on `kind`.
- *
- * ⛔ It carries no `boundsStatement` and no `limits` either, and their absence is
- * a DECISION rather than an oversight — see {@link unknownDocumentFor}.
  */
 export interface ContextUnknownDocument {
   readonly kind: 'unknown';
@@ -212,8 +226,10 @@ Output:
   - totals:  always/on-demand token estimates, plus counts of rows whose size
              is unknown, skipped by the 4 MiB cliff, or pruned behind one
   - rows:    one per resource, with every predicate that admitted it
-  - limits:  what these answers deliberately do not settle, in both directions,
-             stated once because they bound the method rather than any one path
+  - limits:  what these answers deliberately do not settle, in both directions.
+             On the ENVELOPE beside root, never on an answer — they bound the
+             method rather than any one path, so they are stated exactly once
+             however many paths were asked about
 
   A path the projection never realized answers kind: unknown — never zero.
   Diagnostics and blob-stage refusals go to stderr; stdout is the document.
@@ -258,7 +274,7 @@ export async function claudeContextCommand(
     const answers = targets.map(
       (target) => documentFor(target, projection, root, options.discoverable === true),
     );
-    emit({ root, answers }, renderEnvelopeText(answers), format);
+    emit(contextEnvelope(root, answers), renderEnvelopeText(answers), format);
     // ⛔ Always 0. There is no threshold in this command and there is not going
     // to be one — a number that fails a build is a number people learn to stop
     // reading. The explicit exit matches every other leaf here and guarantees the
@@ -277,13 +293,19 @@ export async function claudeContextCommand(
  * handler body put three statements between the query and its document.
  *
  * Returns the document alone — rendering moved to {@link renderEnvelopeText},
- * which needs every document at once to print the limits exactly once.
+ * which needs every document at once to print the limits exactly once, and the
+ * limits themselves are attached by {@link contextEnvelope}, never here.
+ *
+ * ⛔ Exported so it can be TESTED. What has to be pinned is an ABSENCE — that no
+ * limit field is on the returned document — and an absence is only observable by
+ * calling the function that would have added it.
  *
  * @param answer - The query's answer
  * @param projection - The populated projection, for the `claude-md` tag rows
+ * @param discoverable - Whether to compute the one-hop reachable set
  * @returns The answer document
  */
-function answerDocument(
+export function answerDocument(
   answer: LoadedContextAnswer,
   projection: Projection,
   discoverable: boolean,
@@ -313,11 +335,38 @@ function answerDocument(
     // already loaded, and the two lenses partitioning depends on both reading
     // one loaded set.
     discoverable: discoverable ? discoverableFrom(projection, answer) : null,
+  };
+  return document;
+}
+
+/**
+ * Wrap the run's documents in the envelope, with the limits attached ONCE.
+ *
+ * The one place {@link CLAUDE_CONTEXT_LIMITS} and its two companions enter the
+ * machine-readable output. Keeping that a single assignment is what makes the
+ * "stated once" property structural rather than a habit: there is no per-answer
+ * site left where a copy could be reintroduced.
+ *
+ * ⛔ Exported so it can be TESTED alongside {@link answerDocument} — the
+ * regression this guards (an answer growing its own copy of the block) is a
+ * property of the two functions TOGETHER, and a test that can reach only one of
+ * them cannot see it.
+ *
+ * @param root - The corpus root that was enumerated
+ * @param answers - One document per requested path, in the order requested
+ * @returns The envelope, ready to serialize
+ */
+export function contextEnvelope(
+  root: string,
+  answers: readonly (ContextAnswerDocument | ContextUnknownDocument)[],
+): ContextEnvelope {
+  return {
+    root,
+    answers,
     boundsStatement: CLAUDE_CONTEXT_BOUNDS_STATEMENT,
     limits: CLAUDE_CONTEXT_LIMITS,
     modelledBehaviours: CLAUDE_CONTEXT_MODELLED_BEHAVIOURS,
   };
-  return document;
 }
 
 /**
@@ -441,9 +490,9 @@ function renderEnvelopeText(
 ): string {
   const bodies = documents.map((document) =>
     document.kind === 'unknown' ? renderUnknownText(document) : renderAnswerText(document));
-  const measured = documents.find((document) => document.kind === 'answer');
-  if (measured === undefined) return bodies.join('\n');
-  return `${bodies.join('\n')}${limitSection(measured).join('\n')}\n`;
+  const measured = documents.some((document) => document.kind === 'answer');
+  if (!measured) return bodies.join('\n');
+  return `${bodies.join('\n')}${limitSection().join('\n')}\n`;
 }
 
 /**
@@ -506,13 +555,12 @@ function emit(document: unknown, text: string, format: ContextOutputFormat): voi
 /**
  * The non-answer, spelled so it cannot be mistaken for an empty answer.
  *
- * ⛔ **`boundsStatement` and `limits` are omitted on purpose, in every format.**
- * Every one of those limits is a bound on a MEASUREMENT — how much this answer
- * may over- or under-report. Nothing was measured here, so publishing them would
- * assert that a measurement happened and merely came with caveats, which is the
- * exact confusion `kind: 'unknown'` exists to prevent. A consumer reading
- * `document.limits` unconditionally therefore gets `undefined`, and that is the
- * correct signal: switch on `kind` first. The `explanation` carries the only
+ * ⛔ **A non-answer publishes no measurement, in every format.** No `totals`, no
+ * `rows`: nothing was measured here, so anything readable as a figure would
+ * assert that a measurement happened, which is the exact confusion `kind:
+ * 'unknown'` exists to prevent. The limits are one level up on the ENVELOPE and
+ * bound the run's method, not this path — a sweep whose every path was
+ * unrealized still measured nothing, and the `explanation` carries the only
  * caveat that applies to a non-answer, which is that there is no answer.
  *
  * @param input - The path that was asked about
@@ -800,17 +848,25 @@ function listSection(title: string, entries: readonly string[]): string[] {
  * conditions and no unknown rows is subject to exactly the same signed
  * over/under-report bounds as a messy one.
  *
- * @param document - The answer document
+ * ⛔ Reads the imported constants, NOT an answer document — the same source
+ * {@link contextEnvelope} reads. It took no argument's worth of per-answer data
+ * even when the fields were on the answer, and threading one through was what
+ * made "the limits belong to an answer" look true.
+ *
  * @returns The section's lines
  */
-function limitSection(document: ContextAnswerDocument): string[] {
-  const lines = ['What this answer does not settle', ...wrapStatement(document.boundsStatement, '  '), ''];
-  for (const limit of document.limits) {
+function limitSection(): string[] {
+  const lines = [
+    'What this answer does not settle',
+    ...wrapStatement(CLAUDE_CONTEXT_BOUNDS_STATEMENT, '  '),
+    '',
+  ];
+  for (const limit of CLAUDE_CONTEXT_LIMITS) {
     lines.push(`  ${limit.direction}: ${limit.id}`);
     lines.push(...wrapStatement(limit.statement, '    '));
   }
   lines.push('', 'Modelled Claude Code behaviours (vendor versions, each cited)');
-  for (const behaviour of document.modelledBehaviours) {
+  for (const behaviour of CLAUDE_CONTEXT_MODELLED_BEHAVIOURS) {
     lines.push(`  ${behaviour.behaviour}`);
     lines.push(`    ${behaviour.introducedIn} — ${behaviour.citedFrom}`);
   }

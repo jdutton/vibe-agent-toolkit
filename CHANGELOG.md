@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ten enumerations; it is now one. Every argument is also resolved *before* the enumeration, so a
   mistyped path among valid ones is refused in milliseconds instead of after a full population.
 
+- **`vat claude context --format json`/`yaml`: `limits`, `modelledBehaviours` and `boundsStatement`
+  moved off every answer onto the envelope, beside `root`.** They bound the method, not any one
+  path. Read them from the envelope — `answers[i]` no longer carries them.
+
 ### Added
 
 - **`vat claude context --discoverable`** adds a second, disjoint set: what the loaded files link to
@@ -35,11 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the estimate — a markdown link is voluntary, so the figure is a ceiling, not a charge. A target the
   loaded set already contains is excluded, so the two sets can be read alone or added.
 
-- **`vat claude context --all`** answers for every path the projection realized, from the same single
-  enumeration. Bare `vat claude context` still means the current directory — the sweep is spelled
-  out, because making the friendliest invocation the most expensive one is a trap. Paths are
-  deduplicated and sorted by code point so two sweeps are diffable. On this repository it returns
-  6,217 answers and names the worst always-loaded path in the tree.
+- **`vat claude context --all`** answers for every path the projection realized, from one
+  enumeration. Bare `vat claude context` still means the current directory; paths are
+  deduplicated and sorted by code point, so two sweeps are diffable.
 
 - **(library) A closure extent declaration now carries `referenceDialect`.** Parsed
   `ExtentDeclaration` objects gain the field; it defaults to `'href'`, so every existing declaration
