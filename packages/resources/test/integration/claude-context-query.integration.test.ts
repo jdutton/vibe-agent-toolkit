@@ -14,7 +14,7 @@
  * charges is a member the provenance walk cannot explain.
  */
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import {
   whatLoadsAt,
@@ -22,10 +22,9 @@ import {
   type LoadedContextAnswer,
 } from '../../src/projection/claude-context-query.js';
 import { CLAUDE_IMPORT_CONTRIBUTOR_ID_PREFIX } from '../../src/projection/contributors/claude-import-extent.js';
-import type { Projection } from '../../src/projection/projection.js';
 import { ExtentDeclarationSchema } from '../../src/schemas/project-config.js';
 
-import { buildClaudeContextTree, byCodePoint, removeClaudeContextTree } from './claude-context-tree.js';
+import { byCodePoint, setupClaudeContextTree } from './claude-context-tree.js';
 
 /**
  * The tree.
@@ -76,21 +75,7 @@ const HANDBOOK = 'docs/handbook.md';
 /** The hop-2 member, reachable only by following an import out of an import. */
 const DEEP = 'docs/deep/one.md';
 
-let treeDir: string | undefined;
-let projection: Projection;
-
-beforeAll(async () => {
-  const tree = await buildClaudeContextTree(TREE);
-  treeDir = tree.dir;
-  projection = tree.projection;
-}, 60_000);
-
-afterAll(async () => {
-  // Generous, and deliberately so: a recursive `rm` over a temp tree has timed
-  // out at Vitest's 10s hook default on Windows CI, which fails the whole file
-  // for a reason that has nothing to do with what it tests.
-  await removeClaudeContextTree(treeDir);
-}, 60_000);
+const tree = setupClaudeContextTree(TREE);
 
 /**
  * Assert a result IS an answer, and narrow it.
@@ -111,7 +96,7 @@ function narrowed(result: LoadedContext): LoadedContextAnswer {
  * @returns The answer
  */
 function answerAt(path: string): LoadedContextAnswer {
-  return narrowed(whatLoadsAt(projection, path));
+  return narrowed(whatLoadsAt(tree.projection(), path));
 }
 
 /**
@@ -213,7 +198,7 @@ describe('whatLoadsAt over a real populated tree', () => {
   });
 
   it('keeps a path the enumeration never realized distinguishable from an empty answer', () => {
-    expect(whatLoadsAt(projection, 'packages/cli/src/absent.ts')).toEqual({
+    expect(whatLoadsAt(tree.projection(), 'packages/cli/src/absent.ts')).toEqual({
       kind: 'unknown',
       input: 'packages/cli/src/absent.ts',
       reason: 'path-not-realized',
@@ -221,8 +206,8 @@ describe('whatLoadsAt over a real populated tree', () => {
   });
 
   it('reads back the parameter set the population wrote, keyed to a realized root', () => {
-    const realizedPaths = new Set(projection.resourceRealizations.map((row) => row.path));
-    const declarations = projection.zoneProvenance
+    const realizedPaths = new Set(tree.projection().resourceRealizations.map((row) => row.path));
+    const declarations = tree.projection().zoneProvenance
       .filter((row) => row.contributorId.startsWith(`${CLAUDE_IMPORT_CONTRIBUTOR_ID_PREFIX}:`))
       .map((row) => ExtentDeclarationSchema.parse(row.parameterSet));
 

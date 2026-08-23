@@ -287,6 +287,54 @@ describe('discoverableFrom', () => {
     expect(lens.totals.discoverableTokens).toBe(0);
   });
 
+  it('resolves a SHARED blob from every citing path, not from the last one keyed', async () => {
+    // 🪤 The defect this case exists for, and the reason it could not be written
+    // until the fixture stopped keying blobs by path. `blob_references` is keyed
+    // by CONTENT (`content-key.ts`: "two copies of the same document in
+    // different trees share a key"), so two byte-identical `CLAUDE.md` files
+    // share ONE set of reference rows. A `contentKey → path` map is therefore
+    // many-to-one, and the collapse is not a mislabelling: a relative href
+    // resolves against the SOURCE FILE's directory, so `guide.md` names a
+    // DIFFERENT target from each citer. Attributing the rows to one path made
+    // `guide.md` vanish from the answer entirely.
+    //
+    // ⚠️ The two files must be byte-identical for this to bite — change one
+    // character of either and the keys diverge, the bug cannot occur, and the
+    // test passes against the broken code.
+    const shared = 'see [the guide](guide.md)\n';
+    const { lens } = await lensAt({
+      [ROOT_CLAUDE_MD]: shared,
+      'sub/CLAUDE.md': shared,
+      'guide.md': '# root guide\n',
+      'sub/guide.md': '# sub guide\n',
+    }, 'sub');
+
+    expect(pathsOf(lens)).toEqual(['guide.md', 'sub/guide.md']);
+    expect(lens.rows.map((row) => row.citedBy.map((citation) => citation.fromPath))).toEqual([
+      [ROOT_CLAUDE_MD],
+      ['sub/CLAUDE.md'],
+    ]);
+  });
+
+  it('never attributes a shared blob to a path NOTHING loads, even though it shares the bytes', async () => {
+    // The guard against over-correcting the case above. One-to-many must widen
+    // the map only across LOADED paths: `a/CLAUDE.md` carries the same bytes as
+    // the queried `b/CLAUDE.md` and so is filed under the same content key, but
+    // it is not in this query's ancestry and the harness never loads it. Citing
+    // it here would invent a reference from a file that is not in context, and
+    // would manufacture `a/guide.md` as a target nothing points at.
+    const shared = 'see [the guide](guide.md)\n';
+    const { lens } = await lensAt({
+      'a/CLAUDE.md': shared,
+      'a/guide.md': '# a guide\n',
+      'b/CLAUDE.md': shared,
+      'b/guide.md': '# b guide\n',
+    }, 'b');
+
+    expect(pathsOf(lens)).toEqual(['b/guide.md']);
+    expect(lens.rows[0]?.citedBy.map((citation) => citation.fromPath)).toEqual(['b/CLAUDE.md']);
+  });
+
   it('refuses a projection with no root rather than answering nothing is discoverable', async () => {
     // ⛔ The same confident-zero refusal `whatLoadsAt` makes. An empty answer
     // for a tree nobody looked at is indistinguishable from a tree that links

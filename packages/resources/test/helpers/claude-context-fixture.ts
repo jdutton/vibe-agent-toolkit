@@ -40,11 +40,10 @@
  * same claim — it reads only materialised tables — so it gets the same root.
  */
 
-import { createHash } from 'node:crypto';
-
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
 
+import { computeContentKey } from '../../src/content-key.js';
 import { parseMarkdownContent } from '../../src/link-parser.js';
 import { blobRowFor } from '../../src/projection/blob-facts.js';
 import { blobReferencesFor } from '../../src/projection/blob-references.js';
@@ -109,9 +108,36 @@ const MAX_FIXTURE_LINE_LENGTH = 200;
 /** The default syntactic form a hand-planted reference gets when unspecified. */
 export const MARKDOWN_LINK: ReferenceSyntacticForm = 'markdown-link';
 
-/** A schema-valid content key (`<parserKind>.<sha256>`) derived from a seed. */
-function markdownKey(seed: string): string {
-  return `markdown.${createHash('sha256').update(seed).digest('hex')}`;
+/**
+ * The content key one fixture file's blob is filed under — derived from its
+ * CONTENT, exactly as production derives it.
+ *
+ * ⛔ This used to hash the PATH, and that was not a harmless shortcut: it made
+ * the fixture's keys one-to-one with paths, which production's never are.
+ * `content-key.ts` is explicit that a key is a function of bytes and parser
+ * kind alone — "two copies of the same document in different trees share a key"
+ * — so `blob_references` is a per-CONTENT table, and any consumer that maps a
+ * key back to "the path that wrote this" is many-to-one in the real world and
+ * one-to-one here. A path-keyed fixture cannot express that shape at all, so a
+ * lens that collapsed two citers into one passed every in-memory test and only
+ * failed against a real tree. Keying by content is what makes those tests able
+ * to fail.
+ *
+ * `parserKind` is `markdown` rather than `parserKindForPath`'s answer because it
+ * is the truth for these rows, not a stand-in: every fixture blob is produced by
+ * `parseMarkdownContent`, whatever extension the path carries.
+ *
+ * A `refs`-only file has no source text, so its declared references stand in as
+ * its content — the only thing it is made of. Two such files declaring the same
+ * references share a key, which is precisely what production would do with two
+ * byte-identical files.
+ *
+ * @param file - The fixture file
+ * @returns A schema-valid content key (`markdown.<sha256>`)
+ */
+function contentKeyFor(file: FixtureFile): string {
+  const content = file.markdown ?? JSON.stringify(file.refs);
+  return computeContentKey(Buffer.from(content, 'utf-8'), 'markdown');
 }
 
 /**
@@ -248,7 +274,7 @@ export function addFile(builder: ProjectionBuilder, file: FixtureFile, root: str
     return;
   }
 
-  const contentKey = markdownKey(file.path);
+  const contentKey = contentKeyFor(file);
   builder.addRealization({ ...realizationRow(resourceId, file.path, contentKey, false), ...file.columns });
   for (const row of referenceRowsFor(contentKey, file)) {
     builder.addBlobReference(row);

@@ -213,29 +213,86 @@ export function discoverableFrom(
     );
   }
   const loadedPaths = new Set(answer.rows.map((row) => row.path));
-  const keyToPath = new Map<string, string>();
-  for (const row of projection.resourceRealizations) {
-    if (row.contentKey !== null && loadedPaths.has(row.path)) keyToPath.set(row.contentKey, row.path);
-  }
+  const citingPaths = loadedPathsByContentKey(projection.resourceRealizations, loadedPaths);
+  const { targets, reachOf } = collectTargets(projection, root, loadedPaths, citingPaths);
 
+  return buildResult(projection, targets, reachOf);
+}
+
+/**
+ * Every LOADED path each content key is realized at — one key to MANY paths.
+ *
+ * ⛔ The plural is the correctness property, not a generalisation nobody needs.
+ * A `contentKey` names BYTES and nothing else — `content-key.ts` says so in as
+ * many words ("two copies of the same document in different trees share a
+ * key"), because one parse must serve every lane that holds those bytes. So a
+ * `contentKey → path` map is many-to-one and last-write-wins, and `blobReferences`
+ * is keyed by `blob`, i.e. by content key. Two `CLAUDE.md` files with identical
+ * text therefore share ONE set of reference rows, and attributing them to a
+ * single path does not merely mislabel a citation: a relative markdown href
+ * resolves against the SOURCE FILE's own directory, so the same `guide.md`
+ * names a different target from each citer. Collapsing the two loses a target
+ * outright — it does not appear anywhere in the answer.
+ *
+ * A path is recorded once even if the realization table carries it twice, which
+ * {@link buildResult} also assumes: a duplicate would push the same citation
+ * twice into one row's `citedBy`.
+ *
+ * @param realizations - `resource_realizations`, the path-bearing table
+ * @param loadedPaths - The paths `whatLoadsAt` charged
+ * @returns Content key → every loaded path realizing it, in table order
+ */
+function loadedPathsByContentKey(
+  realizations: Projection['resourceRealizations'],
+  loadedPaths: ReadonlySet<string>,
+): Map<string, string[]> {
+  const byKey = new Map<string, string[]>();
+  const seen = new Set<string>();
+  for (const row of realizations) {
+    if (row.contentKey === null || !loadedPaths.has(row.path) || seen.has(row.path)) continue;
+    seen.add(row.path);
+    appendTo(byKey, row.contentKey, row.path);
+  }
+  return byKey;
+}
+
+/**
+ * Resolve every followable reference from every path that authored it.
+ *
+ * Split from {@link discoverableFrom} for the cognitive-complexity ceiling once
+ * the inner loop over citing paths arrived.
+ *
+ * @param projection - The populated projection
+ * @param root - Absolute corpus root
+ * @param loadedPaths - The paths `whatLoadsAt` charged
+ * @param citingPaths - Content key → every loaded path realizing it
+ * @returns Target path → its citations, and target path → its reach
+ */
+function collectTargets(
+  projection: Projection,
+  root: string,
+  loadedPaths: ReadonlySet<string>,
+  citingPaths: ReadonlyMap<string, readonly string[]>,
+): { targets: Map<string, DiscoveryCitation[]>; reachOf: Map<string, DiscoveryReach> } {
   const targets = new Map<string, DiscoveryCitation[]>();
   const reachOf = new Map<string, DiscoveryReach>();
   for (const reference of projection.blobReferences) {
-    const fromPath = keyToPath.get(reference.blob);
-    if (fromPath === undefined || !isFollowable(reference)) continue;
-    const target = resolveTarget(reference.rawRef, fromPath, root);
-    // Already loaded ⇒ not discoverable-but-unloaded. Dropped here rather than
-    // filtered at the end, so the two answers partition by construction.
-    if (target === undefined || loadedPaths.has(target.path)) continue;
-    reachOf.set(target.path, target.reach);
-    push(targets, target.path, {
-      fromPath,
-      line: reference.line,
-      text: reference.text,
-    });
+    const fromPaths = citingPaths.get(reference.blob);
+    if (fromPaths === undefined || !isFollowable(reference)) continue;
+    for (const fromPath of fromPaths) {
+      const target = resolveTarget(reference.rawRef, fromPath, root);
+      // Already loaded ⇒ not discoverable-but-unloaded. Dropped here rather than
+      // filtered at the end, so the two answers partition by construction.
+      if (target === undefined || loadedPaths.has(target.path)) continue;
+      reachOf.set(target.path, target.reach);
+      appendTo(targets, target.path, {
+        fromPath,
+        line: reference.line,
+        text: reference.text,
+      });
+    }
   }
-
-  return buildResult(projection, targets, reachOf);
+  return { targets, reachOf };
 }
 
 /**
@@ -382,13 +439,18 @@ function comparePaths(left: string, right: string): number {
 }
 
 /**
- * Append one citation under a target path.
+ * Append one value under a key, starting the list when it is the first.
  *
- * @param map - The citation map, mutated in place
- * @param path - The target
- * @param citation - Where it was cited
+ * Generic over the value because this lane now builds TWO one-to-many maps —
+ * target path → citations, and content key → citing paths — and two four-line
+ * appenders differing only in element type is the duplication this repo's gate
+ * refuses.
+ *
+ * @param map - The map, mutated in place
+ * @param key - The grouping key
+ * @param value - The value to append
  */
-function push(map: Map<string, DiscoveryCitation[]>, path: string, citation: DiscoveryCitation): void {
-  const list = map.get(path);
-  if (list === undefined) map.set(path, [citation]); else list.push(citation);
+function appendTo<T>(map: Map<string, T[]>, key: string, value: T): void {
+  const list = map.get(key);
+  if (list === undefined) map.set(key, [value]); else list.push(value);
 }

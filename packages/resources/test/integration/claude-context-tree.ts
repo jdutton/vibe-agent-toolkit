@@ -26,6 +26,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { afterAll, beforeAll } from 'vitest';
 
 import { buildClaudeContextPopulation } from '../../src/projection/claude-context-population.js';
 import type { Projection } from '../../src/projection/projection.js';
@@ -74,6 +75,59 @@ export async function buildClaudeContextTree(
 export async function removeClaudeContextTree(dir: string | undefined): Promise<void> {
   if (dir === undefined) return;
   await rm(dir, { recursive: true, force: true });
+}
+
+/** A live handle to the tree a {@link setupClaudeContextTree} suite is running against. */
+export interface ClaudeContextTreeHandle {
+  /** The populated projection. ⛔ Throws if read before `beforeAll` has run. */
+  readonly projection: () => Projection;
+  /** Absolute path of the temp root, or undefined if `beforeAll` never got that far. */
+  readonly dir: () => string | undefined;
+}
+
+/**
+ * Register the `beforeAll`/`afterAll` pair that owns one on-disk tree for a suite.
+ *
+ * Both integration suites need the identical five-line lifecycle, and a third
+ * copy tripped the duplication gate — which is a merge blocker here, so this is
+ * the fix rather than a baseline bump.
+ *
+ * ⚠️ **Both hooks take a 60s timeout deliberately.** A recursive `rm` over a temp
+ * tree has exceeded Vitest's 10s hook default on Windows CI, which fails the
+ * whole file for a reason unrelated to what it tests. One suite had the timeout
+ * and the other did not; consolidating here is what stops that divergence
+ * recurring, and it is why the teardown timeout is not "tidied away" as
+ * excessive.
+ *
+ * @param files - Root-relative, forward-slashed paths to file contents
+ * @returns Accessors for the projection and temp directory
+ */
+export function setupClaudeContextTree(
+  files: Readonly<Record<string, string>>,
+): ClaudeContextTreeHandle {
+  let treeDir: string | undefined;
+  let projection: Projection | undefined;
+
+  beforeAll(async () => {
+    const tree = await buildClaudeContextTree(files);
+    treeDir = tree.dir;
+    projection = tree.projection;
+  }, 60_000);
+
+  afterAll(async () => {
+    await removeClaudeContextTree(treeDir);
+  }, 60_000);
+
+  return {
+    projection: (): Projection => {
+      // An explicit refusal, not a `!`: reading this from a `describe` body
+      // rather than a test runs BEFORE `beforeAll`, and an undefined projection
+      // would otherwise surface as an unrelated property error much later.
+      if (projection === undefined) throw new Error('tree not built yet — read it inside a test');
+      return projection;
+    },
+    dir: (): string | undefined => treeDir,
+  };
 }
 
 /**
