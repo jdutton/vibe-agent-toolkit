@@ -25,6 +25,8 @@ export interface PoolTestBlock {
   evals?: string;
   model?: string;
   timeout?: number;
+  /** Committed opt-in to the with/without A/B run — the config's largest cost multiplier. */
+  baseline?: boolean;
   /** Pre-stage `test.build` shell hook — runs with the DECLARING config's root as cwd. */
   build?: string;
 }

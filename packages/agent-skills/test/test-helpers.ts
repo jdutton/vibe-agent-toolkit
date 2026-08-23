@@ -260,6 +260,24 @@ export async function createAndValidateSingleResourceSkill(
 /**
  * Create a skill with frontmatter only (no body)
  */
+/**
+ * Locate one eval's staged workspace under a run's reported `workspacesPath`.
+ *
+ * The arm segment beneath the root is an OPAQUE token minted per run — it must not
+ * be the arm's name, because that path is quoted to the executor as its working
+ * directory and `…/without/e1` tells a control arm which side of the A/B it is on.
+ * So a test cannot hardcode it, and hardcoding `with` is what these assertions used
+ * to do. Deriving it also asserts the layout: a non-baseline run stages exactly one
+ * arm, and a second directory here would mean the harness staged an arm nobody asked
+ * for.
+ */
+export function soleArmWorkspace(workspacesRoot: string, evalId: string): string {
+  const armDirs = fs.readdirSync(workspacesRoot);
+  expect(armDirs, `expected exactly one arm directory under ${workspacesRoot}`).toHaveLength(1);
+  expect(armDirs, 'the arm directory must not be named after the arm').not.toContain('with');
+  return safePath.join(workspacesRoot, armDirs[0] ?? '', evalId);
+}
+
 export function createFrontmatter(fields: Record<string, unknown>): string {
   const yaml = Object.entries(fields)
     .map(([key, value]) => {

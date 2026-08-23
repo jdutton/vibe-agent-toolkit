@@ -9,7 +9,7 @@
  *   - exit 1  when an internal/parse-failure error is thrown (InternalHarnessError)
  */
 
-import { writeFileSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import * as harness from '@vibe-agent-toolkit/agent-skills';
@@ -17,7 +17,19 @@ import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/uti
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as yaml from 'yaml';
 
+// Imported from SOURCE, not through the `@vibe-agent-toolkit/agent-skills` barrel
+// the rest of this file uses. That barrel resolves through the package's `exports`
+// map to `dist/`, so a domain change made in the same commit as its CLI-visible
+// consequence would be invisible here until someone rebuilt — and an `instanceof`
+// against a dist copy of the class can never match a src instance anyway. These
+// three modules are asserted about DIRECTLY (their contract is the exit code and
+// the published schema), so they come from src, exactly as agent-skills' own unit
+// tests import them.
+import { mapErrorToExitCode } from '../../agent-skills/src/skill-test/exit-codes.js';
+import { GradingReportJsonSchema, GradingSummarySchema } from '../../agent-skills/src/skill-test/grading-schema.js';
+import { HarnessLockBusyError } from '../../agent-skills/src/skill-test/lock.js';
 import * as pluginBuild from '../src/commands/claude/plugin/build.js';
+import { buildKnobs, createSkillTestConfigureCommand } from '../src/commands/skill/test/configure.js';
 import {
   buildMemoKey,
   createSkillTestRunCommand,
@@ -25,6 +37,7 @@ import {
   descriptorsToRecord,
   isPathSourceTarget,
   parseWithFlags,
+  resolveBaseline,
   resolveCappedKnob,
   resolveCompanionSources,
   resolveCompanionSpec,
@@ -58,6 +71,77 @@ const SONNET_MODEL = 'claude-sonnet-5';
 /** A fresh per-call build memo (run.ts creates one per run; unit tests create their own). */
 function newBuildMemo(): BuildMemo {
   return new Set();
+}
+
+/** The baseline A/B flag and its Commander negation — asserted by several suites below. */
+const BASELINE_FLAG = '--baseline';
+const NO_BASELINE_FLAG = '--no-baseline';
+
+/** Silence + capture stderr so a one-line note is observable AND its absence assertable. */
+function spyStderr() {
+  return vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never);
+}
+
+/**
+ * Parse `--baseline`/`--no-baseline` through the REAL command. `parseOptions`
+ * populates `opts()` WITHOUT invoking the action, so no run is attempted.
+ */
+function parseBaselineFlag(argv: string[]): unknown {
+  const command = createSkillTestRunCommand();
+  command.parseOptions(['my-skill', ...argv]);
+  return command.opts().baseline;
+}
+
+/**
+ * The `summary` subschema as PUBLISHED, wherever zodToJsonSchema nested it (named
+ * generation puts the root under `definitions`, anonymous generation inlines it).
+ * Tolerating both means a change in that layout surfaces as the "publishes a summary
+ * subschema at all" control failing, rather than as the invariant assertions
+ * silently passing over an empty object.
+ */
+function publishedSummarySchema(): Record<string, unknown> {
+  const schema = GradingReportJsonSchema as {
+    definitions?: Record<string, { properties?: Record<string, unknown> }>;
+    properties?: Record<string, unknown>;
+  };
+  const root = schema.properties ?? Object.values(schema.definitions ?? {})[0]?.properties ?? {};
+  return root.summary as Record<string, unknown>;
+}
+
+/**
+ * The `configure` analog of {@link parseBaselineFlag} — `configure` persists the
+ * setting, so its own negation has to round-trip through the same Commander
+ * tri-state (and the same declaration-order trap).
+ */
+function parseConfigureBaselineFlag(argv: string[]): unknown {
+  const command = createSkillTestConfigureCommand();
+  command.parseOptions(['my-skill', ...argv]);
+  return command.opts().baseline;
+}
+
+/**
+ * Render the `.addHelpText('after', …)` epilogue, which `helpInformation()` alone
+ * does NOT include — it is emitted by `outputHelp()`, so the writer has to be
+ * captured. That epilogue is where the Artifacts/Model/Exit Codes prose lives.
+ */
+function renderFullHelp(command: ReturnType<typeof createSkillTestRunCommand>): string {
+  let buffer = '';
+  command.configureOutput({
+    writeOut: (s: string) => {
+      buffer += s;
+    },
+  });
+  command.outputHelp();
+  return buffer;
+}
+
+/**
+ * {@link renderFullHelp} with every whitespace run collapsed to one space, so a
+ * PROSE assertion pins the sentence rather than Commander's line wrapping —
+ * re-wording a paragraph must not have to be mirrored into an expected `\n  `.
+ */
+function renderFullHelpFlat(command: ReturnType<typeof createSkillTestRunCommand>): string {
+  return renderFullHelp(command).replaceAll(/\s+/g, ' ');
 }
 
 /** Write a minimal SKILL.md into a mock-built dist dir (verifyBuiltDist requires it). */
@@ -152,12 +236,41 @@ function setupDeclaredPoolFixtureWithPkgSpy() {
   return { fx, pkg };
 }
 
+/**
+ * Real temp dirs standing in for a harness root, so the `Harness:` presence check
+ * is exercised against the FILESYSTEM (what the CLI actually asks) rather than a
+ * re-derived keep/--out/--workdir predicate.
+ */
+const harnessTempDirs: string[] = [];
+
+/** A harness root that SURVIVED the run — the directory exists on disk. */
+function liveHarnessDir(): string {
+  const dir = createTestTempDir('vat-harness-live-');
+  harnessTempDirs.push(dir);
+  return dir;
+}
+
+/** A harness root cleanup already removed — a real path that no longer exists. */
+function reapedHarnessDir(): string {
+  const dir = createTestTempDir('vat-harness-reaped-');
+  rmSync(dir, { recursive: true, force: true });
+  return dir;
+}
+
+function cleanupHarnessTempDirs(): void {
+  while (harnessTempDirs.length > 0) {
+    rmSync(harnessTempDirs.pop() as string, { recursive: true, force: true });
+  }
+}
+
 // Mocks runSkillTestHarness with the given result, captures stdout/stderr writes
 // while runSkillTestRun executes, and returns the captured write payloads.
 async function runAndCaptureStreams(result: {
   harnessPath: string;
   exitCode: number;
   summary: string;
+  resultsPath?: string;
+  workspacesPath?: string;
 }): Promise<{ stdoutCalls: string[]; stderrCalls: string[] }> {
   vi.spyOn(harness, 'runSkillTestHarness').mockResolvedValue(result);
   vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
@@ -284,6 +397,46 @@ describe('resolveCappedKnob (config may lower a cap but never raise it)', () => 
   });
 });
 
+// `baseline` is the LARGEST cost multiplier in the command — every eval runs twice,
+// an executor AND a grader spawn per arm — and it is the one cost knob with no cap
+// to clamp, so resolveCappedKnob's asymmetry cannot apply to it. resolveBaseline
+// applies the same threat model (a COMMITTED config rides along in an untrusted
+// subject repo) the only way a boolean allows: the config-sourced ENABLE is
+// announced rather than silent, and an explicit flag wins in BOTH directions so
+// `--no-baseline` can turn a committed `test.baseline: true` back off.
+describe('resolveBaseline (a committed config may not silently double the spend)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('returns undefined when neither flag nor config set it (harness default applies)', () => {
+    expect(resolveBaseline(undefined, undefined)).toBeUndefined();
+  });
+
+  it('announces on stderr when the CONFIG, not a flag, turned baseline on', () => {
+    const stderr = spyStderr();
+    expect(resolveBaseline(undefined, true)).toBe(true);
+    expect(stderr).toHaveBeenCalledOnce();
+    const note = String(stderr.mock.calls[0]?.[0]);
+    expect(note).toContain('committed config');
+    expect(note).toContain(NO_BASELINE_FLAG);
+  });
+
+  it('lets --no-baseline override a config that enabled it, with no note', () => {
+    const stderr = spyStderr();
+    expect(resolveBaseline(false, true)).toBe(false);
+    expect(stderr).not.toHaveBeenCalled();
+  });
+
+  it('lets --baseline win over a config that disabled it', () => {
+    expect(resolveBaseline(true, false)).toBe(true);
+  });
+
+  it('passes a config `false` through silently (it costs nothing, so nothing to announce)', () => {
+    const stderr = spyStderr();
+    expect(resolveBaseline(undefined, false)).toBe(false);
+    expect(stderr).not.toHaveBeenCalled();
+  });
+});
+
 // Asserts a usage-level flag fails preflight: runSkillTestRun rejects with the
 // preflight exit code (2, via a process.exit mock that throws) and the harness
 // is never invoked.
@@ -299,20 +452,31 @@ async function expectPreflightExit2(
   expect(harnessSpy).not.toHaveBeenCalled();
 }
 
+/**
+ * Install the standard run mocks (harness, process.exit, stdout, stderr) and hand
+ * BOTH spies back. One installation point on purpose: re-spying an already-spied
+ * method shadows the earlier spy, so a test that installs its own stderr spy around
+ * a helper that installs another records nothing and silently asserts on an empty
+ * call list.
+ */
+function installRunSpies() {
+  const harnessSpy = vi
+    .spyOn(harness, 'runSkillTestHarness')
+    .mockResolvedValue({ harnessPath: '/h', exitCode: 0, summary: 'PASS 1/1' });
+  vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+  vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as never);
+  return { harnessSpy, stderrSpy: spyStderr() };
+}
+
 // Mocks runSkillTestHarness, runs runSkillTestRun, and returns the RunHarnessOptions
 // the mock received so tests can assert env/passEnv plumbing.
 async function runAndCaptureOpts(
   subject: string,
   options: Parameters<typeof runSkillTestRun>[1],
 ): Promise<Record<string, unknown>> {
-  const spy = vi
-    .spyOn(harness, 'runSkillTestHarness')
-    .mockResolvedValue({ harnessPath: '/h', exitCode: 0, summary: 'PASS 1/1' });
-  vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
-  vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as never);
-  vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never);
+  const { harnessSpy } = installRunSpies();
   await runSkillTestRun(subject, options);
-  return spy.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
+  return harnessSpy.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
 }
 
 const ENV_TEST_SKILL = './acme-skill';
@@ -419,12 +583,14 @@ describe('vat skill test run (--evals resolves against the cwd)', () => {
 });
 
 describe('vat skill test run (output routing)', () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    cleanupHarnessTempDirs();
+  });
 
   it('writes Summary: to stdout and Harness: to stderr', async () => {
     const { stdoutCalls, stderrCalls } = await runAndCaptureStreams({
-      // eslint-disable-next-line sonarjs/publicly-writable-directories -- test fixture path, not production code
-      harnessPath: '/tmp/h',
+      harnessPath: liveHarnessDir(),
       exitCode: 0,
       summary: 'PASS 2/2',
     });
@@ -432,6 +598,102 @@ describe('vat skill test run (output routing)', () => {
     expect(stdoutCalls.some((s) => s.includes('Summary:'))).toBe(true); // Summary → stdout
     expect(stderrCalls.some((s) => s.includes('Harness:'))).toBe(true); // Harness debug → stderr
     expect(stderrCalls.some((s) => s.includes('Summary:'))).toBe(false); // Summary not on stderr
+  });
+
+  // The `Workspaces:` line above is guarded by a presence check because "a populated
+  // value is a promise that the path is still there". `Harness:` was not, and the
+  // harness's own cleanup runs in its `finally` BEFORE the result reaches this
+  // command: a run that ends before Step 7 creates `results/` (the security-ack
+  // refusal, a preflight failure reachable from an auth mismatch) has its harness
+  // root removed OUTRIGHT, and the CLI then printed the dead path.
+  it('omits the Harness: line when cleanup already removed the harness root', async () => {
+    const { stderrCalls } = await runAndCaptureStreams({
+      harnessPath: reapedHarnessDir(),
+      exitCode: 2,
+      summary: 'Security acknowledgment required.',
+    });
+
+    expect(stderrCalls.some((s) => s.includes('Harness:'))).toBe(false);
+  });
+
+  // The other direction: a run whose harness root survived (a default run that
+  // produced results/, --keep, or a user-owned --out/--workdir location) still
+  // names it. Asked of the PATH itself rather than re-derived from keep/out/workdir,
+  // so this can never drift from the retention rule in cleanupHarness.
+  it('names the harness root when it survived the run', async () => {
+    const dir = liveHarnessDir();
+    const { stderrCalls } = await runAndCaptureStreams({
+      harnessPath: dir,
+      resultsPath: safePath.join(dir, 'results'),
+      exitCode: 0,
+      summary: 'PASS 2/2',
+    });
+
+    expect(stderrCalls.some((s) => s.includes(`Harness: ${dir}`))).toBe(true);
+  });
+
+  // On a default run the harness root holds nothing but `results/` by the time the
+  // operator reads this — everything else was staged untrusted bytes that cleanup
+  // evicts. The `Harness:` line alone therefore points at a directory whose useful
+  // contents the operator has to guess at, so the artifact dir is named outright.
+  it('names the results dir on stderr when the harness reports one', async () => {
+    const { stderrCalls } = await runAndCaptureStreams({
+      // eslint-disable-next-line sonarjs/publicly-writable-directories -- test fixture path, not production code
+      harnessPath: '/tmp/h',
+      // eslint-disable-next-line sonarjs/publicly-writable-directories -- test fixture path, not production code
+      resultsPath: '/tmp/h/results',
+      exitCode: 0,
+      summary: 'PASS 2/2',
+    });
+
+    expect(stderrCalls.some((s) => s.includes('Results: /tmp/h/results'))).toBe(true);
+  });
+
+  // Absent for a run that ended before the results dir existed (a preflight
+  // refusal, a bootstrap scaffold) — an empty `Results:` line would send the
+  // operator to a path that was never created.
+  it('omits the results line when the run reported no results dir', async () => {
+    const { stderrCalls } = await runAndCaptureStreams({
+      // eslint-disable-next-line sonarjs/publicly-writable-directories -- test fixture path, not production code
+      harnessPath: '/tmp/h',
+      exitCode: 2,
+      summary: 'Security acknowledgment required.',
+    });
+
+    expect(stderrCalls.some((s) => s.includes('Results:'))).toBe(false);
+  });
+
+  // The executor's working directories sit outside the harness root under an
+  // unguessable token, so nothing else in the output leads an operator to them.
+  // Under --keep they survive holding everything the evals produced.
+  it('names the workspaces dir on stderr when the harness reports one', async () => {
+    const { stderrCalls } = await runAndCaptureStreams({
+      // eslint-disable-next-line sonarjs/publicly-writable-directories -- test fixture path, not production code
+      harnessPath: '/tmp/h',
+      // eslint-disable-next-line sonarjs/publicly-writable-directories -- test fixture path, not production code
+      workspacesPath: '/tmp/vat-skill-test-ws-abc',
+      exitCode: 0,
+      summary: 'PASS 2/2',
+    });
+
+    expect(stderrCalls.some((s) => s.includes('Workspaces: /tmp/vat-skill-test-ws-abc'))).toBe(true);
+  });
+
+  // The other direction, and the one that regressed: on a default run (no --keep)
+  // the harness DELETES the workspaces in its own finally, before the result ever
+  // reaches this command — so it reports no path, and printing a `Workspaces:` line
+  // anyway would send the operator to a directory that no longer exists.
+  it('omits the workspaces line when the run reported no workspaces dir', async () => {
+    const { stderrCalls } = await runAndCaptureStreams({
+      // eslint-disable-next-line sonarjs/publicly-writable-directories -- test fixture path, not production code
+      harnessPath: '/tmp/h',
+      // eslint-disable-next-line sonarjs/publicly-writable-directories -- test fixture path, not production code
+      resultsPath: '/tmp/h/results',
+      exitCode: 0,
+      summary: 'PASS 2/2',
+    });
+
+    expect(stderrCalls.some((s) => s.includes('Workspaces:'))).toBe(false);
   });
 
   it('does not write Summary: to stderr on non-zero exit', async () => {
@@ -451,22 +713,61 @@ describe('vat skill test run (output routing)', () => {
 // declared skill) — distinct from a NAME target (buildable) and from a path that DOES
 // map to a declared skill (linkedToDeclaredSkill). The warning fires only for the blind case.
 describe('deriveDeclaredExecutableNames (Phase T grader recognition aid)', () => {
+  /** The worked example throughout: one declaration, in both of its spellings. */
+  const CSVSUM_PATH = 'scripts/csvsum.py';
+  const CSVSUM_INVOKED = 'uv run csvsum.py';
+
   it('returns undefined for absent or empty executables', () => {
     expect(deriveDeclaredExecutableNames(undefined)).toBeUndefined();
     expect(deriveDeclaredExecutableNames([])).toBeUndefined();
   });
 
-  it('maps each executable to { name: basename-without-ext, howInvoked, kind }', () => {
+  it('maps each executable to { name: basename-without-ext, howInvoked, kind, path }', () => {
     const out = deriveDeclaredExecutableNames([
-      { path: 'scripts/csvsum.py', kind: 'python', howInvoked: 'uv run csvsum.py' },
+      { path: CSVSUM_PATH, kind: 'python', howInvoked: CSVSUM_INVOKED },
       { path: 'dist/csvsum.mjs', kind: 'node', howInvoked: 'node dist/csvsum.mjs' },
       { path: 'bin/csvsum', kind: 'binary', howInvoked: './csvsum' },
     ]);
     expect(out).toEqual([
-      { name: 'csvsum', howInvoked: 'uv run csvsum.py', kind: 'python' },
-      { name: 'csvsum', howInvoked: 'node dist/csvsum.mjs', kind: 'node' },
-      { name: 'csvsum', howInvoked: './csvsum', kind: 'binary' },
+      { name: 'csvsum', howInvoked: CSVSUM_INVOKED, kind: 'python', path: CSVSUM_PATH },
+      { name: 'csvsum', howInvoked: 'node dist/csvsum.mjs', kind: 'node', path: 'dist/csvsum.mjs' },
+      { name: 'csvsum', howInvoked: './csvsum', kind: 'binary', path: 'bin/csvsum' },
     ]);
+  });
+
+  /**
+   * ⛔ THE PATH IS THE CONTAMINATION SIGNAL, and this function used to THROW IT AWAY.
+   *
+   * `name` is the grader's recognition aid and the eval-lint typo target — an
+   * extension-stripped basename, which is what those two want. The baseline
+   * contamination detector wants the opposite: matching an escaping reach on the
+   * STEM convicted a clean control arm for `cat /tmp/summary.txt` (a skill shipping
+   * `scripts/summary.py`) and for `cat /etc/hosts` (one shipping `scripts/hosts.sh`).
+   * An ambient copy preserves the skill's layout, so the relative PATH separates a
+   * real reach from the arm's own scratch file and the stem cannot.
+   *
+   * These rows are the reviewer's confirmed false positives, asserted at the
+   * derivation: three declarations whose stems are IDENTICAL and whose paths are not.
+   */
+  it('keeps the declared path distinct even when every stem collides', () => {
+    const out = deriveDeclaredExecutableNames([
+      { path: 'scripts/summary.py', kind: 'python', howInvoked: 'uv run summary.py' },
+      { path: 'scripts/hosts.sh', kind: 'shell', howInvoked: './hosts.sh' },
+    ]);
+
+    expect(out?.map((e) => e.path)).toEqual(['scripts/summary.py', 'scripts/hosts.sh']);
+    expect(out?.map((e) => e.name), 'the grader aid still gets the short name').toEqual(['summary', 'hosts']);
+  });
+
+  // A Windows-spelled declaration must not reach the detector with `\` separators:
+  // every needle and every resolved reach in the detector is `/`-normalized, so a
+  // backslash path would end with nothing it can match and the signal goes silent.
+  it('forward-slashes a Windows-spelled declaration', () => {
+    const out = deriveDeclaredExecutableNames([
+      { path: String.raw`scripts\csvsum.py`, kind: 'python', howInvoked: CSVSUM_INVOKED },
+    ]);
+
+    expect(out?.[0]?.path).toBe(CSVSUM_PATH);
   });
 });
 
@@ -534,6 +835,27 @@ describe('vat skill test run (path target honors declared test: config — #7)',
     const opts = await runAndCaptureOpts(fx.pluginDistDir(PL), { iUnderstandThisRunsSkillCode: true });
     expect(opts.model).toBe(SONNET_MODEL);
     expect(opts.subjectScaffoldDir).toBeDefined(); // anchored at the plugin skill's source
+  });
+
+  it('a committed test.baseline: true reaches the harness, and --no-baseline turns it back off', async () => {
+    const BASELINED = 'baselined-skill';
+    const fx = setupReferenceFixture({ pool: [BASELINED], poolTest: { [BASELINED]: { baseline: true } } });
+    resetSkillDiscoveryCache();
+    const { harnessSpy, stderrSpy } = installRunSpies();
+    await runSkillTestRun(fx.poolDistDir(BASELINED), { iUnderstandThisRunsSkillCode: true });
+    expect((harnessSpy.mock.calls[0]?.[0] as unknown as Record<string, unknown>).baseline).toBe(true);
+    // ...and the doubling is ANNOUNCED, not silent — the merge must route through
+    // resolveBaseline, not a bare `??`.
+    expect(stderrSpy.mock.calls.some((c) => String(c[0]).includes('committed config'))).toBe(true);
+
+    resetSkillDiscoveryCache();
+    // `--no-baseline` reaches the action as `baseline: false` (Commander's negation),
+    // and false must BEAT the config — a `??` merge would have let the config win.
+    const overridden = await runAndCaptureOpts(fx.poolDistDir(BASELINED), {
+      baseline: false,
+      iUnderstandThisRunsSkillCode: true,
+    });
+    expect(overridden.baseline).toBe(false);
   });
 
   it('a config-blind path (matches no declared skill) applies NO test config', async () => {
@@ -1463,6 +1785,272 @@ describe('createSkillTestRunCommand (single-subject argument + companion help te
     const withOptionalOption = command.options.find((o) => o.long === '--with-optional');
     expect(withOptionalOption?.description).toContain('OPTIONAL companion skill');
     expect(withOptionalOption?.description).toContain('Staged from its raw (unbuilt) source with a warning');
+  });
+});
+
+// --baseline must stay TRI-state (undefined / true / false) so an explicit flag beats
+// a committed `skills.config.<skill>.test.baseline` in BOTH directions. Commander only
+// gives that shape because `--baseline` is declared BEFORE `--no-baseline`; declaring
+// the negated form alone would default the value to `true` and make every run a
+// baseline run. Parsed through the REAL command so a reordering regresses here.
+describe('createSkillTestRunCommand (--baseline / --no-baseline tri-state)', () => {
+  it('leaves baseline undefined when neither flag is typed (config decides)', () => {
+    expect(parseBaselineFlag([])).toBeUndefined();
+  });
+
+  it('sets baseline true on --baseline', () => {
+    expect(parseBaselineFlag([BASELINE_FLAG])).toBe(true);
+  });
+
+  it('sets baseline FALSE on --no-baseline (not true — the Commander negation trap)', () => {
+    expect(parseBaselineFlag([NO_BASELINE_FLAG])).toBe(false);
+  });
+
+  it('declares --no-baseline as a negated option pointing at the committed config', () => {
+    const command = createSkillTestRunCommand();
+    const negated = command.options.find((o) => o.long === NO_BASELINE_FLAG);
+    expect(negated?.negate).toBe(true);
+    expect(negated?.description).toContain('committed');
+  });
+
+  it("warns in --baseline's own description that it roughly DOUBLES the spend", () => {
+    const command = createSkillTestRunCommand();
+    const baselineOption = command.options.find((o) => o.long === BASELINE_FLAG);
+    expect(baselineOption?.description).toContain('TWICE');
+    expect(baselineOption?.description).toContain('DOUBLES');
+    expect(baselineOption?.description).toContain('--max-budget-usd is per-spawn');
+  });
+});
+
+// The Artifacts epilogue used to promise results/ "SURVIVES every run" and the staged
+// bytes "removed unless you pass --keep" — both false under --out/--workdir, where
+// cleanup does not touch the harness ROOT (it only removes a dir vat itself created).
+// The scope the skill-testing guide always carried is now in --help too.
+describe('createSkillTestRunCommand (Artifacts help is scoped to a DEFAULT run)', () => {
+  it('scopes the results/-survives + cleanup claim to a run with no --out/--workdir/--keep', () => {
+    const help = renderFullHelpFlat(createSkillTestRunCommand());
+    expect(help).toContain('On a DEFAULT run (no --out, --workdir or --keep)');
+  });
+
+  // The replaced claim said `--out`/`--workdir` made cleanup "a complete no-op" and
+  // that NOTHING is removed. Three vat-only directories live OUTSIDE the harness root
+  // — the grader out dir, the eval-suite hold dir, and the per-eval workspaces root —
+  // and are reaped on a rule that ignores both flags. The workspaces one is
+  // operator-visible: an `--out` run without `--keep` returns no `workspacesPath` and
+  // the directory is gone, so the evals' own output cannot be inspected.
+  it('does not claim --out/--workdir removes NOTHING', () => {
+    const help = renderFullHelpFlat(createSkillTestRunCommand());
+    expect(help).not.toContain('NOTHING is removed');
+  });
+
+  it('says --out/--workdir spares only the harness ROOT, and that --keep alone retains the workspaces', () => {
+    const help = renderFullHelpFlat(createSkillTestRunCommand());
+    expect(help).toContain('--out or --workdir spares only the harness ROOT');
+    expect(help).toContain('--keep is the only flag that retains the workspaces');
+  });
+
+  // provenance.json is written into results/ and survives cleanup exactly like the
+  // other four, so an Artifacts list that omits it under-reports what the operator
+  // can go read.
+  it('lists provenance.json among the artifacts', () => {
+    const help = renderFullHelpFlat(createSkillTestRunCommand());
+    expect(help).toContain('provenance.json');
+  });
+});
+
+// `--max-budget-usd` is a PER-SPAWN cap, and both the `--baseline` flag description
+// and the dry-run output say so. Its OWN help said "Hard USD budget cap", which reads
+// as a whole-run ceiling — the one reading that makes a --baseline run cost twice what
+// the operator budgeted.
+describe('--max-budget-usd help states the per-spawn scope', () => {
+  it('says per-spawn on `run`', () => {
+    const option = createSkillTestRunCommand().options.find((o) => o.long === '--max-budget-usd');
+    expect(option?.description).toContain('Per-spawn');
+    expect(option?.description).not.toContain('Hard USD budget cap');
+  });
+
+  it('says per-spawn on `configure`', () => {
+    const option = createSkillTestConfigureCommand().options.find((o) => o.long === '--max-budget-usd');
+    expect(option?.description).toContain('Per-spawn');
+    expect(option?.description).not.toContain('Hard USD budget cap');
+  });
+});
+
+// `--refresh` is declared, threaded into RunHarnessOptions, and read by nothing:
+// staging is a full re-stage every run, so there is no existing staged content for
+// the flag to ignore. Deleting a shipped flag is a breaking change for another PR;
+// until then the help must not promise behaviour the flag does not have.
+describe('--refresh help tells the truth about the flag being inert', () => {
+  it('says the flag currently changes nothing', () => {
+    const option = createSkillTestRunCommand().options.find((o) => o.long === '--refresh');
+    expect(option?.description).toContain('No-op');
+    expect(option?.description).toContain('full re-stage');
+  });
+});
+
+// A stale lockfile (SIGKILL, OOM, a crash — none of which reach the release path)
+// bricks a skill's deterministic harness root forever. The staleness protocol is a
+// separate lane; what must not ALSO be wrong is the exit code, because the published
+// CI recipe reads 1 as "the harness broke, fail the build" while this is the most
+// user-correctable preflight condition there is: delete the file.
+describe('HarnessLockBusyError is a preflight condition (exit 2), not an internal failure', () => {
+  const LOCK_PATH = '/var/folders/xy/vat-skill-test/my-skill/.vat-skill-test.lock';
+
+  it('carries exitCode 2 like every other user-correctable preflight error', () => {
+    expect(new HarnessLockBusyError(LOCK_PATH).exitCode).toBe(2);
+  });
+
+  it('maps to Preflight (2) rather than falling through to Internal (1)', () => {
+    expect(mapErrorToExitCode(new HarnessLockBusyError(LOCK_PATH))).toBe(2);
+  });
+
+  it('names the lock path and how to clear it, so the operator can act without reading the source', () => {
+    const message = new HarnessLockBusyError(LOCK_PATH).message;
+    expect(message).toContain(LOCK_PATH);
+    expect(message).toContain('delete');
+  });
+});
+
+// zodToJsonSchema DISCARDS `.refine()`, so the published JSON Schema accepted
+// `{passed: 9, total: 3}` — the exact shape the Zod validator rejects, and the exact
+// shape that produced a confident `delta: -8`. JSON Schema cannot express a
+// cross-property comparison in any draft, so the emitted artifact must at minimum
+// CARRY the invariant rather than silently dropping it.
+describe('GradingReportJsonSchema records the passed <= total invariant', () => {
+  it('publishes a summary subschema at all', () => {
+    expect(publishedSummarySchema()).toBeDefined();
+  });
+
+  it('states the cross-field invariant in the emitted schema, not only in the Zod refine', () => {
+    expect(JSON.stringify(publishedSummarySchema())).toContain('summary.passed must not exceed summary.total');
+  });
+
+  it('says the constraint is not machine-enforceable by JSON Schema, so a consumer knows to check it', () => {
+    expect(JSON.stringify(publishedSummarySchema())).toContain('cannot express');
+  });
+
+  it('still rejects passed > total through the Zod schema the artifact is generated from', () => {
+    expect(GradingSummarySchema.safeParse({ passed: 9, total: 3 }).success).toBe(false);
+  });
+});
+
+// `configure --baseline` could turn the committed setting ON and never OFF: the one
+// command that writes `baseline: true` had no way to write `baseline: false`, so the
+// only way back was hand-editing the YAML. The declaration ORDER carries the same
+// Commander trap as `run` — a lone `--no-baseline` defaults the value to `true`.
+describe('createSkillTestConfigureCommand (--baseline / --no-baseline tri-state)', () => {
+  it('leaves baseline undefined when neither flag is typed (the knob is left alone)', () => {
+    expect(parseConfigureBaselineFlag([])).toBeUndefined();
+  });
+
+  it('sets baseline true on --baseline', () => {
+    expect(parseConfigureBaselineFlag([BASELINE_FLAG])).toBe(true);
+  });
+
+  it('sets baseline FALSE on --no-baseline, so a committed true can be turned off', () => {
+    expect(parseConfigureBaselineFlag([NO_BASELINE_FLAG])).toBe(false);
+  });
+
+  it('declares --baseline BEFORE --no-baseline (order is load-bearing for the tri-state)', () => {
+    const command = createSkillTestConfigureCommand();
+    const longs = command.options.map((o) => o.long);
+    expect(longs.indexOf(BASELINE_FLAG)).toBeGreaterThanOrEqual(0);
+    expect(longs.indexOf(BASELINE_FLAG)).toBeLessThan(longs.indexOf(NO_BASELINE_FLAG));
+  });
+
+  /**
+   * The three tests above pin the option DECLARATION, and `upsertTestConfig` writes
+   * `false` correctly on its own — but nothing pinned the step BETWEEN them, which is
+   * where the value is either carried into the YAML writer or dropped. Both the
+   * "`--no-baseline` silently does nothing" mutation (`options.baseline === true`)
+   * and deleting the branch entirely left this whole file green.
+   */
+  it.each([
+    ['--no-baseline (false must reach the writer, or a committed true can never be turned off)', false],
+    ['--baseline (true, the case the feature was originally built for)', true],
+  ])('carries baseline into the knob patch: %s', (_label, baseline) => {
+    expect(buildKnobs({ baseline })).toEqual({ baseline });
+  });
+
+  it('omits the baseline knob entirely when neither flag is typed, leaving a committed value alone', () => {
+    // `toEqual({})` would pass on `{ baseline: undefined }`, which `upsertTestConfig`
+    // would read as a typed flag — pin the KEY LIST, not the shape.
+    expect(Object.keys(buildKnobs({}))).toEqual([]);
+  });
+});
+
+/**
+ * `buildKnobs` was exported to close the baseline assembly gap — but the same
+ * diagnosis applies verbatim to every OTHER flag `configure` declares: the option
+ * declarations are pinned and `upsertTestConfig` writes what it is given, while
+ * the step that decides which typed flags become knobs at all was pinned for
+ * `baseline` alone. Deleting the `model` branch makes `configure --model opus`
+ * silently write nothing, with the whole CLI suite green.
+ */
+type ConfigureOptions = Parameters<typeof buildKnobs>[0];
+
+const EVALS_PATH = 'evals/suite.yaml';
+
+/** Every flag `configure` declares, typed the way Commander hands them over. */
+const ALL_CONFIGURE_OPTIONS = {
+  auth: 'subscription',
+  maxTurns: '40',
+  maxBudgetUsd: '2.5',
+  timeout: '600',
+  stall: '90',
+  model: 'opus',
+  baseline: true,
+  evals: EVALS_PATH,
+} satisfies ConfigureOptions;
+
+/** Order-insensitive comparison of key lists (locale-aware, per sonarjs/no-alphabetical-sort). */
+function sortedStrings(values: readonly string[]): string[] {
+  return [...values].sort((a, b) => a.localeCompare(b));
+}
+
+describe('buildKnobs (every declared flag reaches the config writer)', () => {
+  it.each<[string, ConfigureOptions, ReturnType<typeof buildKnobs>]>([
+    ['auth', { auth: 'subscription' }, { auth: 'subscription' }],
+    ['maxTurns, parsed to a number', { maxTurns: '40' }, { maxTurns: 40 }],
+    ['maxBudgetUsd, parsed to a float', { maxBudgetUsd: '2.5' }, { maxBudgetUsd: 2.5 }],
+    ['timeout, parsed to a number', { timeout: '600' }, { timeout: 600 }],
+    ['stall, parsed to a number', { stall: '90' }, { stall: 90 }],
+    ['model, passed through verbatim', { model: 'opus' }, { model: 'opus' }],
+    ['evals, recorded as-is', { evals: EVALS_PATH }, { evals: EVALS_PATH }],
+  ])('carries %s into the knob patch', (_label, options, expected) => {
+    expect(buildKnobs(options)).toEqual(expected);
+  });
+
+  it('assembles a knob for EVERY declared flag — a new flag without a branch fires this', () => {
+    // The drift guard for the table above: a flag added to the command and to the
+    // options type but never wired into the assembly produces no knob, so its key is
+    // simply missing here. Pinning the KEY LIST (not the values) is what makes that a
+    // red test rather than a silent no-op the operator discovers in production.
+    expect(sortedStrings(Object.keys(buildKnobs(ALL_CONFIGURE_OPTIONS)))).toEqual([
+      'auth',
+      'baseline',
+      'evals',
+      'maxBudgetUsd',
+      'maxTurns',
+      'model',
+      'stall',
+      'timeout',
+    ]);
+  });
+});
+
+// `configure` is the surface that makes --baseline PERMANENT for every future operator
+// of the skill, so the cost and the instructions-not-capability caveat matter more here
+// than on `run`, where the operator typed the flag themselves for one run.
+describe('createSkillTestConfigureCommand (--baseline carries the run-surface caveat)', () => {
+  it('describes the persisted baseline as doubling every later run and pointing at baselineIntegrity', () => {
+    const command = createSkillTestConfigureCommand();
+    const baselineOption = command.options.find((o) => o.long === BASELINE_FLAG);
+    expect(baselineOption?.description).toContain('PERMANENT');
+    expect(baselineOption?.description).toContain('TWICE');
+    expect(baselineOption?.description).toContain('INSTRUCTIONS');
+    expect(baselineOption?.description).toContain('baselineIntegrity');
+    expect(baselineOption?.description).toContain(NO_BASELINE_FLAG);
   });
 });
 

@@ -62,9 +62,36 @@ Artifacts produced under `<harnessRoot>/results/`:
 | `grading.json` | Flat per-expectation grades + pass/fail summary (VAT-merged) |
 | `friction.json` | Packaging friction items (categories, severities, messages) |
 | `tool-eval.json` | Per-eval tool verdicts — always written (`{"evals": []}` when no eval declares `toolExpectations`) |
-| `transcripts/` | Per-eval executor conversation logs |
+| `baseline.json` | `--baseline` runs only: the skill-absent arm's merged grades + the `baselineDelta` and `baselineIntegrity` blocks |
+| `provenance.json` | Subject identity, staged-manifest fingerprint, per-entry hashes, and whether the subject was rebuilt |
+
+**`results/` survives every run.** The harness root's path is echoed as `Harness:` and the
+results directory as `Results:` — use the latter. On a default run (no `--out`, `--workdir`
+or `--keep`) everything else under the harness root is removed when the command exits: the
+staged skill bytes are what cleanup is for, the artifacts are the product. (`Harness:` is
+printed only when that root is still on disk — a run that ends before `results/` exists,
+such as the security-ack refusal, has its root removed outright.)
+
+**`--out`/`--workdir` spare only the harness ROOT.** They name a directory *you* own, so vat
+never deletes it and the staged untrusted skill bytes inside it stay until you remove them.
+That is not a blanket "keep everything": three vat-owned directories live **outside** that
+root — the grader's output dir, the held eval suite, and the per-eval executor
+**workspaces** (every eval's working directory, and everything the evals wrote) — and they
+are reaped on a rule that ignores both flags. **`--keep` is the only flag that retains the
+workspaces**, which is why the `Workspaces:` line is printed only under `--keep`. If you
+pass `--out` to inspect what the evals produced, add `--keep` or the per-eval output is
+already gone.
+
+**Executor transcripts are held in memory and never written to disk** — not to `results/`, not
+to the sandbox. That is the anti-forgery property below, not an omission; when an eval fails
+unexpectedly, the grader's per-expectation `evidence` in `grading.json` is the quoted transcript
+excerpt to read.
 
 **Anti-forgery model.** The executor and grader are separate roles; the transcript never touches the skill's sandbox; the grader runs in a directory outside the harness root; and every grader fragment carries a secret per-run nonce (delivered only via the grader's stdin — never on disk or an argv) that VAT re-verifies before merging. So untrusted skill code running in the sandbox cannot forge its own passing grade, tamper with the transcript, or write a result VAT will accept. Full contract: `docs/skill-test-grading-schema.md`.
+
+> **Every spawn passes `--no-session-persistence`, and that is part of the model above, not housekeeping.** Claude Code otherwise writes each headless session to `$CLAUDE_CONFIG_DIR/projects/<cwd-slug>/<uuid>.jsonl` — plaintext, retained indefinitely — and VAT has to forward `CLAUDE_CONFIG_DIR` and `HOME` to the child because that is where auth lives. Those files carry the grading nonce, the eval `expected_output`, and (in a `--baseline` run) the treatment arm's whole transcript, all readable by the skill under test, and readable by the *next* run weeks later. Preflight fails closed (exit `2`) on a `claude` that does not support the flag rather than running without it.
+
+
 
 ## Exit Codes
 
@@ -74,7 +101,9 @@ Artifacts produced under `<harnessRoot>/results/`:
 | `4` | An eval **FAILED** — the harness completed and produced valid results, but the **composite verdict** did not all pass. This covers three cases: an output expectation failed, a declared `toolExpectations` verdict failed (`FAIL N/M (K tool)`), or a cheaper cost tier failed and gated the higher tiers (their evals are **SKIPPED**, never passed). The **fail-closed default** — suppress with `--allow-eval-failure` for interactive iteration. |
 | `3` | Bootstrap: no `evals.json` found — VAT wrote a template. **Not a failure.** Fill in the template and re-run. |
 | `2` | Preflight / env failure: missing `claude` binary, auth error, declared inputs or deps absent, unsafe `--workdir`, `--require-auth` mismatch, or the `--i-understand-this-runs-skill-code` acknowledgment was not given. |
-| `1` | Internal (harness) failure — an executor or grader spawn stalled/timed out/errored, a grader exited without a valid fragment, or a fragment's nonce was missing/wrong. A **stall, timeout, spawn error, or nonce/skew failure is authoritative and always exit 1** — it is never laundered into a PASS or a FAIL, even if a `grading.json` is present on disk (hardening against skill code that writes a fake grade then hangs). |
+| `1` | Internal (harness) failure **on the treatment arm** — its executor or grader spawn stalled/timed out/errored, its grader exited without a valid fragment, or a fragment's nonce was missing/wrong. On that arm a **stall, timeout, spawn error, or nonce/skew failure is authoritative and always exit 1** — it is never laundered into a PASS or a FAIL, even if a `grading.json` is present on disk (hardening against skill code that writes a fake grade then hangs). The **control** arm of a `--baseline` run is the exception, and it is not a small one — read the next paragraph before writing a CI gate. |
+
+> **A dead control arm does not change the exit code.** In a `--baseline` run every failure listed under `1` above — executor spawn error, stall, wall-clock timeout, grader non-zero exit, grader wrote no fragment, unparseable fragment, nonce mismatch, grader returning the wrong number of expectations — is **recorded and survived** on the skill-withheld arm rather than thrown. That is deliberate: `grading.json` *is* the treatment arm, and destroying a completed, already-billed treatment run because the control half died costs more than losing the comparison. The consequence for CI is sharp, and it has been measured: a control executor that hits the watchdog timeout, and a control grader that exits status `3` writing no fragment, **both finish `exitCode 0`, `PASS 2/2`**. The `case $?` block below cannot see either. What you get instead is a stderr warning as it happens, `"delta": null` in `baselineDelta`, and an entry in `baselineIntegrity.controlArmFailures` naming the eval and the failure.
 
 The taxonomy separates "evals failed" (`4`) from "the harness broke" (`1`/`2`/`3`) so a CI consumer can tolerate the former while failing closed on the latter:
 
@@ -86,6 +115,8 @@ case $? in
   *) exit 1 ;;       # 1/2/3/unknown — harness broke, fail the build
 esac
 ```
+
+**On a `--baseline` run that block is necessary but not sufficient.** Exit `0` says the treatment arm completed; it says nothing about whether the comparison exists. If your gate is about the *lift*, read the artifact, not the exit code — require `baselineDelta.delta !== null`, `baselineIntegrity.controlArmFailures` empty, `baselineIntegrity.comparable` true, `baselineIntegrity.degraded` empty, and `baselineIntegrity.contaminated` false. Treat a missing or unparseable `baseline.json` as a failure, exactly as for `grading.json`.
 
 Which specific evals failed lives in `results/grading.json`, never in the exit code.
 
@@ -219,9 +250,78 @@ Keep *regression* evals (known-good behavior that should always pass) mentally s
 
 Put input files under `evals/fixtures/` and reference them via `files`. Use realistic, slightly messy data — the kind that surfaces real bugs, not toy data that everything passes.
 
-### A/B skill-lift (`--baseline`)
+### A/B instruction-lift (`--baseline`)
 
-A skill's value is its **lift over what the model already does without it**. `--baseline` runs each eval twice — with the skill and without — and reports the delta. If an expectation passes in *both* configurations it proves nothing about the skill; make the test harder, or focus the skill on where the model genuinely needs help. This is the single best way to answer "is this skill actually earning its place?"
+A skill's value is its **lift over what the model already does without it**. `--baseline` runs each eval twice — with the skill and without — and reports the delta on stderr and in `baseline.json`. If an expectation passes in *both* configurations it proves nothing about the skill; make the test harder, or focus the skill on where the model genuinely needs help.
+
+```
+Baseline delta: +2 (with skill: 3/3, without skill: 1/3).
+```
+
+**What the control arm actually withholds — read this before trusting a delta.** The skill-absent arm is denied the skill's *declaration*: no `--plugin-dir`, and `--setting-sources ""` suppresses user/project settings, so the agent is never told the skill exists. It is **not** denied *capability*. The executor runs with unrestricted `Bash`, and the harness is context isolation, **not an OS sandbox** — any copy of the skill still on the filesystem is reachable in principle.
+
+vat keeps its **own** copies out of that arm's way: the skill-absent arm's prompt does not name the staged subject, its working directory is a per-eval workspace outside the harness root, and it gets no plugin dir. What vat cannot remove is an **ambient copy you own** — your repo's `dist/`, a build output, or an installed plugin cache. If the control arm finds one of those and runs it, the delta stops measuring the skill.
+
+So `--baseline` A/Bs the skill's **instructions**, on the honest assumption that no ambient copy is reachable. Read the delta accordingly:
+
+- A near-zero delta on a skill that ships an executable is **suspect before it is meaningful** — check `baselineIntegrity` first.
+- The delta is **not** a capability measurement. It cannot tell you "the model can't do this without my tool"; it tells you "my prose changes what the model does."
+
+**`baselineIntegrity` in `baseline.json`.** Every baseline run stamps this block, clean or not (its absence means the file predates the check, never "checked and clean"):
+
+```json
+"baselineIntegrity": {
+  "contaminated": true,
+  "comparable": false,
+  "degraded": [ { "evalId": "lookup-2", "reason": "cwd-untracked", "detail": "cd \"$SOMEVAR\"" } ],
+  "skew": [ { "evalId": "lookup-3", "withTotal": 3, "withoutTotal": 0 } ],
+  "controlArmFailures": [ { "evalId": "lookup-3", "detail": "[control arm (skill withheld)] Executor timed out after 300s" } ],
+  "signals": [ "harness-path", "declared-executable", "skill-content" ],
+  "summary": "BASELINE CONTAMINATED: the skill-absent arm reached the skill in 2 eval(s) …",
+  "findings": [ { "evalId": "lookup-1", "hits": [ { "kind": "harness-path", "match": "…", "excerpt": "…" } ] } ]
+}
+```
+
+All eight fields are **required and unconditional** — an absent one means the file predates the field, never "checked and clean". Three of them are easy to skip past and each disqualifies a different thing:
+
+- **`degraded`** — the evals whose contamination scan did not run at full strength, and why. Five reasons, and they are **three different shapes** — do not triage them alike:
+  - **Fell back to flat text matching** (`transcript-unparsed` — the transcript yielded no stream-json events at all; `cwd-unknown` — no arm workspace was threaded through, so no relative path can be anchored). There is nothing to walk, so the scan reverts to the blunt instrument, which **both over-reports** (a `find` that merely *prints* a path reads as a reach) **and under-reports** (a relative reach loses the leading slash a bare-name needle requires).
+  - **Left a forward-only hole** (`cwd-untracked` — a `cd` the walker could not evaluate, e.g. `cd "$SOMEVAR"`, `cd -`, bare `cd`; `transcript-malformed` — lines that failed to parse and were silently dropped). The structured walk still ran: everything resolved *before* the hole is validly resolved and is kept, and only what came after — and needed a cwd, or sat on a dropped line — is lost. These do **not** fall back; falling back for them discarded good evidence *and* reintroduced the flat scanner's over-reporting, where one leading `cd $HOME` turned a pure directory listing into a "reached the answer key" verdict.
+  - **Could not judge one reach** (`glob-unexpanded` — a shell expansion stood where a directory name belongs, e.g. `cat ../../vat-*/…/SKILL.md`, so no literal needle could match it). The walk ran to completion and lost nothing before or after; exactly one path could not be resolved to a real location, and vat will not guess which one it was. Anything switching on the reason enum must accept this shape too: it is neither a fallback nor a hole.
+
+  `transcript-malformed` is the one degradation invisible from the outside: the parser drops the corrupted line, the surviving lines still decode, and one truncated tool call therefore **deletes** a contamination hit under a confident verdict. Either way, a non-empty `degraded` means `contaminated: false` was written by a scan that did not really look — the difference between "checked and clean" and "checked with a hole in it", which `signals` cannot tell you. Empty is the only state in which a clean verdict means what it says.
+- **`controlArmFailures`** — evals whose skill-withheld arm produced no grade at all, each with the spawn/grader failure that stopped it. Reported separately from `skew` on purpose: skew says "the two graders disagreed about the job", this says "half the experiment never ran". Non-empty is the case the exit code stays `0` for (see **Exit Codes**), so this is the field a `--baseline` CI gate has to read.
+- **`comparable` / `skew`** — whether the two arms were graded against the same expectations at all. A run can be perfectly clean and still incomparable.
+
+`contaminated: true` also prints a warning to stderr. When you see it, **discard the delta** — the control had the treatment. The usual cause is an ambient copy: uninstall the plugin, or run against a tree that has no built copy of the skill. The number is still printed: contamination does not make the arithmetic wrong, it makes *interpreting the result as skill lift* wrong, and the warning sits directly under the number that it disqualifies.
+
+**`baselineDelta` in `baseline.json`.** The subtraction itself, run-level and per-eval:
+
+```json
+"baselineDelta": {
+  "with":    { "passed": 3, "total": 3 },
+  "without": { "passed": 1, "total": 3 },
+  "delta": 2,
+  "perEval": [ { "evalId": "lookup-1", "withPassed": 3, "withTotal": 3, "withoutPassed": 1, "withoutTotal": 3, "delta": 2 } ],
+  "controlArmFailures": [],
+  "truncated": null
+}
+```
+
+`controlArmFailures` is required here too — the same derivation as the one in `baselineIntegrity`, handed to a second reader rather than computed twice, so someone who opens `baselineDelta`, finds `delta: null`, and does not yet know the contamination vocabulary can learn *why* from the block that withheld the number.
+
+**`truncated`** is required and is `null` when the whole declared suite ran — an *absent* key would make "this delta covers everything" indistinguishable from a file written before the field existed, which is the same argument that makes `baselineIntegrity` unconditional. When cost-tier fail-fast gates the run it holds `gatedByTier`, `firstSkippedTier`, `totalSkipped` and the skipped `evalIds`. It does **not** withhold the delta: the tiers that ran, ran on both arms, so their subtraction is legal — what truncation changes is the *scope* of the claim. This matters more than it sounds, because `--baseline` exists to measure a skill that may not be helping, so a gating treatment-arm failure is the *expected* state of an interesting baseline run. A tier-0 failure in an 8-eval suite prints `Baseline delta: +1 (with skill: 2/2, without skill: 1/2)` — byte-identical to a complete 2-eval suite that measured everything it declared. Read `truncated` before quoting the number.
+
+`delta: 0` and `delta: null` mean different things and have different remedies. **`0` is a measurement** — the skill lifted nothing on those expectations, which is a real finding about the skill. **`null` is a refusal to measure**: that eval's two arms were graded against a different number of expectations, so the totals have different denominators and subtracting them would not be a delta. `null` appears per-eval for each skewed eval and run-level if *any* eval is skewed; the evals behind it are listed in `baselineIntegrity.skew`, and `comparable` goes false. It is reported separately from `contaminated` — a run can be clean and incomparable at once.
+
+There are **two** causes and they have different remedies, so check `controlArmFailures` before assuming either:
+
+- **The control arm died** (`baselineIntegrity.controlArmFailures` non-empty) — its executor or grader timed out, crashed, or wrote nothing, so that eval was graded on one arm only and shows `withoutTotal: 0`. This is now the likelier cause, and it is the one the exit code hides. Remedy: **re-run** (raise `--timeout`/`--stall` if it was a watchdog), and check the stderr warning naming the eval.
+- **A misbehaving grader** (`controlArmFailures` empty, `skew` non-empty) — both arms ran, but one grader returned a different number of expectations than the eval declares. Remedy: **audit the grader prompt and the eval's expectations**; re-running usually reproduces it.
+
+**What the block can and cannot see.** `signals` lists which detectors were armed for the run, so a clean verdict can be told apart from a blind one — an empty list means nothing was looking. The harness-path signal always runs. The declared-executable signal needs the subject's `executables` manifest, which resolves only for a **declared** subject (a skill name, or a path that maps back to one) — exactly the same restriction `toolExpectations` carries. Test by **name** for the fuller check; a bare path to a built `dist/` leaves that signal unarmed. It also fires only on a path that reaches OUTSIDE the arm's own workspace (absolute, `~`- or `$VAR`-rooted, or climbing out): a control arm denied the skill writes its own `analyze.py` and says so, and that is the behaviour it is supposed to exhibit, not a reach. The `skill-content` signal covers what the others cannot — an **instruction-only** skill found as an ambient copy names no path and no executable, so vat matches verbatim lines of your SKILL.md body instead. Lines your eval prompts or expectations already quote are excluded (the arm read them from vat, not from the skill), so a skill whose body is entirely quoted by its own suite leaves that signal unarmed. The block raises the floor on silent contamination; it does not prove a clean run.
+
+**Writing prompts that don't defeat their own baseline.** An eval prompt that names the executable or its path (`run ${CLAUDE_SKILL_DIR}/scripts/tool.mjs …`) hands the skill-absent arm the answer, and no harness change can fix that. Describe the *task*, never the *mechanism* — that is also what makes the WITH arm a real test of whether the skill routes the model correctly.
 
 ### Tool expectations — what the skill should *run*
 
@@ -260,7 +360,7 @@ skills:
           howInvoked: uv run csvsum.py
 ```
 
-Tool verdicts land in their own **`tool-eval.json`** channel and never leak into `grading.json`. They ride the **WITH-arm only** in a `--baseline` run (the skill-absent arm has no tools to judge). `toolExpectations` is only meaningful for a **declared** skill subject (name, or a path that maps back to a declared skill) — a plain path/source subject has no `executables` manifest to resolve names against.
+Tool verdicts land in their own **`tool-eval.json`** channel and never leak into `grading.json`. They ride the **WITH-arm only** in a `--baseline` run — the skill-absent arm was never *given* the skill, so there is no declared tool use to hold it to. That is a statement about what the arm was handed, not a guarantee it reached no tool: if it found an ambient copy anyway, `baselineIntegrity` in `baseline.json` is what tells you. `toolExpectations` is only meaningful for a **declared** skill subject (name, or a path that maps back to a declared skill) — a plain path/source subject has no `executables` manifest to resolve names against.
 
 > **Only committed (or `files:`-injected) files stage.** A name-target build stages the skill via a **tracked-files** tree-copy, so an **untracked** script (a scratch `probe.mjs` you never `git add`-ed) silently won't be in the harness — a `mustRun` against it then fails because the file is *absent*, not because it ran. Commit test scripts, or inject non-artifact files through a `files:` entry (the same mechanism skills use to bundle a built CLI).
 
@@ -338,7 +438,7 @@ Two config homes: **per-skill** knobs live in `skills.config.<skill>.test`; the 
 | `--model <id>` | `model` | per-skill | **Executor** model, passed **verbatim** to `claude --model` (no mapping). Pin for reproducible runs. |
 | `--grader-model <id>` | `graderModel` | **global** | **Grader** (judge) model, independent of `--model`. Default `claude-sonnet-5`. |
 | `--concurrency <n>` | `concurrency` | **global** | Max evals run in parallel (default 4). |
-| `--baseline` | `baseline` | per-skill | Run the with/without A/B skill-lift comparison. |
+| `--baseline` / `--no-baseline` | `baseline` | per-skill | A/B the skill's INSTRUCTIONS (skill declared vs withheld). Not a capability control — check `baselineIntegrity` in `baseline.json`. Runs every eval **twice** (an executor *and* a grader spawn per arm), so it roughly **doubles** the spend, and `--max-budget-usd` is a per-spawn cap. A committed `baseline: true` therefore doubles every operator's run; it is announced on stderr when it applies, and `--no-baseline` turns it off for one run. |
 | `--allow-eval-failure` | — | — | Opt out of the fail-closed default so a failing (or fail-fast-gated) eval exits `0` (interactive use). By **default** a failing eval exits `4`. |
 | `--with name=<src>` | `with` | per-skill | Stage a **required** companion skill the subject can invoke (`workspace:`/`npm:`/`url:`/`path:`/`vendored`). A `path:` source that maps to a **declared** skill is **built** first, exactly like the subject, so its `files:` artifacts are injected — a companion backed by a bundled executable stages functional. Its build failure fails the run. Unresolvable source, or a duplicate name across subject/`--with`/`--with-optional`, exits `2`. |
 | `--with-optional name=<src>` | `optional` | per-skill | Stage an **optional** companion; skipped with a stderr warning if its source can't be resolved. Also built when it maps to a declared skill, but a build failure falls back to the raw (unbuilt) source **only** when non-destructive — a `pool`-distribution build, or no build attempted (`--no-build`/`--dry-run`). A failed `plugin-local` build fails the run, because the marketplace build wipes its output tree first and staging would read from a deleted tree. |
@@ -348,7 +448,7 @@ Two config homes: **per-skill** knobs live in `skills.config.<skill>.test`; the 
 | `--evals <path>` (via config) | `evals` | per-skill | Path to `evals.json` relative to the skill source. |
 | — | `build` | per-skill | Shell command run once before staging to generate build artifacts (cwd = config root). |
 | — | `executables` | per-skill | Declared executables (`{ path, kind, howInvoked }`) — stable names for `toolExpectations`. Lives on the skill's config, not its `test:` block. |
-| `--no-build` / `--refresh` / `--keep` / `--out` / `--workdir` | — | — | Skip building a declared skill / force re-stage / keep the harness dir / override output dir / override working dir. Under `--no-build`, a **required** `--with` companion with no built dist hard-fails the run (exit `2`) rather than silently staging nothing. |
+| `--no-build` / `--refresh` / `--keep` / `--out` / `--workdir` | — | — | Skip building a declared skill / **no-op today** (staging already re-stages fully every run, and nothing reads the flag) / keep the harness dir **and the per-eval workspaces** / override output dir / override working dir. Under `--no-build`, a **required** `--with` companion with no built dist hard-fails the run (exit `2`) rather than silently staging nothing. `--out`/`--workdir` spare only the harness **root** — see the artifacts note above. |
 
 Both `test:` blocks are validated under a **strict** schema (VAT-produced config) — unknown keys are a config error. This is the deliberate inverse of `evals.json`, which VAT reads **liberally** (adopter-authored data): there, unknown fields like `category` pass through untouched.
 
@@ -387,8 +487,11 @@ vat skill test run ./dist/skills/my-skill/ --i-understand-this-runs-skill-code
 # Run evals after filling in evals.json
 vat skill test run ./dist/skills/my-skill/ --i-understand-this-runs-skill-code
 
-# A/B skill-lift: run each eval with AND without the skill, report the delta
-vat skill test run ./dist/skills/my-skill/ --baseline --i-understand-this-runs-skill-code
+# A/B instruction-lift: run each eval with the skill declared AND withheld, report the delta.
+# By NAME, not by path — a path subject has no `executables` manifest, so the
+# declared-executable contamination detector is unarmed on the very run whose
+# baselineIntegrity you are about to read. Costs ~2x a normal run.
+vat skill test run my-skill --baseline --i-understand-this-runs-skill-code
 
 # CI gate: a failing eval exits 4 by default (no flag needed). For interactive
 # iteration, --allow-eval-failure downgrades that 4 to 0.
@@ -417,10 +520,14 @@ vat skill test run --help
 
 After a run, check:
 
-1. **Printed summary** — `PASS N/N`, `FAIL N/M`, a `(K tool)` suffix for tool-verdict failures, and any `SKIPPED (fail-fast)` tier line.
+1. **Printed summary** — `PASS N/N`, `FAIL N/M`, a `(K tool)` suffix for tool-verdict failures, and any `SKIPPED (fail-fast)` tier line. On a `--baseline` run, a `Baseline delta:` line on stderr as well.
 2. **`results/grading.json`** — per-expectation verdicts, evidence, and the pass/fail summary.
 3. **`results/tool-eval.json`** — per-eval tool verdicts. **Always written** (`{"evals": []}` when no eval declared `toolExpectations`), so check `.evals.length`, not file existence.
 4. **`results/friction.json`** — packaging friction items; triage by severity and category (see above).
-5. **`results/transcripts/`** — executor conversation logs for failed evals; the most useful debugging artifact when an eval fails unexpectedly.
+5. **`results/baseline.json`** (`--baseline` runs) — the skill-absent arm's grades, plus `baselineDelta` (the lift, run-level and per-eval) and `baselineIntegrity`. Read the integrity block *first*: a contaminated control makes the delta meaningless. Both files carry an `arm` field and per-expectation `evalId`, so the two are self-describing and line up per eval.
+
+The `Results:` line on stderr names the directory. There are no executor transcript files to
+read — the transcript is never written to disk (see **Anti-forgery model** above); the grader's
+`evidence` strings in `grading.json` are the excerpts from it.
 
 A `FAIL N/M` (exit 4) means the harness worked but the composite verdict did not all pass. Fix the skill, rebuild (`vat build`), and re-run.

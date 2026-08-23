@@ -1,3 +1,4 @@
+import { sanitizeGraderText } from './grader-text.js';
 import { GradingReportSchema } from './grading-schema.js';
 
 /**
@@ -19,9 +20,26 @@ export class GradingSkewError extends Error {
 
 export interface NormalizedGrading {
   summary: { passed: number; total: number };
-  expectations: { text: string; passed: boolean; evidence?: string }[];
+  /**
+   * Every graded expectation, flattened across all evals. `evalId` names the eval
+   * the entry came from — it is what lets a reader line the two `--baseline`
+   * artifacts up PER EVAL instead of only in aggregate. Optional for the same
+   * reason `runNonce` is: {@link parseGradingJson} builds a `NormalizedGrading`
+   * from an externally produced grading.json, which carries no such attribution.
+   */
+  expectations: { text: string; passed: boolean; evidence?: string; evalId?: string }[];
   /** Per-run integrity nonce the experimenter copied from its prompt (if present). */
   runNonce?: string;
+  /**
+   * Which `--baseline` arm produced this report: `'with'` (the skill declared —
+   * grading.json) or `'without'` (the control — baseline.json). Stamped by
+   * {@link import('./fragment-merge.js').mergeFragmentsToGrading}, which is the
+   * only producer that knows the arm. Optional for the same reason `runNonce` is:
+   * {@link parseGradingJson} normalizes an externally produced grading.json that
+   * legitimately carries no arm, and inventing one there would be a lie about
+   * provenance rather than a missing field.
+   */
+  arm?: 'with' | 'without';
 }
 
 /**
@@ -40,6 +58,30 @@ export class GradingNonceError extends Error {
         'means the fragment was not produced by the grader we prompted and is rejected.',
     );
     this.name = 'GradingNonceError';
+  }
+}
+
+/**
+ * Thrown when a per-eval grader fragment's `arm` disagrees with the arm the
+ * merge was told it is assembling. Deliberately distinct from
+ * {@link GradingNonceError}: a fragment can carry a perfectly valid nonce for
+ * THIS run and still belong to the other arm, and that is a different failure —
+ * not a forgery, but a mix-up that would fold a control-arm verdict into the
+ * treatment number (or the reverse). Either way the merged total is no longer a
+ * measurement of one arm, which is the entire premise of the `--baseline` A/B,
+ * so the merge refuses rather than emit a mislabelled artifact that downstream
+ * readers would take as authoritative.
+ */
+export class GradingArmError extends Error {
+  constructor(message: string) {
+    super(
+      `grader fragment arm mismatch: ${message}. Each --baseline arm is merged into its own ` +
+        'artifact (grading.json = the WITH arm, baseline.json = the WITHOUT/control arm), and ' +
+        'every fragment merged into one must come from that arm — a fragment with no `arm` ' +
+        "belongs to the default 'with' arm. Mixing arms would make the merged pass count a " +
+        'measurement of neither.',
+    );
+    this.name = 'GradingArmError';
   }
 }
 
@@ -64,19 +106,44 @@ export function parseGradingJson(raw: unknown): NormalizedGrading {
           'graded expectation across all evals',
       );
     }
+    // Both halves are attacker-reachable and land in an operator-facing message: a
+    // `.strict()` rejection puts the grader-CHOSEN KEY inside zod's own issue message,
+    // and `path` is built from that same key. Sanitize both — this is the route that
+    // has already been found twice in sibling modules, and it must not reopen here just
+    // because today's only callers are tests.
     const firstIssue = result.error.issues[0];
-    const path = firstIssue?.path.join('.') ?? '(root)';
-    throw new GradingSkewError(`missing/invalid field at "${path}" (${firstIssue?.message ?? 'unknown'})`);
+    const path = sanitizeGraderText(firstIssue?.path.join('.') ?? '(root)');
+    const detail = sanitizeGraderText(firstIssue?.message ?? 'unknown');
+    throw new GradingSkewError(`missing/invalid field at "${path}" (${detail})`);
   }
-  const { summary, expectations, runNonce } = result.data;
+  const { summary, expectations, runNonce, arm } = result.data;
+  // Pass `evalId`/`arm` through WHEN PRESENT. The docblocks on NormalizedGrading
+  // explain why they are optional — an externally produced grading.json legitimately
+  // carries no attribution, and inventing one would be a lie about provenance. That
+  // argues for omitting an ABSENT field, not for discarding a present one: the schema
+  // already parses both, so dropping them silently narrowed the declared type and
+  // threw away exactly the key a reader needs to line the two --baseline artifacts
+  // up per eval.
+  //
+  // 📌 STATE OF PLAY, so nobody mistakes this for load-bearing code: NOTHING IN
+  // SHIPPED CODE READS THESE TWO TODAY. `parseGradingJson` itself is reachable only
+  // from the package barrel and this module's own test file — the harness builds its
+  // NormalizedGrading from per-eval fragments, not by re-parsing an aggregate
+  // grading.json — so the two spreads are written-but-never-read outside tests. They
+  // stay anyway, because the cost of keeping a parsed field is zero and the cost of
+  // reopening the discard is a reader who cannot attribute an expectation to an eval
+  // or an arm. Treat "no production caller" as a reason to leave this alone, not as
+  // permission to delete it.
   return {
     summary: { passed: summary.passed, total: summary.total },
     expectations: expectations.map(e => ({
       text: e.text,
       passed: e.passed,
       ...(e.evidence === undefined ? {} : { evidence: e.evidence }),
+      ...(e.evalId === undefined ? {} : { evalId: e.evalId }),
     })),
     ...(runNonce === undefined ? {} : { runNonce }),
+    ...(arm === undefined ? {} : { arm }),
   };
 }
 

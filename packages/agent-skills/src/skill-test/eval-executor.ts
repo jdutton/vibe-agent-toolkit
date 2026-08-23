@@ -12,9 +12,25 @@ import { RateLimitSignal } from './pipeline.js';
 export interface RunExecutorInput {
   evalId: string;
   task: string;
-  subjectStagedDir: string;
-  /** `<workspacesRoot>/<id>` when the eval declares input `files`. */
-  workspaceDir?: string;
+  /**
+   * Absolute staged subject dir, named in the prompt so the executor can find
+   * the files it is meant to work with. OMITTED for the skill-absent (WITHOUT)
+   * arm of a `--baseline` run — see {@link import('./executor-prompt.js').BuildExecutorPromptOptions}.
+   */
+  subjectStagedDir?: string;
+  /**
+   * `<workspacesRoot>/<arm>/<id>` — ALWAYS present, and empty when the eval
+   * declares no input `files`. It used to be absent in that case, which made the
+   * executor fall back to running IN the staged subject dir: for the skill-absent
+   * arm that put the control's cwd inside the skill it was supposed to be denied.
+   *
+   * The `<arm>` segment is NOT decoration. Both arms once shared one per-eval
+   * workspace and ran in it concurrently, so the control arm could read the
+   * treatment's output files and answer from them — with no harness path in its
+   * transcript for the detector to catch. Each arm now gets its own copy, staged
+   * identically. Do not collapse these back into one directory.
+   */
+  workspaceDir: string;
   pluginDirs: string[];
   env: NodeJS.ProcessEnv;
   model?: string;
@@ -59,11 +75,11 @@ export interface ExecutorOutcome {
  *   thrown error; the grader decides whether the transcript passes.
  */
 export async function runExecutorForEval(input: RunExecutorInput): Promise<ExecutorOutcome> {
-  const workDir = input.workspaceDir ?? input.subjectStagedDir;
+  const workDir = input.workspaceDir;
   const prompt = buildExecutorPrompt({
     task: input.task,
-    subjectPath: input.subjectStagedDir,
-    ...(input.workspaceDir === undefined ? {} : { workspaceDir: input.workspaceDir }),
+    ...(input.subjectStagedDir === undefined ? {} : { subjectPath: input.subjectStagedDir }),
+    workspaceDir: input.workspaceDir,
   });
   // Defense-in-depth (parity with run-harness's build→assert→use pattern):
   // re-verify the built prompt didn't accidentally blind-break the executor

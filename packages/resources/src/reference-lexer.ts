@@ -300,12 +300,12 @@ function scanLine(
   const length = text.length;
   let index = 0;
   while (index < length) {
-    while (index < length && isSpaceCode(text.charCodeAt(index))) index++;
+    while (index < length && isSpaceCode(text.codePointAt(index) ?? Number.NaN)) index++;
     if (index >= length) break;
     const runStart = index;
     let sigil = false;
-    while (index < length && !isSpaceCode(text.charCodeAt(index))) {
-      const code = text.charCodeAt(index);
+    while (index < length && !isSpaceCode(text.codePointAt(index) ?? Number.NaN)) {
+      const code = text.codePointAt(index) ?? Number.NaN;
       // '/' 47, '$' 36, '%' 37, '@' 64
       if (code === 47 || code === 36 || code === 37 || code === 64) sigil = true;
       index++;

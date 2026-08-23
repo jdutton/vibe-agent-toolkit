@@ -27,8 +27,13 @@ machine schema**, so vat ships one:
 - **Zod (runtime validator):** `GradingReportSchema` in
   [`packages/agent-skills/src/skill-test/grading-schema.ts`](../packages/agent-skills/src/skill-test/grading-schema.ts)
 - **JSON Schema (for external tooling):** `GradingReportJsonSchema`, generated
-  from the Zod schema via `zod-to-json-schema` so the two never drift. Exported
-  from `@vibe-agent-toolkit/agent-skills`.
+  from the Zod schema via `zod-to-json-schema`, so its *shape* (fields, types,
+  required-ness) cannot drift. It is strictly weaker than the Zod schema:
+  `zod-to-json-schema` discards every `.refine()`, and this contract's
+  refinements are cross-field relations JSON Schema cannot express in any draft.
+  The generated document states each such constraint in the `description` of the
+  field it applies to; a consumer that needs one enforced must re-implement it or
+  use the Zod schema. Exported from `@vibe-agent-toolkit/agent-skills`.
 
 The Zod schema is the single source of truth; the JSON Schema is generated from
 it. Do not hand-edit one without the other.
@@ -60,7 +65,11 @@ fields:
 | `summary.total` | non-negative integer | Total expectations evaluated. |
 
 Counts are non-negative integers (a negative or float count is rejected) and
-`summary.passed` may never exceed `summary.total`.
+`summary.passed` may never exceed `summary.total`. This one is enforced by the
+Zod schema and by vat when it merges grader fragments, but **not** by the
+published JSON Schema — a validator running that document alone accepts
+`{"passed": 9, "total": 3}`. Check it yourself before trusting any figure derived
+from these counts (a baseline delta subtracts them).
 
 ### Optional / recommended fields
 
@@ -80,6 +89,17 @@ nonce aborts the run. This is how a forged or left-behind result written by
 untrusted skill code in the shared sandbox is detected: that code never receives
 the nonce, so it cannot mint a fragment vat will accept. External tooling
 validating a grading.json off-line need not supply it.
+
+`arm` (`"with"` | `"without"`) and `expectations[].evalId` (string) are the
+attribution fields vat stamps when it assembles the aggregate from per-eval
+grader fragments. A `--baseline` run produces **two files of this same shape** —
+`results/grading.json` from the arm that had the skill declared, and
+`results/baseline.json` from the control arm that did not — so without `arm` a
+reader holding one of them cannot tell which is which, and without `evalId` the
+two cannot be lined up per eval to say which eval actually moved. Both are
+optional in the schema because a grading.json produced by external tooling
+carries no such provenance; when present, `arm` must be one of the two arm names
+(vat refuses to merge a fragment from the other arm into either file).
 
 ## What is rejected
 

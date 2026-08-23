@@ -86,6 +86,13 @@ export interface SkillTestRunOptions {
   dryRun?: boolean;
   auth?: string;
   requireAuth?: string;
+  /**
+   * Tri-state, and it must stay tri-state: `true` from `--baseline`, `false` from
+   * `--no-baseline`, `undefined` when neither was typed (config decides). Commander
+   * gives this shape because `--baseline` is declared BEFORE `--no-baseline`; a
+   * lone `--no-baseline` would default the value to `true` instead. See
+   * {@link resolveBaseline}.
+   */
   baseline?: boolean;
   allowUnverifiedSkillSource?: boolean;
   iUnderstandThisRunsSkillCode?: boolean;
@@ -175,26 +182,46 @@ function coerceKnobs(options: SkillTestRunOptions): {
 type HarnessOpts = Parameters<typeof runSkillTestHarness>[0];
 type SkillSourceSpec = NonNullable<HarnessOpts['withSources']>[string];
 
-/** The declared-executable recognition aid the harness forwards to the WITH-arm grader. */
+/**
+ * The declared-executable record the harness carries: the recognition aid it forwards
+ * to the WITH-arm grader, plus the skill-relative PATH the baseline contamination
+ * detector needs.
+ *
+ * ⚠️ BOTH FIELDS ARE LOAD-BEARING, for different consumers, and neither can be derived
+ * from the other. The grader aid and `lintToolExpectationExecutables` compare an
+ * extension-stripped NAME (`csvsum`); `detectBaselineContamination` matches an escaping
+ * reach against the declared PATH, because matching the stem instead convicted a clean
+ * control arm of reading its own `/tmp/summary.txt`. This is an alias of the harness
+ * shape, not a widening of it — the harness type owns `path` so the detector's wiring
+ * is checked at the call site rather than resting on a local intersection here.
+ */
 type DeclaredExecutable = NonNullable<HarnessOpts['declaredExecutables']>[number];
 
 /**
  * Map a resolved skill's packaging-config `executables` (SkillExecutableEntry[]) to
  * the grader's recognition-aid shape (issue #145 Phase T): each entry's stable NAME
  * is its `path` basename with the extension stripped (`scripts/csvsum.py` → `csvsum`),
- * carried alongside its `howInvoked` + `kind`. Returns undefined for absent/empty
- * input so the harness omits the aid entirely (the grader still matches tools by the
- * commands in the transcript). Pure + unit-testable.
+ * carried alongside its `howInvoked`, `kind` and the declared `path` itself. Returns
+ * undefined for absent/empty input so the harness omits the aid entirely (the grader
+ * still matches tools by the commands in the transcript). Pure + unit-testable.
+ *
+ * ⛔ THE `path` USED TO BE READ AND DISCARDED. It is the ONLY thing that separates
+ * an ambient copy of the skill — which is a copy, so it reproduces
+ * `…/scripts/csvsum.py` under whatever root it sits at — from the control arm's own
+ * scratch file of the same name. Forward-slashed at the derivation rather than at the
+ * consumer, because every needle and every resolved reach inside the detector is
+ * `/`-normalized and a `\` would silently match nothing.
  */
 export function deriveDeclaredExecutableNames(
   executables: SkillPackagingConfig['executables'],
 ): DeclaredExecutable[] | undefined {
   if (executables === undefined || executables.length === 0) return undefined;
   return executables.map((e) => {
-    const base = basename(toForwardSlash(e.path));
+    const path = toForwardSlash(e.path);
+    const base = basename(path);
     const ext = extname(base);
     const name = ext === '' ? base : base.slice(0, -ext.length);
-    return { name, howInvoked: e.howInvoked, kind: e.kind };
+    return { name, howInvoked: e.howInvoked, kind: e.kind, path };
   });
 }
 
@@ -365,7 +392,7 @@ function applyScalarMerges(opts: HarnessOpts, options: SkillTestRunOptions, conf
   if (authMode !== undefined) opts.auth = authMode as 'inherit' | 'subscription' | 'api-key' | 'auto';
   const authRequirement = options.requireAuth ?? config?.requireAuth;
   if (authRequirement !== undefined) opts.requireAuth = authRequirement as 'subscription' | 'api-key';
-  const baseline = options.baseline ?? config?.baseline;
+  const baseline = resolveBaseline(options.baseline, config?.baseline);
   if (baseline !== undefined) opts.baseline = baseline;
   const model = options.model ?? config?.model;
   if (model !== undefined) opts.model = model;
@@ -377,6 +404,40 @@ function applyScalarMerges(opts: HarnessOpts, options: SkillTestRunOptions, conf
   const evalsRef =
     options.evals === undefined ? config?.evals : resolveAssetReference(options.evals, process.cwd());
   if (evalsRef !== undefined) opts.evalsSubpath = evalsRef;
+}
+
+/**
+ * Resolve `--baseline` with flag > config precedence, ANNOUNCING a config-sourced
+ * enable on stderr.
+ *
+ * Same threat model as {@link resolveCappedKnob} next door — a value from a
+ * COMMITTED config rides along in an untrusted subject repo — applied to the one
+ * cost knob that has no cap to clamp. `baseline` is the LARGEST cost multiplier in
+ * this command: it runs every eval TWICE (skill declared vs withheld), and each arm
+ * is an executor spawn AND a grader spawn, so `skills.config.<skill>.test.baseline:
+ * true` roughly doubles the spend of every `vat skill test run` an operator types.
+ * `--max-budget-usd` is a PER-SPAWN cap, so the worst-case ceiling doubles with it.
+ *
+ * A boolean cannot be clamped to a ceiling, so it is announced instead, and
+ * `--no-baseline` exists so the operator can turn it back off for THIS run without
+ * hand-editing someone else's YAML. Precedence runs both directions: an explicit
+ * flag wins whether it says true or false (hence the `undefined` check rather than
+ * `??`-style falsiness, which would let a config `true` override `--no-baseline`).
+ *
+ * Only an ENABLE is announced. A config `false` costs nothing and needs no note.
+ */
+export function resolveBaseline(
+  flagValue: boolean | undefined,
+  configValue: boolean | undefined,
+): boolean | undefined {
+  if (flagValue !== undefined) return flagValue;
+  if (configValue !== true) return configValue;
+  process.stderr.write(
+    "Note: baseline is ON from this project's committed config ('skills.config.<skill>.test.baseline'), " +
+      'not from a flag; it runs every eval TWICE (an executor AND a grader spawn per arm), roughly doubling ' +
+      'the spawns and the spend. Pass --no-baseline to turn it off for this run.\n',
+  );
+  return true;
 }
 
 /**
@@ -1262,7 +1323,41 @@ export async function runSkillTestRun(
     if (withOptional !== undefined) harnessOpts.withOptional = withOptional;
     const result = await runSkillTestHarness(harnessOpts);
 
-    process.stderr.write(`Harness: ${result.harnessPath}\n`);
+    // Same rule as the `Workspaces:` line below — "a populated value is a promise
+    // that the path is still there" — applied to the sibling it was written next to
+    // and not applied to. Harness cleanup runs inside the harness's own `finally`,
+    // BEFORE this result reaches the CLI: a run that returns before Step 7 creates
+    // `results/` (the §12 security-ack refusal, and the preflight-failure branch
+    // reachable from a `--require-auth` mismatch) leaves the harness root with no
+    // `results/` child, and cleanup removes the ROOT outright. Printing the path
+    // anyway hands the operator a directory that no longer exists.
+    //
+    // Asked of the PATH rather than re-derived from --keep/--out/--workdir on
+    // purpose: the retention rule has ONE author (cleanupHarness), and a second copy
+    // of its predicate here would drift from it. The filesystem cannot.
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- harness root path returned by our own domain call
+    if (existsSync(result.harnessPath)) {
+      process.stderr.write(`Harness: ${result.harnessPath}\n`);
+    }
+    // The artifacts this command's help text tells the operator to read
+    // (grading.json / friction.json / baseline.json). Reported separately from the
+    // harness path because on a default run — no --out, no --workdir, no --keep —
+    // results/ is the ONLY thing left under it: everything else is staged untrusted
+    // bytes that cleanup evicts. Pointing at the harness root alone made the
+    // operator guess which of its children still existed.
+    if (result.resultsPath !== undefined) {
+      process.stderr.write(`Results: ${result.resultsPath}\n`);
+    }
+    // The executor's working directories live OUTSIDE the harness root under an
+    // unguessable token, so the harness path no longer leads an operator to them.
+    // Under --keep they survive holding everything the evals produced; unreported,
+    // they would be an orphan the operator cannot find to inspect or reap. On every
+    // other run cleanup deletes them, and the harness answers with no
+    // `workspacesPath` at all — the retention rule has ONE author, over there, so
+    // this stays a plain presence check and never a second copy of it.
+    if (result.workspacesPath !== undefined) {
+      process.stderr.write(`Workspaces: ${result.workspacesPath}\n`);
+    }
     process.stdout.write(`Summary: ${result.summary}\n`);
     process.exit(result.exitCode);
     return;
@@ -1309,7 +1404,7 @@ export function createSkillTestRunCommand(): Command {
       '--pass-env <key...>',
       'Forward a host env var by NAME to the executor spawn if present (repeatable). Protected names (PATH, auth, model) are ignored.',
     )
-    .option('--refresh', 'Force a full re-stage (ignore existing staged content)')
+    .option('--refresh', 'No-op today, accepted for forward compatibility: staging already does a full re-stage on every run, so there is no retained staged content for this flag to ignore. Nothing reads it — passing it changes nothing.')
     .option('--no-build', 'Skip building declared skills (subject and any --with/--with-optional companion); stage existing dist instead. Errors if absent for the subject or a REQUIRED companion; an OPTIONAL companion falls back to raw source with a warning.')
     .option('--workdir <dir>', 'Override the harness working directory')
     .option('--out <dir>', 'Override the harness output directory')
@@ -1317,7 +1412,17 @@ export function createSkillTestRunCommand(): Command {
     .option('--dry-run', 'Build and stage exactly as a real run would, then stop without spawning Claude (no tokens spent). Combine with --no-build to skip the build too.')
     .option('--auth <mode>', 'Auth mechanism: inherit | subscription | api-key | auto')
     .option('--require-auth <mech>', 'Require a specific auth mechanism: subscription | api-key')
-    .option('--baseline', 'Enable A/B baseline run (with/without skill)')
+    // `--baseline` MUST be declared before `--no-baseline`: Commander only leaves the
+    // value undefined-when-untyped if a positive option already exists, and that
+    // tri-state is what lets a flag beat config in BOTH directions (see resolveBaseline).
+    .option(
+      '--baseline',
+      "A/B the skill's INSTRUCTIONS (declared vs withheld) and report the lift on stderr. Runs every eval TWICE, so it roughly DOUBLES the spawns and the spend (--max-budget-usd is per-spawn). Both arms share a filesystem — not a capability control; see baselineDelta and baselineIntegrity in baseline.json",
+    )
+    .option(
+      '--no-baseline',
+      'Force the baseline A/B OFF for this run, overriding a committed `test.baseline: true` in the project config (which is announced on stderr when it applies).',
+    )
     .option(
       '--allow-eval-failure',
       'Opt out of the fail-closed default: exit 0 even when an eval fails (for interactive use). By DEFAULT a failing eval exits 4, distinct from the harness-broke codes (1/2/3) so CI can gate on it.',
@@ -1337,7 +1442,7 @@ export function createSkillTestRunCommand(): Command {
       "Eval suite to grade against: a path to an evals.json (resolved against the CURRENT DIRECTORY, so it may point outside the skill's tree) or an npm bare specifier honoring that package's exports map. Overrides `test.evals`, which is resolved against the skill source instead. Use this to test a skill you did not author — a correctly packaged skill ships no evals, because the suite is the answer key.",
     )
     .option('--max-turns <n>', 'Per-spawn cap on executor/grader turns (positive integer)')
-    .option('--max-budget-usd <n>', 'Hard USD budget cap (positive number)')
+    .option('--max-budget-usd <n>', 'Per-spawn USD budget cap, applied to EACH executor and grader spawn (positive number). Not a whole-run ceiling: a --baseline run has twice the spawns, so twice the worst-case spend.')
     .option('--timeout <s>', 'Wall-clock timeout in seconds (positive integer)')
     .option('--stall <s>', 'Stall-watchdog in seconds (positive integer)')
     .option('--concurrency <n>', 'Max evals graded in parallel (positive integer; default 4)')
@@ -1360,6 +1465,32 @@ Description:
   full privileges (filesystem, network, shell) and a reachable auth credential.
   Only run skills you trust. You MUST pass --i-understand-this-runs-skill-code
   to acknowledge this and proceed.
+
+Artifacts:
+  grading.json (the verdict), friction.json, tool-eval.json, provenance.json,
+  and -- with --baseline -- baseline.json are written to a results/ directory
+  whose path is echoed to stderr ("Results: <path>"). On a DEFAULT run (no --out,
+  --workdir or --keep) that directory SURVIVES and the staged skill bytes around
+  it are removed.
+
+  --out or --workdir spares only the harness ROOT: it is a location you own, so
+  vat never deletes it, and the staged (untrusted) skill bytes inside it stay
+  until you delete them yourself. It is NOT a blanket "keep everything". Three
+  vat-owned directories live OUTSIDE that root -- the grader's output dir, the
+  held eval suite, and the per-eval executor WORKSPACES (every eval's working
+  directory and everything the evals wrote) -- and they are reaped on a rule that
+  ignores --out and --workdir entirely. --keep is the only flag that retains the
+  workspaces; without it they are gone before this command prints, which is why
+  the "Workspaces: <path>" line appears only under --keep. Pass --keep when you
+  intend to inspect what the evals produced.
+
+  A --baseline run also echoes its lift to stderr ("Baseline delta: +2 (with
+  skill: 3/3, without skill: 1/3)."), and stamps the same numbers into
+  baseline.json as baselineDelta, run-level and per eval. A delta of 0 means the
+  skill lifted nothing; a delta of null means the two arms were graded against a
+  different number of expectations and cannot be subtracted at all -- see
+  baselineIntegrity.skew for which evals, and prefer null over a number that
+  would read as "100% without the skill".
 
 Model:
   --model <id> selects the model UNDER TEST (the executor spawn): passed

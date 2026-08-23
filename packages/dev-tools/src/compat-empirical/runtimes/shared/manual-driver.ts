@@ -134,10 +134,12 @@ export class ManualDriverBase implements RuntimeDriver {
         text: outcome.outputText,
         toolUseEvents: [],
         errors: [],
-        raw: [],
         toolUses: [],
         toolResults: [],
         rateLimited: false,
+        // A hand-driven transcript is typed, not parsed, so nothing could have
+        // failed to parse.
+        malformedLineCount: 0,
       },
       opts.expected.invocationSignals,
     );

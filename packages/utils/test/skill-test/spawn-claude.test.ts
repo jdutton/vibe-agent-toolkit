@@ -21,6 +21,7 @@ describe('assembleClaudeArgs', () => {
   const MODEL_VALUE = 'claude-x';
   const OUTPUT_FORMAT = '--output-format';
   const PERMISSION_MODE = '--permission-mode';
+  const NO_SESSION_PERSISTENCE = '--no-session-persistence';
 
   /** Locate the value following a flag, or undefined when the flag is absent. */
   const valueAfter = (args: string[], flag: string): string | undefined =>
@@ -32,9 +33,29 @@ describe('assembleClaudeArgs', () => {
     OUTPUT_FORMAT, 'stream-json',
     '--verbose',
     '--setting-sources', '',
+    NO_SESSION_PERSISTENCE,
     PERMISSION_MODE, 'bypassPermissions',
     '--add-dir', sandboxPath,
   ];
+
+  /**
+   * Unconditional and non-negotiable: without it Claude Code writes every
+   * headless session to `$CLAUDE_CONFIG_DIR/projects/<cwd-slug>/<uuid>.jsonl`, in
+   * a config dir vat forwards to the untrusted child. That file carries the
+   * per-run grading NONCE (which the prompt is streamed via stdin specifically to
+   * keep off disk), the eval ANSWER KEY, and — in a `--baseline` run — the
+   * treatment arm's entire transcript for the control arm to read. It also
+   * persists indefinitely, so the leak crosses runs and no per-run randomness
+   * helps. Pinned here because it is the only place the guarantee is expressed.
+   */
+  it('always disables session persistence, for every spawn', () => {
+    expect(assembleClaudeArgs(base)).toContain(NO_SESSION_PERSISTENCE);
+    expect(assembleClaudeArgs({ pluginDirs: [], sandboxDir: sandboxPath }))
+      .toContain(NO_SESSION_PERSISTENCE);
+    // A boolean flag: it must not swallow the next argv entry as a value.
+    const args = assembleClaudeArgs(base);
+    expect(args[args.indexOf(NO_SESSION_PERSISTENCE) + 1]).toBe(PERMISSION_MODE);
+  });
 
   it('sets --setting-sources to empty (built-ins remain, user/project settings suppressed)', () => {
     const args = assembleClaudeArgs(base);
