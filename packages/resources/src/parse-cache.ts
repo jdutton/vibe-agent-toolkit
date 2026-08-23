@@ -123,8 +123,8 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { parseCacheDirectory } from './cache-namespace.js';
 import { CONTENT_KEY_PATTERN, type KeyedContent, type ParserKind, readContentWithKey } from './content-key.js';
-import { parseHtmlContent } from './html-link-parser.js';
-import { type ParseResult, parseFrontmatterSource, parseMarkdownContent } from './link-parser.js';
+import { parseFrontmatterSource } from './frontmatter-source.js';
+import type { ParseResult } from './link-parser.js';
 import { recordParseCacheHit, recordParseCacheMiss } from './parse-timing.js';
 import { type ParseFacts, ParseFactsSchema } from './schemas/parse-facts.js';
 
@@ -517,10 +517,16 @@ export async function parseKeyed(keyed: KeyedContent, cache: ParseCache): Promis
   // was read — never a length derived from `keyed.content`, since decoding is
   // lossy on malformed UTF-8 and a re-encoded count diverges from what is on
   // disk (see link-parser.ts and content-key.ts).
+  // Imported here, past the hit-path return, rather than at module scope: the
+  // remark stack behind `parseMarkdownContent` costs ~730ms of module load on
+  // Windows (and parse5 another ~38ms), which a fully warm run — every document
+  // a hit, nothing ever parsed — otherwise paid for a parser it never called.
+  // A miss loads exactly the one parser this document needs; the ESM cache
+  // makes every subsequent miss in the run free.
   const result =
     keyed.parserKind === 'html'
-      ? parseHtmlContent(keyed.content, keyed.byteLength)
-      : parseMarkdownContent(keyed.content, keyed.byteLength);
+      ? (await import('./html-link-parser.js')).parseHtmlContent(keyed.content, keyed.byteLength)
+      : (await import('./link-parser.js')).parseMarkdownContent(keyed.content, keyed.byteLength);
 
   await cache.set(keyed, result);
   return result;

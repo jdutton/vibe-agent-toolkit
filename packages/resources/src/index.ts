@@ -282,7 +282,8 @@ export {
 export type { ContentMeasures, LexicalReference } from './schemas/parse-facts.js';
 
 // Export parser interface for advanced use cases
-export { parseMarkdown, classifyLink, isLocalFileLink, type ParseResult } from './link-parser.js';
+export { parseMarkdown, type ParseResult } from './link-parser.js';
+export { classifyLink, isLocalFileLink } from './link-classify.js';
 
 // The content-decoding seam is NOT re-exported here. It is a `utils` primitive
 // (`@vibe-agent-toolkit/utils/text` for `decodeTextContent`,

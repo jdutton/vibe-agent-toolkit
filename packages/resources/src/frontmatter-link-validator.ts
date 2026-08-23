@@ -21,7 +21,7 @@
 import { createRegistryIssue, type IssueCode } from '@vibe-agent-toolkit/schema';
 import { FsLookupCache } from '@vibe-agent-toolkit/utils';
 
-import { classifyLink } from './link-parser.js';
+import { classifyLink } from './link-classify.js';
 import {
   fillLinkFacts,
   judgeLink,

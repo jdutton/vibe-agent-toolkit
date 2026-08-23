@@ -20,7 +20,8 @@ import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import * as yaml from 'yaml';
 
-import { parseFrontmatterSource, parseMarkdown, parseMarkdownContent } from '../src/link-parser.js';
+import { parseFrontmatterSource } from '../src/frontmatter-source.js';
+import { parseMarkdown, parseMarkdownContent } from '../src/link-parser.js';
 
 import { assertAllLinksClassifiedAs, expectHeadingStructure, findPackageRoot, writeAndParse } from './test-helpers.js';
 

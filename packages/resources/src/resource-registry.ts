@@ -19,7 +19,6 @@ import { calculateChecksumFromContent } from './checksum.js';
 import { getCollectionsForFile } from './collection-matcher.js';
 import { parserKindForPath, readContentWithKey } from './content-key.js';
 import type { DeferredArtifacts } from './deferred-artifacts.js';
-import { ExternalLinkValidator } from './external-link-validator.js';
 import {
   validateFrontmatterLinks,
   type FrontmatterExternalUrl,
@@ -1572,7 +1571,11 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       ? buildLinkAuthEngineConfig(adopterLinkAuth)
       : undefined;
 
-    // Create validator
+    // Create validator. Imported here rather than at module scope: this module
+    // is on every scan's critical path, while external-link-validator pulls
+    // `markdown-link-check` (~409ms of load on Windows) that only URL
+    // validation ever needs.
+    const { ExternalLinkValidator } = await import('./external-link-validator.js');
     const validator = new ExternalLinkValidator(cacheDir, {
       timeout: 15000,
       cacheTtlHours: noCache ? 0 : 24,
