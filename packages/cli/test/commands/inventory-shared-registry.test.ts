@@ -1,12 +1,6 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
-import {
-  findProjectRoot,
-  mkdirSyncReal,
-  normalizedTmpdir,
-  safeExecSync,
-  safePath,
-} from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, mkdirSyncReal, normalizedTmpdir, runGitOrThrow, safePath } from '@vibe-agent-toolkit/utils';
 import type * as UtilsModule from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -99,7 +93,9 @@ const { buildAuditReport, resetAuditCaches } = await import('../../src/commands/
 const { gitTrackerForProjectRoot, resetGitTrackerCache } = await import(
   '../../src/commands/audit/distributed-tree.js'
 );
-const { extractClaudePluginInventory } = await import('@vibe-agent-toolkit/claude-marketplace');
+const { extractClaudePluginInventory, NO_GIT_TRACKER } = await import(
+  '@vibe-agent-toolkit/claude-marketplace'
+);
 const { silentLogger } = await import('../test-helpers.js');
 
 const SKILL_NAMES = ['alpha', 'beta', 'gamma'];
@@ -275,7 +271,7 @@ describe('shared link registry — one corpus crawl per invocation', () => {
       failingCrawlRoots.length = 0;
     });
 
-    it('returns the plugin inventory, one parseError per skill, and attempts the crawl once', async () => {
+    it('returns the plugin inventory, one parseError per skill, and attempts each lane once', async () => {
       crawlBaseDirs.length = 0;
 
       const inventory = (await routeInventory(pluginDir, {})) as unknown as PluginInventoryShape;
@@ -296,9 +292,20 @@ describe('shared link registry — one corpus crawl per invocation', () => {
       );
       expect(crawlErrors).toHaveLength(SKILL_NAMES.length);
 
-      // Reported N times, ATTEMPTED once — the memoized provider hands every skill the
-      // same rejected promise instead of re-crawling a corpus that just failed.
-      expect(crawlBaseDirs).toHaveLength(1);
+      // Reported N times, ATTEMPTED once PER LANE — the memoized provider hands every
+      // skill the same rejected promise instead of re-crawling a corpus that just failed.
+      //
+      // Two, not one, since `vat inventory` began defaulting to the projection: this is
+      // the FAILURE path, so the projection's own corpus crawl fails and the extractor
+      // then degrades to the link walk, which builds the registry and fails too. One
+      // attempt each. The success-path test above still sees exactly ONE crawl, and the
+      // asymmetry is the whole mechanism — when the projection answers, it short-circuits
+      // `walkLinkedFiles` before `registryFor` is ever reached, so no registry is built.
+      //
+      // ⚠️ The number this pins is "per LANE", never "per skill". With three skills an
+      // N+1 regression in either lane reads 3 or 4 here, so this assertion still fails
+      // exactly as it was written to — do not relax it to a lower bound.
+      expect(crawlBaseDirs).toHaveLength(2);
     });
 
     it('returns the single-SKILL.md inventory with the failure in parseErrors', async () => {
@@ -436,7 +443,7 @@ describe('git tracker source — the link walk stops spawning `git check-ignore`
     gitRoot = safePath.resolve(mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-inv-git-')));
     // No commit needed: the active set comes from `git ls-files --cached --others
     // --exclude-standard`, which already reports untracked-but-not-ignored files.
-    safeExecSync('git', ['init', '-q'], { cwd: gitRoot });
+    runGitOrThrow(['init', '-q'], { cwd: gitRoot });
     writeProjectConfig(gitRoot);
     gitPluginDir = safePath.join(gitRoot, 'plugins', 'demo');
     writeSkillPlugin(gitPluginDir, 'git-demo');
@@ -451,13 +458,19 @@ describe('git tracker source — the link walk stops spawning `git check-ignore`
     gitIgnoreQueries.length = 0;
   });
 
-  it('spawns check-ignore per link target when no source is supplied — the control', async () => {
-    // The extractor called exactly as the CLI called it BEFORE this wiring. Without this
+  it('spawns check-ignore per link target when the tracker-less walk is CHOSEN — the control', async () => {
+    // The extractor doing what the CLI's call did BEFORE this wiring. Without this
     // case the zeros below are unfalsifiable: they would also hold for a fixture the
     // counter can never see.
-    const inventory = (await extractClaudePluginInventory(
-      gitPluginDir,
-    )) as unknown as PluginInventoryShape;
+    //
+    // `NO_GIT_TRACKER`, not an omitted argument. This case used to omit the source
+    // entirely, and that made it two claims at once — "this lane spawns per target"
+    // and "a caller can reach that lane by forgetting something". The second is no
+    // longer true anywhere in the product, and pinning it here would have kept a
+    // dead shape alive in the one test whose job is to be the honest control.
+    const inventory = (await extractClaudePluginInventory(gitPluginDir, {
+      gitTrackerSource: NO_GIT_TRACKER,
+    })) as unknown as PluginInventoryShape;
 
     expectLinksFound(inventory);
     expect(linkTargetQueries(gitRoot).length).toBeGreaterThan(0);

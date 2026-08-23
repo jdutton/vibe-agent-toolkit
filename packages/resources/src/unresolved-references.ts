@@ -59,6 +59,7 @@
 import type { Root } from 'mdast';
 import { visit } from 'unist-util-visit';
 
+import { forEachScannableLine } from './scan-lines.js';
 import type { UnresolvedReference } from './types.js';
 
 /** ASCII punctuation, as CommonMark defines it. */
@@ -411,17 +412,6 @@ export function findMatchingBracket(segment: string, openIndex: number): number 
  */
 const MAX_REFERENCE_NESTING_DEPTH = 20;
 
-/**
- * Maximum line length (characters) scanned for reference occurrences at all.
- *
- * A second, independent guard alongside {@link MAX_REFERENCE_NESTING_DEPTH}:
- * an ordinary markdown line is at most a few hundred characters, so a line
- * this long is already pathological input, and skipping it protects against
- * adversarial or corrupted content regardless of *shape* (deeply nested vs.
- * many sibling bracket pairs on one enormous line). The skip is silent — no
- * exception, no partial scan — the line simply contributes no occurrences.
- */
-const MAX_SCANNED_LINE_LENGTH = 10_000;
 
 /**
  * Collect reference occurrences from a single-line segment, recursing into a
@@ -494,23 +484,16 @@ function isEscaped(segment: string, index: number): boolean {
  * cheap: the line number comes free from the loop, so no offset→line index or
  * binary search is needed.
  *
- * Lines longer than {@link MAX_SCANNED_LINE_LENGTH} are skipped outright — see
- * that constant's doc comment for why.
+ * The traversal and its pathological-line guard live in `scan-lines.ts`, shared
+ * with the raw-source reference lexer. Overlong lines are skipped silently
+ * there — see `MAX_SCANNED_LINE_LENGTH` for why. This module's other guard,
+ * {@link MAX_REFERENCE_NESTING_DEPTH}, is independent of it.
  */
 export function findReferenceOccurrences(content: string): ReferenceOccurrence[] {
   const occurrences: ReferenceOccurrence[] = [];
-  let lineStart = 0;
-  let line = 1;
-  while (lineStart <= content.length) {
-    const newlineIndex = content.indexOf('\n', lineStart);
-    const lineEnd = newlineIndex === -1 ? content.length : newlineIndex;
-    if (lineEnd - lineStart <= MAX_SCANNED_LINE_LENGTH) {
-      scanSegment(content.slice(lineStart, lineEnd), lineStart, line, occurrences);
-    }
-    if (newlineIndex === -1) break;
-    lineStart = newlineIndex + 1;
-    line++;
-  }
+  forEachScannableLine(content, (segment, lineStart, line) => {
+    scanSegment(segment, lineStart, line, occurrences);
+  });
   return occurrences;
 }
 

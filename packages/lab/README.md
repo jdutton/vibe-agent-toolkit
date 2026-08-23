@@ -19,12 +19,55 @@ The binary is **`vat-lab`**, and every facet exposes the same two verbs — `run
 `compare` diffs two of them:
 
 ```bash
-vat-lab <facet> run <subject> [--out <dir>] [--repeat <n>] [--cache warm|cold] [--id <name>]
+vat-lab <facet> run <subject> --instrument <spec> [--command <name>]... [--out <dir>] [--runs <n>] [--cache warm|cold] [--id <name>]
 vat-lab <facet> compare <baseline> <candidate>
 ```
 
-Facets today are **`io`** (filesystem-call counts) and **`perf`** (wall time). A minimal
-vary-the-instrument comparison — the same project, measured by two builds of vat:
+`--command` names one measurable vat command instead of the default set and may be repeated
+(`--command validate --command verify`); see
+[Which commands get measured](docs/run-harness.md#which-commands-get-measured).
+
+Facets today are **`io`** (filesystem-call counts), **`perf`** (wall time), **`parse`** (where the
+time inside vat's document parse goes, pass by pass), **`crawl`** (where the time spent *finding*
+those documents goes, per contributor, stratum and fixpoint pass) and **`population`** (*which*
+files a command enumerated). `parse` defaults to `--cache cold` because vat's parse cache
+short-circuits the parse function on a hit, so a warm run has nothing to attribute; `crawl` and
+`population` default to warm, because nothing caches a crawl — see [Facets](docs/facets.md).
+
+`crawl` exists for one question `perf` cannot answer: VAT has **two crawlers live at once** — the
+incumbent `walkLinkGraph` and the projection's `ClosureExtentContributor` — and both now record
+through one seam, on one clock, into one dump. Its `by stratum` line is the two of them side by
+side (`crawl` is the incumbent walker, `closure` is the projection), which is what makes a flip
+decision a measurement rather than an argument.
+
+`population` answers the other half of that question, and the four cost facets could not: not what
+the crawl *spent* but what it *covered*. Its comparator is exact set difference — added, removed,
+and same-path-different-content kept apart — and every row is held against git's own listing, so a
+single report is falsifiable rather than only comparable with another run of itself. Each row also
+names the arm the run *said* it took, read back out of vat's own output: an A/B whose two arms
+silently ran the same enumerator is a clean result that means nothing, and this is what makes that
+visible.
+
+⚠️ The arm is the **lane and its extent source together** (`projection via git`), never the lane
+alone. The projection lane has two enumerators and reports the same word for both, so an A/B
+varying only `VAT_EXTENT_SOURCE` — which is exactly the axis the git-walker flip turns on — puts
+`projection` on both sides. And `crawlSourceFor` declines git *silently* on a root outside a
+repository, so "the two enumerators agree" and "the switch did nothing" are the same picture until
+the extent source separates them. The walk sources no extent and so reports none.
+
+```bash
+vat-lab population run ../some-project --instrument tree:. --id some-project --out ./walk
+VAT_RESOURCES_CRAWL=projection \
+  vat-lab population run ../some-project --instrument tree:. --id some-project --out ./projection
+vat-lab population compare ./walk/<report>.json ./projection/<report>.json
+```
+
+⚠️ Separate `--out` directories are required for two arms selected by the **environment**: the
+coordinate models the subject, its version and the vat build, and an env-selected lane is none of
+those, so both reports would otherwise land on one filename and the second would overwrite the
+first. See the note on `reportFileName` in `src/store.ts`.
+
+A minimal vary-the-instrument comparison — the same project, measured by two builds of vat:
 
 ```bash
 vat-lab io run ../some-project --id some-project --out ./before

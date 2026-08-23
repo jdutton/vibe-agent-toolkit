@@ -7,10 +7,12 @@
  * - HuggingFace model file downloader
  */
 
-import { readFile, stat, mkdir, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { stat, mkdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 
 // ---------------------------------------------------------------------------
 // WordPiece Tokenizer
@@ -399,8 +401,7 @@ export class BertTokenizer {
    *   for why that cannot be tolerated silently
    */
   static async fromVocabFile(vocabPath: string, modelId?: string): Promise<BertTokenizer> {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- vocabPath is from model cache, not user input
-    const content = await readFile(vocabPath, 'utf8');
+    const { text: content } = await readTextContent(vocabPath);
     const vocab = parseVocab(content);
     const specialTokens = resolveSpecialTokens(vocab, vocabPath, modelId);
     rejectIfCased(vocab, vocabPath, modelId);
@@ -607,14 +608,51 @@ async function fileExists(filePath: string): Promise<boolean> {
 }
 
 /**
- * Download a file from a URL to a local path.
+ * Reject a response body that arrived shorter than the server declared.
  *
- * Creates parent directories as needed. Buffers the response body
- * and writes to disk.
+ * Deliberately one-sided. A body LONGER than `content-length` is normal — a
+ * compressed response declares the compressed size while `arrayBuffer()` hands
+ * back the decoded bytes — so only a short read is treated as damage. That
+ * asymmetry matters: a two-sided check would reject every gzipped download and
+ * break model fetching outright, which is far worse than the truncation it
+ * would catch.
+ *
+ * Without this, a short read (or an error page served with status 200) is
+ * written to the cache and, because the cache is guarded only by existence, is
+ * never re-fetched — the machine keeps failing to parse it forever with no
+ * indication of why.
+ */
+function assertCompleteBody(url: string, received: number, declared: string | null): void {
+  if (declared === null) return;
+
+  const expected = Number(declared);
+  if (!Number.isFinite(expected) || received >= expected) return;
+
+  throw new Error(
+    `Incomplete download of ${url}: received ${received.toString()} bytes of the ` +
+      `${expected.toString()} the server declared. Nothing was cached; retry the operation.`,
+  );
+}
+
+/**
+ * Download a file from a URL to a local path, publishing it atomically.
+ *
+ * Creates parent directories as needed, buffers the response body, writes it to
+ * a sibling temp file and only then renames it into place.
+ *
+ * The rename is the point. This cache path is shared by every process on the
+ * machine and {@link ensureModelFiles} guards it only by existence, so several
+ * concurrent first-users all download and all publish to the same path. Writing
+ * the destination directly opens it with `O_TRUNC` and then writes tens of
+ * megabytes across many syscalls, during which any other process reading that
+ * path sees a truncated file — which surfaces from ONNX Runtime as the wholly
+ * unrelated-looking `Failed to load model because protobuf parsing failed`. A
+ * rename is atomic, so a reader sees either no file or a complete one.
  */
 async function downloadFile(url: string, destination: string): Promise<void> {
+  const directory = dirname(destination);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- destination is constructed from known cache directory
-  await mkdir(dirname(destination), { recursive: true });
+  await mkdir(directory, { recursive: true });
 
   const response = await fetch(url);
 
@@ -625,8 +663,24 @@ async function downloadFile(url: string, destination: string): Promise<void> {
   }
 
   const arrayBuffer = await response.arrayBuffer();
+  assertCompleteBody(url, arrayBuffer.byteLength, response.headers.get('content-length'));
+
+  // Sibling temp, so the rename never crosses a filesystem boundary (EXDEV).
+  const temporary = `${destination}.${process.pid.toString()}.${randomUUID()}.part`;
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- destination is constructed from known cache directory
-  await writeFile(destination, Buffer.from(arrayBuffer));
+  await writeFile(temporary, Buffer.from(arrayBuffer));
+
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- destination is constructed from known cache directory
+    await rename(temporary, destination);
+  } catch (cause) {
+    // A concurrent downloader may already hold the destination open, which on
+    // Windows makes the replace fail. Its copy is just as complete as ours, so
+    // losing the race is success, not an error.
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- destination is constructed from known cache directory
+    await unlink(temporary).catch(() => undefined);
+    if (!(await fileExists(destination))) throw cause;
+  }
 }
 
 /**

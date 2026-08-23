@@ -16,7 +16,7 @@
   ],
   "references": [
     { "path": "../utils" },
-    { "path": "../agent-schema" },
+    { "path": "../schema" },
     { "path": "../resource-compiler" }
   ]
 }

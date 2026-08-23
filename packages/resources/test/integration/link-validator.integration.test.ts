@@ -14,7 +14,7 @@ import { writeFile } from 'node:fs/promises';
 
 /* eslint-disable security/detect-non-literal-fs-filename -- tests use dynamic file paths in temp directory */
 
-import { type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { issueLocation, mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 

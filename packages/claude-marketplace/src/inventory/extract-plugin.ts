@@ -15,9 +15,11 @@ import { ClaudePluginSchema } from '../schemas/claude-plugin.js';
 
 import {
 	extractClaudeSkillInventory,
+	type ClaudeSkillInventoryOptions,
 	type GitTrackerSource,
 	type SharedRegistrySource,
 } from './extract-skill.js';
+import { type InventoryPopulation, type SharedPopulationSource } from './inventory-population.js';
 import { ClaudePluginInventory, type ClaudeSkillInventory } from './types.js';
 
 type ParseErrors = ClaudePluginInventory['parseErrors'];
@@ -44,14 +46,43 @@ function memoizeSharedRegistry(
 }
 
 /**
+ * What {@link extractClaudePluginInventory} needs besides the plugin path.
+ *
+ * The skill extractor's options with ONE member re-typed. Everything this lane
+ * does is hand its options down, so it inherits rather than copies — a second
+ * declaration of the shared members could only ever drift from the one that
+ * actually governs the walk.
+ *
+ * `sharedPopulation` is the exception, and the divergence is structural rather
+ * than stylistic: this layer holds the skill list and so takes a SOURCE, while
+ * the skill extractor takes the resolved population. See the member's own note.
+ *
+ * Its `gitTrackerSource` is REQUIRED for the reason the skill extractor's is —
+ * see {@link ClaudeSkillInventoryOptions}. A plugin lane that genuinely has no
+ * tracker to offer says {@link NO_GIT_TRACKER}, and the tracker-less walk is
+ * then a choice at the call site rather than an omission three functions away.
+ */
+export interface ClaudePluginInventoryOptions
+	extends Omit<ClaudeSkillInventoryOptions, 'sharedPopulation'> {
+	/**
+	 * Optional projection-backed membership lane — see {@link SharedPopulationSource}.
+	 *
+	 * A SOURCE here, where the skill extractor takes a resolved population: a
+	 * population must register one contributor per skill before it runs, and this
+	 * is the layer that knows the skill list. The skill extractor never could.
+	 */
+	sharedPopulation?: SharedPopulationSource | undefined;
+}
+
+/**
  * Build a PluginInventory for a directory containing a .claude-plugin/plugin.json manifest
  * and/or a root SKILL.md. Never throws — all failures surface via parseErrors[].
  */
 export async function extractClaudePluginInventory(
 	pluginPath: string,
-	sharedRegistry?: SharedRegistrySource,
-	gitTrackerSource?: GitTrackerSource,
+	options: ClaudePluginInventoryOptions,
 ): Promise<ClaudePluginInventory> {
+	const { sharedRegistry, sharedPopulation, gitTrackerSource } = options;
 	const absolute = safePath.resolve(pluginPath);
 
 	// eslint-disable-next-line security/detect-non-literal-fs-filename -- absolute is resolved from caller-supplied path, safe for plugin extraction
@@ -86,6 +117,7 @@ export async function extractClaudePluginInventory(
 		parseErrors,
 		memoizeSharedRegistry(sharedRegistry),
 		gitTrackerSource,
+		sharedPopulation,
 	);
 	const unexpected = await buildUnexpected(absolute, shape);
 
@@ -235,7 +267,8 @@ async function buildDiscovered(
 	rootSkillMd: string,
 	parseErrors: ParseErrors,
 	resolveSharedRegistry: () => Promise<ResourceRegistry | undefined>,
-	gitTrackerSource: GitTrackerSource | undefined,
+	gitTrackerSource: GitTrackerSource,
+	sharedPopulation: SharedPopulationSource | undefined,
 ): Promise<ClaudePluginInventory['discovered']> {
 	const skills = await discoverSkills(
 		absolute,
@@ -244,6 +277,7 @@ async function buildDiscovered(
 		parseErrors,
 		resolveSharedRegistry,
 		gitTrackerSource,
+		sharedPopulation,
 	);
 	const commands = await discoverComponents(safePath.join(absolute, 'commands'));
 	const agents = await discoverComponents(safePath.join(absolute, 'agents'));
@@ -256,7 +290,8 @@ async function discoverSkills(
 	rootSkillMd: string,
 	parseErrors: ParseErrors,
 	resolveSharedRegistry: () => Promise<ResourceRegistry | undefined>,
-	gitTrackerSource: GitTrackerSource | undefined,
+	gitTrackerSource: GitTrackerSource,
+	sharedPopulation: SharedPopulationSource | undefined,
 ): Promise<ClaudeSkillInventory[]> {
 	const skillInventories: ClaudeSkillInventory[] = [];
 
@@ -271,8 +306,75 @@ async function discoverSkills(
 	// function of each skill's own project root (skills under one plugin can sit in
 	// different repositories), and the caller — not this package — owns the per-root
 	// cache behind it.
-	for (const skillMd of await collectSkillMdPaths(absolute, shape, rootSkillMd)) {
-		const inv = await extractClaudeSkillInventory(skillMd, resolveSharedRegistry, gitTrackerSource);
+	//
+	// It is passed STRAIGHT THROUGH, with no `?? NO_GIT_TRACKER` behind it. That
+	// coalesce used to live here, and it was the join where required-ness stopped:
+	// the skill extractor demanded a source, this function's own parameter was
+	// optional, and the fallback quietly turned every omission back into the
+	// tracker-less walk. The lanes that omitted it were the ones that matter —
+	// `extract-install.ts` (`vat inventory --user`, every cached plugin) and
+	// `extract-marketplace.ts` (which had no parameter to pass on at all) — so
+	// "the skill extractor requires a source" was a statement about one file
+	// rather than about the lane. Both now carry the obligation to their own
+	// callers, and a lane that wants no tracker names `NO_GIT_TRACKER`.
+	const skillMdPaths = await collectSkillMdPaths(absolute, shape, rootSkillMd);
+
+	// Resolved ONCE, here, because this is the first layer that knows the whole
+	// skill list — and a population must register a contributor per skill before it
+	// runs, so unlike the registry it cannot be deferred any further down. Resolved
+	// only when discovery actually found a skill, for the same reason the registry
+	// provider is handed over unresolved: a plugin of commands/ and agents/ alone
+	// must populate nothing.
+	//
+	// A source that throws degrades to the incumbent rather than failing the
+	// plugin — but it SAYS SO, and the difference is not cosmetic.
+	//
+	// This was a bare `catch { population = undefined; }`, written when the lane
+	// was an opt-in second implementation of a question the walk already answers,
+	// so its failure was "a missing measurement, not a defect in the subject".
+	// That premise expired twice over: the projection is now this command's
+	// DEFAULT membership answer, and the source behind it writes an
+	// EXPLICITLY OPTED-IN cache (`VAT_PROJECTION_STORE`). Silence turned a hard
+	// store failure into a run that exited 0, cached nothing, and paid the
+	// projection AND the walk — on every root shipping a binary file, for as long
+	// as the store rejected a declined blob. Measured on a real adopter plugin:
+	// 76 s cold, then 76 s again warm, with an empty store; the same run reports
+	// 1.3 s warm once the store can actually be written.
+	// `cli/src/utils/projection-store.ts` states the standard in its own header:
+	// an opted-in cache that quietly does nothing is worse than no cache.
+	//
+	// A warning and not a `parseErrors` entry, and not a throw:
+	//
+	// - `parseErrors` is this module's degradation channel for defects in the
+	//   SUBJECT, and `audit.ts` renders every entry as an error-severity
+	//   `PLUGIN_INVALID_JSON` finding. A cache failure is neither invalid JSON
+	//   nor the plugin's fault, and routing it there would fail an audit over it.
+	// - A throw would break "never throws — all failures surface via
+	//   parseErrors[]", which `audit.ts` depends on by name: it records the
+	//   incident where moving a crawl outside this catch aborted a whole audit
+	//   with exit code 2 instead of degrading three link walks.
+	//
+	// So the failure is loud on stderr and the extraction continues, which is the
+	// same posture `projection-store.ts` takes when it cannot key a tree.
+	let population: InventoryPopulation | undefined;
+	if (sharedPopulation !== undefined && skillMdPaths.length > 0) {
+		try {
+			population = await sharedPopulation(skillMdPaths);
+		} catch (error) {
+			population = undefined;
+			console.warn(
+				`[vat] Warning: the projection membership lane failed for ${absolute}, so this`
+				+ ` plugin's skills fell back to the link walk and nothing was cached: ${String(error)}`,
+			);
+		}
+	}
+
+	for (const skillMd of skillMdPaths) {
+		const inv = await extractClaudeSkillInventory(skillMd, {
+			sharedRegistry: resolveSharedRegistry,
+			gitTrackerSource,
+			...(population !== undefined && { sharedPopulation: population }),
+		});
 		for (const err of inv.parseErrors) parseErrors.push(err);
 		skillInventories.push(inv);
 	}

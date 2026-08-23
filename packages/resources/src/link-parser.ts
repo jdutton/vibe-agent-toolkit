@@ -13,8 +13,9 @@
  * from `schemas/resource-metadata.ts` (single source of truth).
  */
 
-import { readFile, stat } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 
+import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 import GithubSlugger from 'github-slugger';
 import type { Definition, Heading, Html, Link, LinkReference, Root, Yaml } from 'mdast';
 import { toString as mdastToString } from 'mdast-util-to-string';
@@ -25,6 +26,16 @@ import { unified } from 'unified';
 import { visit } from 'unist-util-visit';
 import * as yaml from 'yaml';
 
+import {
+  ParsePass,
+  ParserKind,
+  parseTimingStart,
+  recordParsedDocument,
+  recordParsePass,
+} from './parse-timing.js';
+import { measureContent } from './projection/blob-facts.js';
+import { collectCodeContextRanges, findLexicalReferences } from './reference-lexer.js';
+import type { ContentMeasures, LexicalReference } from './schemas/parse-facts.js';
 import type { HtmlParseError } from './schemas/resource-metadata.js';
 import type { HeadingNode, LinkType, ResourceLink, UnresolvedReference } from './types.js';
 import { findUnresolvedReferences } from './unresolved-references.js';
@@ -84,6 +95,52 @@ export interface ParseResult {
    * leaves this undefined; markdown always populates it (possibly empty).
    */
   unresolvedReferences?: UnresolvedReference[];
+  /**
+   * Reference candidates the markdown AST cannot produce: `@`-prefixed tokens,
+   * variable-anchored paths, and bounded path-shaped bare tokens. See
+   * `reference-lexer.ts` for what qualifies and what is excluded.
+   *
+   * The key is **omitted** when a document has none, matching {@link anchors}:
+   * no own property of a `ParseResult` is ever valued `undefined`, which is
+   * what makes the cache's JSON round trip exact under `toStrictEqual`. HTML
+   * documents leave it undefined.
+   */
+  lexicalReferences?: LexicalReference[];
+  /**
+   * Word and code-unit accounting for this blob, split by code context —
+   * `BlobRow`'s `wordCount` / `proseCodeUnits` / `codeBlockCodeUnits`.
+   *
+   * Computed at parse time rather than at population time because
+   * `codeBlockCodeUnits` needs the AST's `code` node offsets, which exist only
+   * while the tree is live. Both parsers currently always supply it, so the
+   * absent state is defensive rather than reachable; the key stays optional to
+   * match {@link anchors} and {@link lexicalReferences}, and because a
+   * `ParseResult` assembled by hand (tests, a future producer) legitimately has
+   * nothing to say here.
+   */
+  contentMeasures?: ContentMeasures;
+}
+
+/**
+ * VAT's token estimate for a span of text: one token per four characters.
+ *
+ * A deliberately crude, tokenizer-free approximation — no model's vocabulary is
+ * consulted, so the number is comparable across documents rather than accurate
+ * for any one model. It exists as a function because more than one caller needs
+ * it: {@link parseMarkdownContent} reports it per document as
+ * `estimatedTokenCount`, and `blobSectionsFor` reports it per section. Restating
+ * `Math.ceil(text.length / 4)` at each site is how an estimator drifts.
+ *
+ * The input is a **decoded** string, so this counts UTF-16 code units, not bytes
+ * on disk — the same unit `ContentMeasures` (`proseCodeUnits` /
+ * `codeBlockCodeUnits`) reports in. The one size column that is not code units
+ * is `blob_sections.bytes`, which is a real UTF-8 byte count and says so.
+ *
+ * @param text - Decoded text to estimate
+ * @returns Estimated token count, rounded up
+ */
+export function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
 }
 
 /**
@@ -106,14 +163,17 @@ export interface ParseResult {
  */
 export async function parseMarkdown(filePath: string): Promise<ParseResult> {
   // Read file content and stats
-  const [content, stats] = await Promise.all([
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath is user-provided path parameter
-    readFile(filePath, 'utf-8'),
+  // `readTextContent`, never `readFile(path, 'utf-8')`: this reads a CORPUS
+  // document, whose encoding VAT does not choose. See text-content.ts.
+  const [decoded, stats] = await Promise.all([
+    readTextContent(filePath),
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath is user-provided path parameter
     stat(filePath),
   ]);
 
-  return parseMarkdownContent(content, stats.size);
+  // `stats.size` is RAW bytes and stays raw — see the `sizeBytes` note on
+  // `parseMarkdownContent` for why it cannot be derived from the decoded string.
+  return parseMarkdownContent(decoded.text, stats.size);
 }
 
 /**
@@ -154,39 +214,85 @@ export async function parseMarkdown(filePath: string): Promise<ParseResult> {
  * ```
  */
 export function parseMarkdownContent(content: string, sizeBytes: number): ParseResult {
-  const estimatedTokenCount = Math.ceil(content.length / 4);
+  // Every `passStartedAt` / `recordParsePass` pair is the sub-phase timing seam
+  // (`parse-timing.ts`), off unless `VAT_PARSE_TIMING` names a dump directory.
+  // `totalStartedAt` brackets the whole body, so a reader can compute
+  // unattributed overhead as `markdown-total - sum(this kind's passes)`.
+  // `parseHtmlContent` is instrumented the same way, into its own group.
+  const totalStartedAt = parseTimingStart();
 
-  // Parse markdown with unified/remark
+  let passStartedAt = parseTimingStart();
+  const estimatedTokenCount = estimateTokens(content);
+  recordParsePass(ParsePass.EstimateTokens, passStartedAt);
+
+  // Parse markdown with unified/remark. The processor is rebuilt per document,
+  // so it is timed separately from the parse it feeds.
+  passStartedAt = parseTimingStart();
   const processor = unified()
     .use(remarkParse)
     .use(remarkGfm)
     .use(remarkFrontmatter);
+  recordParsePass(ParsePass.RemarkProcessor, passStartedAt);
 
+  passStartedAt = parseTimingStart();
   const tree = processor.parse(content) as Root;
+  recordParsePass(ParsePass.RemarkParse, passStartedAt);
 
   // Links, headings, raw-HTML anchors and frontmatter, from ONE tree walk
+  passStartedAt = parseTimingStart();
   const { links, headings, anchors, frontmatter, frontmatterError, frontmatterSource } =
     collectAstFacts(tree);
+  recordParsePass(ParsePass.AstFacts, passStartedAt);
 
   // Detect dangling reference-style links (full/collapsed forms with no
   // matching definition) — see findUnresolvedReferences for why this is a
   // raw-source scan rather than an AST visit.
+  passStartedAt = parseTimingStart();
   const unresolvedReferences = findUnresolvedReferences(content, tree);
+  recordParsePass(ParsePass.UnresolvedReferences, passStartedAt);
+
+  // ONE walk for every consumer of code context. `findLexicalReferences` used
+  // to call `collectCodeContextRanges` itself; adding a second call here for
+  // the measures would have walked the tree twice on the cold path CI always
+  // pays — the very cost `collectAstFacts` exists to avoid.
+  passStartedAt = parseTimingStart();
+  const ranges = collectCodeContextRanges(tree);
+  recordParsePass(ParsePass.CodeContextRanges, passStartedAt);
+
+  // Reference candidates remark parses as plain text — `@`-prefixed tokens,
+  // variable-anchored paths, path-shaped bare tokens. Also a raw-source scan,
+  // and for the same structural reason.
+  passStartedAt = parseTimingStart();
+  const lexicalReferences = findLexicalReferences(content, ranges);
+  recordParsePass(ParsePass.LexicalReferences, passStartedAt);
+
+  // Fenced AND indented code blocks are both `code` nodes, so both count as
+  // code here — which is the useful reading: neither is prose.
+  passStartedAt = parseTimingStart();
+  const contentMeasures = measureContent(content, ranges.fences);
+  recordParsePass(ParsePass.MeasureContent, passStartedAt);
 
   // With exactOptionalPropertyTypes: true, we must conditionally include the property
   // rather than assigning undefined to it
-  return {
+  const result: ParseResult = {
     links,
     headings,
     unresolvedReferences,
+    ...(lexicalReferences.length > 0 && { lexicalReferences }),
     ...(anchors.length > 0 && { anchors }),
     ...(frontmatter !== undefined && { frontmatter }),
     ...(frontmatterError !== undefined && { frontmatterError }),
     ...(frontmatterSource !== undefined && { frontmatterSource }),
+    contentMeasures,
     content,
     sizeBytes,
     estimatedTokenCount,
   };
+
+  recordParsedDocument(ParserKind.Markdown, sizeBytes);
+  recordParsePass(ParsePass.MarkdownTotal, totalStartedAt);
+
+  return result;
 }
 
 /**
@@ -380,6 +486,20 @@ function toResourceLink(
     href,
     type: classifyLink(href),
     ...(node.position !== undefined && { line: node.position.start.line }),
+    // The whole node's span — `[text](href)`, not the href alone. mdast gives a
+    // position for the construct and none for the href within it, and the wider
+    // span is the one a rewriter wants anyway: shortening a path usually means
+    // reconsidering the text beside it, and a caller that only wants the href
+    // has the raw source and the span to find it in.
+    //
+    // Spread on `start.offset` rather than on `position`, because the two are
+    // independently optional in mdast's own types: a node can carry a position
+    // whose offsets are absent, and reading `line` while silently defaulting an
+    // offset to 0 would put a rewrite at the top of the document.
+    ...(node.position?.start.offset !== undefined && node.position.end.offset !== undefined && {
+      startOffset: node.position.start.offset,
+      endOffset: node.position.end.offset,
+    }),
     nodeType,
   };
 }

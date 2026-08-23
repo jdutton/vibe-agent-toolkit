@@ -6,14 +6,6 @@
  */
 
 import {
-  allowUnusedIssues,
-  calculateValidationStatus,
-  countBySeverity,
-  createAllowUsageLedger,
-  type SeverityCounts,
-  type ValidationIssue,
-} from '@vibe-agent-toolkit/agent-schema';
-import {
   validateSkillForPackaging,
   type DeclaredEvalSuite,
   type PackagingValidationResult,
@@ -22,6 +14,14 @@ import {
 } from '@vibe-agent-toolkit/agent-skills';
 import type { Target } from '@vibe-agent-toolkit/claude-marketplace';
 import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
+import {
+  allowUnusedIssues,
+  calculateValidationStatus,
+  countBySeverity,
+  createAllowUsageLedger,
+  type SeverityCounts,
+  type ValidationIssue,
+} from '@vibe-agent-toolkit/schema';
 import { findProjectRoot, gitFindRoot, GitTracker, safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';
 
@@ -38,6 +38,11 @@ import {
 } from '../../utils/issue-rendering.js';
 import { type createLogger } from '../../utils/logger.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
+import {
+  RESOURCES_CRAWL_ENV,
+  RESOURCES_CRAWL_PROJECTION,
+  withResourcePopulationSource,
+} from '../../utils/resource-loader.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
 import { renderSkillQualityFooter } from '../../utils/skill-quality-footer.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
@@ -316,7 +321,7 @@ const STATUS_GLYPHS: Record<ValidationStatus, string> = {
  * expected pre-build state and must not fail CI); only the claim was wrong. It
  * is dropped rather than made conditional because the code registry carries no
  * build-blocking fact to condition it on — `CodeRegistryEntry` in
- * agent-schema/src/validation-codes.ts is exactly `defaultSeverity` /
+ * schema/src/validation-codes.ts is exactly `defaultSeverity` /
  * `description` / `fix` / `reference` — and keying the claim
  * on a hardcoded list of code names would assert a cause this renderer cannot
  * observe, and would go stale the next time a code is added.
@@ -493,26 +498,14 @@ async function buildSharedValidationContext(
 
   const context: SkillValidationSharedContext = { allowLedger, projectSkills };
 
-  // Only reuse a single registry when every skill shares the same project
-  // root. Otherwise the per-skill fallback path is correct and the cost is
-  // unchanged from the pre-refactor baseline.
-  if (projectRoots.size === 1) {
-    const [sharedRoot] = [...projectRoots];
-    if (sharedRoot !== undefined) {
-      logger.debug(`Building shared resource registry rooted at: ${sharedRoot}`);
-      const registry = await ResourceRegistry.fromCrawl({
-        baseDir: sharedRoot,
-        include: ['**/*.md'],
-      });
-      registry.resolveLinks();
-      context.registry = registry;
-    }
-  } else {
-    logger.debug(`Skipping shared registry — batch spans ${projectRoots.size} project roots`);
-  }
-
   // One tracker per repo; when the batch spans repos, skip rather than spawn
   // multiple `git ls-files`.
+  //
+  // Built BEFORE the registry, which is the one ordering constraint in this
+  // function: the projection lane below needs an ignore oracle, and without one
+  // every realization row reads `gitignored: false` — so the population would
+  // admit the ignored half of the tree and this command would start validating
+  // generated markdown. Nothing else here depends on the order.
   if (gitRoots.size === 1) {
     const [sharedGitRoot] = [...gitRoots];
     if (sharedGitRoot !== undefined) {
@@ -523,6 +516,40 @@ async function buildSharedValidationContext(
     }
   } else if (gitRoots.size > 1) {
     logger.debug(`Skipping shared tracker — batch spans ${gitRoots.size} git roots`);
+  }
+
+  // Only reuse a single registry when every skill shares the same project
+  // root. Otherwise the per-skill fallback path is correct and the cost is
+  // unchanged from the pre-refactor baseline.
+  if (projectRoots.size === 1) {
+    const [sharedRoot] = [...projectRoots];
+    if (sharedRoot !== undefined) {
+      logger.debug(`Building shared resource registry rooted at: ${sharedRoot}`);
+      // The lane, and the store that answers it, bracket the crawl and nothing
+      // else: the source is called from inside `fromCrawl` and nowhere after it.
+      // `include` is unchanged either way — `ResourceRegistry.crawl` re-applies
+      // it to whatever the source offers, so this stays a markdown-only registry
+      // on both lanes.
+      const registry = await withResourcePopulationSource(
+        { root: sharedRoot, gitTracker: context.gitTracker },
+        async (populationSource) => {
+          logger.debug(
+            populationSource
+              ? `Enumerating via the projection lane (${RESOURCES_CRAWL_ENV}=${RESOURCES_CRAWL_PROJECTION})`
+              : `Enumerating via the incumbent walk (${RESOURCES_CRAWL_ENV} unset)`,
+          );
+          return ResourceRegistry.fromCrawl({
+            baseDir: sharedRoot,
+            include: ['**/*.md'],
+            ...(populationSource !== undefined && { populationSource }),
+          });
+        },
+      );
+      registry.resolveLinks();
+      context.registry = registry;
+    }
+  } else {
+    logger.debug(`Skipping shared registry — batch spans ${projectRoots.size} project roots`);
   }
 
   return context;

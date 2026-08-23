@@ -1,5 +1,5 @@
 import { executeLLMAnalyzer, validateAgentInput } from '@vibe-agent-toolkit/agent-runtime';
-import type { Agent, LLMError, OneShotAgentOutput } from '@vibe-agent-toolkit/agent-schema';
+import type { Agent, LLMError, OneShotAgentOutput } from '@vibe-agent-toolkit/schema';
 import { z } from 'zod';
 
 // Import compiled resources from markdown

@@ -46,7 +46,7 @@
 
 import path from 'node:path';
 
-import { createRegistryIssue, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { createRegistryIssue, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import {
   classifyFilenameCaseFrom,
   type FilenameMatch,

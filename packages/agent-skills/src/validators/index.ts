@@ -14,7 +14,7 @@ export type {
 	IssueCode,
 	IssueSeverity,
 	ValidationIssue,
-} from '@vibe-agent-toolkit/agent-schema';
+} from '@vibe-agent-toolkit/schema';
 export type {
 	LinkedFileValidationResult,
 	ResourceFormat,

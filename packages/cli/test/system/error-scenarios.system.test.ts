@@ -69,7 +69,15 @@ describe('Error scenarios (system test)', () => {
     // NOT a bare `[DEBUG]`: `bin.ts` writes one such line from raw `process.argv`
     // before Commander parses, so that substring was present even when the flag
     // reached nothing. This line can only come from the subcommand's own logger.
-    expect(result.stderr).toContain('[DEBUG] GitTracker initialized');
+    //
+    // ⚠️ The marker used to be `[DEBUG] GitTracker initialized`. It moved because
+    // the tracker is now initialized INSIDE the population-cache bracket — where a
+    // git snapshot already answers its question, saving a `git ls-files` spawn —
+    // and this scenario throws on the missing path BEFORE reaching that bracket.
+    // So the old marker is genuinely absent here rather than broken, and swapping
+    // it keeps what this test is actually about: a debug line that only the
+    // subcommand's logger can have written.
+    expect(result.stderr).toContain('[DEBUG] Path argument provided');
     // ...and the failure now carries frames, not just its message.
     expect(result.stderr).toContain('Error: Path does not exist');
     expect(result.stderr).toContain(V8_STACK_FRAME);

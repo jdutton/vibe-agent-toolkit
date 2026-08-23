@@ -14,9 +14,9 @@
  */
 
 /* eslint-disable security/detect-non-literal-fs-filename -- tests use controlled temp directories */
-import { existsSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { createSymlink, mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { EvalFragment } from '../../src/skill-test/eval-fragment.js';
@@ -1487,12 +1487,13 @@ describe('cleanupHarness', () => {
     expect(() => cleanupHarness(root, { keep: false, created: true })).not.toThrow();
   });
 
-  it.skipIf(process.platform === 'win32')(
+  it(
     'does not follow a symlinked root — leaves the link target intact',
-    () => {
+    ({ skip }) => {
+      const cap = symlinkCapability() ?? skip();
       const target = makeHarnessDir(getTempDir(), 'symlink-target');
       const link = safePath.join(getTempDir(), 'symlink-root');
-      symlinkSync(target, link);
+      createSymlink(cap, target, link);
       cleanupHarness(link, { keep: false, created: true });
       // The symlink target (and its contents) must survive — cleanup must not
       // follow a swapped symlink out of tmp.

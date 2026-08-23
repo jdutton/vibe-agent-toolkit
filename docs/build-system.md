@@ -48,9 +48,14 @@ bun run typecheck
 ```
 
 These scripts map to:
-- `build`: `tsc --build && cd packages/agent-schema && bun run generate:schemas`
-- `build:clean`: `tsc --build --clean && tsc --build && cd packages/agent-schema && bun run generate:schemas`
-- `typecheck`: `tsc --build --dry --force`
+- `build`: `turbo run build && turbo run build:skills`
+- `build:clean`: `bun run clean && turbo run build --force && turbo run build:skills --force` — routed through
+  turbo (and so through `tsc-clean-build.ts`’s staging emit) on purpose. A clean build that calls `tsc`
+  directly bypasses the staging `outDir` and can report success on a tree the real build fails to compile.
+- `clean`: removes build outputs only — `dist`, `*.tsbuildinfo`, `.tsc-staging`, `.test-output`. It does not
+  touch `packages/*/schemas`, which hold tracked files.
+- `clean:deps`: removes `node_modules` (dependency reset, not a build clean).
+- `typecheck`: `turbo run typecheck`
 
 ## How It Works
 

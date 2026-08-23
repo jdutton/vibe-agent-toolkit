@@ -1,7 +1,7 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 import { writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, resetProjectRootCaches, safeExecSync, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, normalizedTmpdir, resetProjectRootCaches, runGitOrThrow, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { packageSkill } from '../../src/skill-packager.js';
@@ -75,9 +75,9 @@ function buildFixture(prefix: string, skillBody: string): Fixture {
   mkdirSyncReal(dir, { recursive: true });
 
   // Real git repo — lets `git check-ignore` run authentically.
-  safeExecSync('git', ['init', '-q', '-b', 'main'], { cwd: dir });
-  safeExecSync('git', ['config', 'user.email', 'test@test'], { cwd: dir });
-  safeExecSync('git', ['config', 'user.name', 'test'], { cwd: dir });
+  runGitOrThrow(['init', '-q', '-b', 'main'], { cwd: dir });
+  runGitOrThrow(['config', 'user.email', 'test@test'], { cwd: dir });
+  runGitOrThrow(['config', 'user.name', 'test'], { cwd: dir });
 
   writeFileSync(safePath.join(dir, '.gitignore'), 'build/\n');
 
@@ -93,8 +93,8 @@ function buildFixture(prefix: string, skillBody: string): Fixture {
   // file crawler) finds them and adds them to the ResourceRegistry. Without
   // a commit, git ls-files returns an empty set and the registry stays empty,
   // which causes walkLinkGraph to skip the skill's links entirely.
-  safeExecSync('git', ['add', '.gitignore', `${SKILL_SUBDIR}/SKILL.md`], { cwd: dir });
-  safeExecSync('git', ['commit', '-q', '-m', 'init'], { cwd: dir });
+  runGitOrThrow(['add', '.gitignore', `${SKILL_SUBDIR}/SKILL.md`], { cwd: dir });
+  runGitOrThrow(['commit', '-q', '-m', 'init'], { cwd: dir });
 
   // Create gitignored build artifact AFTER the initial commit so it is
   // present on disk but not tracked. The real git check-ignore will classify

@@ -1,7 +1,7 @@
 /**
  * RESOURCE_UNREADABLE issue shape.
  *
- * `ValidationIssue`'s contract (see `packages/agent-schema/src/validation-issue.ts`)
+ * `ValidationIssue`'s contract (see `packages/schema/src/validation-issue.ts`)
  * says every issue's `location` must be a project-relative path so it never leaks
  * the developer's home directory into CI logs, and so `validation.allow` globs
  * (which match against `location`) can address it. `collectUnreadableResourceErrors`

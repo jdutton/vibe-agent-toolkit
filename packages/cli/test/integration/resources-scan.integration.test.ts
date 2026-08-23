@@ -42,6 +42,40 @@ describe('vat resources scan (integration)', () => {
     expect(parsed.filesScanned).toBeGreaterThan(0);
   });
 
+  it('emits the same document as JSON, parseable without a YAML parser', async () => {
+    writeTestFile(safePath.join(tempDir, 'README.md'), '# Test');
+
+    const result = await executeCli(binPath, [
+      'resources',
+      'scan',
+      tempDir,
+      '--verbose',
+      '--format',
+      'json',
+    ]);
+
+    expect(result.status).toBe(0);
+    // `JSON.parse` of the whole stream, not a substring match: the point of the
+    // flag is that a consumer needs no parser of ours, and a document with a
+    // stray `---` opener or a trailing second document fails exactly here.
+    const parsed = JSON.parse(result.stdout) as Record<string, unknown>;
+    expect(parsed.status).toBe('success');
+    // The projection lane is the default; this fixture has no `.git`, so it is
+    // the filesystem enumerator that runs under it.
+    expect(parsed.lane).toBe('projection');
+    expect(parsed.extentSource).toBe('filesystem');
+    expect(Array.isArray(parsed.files)).toBe(true);
+  });
+
+  it('refuses an output format it does not have', async () => {
+    const result = await executeCli(binPath, ['resources', 'scan', tempDir, '--format', 'xml']);
+
+    // Loud, not a silent fall back to YAML: a caller who asked for a format and
+    // got another one parses the wrong thing and blames the parser.
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('--format');
+  });
+
   it('should exit 0 even if no files found', async () => {
     const result = await executeCli(binPath, ['resources', 'scan', tempDir]);
 

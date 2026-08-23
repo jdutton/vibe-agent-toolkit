@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
@@ -9,6 +10,23 @@ const EXAMPLE_URL = 'https://example.com';
 const GITHUB_URL = 'https://github.com';
 const BROKEN_URL = 'https://broken.com';
 const CACHE_FILE = 'external-links.json';
+
+/** The key `ExternalLinkCache` files a URL under — SHA-256 of the normalized URL. */
+function entryKey(url: string): string {
+	return createHash('sha256').update(url).digest('hex');
+}
+
+/**
+ * Write the cache file directly, bypassing `set()`.
+ *
+ * Every test that pins the read boundary needs bytes the writer cannot
+ * produce — that is what a read-boundary check is for — so going through the
+ * public API would prove nothing.
+ */
+async function writeRawCache(dir: string, contents: unknown): Promise<void> {
+	// eslint-disable-next-line security/detect-non-literal-fs-filename -- dir comes from mkdtemp in beforeEach
+	await fs.writeFile(safePath.join(dir, CACHE_FILE), JSON.stringify(contents));
+}
 
 describe('ExternalLinkCache', () => {
 	let tempDir: string;
@@ -31,7 +49,6 @@ describe('ExternalLinkCache', () => {
 			statusCode: 200,
 			statusMessage: 'OK',
 			timestamp: expect.any(Number),
-			version: 1,
 		});
 	});
 
@@ -72,7 +89,6 @@ describe('ExternalLinkCache', () => {
 			statusCode: 404,
 			statusMessage: 'Not Found',
 			timestamp: expect.any(Number),
-			version: 1,
 		});
 	});
 
@@ -85,7 +101,6 @@ describe('ExternalLinkCache', () => {
 			statusCode: 404,
 			statusMessage: 'Not Found',
 			timestamp: expect.any(Number),
-			version: 1,
 		});
 	});
 
@@ -114,20 +129,108 @@ describe('ExternalLinkCache', () => {
 		expect(result?.statusCode).toBe(200);
 	});
 
-	it('treats entries with a missing version field as a cache miss (forward-compat)', async () => {
-		// Hand-craft a legacy cache file (pre-version) and confirm get() rejects it.
-		// Forward-compat per #113 — keeps slice 3+ free to evolve CacheEntry without
-		// risking misparse against pre-existing files.
-		const cacheFile = safePath.join(tempDir, CACHE_FILE);
-		const url = 'https://legacy.example.com';
-		const crypto = await import('node:crypto');
-		const key = crypto.createHash('sha256').update(url).digest('hex');
-		const legacy = { [key]: { statusCode: 200, statusMessage: 'OK', timestamp: Date.now() } };
-		// eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir from mkdtemp
-		await fs.writeFile(cacheFile, JSON.stringify(legacy));
+	describe('the removed cache version', () => {
+		it('exports no hand-bumped version constant', async () => {
+			// An absence pin, not decoration. `CACHE_VERSION = 1` never moved off
+			// 1 and was checked INSTEAD OF the entry's own fields, so it
+			// certified a shape it had not looked at. What replaced it is
+			// `ExternalLinkCacheEntrySchema` at the read boundary. The guard
+			// names the SHAPE rather than the symbol on purpose:
+			// `CACHE_VERSION_2` would pass a symbol-only check.
+			const modules = await Promise.all([
+				import('../src/external-link-cache.js'),
+				import('../src/schemas/external-link-cache.js'),
+			]);
+			const versionish = modules.flatMap((module) =>
+				Object.keys(module).filter((name) => /VERSION|REVISION/u.test(name)),
+			);
 
-		const result = await cache.get(url);
-		expect(result).toBeNull();
+			expect(versionish).toStrictEqual([]);
+		});
+
+		it('writes no version field to disk', async () => {
+			await cache.set(EXAMPLE_URL, 200, 'OK');
+
+			const cacheFile = safePath.join(tempDir, CACHE_FILE);
+			// eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir from mkdtemp
+			const written: unknown = JSON.parse(await fs.readFile(cacheFile, 'utf-8'));
+			const entries = Object.values(written as Record<string, Record<string, unknown>>);
+
+			expect(entries).toHaveLength(1);
+			expect(entries[0]).not.toHaveProperty('version');
+		});
+
+		it('treats an entry carrying the old version field as a miss', async () => {
+			// The migration, such as it is: `.strict()` sees `version` as a key
+			// this build has no field for, so entries written by the removed
+			// code path cost exactly one refetch and then stop existing. Pre-1.0
+			// this repo does not keep a field alive for a reader that is gone.
+			const url = 'https://versioned.example.com';
+			await writeRawCache(tempDir, {
+				[entryKey(url)]: {
+					statusCode: 200,
+					statusMessage: 'OK',
+					timestamp: Date.now(),
+					version: 1,
+				},
+			});
+
+			expect(await cache.get(url)).toBeNull();
+		});
+	});
+
+	describe('the read boundary', () => {
+		it('treats a foreign statusCode type as a miss, not a broken link', async () => {
+			// The failure the removed constant permitted: `version: 1` passed and
+			// nothing looked at `statusCode`, so a string reached `isAliveStatus`
+			// — a `Set<number>.has`, which no string is ever a member of. The
+			// link would have been reported broken at full confidence.
+			const url = 'https://stringly.example.com';
+			await writeRawCache(tempDir, {
+				[entryKey(url)]: { statusCode: '200', statusMessage: 'OK', timestamp: Date.now() },
+			});
+
+			expect(await cache.get(url)).toBeNull();
+		});
+
+		it('treats an entry missing a required field as a miss', async () => {
+			const url = 'https://truncated.example.com';
+			await writeRawCache(tempDir, { [entryKey(url)]: { statusCode: 200 } });
+
+			expect(await cache.get(url)).toBeNull();
+		});
+
+		it('does not count a timestamp-less entry as a live cached result', async () => {
+			// Why the schema runs at load rather than per-lookup: `getStats`
+			// never calls `get`, so an entry with no `timestamp` would give
+			// `NaN > ttlMs === false` and be reported live forever, with no
+			// lookup able to evict it.
+			await writeRawCache(tempDir, {
+				[entryKey('https://ageless.example.com')]: { statusCode: 200, statusMessage: 'OK' },
+			});
+
+			expect(await cache.getStats()).toEqual({ total: 0, expired: 0 });
+		});
+
+		it('keeps well-formed neighbours of a rejected entry', async () => {
+			// Per-entry, not per-file. `z.record` would reject the map wholesale
+			// and — on a cache deliberately shared across VAT versions — turn one
+			// bad neighbour into a full internet refetch.
+			await writeRawCache(tempDir, {
+				[entryKey(EXAMPLE_URL)]: { statusCode: 200, statusMessage: 'OK', timestamp: Date.now() },
+				[entryKey(BROKEN_URL)]: { statusCode: 404, statusMessage: 'Not Found', timestamp: 'yesterday' },
+			});
+
+			expect(await cache.get(EXAMPLE_URL)).not.toBeNull();
+			expect(await cache.get(BROKEN_URL)).toBeNull();
+		});
+
+		it('degrades a non-object cache file to an empty cache', async () => {
+			await writeRawCache(tempDir, ['not', 'a', 'map']);
+
+			expect(await cache.get(EXAMPLE_URL)).toBeNull();
+			expect(await cache.getStats()).toEqual({ total: 0, expired: 0 });
+		});
 	});
 
 	it('should handle corrupted cache file gracefully', async () => {

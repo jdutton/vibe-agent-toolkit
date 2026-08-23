@@ -73,10 +73,13 @@ const SCAN_RESOURCE = {
 };
 
 /** The scan payload for one README, with and without `--verbose`. */
-function scanPayload(verbose: boolean) {
+function scanPayload(verbose: boolean, lane: 'walk' | 'projection' = 'walk') {
   return buildScanOutputData({
     resources: [SCAN_RESOURCE],
     root: ROOT,
+    lane,
+    // The walk sources no extent; these cases are about path coordinates.
+    extentSource: null,
     durationMs: 234,
     collections: undefined,
     verbose,
@@ -92,6 +95,15 @@ describe('resources scan payload', () => {
       { path: README_REL, links: 2, anchors: 3, checksum: 'a'.repeat(64) },
     ]);
     expectNoAbsolutePaths(data.files);
+  });
+
+  it('states which enumerator produced the population, in every verbosity', () => {
+    // Provenance, and it belongs beside `root` because it qualifies the file
+    // list the same way: two scans of one tree that report different
+    // populations are only interpretable if each names its own lane.
+    expect(scanPayload(true).lane).toBe('walk');
+    expect(scanPayload(false).lane).toBe('walk');
+    expect(scanPayload(true, 'projection').lane).toBe('projection');
   });
 
   it('names the duration field `durationSecs`, in seconds', () => {

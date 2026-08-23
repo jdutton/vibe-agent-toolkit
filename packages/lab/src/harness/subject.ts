@@ -39,13 +39,13 @@ import {
   fileContentHash,
   gitFindRoot,
   NEVER_CRAWL_GLOBS,
-  safeExecResult,
   safePath,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
 
 import type { SubjectRef, SubjectVersion } from '../envelope/coordinate.js';
 
+import { hasUncommittedChanges, runGit } from './git-state.js';
 import type { ResolvedSubject, SubjectSource } from './types.js';
 
 /**
@@ -125,23 +125,6 @@ const GIT_POPULATION: FingerprintScope = { fromGit: true };
 const FINGERPRINT_EXCLUDE: readonly string[] = NEVER_CRAWL_GLOBS;
 
 /**
- * Run one git plumbing command and return its exit status and decoded stdout.
- *
- * Goes through `safeExecResult` (PATH resolved once, no shell) rather than
- * spawning directly, and never throws: every caller here treats a non-zero exit
- * as information — "no commit yet", "detached HEAD" — rather than as a failure.
- *
- * @param args - Arguments after the `git` executable
- * @param cwd - Directory to run in
- * @returns The exit status (-1 when git could not be spawned) and stdout
- */
-function runGit(args: readonly string[], cwd: string): { status: number; stdout: string } {
-  const result = safeExecResult('git', [...args], { cwd, encoding: 'utf8' });
-  const stdout = typeof result.stdout === 'string' ? result.stdout : result.stdout.toString('utf8');
-  return { status: result.status, stdout };
-}
-
-/**
  * The branch name HEAD points at, or `null` when HEAD is detached.
  *
  * Uses `symbolic-ref` rather than `rev-parse --abbrev-ref`, which reports the
@@ -157,38 +140,6 @@ function currentBranch(cwd: string): string | null {
   if (result.status !== 0) return null;
   const name = result.stdout.trim();
   return name.length > 0 ? name : null;
-}
-
-/**
- * Does the working tree carry changes the commit does not describe?
- *
- * **Judged repository-wide**, matching the commit being stamped: HEAD is a
- * repository-wide fact, so the label qualifying it has to be one too.
- * Untracked-but-not-ignored files count — they are content the instrument can
- * read, and a measurement that saw them is not reproducible from HEAD either.
- *
- * A `git status` that cannot be run is a hard error rather than an assumed
- * clean. That distinction is not pedantry: "we could not tell" and "there was
- * nothing to tell" would otherwise produce the same confident, wrong label, and
- * unlike a dirty tree there is nothing the caller can do to make the answer
- * meaningful.
- *
- * @param cwd - A directory inside the working tree
- * @param root - Repository root, for the message
- * @returns True when the tree has uncommitted changes
- * @throws {Error} When git cannot report the status
- */
-function hasUncommittedChanges(cwd: string, root: string): boolean {
-  const result = runGit(['status', '--porcelain'], cwd);
-  if (result.status !== 0) {
-    throw new Error(
-      `Could not determine whether the subject at ${root} has uncommitted changes ` +
-        `(git status exited ${result.status}). Refusing to guess: a coordinate that ` +
-        'assumes "clean" because the check failed is a silent wrong answer.',
-    );
-  }
-
-  return result.stdout.split('\n').some((line) => line.trim().length > 0);
 }
 
 /**
@@ -284,7 +235,7 @@ function fingerprintFiles(
  * @returns The pinned git version
  */
 function gitVersion(root: string, gitRoot: string, commit: string): SubjectVersion {
-  const dirty = hasUncommittedChanges(root, gitRoot);
+  const dirty = hasUncommittedChanges(root, `the subject at ${gitRoot}`);
 
   return {
     kind: 'git',

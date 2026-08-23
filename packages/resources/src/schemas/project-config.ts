@@ -1,8 +1,11 @@
-import { ValidationConfigSchema } from '@vibe-agent-toolkit/agent-schema';
+import { ValidationConfigSchema } from '@vibe-agent-toolkit/schema';
 import { globMagicRemainder, hasParentTraversalSegment, isAbsoluteAnyPlatform } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
 import { LinkAuthConfigSchema } from './link-auth.js';
+import { ReferenceSyntacticFormSchema } from './projection-blobs.js';
+import { JsonValueSchema } from './projection-shared.js';
+import { ZoneKindSchema } from './projection-zones.js';
 
 /**
  * Official semver regex from https://semver.org/ (anchored).
@@ -17,7 +20,7 @@ import { LinkAuthConfigSchema } from './link-auth.js';
 const SEMVER_REGEX = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
 
 // Re-export for downstream consumers (unicorn/prefer-export-from satisfied by the import above)
-export { ValidationConfigSchema } from '@vibe-agent-toolkit/agent-schema';
+export { ValidationConfigSchema } from '@vibe-agent-toolkit/schema';
 
 /**
  * Validation mode for frontmatter schema validation.
@@ -108,14 +111,18 @@ export const ResourcesConfigSchema = z.object({
 export type ResourcesConfig = z.infer<typeof ResourcesConfigSchema>;
 
 // ---------------------------------------------------------------------------
-// Skill packaging configuration (self-contained — no agent-schema dependency)
+// Skill packaging configuration (self-contained — no schema dependency)
 // ---------------------------------------------------------------------------
 
 /**
  * A rule for excluding references from a skill bundle.
  */
 export const ExcludeReferenceRuleSchema = z.object({
-  patterns: z.array(z.string()).describe('Glob patterns matched against path relative to skill root'),
+  // ⚠️ Relative to the PROJECT root, not the skill root — this said "skill root" and was wrong.
+  // `walk-link-graph.ts:650` matches against `safePath.relative(options.projectRoot, targetPath)`
+  // and `skill-packager.ts:607` passes the project root, so a pattern written against the skill
+  // root silently matches nothing.
+  patterns: z.array(z.string()).describe('Glob patterns matched against path relative to project root'),
   template: z.string().optional().describe('Handlebars template for rewriting links to matched files'),
 });
 
@@ -309,6 +316,181 @@ export const SkillsConfigSchema = z.object({
 }).strict().describe('Skills discovery and packaging configuration');
 
 export type SkillsConfig = z.infer<typeof SkillsConfigSchema>;
+
+// ---------------------------------------------------------------------------
+// Closure-defined extents (zones.md §7.3)
+// ---------------------------------------------------------------------------
+
+/**
+ * A **closure-defined extent**: everything reachable from one root document by
+ * following declared reference forms, bounded by a depth and narrowed by globs.
+ *
+ * ## Why this is config data rather than a plugin API
+ *
+ * zones.md §7.3's adequacy test is that a built-in extent must be expressible
+ * the way a config-declared one would be. Without this primitive, closure-shaped
+ * extents — which is what a *skill bundle* is — would need privileged code, and
+ * that test and the declarative-only rule could not both hold.
+ *
+ * The primitive is not new behaviour: `SkillPackagingConfigSchema`'s
+ * {@link SkillPackagingConfigSchema} `linkFollowDepth` and
+ * `excludeReferencesFromBundle` already *are* a closure declaration, spelled
+ * once for one privileged walker. The union of {@link maxDepth} and
+ * {@link refusals} here is the same pair, generalized and named — including the
+ * `excludeReferencesFromBundle` property that made it a *list of rules* rather
+ * than one flat pattern set: first match wins, and the winner is named.
+ *
+ * ## Declarative data only — never project-supplied code
+ *
+ * Patterns, bindings, metadata, a named resolver, and this primitive. A resolver
+ * *function* from config would be a code-execution surface and would break the
+ * promise that extensible tagging adds no plugin API. Every field below is inert
+ * data a contributor interprets.
+ *
+ * ```yaml
+ * extents:
+ *   my-skill-bundle:
+ *     kind: skill
+ *     closureFrom: skills/foo/SKILL.md
+ *     follow: [markdown-link, markdown-link-reference]
+ *     maxDepth: 3
+ *     refusals:
+ *       - label: DIRECTORY_TARGET          # opaque to the primitive; it only reports it
+ *         kinds: ['directory']
+ *       - label: NAVIGATION_FILE
+ *         basenames: ['README.md']
+ *       - label: EXCLUDED_BY_PATTERN
+ *         patterns: ['*.test.md']
+ *     admitPaths: ['notes/CLAUDE.md']
+ * ```
+ *
+ * ## An ORDERED refusal cascade, and one override that outranks all of it
+ *
+ * ⚠️ **{@link refusals} is a cascade, not a set of independent filters: the order
+ * IS the behaviour.** Each rule carries a {@link ExtentRefusalRuleSchema.label},
+ * the first rule that matches wins, and that winner's label is what the closure
+ * reports as the refusal's `realization_conditions.code`. A candidate that
+ * matches two rules is therefore attributed to the EARLIER one, exactly as
+ * `walk-link-graph.ts`'s `classifyExclusion` attributes a directory that is also
+ * pattern-matched to `directory-target`. Reordering the array repicks which
+ * label a refusal reports, so this array must never be rewritten as a set, a
+ * record, or anything else whose iteration order is incidental.
+ *
+ * {@link admitPaths} is not part of the cascade: it outranks every rule in it,
+ * for the same reason `closureFrom` does. A refusal is not merely "not a member":
+ * the closure does not traverse THROUGH a refused candidate, so the subtree
+ * reachable only via that candidate is refused with it.
+ *
+ * ## Four matchers per rule, because no one predicate expresses the other three
+ *
+ * A basename set is not a path glob (case-insensitive filesystems generate
+ * spellings no alternation enumerates), an entity kind is not a path at all
+ * (a directory's path is shaped exactly like a file's), and a boolean column of
+ * the realization row — `gitignored`, `exists`, `isSymlink` — is not derivable
+ * from any of the three. WITHIN one rule the four are unordered — they all yield
+ * that rule's single label — so a caller that needs two matchers distinguished
+ * writes two rules.
+ *
+ * {@link ExtentRefusalRuleSchema.flags} is the generic one: it names a COLUMN,
+ * not a concept, so `{ gitignored: true }` and `{ isSymlink: true }` are the same
+ * feature and neither is privileged in the primitive. That is deliberate — the
+ * closure knows nothing about git, and a `refuseGitignored: true` knob would have
+ * hardcoded one caller's vocabulary into a primitive whose whole premise is that
+ * the vocabulary belongs to the declaration.
+ *
+ * ⚠️ **A column matcher can only be as good as its producer.** `flags` is what
+ * turned "the walker consults a git oracle and the closure cannot" into a plain
+ * column read — but `resource_realizations.gitignored` is filled only when the
+ * population was given a USABLE `GitTracker`, and `exists` is never `false` for a
+ * link target at all (a path that is not on disk is never enumerated, so no
+ * realization exists to match). A rule keyed on a column its producer never
+ * varies is a rule that cannot fire, and it fails SILENTLY — unlike a rule naming
+ * a column that does not exist, which the closure throws on. Check the producer
+ * before believing a matcher expresses something.
+ *
+ * {@link ExtentRefusalRuleSchema.payload} is the other half of that premise. A
+ * label names a refusal in the caller's vocabulary; a payload carries the rest of
+ * it — anything about the rule the caller will want back at the refusal and the
+ * primitive has no column for. It rides through to
+ * `realization_conditions.matchedPayload` verbatim, uninterpreted, so extending a
+ * caller's rule vocabulary never becomes a change to this schema.
+ *
+ * ## Every optional field carries a default, deliberately
+ *
+ * The parsed shape is handed to a contributor through `PopulateOptions.parameters`,
+ * which is `JsonValue`-typed, and under `exactOptionalPropertyTypes` an optional
+ * property admits `undefined` — which `JsonValue` excludes. Defaulting rather
+ * than leaving fields optional makes the *output* type total, so a parsed
+ * declaration is assignable to `JsonValue` with no cast at the seam that records
+ * it verbatim on `zone_provenance.parameterSet`.
+ */
+export const ExtentRefusalRuleSchema = z.object({
+  label: z.string().min(1)
+    .describe('OPAQUE name for this refusal, reported verbatim as the realization_conditions.code of every candidate this rule refuses. The primitive never interprets it: a caller that wants the shipped skill walker\'s vocabulary supplies that vocabulary here, and a caller with its own supplies its own. Required, because a refusal with no label is the payload-free verdict this rule shape exists to replace.'),
+  patterns: z.array(z.string().min(1)).default([])
+    .describe('Globs (picomatch, dot: true) matched against a candidate member\'s root-relative path. A refused file is neither admitted nor traversed through.'),
+  basenames: z.array(z.string().min(1)).default([])
+    .describe('Basenames matched CASE-INSENSITIVELY against a candidate member\'s basename, e.g. "README.md". Deliberately NOT a glob: patterns matches a root-relative PATH, and a brace alternation over that path cannot enumerate the spellings a case-insensitive filesystem generates freely (Readme.md, README.MD, ReadMe.md), so the glob approximation silently under-matches exactly the spellings that occur in the wild. Folding is toLowerCase(), never toLocaleLowerCase() — see basenameMatcher in agent-skills/src/validators/validation-rules.ts.'),
+  kinds: z.array(z.string().min(1)).default([])
+    .describe('resources.kind values refused, e.g. "directory". This is the only way a declaration can refuse a DIRECTORY target: a directory\'s path is shaped like any other path, so no glob over the path can express the distinction — the entity kind can.'),
+  flags: z.record(z.string().min(1), z.boolean()).default({})
+    .describe('BOOLEAN COLUMNS of the candidate\'s resource_realizations row, as column name → the value that refuses, e.g. { "gitignored": true } or { "gitignored": true, "exists": true }. CONJUNCTIVE within the record — every named column must equal its declared value — which is the only way to state a guarded rule such as walk-link-graph.ts\'s existence-gated gitignore branch; an empty record never matches. The column name is NOT an open vocabulary the way kinds is: a realization row has a fixed shape, so a name no boolean column carries is a rule that could never fire and the closure THROWS on it rather than silently refusing nothing.'),
+  payload: JsonValueSchema.default(null)
+    .describe('OPAQUE caller data about this rule, copied verbatim onto realization_conditions.matchedPayload for every candidate it refuses and NEVER interpreted by the primitive — the same contract label has, for facts that are not a name. It exists because a caller\'s rule carries vocabulary the primitive has no column for: the skill translation puts an excludeReferencesFromBundle rule\'s index and its template here, neither of which a closure could be taught without hardcoding one caller\'s domain. Null when the caller declares none.'),
+}).strict().describe('One labelled refusal rule of a closure extent\'s ordered cascade. The four matchers are unordered WITHIN a rule (they share the one label); ACROSS rules the array order is behaviour.');
+
+export type ExtentRefusalRule = z.infer<typeof ExtentRefusalRuleSchema>;
+
+/**
+ * How a closure INTERPRETS the reference tokens it follows.
+ *
+ * A `blob_references` row carries the token *exactly as authored*, so
+ * interpretation is a property of the reader — and different readers genuinely
+ * disagree. `href` is VAT's general RFC 3986 reading, through
+ * `resolveLocalHref`. `claude-import` is Claude Code's `@`-import dialect, in
+ * which three of those rules are different: a leading `@` is stripped, `~/`
+ * expands to the home directory, and a leading `/` is filesystem-absolute rather
+ * than root-relative.
+ *
+ * The vocabulary lives here, beside the declaration that carries it; the
+ * BEHAVIOUR lives in `projection/contributors/reference-dialect.ts`, which
+ * delegates to `resolveLocalHref` rather than reimplementing it.
+ */
+export const ReferenceDialectSchema = z.enum(['href', 'claude-import'])
+  .describe('How reference tokens are interpreted — RFC 3986 ("href") or Claude Code\'s @-import dialect ("claude-import")');
+
+export type ReferenceDialect = z.infer<typeof ReferenceDialectSchema>;
+
+export const ExtentDeclarationSchema = z.object({
+  kind: ZoneKindSchema
+    .describe('The resolution_contexts.kind this extent has, e.g. "skill". Open vocabulary; must match the kind the contributor is registered under.'),
+  closureFrom: z.string().min(1)
+    .describe('Root-relative path of the extent root — the one member admitted unconditionally, before any traversal. A reference that resolves BACK to it is skipped in silence: the root is a member by declaration, so a self-link has nothing left to refuse and nothing for the hop budget to hold back, and a row about it would contradict the admission. That is the same verdict walk-link-graph.ts gives a link back to its own skillRootPath.'),
+  follow: z.array(ReferenceSyntacticFormSchema).default(['markdown-link', 'markdown-link-reference', 'markdown-definition'])
+    .describe('Which blob_references syntactic forms the closure traverses. Defaults to the three markdown forms; an @-prefixed or bare token is ambiguous at the blob layer, so following one is an explicit choice.'),
+  referenceDialect: ReferenceDialectSchema.default('href')
+    .describe('How this closure INTERPRETS the tokens it follows. Defaults to "href" — RFC 3986 through resolveLocalHref — so every declaration written before this field existed is unchanged. "claude-import" is the only correct reading of an at-prefixed token in a CLAUDE.md or .claude/rules file: a leading @ is stripped, ~/ expands to the home directory (landing OUTSIDE the corpus, which is the healthy state the vendor recommends for sharing instructions across worktrees), and a leading / is filesystem-absolute rather than root-relative. Inert data, so it rides onto zone_provenance.parameterSet verbatim and the store correctly treats two runs over one tree under different dialects as two different questions.'),
+  maxDepth: z.union([z.number().int().min(0), z.literal('full')]).default('full')
+    .describe('Reference hops from the root, or "full" for an unbounded closure. Same union as skills packaging linkFollowDepth, so one concept has one spelling.'),
+  refusals: z.array(ExtentRefusalRuleSchema).default([])
+    .describe('ORDERED refusal cascade — FIRST MATCH WINS, and the winning rule\'s label is what the refusal reports as its condition code. THE ORDER IS BEHAVIOUR: a candidate matching two rules is attributed to the earlier one, the same way walk-link-graph.ts\'s classifyExclusion attributes a directory that is also pattern-matched to "directory-target" rather than to "pattern-matched". Never rewrite this as a set or a record. A refused candidate is neither admitted nor traversed through, so the subtree reachable only through it is refused with it.'),
+  admitPaths: z.array(z.string().min(1)).default([])
+    .describe('Exact root-relative paths admitted even when a refusals rule matches them. The same rule closureFrom already gets: an explicit declaration outranks a net, because a glob never named the file it caught. Checked BEFORE the cascade, so an admitted path never reports a refusal label. Matched by exact string equality against the root-relative, forward-slashed path — never a prefix or glob test, since the explicit-vs-glob distinction is the whole point of the field.'),
+}).strict().describe('A closure-defined extent declaration (zones.md §7.3)');
+
+export type ExtentDeclaration = z.infer<typeof ExtentDeclarationSchema>;
+
+/**
+ * Closure-defined extents, keyed by extent name.
+ *
+ * The key is the extent's within-root discriminator — it becomes the
+ * `resolution_contexts.contextId` suffix — so two declarations under one root
+ * cannot collide, and the same name under two federated roots stays distinct.
+ */
+export const ExtentsConfigSchema = z.record(z.string().min(1), ExtentDeclarationSchema)
+  .describe('Closure-defined extents, keyed by extent name');
+
+export type ExtentsConfig = z.infer<typeof ExtentsConfigSchema>;
 
 // ---------------------------------------------------------------------------
 // Claude marketplace configuration
@@ -511,6 +693,8 @@ export const ProjectConfigSchema = z.object({
     .describe('Resources configuration'),
   claude: ClaudeConfigSchema.optional()
     .describe('Claude-specific configuration (marketplaces, managed-settings)'),
+  extents: ExtentsConfigSchema.optional()
+    .describe('Closure-defined extents (zones.md §7.3), keyed by extent name'),
   test: SkillTestGlobalConfigSchema.optional()
     .describe('Global vat skill test configuration (graderModel, concurrency)'),
 }).strict().describe('vibe-agent-toolkit project configuration');

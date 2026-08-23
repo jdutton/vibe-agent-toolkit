@@ -22,9 +22,9 @@
  * whether this host can make symlinks at all rather than assume it.
  */
 
-import { symlinkSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, safeExecResult, safePath } from '@vibe-agent-toolkit/utils';
+import { createSymlink, mkdirSyncReal, runGit, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 
 /** A regular file in the corpus: forward-slashed relative path → contents. */
 export type CorpusFiles = Readonly<Record<string, string>>;
@@ -324,6 +324,112 @@ export const TRAP_CORPUS_FILES: CorpusFiles = Object.freeze({
   // which of the three decides whether the row reports `frontmatterFields: -`
   // (absent) or `0` (present and empty).
   'parse/frontmatter-delimited-empty.md': '---\n---\n\n# Body only\n',
+
+  // ⭐ The four fixtures below close a measured coverage hole: before them,
+  // 36 of the corpus's 37 blobs rendered `lexicalReferences: -`, and the one
+  // that did not (`docs/Case.md`) is a `bare-token` with `slashCount: 1`,
+  // `leadingAt: false`, `variableExpansion: null`, `inCodeSpan: false` and
+  // `inFence: false`. So a mutation that zeroed `leadingAt`, forced
+  // `syntacticForm` to `bare-token`, dropped variable-expansion detection
+  // outright, or stopped annotating code context could not have moved a single
+  // golden line — the lexer's most load-bearing columns were pinned on their
+  // default values only.
+
+  // `at-prefixed`, outside any code context: the Claude Code import shape, and
+  // the only place `leadingAt: true` is observable.
+  'parse/lexical-at-import.md': [
+    '# At-prefixed import',
+    '',
+    'Read @docs/setup.md before acting.',
+    '',
+  ].join('\n'),
+
+  // ⭐ The SAME token in both code contexts. Anthropic documents that import
+  // parsing skips code spans and fenced blocks, so `inCodeSpan`/`inFence`
+  // decide whether an `@` token is an import at all — and the lexer records
+  // them rather than dropping the token, precisely so a query can be
+  // second-guessed. Identical `raw` across all three rows in this corpus is
+  // deliberate: only the two context columns distinguish them, so nothing else
+  // can accidentally carry the assertion.
+  'parse/lexical-code-context.md': [
+    '# Code context',
+    '',
+    'Inline `@docs/setup.md` in a span.',
+    '',
+    '```text',
+    '@docs/setup.md',
+    '```',
+    '',
+  ].join('\n'),
+
+  // `env-anchored` in two of the four expansion syntaxes — the precedence rule
+  // (`env-anchored` beats a leading `@`) and the `percent` branch that a POSIX
+  // -only corpus never reaches. `%APPDATA%\x` also pins `hasExtension: false`
+  // on a token that a naive "contains a dot" test would call true.
+  'parse/lexical-env-anchored.md': [
+    '# Env anchored',
+    '',
+    'Run ${CLAUDE_PLUGIN_ROOT}/scripts/run.mjs and read %APPDATA%\\x too.',
+    '',
+  ].join('\n'),
+
+  // `bare-token` with TWO slashes. `docs/Case.md`'s incidental token has one,
+  // so `slashCount` was pinned to a value a hardcoded `1` would satisfy.
+  'parse/lexical-bare-token.md': [
+    '# Bare token',
+    '',
+    'Consult docs/guides/setup.md in prose.',
+    '',
+  ].join('\n'),
+
+  // ⭐ ASTRAL CHARACTERS — the only document in the corpus where a code POINT
+  // and a UTF-16 code UNIT are different numbers.
+  //
+  // Every other file here is pure ASCII, which made the whole `contentMeasures`
+  // column non-discriminating: `prose=`/`code=` came out byte-identical whether
+  // `measureContent` counted `content.length` or `[...content].length`, and
+  // `end - start` or `[...codeSegment].length`. A golden that agrees with BOTH
+  // semantics pins neither, so the code-UNIT contract `proseCodeUnits` and
+  // `codeBlockCodeUnits` name had no integration-tier evidence at all.
+  //
+  // ⛔ A BMP character cannot do this job. `é`, `⭐` and `⛔` are each ONE UTF-16
+  // code unit: they move the byte count and leave both size counts exactly where
+  // they were. Only an ASTRAL character — U+10000 and above, stored as a
+  // surrogate PAIR — makes code units and code points diverge, hence 𝄞 (U+1D11E)
+  // and 🪤 (U+1FAA4), one character, two code units and four UTF-8 bytes each.
+  //
+  // One astral character sits in PROSE and one inside a FENCE, because the two
+  // counts come off different arithmetic — `proseCodeUnits` from
+  // `content.length` and `codeBlockCodeUnits` from the fence spans — and a
+  // regression in either one alone has to move a golden number. `café` is the
+  // negative control: an extra byte, no extra code unit, no movement in either
+  // size count.
+  //
+  // The numbers this row reports are deliberately not all equal: `sizeBytes`
+  // (UTF-8 bytes) exceeds `decodedLength` (UTF-16 code units), while
+  // `prose + code` equals `decodedLength` exactly — the partition invariant.
+  // Re-introducing a code-point count breaks that equality and moves the golden.
+  //
+  // The heading and one link text carry astral characters as well, so the bytes
+  // appear in the golden VERBATIM rather than only as counts. That is a second,
+  // independent reading of the same hazard — a slugger or a renderer that splits
+  // a surrogate pair corrupts the text it emits instead of miscounting it, and
+  // it also means `LC_ALL=C grep '[^ -~]'` on the golden answers non-empty.
+  'parse/astral-characters.md': [
+    '# Astral characters 𝄞',
+    '',
+    'A 𝄞 clef in prose: one character, two UTF-16 code units, four UTF-8 bytes.',
+    '',
+    'A link whose TEXT is astral: [a 🪤 trap](../docs/sibling.md).',
+    '',
+    '```text',
+    'A 🪤 trap inside a fence, so the code count moves by two and not by one.',
+    '```',
+    '',
+    'A BMP accent (café) costs an extra byte and no extra code unit, which is',
+    'exactly why it cannot tell a code-unit count from a code-point one.',
+    '',
+  ].join('\n'),
 
   // A row with MORE THAN ONE condition. Every other multi-condition path in the
   // corpus tops out at one, so `collectConditions`' three-key sort comparator
@@ -685,18 +791,17 @@ export function materializeTrapCorpus(
  * @returns True when every symlink was created
  */
 function writeSymlinks(root: string, links: readonly CorpusSymlink[]): boolean {
-  try {
-    for (const link of links) {
-      const absolutePath = safePath.join(root, link.path);
-      mkdirSyncReal(safePath.resolve(absolutePath, '..'), { recursive: true });
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- target and path both come from the frozen literals above
-      symlinkSync(link.target, absolutePath, link.type);
-    }
-    return true;
-  } catch {
-    // Windows without Developer Mode or SeCreateSymbolicLinkPrivilege.
+  // Windows without Developer Mode or SeCreateSymbolicLinkPrivilege.
+  const cap = symlinkCapability();
+  if (!cap) {
     return false;
   }
+  for (const link of links) {
+    const absolutePath = safePath.join(root, link.path);
+    mkdirSyncReal(safePath.resolve(absolutePath, '..'), { recursive: true });
+    createSymlink(cap, link.target, absolutePath, link.type);
+  }
+  return true;
 }
 
 /**
@@ -706,12 +811,19 @@ function writeSymlinks(root: string, links: readonly CorpusSymlink[]): boolean {
  * global git config, and so a developer's `commit.gpgsign` or `core.hooksPath`
  * cannot make the fixture hang.
  *
+ * ⚠️ The environment scrub is load-bearing, not defensive. Measured: with an
+ * inherited `GIT_DIR`, `git init` here re-initializes *that* repository
+ * (`warning: re-init`, exit 0), no `.git` appears under `root` at all, and the
+ * subsequent `add --all` + `commit` land in the ambient repository — while every
+ * step reports success, so this function returns `true` having created no corpus
+ * and having written a commit into a bystander repository.
+ *
  * @param root - Absolute corpus root
  * @returns True when the commit landed
  */
 function initGit(root: string): boolean {
   const run = (args: string[]): boolean =>
-    safeExecResult('git', args, { cwd: root, stdio: 'ignore', timeout: 30_000 }).success;
+    runGit(args, { cwd: root, suppressStderr: true, timeout: 30_000 }).ok;
 
   return (
     run(['init', '--quiet', '--initial-branch=main']) &&

@@ -4,6 +4,7 @@ import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/u
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { extractClaudeMarketplaceInventory } from '../../src/inventory/extract-marketplace.js';
+import { NO_GIT_TRACKER } from '../../src/inventory/extract-skill.js';
 
 const FIXTURE_BASE = safePath.resolve(__dirname, '../fixtures/inventory-marketplace');
 
@@ -19,29 +20,38 @@ function writeMarketplaceJson(root: string, content: string): string {
 	return root;
 }
 
+/**
+ * The tracker-less walk, said out loud.
+ *
+ * These fixtures have no git repository behind them, so no tracker could
+ * answer for them and none of these assertions is about gitignore. Naming the
+ * choice is the point: the extractors REQUIRE a source precisely so a suite
+ * cannot land in the tracker-less state by leaving an argument off, which is how
+ * the walker/closure divergence stayed invisible for three commits.
+ */
 describe('extractClaudeMarketplaceInventory', () => {
 	describe('local fixture (all four source types)', () => {
 		it('returns correct kind and vendor', async () => {
-			const inv = await extractClaudeMarketplaceInventory(safePath.join(FIXTURE_BASE, 'local'));
+			const inv = await extractClaudeMarketplaceInventory(safePath.join(FIXTURE_BASE, 'local'), { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(inv.kind).toBe('marketplace');
 			expect(inv.vendor).toBe('claude-code');
 		});
 
 		it('populates manifest name from marketplace.json', async () => {
-			const inv = await extractClaudeMarketplaceInventory(safePath.join(FIXTURE_BASE, 'local'));
+			const inv = await extractClaudeMarketplaceInventory(safePath.join(FIXTURE_BASE, 'local'), { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(inv.manifest.name).toBe('local-test-marketplace');
 		});
 
 		it('declares all four plugin entries', async () => {
-			const inv = await extractClaudeMarketplaceInventory(safePath.join(FIXTURE_BASE, 'local'));
+			const inv = await extractClaudeMarketplaceInventory(safePath.join(FIXTURE_BASE, 'local'), { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(inv.declared.plugins).toHaveLength(4);
 		});
 
 		it('path-source entry that exists has source=path and exists=true', async () => {
-			const inv = await extractClaudeMarketplaceInventory(safePath.join(FIXTURE_BASE, 'local'));
+			const inv = await extractClaudeMarketplaceInventory(safePath.join(FIXTURE_BASE, 'local'), { gitTrackerSource: NO_GIT_TRACKER });
 
 			const fooRef = inv.declared.plugins.find(p => p.manifestPath === './plugins/foo');
 			expect(fooRef).toBeDefined();
@@ -50,7 +60,7 @@ describe('extractClaudeMarketplaceInventory', () => {
 		});
 
 		it('path-source entry that is missing has source=path and exists=false', async () => {
-			const inv = await extractClaudeMarketplaceInventory(safePath.join(FIXTURE_BASE, 'local'));
+			const inv = await extractClaudeMarketplaceInventory(safePath.join(FIXTURE_BASE, 'local'), { gitTrackerSource: NO_GIT_TRACKER });
 
 			const missingRef = inv.declared.plugins.find(p => p.manifestPath === './plugins/missing');
 			expect(missingRef).toBeDefined();
@@ -59,7 +69,7 @@ describe('extractClaudeMarketplaceInventory', () => {
 		});
 
 		it('github-source entry has source=git', async () => {
-			const inv = await extractClaudeMarketplaceInventory(safePath.join(FIXTURE_BASE, 'local'));
+			const inv = await extractClaudeMarketplaceInventory(safePath.join(FIXTURE_BASE, 'local'), { gitTrackerSource: NO_GIT_TRACKER });
 
 			const gitRef = inv.declared.plugins.find(p => p.source === 'git');
 			expect(gitRef).toBeDefined();
@@ -68,7 +78,7 @@ describe('extractClaudeMarketplaceInventory', () => {
 		});
 
 		it('npm-source entry has source=npm', async () => {
-			const inv = await extractClaudeMarketplaceInventory(safePath.join(FIXTURE_BASE, 'local'));
+			const inv = await extractClaudeMarketplaceInventory(safePath.join(FIXTURE_BASE, 'local'), { gitTrackerSource: NO_GIT_TRACKER });
 
 			const npmRef = inv.declared.plugins.find(p => p.source === 'npm');
 			expect(npmRef).toBeDefined();
@@ -77,20 +87,20 @@ describe('extractClaudeMarketplaceInventory', () => {
 		});
 
 		it('discovers exactly the one existing path-source plugin', async () => {
-			const inv = await extractClaudeMarketplaceInventory(safePath.join(FIXTURE_BASE, 'local'));
+			const inv = await extractClaudeMarketplaceInventory(safePath.join(FIXTURE_BASE, 'local'), { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(inv.discovered.plugins).toHaveLength(1);
 		});
 
 		it('discovered plugin has correct manifest name', async () => {
-			const inv = await extractClaudeMarketplaceInventory(safePath.join(FIXTURE_BASE, 'local'));
+			const inv = await extractClaudeMarketplaceInventory(safePath.join(FIXTURE_BASE, 'local'), { gitTrackerSource: NO_GIT_TRACKER });
 
 			const first = inv.discovered.plugins[0];
 			expect(first?.manifest.name).toBe('foo');
 		});
 
 		it('has no parse errors', async () => {
-			const inv = await extractClaudeMarketplaceInventory(safePath.join(FIXTURE_BASE, 'local'));
+			const inv = await extractClaudeMarketplaceInventory(safePath.join(FIXTURE_BASE, 'local'), { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(inv.parseErrors).toEqual([]);
 		});
@@ -100,6 +110,7 @@ describe('extractClaudeMarketplaceInventory', () => {
 		it('returns empty inventory with a parse error', async () => {
 			const inv = await extractClaudeMarketplaceInventory(
 				safePath.join(FIXTURE_BASE, 'does-not-exist'),
+				{ gitTrackerSource: NO_GIT_TRACKER },
 			);
 
 			expect(inv.kind).toBe('marketplace');
@@ -124,7 +135,7 @@ describe('extractClaudeMarketplaceInventory', () => {
 		it('returns empty inventory with parse error when marketplace.json is malformed JSON', async () => {
 			const root = writeMarketplaceJson(safePath.join(tempDir, 'malformed'), '{ not valid json');
 
-			const inv = await extractClaudeMarketplaceInventory(root);
+			const inv = await extractClaudeMarketplaceInventory(root, { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(inv.declared.plugins).toEqual([]);
 			expect(inv.discovered.plugins).toEqual([]);
@@ -140,7 +151,7 @@ describe('extractClaudeMarketplaceInventory', () => {
 				JSON.stringify({ name: 123, plugins: [], owner: { name: 'X' } }),
 			);
 
-			const inv = await extractClaudeMarketplaceInventory(root);
+			const inv = await extractClaudeMarketplaceInventory(root, { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(inv.parseErrors.length).toBeGreaterThanOrEqual(1);
 			expect(inv.parseErrors[0]?.message).toContain('schema validation failed');
@@ -159,7 +170,7 @@ describe('extractClaudeMarketplaceInventory', () => {
 				}),
 			);
 
-			const inv = await extractClaudeMarketplaceInventory(root);
+			const inv = await extractClaudeMarketplaceInventory(root, { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(inv.declared.plugins).toHaveLength(3);
 			for (const p of inv.declared.plugins) {
@@ -189,7 +200,7 @@ describe('extractClaudeMarketplaceInventory', () => {
 				}),
 			);
 
-			const inv = await extractClaudeMarketplaceInventory(root);
+			const inv = await extractClaudeMarketplaceInventory(root, { gitTrackerSource: NO_GIT_TRACKER });
 
 			const order = [URL_PLUG, PIP_PLUG, MYSTERY_PLUG, NUMERIC];
 			const byName = new Map(inv.declared.plugins.map((p, i) => [order[i] ?? '', p]));

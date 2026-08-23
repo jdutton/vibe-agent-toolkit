@@ -21,6 +21,7 @@
  * being unexpectedly fast, which the spread will show.
  */
 
+import { completedExitCodesOf, type MeasuredCommandSpec } from './commands.js';
 import { runCommand } from './run.js';
 import type {
   CacheMode,
@@ -96,12 +97,24 @@ export function materializeArgs(
  * keeps its code. A caller that reversed these would report `exited null` for
  * an ENOENT.
  *
+ * "Failed" means **did not complete**, which is not the same as "did not exit
+ * zero". The accepted codes come from the command being measured — see
+ * `MeasuredCommandSpec.completedExitCodes` in `commands.ts` — because only the command
+ * knows that its `1` means "ran everything, found something to report" rather
+ * than "gave up". They are a required parameter rather than a defaulted one: a
+ * caller that forgot to pass them would get the old behaviour silently, which is
+ * the defect this replaces.
+ *
  * @param result - One repeat's raw outcome
- * @returns The reason it must not be treated as a clean run, or `null`
+ * @param completedExitCodes - Codes that denote a run that finished its work
+ * @returns The reason it must not be treated as a completed run, or `null`
  */
-export function classifyRunFailure(result: RunResult): string | null {
+export function classifyRunFailure(
+  result: RunResult,
+  completedExitCodes: readonly number[],
+): string | null {
   if (result.spawnError !== null) return result.spawnError;
-  if (result.exitCode !== 0) {
+  if (result.exitCode === null || !completedExitCodes.includes(result.exitCode)) {
     return `exited ${String(result.exitCode)}: ${result.stderr.trim().slice(0, STDERR_EXCERPT_CHARS)}`;
   }
   return null;
@@ -152,26 +165,109 @@ export function runRepeatsFor(
 /**
  * Say whether a set of repeats can produce a measurement at all, and why not.
  *
- * **Any failure poisons the whole set**, in every facet. A run of repeats where
- * some worked and some did not is not measuring one behaviour, and reporting a
- * statistic over the survivors quietly answers a different question than the
- * one asked — with `perf` that is actively backwards, because a command that
- * fails to resolve returns in a fraction of a millisecond and would drag a
- * median down into looking like an improvement.
+ * Two rules, both of which poison the whole set rather than filtering it, and
+ * both of which are shared rather than written per facet — the *sentence* is
+ * part of the contract, because two facets that phrase this differently make one
+ * report look more broken than another describing the identical outcome.
  *
- * Shared rather than written per facet because the *sentence* is part of the
- * contract: two facets that phrase this differently make one report look more
- * broken than another describing the identical outcome.
+ * **1. Any failure poisons the whole set.** A run of repeats where some
+ * completed and some did not is not measuring one behaviour, and reporting a
+ * statistic over the survivors quietly answers a different question than the one
+ * asked — with `perf` that is actively backwards, because a command that fails
+ * to resolve returns in a fraction of a millisecond and would drag a median down
+ * into looking like an improvement.
+ *
+ * **2. The accepted exit codes must be uniform across the set.** Accepting more
+ * than one code (a findings command completes at `0` and at `1` alike) makes it
+ * possible for every repeat to succeed while the repeats did *different amounts
+ * of work*: one run that found nothing and one that rendered a page of findings
+ * are two behaviours, and a median over the mixture describes neither. Such a
+ * row is failed, and the failure names both codes — the usual cause is the
+ * measured command mutating its own subject between repeats, which is worth
+ * saying out loud rather than averaging away.
  *
  * @param results - Every repeat's outcome, raw
- * @returns The failure to record, or `null` when every repeat ran clean
+ * @param completedExitCodes - Codes that denote a run that finished its work
+ * @returns The failure to record, or `null` when every repeat completed alike
  */
-export function summarizeRepeatFailures(results: readonly RunResult[]): string | null {
+export function summarizeRepeatFailures(
+  results: readonly RunResult[],
+  completedExitCodes: readonly number[],
+): string | null {
   const reasons = results
-    .map((result) => classifyRunFailure(result))
+    .map((result) => classifyRunFailure(result, completedExitCodes))
     .filter((reason): reason is string => reason !== null);
-  if (reasons.length === 0) return null;
-  return `${String(reasons.length)} of ${String(results.length)} repeats failed — ${reasons[0] ?? 'unknown'}`;
+  if (reasons.length > 0) {
+    return `${String(reasons.length)} of ${String(results.length)} repeats failed — ${reasons[0] ?? 'unknown'}`;
+  }
+
+  const observed = [...new Set(results.map((result) => result.exitCode))];
+  if (observed.length > 1) {
+    const codes = observed.map((code) => String(code)).join(' and ');
+    return (
+      `${String(results.length)} repeats exited ${codes} — every repeat completed, but not ` +
+      'with the same amount of work done, so a statistic over them describes neither run'
+    );
+  }
+  return null;
+}
+
+/**
+ * One command's repeats, run and judged: everything a facet needs before it can
+ * start computing whatever makes it that facet.
+ */
+export interface SpecMeasurement {
+  /** The command that was measured, carried so a row can name itself. */
+  readonly spec: MeasuredCommandSpec;
+  /** Arguments as actually run, with `{subject}` substituted. */
+  readonly args: readonly string[];
+  /** Which cache mode the repeats ran under. */
+  readonly cache: CacheMode;
+  /** Every repeat's outcome, raw and unfiltered. */
+  readonly results: readonly RunResult[];
+  /** Why these repeats yield no usable measurement, or `null`. */
+  readonly failure: string | null;
+}
+
+/**
+ * Materialize one command's arguments, run its repeats, and say whether they are
+ * usable — the whole preamble a measurement facet performs before it measures.
+ *
+ * The three steps are one concept, not three, and the reason they are assembled
+ * here rather than at each facet is the third one. Whether a set of repeats is
+ * usable is the single property the facets must **not** be allowed to differ on:
+ * two hand-written copies of this preamble are free to disagree about which exit
+ * codes count as completed, or to pass the accepted codes at one call site and
+ * forget them at the other, and the resulting reports stay well-formed while
+ * describing different populations. A `perf` row and an `io` row of the same
+ * command have to have refused or admitted the same repeats, or holding one
+ * beside the other means nothing.
+ *
+ * The narrower pieces stay exported and separately tested — {@link
+ * materializeArgs}, {@link runRepeatsFor}, {@link summarizeRepeatFailures} and
+ * {@link classifyRunFailure} each answer a question worth asking alone. This
+ * only fixes the order they are asked in.
+ *
+ * @param request - What the capture was asked to do
+ * @param spec - The command to measure
+ * @param envFor - Per-repeat environment for the MEASURED run only; see
+ *   {@link RepeatSpec.envFor} for why this is separate from `env`
+ * @returns The repeats and the verdict on them; see {@link SpecMeasurement}
+ */
+export function measureSpec(
+  request: CaptureRequest,
+  spec: MeasuredCommandSpec,
+  envFor?: (index: number) => Readonly<Record<string, string>> | undefined,
+): SpecMeasurement {
+  const args = materializeArgs(spec.args, request.subject.path);
+  const results = runRepeatsFor(request, args, envFor);
+  return {
+    spec,
+    args,
+    cache: request.cache,
+    results,
+    failure: summarizeRepeatFailures(results, completedExitCodesOf(spec)),
+  };
 }
 
 /**

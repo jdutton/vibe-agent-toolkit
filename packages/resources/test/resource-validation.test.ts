@@ -1,4 +1,4 @@
-import { createRegistryIssue, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { createRegistryIssue, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
 const TEST_URL = 'https://example.com';

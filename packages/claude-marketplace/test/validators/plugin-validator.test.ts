@@ -1,7 +1,7 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- test sandbox paths derived from tmp dirs */
 import fs from 'node:fs';
 
-import { countBySeverity } from '@vibe-agent-toolkit/agent-schema';
+import { countBySeverity } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 

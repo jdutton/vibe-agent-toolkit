@@ -1,7 +1,7 @@
-import { ValidationIssueSchema } from '@vibe-agent-toolkit/agent-schema';
+import { ValidationIssueSchema } from '@vibe-agent-toolkit/schema';
 import { z } from 'zod';
 
-export { type ValidationIssue, ValidationIssueSchema } from '@vibe-agent-toolkit/agent-schema';
+export { type ValidationIssue, ValidationIssueSchema } from '@vibe-agent-toolkit/schema';
 
 /**
  * Complete results from validating a collection of resources.

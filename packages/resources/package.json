@@ -9,15 +9,18 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    }
+    },
+    "./schemas/*": "./schemas/*"
   },
   "files": [
     "dist",
+    "schemas/",
     "src",
     "README.md"
   ],
   "scripts": {
-    "build": "tsx ../dev-tools/src/tsc-clean-build.ts",
+    "build": "tsx ../dev-tools/src/tsc-clean-build.ts && bun run generate:schemas",
+    "generate:schemas": "tsx ../dev-tools/src/generate-resources-json-schemas.ts",
     "test:unit": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:system": "vitest run --config vitest.system.config.ts",
@@ -38,7 +41,7 @@
     "node": ">=22.0.0"
   },
   "dependencies": {
-    "@vibe-agent-toolkit/agent-schema": "workspace:*",
+    "@vibe-agent-toolkit/schema": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",

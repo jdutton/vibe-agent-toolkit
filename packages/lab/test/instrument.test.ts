@@ -14,17 +14,23 @@
  * `commit` exists for. Every dev build in this repo carries the semver of the
  * release it branched from, so a resolver that dropped the commit would make
  * two genuinely different instruments compare equal.
+ *
+ * Third, and the reason every fixture here builds BOTH `dist/bin.js` and
+ * `dist/bin/vat.js`: resolving to the wrapper instead of the CLI shipped once
+ * already, and no assertion could have caught it while only one of the two files
+ * was on disk. A fixture that cannot make the two answers differ tests nothing.
  */
 
 /* eslint-disable security/detect-non-literal-fs-filename -- every path here is derived from a controlled mkdtemp scratch dir */
 
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 
 import {
   normalizedTmpdir,
+  removeScratchDir,
   resolveFromImportMeta,
-  safeExecSync,
+  runGitOrThrow,
   safePath,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
@@ -38,11 +44,14 @@ const REPO_ROOT = resolveFromImportMeta(import.meta.url, '../../..');
 
 const SEMVER = /^\d+\.\d+\.\d+/;
 const SHA1 = /^[0-9a-f]{40}$/;
-const VAT_BIN_SUFFIX = /packages\/cli\/dist\/bin\/vat\.js$/;
+const VAT_BIN_SUFFIX = /packages\/cli\/dist\/bin\.js$/;
 
 /** Layout a vat checkout is expected to have, mirrored by the fixtures below. */
 const CLI_DIST_DIR = 'packages/cli/dist';
-const CLI_BIN = 'packages/cli/dist/bin/vat.js';
+/** The CLI's own entry point — the only thing the harness may measure through. */
+const CLI_BIN = 'packages/cli/dist/bin.js';
+/** The context-detecting wrapper `package.json` maps `vat` to, sitting beside it. */
+const CLI_WRAPPER = 'packages/cli/dist/bin/vat.js';
 const CLI_MANIFEST = 'packages/cli/package.json';
 
 let scratch: string;
@@ -52,7 +61,11 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await rm(scratch, { recursive: true, force: true });
+  // Best-effort by design — this suite's 14 fixture git repos are what proved
+  // an unbounded teardown can redden a run whose every assertion passed. See
+  // `removeScratchDir` for the measurement and why the budget lives here
+  // rather than in `hookTimeout`.
+  await removeScratchDir(scratch);
 });
 
 /**
@@ -63,8 +76,7 @@ afterAll(async () => {
  * @param args - Git arguments
  */
 function git(cwd: string, args: string[]): void {
-  safeExecSync(
-    'git',
+  runGitOrThrow(
     [
       '-c',
       'user.email=lab@example.invalid',
@@ -76,7 +88,7 @@ function git(cwd: string, args: string[]): void {
       'init.defaultBranch=main',
       ...args,
     ],
-    { cwd, stdio: 'pipe' },
+    { cwd },
   );
 }
 
@@ -86,8 +98,10 @@ interface FakeTreeOptions {
   readonly version?: string;
   /** Body of the fake bin — varying it varies the commit. */
   readonly binBody?: string;
-  /** Omit the built bin. */
+  /** Omit dist/bin.js, leaving the wrapper as the only thing on disk. */
   readonly noBin?: boolean;
+  /** Omit dist/bin/vat.js, leaving nothing for a wrong resolver to find. */
+  readonly noWrapper?: boolean;
   /** Omit packages/cli/package.json. */
   readonly noManifest?: boolean;
   /** Skip `git init` + commit. */
@@ -96,6 +110,10 @@ interface FakeTreeOptions {
 
 /**
  * Build a directory that looks like a built vat checkout.
+ *
+ * Both entry points exist by default — see this file's header. Leaving the
+ * wrapper out would make every "resolves to bin.js" assertion pass for the wrong
+ * reason.
  *
  * @param name - Subdirectory of the scratch dir to create
  * @param options - Which pieces to leave out, and what to put in the rest
@@ -107,6 +125,9 @@ async function makeTree(name: string, options: FakeTreeOptions = {}): Promise<st
 
   if (options.noBin !== true) {
     await writeFile(safePath.join(root, CLI_BIN), options.binBody ?? '#!/usr/bin/env node\n');
+  }
+  if (options.noWrapper !== true) {
+    await writeFile(safePath.join(root, CLI_WRAPPER), '// context-detecting wrapper\n');
   }
   if (options.noManifest !== true) {
     await writeFile(
@@ -144,6 +165,30 @@ async function expectRejectionNaming(
   }
 }
 
+/**
+ * Assert which entry point an instrument resolves to, having first proved the
+ * fixture could have answered differently.
+ *
+ * The `alternative` check is the whole point: without a wrapper on disk, "it
+ * chose bin.js" is indistinguishable from "bin.js was all there was".
+ *
+ * @param source - The instrument source to resolve
+ * @param expected - The entry point it must choose
+ * @param alternative - The entry point it must NOT choose, which must exist
+ */
+async function expectEntryPoint(
+  source: InstrumentSource,
+  expected: string,
+  alternative: string,
+): Promise<void> {
+  expect(existsSync(alternative), 'fixture cannot distinguish the two answers').toBe(true);
+
+  const resolved = await resolveInstrument(source);
+
+  expect(resolved.leadingArgs).toHaveLength(1);
+  expect(toForwardSlash(resolved.leadingArgs[0] ?? '')).toBe(toForwardSlash(expected));
+}
+
 describe('resolveInstrument — kind: tree', () => {
   it('resolves this checkout to its built bin, its version, and its HEAD commit', async () => {
     const resolved = await resolveInstrument({ kind: 'tree', path: REPO_ROOT });
@@ -175,13 +220,72 @@ describe('resolveInstrument — kind: tree', () => {
     expect(second.version.commit).not.toBe(first.version.commit);
   });
 
+  /**
+   * The shipped bug: `dist/bin/vat.js` is the cwd-detecting wrapper, and the
+   * harness runs every command with cwd set to the SUBJECT. An A/B of two
+   * checkouts against an adopter therefore ran the adopter's own installed vat
+   * on both arms, agreed with itself, and stamped both reports with the two
+   * commits under test.
+   */
+  it('resolves the CLI entry point, not the cwd-detecting wrapper beside it', async () => {
+    const root = await makeTree('both-entry-points');
+
+    await expectEntryPoint(
+      { kind: 'tree', path: root },
+      safePath.join(safePath.resolve(root), CLI_BIN),
+      safePath.join(root, CLI_WRAPPER),
+    );
+  });
+
+  /**
+   * The shipped defect this pins: a run measured a build made from a tree with
+   * substantial uncommitted changes, and the header said
+   * `Instrument: vat 0.2.0-rc.2 (7b65ba86)` with nothing to indicate the bytes
+   * measured were not that commit's. The SUBJECT side had detected and printed
+   * `(DIRTY working tree)` all along; axis C never asked.
+   *
+   * The pair of assertions is the point. Asserting only that a dirty tree
+   * reports `true` would pass equally well for a resolver that hard-coded it, so
+   * the same fixture is measured clean first and dirtied afterwards — one tree,
+   * two answers.
+   */
+  it('reports the instrument checkout as clean, then as dirty once it is edited', async () => {
+    const root = await makeTree('dirty-instrument');
+
+    expect((await resolveInstrument({ kind: 'tree', path: root })).version.dirty).toBe(false);
+
+    await writeFile(safePath.join(root, CLI_BIN), '// edited, never committed\n');
+
+    const dirty = await resolveInstrument({ kind: 'tree', path: root });
+    expect(dirty.version.dirty).toBe(true);
+    // The commit is still stamped — a dirty build is measured, not refused. The
+    // label is what keeps the stamp honest.
+    expect(dirty.version.commit).toMatch(SHA1);
+  });
+
+  it('counts an untracked file as dirty, matching what the subject axis counts', async () => {
+    // Same definition on both axes, because it is literally the same function —
+    // see `harness/git-state.ts`. A resolver that only looked at tracked files
+    // would call a tree clean that the subject side calls dirty, and one report
+    // would then carry two meanings of the word.
+    const root = await makeTree('untracked-instrument');
+    await writeFile(safePath.join(root, 'scratch-note.txt'), 'not committed\n');
+
+    expect((await resolveInstrument({ kind: 'tree', path: root })).version.dirty).toBe(true);
+  });
+
   it('throws naming the path when the tree does not exist', async () => {
     const missing = safePath.join(scratch, 'no-such-checkout');
     await expectRejectionNaming({ kind: 'tree', path: missing }, missing);
   });
 
   it('throws naming the expected bin when the tree was never built', async () => {
-    const root = await makeTree('unbuilt', { noBin: true });
+    const root = await makeTree('unbuilt', { noBin: true, noWrapper: true });
+    await expectRejectionNaming({ kind: 'tree', path: root }, safePath.join(root, CLI_BIN));
+  });
+
+  it('throws naming the missing bin.js when only the wrapper was built', async () => {
+    const root = await makeTree('wrapper-only-tree', { noBin: true });
     await expectRejectionNaming({ kind: 'tree', path: root }, safePath.join(root, CLI_BIN));
   });
 
@@ -241,6 +345,47 @@ describe('resolveInstrument — kind: dist', () => {
 
     expect(resolved.version.version).toBe('0.1.42');
     expect(resolved.version.commit).toBeNull();
+    // And no dirtiness claim either, even though a checkout is right there: the
+    // built artifact is what runs, and `dist:` deliberately does not ask the
+    // tree around it anything. A `false` here would be the confident wrong
+    // answer this null exists to prevent.
+    expect(resolved.version.dirty).toBeNull();
+  });
+
+  it('resolves a dist directory to bin.js, not to the wrapper beside it', async () => {
+    const dist = safePath.join(await makeTree('dist-both-entry-points'), CLI_DIST_DIR);
+
+    await expectEntryPoint(
+      { kind: 'dist', path: dist },
+      safePath.join(dist, 'bin.js'),
+      safePath.join(dist, 'bin/vat.js'),
+    );
+  });
+
+  /**
+   * `dist:` takes a file path verbatim, so the wrapper is one plausible typo
+   * away from being measured — and it would run, and produce a complete report
+   * of a binary nobody chose.
+   */
+  it('refuses the wrapper named directly, and points at bin.js instead', async () => {
+    const root = await makeTree('dist-wrapper-named');
+
+    await expectRejectionNaming(
+      { kind: 'dist', path: safePath.join(root, CLI_WRAPPER) },
+      safePath.join(root, CLI_WRAPPER),
+      'wrapper',
+      safePath.join(root, CLI_BIN),
+    );
+  });
+
+  it('names the wrapper rather than reporting nothing when a dist holds only it', async () => {
+    const dist = safePath.join(await makeTree('dist-wrapper-only', { noBin: true }), CLI_DIST_DIR);
+
+    await expectRejectionNaming(
+      { kind: 'dist', path: dist },
+      safePath.join(dist, 'bin/vat.js'),
+      'wrapper',
+    );
   });
 
   it('throws naming the path when nothing is there', async () => {
@@ -254,7 +399,7 @@ describe('resolveInstrument — kind: dist', () => {
     await expectRejectionNaming(
       { kind: 'dist', path: empty },
       empty,
-      safePath.join(empty, 'bin/vat.js'),
+      safePath.join(empty, 'bin.js'),
     );
   });
 });
@@ -274,7 +419,9 @@ describe('resolveInstrument — kind: npx', () => {
     // the Windows `.cmd` shell decision.
     expect(resolved.command).toBe('npx');
     expect(resolved.leadingArgs).toEqual(['--yes', spec]);
-    expect(resolved.version).toEqual({ version, commit: null });
+    // `dirty: null`, never `false`: a published tarball has no checkout, so
+    // there is nothing that could have been dirty and nothing to claim clean.
+    expect(resolved.version).toEqual({ version, commit: null, dirty: null });
   });
 
   /**

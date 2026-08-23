@@ -80,25 +80,77 @@ function subjectVersionTag(coordinate: Coordinate): string {
 }
 
 /**
+ * The short identifier for axis C.
+ *
+ * A dirty build's identity is NOT its commit — the bytes measured were not the
+ * bytes at that commit — and unlike a dirty *subject* there is no fingerprint to
+ * fall back on, because what ran is the built output rather than the checkout
+ * (see `InstrumentVersion.dirty`). So a dirty instrument is pinned by *when it
+ * was observed* instead. That is weaker than an identity and it is meant to be:
+ * it cannot say two dirty runs measured the same build, but it does guarantee
+ * that a second dirty run never silently overwrites the first, which is the
+ * failure this whole naming scheme exists to prevent.
+ *
+ * @param envelope - The report being named
+ * @returns A short, stable string naming the instrument build
+ */
+function instrumentTag(envelope: ReportEnvelope<unknown>): string {
+  const instrument = envelope.coordinate.instrument;
+  const build =
+    instrument.commit === null ? 'release' : instrument.commit.slice(0, SHORT_ID_LENGTH);
+  const base = `vat-${slug(instrument.version)}-${build}`;
+  return instrument.dirty === true ? `${base}-dirty-${slug(envelope.capturedAt)}` : base;
+}
+
+/**
  * The filename a report is stored under.
  *
  * Encodes facet, subject, subject version and instrument — the whole coordinate
  * except what would make the name unreadable. Two reports that differ on any
- * axis therefore land on different filenames and cannot overwrite each other.
+ * MODELLED axis therefore land on different filenames and cannot overwrite each
+ * other.
+ *
+ * ⚠️ **"Any axis" means any axis the coordinate models, and an instrument
+ * selected by the ENVIRONMENT is not one of them.** Measured 2026-08-15: two
+ * `crawl run` invocations over one subject, differing only in
+ * `VAT_INVENTORY_CRAWL` (the switch choosing the incumbent link-walk crawler or
+ * the projection crawler), produced two genuinely different measurements and
+ * wrote them to a **byte-identical path** — the second silently overwrote the
+ * first. That is precisely "the failure this whole naming scheme exists to
+ * prevent", and it is silent: nothing warns, and the survivor looks like a
+ * complete capture.
+ *
+ * The lab does not set that variable and does not read it: it spawns the vat
+ * binary and the value is inherited from whoever ran the lab, so nothing here
+ * can currently notice. Closing this means giving the instrument coordinate an
+ * explicit VARIANT (a general operator-supplied label, not a VAT-specific env
+ * allowlist) and putting it in {@link instrumentTag} — a coordinate change, so
+ * it is recorded here rather than patched around.
+ *
+ * The family has since grown to three — `VAT_INVENTORY_CRAWL`,
+ * `VAT_RESOURCES_CRAWL` and `VAT_EXTENT_SOURCE` — which is the argument for a
+ * general variant axis rather than for lengthening this list again. Every one of
+ * them selects an INSTRUMENT rather than a subject, and every one of them is
+ * invisible here.
+ *
+ * ✅ Until then the workaround is real and was RUN, not assumed: send each arm to
+ * its own `--out` directory, then hand `crawl compare` the two report paths. It
+ * prints a correct arm-vs-arm diff, honestly headed "Comparing two reports at the
+ * same coordinate" — which is exactly the gap named above, stated by the tool
+ * itself. Prefer this over a distinct `--id` per arm: that does reach the
+ * filename, but via the SUBJECT axis, so it buys separation by recording that the
+ * arms measured two different subjects, which they did not.
  *
  * @param envelope - The report to name
  * @returns A filename, without a directory
  */
 export function reportFileName(envelope: ReportEnvelope<unknown>): string {
-  const instrument = envelope.coordinate.instrument;
-  const build =
-    instrument.commit === null ? 'release' : instrument.commit.slice(0, SHORT_ID_LENGTH);
   return (
     [
       slug(envelope.facet),
       distinctSlug(envelope.coordinate.subject.id),
       slug(subjectVersionTag(envelope.coordinate)),
-      `vat-${slug(instrument.version)}-${build}`,
+      instrumentTag(envelope),
     ].join('__') + '.json'
   );
 }

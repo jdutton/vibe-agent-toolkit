@@ -13,11 +13,20 @@
  * the file's own directory, not a document base.
  */
 
-import { readFile, stat } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 
+import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 import { parse, type DefaultTreeAdapterMap } from 'parse5';
 
-import { classifyLink, type ParseResult } from './link-parser.js';
+import { classifyLink, estimateTokens, type ParseResult } from './link-parser.js';
+import {
+  ParsePass,
+  ParserKind,
+  parseTimingStart,
+  recordParsedDocument,
+  recordParsePass,
+} from './parse-timing.js';
+import { measureContent } from './projection/blob-facts.js';
 import type { HtmlParseError } from './schemas/resource-metadata.js';
 import type { ResourceLink } from './types.js';
 
@@ -125,25 +134,61 @@ function visitElement(
  * @param sizeBytes - Byte size to report; the caller owns where it comes from.
  */
 export function parseHtmlContent(content: string, sizeBytes: number): ParseResult {
+  // Every `passStartedAt` / `recordParsePass` pair is the sub-phase timing seam
+  // (`parse-timing.ts`), off unless `VAT_PARSE_TIMING` names a dump directory.
+  // This parser reports into its OWN group with its OWN passes — an HTML-heavy
+  // tree must not be described by markdown's pass list, and the two share a pass
+  // name only where they genuinely run the same operation.
+  const totalStartedAt = parseTimingStart();
+
+  let passStartedAt = parseTimingStart();
   const { document, parseErrors } = parseHtmlDocument(content);
+  recordParsePass(ParsePass.HtmlParse, passStartedAt);
 
   const links: ResourceLink[] = [];
   const anchors = new Set<string>();
 
+  // ONE walk: the generator and the per-element visit are inseparable in the
+  // cost sense, so they are bracketed together rather than pretending the
+  // traversal and the extraction are separable passes.
+  passStartedAt = parseTimingStart();
   for (const element of walkElements(document)) {
     visitElement(element, links, anchors);
   }
+  recordParsePass(ParsePass.HtmlElementWalk, passStartedAt);
 
   const anchorList = [...anchors];
-  return {
+
+  // Hoisted out of the object literal below purely so they can be bracketed;
+  // both are pure, so the order they run in is not observable.
+  passStartedAt = parseTimingStart();
+  const estimatedTokenCount = estimateTokens(content);
+  recordParsePass(ParsePass.HtmlEstimateTokens, passStartedAt);
+
+  // No fences: HTML has no fenced-code construct, so an HTML blob is all prose.
+  // This is a modelling choice, not a stub — `<pre><code>` is markup with no
+  // offset range the parse5 tree exposes as "code context", and treating a
+  // `<pre>` block as code would need a second, HTML-specific definition of the
+  // column that markdown's `code` nodes already define.
+  passStartedAt = parseTimingStart();
+  const contentMeasures = measureContent(content, []);
+  recordParsePass(ParsePass.HtmlMeasureContent, passStartedAt);
+
+  const result: ParseResult = {
     links,
     headings: [],
     content,
     sizeBytes,
-    estimatedTokenCount: Math.ceil(content.length / 4),
+    estimatedTokenCount,
+    contentMeasures,
     ...(anchorList.length > 0 && { anchors: anchorList }),
     ...(parseErrors.length > 0 && { parseErrors }),
   };
+
+  recordParsedDocument(ParserKind.Html, sizeBytes);
+  recordParsePass(ParsePass.HtmlTotal, totalStartedAt);
+
+  return result;
 }
 
 /**
@@ -152,12 +197,13 @@ export function parseHtmlContent(content: string, sizeBytes: number): ParseResul
  * @param filePath - Absolute path to the HTML file.
  */
 export async function parseHtml(filePath: string): Promise<ParseResult> {
-  const [content, stats] = await Promise.all([
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath is a user-provided path parameter
-    readFile(filePath, 'utf-8'),
+  // `readTextContent`, never `readFile(path, 'utf-8')`: this reads a CORPUS
+  // document, whose encoding VAT does not choose. See text-content.ts.
+  const [decoded, stats] = await Promise.all([
+    readTextContent(filePath),
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath is a user-provided path parameter
     stat(filePath),
   ]);
 
-  return parseHtmlContent(content, stats.size);
+  return parseHtmlContent(decoded.text, stats.size);
 }

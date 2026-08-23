@@ -5,7 +5,7 @@ import type {
   Agent,
   ExternalEventError,
   OneShotAgentOutput,
-} from '@vibe-agent-toolkit/agent-schema';
+} from '@vibe-agent-toolkit/schema';
 import { z } from 'zod';
 
 /**

@@ -127,6 +127,34 @@ system binaries on macOS and `strace` is Linux-only, so the Node boundary is the
 measure. The distinction is not pedantry: one `fs.readFile` is not one syscall, and labelling these
 syscalls would overstate what the lab can see.
 
+**Stage 3.5 — the `parse` facet.** Sub-phase attribution, read from a timing seam inside vat rather
+than injected by the lab. It exists because of a measured cost: a regression hunt over vat's markdown
+parse took **24 cold measurement runs** of delete-and-re-time bisecting, because `perf` could say the
+command got slower and nothing could say which pass did. The seam brackets each pass plus the whole
+function, so `total − Σ(passes)` is published as an **unattributed remainder** — the number that says
+whether the breakdown is a complete explanation or a partial one.
+
+Three things it does differently from both older facets:
+
+- **It defaults to a cold cache, and that is not a preference.** vat's parse cache short-circuits
+  `parseMarkdownContent` entirely on a hit, so a warm run produces a dump with zero pass invocations.
+  Sub-phase attribution exists **only on cache misses**. A warm capture is a well-formed body full of
+  zeroes that reads as "parsing is free", which is why `--cache` now has a per-facet default.
+- **It distinguishes four zero-states rather than reporting one zero.** No dump at all (the build has
+  no seam — the state every A/B baseline arm is in) is a refusal; every document a cache hit,
+  cache misses that went to the uninstrumented HTML parser, and a command that never reached the
+  parse path at all are three further states that produce identical numbers and support opposite
+  conclusions. Each renders as its own sentence.
+- **It discards no repeat.** `io` drops repeat 0 as a warm-up because it wants the steady state; here
+  repeat 0 is, in `warm` mode, the *only* repeat that parses anything.
+
+⚠️ **`documents.count == cache.misses` is not an invariant**, in either direction, and nothing in the
+facet derives one from the other. The cache counts every parser kind while the passes count markdown
+only, so HTML work inflates misses with no matching documents; and several call sites reach the
+markdown parser directly without consulting the cache, so documents can exceed misses too. The hit
+rate is therefore rendered as `hits/(hits+misses)` and labelled as covering all parser kinds — never
+as a per-document rate.
+
 **Stage 4 — the `sweep` facet and the corpus registry.** Absorbs `vat corpus scan` and the 236-entry
 seed. Subjects tracked on moving refs; every observation stamped with the resolved commit.
 

@@ -18,7 +18,7 @@
  *    not.
  */
 
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -34,6 +34,8 @@ import {
   sameBuckets,
 } from '../src/facets/io/dump.js';
 import { IoBodySchema } from '../src/facets/io/types.js';
+
+import { writeDumpDir } from './dump-fixtures.js';
 
 /** Roots used for every normalization assertion, kept POSIX-shaped on purpose. */
 const ROOTS = { instrumentRoot: '/repo/vat', subjectPath: '/work/adopter' } as const;
@@ -75,16 +77,9 @@ function merged(...dumps: readonly IoDump[]): MergedDumps {
   return mergeDumps(dumps, ROOTS);
 }
 
-/** Write raw files into a fresh directory under the temp root. */
+/** Write raw files into a fresh directory under this suite's temp root. */
 async function dumpDir(name: string, files: Readonly<Record<string, string>>): Promise<string> {
-  const directory = safePath.join(tempDir, name);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- temp path composed here
-  await mkdir(directory, { recursive: true });
-  for (const [file, content] of Object.entries(files)) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- temp fixture path composed here
-    await writeFile(safePath.join(directory, file), content, 'utf-8');
-  }
-  return directory;
+  return writeDumpDir(tempDir, name, files);
 }
 
 /** Write a directory of well-formed dumps. */

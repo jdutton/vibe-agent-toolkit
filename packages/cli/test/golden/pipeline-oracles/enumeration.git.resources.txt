@@ -3,8 +3,8 @@ lane: resources
 corpus: trap/git
 route: git-ls-files
 gitAvailable: true
-enumeratedCount: 37
-admittedCount: 36
+enumeratedCount: 42
+admittedCount: 41
 collisionCount: 1
 buildError: -
 
@@ -35,18 +35,23 @@ buildError: -
 22	links/to-dir.md	true	false	false	false	-	true	false	markdown.1e8ee9ffecab8e8c6b4b9d3227187f7c0a16ff1f87b13dd9d866f9f2373d3f0e
 23	links/to-ignored.md	true	false	false	false	-	true	false	markdown.6f1bc344fd6c87b6c242f62ff15c67f4e8b434ab5861cac52013506b6eaf6d3b
 24	links/to-missing.md	true	false	false	false	-	true	false	markdown.cd76114fabff2f7e953542eb7f20fd5db1cca11cbab98a868b99c00337aa3b9f
-25	parse/duplicate-definition.md	true	false	false	false	-	true	false	markdown.91d8b1997300816e46abbc915331037111bcc581b27478801d1868cf9c37e473
-26	parse/frontmatter-delimited-empty.md	true	false	false	false	-	true	false	markdown.ba2905f27de96e27c8c708c184da19c4e0d891aeeb0b6c4ba733a481f61462fc
-27	parse/html-anchors.md	true	false	false	false	-	true	false	markdown.63b800a9a7f205bf823e4701e4166ccf5c4702d83afc0a85322543bbede68984
-28	parse/interleaved-kinds.md	true	false	false	false	-	true	false	markdown.c880e9b66747c90ba12470866596145b8a5dcd9f57970ad54660f3d0f368e59a
-29	parse/kitchen-sink.md	true	false	false	false	-	true	false	markdown.bf798e047abfa6f1c1d3a509e5fc1147814ef3faa240c759afd8c99d3f240229
-30	parse/masked-references.md	true	false	false	false	-	true	false	markdown.5195703e66147cd8876b5a3eebc701c0f5318a1339cb0456078a777f06bbedc8
-31	parse/nested-links.md	true	false	false	false	-	true	false	markdown.45e58cf06c1ac1f4f6c9761df8f17978340f7094c669f372a16ed89a838c79c9
-32	parse/repeated-headings.md	true	false	false	false	-	true	false	markdown.6e4dd38ea55b70879520c4d16ffad0b02e73b40f3f7181485893a18b7e838d39
-33	symlinks/a/target.md	true	false	false	false	-	true	false	markdown.0515644a301962595aa300141e63ec34db5489a0e7ac075f7a358d75a2527bfb
-34	symlinks/b/target.md	true	false	false	false	-	true	false	markdown.226826d2beb52a81a162c65601363ead7d9108a616dde6c2f5cdcd4687ca9727
-35	twins/left/same.md	true	false	false	false	-	true	false	markdown.24a32039623465bcbaadbfad91511d09a4f4de2dd71256cb528fc8395c90b5e2
-36	twins/right/same.md	true	false	false	false	-	true	false	markdown.24a32039623465bcbaadbfad91511d09a4f4de2dd71256cb528fc8395c90b5e2
+25	parse/astral-characters.md	true	false	false	false	-	true	false	markdown.2f89511e18b35834cfc14173663f19732b1ea48b1905db75ab19892dcc2e1528
+26	parse/duplicate-definition.md	true	false	false	false	-	true	false	markdown.91d8b1997300816e46abbc915331037111bcc581b27478801d1868cf9c37e473
+27	parse/frontmatter-delimited-empty.md	true	false	false	false	-	true	false	markdown.ba2905f27de96e27c8c708c184da19c4e0d891aeeb0b6c4ba733a481f61462fc
+28	parse/html-anchors.md	true	false	false	false	-	true	false	markdown.63b800a9a7f205bf823e4701e4166ccf5c4702d83afc0a85322543bbede68984
+29	parse/interleaved-kinds.md	true	false	false	false	-	true	false	markdown.c880e9b66747c90ba12470866596145b8a5dcd9f57970ad54660f3d0f368e59a
+30	parse/kitchen-sink.md	true	false	false	false	-	true	false	markdown.bf798e047abfa6f1c1d3a509e5fc1147814ef3faa240c759afd8c99d3f240229
+31	parse/lexical-at-import.md	true	false	false	false	-	true	false	markdown.e232b3cc1c2b3c0b3b466a4840b7d669d6b5d49814c198b3d65ff830579db6aa
+32	parse/lexical-bare-token.md	true	false	false	false	-	true	false	markdown.5b323f4a7ad9af39e3ed44c02ac23ea566ba2b575e1efab5d1c7a9116594b309
+33	parse/lexical-code-context.md	true	false	false	false	-	true	false	markdown.8e8235d8e69f095d07a2a2d9f0e9fbb9ece438ee1edd7e3127abd9cf8316ede2
+34	parse/lexical-env-anchored.md	true	false	false	false	-	true	false	markdown.9e63ced7a9fff0628fdb6908bf6e66cd194bd0c6dd2cb0ab4a0040caf1a0d5d5
+35	parse/masked-references.md	true	false	false	false	-	true	false	markdown.5195703e66147cd8876b5a3eebc701c0f5318a1339cb0456078a777f06bbedc8
+36	parse/nested-links.md	true	false	false	false	-	true	false	markdown.45e58cf06c1ac1f4f6c9761df8f17978340f7094c669f372a16ed89a838c79c9
+37	parse/repeated-headings.md	true	false	false	false	-	true	false	markdown.6e4dd38ea55b70879520c4d16ffad0b02e73b40f3f7181485893a18b7e838d39
+38	symlinks/a/target.md	true	false	false	false	-	true	false	markdown.0515644a301962595aa300141e63ec34db5489a0e7ac075f7a358d75a2527bfb
+39	symlinks/b/target.md	true	false	false	false	-	true	false	markdown.226826d2beb52a81a162c65601363ead7d9108a616dde6c2f5cdcd4687ca9727
+40	twins/left/same.md	true	false	false	false	-	true	false	markdown.24a32039623465bcbaadbfad91511d09a4f4de2dd71256cb528fc8395c90b5e2
+41	twins/right/same.md	true	false	false	false	-	true	false	markdown.24a32039623465bcbaadbfad91511d09a4f4de2dd71256cb528fc8395c90b5e2
 
 ## admitted (ordered, post-deduplication)
 0	README.md
@@ -73,18 +78,23 @@ buildError: -
 21	links/to-dir.md
 22	links/to-ignored.md
 23	links/to-missing.md
-24	parse/duplicate-definition.md
-25	parse/frontmatter-delimited-empty.md
-26	parse/html-anchors.md
-27	parse/interleaved-kinds.md
-28	parse/kitchen-sink.md
-29	parse/masked-references.md
-30	parse/nested-links.md
-31	parse/repeated-headings.md
-32	symlinks/a/target.md
-33	symlinks/b/target.md
-34	twins/left/same.md
-35	twins/right/same.md
+24	parse/astral-characters.md
+25	parse/duplicate-definition.md
+26	parse/frontmatter-delimited-empty.md
+27	parse/html-anchors.md
+28	parse/interleaved-kinds.md
+29	parse/kitchen-sink.md
+30	parse/lexical-at-import.md
+31	parse/lexical-bare-token.md
+32	parse/lexical-code-context.md
+33	parse/lexical-env-anchored.md
+34	parse/masked-references.md
+35	parse/nested-links.md
+36	parse/repeated-headings.md
+37	symlinks/a/target.md
+38	symlinks/b/target.md
+39	twins/left/same.md
+40	twins/right/same.md
 
 ## collisions (first-added-wins drops, in arrival order)
 dup-hyphen-note-md	won=dup-hyphen/note.md	dropped=dup/hyphen-note.md

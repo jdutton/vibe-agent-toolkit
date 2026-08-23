@@ -30,6 +30,26 @@ export const unitPoolOptions = {
   threads: { singleThread: false, maxThreads: 2 },
 };
 
+/**
+ * Dependencies vitest must TRANSFORM rather than externalize.
+ *
+ * `@vibe-validate/git` owns the `git` spawn that `runGit` wraps. Vitest
+ * externalizes `node_modules` by default, and an externalized module never sees
+ * `vi.mock('node:child_process')` — so a test that stubs the spawn to inspect
+ * what reaches git keeps passing while REAL git runs underneath it. Measured:
+ * `git-clone-env.test.ts` (which asserts that a clone of a *shorthand* URL
+ * cannot block on a credential prompt) went 2-of-8 green that way, and
+ * `git-utils.test.ts` 7-of-10 — in both cases only the call-count assertions
+ * noticed, and a suite asserting return values alone would have been fully green
+ * while testing a live subprocess.
+ *
+ * This belongs in all three tiers AND in the root config: a package-level run
+ * (`cd packages/x && vitest`) uses the package's own config, so setting it only
+ * at the root makes the same test pass from the repo root and fail from the
+ * package directory.
+ */
+export const inlineDeps = ['@vibe-validate/git'];
+
 export const integrationPool = 'forks' as const;
 export const integrationPoolOptions = {
   forks: {
@@ -64,6 +84,7 @@ export function createUnitTestConfig(overrides: UnitTestConfigOverrides = {}) {
       '**/*.integration.test.ts',
       '**/*.system.test.ts',
     ],
+    server: { deps: { inline: inlineDeps } },
     testTimeout: platformTestTimeout,
     // NOTE: no hookTimeout override here on purpose. Unit hooks should fail
     // fast at vitest's 10s default — a unit hook that needs longer is doing
@@ -101,6 +122,7 @@ export function createIntegrationTestConfig(overrides: IntegrationTestConfigOver
     setupFiles: [setupFilePath],
     include: ['test/**/*.integration.test.ts', 'src/**/*.integration.test.ts'],
     exclude: ['**/node_modules/**', '**/dist/**', ...(overrides.exclude ?? [])],
+    server: { deps: { inline: inlineDeps } },
     testTimeout: platformTestTimeout,
     // Integration hooks legitimately do real I/O (git subprocesses, fixture
     // hydration, temp-tree setup), so vitest's 10s default is too tight —
@@ -130,6 +152,7 @@ export function createSystemTestConfig(overrides: SystemTestConfigOverrides = {}
     // 10s is far too short; raise across platforms so slow VMs and fast dev boxes
     // share the same ceiling.
     hookTimeout: 300_000,
+    server: { deps: { inline: inlineDeps } },
     // Windows rmSync on large fixture trees can take significant time.
     teardownTimeout: 120_000,
     // ['default', { summary: false }] is the vitest v3 replacement for the

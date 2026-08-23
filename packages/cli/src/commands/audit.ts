@@ -8,12 +8,6 @@ import { existsSync as fsExistsSync, type Dirent } from 'node:fs';
 import { basename } from 'node:path';
 
 import {
-  calculateValidationStatus,
-  countBySeverity,
-  type SeverityCounts,
-  type ValidationIssue,
-} from '@vibe-agent-toolkit/agent-schema';
-import {
   crawlAndResolveRegistry,
   detectDeclaredButMissing,
   detectMarketplacePluginSourceMissing,
@@ -52,6 +46,12 @@ import {
   type Target,
 } from '@vibe-agent-toolkit/claude-marketplace';
 import { detectFormat } from '@vibe-agent-toolkit/discovery';
+import {
+  calculateValidationStatus,
+  countBySeverity,
+  type SeverityCounts,
+  type ValidationIssue,
+} from '@vibe-agent-toolkit/schema';
 import {
   findProjectRoot,
   gitFindRoot,
@@ -1095,7 +1095,7 @@ async function runInventoryDetectors(
     ];
   }
   if (type === 'marketplace') {
-    const inv = prebuiltInv?.kind === 'marketplace' ? prebuiltInv : await extractClaudeMarketplaceInventory(scanPath);
+    const inv = prebuiltInv?.kind === 'marketplace' ? prebuiltInv : await extractClaudeMarketplaceInventory(scanPath, { gitTrackerSource: gitTrackerForProjectRoot });
     return detectMarketplacePluginSourceMissing(inv, locationRoot);
   }
   return [];
@@ -1300,7 +1300,7 @@ async function validateAuditSubject(
 			// recursion into co-located, path-source plugins. discovered.plugins[]
 			// is populated only for path sources that exist on disk (git/npm/unknown
 			// sources are declarations only and stay out of scope).
-			const marketplaceInv = await extractClaudeMarketplaceInventory(scanPath);
+			const marketplaceInv = await extractClaudeMarketplaceInventory(scanPath, { gitTrackerSource: gitTrackerForProjectRoot });
 			const marketplaceInventoryIssues = await runInventoryDetectors(scanPath, 'marketplace', locationRoot, marketplaceInv);
 			appendIssues(result, marketplaceInventoryIssues);
 			logger.debug(`Inventory detectors emitted ${marketplaceInventoryIssues.length.toString()} issues for marketplace at ${scanPath}`);
@@ -2195,11 +2195,12 @@ async function getOrCreateInventoryRegistry(
  */
 async function pluginInventoryAt(dir: string): Promise<Awaited<ReturnType<typeof extractClaudePluginInventory>>> {
   const projectRoot = findProjectRoot(dir);
-  return extractClaudePluginInventory(
-    dir,
-    projectRoot === null ? undefined : () => getOrCreateInventoryRegistry(projectRoot),
-    gitTrackerForProjectRoot,
-  );
+  return extractClaudePluginInventory(dir, {
+    ...(projectRoot === null
+      ? {}
+      : { sharedRegistry: () => getOrCreateInventoryRegistry(projectRoot) }),
+    gitTrackerSource: gitTrackerForProjectRoot,
+  });
 }
 
 /**

@@ -6,7 +6,7 @@ This directory contains all packages in the vibe-agent-toolkit monorepo. This RE
 
 | Package | npm Package | Status | Purpose |
 |---------|-------------|--------|---------|
-| agent-schema | `@vibe-agent-toolkit/agent-schema` | Published | JSON Schema definitions and TypeScript types for agent manifests |
+| schema | `@vibe-agent-toolkit/schema` | Published | JSON Schema definitions and TypeScript types for agent manifests |
 | utils | `@vibe-agent-toolkit/utils` | Published | Core utility functions, plus the ESLint rules enforcing them on `/eslint` (no internal dependencies) |
 | discovery | `@vibe-agent-toolkit/discovery` | Published | Intelligent file discovery for agents and Agent Skills |
 | resources | `@vibe-agent-toolkit/resources` | Published | Markdown resource parsing, validation, and link integrity |
@@ -26,7 +26,7 @@ The packages follow a progressive dependency structure from low-level utilities 
 ```mermaid
 graph TD
     %% Foundation Layer
-    agent-schema["agent-schema<br/>(no deps)"]
+    schema["schema<br/>(no deps)"]
     utils["utils<br/>(no deps)"]
 
     %% File & Resource Layer
@@ -58,7 +58,7 @@ graph TD
     rag --> rag-lancedb
     utils --> rag-lancedb
 
-    agent-schema --> agent-config
+    schema --> agent-config
     utils --> agent-config
     rag --> agent-config
 
@@ -77,7 +77,7 @@ graph TD
     cli --> vibe-agent-toolkit
 
     %% Separate dependencies
-    agent-schema --> vat-development-agents
+    schema --> vat-development-agents
     utils --> dev-tools
 
     %% Styling
@@ -89,7 +89,7 @@ graph TD
     classDef separate fill:#f5f5f5,stroke:#616161,stroke-width:2px
     classDef private fill:#ffebee,stroke:#d32f2f,stroke-width:2px,stroke-dasharray: 5 5
 
-    class agent-schema,utils foundation
+    class schema,utils foundation
     class discovery,resources,rag fileResource
     class rag-lancedb ragImpl
     class agent-config,agent-skills config
@@ -102,8 +102,8 @@ graph TD
 
 ### Foundation Layer
 
-#### agent-schema
-**npm**: `@vibe-agent-toolkit/agent-schema`
+#### schema
+**npm**: `@vibe-agent-toolkit/schema`
 
 JSON Schema definitions and TypeScript types for VAT agent manifest format. Uses Zod for type-safe schema definitions that generate both TypeScript types and JSON Schema.
 
@@ -196,7 +196,7 @@ Agent manifest loading and validation. Loads agent YAML manifests, validates aga
 
 **Dependencies**:
 - External: `yaml`
-- Internal: `agent-schema`, `utils`, `rag`
+- Internal: `schema`, `utils`, `rag`
 
 ---
 
@@ -269,7 +269,7 @@ VAT development agents - dogfooding the vibe-agent-toolkit. Contains example age
 
 **Dependencies**:
 - External: `yaml`
-- Internal: `agent-schema`
+- Internal: `schema`
 
 ---
 

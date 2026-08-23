@@ -9,7 +9,7 @@
   "references": [
     { "path": "../utils" },
     { "path": "../resources" },
-    { "path": "../agent-schema" },
+    { "path": "../schema" },
     { "path": "../agent-skills" }
   ]
 }

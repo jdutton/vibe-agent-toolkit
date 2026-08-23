@@ -28,7 +28,7 @@ projection and judgement at once. Two consequences:
 | Instrument | What it answers | Status |
 |---|---|---|
 | **Enumeration snapshot** | Per lane, per corpus: which paths, **in which order**, with `exists` / `isDirectory` / `gitignored` / `isSymlink` / `symlinkResolves` / content key | Built |
-| **Parse-fact snapshot** | Per content key: links + ordinals + `resolvedId`, headings + slugs, frontmatter **source, value shapes and value digests**, fragment anchors, optional-array presence states, byte and decoded lengths, parse conditions — with `keyof ParseResult` coverage enforced at compile time | Built |
+| **Parse-fact snapshot** | Per content key: links + ordinals + `resolvedId`, lexical reference candidates + every lexer column, headings + slugs, frontmatter **source, value shapes and value digests**, fragment anchors, optional-array presence states, byte and decoded lengths, parse conditions — with `keyof ParseResult` coverage enforced at compile time | Built |
 | **Symlink divergence report** | Per lane, per corpus: the three populations one tree can present (`git ls-files`, walk without following, walk following) and every path that is not in all of them, with the reason | Built |
 | **Rule-invocation log** | Per run: which check ran, over how many rows, emitting how many findings | **Not built** — see below |
 
@@ -80,6 +80,31 @@ This is not a hypothetical. `anchors` was uncovered until 2026-08-07, and it is
 the input to `ResourceRegistry.buildFragmentIndex` — every `file.md#fragment`
 check in VAT.
 
+#### Lexical reference candidates are recorded because the cache carries them
+
+`ParseResult.lexicalReferences` holds the reference candidates markdown's AST
+cannot produce — `@docs/x.md`, `${CLAUDE_PLUGIN_ROOT}/scripts/x.js`, bounded
+path-shaped bare tokens. It is **carried in the parse cache**, which is the
+whole reason it is recorded here rather than declared unrecorded: the snapshot's
+claim is that a cached parse differing from a fresh one moves a row, and a cache
+that dropped, reordered or mangled this list would change every `@`-import VAT
+sees while `links`, `headings` and all three frontmatter captures held still.
+
+Every column the lexer produces is recorded — `raw`, `line`, `column`,
+`syntacticForm`, `hasExtension`, `leadingAt`, `slashCount`, `variableExpansion`,
+`inCodeSpan`, `inFence` — plus an ordinal, on the same reasoning as `links`: a
+`raw` token is not an identity, because one document may write the same token
+ten times. They are all small scalars, and a lossy round-trip replaces a scalar
+with a *plausible* value rather than dropping the row, so a summary column could
+not tell the two apart.
+
+`inCodeSpan` is the load-bearing one. Anthropic documents that Claude Code's
+import parser **skips code spans and fenced blocks**, so that boolean is what
+decides whether an `@` token is an import at all. A layer that defaulted it to
+`false` would leave the token, its position and every other column identical
+while reversing what the row means — which is why the lexer records code context
+instead of dropping the token, and why the oracle records the record.
+
 #### Frontmatter is captured three ways, because no one capture does the job
 
 - **Source** (`frontmatterSource`), the block as written. Catches a change in
@@ -110,6 +135,11 @@ reads both through `?? []`, so absent and empty produce an identical `conditions
 list — while the contract distinguishes them explicitly (`unresolvedReferences`
 is *"HTML leaves this undefined; markdown always populates it (possibly empty)"*).
 Those states are therefore recorded separately, in `optionalArrays`.
+
+`lexicalReferences` is in `optionalArrays` too, and its absent state is likewise
+reachable: HTML documents never populate it, and markdown omits the key rather
+than emitting `[]` when a document has no candidates. Unlike `anchors` it also
+has its own list column, so the presence state and the contents are both visible.
 
 #### Lists are one entry per line, never joined
 

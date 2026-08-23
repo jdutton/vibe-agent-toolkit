@@ -1,5 +1,5 @@
-import { RESULT_ERROR, RESULT_SUCCESS } from '@vibe-agent-toolkit/agent-schema';
-import type { OneShotAgentOutput } from '@vibe-agent-toolkit/agent-schema';
+import { RESULT_ERROR, RESULT_SUCCESS } from '@vibe-agent-toolkit/schema';
+import type { OneShotAgentOutput } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
 import { ResultTranslator } from '../../src/server/result-translator.js';

@@ -5,7 +5,7 @@
 
 ## Purpose
 
-Document schema refinements and learnings discovered while designing agent-generator against @vibe-agent-toolkit/agent-schema.
+Document schema refinements and learnings discovered while designing agent-generator against @vibe-agent-toolkit/schema.
 
 ## Schema Refinements Discovered
 
@@ -49,7 +49,7 @@ Document schema refinements and learnings discovered while designing agent-gener
 4. **Transparency**: Architecture decisions documented for user understanding
 
 **Validation Strategy:**
-- Agent calls `AgentManifestSchema.safeParse()` from @vibe-agent-toolkit/agent-schema
+- Agent calls `AgentManifestSchema.safeParse()` from @vibe-agent-toolkit/schema
 - Reports validation results in structured format
 - User sees exactly what passed/failed before files are written
 
@@ -407,7 +407,7 @@ The agent.yaml now validates successfully, but we've temporarily removed fields 
    - Pattern `docs/**/*.ts` excludes documentation scripts from linting
    - Alternative would be to create separate tsconfig for docs (overkill for Phase 1)
 
-### Recommendations for agent-schema Package
+### Recommendations for schema Package
 
 **Immediate actions (before Phase 1 complete):**
 
@@ -491,9 +491,9 @@ The four-phase workflow pattern (GATHER → ANALYZE → DESIGN → GENERATE) dis
 
 **What worked well in Phase 1:**
 
-1. **Schema-first design** - Validating agent.yaml against @vibe-agent-toolkit/agent-schema caught design issues early
+1. **Schema-first design** - Validating agent.yaml against @vibe-agent-toolkit/schema caught design issues early
    - Prevented invalid configurations from being committed
-   - Schema gaps became clear design requirements for agent-schema package
+   - Schema gaps became clear design requirements for schema package
    - Validation feedback was actionable
 
 2. **Explicit phase documentation** - Making the 4-phase workflow visible in agent.yaml helps users understand what the agent does

@@ -1,9 +1,10 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
 import { extractClaudePluginInventory } from '../../src/inventory/extract-plugin.js';
+import { NO_GIT_TRACKER } from '../../src/inventory/extract-skill.js';
 
 const FIXTURE_BASE = safePath.resolve(__dirname, '../fixtures/inventory-plugin');
 const SKILL_CLAUDE_PLUGIN_FIXTURE = 'skill-claude-plugin';
@@ -20,10 +21,52 @@ function makePluginWithManifest(root: string, content: string): string {
 	return root;
 }
 
+/**
+ * Extract a plugin whose manifest fails `ClaudePluginSchema`, and return the two
+ * things every such case asserts about.
+ *
+ * The cases differ only in the raw manifest: the extractor's fallback is a
+ * `typeof x === 'string'` test per field, so the axis worth varying is which
+ * fields happen to be strings. Shared rather than repeated because with the
+ * manifest inline the two bodies were byte-identical apart from that literal.
+ *
+ * @param tempDir - The suite's temp root
+ * @param fixtureName - A directory name under it, unique per case
+ * @param manifest - The raw manifest to write
+ * @returns The schema error, if one was recorded, and the manifest that survived
+ */
+async function afterSchemaFailure(
+	tempDir: string,
+	fixtureName: string,
+	manifest: unknown,
+): Promise<{
+	schemaErr: { path: string; message: string } | undefined;
+	manifest: Awaited<ReturnType<typeof extractClaudePluginInventory>>['manifest'];
+}> {
+	const root = makePluginWithManifest(
+		safePath.join(tempDir, fixtureName),
+		JSON.stringify(manifest),
+	);
+	const inv = await extractClaudePluginInventory(root, { gitTrackerSource: NO_GIT_TRACKER });
+	return {
+		schemaErr: inv.parseErrors.find(e => e.message.includes('schema validation failed')),
+		manifest: inv.manifest,
+	};
+}
+
+/**
+ * The tracker-less walk, said out loud.
+ *
+ * These fixtures have no git repository behind them, so no tracker could
+ * answer for them and none of these assertions is about gitignore. Naming the
+ * choice is the point: the extractors REQUIRE a source precisely so a suite
+ * cannot land in the tracker-less state by leaving an argument off, which is how
+ * the walker/closure divergence stayed invisible for three commits.
+ */
 describe('extractClaudePluginInventory', () => {
 	describe('canonical fixture', () => {
 		it('returns correct kind, vendor, shape', async () => {
-			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, 'canonical'));
+			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, 'canonical'), { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(inv.kind).toBe('plugin');
 			expect(inv.vendor).toBe('claude-code');
@@ -31,14 +74,14 @@ describe('extractClaudePluginInventory', () => {
 		});
 
 		it('populates manifest from plugin.json', async () => {
-			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, 'canonical'));
+			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, 'canonical'), { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(inv.manifest.name).toBe('canonical');
 			expect(inv.manifest.version).toBe('1.0.0');
 		});
 
 		it('builds declared.skills as a 1-element array with correct ref', async () => {
-			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, 'canonical'));
+			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, 'canonical'), { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(Array.isArray(inv.declared.skills)).toBe(true);
 			expect(inv.declared.skills).toHaveLength(1);
@@ -49,7 +92,7 @@ describe('extractClaudePluginInventory', () => {
 		});
 
 		it('returns null for undeclared component fields', async () => {
-			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, 'canonical'));
+			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, 'canonical'), { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(inv.declared.commands).toBeNull();
 			expect(inv.declared.agents).toBeNull();
@@ -59,7 +102,7 @@ describe('extractClaudePluginInventory', () => {
 		});
 
 		it('discovers the foo skill', async () => {
-			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, 'canonical'));
+			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, 'canonical'), { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(inv.discovered.skills).toHaveLength(1);
 			const firstSkill = inv.discovered.skills[0];
@@ -67,7 +110,7 @@ describe('extractClaudePluginInventory', () => {
 		});
 
 		it('has no parse errors', async () => {
-			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, 'canonical'));
+			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, 'canonical'), { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(inv.parseErrors).toEqual([]);
 		});
@@ -75,13 +118,13 @@ describe('extractClaudePluginInventory', () => {
 
 	describe('skill-claude-plugin fixture', () => {
 		it('detects skill-claude-plugin shape', async () => {
-			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, SKILL_CLAUDE_PLUGIN_FIXTURE));
+			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, SKILL_CLAUDE_PLUGIN_FIXTURE), { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(inv.shape).toBe(SKILL_CLAUDE_PLUGIN_FIXTURE);
 		});
 
 		it('includes root SKILL.md in discovered.skills', async () => {
-			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, SKILL_CLAUDE_PLUGIN_FIXTURE));
+			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, SKILL_CLAUDE_PLUGIN_FIXTURE), { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(inv.discovered.skills.length).toBeGreaterThanOrEqual(1);
 			const rootSkillPath = safePath.join(FIXTURE_BASE, SKILL_CLAUDE_PLUGIN_FIXTURE, 'SKILL.md');
@@ -89,7 +132,7 @@ describe('extractClaudePluginInventory', () => {
 		});
 
 		it('returns null for declared.skills when manifest has no skills key', async () => {
-			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, SKILL_CLAUDE_PLUGIN_FIXTURE));
+			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, SKILL_CLAUDE_PLUGIN_FIXTURE), { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(inv.declared.skills).toBeNull();
 		});
@@ -97,13 +140,13 @@ describe('extractClaudePluginInventory', () => {
 
 	describe('tri-state fixture', () => {
 		it('returns [] for explicit empty array (skills: [])', async () => {
-			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, 'tri-state'));
+			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, 'tri-state'), { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(inv.declared.skills).toEqual([]);
 		});
 
 		it('returns 1-element array for string path (commands: "./commands/cmd1.md")', async () => {
-			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, 'tri-state'));
+			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, 'tri-state'), { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(Array.isArray(inv.declared.commands)).toBe(true);
 			expect(inv.declared.commands).toHaveLength(1);
@@ -114,7 +157,7 @@ describe('extractClaudePluginInventory', () => {
 		});
 
 		it('returns null for absent agents field', async () => {
-			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, 'tri-state'));
+			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, 'tri-state'), { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(inv.declared.agents).toBeNull();
 		});
@@ -122,14 +165,14 @@ describe('extractClaudePluginInventory', () => {
 
 	describe('unexpected fixture', () => {
 		it('reports unexpected skillManifests for SKILL.md outside skills/<name>/', async () => {
-			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, 'unexpected'));
+			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, 'unexpected'), { gitTrackerSource: NO_GIT_TRACKER });
 
 			const extraPath = safePath.join(FIXTURE_BASE, 'unexpected', 'extra', 'SKILL.md');
 			expect(inv.unexpected.skillManifests).toContain(extraPath);
 		});
 
 		it('reports unexpected pluginManifests for nested .claude-plugin/plugin.json', async () => {
-			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, 'unexpected'));
+			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, 'unexpected'), { gitTrackerSource: NO_GIT_TRACKER });
 
 			const nestedPath = safePath.join(FIXTURE_BASE, 'unexpected', 'nested', CLAUDE_PLUGIN_DIR, PLUGIN_JSON);
 			expect(inv.unexpected.pluginManifests).toContain(nestedPath);
@@ -138,7 +181,7 @@ describe('extractClaudePluginInventory', () => {
 
 	describe('missing plugin path edge case', () => {
 		it('returns inventory with empty manifest and a parse error for non-existent path', async () => {
-			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, 'does-not-exist'));
+			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, 'does-not-exist'), { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(inv.kind).toBe('plugin');
 			expect(inv.manifest).toEqual({});
@@ -149,7 +192,7 @@ describe('extractClaudePluginInventory', () => {
 
 	describe('malformed-assets fixture (hooks.json + .mcp.json parse errors)', () => {
 		it('populates parseErrors for malformed hooks/hooks.json', async () => {
-			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, MALFORMED_ASSETS_FIXTURE));
+			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, MALFORMED_ASSETS_FIXTURE), { gitTrackerSource: NO_GIT_TRACKER });
 
 			const hooksPath = safePath.join(FIXTURE_BASE, MALFORMED_ASSETS_FIXTURE, 'hooks', 'hooks.json');
 			const hookErr = inv.parseErrors.find(e => e.path === hooksPath);
@@ -158,7 +201,7 @@ describe('extractClaudePluginInventory', () => {
 		});
 
 		it('populates parseErrors for malformed .mcp.json', async () => {
-			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, MALFORMED_ASSETS_FIXTURE));
+			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, MALFORMED_ASSETS_FIXTURE), { gitTrackerSource: NO_GIT_TRACKER });
 
 			const mcpPath = safePath.join(FIXTURE_BASE, MALFORMED_ASSETS_FIXTURE, '.mcp.json');
 			const mcpErr = inv.parseErrors.find(e => e.path === mcpPath);
@@ -167,7 +210,7 @@ describe('extractClaudePluginInventory', () => {
 		});
 
 		it('has no parse errors from plugin.json (which is valid)', async () => {
-			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, MALFORMED_ASSETS_FIXTURE));
+			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, MALFORMED_ASSETS_FIXTURE), { gitTrackerSource: NO_GIT_TRACKER });
 
 			const pluginJsonPath = safePath.join(
 				FIXTURE_BASE, MALFORMED_ASSETS_FIXTURE, CLAUDE_PLUGIN_DIR, PLUGIN_JSON,
@@ -192,7 +235,7 @@ describe('extractClaudePluginInventory', () => {
 			const root = safePath.join(tempDir, 'no-manifest');
 			mkdirSyncReal(root, { recursive: true });
 
-			const inv = await extractClaudePluginInventory(root);
+			const inv = await extractClaudePluginInventory(root, { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(inv.shape).toBe('claude-plugin');
 			expect(inv.manifest).toEqual({});
@@ -203,7 +246,7 @@ describe('extractClaudePluginInventory', () => {
 		it('records JSON parse error when plugin.json is malformed', async () => {
 			const root = makePluginWithManifest(safePath.join(tempDir, 'bad-json'), '{ not valid');
 
-			const inv = await extractClaudePluginInventory(root);
+			const inv = await extractClaudePluginInventory(root, { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(inv.parseErrors.length).toBeGreaterThanOrEqual(1);
 			expect(inv.parseErrors[0]?.path).toContain('plugin.json');
@@ -212,34 +255,30 @@ describe('extractClaudePluginInventory', () => {
 		it('records schema validation error and falls back to raw fields', async () => {
 			// `name` is required to be a string — make it a number.
 			// Other fields (version, description) are also numbers to exercise the typeof guards.
-			const root = makePluginWithManifest(
-				safePath.join(tempDir, 'schema-fail'),
-				JSON.stringify({ name: 42, version: 7, description: false }),
-			);
+			const { schemaErr, manifest } = await afterSchemaFailure(tempDir, 'schema-fail', {
+				name: 42,
+				version: 7,
+				description: false,
+			});
 
-			const inv = await extractClaudePluginInventory(root);
-
-			const schemaErr = inv.parseErrors.find(e => e.message.includes('schema validation failed'));
 			expect(schemaErr).toBeDefined();
 			// None of the typeof-string checks pass, so manifest stays empty.
-			expect(inv.manifest).toEqual({});
+			expect(manifest).toEqual({});
 		});
 
 		it('records schema validation error but keeps string fields from raw manifest', async () => {
-			// `name` valid, but `extras` introduces an invalid shape (e.g. version not a string).
-			// Actually: ClaudePluginSchema requires `name: string`. We make `name` a number to fail,
-			// but provide a string `description` to verify the typeof-string fallback.
-			const root = makePluginWithManifest(
-				safePath.join(tempDir, 'schema-fail-keep-strings'),
-				JSON.stringify({ name: 0, version: '1.0.0', description: 'desc' }),
+			// `ClaudePluginSchema` requires `name: string`, so a numeric `name` fails the
+			// parse — but `version` and `description` are strings here, which is what the
+			// typeof-string fallback is supposed to keep.
+			const { schemaErr, manifest } = await afterSchemaFailure(
+				tempDir,
+				'schema-fail-keep-strings',
+				{ name: 0, version: '1.0.0', description: 'desc' },
 			);
 
-			const inv = await extractClaudePluginInventory(root);
-
-			const schemaErr = inv.parseErrors.find(e => e.message.includes('schema validation failed'));
 			expect(schemaErr).toBeDefined();
-			expect(inv.manifest.version).toBe('1.0.0');
-			expect(inv.manifest.description).toBe('desc');
+			expect(manifest.version).toBe('1.0.0');
+			expect(manifest.description).toBe('desc');
 		});
 
 		it('normalizes commands: null treated as explicit empty array', async () => {
@@ -248,7 +287,7 @@ describe('extractClaudePluginInventory', () => {
 				JSON.stringify({ name: 'p', commands: null }),
 			);
 
-			const inv = await extractClaudePluginInventory(root);
+			const inv = await extractClaudePluginInventory(root, { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(inv.declared.commands).toEqual([]);
 		});
@@ -259,7 +298,7 @@ describe('extractClaudePluginInventory', () => {
 				JSON.stringify({ name: 'p', hooks: './hooks/hook.json' }),
 			);
 
-			const inv = await extractClaudePluginInventory(root);
+			const inv = await extractClaudePluginInventory(root, { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(inv.declared.hooks).toHaveLength(1);
 			expect(inv.declared.hooks?.[0]?.manifestPath).toBe('./hooks/hook.json');
@@ -271,7 +310,7 @@ describe('extractClaudePluginInventory', () => {
 				JSON.stringify({ name: 'p', hooks: [] }),
 			);
 
-			const inv = await extractClaudePluginInventory(root);
+			const inv = await extractClaudePluginInventory(root, { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(inv.declared.hooks).toEqual([]);
 		});
@@ -282,7 +321,7 @@ describe('extractClaudePluginInventory', () => {
 				JSON.stringify({ name: 'p', hooks: ['./a.json', './b.json'] }),
 			);
 
-			const inv = await extractClaudePluginInventory(root);
+			const inv = await extractClaudePluginInventory(root, { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(inv.declared.hooks).toHaveLength(2);
 		});
@@ -293,7 +332,7 @@ describe('extractClaudePluginInventory', () => {
 				JSON.stringify({ name: 'p', hooks: { PreToolUse: [{ matcher: '*' }] } }),
 			);
 
-			const inv = await extractClaudePluginInventory(root);
+			const inv = await extractClaudePluginInventory(root, { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(inv.declared.hooks).toHaveLength(1);
 			const ref = inv.declared.hooks?.[0];
@@ -308,7 +347,7 @@ describe('extractClaudePluginInventory', () => {
 				JSON.stringify({ name: 'p', mcpServers: { someServer: { command: 'foo' } } }),
 			);
 
-			const inv = await extractClaudePluginInventory(root);
+			const inv = await extractClaudePluginInventory(root, { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(inv.declared.mcpServers).toHaveLength(1);
 			const ref = inv.declared.mcpServers?.[0];
@@ -321,7 +360,7 @@ describe('extractClaudePluginInventory', () => {
 				JSON.stringify({ name: 'p', hooks: 42 }),
 			);
 
-			const inv = await extractClaudePluginInventory(root);
+			const inv = await extractClaudePluginInventory(root, { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(inv.declared.hooks).toEqual([]);
 		});
@@ -335,7 +374,7 @@ describe('extractClaudePluginInventory', () => {
 			// eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
 			writeFileSync(safePath.join(root, 'skills'), 'not a directory');
 
-			const inv = await extractClaudePluginInventory(root);
+			const inv = await extractClaudePluginInventory(root, { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(inv.discovered.skills).toEqual([]);
 		});
@@ -352,7 +391,7 @@ describe('extractClaudePluginInventory', () => {
 			// eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
 			writeFileSync(safePath.join(subDir, 'nested.md'), '# nested');
 
-			const inv = await extractClaudePluginInventory(root);
+			const inv = await extractClaudePluginInventory(root, { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(inv.discovered.commands).toHaveLength(2);
 			const paths = inv.discovered.commands
@@ -371,11 +410,107 @@ describe('extractClaudePluginInventory', () => {
 				JSON.stringify({ name: 'p' }),
 			);
 
-			const inv = await extractClaudePluginInventory(root);
+			const inv = await extractClaudePluginInventory(root, { gitTrackerSource: NO_GIT_TRACKER });
 
 			expect(inv.discovered.commands).toEqual([]);
 			expect(inv.discovered.agents).toEqual([]);
 			expect(inv.unexpected.skillManifests).toEqual([]);
 		});
+	});
+});
+
+/**
+ * The projection-backed membership lane failing, and what the plugin extractor
+ * is allowed to do about it.
+ *
+ * `discoverSkills` used to hold a **bare** `catch { population = undefined; }`
+ * here, and that one line converted a hard failure into an invisible one: the
+ * store write throwing (which it did on every root shipping a binary file) left
+ * `vat inventory` exiting 0 with an empty cache, having paid the projection AND
+ * the walk. `cli/src/utils/projection-store.ts` states the standard this
+ * violates in its own header — *an opted-in cache that quietly does nothing is
+ * worse than no cache* — so a failure on this lane must be observable.
+ *
+ * It must also stay a *degradation*: `extractClaudePluginInventory` promises
+ * "never throws — all failures surface via parseErrors[]", and `audit.ts` relies
+ * on that promise (its `pluginInventoryAt` docstring records the incident where
+ * one unreadable file aborted a whole audit with exit code 2). So both halves
+ * are asserted: it says so, and it carries on.
+ */
+/**
+ * A plugin with one skill, so the extractor actually reaches its population
+ * source — it asks for one only when discovery found a `SKILL.md`.
+ *
+ * @param root - The plugin root to create
+ * @returns That same root
+ */
+function pluginWithOneSkill(root: string): string {
+	makePluginWithManifest(root, JSON.stringify({ name: 'p' }));
+	const skillDir = safePath.join(root, 'skills', 'alpha');
+	mkdirSyncReal(skillDir, { recursive: true });
+	// eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
+	writeFileSync(
+		safePath.join(skillDir, 'SKILL.md'),
+		'---\nname: alpha\ndescription: A skill the population source is asked about.\n---\n\n# Alpha\n',
+	);
+	return root;
+}
+
+describe('a shared population source that throws', () => {
+	let tempDir: string;
+	let warnings: string[];
+	let warnSpy: MockInstance<typeof console.warn>;
+
+	beforeAll(() => {
+		tempDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-inv-population-failure-'));
+	});
+
+	afterAll(() => {
+		rmSync(tempDir, { recursive: true, force: true });
+	});
+
+	beforeEach(() => {
+		warnings = [];
+		warnSpy = vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => {
+			warnings.push(args.map(arg => String(arg)).join(' '));
+		});
+	});
+
+	afterEach(() => {
+		warnSpy.mockRestore();
+	});
+
+	it('reports the failure rather than swallowing it', async () => {
+		const root = pluginWithOneSkill(safePath.join(tempDir, 'reported'));
+
+		await extractClaudePluginInventory(root, {
+			gitTrackerSource: NO_GIT_TRACKER,
+			sharedPopulation: () => {
+				throw new Error('blob_conditions carries a row for content key "x"');
+			},
+		});
+
+		expect(warnings).toHaveLength(1);
+		// The cause has to survive: "the projection lane failed" without the
+		// reason is the same dead end as silence, one step further along.
+		expect(warnings[0]).toContain('blob_conditions carries a row for content key "x"');
+		expect(warnings[0]).toContain(root);
+	});
+
+	it('still returns a usable inventory, degraded to the link walk', async () => {
+		const root = pluginWithOneSkill(safePath.join(tempDir, 'degraded'));
+
+		const inv = await extractClaudePluginInventory(root, {
+			gitTrackerSource: NO_GIT_TRACKER,
+			sharedPopulation: () => {
+				throw new Error('store unavailable');
+			},
+		});
+
+		expect(inv.discovered.skills.map(skill => skill.manifest.name)).toEqual(['alpha']);
+		// NOT a parse error: `audit.ts` turns every one of those into an
+		// error-severity `PLUGIN_INVALID_JSON` finding, so routing a cache
+		// failure there would both mislabel it and fail an audit over a cache.
+		expect(inv.parseErrors).toEqual([]);
 	});
 });

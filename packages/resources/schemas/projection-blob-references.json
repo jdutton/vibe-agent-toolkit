@@ -1,0 +1,128 @@
+{
+  "$ref": "#/definitions/projection-blob-references",
+  "definitions": {
+    "projection-blob-references": {
+      "type": "object",
+      "properties": {
+        "blob": {
+          "type": "string",
+          "pattern": "^(?:markdown|html)\\.[0-9a-f]{64}$",
+          "description": "Foreign key to blobs.contentKey"
+        },
+        "ordinal": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0-based position among this blob's references"
+        },
+        "rawRef": {
+          "type": "string",
+          "description": "The reference exactly as authored — unresolved"
+        },
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Link text for a markdown form, or null for a bare autolink or any lexer-derived form"
+        },
+        "line": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "column": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "1-based column. Null for a markdown form derived from an AST node that carries no column."
+        },
+        "startOffset": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0-based UTF-16 code-unit offset of the reference token in the decoded content — NOT characters and NOT bytes; an astral character advances it by two"
+        },
+        "endOffset": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0-based UTF-16 code-unit offset one past the reference token — the half-open span [startOffset, endOffset)"
+        },
+        "syntacticForm": {
+          "type": "string",
+          "enum": [
+            "markdown-link",
+            "markdown-link-reference",
+            "markdown-definition",
+            "at-prefixed",
+            "env-anchored",
+            "bare-token"
+          ],
+          "description": "Syntactic form of a reference candidate, as a lexer sees it"
+        },
+        "hasExtension": {
+          "type": "boolean",
+          "description": "The token ends in a dot followed by a short alphanumeric run"
+        },
+        "leadingAt": {
+          "type": "boolean",
+          "description": "The token begins with \"@\""
+        },
+        "slashCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of \"/\" characters in the token"
+        },
+        "variableExpansion": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "brace",
+                "bare",
+                "percent",
+                "powershell"
+              ],
+              "description": "Variable-expansion syntax present in a reference token"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Which expansion syntax the token uses, or null when it contains none"
+        },
+        "inCodeSpan": {
+          "type": "boolean",
+          "description": "True when the reference sits inside an inline code span"
+        },
+        "inFence": {
+          "type": "boolean",
+          "description": "True when the reference sits inside a fenced code block"
+        }
+      },
+      "required": [
+        "blob",
+        "ordinal",
+        "rawRef",
+        "text",
+        "line",
+        "column",
+        "startOffset",
+        "endOffset",
+        "syntacticForm",
+        "hasExtension",
+        "leadingAt",
+        "slashCount",
+        "variableExpansion",
+        "inCodeSpan",
+        "inFence"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the blob-keyed `blob_references` table"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

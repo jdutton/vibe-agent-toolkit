@@ -1,0 +1,121 @@
+{
+  "$ref": "#/definitions/projection-resource-realizations",
+  "definitions": {
+    "projection-resource-realizations": {
+      "type": "object",
+      "properties": {
+        "resourceId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Foreign key to resources.resourceId — the shared identity"
+        },
+        "extentId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Foreign key to resolution_contexts.contextId, species \"extent\""
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Root-relative path, forward-slash separated"
+        },
+        "pathLower": {
+          "type": "string",
+          "description": "path, lowercased — case-insensitive matching as a column, not a function call"
+        },
+        "basenameLower": {
+          "type": "string",
+          "description": "The final path segment, lowercased"
+        },
+        "dir": {
+          "type": "string",
+          "description": "Root-relative directory containing this path"
+        },
+        "depth": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Path segment count below the root"
+        },
+        "ext": {
+          "type": "string",
+          "description": "Lowercased extension including the leading dot, or \"\" when none"
+        },
+        "contentKey": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(?:markdown|html)\\.[0-9a-f]{64}$",
+              "description": "A parser-kind-qualified content key: \"<markdown|html>.<sha256>\""
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Foreign key to blobs.contentKey for THIS realization's bytes, or null — read contentState for WHICH of the three null cases this is"
+        },
+        "contentState": {
+          "type": "string",
+          "enum": [
+            "keyed",
+            "deferred",
+            "unreadable",
+            "none"
+          ],
+          "description": "Why contentKey is or is not set. Pinned to contentKey in BOTH directions by a superRefine (keyed ⟺ non-null); like symlinkResolves, that constraint is NOT encoded in the generated JSON Schema"
+        },
+        "mtime": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Last modification time, or null when nothing stat-ed this path — it is absent, or its shape came from git rather than from the filesystem"
+        },
+        "exists": {
+          "type": "boolean"
+        },
+        "isDirectory": {
+          "type": "boolean"
+        },
+        "gitignored": {
+          "type": "boolean"
+        },
+        "isSymlink": {
+          "type": "boolean"
+        },
+        "symlinkResolves": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Null when isSymlink is false"
+        }
+      },
+      "required": [
+        "resourceId",
+        "extentId",
+        "path",
+        "pathLower",
+        "basenameLower",
+        "dir",
+        "depth",
+        "ext",
+        "contentKey",
+        "contentState",
+        "mtime",
+        "exists",
+        "isDirectory",
+        "gitignored",
+        "isSymlink",
+        "symlinkResolves"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the path-dependent `resource_realizations` table. Note: symlinkResolves must be null when isSymlink is false; this constraint is enforced by the Zod schema but not encoded in the generated JSON Schema."
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

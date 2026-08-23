@@ -8,7 +8,7 @@
   "include": ["src/**/*.ts", "src/types/**/*.d.ts"],
   "exclude": ["dist", "node_modules"],
   "references": [
-    { "path": "../agent-schema" },
+    { "path": "../schema" },
     { "path": "../utils" }
   ]
 }

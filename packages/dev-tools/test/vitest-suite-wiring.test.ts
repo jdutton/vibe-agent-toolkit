@@ -93,7 +93,7 @@ function hasMatchingTestFiles(pkgDir: string, testFileSuffix: string): boolean {
  * kind) pair that qualifies as "this suite exists" — EITHER the config file is
  * present OR a matching test file is present under `test/`. A package that has
  * neither signal for a suite kind is genuinely out of scope for that kind (e.g.
- * `agent-schema` ships no integration tests at all) and is not included.
+ * `schema` ships no integration tests at all) and is not included.
  *
  * Exported (and parameterized on `packagesDir`) so the detection logic itself
  * — not just the final assertions — is unit-testable against a synthetic

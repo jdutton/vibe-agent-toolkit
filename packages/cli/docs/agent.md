@@ -70,7 +70,7 @@ spec:
       type: template
 ```
 
-See `@vibe-agent-toolkit/agent-schema` for complete schema reference.
+See `@vibe-agent-toolkit/schema` for complete schema reference.
 
 ## Examples
 
@@ -120,6 +120,6 @@ for terminology.
 
 ## See Also
 
-- [@vibe-agent-toolkit/agent-schema](../../agent-schema/README.md) - Schema reference
+- [@vibe-agent-toolkit/schema](../../schema/README.md) - Schema reference
 - [agent-generator](../../vat-development-agents/agents/agent-generator/README.md) - Example agent
 - [RAG Commands](./rag.md) - Indexing documentation for RAG tools

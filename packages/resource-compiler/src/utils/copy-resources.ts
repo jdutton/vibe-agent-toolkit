@@ -6,7 +6,7 @@
 import { cpSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 export interface CopyResourcesOptions {
   /**
@@ -25,6 +25,18 @@ export interface CopyResourcesOptions {
    * Enable verbose logging
    */
   verbose?: boolean;
+
+  /**
+   * Paths relative to sourceDir to leave out of the copy, along with everything
+   * under them. Example: ['resources/skills/evals'] to keep eval fixtures — test
+   * input, not distributed skill content — out of the published package.
+   */
+  exclude?: string[];
+}
+
+function isExcludedPath(relativePath: string, exclude: readonly string[]): boolean {
+  const normalized = toForwardSlash(relativePath);
+  return normalized !== '' && exclude.some((entry) => normalized === entry || normalized.startsWith(`${entry}/`));
 }
 
 /**
@@ -41,7 +53,7 @@ export interface CopyResourcesOptions {
  * ```
  */
 export function copyResources(options: CopyResourcesOptions): void {
-  const { sourceDir, targetDir, verbose = false } = options;
+  const { sourceDir, targetDir, verbose = false, exclude = [] } = options;
 
   if (verbose) {
     console.log(`Copying resources: ${sourceDir} → ${targetDir}`);
@@ -62,7 +74,11 @@ export function copyResources(options: CopyResourcesOptions): void {
 
   try {
     // Copy recursively using Node's built-in cpSync (cross-platform)
-    cpSync(sourceDir, targetDir, { recursive: true });
+    cpSync(sourceDir, targetDir, {
+      recursive: true,
+      filter:
+        exclude.length === 0 ? undefined : (src) => !isExcludedPath(safePath.relative(sourceDir, src), exclude),
+    });
 
     if (verbose) {
       console.log(`✓ Copied resources to ${targetDir}`);
@@ -91,14 +107,16 @@ export function createPostBuildScript(options: {
   generatedDir: string;
   distDir: string;
   verbose?: boolean;
+  exclude?: string[];
 }): void {
-  const { generatedDir, distDir, verbose = false } = options;
+  const { generatedDir, distDir, verbose = false, exclude } = options;
 
   try {
     copyResources({
       sourceDir: generatedDir,
       targetDir: safePath.join(distDir, generatedDir),
       verbose,
+      ...(exclude === undefined ? {} : { exclude }),
     });
   } catch (error) {
     console.error(`Error in post-build script:`, error);

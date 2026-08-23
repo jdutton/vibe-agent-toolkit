@@ -1,0 +1,39 @@
+{
+  "$ref": "#/definitions/projection-resource-tags",
+  "definitions": {
+    "projection-resource-tags": {
+      "type": "object",
+      "properties": {
+        "resourceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tag": {
+          "type": "string",
+          "minLength": 1
+        },
+        "value": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Null for a boolean-presence tag with no associated value"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Contributor id that produced this tag — open vocabulary, e.g. \"filename\", \"config\", \"frontmatter\""
+        }
+      },
+      "required": [
+        "resourceId",
+        "tag",
+        "value",
+        "source"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the path-dependent `resource_tags` table"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

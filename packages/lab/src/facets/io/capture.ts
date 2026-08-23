@@ -35,8 +35,8 @@
  * 1. **A dump directory reused across repeats.** Nothing downstream can tell a
  *    leftover dump from an earlier repeat apart from a descendant process of
  *    this one — both are files with distinct PIDs — so reuse inflates both the
- *    call counts and `processes`. Hence {@link makeDumpDirs}: a fresh `mkdtemp`
- *    per repeat, freshness by construction rather than by deleting first.
+ *    call counts and `processes`. Hence `withDumpDirs`: a fresh `mkdtemp` per
+ *    repeat, freshness by construction rather than by deleting first.
  * 2. **`NODE_OPTIONS` assigned instead of appended.** `runRepeats` merges the
  *    capture's environment OVER `process.env`, so an assignment silently drops
  *    whatever the surrounding shell or CI had set — changing the process being
@@ -51,14 +51,13 @@
  */
 
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
 
-import { normalizedTmpdir, resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
+import { resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { ReportEnvelope } from '../../envelope/envelope.js';
-import type { MeasuredCommandSpec } from '../../harness/commands.js';
+import { withDumpDirs } from '../../harness/dumps.js';
 import { judgeLoad, readLoad } from '../../harness/load-guard.js';
-import { materializeArgs, runRepeatsFor, summarizeRepeatFailures } from '../../harness/repeat.js';
+import { measureSpec, type SpecMeasurement } from '../../harness/repeat.js';
 import { buildReportEnvelope } from '../../harness/report.js';
 import type { CacheMode, CaptureRequest } from '../../harness/types.js';
 
@@ -168,22 +167,6 @@ function nodeOptionsWith(counterPath: string, base: string | undefined): string 
 }
 
 /**
- * One fresh dump directory per repeat.
- *
- * `mkdtemp` per repeat rather than one directory emptied between them: emptying
- * is a step that can fail, be skipped, or race a descendant process that has not
- * exited yet, and every one of those failures adds calls to the next repeat's
- * numbers without adding anything that says so.
- *
- * @param runs - How many repeats will run
- * @returns One directory per repeat, in repeat order
- */
-async function makeDumpDirs(runs: number): Promise<string[]> {
-  const prefix = safePath.join(normalizedTmpdir(), DUMP_DIR_PREFIX);
-  return Promise.all(Array.from({ length: Math.max(0, runs) }, () => mkdtemp(prefix)));
-}
-
-/**
  * A row that measured nothing, with every measurement zeroed and `failed` set.
  *
  * Zeros rather than absent fields: the schema is strict and a reader must not
@@ -246,69 +229,54 @@ async function readWindow(
 }
 
 /**
- * Measure one command: run its repeats instrumented, then read what they wrote.
+ * Fold what the repeats wrote to disk into a report row.
  *
- * @param spec - What was asked for
- * @param options - The whole capture's options
- * @param counterPath - Absolute, forward-slashed path to the counter
+ * Whether the repeats are usable at all is already decided — {@link measureSpec}
+ * owns that, so this facet and `perf` refuse exactly the same repeats for
+ * exactly the same reasons, phrased the same way. What is left here is this
+ * facet's own question: what did the dumps say, and did they agree.
+ *
+ * @param measurement - What was asked for, what ran, and whether it is usable
+ * @param directories - The repeats' dump directories, in repeat order
  * @param roots - See {@link SiteRoots}
  * @returns The row, marked failed when no usable measurement exists
  */
-async function measureCommand(
-  spec: MeasuredCommandSpec,
-  options: CaptureIoOptions,
-  counterPath: string,
+async function rowFromDumps(
+  measurement: SpecMeasurement,
+  directories: readonly string[],
   roots: SiteRoots,
 ): Promise<IoCommandStats> {
-  const args = materializeArgs(spec.args, options.subject.path);
-  const base: RowBase = { name: spec.name, args, cache: options.cache };
-  const directories = await makeDumpDirs(options.runs);
+  const { results, failure } = measurement;
+  const base: RowBase = {
+    name: measurement.spec.name,
+    args: measurement.args,
+    cache: measurement.cache,
+  };
 
-  try {
-    // Repeat 0 is the warm-up and is compared with nothing — except when it is
-    // also the only repeat, and therefore the one reported.
-    const [head, ...tail] = directories.length <= 1 ? directories : directories.slice(1);
-    if (head === undefined) return failedRow(base, 0, 'no repeats were requested');
+  // Repeat 0 is the warm-up and is compared with nothing — except when it is
+  // also the only repeat, and therefore the one reported.
+  const [head, ...tail] = directories.length <= 1 ? directories : directories.slice(1);
+  if (head === undefined) return failedRow(base, 0, 'no repeats were requested');
+  if (failure !== null) return failedRow(base, results.length, failure);
 
-    const nodeOptions = nodeOptionsWith(
-      counterPath,
-      options.env?.['NODE_OPTIONS'] ?? process.env['NODE_OPTIONS'],
-    );
-    // Per repeat, and on `envFor` rather than `env`: only the measured run is
-    // instrumented, so `cold` mode's cache clear cannot contribute its own I/O.
-    const perRepeat = directories.map((directory) => ({
-      [COUNTER_LOG_DIR_ENV]: directory,
-      NODE_OPTIONS: nodeOptions,
-    }));
+  const read = await readWindow([head, ...tail], roots);
+  if ('refusal' in read) return failedRow(base, results.length, read.refusal);
 
-    const results = runRepeatsFor(options, args, (index) => perRepeat[index]);
-
-    const failure = summarizeRepeatFailures(results);
-    if (failure !== null) return failedRow(base, results.length, failure);
-
-    const read = await readWindow([head, ...tail], roots);
-    if ('refusal' in read) return failedRow(base, results.length, read.refusal);
-
-    const comparedRuns = Math.max(0, results.length - 1);
-    return {
-      ...base,
-      runs: results.length,
-      comparedRuns,
-      // Below two compared repeats there is nothing to disagree, so there is
-      // nothing to report. `null` is not `false` and emphatically not `true`.
-      stable: comparedRuns < 2 ? null : read.allSame,
-      processes: read.reported.processes,
-      loaderCalls: read.reported.loaderCalls,
-      userCalls: read.reported.userCalls,
-      sites: read.reported.sites,
-      failed: false,
-      failure: null,
-    };
-  } finally {
-    await Promise.all(
-      directories.map((directory) => rm(directory, { recursive: true, force: true })),
-    );
-  }
+  const comparedRuns = Math.max(0, results.length - 1);
+  return {
+    ...base,
+    runs: results.length,
+    comparedRuns,
+    // Below two compared repeats there is nothing to disagree, so there is
+    // nothing to report. `null` is not `false` and emphatically not `true`.
+    stable: comparedRuns < 2 ? null : read.allSame,
+    processes: read.reported.processes,
+    loaderCalls: read.reported.loaderCalls,
+    userCalls: read.reported.userCalls,
+    sites: read.reported.sites,
+    failed: false,
+    failure: null,
+  };
 }
 
 /**
@@ -333,12 +301,28 @@ export async function captureIo(options: CaptureIoOptions): Promise<ReportEnvelo
     subjectPath: options.subject.path,
   };
 
+  const nodeOptions = nodeOptionsWith(
+    counterPath,
+    options.env?.['NODE_OPTIONS'] ?? process.env['NODE_OPTIONS'],
+  );
+
   const loadBefore = readLoad();
   const commands: IoCommandStats[] = [];
   for (const spec of options.commands) {
     // Sequential on purpose — see this function's doc. Awaiting inside the loop
     // is the mechanism, not an oversight.
-    commands.push(await measureCommand(spec, options, counterPath, roots));
+    commands.push(
+      await withDumpDirs(options.runs, DUMP_DIR_PREFIX, async (directories) => {
+        // Per repeat, and on `envFor` rather than `env`: only the measured run is
+        // instrumented, so `cold` mode's cache clear cannot contribute its own I/O.
+        const perRepeat = directories.map((directory) => ({
+          [COUNTER_LOG_DIR_ENV]: directory,
+          NODE_OPTIONS: nodeOptions,
+        }));
+        const measurement = measureSpec(options, spec, (index) => perRepeat[index]);
+        return rowFromDumps(measurement, directories, roots);
+      }),
+    );
   }
   const loadAfter = readLoad();
 

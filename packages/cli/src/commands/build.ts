@@ -9,12 +9,12 @@
 import { existsSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 
+import { checkBrokenPackagedLinks } from '@vibe-agent-toolkit/agent-skills';
 import {
   calculateValidationStatus,
   countBySeverity,
   type ValidationIssue,
-} from '@vibe-agent-toolkit/agent-schema';
-import { checkBrokenPackagedLinks } from '@vibe-agent-toolkit/agent-skills';
+} from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 

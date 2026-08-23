@@ -8,7 +8,7 @@ This guide shows how to orchestrate VAT agents using standardized result envelop
 
 ### Result Types
 
-VAT defines two core result types in `@vibe-agent-toolkit/agent-schema`:
+VAT defines two core result types in `@vibe-agent-toolkit/schema`:
 
 #### AgentResult<TData, TError>
 
@@ -333,7 +333,7 @@ import {
   LLM_UNAVAILABLE,
   RETRYABLE_LLM_ERRORS,
   RETRYABLE_EVENT_ERRORS,
-} from '@vibe-agent-toolkit/agent-schema';
+} from '@vibe-agent-toolkit/schema';
 
 // Use the withRetry helper (built into agent-runtime)
 const output = await withRetry(
@@ -370,7 +370,7 @@ if (output.result.status === 'success') {
 If you need custom retry behavior, you can use the standard error sets:
 
 ```typescript
-import { RETRYABLE_LLM_ERRORS } from '@vibe-agent-toolkit/agent-schema';
+import { RETRYABLE_LLM_ERRORS } from '@vibe-agent-toolkit/schema';
 
 function isRetryable(error: string): boolean {
   return RETRYABLE_LLM_ERRORS.has(error as LLMError) ||
@@ -557,7 +557,7 @@ Result envelopes support optional observability fields for production monitoring
 Indicates certainty in the result (0-1 scale), enabling intelligent orchestration decisions:
 
 ```typescript
-import { RESULT_SUCCESS } from '@vibe-agent-toolkit/agent-schema';
+import { RESULT_SUCCESS } from '@vibe-agent-toolkit/schema';
 
 // Agent returns confidence
 const output = await photoAnalyzer.execute({ imagePath });
@@ -645,7 +645,7 @@ if (output.result.execution) {
 
 ```typescript
 import { withRetry, withTiming } from '@vibe-agent-toolkit/agent-runtime';
-import { RESULT_SUCCESS } from '@vibe-agent-toolkit/agent-schema';
+import { RESULT_SUCCESS } from '@vibe-agent-toolkit/schema';
 
 // Combine timing and retry
 const output = await withRetry(

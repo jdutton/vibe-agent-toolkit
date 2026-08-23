@@ -559,8 +559,29 @@ async function symlinkDevSkill(
   await prepareDevSymlinkDest(destSkillPath, skillFsName, options);
 
   if (!options.dryRun) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
-    await symlink(srcSkillPath, destSkillPath, 'dir');
+    try {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename, local/no-bare-symlink-in-tests -- eyes open: `handleDevInstall` refuses win32 upstream, so the Windows privilege hazard the rule names cannot be reached here.
+      await symlink(srcSkillPath, destSkillPath, 'dir');
+    } catch (error) {
+      // ⚠️ POSIX-only in practice: `handleDevInstall` throws on win32 before
+      // this call chain begins, so Windows-specific handling here would be dead
+      // code — an earlier revision added exactly that. Making `--dev` work on
+      // Windows means changing that guard (a junction needs no elevation), not
+      // this catch. Not falling back to a copy either — dev mode exists so a
+      // rebuild is picked up live, and a copy would quietly stop that.
+      //
+      // ⚠️ This throws mid-loop, after `devInstallMarketplace` already removed
+      // the previous marketplace directory and `devInstallPlugin` copied the
+      // non-skill content. Earlier skills are linked, later ones are not, and
+      // `registerPlugin` never runs — so the tree is on disk but unregistered.
+      // Recoverable by re-running, which starts over.
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Could not symlink ${skillFsName} to ${destSkillPath}: ${detail}\n` +
+          'Check that the destination directory is writable. This install is now ' +
+          'incomplete — re-run the same command to start over.',
+      );
+    }
   }
 
   logger.info(`   Symlinked: ${safePath.relative(cwd, destSkillPath)} → ${srcSkillPath}`);

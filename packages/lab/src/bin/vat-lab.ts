@@ -9,20 +9,49 @@
 
 import { pathToFileURL } from 'node:url';
 
-import { parseWholeNumberAtLeast } from '@vibe-agent-toolkit/utils';
+import { parseWholeNumberAtLeast, safePath } from '@vibe-agent-toolkit/utils';
 import { Command, InvalidArgumentError } from 'commander';
 
 import type { ReportEnvelope } from '../envelope/envelope.js';
+import { captureCrawl } from '../facets/crawl/capture.js';
+import { compareCrawl } from '../facets/crawl/compare.js';
+import { renderCrawlComparison, renderCrawlReport } from '../facets/crawl/render.js';
 import { captureIo } from '../facets/io/capture.js';
 import { compareIo } from '../facets/io/compare.js';
 import { renderIoComparison, renderIoReport } from '../facets/io/render.js';
+import { captureParse } from '../facets/parse/capture.js';
+import { compareParse } from '../facets/parse/compare.js';
+import { renderParseComparison, renderParseReport } from '../facets/parse/render.js';
 import { capturePerf } from '../facets/perf/capture.js';
 import { comparePerf } from '../facets/perf/compare.js';
 import { renderPerfComparison, renderPerfReport } from '../facets/perf/render.js';
-import { DEFAULT_MEASURED_COMMANDS } from '../harness/commands.js';
+import { capturePopulation } from '../facets/population/capture.js';
+import { comparePopulation } from '../facets/population/compare.js';
+import {
+  renderPopulationComparison,
+  renderPopulationReport,
+} from '../facets/population/render.js';
+import {
+  abExitCondition,
+  CHANGED_VERDICT,
+  type ComparisonLike,
+  type FacetEstimate,
+  type FacetFunctions,
+  renderAb,
+  runAb,
+  UNMEASURABLE_VERDICT,
+} from '../harness/ab.js';
+import {
+  DEFAULT_MEASURED_COMMANDS,
+  MEASURABLE_COMMAND_NAMES,
+  measurableCommand,
+  type MeasuredCommandSpec,
+  POPULATION_MEASURED_COMMANDS,
+} from '../harness/commands.js';
 import { resolveInstrument } from '../harness/instrument.js';
+import { instrumentTrustNotes } from '../harness/render.js';
 import { resolveSubject } from '../harness/subject.js';
-import type { CacheMode, CaptureRequest, InstrumentSource } from '../harness/types.js';
+import type { CacheMode, InstrumentSource, ResolvedInstrument } from '../harness/types.js';
 import { readReport, writeReport } from '../store.js';
 
 /**
@@ -104,6 +133,32 @@ export function wholeNumberAtLeast(flag: string, floor: number): (value: string)
 }
 
 /**
+ * A Commander parser for a finite, non-negative number.
+ *
+ * Separate from {@link wholeNumberAtLeast} because a noise floor is a
+ * measurement, not a count: rounding `12.4 ms` up to `13` would silently widen
+ * the band in which effects are dismissed as noise, and rounding it down would
+ * silently narrow it.
+ *
+ * @param flag - Flag spelling, so the error names what the user typed
+ * @returns A parser Commander calls with the raw string
+ */
+export function nonNegativeNumber(flag: string): (value: string) => number {
+  return (value: string): number => {
+    // `Number('')` and `Number('  ')` are both `0`, and a `--noise-floor` of 0
+    // means "nothing is noise" — the most permissive possible reading, arrived
+    // at by typing nothing. Rejected explicitly rather than left to coercion.
+    const parsed = value.trim() === '' ? Number.NaN : Number(value);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      throw new InvalidArgumentError(
+        `${flag} expects a finite number at or above 0; got '${value}'.`,
+      );
+    }
+    return parsed;
+  };
+}
+
+/**
  * A Commander parser for `--cache`.
  *
  * A synchronous per-option callback, matching {@link parseInstrument} and
@@ -127,6 +182,39 @@ export function parseCacheMode(value: string): CacheMode {
   return value;
 }
 
+/**
+ * A Commander parser for `--command`, accumulating repeats into a list.
+ *
+ * Commander hands a repeatable option's parser the value plus whatever the
+ * option holds so far, which is how one flag given twice becomes two specs
+ * rather than the last one winning. `previous` is `undefined` on the first
+ * occurrence because the option carries no default — "no `--command` at all"
+ * has to stay distinguishable from "`--command` given", since the former means
+ * {@link DEFAULT_MEASURED_COMMANDS} and an empty-list default would silently
+ * mean "measure nothing".
+ *
+ * The unknown-name check lives here, in the option's own parser, for the reason
+ * {@link parseCacheMode} spells out: an `InvalidArgumentError` thrown from the
+ * async action is just a rejected promise and surfaces as a raw stack trace.
+ *
+ * @param value - Raw value Commander parsed
+ * @param previous - Specs collected from earlier occurrences of this flag
+ * @returns The accumulated specs, in the order the flags were given
+ * @throws {InvalidArgumentError} when no measurable command has that name
+ */
+export function collectMeasuredCommand(
+  value: string,
+  previous: readonly MeasuredCommandSpec[] | undefined,
+): MeasuredCommandSpec[] {
+  const spec = measurableCommand(value);
+  if (spec === undefined) {
+    throw new InvalidArgumentError(
+      `--command expects one of: ${MEASURABLE_COMMAND_NAMES.join(', ')}; got '${value}'.`,
+    );
+  }
+  return [...(previous ?? []), spec];
+}
+
 /** Options Commander collects for a facet's `run`. */
 interface RunOptions {
   readonly instrument: InstrumentSource;
@@ -134,31 +222,8 @@ interface RunOptions {
   readonly cache: CacheMode;
   readonly out: string;
   readonly id?: string;
-}
-
-/** The verdict kind that means a real, attributable difference was found. */
-const CHANGED_VERDICT = 'changed';
-/** The verdict kind that means no usable measurement exists for a command. */
-const UNMEASURABLE_VERDICT = 'unmeasurable';
-
-/**
- * The least a comparison must expose for the CLI to report it.
- *
- * Deliberately structural rather than a union of the two facets' result types:
- * the CLI's job is to print what a facet rendered and to pick an exit code, and
- * it should not acquire a reason to know what a `perf` verdict is called versus
- * an `io` one. A third facet wires itself up by satisfying this and nothing else.
- */
-interface ComparisonLike {
-  /** The discriminant, so a refusal and a result stay distinguishable here too. */
-  readonly ok: true;
-  readonly commands: readonly { readonly verdict: { readonly kind: string } }[];
-}
-
-/** A comparison that refused, in the shape every facet's comparator returns. */
-interface RefusalLike {
-  readonly ok: false;
-  readonly refusal: string;
+  /** Absent unless `--command` was given at least once. */
+  readonly command?: readonly MeasuredCommandSpec[];
 }
 
 /**
@@ -170,7 +235,8 @@ interface RefusalLike {
  * exit-code rules, and the copies would drift into two different answers to
  * "what exit code does a refusal get?", which is the CLI's whole contract.
  */
-interface FacetWiring<TBody, TComparison extends ComparisonLike> {
+interface FacetWiring<TBody, TComparison extends ComparisonLike>
+  extends FacetFunctions<TBody, TComparison> {
   /** Subcommand name, and the facet's name in help text. */
   readonly name: string;
   readonly summary: string;
@@ -184,18 +250,216 @@ interface FacetWiring<TBody, TComparison extends ComparisonLike> {
    * wants enough samples for a spread to mean something.
    */
   readonly defaultRuns: number;
-  readonly capture: (request: CaptureRequest) => Promise<ReportEnvelope<TBody>>;
-  readonly compare: (
-    before: ReportEnvelope<unknown>,
-    after: ReportEnvelope<unknown>,
-    options: { allowMultiAxis: boolean },
-  ) => RefusalLike | TComparison;
+  /**
+   * Cache mode a bare `run` uses.
+   *
+   * Per facet because the facets need opposite things, and getting it wrong is
+   * not a preference but a broken measurement: `perf` and `io` want the steady
+   * state, while `parse` can only attribute anything on a cache MISS — vat's
+   * parse cache short-circuits the parse function entirely on a hit, so a warm
+   * `parse` run produces a breakdown of nine zeroes that reads as "parsing is
+   * free". Defaulting every facet to `warm` from one shared constant made that
+   * the out-of-the-box experience of the one facet it ruins.
+   */
+  readonly defaultCache: CacheMode;
+  /**
+   * The commands a bare run measures, when the shared default set is wrong for
+   * this facet.
+   *
+   * Absent means {@link DEFAULT_MEASURED_COMMANDS} — the three corpus-enumerating
+   * verbs every cost facet is taken over. `population` overrides it because two
+   * of those three emit no file list, so a bare run would be two refusals and a
+   * measurement. Overriding the DEFAULT never narrows what `--command` can ask
+   * for; the registry is still the whole menu.
+   */
+  readonly defaultCommands?: readonly MeasuredCommandSpec[];
   readonly renderReport: (report: ReportEnvelope<TBody>) => string;
   readonly renderComparison: (comparison: TComparison) => string;
 }
 
+/** Options Commander collects for a facet's `ab`. */
+interface AbOptions {
+  readonly instrumentA: InstrumentSource;
+  /** Absent for a `--control` run, where arm A is entered twice. */
+  readonly instrumentB?: InstrumentSource;
+  readonly pairs: number;
+  readonly runs: number;
+  readonly cache: CacheMode;
+  readonly out: string;
+  readonly id?: string;
+  readonly command?: readonly MeasuredCommandSpec[];
+  readonly control: boolean;
+  readonly noiseFloor?: number;
+}
+
 /**
- * Build one facet's `run` and `compare` subcommands.
+ * Where one `ab` invocation's per-pair reports live.
+ *
+ * Stamped with the wall clock so two A/Bs of the same coordinate cannot land on
+ * top of each other — the reports inside are `pair-1/a`, `pair-1/b`, … and every
+ * pair of one arm shares a coordinate, so nothing else in the name distinguishes
+ * two runs.
+ *
+ * @param out - The `--out` directory
+ * @param startedAt - ISO stamp for this invocation
+ * @returns The directory to write into
+ */
+function abRunDirectory(out: string, startedAt: string): string {
+  return safePath.join(out, `ab-${startedAt.replaceAll(/[^\dA-Za-z]/g, '-')}`);
+}
+
+/**
+ * Add a facet's `ab` subcommand.
+ *
+ * Declared on the shared factory rather than on one facet: every facet's numbers
+ * are worth A/B-ing, and a verb that existed only where someone happened to need
+ * it first would leave the others with the hand-orchestration this replaces.
+ *
+ * @param group - The facet's command group
+ * @param wiring - See {@link FacetWiring}
+ */
+function addAbCommand<TBody, TComparison extends ComparisonLike>(
+  group: Command,
+  wiring: FacetWiring<TBody, TComparison>,
+): void {
+  group
+    .command('ab')
+    .argument('<subject>', 'Path to the project to measure')
+    .requiredOption(
+      '--instrument-a <spec>',
+      "Arm A: 'tree:<path>', 'dist:<path>' or 'npx:<pkg@version>'",
+      parseInstrument,
+    )
+    .option('--instrument-b <spec>', 'Arm B; omit only with --control', parseInstrument)
+    .option(
+      '--control',
+      'Run the SAME instrument as both arms, to measure this machine’s noise floor',
+      false,
+    )
+    .option(
+      '--noise-floor <value>',
+      "Largest effect a --control run reported, in the facet's own units; " +
+        'anything at or below it is reported as indistinguishable from noise',
+      nonNegativeNumber('--noise-floor'),
+    )
+    .option('--pairs <n>', 'A-then-B cycles to run', wholeNumberAtLeast('--pairs', 1), 6)
+    .option('--runs <n>', 'Repeats per capture', wholeNumberAtLeast('--runs', 1), wiring.defaultRuns)
+    .option(
+      '--cache <mode>',
+      "'warm' or 'cold' (cold clears vat's caches before every repeat)",
+      parseCacheMode,
+      wiring.defaultCache,
+    )
+    .option(
+      '--command <name>',
+      `Measure this command instead of the default set (repeatable). One of: ${MEASURABLE_COMMAND_NAMES.join(', ')}`,
+      collectMeasuredCommand,
+    )
+    .option('--out <dir>', 'Directory to write the reports into', '.vat-lab')
+    .option(
+      '--id <name>',
+      'Subject id recorded in the reports (default: the <subject> argument exactly as given)',
+    )
+    .description(
+      `Interleave two vat builds over the ${wiring.name} facet: A B A B …, min estimator, per-pair verdicts`,
+    )
+    .action(async (subjectPath: string, options: AbOptions) => {
+      const arms = await resolveAbArms(options);
+      if (arms === null) return;
+
+      const startedAt = new Date().toISOString();
+      const result = await runAb({
+        subject: await resolveSubject({ id: options.id ?? subjectPath, path: subjectPath }),
+        armA: arms.a,
+        armB: arms.b,
+        commands: options.command ?? wiring.defaultCommands ?? DEFAULT_MEASURED_COMMANDS,
+        pairs: options.pairs,
+        runs: options.runs,
+        cache: options.cache,
+        control: options.control,
+        noiseFloor: options.noiseFloor ?? null,
+        outDir: abRunDirectory(options.out, startedAt),
+        now: () => new Date().toISOString(),
+        capture: wiring.capture,
+        compare: wiring.compare,
+        estimate: wiring.estimate,
+      });
+
+      process.stdout.write(`${renderAb(result)}\n`);
+      applyAbExitCode(result);
+    });
+}
+
+/**
+ * Resolve the two arms, or refuse when the flags do not describe an A/B.
+ *
+ * A control run uses the *same resolved object* for both arms rather than
+ * resolving one spec twice: that is what makes the two stamps identical by
+ * construction, so a control can never be mistaken for a two-build comparison.
+ *
+ * @param options - What the caller passed
+ * @returns The two arms, or `null` when the run was refused
+ */
+async function resolveAbArms(
+  options: AbOptions,
+): Promise<{ a: ResolvedInstrument; b: ResolvedInstrument } | null> {
+  if (options.control) {
+    if (options.instrumentB !== undefined) {
+      refuse(
+        'REFUSED: --control runs one instrument as both arms, so --instrument-b would be ' +
+          'silently ignored. Drop one of the two flags.',
+      );
+      return null;
+    }
+    const only = await resolveInstrument(options.instrumentA);
+    return { a: only, b: only };
+  }
+
+  if (options.instrumentB === undefined) {
+    refuse(
+      'REFUSED: an A/B needs two arms. Pass --instrument-b, or pass --control to enter ' +
+        '--instrument-a twice and measure the noise floor instead.',
+    );
+    return null;
+  }
+
+  return {
+    a: await resolveInstrument(options.instrumentA),
+    b: await resolveInstrument(options.instrumentB),
+  };
+}
+
+/**
+ * Set the exit code an `ab` run earned.
+ *
+ * Shares the mapping with `compare` — see {@link abExitCondition} for why an
+ * unstable verdict lands on `EXIT_UNMEASURABLE` rather than on either answer the
+ * pairs gave.
+ *
+ * @param result - A completed A/B
+ */
+function applyAbExitCode(result: Parameters<typeof abExitCondition>[0]): void {
+  switch (abExitCondition(result)) {
+    case 'refused': {
+      process.exitCode = EXIT_REFUSED;
+      return;
+    }
+    case 'changed': {
+      process.exitCode = EXIT_CHANGED;
+      return;
+    }
+    case 'unmeasurable': {
+      process.exitCode = EXIT_UNMEASURABLE;
+      return;
+    }
+    case 'clean': {
+      return;
+    }
+  }
+}
+
+/**
+ * Build one facet's `run`, `compare` and `ab` subcommands.
  *
  * @param wiring - See {@link FacetWiring}
  * @returns The configured Commander command
@@ -223,7 +487,12 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
       '--cache <mode>',
       "'warm' or 'cold' (cold clears vat's caches before every repeat)",
       parseCacheMode,
-      'warm',
+      wiring.defaultCache,
+    )
+    .option(
+      '--command <name>',
+      `Measure this command instead of the default set (repeatable). One of: ${MEASURABLE_COMMAND_NAMES.join(', ')}`,
+      collectMeasuredCommand,
     )
     .option('--out <dir>', 'Directory to write the report into', '.vat-lab')
     .option(
@@ -237,7 +506,9 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
       const report = await wiring.capture({
         instrument,
         subject,
-        commands: DEFAULT_MEASURED_COMMANDS,
+        // No `--command` means the facet's default set, unchanged — the flag
+        // widens what can be asked for and never quietly narrows a bare run.
+        commands: options.command ?? wiring.defaultCommands ?? DEFAULT_MEASURED_COMMANDS,
         runs: options.runs,
         cache: options.cache,
         capturedAt: new Date().toISOString(),
@@ -268,6 +539,15 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
         });
         if (!comparison.ok) return refuse(comparison.refusal);
 
+        // Above the facet's own output, and for every facet at once: a stamp
+        // that misdescribes which build ran invalidates the numbers below it,
+        // and only two of the three facets route their comparison through the
+        // shared frame that could otherwise carry this.
+        const trust = instrumentTrustNotes(
+          baseline.envelope.coordinate.instrument,
+          candidate.envelope.coordinate.instrument,
+        );
+        if (trust.length > 0) process.stdout.write(`${trust.join('\n')}\n`);
         process.stdout.write(`${wiring.renderComparison(comparison)}\n`);
         if (comparison.commands.some((command) => command.verdict.kind === CHANGED_VERDICT)) {
           process.exitCode = EXIT_CHANGED;
@@ -283,7 +563,68 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
       },
     );
 
+  addAbCommand(group, wiring);
+
   return group;
+}
+
+/**
+ * Turn a facet's command rows into the estimates `ab` aggregates.
+ *
+ * Shared by all three wirings because the *rule* is shared and is the part worth
+ * getting right: a failed row publishes no estimate at all. Letting one through
+ * would feed `ab` the zero a failed row carries, and a zero is the best number
+ * this tool can print — one failure would read as the fastest arm ever measured.
+ * Three hand-written copies would be three chances to forget that filter.
+ *
+ * @param rows - The facet's command rows, which all share `name` and `failed`
+ * @param unit - What the extracted value is, for rendering only
+ * @param valueOf - Which of the row's numbers to publish
+ * @returns One estimate per row that produced a usable measurement
+ */
+function rowEstimates<TRow extends { readonly name: string; readonly failed: boolean }>(
+  rows: readonly TRow[],
+  unit: string,
+  valueOf: (row: TRow) => number,
+): readonly FacetEstimate[] {
+  return rows
+    .filter((row) => !row.failed)
+    .map((row) => ({ name: row.name, value: valueOf(row), unit }));
+}
+
+/**
+ * The fastest repeat a row measured — the reduction `FacetEstimate` requires.
+ *
+ * `FacetFunctions.estimate` demands "a per-capture reduction that is already
+ * robust to a slow repeat", because `ab` then takes a minimum across captures
+ * and **a min over medians is not a min**: a median carries whichever repeat
+ * happened to land in the middle, so a single slow repeat inside an arm survives
+ * into the number `ab` compares and reads as a real effect.
+ *
+ * `perf` publishes `minMs` and needs no help. `parse` and `crawl` both report
+ * one repeat WHOLE — the one whose total is the median, so that every share on
+ * the row comes from a run that actually happened — and both carry the spread
+ * separately as `totalMsSamples`. This is where those two facets stop agreeing
+ * with their own row and start agreeing with the contract; keeping it in one
+ * place is what stops them diverging again.
+ *
+ * Falls back to `totalMs` only when no samples were published, which is a row
+ * that ran zero repeats.
+ *
+ * ⚠️ A degenerate capture reduces to its degenerate value, deliberately: `parse
+ * --cache warm` parses on repeat 0 and nothing afterwards, so its samples are
+ * `[x, 0, 0]` and the minimum is `0`. The median is `0` there too — this is the
+ * mode the row's `attribution` and `stable: false` exist to report, and neither
+ * reduction can rescue a measurement that was never taken.
+ *
+ * @param row - Any facet row publishing a total and its per-repeat samples
+ * @returns The smallest repeat, in the row's own unit
+ */
+export function fastestRepeat(row: {
+  readonly totalMs: number;
+  readonly totalMsSamples: readonly number[];
+}): number {
+  return row.totalMsSamples.length === 0 ? row.totalMs : Math.min(...row.totalMsSamples);
 }
 
 /**
@@ -317,10 +658,15 @@ export function createProgram(): Command {
         runSummary: 'Capture a perf report for one project against one vat build',
         compareSummary: 'Diff two perf reports along a single axis',
         defaultRuns: 5,
+        defaultCache: 'warm',
         capture: (request) => Promise.resolve(capturePerf(request)),
         compare: comparePerf,
         renderReport: renderPerfReport,
         renderComparison: renderPerfComparison,
+        // `minMs`, not `medianMs`. The row already carries the fastest repeat,
+        // and it is the right number to hand `ab` for the same reason `ab` then
+        // takes a minimum of it — see `harness/estimator.ts`.
+        estimate: (report) => rowEstimates(report.body.commands, 'ms', (row) => row.minMs),
       }),
     )
     .addCommand(
@@ -333,10 +679,111 @@ export function createProgram(): Command {
         // test determinism at all, and io counts are deterministic enough that
         // more repeats buy confidence rather than resolution.
         defaultRuns: 3,
+        defaultCache: 'warm',
         capture: captureIo,
         compare: compareIo,
         renderReport: renderIoReport,
         renderComparison: renderIoComparison,
+        // Call counts do not move with machine load, so a min across pairs is
+        // normally every pair's value. That is a feature: an arm whose min and
+        // p25 differ is an arm whose counts were NOT deterministic, and the A/B
+        // shows it without needing its own stability rule.
+        estimate: (report) => rowEstimates(report.body.commands, 'calls', (row) => row.userCalls),
+      }),
+    )
+    .addCommand(
+      createFacetCommand({
+        name: 'parse',
+        summary: "Attribute vat's document parse time, per parser kind, to individual passes",
+        runSummary: 'Capture a parse-timing report for one project against one vat build',
+        compareSummary: 'Diff two parse-timing reports along a single axis',
+        // Three repeats, so the middle one can be reported and the other two can
+        // disagree with it. No warm-up is discarded — see `parse/capture.ts`.
+        defaultRuns: 3,
+        // The one facet that must not default to warm — see `FacetWiring.defaultCache`.
+        defaultCache: 'cold',
+        capture: captureParse,
+        compare: compareParse,
+        renderReport: renderParseReport,
+        renderComparison: renderParseComparison,
+        // The MINIMUM repeat, via the shared `fastestRepeat` — not the median
+        // this row otherwise reports. Review finding 2026-08-14, now fixed: the
+        // one facet the mandatory-`estimate` contract was written to protect was
+        // the facet violating it, and nothing caught it because `ab.test.ts`
+        // supplies a STUB estimate — no test exercises any real one.
+        //
+        // Measured cost of the defect, first real `parse ab`, pair 1 arm A on
+        // the primary adopter: samples [9381.952, 9085.774, 9258.195] → reported
+        // 9258.195, min 9085.774. That is +172.4ms (1.9%), ~1.8x the 97.561ms
+        // noise floor, injected into the number `ab` aggregated on every
+        // capture. Numbers from `parse ab` runs before this change carry it.
+        //
+        // Time inside a parser, summed ACROSS EVERY PARSER KIND — deliberately,
+        // and the unit says so. The per-kind totals are the honest unit of
+        // attribution, but `ab` compares exactly one number per command, and a
+        // number that meant "one kind's total" would reproduce precisely the
+        // blindness the per-kind grouping exists to remove: an arm that made one
+        // parser slower and another faster would read as unchanged, and on a
+        // corpus dominated by the kind the estimate ignored it would read as no
+        // change at all. The sum is the only single number that moves whenever
+        // any parse work does. A reader who needs to know WHICH kind moved reads
+        // the compare output, where the passes are qualified by kind.
+        estimate: (report) =>
+          rowEstimates(report.body.commands, 'ms parse (all kinds)', fastestRepeat),
+      }),
+    )
+    .addCommand(
+      createFacetCommand({
+        name: 'crawl',
+        summary:
+          "Attribute the time vat spends FINDING documents, per contributor, stratum and fixpoint pass",
+        runSummary: 'Capture a crawl-timing report for one project against one vat build',
+        compareSummary: 'Diff two crawl-timing reports along a single axis',
+        // Three repeats, so the middle one can be reported and the other two can
+        // disagree with it. No warm-up is discarded — see `crawl/capture.ts`.
+        defaultRuns: 3,
+        // Warm, unlike `parse`. There is no cache in front of a crawl, so the
+        // work happens on every repeat and the steady state is the honest one.
+        defaultCache: 'warm',
+        capture: captureCrawl,
+        compare: compareCrawl,
+        renderReport: renderCrawlReport,
+        renderComparison: renderCrawlComparison,
+        // The MINIMUM repeat, not the median — via the same `fastestRepeat` the
+        // `parse` wiring uses, which is the point: these two facets report a
+        // median row and must reduce it identically for `ab`, and stating the
+        // rule twice is how they drifted apart the first time.
+        estimate: (report) =>
+          rowEstimates(report.body.commands, 'ms crawl (all strata)', fastestRepeat),
+      }),
+    )
+    .addCommand(
+      createFacetCommand({
+        name: 'population',
+        summary: 'Record WHICH files a vat command enumerated, and diff two populations as sets',
+        runSummary: 'Capture a population report for one project against one vat build',
+        compareSummary: 'Diff two population reports along a single axis',
+        // Two repeats, which is the smallest number that can disagree. A
+        // population is supposed to be deterministic, so more repeats buy
+        // confidence in that rather than resolution in a statistic — and each
+        // repeat is a whole corpus enumeration, which is not cheap.
+        defaultRuns: 2,
+        // Warm. There is no cache in front of the enumeration, and a set does
+        // not move with one.
+        defaultCache: 'warm',
+        defaultCommands: POPULATION_MEASURED_COMMANDS,
+        capture: (request) => Promise.resolve(capturePopulation(request)),
+        compare: comparePopulation,
+        renderReport: renderPopulationReport,
+        renderComparison: renderPopulationComparison,
+        // The file COUNT, and it is deliberately the weakest thing this facet
+        // knows. `ab` compares exactly one number per command, and a population
+        // has no number worth interleaving arms over — the evidence is the set,
+        // which `compare` diffs exactly. The count is here because the contract
+        // requires an estimate, and it is honest about what it can see: two
+        // populations of equal size and different membership read as unchanged
+        // through `ab` and as CHANGED through `compare`. Use `compare`.
+        estimate: (report) => rowEstimates(report.body.commands, 'files', (row) => row.count),
       }),
     );
 }

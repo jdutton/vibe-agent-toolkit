@@ -2,8 +2,6 @@ import * as yaml from 'yaml';
 
 import type { AnyInventory, InstallInventory, MarketplaceInventory, PluginInventory } from './types.js';
 
-export const INVENTORY_SCHEMA_VERSION = 'vat.inventory/v1alpha';
-
 type Format = 'yaml' | 'json';
 
 /*
@@ -41,13 +39,14 @@ export type ShallowInventory =
 	| AnyInventory;
 
 /**
- * Serialize an inventory with a top-level schema discriminator.
+ * Serialize an inventory.
  *
- * The discriminator must come FIRST in the output so consumers can
- * sniff the schema version without parsing the whole document.
+ * The document carries NO version label. A consumer that needs to know which
+ * shape it is holding reads `kind` — the structural discriminator that is part
+ * of the model itself — and, under pre-1.0, pins the VAT version it ran.
  */
 export function serializeInventory(inv: AnyInventory, format: Format = 'yaml'): string {
-	return emit({ schema: INVENTORY_SCHEMA_VERSION, ...inv }, format);
+	return emit(inv, format);
 }
 
 /**
@@ -66,10 +65,7 @@ export function serializeInventory(inv: AnyInventory, format: Format = 'yaml'): 
  * Use case: tooling that wants top-level structure without the bulk.
  */
 export function serializeInventoryShallow(inv: AnyInventory, format: Format = 'yaml'): string {
-	return emit(
-		{ schema: INVENTORY_SCHEMA_VERSION, projection: 'shallow', ...shallowProject(inv) },
-		format,
-	);
+	return emit({ projection: 'shallow', ...shallowProject(inv) }, format);
 }
 
 function emit(envelope: object, format: Format): string {

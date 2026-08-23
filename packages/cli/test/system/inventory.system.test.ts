@@ -27,8 +27,6 @@ const binPath = getBinPath(import.meta.url);
 // Relative path components for the known-good fixture plugin used across test cases
 const SUPERPOWERS_PATH_PARTS = ['cache', 'superpowers-marketplace', 'superpowers', '4.0.3'] as const;
 
-const INVENTORY_SCHEMA = 'vat.inventory/v1alpha';
-
 describe('vat inventory (system test)', () => {
 	let tempDir: string;
 	let fixtureDir: string;
@@ -52,7 +50,8 @@ describe('vat inventory (system test)', () => {
 
 			const parsed = parseYamlOutput(result.stdout);
 
-			expect(parsed['schema']).toBe(INVENTORY_SCHEMA);
+			// The document carries no version label — `kind` is the only discriminator.
+			expect('schema' in parsed).toBe(false);
 			expect(parsed['kind']).toBe('plugin');
 			expect(parsed['vendor']).toBe('claude-code');
 		});
@@ -103,7 +102,8 @@ describe('vat inventory (system test)', () => {
 			// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
 			expect(parsed!['kind']).toBe('plugin');
 			// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-			expect(parsed!['schema']).toBe(INVENTORY_SCHEMA);
+			expect('schema' in parsed!).toBe(false);
+			expect(result.stdout).not.toContain('"schema"');
 		});
 	});
 
@@ -149,7 +149,7 @@ describe('vat inventory (system test)', () => {
 			expect(result.status).toBe(0);
 
 			const parsed = parseYamlOutput(result.stdout);
-			expect(parsed['schema']).toBe(INVENTORY_SCHEMA);
+			expect('schema' in parsed).toBe(false);
 			expect(parsed['kind']).toBe('skill');
 		});
 	});

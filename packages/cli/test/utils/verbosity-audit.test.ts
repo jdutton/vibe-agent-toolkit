@@ -15,8 +15,8 @@
  * `issuesToRenderAtVerbosity` policy exists to prevent.
  */
 
-import { countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import type { ValidationResult } from '@vibe-agent-toolkit/agent-skills';
+import { countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
 import { formatAuditFindingsLines } from '../../src/commands/audit.js';

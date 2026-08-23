@@ -21,16 +21,18 @@ import { mkdtempSync, promises as fs, rmSync } from 'node:fs';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { clearCacheDirectory, vatCacheRoot } from '../../src/commands/cache/clear.js';
-import { applyCacheControl, registerCacheControl } from '../../src/commands/cache/index.js';
+import { applyCacheControl, createCacheCommand, registerCacheControl } from '../../src/commands/cache/index.js';
 import { createResourcesCommand } from '../../src/commands/resources/index.js';
 
 /** The flag under test, spelled once so a rename cannot half-land. */
 const NO_CACHE_FLAG = '--no-cache';
 /** The value `--no-cache` writes into the environment. */
 const DISABLED = '0';
+/** The per-OS-user auth tenant directory, named once for fixture and assertions. */
+const AUTH_TENANT = 'auth-someuser';
 /** One tenant filename, reused by the fixture and by the expected report. */
 const EXTERNAL_LINKS = 'external-links.json';
 /** The shared cache root's directory name — the same one production derives. */
@@ -55,7 +57,7 @@ async function createFakeCache(parent: string): Promise<FakeCache> {
   const root = safePath.join(parent, CACHE_DIR_NAME);
   const relativeFiles = [
     ['parse', 'ab', 'deadbeefab.json'],
-    ['auth-someuser', EXTERNAL_LINKS],
+    [AUTH_TENANT, EXTERNAL_LINKS],
     [EXTERNAL_LINKS],
   ];
 
@@ -187,7 +189,7 @@ describe('clearCacheDirectory', () => {
     expect(report.existed).toBe(true);
     expect(report.entriesRemoved).toBe(fake.fileCount);
     expect(report.bytesRemoved).toBe(fake.totalBytes);
-    expect(report.removed).toEqual(['auth-someuser', EXTERNAL_LINKS, 'parse']);
+    expect(report.removed).toEqual([AUTH_TENANT, EXTERNAL_LINKS, 'parse']);
     await expect(fs.access(fake.root)).rejects.toThrow();
   });
 
@@ -218,6 +220,42 @@ describe('clearCacheDirectory', () => {
     });
   });
 
+  it('reports a partial clear by re-reading the tree, not by trusting the error', async () => {
+    // The shared cache root is written by every VAT on the machine, so a delete
+    // racing a concurrent run gives up part-way. The error names ONE path and
+    // says nothing about the rest, which is why the survivors are read back off
+    // disk. Injected here rather than provoked with permissions: a chmod-EACCES
+    // fixture is POSIX-only and no-ops as root, so it would be a test that
+    // silently stops testing on two of the three platforms this ships to.
+    const fake = await createFakeCache(workDir);
+    const stubborn = safePath.join(fake.root, 'parse');
+
+    const rm = vi.spyOn(fs, 'rm').mockImplementation(async () => {
+      rmSync(safePath.join(fake.root, AUTH_TENANT), { recursive: true, force: true });
+      rmSync(safePath.join(fake.root, EXTERNAL_LINKS), { force: true });
+      throw Object.assign(new Error(`ENOTEMPTY: directory not empty, rmdir '${stubborn}'`), {
+        code: 'ENOTEMPTY',
+      });
+    });
+
+    try {
+      const report = await clearCacheDirectory(fake.root);
+
+      expect(report.status).toBe('partial');
+      expect(report.removed).toEqual([AUTH_TENANT, EXTERNAL_LINKS]);
+      expect(report.remaining).toEqual(['parse']);
+      expect(report.reason).toContain('ENOTEMPTY');
+      // The counts describe what actually went. Reporting the pre-delete
+      // measurement here would claim the whole cache was reclaimed while most
+      // of it is still on disk — the failure this branch exists to prevent.
+      expect(report.entriesRemoved).toBeGreaterThan(0);
+      expect(report.entriesRemoved).toBeLessThan(fake.fileCount);
+      expect(report.bytesRemoved).toBeLessThan(fake.totalBytes);
+    } finally {
+      rm.mockRestore();
+    }
+  });
+
   it('counts an empty cache root as existing, with nothing in it', async () => {
     const empty = safePath.join(workDir, CACHE_DIR_NAME);
     await fs.mkdir(empty, { recursive: true });
@@ -235,5 +273,51 @@ describe('vatCacheRoot', () => {
     // Asserted structurally rather than against a literal: the real value is
     // realpath-normalized, and nothing here is allowed to delete it.
     expect(vatCacheRoot().endsWith(`/${CACHE_DIR_NAME}`)).toBe(true);
+  });
+});
+
+/**
+ * The help for one command in the `cache` group, as a user would read it.
+ *
+ * 🪤 `helpInformation()` renders the built-in sections ONLY: Commander appends
+ * an `addHelpText('after', …)` block in `outputHelp()`, and every sentence
+ * describing what the caches ARE lives in that block. A test written against
+ * `helpInformation()` sees an empty Description section and passes every "does
+ * not say X" assertion vacuously.
+ *
+ * @param path - Subcommand name, or nothing for the group itself
+ * @returns The rendered help
+ */
+function cacheHelpFor(path?: string): string {
+  const group = createCacheCommand();
+  const target = path === undefined ? group : group.commands.find((command) => command.name() === path);
+  if (target === undefined) throw new Error(`no vat cache subcommand named ${String(path)} to render`);
+
+  let captured = '';
+  target.configureOutput({ writeOut: (text: string) => { captured += text; } });
+  target.outputHelp();
+  return captured;
+}
+
+describe('vat cache help text', () => {
+  it.each([
+    ['the group', undefined],
+    ['clear', 'clear'],
+  ])('names the projection store among the caches it describes (%s)', (_description, path) => {
+    // The store is a real tenant of `<tmpdir>/.vat-cache` — measured at 9.8 MB
+    // after ONE run of `vat resources validate` on this repository, and 58.5 MB
+    // after five edits. `vat cache clear` did reclaim it, but only incidentally,
+    // by removing the whole root; the text a user reads enumerated the other
+    // three and never mentioned it, so the one cache big enough to send someone
+    // to this command was the one the command did not admit to holding.
+    expect(cacheHelpFor(path)).toMatch(/projection store/i);
+  });
+
+  it('does not still claim there are three caches', () => {
+    // A count in prose is a claim that goes stale the moment a tenant is added,
+    // and this one already had. Asserted separately from the presence check
+    // above so an edit that appends "and the projection store" to a sentence
+    // beginning "three disposable caches" cannot go green.
+    expect(cacheHelpFor()).not.toMatch(/three disposable caches/i);
   });
 });

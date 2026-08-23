@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 
 import type { SkillsConfig } from '@vibe-agent-toolkit/resources';
-import { normalizedTmpdir, safeExecSync, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, runGitOrThrow, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { discoverSkillsFromConfig } from '../../src/commands/skills/skill-discovery.js';
@@ -124,12 +124,12 @@ describe('discoverSkillsFromConfig — inside a git repository', () => {
 
   beforeAll(() => {
     repoRoot = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-skills-git-'));
-    safeExecSync('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
+    runGitOrThrow(['init', '-q', '-b', 'main'], { cwd: repoRoot });
 
     writeSkill(safePath.join(repoRoot, 'skills', 'committed'), COMMITTED, 'staged, so tracked');
     // Staging is enough to make `git ls-files` report a file as tracked; no
     // commit (and so no user identity config) is needed to tell the two apart.
-    safeExecSync('git', ['add', 'skills/committed/SKILL.md'], { cwd: repoRoot });
+    runGitOrThrow(['add', 'skills/committed/SKILL.md'], { cwd: repoRoot });
 
     // Deliberately NOT staged — this is the case the fix exists for.
     writeSkill(

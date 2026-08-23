@@ -1,4 +1,4 @@
-import { countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { issueLocation } from '@vibe-agent-toolkit/utils';
 
 import { type AnchorRootOptions, resolveAnchorRoot } from './anchor-root.js';

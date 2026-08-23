@@ -152,8 +152,8 @@ MCP agent packages must export collections via the `/mcp-collections` entrypoint
 ### Example: `src/mcp-collections.ts`
 
 ```typescript
-import type { Agent, OneShotAgentOutput } from '@vibe-agent-toolkit/agent-schema';
-import { createSuccess } from '@vibe-agent-toolkit/agent-schema';
+import type { Agent, OneShotAgentOutput } from '@vibe-agent-toolkit/schema';
+import { createSuccess } from '@vibe-agent-toolkit/schema';
 
 export interface MCPAgentRegistration {
   name: string;

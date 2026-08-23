@@ -1,6 +1,6 @@
 import { userInfo } from 'node:os';
 
-import type { IssueCode } from '@vibe-agent-toolkit/agent-schema';
+import type { IssueCode } from '@vibe-agent-toolkit/schema';
 import {
   resolveAuthenticatedUrl,
   safePath,

@@ -7,10 +7,11 @@
  * RFC 3986 §4.2 absolute-path reference (leading `/`) case.
  */
 
-import nodeFs, { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import nodeFs, { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import {
+  createSymlink,
   fillRealpaths,
   FsLookupCache,
   mkdirSyncReal,
@@ -18,6 +19,7 @@ import {
   normalizePath,
   realpathFrom,
   safePath,
+  symlinkCapability,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -31,9 +33,10 @@ import {
 
 // Symlink creation requires admin/Developer Mode on Windows. The realpath escape
 // logic these guard is platform-agnostic (the symmetry case is really a macOS
-// /tmp → /private/tmp concern) and covered on POSIX CI, so skip the symlink
-// fixture + test on Windows rather than gate on privilege.
-const SYMLINKS_SUPPORTED = process.platform !== 'win32';
+// /tmp → /private/tmp concern) and covered on POSIX CI, so probe the real
+// capability rather than gate on raw platform — this also lets the fixture run
+// on an elevated/Developer-Mode Windows host instead of skipping it outright.
+const symlinkCap = symlinkCapability();
 
 const SOURCE = '/project/docs/README.md';
 const SOURCE_DIR = '/project/docs';
@@ -158,8 +161,8 @@ describe('resolveLocalHref leading-/ behavior', () => {
       // Symlink escape: <projectRoot>/badlink → ../escape.md. Creating a symlink
       // needs elevation/Developer Mode on Windows (EPERM otherwise), so only the
       // symlink-specific test below depends on it; guard creation here.
-      if (SYMLINKS_SUPPORTED) {
-        symlinkSync(escapeFile, safePath.join(projectRoot, 'badlink'));
+      if (symlinkCap) {
+        createSymlink(symlinkCap, escapeFile, safePath.join(projectRoot, 'badlink'));
       }
     });
 
@@ -174,7 +177,7 @@ describe('resolveLocalHref leading-/ behavior', () => {
       expect(r.href).toBe('/../escape.md');
     });
 
-    it.skipIf(!SYMLINKS_SUPPORTED)('symlinked escape returns absolute_escapes_root', () => {
+    it.skipIf(!symlinkCap)('symlinked escape returns absolute_escapes_root', () => {
       const r = resolveLocalHref('/badlink', sourceFile, projectRoot);
       expect(r.kind).toBe('absolute_escapes_root');
     });
@@ -229,9 +232,9 @@ describe('symlinked project root (real-filesystem)', () => {
     writeFileSync(sourceViaReal, '# Source\n');
     writeFileSync(safePath.join(outsideDir, 'data.md'), '# Outside\n');
 
-    if (SYMLINKS_SUPPORTED) {
-      symlinkSync(realRoot, linkRoot, 'dir');
-      symlinkSync(outsideDir, safePath.join(realRoot, 'outlink'), 'dir');
+    if (symlinkCap) {
+      createSymlink(symlinkCap, realRoot, linkRoot, 'dir');
+      createSymlink(symlinkCap, outsideDir, safePath.join(realRoot, 'outlink'), 'dir');
     }
 
     // `realpathSync`, never `normalizePath()`/`realpathSync.native`: Node ships
@@ -258,13 +261,13 @@ describe('symlinked project root (real-filesystem)', () => {
     expect(safePath.resolve(pathViaLink).startsWith(canonicalRealRoot + '/')).toBe(false);
   };
 
-  it.skipIf(!SYMLINKS_SUPPORTED)('row A: an EXISTING file under a symlinked root resolves', () => {
+  it.skipIf(!symlinkCap)('row A: an EXISTING file under a symlinked root resolves', () => {
     expectFixtureDiscriminates(sourceViaLink);
     const r = resolveLocalHref('/docs/sub/page.md', sourceViaLink, linkRoot);
     expect(r.kind).toBe(RESOLVED);
   });
 
-  it.skipIf(!SYMLINKS_SUPPORTED)(
+  it.skipIf(!symlinkCap)(
     'row B: a MISSING file under a symlinked root resolves, it does not escape',
     () => {
       // The shipped bug: `canonicalizeSync` answered the missing path lexically,
@@ -281,7 +284,7 @@ describe('symlinked project root (real-filesystem)', () => {
     expect(r.kind).toBe(RESOLVED);
   });
 
-  it.skipIf(!SYMLINKS_SUPPORTED)(
+  it.skipIf(!symlinkCap)(
     'row D: an EXISTING file behind a directory link that leaves the root still escapes',
     () => {
       const r = resolveLocalHref('/outlink/data.md', sourceViaLink, linkRoot);
@@ -289,7 +292,7 @@ describe('symlinked project root (real-filesystem)', () => {
     },
   );
 
-  it.skipIf(!SYMLINKS_SUPPORTED)(
+  it.skipIf(!symlinkCap)(
     'row D: a MISSING file behind a directory link that leaves the root still escapes',
     () => {
       // The walk widens nothing: the deepest existing ancestor of this path IS
@@ -299,7 +302,7 @@ describe('symlinked project root (real-filesystem)', () => {
     },
   );
 
-  it.skipIf(!SYMLINKS_SUPPORTED)(
+  it.skipIf(!symlinkCap)(
     'walks through several missing levels to reach the ancestor that exists',
     () => {
       expectFixtureDiscriminates(safePath.join(linkRoot, 'docs', 'nope', 'deeper', 'gone.md'));
@@ -308,7 +311,7 @@ describe('symlinked project root (real-filesystem)', () => {
     },
   );
 
-  it.skipIf(!SYMLINKS_SUPPORTED)(
+  it.skipIf(!symlinkCap)(
     'isWithinProject and isWithinProjectFrom answer identically for a missing file',
     async () => {
       // THE invariant the sync walk exists to protect. `isWithinProject` asks the
@@ -330,7 +333,7 @@ describe('symlinked project root (real-filesystem)', () => {
     },
   );
 
-  it.skipIf(!SYMLINKS_SUPPORTED)(
+  it.skipIf(!symlinkCap)(
     'canonicalizeSync answers byte for byte what FsLookupCache.realpath answers',
     async () => {
       // The stated contract, asserted on the STRING rather than on a verdict.

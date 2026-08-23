@@ -36,7 +36,7 @@
  * | Field | Fate |
  * |---|---|
  * | `links`, `headings`, `estimatedTokenCount` | stored |
- * | `anchors`, `parseErrors`, `unresolvedReferences` | stored when present |
+ * | `anchors`, `parseErrors`, `unresolvedReferences`, `lexicalReferences`, `contentMeasures` | stored when present |
  * | `frontmatterSource`, `frontmatterError` | stored when present |
  * | `content`, `sizeBytes` | **never stored** — re-attached from `KeyedContent` |
  * | `frontmatter` | **never stored** — re-derived from `frontmatterSource` |
@@ -68,12 +68,19 @@
  *
  * ## Versioning
  *
- * There is none here, on purpose. The content key covers the parser's *inputs*
- * and cannot see a change to the parser itself or to the shape stored here —
- * so both are handled one level up, by the namespace directory in
- * `cache-namespace.ts`, which is derived automatically from the running build
- * of VAT. A hand-bumped constant in this file would be a discipline that
- * nothing enforces; a directory that moves when the build moves is a mechanism.
+ * There is no version number here or anywhere else, on purpose. The content key
+ * covers the parser's *inputs* and cannot see a change to the parser itself, so
+ * that is handled one level up by the namespace directory in
+ * `cache-namespace.ts`: an installed VAT gets a namespace per release, a dev
+ * checkout one per worktree.
+ *
+ * What guards the *shape* stored here is {@link ParseFactsSchema} — a real
+ * schema at the read boundary, so an entry that disagrees with this build about
+ * what a link or a heading is becomes a miss rather than a plausible answer.
+ * Read that schema's docstring before changing `dehydrate`/`rehydrate`: it is
+ * explicit about the one class it cannot catch (adding an *optional* field,
+ * where "written before the field existed" and "legitimately absent" are the
+ * same bytes), and `vat cache clear` is the escape hatch for exactly that case.
  *
  * ## Layout
  *
@@ -90,7 +97,8 @@
  * namespace deliberately — URL reachability and fetched link content are facts
  * about the world, not about this build, so re-fetching them on every VAT
  * upgrade would be waste. Only tenants whose contents VAT's own code determines
- * (this one, and `parquet/` when it lands) sit under the namespace.
+ * (this one, and a `projection-<shapeDigest>/` store when it lands) sit under
+ * the namespace.
  *
  * ## Failure model
  *
@@ -114,11 +122,11 @@ import { promises as fs, type Stats } from 'node:fs';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { parseCacheDirectory } from './cache-namespace.js';
-import { type KeyedContent, type ParserKind, readContentWithKey } from './content-key.js';
+import { CONTENT_KEY_PATTERN, type KeyedContent, type ParserKind, readContentWithKey } from './content-key.js';
 import { parseHtmlContent } from './html-link-parser.js';
 import { type ParseResult, parseFrontmatterSource, parseMarkdownContent } from './link-parser.js';
-import type { HtmlParseError } from './schemas/resource-metadata.js';
-import type { HeadingNode, ResourceLink, UnresolvedReference } from './types.js';
+import { recordParseCacheHit, recordParseCacheMiss } from './parse-timing.js';
+import { type ParseFacts, ParseFactsSchema } from './schemas/parse-facts.js';
 
 /**
  * Directory mode for every directory this cache creates.
@@ -142,7 +150,7 @@ const SHARD_LENGTH = 2;
  * Pinning to the real shape rules that out structurally. An unexpected shape
  * is treated as a miss/no-op.
  */
-const SAFE_KEY = /^(?:markdown|html)\.[0-9a-f]{64}$/;
+const SAFE_KEY = CONTENT_KEY_PATTERN;
 
 /**
  * Disambiguates concurrent temp files within one process. Combined with
@@ -151,38 +159,17 @@ const SAFE_KEY = /^(?:markdown|html)\.[0-9a-f]{64}$/;
  */
 let tempFileCounter = 0;
 
-/**
- * The subset of {@link ParseResult} that is a function of the parsed bytes
- * alone — i.e. everything the cache is entitled to persist.
- *
- * Note what is missing: `content`, `sizeBytes` and `frontmatter`. See the table
- * in the module docstring for why each one is absent.
- */
-export interface ParseFacts {
-  links: ResourceLink[];
-  headings: HeadingNode[];
-  estimatedTokenCount: number;
-  anchors?: string[];
-  parseErrors?: HtmlParseError[];
-  unresolvedReferences?: UnresolvedReference[];
-  /** Raw YAML of the frontmatter block, without the `---` delimiters. */
-  frontmatterSource?: string;
-  /**
-   * Carried for producers that report a frontmatter error without a source.
-   * When {@link frontmatterSource} IS present, {@link rehydrate} prefers the
-   * value re-derived from it — the two agree by construction, since deriving is
-   * what produced this field in the first place.
-   */
-  frontmatterError?: string;
-}
+export type { ParseFacts } from './schemas/parse-facts.js';
 
 /**
  * The entry envelope.
  *
- * No version field: the namespace directory (see `cache-namespace.ts`) already
- * separates every build of VAT, so a serialization change cannot meet an entry
- * written under the old shape. What remains is corruption, which `isParseFacts`
- * rejects structurally.
+ * No version field: the namespace directory (see `cache-namespace.ts`) carries
+ * the build discrimination — per release when installed, per worktree in a dev
+ * checkout — and {@link ParseFactsSchema} carries the shape discrimination on
+ * read. A serialization change therefore needs no number bumped anywhere; what
+ * it needs, in a dev checkout whose namespace deliberately survives a rebuild,
+ * is either a shape the schema can reject or a `vat cache clear`.
  */
 interface StoredEntry {
   facts: ParseFacts;
@@ -252,6 +239,12 @@ export function dehydrate(result: ParseResult): ParseFacts {
     ...(result.unresolvedReferences !== undefined && {
       unresolvedReferences: result.unresolvedReferences,
     }),
+    ...(result.lexicalReferences !== undefined && {
+      lexicalReferences: result.lexicalReferences,
+    }),
+    ...(result.contentMeasures !== undefined && {
+      contentMeasures: result.contentMeasures,
+    }),
     ...(result.frontmatterSource !== undefined && {
       frontmatterSource: result.frontmatterSource,
     }),
@@ -284,6 +277,12 @@ export function rehydrate(facts: ParseFacts, keyed: KeyedContent): ParseResult {
     ...(facts.parseErrors !== undefined && { parseErrors: facts.parseErrors }),
     ...(facts.unresolvedReferences !== undefined && {
       unresolvedReferences: facts.unresolvedReferences,
+    }),
+    ...(facts.lexicalReferences !== undefined && {
+      lexicalReferences: facts.lexicalReferences,
+    }),
+    ...(facts.contentMeasures !== undefined && {
+      contentMeasures: facts.contentMeasures,
     }),
     ...(facts.frontmatterSource !== undefined && {
       frontmatterSource: facts.frontmatterSource,
@@ -384,7 +383,8 @@ export class ParseCache {
 
     let raw: string;
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is cacheDir + a charset-validated content key
+       
+      // eslint-disable-next-line security/detect-non-literal-fs-filename, local/no-raw-text-decode -- reading back this cache's own entry, written as UTF-8 by `set()`; a corpus document never lands here
       raw = await fs.readFile(this.entryPath(keyed.key), 'utf-8');
     } catch {
       // ENOENT (never written), EACCES (perms), EISDIR — all a miss.
@@ -504,7 +504,14 @@ export class ParseCache {
  */
 export async function parseKeyed(keyed: KeyedContent, cache: ParseCache): Promise<ParseResult> {
   const hit = await cache.get(keyed);
-  if (hit !== null) return hit;
+  if (hit !== null) {
+    // Feeds the sub-phase timing dump (`parse-timing.ts`), never this cache's
+    // own per-instance `ParseCacheStats`. Without it a dump from a fully warm
+    // run would show zero parse invocations and read as a dead seam.
+    recordParseCacheHit();
+    return hit;
+  }
+  recordParseCacheMiss();
 
   // The `sizeBytes` argument is `keyed.byteLength` — the raw byte count of what
   // was read — never a length derived from `keyed.content`, since decoding is
@@ -579,10 +586,19 @@ export async function parseFileCached(
  * well-formed entry.
  *
  * There is no version field to check — see the {@link StoredEntry} docblock.
- * Validation is purely structural, via {@link isParseFacts}: a `JSON.parse`
- * failure, a missing/malformed `facts`, or a `facts` whose `links`, `headings`
- * or `estimatedTokenCount` are the wrong shape are all misses, so a mangled or
- * foreign payload can never reach {@link rehydrate}.
+ * Validation is {@link ParseFactsSchema}, applied in full and to every element:
+ * a `JSON.parse` failure, a missing or malformed `facts`, an unknown key on the
+ * envelope, or one link whose `line` is a string are all misses, so no payload
+ * this build cannot account for reaches {@link rehydrate}.
+ *
+ * This runs on every cache hit, which is the hottest read path in the toolkit —
+ * the cost is deliberate and measured. A predicate that only checked array-ness
+ * is what previously let a shape change be served back as a plausible answer;
+ * "cheap enough to be wrong" was not a trade worth keeping.
+ *
+ * The returned object is Zod's own output, not the `JSON.parse` product: a
+ * fresh graph either way, which is what the "never hand out a shared object"
+ * constraint in the module docstring requires.
  */
 function readFacts(raw: string): ParseFacts | null {
   let value: unknown;
@@ -593,26 +609,8 @@ function readFacts(raw: string): ParseFacts | null {
   }
 
   if (typeof value !== 'object' || value === null) return null;
-  const entry = value as Partial<StoredEntry>;
-  return isParseFacts(entry.facts) ? entry.facts : null;
-}
-
-/**
- * Shallow structural check on the payload.
- *
- * Not a full schema validation: the writer is this same module, so the realistic
- * failure is truncation or foreign content, both of which this catches. It
- * exists so a mangled payload becomes a miss instead of a `ParseResult` whose
- * `links` is a string.
- */
-function isParseFacts(value: unknown): value is ParseFacts {
-  if (typeof value !== 'object' || value === null) return false;
-  const facts = value as Partial<ParseFacts>;
-  return (
-    Array.isArray(facts.links) &&
-    Array.isArray(facts.headings) &&
-    typeof facts.estimatedTokenCount === 'number'
-  );
+  const parsed = ParseFactsSchema.safeParse((value as Partial<StoredEntry>).facts);
+  return parsed.success ? parsed.data : null;
 }
 
 /**

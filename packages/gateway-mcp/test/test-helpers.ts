@@ -1,5 +1,5 @@
-import { RESULT_SUCCESS } from '@vibe-agent-toolkit/agent-schema';
-import type { Agent, OneShotAgentOutput } from '@vibe-agent-toolkit/agent-schema';
+import { RESULT_SUCCESS } from '@vibe-agent-toolkit/schema';
+import type { Agent, OneShotAgentOutput } from '@vibe-agent-toolkit/schema';
 
 /**
  * Create a mock pure-function agent for testing

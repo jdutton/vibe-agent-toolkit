@@ -15,14 +15,7 @@
 import { cpSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import {
-  isAbsolutePath,
-  mkdirSyncReal,
-  normalizedTmpdir,
-  safePath,
-  safeExecResult,
-  toForwardSlash,
-} from '@vibe-agent-toolkit/utils';
+import { isAbsolutePath, mkdirSyncReal, normalizedTmpdir, runGit, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import type { CorpusEntry, SkillSource } from '../types.js';
 
@@ -90,23 +83,23 @@ function refreshGitRef(stageDir: string, ref: string): void {
   // `--tags --force` is also a hedge against the shallow-boundary case where
   // the new tag commit lies outside the `--depth 50` window: this fetch
   // deepens as needed before the depth-limited named fetch runs.
-  const tagsRes = safeExecResult('git', ['-C', stageDir, 'fetch', '--quiet', '--tags', '--force', 'origin']);
-  if (!tagsRes.success) {
+  const tagsRes = runGit(['-C', stageDir, 'fetch', '--quiet', '--tags', '--force', 'origin']);
+  if (!tagsRes.ok) {
     throw new Error(`git fetch --tags failed in ${stageDir}: ${tagsRes.stderr.toString()}`);
   }
-  const fetchRes = safeExecResult('git', ['-C', stageDir, 'fetch', '--quiet', '--depth', '50', 'origin', ref]);
-  if (!fetchRes.success) {
+  const fetchRes = runGit(['-C', stageDir, 'fetch', '--quiet', '--depth', '50', 'origin', ref]);
+  if (!fetchRes.ok) {
     throw new Error(`git fetch ${ref} failed in ${stageDir}: ${fetchRes.stderr.toString()}`);
   }
   // Discard any local modifications before checkout so a half-finished prior
   // run can't permanently wedge the cache. The clone is harness-owned scratch
   // space — there's nothing to preserve.
-  const resetRes = safeExecResult('git', ['-C', stageDir, 'reset', '--hard', '--quiet']);
-  if (!resetRes.success) {
+  const resetRes = runGit(['-C', stageDir, 'reset', '--hard', '--quiet']);
+  if (!resetRes.ok) {
     throw new Error(`git reset failed in ${stageDir}: ${resetRes.stderr.toString()}`);
   }
-  const checkoutRes = safeExecResult('git', ['-C', stageDir, 'checkout', '--quiet', 'FETCH_HEAD']);
-  if (!checkoutRes.success) {
+  const checkoutRes = runGit(['-C', stageDir, 'checkout', '--quiet', 'FETCH_HEAD']);
+  if (!checkoutRes.ok) {
     throw new Error(`git checkout ${ref} failed in ${stageDir}: ${checkoutRes.stderr.toString()}`);
   }
 }
@@ -124,13 +117,13 @@ function stageGit(entry: CorpusEntry, source: Extract<SkillSource, { kind: 'git'
 
   ensureDir(toForwardSlash(dirname(stageDir)));
 
-  const cloneRes = safeExecResult('git', ['clone', '--depth', '50', '--quiet', source.repo, stageDir]);
-  if (!cloneRes.success) {
+  const cloneRes = runGit(['clone', '--depth', '50', '--quiet', source.repo, stageDir]);
+  if (!cloneRes.ok) {
     throw new Error(`git clone failed for ${source.repo}: ${cloneRes.stderr.toString()}`);
   }
 
-  const checkoutRes = safeExecResult('git', ['-C', stageDir, 'checkout', '--quiet', source.ref]);
-  if (!checkoutRes.success) {
+  const checkoutRes = runGit(['-C', stageDir, 'checkout', '--quiet', source.ref]);
+  if (!checkoutRes.ok) {
     throw new Error(`git checkout ${source.ref} failed in ${stageDir}: ${checkoutRes.stderr.toString()}`);
   }
 

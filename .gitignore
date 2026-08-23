@@ -8,6 +8,9 @@ package-lock.json  # Using Bun, not npm
 dist/
 build/
 generated/
+# Where tsc-clean-build.ts has the compiler emit before promoting into dist/.
+# Removed on success and on failure; only a hard kill can leave one behind.
+.tsc-staging/
 *.tsbuildinfo
 *.tgz
 

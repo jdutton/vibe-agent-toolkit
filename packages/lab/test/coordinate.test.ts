@@ -26,8 +26,10 @@ import {
 
 const GIT_A: SubjectVersion = { kind: 'git', commit: 'a'.repeat(40), ref: 'main', dirty: false, workingFingerprint: null };
 const GIT_B: SubjectVersion = { kind: 'git', commit: 'b'.repeat(40), ref: 'main', dirty: false, workingFingerprint: null };
-const VAT_RELEASE: InstrumentVersion = { version: '0.1.42', commit: '1'.repeat(40) };
-const VAT_DEV: InstrumentVersion = { version: '0.1.42', commit: '2'.repeat(40) };
+const VAT_RELEASE: InstrumentVersion = { version: '0.1.42', commit: '1'.repeat(40), dirty: false };
+const VAT_DEV: InstrumentVersion = { version: '0.1.42', commit: '2'.repeat(40), dirty: false };
+/** The same build as {@link VAT_DEV}, but with uncommitted changes on top. */
+const VAT_DEV_DIRTY: InstrumentVersion = { ...VAT_DEV, dirty: true };
 
 /**
  * Build a coordinate, overriding only the axis under test.
@@ -51,6 +53,35 @@ describe('movedAxes', () => {
 
   it('reports the instrument axis when only the vat build differs', () => {
     expect(movedAxes(coord(), coord({ instrument: VAT_DEV }))).toEqual(['instrument']);
+  });
+
+  /**
+   * The shipped defect: a `tree:` build made from a working tree with
+   * substantial uncommitted changes was stamped with HEAD and nothing else, so a
+   * dirty build and the clean commit it branched from were the same instrument
+   * to every comparison either took part in.
+   */
+  it('reports the instrument axis when a build is dirty and the commit is not', () => {
+    // The fixture can distinguish the two answers: everything except `dirty` is
+    // identical, so a comparator that ignored the field would return [].
+    expect(VAT_DEV_DIRTY.commit).toBe(VAT_DEV.commit);
+    expect(VAT_DEV_DIRTY.version).toBe(VAT_DEV.version);
+
+    expect(movedAxes(coord({ instrument: VAT_DEV }), coord({ instrument: VAT_DEV_DIRTY }))).toEqual([
+      'instrument',
+    ]);
+  });
+
+  /**
+   * Reflexivity, and the reason `sameInstrument` does not simply declare every
+   * dirty build unequal: `--control` enters ONE instrument as both arms to
+   * measure the noise floor, and a comparator that reported movement there would
+   * make the control unusable on exactly the dirty tree a developer runs it on.
+   */
+  it('reports no movement for one dirty instrument compared against itself', () => {
+    expect(movedAxes(coord({ instrument: VAT_DEV_DIRTY }), coord({ instrument: VAT_DEV_DIRTY }))).toEqual(
+      [],
+    );
   });
 
   it('distinguishes two instrument builds sharing one version string', () => {

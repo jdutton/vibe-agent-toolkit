@@ -4,7 +4,17 @@ import { dirname } from 'node:path';
 
 import { DeferredArtifacts } from '@vibe-agent-toolkit/resources';
 import type { ResourceLink, ResourceMetadata, SkillFileEntry } from '@vibe-agent-toolkit/resources';
-import { FsLookupCache, mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import {
+  __readCrawlTimingSnapshot,
+  __setCrawlTimingForTest,
+  CRAWL_PASS_INSIDE,
+  CRAWL_WALKER_GITIGNORE_ID,
+  CRAWL_WALKER_ID,
+  FsLookupCache,
+  mkdirSyncReal,
+  safePath,
+  toForwardSlash,
+} from '@vibe-agent-toolkit/utils';
 import type { PathProbe } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -249,6 +259,29 @@ function makeGitTrackerStub(
   isIgnoredByActiveSet: (filePath: string) => boolean,
 ): NonNullable<WalkLinkGraphOptions['gitTracker']> {
   return { isIgnoredByActiveSet } as unknown as NonNullable<WalkLinkGraphOptions['gitTracker']>;
+}
+
+/**
+ * How many invocations the crawl-timing seam charged to one synthetic id.
+ *
+ * Throws with the rows that ARE present rather than returning `0`: a missing row
+ * is the failure the timing suite exists to catch — the seam charging nothing —
+ * and a `0` would flow into `toBe(0)`-shaped assertions that pass either way.
+ *
+ * @param contributorId - The synthetic id to read
+ * @returns That row's call count
+ */
+function timedCalls(contributorId: string): number {
+  const charged = __readCrawlTimingSnapshot().entries;
+  const entry = charged.find((row) => row.contributorId === contributorId);
+  if (entry === undefined) {
+    const present = charged.map((row) => row.contributorId);
+    throw new Error(
+      `no crawl-timing row for '${contributorId}'; the seam charged: ` +
+        `${present.join(', ') || '(nothing)'}`,
+    );
+  }
+  return entry.calls;
 }
 
 /** Ids of the fan-in documents that all link the SAME gitignored target. */
@@ -1524,6 +1557,121 @@ describe('walkLinkGraph', () => {
       expect(result.excludedReferences[0]?.excludeReason).toBe(REASON_PATTERN_MATCHED);
       // A pattern verdict carries its rule; the gitignore verdict never does.
       expect(result.excludedReferences[0]?.matchedRule).toBeDefined();
+    });
+  });
+
+  /**
+   * The crawl-timing seam, from the walker's side.
+   *
+   * This walker is not a projection contributor, so the merge driver never sees
+   * it and it records under synthetic ids in a `crawl` stratum of its own. The
+   * point of putting it in the SAME dump as the closure contributor's rows is
+   * that the two crawlers become comparable — which is impossible today, and is
+   * the decision the flip is waiting on.
+   *
+   * Every assertion below is a call count produced by real work, for the reason
+   * `crawl-timing.test.ts` states: an assertion over a hand-built entry passes
+   * with the instrumentation deleted.
+   */
+  describe('crawl timing', () => {
+    afterEach(() => {
+      // Module-level state shared with every other suite in this process.
+      __setCrawlTimingForTest(null);
+    });
+
+    it('charges nothing when the seam is off', () => {
+      const { registry } = createOnDiskChain();
+      walkLinkGraph(SKILL_ID, registry, {
+        maxDepth: 5,
+        excludeRules: [],
+        projectRoot: PROJECT_ROOT,
+        skillRootPath: SKILL_PATH,
+      });
+
+      expect(__readCrawlTimingSnapshot().entries).toEqual([]);
+    });
+
+    it('charges one walk per walkLinkGraph call, under the crawl stratum', () => {
+      __setCrawlTimingForTest(getTempDir());
+      const { root, skillPath, registry } = createOnDiskChain();
+      const options: WalkLinkGraphOptions = {
+        maxDepth: 5,
+        excludeRules: [],
+        projectRoot: root,
+        skillRootPath: skillPath,
+      };
+
+      walkLinkGraph(SKILL_ID, registry, options);
+      walkLinkGraph(SKILL_ID, registry, options);
+
+      expect(timedCalls(CRAWL_WALKER_ID)).toBe(2);
+      const walkRow = __readCrawlTimingSnapshot().entries.find(
+        (row) => row.contributorId === CRAWL_WALKER_ID,
+      );
+      // Not `base` and not `closure`: the driver never runs this, so a row that
+      // claimed one of its strata would put the incumbent walker inside the
+      // projection's accounting and make the two crawlers look like one.
+      expect(walkRow?.stratum).toBe('crawl');
+      expect(walkRow?.pass).toBe(CRAWL_PASS_INSIDE);
+    });
+
+    it('charges the walk even when the skill id resolves to nothing', () => {
+      __setCrawlTimingForTest(getTempDir());
+      const { registry } = createOnDiskChain();
+
+      walkLinkGraph('no-such-resource', registry, {
+        maxDepth: 5,
+        excludeRules: [],
+        projectRoot: PROJECT_ROOT,
+        skillRootPath: SKILL_PATH,
+      });
+
+      // The early return is a real (cheap) call. A bracket repeated at each
+      // `return` rather than placed in a `finally` is one a later edit drops.
+      expect(timedCalls(CRAWL_WALKER_ID)).toBe(1);
+    });
+
+    it('charges the gitignore oracle per READ, not per ask', () => {
+      __setCrawlTimingForTest(getTempDir());
+      const { root, skillPath, registry } = createOnDiskChain();
+      let asked = 0;
+
+      walkLinkGraph(SKILL_ID, registry, {
+        maxDepth: 5,
+        excludeRules: [],
+        projectRoot: root,
+        skillRootPath: skillPath,
+        gitTracker: makeGitTrackerStub(() => {
+          asked += 1;
+          return false;
+        }),
+      });
+
+      // The chain has two existing, non-excluded targets, so the cascade reaches
+      // its last branch twice — and the memo means each is asked of the oracle
+      // once. The row must equal the oracle reads the stub actually served: an
+      // instrument that counted memo hits would report a number no `git
+      // check-ignore` spawn corresponds to.
+      expect(asked).toBeGreaterThan(0);
+      expect(timedCalls(CRAWL_WALKER_GITIGNORE_ID)).toBe(asked);
+    });
+
+    it('keeps the walk and its gitignore oracle in separate rows', () => {
+      __setCrawlTimingForTest(getTempDir());
+      const { root, skillPath, registry } = createOnDiskChain();
+
+      walkLinkGraph(SKILL_ID, registry, {
+        maxDepth: 5,
+        excludeRules: [],
+        projectRoot: root,
+        skillRootPath: skillPath,
+        gitTracker: makeGitTrackerStub(() => false),
+      });
+
+      // One walk, several oracle reads. Pooling them would hide the one cost
+      // that can spawn a subprocess inside the one that cannot.
+      expect(timedCalls(CRAWL_WALKER_ID)).toBe(1);
+      expect(timedCalls(CRAWL_WALKER_GITIGNORE_ID)).toBeGreaterThan(1);
     });
   });
 });

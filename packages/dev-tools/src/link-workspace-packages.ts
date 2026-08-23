@@ -38,7 +38,7 @@ const NODE_MODULES_DIR = join(REPO_ROOT, 'node_modules');
 const WORKSPACE_PACKAGES = [
   'agent-config',
   'agent-runtime',
-  'agent-schema',
+  'schema',
   'agent-skills',
   'cli',
   'dev-tools',
@@ -101,6 +101,7 @@ function linkPackage(packageName: string, scopeDir: string): boolean {
     const target = isWindows
       ? resolve(PACKAGES_DIR, packageName)       // absolute for junction
       : join('..', '..', 'packages', packageName); // relative for symlink
+    // eslint-disable-next-line local/no-bare-symlink-in-tests -- eyes open: this IS the junction-on-win32 form the rule asks for, and the catch below reports the failure by package name.
     symlinkSync(target, linkPath, isWindows ? 'junction' : 'dir');
     return true;
   } catch (error) {

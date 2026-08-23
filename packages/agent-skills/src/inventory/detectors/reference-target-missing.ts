@@ -6,7 +6,7 @@
  * resolves to a path that does not exist on disk.
  */
 
-import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { PluginInventory } from '../types.js';

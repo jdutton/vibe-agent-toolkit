@@ -3,7 +3,9 @@
   "version": "0.2.0-rc.2",
   "type": "module",
   "description": "Core utility functions shared across the vibe-agent-toolkit packages",
-  "sideEffects": false,
+  "sideEffects": [
+    "./dist/crawl-timing.js"
+  ],
   "keywords": [
     "typescript",
     "utilities",
@@ -31,6 +33,10 @@
     "./fs": {
       "types": "./dist/fs.d.ts",
       "import": "./dist/fs.js"
+    },
+    "./text": {
+      "types": "./dist/text.d.ts",
+      "import": "./dist/text.js"
     },
     "./process": {
       "types": "./dist/process.d.ts",
@@ -93,6 +99,7 @@
     "clean": "rimraf dist *.tsbuildinfo"
   },
   "dependencies": {
+    "@vibe-validate/git": "0.20.1",
     "handlebars": "^4.7.8",
     "ignore": "^7.0.5",
     "picomatch": "^4.0.3",

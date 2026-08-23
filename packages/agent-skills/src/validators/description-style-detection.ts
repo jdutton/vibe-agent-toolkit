@@ -16,7 +16,7 @@
  * CLI call site).
  */
 
-import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 
 export type DescriptionYamlStyle =

@@ -11,9 +11,9 @@ import { cpSync, existsSync, readFileSync } from 'node:fs';
 import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 
-import { countBySeverity, type SeverityCounts, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { createProjectRegistry, getPluginOutputDir, getPluginSourceDir, listPluginSourceSkillDirs, listUntrackedPluginSkillDirs, materializeIssue, packageSkill, packagingConfigToPackageOptions, skillNameToFsPath, type DeclaredEvalSuite, type PackageSkillResult } from '@vibe-agent-toolkit/agent-skills';
 import type { ClaudeMarketplaceConfig, ClaudeMarketplacePluginEntry, ExternalPluginSource, ResourceRegistry, SkillsConfig } from '@vibe-agent-toolkit/resources';
+import { countBySeverity, type SeverityCounts, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
@@ -30,6 +30,7 @@ import {
 } from '../../../utils/issue-rendering.js';
 import { createLogger } from '../../../utils/logger.js';
 import { writeYamlOutput } from '../../../utils/output.js';
+import { withResourcePopulationSource } from '../../../utils/resource-loader.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../../utils/skill-packaging-config.js';
 import { discoverSkillsFromConfig } from '../../skills/skill-discovery.js';
 import { loadClaudeProjectConfig } from '../claude-config.js';
@@ -260,7 +261,18 @@ export async function runClaudePluginBuild(
   // builds this itself when it is not given one, so omitting it does not fail —
   // it just re-reads the whole project once per skill, which is how a 46-skill
   // build came to take longer than a 30-minute CI budget.
-  const sharedRegistry = await createProjectRegistry(configDir);
+  //
+  // On the projection lane when this process selected it — the same selector,
+  // store and ignore oracle `vat resources validate` uses. `createProjectRegistry`
+  // re-applies its own markdown-only `include` to whatever the source offers, so
+  // this is a change of COST, not of what the build sees.
+  const sharedRegistry = await withResourcePopulationSource(
+    { root: configDir },
+    async (populationSource) =>
+      createProjectRegistry(configDir, {
+        ...(populationSource !== undefined && { populationSource }),
+      }),
+  );
   logger.debug(`Project registry: ${sharedRegistry.getAllResources().length} markdown resources (built once)`);
 
   // THE project's declared eval suites for this build, assembled ONCE and threaded

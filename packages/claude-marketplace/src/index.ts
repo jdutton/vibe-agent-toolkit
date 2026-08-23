@@ -163,12 +163,58 @@ export {
   ClaudePluginInventory,
   ClaudeSkillInventory,
 } from './inventory/index.js';
-export { crawlSkillLinkRegistry, extractClaudeSkillInventory } from './inventory/index.js';
+export {
+  crawlSkillLinkRegistry,
+  extractClaudeSkillInventory,
+  NO_GIT_TRACKER,
+  type ClaudeSkillInventoryOptions,
+} from './inventory/index.js';
+export {
+  INVENTORY_EXTENT_CONTRIBUTOR_ID_PREFIX,
+  INVENTORY_EXTENT_KIND,
+  INVENTORY_MAX_DEPTH,
+  INVENTORY_REFUSED_AGENT_INSTRUCTION_FILE,
+  INVENTORY_REFUSED_DIRECTORY_TARGET,
+  INVENTORY_REFUSED_GITIGNORED,
+  INVENTORY_REFUSED_NAVIGATION_FILE,
+  InventorySkillExtentContributor,
+  inventoryExtentContributorId,
+  inventoryExtentDeclaration,
+  inventoryExtentName,
+} from './inventory/index.js';
+export {
+  INVENTORY_CRAWL_ENV,
+  INVENTORY_CRAWL_PROJECTION,
+  INVENTORY_CRAWL_WALKER,
+  buildInventoryPopulation,
+  projectionCrawlSelected,
+  type InventoryPopulation,
+  type SharedPopulationSource,
+} from './inventory/index.js';
 export {
   extractClaudePluginInventory,
+  type ClaudePluginInventoryOptions,
   type GitTrackerSource,
   type SharedRegistrySource,
 } from './inventory/index.js';
-export { extractClaudeMarketplaceInventory } from './inventory/index.js';
-export { extractClaudeInstallInventory } from './inventory/index.js';
+export {
+  extractClaudeMarketplaceInventory,
+  type ClaudeMarketplaceInventoryOptions,
+} from './inventory/index.js';
+export {
+  extractClaudeInstallInventory,
+  type ClaudeInstallInventoryOptions,
+} from './inventory/index.js';
 export { detectSkillClaudePluginNameMismatch } from './inventory/index.js';
+
+// Resource-projection extent contributors (zones §7.1, closure stratum)
+export {
+  MANIFEST_UNREADABLE,
+  MARKETPLACE_CONTRIBUTOR_ID,
+  MARKETPLACE_KIND,
+  MarketplaceExtentContributor,
+  PLUGIN_CONTRIBUTOR_ID,
+  PLUGIN_KIND,
+  PLUGIN_NOT_INSTALLED,
+  PluginExtentContributor,
+} from './projection/plugin-extent.js';

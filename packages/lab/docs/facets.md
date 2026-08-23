@@ -18,6 +18,28 @@ being wrong" improves vat.
 numbers need spread. A single sample is not a measurement; a median over repeats with the spread
 reported alongside is.
 
+**Extent facets** — `population`. The output is a *set*, and a set needs neither spread nor
+tolerance: the comparator is exact set difference, and one member's difference is real. The
+distinction from a measurement facet is not cosmetic. Every other facet answers *how expensive was
+this?*; `population` answers *what did it cover?*, and for four facets that question was unreachable
+from the instrument — which is how a crawl change came to be checkable only by a throwaway script.
+
+An extent facet has two obligations a cost facet does not:
+
+- **It reports the set, never only its size.** Two runs enumerating 1,382 files each and disagreeing
+  about *which* 1,382 are not the same measurement, and a facet reporting only a count renders that
+  as agreement.
+- **It carries a reference the subject did not produce.** A population compared only against another
+  run of the same instrument is self-referential — two runs of one lane agree trivially. `population`
+  holds each run against git's own listing, which answers the one containment direction that needs
+  no knowledge of the subject's include/exclude globs: *did the crawl emit a path git does not
+  track?*
+
+It also records the **lane the subject said it took**, read back out of the subject's own output
+rather than from the environment the caller set. Setting a variable proves what was asked for; only
+the output proves what happened, and an A/B whose two arms silently ran the same lane is a clean
+result that means nothing.
+
 Both use the same coordinate header. The comparator knows which kind it is holding and diffs
 accordingly — set differences for findings, distribution differences for numbers.
 

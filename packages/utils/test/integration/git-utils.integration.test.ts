@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import { gitFindRoot, gitLsFiles, isGitIgnored } from '../../src/git-utils.js';
 import { normalizedTmpdir } from '../../src/path-utils.js';
-import { setupSyncTempDirSuite } from '../../src/test-helpers.js';
+import { createSymlink, setupSyncTempDirSuite, symlinkCapability } from '../../src/test-helpers.js';
 import { createGitRepo } from '../test-helpers.js';
 
 const GITIGNORE_FILENAME = '.gitignore';
@@ -240,7 +240,8 @@ describe('isGitIgnored', () => {
     expect(result).toBe(true);
   });
 
-  it.skipIf(process.platform === 'win32')('should detect gitignored files through symlinks via ancestor walk', () => {
+  it('should detect gitignored files through symlinks via ancestor walk', ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
     // Simulate: data/ is gitignored, data/linked-content is a symlink to external dir
     // git check-ignore fails with "beyond a symbolic link" for paths through symlinks,
     // but ancestor walk should detect that data/ itself is gitignored
@@ -254,8 +255,7 @@ describe('isGitIgnored', () => {
     fs.mkdirSync(externalDir);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
     fs.writeFileSync(safePath.join(externalDir, 'doc.md'), '# Test');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
-    fs.symlinkSync(externalDir, linkedDir);
+    createSymlink(cap, externalDir, linkedDir);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
     fs.writeFileSync(safePath.join(tempDir, GITIGNORE_FILENAME), 'data/\n');
 

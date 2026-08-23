@@ -1,0 +1,10 @@
+{
+  "extends": ["//"],
+  "tasks": {
+    "test:integration": {
+      "dependsOn": ["^build", "build"],
+      "outputs": [],
+      "cache": true
+    }
+  }
+}

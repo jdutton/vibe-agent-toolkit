@@ -3,7 +3,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { mkdirSyncReal,normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { createSymlink, mkdirSyncReal,normalizedTmpdir, safePath, type SymlinkCapability } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, expect } from 'vitest';
 import type { z } from 'zod';
 
@@ -35,11 +35,11 @@ export function setupTempDir(prefix: string): { getTempDir: () => string } {
  * Shared by harness-root safety tests that exercise the symlink-refusal path.
  * Returns both absolute paths (forward-slash via safePath).
  */
-export function createSymlinkedDir(baseDir: string): { target: string; link: string } {
+export function createSymlinkedDir(baseDir: string, cap: SymlinkCapability): { target: string; link: string } {
   const target = safePath.join(baseDir, 'target');
   mkdirSyncReal(target, { mode: 0o700 });
   const link = safePath.join(baseDir, 'link');
-  fs.symlinkSync(target, link);
+  createSymlink(cap, target, link);
   return { target, link };
 }
 

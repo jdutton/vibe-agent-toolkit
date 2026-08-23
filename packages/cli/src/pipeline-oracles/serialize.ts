@@ -10,7 +10,7 @@
  */
 
 import type { SymlinkDivergenceReport } from './symlink-divergence.js';
-import type { EnumerationSnapshot, ParseFactSnapshot } from './types.js';
+import type { ContentMeasuresFact, EnumerationSnapshot, ParseFactSnapshot } from './types.js';
 
 /** `true` / `false` / `-` for an unanswered column, so columns stay aligned in width. */
 function flag(value: boolean | null): string {
@@ -181,6 +181,7 @@ export function renderParseFactSnapshot(snapshot: ParseFactSnapshot): string {
     lines.push(`sizeBytes: ${String(row.sizeBytes)}`);
     lines.push(`estimatedTokenCount: ${String(row.estimatedTokenCount)}`);
     lines.push(`decodedLength: ${String(row.decodedLength)}`);
+    lines.push(`contentMeasures: ${renderContentMeasures(row.contentMeasures)}`);
     lines.push(`frontmatterSource: ${renderMultiline(row.frontmatterSource)}`);
     const optionalArrays = row.optionalArrays.map((fact) => `${fact.field}=${fact.state}`).join(' ');
     lines.push(`optionalArrays: ${optionalArrays}`);
@@ -204,6 +205,13 @@ export function renderParseFactSnapshot(snapshot: ParseFactSnapshot): string {
     for (const link of row.links) {
       lines.push(
         `  ${String(link.ordinal)}\t${link.type}\t${link.nodeType ?? '-'}\tline=${String(link.line ?? '-')}\tresolvedId=${link.resolvedId ?? '-'}\thref=${renderInline(link.href)}\ttext=${renderInline(link.text)}`,
+      );
+    }
+
+    lines.push(`lexicalReferences: ${countOrAbsent(row.lexicalReferences)}`);
+    for (const reference of row.lexicalReferences ?? []) {
+      lines.push(
+        `  ${String(reference.ordinal)}\t${reference.syntacticForm}\tline=${String(reference.line)}\tcol=${String(reference.column)}\text=${String(reference.hasExtension)}\tat=${String(reference.leadingAt)}\tslashes=${String(reference.slashCount)}\tvar=${reference.variableExpansion ?? '-'}\tcodeSpan=${String(reference.inCodeSpan)}\tfence=${String(reference.inFence)}\traw=${renderInline(reference.raw)}`,
       );
     }
 
@@ -273,6 +281,22 @@ function renderMultiline(value: string | null): string {
   if (value === null) return '-';
   const escaped = renderInline(value).replaceAll('"', String.raw`\"`);
   return `"${escaped}"`;
+}
+
+/**
+ * Render the three measure columns on one line, or `-` when absent.
+ *
+ * Named rather than positional (`words=… prose=… code=…`), because the three
+ * are all bare integers: a transposition of two of them would be invisible in a
+ * positional rendering, and `proseCodeUnits`/`codeBlockCodeUnits` are exactly
+ * the pair a mistake would swap.
+ *
+ * @param measures - The measures, or null when the field was absent
+ * @returns `-`, or the three counts labelled
+ */
+function renderContentMeasures(measures: ContentMeasuresFact | null): string {
+  if (measures === null) return '-';
+  return `words=${String(measures.wordCount)} prose=${String(measures.proseCodeUnits)} code=${String(measures.codeBlockCodeUnits)}`;
 }
 
 /**

@@ -1,0 +1,409 @@
+/**
+ * Realization rows for the resource projection — **one path in one extent**.
+ *
+ * The cheap per-path attributes a population records once, so later stages do
+ * not go and compute them per link, per check, per lane. Moved down here from
+ * the CLI's enumeration oracle: the oracle asked exactly the same questions of
+ * exactly the same `lstat`, and one fact must have one implementation.
+ */
+
+import { lstatSync, realpathSync, statSync } from 'node:fs';
+
+import { type GitTracker, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+
+import { parserKindForPath } from '../content-key.js';
+import type { ContentState, ResourceRealizationRow } from '../schemas/projection-resources.js';
+
+import { readKeyedContent, type RunContentCache } from './content-cache.js';
+
+/**
+ * Render an absolute path relative to a root, forward-slashed.
+ *
+ * Every path a realization row or a snapshot prints goes through here. An
+ * absolute path in a golden file makes the golden machine-specific and leaks
+ * `$HOME`; both have bitten this repo before.
+ *
+ * @param absolutePath - Path to render
+ * @param root - Root the path is rendered relative to
+ * @returns Forward-slashed relative path (or the forward-slashed absolute path
+ *   when the target lies outside the root, which is itself worth seeing)
+ */
+export function relativize(absolutePath: string, root: string): string {
+  const rel = safePath.relative(root, absolutePath);
+  return rel === '' ? '.' : toForwardSlash(rel);
+}
+
+/**
+ * When a realization should pay to read and hash a path's bytes.
+ *
+ * Three literals rather than a predicate callback, deliberately: a policy has
+ * to stay inspectable and serializable — readable off the contributor that set
+ * it and reproducible from a recorded population — and a closure here would be
+ * a rule nobody can read back out of the projection.
+ *
+ * - `eager` — key the bytes now. The **default** when the field is absent, so
+ *   every caller that has not opted in (including `collectRealization`'s caller
+ *   outside any population, the CLI's enumeration-snapshot oracle) is unchanged.
+ * - `deferred` — never key here; the row lands as `deferred` and no read
+ *   happens.
+ * - `deferGitignored` — key unless the row's own `gitignored` column is true.
+ */
+export type ContentDemand = 'eager' | 'deferred' | 'deferGitignored';
+
+/**
+ * What an enumerator already established about a path, so no `lstat` is needed.
+ *
+ * Two literals and no third, because the vocabulary is deliberately narrower
+ * than `lstat`'s: a source may supply one of these **only** when it knows, for
+ * free, that the path is present on disk, is not a symbolic link, and is one of
+ * a regular file or a directory. Everything else — a symlink, a path whose
+ * shape the source is merely confident about, a path it found by walking —
+ * supplies nothing and is stat'ed as before.
+ *
+ * The narrowness is the safety property. A richer record (`{exists, isSymlink,
+ * isDirectory, symlinkResolves}`) could express states no source can actually
+ * observe without a stat, and a source that filled one in from a guess would
+ * produce a row indistinguishable from an observed one. Here the only thing
+ * expressible is what git's index can answer.
+ *
+ * ⚠️ **A shape carries no `mtime`, and cannot.** Every source able to skip the
+ * stat is able to precisely because it never asked the filesystem, and the
+ * modification time exists nowhere else — a tree object has none, and the
+ * index's stat cache is a deliberately-stale cache-validation stamp rather than
+ * the truth. So a realization built from a shape records `mtime: null`, which
+ * the column has always allowed.
+ */
+export type PathShape = 'file' | 'directory';
+
+/** Everything needed to answer the realization questions for a path. */
+export interface RealizationContext {
+  /** Root every `path` in the resulting rows is relative to. */
+  root: string;
+  /** The extent this realization is observed in — `resource_realizations.extentId`. */
+  extentId: string;
+  /** Absent (or unusable) when the root is not a git repository. */
+  gitTracker?: GitTracker | undefined;
+  /**
+   * The run's content cache, so one path keyed in two extents is read once.
+   *
+   * Optional because this function is also called outside a population — the
+   * CLI's enumeration oracle keys a single path with no run to belong to — and a
+   * cache with a lifetime of one call would be a pure cost. Inside `populate` it
+   * is always present, threaded from the builder through
+   * {@link ProjectionBase.contentCache}.
+   */
+  contentCache?: RunContentCache | undefined;
+  /**
+   * Whether this extent wants the bytes keyed. Absent means {@link ContentDemand}
+   * `'eager'` — the historical behaviour, and the reason no existing caller had
+   * to change.
+   */
+  contentDemand?: ContentDemand | undefined;
+  /**
+   * A byte identity the enumerator already computed for THIS path — the git
+   * source's blob OID, when it has a sound one.
+   *
+   * Only ever a lookup into the run's cache, so that a second path holding
+   * identical bytes costs no read; never the key a parse is filed under. Absent
+   * for every path a walk found, and absent for symlinks and submodules even
+   * under git — see `EnumeratedPath.contentHint`, which is where the mode is
+   * visible and therefore where the exclusion belongs.
+   */
+  contentHint?: string | undefined;
+  /**
+   * The enumerator's own answer to "what is this path", when it had one.
+   *
+   * Authoritative, unlike {@link RealizationContext.contentHint}, which is only
+   * ever a cache lookup whose miss is free: supplying this **replaces** the
+   * `lstat`, it does not accelerate it. So a source may set it only from
+   * something it genuinely observed — see {@link PathShape} for the exact bar —
+   * and absence means "ask the filesystem", which is what every caller that has
+   * not opted in continues to do.
+   */
+  observedShape?: PathShape | undefined;
+}
+
+/**
+ * The five columns a realization gets from looking at a path — by whatever means
+ * it looked.
+ *
+ * Named as one record so the two ways of answering are interchangeable at the
+ * call site and cannot drift into filling in different subsets. A column added
+ * here must be answerable by BOTH producers or the type stops compiling, which
+ * is the property that keeps a shape-sourced row from quietly under-describing
+ * a path.
+ */
+interface PathObservation {
+  /** The path is present. */
+  exists: boolean;
+  /** The path is a directory (following the link, when it is one). */
+  isDirectory: boolean;
+  /** The path is itself a symbolic link. */
+  isSymlink: boolean;
+  /** Whether a symlink's target resolves; `null` when the path is not a link. */
+  symlinkResolves: boolean | null;
+  /** Last modification time; `null` when nothing stat'ed this path. */
+  mtime: Date | null;
+}
+
+/**
+ * Ask the filesystem.
+ *
+ * @param absolutePath - Path to stat
+ * @returns What `lstat` (and, for a link, `stat`) said
+ */
+function statObservation(absolutePath: string): PathObservation {
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- enumerated corpus path
+    const link = lstatSync(absolutePath);
+    if (!link.isSymbolicLink()) {
+      return {
+        exists: true,
+        isDirectory: link.isDirectory(),
+        isSymlink: false,
+        symlinkResolves: null,
+        mtime: link.mtime,
+      };
+    }
+    try {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- enumerated corpus path
+      const target = statSync(absolutePath);
+      return {
+        exists: true,
+        isDirectory: target.isDirectory(),
+        isSymlink: true,
+        symlinkResolves: true,
+        mtime: link.mtime,
+      };
+    } catch {
+      return {
+        exists: true,
+        isDirectory: false,
+        isSymlink: true,
+        symlinkResolves: false,
+        mtime: link.mtime,
+      };
+    }
+  } catch {
+    // Genuinely absent — `exists` is false and every other column takes its "we
+    // could not look" default rather than a guess.
+    return {
+      exists: false,
+      isDirectory: false,
+      isSymlink: false,
+      symlinkResolves: null,
+      mtime: null,
+    };
+  }
+}
+
+/**
+ * Take the enumerator's word for it, and spend no syscall.
+ *
+ * `exists: true` is not an assumption bolted on here — it is half of what
+ * {@link PathShape} means, and a source that cannot assert it must supply no
+ * shape. `isSymlink: false` is the other half, which is why `symlinkResolves`
+ * is `null` rather than `true`: the column reports how a *link* resolved, and
+ * this path is not one.
+ *
+ * @param shape - What the enumerator observed
+ * @returns The same five columns, none of them stat'ed
+ */
+function shapeObservation(shape: PathShape): PathObservation {
+  return {
+    exists: true,
+    isDirectory: shape === 'directory',
+    isSymlink: false,
+    symlinkResolves: null,
+    mtime: null,
+  };
+}
+
+/**
+ * Collect the realization row for one absolute path in one extent.
+ *
+ * `lstat` first, deliberately, **whenever the filesystem has to be asked at
+ * all**: `stat` follows symlinks, so a `stat`-only implementation cannot tell a
+ * symlink from what it points at, and reports a dangling link as simply absent.
+ * That single `lstat` also supplies `mtime` — there is deliberately no second
+ * `stat` call for it.
+ *
+ * The filesystem does not have to be asked when the enumerator already answered:
+ * see {@link RealizationContext.observedShape}. That path costs no syscall and
+ * yields `mtime: null`.
+ *
+ * @param absolutePath - Path to describe
+ * @param resourceId - The identity this path realizes, from `ResourceIdentityMap`
+ * @param context - Root, extent, (optional) git oracle, cache and demand policy
+ * @returns The realization row, with `contentKey` filled in when the bytes were
+ *   read and `contentState` always saying why it was or was not
+ */
+export async function collectRealization(
+  absolutePath: string,
+  resourceId: string,
+  context: RealizationContext,
+): Promise<ResourceRealizationRow> {
+  const { exists, isDirectory, isSymlink, symlinkResolves, mtime }
+    = context.observedShape === undefined
+      ? statObservation(absolutePath)
+      : shapeObservation(context.observedShape);
+
+  // `isIgnoredByActiveSet`, NOT `isIgnored`, and the difference is 59× on this
+  // repository. `GitTracker.initialize()` primes its cache with the ACTIVE files
+  // only, so `isIgnored` is an O(1) cache hit for every path that is NOT ignored
+  // and a `git check-ignore` SPAWN for every path that is — i.e. it spawns once
+  // per ignored path, which for the filesystem extent (`respectGitignore: false`,
+  // so it enumerates all of `dist/`) is most of the tree. Measured by
+  // `claude-marketplace`'s `inventory-extent-corpus.integration.test.ts`, whose
+  // `populate ms` column is the observation: repo root, tracker supplied,
+  // 59,870 ms → 1,016 ms; one VAT package, 5,203 ms → 65 ms. Neither the
+  // realization count (5,903) nor the reference-candidate count (31,264) moved,
+  // so the column's ANSWERS are unchanged on that corpus.
+  //
+  // It is the same question, asked of a set instead of a subprocess: for a path
+  // that exists inside the root, active-set membership is authoritative, and
+  // `isIgnoredByActiveSet` falls back to `isIgnored` for the two cases where it
+  // is not (a path that does not exist, and a path outside the root). The one
+  // real difference is the tracker's documented STALENESS BOUND — a file created
+  // after `initialize()` exists but is absent from the active set, so it reads as
+  // ignored. A population is a read-only snapshot, which is exactly the lane that
+  // bound is documented as safe for; a lane that WRITES between walks must hand
+  // in a fresh tracker, as `walkLinkGraph`'s callers already must.
+  // The observation above already answered "is this path there?", so the tracker
+  // is told rather than asked. Without this it re-probes with `existsSync` for every
+  // path absent from the active set -- once per ignored path, and this is the
+  // extent that enumerates all of them: 11,108 calls on an 8,496-path adopter.
+  //
+  // `existsSync` FOLLOWS symlinks and `lstat` does not, so the boolean handed
+  // over is deliberately not `exists`. A dangling symlink is `exists: true` here
+  // and absent to `existsSync`, and passing the raw `lstat` answer would stop it
+  // falling back to `git check-ignore` and start calling it ignored.
+  const resolvesForStat = exists && symlinkResolves !== false;
+  const gitignored = context.gitTracker?.isUsable() === true
+    ? context.gitTracker.isIgnoredByActiveSet(absolutePath, resolvesForStat)
+    : false;
+
+  const { contentKey, contentState } = await keyOrState(absolutePath, context, {
+    hasBytes: exists && !isDirectory && symlinkResolves !== false,
+    gitignored,
+  });
+
+  const rel = relativize(absolutePath, context.root);
+  const lastSlash = rel.lastIndexOf('/');
+  const basename = lastSlash === -1 ? rel : rel.slice(lastSlash + 1);
+  const dot = basename.lastIndexOf('.');
+
+  return {
+    resourceId,
+    extentId: context.extentId,
+    path: rel,
+    pathLower: rel.toLowerCase(),
+    basenameLower: basename.toLowerCase(),
+    dir: lastSlash === -1 ? '' : rel.slice(0, lastSlash),
+    // eslint-disable-next-line local/no-hardcoded-path-split -- relativize() has already forward-slashed this
+    depth: rel.split('/').length,
+    ext: dot <= 0 ? '' : basename.slice(dot).toLowerCase(),
+    contentKey,
+    contentState,
+    mtime,
+    exists,
+    isDirectory,
+    gitignored,
+    isSymlink,
+    symlinkResolves,
+  };
+}
+
+/**
+ * A path's real location, or `null` when it cannot be resolved.
+ *
+ * Exported so a population pass can group by identity without resolving twice,
+ * and because "two paths are the same file" is a question only the real path
+ * can answer — comparing content keys would conflate an alias with two files
+ * that merely have identical bytes, which any corpus with two empty files
+ * already contains.
+ *
+ * Distinct from `identity.ts`'s ancestor-walking fallback on purpose: this one
+ * reports unresolvability as `null` rather than inventing a spelling, because
+ * its callers are asking *whether* a path resolves.
+ *
+ * @param absolutePath - Path to resolve
+ * @returns Forward-slashed real path, or null
+ */
+export function realPathOrNull(absolutePath: string): string | null {
+  try {
+    return toForwardSlash(realpathSync.native(absolutePath));
+  } catch {
+    return null;
+  }
+}
+
+/** What `lstat` already established about whether there are bytes to key. */
+interface ObservedPath {
+  /** False for an absent path, a directory, or a dangling symlink. */
+  hasBytes: boolean;
+  /** The row's own `gitignored` column — the input `deferGitignored` reads. */
+  gitignored: boolean;
+}
+
+/**
+ * Key a path's contents, or say why there is no key — the `(contentKey,
+ * contentState)` pair, computed together because they are one decision and two
+ * columns.
+ *
+ * Precedence is fixed and the order matters:
+ *
+ * 1. **No bytes** wins over everything. A directory is not "deferred", it is a
+ *    thing with no content, and no demand policy may relabel it — otherwise a
+ *    consumer could not tell a corpus of directories from one it declined to
+ *    read.
+ * 2. **The demand policy defers.** No read happens at all; that is the saving.
+ * 3. **Otherwise read.** Success keys it; a throw is `unreadable`.
+ *
+ * A read failure is a fact about the corpus, not an error in the harness — an
+ * unreadable file must show up as a row with a null key, not abort the
+ * population, or one permissions quirk on one CI host destroys the whole gate.
+ *
+ * The read goes through the run's cache when there is one, so the same file
+ * realized in the git extent, the filesystem extent and a package extent costs
+ * one `readFile` and one SHA-256 rather than three.
+ *
+ * @param absolutePath - Path to read and key
+ * @param context - Supplies the demand policy and the run's cache
+ * @param observed - What `lstat` already established about this path
+ * @returns The content key (or null) and the state explaining it
+ */
+async function keyOrState(
+  absolutePath: string,
+  context: RealizationContext,
+  observed: ObservedPath,
+): Promise<{ contentKey: string | null; contentState: ContentState }> {
+  if (!observed.hasBytes) {
+    return { contentKey: null, contentState: 'none' };
+  }
+  if (defers(context.contentDemand ?? 'eager', observed.gitignored)) {
+    return { contentKey: null, contentState: 'deferred' };
+  }
+  try {
+    const keyed = await readKeyedContent(
+      absolutePath,
+      parserKindForPath(absolutePath),
+      context.contentCache,
+      context.contentHint,
+    );
+    return { contentKey: keyed.key, contentState: 'keyed' };
+  } catch {
+    return { contentKey: null, contentState: 'unreadable' };
+  }
+}
+
+/**
+ * Whether a demand policy declines to key this row.
+ *
+ * @param demand - The extent's policy
+ * @param gitignored - The row's own `gitignored` column
+ * @returns True when the bytes must not be read
+ */
+function defers(demand: ContentDemand, gitignored: boolean): boolean {
+  return demand === 'deferred' || (demand === 'deferGitignored' && gitignored);
+}

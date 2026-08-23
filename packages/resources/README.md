@@ -2,6 +2,12 @@
 
 Markdown resource parsing, validation, and link integrity checking for AI agent toolkits.
 
+> This README is an API reference for the classes below. For how resource scanning actually works —
+> git-tracked vs. non-git corpora, the object-level content cache, and the projection schema this
+> package's output feeds — see
+> [Resource Scanning and Object Caching](../../docs/architecture/resource-scanning-and-caching.md) and
+> [Resource Projection](../../docs/architecture/resource-projection.md).
+
 ## Features
 
 - **Parse markdown files** - Extract links, headings, and metadata using unified/remark
@@ -547,7 +553,7 @@ interface ValidationResult {
 A single validation issue found during link validation.
 
 `ValidationIssue` is the unified issue shape every VAT validator emits (defined
-in `@vibe-agent-toolkit/agent-schema`). Each issue carries a registry `code`
+in `@vibe-agent-toolkit/schema`). Each issue carries a registry `code`
 (see [Validation Codes](../../docs/validation-codes.md)) and a resolved
 `severity`.
 

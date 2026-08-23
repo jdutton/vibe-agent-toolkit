@@ -20,15 +20,6 @@ import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
 import {
-  allowUnusedIssues,
-  createAllowUsageLedger,
-  runValidationFramework,
-  type AllowUsageLedger,
-  type FrameworkResult,
-  type ValidationConfig,
-  type ValidationIssue,
-} from '@vibe-agent-toolkit/agent-schema';
-import {
   DeferredArtifacts,
   DuplicateResourceIdError,
   ResourceRegistry,
@@ -43,8 +34,18 @@ import {
   type ParseResult,
   type ProjectConfig,
   type ResourceMetadata,
+  type ResourcePopulationSource,
   parseFileCached,
 } from '@vibe-agent-toolkit/resources';
+import {
+  allowUnusedIssues,
+  createAllowUsageLedger,
+  runValidationFramework,
+  type AllowUsageLedger,
+  type FrameworkResult,
+  type ValidationConfig,
+  type ValidationIssue,
+} from '@vibe-agent-toolkit/schema';
 import {
   findProjectRoot,
   isGlob,
@@ -471,6 +472,11 @@ export type SkillPackageOutcome =
  *   (`vat build` also validates the SOURCE tree, whose matches count too).
  *   Containment does not change that: a skill that threw may still have matched
  *   allow entries before it threw, and those matches count for the run.
+ * @param runOptions - Registry-build options for the RUN. Named apart from the
+ *   per-skill `options` destructured in the loop below, which it is not: it
+ *   configures the ONE shared registry {@link createProjectRegistry} builds here.
+ *   It does NOT reach the per-skill post-build validation, which builds a private
+ *   registry over the BUILT tree — see {@link runPostBuildValidation}
  * @returns One outcome per input spec, in input order
  *
  * @example
@@ -488,18 +494,28 @@ export async function packageSkills(
   skills: SkillBuildSpec[],
   projectRoot: string,
   allowLedger: AllowUsageLedger,
+  runOptions: ProjectRegistryOptions = {},
 ): Promise<SkillPackageOutcome[]> {
   // 1. Create one registry for the entire project. Through the shared builder:
   // this used to call `fromCrawl` directly and omit the config, so skills built
   // here belonged to no collection while a skill built through the single-skill
   // fallback did.
-  const registry = await createProjectRegistry(projectRoot);
+  //
+  // `runOptions` is forwarded rather than absorbed: this is the ONLY registry the
+  // run builds, so a caller that wants the run on the projection lane has no
+  // other seam to reach. Dropping it here would leave `vat skills build`
+  // reaching a store it opened and never used.
+  const registry = await createProjectRegistry(projectRoot, runOptions);
 
   // 2. Package each skill against the shared registry
   const outcomes: SkillPackageOutcome[] = [];
   for (const { skillPath, options } of skills) {
     try {
-      const result = await packageSkill(skillPath, { ...options, registry, allowLedger });
+      const result = await packageSkill(skillPath, {
+        ...options,
+        registry,
+        allowLedger,
+      });
       outcomes.push({ status: 'built', skillPath, result });
     } catch (error) {
       // Not swallowed: the error is carried on the outcome so the caller reports
@@ -927,6 +943,22 @@ function withRunAllowUnused(framework: FrameworkResult, ledger: AllowUsageLedger
  *
  * `allowLedger` is required, not optional: this lane is one half of a build, so
  * it must never conclude on its own that an allow entry matched nothing.
+ *
+ * ⛔ This lane stays on the walk and is handed no `populationSource`. It validates
+ * the BUILT tree under `outputPath` — a different tree from the one the run
+ * enumerated, not tracked by git, and not covered by the packaging registry. A
+ * source produced by `withResourcePopulationSource` is bound to the PROJECT root
+ * and its git tree hash, so offering it a build-output directory asks it a
+ * question about a tree it does not describe. Forwarding it here was tried and
+ * reverted — the giveaway was a source offered `<root>/out/<skill>` instead of
+ * the root.
+ *
+ * The store-poisoning half of that hazard is now closed at the seam rather than by
+ * this comment: `ResourceRegistry.populationFrom` compares the source's own bound
+ * root against the crawl's base and declines a mismatch back onto the walk. So a
+ * future forward here would be a no-op that warns, not a corrupted extent key.
+ * What it would still NOT be is a speed-up, which is why nothing is forwarded:
+ * the built tree is a different tree, so there is no stored answer for it to hit.
  */
 async function runPostBuildValidation(
   outputPath: string,
@@ -990,6 +1022,20 @@ function assemblePackageResult(input: AssembleResultInput): PackageSkillResult {
 // ============================================================================
 
 /**
+ * Options for {@link createProjectRegistry}.
+ */
+export interface ProjectRegistryOptions {
+  /**
+   * Where the file list comes from — omit for the incumbent walk, supply one to
+   * source it from a projection instead.
+   *
+   * See {@link createProjectRegistry}'s docstring: the source answers
+   * enumeration only, and this builder's markdown-only scoping survives it.
+   */
+  populationSource?: ResourcePopulationSource | undefined;
+}
+
+/**
  * Build THE project registry: every markdown file under `projectRoot`, parsed,
  * with links resolved and the project config attached.
  *
@@ -1019,13 +1065,29 @@ function assemblePackageResult(input: AssembleResultInput): PackageSkillResult {
  *
  * Widening this glob would NOT widen what the walker follows: routing is
  * markdown-only regardless — see `isRoutable` in `walk-link-graph.ts`.
+ *
+ * ## The optional population source, and why it cannot widen that glob
+ *
+ * `populationSource` replaces the ENUMERATION only. `ResourceRegistry.crawl`
+ * re-applies this function's `include` — and the crawl's default `exclude` —
+ * to whatever the source offers, through the same compiled matcher the walk
+ * itself uses, so a source that enumerates a whole tree still yields exactly
+ * the project's markdown here. That is what makes handing this builder a
+ * projection a cost change rather than a scope change.
+ *
+ * Selecting the lane stays the CLI's job: this signature takes a source, never
+ * an environment. A library caller that passes nothing keeps the walk.
  */
-export async function createProjectRegistry(projectRoot: string): Promise<ResourceRegistry> {
+export async function createProjectRegistry(
+  projectRoot: string,
+  options: ProjectRegistryOptions = {},
+): Promise<ResourceRegistry> {
   const config = await loadConfig(projectRoot);
   const registry = await ResourceRegistry.fromCrawl(
     {
       baseDir: projectRoot,
       include: ['**/*.md'],
+      ...(options.populationSource !== undefined && { populationSource: options.populationSource }),
     },
     config === undefined ? undefined : { config },
   );

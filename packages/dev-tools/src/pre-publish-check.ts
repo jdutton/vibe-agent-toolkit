@@ -34,9 +34,9 @@
 
 import { readdirSync, existsSync, readFileSync } from 'node:fs';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { runGit, safePath } from '@vibe-agent-toolkit/utils';
 
-import { PROJECT_ROOT, log, safeExecSync, safeExecResult } from './common.js';
+import { PROJECT_ROOT, log, safeExecSync } from './common.js';
 import { validatePackageList } from './validate-package-list.js';
 
 /**
@@ -138,8 +138,8 @@ console.log('');
 
 // Check 1: Git repository exists
 try {
-  const result = safeExecResult('git', ['rev-parse', '--git-dir'], { stdio: 'pipe' });
-  if (!result.success) {
+  const result = runGit(['rev-parse', '--git-dir']);
+  if (!result.ok) {
     throw new Error('Not a git repository');
   }
   log('✓ Git repository detected', 'green');
@@ -158,11 +158,8 @@ if (IS_CI || skipGitChecks) {
 } else {
   let currentBranch: string;
   try {
-    const result = safeExecResult('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
-      encoding: 'utf8',
-      stdio: 'pipe',
-    });
-    if (!result.success) {
+    const result = runGit(['rev-parse', '--abbrev-ref', 'HEAD']);
+    if (!result.ok) {
       throw new Error('Failed to determine current branch');
     }
     currentBranch = result.stdout.toString().trim();
@@ -192,19 +189,16 @@ if (IS_CI || skipGitChecks) {
 if (IS_CI || skipGitChecks) {
   log('⊘ Uncommitted changes check skipped (CI mode or --skip-git-checks)', 'yellow');
 } else {
-  const result = safeExecResult('git', ['diff-index', '--quiet', 'HEAD', '--'], { stdio: 'pipe' });
-  const hasUncommittedChanges = !result.success;
+  const result = runGit(['diff-index', '--quiet', 'HEAD', '--']);
+  const hasUncommittedChanges = !result.ok;
 
   if (hasUncommittedChanges) {
     log('✗ Uncommitted changes detected', 'red');
     console.log('');
 
-    const statusResult = safeExecResult('git', ['status', '--short'], {
-      encoding: 'utf8',
-      stdio: 'pipe',
-    });
+    const statusResult = runGit(['status', '--short']);
 
-    if (statusResult.success) {
+    if (statusResult.ok) {
       console.log(statusResult.stdout);
     } else {
       console.log('  (Unable to show git status details)');
@@ -220,13 +214,10 @@ if (IS_CI || skipGitChecks) {
 if (IS_CI || skipGitChecks) {
   log('⊘ Untracked files check skipped (CI mode or --skip-git-checks)', 'yellow');
 } else {
-  const untrackedResult = safeExecResult('git', ['ls-files', '--others', '--exclude-standard'], {
-    encoding: 'utf8',
-    stdio: 'pipe',
-  });
+  const untrackedResult = runGit(['ls-files', '--others', '--exclude-standard']);
 
   let untracked = '';
-  if (untrackedResult.success) {
+  if (untrackedResult.ok) {
     untracked = untrackedResult.stdout.toString();
   } else {
     log('⚠ Warning: Could not check untracked files (git not available)', 'yellow');
@@ -645,12 +636,9 @@ if (releaseReadiness) {
   console.log(`Checking remote tag v${currentVersion}...`);
 
   {
-    const tagResult = safeExecResult('git', ['ls-remote', '--tags', 'origin', `refs/tags/v${currentVersion}`], {
-      encoding: 'utf8',
-      stdio: 'pipe',
-    });
+    const tagResult = runGit(['ls-remote', '--tags', 'origin', `refs/tags/v${currentVersion}`]);
 
-    if (tagResult.success && tagResult.stdout.toString().trim().length > 0) {
+    if (tagResult.ok && tagResult.stdout.toString().trim().length > 0) {
       log(`✗ v${currentVersion} tag already exists on remote`, 'red');
       console.log(`  The tag v${currentVersion} has already been pushed to the remote.`);
       console.log('  Bump the version before releasing.');

@@ -8,7 +8,11 @@
  * 1. **A failed run contributes no timing.** Timing a crash measures how fast
  *    vat fails. Worse, the failures are *fast* — a command that cannot resolve
  *    returns in a fraction of a millisecond — so admitting them would drag a
- *    median down and read as an improvement.
+ *    median down and read as an improvement. "Failed" means *did not complete*,
+ *    which is not the same as "exited non-zero": a validator exiting 1 because
+ *    it has findings did all of its work, and refusing to time that made three
+ *    of vat's commands unmeasurable on every real project. The command declares
+ *    which of its codes mean completed; see `harness/commands.ts`.
  * 2. **Cold means cold on every repeat.** Clearing the cache once and then
  *    running five times measures one cold run and four warm ones, and reports
  *    the median of a mixture that describes nothing. That loop belongs to the
@@ -23,11 +27,10 @@
  */
 
 import type { ReportEnvelope } from '../../envelope/envelope.js';
-import type { MeasuredCommandSpec } from '../../harness/commands.js';
 import { judgeLoad, readLoad } from '../../harness/load-guard.js';
-import { materializeArgs, runRepeatsFor, summarizeRepeatFailures } from '../../harness/repeat.js';
+import { measureSpec, type SpecMeasurement } from '../../harness/repeat.js';
 import { buildReportEnvelope } from '../../harness/report.js';
-import type { CacheMode, CaptureRequest, RunResult } from '../../harness/types.js';
+import type { CaptureRequest } from '../../harness/types.js';
 
 import { summarize } from './stats.js';
 import {
@@ -48,19 +51,11 @@ export type CapturePerfOptions = CaptureRequest;
 /**
  * Turn a command's repeats into a report row.
  *
- * @param spec - What was asked for
- * @param args - What was actually run
- * @param cache - Which cache mode the repeats used
- * @param results - Every repeat's outcome, raw
+ * @param measurement - What was asked for, what ran, and whether it is usable
  * @returns The row, marked failed when no usable measurement exists
  */
-function rowFor(
-  spec: MeasuredCommandSpec,
-  args: readonly string[],
-  cache: CacheMode,
-  results: readonly RunResult[],
-): PerfCommandStats {
-  const failure = summarizeRepeatFailures(results);
+function rowFor(measurement: SpecMeasurement): PerfCommandStats {
+  const { spec, args, cache, results, failure } = measurement;
   const empty = { medianMs: 0, minMs: 0, maxMs: 0, iqrMs: 0 };
 
   if (results.length === 0) {
@@ -101,7 +96,12 @@ function rowFor(
     runs: results.length,
     ...summarize(samplesMs),
     samplesMs,
-    exitCode: 0,
+    // The code the repeats actually produced, not a hard-coded 0: a findings
+    // command completes at 1 as well, and a reader has to be able to tell those
+    // two rows apart. Reading the first repeat is sound precisely because
+    // `summarizeRepeatFailures` returned null — that is what guarantees every
+    // repeat exited with this same accepted code.
+    exitCode: results[0]?.exitCode ?? null,
     failed: false,
     failure: null,
   };
@@ -116,11 +116,7 @@ function rowFor(
 export function capturePerf(options: CapturePerfOptions): ReportEnvelope<PerfBody> {
   const loadBefore = readLoad();
 
-  const commands = options.commands.map((spec) => {
-    const args = materializeArgs(spec.args, options.subject.path);
-    const results = runRepeatsFor(options, args);
-    return rowFor(spec, args, options.cache, results);
-  });
+  const commands = options.commands.map((spec) => rowFor(measureSpec(options, spec)));
 
   const loadAfter = readLoad();
   const load = judgeLoad(loadBefore.loadAvg1, loadAfter.loadAvg1, loadAfter.cpus);

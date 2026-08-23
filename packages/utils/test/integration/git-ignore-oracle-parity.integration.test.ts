@@ -71,14 +71,14 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { GitTracker } from '../../src/git-tracker.js';
 import { isGitIgnored } from '../../src/git-utils.js';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '../../src/path-utils.js';
-import { canCreateSymlinks } from '../../src/test-helpers.js';
+import { createSymlink, symlinkCapability } from '../../src/test-helpers.js';
 import { createGitRepo } from '../test-helpers.js';
 
 /** The answer each oracle gives for one path class. */
@@ -290,16 +290,16 @@ function addLocalSubmodule(root: string, originDirectory: string): void {
 /**
  * Create `link/ -> real/` and report whether the host allowed it.
  *
- * Gated on {@link canCreateSymlinks} (a real create/remove probe), never on
+ * Gated on {@link symlinkCapability} (a real create/remove probe), never on
  * `process.platform`: the privilege is a Windows ACL, not a platform constant,
  * and this branch has no CI coverage to catch a platform guess that is wrong.
  */
 function tryCreateDirectorySymlink(root: string): boolean {
-  if (!canCreateSymlinks(root)) {
+  const cap = symlinkCapability();
+  if (!cap) {
     return false;
   }
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- root is a temp directory created by this suite
-  symlinkSync('real', safePath.join(root, 'link'), 'dir');
+  createSymlink(cap, 'real', safePath.join(root, 'link'), 'dir');
   return true;
 }
 

@@ -3,7 +3,7 @@
  * Ensures the test helper API works correctly for adopting projects
  */
 
-import type { AgentResult, StatefulAgentResult } from '@vibe-agent-toolkit/agent-schema';
+import type { AgentResult, StatefulAgentResult } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
 import { resultMatchers } from '../src/test-helpers.js';

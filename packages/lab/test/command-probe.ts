@@ -15,6 +15,10 @@
  *
  * ## Two ways to ask for a failure, and why both exist
  *
+ * Either can be given a code with {@link PROBE_EXIT_CODE_ENV}: "failing" here
+ * means "exit non-zero", and whether that non-zero code is a *failure* is the
+ * measured command's own declaration.
+ *
  * 1. **{@link PROBE_FAIL_TOKEN} in the arguments** — this command always fails,
  *    every repeat. Keyed on argv, so within one capture it can fail one command
  *    while another passes, which is how "a failing command must not poison a
@@ -36,7 +40,7 @@ import type { RepeatSpec } from '../src/harness/repeat.js';
 import type { ResolvedInstrument } from '../src/harness/types.js';
 
 /** Axis C is irrelevant to a probe run; every instrument here shares one. */
-export const PROBE_VERSION: InstrumentVersion = { version: '0.0.0-test', commit: null };
+export const PROBE_VERSION: InstrumentVersion = { version: '0.0.0-test', commit: null, dirty: null };
 
 /** Base-environment variable, expected in EVERY child including the cache clear. */
 export const PROBE_BASE_ENV = 'LAB_PROBE_BASE';
@@ -49,6 +53,33 @@ export const PROBE_STDERR_ENV = 'LAB_PROBE_STDERR';
 
 /** Set to a zero-based child index to fail exactly that one invocation. */
 export const PROBE_FAIL_AT_ENV = 'LAB_PROBE_FAIL_AT';
+
+/**
+ * Set to the code a "failing" child should exit with, instead of
+ * {@link PROBE_FAIL_EXIT}.
+ *
+ * Exists so a suite can fixture vat's *findings* exit. `1` is not a crash — a
+ * spec may declare it a completed run — and the difference between "every repeat
+ * exited 1 and the spec accepts 1" and "every repeat exited 3" is precisely what
+ * `completedExitCodes` decides. Without a controllable code, no fixture could
+ * make those two answers differ.
+ */
+export const PROBE_EXIT_CODE_ENV = 'LAB_PROBE_EXIT_CODE';
+
+/**
+ * Set to a JSON array of strings for the probe to write to stdout, one per
+ * invocation, the last entry repeating once the list runs out.
+ *
+ * A list rather than a single string because the facets that read stdout are
+ * exactly the facets that have to notice when two repeats DISAGREE, and a probe
+ * that can only say one thing makes that case unfixturable — the suite would be
+ * left asserting stability against a probe incapable of instability.
+ *
+ * Indexed by the count of children that already ran here, so it shares
+ * {@link PROBE_FAIL_AT_ENV}'s caveat: unambiguous only for a single warm
+ * command, where no cache clear is interleaved.
+ */
+export const PROBE_STDOUT_ENV = 'LAB_PROBE_STDOUT';
 
 /** An argument that makes every invocation of that command fail. */
 export const PROBE_FAIL_TOKEN = 'boom';
@@ -88,10 +119,16 @@ const PROBE_SOURCE = [
   `  perRepeat: process.env.${PROBE_REPEAT_ENV} ?? null,`,
   '});',
   String.raw`appendFileSync(log, line + '\n');`,
+  `const outSpec = process.env.${PROBE_STDOUT_ENV};`,
+  'if (outSpec !== undefined) {',
+  '  const outputs = JSON.parse(outSpec);',
+  '  process.stdout.write(outputs[Math.min(priorChildren, outputs.length - 1)] ?? "");',
+  '}',
   'if (failed) {',
   `  process.stderr.write(process.env.${PROBE_STDERR_ENV} ?? ${JSON.stringify(PROBE_DEFAULT_STDERR)});`,
   '}',
-  `process.exit(failed ? ${String(PROBE_FAIL_EXIT)} : 0);`,
+  `const failExit = Number(process.env.${PROBE_EXIT_CODE_ENV} ?? ${String(PROBE_FAIL_EXIT)});`,
+  'process.exit(failed ? failExit : 0);',
   '',
 ].join('\n');
 

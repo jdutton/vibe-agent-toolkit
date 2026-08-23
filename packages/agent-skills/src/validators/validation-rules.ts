@@ -17,7 +17,7 @@
  * - https://github.com/anthropics/skills (official examples)
  */
 
-import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 /**
  * Validation rule category

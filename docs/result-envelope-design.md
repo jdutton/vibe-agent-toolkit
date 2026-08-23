@@ -499,7 +499,7 @@ class RuntimeContext {
 
 ## Implementation Checklist
 
-### Phase 1: Update agent-schema Package
+### Phase 1: Update schema Package
 
 - [ ] Update `src/result-types.ts` with constants
 - [ ] Add `ExecutionMetadata` interface
@@ -554,7 +554,7 @@ const isRetryable = error === 'llm-timeout' || error === 'llm-rate-limit';
 ### After (constants)
 
 ```typescript
-import { RESULT_ERROR, LLM_TIMEOUT, RETRYABLE_LLM_ERRORS } from '@vibe-agent-toolkit/agent-schema';
+import { RESULT_ERROR, LLM_TIMEOUT, RETRYABLE_LLM_ERRORS } from '@vibe-agent-toolkit/schema';
 
 return {
   result: {
