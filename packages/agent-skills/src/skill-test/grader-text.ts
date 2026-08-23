@@ -119,6 +119,8 @@ const INTERMEDIATE_MAX = 0x2f;
 /** The leading half of a surrogate pair; see {@link capLength}. */
 const HIGH_SURROGATE_MIN = 0xd800;
 const HIGH_SURROGATE_MAX = 0xdbff;
+/** Above this, a code point is written as a surrogate PAIR; see {@link capLength}. */
+const MAX_BMP_CODE_POINT = 0xffff;
 
 const WHITESPACE_RUN = /\s+/gu;
 
@@ -135,7 +137,7 @@ const LINE_FEED = 0x0a;
  * ⚠️ WRITTEN AS NUMBERS, like every other constant in this file, and for the same
  * reason: a `\u202E` escape in a regex literal gets normalized into the real code
  * point by editors and tooling on the way in, which makes the module unreviewable
- * in a diff and unfindable by `grep`. Build test inputs with `String.fromCharCode`.
+ * in a diff and unfindable by `grep`. Build test inputs with `String.fromCodePoint`.
  *
  * THE RULE, and it is not "the Cf class". Two admission tests; a code point has to
  * pass one of them:
@@ -216,7 +218,7 @@ function isControlCode(code: number): boolean {
 function endOfCsi(value: string, from: number): number {
   let i = from;
   while (i < value.length) {
-    const code = value.charCodeAt(i);
+    const code = value.codePointAt(i) ?? Number.NaN;
     i += 1;
     if (code >= CSI_FINAL_MIN && code <= CSI_FINAL_MAX) return i;
   }
@@ -227,10 +229,10 @@ function endOfCsi(value: string, from: number): number {
 function endOfOsc(value: string, from: number): number {
   let i = from;
   while (i < value.length) {
-    const code = value.charCodeAt(i);
+    const code = value.codePointAt(i) ?? Number.NaN;
     if (code === BEL) return i + 1;
     // String Terminator is ESC followed by a backslash; a bare ESC ends it too.
-    if (code === ESC) return i + (value.charCodeAt(i + 1) === BACKSLASH ? 2 : 1);
+    if (code === ESC) return i + (value.codePointAt(i + 1) === BACKSLASH ? 2 : 1);
     i += 1;
   }
   return i;
@@ -243,7 +245,7 @@ function endOfOsc(value: string, from: number): number {
 function endOfNf(value: string, from: number): number {
   let i = from;
   while (i < value.length) {
-    const code = value.charCodeAt(i);
+    const code = value.codePointAt(i) ?? Number.NaN;
     i += 1;
     if (code < INTERMEDIATE_MIN || code > INTERMEDIATE_MAX) return i;
   }
@@ -253,7 +255,7 @@ function endOfNf(value: string, from: number): number {
 /** Index of the first code unit AFTER the escape sequence introduced by the ESC at `start`. */
 function endOfEscapeSequence(value: string, start: number): number {
   if (start + 1 >= value.length) return start + 1;
-  const second = value.charCodeAt(start + 1);
+  const second = value.codePointAt(start + 1) ?? Number.NaN;
   if (second === LEFT_BRACKET) return endOfCsi(value, start + 2);
   if (second === RIGHT_BRACKET) return endOfOsc(value, start + 2);
   if (second >= INTERMEDIATE_MIN && second <= INTERMEDIATE_MAX) return endOfNf(value, start + 1);
@@ -272,7 +274,7 @@ function stripEscapesAndControls(value: string, preserveNewlines = false): strin
   const out: string[] = [];
   let i = 0;
   while (i < value.length) {
-    const code = value.charCodeAt(i);
+    const code = value.codePointAt(i) ?? Number.NaN;
     if (code === ESC) {
       i = endOfEscapeSequence(value, i);
     } else if (isControlCode(code)) {
@@ -310,8 +312,16 @@ function capLength(value: string, max: number): string {
   const cut = max - TRUNCATION_MARKER.length;
   // A high surrogate immediately before the cut has its partner AT the cut (or is
   // itself already lone) — either way it must not be the last thing kept.
-  const last = value.charCodeAt(cut - 1);
-  const safeCut = last >= HIGH_SURROGATE_MIN && last <= HIGH_SURROGATE_MAX ? cut - 1 : cut;
+  // `codePointAt` reports the COMBINED code point when a well-formed pair STARTS at the
+  // index, so a value above the BMP means the cut would fall between the two halves. A
+  // value still inside the high-surrogate block means that half never had a partner and
+  // is already lone. Either way it must not be the last thing kept. (A LOW surrogate
+  // reads back as itself, which is correct: its partner is at `cut - 2`, so the pair
+  // survives the cut intact.)
+  const last = value.codePointAt(cut - 1) ?? Number.NaN;
+  const cutSplitsPair =
+    last > MAX_BMP_CODE_POINT || (last >= HIGH_SURROGATE_MIN && last <= HIGH_SURROGATE_MAX);
+  const safeCut = cutSplitsPair ? cut - 1 : cut;
   return value.slice(0, safeCut) + TRUNCATION_MARKER;
 }
 

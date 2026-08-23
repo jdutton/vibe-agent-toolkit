@@ -7,15 +7,15 @@ const MENTIONS_WIDGET_COUNT = 'mentions the widget count';
 const PRESENCE_ONLY_ID = 'presence-only';
 
 /**
- * Control bytes are BUILT with `String.fromCharCode`, never typed. A backslash-u
+ * Control bytes are BUILT with `String.fromCodePoint`, never typed. A backslash-u
  * escape for one of these gets normalized INTO the real byte by editors and tooling on
  * the way in — verified while writing this file, where such an escape in this very
  * comment came back as a literal ESC — which makes the file unreviewable in a diff and
  * unfindable by `grep`. Same rule, and same reason, as `grader-text.ts` states for its
  * own constant tables.
  */
-const ESC = String.fromCharCode(0x1b);
-const CR = String.fromCharCode(0x0d);
+const ESC = String.fromCodePoint(0x1b);
+const CR = String.fromCodePoint(0x0d);
 
 /** The repaint a fetched suite would author: erase the line, return, re-render in green as vat's own voice. */
 function repaint(prefix: string): string {
@@ -24,7 +24,9 @@ function repaint(prefix: string): string {
 
 /** Every C0/C1 control code surviving into a string bound for the operator's terminal. */
 function controlCodesIn(text: string): number[] {
-  return [...text].map((ch) => ch.charCodeAt(0)).filter((code) => code <= 0x1f || (code >= 0x7f && code <= 0x9f));
+  return [...text]
+    .map((ch) => ch.codePointAt(0) ?? Number.NaN)
+    .filter((code) => code <= 0x1f || (code >= 0x7f && code <= 0x9f));
 }
 
 /** Minimal valid eval entry, overridable per test. */

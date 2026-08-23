@@ -13,11 +13,11 @@ import {
  * a raw ESC or NUL in a test file makes it binary to `grep` and invisible in a
  * diff — the same reason grader-text.ts scans instead of using regex classes.
  */
-const ESC = String.fromCharCode(0x1b);
-const BEL = String.fromCharCode(0x07);
-const NUL = String.fromCharCode(0x00);
-const CR = String.fromCharCode(0x0d);
-const C1_CSI = String.fromCharCode(0x9b);
+const ESC = String.fromCodePoint(0x1b);
+const BEL = String.fromCodePoint(0x07);
+const NUL = String.fromCodePoint(0x00);
+const CR = String.fromCodePoint(0x0d);
+const C1_CSI = String.fromCodePoint(0x9b);
 
 /** The tail `capLength` spends to say it truncated. Module-private there, so restated here. */
 const TRUNCATION_MARKER = '... (truncated)';
@@ -113,7 +113,7 @@ describe('sanitizeGraderText', () => {
  * and costs a mangled quotation — the same argument grader-text.ts already made for
  * the variation selectors.
  *
- * Built with `String.fromCharCode` for the same reason grader-text.ts uses numbers:
+ * Built with `String.fromCodePoint` for the same reason grader-text.ts uses numbers:
  * a literal U+202E in this file is invisible in a diff and unfindable by `grep`
  * (this comment tripped the repo's own bidi-character lint when it carried one).
  */
@@ -141,19 +141,19 @@ const PRESERVED_INVISIBLES: ReadonlyArray<[string, number]> = [
   ['U+FE0F VARIATION SELECTOR-16', 0xfe0f],
 ];
 
-const ZWJ = String.fromCharCode(0x200d);
-const ZWNJ = String.fromCharCode(0x200c);
-const VS16 = String.fromCharCode(0xfe0f);
+const ZWJ = String.fromCodePoint(0x200d);
+const ZWNJ = String.fromCodePoint(0x200c);
+const VS16 = String.fromCodePoint(0xfe0f);
 
 /** `a<code point>b` — the minimal shape that shows whether the middle survived. */
 function around(code: number): string {
-  return `a${String.fromCharCode(code)}b`;
+  return `a${String.fromCodePoint(code)}b`;
 }
 
 describe('sanitizeGraderText — bidi controls and invisible characters', () => {
   it.each(NEUTRALIZED_INVISIBLES)('neutralizes %s', (_label, code) => {
     const out = sanitizeGraderText(around(code));
-    expect(out, 'the code point survived into an artifact').not.toContain(String.fromCharCode(code));
+    expect(out, 'the code point survived into an artifact').not.toContain(String.fromCodePoint(code));
     expect(out).toBe('a b');
   });
 
@@ -176,7 +176,7 @@ describe('sanitizeGraderText — bidi controls and invisible characters', () => 
   // The verified end-to-end shape: one RLO in a friction message flips the tail of
   // vat's own stderr line. Nothing after it may still be an override.
   it('strips the override out of a friction-shaped message', () => {
-    const RLO = String.fromCharCode(0x202e);
+    const RLO = String.fromCodePoint(0x202e);
     const out = sanitizeGraderText(`path-assumption${RLO} assumed /tmp exists`);
     expect(out).toBe('path-assumption assumed /tmp exists');
   });
@@ -201,7 +201,7 @@ describe('sanitizeTextPreservingLines', () => {
   });
 
   it('still removes escape sequences, controls and bidi overrides', () => {
-    const RLO = String.fromCharCode(0x202e);
+    const RLO = String.fromCodePoint(0x202e);
     const out = sanitizeTextPreservingLines(`ok${ESC}[32m${NUL}${RLO}\nnext${CR}line`);
     expect(out).toBe('ok  \nnext line');
     expect(out).not.toContain(ESC);
@@ -235,9 +235,9 @@ describe('sanitizeTextPreservingLines', () => {
   // whitespace collapse, and the collapse was what ate these in the SIBLING — so
   // they reached stderr through `quoteSuiteBlock` -> `EvalInputError` intact.
   it('removes the invisibles only the sibling collapse used to eat', () => {
-    const BOM = String.fromCharCode(0xfeff);
-    const LS = String.fromCharCode(0x2028);
-    const PS = String.fromCharCode(0x2029);
+    const BOM = String.fromCodePoint(0xfeff);
+    const LS = String.fromCodePoint(0x2028);
+    const PS = String.fromCodePoint(0x2029);
     const out = sanitizeTextPreservingLines(`a${BOM}b${LS}c${PS}d`);
     expect(out).toBe('a b c d');
     expect(out, 'a separator some renderers break lines on survived').not.toContain(LS);

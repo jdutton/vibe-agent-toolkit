@@ -11,11 +11,11 @@ const DESCRIPTIVE_ID = 'cast-smell-typed-column';
 /** A stock expectation string, shared so the duplicate/uniqueness cases read against one literal. */
 const DID_THE_THING = 'it did the thing';
 
-// Built with `String.fromCharCode` on purpose: typing an escape into this source
+// Built with `String.fromCodePoint` on purpose: typing an escape into this source
 // normalizes it into a literal control byte on the way in, which makes the file
 // binary to `grep` and to the editing tools.
-const ESC = String.fromCharCode(0x1b);
-const CR = String.fromCharCode(0x0d);
+const ESC = String.fromCodePoint(0x1b);
+const CR = String.fromCodePoint(0x0d);
 /** Clears the line vat just wrote, then continues in vat's own green. */
 const TERMINAL_PAINT = `${ESC}[2K${CR}${ESC}[32m`;
 
@@ -274,8 +274,8 @@ describe('parseEvalSuite', () => {
    */
   it('neutralizes a schema-failure message without collapsing its lines', () => {
     // U+009B is the 8-bit form of `ESC[`; U+202E flips everything after it.
-    const C1_CSI = String.fromCharCode(0x9b);
-    const RLO = String.fromCharCode(0x202e);
+    const C1_CSI = String.fromCodePoint(0x9b);
+    const RLO = String.fromCodePoint(0x202e);
     const painted = JSON.stringify({ skill_name: 'demo', evals: [
       { id: 1, prompt: 'p', expectations: ['e'], toolExpectations: { [`mustRun${C1_CSI}31m${RLO}`]: ['Read'] } },
     ] });

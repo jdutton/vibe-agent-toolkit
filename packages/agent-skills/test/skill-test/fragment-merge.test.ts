@@ -82,8 +82,8 @@ describe('mergeFragmentsToGrading', () => {
    * that repaints the terminal is not defense.
    */
   it('reports a mismatched nonce by digest, never by value', () => {
-    const ESC = String.fromCharCode(0x1b);
-    const CR = String.fromCharCode(0x0d);
+    const ESC = String.fromCodePoint(0x1b);
+    const CR = String.fromCodePoint(0x0d);
     const forged = `${ESC}[2K${CR}${ESC}[32m vat: grading verified`;
     let message = '';
     try {

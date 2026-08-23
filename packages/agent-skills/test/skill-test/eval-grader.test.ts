@@ -22,11 +22,11 @@ const NONCE = 'nonce-abc-123';
 const EVAL_ID = 'eval-1';
 const ENOENT_ERROR = new Error('ENOENT: claude not found');
 
-// Built with `String.fromCharCode` on purpose: typing an escape into this source
+// Built with `String.fromCodePoint` on purpose: typing an escape into this source
 // normalizes it into a literal control byte on the way in, which makes the file
 // binary to `grep` and to the editing tools.
-const ESC = String.fromCharCode(0x1b);
-const CR = String.fromCharCode(0x0d);
+const ESC = String.fromCodePoint(0x1b);
+const CR = String.fromCodePoint(0x0d);
 
 function validFragmentFor(evalId: string, nonce: string): Record<string, unknown> {
   return {
@@ -453,7 +453,7 @@ describe('runGraderForEval', () => {
       // The fragment parse sanitizes the reported name; the declared side is
       // normalized the same way, so the comparison happens in one space and a
       // decorated name is neither a false mismatch nor a way past the check.
-      const esc = String.fromCharCode(0x1b);
+      const esc = String.fromCodePoint(0x1b);
       const fragment = {
         ...validFragmentFor(EVAL_ID, NONCE),
         tool: { mustRun: [{ name: `${esc}[32mcsvsum${esc}[0m`, ran: true }], passed: true },

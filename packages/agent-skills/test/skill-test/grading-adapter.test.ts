@@ -186,8 +186,8 @@ describe('parseGradingJson — the rejection message is not a paint surface', ()
   // reported (that route belongs to the `.strict()` fragment schema in a sibling module).
   // A type mismatch on `passed`/`text` names the type, never the value. An earlier draft
   // of this test used the forged-key fixture and passed with the sanitizer REMOVED.
-  const ESC = String.fromCharCode(27);
-  const CR = String.fromCharCode(13);
+  const ESC = String.fromCodePoint(27);
+  const CR = String.fromCodePoint(13);
   const forged = `x${ESC}[2K${CR}${ESC}[32mvat: grading verified${ESC}[0m`;
 
   it('strips escape and control bytes a report smuggled through a rejected enum value', () => {

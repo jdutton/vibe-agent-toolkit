@@ -2463,12 +2463,12 @@ describe('detectBaselineContamination — `match` names nobody', () => {
  * it, so the raw bytes would still land in `baseline.json`.
  */
 describe('detectBaselineContamination — a degradation detail cannot forge a terminal line', () => {
-  // Built with `String.fromCharCode`: a `\u`-style escape typed into a source file
+  // Built with `String.fromCodePoint`: a `\u`-style escape typed into a source file
   // in this module family is normalized into a literal control byte on the way in,
   // which defeats grep and breaks exact-match editing.
-  const ESC = String.fromCharCode(27);
-  const CR = String.fromCharCode(13);
-  const LF = String.fromCharCode(10);
+  const ESC = String.fromCodePoint(27);
+  const CR = String.fromCodePoint(13);
+  const LF = String.fromCodePoint(10);
   const FORGERY = `$D${ESC}[2K${CR}${ESC}[32mvat: control arm verified clean${ESC}[0m${LF}second line`;
 
   it('strips escape, carriage-return and newline from a transcript-derived detail', () => {
