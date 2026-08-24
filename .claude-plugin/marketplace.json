@@ -9,7 +9,7 @@
       "name": "vibe-agent-toolkit",
       "description": "Development agents and skills for building with vibe-agent-toolkit",
       "source": "./plugins/vibe-agent-toolkit",
-      "version": "0.2.0-rc.2",
+      "version": "0.2.0-rc.3",
       "author": {
         "name": "vibe-agent-toolkit contributors"
       }
