@@ -315,10 +315,15 @@ cache, not a replacement for either layer.
     vocabulary the earlier draft listed: the first belongs to the npm Changesets release tool that
     no agent harness reads, and the other three are the skill packager's and a lens's outputs
     rather than functions of a path.
-- ⚠️ **Populated but not yet consumed:** nothing reads `resource_tags`. The §7 always-loaded
-  context-budget check — the first named consumer — is unbuilt, and so is `lens_entry_points`,
-  which it would join against. A populated table is not evidence of a *useful* one any more than a
-  typed one was evidence of a populated one.
+- ✅ **Consumed as of 2026-08-23.** `resource_tags` has its first reader: the always-loaded
+  context-budget check reads the `claude-md` tag to decide which realizations set an instruction
+  chain (`packages/resources/src/projection/claude-context-budget-sweep.ts › claudeMdIdentities()`,
+  and the same lookup in `claude-context-accounting.ts`'s caller). It ships as `vat claude budget`,
+  a command of its own rather than a check folded into `vat resources validate` — a validation run
+  must not emit findings nobody asked for. `lens_entry_points` remains unbuilt, and the check does
+  not join against it. A populated table is still not evidence of a *useful* one any more than a
+  typed one was evidence of a populated one; what changed is that this one now has a consumer that
+  would break if it went empty.
 
 > ✅ **The Zones revisions below have LANDED** — this note is kept as the record of what changed and
 > why, not as a warning about pending work. Zone modelling was originally deferred past population

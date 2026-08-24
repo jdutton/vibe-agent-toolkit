@@ -25,7 +25,7 @@
 
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { GitTracker, normalizedTmpdir, runGitOrThrow, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll } from 'vitest';
 
 import { buildClaudeContextPopulation } from '../../src/projection/claude-context-population.js';
@@ -44,10 +44,18 @@ export interface ClaudeContextTree {
  * @param files - Root-relative, forward-slashed paths to file contents. Parent
  *   directories are created; nothing else is written, so the tree contains
  *   exactly what the caller declared
+ * @param options - How the tree is populated
+ * @param options.git - `git init` the tree and hand the lane a real
+ *   {@link GitTracker}. ⛔ Required to observe anything about ignored paths at
+ *   all: outside a repository nothing is ignored, so a lane that declines the
+ *   gitignored half and one that realizes it agree for the wrong reason. No
+ *   commit is made — `GitTracker` falls back to `git check-ignore`, which reads
+ *   `.gitignore` directly
  * @returns The temp directory and the projection the lane derived from it
  */
 export async function buildClaudeContextTree(
   files: Readonly<Record<string, string>>,
+  options: { git?: boolean } = {},
 ): Promise<ClaudeContextTree> {
   // `normalizedTmpdir`, not `os.tmpdir()`: on Windows the raw value can be an
   // 8.3 short name (`RUNNER~1`), which does not compare equal to the long path
@@ -60,9 +68,22 @@ export async function buildClaudeContextTree(
     await writeFile(absolute, content);
   }
 
+  let gitTracker: GitTracker | undefined;
+  if (options.git === true) {
+    // No output suppression is needed or available: `runGitOrThrow` CAPTURES
+    // stdout/stderr rather than inheriting them, so `git init`'s banner never
+    // reaches the test reporter. `GitRunOptions` has no `stdio` passthrough on
+    // purpose — it pins the repository via `cwd` after scrubbing the ambient git
+    // environment, which a raw `stdio` handoff would sit beside misleadingly.
+    runGitOrThrow(['init'], { cwd: dir });
+    gitTracker = new GitTracker(dir);
+    await gitTracker.initialize();
+  }
+
   const projection = await buildClaudeContextPopulation({
     root: dir,
     onBlobPopulation: () => undefined,
+    ...(gitTracker !== undefined && { gitTracker }),
   });
   return { dir, projection };
 }

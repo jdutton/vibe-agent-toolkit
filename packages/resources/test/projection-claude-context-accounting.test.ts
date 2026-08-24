@@ -323,18 +323,19 @@ describe('the stated limits', () => {
       .toContain('applies whether or not the unknown-size, skipped and pruned counters are zero');
   });
 
-  it('states 21 limits covering all four directions', () => {
+  it('states 23 limits covering all four directions', () => {
     // Spec §11's fifteen, plus the nested-rule trigger D-B6 introduced, plus the
     // unresolved-conditions collapse a reviewer confirmed after that, plus the
     // four the final review found missing — the token estimator, the unfollowed
     // variable import, the overall context-window scope, and the budget check a
-    // directory query skips.
+    // directory query skips — plus the gitignored half this lane stopped
+    // realizing.
     //
     // ⛔ A change detector, and only a change detector: it fails when this list
     // grows or shrinks, which is what caught a draft that reused a published
     // slot. It cannot see an assumption made elsewhere in the lane and never
     // written down — see the by-name assertions below for what it is paired with.
-    expect(CLAUDE_CONTEXT_LIMITS).toHaveLength(22);
+    expect(CLAUDE_CONTEXT_LIMITS).toHaveLength(23);
     const directions = new Set(CLAUDE_CONTEXT_LIMITS.map((limit) => limit.direction));
     expect(directions.has('over-report')).toBe(true);
     expect(directions.has(UNDER_REPORT)).toBe(true);
@@ -419,6 +420,23 @@ describe('the stated limits', () => {
 
     expect(limit?.direction).toBe(UNDER_REPORT);
     expect(limit?.statement).toContain('∀ half is immune');
+  });
+
+  it('signs the gitignored half this lane stopped realizing as an under-report', () => {
+    // ⛔ The one entry that MUST exist for the population change that created it
+    // to be honest. `buildClaudeContextPopulation` now passes `DECLINE_IGNORED`,
+    // so a generated `CLAUDE.md` the harness really does read is absent from the
+    // answer. A docstring is not enough: an omission nobody declared is
+    // indistinguishable from a file that is not there, and this list is the only
+    // place a consumer can learn which way to hedge.
+    const limit = CLAUDE_CONTEXT_LIMITS.find((entry) => entry.id === 'gitignored-not-realized');
+
+    expect(limit?.direction).toBe(UNDER_REPORT);
+    // The mechanism, so a reader can tell WHICH files are missing...
+    expect(limit?.statement).toContain('gitignored');
+    // ...and the one condition under which the bound is empty, so nobody hedges
+    // against it in a tree where nothing is ignored at all.
+    expect(limit?.statement).toContain('Outside a git working tree');
   });
 
   it('signs the estimator as an assumption running in both directions', () => {

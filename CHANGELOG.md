@@ -78,30 +78,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`ALWAYS_LOADED_CONTEXT_BUDGET` — a default-on check on the always-loaded context a directory
-  pays.** `vat resources validate` (and so `vat validate`) now reports, at `info`, any working
-  directory whose always-loaded context exceeds a token budget. The measured chain is the repo-root
-  `CLAUDE.md`/`AGENTS.md`, every one on the directory path down to it, and **one level** of `@`
-  imports. Rules files are excluded — they are `selected`, not `always`.
+- **`vat claude budget [paths...]` — checks the always-loaded context a working location pays.**
+  Reports `ALWAYS_LOADED_CONTEXT_BUDGET`, at `info`, for any instruction chain over a token budget.
+  The measured chain is the repo-root `CLAUDE.md`/`AGENTS.md`, every one on the directory path down
+  to the location, and **one level** of `@` imports. Rules files are excluded — they are `selected`,
+  not `always`. Naming paths narrows which chains are reported; no paths checks the whole tree.
 
-  **It reports, it does not gate.** `info` findings do not change the exit code, so no build goes red
-  from an upgrade. This is the first check to consume the resource projection, and it is a TypeScript
-  predicate over the projection's row model rather than SQL — no default-on check may require a query
-  engine.
+  **It is its own command, not part of `vat resources validate`.** Neither validate nor `vat
+  validate` reports the budget or takes a flag for it in either direction. Its query sibling
+  `vat claude context` still never gates; `vat claude budget` is the half that has a threshold.
 
   - **Threshold: `resources.validation.thresholds.alwaysLoadedContextTokens`, default 12,000.** The
     default is a property of the pipeline, not of the config file: a project with no
-    `vibe-agent-toolkit.config.yaml` runs the same check at the same number. Set the key to move the
-    budget, `resources.validation.severity.ALWAYS_LOADED_CONTEXT_BUDGET: ignore` to silence it, or
-    pass `--no-context-budget` to skip the work entirely. `--collection` skips it too — the budget is
-    a property of a position in the tree, not of a collection.
+    `vibe-agent-toolkit.config.yaml` is checked at the same number. Set the key to move the budget,
+    or `resources.validation.severity.ALWAYS_LOADED_CONTEXT_BUDGET: ignore` to silence it. `info`
+    does not change the exit code; promoting the code to `error` makes the command exit 1.
   - **One finding per distinct context chain, not per directory.** Directories that load the same set
-    of files share one finding, which names how many working locations pay it. In this repository 819
-    directories collapse to 9 such chains — 553 of them load only the root `CLAUDE.md` — so a single
-    oversized root file produces one finding rather than 553 identical ones.
-  - **Gitignored directories are not working locations.** Build output still loads context (the
-    harness reads the filesystem, not git) but nobody works there, so `dist/`, `coverage/` and
-    friends are excluded from the report.
+    of files share one finding, which names how many working locations pay it. In this repository 589
+    directories collapse to 9 such chains — 366 of them load only the root `CLAUDE.md` — so a single
+    oversized root file produces one finding rather than 366 identical ones.
+  - **Gitignored files are not counted at all.** `dist/`, `coverage/` and friends are neither
+    reported as working locations nor measured as context, so a generated `CLAUDE.md` or rules file
+    is invisible to the budget. `vat claude context` lists this as a stated limit
+    (`gitignored-not-realized`, direction `under-report`).
   - **The total is a lower bound, and says so.** A global `~/.claude/CLAUDE.md` and the enabled skill
     index are real always-loaded cost that a tree-only projection cannot see, and no per-directory
     budget could act on them. Where rows were seen but not estimated, the message names the counts.

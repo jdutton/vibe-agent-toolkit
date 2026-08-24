@@ -31,8 +31,19 @@
  * one the four-corpus calibration produced and not because 10,000 is unusable
  * here.
  *
+ * ⚠️ **The DENOMINATOR moved later the same day and the answer did not.** The
+ * context population began declining the gitignored half, so the same sweep now
+ * covers **589 directories: median 8,184, p90 9,457, max 14,195**, and the
+ * flagged sets are identical — **39** over 10,000 (`docs/architecture` and
+ * `packages/vat-development-agents/resources/skills`), **1** over 12,000
+ * (`docs/architecture`, 14,195), none over 15,000. The 230 directories that left
+ * were `dist/`, `coverage/` and their like, which pay whatever their nearest
+ * committed ancestor pays and so could never be the flagged one. Percentages
+ * computed from the old denominator are stale by construction; the counts are
+ * not.
+ *
  * ⚠️ **Every exclusion branch below is unreachable from VAT's own corpus.**
- * Across all 819 directories, this budget equals the shipped `totals.alwaysTokens`
+ * Across every one of those directories, this budget equals the shipped `totals.alwaysTokens`
  * exactly — zero divergence. There are no rules-only `always` rows, no imports
  * past one hop, and no unattributed imports anywhere in this tree. So
  * `excludedRuleRows`, `excludedDeepImportRows` and `unattributedImportRows` fire

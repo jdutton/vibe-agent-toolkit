@@ -7,10 +7,7 @@ import * as path from 'node:path';
 
 import { packagedFileEntries } from '@vibe-agent-toolkit/agent-skills';
 import {
-  buildClaudeContextPopulation,
   DeferredArtifacts,
-  DEFAULT_ALWAYS_LOADED_CONTEXT_TOKENS,
-  sweepAlwaysLoadedBudgets,
   type CollectionStats,
   type DeferredSkillFiles,
   type ProjectConfig,
@@ -18,30 +15,23 @@ import {
   type ValidationResult,
 } from '@vibe-agent-toolkit/resources';
 import {
-  applyAllowFilter,
   calculateValidationStatus,
   countBySeverity,
   type IssueSeverity,
   type SeverityCounts,
-  type ValidationIssue,
   type ValidationIssueCode,
 } from '@vibe-agent-toolkit/schema';
 import type { GitTracker } from '@vibe-agent-toolkit/utils';
 import { resolveAssetReference, safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';
 
-import { contextBudgetIssues } from '../../utils/context-budget-issues.js';
 import { formatDurationSecs } from '../../utils/duration.js';
 import { summarizeFindings, type FindingCountSummary } from '../../utils/issue-rendering.js';
-import { resolveIssueSeverity } from '../../utils/issue-severity.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { writeTestFormatError } from '../../utils/output.js';
-import { populationWiring } from '../../utils/population-wiring.js';
 import { projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
-import { withPopulationCache } from '../../utils/projection-store.js';
 import { loadResourcesWithConfig } from '../../utils/resource-loader.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
-import { gitTrackerForProjectRoot } from '../audit/distributed-tree.js';
 import { discoverSkillsFromConfig } from '../skills/skill-discovery.js';
 
 import { handleCommandError } from './command-helpers.js';
@@ -512,33 +502,6 @@ export interface ValidateOptions {
   checkHtmlAnchors?: boolean; // Strictly validate HTML fragment anchors against element ids
   cache?: boolean; // Commander negates this when --no-cache is passed; absent = true (cache enabled)
   checkFrontmatterLinks?: boolean; // Commander negates this when --no-check-frontmatter-links is passed; absent = true
-  /** Commander negates this when --no-context-budget is passed; absent = true (check runs). */
-  contextBudget?: boolean;
-}
-
-/**
- * Translate `--no-context-budget` into "run the always-loaded budget check".
- *
- * ⚠️ Written as the POSITIVE key, exactly like {@link resolveNoCache} next door,
- * and for the same reason that function exists: Commander represents a `--no-x`
- * boolean as the key `x`, defaulted to `true` and set to `false` only when the
- * negated flag is passed. It never emits a `noX` key. This repo has already
- * shipped a silent no-op by declaring the key Commander cannot produce — the
- * compiler happily validated a read that was always `undefined`, and the flag
- * did nothing for as long as nobody tested it.
- *
- * ⛔ Absent means ON. The budget check is default-on, and a project with no
- * `vibe-agent-toolkit.config.yaml` runs it at exactly the same threshold as one
- * with a config — the default check set is a property of the pipeline, not of
- * the config file.
- *
- * @param options - The command's flags
- * @returns Whether the always-loaded budget check should run
- */
-export function resolveContextBudgetEnabled(
-  options: Pick<ValidateOptions, 'contextBudget'>,
-): boolean {
-  return options.contextBudget !== false;
 }
 
 /**
@@ -628,85 +591,6 @@ export async function computeDeferredArtifacts(
   return DeferredArtifacts.from(skillFiles, projectRoot);
 }
 
-/**
- * The always-loaded context budget findings for this project, severity-resolved.
- *
- * Orchestration only, and deliberately so: which directories exist, what each
- * pays and whether that is over budget are all decided in
- * `@vibe-agent-toolkit/resources` (`sweepAlwaysLoadedBudgets`), and the wording
- * of the findings in `contextBudgetIssues`. This function populates one tree,
- * calls them, and runs the two shared filters every other lane runs.
- *
- * ⚠️ The population roots at `projectRoot` and NOWHERE else, whatever `pathArg`
- * named. A population source is bound to one tree and must not be offered
- * another: a budget is a property of a position in the directory tree, and
- * rooting a second population at a subdirectory would compute one against a
- * corpus whose ancestors are missing — a confidently wrong number.
- *
- * ## Degradation is ANNOUNCED, never silent
- *
- * A projection failure must not take down a validation run that otherwise
- * succeeded — the budget is an `info`-severity observation and the link/anchor
- * findings are what the caller came for. But it is reported at `warn` (stderr,
- * so the stdout document stays parseable) rather than at `debug`, because a lane
- * that quietly returns nothing is indistinguishable from a clean bill of health,
- * and this repo has been bitten by exactly that. `debug` would make the default
- * run silent, which is the failure mode, not the fix.
- *
- * @param projectRoot - The absolute corpus root; the ONLY tree populated
- * @param config - The project's config, or undefined when it has none
- * @param options - The command's flags
- * @param logger - Where a degraded run announces itself (stderr)
- * @returns The findings, allow-filtered and severity-resolved; empty when the
- *   check is off, when nothing is over budget, or when the sweep could not run
- */
-async function contextBudgetFindings(
-  projectRoot: string,
-  config: ProjectConfig | undefined,
-  options: ValidateOptions,
-  logger: Logger,
-): Promise<ValidationIssue[]> {
-  // `--collection` narrows to a RESOURCE COLLECTION, and the budget is not a
-  // property of one: it belongs to a position in the directory tree. Reporting
-  // it under a collection filter would answer a question nobody asked, and would
-  // report the same directories whichever collection was named.
-  if (options.collection !== undefined || !resolveContextBudgetEnabled(options)) return [];
-
-  const validation = config?.resources?.validation;
-  // ⛔ The number is never re-spelled here. It is a MEASURED quantity that lives
-  // beside the detector; a literal in this package would be a second source of
-  // truth that nothing compares.
-  const threshold = validation?.thresholds?.alwaysLoadedContextTokens
-    ?? DEFAULT_ALWAYS_LOADED_CONTEXT_TOKENS;
-
-  let raw: ValidationIssue[];
-  try {
-    const projection = await withPopulationCache({ root: projectRoot }, async (cache) => {
-      const gitTracker = await gitTrackerForProjectRoot(projectRoot);
-      return buildClaudeContextPopulation({
-        root: projectRoot,
-        ...populationWiring(logger, gitTracker, cache),
-      });
-    });
-    // Default options: gitignored working locations are excluded by the sweep,
-    // deliberately — a context budget reported for `dist/` is noise, and noise
-    // teaches people to stop reading the check.
-    raw = contextBudgetIssues(sweepAlwaysLoadedBudgets(projection, threshold));
-  } catch (error) {
-    logger.warn(
-      'Warning: the always-loaded context budget check could not run, so this run reports no'
-      + ` budget findings (every other check ran normally): ${String(error)}`,
-    );
-    return [];
-  }
-
-  // The same two shared mechanisms every other lane uses, in the same order:
-  // `validation.allow` suppresses by path glob, then `validation.severity`
-  // resolves — BOTH directions, so an adopter promoting this code to `error`
-  // gets an error, which is the case that gets forgotten.
-  return resolveIssueSeverity(applyAllowFilter(raw, validation ?? {}).emitted, validation);
-}
-
 export async function validateCommand(
   pathArg: string | undefined,
   options: ValidateOptions
@@ -763,10 +647,6 @@ export async function validateCommand(
       ? filterByCollection(registry, validationResult, options.collection, projectRoot)
       : { filteredIssues: validationResult.issues, filteredStats: registry.getStats() };
 
-    // Runs BEFORE the duration is taken, so `durationSecs` covers the whole run
-    // rather than reporting a figure the budget population is missing from.
-    const budgetIssues = await contextBudgetFindings(projectRoot, config, options, logger);
-
     const duration = Date.now() - startTime;
 
     // Build validation metadata
@@ -791,14 +671,8 @@ export async function validateCommand(
     // while the exit code still covers the whole project.
     const { hasErrors } = validationResult;
 
-    // Flatten issues for display (relative `file` + absolute `absPath`). The
-    // budget findings join the SAME list, so they render, are counted and are
-    // summarized by code exactly like every other finding — a second reporting
-    // path would be a second vocabulary for the same run.
-    const issueData = [
-      ...flattenIssuesForDisplay(filteredIssues, projectRoot),
-      ...flattenIssuesForDisplay(budgetIssues, projectRoot),
-    ];
+    // Flatten issues for display (relative `file` + absolute `absPath`).
+    const issueData = flattenIssuesForDisplay(filteredIssues, projectRoot);
 
     const context: ValidationContext = {
       stats: filteredStats,
@@ -809,17 +683,11 @@ export async function validateCommand(
 
     emitResult(issueData, context, registry, options.format ?? 'yaml', options.verbose === true);
     logGitTrackerStats(gitTracker, logger);
-    // The library's severity-based `hasErrors` still decides the framework's own
-    // findings — that has not changed. The second clause covers findings the
-    // library never saw: the budget lane resolves its OWN severities here, and
-    // `resolveIssueSeverity`'s doc comment says in as many words that whether a
-    // promotion moves the exit code is the CALLER's contract. `vat resources
-    // validate` fails on error severity, so an adopter who promoted
-    // ALWAYS_LOADED_CONTEXT_BUDGET to `error` must get exit 1. At its `info`
-    // default this clause is always false, so the budget check cannot flip a
-    // green run red on its own.
-    const budgetHasErrors = budgetIssues.some((issue) => issue.severity === 'error');
-    process.exit(hasErrors || budgetHasErrors ? 1 : 0);
+    // The library's severity-based `hasErrors` is the WHOLE decision: every
+    // finding this command reports came from `registry.validate()`, which
+    // already allow-filtered and severity-resolved them. Nothing is reported
+    // here that the library never saw, so there is no second clause to OR in.
+    process.exit(hasErrors ? 1 : 0);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'Validation');
   }

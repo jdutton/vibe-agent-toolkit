@@ -87,7 +87,6 @@ Examples:
     .option('--check-html-anchors', 'Strictly validate HTML fragment anchors against element ids (default: false; HTML fragments are often runtime-defined by JS)')
     .option('--no-cache', 'Disable every disk cache for this run: the parse cache and the external URL cache (forces fresh parses and fresh checks)')
     .option('--no-check-frontmatter-links', 'Skip frontmatter URI-reference link validation across all collections (default: enabled)')
-    .option('--no-context-budget', 'Skip the always-loaded context budget check (ALWAYS_LOADED_CONTEXT_BUDGET) — it populates a second tree, so it costs a second sweep')
     .action(validateCommand)
     .addHelpText(
       'after',
@@ -188,15 +187,6 @@ HTML Fragment Anchor Validation:
   proof of breakage. Use --check-html-anchors to strict-check fully-static
   HTML against literal id/name attributes. Markdown anchor checking is
   unaffected — heading slugs are statically authoritative and always checked.
-
-Always-Loaded Context Budget:
-  Reports ALWAYS_LOADED_CONTEXT_BUDGET when the CLAUDE.md chain an agent loads
-  before reading anything exceeds the budget — one info finding per chain, so
-  it never fails the run. Tune the budget with
-  resources.validation.thresholds.alwaysLoadedContextTokens, or promote/silence
-  the code via resources.validation.severity.
-  The check populates a SECOND tree, so it costs a second sweep of the project.
-  --no-context-budget skips it for this run.
 
 Frontmatter Validation:
   --frontmatter-schema <path>

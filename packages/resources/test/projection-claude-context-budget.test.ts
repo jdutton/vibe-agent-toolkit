@@ -18,7 +18,10 @@
  *
  * ## ⛔ These are the ONLY tests that will ever cover the exclusion branches
  *
- * Re-measured 2026-08-23 over this whole repo (819 directories): the budget
+ * Re-measured 2026-08-23 over this whole repo (819 directories, and 589 after
+ * the context population began declining the gitignored half — the departing
+ * directories were build output, which pays whatever its committed ancestor
+ * pays): the budget
  * equals the shipped `totals.alwaysTokens` with ZERO divergence. VAT's own tree
  * has no rules-only `always` rows, no imports past one hop, and no unattributed
  * imports — so `excludedRuleRows`, `excludedDeepImportRows` and

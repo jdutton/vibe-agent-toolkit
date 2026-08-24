@@ -66,7 +66,7 @@ async function contributeInRepo(): Promise<ExtentContribution> {
  * @returns The contribution
  */
 async function contributeWithParameters(parameters: JsonValue): Promise<ExtentContribution> {
-  runGitOrThrow(['init'], { cwd: root, stdio: 'pipe' });
+  runGitOrThrow(['init'], { cwd: root });
   const tracker = new GitTracker(root);
   await tracker.initialize();
   const base = new ProjectionBuilder(root, tracker).base();
@@ -85,7 +85,7 @@ async function contributeWithParameters(parameters: JsonValue): Promise<ExtentCo
  * @returns The contribution
  */
 async function contributeUnder(demand?: ContentDemand): Promise<ExtentContribution> {
-  runGitOrThrow(['init'], { cwd: root, stdio: 'pipe' });
+  runGitOrThrow(['init'], { cwd: root });
   const tracker = new GitTracker(root);
   await tracker.initialize();
   const base = new ProjectionBuilder(root, tracker, new RunContentCache()).base();

@@ -59,7 +59,7 @@ async function nestedRow(): Promise<ResourceRealizationRow> {
  */
 async function trackerOverFixture(): Promise<GitTracker> {
   writeFileSync(safePath.join(root, '.gitignore'), `${IGNORED_LOG}\n${IGNORED_DIR}/\n`);
-  runGitOrThrow(['init'], { cwd: root, stdio: 'pipe' });
+  runGitOrThrow(['init'], { cwd: root });
   const tracker = new GitTracker(root);
   await tracker.initialize();
   return tracker;

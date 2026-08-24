@@ -287,18 +287,18 @@ describe('sweepAlwaysLoadedBudgets', () => {
   });
 
   describe('gitignored working locations', () => {
-    it('excludes a directory whose realizations are all ignored, by default', async () => {
+    // ⛔ The `includeIgnored` opt-out this pair used to bracket is GONE. Once
+    // `buildClaudeContextPopulation` started declining the gitignored half, no
+    // real population could produce a `gitignored: true` row, so the option was a
+    // switch that could not change any answer — and a switch you can set that
+    // proves nothing is worse than no switch. The filter itself stays, as the
+    // backstop against the decline predicate and this column drifting apart, and
+    // the synthetic fixture below is the only thing that can still exercise it.
+    it('excludes a directory whose realizations are all ignored', async () => {
       const projection = withGitignored(await claudeContextFixture(TREE), [UTILS, UTILS_README]);
       const sweep = sweepAlwaysLoadedBudgets(projection, ROOMY);
       expect(directoriesOf(sweep)).not.toContain(UTILS);
       expect(sweep.evaluatedDirectories).toBe(TREE_LOCATIONS.length - 1);
-    });
-
-    it('keeps it under includeIgnored', async () => {
-      const projection = withGitignored(await claudeContextFixture(TREE), [UTILS, UTILS_README]);
-      const sweep = sweepAlwaysLoadedBudgets(projection, ROOMY, { includeIgnored: true });
-      expect(directoriesOf(sweep)).toContain(UTILS);
-      expect(sweep.evaluatedDirectories).toBe(TREE_LOCATIONS.length);
     });
 
     it('still lets an ignored CLAUDE.md set the representative — the harness reads it', async () => {

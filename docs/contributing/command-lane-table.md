@@ -4,10 +4,15 @@ Which of VAT's commands read the filesystem to build a resource population, and 
 entry point. This exists to replace the standing claim *"~70 commands, 5 examined"* with a bounded
 list, so the four-phase pipeline work knows exactly whose behaviour it must preserve.
 
-**Population: 66 commands** — 65 leaves plus `vat audit`, the only command group that is also
+**Population: 67 commands** — 66 leaves plus `vat audit`, the only command group that is also
 runnable in its own right (`vat audit [git-url-or-path]` alongside its `settings` subcommand).
 
-**24 enumerate. 42 do not.**
+**25 enumerate. 42 do not.**
+
+⚠️ It read *"66 commands — 65 leaves, 24 enumerate"* until 2026-08-23. The leaf added is
+`vat claude budget`, registered at `packages/cli/src/commands/claude/index.ts ›
+createClaudeCommand()`, which took the always-loaded budget check out of `vat resources validate`
+and gave it its own verb.
 
 The population was re-derived by the method below on 2026-08-22 and had gone **stale**: it read
 *"65 commands — 64 leaves"*, and the leaf it was missing is `vat cache clear`, registered at
@@ -54,24 +59,26 @@ sources, and neither is a clean fourth sink:
 Either way the command reports the enumerator that RAN, not the one the environment asked for. So a
 projection row's `crawl` mark is true but partial: it names a sink the lane can reach, not the
 enumerator doing the work, and how much work reaches that sink depends on which source
-`crawlSourceFor` returned for that root and what the tree contains. **Eight rows carry a projection**,
+`crawlSourceFor` returned for that root and what the tree contains. **Nine rows carry a projection**,
 and each takes it by default unless its escape hatch is set: `vat resources scan`,
 `vat resources validate` and `vat rag index` through
 `packages/cli/src/utils/resource-loader.ts › loadResourcesWithConfig()`; `vat skills validate`,
 `vat skills build` and `vat claude plugin build` for their link registries through
 `› withResourcePopulationSource()` — both gated by `› resourcesProjectionCrawlSelected()`, which is
-`!== 'walk'`; `vat inventory` on a plugin directory; and `vat claude context`, which has no walk arm
-at all. Four more inherit one: `vat build`, `vat validate` and `vat verify` through the phases they
+`!== 'walk'`; `vat inventory` on a plugin directory; and `vat claude context` and `vat claude budget`, neither of
+which has a walk arm at all. Four more inherit one: `vat build`, `vat validate` and `vat verify` through the phases they
 spawn, and `vat skill test run` by re-entering `vat claude plugin build`.
 
-⚠️ **`vat resources validate` is the first command to carry TWO projections in one process**, and
-they are not the same population: the resource population from `loadResourcesWithConfig()`, and the
-claude-context population `buildClaudeContextPopulation` builds for the default-on
-`ALWAYS_LOADED_CONTEXT_BUDGET` check. They answer different questions — *what files are here* versus
-*what does the harness load* — and the second deliberately does NOT decline gitignored paths, so the
-two disagree about the tree on purpose. Neither shares the other's enumeration. A reader counting
-"one projection per command" will get this row wrong. The raw `readdir`
-populations several commands build for themselves are un-modelled here on the same terms.
+⚠️ **No command carries two projections in one process any more**, and one briefly did. Between
+2026-08-22 and 2026-08-23 `vat resources validate` built the resource population from
+`loadResourcesWithConfig()` *and* a claude-context population for a default-on
+`ALWAYS_LOADED_CONTEXT_BUDGET` check. That check now has its own verb — `vat claude budget` — so
+each command holds exactly one population again. The two populations still answer different
+questions (*what files are here* versus *what does the harness load*) and still derive differently
+(the resource population skips content keying and the blob stage; the context population needs
+both), which is why they were never merged into one; what changed is that they no longer run in the
+same process. The raw `readdir` populations several commands build for themselves are un-modelled
+here on the same terms.
 `docs/architecture/command-population-matrix.md` §2–§5 is the accounting for the projection lane and
 those other routes — their selectors, extents and content stages; this table is deliberately not a
 second copy of it, and records only which enumeration entry point a command's route reaches.
@@ -98,10 +105,11 @@ process" — a cross-process cache is the only kind that can help them.
 | `vat skill review` | `crawl` + `registry-md-html` | `skill/review.ts` |
 | `vat corpus scan` | `crawl` + `registry-md-html` | `corpus/index.ts` (inline; see limits) |
 | `vat resources scan` | `crawl` | `resources/scan.ts` |
-| `vat resources validate` | `crawl` ×3 | `resources/validate.ts` — `crawl` once for the resource population via `packages/cli/src/utils/resource-loader.ts › loadResourcesWithConfig()`, **plus `crawl` ×2** for a SECOND, independent population: `› buildClaudeContextPopulation` behind the default-on `ALWAYS_LOADED_CONTEXT_BUDGET` check, which enumerates twice for the same root-discovery reason the `vat claude context` row gives. Skipped under `--no-context-budget` or `--collection` |
+| `vat resources validate` | `crawl` ×1 | `resources/validate.ts` — one crawl, for the resource population, via `packages/cli/src/utils/resource-loader.ts › loadResourcesWithConfig()`. Read `crawl` ×3 until 2026-08-22 and `crawl` ×2 until 2026-08-23, when the second population — built for the then-default-on `ALWAYS_LOADED_CONTEXT_BUDGET` check — moved out to `vat claude budget`. This command has no knowledge of the context budget at all now: no check, no flag in either direction |
 | `vat skills list` | `crawl` | `skills/list.ts` |
 | `vat rag index` | `crawl` | `rag/index-command.ts` |
-| `vat claude context [paths...]` | `crawl` ×2 | `claude/context.ts` → `buildClaudeContextPopulation` → `FilesystemExtentContributor` → `crawlSourceFor` → `GitCrawlSource` **by default**, or `FilesystemCrawlSource` → `crawlDirectory` (this cell named only the filesystem source until 2026-08-22) |
+| `vat claude context [paths...]` | `crawl` ×1 | `claude/context.ts` → `buildClaudeContextPopulation` → `› sharedEnumeration()` → `crawlSourceFor` → `GitCrawlSource` **by default**, or `FilesystemCrawlSource` → `crawlDirectory` (this cell named only the filesystem source until 2026-08-22, and read `crawl` ×2 until 2026-08-23). Two `populate()` passes, ONE crawl: both `FilesystemExtentContributor` registrations are handed the same enumeration |
+| `vat claude budget [paths...]` | `crawl` ×1 | `claude/budget.ts` → `buildClaudeContextPopulation` → the same route, the same double `populate()` and the same single crawl as the `vat claude context` row above. It is the SAME lane and the SAME population; only the question differs — `context` reports what one path loads, `budget` sweeps every working location and applies a threshold (`packages/resources/src/projection/claude-context-budget-sweep.ts › sweepAlwaysLoadedBudgets()`), and the sweep is nine `whatLoadsAt` queries on this repository rather than 589 |
 | `vat inventory [path]` | `crawl`, **or** the projection's `filesystem` extent on a plugin directory (the default there) | `inventory.ts` → `routeInventory()`; the walk at `packages/claude-marketplace/src/inventory/extract-skill.ts › crawlSkillLinkRegistry()` → `crawlDirectory`; the projection at `inventory.ts › populationProviderFor()` → `buildInventoryPopulation` → `FilesystemExtentContributor` → `crawlSourceFor` → `crawlDirectory` or `GitCrawlSource` |
 | `vat claude marketplace validate` | `crawl` | `claude/marketplace/validate.ts` |
 | `vat claude org skills list` | `crawl` | `claude/org/skills.ts` |
@@ -110,11 +118,17 @@ process" — a cross-process cache is the only kind that can help them.
 | `vat claude org skills versions list` | `crawl` | `claude/org/skills.ts` |
 | `vat claude org skills versions delete` | `crawl` | `claude/org/skills.ts` |
 
-`vat claude context` is the one row marked `crawl` **×2**, and the doubling is structural rather than
-incidental: `ContributorRegistry` keys on `id` and partitions on `kind` before any `contribute` runs,
-so `discoverImportRoots` must enumerate once — under `CONTENT_PARSING_SKIP`, with `'deferred'`
-content, reading no bytes — purely to name the `@`-import contributors the real population then
-registers. Documented at the head of `claude-context-population.ts`. Its enumeration reaches
+`vat claude context` and `vat claude budget` each **populate** twice, and that doubling is
+structural rather than incidental:
+`ContributorRegistry` keys on `id` and partitions on `kind` before any `contribute` runs, so
+`discoverImportRoots` must run once — under `CONTENT_PARSING_SKIP`, with `'deferred'` content,
+reading no bytes — purely to name the `@`-import contributors the real population then registers.
+⚠️ It does **not** crawl twice, and this paragraph said it did until 2026-08-23. The registration
+ordering is what is structural; the second walk never was. `sharedEnumeration()` performs one crawl
+and both passes replay it, which is sound only because both now ask the extent the same question —
+same source, same `DECLINE_IGNORED` parameter set — differing solely in `contentDemand`, which
+decides what a row SAYS rather than which paths exist. Documented at the head of
+`claude-context-population.ts`. Its enumeration reaches
 `GitCrawlSource` rather than `FilesystemCrawlSource` wherever `gitExtentSelected` holds — which this
 paragraph called an "opt-in" until 2026-08-22 and is not one: git is the default and `filesystem` is
 the opt-out, as the bullets above set out, and the same is true of every row in this table that goes
@@ -227,6 +241,6 @@ instrumented run saw it. Any future revision of this table must keep the runtime
   that both of `inventory.ts`'s routes to a sink leave the CLI package through a barrel import,
   which is exactly the edge rejected method 1's fix stopped attributing — its cure for barrel
   *over*-reporting has an under-reporting direction, and nothing in the derivation bounds it. The
-  runtime leg cannot exonerate it either: 22 invocations against 66 commands, and a probe proves
+  runtime leg cannot exonerate it either: 22 invocations against 67 commands, and a probe proves
   presence, never absence. This row was read out of `routeInventory()` and the two providers it
   gates.

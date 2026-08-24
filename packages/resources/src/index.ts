@@ -547,7 +547,7 @@ export {
 } from './projection/claude-context-budget.js';
 
 // That budget over the WHOLE tree, from one query per distinct instruction chain
-// rather than one per directory — 9 queries instead of 819 on VAT's own corpus.
+// rather than one per directory — 9 queries instead of 589 on VAT's own corpus.
 // The internals (`representativeFor`, `workingLocations`) stay unexported for the
 // reason `selectRules` does: pre-1.0, a published symbol is a contract, and the
 // collapse's soundness is guarded by the suite's differential oracle rather than
@@ -555,7 +555,6 @@ export {
 export {
   sweepAlwaysLoadedBudgets,
   type BudgetSweep,
-  type BudgetSweepOptions,
   type LocationBudget,
 } from './projection/claude-context-budget-sweep.js';
 

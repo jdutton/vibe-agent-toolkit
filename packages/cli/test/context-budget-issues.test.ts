@@ -18,13 +18,22 @@ import {
 import { CODE_REGISTRY } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
-import { contextBudgetIssues } from '../src/utils/context-budget-issues.js';
+import { contextBudgetIssues, scopeSweepToPaths } from '../src/utils/context-budget-issues.js';
 
 /** The threshold every fixture uses unless it says otherwise. */
 const THRESHOLD = 12_000;
 
 /** A representative that is not the corpus root, so `location` is carried. */
 const NESTED = 'packages/cli';
+
+/** A working location beneath {@link NESTED}. */
+const NESTED_CHILD = `${NESTED}/src`;
+
+/** A SIBLING of {@link NESTED} whose name merely starts with it — the segment-boundary trap. */
+const NESTED_SIBLING = `${NESTED}-x`;
+
+/** A path no fixture realizes. */
+const UNREALIZED = 'no/such/dir';
 
 /**
  * One representative's budget, and how many working locations borrow it.
@@ -38,6 +47,15 @@ interface BudgetSpec {
   readonly threshold?: number;
   /** How many working locations pay this representative's chain. Default 1. */
   readonly locations?: number;
+  /**
+   * The exact working locations paying this chain, overriding {@link locations}.
+   *
+   * Needed by the scoping tests and by nothing else: the generated names are all
+   * DESCENDANTS of the representative, so a fixture built from them cannot show
+   * a payer that sits outside the scope being asked about — which is the very
+   * case `scopeSweepToPaths` retains.
+   */
+  readonly locationDirs?: readonly string[];
   readonly contributors?: readonly BudgetContributor[];
   readonly unknownTokenRows?: number;
   readonly excludedRuleRows?: number;
@@ -98,13 +116,8 @@ function sweepOf(specs: readonly BudgetSpec[]): BudgetSweep {
   const locations: LocationBudget[] = [];
   for (const spec of specs) {
     const budget = budgetOf(spec);
-    const count = spec.locations ?? 1;
-    for (let index = 0; index < count; index += 1) {
-      locations.push({
-        directory: index === 0 ? spec.representative : `${spec.representative}/sub${String(index)}`,
-        representative: spec.representative,
-        budget,
-      });
+    for (const directory of payingDirectories(spec)) {
+      locations.push({ directory, representative: spec.representative, budget });
     }
   }
   return {
@@ -113,6 +126,21 @@ function sweepOf(specs: readonly BudgetSpec[]): BudgetSweep {
     evaluatedDirectories: locations.length,
     skippedUnknownLocations: 0,
   };
+}
+
+/**
+ * The working locations one spec's chain is paid by.
+ *
+ * @param spec - The representative's spec
+ * @returns Its payers, the representative itself first
+ */
+function payingDirectories(spec: BudgetSpec): readonly string[] {
+  if (spec.locationDirs !== undefined) return spec.locationDirs;
+  const dirs = [spec.representative];
+  for (let index = 1; index < (spec.locations ?? 1); index += 1) {
+    dirs.push(`${spec.representative}/sub${String(index)}`);
+  }
+  return dirs;
 }
 
 /** The one message a single-issue fixture produced. */
@@ -272,5 +300,82 @@ describe('contextBudgetIssues', () => {
       evaluatedDirectories: 0,
       skippedUnknownLocations: 0,
     })).toEqual([]);
+  });
+});
+
+describe('scopeSweepToPaths', () => {
+  /**
+   * A tree where the root chain is paid from three places — one of them a
+   * SIBLING whose name merely starts with the other scope's name — plus a
+   * second chain that sibling does NOT pay.
+   */
+  const TREE = sweepOf([
+    { representative: '', tokens: 14_195, locationDirs: ['', 'src', NESTED_SIBLING] },
+    { representative: NESTED, tokens: 20_000, locationDirs: [NESTED, NESTED_CHILD] },
+  ]);
+
+  it('selects every chain when the scope is the corpus root', () => {
+    const { sweep, unmatchedScope } = scopeSweepToPaths(TREE, ['']);
+
+    expect(sweep.locations).toEqual(TREE.locations);
+    expect(unmatchedScope).toEqual([]);
+  });
+
+  it('selects nothing at all for an empty scope', () => {
+    // `['']` is "the whole tree"; `[]` is "you named nothing". The two must not
+    // collapse into each other — a caller that passed an empty list by mistake
+    // would otherwise silently sweep everything.
+    expect(scopeSweepToPaths(TREE, []).sweep.locations).toEqual([]);
+  });
+
+  it('RETAINS every payer of a selected chain, including payers outside the scope', () => {
+    const { sweep } = scopeSweepToPaths(TREE, ['src']);
+
+    // `src` pays the root chain, so the root chain is selected — and all THREE
+    // of its payers come back, not just `src`. The finding's message says how
+    // many working locations pay it, and that is a fact about the TREE: keeping
+    // only the in-scope payer would report "1 working location pays it" for a
+    // chain three pay, which is a number nobody measured.
+    expect(sweep.locations.map((location) => location.directory))
+      .toEqual(['', 'src', NESTED_SIBLING]);
+    expect(contextBudgetIssues(sweep)[0]?.message).toContain('3 working locations pay it');
+  });
+
+  it('matches on SEGMENT boundaries, so a name-prefix sibling is not swept in', () => {
+    const { sweep, unmatchedScope } = scopeSweepToPaths(TREE, [NESTED]);
+
+    // `packages/cli-x` starts with `packages/cli` and pays a DIFFERENT chain. A
+    // bare `startsWith` would select the root chain too, reporting two findings
+    // where the caller asked about one directory.
+    expect(new Set(sweep.locations.map((location) => location.representative)))
+      .toEqual(new Set([NESTED]));
+    expect(unmatchedScope).toEqual([]);
+  });
+
+  it('includes the scope directory itself, not only what is beneath it', () => {
+    const { sweep } = scopeSweepToPaths(TREE, [NESTED_CHILD]);
+
+    expect(sweep.locations.map((location) => location.directory))
+      .toEqual([NESTED, NESTED_CHILD]);
+  });
+
+  it('names a scope that matched no working location rather than reporting it clean', () => {
+    const { sweep, unmatchedScope } = scopeSweepToPaths(TREE, [UNREALIZED, 'src']);
+
+    // The matched half still works; the unmatched half is REPORTED. Zero
+    // findings for `no/such/dir` is byte-identical to "within budget", and only
+    // this list distinguishes them.
+    expect(unmatchedScope).toEqual([UNREALIZED]);
+    expect(sweep.locations).not.toHaveLength(0);
+  });
+
+  it('carries the sweep counters through untouched, because a scope measures nothing', () => {
+    const { sweep } = scopeSweepToPaths(TREE, [NESTED]);
+
+    // They describe what was SWEPT. Recomputing them from the narrowed view
+    // would let `vat claude budget packages/cli` claim the tree has one chain.
+    expect(sweep.evaluatedDirectories).toBe(TREE.evaluatedDirectories);
+    expect(sweep.queriedDirectories).toBe(TREE.queriedDirectories);
+    expect(sweep.skippedUnknownLocations).toBe(TREE.skippedUnknownLocations);
   });
 });

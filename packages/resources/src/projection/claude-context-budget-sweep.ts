@@ -5,15 +5,22 @@
  * ## The measurement that shapes this
  *
  * Measured on VAT's own tree, 2026-08-23: `vat claude context .` — population
- * plus ONE query — costs **2.9 s**, and `vat claude context` over all **818**
- * directories costs **12.5 s**, so a `whatLoadsAt` query is ~**11.7 ms**. The
- * tree has **819 working directories and 9 distinct always-loaded chains**: 553
- * directories pay `['CLAUDE.md']` alone, 111 pay `['CLAUDE.md',
- * 'packages/cli/CLAUDE.md']`, and so on down to one directory paying a five-file
- * chain. A sweep that queried every directory would therefore spend ~9.6 s of
- * pure repetition to compute 9 distinct answers, and turn a **1.2 s** `vat
- * resources validate` into a ~13 s one. That is the cost this module exists to
- * not pay.
+ * plus ONE query — costs **2.9 s**, and `vat claude context` over all
+ * directories costs **12.5 s**, so a `whatLoadsAt` query is ~**11.7 ms**. A
+ * sweep that queried every directory would spend ~9.6 s of pure repetition to
+ * compute **9** distinct answers, turning the ~1.8 s `vat claude budget` costs
+ * into ~13 s. That is the cost this module exists to not pay. (The figure was
+ * first argued against `vat resources validate`, which ran this sweep behind a
+ * default-on check until 2026-08-23; the check is now its own command and the
+ * repetition it would pay is unchanged.)
+ *
+ * ⚠️ **The directory count moved, the collapse did not.** Re-measured on the
+ * same tree after the context population began declining the gitignored half:
+ * **589 working locations, still 9 distinct chains**, the largest group 366
+ * directories paying `['CLAUDE.md']` alone and the smallest two paying a chain
+ * apiece. Before declining it was **817 locations / 9 chains / largest group
+ * 552**. What the decline removed is repetition, never an answer — which is the
+ * property to re-check when either number is next restated.
  *
  * ## The collapse, and why it is sound
  *
@@ -22,7 +29,7 @@
  * containing no `claude-md` file of its own pays exactly what its nearest
  * instructed ancestor pays**, falling back to the corpus root. Query one
  * REPRESENTATIVE per group; reuse its answer for the whole group. Nine queries
- * instead of 819.
+ * instead of 589.
  *
  * Three things that look like they should break it, and do not:
  *
@@ -36,10 +43,10 @@
  * - **The root's second project location.** `claudeAncestry` admits
  *   `.claude/CLAUDE.md` for every directory, not just for `.claude`. Constant
  *   again, and constants cannot separate two groups.
- * - **A gitignored `CLAUDE.md`.** It is still read by the harness, so it still
- *   sets the representative. Only the reported LOCATION set is filtered — see
- *   below. Deriving the representative from the filtered set instead would hand a
- *   directory the wrong ancestor's numbers.
+ * - **A gitignored `CLAUDE.md`.** There is no longer such a row to reason about
+ *   — the context population declines the ignored half outright (see
+ *   `claude-context-population.ts`) — so the representative and the reported
+ *   location set are derived from the same rows and cannot disagree.
  *
  * ⚠️ This is nonetheless a SECOND model of "which directories matter", sitting
  * beside `whatLoadsAt`'s. If the two drift, budgets go silently stale, which is
@@ -48,16 +55,23 @@
  * recomputes every location the naive way and demands agreement — it is the
  * reason this collapse is allowed to exist, and it must not be weakened.
  *
- * ## Why gitignored realizations are excluded by DEFAULT
+ * ## Why gitignored realizations are still filtered here
  *
- * The context population deliberately realizes gitignored paths, because Claude
- * Code reads the filesystem and a generated `CLAUDE.md` really is loaded. That is
- * right for *what loads*. But a working LOCATION is where a person or an agent
- * actually works, and `packages/agent-config/dist` is not one. On VAT's own tree
- * the difference is **819 directories versus 622**, and the 197 excluded are
- * `dist/`, `coverage/`, `jscpd-report/`, `.vat-lab/` and their like. Reporting a
- * context budget for build output is noise, and noise teaches people to stop
- * reading the check.
+ * They cannot arrive any more: `buildClaudeContextPopulation` passes
+ * `DECLINE_IGNORED`, so no row it produces is `gitignored: true`. On VAT's own
+ * tree that is the difference between **817 and 589 working locations** (and
+ * **6,271 against 2,820 realizations**) — the 228 excluded being `dist/`,
+ * `coverage/`, `jscpd-report/`, `.vat-lab/` and their like, which are not places
+ * a person or an agent works, and reporting a context budget for build output is
+ * noise that teaches people to stop reading the check.
+ *
+ * ⛔ The filter in {@link workingLocations} is nonetheless kept, unconditionally
+ * and with no opt-out, for the reason `buildResourcePopulation` keeps the same
+ * line: it is the one place this lane's admitted set is STATED rather than
+ * inferred from a parameter two files away, and it is the backstop if the
+ * decline predicate and `collectRealization`'s `gitignored` column ever drift.
+ * It used to be an `includeIgnored` option; that option became a switch that
+ * could not change any answer, which is worse than no switch at all.
  */
 
 import { CLAUDE_MD_TAG } from './agentic-tags.js';
@@ -110,12 +124,6 @@ export interface BudgetSweep {
   readonly skippedUnknownLocations: number;
 }
 
-/** {@link sweepAlwaysLoadedBudgets}'s options. */
-export interface BudgetSweepOptions {
-  /** Keep locations whose realizations are `gitignored` — see the module docstring. */
-  readonly includeIgnored?: boolean;
-}
-
 /**
  * Every working location's always-loaded budget, from one query per distinct
  * instruction chain.
@@ -123,7 +131,6 @@ export interface BudgetSweepOptions {
  * @param projection - A populated projection from `buildClaudeContextPopulation`
  * @param threshold - The always-loaded token budget, in tokens. Passed straight
  *   through to `alwaysLoadedBudget`, which refuses a non-positive-integer loudly
- * @param options - `includeIgnored` to keep gitignored working locations
  * @returns Every location's budget, and the two counters that show the collapse
  * @throws {TypeError} When `threshold` is not a positive integer — raised by
  *   `alwaysLoadedBudget` on the first representative, deliberately not
@@ -132,11 +139,10 @@ export interface BudgetSweepOptions {
 export function sweepAlwaysLoadedBudgets(
   projection: Projection,
   threshold: number,
-  options: BudgetSweepOptions = {},
 ): BudgetSweep {
   const claudeMdIds = claudeMdIdentities(projection);
   const instructedDirs = instructedDirectories(projection, claudeMdIds);
-  const locations = workingLocations(projection, options.includeIgnored === true);
+  const locations = workingLocations(projection);
 
   const state: SweepState = { projection, threshold, claudeMdIds, answers: new Map(), queries: 0 };
   const results: LocationBudget[] = [];
@@ -204,11 +210,13 @@ function claudeMdIdentities(projection: Projection): ReadonlySet<string> {
  * Every directory holding at least one `claude-md` file — the candidate
  * representatives.
  *
- * ⚠️ Derived from ALL realizations, `gitignored` ones included, whatever
- * `includeIgnored` says. The flag decides which locations are REPORTED; it can
- * never decide what the harness loads, and a generated-but-ignored `CLAUDE.md`
- * is loaded. Filtering here would give the directories beneath it their
- * grandparent's numbers.
+ * ⚠️ Derived from ALL realizations, deliberately WITHOUT the `gitignored` filter
+ * {@link workingLocations} applies. Which locations are REPORTED is a separate
+ * question from what the harness loads, and filtering here would give the
+ * directories beneath an instructed-but-ignored `CLAUDE.md` their grandparent's
+ * numbers. Nothing the context population produces is `gitignored` today, so the
+ * two sets agree — the asymmetry is kept because it is the correct one, not
+ * because it currently matters.
  *
  * @param projection - The populated projection
  * @param claudeMdIds - The `claude-md`-tagged identities
@@ -232,13 +240,15 @@ function instructedDirectories(
  * which is a working location whether or not anything sits directly in it.
  *
  * @param projection - The populated projection
- * @param includeIgnored - Keep realizations whose `gitignored` column is true
  * @returns Root-relative directories, `''` first
  */
-function workingLocations(projection: Projection, includeIgnored: boolean): readonly string[] {
+function workingLocations(projection: Projection): readonly string[] {
   const dirs = new Set<string>(['']);
   for (const row of projection.resourceRealizations) {
-    if (!includeIgnored && row.gitignored) continue;
+    // Unconditional, and with no opt-out — see the module docstring. The context
+    // population declines the ignored half, so this can only fire if that
+    // decline and this column ever drift.
+    if (row.gitignored) continue;
     dirs.add(row.dir);
   }
   return [...dirs].sort(comparePaths);
