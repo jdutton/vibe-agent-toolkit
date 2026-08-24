@@ -234,6 +234,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A `vat` invocation no longer imports every command before running one.** Fourteen of the fifteen
+  top-level commands sit behind per-command loaders — `doctor` is the exception, because it is the
+  command that checks the others load — so only the one named on the command line is loaded, and
+  the root `--no-cache` registration — which happens on every invocation — no longer drags the
+  resources package in behind it. On a 4-CPU Windows box `vat --version` goes from 2,477 ms to
+  370 ms, measured at the CLI entry point — the `vat` wrapper spawns a second node process, so
+  `time vat --version` reads higher than both. Help, a bare `vat`, an unknown command and any
+  unrecognised option still load the whole tree, because they have to render or search it.
+
+- **A warm resource scan no longer loads the markdown parser or the external-link validator it
+  never calls.** A warm `vat resources scan` drops from 4,000 ms to 2,969 ms over 184 documents,
+  and from 7,459 ms to 6,486 ms over 1,289. Cold scans are parse-bound (~23 ms/doc) and unchanged.
+  `parseMarkdown`/`parseHtml` keep their signatures but now load their parser on call.
+
 - **`vat audit` and `vat inventory` no longer spawn a `git check-ignore` process per link target.**
   On a 1,484-document monorepo the whole command goes from 12.5 s to 2.5 s. Reports are unchanged.
 

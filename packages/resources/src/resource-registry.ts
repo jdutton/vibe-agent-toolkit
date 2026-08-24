@@ -19,7 +19,6 @@ import { calculateChecksumFromContent } from './checksum.js';
 import { getCollectionsForFile } from './collection-matcher.js';
 import { parserKindForPath, readContentWithKey } from './content-key.js';
 import type { DeferredArtifacts } from './deferred-artifacts.js';
-import { ExternalLinkValidator } from './external-link-validator.js';
 import {
   validateFrontmatterLinks,
   type FrontmatterExternalUrl,
@@ -76,6 +75,13 @@ export interface DuplicateIdCollision {
  * `ELOOP` is the symlink cycle; `ENOENT` the dangling symlink and the file
  * deleted between enumeration and parse; `EISDIR`/`ENOTDIR` a path whose type
  * changed underneath the crawl.
+ *
+ * Being an allow-list is also what makes this boundary safe for the parser load
+ * that now happens inside `addResource`: a failed load arrives as
+ * `ParserUnavailableError`, whose `code` is `VAT_PARSER_UNAVAILABLE` and is
+ * therefore not a member, so it is never demoted. That holds by construction —
+ * no `isParserUnavailable` call is needed here, and adding one would suggest
+ * this set could otherwise contain it.
  */
 const READ_FAILURE_CODES: ReadonlySet<string> = new Set([
   'EACCES',
@@ -807,6 +813,14 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * ```
    */
   async addResources(filePaths: string[]): Promise<ResourceMetadata[]> {
+    // ⛔ Nothing is pre-loaded here, deliberately. A `loadParsersFor(filePaths)`
+    // hoist stood on this line to keep a broken INSTALL out of the demotion
+    // below, and it cost every fully warm crawl the ~730 ms remark load for
+    // parses that never happen (measured: 963 scripts loaded on a warm scan,
+    // against 779 with the parser absent). The demotion is guarded by TYPE
+    // instead: `isReadFailure` allow-lists errnos, and a failed parser load
+    // arrives as `ParserUnavailableError` whose code is not one, so it falls
+    // through to the `throw` below with no predicate call needed here.
     const results: ResourceMetadata[] = [];
     for (const fp of filePaths) {
       try {
@@ -1572,7 +1586,11 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       ? buildLinkAuthEngineConfig(adopterLinkAuth)
       : undefined;
 
-    // Create validator
+    // Create validator. Imported here rather than at module scope: this module
+    // is on every scan's critical path, while external-link-validator pulls
+    // `markdown-link-check` (~409ms of load on Windows) that only URL
+    // validation ever needs.
+    const { ExternalLinkValidator } = await import('./external-link-validator.js');
     const validator = new ExternalLinkValidator(cacheDir, {
       timeout: 15000,
       cacheTtlHours: noCache ? 0 : 24,

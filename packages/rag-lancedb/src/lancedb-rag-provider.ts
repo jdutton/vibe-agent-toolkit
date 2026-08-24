@@ -29,6 +29,7 @@ import {
   OnnxEmbeddingProvider,
 } from '@vibe-agent-toolkit/rag';
 import {
+  isParserUnavailable,
   parseFileCached,
   transformContent,
   type ContentTransformOptions,
@@ -144,6 +145,39 @@ function getDirectorySize(dirPath: string): number {
  */
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * One progress report, assembled from the batch counters plus where the loop is.
+ *
+ * Extracted from the indexing loop rather than inlined: the loop's own branching
+ * is now load-bearing (a failed parser LOAD is rethrown while a failed document
+ * is recorded), and this arithmetic contributed nothing to that decision while
+ * pushing the function past the complexity gate.
+ *
+ * @param result - The batch counters as they stand
+ * @param at - Where the loop is: ordinal, total, elapsed time, current resource
+ * @returns The progress payload a caller's callback receives
+ */
+function progressAfter(
+  result: IndexResult,
+  at: { current: number; total: number; elapsedMs: number; resourceId: string },
+): IndexProgress {
+  const remaining = at.total - at.current;
+  return {
+    current: at.current,
+    total: at.total,
+    resourcesIndexed: result.resourcesIndexed,
+    resourcesSkipped: result.resourcesSkipped,
+    resourcesUpdated: result.resourcesUpdated,
+    chunksCreated: result.chunksCreated,
+    elapsedMs: at.elapsedMs,
+    // Extrapolated from the average so far, and zero once nothing is left —
+    // never a negative number from a total that has been passed.
+    estimatedRemainingMs: remaining > 0 ? Math.round((at.elapsedMs / at.current) * remaining) : 0,
+    resourceId: at.resourceId,
+    errors: result.errors ?? [],
+  };
 }
 
 const TABLE_NAME = 'rag_chunks';
@@ -437,6 +471,10 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
 
   /**
    * Index resources into the RAG database
+   *
+   * @throws {ParserUnavailableError} If the markdown parser module cannot be
+   *   loaded — a broken install fails the whole batch rather than becoming one
+   *   error entry per resource
    */
   async indexResources(
     resources: ResourceMetadata[],
@@ -468,6 +506,21 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       try {
         await this.indexResource(resource, result);
       } catch (error) {
+        // A broken INSTALL, not a broken corpus. `indexResource`'s parse carries
+        // no local try, so this catch is the one that sees a failed parser load —
+        // the parser arrives by `import()` from inside `parseFileCached`, lazily,
+        // past the parse cache's hit-path return so a fully warm index loads no
+        // parser at all. Unguarded, a `chmod 000` on the built parser produced
+        // one `errors` entry per resource, `resourcesIndexed: 0`, and a resolved
+        // promise with nothing to act on.
+        //
+        // A type check rather than a `loadParser('markdown')` hoisted above the
+        // loop: that also closes it and costs every warm run the ~730 ms remark
+        // load for parses that never happen. `isParserUnavailable` matches one
+        // type VAT constructs at one place, so it is complete by construction —
+        // not the guessed blocklist of Node loader codes that was deleted.
+        if (isParserUnavailable(error)) throw error;
+
         const message = describeError(error);
         // Also surfaced on stderr: a caller that ignores `result.errors` would
         // otherwise meet this failure much later as an unexplained
@@ -479,26 +532,17 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
         });
       }
 
-      // Call progress callback after each resource
-      if (onProgress) {
-        const elapsedMs = Date.now() - startTime;
-        const avgTimePerResource = elapsedMs / processedCount;
-        const remainingResources = totalResources - processedCount;
-        const estimatedRemainingMs = remainingResources > 0 ? Math.round(avgTimePerResource * remainingResources) : 0;
-
-        onProgress({
+      // After each resource, never before: a caller reading this is told what has
+      // actually happened, and the rethrow above leaves the loop without
+      // reporting a resource the batch never finished.
+      onProgress?.(
+        progressAfter(result, {
           current: processedCount,
           total: totalResources,
-          resourcesIndexed: result.resourcesIndexed,
-          resourcesSkipped: result.resourcesSkipped,
-          resourcesUpdated: result.resourcesUpdated,
-          chunksCreated: result.chunksCreated,
-          elapsedMs,
-          estimatedRemainingMs,
+          elapsedMs: Date.now() - startTime,
           resourceId: resource.id,
-          errors: result.errors ?? [],
-        });
-      }
+        }),
+      );
     }
 
     // Flush accumulated document records to rag_documents table

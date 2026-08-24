@@ -23,8 +23,9 @@ import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { applyCacheControl, registerCacheControl } from '../../src/commands/cache/cache-control.js';
 import { clearCacheDirectory, vatCacheRoot } from '../../src/commands/cache/clear.js';
-import { applyCacheControl, createCacheCommand, registerCacheControl } from '../../src/commands/cache/index.js';
+import { createCacheCommand } from '../../src/commands/cache/index.js';
 import { createResourcesCommand } from '../../src/commands/resources/index.js';
 
 /** The flag under test, spelled once so a rename cannot half-land. */

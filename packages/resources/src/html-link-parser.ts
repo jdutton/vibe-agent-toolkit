@@ -18,7 +18,8 @@ import { stat } from 'node:fs/promises';
 import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 import { parse, type DefaultTreeAdapterMap } from 'parse5';
 
-import { classifyLink, estimateTokens, type ParseResult } from './link-parser.js';
+import { classifyLink, estimateTokens } from './link-classify.js';
+import type { ParseResult } from './link-parser.js';
 import {
   ParsePass,
   ParserKind,
