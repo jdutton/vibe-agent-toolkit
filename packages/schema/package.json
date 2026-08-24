@@ -34,15 +34,15 @@
   ],
   "dependencies": {
     "picomatch": "^4.0.3",
-    "zod": "^3.23.8",
+    "zod": "^4.4.3",
     "zod-to-json-schema": "^3.23.5"
   },
   "devDependencies": {
     "@types/picomatch": "^4.0.2",
     "@vibe-agent-toolkit/utils": "workspace:*",
     "tsx": "^4.21.0",
-    "typescript": "^5.9.3",
-    "vitest": "^3.2.4"
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
   },
   "repository": {
     "type": "git",
