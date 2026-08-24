@@ -97,8 +97,64 @@ describe('docs/validation-codes.md', () => {
         expect(cells.fix).toBe(entry.fix);
       });
     }
+
+    // ⛔ The catalog covers 23 of the registry's codes, not all of them: it is
+    // scoped by its own heading to "the intent-aware skill-resource codes
+    // decided by the shared verdict engine". Every code OUTSIDE it has its
+    // prose checked by nothing but the anchor test above, which cannot see a
+    // description that has gone false.
+    //
+    // That is not hypothetical. `ALWAYS_LOADED_CONTEXT_BUDGET`'s prose here
+    // claimed the measured chain was "the repo-root CLAUDE.md/AGENTS.md" —
+    // and an AGENTS.md contributes nothing unless a CLAUDE.md imports it, so a
+    // repo standardised on AGENTS.md was getting a clean bill of health from a
+    // check that had measured none of it. The registry said the same thing, and
+    // nothing compared the two.
+    //
+    // 🔑 Pinned narrowly rather than by widening the catalog: this code belongs
+    // to the context lane, not the verdict engine, so putting it in that table
+    // would make the table's own scope sentence false. Widening the guard to
+    // every registry code is the real fix and is its own change.
+    it('the ALWAYS_LOADED_CONTEXT_BUDGET section quotes the registry verbatim', () => {
+      const entry = CODE_REGISTRY.ALWAYS_LOADED_CONTEXT_BUDGET;
+      const section = sectionFor(doc, '### `ALWAYS_LOADED_CONTEXT_BUDGET`');
+
+      // Backticks and bold are the doc's own emphasis and carry no meaning the
+      // registry could hold, so they are stripped before comparing. Everything
+      // else must match word for word.
+      expect(deEmphasize(section)).toContain(entry.description);
+      expect(deEmphasize(section)).toContain(entry.fix);
+    });
   });
 });
+
+/**
+ * The body of one `###` section, up to the next heading of any level.
+ *
+ * @param doc - The whole document
+ * @param heading - The exact heading line to start at
+ * @returns The section body
+ * @throws When the heading is absent — a silently empty section would make
+ *   every `toContain` below vacuously... false, but for the wrong reason, and a
+ *   renamed heading should say so rather than read as a prose mismatch
+ */
+function sectionFor(doc: string, heading: string): string {
+  const start = doc.indexOf(heading);
+  if (start === -1) throw new Error(`docs/validation-codes.md has no section headed ${heading}`);
+  const after = start + heading.length;
+  const next = doc.indexOf('\n#', after);
+  return next === -1 ? doc.slice(after) : doc.slice(after, next);
+}
+
+/**
+ * Strip the markdown emphasis the doc adds and the registry cannot carry.
+ *
+ * @param text - A section body
+ * @returns The same text without backticks or `**` runs
+ */
+function deEmphasize(text: string): string {
+  return text.replaceAll('`', '').replaceAll('**', '');
+}
 
 interface CatalogCells {
   severity: string;

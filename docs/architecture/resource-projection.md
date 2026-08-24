@@ -150,15 +150,22 @@ than against taste** (`packages/resources/src/projection/agentic-tags.ts` carrie
   measurement that motivated `selected` is a **base rate, not a rule**, so the tag ships with no
   `loading` value at all until something reads frontmatter.
 
-  ⚠️ **Two consequences, and the second is a correction to the budget check that has not been
-  built yet.** First, VAT's own `claude-rules` collection *requires* `paths:` — deliberately
-  stricter than the vendor, because an unscoped rule is charged to every session whether or not
-  the work touches what it guards, and that cost is precisely what this check exists to surface.
-  Second, the design's instruction to **exclude rules files from the always-loaded chain sum is
-  right only for rules that carry `paths:`**. A rule that omits it *is* always-loaded, and
-  excluding it under-reports exactly the file whose cost is worst — the same direction of error
-  the `loading` rank rule exists to prevent. Once the check reads frontmatter, the rule is
-  `paths:` present → `selected` (excluded), absent → `always` (charged).
+  ⚠️ **Two consequences, and the second is a correction the budget check now implements.** First,
+  VAT's own `claude-rules` collection *requires* `paths:` — deliberately stricter than the vendor,
+  because an unscoped rule is charged to every session whether or not the work touches what it
+  guards, and that cost is precisely what this check exists to surface. Second, the design's
+  instruction to **exclude rules files from the always-loaded chain sum is right only for rules
+  that carry `paths:`**. A rule that omits it *is* always-loaded, and excluding it under-reports
+  exactly the file whose cost is worst — the same direction of error the `loading` rank rule exists
+  to prevent. The rule is `paths:` present → `selected` (excluded), absent → `always` (charged).
+
+  ⭐ **This passage shipped BEFORE the code obeyed it, and that gap was a real defect.**
+  `alwaysLoadedBudget`'s `qualifies()` excluded every rule admission, so `vat claude budget` and
+  `vat claude context` disagreed about the same directory — the query lane classed an unscoped root
+  rule `always`, the check dropped it, and a repo whose root rules omit `paths:` was told *"Every
+  instruction chain checked is within budget."* Unreachable from VAT's own tree, where all rules
+  carry `paths:`, which is why nothing went red for it. `qualifies()` now admits `root-rule` and
+  only `root-rule`; the path-scoped kinds stay excluded, for the reason above.
 - **`AGENTS.md` is not `always`.** Claude Code reads `CLAUDE.md`, not `AGENTS.md`; the latter is
   charged only where a `CLAUDE.md` imports it. Its class is a property of the import graph, so it
   too ships with no `loading` value.

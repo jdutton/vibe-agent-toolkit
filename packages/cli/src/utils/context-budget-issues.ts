@@ -37,10 +37,20 @@
  * {@link AlwaysLoadedBudget.lowerBound} — that rows VAT *did* see were left out
  * of the sum — is appended as its own sentence with the three counts behind it.
  *
- * 🔑 `excludedRuleRows` is deliberately NOT one of those counts. Rules files are
- * excluded by DESIGN (they are `selected`, not `always`), so their absence is a
+ * 🔑 `excludedRuleRows` is deliberately NOT one of those counts. What it counts is
+ * PATH-SCOPED rules — the ones carrying a `paths:` list — and those are excluded
+ * by DESIGN: they are `selected`, not `always`, so their absence from the sum is a
  * decision rather than a gap in what we know, and only ignorance makes a sum a
  * lower bound.
+ *
+ * ⛔ Not "rules files" as a class. An UNSCOPED rule in the root `.claude/rules/`
+ * is classed `always` and IS charged into the budget — nothing gates it on a path,
+ * so it loads at launch exactly as a CLAUDE.md does. The blanket reading was true
+ * while every rule was excluded and became a false statement about a check that
+ * gates the moment the root-rule admission started qualifying. It matters here
+ * because the largest contributor a message names may now be a rules file, which
+ * is why the registry `fix` points at the named contributors rather than at a file
+ * type.
  */
 
 import type { BudgetSweep, AlwaysLoadedBudget } from '@vibe-agent-toolkit/resources';

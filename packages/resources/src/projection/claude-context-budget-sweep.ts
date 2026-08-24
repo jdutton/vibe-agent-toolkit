@@ -33,13 +33,19 @@
  *
  * Three things that look like they should break it, and do not:
  *
- * - **Rules files.** `alwaysLoadedBudget` excludes every rule admission from the
- *   sum, so the file-versus-directory precision that makes `paths:` globs exact
- *   cannot move this number. The one rule class that is launch-time —
- *   `root-rule`, an unscoped rule in the ROOT `.claude/rules/` — is selected for
- *   every query directory alike (`claude-context-rules.ts`: `scope === 'root'`
- *   admits unconditionally), so it is a constant across the whole tree, and so is
- *   whatever its own import closure pulls in.
+ * - **Rules files.** ⚠️ The premise here USED to be that `alwaysLoadedBudget`
+ *   excludes every rule admission from the sum. It does not, and never should
+ *   have: a `root-rule` is `always` to the query lane, so the budget charges it
+ *   ({@link alwaysLoadedBudget}'s `qualifies`), and a version that excluded it
+ *   made the two lanes disagree about the same directory. The CONCLUSION is
+ *   unchanged, and it never rested on the exclusion. Charged or not, a
+ *   `root-rule` is selected for every query directory alike
+ *   (`claude-context-rules.ts`: `scope === 'root'` admits unconditionally), so it
+ *   is a CONSTANT across the whole tree — as is whatever its own import closure
+ *   pulls in — and a constant cannot separate two groups. The rule kinds that
+ *   DO vary by location are the path-scoped ones, and those are precisely the
+ *   ones the budget still excludes, so the file-versus-directory precision that
+ *   makes `paths:` globs exact cannot move this number either.
  * - **The root's second project location.** `claudeAncestry` admits
  *   `.claude/CLAUDE.md` for every directory, not just for `.claude`. Constant
  *   again, and constants cannot separate two groups.

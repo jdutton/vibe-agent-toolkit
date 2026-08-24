@@ -37,13 +37,28 @@
  * lives beside the detector (`DEFAULT_ALWAYS_LOADED_CONTEXT_TOKENS`), and a
  * literal in this package would be a second source of truth that nothing
  * compares.
+ *
+ * ## The stated bounds ride ONCE on the REPORT, in every format
+ *
+ * The sibling query publishes 23 stated limits; this command applies a threshold
+ * to the same measurement, so it publishes {@link ALWAYS_LOADED_BUDGET_LIMITS}
+ * and {@link CLAUDE_CONTEXT_BOUNDS_STATEMENT} beside its verdict — the half that
+ * GATES is the half whose bounds a reader most needs. Both are imported, never
+ * restated: the sentence is domain content owned beside the list it frames.
+ *
+ * ⛔ They belong to the REPORT, never to a finding. A per-finding copy is the
+ * defect this lane already shipped once on the query side, and it is invisible to
+ * any assertion that checks presence rather than counting occurrences.
  */
 
 import {
+  ALWAYS_LOADED_BUDGET_LIMITS,
   buildClaudeContextPopulation,
+  CLAUDE_CONTEXT_BOUNDS_STATEMENT,
   DEFAULT_ALWAYS_LOADED_CONTEXT_TOKENS,
   sweepAlwaysLoadedBudgets,
   type BudgetSweep,
+  type StatedLimit,
 } from '@vibe-agent-toolkit/resources';
 import {
   applyAllowFilter,
@@ -68,6 +83,9 @@ import { gitTrackerForProjectRoot } from '../audit/distributed-tree.js';
 
 /** How this command names itself in a refusal. */
 const COMMAND_NAME = 'vat claude budget';
+
+/** Soft wrap width for the printed limit statements. */
+const WRAP_COLUMNS = 96;
 
 /** How the report is rendered. `text` is for a person; the other two are for a program. */
 export type BudgetOutputFormat = 'text' | 'yaml' | 'json';
@@ -104,6 +122,17 @@ export interface BudgetReport {
   /** Locations whose representative the projection never realized. Counted, never zeroed. */
   readonly skippedUnknownLocations: number;
   readonly findings: readonly ValidationIssue[];
+  /**
+   * What this verdict does not settle, in either direction. Stated ONCE.
+   *
+   * ⛔ On the report beside `threshold`, never on a finding. These bound the
+   * MEASUREMENT METHOD, not any one chain — a finding carrying its own copy
+   * reads as though that chain had caveats of its own, and repeated across a
+   * sweep it is pure byte-identical duplication.
+   */
+  readonly boundsStatement: string;
+  /** The signed over/under-report bounds on the method. Stated ONCE. */
+  readonly limits: readonly StatedLimit[];
 }
 
 /**
@@ -132,9 +161,13 @@ export function createBudgetCommand(): Command {
 Description:
   Reports ALWAYS_LOADED_CONTEXT_BUDGET for each instruction chain whose
   always-loaded context exceeds the budget. The measured chain is the
-  repo-root CLAUDE.md/AGENTS.md, every one on the path down to the working
-  location, and one level of @ imports from each. Rules files are excluded —
-  they are selected, not always-loaded.
+  repo-root CLAUDE.md, every CLAUDE.md on the path down to the working
+  location, one level of @ imports from each, and any unscoped rules file in
+  the root .claude/rules/. An AGENTS.md is measured only where a CLAUDE.md
+  imports it (@AGENTS.md) — Claude Code does not load it by name, so a repo
+  standardised on AGENTS.md alone has nothing here to measure. Path-scoped
+  rules (a paths: list) are excluded: they load when the agent touches a
+  matching file, not at launch.
 
   ONE finding per chain, not per directory: directories loading the same files
   share a finding, which names how many working locations pay it. Naming paths
@@ -157,6 +190,10 @@ Output:
   - workingLocations, distinctChains, skippedUnknownLocations: whole-tree
                         facts, so an empty findings list is legible
   - findings:           one per over-budget chain, ascending by directory
+  - limits/boundsStatement: what this verdict does not settle, signed
+                        over-report or under-report. On the REPORT, never on a
+                        finding — they bound the method, not any one chain, so
+                        they are stated exactly once however many chains flag
 
   Text to stdout by default; --format yaml|json for a program. Diagnostics
   and blob-stage refusals go to stderr.
@@ -218,7 +255,7 @@ export async function claudeBudgetCommand(
 }
 
 /** Everything {@link buildReport} needs, bundled past the lint gate's parameter ceiling. */
-interface ReportInput {
+export interface ReportInput {
   readonly root: string;
   readonly threshold: number;
   readonly scope: readonly string[];
@@ -234,10 +271,20 @@ interface ReportInput {
  * and a scope changes only what is reported — sourcing them from the narrowed
  * view would let `vat claude budget docs` claim the tree has one chain.
  *
+ * ⛔ This is the ONE place the stated bounds enter the machine-readable output,
+ * and keeping it a single assignment is what makes "stated once" structural
+ * rather than a habit: there is no per-finding site left where a copy could be
+ * reintroduced. They are attached unconditionally — a run that flagged nothing
+ * used the same method, and a reader acting on "within budget" needs them most.
+ *
+ * ⛔ Exported so it can be TESTED. What has to be pinned is a COUNT — that the
+ * block appears exactly once across a MULTI-finding report — and a presence
+ * check passes identically with a copy per finding.
+ *
  * @param input - The run's parts
  * @returns The report, ready to serialize
  */
-function buildReport(input: ReportInput): BudgetReport {
+export function buildReport(input: ReportInput): BudgetReport {
   const { root, threshold, scope, sweep, scoped, findings } = input;
   return {
     root,
@@ -250,6 +297,8 @@ function buildReport(input: ReportInput): BudgetReport {
     distinctChains: sweep.queriedDirectories,
     skippedUnknownLocations: sweep.skippedUnknownLocations,
     findings,
+    boundsStatement: CLAUDE_CONTEXT_BOUNDS_STATEMENT,
+    limits: ALWAYS_LOADED_BUDGET_LIMITS,
   };
 }
 
@@ -336,10 +385,14 @@ function emit(report: BudgetReport, format: BudgetOutputFormat): void {
 /**
  * Render the report for a person.
  *
+ * ⛔ Exported so the "stated once" property can be pinned in TEXT as well as in
+ * json. The two renderings are separate code paths and this lane has already
+ * shipped a defect where they disagreed while each looked right alone.
+ *
  * @param report - The report
  * @returns The text rendering, newline-terminated
  */
-function renderReportText(report: BudgetReport): string {
+export function renderReportText(report: BudgetReport): string {
   const lines = [
     `Always-loaded context budget at ${report.root}`,
     `  budget ${count(report.threshold)} tokens`
@@ -349,8 +402,62 @@ function renderReportText(report: BudgetReport): string {
     '',
     ...findingLines(report.findings),
     ...unmatchedLines(report.unmatchedScope),
+    ...limitLines(report),
   ];
   return `${lines.join('\n')}\n`;
+}
+
+/**
+ * The stated bounds, printed once at the foot of the report.
+ *
+ * ⛔ Never omitted, and never per finding. A clean report is subject to exactly
+ * the same signed bounds as a flagged one — more so, since "within budget" is the
+ * verdict a reader is most likely to act on without reading further.
+ *
+ * The sibling `vat claude context` prints a section of the same shape from its
+ * own list. They are deliberately NOT sharing a renderer: two commands, two
+ * report types, and the query additionally prints the modelled-behaviour
+ * citations that no bound of this verdict rests on.
+ *
+ * @param report - The report carrying the bounds
+ * @returns The section's lines
+ */
+function limitLines(report: BudgetReport): string[] {
+  const lines = ['What this verdict does not settle', ...wrapped(report.boundsStatement, '  '), ''];
+  for (const limit of report.limits) {
+    lines.push(`  ${limit.direction}: ${limit.id}`);
+    lines.push(...wrapped(limit.statement, '    '));
+  }
+  return lines;
+}
+
+/**
+ * Soft-wrap a statement under a fixed indent.
+ *
+ * The statements run to several sentences and are the part of this output a
+ * reader has to actually read; unwrapped they arrive as one 500-column line that
+ * a terminal breaks mid-word. A word longer than the width overflows its own line
+ * rather than being split — no character of a statement is ever dropped.
+ *
+ * @param text - The statement
+ * @param indent - Leading whitespace for every produced line
+ * @returns One or more indented lines
+ */
+function wrapped(text: string, indent: string): string[] {
+  const width = Math.max(WRAP_COLUMNS - indent.length, 24);
+  const lines: string[] = [];
+  let pending = '';
+  for (const word of text.split(' ')) {
+    const candidate = pending === '' ? word : `${pending} ${word}`;
+    if (pending !== '' && candidate.length > width) {
+      lines.push(indent + pending);
+      pending = word;
+    } else {
+      pending = candidate;
+    }
+  }
+  if (pending !== '') lines.push(indent + pending);
+  return lines;
 }
 
 /**

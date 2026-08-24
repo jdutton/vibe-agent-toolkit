@@ -687,6 +687,16 @@ export {
   type StatedLimit,
 } from './projection/claude-context-limits.js';
 
+// The same discipline for the half of the lane that GATES. `vat claude budget`
+// applies a threshold to the measurement `vat claude context` reports, so it owes
+// a reader the same signed bounds — COMPOSED from the list above by id rather
+// than copied, plus the four that only a thresholded reading needs.
+export {
+  ALWAYS_LOADED_BUDGET_LIMITS,
+  BUDGET_LIMIT_IDS_FROM_CONTEXT,
+  limitsById,
+} from './projection/claude-context-budget-limits.js';
+
 // One crawl API, two implementations (scanning-and-caching §3.3): the walk, and
 // git plus a bounded walk of only what git cannot see. Same population, two cost
 // models — which is exactly what makes them differentially testable.

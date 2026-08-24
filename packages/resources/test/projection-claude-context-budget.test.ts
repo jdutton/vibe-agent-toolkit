@@ -11,10 +11,21 @@
  *
  * ## The case that separates this from a simpler implementation
  *
- * A row carrying BOTH a rule admission and an ancestry admission is counted —
- * one qualifying admission is enough. An implementation that asked "is this a
- * rules row?" first, or that used `every` where it needed `some`, passes every
- * other test in this file and fails that one.
+ * A row carrying BOTH a path-scoped rule admission and an ancestry admission is
+ * counted — one qualifying admission is enough. An implementation that asked "is
+ * this a rules row?" first, or that used `every` where it needed `some`, passes
+ * every other test in this file and fails that one.
+ *
+ * ## The two lanes must not disagree about the same directory
+ *
+ * `claude-context-query.ts`'s `baseLoadClass` classes a `root-rule` admission
+ * `always`, so `vat claude context` charges an unscoped root rule at launch. This
+ * budget once excluded EVERY rule kind, which made `vat claude budget` print
+ * "within budget" for a directory `vat claude context` reported over it. Two
+ * reviewers found it independently on adopter trees, at 25,003 and 20,263 tokens.
+ * The qualifying-admission cases below are what keep the two lanes reading one
+ * definition of `always`, and the {@link ON_DEMAND_RULES} table is what keeps the
+ * fix from over-reaching to the path-scoped kinds.
  *
  * ## ⛔ These are the ONLY tests that will ever cover the exclusion branches
  *
@@ -29,6 +40,11 @@
  * corpus, and from any system test that runs against it. Deleting or weakening
  * an exclusion case here does not lower coverage of a branch; it removes the
  * branch's only coverage entirely.
+ *
+ * ⛔ The `root-rule` CHARGE is unreachable here for the same reason: all eight of
+ * this repo's rules files carry `paths:`, so every one of them is `glob-rule` and
+ * none is `root-rule`. The disagreement above was an adopter-only defect and this
+ * suite is the only thing that will ever cover its fix.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -57,8 +73,39 @@ function imported(depth: number | null): Admission {
 /** The ancestry admission every default row carries. */
 const ANCESTRY: Admission = { kind: 'ancestry', dir: DIR };
 
-/** A root-rule admission — the kind that can never qualify on its own. */
-const RULE: Admission = { kind: 'root-rule' };
+/**
+ * The one rule admission that IS launch-time: an unscoped rule in the ROOT
+ * `.claude/rules/`, which `claude-context-query.ts`'s `baseLoadClass` classes
+ * `always`.
+ */
+const ROOT_RULE: Admission = { kind: 'root-rule' };
+
+/** The rule path a rule-admission fixture is realized at. */
+const RULE_PATH = '.claude/rules/style.md';
+
+/** One path-scoped rule, used wherever a single non-launch-time rule is enough. */
+const GLOB_RULE: Admission = { kind: 'glob-rule', pattern: `${DIR}/src/*.ts` };
+
+/**
+ * Every rule kind that is NOT launch-time, spelled as `RuleAdmission` spells it.
+ *
+ * ⛔ This table is the mutation guard against an over-broad fix. `qualifies()`
+ * written as `admission.kind.endsWith('rule')` — or as "rules are launch-time
+ * now" — passes the `root-rule` cases above and fails every row here. A
+ * path-scoped rule loads when the agent touches a matching file and a nested
+ * rules directory is in the vendor's on-demand class; neither is paid at launch,
+ * and `baseLoadClass`'s docstring spells out at length why classing either
+ * `always` would be a contradiction rather than a refinement.
+ */
+const ON_DEMAND_RULES: ReadonlyArray<readonly [string, Admission]> = [
+  ['nested-rule', { kind: 'nested-rule', under: DIR }],
+  ['glob-rule', GLOB_RULE],
+  ['glob-rule-covers-dir', { kind: 'glob-rule-covers-dir', pattern: `${DIR}/**` }],
+  [
+    'glob-rule-may-fire',
+    { kind: 'glob-rule-may-fire', pattern: `${DIR}/*.ts`, examplePath: `${DIR}/a.ts` },
+  ],
+];
 
 function makeRow(overrides: Partial<AccountedRow> & Pick<AccountedRow, 'path'>): AccountedRow {
   return {
@@ -130,11 +177,40 @@ describe('alwaysLoadedBudget', () => {
       expect(budget).toMatchObject(NO_EXCLUSIONS);
     });
 
-    it('counts a row carrying BOTH a rule admission and an ancestry admission', () => {
-      const rows = [makeRow({ path: 'both.md', admissions: [RULE, ANCESTRY] })];
+    it('counts a row carrying BOTH a path-scoped rule and an ancestry admission', () => {
+      const rows = [makeRow({ path: 'both.md', admissions: [GLOB_RULE, ANCESTRY] })];
       const budget = alwaysLoadedBudget(DIR, rows, ROOMY);
       expect(budget.tokens).toBe(100);
       expect(budget.contributors).toEqual([{ path: 'both.md', tokens: 100 }]);
+      expect(budget).toMatchObject(NO_EXCLUSIONS);
+    });
+
+    it('counts a root-rule row — the query classes it `always`, so this must charge it', () => {
+      const rows = [makeRow({ path: RULE_PATH, admissions: [ROOT_RULE] })];
+      const budget = alwaysLoadedBudget(DIR, rows, ROOMY);
+      expect(budget.tokens).toBe(100);
+      expect(budget.contributors).toEqual([{ path: RULE_PATH, tokens: 100 }]);
+      expect(budget).toMatchObject(NO_EXCLUSIONS);
+    });
+
+    it('charges a root rule AND its one-hop import, not the import alone', () => {
+      // The self-consistency case: a rules file is itself an `@`-import root, so
+      // the rule's one-hop import already carried an `import` admission and was
+      // charged in full while the rule's own bytes were free. The total is both.
+      const rows = [
+        makeRow({ path: RULE_PATH, tokens: 100, admissions: [ROOT_RULE] }),
+        makeRow({
+          path: 'docs/style-guide.md',
+          tokens: 250,
+          admissions: [{ kind: 'import', rootPath: RULE_PATH, viaPath: RULE_PATH, depth: 1 }],
+        }),
+      ];
+      const budget = alwaysLoadedBudget(DIR, rows, ROOMY);
+      expect(budget.tokens).toBe(350);
+      expect(budget.contributors).toEqual([
+        { path: 'docs/style-guide.md', tokens: 250 },
+        { path: RULE_PATH, tokens: 100 },
+      ]);
       expect(budget).toMatchObject(NO_EXCLUSIONS);
     });
 
@@ -172,14 +248,17 @@ describe('alwaysLoadedBudget', () => {
       expect(budget.excludedDeepImportRows).toBe(0);
     });
 
-    it('excludes a rules-only row WITHOUT making the total a lower bound', () => {
-      const rows = [makeRow({ path: '.claude/rules/style.md', admissions: [RULE] })];
-      const budget = alwaysLoadedBudget(DIR, rows, ROOMY);
-      expect(budget.tokens).toBe(0);
-      expect(budget.contributors).toEqual([]);
-      expect(budget.excludedRuleRows).toBe(1);
-      expect(budget.lowerBound).toBe(false);
-    });
+    it.each(ON_DEMAND_RULES)(
+      'excludes a %s-only row WITHOUT making the total a lower bound',
+      (_label, admission) => {
+        const rows = [makeRow({ path: RULE_PATH, admissions: [admission] })];
+        const budget = alwaysLoadedBudget(DIR, rows, ROOMY);
+        expect(budget.tokens).toBe(0);
+        expect(budget.contributors).toEqual([]);
+        expect(budget.excludedRuleRows).toBe(1);
+        expect(budget.lowerBound).toBe(false);
+      },
+    );
 
     it('files an admission-less always row under the rules bucket', () => {
       const rows = [makeRow({ path: 'nothing.md', admissions: [] })];
@@ -221,7 +300,7 @@ describe('alwaysLoadedBudget', () => {
 
   it('ignores an on-demand row entirely, incrementing no counter', () => {
     expectContributesNothing([
-      makeRow({ path: 'ondemand-rule.md', loadClass: 'on-demand', admissions: [RULE] }),
+      makeRow({ path: 'ondemand-rule.md', loadClass: 'on-demand', admissions: [GLOB_RULE] }),
       makeRow({ path: 'ondemand-deep.md', loadClass: 'on-demand', admissions: [imported(9)] }),
       makeRow({
         path: 'ondemand-unknown.md',

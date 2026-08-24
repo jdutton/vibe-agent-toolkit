@@ -51,6 +51,13 @@
  * ever cover them. ⛔ Do not "simplify away" a branch on the evidence that it
  * never fires here — this repo is not the population.
  *
+ * ⚠️ The `root-rule` CHARGE is unreachable here too, and that blindness already
+ * cost a shipped defect. All eight of this repo's rules files carry `paths:`, so
+ * every one of them is `glob-rule` and none is `root-rule` — which is why this
+ * budget could exclude every rule kind, disagree with `vat claude context` on any
+ * adopter whose root rules are unscoped, and stay green through every test and
+ * every sweep run against this tree.
+ *
  * Independently corroborated. A large adopter's own `tools/check-claude-md-budget.ts`
  * uses a chain budget of 40 KiB ≈ 10,240 tokens, and their code validates the
  * estimator at 3.9–4.1 bytes/token — the same order, arrived at without us. Their
@@ -91,11 +98,15 @@
  * rows this function DID see were left out of the sum.
  *
  * 🔑 `excludedRuleRows` does NOT set `lowerBound`, and that is the distinction a
- * future reader will get wrong. Rules files are excluded **by design** — they are
- * `selected`, not `always` — so their absence is a decision, not a gap in what we
- * know. `unknownTokenRows`, `excludedDeepImportRows` and `unattributedImportRows`
- * are exclusions by IGNORANCE: a real always-loaded cost we declined to estimate.
- * Only ignorance makes a sum a lower bound.
+ * future reader will get wrong. The rules it counts are the ON-DEMAND ones —
+ * `glob-rule`, `glob-rule-may-fire`, `glob-rule-covers-dir`, `nested-rule` —
+ * which are excluded **by design**, because they are `selected` rather than
+ * `always`, so their absence is a decision and not a gap in what we know. ⛔ It
+ * does NOT count `root-rule`: an unscoped rule in the ROOT `.claude/rules/` is
+ * `always` to the query lane and is CHARGED here. `unknownTokenRows`,
+ * `excludedDeepImportRows` and `unattributedImportRows` are exclusions by
+ * IGNORANCE: a real always-loaded cost we declined to estimate. Only ignorance
+ * makes a sum a lower bound.
  */
 
 import type { AccountedRow } from './claude-context-accounting.js';
@@ -135,7 +146,10 @@ export interface AlwaysLoadedBudget {
   readonly contributors: readonly BudgetContributor[];
   /** always-class rows that qualified but carry an UNKNOWN size. */
   readonly unknownTokenRows: number;
-  /** always-class rows excluded because every admission they carry is a rule admission. */
+  /**
+   * always-class rows excluded because every admission they carry is an
+   * ON-DEMAND rule admission. `root-rule` is charged, not counted here.
+   */
   readonly excludedRuleRows: number;
   /** always-class rows excluded because every import admission is deeper than one hop. */
   readonly excludedDeepImportRows: number;
@@ -227,11 +241,23 @@ function admit(row: AccountedRow, accumulator: BudgetAccumulator): void {
  * ordinary — and ONE qualifying admission is enough, because the harness loads
  * the file at launch for that reason whatever the other reasons are.
  *
- * ⛔ A rule admission NEVER qualifies, at any depth and in any combination.
- * Rules files are `selected` rather than `always`, and the spec excludes them
- * from this budget. Note the test is POSITIVE — only `ancestry` and a shallow
- * `import` admit — so a rule kind added to the union later inherits the
- * exclusion rather than silently earning a charge.
+ * 🔑 The predicate is "is this admission `always` to the QUERY lane", and
+ * `root-rule` is the only rule kind that is. `claude-context-query.ts`'s
+ * `baseLoadClass` classes `ancestry` and `root-rule` `always` and nothing else,
+ * because an unscoped rule in the ROOT `.claude/rules/` genuinely does load at
+ * launch. Two lanes reading the same directory must not disagree about it: while
+ * this function excluded `root-rule`, `vat claude budget` printed "within budget"
+ * for directories `vat claude context` reported over it, and the rows it dropped
+ * were counted under {@link AlwaysLoadedBudget.excludedRuleRows}, which does not
+ * even set `lowerBound`. Found on two adopter trees, at 25,003 and 20,263 tokens.
+ *
+ * ⛔ NO OTHER rule kind qualifies, at any depth and in any combination.
+ * `glob-rule`, `glob-rule-may-fire` and `glob-rule-covers-dir` load when the
+ * agent touches a matching file, and `nested-rule` is in the vendor's on-demand
+ * class — `baseLoadClass`'s docstring spells out at length why classing any of
+ * them `always` would be a contradiction rather than a refinement. Note the test
+ * stays POSITIVE — it enumerates what admits — so a rule kind added to the union
+ * later inherits the exclusion rather than silently earning a charge.
  *
  * @param admissions - Every admission the row carries
  * @returns True when at least one admission qualifies
@@ -240,6 +266,7 @@ function qualifies(admissions: readonly Admission[]): boolean {
   return admissions.some(
     (admission) =>
       admission.kind === 'ancestry'
+      || admission.kind === 'root-rule'
       || (admission.kind === 'import'
         && admission.depth !== null
         && admission.depth <= MAX_QUALIFYING_IMPORT_DEPTH),
@@ -299,9 +326,11 @@ function countExclusion(
   ) {
     accumulator.excludedDeepImportRows += 1;
   } else {
-    // Rules-only — and also the admission-less row, which the query emits when
-    // nothing reached a member. Neither is ignorance about a cost: one is
-    // excluded by design, the other has no route at all.
+    // On-demand rules only — every rule kind but `root-rule`, which
+    // {@link qualifies} admits — and also the admission-less row, which the
+    // query emits when nothing reached a member. Neither is ignorance about a
+    // cost: a path-scoped or nested rule is excluded by design because it does
+    // not load at launch, and the admission-less row has no route at all.
     accumulator.excludedRuleRows += 1;
   }
 }

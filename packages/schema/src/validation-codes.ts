@@ -768,8 +768,8 @@ export const CODE_REGISTRY = {
   // validation-rule-design.md's graduation path is how it earns that.
   ALWAYS_LOADED_CONTEXT_BUDGET: entry(
     'info',
-    "A working directory's always-loaded context — the repo-root CLAUDE.md/AGENTS.md, every one on the directory path down to it, and one level of @ imports — exceeds the configured token budget.",
-    'Raise or lower resources.validation.thresholds.alwaysLoadedContextTokens in vibe-agent-toolkit.config.yaml to move the budget, or set resources.validation.severity.ALWAYS_LOADED_CONTEXT_BUDGET to ignore to stop reporting it. Neither is usually the real fix: shrink an ANCESTOR CLAUDE.md instead, because one oversized root file is paid in full by every directory beneath it, so trimming it is the single edit that lowers every reported directory at once.',
+    "A working directory's always-loaded context — the repo-root CLAUDE.md, every CLAUDE.md on the directory path down to it, one level of @ imports from each, and any unscoped rules file in the root .claude/rules/ — exceeds the configured token budget. An AGENTS.md is measured only where a CLAUDE.md imports it; Claude Code does not load it by name.",
+    'Raise or lower resources.validation.thresholds.alwaysLoadedContextTokens in vibe-agent-toolkit.config.yaml to move the budget, or set resources.validation.severity.ALWAYS_LOADED_CONTEXT_BUDGET to ignore to stop reporting it. Neither is usually the real fix: open the largest contributors the finding names, in the order it names them, and trim there. The win is usually in an ancestor file — a root CLAUDE.md or a root .claude/rules/ file is paid in full by every directory beneath it, so trimming one is the single edit that lowers every reported directory at once — but the finding, not the file type, says which one.',
     'always_loaded_context_budget',
   ),
 } as const satisfies Record<string, CodeRegistryEntry>;

@@ -24,6 +24,22 @@
  * agree location by location. It also demands the collapse actually collapsed:
  * a sweep that quietly degraded to querying everything would still be correct,
  * and correct-but-pointless must not read as a pass.
+ *
+ * ⛔ The oracle lives in ONE function ({@link expectOracleAgreement}) that every
+ * fixture is run through, never copied per fixture: a copied oracle is one
+ * somebody can weaken in one place while the other keeps reading as covered.
+ *
+ * ## The root-rule fixture, and why this corpus cannot produce it
+ *
+ * {@link ROOT_RULE_TREE} carries an UNSCOPED rule in the root `.claude/rules/`,
+ * which `baseLoadClass` classes `always` and `alwaysLoadedBudget` therefore
+ * charges. VAT's own tree has no such file — all eight of its rules files carry
+ * `paths:` — so this is the only place the sweep's soundness argument about a
+ * launch-time rule is exercised at all. That argument used to rest on the budget
+ * EXCLUDING every rule admission; it never needed to, and the sweep module's
+ * docstring now states it from the premise that survives: a root rule is
+ * selected for every query directory alike, so it is a constant, and a constant
+ * cannot separate two groups.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -87,6 +103,42 @@ const TREE: Record<string, string> = {
 /** Every working location `TREE` produces, in the order the sweep must report them. */
 const TREE_LOCATIONS = [ROOT, 'docs', 'packages', CLI, CLI_X, CLI_SRC, UTILS];
 
+/** The unscoped root rule `ROOT_RULE_TREE` hangs its whole case off. */
+const ROOT_RULE = '.claude/rules/style.md';
+
+/** The file that rule imports at one hop — charged only if the rule itself is. */
+const RULE_IMPORT = 'docs/style-guide.md';
+
+/**
+ * A tree whose ROOT `.claude/rules/` holds an UNSCOPED rule — no `paths:`
+ * frontmatter — so `ClaudeRulesScopeContributor` scopes it `root` and
+ * `baseLoadClass` classes it `always`.
+ *
+ * ⛔ This shape cannot occur in VAT's own tree: all eight of this repo's rules
+ * files carry `paths:`, so every one is `glob-rule` and none is `root-rule`. It
+ * is the adopter shape that made `vat claude budget` disagree with `vat claude
+ * context` about the same directory, and no fixture derived from this corpus can
+ * reach it.
+ *
+ * The rule also `@`-imports, because that is the self-consistency half: a rules
+ * file is itself an import root, so its one-hop import was charged in full while
+ * the rule's own bytes were free.
+ *
+ * ⚠️ The reference is written `../../` because `resolveReference` resolves an
+ * `@` import against the IMPORTING FILE's directory, not against the corpus
+ * root. A rule two levels down spelling it `@docs/style-guide.md` asks for
+ * `.claude/rules/docs/style-guide.md`, which nothing realizes — the fixture's
+ * first draft did exactly that, and the closure reported
+ * `CLOSURE_REFERENCE_UNRESOLVED` instead of admitting a member.
+ */
+const ROOT_RULE_TREE: Record<string, string> = {
+  'CLAUDE.md': 'Root instructions for the whole corpus.\n',
+  [ROOT_RULE]: `@../../${RULE_IMPORT}\n\nAn unscoped root rule. No \`paths:\` frontmatter, so it loads at launch.\n`,
+  [RULE_IMPORT]: 'The style guide, imported by the root rule at one hop.\n',
+  'packages/cli/CLAUDE.md': 'CLI instructions. '.repeat(40),
+  'packages/cli/src/main.md': 'Source notes.\n',
+};
+
 /**
  * A tree with NO root `CLAUDE.md`, so a directory under no instructed ancestor
  * has to fall back to the corpus root rather than to nothing.
@@ -139,6 +191,36 @@ function budgetTheLongWay(
   const accounted = account(answer, claudeMdIdsOf(projection));
   const budget = alwaysLoadedBudget(directory, accounted.rows, threshold);
   return { tokens: budget.tokens, overBudget: budget.overBudget };
+}
+
+/**
+ * The oracle itself: every location the sweep reported, recomputed the naive
+ * way, and the two demanded to agree.
+ *
+ * ⛔ Extracted so a second fixture can be run through the SAME oracle rather
+ * than through a copy of it — a copied oracle is one somebody can weaken in one
+ * place and leave apparently-covered in the other. It must never be loosened;
+ * see the sweep module's docstring, which names it as the reason the collapse is
+ * allowed to exist at all.
+ *
+ * @param projection - The populated projection the sweep ran over
+ * @param sweep - The sweep's answer
+ * @param threshold - The threshold both sides are measured at
+ */
+function expectOracleAgreement(
+  projection: Projection,
+  sweep: BudgetSweep,
+  threshold: number,
+): void {
+  for (const location of sweep.locations) {
+    const oracle = budgetTheLongWay(projection, location.directory, threshold);
+    expect(oracle, `oracle refused ${JSON.stringify(location.directory)}`).not.toBeNull();
+    expect({
+      directory: location.directory,
+      tokens: location.budget.tokens,
+      overBudget: location.budget.overBudget,
+    }).toEqual({ directory: location.directory, ...oracle });
+  }
 }
 
 /** The sweep entry for one directory, asserted to exist before it is read. */
@@ -207,19 +289,41 @@ describe('sweepAlwaysLoadedBudgets', () => {
       const sweep = sweepAlwaysLoadedBudgets(projection, ROOMY);
 
       expect(sweep.locations).toHaveLength(TREE_LOCATIONS.length);
-      for (const location of sweep.locations) {
-        const oracle = budgetTheLongWay(projection, location.directory, ROOMY);
-        expect(oracle, `oracle refused ${JSON.stringify(location.directory)}`).not.toBeNull();
-        expect({
-          directory: location.directory,
-          tokens: location.budget.tokens,
-          overBudget: location.budget.overBudget,
-        }).toEqual({ directory: location.directory, ...oracle });
-      }
+      expectOracleAgreement(projection, sweep, ROOMY);
 
       // A sweep that degraded to querying every location would still pass every
       // assertion above. This is the one that would fail.
       expect(sweep.queriedDirectories).toBeLessThan(sweep.evaluatedDirectories);
+    });
+
+    it('agrees when an unscoped ROOT RULE and its import are part of every chain', async () => {
+      const projection = await claudeContextFixture(ROOT_RULE_TREE);
+      const sweep = sweepAlwaysLoadedBudgets(projection, ROOMY);
+
+      // The fixture is load-bearing only if the rule really is charged. Asserted
+      // FIRST: a root rule the budget silently dropped would leave the oracle
+      // agreeing about a number that is wrong on both sides.
+      const charged = entryAt(sweep, ROOT).budget.contributors.map((row) => row.path);
+      expect(charged).toContain(ROOT_RULE);
+      expect(charged).toContain(RULE_IMPORT);
+
+      expectOracleAgreement(projection, sweep, ROOMY);
+      expect(sweep.queriedDirectories).toBeLessThan(sweep.evaluatedDirectories);
+    });
+
+    it('charges an unscoped root rule identically to every group, so it cannot separate one', async () => {
+      // The sweep module's soundness argument: a `root-rule` is selected for
+      // every query directory alike, so it is a CONSTANT across the tree — and a
+      // constant cannot make two groups differ. That is now a claim about a
+      // charged row rather than about an excluded one, so it is pinned here.
+      const projection = await claudeContextFixture(ROOT_RULE_TREE);
+      const sweep = sweepAlwaysLoadedBudgets(projection, ROOMY);
+      const ruleTokens = (directory: string): number | undefined =>
+        entryAt(sweep, directory).budget.contributors.find((row) => row.path === ROOT_RULE)?.tokens;
+
+      expect(ruleTokens(ROOT)).toBeGreaterThan(0);
+      expect(ruleTokens(CLI)).toBe(ruleTokens(ROOT));
+      expect(ruleTokens(CLI_SRC)).toBe(ruleTokens(ROOT));
     });
 
     it('agrees at a threshold that puts some locations over budget and others under', async () => {
