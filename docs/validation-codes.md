@@ -920,6 +920,33 @@ Scope in v1: detectors run against SKILL.md and its transitively linked markdown
 - **Why it matters:** Absence of a target declaration is not the same as "compatible everywhere." Surfacing the gap lets adopters make the choice explicit.
 - **Fix:** Declare targets in `vibe-agent-toolkit.config.yaml` (`skills.config.<name>.targets`), `plugin.json`, or marketplace defaults.
 
+## Context Budget Codes
+
+*Fire from the resource projection — the always-loaded context a working directory pays before an agent reads a single line of the task.*
+
+Every other code in this document is about one file. These are about a *position
+in the tree*: what an agent starting work in a given directory is charged for
+having started there.
+
+⚠️ **These are emitted by `vat claude budget` alone**, and by no other command.
+Between 2026-08-22 and 2026-08-23 `vat resources validate` ran the check by
+default behind a `--no-context-budget` opt-out; it does not any more, and there
+is no flag in either direction — a validation run must not emit findings nobody
+asked for. `vat validate`, which spawns `vat resources validate`, is therefore
+silent about the budget too. `resources.validation.*` is still the configuration
+surface: `vat claude budget` reads the same `thresholds`, `severity` and `allow`
+keys every other lane reads.
+
+### `ALWAYS_LOADED_CONTEXT_BUDGET`
+
+- **Default:** `info`
+- **What:** A working directory's always-loaded context — the repo-root `CLAUDE.md`, every `CLAUDE.md` on the directory path down to it, one level of `@` imports from each, and any **unscoped** rules file in the root `.claude/rules/` — exceeds the configured token budget. An `AGENTS.md` is measured only where a `CLAUDE.md` imports it; Claude Code does not load it by name. Path-scoped rules (a `paths:` list) are excluded: they load when the agent touches a matching file, not at launch.
+- **Why it matters:** This context is not optional and not lazy — it is prepended to the session before any task text, so it is paid in full on every single turn started in that directory, whether or not a word of it is relevant. The cost is also *inherited*: an oversized repo-root file is charged again to every directory beneath it, so one file can put an entire tree over budget while each individual file looks reasonable. The budget makes that inheritance visible; without it, the growth is invisible because no single edit ever looks expensive.
+- **Why `info` and not `warning`:** New rules ship at `info` or `warning` per [validation rule design](./validation-rule-design.md), and the threshold here is calibrated but has no corpus evidence behind it yet. The one production repository known to enforce an equivalent always-loaded chain budget ships its check deliberately warn-only for the same reason. A number that fails a build is a number people learn to stop reading; this one has to earn the right to block via the documented graduation path.
+- **Emitted by:** `vat claude budget [paths...]` — the check verb. Its query sibling `vat claude context` reads the same lane and never emits a finding, and `vat resources validate` does not emit this code at all.
+- **Fix:** Raise or lower `resources.validation.thresholds.alwaysLoadedContextTokens` in `vibe-agent-toolkit.config.yaml` to move the budget, or set `resources.validation.severity.ALWAYS_LOADED_CONTEXT_BUDGET` to `ignore` to stop reporting it. Neither is usually the real fix: open the largest contributors the finding names, in the order it names them, and trim there. The win is usually in an **ancestor** file — a root `CLAUDE.md` or a root `.claude/rules/` file is paid in full by every directory beneath it, so trimming one is the single edit that lowers every reported directory at once — but the finding, not the file type, says which one.
+- **Bounds:** The command publishes what its answer does not settle, once per run, beside the findings — the same signed, directional limit list `vat claude context` prints. Read it before acting on the number: the total is a lower bound in several named directions, and the token figure is `characters / 4` rather than a tokenizer count.
+
 ## Meta Codes
 
 *Stance: see [Configuration Meta](./skill-quality-and-compatibility.md#configuration-meta).*

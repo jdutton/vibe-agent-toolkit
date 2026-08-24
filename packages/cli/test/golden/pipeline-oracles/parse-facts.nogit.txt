@@ -15,7 +15,7 @@ optionalArrays: anchors=absent parseErrors=present unresolvedReferences=absent l
 frontmatterFields: -
 anchors: -
 links: 1
-  0	local_file	-	line=1	resolvedId=-	href=sibling.md	text=
+  0	local_file	htmlAttribute	line=1	resolvedId=-	href=sibling.md	text=sibling
 lexicalReferences: -
 headings: 0
 conditions: 1
@@ -34,7 +34,7 @@ frontmatterFields: -
 anchors: 1
   0	top
 links: 1
-  0	local_file	-	line=3	resolvedId=-	href=guide.md	text=
+  0	local_file	htmlAttribute	line=3	resolvedId=-	href=guide.md	text=guide
 lexicalReferences: -
 headings: 0
 conditions: 0

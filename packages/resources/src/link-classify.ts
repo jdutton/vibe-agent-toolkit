@@ -60,10 +60,26 @@ export function estimateTokens(text: string): number {
  * classifyLink('../docs/') // 'local_directory'
  * classifyLink('/docs/') // 'local_directory'
  * classifyLink('https://x.com/docs/') // 'external' (not a local ref)
+ * classifyLink('//cdn.example.com/x.js') // 'external' (protocol-relative)
  * ```
  */
 export function classifyLink(href: string): LinkType {
-  if (href.startsWith('http://') || href.startsWith('https://')) {
+  // B4: `//`-prefixed is grouped with `http(s)://` rather than getting its own
+  // `if`, and that is not just a style choice — a `//`-prefixed href is a
+  // network-path reference (RFC 3986 §4.2): same scheme as the referring
+  // document, different AUTHORITY (`cdn.example.com`), not a root-relative
+  // path on this document's own host. It carries no `:`, so it used to fall
+  // through every protocol check and land on `href.startsWith('/')` far
+  // below — true for `//...` as much as for `/...` — and come back
+  // `local_file`: a link this package would then try to resolve and validate
+  // against the local filesystem, which is usually "silently never checked"
+  // rather than "checked and wrong", since a resolver handed a bogus local
+  // path typically reports it broken or skips it, neither of which is the
+  // truth about an external URL. Must be tested BEFORE the later
+  // `startsWith('/')` branch, which is why it sits at the top with the other
+  // protocol checks — it IS a protocol check, just one whose protocol is
+  // implicit rather than spelled out.
+  if (href.startsWith('http://') || href.startsWith('https://') || href.startsWith('//')) {
     return 'external';
   }
   if (href.startsWith('mailto:')) {

@@ -104,7 +104,8 @@
               "LINK_AUTH_DEAD_OR_UNAUTHORIZED",
               "LINK_AUTH_FORBIDDEN",
               "LINK_AUTH_UNAUTHORIZED",
-              "LINK_AUTH_UNVERIFIED"
+              "LINK_AUTH_UNVERIFIED",
+              "ALWAYS_LOADED_CONTEXT_BUDGET"
             ]
           }
         },
@@ -229,9 +230,20 @@
               "LINK_AUTH_DEAD_OR_UNAUTHORIZED",
               "LINK_AUTH_FORBIDDEN",
               "LINK_AUTH_UNAUTHORIZED",
-              "LINK_AUTH_UNVERIFIED"
+              "LINK_AUTH_UNVERIFIED",
+              "ALWAYS_LOADED_CONTEXT_BUDGET"
             ]
           }
+        },
+        "thresholds": {
+          "type": "object",
+          "properties": {
+            "alwaysLoadedContextTokens": {
+              "type": "integer",
+              "exclusiveMinimum": 0
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

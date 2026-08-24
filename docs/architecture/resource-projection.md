@@ -150,15 +150,22 @@ than against taste** (`packages/resources/src/projection/agentic-tags.ts` carrie
   measurement that motivated `selected` is a **base rate, not a rule**, so the tag ships with no
   `loading` value at all until something reads frontmatter.
 
-  ⚠️ **Two consequences, and the second is a correction to the budget check that has not been
-  built yet.** First, VAT's own `claude-rules` collection *requires* `paths:` — deliberately
-  stricter than the vendor, because an unscoped rule is charged to every session whether or not
-  the work touches what it guards, and that cost is precisely what this check exists to surface.
-  Second, the design's instruction to **exclude rules files from the always-loaded chain sum is
-  right only for rules that carry `paths:`**. A rule that omits it *is* always-loaded, and
-  excluding it under-reports exactly the file whose cost is worst — the same direction of error
-  the `loading` rank rule exists to prevent. Once the check reads frontmatter, the rule is
-  `paths:` present → `selected` (excluded), absent → `always` (charged).
+  ⚠️ **Two consequences, and the second is a correction the budget check now implements.** First,
+  VAT's own `claude-rules` collection *requires* `paths:` — deliberately stricter than the vendor,
+  because an unscoped rule is charged to every session whether or not the work touches what it
+  guards, and that cost is precisely what this check exists to surface. Second, the design's
+  instruction to **exclude rules files from the always-loaded chain sum is right only for rules
+  that carry `paths:`**. A rule that omits it *is* always-loaded, and excluding it under-reports
+  exactly the file whose cost is worst — the same direction of error the `loading` rank rule exists
+  to prevent. The rule is `paths:` present → `selected` (excluded), absent → `always` (charged).
+
+  ⭐ **This passage shipped BEFORE the code obeyed it, and that gap was a real defect.**
+  `alwaysLoadedBudget`'s `qualifies()` excluded every rule admission, so `vat claude budget` and
+  `vat claude context` disagreed about the same directory — the query lane classed an unscoped root
+  rule `always`, the check dropped it, and a repo whose root rules omit `paths:` was told *"Every
+  instruction chain checked is within budget."* Unreachable from VAT's own tree, where all rules
+  carry `paths:`, which is why nothing went red for it. `qualifies()` now admits `root-rule` and
+  only `root-rule`; the path-scoped kinds stay excluded, for the reason above.
 - **`AGENTS.md` is not `always`.** Claude Code reads `CLAUDE.md`, not `AGENTS.md`; the latter is
   charged only where a `CLAUDE.md` imports it. Its class is a property of the import graph, so it
   too ships with no `loading` value.
@@ -315,10 +322,15 @@ cache, not a replacement for either layer.
     vocabulary the earlier draft listed: the first belongs to the npm Changesets release tool that
     no agent harness reads, and the other three are the skill packager's and a lens's outputs
     rather than functions of a path.
-- ⚠️ **Populated but not yet consumed:** nothing reads `resource_tags`. The §7 always-loaded
-  context-budget check — the first named consumer — is unbuilt, and so is `lens_entry_points`,
-  which it would join against. A populated table is not evidence of a *useful* one any more than a
-  typed one was evidence of a populated one.
+- ✅ **Consumed as of 2026-08-23.** `resource_tags` has its first reader: the always-loaded
+  context-budget check reads the `claude-md` tag to decide which realizations set an instruction
+  chain (`packages/resources/src/projection/claude-context-budget-sweep.ts › claudeMdIdentities()`,
+  and the same lookup in `claude-context-accounting.ts`'s caller). It ships as `vat claude budget`,
+  a command of its own rather than a check folded into `vat resources validate` — a validation run
+  must not emit findings nobody asked for. `lens_entry_points` remains unbuilt, and the check does
+  not join against it. A populated table is still not evidence of a *useful* one any more than a
+  typed one was evidence of a populated one; what changed is that this one now has a consumer that
+  would break if it went empty.
 
 > ✅ **The Zones revisions below have LANDED** — this note is kept as the record of what changed and
 > why, not as a warning about pending work. Zone modelling was originally deferred past population

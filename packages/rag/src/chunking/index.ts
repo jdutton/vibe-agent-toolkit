@@ -11,6 +11,8 @@ export {
   calculateEffectiveTarget,
   generateChunkId,
   generateContentHash,
+  splitByLines,
   splitByParagraphs,
   splitBySentences,
+  splitByWords,
 } from './utils.js';

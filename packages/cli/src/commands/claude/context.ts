@@ -69,10 +69,11 @@ import {
   type Projection,
   type StatedLimit,
 } from '@vibe-agent-toolkit/resources';
-import { findProjectRoot, isAbsoluteAnyPlatform, safePath } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot } from '@vibe-agent-toolkit/utils';
 import { Command, Option } from 'commander';
 
 import { handleCommandError } from '../../utils/command-error.js';
+import { targetPathWithin } from '../../utils/corpus-target.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { writeJsonOutput, writeStdoutSync, writeYamlOutput } from '../../utils/output.js';
 import { populationWiring } from '../../utils/population-wiring.js';
@@ -81,6 +82,9 @@ import { gitTrackerForProjectRoot } from '../audit/distributed-tree.js';
 
 /** Soft wrap width for the printed limit statements. */
 const WRAP_COLUMNS = 96;
+
+/** How this command names itself in a refusal. */
+const COMMAND_NAME = 'vat claude context';
 
 /** How the answer is rendered. `text` is for a person; the other two are for a program. */
 export type ContextOutputFormat = 'text' | 'yaml' | 'json';
@@ -370,36 +374,6 @@ export function contextEnvelope(
 }
 
 /**
- * Does a path already stated against the corpus root fall OUTSIDE it?
- *
- * Three spellings of "outside", not two, and the third is the one that could
- * only fail where nobody would see it. `safePath.relative` says "not under this
- * root" with a `..`-prefixed path in the ordinary case, but returns an ABSOLUTE
- * path when no relative route exists at all — which on Windows is exactly what a
- * different drive letter produces. Without the third test, `vat claude context
- * D:\elsewhere\doc.md` run from a `C:` repo passes the guard and answers `kind:
- * unknown`, indistinguishable from a typo inside the tree, which is the one
- * outcome {@link targetPathWithin}'s `@throws` claims to prevent. Its sibling
- * `escapesRoot` (`closure-extent.ts`) applies the same triple for the same
- * reason.
- *
- * ⛔ Exported so it can be TESTED. On POSIX `safePath.relative` between two
- * absolute paths never returns an absolute string, so the third clause is
- * unreachable through {@link targetPathWithin} on every machine a developer
- * runs — the branch has to be exercised directly or not at all, and "not at
- * all" is how it went missing in the first place.
- *
- * @param normalizedRelative - A forward-slashed path already stated against the
- *   corpus root
- * @returns True when the corpus root does not contain it
- */
-export function escapesCorpusRoot(normalizedRelative: string): boolean {
-  return normalizedRelative === '..'
-    || normalizedRelative.startsWith('../')
-    || isAbsoluteAnyPlatform(normalizedRelative);
-}
-
-/**
  * Resolve every requested path, defaulting to the current directory.
  *
  * No arguments means the current directory — NOT the whole corpus. `--all` is
@@ -412,8 +386,8 @@ export function escapesCorpusRoot(normalizedRelative: string): boolean {
  * @returns One root-relative target per argument, in argument order
  */
 function targetsWithin(root: string, pathArgs: readonly string[]): string[] {
-  if (pathArgs.length === 0) return [targetPathWithin(root, undefined)];
-  return pathArgs.map((pathArg) => targetPathWithin(root, pathArg));
+  if (pathArgs.length === 0) return [targetPathWithin(root, undefined, COMMAND_NAME)];
+  return pathArgs.map((pathArg) => targetPathWithin(root, pathArg, COMMAND_NAME));
 }
 
 /**
@@ -493,28 +467,6 @@ function renderEnvelopeText(
   const measured = documents.some((document) => document.kind === 'answer');
   if (!measured) return bodies.join('\n');
   return `${bodies.join('\n')}${limitSection().join('\n')}\n`;
-}
-
-/**
- * The root-relative path to query, refusing anything outside the corpus.
- *
- * @param root - The discovered project root
- * @param pathArg - The path argument, or undefined for the current directory
- * @returns The root-relative, forward-slashed target. `''` is the corpus root
- * @throws When the argument resolves outside `root` — answering for it would
- *   mean querying a corpus this projection never enumerated, and a confident
- *   `unknown` there would be indistinguishable from a typo inside the tree
- */
-function targetPathWithin(root: string, pathArg: string | undefined): string {
-  const relative = safePath.relative(root, safePath.resolve(process.cwd(), pathArg ?? '.'));
-  if (escapesCorpusRoot(relative)) {
-    throw new Error(
-      `${pathArg ?? process.cwd()} resolves outside the corpus root ${root}.`
-      + ' vat claude context answers only for paths inside the root it discovered —'
-      + ' run it from within the project you mean to ask about.',
-    );
-  }
-  return relative;
 }
 
 /**

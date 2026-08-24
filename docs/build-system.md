@@ -54,8 +54,10 @@ These scripts map to:
   directly bypasses the staging `outDir` and can report success on a tree the real build fails to compile.
 - `clean`: removes build outputs only — `dist`, `*.tsbuildinfo`, `.tsc-staging`, `.test-output`. It does not
   touch `packages/*/schemas`, which hold tracked files.
-- `clean:deps`: removes `node_modules` (dependency reset, not a build clean).
-- `typecheck`: `turbo run typecheck`
+- `clean:deps`: `rimraf --glob node_modules 'packages/*/node_modules'` — removes the root **and every
+  package's** `node_modules` (dependency reset, not a build clean). Requires a `bun install` after.
+- `typecheck`: `turbo run typecheck`, whose task `dependsOn: ["^build"]` — so a typecheck builds every
+  upstream package first. Each package's own `typecheck` is `tsc --noEmit`, not `tsc --build`.
 
 ## How It Works
 
@@ -82,11 +84,20 @@ These scripts map to:
    }
    ```
 
-3. **`tsc --build`** walks the dependency graph and builds packages in order:
+3. The dependency graph is walked and packages are built in order:
    - Builds `utils` (no dependencies)
    - Builds `resources` (depends on `utils`)
    - Builds `rag` (depends on `utils` and `resources`)
    - etc.
+
+   ⚠️ **Two different mechanisms do that ordering, and `bun run build` is not the `tsc --build` one.**
+   `bun run build` is `turbo run build && turbo run build:skills`; turbo orders the packages via
+   `dependsOn: ["^build"]` in `turbo.json`, and each package's own `build` script is
+   `tsx ../dev-tools/src/tsc-clean-build.ts` — a plain `tsc` invocation with the emit redirected to a
+   `.tsc-staging` directory that is swapped into `dist/` at the end, so `dist/` stays continuously
+   readable to a concurrent consumer. `tsc --build` proper survives only in `build:packages`
+   (`tsc --build && cd packages/schema && bun run generate:schemas`), and the root `references` array
+   below is what makes that script — and every package's `tsc --noEmit` typecheck — resolve correctly.
 
 ## Configuring New Package Builds
 
@@ -107,8 +118,11 @@ When creating a new package:
 - Packages must form a directed acyclic graph (DAG)
 
 **Build succeeds but types are wrong**:
-- Delete `.tsbuildinfo` files: `tsc --build --clean`
-- Rebuild: `bun run build:clean`
+- Clear build outputs: `bun run clean`. Prefer it over `tsc --build --clean`, which leaves
+  `.tsc-staging`/`.test-output` behind and — per `packages/dev-tools/src/tsc-clean-build.ts`'s own
+  docstring — cannot remove the emitted output of a source file that has since been deleted, which is
+  the usual cause of this symptom.
+- Rebuild: `bun run build:clean` (which runs `bun run clean` first, then forces both turbo passes).
 
 ## Workspace Protocol for Internal Dependencies
 
@@ -182,4 +196,7 @@ Using `tsc --build`:
 - ✅ Faster with incremental builds
 - ✅ Standard TypeScript solution
 
-**Rule**: Never manually run `tsc` in individual packages. Always use `tsc --build` from the root.
+**Rule**: Never manually run `tsc` in an individual package's directory. Always build from the root —
+`bun run build` (turbo → `tsc-clean-build.ts` per package) or `bun run build:packages`
+(`tsc --build` over the root `references` graph). A hand-run `tsc` inside a package bypasses the
+staging `outDir` and can report success on a tree the real build fails to compile.

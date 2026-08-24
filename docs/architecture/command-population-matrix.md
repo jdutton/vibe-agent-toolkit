@@ -73,15 +73,30 @@ Three properties that are easy to get wrong:
 
 - **No default is the incumbent any more, and one of the three flips was not a no-op.** The
   inventory flip was provable as byte-for-byte; the resources flip is provably *not* one and shipped
-  anyway. Both projection extents omit a **committed symlink** — the `filesystem` extent crawls with
-  `followSymlinks: false` and records no link's own path, and `GitCrawlSource` skips mode `120000`
-  to match it — so a broken committed symlink that the walk reports as `LINK_BROKEN_FILE` produces
-  no finding on the default lane. `packages/cli/src/utils/resource-loader.ts ›
-  resourcesProjectionCrawlSelected()` states that loss and accepts it, with `walk` as the escape
-  hatch ([the resources selector](#the-resources-selector)). ⚠️ A committed symlink is *tracked*, so
-  this default is narrower than the universe §1 rules binding, and the two have not been reconciled
-  here: the divergence is real, it is recorded at the call site, and the waiver §7 requires for it
-  has not been filed.
+  anyway. **This is a KNOWN DIVERGENCE, `BUG:` territory under [§7](#7-how-to-audit-this), and the
+  waiver has NOT been filed** — see the paragraph below for what is still owed.
+
+  Measured facts, both arms, on a planted committed symlink:
+
+  | extent | what a planted symlink yields | why |
+  |---|---|---|
+  | `filesystem` | **ZERO realizations** — the link contributes no row of its own | the walk runs `followSymlinks: false` (`packages/resources/src/projection/crawl-source.ts:180,424`), whose `processSymlink` returns before recording the link's own path (`:293`) |
+  | `git` | **ZERO realizations** for the link *as a link* | `GitCrawlSource` drops mode `120000` explicitly, to match the filesystem arm (`packages/resources/src/projection/crawl-source.ts:30,295,318`) |
+  | `git`, identity minting | **TWO distinct ids** where a symlink and its target are *both* tracked | `canonicalPathFor` short-circuits to `gitTracker.indexPathFor()` for any tracked path and never reaches `realPathOrSelf` (`packages/resources/src/projection/identity.ts:106-115`), so the link path and the target path each mint their own id — defeating the "a symlink and its target share one identity" consequence that same docstring declares at `:98-100` |
+
+  Consequence for findings: a broken committed symlink that the incumbent walk reports as
+  `LINK_BROKEN_FILE` produces **no finding at all** on the default lane, and where the link is not
+  broken the git arm can still double-count it. `packages/cli/src/utils/resource-loader.ts ›
+  resourcesProjectionCrawlSelected()` states the first loss and accepts it, with `walk` as the escape
+  hatch ([the resources selector](#the-resources-selector)); the second — the two-ids case — is
+  stated nowhere in the code.
+
+  ⚠️ **Still owed, and deliberately not done here.** A committed symlink is *tracked*, so this
+  default is narrower than the universe [§1](#1-the-governing-ruling) rules binding. Under §7 that
+  makes it a `BUG:`-annotated cell, and §7's second rule is that *entry is defended by the key* — the
+  annotation and the CODEOWNERS-guarded baseline row (carrying the divergence's `file › symbol`) must
+  land **in the same commit**. That baseline edit is out of scope for this doc pass, so the
+  divergence is recorded here with its measurements and the `BUG:` filing remains open.
 - **An unrecognized value never throws, and now they all fail the same way.** Each selector treats
   anything that is not exactly its opt-out spelling — `walk`, `walker`, `filesystem` — as the new
   lane. A typo'd selector silently selects the projection, where it used to silently select the
@@ -99,18 +114,22 @@ Only commands that enumerate a file population appear here.
 [§6](#6-commands-that-enumerate-no-file-population) lists the rest, so that every registered command
 appears in this document exactly once.
 
-⚠️ **Three `(default)` cells below predate the resources flip and are stale.** `vat resources scan`,
-`vat resources validate` and `vat rag index` are written as `crawlDirectory` walks; that is what
-`VAT_RESOURCES_CRAWL=walk` buys now, not what an unset environment gets. The same inversion carries
-into their [§4](#4-what-each-command-sees) rows, where the projection line is written as the
-opted-in case. Re-writing those rows is a per-lane read that has not been done here — where they and
+✅ **The three `(default)` cells for `vat resources scan`, `vat resources validate` and `vat rag index`
+were rewritten from a per-lane read on 2026-08-23.** They previously read `crawlDirectory` walk —
+which is what `VAT_RESOURCES_CRAWL=walk` buys, not what an unset environment gets. All three reach
+the same seam, `packages/cli/src/utils/resource-loader.ts › loadResourcesWithConfig()`, whose lane is
+decided by `› resourcesProjectionCrawlSelected()` — a single `!==` against the string `walk`, so
+**unset means projection**.
+
+⚠️ The same inversion still stands uncorrected in their [§4](#4-what-each-command-sees) rows, which
+are labelled below rather than rewritten. Where §4 and
 [§2](#2-the-three-selectors-and-the-opt-outs-they-answer-to) disagree, §2 is current.
 
 | command | population source (default) | selector | declared |
 |---|---|---|---|
-| `vat resources scan` | `crawlDirectory` walk | `VAT_RESOURCES_CRAWL` | [the resources selector](#the-resources-selector) |
-| `vat resources validate` | `crawlDirectory` walk | `VAT_RESOURCES_CRAWL` | [the resources selector](#the-resources-selector) |
-| `vat rag index` | `crawlDirectory` walk (same loader) | `VAT_RESOURCES_CRAWL` | [the resources selector](#the-resources-selector) |
+| `vat resources scan` | **projection**, via `loadResourcesWithConfig()` → `› populationSourceFor()` → `packages/resources/src/projection/resource-population.ts › buildResourcePopulation()`. Extent chosen by `VAT_EXTENT_SOURCE`: **git** wherever the root has a readable `.git`, the `filesystem` walk elsewhere. Enumerates with `contentDemand: 'deferred'` and `CONTENT_PARSING_SKIP`, so **no file bytes are read at enumeration** ([§5](#5-content-reads-and-the-blob-stage)). Root is `projectRootOrLoudCwd(pathArg ?? cwd)`. Alone among the three, it **reports the lane it took** — `lane` and `extentSource` are fields of its YAML output (`packages/cli/src/commands/resources/scan.ts:130,162-163`). `VAT_RESOURCES_CRAWL=walk` is the escape hatch back to `crawlDirectory` | `VAT_RESOURCES_CRAWL`, plus `VAT_EXTENT_SOURCE` *within* the projection | [the resources selector](#the-resources-selector), [the blob stage default and its refusal](#the-blob-stage-default-and-its-refusal) |
+| `vat resources validate` | **projection**, via `loadResourcesWithConfig()` — ONE population, same loader and same extent rule as `scan`; root is likewise `projectRootOrLoudCwd(pathArg ?? cwd)`. Differs from `scan` only in what it takes back from the loader — it keeps the `GitTracker` for downstream checks and **does not** surface `lane`/`extentSource` in its output, so a validate run gives the reader no way to tell which lane produced it (`packages/cli/src/commands/resources/validate.ts › validateCommand()` → `› loadResourcesWithConfig()`). ⚠️ This cell read **"TWO projections, not one"** until 2026-08-23: the second was a claude-context population built for a default-on `ALWAYS_LOADED_CONTEXT_BUDGET` check. That check is now its own command — see the `vat claude budget` row — and this one has no knowledge of the context budget at all: no check, and no flag in either direction | `VAT_RESOURCES_CRAWL`, plus `VAT_EXTENT_SOURCE` | [the resources selector](#the-resources-selector) |
+| `vat rag index` | **projection**, same loader — but on a **different root basis**: it resolves `projectRootOrNull(process.cwd())` and falls back to `process.cwd()` when that is null, so unlike the two above the root is derived from the cwd and never from `pathArg` (`packages/cli/src/commands/rag/index-command.ts:30,39-40`). Same deferred-content enumeration; no lane reporting | `VAT_RESOURCES_CRAWL`, plus `VAT_EXTENT_SOURCE` | [the resources selector](#the-resources-selector) |
 | `vat inventory` (plugin dir) | **projection** | `VAT_INVENTORY_CRAWL` | [the inventory selector](#the-inventory-selector) |
 | `vat inventory` (marketplace root, `--user`, single `SKILL.md`) | incumbent link walk — the projection lane is **plugin-directory-only** | none; the selector does not reach these shapes | `packages/cli/src/commands/inventory.ts › routeInventory()`, gated at `› populationProviderFor()` |
 | `vat skills validate` | skill discovery: `crawlDirectory` walk · link registry: `crawlDirectory` walk | `VAT_RESOURCES_CRAWL` (registry only) | [the resources selector](#the-resources-selector), [skill discovery includes untracked files](#skill-discovery-includes-untracked-files) |
@@ -122,7 +141,8 @@ opted-in case. Re-writing those rows is a per-lane read that has not been done h
 | `vat skill test run` | subject resolution runs project-wide skill discovery; the build path re-enters `vat claude plugin build` for a plugin-local skill | `VAT_RESOURCES_CRAWL` (registry only) | [skill discovery includes untracked files](#skill-discovery-includes-untracked-files) |
 | `vat skills package` | a project-wide `**/*.md` crawl — `packages/agent-skills/src/skill-packager.ts › packageSkill()` falls back to `createProjectRegistry(projectRoot)` when no caller supplies a registry, and `packages/cli/src/commands/skills/package.ts › packageCommand()` supplies none — then the skill's link graph over that registry, plus `fs.globSync` for unreferenced-file detection. The `files:` globs are **not** in this route: `files:` reaches the packager only through the config→spec conversion, which is the `vat skills build` / plugin-build path | none | ⚠️ undeclared |
 | `vat agent build` | a fixed convention list (`scripts/`, `LICENSE.txt`), then the same project-wide `**/*.md` crawl and link graph as `vat skills package`, for the same reason — `packages/agent-skills/src/builder.ts › buildAgentSkill()` calls `packageSkill` with no registry. No `files:` globs either | none | ⚠️ undeclared |
-| `vat claude context [paths...]` | its own projection lane, enumerating the tree TWICE over the `filesystem` extent: a cheap discovery pass that only names the `@`-import roots, then the real population. `ContributorRegistry` keys on `id` and partitions on `kind` before any `contribute` runs, so the root set must exist before `populate` is called and there is no caller holding it — the doubling is structural, not incidental. ⚠️ **Gitignored paths are realized here on purpose** — `buildResourcePopulation` passes `DECLINE_IGNORED` and this lane does not. The population is the whole tree; the ANSWER is much narrower — only the `CLAUDE.md` ancestry chain, the rules files in scope, and the `@`-import closure at the queried path | `VAT_EXTENT_SOURCE`, which selects the crawl source under the extent. **Not** on `VAT_RESOURCES_CRAWL`: there is no incumbent walk to select between here, the projection is the only implementation | `packages/resources/src/projection/claude-context-population.ts › buildClaudeContextPopulation()` — its module docstring carries the double-enumeration constraint, the gitignored decision and the cost that decision has — with the discovery pass at `› discoverImportRoots()` and the query's narrowing at `packages/resources/src/projection/claude-context-query.ts › whatLoadsAt()`; [the blob stage default and its refusal](#the-blob-stage-default-and-its-refusal) |
+| `vat claude context [paths...]` | its own projection lane, POPULATING the `filesystem` extent twice off ONE crawl: a cheap discovery pass that only names the `@`-import roots, then the real population. `ContributorRegistry` keys on `id` and partitions on `kind` before any `contribute` runs, so the root set must exist before `populate` is called and there is no caller holding it — the doubled *registration* is structural. The doubled *enumeration* was not, and is gone as of 2026-08-23: `› sharedEnumeration()` crawls once and both passes replay it. ⚠️ **Gitignored paths are DECLINED here**, exactly as `buildResourcePopulation` declines them; this row said the opposite until 2026-08-23. The harness really does read them — that fact is unchanged — so the omission is published as the `gitignored-not-realized` under-report in `claude-context-limits.ts` rather than left silent. The population is the whole non-ignored tree; the ANSWER is much narrower — only the `CLAUDE.md` ancestry chain, the rules files in scope, and the `@`-import closure at the queried path | `VAT_EXTENT_SOURCE`, which selects the crawl source under the extent. **Not** on `VAT_RESOURCES_CRAWL`: there is no incumbent walk to select between here, the projection is the only implementation | `packages/resources/src/projection/claude-context-population.ts › buildClaudeContextPopulation()` — its module docstring carries the double-population constraint, the gitignored ruling and what declining bought — with `› sharedEnumeration()`, the discovery pass at `› discoverImportRoots()`, and the query's narrowing at `packages/resources/src/projection/claude-context-query.ts › whatLoadsAt()`; [the blob stage default and its refusal](#the-blob-stage-default-and-its-refusal) |
+| `vat claude budget [paths...]` | the SAME projection lane, the same double `populate()` off one crawl, and the same declined-gitignored membership as `vat claude context` above — one population, read differently. `context` answers for named paths; `budget` sweeps every working location and applies a threshold, collapsing them onto one query per distinct instruction chain (`packages/resources/src/projection/claude-context-budget-sweep.ts › sweepAlwaysLoadedBudgets()` — 589 locations, 9 queries on this repository). Named paths narrow which chains are REPORTED, never what is populated: the population always roots at the discovered project root, because a budget rooted at a subdirectory is computed against a corpus whose ancestors are missing | `VAT_EXTENT_SOURCE`, as for `vat claude context`. **Not** on `VAT_RESOURCES_CRAWL` | `packages/cli/src/commands/claude/budget.ts › claudeBudgetCommand()`, the sweep above, and the finding rendering at `packages/cli/src/utils/context-budget-issues.ts › contextBudgetIssues()` / `› scopeSweepToPaths()` |
 | `vat claude marketplace validate` | nested one-level `readdirSync` over the built tree, then `fs.globSync` per skill | none | ⚠️ undeclared |
 | `vat claude marketplace publish` | `cpSync` of the built tree, then **git itself decides what is published** (`git add -A`) | none | ⚠️ undeclared |
 | `vat claude plugin install` | nested one-level `readdirSync`, three deep — marketplaces, then plugins, then skill directories — over the extracted/source tree | none | ⚠️ undeclared |
@@ -164,6 +184,15 @@ and nothing declares which route a new command should reach for.
 The two visibility questions the ruling in §1 turns on. `n/a` means the command reaches this
 mechanism through a route where the concept does not apply.
 
+⚠️ **The first four rows are written with the lanes inverted.** The `vat resources scan`,
+`vat resources validate` and `vat rag index` rows describe the `crawlDirectory` walk, which is now
+reachable only via `VAT_RESOURCES_CRAWL=walk`; the row that follows them describes the projection as
+`VAT_RESOURCES_CRAWL=projection`, which is the **default**, not an opt-in (any value that is not
+exactly `walk` selects it — `packages/cli/src/utils/resource-loader.ts:184`). The *answers* in the
+two right-hand columns are the same on both lanes, which is why the rows were left standing rather
+than deleted; only the labels are wrong. [§3](#3-population-source-and-selector-per-command) carries
+the corrected per-lane read.
+
 | command | in a git working tree | NOT in a git working tree | sees untracked-not-ignored? | sees gitignored (e.g. `dist/`)? |
 |---|---|---|---|---|
 | `vat resources scan` | `git ls-files` fast path | manual `readdir` walk; `.gitignore` is never consulted, so everything not glob-excluded is a member | yes — `packages/resources/src/resource-registry.ts › ResourceRegistry.crawl()` passes `includeUntracked: true`, which widens the `git ls-files` query to `--cached --others --exclude-standard` without leaving the fast path | no |
@@ -183,7 +212,7 @@ mechanism through a route where the concept does not apply.
 | `vat skill review` — discovery | `git ls-files --cached --others --exclude-standard` | manual walk | yes — same discovery | no |
 | `vat skill review` — link registry | `git ls-files` fast path | manual walk | yes — same `crawlAndResolveRegistry` route | no |
 | `vat skill test run` — subject resolution | `git ls-files --cached --others --exclude-standard` | manual walk | yes — same discovery | no |
-| `vat claude context [paths...]` | filesystem-extent walk by default; under `VAT_EXTENT_SOURCE=git` the `git ls-files` snapshot plus a bounded walk of the ignored territory git declines to hold — both arms enumerate the same extent. A `GitTracker` is consulted only to FILL the `gitignored` column, never to drop a row | filesystem-extent walk; no oracle, so every row reads `gitignored: false` and the whole crawl is admitted | yes | **yes, and by declared intent — the only such row in this table.** Claude Code reads the FILESYSTEM, not git: a gitignored `CLAUDE.md` or a generated handbook is loaded into a real session, and declining it would under-report on the file class most likely to be large. An under-report is the one direction a context-budget answer cannot tolerate. ⚠️ The cost is declared with the decision: a gitignored second copy of the tree — a vendored checkout, a generated bundle, a release staging directory — contributes its own `CLAUDE.md` and `.claude/rules/` set, so root discovery registers a contributor per copy. It doubles the WORK, not any answer. Git worktrees are **not** an instance: `**/.worktrees/**` and `**/.claude/worktrees/**` are in `NEVER_CRAWL_GLOBS`, applied on both arms, so neither can reach one |
+| `vat claude context [paths...]` and `vat claude budget [paths...]` | filesystem-extent walk by default; under `VAT_EXTENT_SOURCE=git` the `git ls-files` snapshot plus a bounded walk of the ignored territory git declines to hold — both arms enumerate the same extent. A `GitTracker` decides which enumerated paths become members | filesystem-extent walk; no oracle, so nothing is ignored, nothing is declined and the whole crawl is admitted | yes | **no, as of 2026-08-23** — this cell read *"yes, and by declared intent — the only such row in this table"* until then, and the reversal is a RULING, not a bug fix. Claude Code does read the FILESYSTEM and not git, so a gitignored `CLAUDE.md` really is loaded; what changed is that a file inside a repository but not in git records neither when nor how it was built, so a budget computed against it describes a session nobody can reproduce. The resulting omission is **published**, not silent: `packages/resources/src/projection/claude-context-limits.ts › CLAUDE_CONTEXT_LIMITS` carries it as `gitignored-not-realized`, signed `under-report`, and `vat claude context` prints it beside every answer — so the budget `vat claude budget` reports is bounded by the same published under-report. Git worktrees were never an instance of the cost this cell used to cite: `**/.worktrees/**` and `**/.claude/worktrees/**` are in `NEVER_CRAWL_GLOBS`, applied on both arms, so neither can reach one |
 | `vat claude marketplace validate` | one-level `readdirSync` over `dist/` | identical | n/a — the tree it reads is build output | **yes** — necessarily, and correctly: `dist/` is normally gitignored and a verify verb must see what was built. ⚠️ undeclared |
 | `vat claude marketplace publish` | **git decides** — the composed tree is `git add -A`ed, so the published set is `tracked ∪ (untracked ∧ ¬ignored)` of the publish repo | n/a — publishing requires a repository | yes, by the mechanism | no |
 | `vat claude plugin install` | nested one-level `readdirSync`, three deep — `packages/cli/src/commands/claude/plugin/install.ts › handleDevInstall()` over marketplaces, `› devInstallMarketplace()` over plugins, `› symlinkPluginSkills()` over skill directories, each through `› listSubdirectories()` or a bare `readdirSync` | identical | yes, incidentally | yes, incidentally. ⚠️ undeclared |

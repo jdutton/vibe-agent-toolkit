@@ -5,6 +5,7 @@ import remarkParse from 'remark-parse';
 import { unified } from 'unified';
 import { describe, expect, it } from 'vitest';
 
+import { blobReferencesFor } from '../src/projection/blob-references.js';
 import {
   collectCodeContextRanges,
   detectVariableExpansion,
@@ -194,6 +195,84 @@ describe('findLexicalReferences — bare tokens', () => {
   });
 });
 
+describe('findLexicalReferences — hasExtension across a query string or fragment', () => {
+  // Task B/B3 fixed `lexicalFeatures()` in `projection/blob-references.ts` to strip a
+  // trailing `?query` or `#fragment` before testing `EXTENSION_SUFFIX`, because the raw
+  // regex tested against the WHOLE href and a suffix pushed the extension off the string's
+  // own end. `reference-lexer.ts:345` runs the identical `EXTENSION_SUFFIX` test but was not
+  // touched by that fix. These three cases are the reachable proof: none of them route
+  // through the bare-token `isCandidate` gate at line 394 (which requires the token's own end
+  // to already match `EXTENSION_SUFFIX`, so a bare token with a trailing query never becomes a
+  // candidate at all) — they are admitted UNCONDITIONALLY via `@`-prefix, `./` explicit-relative,
+  // or a variable expansion, so a query/fragment tail reaches `toLexicalReference` untouched.
+  it('an @-prefixed token with a trailing query string', () => {
+    const refs = lex('See @docs/guide.md?v=2 for details.\n');
+    expect(refs).toHaveLength(1);
+    expect(refs[0]?.raw).toBe('@docs/guide.md?v=2');
+    expect(refs[0]?.hasExtension).toBe(true);
+  });
+
+  it('an explicitly relative token with a trailing fragment', () => {
+    const refs = lex('Look in ./guide.md#section now.\n');
+    expect(refs).toHaveLength(1);
+    expect(refs[0]?.raw).toBe('./guide.md#section');
+    expect(refs[0]?.hasExtension).toBe(true);
+  });
+
+  it('a variable-expansion token with a trailing query string', () => {
+    const refs = lex('Open ${CLAUDE_PLUGIN_ROOT}/guide.md?v=2 now.\n');
+    expect(refs).toHaveLength(1);
+    expect(refs[0]?.raw).toBe('${CLAUDE_PLUGIN_ROOT}/guide.md?v=2');
+    expect(refs[0]?.hasExtension).toBe(true);
+  });
+
+  it('negative control: still reports false when the part BEFORE the query has no extension', () => {
+    const refs = lex('See @docs/README?v=2 for details.\n');
+    // A token whose path half has no extension at all — stripping the query must not make
+    // this read `true`. Guards against a fix that always returns `true` for anything
+    // carrying a `?` or `#`, rather than actually re-testing the stripped prefix.
+    expect(refs[0]?.raw).toBe('@docs/README?v=2');
+    expect(refs[0]?.hasExtension).toBe(false);
+  });
+});
+
+describe('hasExtension parity across producers', () => {
+  it('the lexer and the AST-derived row report the SAME hasExtension for an identical query-bearing reference', () => {
+    // `EXTENSION_SUFFIX` and `stripQueryOrFragment` used to be two independent copies — one
+    // here, one in `projection/blob-references.ts` — each carrying a docstring asserting the
+    // other agreed with it. That assertion went false without either file changing its own
+    // behaviour (B3 fixed one copy; Task C found the other had silently drifted). Both producers
+    // now import the SAME two symbols from this module, so the invariant is enforced by the
+    // module system rather than by a comment. This test drives BOTH real computation paths —
+    // `findLexicalReferences` for the lexer, `blobReferencesFor` for the AST — on the identical
+    // reference string, so it goes red the moment anyone reintroduces a second copy that drifts,
+    // not merely when a query string is mishandled by one side alone.
+    const rawRef = '@docs/guide.md?v=2';
+
+    const lexed = lex(`See ${rawRef} for details.\n`);
+    expect(lexed[0]?.hasExtension).toBe(true);
+
+    const astRows = blobReferencesFor(`markdown.${'c'.repeat(64)}`, {
+      content: '',
+      sizeBytes: 0,
+      headings: [],
+      estimatedTokenCount: 0,
+      links: [{
+        text: 'q',
+        href: rawRef,
+        type: 'local_file',
+        line: 1,
+        nodeType: 'link',
+        startOffset: 0,
+        endOffset: rawRef.length,
+      }],
+    });
+    expect(astRows[0]?.hasExtension).toBe(true);
+
+    expect(astRows[0]?.hasExtension).toBe(lexed[0]?.hasExtension);
+  });
+});
+
 describe('a code span followed by prose', () => {
   // ⛔ These assert `inCodeSpan`, NOT just a tidy `raw`. `raw` is the visible
   // symptom; the DEFECT is that `end` is derived from `raw.length`, so a token
@@ -229,5 +308,52 @@ describe('a code span followed by prose', () => {
     expect(rest).toHaveLength(0);
     expect(reference?.raw).toBe('@docs/real-import.md');
     expect(reference?.inCodeSpan).toBe(false);
+  });
+});
+
+describe('the cut is at the FIRST backtick, not the last', () => {
+  // ⛔ `truncateAtBacktick` uses `indexOf`, and every case above is blind to
+  // whether it does: none of their tokens carries a SECOND backtick with
+  // non-backtick content after it, so `indexOf` and `lastIndexOf` return the
+  // same index and the two spellings are indistinguishable. A mutation sweep
+  // caught that — `indexOf` → `lastIndexOf` survived the whole suite.
+  //
+  // `indexOf` is the correct rule: a code span closes at its FIRST backtick, so
+  // everything past that backtick belongs to the prose around the span and must
+  // not be swallowed into the reference. These two fixtures put a code span
+  // immediately against more backticked text with NO whitespace between them —
+  // one whitespace-delimited token holding three backticks — which is the only
+  // shape where the two spellings diverge.
+  //
+  // 🪤 The divergence must survive `stripTrailingPunctuation`, which runs after
+  // the truncation. `token.slice(0, close)` vs `slice(0, close + 1)` does NOT
+  // survive it (the backtick is in TRAILING_PUNCTUATION, so it is stripped
+  // either way) — hence both fixtures end their swallowed tail in a LETTER, so
+  // the stripper has nothing to remove and the two branches keep genuinely
+  // different `raw` values.
+  it('does not swallow the prose after a span into an @-prefixed reference', () => {
+    // Under `lastIndexOf`: raw becomes '@scope/one`@scope/two', whose `end` is
+    // derived from `raw.length` and therefore runs past the code span — so
+    // `inCodeSpan` flips to false as well, re-opening exactly the closure-guard
+    // defect the describe above exists to prevent.
+    const [reference, ...rest] = lex('Prefer `@scope/one`@scope/two` over both.\n');
+
+    expect(rest).toHaveLength(0);
+    expect(reference?.raw).toBe('@scope/one');
+    expect(reference?.inCodeSpan).toBe(true);
+  });
+
+  it('still admits a bare token whose swallowed tail would push its extension off the end', () => {
+    // The cardinality half of the kill. `isCandidate` admits a bare token only
+    // when `EXTENSION_SUFFIX` matches its own end, so under `lastIndexOf` the
+    // raw is 'docs/one.md`and-more' — the extension is no longer terminal, the
+    // token is rejected, and the reference DISAPPEARS from `blob_references`
+    // entirely rather than merely being reported with a scruffy `raw`.
+    const [reference, ...rest] = lex('Run `docs/one.md`and-more` now.\n');
+
+    expect(rest).toHaveLength(0);
+    expect(reference?.raw).toBe('docs/one.md');
+    expect(reference?.syntacticForm).toBe(BARE_TOKEN);
+    expect(reference?.inCodeSpan).toBe(true);
   });
 });

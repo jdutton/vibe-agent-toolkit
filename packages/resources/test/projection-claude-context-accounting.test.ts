@@ -43,6 +43,13 @@ import type {
 /** The closure root every fixture here is rooted at. */
 const ROOT_CLAUDE_MD = 'CLAUDE.md';
 
+/**
+ * The one signed direction this file names three times — as a member of the
+ * `direction` vocabulary, as one entry's value, and as a word a statement must
+ * SAY. Hoisted for `sonarjs/no-duplicate-string`, which counts all three.
+ */
+const UNDER_REPORT = 'under-report';
+
 /** The oversize file that sits in the MIDDLE of an otherwise intact closure. */
 const MIDDLE_CLAUDE_MD = 'docs/CLAUDE.md';
 
@@ -316,21 +323,22 @@ describe('the stated limits', () => {
       .toContain('applies whether or not the unknown-size, skipped and pruned counters are zero');
   });
 
-  it('states 21 limits covering all four directions', () => {
+  it('states 23 limits covering all four directions', () => {
     // Spec §11's fifteen, plus the nested-rule trigger D-B6 introduced, plus the
     // unresolved-conditions collapse a reviewer confirmed after that, plus the
     // four the final review found missing — the token estimator, the unfollowed
     // variable import, the overall context-window scope, and the budget check a
-    // directory query skips.
+    // directory query skips — plus the gitignored half this lane stopped
+    // realizing.
     //
     // ⛔ A change detector, and only a change detector: it fails when this list
     // grows or shrinks, which is what caught a draft that reused a published
     // slot. It cannot see an assumption made elsewhere in the lane and never
     // written down — see the by-name assertions below for what it is paired with.
-    expect(CLAUDE_CONTEXT_LIMITS).toHaveLength(22);
+    expect(CLAUDE_CONTEXT_LIMITS).toHaveLength(23);
     const directions = new Set(CLAUDE_CONTEXT_LIMITS.map((limit) => limit.direction));
     expect(directions.has('over-report')).toBe(true);
-    expect(directions.has('under-report')).toBe(true);
+    expect(directions.has(UNDER_REPORT)).toBe(true);
     expect(directions.has('scope')).toBe(true);
     expect(directions.has('assumption')).toBe(true);
   });
@@ -410,8 +418,25 @@ describe('the stated limits', () => {
     // a direction a reader can hedge against.
     const limit = CLAUDE_CONTEXT_LIMITS.find((entry) => entry.id === 'existential-needs-a-file');
 
-    expect(limit?.direction).toBe('under-report');
+    expect(limit?.direction).toBe(UNDER_REPORT);
     expect(limit?.statement).toContain('∀ half is immune');
+  });
+
+  it('signs the gitignored half this lane stopped realizing as an under-report', () => {
+    // ⛔ The one entry that MUST exist for the population change that created it
+    // to be honest. `buildClaudeContextPopulation` now passes `DECLINE_IGNORED`,
+    // so a generated `CLAUDE.md` the harness really does read is absent from the
+    // answer. A docstring is not enough: an omission nobody declared is
+    // indistinguishable from a file that is not there, and this list is the only
+    // place a consumer can learn which way to hedge.
+    const limit = CLAUDE_CONTEXT_LIMITS.find((entry) => entry.id === 'gitignored-not-realized');
+
+    expect(limit?.direction).toBe(UNDER_REPORT);
+    // The mechanism, so a reader can tell WHICH files are missing...
+    expect(limit?.statement).toContain('gitignored');
+    // ...and the one condition under which the bound is empty, so nobody hedges
+    // against it in a tree where nothing is ignored at all.
+    expect(limit?.statement).toContain('Outside a git working tree');
   });
 
   it('signs the estimator as an assumption running in both directions', () => {
@@ -423,6 +448,33 @@ describe('the stated limits', () => {
 
     expect(estimate?.direction).toBe('assumption');
     expect(estimate?.statement).toContain('BOTH directions');
+  });
+
+  it('states the symlink version gate without claiming dedup rests on a realpath collapse', () => {
+    // ⛔ The claim this replaces was FALSE in shipped output: *"Dedup relies on
+    // `realpathSync.native` collapsing symlink aliases"*. It does not.
+    // `canonicalPathFor` asks `GitTracker.indexPathFor` FIRST and returns from
+    // it, so the `realPathOrSelf` fallback is unreachable for any path
+    // `git ls-files --cached --others` lists — a link and its target mint TWO ids
+    // on the default lane (`identity.ts`, *"🪤 A symlink and its target do NOT
+    // reliably share one identity"*; pinned as `distinctResourceIds() === 3`).
+    // Nothing in this answer ever depended on that collapse: the Claude-context
+    // lane registers the filesystem extent alone, and a symlink path is not a
+    // member of it, which is also what makes the vendor gate an UNDER-report
+    // rather than a double charge.
+    const limit = CLAUDE_CONTEXT_LIMITS.find((entry) => entry.id === 'version-gated');
+
+    // Still a `scope` entry: its subject is that no version FLOOR is pinned.
+    expect(limit?.direction).toBe('scope');
+    expect(limit?.statement).toContain('pins no floor');
+    // The vendor fact survives — it is the citation the modelled list carries.
+    expect(limit?.statement).toContain('v2.1.198');
+    expect(limit?.statement).toContain('path-scoped rule');
+    // ...and the direction the gate actually runs in is stated, not left to the reader.
+    expect(limit?.statement).toContain(UNDER_REPORT);
+    // Both halves of the false mechanism claim are gone.
+    expect(limit?.statement).not.toContain('realpathSync');
+    expect(limit?.statement).not.toContain('Dedup');
   });
 
   it('names no single assumed Claude Code version, only dated per-behaviour citations', () => {

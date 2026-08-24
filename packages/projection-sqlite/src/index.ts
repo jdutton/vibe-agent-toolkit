@@ -11,9 +11,12 @@
  * **Node 22.13.0** and is absent from 22.12.0, so this package's `engines`
  * requires `>=22.13.0` while the rest of the toolkit stays at `>=22.0.0` — a
  * backend nobody has to install should not raise everyone else's floor. The
- * module is unflagged from the Node 24 line onward; on Node 22 it emits an
- * `ExperimentalWarning` per process, which this package deliberately does not
- * suppress (a blanket `NODE_NO_WARNINGS` would hide real ones).
+ * module needs no flag from the Node 24 line onward, but **unflagged is not
+ * silent**: it still emits one `ExperimentalWarning` per process there, as it
+ * does on Node 22 — verified on 24.13.1. This package deliberately does not
+ * suppress it (a blanket `NODE_NO_WARNINGS` would hide real ones), so any
+ * caller that turns this backend on *by default* has to filter that one warning
+ * by name at its own boundary, or every one of its invocations prints it.
  *
  * 🪤 Bun's runtime has no `node:sqlite` — it ships `bun:sqlite`, a different
  * API. Nothing in VAT executes under Bun (the shipped `bin/vat` is

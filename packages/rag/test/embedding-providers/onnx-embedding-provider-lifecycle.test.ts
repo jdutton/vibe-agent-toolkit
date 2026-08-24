@@ -48,28 +48,61 @@ const mockFromVocabFile = vi.mocked(BertTokenizer.fromVocabFile);
 const EMBEDDING_DIM = 384;
 const SEQ_LEN = 2;
 
+interface TokenizedBatch {
+  inputIds: number[][];
+  attentionMask: number[][];
+  maxLen: number;
+  truncatedTexts: number;
+  droppedTokens: number;
+}
+
+/** Swappable per test so a batch can report truncation without a real model. */
+let mockTokenizeBatch: (...args: unknown[]) => TokenizedBatch;
+
+/**
+ * A one-text tokenizer result that reports the given truncation numbers.
+ * Assign to `mockTokenizeBatch` mid-test to change what the next batch loses.
+ */
+function batchLosing(truncatedTexts: number, droppedTokens: number): () => TokenizedBatch {
+  return () => ({
+    inputIds: [[101, 102]],
+    attentionMask: [[1, 1]],
+    maxLen: SEQ_LEN,
+    truncatedTexts,
+    droppedTokens,
+  });
+}
+
+/**
+ * Installs the happy-path mock surface (model files, tokenizer, session, run)
+ * shared by every suite here. `firstBatch` decides what the first tokenized
+ * batch reports as truncated — the only thing the suites disagree about.
+ */
+function installProviderMocks(firstBatch: () => TokenizedBatch): void {
+  vi.clearAllMocks();
+  mockEnv.wasm.numThreads = 0;
+
+  mockEnsureModelFiles.mockResolvedValue({
+    modelPath: '/cache/model_quantized.onnx',
+    vocabPath: '/cache/vocab.txt',
+  });
+  mockTokenizeBatch = firstBatch;
+  mockFromVocabFile.mockResolvedValue({
+    tokenizeBatch: (...args: unknown[]) => mockTokenizeBatch(...args),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mocked module surface
+  } as any);
+  mockSessionCreate.mockResolvedValue({ run: mockRun, release: mockRelease });
+  mockRun.mockResolvedValue({
+    last_hidden_state: { data: new Float32Array(SEQ_LEN * EMBEDDING_DIM) },
+  });
+  mockRelease.mockResolvedValue(undefined);
+}
+
+const NO_TRUNCATION = batchLosing(0, 0);
+
 describe('OnnxEmbeddingProvider - session lifecycle', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    mockEnv.wasm.numThreads = 0;
-
-    mockEnsureModelFiles.mockResolvedValue({
-      modelPath: '/cache/model_quantized.onnx',
-      vocabPath: '/cache/vocab.txt',
-    });
-    mockFromVocabFile.mockResolvedValue({
-      tokenizeBatch: () => ({
-        inputIds: [[101, 102]],
-        attentionMask: [[1, 1]],
-        maxLen: SEQ_LEN,
-      }),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mocked module surface
-    } as any);
-    mockSessionCreate.mockResolvedValue({ run: mockRun, release: mockRelease });
-    mockRun.mockResolvedValue({
-      last_hidden_state: { data: new Float32Array(SEQ_LEN * EMBEDDING_DIM) },
-    });
-    mockRelease.mockResolvedValue(undefined);
+    installProviderMocks(NO_TRUNCATION);
   });
 
   it('dispose() before any embed call is a no-op', async () => {
@@ -160,5 +193,95 @@ describe('OnnxEmbeddingProvider - session lifecycle', () => {
     const provider = new OnnxEmbeddingProvider();
 
     await expect(provider.embed('hello')).rejects.toThrow(/last_hidden_state/);
+  });
+});
+
+describe('OnnxEmbeddingProvider - truncation is observable', () => {
+  const DROPPED_FIRST = 40;
+  const DROPPED_SECOND = 2;
+
+  beforeEach(() => {
+    installProviderMocks(batchLosing(1, DROPPED_FIRST));
+  });
+
+  it('accumulates what the tokenizer silently threw away', async () => {
+    const provider = new OnnxEmbeddingProvider();
+
+    await provider.embed('a text far longer than the model can read');
+
+    expect(provider.truncationStats).toEqual({
+      textsEmbedded: 1,
+      textsTruncated: 1,
+      tokensDropped: DROPPED_FIRST,
+    });
+  });
+
+  it('keeps accumulating across batches', async () => {
+    const provider = new OnnxEmbeddingProvider();
+    await provider.embed('first');
+    mockTokenizeBatch = batchLosing(1, DROPPED_SECOND);
+
+    await provider.embed('second');
+
+    expect(provider.truncationStats).toEqual({
+      textsEmbedded: 2,
+      textsTruncated: 2,
+      tokensDropped: DROPPED_FIRST + DROPPED_SECOND,
+    });
+  });
+
+  it('calls onTruncation for every batch that loses content', async () => {
+    const onTruncation = vi.fn();
+    const provider = new OnnxEmbeddingProvider({ onTruncation });
+
+    await provider.embed('too long');
+
+    expect(onTruncation).toHaveBeenCalledTimes(1);
+    expect(onTruncation).toHaveBeenCalledWith({
+      textsInBatch: 1,
+      textsTruncated: 1,
+      tokensDropped: DROPPED_FIRST,
+      maxInputTokens: 256,
+      model: 'Xenova/all-MiniLM-L6-v2',
+    });
+  });
+
+  it('does not call onTruncation when the batch fits', async () => {
+    const onTruncation = vi.fn();
+    mockTokenizeBatch = NO_TRUNCATION;
+    const provider = new OnnxEmbeddingProvider({ onTruncation });
+
+    await provider.embed('short');
+
+    expect(onTruncation).not.toHaveBeenCalled();
+    expect(provider.truncationStats.textsTruncated).toBe(0);
+  });
+
+  it('warns on stderr the first time content is dropped, and only once', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const provider = new OnnxEmbeddingProvider();
+
+      await provider.embed('too long');
+      await provider.embed('also too long');
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]?.[0]).toMatch(/truncat/i);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('stays silent when an explicit onTruncation handler owns reporting', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const provider = new OnnxEmbeddingProvider({ onTruncation: () => undefined });
+
+      await provider.embed('too long');
+
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

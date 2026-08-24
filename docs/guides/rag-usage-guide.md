@@ -187,6 +187,10 @@ rag:
       provider: openai
       model: text-embedding-3-small
     chunking:
+      # Both values below are deliberate downsizes for retrieval granularity.
+      # text-embedding-3-small reads 8192 tokens, so there is headroom here; the
+      # derived default would be 8192. Overriding UPWARD is never available — the
+      # ceiling belongs to the model.
       targetSize: 256  # Smaller chunks for API docs
 
   stores:
@@ -198,8 +202,15 @@ rag:
       db: ./dist/examples-rag
       resources: examples
       chunking:
-        targetSize: 512  # Larger chunks for examples
+        targetSize: 512  # Larger chunks for examples (still well under 8192)
 ```
+
+> ⚠️ **`chunking:` in YAML is not read by `vat rag index` today.** The CLI constructs
+> `LanceDBRAGProvider` without passing `targetChunkSize` or `paddingFactor`, so every run uses the
+> budget derived from the embedding provider's own `maxInputTokens`. The blocks above document the
+> intended shape; the working override is the library one —
+> `LanceDBRAGProvider.create({ targetChunkSize, paddingFactor, … })`. Writing `targetSize:` in
+> `vibe-agent-toolkit.config.yaml` changes nothing and produces no warning.
 
 **Usage**:
 
@@ -253,9 +264,11 @@ rag:
     embedding:
       provider: onnx
       model: Xenova/all-MiniLM-L6-v2
-    chunking:
-      targetSize: 512
-      paddingFactor: 0.9
+    # No chunking block: the budget derives from the provider. This model's
+    # maxInputTokens is 256, so the derived target is 256 and the derived
+    # paddingFactor ~0.84. An over-large target IS clamped and warned about —
+    # but only when it reaches `resolveChunkingConfig`, i.e. via the library
+    # option, NOT via this YAML key, which `vat rag index` does not read.
 
   stores:
     agent-knowledge:
@@ -268,7 +281,7 @@ rag:
       db: ./dist/api-rag
       resources: api-reference
       chunking:
-        targetSize: 256  # Smaller for API docs
+        targetSize: 128  # Deliberately finer-grained than the derived 256
 ```
 
 ---

@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/lab",
-  "version": "0.2.0-rc.2",
+  "version": "0.2.0-rc.3",
   "description": "Quality lab: generate and compare analyzable reports across projects, project versions, and vat versions",
   "type": "module",
   "private": true,

@@ -28,24 +28,22 @@
  * off the developer's live cache: a test that populated or cleared the real
  * `<tmpdir>/.vat-cache` would be a bug whether or not it passed.
  *
- * ## 🪤 Which variable names the temp directory is PLATFORM-SPECIFIC
- *
- * `os.tmpdir()` — under `normalizedTmpdir()` — reads `TMPDIR` on POSIX and
- * `TEMP`, then `TMP`, on Windows. It reads no variable that both platforms
- * honour, so isolating by `TMPDIR` alone is inert on Windows: the child resolves
- * the runner's real temp directory instead, writes its store there, and every
- * assertion here reads an isolated directory that no run ever touched. That
- * fails the positive control and passes the two `--no-cache` arms VACUOUSLY,
- * which is the worse half. All three names are set, per the platform set this
- * repo already keeps in `skill-test/env-scrub.ts`.
+ * The probes that read that directory back — and the platform trap in isolating
+ * it — live in `test/helpers/projection-store-probe.ts`, shared with the
+ * equivalence suite.
  */
 
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { DatabaseSync } from 'node:sqlite';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import {
+  contributorsCharged,
+  rowsStoredUnder,
+  storeFilesUnder,
+  tmpdirEnv,
+} from '../helpers/projection-store-probe.js';
 import { executeCli, getBinPath } from '../system/test-common.js';
 import { commitTestFixture } from '../test-helpers.js';
 
@@ -76,70 +74,6 @@ afterAll(() => {
 /** A private OS temp directory, so this arm's store cannot be any other arm's. */
 function isolatedTmpdir(label: string): string {
   return mkdtempSync(safePath.join(scratch, `${label}-tmp-`));
-}
-
-/**
- * Point a child's `os.tmpdir()` at one directory on every platform.
- *
- * @param temp - The arm's private temp directory
- * @returns The env pairs to merge, covering the POSIX and the Windows names
- */
-function tmpdirEnv(temp: string): Record<string, string> {
-  return { TMPDIR: temp, TMP: temp, TEMP: temp };
-}
-
-/**
- * Every `projection.db` under one isolated temp directory.
- *
- * Searched rather than derived: the path carries a release namespace and a
- * projection shape digest, and restating either here would make this file fail
- * for a reason that has nothing to do with caching. Finding none is a real
- * answer — no store was ever opened.
- */
-function storeFilesUnder(root: string): string[] {
-  const found: string[] = [];
-  const visit = (directory: string): void => {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      const child = safePath.join(directory, entry.name);
-      if (entry.isDirectory()) visit(child);
-      else if (entry.name === 'projection.db') found.push(child);
-    }
-  };
-  visit(root);
-  return found;
-}
-
-/**
- * Rows held across every table of every store under one temp directory.
- *
- * @param root - The isolated temp directory an arm ran under
- * @returns Total rows, which is 0 both for "no store file" and "an empty one"
- */
-function rowsStoredUnder(root: string): number {
-  let total = 0;
-  for (const file of storeFilesUnder(root)) {
-    const database = new DatabaseSync(file, { readOnly: true });
-    try {
-      for (const { name } of database
-        .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
-        .all() as { name: string }[]) {
-        total += (database.prepare(`SELECT COUNT(*) AS total FROM "${name}"`).get() as { total: number }).total;
-      }
-    } finally {
-      database.close();
-    }
-  }
-  return total;
-}
-
-/** Which contributors a run charged time to, as `VAT_CRAWL_TIMING` recorded them. */
-function contributorsCharged(timingDir: string): string[] {
-  return readdirSync(timingDir).flatMap((file) => {
-    const dump = JSON.parse(readFileSync(safePath.join(timingDir, file), 'utf-8')) as {
-      entries: { contributorId: string }[];
-    };
-    return dump.entries.map((entry) => entry.contributorId);
-  });
 }
 
 /**
@@ -196,11 +130,15 @@ describe('the projection store under the cache controls', () => {
     // write while still serving its population from a store an earlier run
     // filled, which is the same broken promise in the other direction.
     //
-    // Observed through the crawl-timing dump rather than inferred. A run that
-    // hits the store charges `projection-store:read` and never reaches the
-    // filesystem enumerator; a run that does not have a store charges
-    // `builtin:filesystem` instead. Measured on this repository: a warm hit
-    // files `projection-store:read` and no `builtin:filesystem` at all.
+    // Observed through the crawl-timing dump rather than inferred: a run that
+    // CONSULTS a store charges `projection-store:read`, and a run given no
+    // store charges nothing under `projection-store:` at all. That is the whole
+    // claim this arm makes, and it is the whole claim the tell supports —
+    // `readCachedProjection` files the row in a `finally`, deliberately, so a
+    // hit and a miss are charged alike. Measured on this fixture, the warm
+    // `resources validate` run MISSES: it charges `projection-store:write` and
+    // `builtin:filesystem` exactly as the cold run does. See the equivalence
+    // suite, whose per-command `warmHitsStore` records which commands hit.
     const temp = isolatedTmpdir('warm');
     await runValidate(temp);
     expect(rowsStoredUnder(temp)).toBeGreaterThan(0);

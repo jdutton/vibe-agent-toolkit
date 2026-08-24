@@ -74,16 +74,18 @@ Description:
   When no path: uses vibe-agent-toolkit.config.yaml include/exclude patterns
 
 Output Structure (YAML):
-  status: success/error
+  status: success (every resource indexed) / partial (some failed) / error
   resourcesIndexed: new/updated files
   resourcesSkipped: unchanged files (content hash match)
   resourcesUpdated: files with new content
   chunksCreated: total chunks added
   chunksDeleted: chunks removed from updated files
   duration: total indexing time
+  errors: resources that failed, present only when non-empty. Their content
+          is NOT in the index and NOT searchable.
 
 Exit Codes:
-  0 - Success  |  2 - System error
+  0 - Success  |  1 - Indexed with errors (see 'errors')  |  2 - System error
 
 Requirements:
   projectRoot: optional (tolerates absence — use --db to specify path)

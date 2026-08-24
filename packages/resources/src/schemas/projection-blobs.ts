@@ -104,6 +104,23 @@ export type BlobRow = z.infer<typeof BlobRowSchema>;
  *   standalone-skill extent cannot — which is exactly what the shipped
  *   `NON_PORTABLE_ASSET_REFERENCE` code flags by hand today.
  * - `bare-token` — a path-shaped token with no markup at all.
+ *
+ * `html-link` is a seventh, from neither of those two producers: a URL-bearing
+ * HTML attribute (`<a href>`, `<img src>`), parsed by parse5.
+ *
+ * ⛔ It is deliberately absent from `follow`'s default
+ * (`project-config.ts`) and from `claude-context-discovery.ts`'s
+ * `FOLLOWED_FORMS`, and adding it to either is a membership decision, not a
+ * tidy-up. Both lists drive closure traversal, and `vat build` does not bundle
+ * an HTML-referenced file — so following `html-link` would make `vat inventory`
+ * report members `vat build` leaves out, which is a divergence between two
+ * commands rather than a wider answer.
+ *
+ * ⭐ Until HTML references produced rows at all, this form's absence cost
+ * nothing and its default was invisible: every HTML row was dropped upstream
+ * for want of a span, so the `markdown-link` these rows used to be labelled
+ * with was wrong but INERT. Fixing the span is what would have made the
+ * mislabel load-bearing, which is why the two changes belong in one commit.
  */
 export const ReferenceSyntacticFormSchema = z.enum([
   'markdown-link',
@@ -112,6 +129,7 @@ export const ReferenceSyntacticFormSchema = z.enum([
   'at-prefixed',
   'env-anchored',
   'bare-token',
+  'html-link',
 ]).describe('Syntactic form of a reference candidate, as a lexer sees it');
 
 export type ReferenceSyntacticForm = z.infer<typeof ReferenceSyntacticFormSchema>;

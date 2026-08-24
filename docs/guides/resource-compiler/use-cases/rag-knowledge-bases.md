@@ -188,6 +188,15 @@ console.log(`Created ${chunks.length} chunks`);
 console.log(`Average size: ${chunks.reduce((s, c) => s + c.length, 0) / chunks.length} chars`);
 ```
 
+> **Size these against your embedder, not against a round number.** LangChain's
+> `chunkSize` counts *characters*; embedding models count *tokens*. At roughly 4
+> characters per token, `chunkSize: 1000` lands near 250 tokens — already over
+> `OnnxEmbeddingProvider`'s 256-token window once `[CLS]`/`[SEP]` are charged,
+> and the excess is discarded before inference with no error. Read the real
+> ceiling off `embedder.maxInputTokens` and leave margin. VAT's own chunker
+> (`@vibe-agent-toolkit/rag-lancedb`) derives that budget for you; a third-party
+> splitter will not.
+
 ### Semantic Chunking
 
 ```typescript

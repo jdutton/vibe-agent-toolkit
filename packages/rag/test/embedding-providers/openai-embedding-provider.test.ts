@@ -13,6 +13,7 @@ import { OpenAIEmbeddingProvider } from '../../src/embedding-providers/openai-em
 
 const TEST_API_KEY = 'test-key';
 const SMALL_MODEL = 'text-embedding-3-small';
+const LARGE_MODEL = 'text-embedding-3-large';
 
 describe('OpenAIEmbeddingProvider - Unit Tests', () => {
   it('should have correct metadata for text-embedding-3-small', () => {
@@ -29,11 +30,11 @@ describe('OpenAIEmbeddingProvider - Unit Tests', () => {
   it('should have correct metadata for text-embedding-3-large', () => {
     const provider = new OpenAIEmbeddingProvider({
       apiKey: TEST_API_KEY,
-      model: 'text-embedding-3-large',
+      model: LARGE_MODEL,
     });
 
     expect(provider.name).toBe('openai');
-    expect(provider.model).toBe('text-embedding-3-large');
+    expect(provider.model).toBe(LARGE_MODEL);
     expect(provider.dimensions).toBe(3072);
   });
 
@@ -59,6 +60,33 @@ describe('OpenAIEmbeddingProvider - Unit Tests', () => {
     const provider = new OpenAIEmbeddingProvider({ apiKey: TEST_API_KEY });
     expect(provider).toBeDefined();
     expect(provider.name).toBe('openai');
+  });
+
+  it('should publish the real input-token limit per model', () => {
+    const small = new OpenAIEmbeddingProvider({ apiKey: TEST_API_KEY, model: SMALL_MODEL });
+    const large = new OpenAIEmbeddingProvider({
+      apiKey: TEST_API_KEY,
+      model: LARGE_MODEL,
+    });
+    const ada = new OpenAIEmbeddingProvider({
+      apiKey: TEST_API_KEY,
+      model: 'text-embedding-ada-002',
+    });
+
+    expect(small.maxInputTokens).toBe(8192);
+    expect(large.maxInputTokens).toBe(8192);
+    // 8191 — the number that was hardcoded into the chunker for EVERY provider —
+    // belongs to ada-002 alone.
+    expect(ada.maxInputTokens).toBe(8191);
+  });
+
+  it('should fall back to the conservative input-token limit for an unknown model', () => {
+    const provider = new OpenAIEmbeddingProvider({
+      apiKey: TEST_API_KEY,
+      model: 'unknown-model',
+    });
+
+    expect(provider.maxInputTokens).toBe(8191);
   });
 
   it('should use default dimensions when model not in map', () => {

@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import type { Connection, Table } from '@lancedb/lancedb';
 import * as lancedb from '@lancedb/lancedb';
 import type {
+  ChunkingConfig,
   DefaultRAGMetadata,
   DocumentResult,
   EmbeddingProvider,
@@ -37,6 +38,7 @@ import {
 import { safePath } from '@vibe-agent-toolkit/utils';
 import type { ZodObject, ZodRawShape } from 'zod';
 
+import { resolveChunkingConfig } from './chunking-config.js';
 import { createDocumentRecord, overlayChunkMetadata, type DocumentRecord } from './document-helpers.js';
 import { buildWhereClause, escapeSQLString } from './filter-builder.js';
 import {
@@ -58,10 +60,23 @@ export interface LanceDBConfig<_TMetadata extends Record<string, unknown> = Defa
   /** Embedding provider (default: OnnxEmbeddingProvider — local WASM embeddings) */
   embeddingProvider?: EmbeddingProvider;
 
-  /** Target chunk size in tokens (default: 512) */
+  /**
+   * Target chunk size in tokens.
+   *
+   * Defaults to the embedding provider's own `maxInputTokens` — 256 for the
+   * default local model, not a fixed 512. A value above the provider's limit is
+   * clamped with a warning, because text past that limit never reaches the model.
+   */
   targetChunkSize?: number;
 
-  /** Padding factor for token estimation (default: 0.9) */
+  /**
+   * Padding factor for token estimation.
+   *
+   * Defaults to a value derived from the provider's limit that keeps a full
+   * chunk inside it even after the chunker's cl100k count is re-tokenized by
+   * the model's own (coarser) tokenizer. Override only with a reason — see
+   * {@link resolveChunkingConfig}.
+   */
   paddingFactor?: number;
 
   /** Metadata schema for validation and serialization (defaults to DefaultRAGMetadataSchema) */
@@ -123,6 +138,16 @@ function getDirectorySize(dirPath: string): number {
 }
 
 /**
+ * Render a thrown value as a message.
+ *
+ * @param error - The caught value
+ * @returns Its message if it is an Error, otherwise its string form
+ */
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
  * One progress report, assembled from the batch counters plus where the loop is.
  *
  * Extracted from the indexing loop rather than inlined: the loop's own branching
@@ -165,8 +190,10 @@ interface RequiredLanceDBConfig<_TMetadata extends Record<string, unknown>> {
   dbPath: string;
   readonly: boolean;
   embeddingProvider: EmbeddingProvider;
-  targetChunkSize: number;
-  paddingFactor: number;
+  /** Caller override only — the default is derived from `embeddingProvider`. */
+  targetChunkSize?: number;
+  /** Caller override only — the default is derived from `embeddingProvider`. */
+  paddingFactor?: number;
   metadataSchema: ZodObject<ZodRawShape>;
   contentTransform?: ContentTransformOptions;
   storeDocuments: boolean;
@@ -186,6 +213,9 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
   private table: Table | null = null;
   private readonly tokenCounter = new ApproximateTokenCounter();
 
+  /** Resolved once from the embedding provider's real limit; warnings logged once. */
+  private resolvedChunkingConfig: ChunkingConfig | null = null;
+
   /** Accumulated document records during indexing, flushed in indexResources() */
   private pendingDocuments: DocumentRecord[] = [];
 
@@ -193,13 +223,39 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     this.config = {
       readonly: false,
       embeddingProvider: new OnnxEmbeddingProvider(),
-      targetChunkSize: 512,
-      paddingFactor: 0.9,
       metadataSchema: DefaultRAGMetadataSchema,
       storeDocuments: false,
       ...config,
     };
     this.metadataSchema = this.config.metadataSchema;
+  }
+
+  /**
+   * The chunking budget for this provider's embedder.
+   *
+   * Derived from `embeddingProvider.maxInputTokens` rather than assumed, and
+   * memoized so its warnings are printed once per provider instead of once per
+   * indexed resource.
+   *
+   * @returns Resolved chunking configuration
+   */
+  private getChunkingConfig(): ChunkingConfig {
+    if (!this.resolvedChunkingConfig) {
+      const { config, warnings } = resolveChunkingConfig({
+        embeddingProvider: this.config.embeddingProvider,
+        tokenCounter: this.tokenCounter,
+        targetChunkSize: this.config.targetChunkSize,
+        paddingFactor: this.config.paddingFactor,
+      });
+
+      for (const warning of warnings) {
+        console.warn(`[vat-rag] ${warning}`);
+      }
+
+      this.resolvedChunkingConfig = config;
+    }
+
+    return this.resolvedChunkingConfig;
   }
 
   /**
@@ -269,7 +325,10 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     await this.reconnectAndOpenTable();
 
     if (!this.table) {
-      throw new Error('No data indexed yet');
+      throw new Error(
+        `No data indexed yet: no '${TABLE_NAME}' table at ${this.config.dbPath}. ` +
+          'If indexResources() was called, check its returned `errors` for resources that failed to chunk or embed.',
+      );
     }
 
     const startTime = Date.now();
@@ -462,9 +521,14 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
         // not the guessed blocklist of Node loader codes that was deleted.
         if (isParserUnavailable(error)) throw error;
 
+        const message = describeError(error);
+        // Also surfaced on stderr: a caller that ignores `result.errors` would
+        // otherwise meet this failure much later as an unexplained
+        // "No data indexed yet" from query().
+        console.warn(`[vat-rag] Failed to index resource '${resource.id}': ${message}`);
         result.errors?.push({
           resourceId: resource.id,
-          error: error instanceof Error ? error.message : String(error),
+          error: message,
         });
       }
 
@@ -597,12 +661,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
         content,
         frontmatter: {},
       },
-      {
-        targetChunkSize: this.config.targetChunkSize,
-        modelTokenLimit: 8191,
-        paddingFactor: this.config.paddingFactor,
-        tokenCounter: this.tokenCounter,
-      }
+      this.getChunkingConfig()
     );
 
     // Embed chunks

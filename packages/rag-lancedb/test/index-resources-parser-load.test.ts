@@ -89,11 +89,21 @@ vi.mock('@lancedb/lancedb', () => {
   };
 });
 
-/** Fixed-width vectors, so nothing in this suite loads an inference runtime. */
+/**
+ * Fixed-width vectors, so nothing in this suite loads an inference runtime.
+ *
+ * `maxInputTokens` is REQUIRED, not decoration: chunk sizing reads it, and a
+ * provider that omits it fails every document with "leaves no room for
+ * content" — which lands as an ordinary per-resource error and so reads here as
+ * an extra unreadable document rather than as a broken stub. 256 matches the
+ * local all-MiniLM-L6-v2 limit; any positive number would do, since this suite
+ * asserts error ATTRIBUTION and never chunk boundaries.
+ */
 const STUB_EMBEDDINGS: EmbeddingProvider = {
   name: 'stub',
   model: 'stub-model',
   dimensions: 4,
+  maxInputTokens: 256,
   embed: async () => [0, 0, 0, 1],
   embedBatch: async (texts: string[]) => texts.map(() => [0, 0, 0, 1]),
 };

@@ -683,7 +683,10 @@ export async function validateCommand(
 
     emitResult(issueData, context, registry, options.format ?? 'yaml', options.verbose === true);
     logGitTrackerStats(gitTracker, logger);
-    // Exit decision is purely the library's severity-based `hasErrors`.
+    // The library's severity-based `hasErrors` is the WHOLE decision: every
+    // finding this command reports came from `registry.validate()`, which
+    // already allow-filtered and severity-resolved them. Nothing is reported
+    // here that the library never saw, so there is no second clause to OR in.
     process.exit(hasErrors ? 1 : 0);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'Validation');

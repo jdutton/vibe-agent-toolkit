@@ -32,6 +32,19 @@ describe('classifyLink (exported)', () => {
     expect(classifyLink('blob:https://example.com/550e8400-uuid')).toBe('embedded');
   });
 
+  it('B4 — classifies a protocol-relative href as external, per RFC 3986, not local_file', () => {
+    // `//host/path` has no `:`, so it skipped the protocol checks entirely and
+    // fell through to `href.startsWith('/')` — true for `//...` too — which
+    // returned `local_file`. RFC 3986 §4.2 makes a `//`-prefixed reference a
+    // network-path reference: same scheme as the referring document, but an
+    // AUTHORITY of `cdn.example.com`, not a root-relative path on this host.
+    expect(classifyLink('//cdn.example.com/x.js')).toBe('external');
+    expect(classifyLink('//cdn.example.com/path/to/file.md')).toBe('external');
+    // A single leading slash is still root-relative and stays local_file — the
+    // fix must not conflate the two.
+    expect(classifyLink('/docs/file.md')).toBe('local_file');
+  });
+
   describe('local_directory classification', () => {
     it.each<{ href: string; expected: LinkType }>([
       { href: 'docs/', expected: 'local_directory' },

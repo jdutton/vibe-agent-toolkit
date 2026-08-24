@@ -288,21 +288,34 @@ export interface BlobPopulationResult {
   /**
    * Reference candidates dropped by `blobReferencesFor` for want of a source line.
    *
-   * Measured **77** over this repository's 4,425 blobs, not 0. Every one of them
-   * is a GFM autolink literal in a *non-markdown* blob (`.ts` 61, `.json` 9,
-   * `.js` 4, `.yaml` 2), and the cause is upstream of this module: remark hands
-   * `toResourceLink` a `link` node whose `position` is `undefined` when the
-   * autolink is wrapped in quotes and parentheses. Minimal repro, verified:
+   * ⚠️ Non-zero on this repository, and reliably so. The cause is upstream of
+   * this module: a GFM autolink literal the tokenizer does not see is
+   * reconstructed by `mdast-util-gfm-autolink-literal`'s `findAndReplace`
+   * post-pass, which builds the `link` node with **no `position`**, so
+   * `toResourceLink` emits it with neither a line nor offsets. Minimal repro,
+   * verified:
    *
    * ```text
    * parseMarkdownContent('"WebFetch(domain:www.anthropic.com)"\n', 36)
    *   .links[0].line === undefined      // whereas '(www.anthropic.com)' → 1
    * ```
    *
-   * They are all external URLs and mailto targets, so none of them is a closure
-   * edge — but "harmless" is a judgement a lens makes, not a reason to stop
-   * counting. Defaulting them to line 1 instead would put 77 rows at the top of
-   * 76 documents where nothing could falsify them.
+   * ⛔ **The count is deliberately not written here.** It used to read
+   * "measured 77 over this repository's 4,425 blobs, with a per-extension
+   * breakdown". Re-measured over the tracked tree it came back **94** — the
+   * figure moves whenever anyone adds a file quoting a URL, so pinning it in
+   * prose only guarantees a docstring that is wrong most of the time. Run the
+   * stage and read this counter if you want today's number.
+   *
+   * 🔑 What IS stable, and what the counter is really for, is the SHAPE: every
+   * dropped candidate observed so far is an http/www/email target sitting in a
+   * *non-markdown* blob (`.ts`, `.json`, `.yaml` — quoted URLs in source and
+   * fixtures), so none of them is a closure edge. That is a measured property
+   * of GFM autolink literals, not a guarantee — a position-less node naming a
+   * local file would be a lost edge, and this counter is the only thing that
+   * would show it. "Harmless" is a judgement a lens makes, not a reason to stop
+   * counting. Defaulting them to line 1 instead would plant rows at the top of
+   * documents where nothing could falsify them.
    */
   readonly referencesSkippedForMissingLine: number;
   /**

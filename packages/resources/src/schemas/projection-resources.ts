@@ -58,16 +58,24 @@ export const ResourceKindSchema = z.string().min(1)
  *
  * ## `canonicalPath` has an explicit rule
  *
- * **Git-index casing where the path is tracked, otherwise the on-disk casing
- * from `fs/promises.realpath`, with symlinks resolved.** Not optional
+ * **Git's own spelling for any path `git ls-files` lists — tracked *or*
+ * untracked-but-unignored — otherwise the on-disk casing from
+ * `realpathSync.native`, with symlinks resolved.** Not optional
  * precision: `pathLower`/`basenameLower` exist so case-insensitive matching
  * is a column rather than a function call, and hashing a raw path defeats
  * them — on a case-insensitive filesystem `docs/Readme.md` seen through the
  * filesystem extent and `docs/README.md` recorded in git's index would mint
  * two identities for one inode. Node's two `realpath` implementations
  * disagree about which casing they return, so this is not hypothetical.
- * Consequences: a symlink and its target share one identity; a symlinked
- * directory loop mints one identity per real file, not per traversal.
+ *
+ * 🪤 **The consequence is NOT that a symlink and its target share one
+ * identity.** Git's branch is taken first, so wherever git lists the path the
+ * `realpath` fallback is never reached and the two spellings mint two ids. The
+ * collapse holds only where git does not answer, and there a symlinked directory
+ * loop mints one identity per real file rather than one per traversal. The
+ * mechanism, the measurement and the still-open "should it realpath?" question
+ * are written up once, under *"🪤 A symlink and its target do NOT reliably share
+ * one identity"* in `src/projection/identity.ts` — do not restate them here.
  *
  * Every path-shaped and byte-shaped column lives on
  * {@link ResourceRealizationRowSchema} instead.

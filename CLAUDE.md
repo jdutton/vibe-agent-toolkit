@@ -305,7 +305,7 @@ reports `tail`'s status, so a failed run looks like exit 0. Redirect to a file a
 
 **This section governs how to run multi-task plans via the `superpowers:subagent-driven-development` skill (the preferred execution method in this repo).** It overrides the per-task "commit at each boundary" rhythm that skill assumes, because of how this repo's gates are wired:
 
-- **`git commit` triggers `bun run validate` via the Husky pre-commit hook, which takes ~3.5–4 minutes and requires the ENTIRE tree to be perfect** (lint, typecheck, unit + integration + system tests, zero duplication). A mid-refactor tree is *never* perfect, so a per-task commit either blocks for 4 minutes or fails outright.
+- **`git commit` triggers `bun run validate` via the Husky pre-commit hook, and an uncached run costs *minutes to over an hour* and requires the ENTIRE tree to be perfect** (lint, typecheck, unit + integration + system tests, zero duplication). Measured full runs: **528 s and 771 s (~9–13 min) on macOS local**, and **4,749.9 s (~79 min) on Windows**. Only a *cache hit* is fast — and a mid-refactor tree never hits the cache, because every task's edits invalidate it. A mid-refactor tree is also *never* perfect, so a per-task commit either blocks for that full ten-minutes-to-an-hour window or fails outright at the end of it.
 - Therefore: **do NOT commit per task or per phase. Do NOT run `bun run validate` mid-flight.** Batch all tasks/phases into one uncommitted working tree, then run `bun run validate` exactly once when everything is stable, fix what it surfaces, and commit at the very end (in as few commits as the change logically needs).
 
 **Guidance to embed in every implementer/fixer subagent prompt:**
@@ -316,7 +316,7 @@ reports `tail`'s status, so a failed run looks like exit 0. Redirect to a file a
 >
 > Do NOT run `bun run validate`, `bun run test:system`, or `bun run test:integration` — they are slow and will not pass on a partially-migrated tree. Do NOT use `bun test`. Do NOT commit — leave all changes uncommitted; the orchestrator commits once at the end after a single full `bun run validate`.
 
-**Why:** the per-change feedback loop must stay fast (seconds, not minutes) for subagent iteration to be worthwhile; the expensive whole-tree gate is meaningful only once, on a stable tree. See [Critical Duplication Policy](#critical-code-duplication-policy) — the single end-of-run `validate` is also where duplication is caught, so each "move/rename" task must delete the original in the same task (never leave a copy that a later task removes).
+**Why:** the per-change feedback loop must stay fast (seconds, not the ten-plus minutes a real `validate` costs) for subagent iteration to be worthwhile; the expensive whole-tree gate is meaningful only once, on a stable tree. See [Critical Duplication Policy](#critical-code-duplication-policy) — the single end-of-run `validate` is also where duplication is caught, so each "move/rename" task must delete the original in the same task (never leave a copy that a later task removes).
 
 ### Pre-Commit Checklist
 
@@ -534,7 +534,7 @@ Material for developers working on VAT itself (not for users of VAT) lives under
 
 - [vat-debugging.md](docs/contributing/vat-debugging.md) — reproducing VAT bugs, `VAT_ROOT_DIR` adopter testing, failing-test-first fixes before landing changes
 - [vat-install-architecture.md](docs/contributing/vat-install-architecture.md) — design landscape for VAT's install/uninstall surfaces; read before proposing new install methods
-- [command-lane-table.md](docs/contributing/command-lane-table.md) — which of the 66 commands enumerate the filesystem, through which of the three entry points, and which three only do so by spawning child processes; read before changing enumeration or the crawl routes
+- [command-lane-table.md](docs/contributing/command-lane-table.md) — which of the 67 commands enumerate the filesystem, through which of the three entry points, and which three only do so by spawning child processes; read before changing enumeration or the crawl routes
 - [packages/lab/README.md](packages/lab/README.md) — the **quality lab**: a separate CLI that reports on a project and compares along one of three axes (which project, which version of it, which vat build). Read before adding any dev/QA/profiling verb — it owns that scope, and its [scope doc](packages/lab/docs/scope.md) decides what belongs there versus in `vat`
 
 **⚠️ Measuring anything? The lab is the instrument — do not hand-roll a probe.** The trigger is

@@ -1,5 +1,21 @@
 /**
  * System tests for rag index command
+ *
+ * ⚠️ The `status: 'success'` assertions below were VACUOUS until the command
+ * started deriving that field: it was a hardcoded literal beside an
+ * unconditional `process.exit(0)`, so every case here passed no matter what
+ * `indexResources` reported. They are real assertions now.
+ *
+ * The other half of that contract — a run with failing resources reporting
+ * `status: 'partial'` and exiting 1 — is NOT covered here, and deliberately so.
+ * A per-resource index error has to survive the crawl to reach
+ * `indexResources`, and the crawl reads and parses every file itself
+ * (`ResourceRegistry.addResource`), so an unreadable or malformed fixture is
+ * dropped before indexing ever sees it — it produces a resource that is
+ * *missing*, not one that *failed*. The failures actually observed in the wild
+ * came from the chunker rejecting an over-long line, which is a moving target.
+ * The status/exit mapping is therefore pinned as pure logic in
+ * `test/commands/rag/index-outcome.test.ts` instead of manufactured here.
  */
 
 import { getTestOutputDir } from '@vibe-agent-toolkit/utils';
@@ -43,6 +59,9 @@ describe('RAG index command (system test)', () => {
 
     expect(result.status).toBe(0);
     expect(parsed.status).toBe('success');
+    // The exit code and the status have to agree, and `success` has to mean the
+    // whole corpus landed: an `errors` list alongside exit 0 is the defect.
+    expect(parsed.errors).toBeUndefined();
     expect(parsed.resourcesIndexed).toBeGreaterThan(0);
     expect(parsed.chunksCreated).toBeGreaterThan(0);
     expect(parsed.duration).toBeDefined();

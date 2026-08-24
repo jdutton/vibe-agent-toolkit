@@ -187,7 +187,14 @@ function hasUriScheme(rawRef: string): boolean {
 }
 
 /** The two syntactic forms that carry a URL an author typed as a destination. */
-const FOLLOWED_FORMS = new Set(['markdown-link', 'markdown-definition']);
+/**
+ * Exported for pinning, not for reuse: `projection-blob-references.test.ts`
+ * asserts that `html-link` is in neither this set nor `ExtentDeclarationSchema`'s
+ * `follow` default, and reading the shipped constant is what makes that
+ * assertion fail if someone adds the form here. A restated copy would agree
+ * with itself forever.
+ */
+export const FOLLOWED_FORMS = new Set(['markdown-link', 'markdown-definition']);
 
 /**
  * What is reachable in one hop from what loads at this path, minus what loads.

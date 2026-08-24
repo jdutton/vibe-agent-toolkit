@@ -53,6 +53,8 @@ export {
   OnnxEmbeddingProvider,
   type OpenAIEmbeddingConfig,
   type OnnxEmbeddingConfig,
+  type TruncationEvent,
+  type TruncationStats,
 } from './embedding-providers/index.js';
 
 // Chunking
@@ -63,8 +65,10 @@ export {
   enrichChunks,
   generateChunkId,
   generateContentHash,
+  splitByLines,
   splitByParagraphs,
   splitBySentences,
+  splitByWords,
   type ChunkableResource,
   type ChunkingConfig,
   type ChunkingResult,

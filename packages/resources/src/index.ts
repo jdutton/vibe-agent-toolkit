@@ -539,9 +539,21 @@ export {
   type ExtentContributor,
 } from './projection/contributor.js';
 
-// Blob-keyed reference rows — the markdown AST's links and the raw-source
-// lexer's tokens unified into one position-ordered ordinal space.
-export { blobReferencesFor } from './projection/blob-references.js';
+// Blob-keyed reference rows — a parser AST's links (mdast or parse5) and the
+// raw-source lexer's tokens unified into one position-ordered ordinal space.
+//
+// `AST_SYNTACTIC_FORMS` and `hasReferenceSpan` are exported because they are
+// the producer's own answers to "which rows came from a parser?" and "which
+// links could become rows at all?". A consumer that reconstructs either by hand
+// is a second opinion that goes stale the next time a parser is added — which
+// is exactly how a hand-listed markdown triple made a whole-corpus invariant
+// disagree with its own counter once HTML references started producing rows.
+export {
+  AST_SYNTACTIC_FORMS,
+  blobReferencesFor,
+  hasReferenceSpan,
+  type PositionedLink,
+} from './projection/blob-references.js';
 
 // The filesystem extent (zones §2): everything on disk under the root, files
 // AND directories, excluding NEVER_CRAWL_GLOBS but deliberately NOT build
@@ -623,6 +635,29 @@ export {
   type ContextTotals,
 } from './projection/claude-context-accounting.js';
 
+// The always-loaded budget over those charges — VAT's flagship projection check,
+// as a pure predicate. The threshold constant IS exported (unlike `OVERSIZE_BYTES`
+// above) because the CLI's config default reads it: a number the command
+// re-spelled would be a second copy of a measured quantity.
+export {
+  DEFAULT_ALWAYS_LOADED_CONTEXT_TOKENS,
+  alwaysLoadedBudget,
+  type AlwaysLoadedBudget,
+  type BudgetContributor,
+} from './projection/claude-context-budget.js';
+
+// That budget over the WHOLE tree, from one query per distinct instruction chain
+// rather than one per directory — 9 queries instead of 589 on VAT's own corpus.
+// The internals (`representativeFor`, `workingLocations`) stay unexported for the
+// reason `selectRules` does: pre-1.0, a published symbol is a contract, and the
+// collapse's soundness is guarded by the suite's differential oracle rather than
+// by anyone calling its pieces.
+export {
+  sweepAlwaysLoadedBudgets,
+  type BudgetSweep,
+  type LocationBudget,
+} from './projection/claude-context-budget-sweep.js';
+
 // The COMPLEMENT of the query: what the loaded set POINTS AT in one hop and the
 // harness does not load. Its own row shape on purpose — a voluntary markdown link
 // has no honest `loadClass`, and folding it into `LoadedRow` would make the
@@ -651,6 +686,16 @@ export {
   type ModelledBehaviour,
   type StatedLimit,
 } from './projection/claude-context-limits.js';
+
+// The same discipline for the half of the lane that GATES. `vat claude budget`
+// applies a threshold to the measurement `vat claude context` reports, so it owes
+// a reader the same signed bounds — COMPOSED from the list above by id rather
+// than copied, plus the four that only a thresholded reading needs.
+export {
+  ALWAYS_LOADED_BUDGET_LIMITS,
+  BUDGET_LIMIT_IDS_FROM_CONTEXT,
+  limitsById,
+} from './projection/claude-context-budget-limits.js';
 
 // One crawl API, two implementations (scanning-and-caching §3.3): the walk, and
 // git plus a bounded walk of only what git cannot see. Same population, two cost

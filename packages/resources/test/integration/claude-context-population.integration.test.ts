@@ -134,3 +134,47 @@ describe('buildClaudeContextPopulation', () => {
     )?.value).toBe('always');
   });
 });
+
+describe('buildClaudeContextPopulation in a repository', () => {
+  /**
+   * ⛔ Its own tree, and a REAL repository, because nothing about the ignored
+   * half is observable in the suite tree above: outside git nothing is ignored,
+   * so a lane that declines the gitignored half and one that realizes it agree
+   * for the wrong reason. Built inside the test rather than in a hook so the
+   * suite keeps one shared tree and this stays the only run paying for a
+   * `git init`.
+   */
+  const IGNORED_TREE: Record<string, string> = {
+    'CLAUDE.md': '# Root\n',
+    '.gitignore': 'generated/\n',
+    'generated/CLAUDE.md': '# Generated\n\nA handbook nobody committed.\n',
+    'generated/.claude/rules/built.md': '---\ndescription: generated\n---\n\nBuilt.\n',
+  };
+
+  it('declines the gitignored half instead of realizing it', async () => {
+    const tree = await buildClaudeContextTree(IGNORED_TREE, { git: true });
+    try {
+      const paths = new Set(tree.projection.resourceRealizations.map((row) => row.path));
+
+      // The positive control, asserted FIRST: a tree that failed to populate at
+      // all satisfies every absence below, and an absence test whose subject was
+      // never built is the most convincing vacuous pass there is.
+      expect(paths.has('CLAUDE.md')).toBe(true);
+
+      // The decision: a gitignored `CLAUDE.md` is no longer modelled. It is
+      // absent from the population, not merely absent from the reported
+      // locations, so no downstream filter has to be trusted for it.
+      expect(paths.has('generated/CLAUDE.md')).toBe(false);
+      expect(paths.has('generated/.claude/rules/built.md')).toBe(false);
+
+      // ...and no root discovery registered a contributor for either of them.
+      // The extent count is what the DISCOVERY pass decided, one layer above the
+      // realization rows, so it can disagree with them — and this lane's whole
+      // cost story is that it does not.
+      expect(tree.projection.resolutionContexts.filter((row) => row.kind === CLAUDE_IMPORT_KIND))
+        .toHaveLength(1);
+    } finally {
+      await removeClaudeContextTree(tree.dir);
+    }
+  }, 60_000);
+});

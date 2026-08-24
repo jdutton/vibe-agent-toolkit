@@ -1,5 +1,6 @@
 /**
- * The containment guard on `vat claude context`'s path argument.
+ * The containment guard on the path arguments of `vat claude context` and its
+ * sibling `vat claude budget` — one predicate, shared, in `utils/corpus-target`.
  *
  * ## Why the predicate is tested and not the function that calls it
  *
@@ -22,7 +23,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { escapesCorpusRoot } from '../../../src/commands/claude/context.js';
+import { escapesCorpusRoot } from '../../../src/utils/corpus-target.js';
 
 describe('escapesCorpusRoot', () => {
   it('admits paths the corpus root really contains', () => {

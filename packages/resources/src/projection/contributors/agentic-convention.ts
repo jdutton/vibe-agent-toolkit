@@ -29,22 +29,54 @@
  * membership without realization is the correct shape here and not an
  * omission.
  *
- * ## 🪤 Identity collapse, and why loading is reduced across realizations
+ * ## 🪤 Identity collapse — the reduction is sound, but NO SHIPPED PRODUCER
+ * reaches it
  *
- * `resource_tags` is keyed `(resourceId, tag, value, source)` and `resourceId`
- * canonicalises through `realpathSync.native`, so a symlink at
- * `.claude/agents/foo.md` pointing at `docs/foo.md` mints ONE identity. Two
- * realizations of that identity classify differently — `subagent` at one path,
- * nothing at the other — and the table has no column to say which path produced
- * which row. Emitting both verbatim would put two contradictory `loading` rows
- * under one key, and a budget check joining on it would double-count.
+ * `resource_tags` is keyed `(resourceId, tag, value, source)` and has no column
+ * for which *path* produced a row. So if one identity were realized at two paths
+ * that classify differently — `subagent` at `.claude/agents/foo.md`, nothing at
+ * `docs/foo.md` — emitting both verbatim would put two contradictory `loading`
+ * rows under one key and a budget check joining on it would double-count. That
+ * is the hazard {@link strongestLoading} is reduced against, and the reduction
+ * below is correct for it.
  *
- * So the classes are reduced with {@link strongestLoading} across *all* of an
- * identity's realizations before a row is written: one `loading` row per
- * identity, and the strongest wins, which is the same direction the per-path
- * rule takes and for the same reason — under-reporting is the failure mode a
- * budget check cannot tolerate. Convention tags are a union, which needs no
- * reduction because they are boolean-presence facts.
+ * **A symlink is not what produces that shape today, in either base extent.**
+ * The obvious reading — `canonicalPathFor` resolves symlinks, therefore a link
+ * and its target collapse onto one identity — is wrong twice over, and both
+ * halves were measured rather than reasoned:
+ *
+ * - **Filesystem extent → ZERO realizations for a symlink's own path.** Neither
+ *   enumerator ever hands the path over: `FilesystemCrawlSource` walks with
+ *   `followSymlinks: false`, and `GitCrawlSource` is handed the mode-`120000`
+ *   entry by git and drops it explicitly (`crawl-source.ts`, *"A SYMLINK IS NOT
+ *   A MEMBER HERE"*). There is no second realization to reduce because there is
+ *   no first one. Pinned per-enumerator, with a regular file planted alongside
+ *   as the positive control, by
+ *   `test/projection-filesystem-extent-symlink.test.ts`.
+ * - **Git extent → TWO realizations with two DISTINCT identities.** It does
+ *   enumerate the link, but `canonicalPathFor` never reaches its `realpath`
+ *   fallback: `GitTracker.indexPathFor` answers first, returning the path git
+ *   listed. That map is filled from `git ls-files --cached --others`, so it
+ *   covers untracked paths as well as tracked ones — the link and its target
+ *   therefore hash different spellings and mint different ids whether the link
+ *   is committed or merely present. Pinned as `distinctResourceIds() === 3` by
+ *   `test/projection-git-extent-symlink.test.ts`.
+ *
+ * So {@link strongestLoading}'s reduction is currently reachable only from a
+ * **hypothetical future contributor** — one that realizes one identity at two
+ * differently-classifying paths. Nothing shipped does; the fold below is a
+ * guard against a shape no producer creates today, and it must not be read as
+ * describing behaviour that fires. (The union over convention tags needs no
+ * reduction either way — they are boolean-presence facts.)
+ *
+ * ⚠️ **Open, and deliberately not settled here:** whether `canonicalPathFor`
+ * *should* realpath a symlink instead of taking git's spelling. The two files no
+ * longer disagree about what it *does* — `identity.ts` now leads
+ * `canonicalPathFor` with *"🪤 A symlink and its target do NOT reliably share one
+ * identity"*, which is the measurement above. What it *ought* to do is still
+ * unanswered. That is a question about identity, not about classification, and
+ * answering it would change the population — so it awaits a ruling rather than
+ * being resolved in this comment.
  */
 
 import type {

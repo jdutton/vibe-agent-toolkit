@@ -166,9 +166,24 @@ interface RAGAdminProvider {
 4. Add metadata: headingPath, file location, content hash
 ```
 
-**Key Parameters**:
-- `targetSize`: 512 tokens (default, adjustable)
-- `paddingFactor`: 0.9 (10% safety margin for token estimation error)
+**Key Parameters** — derived from the embedding provider, not constants:
+
+`resolveChunkingConfig()` (`packages/rag-lancedb/src/chunking-config.ts`) computes the
+budget from `embeddingProvider.maxInputTokens`. There is no 512/0.9 default any more:
+
+- `targetChunkSize`: defaults to the provider's `maxInputTokens` (256 for the default
+  local model, 8192 for OpenAI's v3 models). A caller override above that limit is
+  honoured as a *clamp plus warning*, never silently applied.
+- `paddingFactor`: derived, not chosen — `(limit - 2) / (limit * 1.18)`, rounded down to
+  two decimals (≈0.84). The 2 is `[CLS]`/`[SEP]`; the 1.18 is measured divergence between
+  the chunker's cl100k counting and the model's own tokenizer.
+- `modelTokenLimit`: the provider's `maxInputTokens` verbatim.
+
+**Why derived**: the previous hardcoded pair (512-token target, 8191-token "model limit")
+described OpenAI ada-002 and was applied to every provider, including the default local
+all-MiniLM-L6-v2, which reads 256. Measured result: 84-86% of chunks truncated, 42-44% of
+every corpus never reaching the model, and an "exceeds model token limit" guard that could
+not fire because 8191 is 32x the real limit.
 
 ### 5. LanceDB Provider
 
@@ -377,9 +392,12 @@ rag:
     embedding:
       provider: onnx
       model: Xenova/all-MiniLM-L6-v2
-    chunking:
-      targetSize: 512
-      paddingFactor: 0.9
+    # chunking: omit it. The budget derives from the provider's maxInputTokens
+    # (256 for Xenova/all-MiniLM-L6-v2), and `vat rag index` does not read this
+    # key at all — it constructs the provider without a targetChunkSize, so a
+    # value written here is inert and silent. The clamp-and-warn described below
+    # applies to the LIBRARY option (`LanceDBRAGProvider.create`), which is the
+    # only route that reaches `resolveChunkingConfig`.
 
   stores:
     main:
@@ -410,15 +428,17 @@ All RAG commands support:
 
 ### Chunking Strategy
 
-**Target Size Selection**:
-- **512 tokens**: General documentation (default, good balance)
-- **256 tokens**: Code snippets, API references (more granular)
-- **1024 tokens**: Long-form guides, tutorials (more context)
+**Target Size Selection**: leave it unset and take the derived value — the provider's
+`maxInputTokens` — unless you have a retrieval-quality reason to go *smaller*. Smaller
+chunks are more granular (useful for code snippets and API references); larger is not an
+option, because the ceiling is the model's, not a preference. An override above the limit
+is clamped and warned about.
 
-**Padding Factor**:
-- **0.9** (default): Safe for fast token counter (±20% error)
-- **0.95**: For approximate counter (±5% error)
-- **1.0**: Only if using exact tokenization
+**Padding Factor**: derived from the same limit (≈0.84). Override it downward if your token
+counter is coarse — `FastTokenCounter`'s ±20% error eats into the margin — but note the
+derived value already accounts for the ~1.18x gap between cl100k counting and the model's
+own tokenizer. Setting it to 1.0 does not "use the full window"; it removes the margin that
+keeps a full chunk from overflowing, and `resolveChunkingConfig()` will warn accordingly.
 
 ### Embedding Provider Choice
 
@@ -472,7 +492,7 @@ vat rag index docs/
 **Solutions**:
 1. Switch to `FastTokenCounter` (default)
 2. Use the ONNX provider (faster than OpenAI for large batches)
-3. Reduce `targetSize` (fewer chunks = faster indexing)
+3. Leave `targetChunkSize` at the derived value — lowering it produces *more*, smaller chunks and slows indexing down (library option only; the YAML key is not read)
 4. Check disk I/O (SSD vs HDD)
 
 ### Problem: Model download fails
@@ -492,16 +512,23 @@ vat rag index docs/
 **Solutions**:
 1. Increase Node.js memory: `NODE_OPTIONS=--max-old-space-size=4096`
 2. Index in smaller batches
-3. Reduce `targetSize` (larger chunks = more memory)
+3. Reduce `targetChunkSize` (larger chunks = more memory); library option only
 4. Close other applications
 
 ### Problem: Inaccurate token counts
 
 **Symptoms**: Chunks exceed model limits despite padding factor
 
-**Solutions**:
+**First check the provider is telling the truth.** `resolveChunkingConfig()` sizes
+everything against `embeddingProvider.maxInputTokens`; if a custom provider reports a
+number larger than its model really reads, the budget is wrong before any counter runs and
+the overflow warning cannot fire. Confirm the limit against the model card, and for a
+decorator (rate limiter, cache, retry wrapper) confirm it *delegates* the limit rather than
+declaring one.
+
+**Then**:
 1. Switch to `ApproximateTokenCounter`
-2. Reduce `paddingFactor` to 0.8-0.85
+2. Reduce `paddingFactor` below the derived ≈0.84
 3. Inspect failed chunks: Look at `tokenCount` field
 4. Report issue with example markdown
 

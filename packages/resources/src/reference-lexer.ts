@@ -204,8 +204,74 @@ export function stripLeadingDelimiters(token: string): { token: string; stripped
   return { token: token.slice(start), stripped: start };
 }
 
-/** A dot followed by a short alphanumeric run at the very end of the token. */
-const EXTENSION_SUFFIX = /\.[A-Za-z0-9]{1,8}$/u;
+/**
+ * A dot followed by a short alphanumeric run at the very end of the string it is tested
+ * against — see {@link stripQueryOrFragment}, which is what makes that end the end of the
+ * path rather than the end of the whole raw reference.
+ *
+ * The single definition of `hasExtension`'s predicate, shared by both `blob_references`
+ * producers: this module's raw-source lexer and the AST-derived rows `projection/
+ * blob-references.ts` builds from `ResourceLink.href`. `hasExtension` must mean ONE predicate
+ * across the table, or a query filtering on it silently reads two different rules depending on
+ * which producer emitted the row — and for a while it did: this constant and
+ * {@link stripQueryOrFragment} each existed as two independent copies, one per module, with a
+ * docstring in each asserting the two agreed. That assertion was true when written and then
+ * went false without either file changing its OWN behaviour (below), because **a comment
+ * asserting two constants agree is not a mechanism that makes them agree**. There is now one
+ * copy; `blob-references.ts` imports both from here — the existing import direction, since it
+ * already imports {@link detectVariableExpansion} from this module — so the invariant is
+ * enforced by the module system instead of by a comment.
+ *
+ * ⛔ B3: `lexicalFeatures` (in `projection/blob-references.ts`) used to run this regex against
+ * the WHOLE raw href. For `./guide.md?v=2` the string's own end is `2`, not `.md`, so the regex
+ * never matched and `hasExtension` read `false` for a link that plainly has a `.md` extension —
+ * silently, since nothing separated "no extension" from "extension pushed off the end by
+ * trailing punctuation nobody stripped." Same failure for `./guide.md#section`. Pinned by
+ * Task A as `it.fails` in `html-link-parser.test.ts` and fixed by stripping the query/fragment
+ * first (below) before testing.
+ *
+ * ⛔ Task C found the OTHER producer — this module's own lexer tokens, via {@link emitToken} —
+ * had the identical bug independently, and for the same reason: `emitToken` tested `raw`
+ * directly instead of a stripped form. `@docs/guide.md?v=2`, `./guide.md#section` and
+ * `${CLAUDE_PLUGIN_ROOT}/guide.md?v=2` (the three token classes {@link isCandidate} admits
+ * UNCONDITIONALLY, which do not have to pass this regex to become a row at all) read
+ * `hasExtension: false` from the lexer while the equivalent markdown link read `true` from the
+ * AST side for the identical path. Fixed the same way, at the column site in {@link emitToken}.
+ */
+export const EXTENSION_SUFFIX = /\.[A-Za-z0-9]{1,8}$/u;
+
+/**
+ * Everything before the first `?` or `#` — the part of a reference
+ * {@link EXTENSION_SUFFIX} means to test.
+ *
+ * Splitting on the FIRST of either delimiter (not just `?`, not just `#`) matters for the order
+ * they can appear in: `?` before `#` is the common case (`?v=2#section`), but nothing in URL
+ * syntax forbids the reverse, and a split anchored to only one delimiter would leave the
+ * other's text attached to the "path" half — silently miscounting the extension in that href,
+ * or leaving a stray trailing character after it in others.
+ *
+ * A fragment-only reference (`#section`) or a bare `?`/`#` correctly reduces to the empty
+ * string here, which {@link EXTENSION_SUFFIX} — anchored, so it cannot match nothing — reports
+ * as no extension, exactly as it should: neither has one.
+ *
+ * `[0] ?? token` is the same `noUncheckedIndexedAccess` guard `link-parser.ts ›
+ * classifyLink` uses for the identical split: `String#split` on a defined regex always returns
+ * at least one element, so the fallback is unreachable in practice and kept only because the
+ * type system cannot see that.
+ *
+ * Two call sites test this function's result against {@link EXTENSION_SUFFIX} to fill the
+ * `hasExtension` column: {@link emitToken} here, for lexer tokens, and `lexicalFeatures` in
+ * `projection/blob-references.ts`, for AST hrefs. It does NOT touch the SEPARATE
+ * candidate-admission regex at {@link isCandidate} — see that function's docstring for why that
+ * gate is deliberately left testing the unstripped token.
+ *
+ * @param token - The reference exactly as authored — a lexer token (leading delimiters and
+ *   trailing sentence punctuation already stripped) or an AST `href`
+ * @returns `token` with any trailing `?query` or `#fragment` removed
+ */
+export function stripQueryOrFragment(token: string): string {
+  return token.split(/[#?]/u)[0] ?? token;
+}
 
 /**
  * Every reference candidate the markdown AST does not produce, in document
@@ -342,7 +408,10 @@ function emitToken(
     startOffset: start,
     endOffset: end,
     syntacticForm: classify(raw),
-    hasExtension: EXTENSION_SUFFIX.test(raw),
+    // Tested against the query/fragment-stripped form, not `raw` itself — see
+    // {@link stripQueryOrFragment}. The candidate GATE at `isCandidate` still tests `token`
+    // (unstripped) — a deliberate, narrower fix; see that function's docstring.
+    hasExtension: EXTENSION_SUFFIX.test(stripQueryOrFragment(raw)),
     leadingAt: raw.startsWith('@'),
     slashCount: countSlashes(raw),
     variableExpansion: detectVariableExpansion(raw),
@@ -383,6 +452,21 @@ const ALL_NUMERIC_SEGMENTS = /^[\d./]+$/u;
  *
  * Rejected outright: scheme-qualified URLs (an external reference, not a path
  * candidate) and all-numeric segment runs (`2026/08/12`, `1/2`).
+ *
+ * ⚠️ Task C, deliberately NOT touched here: `EXTENSION_SUFFIX` below is the SAME regex
+ * {@link emitToken} tests (via {@link stripQueryOrFragment}) to fill the `hasExtension`
+ * COLUMN, but here it decides whether a bare token becomes a ROW at all — a much larger
+ * blast radius, since it can add rows to `blob_references` for tokens that never produced
+ * one before, flowing into closures and `vat inventory`. Stripping a query/fragment here
+ * too (`docs/guide.md?v=2`, currently rejected because ITS OWN end is `2`, not `.md`) would
+ * change the candidate population, not just a column value on an already-admitted row.
+ * Left as `token` (unstripped) on purpose: fixing the column is sufficient to make
+ * `hasExtension` mean one thing across the table (the invariant this task exists to
+ * restore), because a bare token can only reach {@link emitToken} through this exact
+ * branch, so if a query/fragment tail keeps it OUT, `hasExtension` is never computed for
+ * it in the first place — there is no row for the value to disagree on. A wider fix here
+ * would need to be measured against this repository's own corpus first (see Task C's
+ * report), not assumed safe by analogy with the column fix.
  */
 function isCandidate(token: string): boolean {
   if (token.length < 2) return false;

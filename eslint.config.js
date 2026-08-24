@@ -212,6 +212,10 @@ export default [
       'build/',
       'coverage/',
       'node_modules/',
+      // Emitted by tsc-clean-build, gitignored, and NOT source. An interrupted build leaves it
+      // behind, and linting it fails the gate on generated code nobody wrote — a spurious red
+      // that looks exactly like a real one.
+      '**/.tsc-staging/',
       'generated/',
       '**/generated/',
       '**/*.d.ts',

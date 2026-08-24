@@ -33,6 +33,38 @@ import {
 } from './onnx-utils.js';
 
 /**
+ * What a single embed call lost to the model's sequence-length cap.
+ *
+ * Handed to {@link OnnxEmbeddingConfig.onTruncation} for every batch that
+ * dropped content, so a caller can attribute the loss to the work it just
+ * submitted rather than to a running total.
+ */
+export interface TruncationEvent {
+  /** Texts submitted in the batch. */
+  textsInBatch: number;
+  /** How many of them were cut short. */
+  textsTruncated: number;
+  /** Content tokens discarded across the batch. */
+  tokensDropped: number;
+  /** The cap that did the cutting. */
+  maxInputTokens: number;
+  /** Model whose cap applied. */
+  model: string;
+}
+
+/**
+ * Running total of what this provider has discarded since construction.
+ */
+export interface TruncationStats {
+  /** Texts handed to the model. */
+  textsEmbedded: number;
+  /** Texts the model read only part of. */
+  textsTruncated: number;
+  /** Content tokens the model never saw. */
+  tokensDropped: number;
+}
+
+/**
  * Configuration for OnnxEmbeddingProvider
  */
 export interface OnnxEmbeddingConfig {
@@ -50,13 +82,29 @@ export interface OnnxEmbeddingConfig {
    * quantized download the previous transformers.js backend used.
    */
   quantized?: boolean;
-  /** Max sequence length for tokenization (default: 256) */
+  /**
+   * Max sequence length for tokenization (default: 256).
+   *
+   * 256 is not a placeholder to be raised when chunks overflow: all-MiniLM-L6-v2
+   * was TRAINED at 256 positions, so it is a property of the model. Text past
+   * the cap is discarded before inference — size the chunks, not the cap.
+   * Published as {@link OnnxEmbeddingProvider.maxInputTokens} so consumers can
+   * read the real number instead of assuming one.
+   */
   maxSequenceLength?: number;
   /**
    * Number of WASM threads (default: 1). Single-threaded avoids spawning worker
    * threads, which keeps inference deterministic and teardown clean.
    */
   numThreads?: number;
+  /**
+   * Called once per batch that lost content to the sequence-length cap.
+   *
+   * Supplying a handler takes ownership of reporting: the provider's own
+   * one-shot `console.warn` is suppressed, on the assumption that a caller who
+   * asked for the events will surface them itself.
+   */
+  onTruncation?: (event: TruncationEvent) => void;
 }
 
 /** WASM runtime environment knobs we set (subset of onnxruntime-web's `env`). */
@@ -175,13 +223,30 @@ export class OnnxEmbeddingProvider implements EmbeddingProvider {
   readonly model: string;
   readonly dimensions: number;
 
+  /**
+   * The model's real sequence-length cap, including [CLS] and [SEP].
+   *
+   * Chunkers must size against this. The default (256) is what
+   * all-MiniLM-L6-v2 was trained at.
+   */
+  readonly maxInputTokens: number;
+
   private readonly configModelPath: string | undefined;
   private readonly cacheDir: string;
   private readonly quantized: boolean;
-  private readonly maxSequenceLength: number;
   private readonly numThreads: number;
+  private readonly onTruncation: ((event: TruncationEvent) => void) | undefined;
 
   private initPromise: Promise<LoadedModel> | null = null;
+
+  private readonly stats: TruncationStats = {
+    textsEmbedded: 0,
+    textsTruncated: 0,
+    tokensDropped: 0,
+  };
+
+  /** Warn on stderr once per provider, not once per batch, to stay readable. */
+  private hasWarnedAboutTruncation = false;
 
   /**
    * Create OnnxEmbeddingProvider
@@ -194,8 +259,19 @@ export class OnnxEmbeddingProvider implements EmbeddingProvider {
     this.configModelPath = config.modelPath;
     this.cacheDir = config.cacheDir ?? safePath.join(homedir(), '.cache', 'vat-onnx-models');
     this.quantized = config.quantized ?? true;
-    this.maxSequenceLength = config.maxSequenceLength ?? 256;
+    this.maxInputTokens = config.maxSequenceLength ?? 256;
     this.numThreads = config.numThreads ?? 1;
+    this.onTruncation = config.onTruncation;
+  }
+
+  /**
+   * What this provider has discarded so far, as a snapshot.
+   *
+   * Non-zero `tokensDropped` means the corpus that was indexed is not the
+   * corpus the model saw.
+   */
+  get truncationStats(): TruncationStats {
+    return { ...this.stats };
   }
 
   /**
@@ -320,10 +396,10 @@ export class OnnxEmbeddingProvider implements EmbeddingProvider {
     const { session, tokenizer } = await this.initialize();
     const ort = await loadOnnxRuntime();
 
-    const { inputIds, attentionMask, maxLen } = tokenizer.tokenizeBatch(
-      texts,
-      this.maxSequenceLength,
-    );
+    const { inputIds, attentionMask, maxLen, truncatedTexts, droppedTokens } =
+      tokenizer.tokenizeBatch(texts, this.maxInputTokens);
+
+    this.recordTruncation(texts.length, truncatedTexts, droppedTokens);
 
     const batchSize = texts.length;
     const { inputIdsTensor, attentionMaskTensor, tokenTypeIdsTensor } = createBatchTensors(
@@ -356,5 +432,54 @@ export class OnnxEmbeddingProvider implements EmbeddingProvider {
     );
 
     return pooled.map((vector) => l2Normalize(vector));
+  }
+
+  /**
+   * Book a batch's truncation toll and make it audible.
+   *
+   * Dropping content is never silent here: it lands in {@link truncationStats},
+   * it reaches `onTruncation` if the caller wired one, and failing both it hits
+   * stderr once so a `vat rag index` run cannot quietly ship a corpus the model
+   * only half read.
+   *
+   * @param textsInBatch - Texts submitted
+   * @param truncatedTexts - How many were cut short
+   * @param tokensDropped - Content tokens discarded
+   */
+  private recordTruncation(
+    textsInBatch: number,
+    truncatedTexts: number,
+    tokensDropped: number,
+  ): void {
+    this.stats.textsEmbedded += textsInBatch;
+
+    if (truncatedTexts === 0) {
+      return;
+    }
+
+    this.stats.textsTruncated += truncatedTexts;
+    this.stats.tokensDropped += tokensDropped;
+
+    if (this.onTruncation) {
+      this.onTruncation({
+        textsInBatch,
+        textsTruncated: truncatedTexts,
+        tokensDropped,
+        maxInputTokens: this.maxInputTokens,
+        model: this.model,
+      });
+      return;
+    }
+
+    if (!this.hasWarnedAboutTruncation) {
+      this.hasWarnedAboutTruncation = true;
+      console.warn(
+        `[vat-onnx] Input truncated: ${String(truncatedTexts)} of ${String(textsInBatch)} text(s) ` +
+          `exceeded the ${String(this.maxInputTokens)}-token limit of '${this.model}' and lost ` +
+          `${String(tokensDropped)} token(s), which the model will not see. ` +
+          'Reduce the chunk size feeding this provider. ' +
+          'Further truncations are counted in truncationStats rather than warned about again.',
+      );
+    }
   }
 }

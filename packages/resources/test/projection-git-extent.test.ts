@@ -67,7 +67,7 @@ let contribution: ExtentContribution;
  * @param cwd - Fixture directory to run in
  */
 function git(args: readonly string[], cwd: string): void {
-  runGitOrThrow([...args], { cwd, stdio: 'pipe' });
+  runGitOrThrow([...args], { cwd });
 }
 
 /** Root-relative paths of every realization the contributor emitted. */

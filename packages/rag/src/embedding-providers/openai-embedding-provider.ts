@@ -29,6 +29,22 @@ const MODEL_DIMENSIONS: Record<string, number> = {
 };
 
 /**
+ * Maximum input tokens per request, per model.
+ *
+ * The third-generation models take 8192; ada-002 takes 8191. That off-by-one is
+ * the entire provenance of the 8191 that used to be hardcoded into the chunker
+ * and applied to every provider, local models included.
+ */
+const MODEL_INPUT_TOKEN_LIMITS: Record<string, number> = {
+  'text-embedding-3-small': 8192,
+  'text-embedding-3-large': 8192,
+  'text-embedding-ada-002': 8191,
+};
+
+/** Lowest documented OpenAI embedding limit — the safe answer for an unknown model. */
+const FALLBACK_INPUT_TOKEN_LIMIT = 8191;
+
+/**
  * OpenAIEmbeddingProvider
  *
  * Cloud-based embedding generation using OpenAI API.
@@ -49,6 +65,7 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
   readonly name = 'openai';
   readonly model: string;
   readonly dimensions: number;
+  readonly maxInputTokens: number;
 
   private readonly client: {
     embeddings: {
@@ -70,6 +87,7 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
   constructor(config: OpenAIEmbeddingConfig) {
     this.model = config.model ?? 'text-embedding-3-small';
     this.dimensions = config.dimensions ?? MODEL_DIMENSIONS[this.model] ?? 1536;
+    this.maxInputTokens = MODEL_INPUT_TOKEN_LIMITS[this.model] ?? FALLBACK_INPUT_TOKEN_LIMIT;
 
     // Lazy load OpenAI SDK (optional dependency)
     // Using dynamic import in constructor requires synchronous initialization,

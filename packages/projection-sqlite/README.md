@@ -16,9 +16,12 @@ nothing to download.
 
 **Requires Node >= 22.13.0** — `node:sqlite` is absent from 22.12.0. The rest of
 the toolkit stays at `>=22.0.0`; a backend nobody has to install should not
-raise everyone else's floor. The module is unflagged from the Node 24 line
-onward; on Node 22 it emits one `ExperimentalWarning` per process, which this
-package deliberately does not suppress.
+raise everyone else's floor. The module needs no flag from the Node 24 line
+onward, but **unflagged is not silent** — it still emits one
+`ExperimentalWarning` per process there, as it does on Node 22 (verified on
+24.13.1). This package deliberately does not suppress it. A caller that enables
+this backend *by default* must filter that one warning by name at its own
+boundary, or every invocation prints it.
 
 > 🪤 Bun's runtime has no `node:sqlite` (it ships `bun:sqlite`, a different API).
 > Nothing in VAT executes under Bun, but importing this package into a Bun
@@ -56,7 +59,11 @@ The twelve projection tables split in two, by the `scope` each declares in
 
 Extent-scoped tables carry two extra leading columns holding that key, and their
 primary key is prefixed with it, so reading one tree is a key-range scan and no
-secondary index is needed.
+secondary index is needed **for that read**. The database holds no explicitly
+created index at all, and that is a deliberate fit to the one access pattern
+above — read a whole tree back by its key. It does not generalize: a consumer
+that filters on any other column (a path, a directory, a content key, a resource
+kind) gets a full table scan, and would have to bring its own indexes.
 
 The database lives at
 `<vatCacheNamespaceRoot()>/projection-<shape digest>/projection.db`. The
