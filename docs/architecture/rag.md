@@ -393,8 +393,11 @@ rag:
       provider: onnx
       model: Xenova/all-MiniLM-L6-v2
     # chunking: omit it. The budget derives from the provider's maxInputTokens
-    # (256 for Xenova/all-MiniLM-L6-v2). `targetSize: 512` under this provider
-    # would be clamped back to 256 with a warning — it cannot buy a bigger window.
+    # (256 for Xenova/all-MiniLM-L6-v2), and `vat rag index` does not read this
+    # key at all — it constructs the provider without a targetChunkSize, so a
+    # value written here is inert and silent. The clamp-and-warn described below
+    # applies to the LIBRARY option (`LanceDBRAGProvider.create`), which is the
+    # only route that reaches `resolveChunkingConfig`.
 
   stores:
     main:
@@ -489,7 +492,7 @@ vat rag index docs/
 **Solutions**:
 1. Switch to `FastTokenCounter` (default)
 2. Use the ONNX provider (faster than OpenAI for large batches)
-3. Leave `targetSize` at the derived value — lowering it produces *more*, smaller chunks and slows indexing down
+3. Leave `targetChunkSize` at the derived value — lowering it produces *more*, smaller chunks and slows indexing down (library option only; the YAML key is not read)
 4. Check disk I/O (SSD vs HDD)
 
 ### Problem: Model download fails
@@ -509,7 +512,7 @@ vat rag index docs/
 **Solutions**:
 1. Increase Node.js memory: `NODE_OPTIONS=--max-old-space-size=4096`
 2. Index in smaller batches
-3. Reduce `targetSize` (larger chunks = more memory)
+3. Reduce `targetChunkSize` (larger chunks = more memory); library option only
 4. Close other applications
 
 ### Problem: Inaccurate token counts

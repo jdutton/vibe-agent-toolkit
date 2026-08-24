@@ -761,7 +761,11 @@ Error: Vector dimension mismatch. Expected 384, got 1536.
 ```
 
 **Solution:** You switched providers after indexing. Either:
-1. Re-index with new provider: `await ragProvider.clearAndReindex(resources)`
+1. Clear the store, then re-index with the new provider — `vat rag clear && vat rag index`, or
+   `await ragProvider.clear()` followed by `await ragProvider.indexResources(resources)`.
+   ⚠️ `vat rag index` on its own is **not** enough: change detection is a content hash of the
+   source document, so an unchanged file is skipped and its stale vectors survive. There is no
+   `--force`.
 2. Switch back to original provider
 
 ### API key errors

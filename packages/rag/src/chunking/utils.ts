@@ -54,17 +54,46 @@ export function splitByParagraphs(text: string): string[] {
 }
 
 /**
- * Split text by sentences
+ * Split text by lines
+ *
+ * Blank and whitespace-only lines are dropped: they carry no content, and a
+ * caller re-joining the pieces with a newline reproduces the source.
  *
  * @param text - Text to split
- * @returns Array of sentences
+ * @returns Array of non-blank lines
+ */
+export function splitByLines(text: string): string[] {
+  return text.split('\n').filter((line) => line.trim().length > 0);
+}
+
+/**
+ * Split text by sentences
+ *
+ * The terminating `.`, `!` or `?` stays with its sentence. These pieces are
+ * re-joined on the chunking path, so dropping the terminator would silently
+ * delete content from the indexed text.
+ *
+ * @param text - Text to split
+ * @returns Array of sentences, each retaining its terminator
  */
 export function splitBySentences(text: string): string[] {
-  // Simple sentence splitting (handles . ! ?)
-  // Match sentence boundaries and capture the sentences
-  const matches = text.match(/[^.!?]+/g);
-  if (!matches) {
-    return [];
-  }
-  return matches.map((s) => s.trim()).filter((s) => s.length > 0);
+  // Cut at a zero-width position that follows a terminator and is not followed
+  // by another, so `...` and `!!` stay whole. Splitting on a boundary rather
+  // than matching the sentence keeps every character — the old
+  // `match(/[^.!?]+/g)` silently dropped every terminator — and, being pure
+  // lookaround with nothing to backtrack into, it is linear in the input.
+  return text
+    .split(/(?<=[.!?])(?![.!?])/u)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => sentence.length > 0);
+}
+
+/**
+ * Split text by whitespace-delimited words
+ *
+ * @param text - Text to split
+ * @returns Array of words, with all whitespace runs consumed
+ */
+export function splitByWords(text: string): string[] {
+  return text.split(/\s+/u).filter((word) => word.length > 0);
 }

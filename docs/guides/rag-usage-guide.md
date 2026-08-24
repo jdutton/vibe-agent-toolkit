@@ -205,6 +205,13 @@ rag:
         targetSize: 512  # Larger chunks for examples (still well under 8192)
 ```
 
+> ⚠️ **`chunking:` in YAML is not read by `vat rag index` today.** The CLI constructs
+> `LanceDBRAGProvider` without passing `targetChunkSize` or `paddingFactor`, so every run uses the
+> budget derived from the embedding provider's own `maxInputTokens`. The blocks above document the
+> intended shape; the working override is the library one —
+> `LanceDBRAGProvider.create({ targetChunkSize, paddingFactor, … })`. Writing `targetSize:` in
+> `vibe-agent-toolkit.config.yaml` changes nothing and produces no warning.
+
 **Usage**:
 
 ```bash
@@ -259,9 +266,9 @@ rag:
       model: Xenova/all-MiniLM-L6-v2
     # No chunking block: the budget derives from the provider. This model's
     # maxInputTokens is 256, so the derived target is 256 and the derived
-    # paddingFactor ~0.84. Writing `targetSize: 512, paddingFactor: 0.9` here
-    # would be asking for chunks twice the size the model can read — clamped and
-    # warned about now, but it was silent data loss before the limit was required.
+    # paddingFactor ~0.84. An over-large target IS clamped and warned about —
+    # but only when it reaches `resolveChunkingConfig`, i.e. via the library
+    # option, NOT via this YAML key, which `vat rag index` does not read.
 
   stores:
     agent-knowledge:

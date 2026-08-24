@@ -430,16 +430,22 @@ recommendations: a factor chosen for the counter (0.9, say) overruns a
 import {
   chunkByTokens,
   splitByParagraphs,
+  splitByLines,
   splitBySentences,
+  splitByWords,
   generateContentHash,
   generateChunkId,
   calculateEffectiveTarget,
 } from '@vibe-agent-toolkit/rag';
 
-// Split text by token count
+// Split text by token count. Never throws: when a paragraph is over budget it
+// descends paragraphs → lines → sentences → words → a character window, so a
+// document with one very long line is split rather than rejected.
 const chunks = chunkByTokens('long text...', config);
 
-// Split by paragraphs
+// The rungs of that ladder, individually. `splitBySentences` RETAINS the
+// terminating `.`/`!`/`?` — it used to discard them, which was lossy the
+// moment anything put it on the indexing path.
 const paragraphs = splitByParagraphs(text);
 
 // Generate content hash for change detection

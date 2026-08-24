@@ -85,11 +85,25 @@ describe('resolveChunkingConfig', () => {
     expect(config.targetChunkSize).toBe(LOCAL_LIMIT);
   });
 
+  // ⛔ This test used to present itself as "the assertion the whole defect
+  // reduces to". It is an ALGEBRAIC IDENTITY and proves nothing about the
+  // divergence factor.
+  //
+  //   derivePaddingFactor(L) = floor(((L-2)/(L·F))·100)/100 ≤ (L-2)/(L·F)
+  //   ⇒ floor(L·p)·F + 2 ≤ ((L-2)/F)·F + 2 = L,  for ANY F > 0
+  //
+  // Both sides read the same `ESTIMATOR_DIVERGENCE_FACTOR`, so it cancels.
+  // Verified numerically over 15,559,685 combinations (L = 8..8192 × F =
+  // 1.00..20.00 step 0.01): ZERO breaks. At F = 20 the resolver quietly returns
+  // `paddingFactor: 0.04` — a 10-token chunk out of a 256-token window — and
+  // the old assertion still passed green.
+  //
+  // 🔑 It is kept, because the identity IS the invariant the resolver owes its
+  // caller and a refactor that broke it would be a real defect. What is added
+  // beside it is the discriminator the identity cannot be: a bound on how much
+  // of the model's window a full chunk is allowed to give away. That is what
+  // separates a plausible divergence factor from an absurd one.
   it('leaves the default worst-case chunk inside what the model will read', () => {
-    // This is the assertion the whole defect reduces to. The chunker counts in
-    // cl100k; the local model tokenizes in WordPiece, which runs 1.13-1.18x
-    // higher at p50. A budget that ignores that divergence overflows even when
-    // targetChunkSize equals the model limit exactly.
     const provider = providerWithLimit(LOCAL_LIMIT);
     const { config, warnings } = resolveChunkingConfig({
       embeddingProvider: provider,
@@ -104,6 +118,31 @@ describe('resolveChunkingConfig', () => {
 
     expect(worstCaseModelTokens).toBeLessThanOrEqual(LOCAL_LIMIT);
     expect(warnings).toEqual([]);
+  });
+
+  it('does not give away most of the model window to the safety margin', () => {
+    // The discriminating half. `MIN_WINDOW_UTILISATION` is a floor on how much
+    // of the model's own limit one full chunk may actually carry, and it is
+    // deliberately NOT derived from ESTIMATOR_DIVERGENCE_FACTOR — a bound
+    // computed from the constant under test would cancel exactly the way the
+    // identity above does.
+    //
+    // 0.5 is a wide bound, chosen so this test fails only on an absurd factor
+    // rather than on a re-calibration. Today's 1.18 yields 0.84 utilisation; a
+    // move to the p99 tail bound (~1.55) would still yield ~0.63 and pass. F=20
+    // yields 0.04 and fails, which is the whole point.
+    const MIN_WINDOW_UTILISATION = 0.5;
+
+    const { config } = resolveChunkingConfig({
+      embeddingProvider: providerWithLimit(LOCAL_LIMIT),
+      tokenCounter,
+      targetChunkSize: undefined,
+      paddingFactor: undefined,
+    });
+
+    const effectiveTarget = Math.floor(config.targetChunkSize * config.paddingFactor);
+
+    expect(effectiveTarget / LOCAL_LIMIT).toBeGreaterThanOrEqual(MIN_WINDOW_UTILISATION);
   });
 
   it('clamps an explicit target that overshoots the provider, and says so', () => {

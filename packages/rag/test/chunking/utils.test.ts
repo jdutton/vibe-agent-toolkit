@@ -8,8 +8,10 @@ import {
   calculateEffectiveTarget,
   generateChunkId,
   generateContentHash,
+  splitByLines,
   splitByParagraphs,
   splitBySentences,
+  splitByWords,
 } from '../../src/chunking/utils.js';
 
 describe('generateContentHash', () => {
@@ -80,17 +82,63 @@ describe('splitByParagraphs', () => {
 });
 
 describe('splitBySentences', () => {
-  it('should split text by sentence boundaries', () => {
+  it('should split text by sentence boundaries, retaining the terminator', () => {
     const text = 'Sentence one. Sentence two! Sentence three?';
     const sentences = splitBySentences(text);
 
-    expect(sentences).toEqual(['Sentence one', 'Sentence two', 'Sentence three']);
+    expect(sentences).toEqual(['Sentence one.', 'Sentence two!', 'Sentence three?']);
   });
 
   it('should handle mixed punctuation', () => {
     const text = 'First! Second? Third.';
     const sentences = splitBySentences(text);
 
-    expect(sentences).toEqual(['First', 'Second', 'Third']);
+    expect(sentences).toEqual(['First!', 'Second?', 'Third.']);
+  });
+
+  it('should lose no non-whitespace character', () => {
+    // The pieces are re-joined onto the shipping chunk path: a dropped '.' is a
+    // content-loss bug, not a cosmetic one.
+    const text = 'Ellipses... then a question? And an exclamation!! Finally, no terminator';
+    const sentences = splitBySentences(text);
+
+    const strip = (value: string): string => value.replaceAll(/\s+/gu, '');
+    expect(strip(sentences.join(''))).toBe(strip(text));
+  });
+
+  it('should return the whole text when there is no terminator', () => {
+    expect(splitBySentences('no terminator here')).toEqual(['no terminator here']);
+  });
+
+  it('should return punctuation-only text rather than dropping it', () => {
+    expect(splitBySentences('...')).toEqual(['...']);
+  });
+
+  it('should return an empty array for whitespace-only text', () => {
+    expect(splitBySentences('   \n  ')).toEqual([]);
+  });
+});
+
+describe('splitByLines', () => {
+  it('should split on newlines and drop blank lines', () => {
+    expect(splitByLines('one\ntwo\n\n   \nthree')).toEqual(['one', 'two', 'three']);
+  });
+
+  it('should return a single-line text unchanged', () => {
+    expect(splitByLines('only one line')).toEqual(['only one line']);
+  });
+});
+
+describe('splitByWords', () => {
+  it('should split on any run of whitespace', () => {
+    expect(splitByWords('one  two\tthree\nfour')).toEqual(['one', 'two', 'three', 'four']);
+  });
+
+  it('should ignore leading and trailing whitespace', () => {
+    expect(splitByWords('  padded  ')).toEqual(['padded']);
+  });
+
+  it('should return a single atom when there is no whitespace', () => {
+    expect(splitByWords('unbreakable')).toEqual(['unbreakable']);
   });
 });

@@ -6,9 +6,20 @@
  * the provider rather than assumed: the previous hardcoded pair (512-token
  * target, 8191-token "model limit") described OpenAI ada-002 and was applied to
  * every provider, including the default local all-MiniLM-L6-v2, which reads 256.
- * Measured consequence: 84-86% of chunks truncated, 42-44% of every corpus never
- * reaching the model, and an "exceeds model token limit" guard that could not
- * fire because 8191 is 32x the real limit.
+ * The consequence that needs no measurement to state: **8191 is 32x the real
+ * limit**, so the "exceeds model token limit" guard could not fire at all, and
+ * every chunk over 256 tokens was cut at inference time with nothing said.
+ *
+ * ⛔ This paragraph used to carry *"84-86% of chunks truncated, 42-44% of every
+ * corpus never reaching the model"*, stated flatly and in the present tense.
+ * Retired rather than corrected. It was measured against raw `chunkByTokens`,
+ * and the SHIPPED path is `chunkResource`, which splits at markdown headings
+ * FIRST — so the figure does not reproduce against the thing it describes, and
+ * an independent re-measurement through the real path put the token loss
+ * roughly a third to a half of that. Neither number is written here: a
+ * corpus-shaped percentage moves whenever the corpus does, and this file's
+ * argument does not need one. Measure the claim's OWN subject, or make no
+ * claim.
  */
 
 import { calculateEffectiveTarget } from '@vibe-agent-toolkit/rag';
