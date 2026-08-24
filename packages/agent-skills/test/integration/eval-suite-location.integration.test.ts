@@ -33,7 +33,7 @@
    this test's own temp dir. */
 import { existsSync, statSync } from 'node:fs';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { cleanupTestTempDir, createTestTempDir } from '../../../cli/test/system/test-common.js';
@@ -45,6 +45,7 @@ import {
   writeSuiteFixture,
 } from '../skill-test/eval-fixture.js';
 import { makeHarnessFakeSpawn } from '../skill-test/spawn-stub.js';
+import { soleArmWorkspace } from '../test-helpers.js';
 
 // Preflight shells out to a real `claude` and probes its flags, so without this
 // the whole file would be gated on the developer's PATH rather than the code.
@@ -53,7 +54,11 @@ vi.mock('../../src/skill-test/preflight.js', async (io) => (await import('../ski
 const SKILL_NAME = 'suite-location-skill';
 const INTERNAL_EVAL_ID = 'reads-a-fixture';
 const EXTERNAL_EVAL_ID = 'reads-external-fixture';
-const WORKSPACES = 'workspaces';
+// The executor's per-eval workspaces live OUTSIDE the harness root (under OS tmp,
+// as `vat-skill-test-ws-<token>`) so the skill-absent arm of a --baseline run does
+// not sit beside vat's own staged copy of the skill. The run reports the location
+// back as `workspacesPath` — it carries a random token and cannot be derived.
+const WORKSPACES = 'vat-skill-test-ws-';
 const EVALS_JSON = 'evals.json';
 
 let tempDir: string;
@@ -141,7 +146,10 @@ describe('${fixturesDir} wiring (integration)', () => {
     });
 
     const result = await runSkillTestHarness(
+      // `keep` because the assertions below inspect the workspace AFTER the run;
+      // workspaces live under OS tmp now and are reaped on exit otherwise.
       optsFor(subjectDir, fake.spawn, {
+        keep: true,
         env: { CUSTOMER_SNAPSHOT_PATH: '${fixturesDir}/snap.json' },
       }),
     );
@@ -175,7 +183,7 @@ describe('external eval suite (integration)', () => {
     });
 
     const result = await runSkillTestHarness(
-      optsFor(layout.subjectDir, fake.spawn, { evalsSubpath: layout.evalsPath }),
+      optsFor(layout.subjectDir, fake.spawn, { evalsSubpath: layout.evalsPath, keep: true }),
     );
 
     // Exit 3 is bootstrap — "no suite found, here is a template". Before the fix
@@ -189,13 +197,43 @@ describe('external eval suite (integration)', () => {
 
     // Fixtures resolve relative to the EXTERNAL suite dir, not the skill dir,
     // and land in the eval's own workspace.
+    expect(result.workspacesPath, 'the run did not report where workspaces were staged').toBeDefined();
     expect(
-      existsSync(safePath.join(tempDir, 'harness', WORKSPACES, EXTERNAL_EVAL_ID, 'fixtures', 'case.md')),
+      existsSync(safePath.join(soleArmWorkspace(result.workspacesPath ?? '', EXTERNAL_EVAL_ID), 'fixtures', 'case.md')),
     ).toBe(true);
+    // And they are NOT under the harness root, which holds vat's runnable copies.
+    expect(result.workspacesPath ?? '').not.toContain(safePath.join(tempDir, 'harness'));
 
     // And the external suite was never copied into the subject tree.
     expect(existsSync(safePath.join(layout.subjectDir, EVALS_JSON))).toBe(false);
     expect(existsSync(safePath.join(layout.subjectDir, 'evals'))).toBe(false);
+  });
+
+  // Workspaces moved OUT of the harness root to OS tmp, which the user never
+  // chose. `cleanupHarness`'s "retain a user-owned --out/--workdir location" rule
+  // must NOT be carried across: doing so orphans a vat-skill-test-ws-<token> dir
+  // in tmp on every --out run, forever. --keep is the only thing that retains.
+  it('reaps the tmp workspaces root on an --out run that did not ask to keep it', async () => {
+    const layout = writeExternalLayout();
+    // The workspaces root has to come from the EXECUTOR's own cwd, not from the
+    // result: `workspacesPath` is reported only when the directory survives (i.e.
+    // only under `--keep`), precisely so the result never names a directory cleanup
+    // has already removed. On this run it is correctly absent, which leaves the
+    // spawn as the only witness to where the workspaces actually were.
+    let executorCwd = '';
+    const fake = makeHarnessFakeSpawn({ onExecutorSpawn: (opts) => { executorCwd = opts.cwd ?? ''; } });
+
+    const result = await runSkillTestHarness(
+      optsFor(layout.subjectDir, fake.spawn, { evalsSubpath: layout.evalsPath }),
+    );
+
+    expect(result.exitCode, result.summary).toBe(0);
+    expect(result.workspacesPath, 'a non-keep run named a workspaces dir it did not retain').toBeUndefined();
+    const workspacesRoot = /^(.*\/vat-skill-test-ws-[^/]+)\//.exec(toForwardSlash(executorCwd))?.[1];
+    expect(workspacesRoot, `no workspaces root in the executor cwd: ${executorCwd}`).toBeDefined();
+    // The user-owned --out dir survives, as it always has; the tmp dir does not.
+    expect(existsSync(safePath.join(tempDir, 'harness'))).toBe(true);
+    expect(existsSync(workspacesRoot ?? ''), 'tmp workspaces root leaked').toBe(false);
   });
 
   // Windows does not model POSIX permission bits, so this is Unix-only — the
@@ -215,15 +253,17 @@ describe('external eval suite (integration)', () => {
       const layout = writeExternalLayout();
       const fake = makeHarnessFakeSpawn({});
 
-      await runSkillTestHarness(
-        optsFor(layout.subjectDir, fake.spawn, { evalsSubpath: layout.evalsPath }),
+      const result = await runSkillTestHarness(
+        optsFor(layout.subjectDir, fake.spawn, { evalsSubpath: layout.evalsPath, keep: true }),
       );
 
-      const harnessRoot = safePath.join(tempDir, 'harness');
-      for (const name of [WORKSPACES, 'results']) {
-        const dir = safePath.join(harnessRoot, name);
-        expect(existsSync(dir), `${name}/ was never created`).toBe(true);
-        expect(statSync(dir).mode & 0o777, `${name}/ is not 0700`).toBe(0o700);
+      // results/ still sits under the harness root; workspaces/ moved out to its
+      // own OS-tmp dir, which makes its 0700 mode load-bearing rather than
+      // inherited — nothing above it is guaranteed to be 0700 any more.
+      const dirs = [safePath.join(tempDir, 'harness', 'results'), result.workspacesPath ?? ''];
+      for (const dir of dirs) {
+        expect(existsSync(dir), `${dir} was never created`).toBe(true);
+        expect(statSync(dir).mode & 0o777, `${dir} is not 0700`).toBe(0o700);
       }
     },
   );

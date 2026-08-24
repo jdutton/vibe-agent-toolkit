@@ -69,6 +69,33 @@ const FAKE_EXECUTOR_LINE =
 export interface HarnessFakeSpawnConfig {
   /** Executor spawn exit status (default 0). A non-zero status is a CLEAN failure. */
   executorStatus?: number;
+  /**
+   * Full {@link SpawnResult} override for ONE executor spawn, decided from its
+   * `opts`. Returning `undefined` falls back to {@link executorStatus}.
+   *
+   * This is the knob {@link executorStatus} cannot be: a non-zero status is a CLEAN
+   * failure that flows into the grader and becomes an eval verdict, whereas
+   * {@link SPAWN_TIMED_OUT}/{@link SPAWN_STALLED} are WATCHDOG kills that throw
+   * `InternalHarnessError` out of the executor. Only the second kind exercises the
+   * "does a broken arm destroy the run?" path.
+   *
+   * `opts.pluginDirs.length === 0` is how a test picks the CONTROL arm here — the
+   * skill-absent arm is spawned with no plugin dirs, and that is deliberately the
+   * ONLY thing about the two spawns that names an arm (the workspace segment is an
+   * opaque per-run token precisely so it does not).
+   */
+  executorResultFor?: (opts: SpawnHeadlessOptions) => SpawnResult | undefined;
+  /**
+   * Full {@link SpawnResult} override for ONE grader spawn, decided from the
+   * fragment path it was asked to write (the only arm-bearing value at a grader
+   * spawn — see {@link graderPassedFor}). Returning `undefined` runs the normal
+   * write-a-fragment path.
+   *
+   * A non-zero status here means the grader failed to do its one job, which is
+   * harness breakage on either arm; the fragment is deliberately NOT written, so
+   * this also covers the "grader exited without writing a fragment" mode.
+   */
+  graderResultFor?: (fragmentPath: string) => SpawnResult | undefined;
   /** Whether every grader fragment marks its expectation passed (default true). */
   graderPassed?: boolean;
   /**
@@ -76,10 +103,29 @@ export interface HarnessFakeSpawnConfig {
    * by eval id. When it returns a boolean that wins; `undefined` falls back to
    * {@link graderPassed}. Lets a tiered test fail ONE tier's eval while the
    * others pass (issue #145 Phase G fail-fast gating).
+   *
+   * `fragmentPath` is the SECOND key, and it is what makes this knob able to
+   * decide the two `--baseline` arms differently: the eval id is identical on
+   * both arms and the grader prompt is deliberately arm-blind, so the fragment
+   * path — which vat writes under `<graderOutDir>/<arm>/` — is the only thing at
+   * a grader spawn that says which arm is being graded. Without it a test could
+   * only make BOTH arms pass or BOTH fail, i.e. only ever produce a zero delta,
+   * which is precisely the value a broken lift computation also produces.
+   *
+   * This widens the existing knob rather than adding a per-arm sibling on
+   * purpose: two knobs both deciding grader pass/fail would be free to disagree,
+   * and the one that lost would be invisible.
    */
-  graderPassedFor?: (evalId: string) => boolean | undefined;
+  graderPassedFor?: (evalId: string, fragmentPath: string) => boolean | undefined;
   /** When true, the grader writes a WRONG runNonce (simulates a forged fragment). */
   forgeNonce?: boolean;
+  /**
+   * Extra stream-json line the EXECUTOR emits, computed from its spawn `opts`.
+   * Lets a test simulate a control arm that went and found the skill — the only
+   * way to drive the baseline contamination detector, whose input is the
+   * transcript. Returning undefined emits nothing extra.
+   */
+  executorExtraStdout?: (opts: SpawnHeadlessOptions) => string | undefined;
   /**
    * When the grader prompt carries a tool-verdict directive (the eval declared
    * `toolExpectations`), the fragment ALSO gets a `tool` body whose `passed` is
@@ -94,6 +140,43 @@ export interface HarnessFakeSpawnConfig {
    * sandboxDir, pluginDirs) while the run is live. Never called for grader spawns.
    */
   onExecutorSpawn?: (opts: SpawnHeadlessOptions) => void;
+  /**
+   * How many expectation entries the grader writes for this fragment (default 1).
+   *
+   * Keyed on the fragment PATH because that is the only thing distinguishing the
+   * two arms at a grader spawn — vat writes each arm's fragment under
+   * `<graderOutDir>/<arm>/`, while the grader PROMPT is deliberately arm-blind.
+   * Lets a test simulate a grader that graded one arm against fewer expectations
+   * than the other, which is what makes the two summaries' denominators disagree.
+   */
+  graderExpectationCount?: (fragmentPath: string) => number;
+  /**
+   * Fields merged into the grader's fragment LAST, over everything the stub wrote
+   * itself. The knob for making the fake grader emit something vat is supposed to
+   * REJECT, rather than merely something vat grades.
+   *
+   * Two defences depend on it, and a mutation audit found both unpinned for the
+   * same reason: no stub could express the input that breaks them.
+   *
+   * - `contamination` — vat strips it (`withoutGraderContamination` in
+   *   run-harness.ts) because the grader's ONLY input is the executor transcript,
+   *   which untrusted skill code controls. On a clean run vat's own patch is `{}`
+   *   and so overwrites nothing, which is precisely why the strip is load-bearing:
+   *   without it, attacker-chosen `kind`/`match`/`excerpt` strings land verbatim in
+   *   `baseline.json.baselineIntegrity.findings`.
+   * - `evalId` — vat takes it from the REQUEST, never from the answer
+   *   (eval-grader.ts). The stub otherwise derives the id from the prompt, so a
+   *   fragment whose id disagrees with the eval vat asked about is inexpressible —
+   *   and that divergence is exactly what mis-pairs the two `--baseline` arms and
+   *   manufactures phantom skew, because the merge stamps the id onto every
+   *   expectation and both `armExpectationSkew` and `computeBaselineDelta` key the
+   *   arms on it.
+   *
+   * Keyed on the fragment path for the same reason {@link graderPassedFor} is: it
+   * is the only arm-bearing value at a grader spawn. Returning `undefined` writes
+   * the stub's own fragment unchanged.
+   */
+  graderFragmentOverrides?: (fragmentPath: string) => Record<string, unknown> | undefined;
 }
 
 export interface HarnessFakeSpawn {
@@ -134,17 +217,32 @@ export function makeHarnessFakeSpawn(cfg: HarnessFakeSpawnConfig = {}): HarnessF
       // toolExpectations (WITH arm) — mirror that by emitting a `tool` body then.
       const emitTool = opts.prompt.includes('"tool" object');
       const toolPassed = cfg.graderToolPassed ?? true;
-      const passed = cfg.graderPassedFor?.(evalId) ?? cfg.graderPassed ?? true;
+      const forced = cfg.graderResultFor?.(fragmentPath ?? '');
+      // Return BEFORE writing: a grader that broke wrote no fragment, and a stub
+      // that returned a failure status over a fragment it had already written would
+      // let a "missing fragment" assertion pass against a file that exists.
+      if (forced !== undefined) return forced;
       if (fragmentPath !== undefined) {
+        // Resolved INSIDE the guard so `graderPassedFor` always receives a real
+        // path rather than an empty-string stand-in — an arm predicate handed
+        // `''` would silently take its fallback branch for every spawn.
+        const passed = cfg.graderPassedFor?.(evalId, fragmentPath) ?? cfg.graderPassed ?? true;
         writeFileSync(
           fragmentPath,
           JSON.stringify({
             runNonce: cfg.forgeNonce === true ? 'f'.repeat(32) : nonce,
             evalId,
-            expectations: [{ text: 'graded', passed }],
+            expectations: Array.from(
+              { length: cfg.graderExpectationCount?.(fragmentPath) ?? 1 },
+              (_unused, i) => ({ text: `graded ${i}`, passed }),
+            ),
             ...(emitTool
               ? { tool: { mustRun: [{ name: 'csvsum', ran: toolPassed }], passed: toolPassed } }
               : {}),
+            // LAST, so a test can override a field the stub derived correctly —
+            // `evalId` above is read out of the prompt, i.e. always the id vat
+            // asked about, which is the one value a divergence test needs to break.
+            ...cfg.graderFragmentOverrides?.(fragmentPath),
           }),
           'utf8',
         );
@@ -153,7 +251,12 @@ export function makeHarnessFakeSpawn(cfg: HarnessFakeSpawnConfig = {}): HarnessF
     }
     cfg.onExecutorSpawn?.(opts);
     opts.onStdout?.(`${FAKE_EXECUTOR_LINE}\n`);
-    return { status: cfg.executorStatus ?? 0, timedOut: false, stalled: false };
+    const extra = cfg.executorExtraStdout?.(opts);
+    if (extra !== undefined) opts.onStdout?.(`${extra}\n`);
+    // The transcript is streamed FIRST even for a watchdog kill: a real timeout
+    // fires after the executor has already produced output, and a stub that
+    // returned silently would let a fix that reads a partial transcript look fine.
+    return cfg.executorResultFor?.(opts) ?? { status: cfg.executorStatus ?? 0, timedOut: false, stalled: false };
   });
   return { spawn: spawn as unknown as typeof spawnHeadlessClaude, graderSandboxDirs, graderNonces };
 }

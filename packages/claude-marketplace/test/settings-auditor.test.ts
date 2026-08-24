@@ -19,7 +19,7 @@ import {
   validateSettingsFile,
 } from '../src/settings/settings-auditor.js';
 
-const NUL = String.fromCharCode(0);
+const NUL = String.fromCodePoint(0);
 const A_MODEL = 'claude-sonnet-4-5';
 
 describe('settings auditor answer shapes', () => {

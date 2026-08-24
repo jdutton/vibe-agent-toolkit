@@ -164,7 +164,7 @@ vibe-agent-toolkit/
 
 - **Test Coverage**: Currently enforced at 70% (statements, branches, functions, lines). Goal: 80%+. See [Test Pyramid and Coverage](#test-pyramid-and-coverage) for details.
 - **Code Duplication**: **ZERO TOLERANCE** - See Critical Duplication Policy below
-- **SonarQube**: Configured for free tier (sonarway) - ESLint catches issues first
+- **SonarQube**: Automatic analysis on SonarWay — **fix every smell it reports. NEVER `NOSONAR`, never argue one away.** Suppression does not work under automatic analysis. If ESLint can catch the same class, add that rule too so it fails at the desk instead.
 
 ### **CRITICAL: Code Duplication Policy**
 
@@ -245,6 +245,10 @@ bun run test:coverage      # Unit tests with coverage report
 
 **For AI assistants:** Never suggest `bun test`. Always use `vv validate` or `bun run test:*` commands.
 
+**Run a single integration/system file from its PACKAGE directory, never the repo root** — the root
+config silently collects 0 files and exits 0:
+`cd packages/<pkg> && bunx vitest run --config vitest.integration.config.ts test/integration/<file>`
+
 ## Development Workflow
 
 ### MANDATORY Steps for ANY Code Change
@@ -252,6 +256,11 @@ bun run test:coverage      # Unit tests with coverage report
 **CRITICAL**: After fixing errors, ALWAYS run `bun run validate` again before asking to commit (cache makes it instant if correct, catches side effects if wrong).
 
 **For AI assistants**: This workflow is non-negotiable. Follow it exactly for every code change, no matter how small.
+
+**Trust the exit code, not the summary.** `validate` replays its cache — including a cached
+FAILURE — so re-run with `--force` when you need a true verdict. A real run is minutes; a
+sub-second "pass" means nothing executed. And never read a verdict through a pipe: `validate | tail`
+reports `tail`'s status, so a failed run looks like exit 0. Redirect to a file and capture `$?`.
 
 1. **Create feature branch** (never work on main)
    ```bash

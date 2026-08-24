@@ -25,6 +25,8 @@ function baseInput(overrides: Partial<RunExecutorInput> = {}): RunExecutorInput 
     evalId: 'eval-1',
     task: 'Summarize the report.',
     subjectStagedDir: '/h/subject',
+    // Always present now — every eval has its own workspace, empty or not.
+    workspaceDir: WORKSPACE_DIR,
     pluginDirs: ['/h/subject'],
     env: {},
     maxTurns: 10,
@@ -100,16 +102,11 @@ describe('runExecutorForEval', () => {
     expect(outcome.parsed.rateLimited).toBe(true);
   });
 
-  it('uses subjectStagedDir for cwd/sandboxDir when workspaceDir is not set', async () => {
-    const { spawn, calls } = stubSpawn([RESULT_OK_LINE], CLEAN_OK);
-
-    await runExecutorForEval(baseInput({ spawn, subjectStagedDir: SUBJECT_ONLY_DIR }));
-
-    expect(calls[0]?.cwd).toBe(SUBJECT_ONLY_DIR);
-    expect(calls[0]?.sandboxDir).toBe(SUBJECT_ONLY_DIR);
-  });
-
-  it('uses workspaceDir for cwd/sandboxDir when set (overrides subjectStagedDir)', async () => {
+  // The cwd is ALWAYS the eval's own workspace. There is deliberately no
+  // subjectStagedDir fallback: that fallback ran the executor inside the staged
+  // skill, which for the skill-absent arm of a --baseline run handed the control
+  // the treatment via its own working directory.
+  it('uses workspaceDir for cwd/sandboxDir, never the staged subject dir', async () => {
     const { spawn, calls } = stubSpawn([RESULT_OK_LINE], CLEAN_OK);
 
     await runExecutorForEval(
@@ -118,6 +115,22 @@ describe('runExecutorForEval', () => {
 
     expect(calls[0]?.cwd).toBe(WORKSPACE_DIR);
     expect(calls[0]?.sandboxDir).toBe(WORKSPACE_DIR);
+    expect(calls[0]?.cwd).not.toBe(SUBJECT_ONLY_DIR);
+  });
+
+  // The skill-absent arm: no subjectStagedDir at all. The prompt must not name a
+  // path to the skill, because the staged dir holds the SKILL.md and any shipped
+  // executable — telling the control where it is defeats the control outright.
+  it('omits the subject path from the prompt when subjectStagedDir is absent (skill-absent arm)', async () => {
+    const { spawn, calls } = stubSpawn([RESULT_OK_LINE], CLEAN_OK);
+
+    const input = baseInput({ spawn, workspaceDir: WORKSPACE_DIR });
+    delete (input as { subjectStagedDir?: string }).subjectStagedDir;
+    await runExecutorForEval(input);
+
+    expect(calls[0]?.prompt).not.toContain(SUBJECT_ONLY_DIR);
+    expect(calls[0]?.prompt).not.toContain('The relevant files are located at');
+    expect(calls[0]?.prompt).toContain(WORKSPACE_DIR);
   });
 
   it('does NOT reject an adopter task that naturally contains a blinding-breaker phrase', async () => {

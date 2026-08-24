@@ -131,6 +131,13 @@ const importRulesConfig = {
 // Unicorn — modern JavaScript. Apply to both TS and JS source. Per-file
 // overrides (e.g. CJS opting out of `prefer-module`) live on the file's
 // config block.
+//
+// FUTURE ENHANCEMENT: flip this opt-IN allowlist (25 of the plugin's 144 rules) to
+// `unicorn/recommended` + an explicit disable list, so a SonarWay smell fails locally
+// instead of arriving from Sonar. Measured over `packages/*/src/**/*.ts` (726 files):
+// 11 non-fits account for 2,848 of 3,524 findings (`prevent-abbreviations` 1,886,
+// `no-null` 518, `no-process-exit` 152); the remaining 27 rules are 676 findings, 477
+// of them `--fix`-able. Re-measure before acting, and give it its own branch.
 const unicornRulesConfig = {
   'unicorn/prefer-node-protocol': 'error',
   'unicorn/prefer-module': 'error',
@@ -157,6 +164,8 @@ const unicornRulesConfig = {
   'unicorn/no-useless-spread': 'error',
   'unicorn/no-array-push-push': 'error',
   'unicorn/prefer-set-has': 'error',
+  // Mirrors a SonarWay smell. Keep it here so it fails at the desk, not in Sonar.
+  'unicorn/prefer-code-point': 'error',
 };
 
 // Ban legacy YAML / frontmatter libraries — see CLAUDE.md yaml-lib rule.

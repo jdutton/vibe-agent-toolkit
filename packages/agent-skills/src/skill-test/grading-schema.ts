@@ -35,15 +35,57 @@ export const GradedExpectationSchema = z
     text: z.string(),
     passed: z.boolean(),
     evidence: z.string().optional(),
+    /**
+     * Which eval this expectation was graded under. vat stamps it when it
+     * assembles the aggregate from per-eval grader fragments, so that a
+     * `--baseline` run's two artifacts can be lined up PER EVAL rather than only
+     * in aggregate — without it, a reader can compare two totals but cannot say
+     * which eval moved. Optional because a grading.json produced by external
+     * tooling (skill-creator's own) carries no per-eval attribution; the schema
+     * documents the field vat now emits rather than tightening the contract.
+     */
+    evalId: z.string().optional(),
   })
   .passthrough();
 
 export type GradedExpectation = z.infer<typeof GradedExpectationSchema>;
 
 /**
+ * The cross-field invariant, worded once and carried into BOTH surfaces that can
+ * state it: the Zod refine's failure message, and the `description` on `summary`
+ * in the published JSON Schema.
+ *
+ * It has to be carried explicitly because `zodToJsonSchema` DISCARDS `.refine()`.
+ * Without this, the published document said `{passed: integer≥0, total: integer≥0}`
+ * and nothing else — so external tooling validating against it accepted
+ * `{passed: 9, total: 3}`, the exact shape the Zod validator rejects and the exact
+ * shape that produced a confident `delta: -8`. The invariant was not enforced OR
+ * mentioned, which is worse than unenforced: a consumer reading the schema had no
+ * way to learn the check existed.
+ *
+ * JSON Schema cannot close the gap. No draft can compare one property against
+ * another (`maximum` takes a number, not a pointer; `if`/`then` can only test a
+ * value, not a relation), and the Ajv `$data` extension that could is not portable
+ * — a plain Ajv without `$data: true` FAILS TO COMPILE a schema containing it,
+ * which would break every conforming consumer to serve one. So the published
+ * schema records the constraint and says plainly that it is on the consumer to
+ * check, rather than pretending to enforce it.
+ */
+const SUMMARY_INVARIANT_MESSAGE = 'summary.passed must not exceed summary.total';
+
+const SUMMARY_SCHEMA_DESCRIPTION =
+  'Aggregate pass/fail counts. INVARIANT: ' +
+  `${SUMMARY_INVARIANT_MESSAGE}. It is enforced by the Zod schema this document is generated from ` +
+  'and by vat when it merges grader fragments, but NOT by this document: JSON Schema cannot express ' +
+  'a comparison between two properties in any draft, so a validator running this schema alone will ' +
+  'accept {"passed": 9, "total": 3}. Check it yourself before trusting any figure derived from these ' +
+  'counts (a baseline delta subtracts them).';
+
+/**
  * Aggregate pass/fail counts. `failed`/`pass_rate` are documented but optional.
  * Counts are non-negative integers (a float or negative count is a grader bug),
- * and `passed` can never exceed `total`.
+ * and `passed` can never exceed `total` — see {@link SUMMARY_SCHEMA_DESCRIPTION}
+ * for why that last one has to be stated twice.
  */
 export const GradingSummarySchema = z
   .object({
@@ -54,8 +96,12 @@ export const GradingSummarySchema = z
   })
   .passthrough()
   .refine(s => s.passed <= s.total, {
-    message: 'summary.passed must not exceed summary.total',
-  });
+    message: SUMMARY_INVARIANT_MESSAGE,
+  })
+  // `.describe()` AFTER `.refine()`: zodToJsonSchema reads the description off the
+  // outermost node, and this is the only channel through which a Zod refinement's
+  // meaning can reach the emitted document at all.
+  .describe(SUMMARY_SCHEMA_DESCRIPTION);
 
 export type GradingSummary = z.infer<typeof GradingSummarySchema>;
 
@@ -77,15 +123,31 @@ export const GradingReportSchema = z
      * by untrusted skill code is rejected.
      */
     runNonce: z.string().optional(),
+    /**
+     * Which `--baseline` arm produced this report: `'with'` (the skill declared)
+     * or `'without'` (the control arm run with the skill withheld). vat writes
+     * the two arms to two files of the SAME shape — `grading.json` and
+     * `baseline.json` — so without this field a reader holding one of them
+     * cannot tell which arm it is looking at. Optional for the same reason
+     * `runNonce` is: an externally produced grading.json has no arm to declare.
+     */
+    arm: z.enum(['with', 'without']).optional(),
   })
   .passthrough();
 
 export type GradingReport = z.infer<typeof GradingReportSchema>;
 
 /**
- * Published JSON Schema for grading.json — generated from {@link GradingReportSchema}
- * so the two never drift. Importable by external tooling that wants to validate a
- * grading.json without depending on Zod. Documented in
- * docs/skill-test-grading-schema.md.
+ * Published JSON Schema for grading.json — generated from {@link GradingReportSchema},
+ * so its SHAPE (fields, types, required-ness, additionalProperties) cannot drift from
+ * the Zod schema. Importable by external tooling that wants to validate a grading.json
+ * without depending on Zod. Documented in docs/skill-test-grading-schema.md.
+ *
+ * It is NOT equivalent to the Zod schema, and never can be. `zodToJsonSchema` drops
+ * every `.refine()`, and the two refinements in this file are cross-field relations
+ * JSON Schema has no way to express — so the generated document is strictly weaker
+ * than the validator that generated it. That gap is stated, in the document itself,
+ * on the field it applies to (see {@link SUMMARY_SCHEMA_DESCRIPTION}); a consumer
+ * that needs the invariant enforced must re-implement it or use the Zod schema.
  */
 export const GradingReportJsonSchema = zodToJsonSchema(GradingReportSchema, 'grading-report');

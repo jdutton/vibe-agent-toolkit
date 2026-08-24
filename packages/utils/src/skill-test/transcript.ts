@@ -5,7 +5,10 @@
  *
  * The stream-json schema is informally documented and may shift between
  * Claude Code releases. This parser is intentionally tolerant of unknown
- * event kinds — anything we don't recognise is appended to `raw`.
+ * event kinds — an event whose `type` we do not recognise is simply not
+ * consumed. Tolerance stops at unknown SHAPES: a line that is not JSON at all is
+ * counted into {@link ParsedTranscript.malformedLineCount}, because that is data
+ * loss, not forward compatibility.
  *
  * Shape notes (empirically verified):
  * - `tool_use` content blocks carry `input.command` for Bash calls.
@@ -21,15 +24,55 @@ export interface ParsedTranscript {
   text: string;
   toolUseEvents: Array<{ name: string; inputSummary: string }>;
   errors: string[];
-  raw: string[];
+  /**
+   * How many non-empty lines failed `JSON.parse` and were therefore NOT consumed.
+   *
+   * This is the only thing that distinguishes "parsed fine, nothing found" from
+   * "we lost the evidence". A corrupted line drops its whole event — the tool call
+   * in it, and any contamination it proves — while every other line, including the
+   * terminal `result`, still parses. Every downstream "did this transcript decode?"
+   * test is an any-of over the populated fields, so the surviving `result` line on
+   * its own certifies the transcript as decoded and the loss goes unremarked.
+   *
+   * Non-zero means the scan that consumed this transcript ran on less than the
+   * whole transcript and its verdict must be reported as DEGRADED, never clean.
+   * Zero is a positive statement, not an absence: every line was accounted for.
+   */
+  malformedLineCount: number;
   toolUses: Array<{
     id: string | null;
     name: string;
     command?: string;
+    /**
+     * The FULL, unsummarized tool input.
+     *
+     * `inputSummary` beside it is truncated to 200 characters by
+     * {@link summarizeValue}, which is fine for an observation record a human
+     * skims and useless for anything that has to REASON about what the call did
+     * — a path 200 characters into a `Read` input simply is not there. The
+     * baseline-integrity detector walks tool inputs to decide whether the
+     * skill-absent arm reached the skill, so it needs the whole value; the
+     * summary stays for the consumers that only ever display it.
+     *
+     * `unknown` because the shape is per-tool and informally documented — every
+     * consumer narrows it itself rather than trusting a type we invented.
+     */
+    input: unknown;
     inputSummary: string;
     parentToolUseId: string | null;
   }>;
-  toolResults: Array<{ toolUseId: string | null; isError: boolean; contentSummary: string }>;
+  toolResults: Array<{
+    toolUseId: string | null;
+    isError: boolean;
+    contentSummary: string;
+    /**
+     * The FULL tool result, flattened to text. Same reason as `input` above:
+     * `contentSummary` is truncated to 200 characters, so scanning a tool RESULT
+     * for evidence (a file's contents echoed back, a grep hit line) cannot be
+     * done through it. Never truncated — the caller bounds what it keeps.
+     */
+    content: string;
+  }>;
   result?: { subtype?: string; isError: boolean; numTurns?: number; totalCostUsd?: number };
   rateLimited: boolean;
 }
@@ -41,6 +84,39 @@ function summarizeValue(value: unknown): string {
   } catch {
     return '<unserializable>';
   }
+}
+
+function stringifyValue(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? '';
+  } catch {
+    return '<unserializable>';
+  }
+}
+
+/**
+ * Flatten a `tool_result` `content` field to plain text, WITHOUT truncating.
+ *
+ * Three shapes occur in practice: a bare string (most Bash results), an array of
+ * content blocks (`{type:'text',text}` and friends), and — for a tool that
+ * returns structured data — an arbitrary object. The array case is the one that
+ * matters: `JSON.stringify` of it would bury the text behind escaped quotes, and
+ * a consumer scanning for a verbatim sentence would never find it.
+ */
+function contentToText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map((block) => contentBlockToText(block)).join('\n');
+  if (value === undefined || value === null) return '';
+  return stringifyValue(value);
+}
+
+function contentBlockToText(block: unknown): string {
+  if (typeof block === 'string') return block;
+  if (block !== null && typeof block === 'object') {
+    const { text } = block as { text?: unknown };
+    if (typeof text === 'string') return text;
+  }
+  return stringifyValue(block);
 }
 
 interface ContentBlock {
@@ -89,6 +165,7 @@ function consumeAssistantBlocks(
         id: typeof block.id === 'string' ? block.id : null,
         name: block.name,
         ...(command === undefined ? {} : { command }),
+        input: block.input,
         inputSummary,
         parentToolUseId,
       });
@@ -103,6 +180,7 @@ function consumeUserBlocks(blocks: ContentBlock[], out: ParsedTranscript): void 
         toolUseId: typeof block.tool_use_id === 'string' ? block.tool_use_id : null,
         isError: block.is_error === true,
         contentSummary: summarizeValue(block.content),
+        content: contentToText(block.content),
       });
     }
   }
@@ -161,22 +239,25 @@ export function parseStreamJsonTranscript(streamText: string): ParsedTranscript 
     text: '',
     toolUseEvents: [],
     errors: [],
-    raw: [],
     toolUses: [],
     toolResults: [],
     rateLimited: false,
+    malformedLineCount: 0,
   };
   const lines = streamText.split('\n');
 
   for (const line of lines) {
     const trimmed = line.trim();
     if (trimmed.length === 0) continue;
-    out.raw.push(trimmed);
 
     let parsed: MessageEvent;
     try {
       parsed = JSON.parse(trimmed) as MessageEvent;
     } catch {
+      // Counted, not thrown on, and never pushed into `errors`: `errors` reports
+      // what the AGENT hit, this reports what the PARSER lost. Conflating them
+      // would make a harness defect look like a run failure and vice versa.
+      out.malformedLineCount += 1;
       continue;
     }
 

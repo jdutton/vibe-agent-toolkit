@@ -191,7 +191,7 @@ const BINARY_SNIFF_CHARS = 8000;
 function looksBinary(content: string): boolean {
   const limit = Math.min(content.length, BINARY_SNIFF_CHARS);
   for (let index = 0; index < limit; index += 1) {
-    if (content.charCodeAt(index) === 0) return true;
+    if (content.codePointAt(index) === 0) return true;
   }
   return false;
 }

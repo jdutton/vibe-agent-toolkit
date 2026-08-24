@@ -44,6 +44,7 @@ describe('parseStreamJsonTranscript', () => {
         id: 'toolu_1',
         name: 'Bash',
         command: 'echo hi',
+        input: { command: 'echo hi' },
         inputSummary: JSON.stringify({ command: 'echo hi' }),
         parentToolUseId: null,
       },
@@ -106,8 +107,80 @@ describe('parseStreamJsonTranscript', () => {
     );
 
     expect(parsed.toolResults).toEqual([
-      { toolUseId: 'toolu_1', isError: true, contentSummary: JSON.stringify('boom') },
+      { toolUseId: 'toolu_1', isError: true, contentSummary: JSON.stringify('boom'), content: 'boom' },
     ]);
+  });
+
+  // The whole reason the full fields exist: the summaries are capped at 200
+  // characters, so anything that has to REASON about a call (which path did it
+  // read? did the output quote the skill?) cannot be done through them. A long
+  // path or a grep hit 200 characters in simply is not present in the summary.
+  it('keeps the FULL tool input and result alongside the 200-char summaries', () => {
+    const longPath = `/private/var/folders/${'d'.repeat(300)}/staged/s/SKILL.md`;
+    const longOutput = `${'x'.repeat(400)} the verbatim sentence lifted from the skill body`;
+    const parsed = parseStreamJsonTranscript(
+      stream(
+        {
+          type: 'assistant',
+          parent_tool_use_id: null,
+          message: {
+            content: [{ type: 'tool_use', id: 'toolu_1', name: 'Read', input: { file_path: longPath } }],
+          },
+        },
+        {
+          type: 'user',
+          parent_tool_use_id: null,
+          message: {
+            content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: longOutput }],
+          },
+        },
+      ),
+    );
+
+    expect(parsed.toolUses[0]?.input).toEqual({ file_path: longPath });
+    expect(parsed.toolUses[0]?.inputSummary, 'the summary must stay truncated').toHaveLength(200);
+    expect(parsed.toolUses[0]?.inputSummary).not.toContain('SKILL.md');
+
+    expect(parsed.toolResults[0]?.content).toBe(longOutput);
+    expect(parsed.toolResults[0]?.contentSummary).toHaveLength(200);
+    expect(parsed.toolResults[0]?.contentSummary).not.toContain('verbatim sentence');
+  });
+
+  // The array-of-blocks shape is why `content` is not just JSON.stringify: the
+  // stringified form buries the text behind escaped quotes, and a consumer
+  // scanning for a verbatim sentence would never find it.
+  it('flattens an array-of-blocks tool_result to plain text', () => {
+    const parsed = parseStreamJsonTranscript(
+      stream({
+        type: 'user',
+        parent_tool_use_id: null,
+        message: {
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'toolu_1',
+              content: [{ type: 'text', text: 'first line' }, { type: 'text', text: 'second line' }],
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(parsed.toolResults[0]?.content).toBe('first line\nsecond line');
+  });
+
+  it('renders a non-text tool_result content shape without throwing', () => {
+    const parsed = parseStreamJsonTranscript(
+      stream({
+        type: 'user',
+        parent_tool_use_id: null,
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: { rows: 3 } }],
+        },
+      }),
+    );
+
+    expect(parsed.toolResults[0]?.content).toBe(JSON.stringify({ rows: 3 }));
   });
 
   it('defaults isError to false when tool_result omits is_error', () => {
@@ -192,12 +265,14 @@ describe('parseStreamJsonTranscript', () => {
     expect(parsed.errors).toEqual(['boom']);
   });
 
-  it('is tolerant of unknown/malformed lines: appends to raw and continues', () => {
+  it('is tolerant of unknown/malformed lines: keeps going and does not invent errors', () => {
     const raw = ['not json {{{', JSON.stringify({ type: 'unknown_future_event', foo: 'bar' })].join(
       '\n',
     );
     const parsed = parseStreamJsonTranscript(raw);
-    expect(parsed.raw).toEqual(['not json {{{', JSON.stringify({ type: 'unknown_future_event', foo: 'bar' })]);
+    // Tolerance means "do not throw", not "do not report": the unparseable line is
+    // counted, the unknown-but-valid line is not, and neither is a runtime `error`.
+    expect(parsed.malformedLineCount).toBe(1);
     expect(parsed.errors).toEqual([]);
   });
 
@@ -232,6 +307,120 @@ describe('parseStreamJsonTranscript', () => {
     expect(parsed.toolResults[0]?.isError).toBe(false);
     expect(parsed.result?.subtype).toBe('success');
     expect(parsed.rateLimited).toBe(false);
+  });
+});
+
+/**
+ * The one failure this module exists to prevent.
+ *
+ * A per-line `JSON.parse` failure used to be swallowed with a bare `continue`, so a
+ * corrupted `tool_use` line simply vanished from `toolUses` — and the terminal
+ * `result` line, which parses fine, still satisfied every downstream any-of
+ * "did this transcript decode?" check. The contamination detector then reported a
+ * confident CLEAN verdict on evidence it never saw.
+ *
+ * `malformedLineCount` is the only thing that separates "parsed fine, nothing
+ * found" from "we lost the evidence". Its name is a contract with the detector,
+ * which raises a degradation when it is non-zero.
+ */
+describe('parseStreamJsonTranscript malformed-line accounting', () => {
+  // eslint-disable-next-line sonarjs/publicly-writable-directories -- fixture path, mirrors the real harness staging root
+  const HARNESS_PATH = '/tmp/vat-skill-test/my-skill-abc12345/staged/s/SKILL.md';
+
+  const TOOL_USE_EVENT = {
+    type: 'assistant',
+    parent_tool_use_id: null,
+    message: {
+      content: [{ type: 'tool_use', id: 'toolu_1', name: 'Read', input: { file_path: HARNESS_PATH } }],
+    },
+  };
+  const RESULT_EVENT = { type: 'result', subtype: 'success', is_error: false, num_turns: 1 };
+
+  /** Break a line's JSON without touching any other line (what a split chunk does in effect). */
+  const corrupt = (transcript: string): string => transcript.replace('{"type":"assistant"', '�{"type":"assistant"');
+
+  it('is 0 when every non-empty line parsed', () => {
+    const parsed = parseStreamJsonTranscript(stream(TOOL_USE_EVENT, RESULT_EVENT));
+    expect(parsed.malformedLineCount).toBe(0);
+    expect(parsed.toolUses[0]?.input).toEqual({ file_path: HARNESS_PATH });
+  });
+
+  it('counts the corrupted line whose contamination evidence it dropped, and still parses the rest', () => {
+    const intact = stream(TOOL_USE_EVENT, RESULT_EVENT);
+    const parsed = parseStreamJsonTranscript(corrupt(intact));
+
+    // The evidence is gone: the reach the detector would have convicted on is not here.
+    expect(parsed.toolUses).toEqual([]);
+    // And the any-of decoded check downstream is STILL satisfied by the result line
+    // alone — which is exactly why the count has to exist.
+    expect(parsed.result).toBeDefined();
+    expect(parsed.malformedLineCount).toBe(1);
+  });
+
+  it('counts each corrupted line separately', () => {
+    const parsed = parseStreamJsonTranscript(['{"type":"assistant"', 'also not json', JSON.stringify(RESULT_EVENT)].join('\n'));
+    expect(parsed.malformedLineCount).toBe(2);
+  });
+
+  it('does not count a valid line carrying an unknown event type', () => {
+    const parsed = parseStreamJsonTranscript(stream({ type: 'unknown_future_event', foo: 'bar' }));
+    expect(parsed.malformedLineCount).toBe(0);
+  });
+
+  it('does not count blank or whitespace-only lines', () => {
+    const parsed = parseStreamJsonTranscript(`\n   \n${JSON.stringify(RESULT_EVENT)}\n\n`);
+    expect(parsed.malformedLineCount).toBe(0);
+    expect(parsed.result).toBeDefined();
+  });
+
+  it('reports 0 for an empty transcript — distinguishable from a transcript that decoded to nothing', () => {
+    const empty = parseStreamJsonTranscript('');
+    expect(empty.malformedLineCount).toBe(0);
+    expect(empty.result).toBeUndefined();
+    expect(empty.toolUses).toEqual([]);
+
+    // Valid JSONL that simply made no tool calls: same emptiness, same zero count.
+    const quiet = parseStreamJsonTranscript(stream({ type: 'assistant', message: { content: [{ type: 'text', text: 'no tools needed' }] } }, RESULT_EVENT));
+    expect(quiet.malformedLineCount).toBe(0);
+    expect(quiet.toolUses).toEqual([]);
+    expect(quiet.text).toBe('no tools needed');
+  });
+
+  it('counts a line of non-UTF8 bytes decoded to replacement characters', () => {
+    const garbage = Buffer.from([0xff, 0xfe, 0x00, 0x41]).toString('utf8');
+    const parsed = parseStreamJsonTranscript(garbage);
+    expect(parsed.malformedLineCount).toBe(1);
+    // Nothing else fired, so without the count this is indistinguishable from ''.
+    expect(parsed.result).toBeUndefined();
+    expect(parsed.text).toBe('');
+  });
+
+  it('a replacement character INSIDE a JSON string is still valid JSON and is not counted', () => {
+    const parsed = parseStreamJsonTranscript(
+      stream({ type: 'assistant', message: { content: [{ type: 'text', text: 'caf�' }] } }),
+    );
+    expect(parsed.malformedLineCount).toBe(0);
+    expect(parsed.text).toBe('caf�');
+  });
+
+  /**
+   * Pins the field SET, not just the values: `toEqual` cannot tell an absent key
+   * from an `undefined` one, so the removal of the unconsumed `raw` array (which
+   * held a second full copy of the transcript) and the arrival of
+   * `malformedLineCount` are both asserted here.
+   */
+  it('exposes exactly the documented fields — no `raw` second copy of the transcript', () => {
+    const parsed = parseStreamJsonTranscript(stream(TOOL_USE_EVENT, RESULT_EVENT));
+    expect(Object.keys(parsed).sort((a, b) => a.localeCompare(b))).toEqual([
+      'errors',
+      'malformedLineCount',
+      'rateLimited',
+      'result',
+      'text',
+      'toolResults',
+      'toolUseEvents',
+      'toolUses',
+    ]);
   });
 });
 

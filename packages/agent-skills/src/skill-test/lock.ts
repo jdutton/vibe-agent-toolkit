@@ -2,14 +2,46 @@ import { closeSync, openSync, rmSync } from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 
+/**
+ * The harness root for a subject set is already locked.
+ *
+ * Exit 2 (PREFLIGHT), not 1. This is the most user-correctable condition in the
+ * command — the remedy is "wait, or delete one file" — and it was the ONE error
+ * class in this feature with no `exitCode`, so it fell through
+ * `mapErrorToExitCode`'s default to Internal (1). The published CI recipe reads 1
+ * as "the harness broke, fail the build", which is exactly the wrong verdict for a
+ * lock held by the operator's own second terminal.
+ *
+ * The field below is what `mapErrorToExitCode` READS — it is not decoration
+ * mirroring an `instanceof` row, which is what it was when it was added. Deleting it
+ * turns this back into an exit 1.
+ *
+ * The message names `lockPath` because the lockfile is created `O_EXCL` in the
+ * DETERMINISTIC harness root and released only on normal exit or SIGINT/SIGTERM —
+ * a SIGKILL, an OOM, or a crash leaves it behind and every later run of that skill
+ * fails here, with no `--force` to escape. Until the staleness protocol (pid +
+ * timestamp + liveness probe + `--force`) lands in its own lane, naming the path
+ * and saying to delete it IS the escape hatch, so it belongs in the message rather
+ * than in a doc the operator is not currently reading.
+ */
 export class HarnessLockBusyError extends Error {
-  constructor(lockPath: string) {
-    super(`Another vat skill test run holds the harness lock: ${lockPath}. Wait for it to finish or use a different subject set.`);
+  readonly exitCode = 2 as const;
+  constructor(public readonly lockPath: string) {
+    super(
+      `Another vat skill test run holds the harness lock: ${lockPath}. ` +
+        'Wait for it to finish, or use a different subject set. ' +
+        'If no other run is in progress the lock is stale (a previous run was killed, ' +
+        `crashed, or ran out of memory) — delete ${lockPath} and re-run.`,
+    );
     this.name = 'HarnessLockBusyError';
   }
 }
 
 export interface HarnessLock {
+  /**
+   * Release the lock. NEVER THROWS — see {@link acquireHarnessLock}. Callers run
+   * this from a cleanup path and must be able to call it bare.
+   */
   release(): void;
 }
 
@@ -18,6 +50,34 @@ export interface HarnessLock {
  * vat-vs-vat staging/result races for the same subject set. `wait: false`
  * fails fast; the default `wait: true` is reserved for the CLI to poll (v1
  * keeps the simple fail-fast — the CLI surfaces the busy message).
+ *
+ * ACQUIRING can throw (that is the whole point: EEXIST → {@link HarnessLockBusyError}).
+ * RELEASING cannot, and that asymmetry is deliberate. `rmSync(..., {force: true})`
+ * swallows only ENOENT, so an EPERM/EACCES/EROFS on the lockfile — a read-only
+ * volume, a `root`-owned temp dir, a Windows handle still open — threw out of the
+ * harness `finally` and REPLACED an already-good result (verdict computed, artifacts
+ * written, summary composed) with exit 1 and no summary, every artifact sitting
+ * unread on disk.
+ *
+ * The guard lives HERE rather than at the call site, where it originally went. A
+ * call-site wrapper is invisible to the compiler: reverting it to a bare
+ * `lock.release()` left the whole unit suite AND the integration suite green, so
+ * nothing but review stood between the fix and its own silent removal. Owning the
+ * contract in the definition — `release()` never throws — means there is no unwrapped
+ * call site left to lose. Note what that does NOT mean: `release(): void` encodes
+ * nothing about throwing, because TypeScript has no throws clause. The contract is
+ * held up by the two nested `try`s below and by the tests that pin each one, not by
+ * the signature.
+ *
+ * BOTH statements of the catch are guarded, and the second one is why: the warning
+ * write is itself an fd-level operation, and a synchronous EBADF/EPIPE on a file- or
+ * TTY-backed fd 2 threw straight back out — reinstating the exact failure the outer
+ * catch was added to prevent, on a path only reachable once something had already
+ * gone wrong. A test that mocks `process.stderr.write` to RETURN cannot see it.
+ *
+ * The failure is not silent: a lockfile that could not be removed will fail the NEXT
+ * run of this skill with a "busy" error, and an operator who saw nothing here has no
+ * way to connect the two.
  */
 export function acquireHarnessLock(harnessRoot: string, opts: { wait?: boolean } = {}): HarnessLock {
   const lockPath = safePath.joinUnderRoot(harnessRoot, '.vat-skill-test.lock');
@@ -40,7 +100,24 @@ export function acquireHarnessLock(harnessRoot: string, opts: { wait?: boolean }
     release(): void {
       if (released) return;
       released = true;
-      rmSync(lockPath, { force: true });
+      try {
+        rmSync(lockPath, { force: true });
+      } catch (err) {
+        try {
+          process.stderr.write(
+            `warning: could not remove the harness lockfile ${lockPath} (the run's result stands): ` +
+              `${err instanceof Error ? err.message : String(err)}. ` +
+              'The next run of this skill will report the lock as busy until it is deleted.\n',
+          );
+        } catch {
+          // The REPORTING channel is what failed — an EBADF/EPIPE on a file- or
+          // TTY-backed fd 2 throws synchronously out of `write`. There is nowhere
+          // left to report it to, and rethrowing here would do exactly what the
+          // outer catch exists to prevent: destroy a good result from the harness
+          // `finally`. Swallowed deliberately, and it is the only swallow in this
+          // module that has no alternative surface.
+        }
+      }
     },
   };
 }
