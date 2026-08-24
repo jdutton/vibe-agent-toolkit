@@ -14,7 +14,7 @@
 
 import GithubSlugger from 'github-slugger';
 
-import { estimateTokens } from '../link-parser.js';
+import { estimateTokens } from '../link-classify.js';
 import type { BlobSectionRow } from '../schemas/projection-blobs.js';
 import type { HeadingNode } from '../schemas/resource-metadata.js';
 

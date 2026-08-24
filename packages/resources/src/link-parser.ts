@@ -24,8 +24,9 @@ import remarkGfm from 'remark-gfm';
 import remarkParse from 'remark-parse';
 import { unified } from 'unified';
 import { visit } from 'unist-util-visit';
-import * as yaml from 'yaml';
 
+import { parseFrontmatterSource } from './frontmatter-source.js';
+import { classifyLink, estimateTokens } from './link-classify.js';
 import {
   ParsePass,
   ParserKind,
@@ -37,7 +38,7 @@ import { measureContent } from './projection/blob-facts.js';
 import { collectCodeContextRanges, findLexicalReferences } from './reference-lexer.js';
 import type { ContentMeasures, LexicalReference } from './schemas/parse-facts.js';
 import type { HtmlParseError } from './schemas/resource-metadata.js';
-import type { HeadingNode, LinkType, ResourceLink, UnresolvedReference } from './types.js';
+import type { HeadingNode, ResourceLink, UnresolvedReference } from './types.js';
 import { findUnresolvedReferences } from './unresolved-references.js';
 
 /**
@@ -119,28 +120,6 @@ export interface ParseResult {
    * nothing to say here.
    */
   contentMeasures?: ContentMeasures;
-}
-
-/**
- * VAT's token estimate for a span of text: one token per four characters.
- *
- * A deliberately crude, tokenizer-free approximation — no model's vocabulary is
- * consulted, so the number is comparable across documents rather than accurate
- * for any one model. It exists as a function because more than one caller needs
- * it: {@link parseMarkdownContent} reports it per document as
- * `estimatedTokenCount`, and `blobSectionsFor` reports it per section. Restating
- * `Math.ceil(text.length / 4)` at each site is how an estimator drifts.
- *
- * The input is a **decoded** string, so this counts UTF-16 code units, not bytes
- * on disk — the same unit `ContentMeasures` (`proseCodeUnits` /
- * `codeBlockCodeUnits`) reports in. The one size column that is not code units
- * is `blob_sections.bytes`, which is a real UTF-8 byte count and says so.
- *
- * @param text - Decoded text to estimate
- * @returns Estimated token count, rounded up
- */
-export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
 }
 
 /**
@@ -558,110 +537,6 @@ function extractLinkText(node: Link | LinkReference): string {
   return mdastToString(node, { includeImageAlt: false });
 }
 
-/**
- * Classify a link based on its href shape.
- *
- * Public so frontmatter-link validation can reuse identical URI classification
- * logic (markdown links and frontmatter URI-reference values share one
- * classifier).
- *
- * @param href - The href attribute from the link
- * @returns Classified link type
- *
- * @example
- * ```typescript
- * classifyLink('https://example.com') // 'external'
- * classifyLink('mailto:user@example.com') // 'email'
- * classifyLink('#heading') // 'anchor'
- * classifyLink('./file.md') // 'local_file'
- * classifyLink('./file.md#anchor') // 'local_file'
- * classifyLink('docs/') // 'local_directory'
- * classifyLink('./docs/') // 'local_directory'
- * classifyLink('../docs/') // 'local_directory'
- * classifyLink('/docs/') // 'local_directory'
- * classifyLink('https://x.com/docs/') // 'external' (not a local ref)
- * ```
- */
-export function classifyLink(href: string): LinkType {
-  if (href.startsWith('http://') || href.startsWith('https://')) {
-    return 'external';
-  }
-  if (href.startsWith('mailto:')) {
-    return 'email';
-  }
-  if (href.startsWith('#')) {
-    return 'anchor';
-  }
-  // Self-contained inline resources: a data: URI embeds its payload and a blob:
-  // URL references an in-memory object. Neither has a target to fetch or an
-  // anchor to resolve, so they are valid-but-nothing-to-validate (skipped), not
-  // "unknown". Common in HTML (inline SVG/PNG/GIF logos).
-  if (href.startsWith('data:') || href.startsWith('blob:')) {
-    return 'embedded';
-  }
-  // Any remaining href containing ':' is a protocol-like pattern we don't recognise
-  // (e.g., javascript:, tel:, ftp:) — classify as unknown rather than local file
-  if (href.includes(':')) {
-    return 'unknown';
-  }
-  // Local directory: path component (before any # or ?) ends in '/'.
-  // Must come after all protocol guards so external URLs are never reclassified.
-  const pathPart = href.split(/[#?]/u)[0] ?? href;
-  if (pathPart.endsWith('/')) {
-    return 'local_directory';
-  }
-  // Links with anchors are still local file links
-  if (href.includes('#')) {
-    return 'local_file';
-  }
-  // .md files are always local files
-  if (href.endsWith('.md')) {
-    return 'local_file';
-  }
-  // Paths that look like file paths (start with ./ or ../ or /) or have no extension
-  if (href.startsWith('./') || href.startsWith('../') || href.startsWith('/')) {
-    return 'local_file';
-  }
-  // Paths without extensions (no dot or last dot is before a slash)
-  const lastSlash = href.lastIndexOf('/');
-  const lastDot = href.lastIndexOf('.');
-  if (lastDot === -1 || lastDot < lastSlash) {
-    return 'local_file';
-  }
-  // Bare relative paths with file extensions (e.g., "files/doc.pdf")
-  // If it contains a slash but doesn't look like a protocol (no "://"), it's a file path
-  if (lastSlash >= 0 && !href.includes('://')) {
-    return 'local_file';
-  }
-  // URL-decode and check if it looks like a relative file path
-  // (e.g., "My%20Document.pdf" decodes to "My Document.pdf")
-  try {
-    const decoded = decodeURIComponent(href);
-    if (decoded !== href) {
-      return 'local_file';
-    }
-  } catch {
-    // Invalid percent encoding — leave as unknown
-  }
-  // Bare filenames with extensions (e.g., "config.schema.json", "image.png")
-  if (href.includes('.')) {
-    return 'local_file';
-  }
-  return 'unknown';
-}
-
-/**
- * Returns true for link types that represent local filesystem targets — both
- * regular files and directories. Other packages (e.g. agent-skills walker)
- * import this predicate as the single source of truth for "should we treat
- * this link like a file link during validation/traversal?"
- *
- * @param type - The classified link type
- * @returns `true` for `'local_file'` and `'local_directory'`
- */
-export function isLocalFileLink(type: LinkType): boolean {
-  return type === 'local_file' || type === 'local_directory';
-}
 
 /** `id="…"` / `name="…"` attribute, single- or double-quoted. */
 const HTML_ANCHOR_ATTRIBUTE = /\b(?:id|name)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
@@ -858,57 +733,6 @@ function cleanupEmptyChildren(headings: HeadingNode[]): void {
   }
 }
 
-/**
- * What a frontmatter block's YAML source means — the single implementation of
- * that decision.
- *
- * ## Why this is exported
- *
- * A parse cache stores {@link ParseResult.frontmatterSource} (the source is
- * JSON-safe; the parsed object is not) and must rebuild `frontmatter` /
- * `frontmatterError` on a hit. If it re-implemented the decision below it would
- * become a second implementation free to drift from this one — the same class
- * of defect as any parallel resolver. It calls this instead, so cold and warm
- * run *the same code*.
- *
- * The two properties that second caller depends on, and which must not be
- * broken: it is **pure** (no state, no I/O, no AST) and **total** (never
- * throws, for any string — a YAML failure comes back as `frontmatterError`).
- *
- * ## Acceptance rules (behaviour-preserving — do not "improve" these)
- *
- * - Empty or whitespace-only source → `{}`. No frontmatter, no error.
- * - Parses to a non-null, non-array object → `{ frontmatter }`.
- * - Parses to anything else (a bare scalar, `null`, a sequence) → `{}`. The
- *   value is silently ignored, exactly as it always has been.
- * - Throws → `{ frontmatterError }`.
- *
- * Keys are spread conditionally, so the result never carries an
- * undefined-valued key (see {@link cleanupEmptyChildren} for why that matters).
- *
- * @param source - A frontmatter block's YAML body, delimiters excluded
- * @returns The frontmatter object, the error message, or neither
- */
-export function parseFrontmatterSource(source: string): {
-  frontmatter?: Record<string, unknown>;
-  frontmatterError?: string;
-} {
-  if (source.trim() === '') {
-    // Empty frontmatter block
-    return {};
-  }
-
-  try {
-    const parsed: unknown = yaml.parse(source);
-    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-      return { frontmatter: parsed as Record<string, unknown> };
-    }
-    return {};
-  } catch (error) {
-    // Capture YAML parsing error for validation reporting
-    return { frontmatterError: error instanceof Error ? error.message : String(error) };
-  }
-}
 
 /**
  * Record one frontmatter block on the walk state.

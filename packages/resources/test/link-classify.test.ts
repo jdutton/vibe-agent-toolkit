@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { classifyLink, isLocalFileLink } from '../src/link-parser.js';
+import { classifyLink, isLocalFileLink } from '../src/link-classify.js';
 import type { LinkType } from '../src/types.js';
 
 describe('classifyLink (exported)', () => {

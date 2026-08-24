@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import { basename, dirname } from 'node:path';
 
-import { isLocalFileLink, parseFileCached, resolveLocalHref, type LinkType } from '@vibe-agent-toolkit/resources';
+import { isLocalFileLink, isParserUnavailable, parseFileCached, resolveLocalHref, type LinkType } from '@vibe-agent-toolkit/resources';
 import { calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { findProjectRoot, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
@@ -290,6 +290,10 @@ function processFileLinks(
  * - Outside skill directory -> OUTSIDE_PROJECT_BOUNDARY warning
  * - Existing .md file -> recurse (add to BFS queue)
  * - Non-markdown asset -> existence check only
+ *
+ * @throws {ParserUnavailableError} If the markdown parser module cannot be
+ *   loaded — a broken install fails the validation rather than being demoted to
+ *   a per-document finding
  */
 async function traverseLinks(
   skillPath: string,
@@ -312,7 +316,21 @@ async function traverseLinks(
     let parseResult;
     try {
       parseResult = await parseFileCached(currentPath, 'markdown');
-    } catch {
+    } catch (error) {
+      // A broken INSTALL, not a broken document. The parser arrives by
+      // `import()` from inside `parseFileCached` — lazily, past the parse
+      // cache's hit-path return, so a fully warm validation loads no parser at
+      // all — which puts a loader failure in this catch. Unguarded it minted one
+      // `LINK_INTEGRITY_BROKEN` per file, blamed every innocent document, never
+      // walked the link graph, and still exited 0 on "passed with warnings".
+      //
+      // A type check rather than a hoisted `loadParser` above the loop: that
+      // also works and costs every warm run the ~730 ms remark load for parses
+      // that never happen. `isParserUnavailable` matches one type VAT
+      // constructs at one place, so it is complete by construction — not the
+      // guessed blocklist of Node loader codes that was deleted.
+      if (isParserUnavailable(error)) throw error;
+
       issues.push({
         severity: 'warning',
         code: 'LINK_INTEGRITY_BROKEN',

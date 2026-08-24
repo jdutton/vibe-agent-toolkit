@@ -13,6 +13,7 @@ import { createHash } from 'node:crypto';
 
 import {
   flattenHeadings,
+  isParserUnavailable,
   parseHtml,
   parseMarkdown,
   parserKindForPath,
@@ -112,6 +113,9 @@ export const PARSE_RESULT_FIELDS_ACCOUNTED_FOR: AssertNoUnaccountedParseResultFi
  * @param absolutePaths - Paths to parse; unreadable ones are skipped, not fatal
  * @param options - Corpus root (for relativizing) and label
  * @returns The snapshot, rows ordered by content key
+ * @throws {ParserUnavailableError} If a parser module cannot be loaded — a
+ *   broken install must fail loudly rather than produce a snapshot of a
+ *   measurement that did not run
  */
 export async function captureParseFactSnapshot(
   absolutePaths: readonly string[],
@@ -214,11 +218,35 @@ async function readKeyedOrSkip(
   }
 }
 
-/** Parse via the same discriminator the registry uses. */
+/**
+ * Parse via the same discriminator the registry uses.
+ *
+ * ## Why the one rethrow
+ *
+ * `null` for any throw is deliberate — this oracle crawls a real tree, and one
+ * unparseable file must not abandon the whole snapshot. But `parseMarkdown` /
+ * `parseHtml` load their parser by `import()` on first use, so a broken INSTALL
+ * arrives here too, and swallowed it produced a well-formed snapshot with
+ * `rows: []`: a measurement that did not run, reported as a measurement whose
+ * answer was nothing. This snapshot is the parse cache's correctness oracle, so
+ * an empty one is a green gate over an unrun check.
+ *
+ * The guard is the error TYPE. Loading both kinds up front — derived from the
+ * paths — also closes it and was tried; it made every warm capture pay the
+ * ~730 ms remark load for parses that may never happen.
+ * `isParserUnavailable` matches one type VAT constructs at one place, so it is
+ * complete by construction, unlike the errno blocklist that preceded it.
+ *
+ * @param absolutePath - The document to parse
+ * @param parserKind - Which parser the path routes to
+ * @returns The parse, or `null` when this document alone could not be parsed
+ * @throws {ParserUnavailableError} If the parser module cannot be loaded
+ */
 async function parseOrNull(absolutePath: string, parserKind: string): Promise<ParseResult | null> {
   try {
     return parserKind === 'html' ? await parseHtml(absolutePath) : await parseMarkdown(absolutePath);
-  } catch {
+  } catch (error) {
+    if (isParserUnavailable(error)) throw error;
     return null;
   }
 }

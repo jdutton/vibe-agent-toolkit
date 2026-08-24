@@ -26,6 +26,17 @@
  * ```
  */
 
+// Type-only, so it is erased and does NOT pull the parser into this barrel's
+// module graph — which is the whole point of the lazy `parseMarkdown` /
+// `parseHtml` wrappers below.
+import type { ParseResult } from './link-parser.js';
+// A value import, and NOT part of the public surface: the two lazy parse wrappers
+// below import a parser module by a route `loadParser` does not cover, and must
+// produce the same `ParserUnavailableError` when it cannot be loaded. `parse-cache`
+// is already in this barrel's graph (it is value-re-exported below) and pulls in no
+// parser of its own, so this costs nothing at load time.
+import { importParserModule } from './parse-cache.js';
+
 // Export main ResourceRegistry class and ID generation utility
 export {
   ResourceRegistry,
@@ -282,7 +293,54 @@ export {
 export type { ContentMeasures, LexicalReference } from './schemas/parse-facts.js';
 
 // Export parser interface for advanced use cases
-export { parseMarkdown, classifyLink, isLocalFileLink, type ParseResult } from './link-parser.js';
+export type { ParseResult } from './link-parser.js';
+export { classifyLink, isLocalFileLink } from './link-classify.js';
+
+/**
+ * Parse a markdown file from disk.
+ *
+ * ## Why this is a wrapper and not `export { parseMarkdown } from ...`
+ *
+ * A value re-export makes the parser part of this barrel's module graph, so
+ * importing ANY symbol from `@vibe-agent-toolkit/resources` evaluated the whole
+ * remark stack — ~730ms on Windows — before a single line of caller code ran.
+ * Every consumer reaches this package through the barrel (the package publishes
+ * only `"."` and `"./schemas/*"`), so that cost was unavoidable and it silently
+ * cancelled the parser deferral in `parse-cache.ts`: a fully warm scan, which
+ * parses nothing, still paid for the parser.
+ *
+ * Deferring it here instead of dropping the export keeps the public signature
+ * byte-identical — this function was already `async`, so a caller cannot tell
+ * the difference — and needs no `exports` subpath.
+ *
+ * ⚠️ Keep this a wrapper. Restoring the plain re-export re-loads remark for
+ * every consumer of every symbol in this package and is invisible in review;
+ * `packages/cli/test/integration/module-load-budget.integration.test.ts` is
+ * what fails if you do.
+ *
+ * ## Why the import goes through `importParserModule`
+ *
+ * This route bypasses `loadParser` entirely — it reads the file itself, so it
+ * needs `parseMarkdown` rather than `parseMarkdownContent` — and it therefore
+ * has its own `import()` that can fail its own way. Unwrapped, a broken install
+ * reached this package's consumers as a bare `EACCES`, which every per-document
+ * catch and every errno allow-list in the toolkit swallows. `importParserModule`
+ * makes it the same `ParserUnavailableError` the cached route produces, so one
+ * `isParserUnavailable` guard at a call site covers both. The parse call itself
+ * is deliberately OUTSIDE that boundary: a document that will not parse is not a
+ * broken install.
+ *
+ * @param filePath - Path to the markdown file
+ * @returns Links, headings, frontmatter and measures for the document
+ * @throws {ParserUnavailableError} If the parser module cannot be loaded
+ */
+export async function parseMarkdown(filePath: string): Promise<ParseResult> {
+  const parse = await importParserModule(
+    'markdown',
+    async () => (await import('./link-parser.js')).parseMarkdown,
+  );
+  return parse(filePath);
+}
 
 // The content-decoding seam is NOT re-exported here. It is a `utils` primitive
 // (`@vibe-agent-toolkit/utils/text` for `decodeTextContent`,
@@ -317,20 +375,62 @@ export {
 // `parseFileCached` IS exported, and is the one every caller outside
 // `ResourceRegistry` should reach for: `parseMarkdown`/`parseHtml` read the file
 // and hand the bytes straight to a parser, so they bypass the cache entirely.
+//
+// `isParserUnavailable` and `ParserUnavailableError` are exported for one narrow
+// purpose: a caller that wraps a parse in a per-document `try` must rethrow this
+// one type, or its catch silently reports a broken INSTALL as a broken DOCUMENT —
+// once per document. The parser is loaded lazily, past the parse cache's hit-path
+// return (a fully warm run must load no parser at all), so the load happens INSIDE
+// those trys by design and position cannot be the guard.
+//
+// The type also carries a `code` no errno allow-list holds, which is what gets a
+// broken install past the boundaries one layer further out — `vat audit`'s scan
+// catch, `ResourceRegistry`'s read-failure demotion — that would otherwise degrade
+// it to a warning and exit 0. Those two need no predicate call for that reason;
+// only a catch that swallows EVERYTHING does.
+//
+// `loadParser` is exported for tests and embedders that want to force or observe
+// the load. ⛔ It is NOT an optimisation hook: awaiting it before a loop, to "warm"
+// the parser, is exactly the regression above.
 export {
   ParseCache,
+  ParserUnavailableError,
   defaultParseCache,
+  isParserUnavailable,
+  loadParser,
   parseCacheDirectory,
   parseFileCached,
   parseKeyed,
   vatCacheNamespace,
   vatCacheNamespaceRoot,
   vatCacheRoot,
+  type LoadedParser,
   type ParseCacheOptions,
   type ParseCacheStats,
 } from './parse-cache.js';
 
-export { parseHtml } from './html-link-parser.js';
+/**
+ * Parse an HTML file from disk.
+ *
+ * Lazy for the same reason as {@link parseMarkdown} above — a value re-export
+ * put parse5 in this barrel's module graph for every consumer of every symbol.
+ * The signature is unchanged; it was already `async`. The load goes through
+ * `importParserModule` for the same reason too: an `.html`-only corpus must
+ * report a broken install as a broken install, and this is the only route by
+ * which it ever loads a parser.
+ *
+ * @param filePath - Path to the HTML file
+ * @returns Links, headings and measures for the document
+ * @throws {ParserUnavailableError} If the parser module cannot be loaded
+ */
+export async function parseHtml(filePath: string): Promise<ParseResult> {
+  const parse = await importParserModule(
+    'html',
+    async () => (await import('./html-link-parser.js')).parseHtml,
+  );
+  return parse(filePath);
+}
+
 // HtmlParseError is Zod-sourced (single source of truth) — see schemas/resource-metadata.ts.
 export type { HtmlParseError } from './schemas/resource-metadata.js';
 export { rewriteHtmlLinks, type UnappliedRewrite } from './html-transform.js';
