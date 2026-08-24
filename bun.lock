@@ -43,7 +43,7 @@
     },
     "packages/agent-config": {
       "name": "@vibe-agent-toolkit/agent-config",
-      "version": "0.2.0-rc.2",
+      "version": "0.2.0-rc.3",
       "dependencies": {
         "@vibe-agent-toolkit/schema": "workspace:*",
         "@vibe-agent-toolkit/utils": "workspace:*",
@@ -57,7 +57,7 @@
     },
     "packages/agent-runtime": {
       "name": "@vibe-agent-toolkit/agent-runtime",
-      "version": "0.2.0-rc.2",
+      "version": "0.2.0-rc.3",
       "dependencies": {
         "@vibe-agent-toolkit/schema": "workspace:*",
         "@vibe-agent-toolkit/utils": "workspace:*",
@@ -72,7 +72,7 @@
     },
     "packages/agent-skills": {
       "name": "@vibe-agent-toolkit/agent-skills",
-      "version": "0.2.0-rc.2",
+      "version": "0.2.0-rc.3",
       "dependencies": {
         "@vibe-agent-toolkit/agent-config": "workspace:*",
         "@vibe-agent-toolkit/resources": "workspace:*",
@@ -98,7 +98,7 @@
     },
     "packages/claude-marketplace": {
       "name": "@vibe-agent-toolkit/claude-marketplace",
-      "version": "0.2.0-rc.2",
+      "version": "0.2.0-rc.3",
       "dependencies": {
         "@vibe-agent-toolkit/agent-skills": "workspace:*",
         "@vibe-agent-toolkit/resources": "workspace:*",
@@ -116,7 +116,7 @@
     },
     "packages/cli": {
       "name": "@vibe-agent-toolkit/cli",
-      "version": "0.2.0-rc.2",
+      "version": "0.2.0-rc.3",
       "bin": {
         "vat": "./dist/bin/vat.js",
       },
@@ -157,7 +157,7 @@
     },
     "packages/dev-tools": {
       "name": "@vibe-agent-toolkit/dev-tools",
-      "version": "0.2.0-rc.2",
+      "version": "0.2.0-rc.3",
       "dependencies": {
         "@vibe-agent-toolkit/agent-skills": "workspace:*",
         "@vibe-agent-toolkit/claude-marketplace": "workspace:*",
@@ -180,7 +180,7 @@
     },
     "packages/discovery": {
       "name": "@vibe-agent-toolkit/discovery",
-      "version": "0.2.0-rc.2",
+      "version": "0.2.0-rc.3",
       "dependencies": {
         "@vibe-agent-toolkit/utils": "workspace:*",
         "picomatch": "^4.0.2",
@@ -191,7 +191,7 @@
     },
     "packages/gateway-mcp": {
       "name": "@vibe-agent-toolkit/gateway-mcp",
-      "version": "0.2.0-rc.2",
+      "version": "0.2.0-rc.3",
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.0.4",
         "@vibe-agent-toolkit/schema": "workspace:*",
@@ -207,7 +207,7 @@
     },
     "packages/lab": {
       "name": "@vibe-agent-toolkit/lab",
-      "version": "0.2.0-rc.2",
+      "version": "0.2.0-rc.3",
       "bin": {
         "vat-lab": "./dist/bin/vat-lab.js",
       },
@@ -223,7 +223,7 @@
     },
     "packages/projection-sqlite": {
       "name": "@vibe-agent-toolkit/projection-sqlite",
-      "version": "0.2.0-rc.2",
+      "version": "0.2.0-rc.3",
       "dependencies": {
         "@vibe-agent-toolkit/resources": "workspace:*",
         "@vibe-agent-toolkit/utils": "workspace:*",
@@ -237,7 +237,7 @@
     },
     "packages/rag": {
       "name": "@vibe-agent-toolkit/rag",
-      "version": "0.2.0-rc.2",
+      "version": "0.2.0-rc.3",
       "dependencies": {
         "@vibe-agent-toolkit/resources": "workspace:*",
         "@vibe-agent-toolkit/utils": "workspace:*",
@@ -261,7 +261,7 @@
     },
     "packages/rag-lancedb": {
       "name": "@vibe-agent-toolkit/rag-lancedb",
-      "version": "0.2.0-rc.2",
+      "version": "0.2.0-rc.3",
       "dependencies": {
         "@lancedb/lancedb": "^0.23.0",
         "@vibe-agent-toolkit/rag": "workspace:*",
@@ -278,7 +278,7 @@
     },
     "packages/resource-compiler": {
       "name": "@vibe-agent-toolkit/resource-compiler",
-      "version": "0.2.0-rc.2",
+      "version": "0.2.0-rc.3",
       "bin": {
         "vat-compile-resources": "./bin/vat-compile-resources",
       },
@@ -299,7 +299,7 @@
     },
     "packages/resources": {
       "name": "@vibe-agent-toolkit/resources",
-      "version": "0.2.0-rc.2",
+      "version": "0.2.0-rc.3",
       "dependencies": {
         "@vibe-agent-toolkit/schema": "workspace:*",
         "@vibe-agent-toolkit/utils": "workspace:*",
@@ -331,7 +331,7 @@
     },
     "packages/runtime-claude-agent-sdk": {
       "name": "@vibe-agent-toolkit/runtime-claude-agent-sdk",
-      "version": "0.2.0-rc.2",
+      "version": "0.2.0-rc.3",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "^0.1.5",
         "@anthropic-ai/sdk": "^0.37.0",
@@ -350,7 +350,7 @@
     },
     "packages/runtime-langchain": {
       "name": "@vibe-agent-toolkit/runtime-langchain",
-      "version": "0.2.0-rc.2",
+      "version": "0.2.0-rc.3",
       "dependencies": {
         "@langchain/core": "^0.3.29",
         "@vibe-agent-toolkit/agent-runtime": "workspace:*",
@@ -368,7 +368,7 @@
     },
     "packages/runtime-openai": {
       "name": "@vibe-agent-toolkit/runtime-openai",
-      "version": "0.2.0-rc.2",
+      "version": "0.2.0-rc.3",
       "dependencies": {
         "@vibe-agent-toolkit/agent-runtime": "workspace:*",
         "openai": "^4.77.3",
@@ -386,7 +386,7 @@
     },
     "packages/runtime-vercel-ai-sdk": {
       "name": "@vibe-agent-toolkit/runtime-vercel-ai-sdk",
-      "version": "0.2.0-rc.2",
+      "version": "0.2.0-rc.3",
       "dependencies": {
         "@ai-sdk/provider": "^3.0.4",
         "@ai-sdk/provider-utils": "^4.0.8",
@@ -407,7 +407,7 @@
     },
     "packages/schema": {
       "name": "@vibe-agent-toolkit/schema",
-      "version": "0.2.0-rc.2",
+      "version": "0.2.0-rc.3",
       "dependencies": {
         "picomatch": "^4.0.3",
         "zod": "^3.23.8",
@@ -423,7 +423,7 @@
     },
     "packages/test-agents": {
       "name": "@vibe-agent-toolkit/test-agents",
-      "version": "0.2.0-rc.2",
+      "version": "0.2.0-rc.3",
       "dependencies": {
         "@vibe-agent-toolkit/agent-runtime": "workspace:*",
         "zod": "^3.24.1",
@@ -436,7 +436,7 @@
     },
     "packages/transports": {
       "name": "@vibe-agent-toolkit/transports",
-      "version": "0.2.0-rc.2",
+      "version": "0.2.0-rc.3",
       "dependencies": {
         "@vibe-agent-toolkit/agent-runtime": "workspace:*",
         "ws": "^8.18.0",
@@ -450,7 +450,7 @@
     },
     "packages/utils": {
       "name": "@vibe-agent-toolkit/utils",
-      "version": "0.2.0-rc.2",
+      "version": "0.2.0-rc.3",
       "dependencies": {
         "@vibe-validate/git": "0.20.1",
         "handlebars": "^4.7.8",
@@ -477,7 +477,7 @@
     },
     "packages/vat-development-agents": {
       "name": "@vibe-agent-toolkit/vat-development-agents",
-      "version": "0.2.0-rc.2",
+      "version": "0.2.0-rc.3",
       "dependencies": {
         "@vibe-agent-toolkit/cli": "workspace:*",
         "@vibe-agent-toolkit/schema": "workspace:*",
@@ -493,7 +493,7 @@
     },
     "packages/vat-example-cat-agents": {
       "name": "@vibe-agent-toolkit/vat-example-cat-agents",
-      "version": "0.2.0-rc.2",
+      "version": "0.2.0-rc.3",
       "dependencies": {
         "@vibe-agent-toolkit/agent-runtime": "workspace:*",
         "@vibe-agent-toolkit/schema": "workspace:*",
@@ -519,7 +519,7 @@
     },
     "packages/vibe-agent-toolkit": {
       "name": "vibe-agent-toolkit",
-      "version": "0.2.0-rc.2",
+      "version": "0.2.0-rc.3",
       "bin": {
         "vat": "./bin/vat",
       },

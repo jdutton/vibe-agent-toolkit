@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/projection-sqlite",
-  "version": "0.2.0-rc.2",
+  "version": "0.2.0-rc.3",
   "description": "SQLite-backed projection store for VAT, on Node's built-in node:sqlite",
   "type": "module",
   "main": "./dist/index.js",
