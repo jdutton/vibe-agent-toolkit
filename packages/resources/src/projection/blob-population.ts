@@ -80,7 +80,7 @@ import type { TextProvenance } from '@vibe-agent-toolkit/utils/text';
 
 import type { KeyedContent, ParserKind } from '../content-key.js';
 import type { ParseResult } from '../link-parser.js';
-import { type ParseCache, defaultParseCache, loadParser, parseKeyed } from '../parse-cache.js';
+import { type ParseCache, defaultParseCache, isParserUnavailable, parseKeyed } from '../parse-cache.js';
 import type { BlobConditionRow } from '../schemas/projection-blobs.js';
 import type { ResourceRealizationRow } from '../schemas/projection-resources.js';
 
@@ -687,17 +687,22 @@ async function readTarget(
  * non-markdown ones, so the markdown parser is handed arbitrary bytes by design.
  * One of them failing must not abort a whole population.
  *
- * ⚠️ A broken INSTALL must not be reported as a broken DOCUMENT, which is why
- * the parser is loaded on the line ABOVE the `try` rather than inside
- * `parseKeyed`. The parser arrives by `import()`, so a module that cannot be
- * loaded — a half-extracted tarball, a quarantined or `chmod 000` file — would
- * otherwise land in this catch and be reported as
+ * ⚠️ A broken INSTALL must not be reported as a broken DOCUMENT. The parser
+ * arrives by `import()` from inside `parseKeyed`, so a module that cannot be
+ * loaded — a half-extracted tarball, a quarantined or `chmod 000` file — lands in
+ * this very catch, and unguarded was reported as
  * `The markdown parser threw on the bytes at "<path>" (EACCES)`, once per
  * document, blaming every innocent file in the corpus while the exit code stayed
- * 0. Hoisting the load is structural: this catch can no longer see a loader
- * failure at all, so nothing has to classify one — which matters because the two
- * classes are genuinely indistinguishable by inspection (the ESM loader reads
- * the module through `fs`, so its errnos are the parse cache's errnos).
+ * 0.
+ *
+ * The guard is the error TYPE, not the load's position. Hoisting the load above
+ * this `try` also closes it, and was tried — it costs every fully warm
+ * population the ~730 ms remark load for parses that never happen, which is the
+ * whole point of loading past the cache's hit-path return. `isParserUnavailable`
+ * matches one type VAT constructs at one place, so it is complete by
+ * construction; it is emphatically not the errno blocklist that was deleted (see
+ * its docstring). The errno classes remain indistinguishable by inspection —
+ * that is why nothing here inspects.
  *
  * @param builder - The builder to record a condition on
  * @param target - The blob and its path
@@ -705,7 +710,8 @@ async function readTarget(
  * @param cache - The parse cache to consult
  * @param counts - The accumulator
  * @returns The parse, or null when a condition was recorded instead
- * @throws Whatever loading the parser throws — a broken install fails the run
+ * @throws {ParserUnavailableError} If the parser module cannot be loaded — a
+ *   broken install fails the run rather than accusing the corpus
  */
 async function parseTarget(
   builder: ProjectionBuilder,
@@ -714,13 +720,14 @@ async function parseTarget(
   cache: ParseCache,
   counts: MutableCounts,
 ): Promise<ParseResult | null> {
-  // Outside the try, deliberately. Memoized, so this is one map lookup per blob
-  // after the first — and still lazy, so a fully warm run loads no parser.
-  await loadParser(keyed.parserKind);
-
   try {
     return await parseKeyed(keyed, cache);
   } catch (error) {
+    // The install, not the document. See the ⚠️ block above for why this is a
+    // type check and not a hoist, and `isParserUnavailable` for why matching one
+    // constructed type is not the guessed blocklist that preceded it.
+    if (isParserUnavailable(error)) throw error;
+
     counts.blobsParseFailed += 1;
     builder.addBlobCondition(condition(
       target.contentKey,

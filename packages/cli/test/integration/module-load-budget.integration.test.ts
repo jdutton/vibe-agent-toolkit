@@ -28,16 +28,22 @@
  * that every `vat` invocation now pays for. Find it with the reported URL and
  * either defer it behind `await import(...)` at its use site, or make the
  * export a lazy wrapper (see `parseMarkdown` in `resources/src/index.ts`).
+ *
+ * The warm-scan case is the one that fails for a second reason: an `await
+ * loadParser(...)` hoisted above a per-document loop, to keep a broken install
+ * from being blamed on documents. That is a real problem with a different fix —
+ * rethrow `ParserUnavailableError` from the catch (`isParserUnavailable`) — and
+ * hoisting it has already cost this saving twice.
  */
 
 /* eslint-disable security/detect-non-literal-fs-filename -- every path here is a temp dir this test created and owns */
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect } from 'vitest';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -71,6 +77,24 @@ const PARSER_NEEDLES = ['remark-parse', 'resources/dist/link-parser.js'] as cons
  * PRESENT. Get one wrong and that case goes red rather than the others going
  * quietly green.
  */
+/**
+ * The corpus every parsing case here scans.
+ *
+ * One constant because three cases must scan the SAME tree: the cold/warm pair
+ * below is only evidence if both runs did identical work, and the `VAT_CACHE=0`
+ * control is only a control for them if it parses the same documents.
+ */
+const SCAN_ARGS = ['resources', 'scan', 'docs/contributing'] as const;
+
+/**
+ * The resources barrel — the module the parser hides BEHIND.
+ *
+ * Asserted absent for `--version` and present everywhere the parser's absence is
+ * the claim: "the barrel loaded and the parser did not" is the whole property,
+ * and without the first half it is satisfied by a run that loaded nothing.
+ */
+const BARREL_NEEDLE = 'resources/dist/index.js';
+
 const COMMAND_NEEDLES = {
   audit: 'cli/dist/commands/audit.js',
   inventory: 'cli/dist/commands/inventory.js',
@@ -128,6 +152,56 @@ function expectParserAbsent(urls: readonly string[]): void {
   }
 }
 
+/**
+ * Every `src/*.ts` under `packages/`, as absolute paths.
+ *
+ * Walks the packages directory rather than reading a hardcoded list: a list is
+ * a second thing to keep in step with the tree, and the one failure mode that
+ * matters here is a call appearing in a file nobody thought to enumerate.
+ *
+ * @returns Absolute paths of every TypeScript source file in every package
+ */
+function packageSourceFiles(): string[] {
+  const packagesDir = safePath.join(repoRoot, 'packages');
+  const files: string[] = [];
+  for (const pkg of readdirSync(packagesDir)) {
+    const srcDir = safePath.join(packagesDir, pkg, 'src');
+    if (!existsSync(srcDir)) continue;
+    for (const entry of readdirSync(srcDir, { recursive: true, encoding: 'utf-8' })) {
+      if (entry.endsWith('.ts') && !entry.endsWith('.d.ts')) {
+        files.push(safePath.join(srcDir, entry));
+      }
+    }
+  }
+  return files;
+}
+
+/**
+ * Which package sources contain `needle` in CODE, reported repo-relative.
+ *
+ * Comment-only lines are dropped first: the call sites this pins carry long
+ * comments explaining why they do NOT hoist a load, and several name the
+ * function they are not calling. A scan that could not tell those apart from a
+ * real call would fail on its own documentation.
+ *
+ * @param needle - The code fragment to look for
+ * @returns Repo-relative paths, sorted, of every source file whose code has it
+ */
+function sourceFilesCalling(needle: string): string[] {
+  const hits: string[] = [];
+  for (const file of packageSourceFiles()) {
+    const code = readFileSync(file, 'utf-8')
+      .split('\n')
+      .filter(line => {
+        const trimmed = line.trimStart();
+        return !trimmed.startsWith('//') && !trimmed.startsWith('*') && !trimmed.startsWith('/*');
+      })
+      .join('\n');
+    if (code.includes(needle)) hits.push(toForwardSlash(safePath.relative(repoRoot, file)));
+  }
+  return hits.sort((a, b) => a.localeCompare(b));
+}
+
 describe('module load budget (integration)', () => {
   it('`--version` loads neither the resources package nor the markdown parser', () => {
     const { urls, status } = loadedScripts(['--version']);
@@ -140,7 +214,7 @@ describe('module load budget (integration)', () => {
     expect(status).toBe(0);
 
     expectParserAbsent(urls);
-    expect(urls.filter(url => url.includes('resources/dist/index.js'))).toEqual([]);
+    expect(urls.filter(url => url.includes(BARREL_NEEDLE))).toEqual([]);
   });
 
   it('a command that actually parses DOES load the parser, so the check can distinguish', () => {
@@ -151,11 +225,57 @@ describe('module load budget (integration)', () => {
     // hit, nothing is parsed, and the parser is legitimately never imported —
     // which is the whole point of the deferral, and would make this control
     // pass for the wrong reason on a cold machine and fail on a warm one.
-    const { urls } = loadedScripts(['resources', 'scan', 'docs/contributing'], { VAT_CACHE: '0' });
+    const { urls } = loadedScripts(SCAN_ARGS, { VAT_CACHE: '0' });
 
     expect(urls.length).toBeGreaterThan(0);
     for (const needle of PARSER_NEEDLES) {
       expect(urls.some(url => url.includes(needle))).toBe(true);
+    }
+  });
+
+  it('a SECOND scan of the same corpus loads no parser at all', () => {
+    // THE case this file was missing, and the whole reason a regression shipped:
+    // the properties above are all about invocations that parse nothing, and the
+    // warm-run claim — "every document is a cache hit, so the parser is never
+    // imported" — was stated in the prose of the case below and tested nowhere.
+    // Two hoists of `loadParser` above the parse cache's hit-path return have
+    // since made a fully warm scan load the parser again with every existing
+    // test still green. Measured at the time of writing: 1,235 scripts cold
+    // against 1,049 warm, and ~1.0s of wall clock on a 184-document corpus.
+    //
+    // A PRIVATE temp dir, so the cache state under test belongs to this test.
+    // `os.tmpdir()` reads TMPDIR on POSIX and TEMP/TMP on Windows, and VAT's
+    // cache root is `<tmpdir>/.vat-cache` — so setting all three makes the first
+    // run genuinely cold no matter what else has run on this machine, and leaves
+    // the shared cache untouched. Without it the "cold" run below could be a
+    // warm one, and its positive control would be the thing that failed.
+    const cacheHome = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-warmscan-'));
+    const privateTmp = { TMPDIR: cacheHome, TEMP: cacheHome, TMP: cacheHome };
+    try {
+      const cold = loadedScripts(SCAN_ARGS, privateTmp);
+
+      // Positive control, and it is doing two jobs: the run has to have
+      // succeeded AND to have actually parsed, or "warm" below means nothing —
+      // an empty cache directory and a fully warm one both produce zero parses
+      // if the scan itself did no work.
+      expect(cold.status).toBe(0);
+      expect(cold.urls.length).toBeGreaterThan(0);
+      for (const needle of PARSER_NEEDLES) {
+        expect(cold.urls.some(url => url.includes(needle))).toBe(true);
+      }
+
+      const warm = loadedScripts(SCAN_ARGS, privateTmp);
+
+      // The second positive control: the warm run did the same work — same
+      // command, same corpus, exit 0, the resources barrel loaded — so the
+      // absence below is the parser being skipped and not the scan being skipped.
+      expect(warm.status).toBe(0);
+      expect(warm.urls.length).toBeGreaterThan(0);
+      expect(warm.urls.some(url => url.includes(BARREL_NEEDLE))).toBe(true);
+
+      expectParserAbsent(warm.urls);
+    } finally {
+      rmSync(cacheHome, { recursive: true, force: true });
     }
   });
 
@@ -176,7 +296,7 @@ describe('module load budget (integration)', () => {
     // Positive control FIRST, and here it carries the whole case: assert the
     // barrel WAS loaded before asserting the parser behind it was not.
     expect(urls.length).toBeGreaterThan(0);
-    expect(urls.some(url => url.includes('resources/dist/index.js'))).toBe(true);
+    expect(urls.some(url => url.includes(BARREL_NEEDLE))).toBe(true);
     expect(status).toBe(0);
 
     expectParserAbsent(urls);
@@ -218,6 +338,28 @@ describe('module load budget (integration)', () => {
     for (const needle of Object.values(COMMAND_NEEDLES)) {
       expect(urls.some(url => url.includes(needle))).toBe(true);
     }
+  });
+
+  it('nothing outside the parse cache calls `loadParser`', () => {
+    // The warm-scan case above can only see the lane it drives — the resource
+    // registry. The regression it exists to catch appeared at FIVE call sites
+    // across four packages at once, and the four others (blob derivation, skill
+    // link traversal, the parse-fact oracle, rag indexing) are reached by
+    // commands this suite does not run. So the same property is also pinned
+    // structurally: the ONLY place allowed to ask for a parser is the parse
+    // cache itself, past its hit-path return.
+    //
+    // A source scan rather than a behavioural one, deliberately. Driving four
+    // more lanes would be four more slow spawns and would still miss the fifth
+    // the day it is added, whereas "who may call this function" is decidable by
+    // reading, and a new caller is exactly the diff that regressed twice.
+    const callers = sourceFilesCalling('loadParser(');
+
+    // Positive control FIRST, and it does two jobs: a walk that found nothing
+    // (a moved `src/`, a broken glob) would otherwise report a clean tree, and
+    // a needle that matches nothing would too.
+    expect(callers.length).toBeGreaterThan(0);
+    expect(callers).toEqual(['packages/resources/src/parse-cache.ts']);
   });
 
   it('the always-on cache-control registration stays off the heavy path', () => {

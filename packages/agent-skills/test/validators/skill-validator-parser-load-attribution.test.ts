@@ -10,14 +10,26 @@
  * the link graph at all, and still reported "Audit passed with warnings" at
  * exit 0. The install was broken and the command said the skills were.
  *
- * ## Why the fix is a seam and not a predicate
+ * ## Why the fix is a type and not a hoist, and not an inspection either
  *
  * The two classes are NOT distinguishable by inspecting the error: Node's ESM
  * loader reads the module through `fs`, so an unloadable parser throws the same
- * `EACCES` an unreadable *document* throws. So `loadParser` is awaited OUTSIDE
- * the loop, and the catch can no longer see a loader failure. These tests drive
- * that seam rather than fabricating a coded error out of the parse, which would
- * only prove that some blocklist matched its own members.
+ * `EACCES` an unreadable *document* throws. A blocklist of loader codes was
+ * tried and deleted, and a test fabricating a coded error out of the parse would
+ * only prove that such a blocklist matched its own members.
+ *
+ * Awaiting `loadParser` above the loop was tried too, and is what this suite
+ * used to drive. It works and it costs too much: the load happens inside
+ * `parseFileCached`, past the parse cache's hit-path return, precisely so a
+ * fully warm validation loads no parser at all. Any hoist cancels that silently
+ * and no test in this package can see it.
+ *
+ * So the load stays lazy and the catch rethrows one TYPE —
+ * `ParserUnavailableError`, minted at VAT's single parser-import boundary and
+ * matched by `isParserUnavailable`, which is complete by construction rather
+ * than by enumeration. That the boundary really mints it is pinned in
+ * `packages/resources/test/parser-unavailable-error.test.ts`, against the real
+ * `import()`; what this suite owns is the attribution decision here.
  *
  * ## Why both directions are pinned
  *
@@ -28,6 +40,7 @@
  */
 
 import type * as ResourcesModule from '@vibe-agent-toolkit/resources';
+import { ParserUnavailableError } from '@vibe-agent-toolkit/resources';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ValidationResult } from '../../src/validators/types.js';
@@ -39,7 +52,7 @@ import {
 } from '../test-helpers.js';
 
 /**
- * What the next `loadParser` / `parseFileCached` call throws, or nothing.
+ * What the next `parseFileCached` call throws, or nothing.
  *
  * `vi.hoisted` because the mock factory below is hoisted above every import and
  * would otherwise close over an uninitialised binding. The parse arm is a path
@@ -52,18 +65,20 @@ const failures = vi.hoisted(() => ({ load: undefined as Error | undefined, parse
 /** A parse failure armed for every path containing `pathContains`. */
 type ParseArm = { pathContains: string; error: Error } | undefined;
 
-// The load and the parse are the only things replaced. Link resolution, the
-// content-key machinery and the real parser all stay live via `importOriginal`,
-// so the walk under test is the one a real validation performs.
+// Only `parseFileCached` is replaced — the seam the lazy parser load throws
+// THROUGH. Link resolution, the content-key machinery, the real parser and the
+// real `isParserUnavailable` all stay live via `importOriginal`, so the walk
+// under test is the one a real validation performs and the predicate under test
+// is the shipped one.
 vi.mock('@vibe-agent-toolkit/resources', async (importOriginal) => {
   const actual = await importOriginal<typeof ResourcesModule>();
-  const parseFileCached = async (filePath: string, kind: ResourcesModule.ParserKind) =>
-    failures.parseFor && filePath.includes(failures.parseFor.pathContains)
+  const parseFileCached = async (filePath: string, kind: ResourcesModule.ParserKind) => {
+    if (failures.load) return Promise.reject(failures.load);
+    return failures.parseFor && filePath.includes(failures.parseFor.pathContains)
       ? Promise.reject(failures.parseFor.error)
       : actual.parseFileCached(filePath, kind);
-  const loadParser = async (kind: ResourcesModule.ParserKind) =>
-    failures.load ? Promise.reject(failures.load) : actual.loadParser(kind);
-  return { ...actual, parseFileCached, loadParser };
+  };
+  return { ...actual, parseFileCached };
 });
 
 /**
@@ -89,17 +104,24 @@ beforeEach(() => {
 });
 
 /**
- * The failure the reproduction actually produced: `chmod 000` on the built
- * parser, surfacing as the ESM loader's own `fs` read failing.
+ * The failure the reproduction actually produced, as it arrives at the parse
+ * site: `chmod 000` on the built parser, surfacing as the ESM loader's own `fs`
+ * read failing, wrapped at VAT's import boundary.
  *
- * `EACCES` is deliberate rather than a loader-specific code — it is precisely
- * the error an inspection-based guard could never tell apart from an unreadable
- * document.
+ * Built from the REAL exported class rather than hand-rolled, so a change to
+ * what `isParserUnavailable` accepts cannot pass here by agreeing with a
+ * fixture's idea of the type. The `EACCES` underneath is deliberate — it is
+ * precisely the error an inspection-based guard could never tell apart from an
+ * unreadable document, and it stays reachable only via `loaderError`.
  *
  * @returns A fresh error per test, so identity assertions are meaningful
  */
 function parserLoadFailure(): Error {
-  return Object.assign(new Error("permission denied, open '.../dist/link-parser.js'"), { code: 'EACCES' });
+  return new ParserUnavailableError(
+    'markdown',
+    './link-parser.js',
+    Object.assign(new Error("permission denied, open '.../dist/link-parser.js'"), { code: 'EACCES' }),
+  );
 }
 
 /**

@@ -10,12 +10,24 @@
  * resource, `resourcesIndexed: 0`, and a resolved promise. The install was
  * broken and the report said every document was.
  *
- * ## Why the fix is a seam and not a predicate
+ * ## Why the fix is a type and not a hoist, and not an inspection either
  *
  * Node's ESM loader reads the module through `fs`, so an unloadable parser
  * throws the same `EACCES` an unreadable *document* throws — nothing in the
- * error separates them. So `loadParser` is awaited OUTSIDE the loop, and the
- * catch can no longer see a loader failure at all.
+ * error separates them, which is why a blocklist of loader codes was tried and
+ * deleted.
+ *
+ * Awaiting `loadParser` above the loop was tried too, and is what this suite
+ * used to drive. It works and it costs too much: the load happens inside
+ * `parseFileCached`, past the parse cache's hit-path return, precisely so a
+ * fully warm index loads no parser at all. Any hoist cancels that silently.
+ *
+ * So the load stays lazy and the catch rethrows one TYPE —
+ * `ParserUnavailableError`, minted at VAT's single parser-import boundary and
+ * matched by `isParserUnavailable`, complete by construction rather than by
+ * enumeration. That the boundary really mints it is pinned in
+ * `packages/resources/test/parser-unavailable-error.test.ts` against the real
+ * `import()`; what this suite owns is who gets blamed here.
  *
  * ## Why both directions are pinned
  *
@@ -31,6 +43,7 @@
 
 import type { EmbeddingProvider, ResourceMetadata } from '@vibe-agent-toolkit/rag';
 import type * as ResourcesModule from '@vibe-agent-toolkit/resources';
+import { ParserUnavailableError } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -39,21 +52,23 @@ import { LanceDBRAGProvider } from '../src/lancedb-rag-provider.js';
 import { createTestMarkdownFile, setupLanceDBTestSuite } from './test-helpers.js';
 
 /**
- * What the next `loadParser` call throws, or nothing.
+ * What the next `parseFileCached` call throws, or nothing.
  *
  * `vi.hoisted` because the mock factory below is hoisted above every import and
  * would otherwise close over an uninitialised binding.
  */
 const failures = vi.hoisted(() => ({ load: undefined as Error | undefined }));
 
-// Only the load is replaced. `parseFileCached` and the real parser stay live via
+// Only the parse seam is replaced, and only when armed. The real parser, the
+// real `parseFileCached` and the real `isParserUnavailable` stay live via
 // `importOriginal`, so the ordinary-failure case below fails for the reason a
-// real unreadable document fails rather than because a stub said so.
+// real unreadable document fails rather than because a stub said so, and the
+// predicate under test is the shipped one.
 vi.mock('@vibe-agent-toolkit/resources', async (importOriginal) => {
   const actual = await importOriginal<typeof ResourcesModule>();
-  const loadParser = async (kind: ResourcesModule.ParserKind) =>
-    failures.load ? Promise.reject(failures.load) : actual.loadParser(kind);
-  return { ...actual, loadParser };
+  const parseFileCached = async (filePath: string, kind: ResourcesModule.ParserKind) =>
+    failures.load ? Promise.reject(failures.load) : actual.parseFileCached(filePath, kind);
+  return { ...actual, parseFileCached };
 });
 
 // A connection that accepts rows and forgets them. Nothing here asserts on what
@@ -97,17 +112,23 @@ afterEach(async () => {
 });
 
 /**
- * The failure the reproduction actually produced: `chmod 000` on the built
- * parser, surfacing as the ESM loader's own `fs` read failing.
+ * The failure the reproduction actually produced, as it arrives at the parse
+ * site: `chmod 000` on the built parser, surfacing as the ESM loader's own `fs`
+ * read failing, wrapped at VAT's import boundary.
  *
- * `EACCES` is deliberate rather than a loader-specific code — it is precisely
- * the error an inspection-based guard could never tell apart from an unreadable
- * document.
+ * Built from the REAL exported class rather than hand-rolled, so a change to
+ * what `isParserUnavailable` accepts cannot pass here by agreeing with a
+ * fixture's idea of the type. The `EACCES` underneath is precisely the error an
+ * inspection-based guard could never tell apart from an unreadable document.
  *
  * @returns A fresh error per test, so identity assertions are meaningful
  */
 function parserLoadFailure(): Error {
-  return Object.assign(new Error("permission denied, open '.../dist/link-parser.js'"), { code: 'EACCES' });
+  return new ParserUnavailableError(
+    'markdown',
+    './link-parser.js',
+    Object.assign(new Error("permission denied, open '.../dist/link-parser.js'"), { code: 'EACCES' }),
+  );
 }
 
 /**
@@ -173,9 +194,9 @@ describe('a parser-load failure during resource indexing', () => {
     // `errors` entry per resource and `resourcesIndexed: 0`.
     await expect(provider().indexResources(missingResources(), onProgress)).rejects.toBe(thrown);
 
-    // Nothing was attempted either: the batch aborted before the first resource
-    // rather than walking on and accusing the second as well. `onProgress` fires
-    // once per resource, so zero calls is the whole loop's silence.
+    // Nothing was reported either: the rethrow leaves the first iteration before
+    // its `onProgress`, so zero calls is the whole loop's silence. Under the
+    // defect it fired once per resource and the run resolved.
     expect(onProgress).not.toHaveBeenCalled();
   });
 });

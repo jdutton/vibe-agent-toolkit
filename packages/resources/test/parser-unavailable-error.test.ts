@@ -5,17 +5,23 @@
  * ## Why hoisting the load out of the per-document `try` was necessary but not
  * sufficient
  *
- * Six call sites now await `loadParser` OUTSIDE their per-document `try`, so a
- * loader failure is no longer recorded once per innocent document. It still
- * exited 0. Node's ESM loader reads the module through `fs`, so a `chmod 000` on
+ * The parser is loaded lazily, from inside `parseKeyed` and past its cache-hit
+ * return, because a fully warm run must load no parser at all. That puts the
+ * load INSIDE the five per-document `try` blocks that wrap a parse, so what
+ * keeps a loader failure off the innocent documents is the error's TYPE: four of
+ * those five catches rethrow it through `isParserUnavailable`, and the fifth
+ * (`ResourceRegistry.addResources`) allow-lists errnos and so never held it.
+ * Attribution alone was not the whole defect, though — even once no document was
+ * blamed, it still exited 0. Node's ESM loader reads the module through `fs`, so a `chmod 000` on
  * the built `link-parser.js` throws a raw `EACCES` — and `vat audit`'s outer scan
  * boundary degrades ANY error satisfying `isFilesystemAccessError` into a
  * `SCAN_PATH_UNREADABLE` finding at severity `warning`. Reproduced: `chmod 000
  * packages/resources/dist/link-parser.js` with `VAT_CACHE=0`, `vat audit` exits 0.
  *
- * Hoisting further is chasing an unbounded chain — every outer boundary that
- * allow-lists filesystem errnos re-swallows it. So the fix is at the origin: the
- * loader's failure is rethrown wearing a code no errno allow-list contains.
+ * Hoisting the load is chasing an unbounded chain — every outer boundary that
+ * allow-lists filesystem errnos re-swallows it, and hoisting is also what
+ * destroys the warm-run deferral. So the fix is at the origin: the loader's
+ * failure is rethrown wearing a code no errno allow-list contains.
  *
  * ## What these tests are evidence OF
  *
@@ -47,6 +53,7 @@
 import { isFilesystemAccessError } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type * as BarrelModule from '../src/index.js';
 import type * as ParseCacheModule from '../src/parse-cache.js';
 
 /**
@@ -61,6 +68,7 @@ import type * as ParseCacheModule from '../src/parse-cache.js';
 const loader = vi.hoisted(() => ({
   failure: undefined as Error | undefined,
   htmlFailure: undefined as Error | undefined,
+  parseFailure: undefined as Error | undefined,
   attempts: 0,
 }));
 
@@ -75,6 +83,19 @@ vi.mock('../src/link-parser.js', () => ({
     if (loader.failure) throw loader.failure;
     return () => ({ links: [], headings: [], estimatedTokenCount: 0 });
   },
+  // The export the BARREL's lazy `parseMarkdown` wrapper reads. It is a second
+  // route into the same module — it reads the file itself, so it cannot go
+  // through `loadParser` — and it therefore needs its own proof that a failed
+  // load arrives as the same type. `parseFailure` is separate from `failure` so
+  // the negative control below can make the returned parser throw without
+  // making the LOAD throw.
+  get parseMarkdown() {
+    if (loader.failure) throw loader.failure;
+    return () => {
+      if (loader.parseFailure) throw loader.parseFailure;
+      return { links: [], headings: [], estimatedTokenCount: 0 };
+    };
+  },
 }));
 
 // Both kinds are mocked because the message's module name comes from a lookup
@@ -82,6 +103,11 @@ vi.mock('../src/link-parser.js', () => ({
 // would let the html entry drift into naming a module the loader never touched.
 vi.mock('../src/html-link-parser.js', () => ({
   get parseHtmlContent() {
+    if (loader.htmlFailure) throw loader.htmlFailure;
+    return () => ({ links: [], headings: [], estimatedTokenCount: 0 });
+  },
+  /** The barrel's lazy `parseHtml` wrapper — the html half of the same route. */
+  get parseHtml() {
     if (loader.htmlFailure) throw loader.htmlFailure;
     return () => ({ links: [], headings: [], estimatedTokenCount: 0 });
   },
@@ -103,6 +129,22 @@ function loaderEacces(): Error & { code: string } {
     new Error("EACCES: permission denied, open '/x/packages/resources/dist/link-parser.js'"),
     { code: 'EACCES' },
   );
+}
+
+/**
+ * A freshly evaluated BARREL, whose lazy parse wrappers have not yet imported
+ * anything.
+ *
+ * Separate from {@link freshParseCache} because these two routes into the parser
+ * modules are separate: `loadParser` is memoized and `parseMarkdown` /
+ * `parseHtml` are not, so a suite that only drove one of them would leave the
+ * other free to throw a bare loader errno at every consumer of this package.
+ *
+ * @returns A freshly evaluated `index.js`
+ */
+async function freshBarrel(): Promise<typeof BarrelModule> {
+  vi.resetModules();
+  return import('../src/index.js');
 }
 
 /**
@@ -145,12 +187,14 @@ async function loadFailure(
 beforeEach(() => {
   loader.failure = undefined;
   loader.htmlFailure = undefined;
+  loader.parseFailure = undefined;
   loader.attempts = 0;
 });
 
 afterEach(() => {
   loader.failure = undefined;
   loader.htmlFailure = undefined;
+  loader.parseFailure = undefined;
 });
 
 describe('a parser module that cannot be loaded', () => {
@@ -268,5 +312,106 @@ describe('a parser module that cannot be loaded', () => {
     // paying the ~730 ms module load on every document.
     expect(second).toBe(first);
     expect(loader.attempts).toBe(1);
+  });
+});
+
+/**
+ * The predicate every per-document catch rethrows through.
+ *
+ * Its value is that its membership is decided by a constructor call rather than
+ * by a guess at Node's loader codes — which is what the deleted
+ * `isModuleLoadFailure` blocklist did, incompletely, by its own admission. So
+ * both directions are pinned here: it must accept the wrapper and it must reject
+ * the raw errno, or the four catches that consult it either stop discriminating
+ * or stop rethrowing.
+ */
+describe('isParserUnavailable', () => {
+  it('accepts the wrapper and rejects the bare loader errno', async () => {
+    loader.failure = loaderEacces();
+    const mod = await freshParseCache();
+
+    const thrown = await loadFailure(mod);
+
+    expect(mod.isParserUnavailable(thrown)).toBe(true);
+    // The discrimination, in the same test: an `EACCES` from reading a DOCUMENT
+    // reaches the same catches, and demoting it to a broken install would abort
+    // a whole run on one bad file.
+    expect(mod.isParserUnavailable(loaderEacces())).toBe(false);
+    expect(mod.isParserUnavailable(new Error('unexpected token'))).toBe(false);
+    expect(mod.isParserUnavailable(undefined)).toBe(false);
+  });
+
+  it('matches by code across two copies of this module', async () => {
+    // `instanceof` alone is false when a second instance of parse-cache exists
+    // in the process — a mocked module beside the real one, or a `src` and a
+    // `dist` resolution in one run. Two independently-evaluated instances is
+    // exactly that situation, and the guard must still hold.
+    loader.failure = loaderEacces();
+    const producer = await freshParseCache();
+    const thrown = await loadFailure(producer);
+    const consumer = await freshParseCache();
+
+    expect(thrown).not.toBeInstanceOf(consumer.ParserUnavailableError);
+    expect(consumer.isParserUnavailable(thrown)).toBe(true);
+  });
+});
+
+/**
+ * The barrel's `parseMarkdown` / `parseHtml`, which import a parser module by a
+ * route `loadParser` never touches.
+ *
+ * They read the file themselves, so they need the module's `parseMarkdown`
+ * export rather than `parseMarkdownContent`, and they carry their own
+ * `import()`. Unwrapped, that import threw a bare `EACCES` — which every
+ * per-document catch and every errno allow-list in the toolkit swallows — so a
+ * broken install reached `vat`'s parse-fact oracle as an empty snapshot at
+ * exit 0 even after the cached route was fixed.
+ */
+describe('the barrel lazy parse wrappers', () => {
+  it('reports a failed markdown load as a broken install', async () => {
+    const original = loaderEacces();
+    loader.failure = original;
+    const mod = await freshBarrel();
+
+    const thrown = await mod.parseMarkdown('/does/not/matter.md').then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(mod.isParserUnavailable(thrown)).toBe(true);
+    expect((thrown as { loaderError?: unknown }).loaderError).toBe(original);
+    expect((thrown as Error).message).toContain('./link-parser.js');
+  });
+
+  it('reports a failed html load as a broken install', async () => {
+    // The `.html`-only corpus case: this wrapper is the ONLY route by which such
+    // a run ever loads a parser, so a guard covering markdown alone would leave
+    // it reporting a broken install as an unparseable document.
+    loader.htmlFailure = loaderEacces();
+    const mod = await freshBarrel();
+
+    const thrown = await mod.parseHtml('/does/not/matter.html').then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(mod.isParserUnavailable(thrown)).toBe(true);
+    expect((thrown as Error).message).toContain('./html-link-parser.js');
+  });
+
+  it('does not blame the install when the PARSE throws', async () => {
+    // The negative control, and the reason the wrap covers the import and not
+    // the call: a document that will not parse is not a broken install, and a
+    // boundary that said otherwise would abort a whole run on one bad file.
+    loader.parseFailure = new Error('unexpected token');
+    const mod = await freshBarrel();
+
+    const thrown = await mod.parseMarkdown('/does/not/matter.md').then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(thrown).toBe(loader.parseFailure);
+    expect(mod.isParserUnavailable(thrown)).toBe(false);
   });
 });

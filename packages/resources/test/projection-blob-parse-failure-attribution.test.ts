@@ -13,16 +13,36 @@
  * `link-parser.js` produced 8 × `RESOURCE_UNREADABLE` with `filesScanned: 0` —
  * every innocent markdown file blamed in turn for one unreadable module.
  *
- * ## Why the fix is a seam and not a predicate
+ * ## Why the fix is a type and not a hoist, and not an inspection either
  *
  * The classes are NOT distinguishable by inspecting the error: Node's ESM loader
  * reads the module through `fs`, so an unloadable parser throws the same
  * `EACCES`/`ENOENT` an unreadable *document* throws, and a module that throws
- * while EVALUATING carries no loader code at all. So `loadParser` is awaited
- * OUTSIDE each `try`, and the catch can no longer see a loader failure. These
- * tests therefore drive the seam — they make `loadParser` reject — rather than
- * fabricating a coded error out of the parse, which would only have proven that
- * a since-deleted blocklist matched its own members.
+ * while EVALUATING carries no loader code at all. A blocklist of loader codes
+ * was tried and deleted; a test fabricating a coded error out of the parse would
+ * only ever have proven that such a blocklist matched its own members.
+ *
+ * Awaiting `loadParser` above each `try` was tried too, and it is what these
+ * tests used to drive. It works and it costs too much: the load happens inside
+ * `parseKeyed`, past the cache's hit-path return, precisely so a fully warm run
+ * loads no parser at all (measured: 1,049 scripts warm against 1,235 cold). Any
+ * hoist cancels that silently.
+ *
+ * So the load stays lazy and the catch rethrows one TYPE —
+ * `ParserUnavailableError`, constructed at VAT's single parser-import boundary,
+ * matched by `isParserUnavailable`. Complete by construction rather than by
+ * enumeration: there is no parser-load failure that does not pass through that
+ * one wrap.
+ *
+ * ## What these tests drive, and what they do not
+ *
+ * They inject a genuine `ParserUnavailableError` at the parse seam, which is
+ * exactly what the lazy load produces there. That the real import boundary
+ * really MINTS that error — for both parser kinds, and through both routes into
+ * the parser modules — is `parser-unavailable-error.test.ts`'s job, driven
+ * against the real `import()` with a fresh module instance per case. Splitting
+ * it that way keeps this suite's subject the attribution decision, which is the
+ * thing that regressed.
  *
  * ## Why both directions are pinned
  *
@@ -47,7 +67,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type * as ParseCacheModule from '../src/parse-cache.js';
-import { ParseCache } from '../src/parse-cache.js';
+import { ParseCache, ParserUnavailableError } from '../src/parse-cache.js';
 import { BLOB_PARSE_FAILED, populateBlobs } from '../src/projection/blob-population.js';
 import { ResourceRegistry } from '../src/resource-registry.js';
 
@@ -55,32 +75,31 @@ import { baseBuilderForRoot, conditionsWithCode } from './blob-fixture-populatio
 import { setupSubdirTestSuite, useCorpusSuite, type CorpusFile } from './test-helpers.js';
 
 /**
- * What the next `loadParser` / `parseKeyed` call throws, or nothing.
+ * What the next `parseKeyed` call throws, or nothing.
  *
  * `vi.hoisted` because the mock factory below is hoisted above every import and
- * would otherwise close over an uninitialised binding.
+ * would otherwise close over an uninitialised binding. One field per class,
+ * because the whole subject is which of the two the catch may swallow.
  */
 const failures = vi.hoisted(() => ({
   load: undefined as Error | undefined,
   parse: undefined as Error | undefined,
 }));
 
-// The load and the parse are the only things replaced. Everything else —
-// `ParseCache`, the content-key machinery the base stratum runs — stays real via
-// `importOriginal`, so the realizations these tests derive blobs from are the
-// ones a real crawl produces. Mocking the whole module would make the fixture's
-// keys fictional and the stages under test would never be reached with a genuine
-// target. `ResourceRegistry` imports from this same module, so one mock covers
-// both call sites.
+// Only `parseKeyed` is replaced — the seam the lazy parser load throws THROUGH.
+// Everything else — `ParseCache`, `isParserUnavailable`, the content-key
+// machinery the base stratum runs — stays real via `importOriginal`, so the
+// realizations these tests derive blobs from are the ones a real crawl produces
+// and the predicate under test is the shipped one. Mocking the whole module
+// would make the fixture's keys fictional and the stages under test would never
+// be reached with a genuine target. `ResourceRegistry` imports from this same
+// module, so one mock covers both call sites.
 vi.mock('../src/parse-cache.js', async (importOriginal) => {
   const actual = await importOriginal<typeof ParseCacheModule>();
   return {
     ...actual,
-    loadParser: async (...args: Parameters<typeof actual.loadParser>) => {
-      if (failures.load) throw failures.load;
-      return actual.loadParser(...args);
-    },
     parseKeyed: async (...args: Parameters<typeof actual.parseKeyed>) => {
+      if (failures.load) throw failures.load;
       if (failures.parse) throw failures.parse;
       return actual.parseKeyed(...args);
     },
@@ -133,17 +152,25 @@ function codedError(code: string, message: string): Error {
 }
 
 /**
- * The failure the reproduction actually produced: `chmod 000` on the built
- * parser, surfacing as the loader's own `fs` read failing.
+ * The failure the reproduction actually produced, as it arrives at a parse site:
+ * `chmod 000` on the built parser, surfacing as the loader's own `fs` read
+ * failing, wrapped at VAT's import boundary.
  *
- * `EACCES` is deliberate rather than a loader-specific code — it is a member of
- * `resource-registry`'s READ_FAILURE_CODES, so it is precisely the error an
- * inspection-based guard could never tell apart from an unreadable document.
+ * The wrapper is built from the REAL exported class rather than hand-rolled, so
+ * a change to what `isParserUnavailable` accepts cannot pass here by agreeing
+ * with a fixture's idea of the type. The `EACCES` underneath is deliberate: it
+ * is a member of `resource-registry`'s READ_FAILURE_CODES, so it is precisely
+ * the error an inspection-based guard could never tell apart from an unreadable
+ * document — and it must stay reachable only via `loaderError`.
  *
  * @returns A fresh error per test, so identity assertions are meaningful
  */
 function parserLoadFailure(): Error {
-  return codedError('EACCES', "permission denied, open '.../dist/link-parser.js'");
+  return new ParserUnavailableError(
+    'markdown',
+    './link-parser.js',
+    codedError('EACCES', "permission denied, open '.../dist/link-parser.js'"),
+  );
 }
 
 /**
@@ -183,8 +210,8 @@ describe('an ordinary parser failure during blob derivation', () => {
     // No `code` at all: the shape a parser's own `throw new Error(...)` has.
     { label: 'a plain Error with no code', error: new Error('unexpected token') },
     // A `code`, but one that reaches the catch from the parse rather than from
-    // the load — proves the catch still swallows a coded error, so the fix is
-    // the hoisted seam and not a resurrected code check.
+    // the load — proves the catch still swallows a coded error, so the guard is
+    // the one constructed type and not a resurrected code check.
     {
       label: 'a coded error thrown by the parse',
       error: codedError('ERR_INVALID_ARG_TYPE', 'The "input" argument must be of type string'),
