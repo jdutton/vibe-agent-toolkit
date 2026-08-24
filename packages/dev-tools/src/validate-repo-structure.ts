@@ -980,6 +980,16 @@ const SEVERITY_COUNTS_CONFORMING = new Set<string>([
   // review findings themselves live in the sibling review.md rather than being
   // recomputed here into a second, weaker answer.
   'packages/cli/src/commands/corpus/report.ts',
+  // The always-loaded context budget, split out of `resources/validate.ts` into
+  // its own verb. It is the case this gate exists for: its one code defaults to
+  // `info`, so a status alone would collapse every finding to the reassuring
+  // answer and report "success" on a tree that is over budget everywhere. The
+  // distribution is the shared counter's own output (`countBySeverity`),
+  // published as `BudgetReport.issueCounts` beside the shared collapse, and the
+  // exit code is read from `issueCounts.errors` rather than from the status —
+  // so an adopter who promotes the code to `error` gates on the same number the
+  // report shows.
+  'packages/cli/src/commands/claude/budget.ts',
 ]);
 
 /**
