@@ -165,17 +165,61 @@ const loadDoctor = async (): Promise<void> =>
   (await import('./commands/doctor.js')).doctorCommand(program);
 
 /**
- * Root flags that consume the argv token AFTER them.
+ * Every option token this program DECLARES, and the subset that consumes the
+ * argv token after it.
  *
  * Read off commander's own declarations rather than hardcoded, because the
- * blast radius grows with every future value-taking root option. `--cwd <dir>`
- * is the one that exists today.
+ * blast radius grows with every future root option. Today that is `--version`,
+ * `--cwd <dir>`, `--debug` and `--no-cache`; only `--cwd` takes a value.
+ *
+ * ORDERING MATTERS: this must run AFTER `registerCacheControl(program)` above,
+ * which is what puts `--no-cache` into `program.options`. Built before that
+ * call, `--no-cache` would read as undeclared and every `vat --no-cache <verb>`
+ * would silently give up the lazy load and register the whole tree — a quiet
+ * perf regression with no failing test to announce it.
+ *
+ * Note what is deliberately NOT synthesised here: a `--no-x` twin for boolean
+ * options, and a positive `--cache` twin for `--no-cache`. Commander matches an
+ * option by exact string (`Option.is()` is `short === arg || long === arg`), so
+ * `--no-debug` and `--cache` are UNKNOWN options that end the parse in an
+ * error. Accepting them here would re-create the very bug this scan exists to
+ * avoid: a token commander rejects, treated by us as an ordinary flag to skip.
  */
+const declaredRootFlags = new Set<string>(['-h', '--help']);
 const valueTakingRootFlags = new Set<string>();
+const declareRootFlag = (flag: string | undefined, takesValue: boolean): void => {
+  if (!flag) return;
+  declaredRootFlags.add(flag);
+  if (takesValue) valueTakingRootFlags.add(flag);
+};
 for (const option of program.options) {
-  if (!option.required && !option.optional) continue;
-  if (option.short) valueTakingRootFlags.add(option.short);
-  if (option.long) valueTakingRootFlags.add(option.long);
+  const takesValue = Boolean(option.required || option.optional);
+  declareRootFlag(option.short, takesValue);
+  declareRootFlag(option.long, takesValue);
+}
+
+/** How the argv scan must treat one option-shaped token. */
+type OptionTokenKind = 'undeclared' | 'consumes-next' | 'self-contained';
+
+/**
+ * Classify an option-shaped token against what this program declares.
+ *
+ * The `--flag=value` case is not just "strip the suffix": commander only
+ * accepts the inline form for a VALUE-TAKING option — its `--foo=bar` branch
+ * requires `option.required || option.optional` — so `--debug=1` is an unknown
+ * option even though `--debug` is declared.
+ *
+ * Anything unrecognised is reported as `undeclared` rather than guessed at.
+ * The cost of being wrong is asymmetric: a false `undeclared` only forfeits the
+ * lazy-load saving, while a false "declared" ships a wrong help page at exit 0.
+ */
+function classifyOptionToken(arg: string): OptionTokenKind {
+  const equalsIndex = arg.indexOf('=');
+  if (equalsIndex !== -1) {
+    return valueTakingRootFlags.has(arg.slice(0, equalsIndex)) ? 'self-contained' : 'undeclared';
+  }
+  if (!declaredRootFlags.has(arg)) return 'undeclared';
+  return valueTakingRootFlags.has(arg) ? 'consumes-next' : 'self-contained';
 }
 
 /**
@@ -198,6 +242,25 @@ for (const option of program.options) {
  *   page claiming the CLI has exactly one command, and exit 0. `vat audit
  *   --help` is the other order and returns on the verb before reaching the
  *   flag, so it still loads just `audit`.
+ * - **An UNDECLARED option is not a flag to skip over.** `--help` is only the
+ *   most visible member of that class — it is not in `program.options` either,
+ *   which is exactly why the bail-out above works. Commander's `parseOptions`
+ *   switches its destination to `unknown` at the FIRST unrecognised
+ *   option-shaped token and never switches back, so the verb after it never
+ *   reaches `operands`; the run ends in `unknownOption()` +
+ *   `showHelpAfterError()`, i.e. ROOT help. `vat --verbose audit` therefore
+ *   printed an error page listing exactly one command. Every undeclared option
+ *   gets the `--help` treatment for that reason.
+ * - **A lone `-` is an OPERAND, not an option.** Commander's `maybeOption`
+ *   requires `arg.length > 1`, so `-` lands in `operands` and reaches the
+ *   `command:*` handler as an unknown command — which again renders root help.
+ *   Falling through to the operand return below hands `-` to the dispatcher,
+ *   where it matches no loader key and the whole tree loads.
+ *
+ * `--` is option-shaped by the length test but declared by nobody, so it takes
+ * the undeclared bail-out. That is the right answer: commander treats every
+ * token after it as an operand, and loading the whole tree is always
+ * behaviourally correct — the scan only ever trades away startup time.
  */
 function readRequestedCommand(argv: readonly string[]): string | undefined {
   for (let index = 0; index < argv.length; index++) {
@@ -205,8 +268,10 @@ function readRequestedCommand(argv: readonly string[]): string | undefined {
     /* c8 ignore next -- index is bounded by argv.length */
     if (arg === undefined) continue;
     if (arg === '--help' || arg === '-h') return undefined;
-    if (arg.startsWith('-')) {
-      if (!arg.includes('=') && valueTakingRootFlags.has(arg)) index++;
+    if (arg.length > 1 && arg.startsWith('-')) {
+      const kind = classifyOptionToken(arg);
+      if (kind === 'undeclared') return undefined;
+      if (kind === 'consumes-next') index++;
       continue;
     }
     return arg;

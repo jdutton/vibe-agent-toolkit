@@ -20,10 +20,51 @@ import { writeFile } from 'node:fs/promises';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { expect } from 'vitest';
 
+import type { RunContentCache } from '../src/projection/content-cache.js';
 import { ContributorRegistry } from '../src/projection/contributor.js';
 import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { populate, type BlobPopulationReport } from '../src/projection/merge.js';
-import type { Projection } from '../src/projection/projection.js';
+import { ProjectionBuilder, type Projection } from '../src/projection/projection.js';
+import type { ResourceRealizationRow } from '../src/schemas/projection-resources.js';
+
+/** Reorders the realizations before they reach the builder. */
+export type RealizationOrder = (
+  rows: readonly ResourceRealizationRow[],
+) => readonly ResourceRealizationRow[];
+
+/** Enumeration order, as the crawl produced it. */
+export const IN_CRAWL_ORDER: RealizationOrder = (rows) => rows;
+
+/**
+ * A builder holding only what the filesystem extent contributed.
+ *
+ * The base stratum, run by hand so a caller can drive `populateBlobs` itself —
+ * which is what a suite needs when it must inspect the builder after the stage
+ * **threw**, a state `populate()` gives no seam to reach, or disturb the corpus
+ * between enumeration and derivation.
+ *
+ * `contentCache` is omitted by default on purpose: a builder with no cache is
+ * the configuration in which the derivation-time read is genuinely a second
+ * read, so it is the only one that can exercise the stage's disagreement
+ * branches at all.
+ *
+ * @param rootDir - The corpus root to enumerate
+ * @param order - How to reorder the realizations before recording them
+ * @param contentCache - The run cache to share with the derivation stage, if any
+ * @returns A builder carrying the base stratum and nothing else
+ */
+export async function baseBuilderForRoot(
+  rootDir: string,
+  order: RealizationOrder = IN_CRAWL_ORDER,
+  contentCache?: RunContentCache,
+): Promise<ProjectionBuilder> {
+  const builder = new ProjectionBuilder(rootDir, undefined, contentCache);
+  const contribution = await new FilesystemExtentContributor().contribute(builder.base(), null);
+  for (const row of contribution.contexts) builder.addContext(row);
+  for (const row of contribution.resources) builder.addResource(row);
+  for (const row of order(contribution.realizations)) builder.addRealization(row);
+  return builder;
+}
 
 /**
  * Write raw bytes to a fixture beneath a suite root, bypassing string encoding

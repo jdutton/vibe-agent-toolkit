@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import { basename, dirname } from 'node:path';
 
-import { isLocalFileLink, parseFileCached, resolveLocalHref, type LinkType } from '@vibe-agent-toolkit/resources';
+import { isLocalFileLink, loadParser, parseFileCached, resolveLocalHref, type LinkType } from '@vibe-agent-toolkit/resources';
 import { calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { findProjectRoot, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
@@ -290,6 +290,9 @@ function processFileLinks(
  * - Outside skill directory -> OUTSIDE_PROJECT_BOUNDARY warning
  * - Existing .md file -> recurse (add to BFS queue)
  * - Non-markdown asset -> existence check only
+ *
+ * @throws Whatever loading the markdown parser throws — a broken install fails
+ *   the validation rather than being demoted to a per-document finding
  */
 async function traverseLinks(
   skillPath: string,
@@ -302,6 +305,15 @@ async function traverseLinks(
   const visited = new Set<string>([resolvedSkillPath]);
   const linkedFiles: LinkedFileValidationResult[] = [];
   const queue: string[] = [resolvedSkillPath];
+
+  // Above the loop, and therefore above the catch below. The parser arrives by
+  // `import()`, and Node's ESM loader reads the module through `fs` — so an
+  // unreadable or half-extracted parser throws `EACCES`, which is exactly what
+  // an unreadable DOCUMENT throws. Inside the loop that made a broken INSTALL
+  // report `LINK_INTEGRITY_BROKEN` once per file, blame every innocent document,
+  // never walk the link graph, and still exit 0 on "passed with warnings".
+  // Memoized, so this is one map lookup per iteration after the first.
+  await loadParser('markdown');
 
   while (queue.length > 0) {
     const currentPath = queue.shift();

@@ -13,6 +13,7 @@ import { createHash } from 'node:crypto';
 
 import {
   flattenHeadings,
+  loadParser,
   parseHtml,
   parseMarkdown,
   parserKindForPath,
@@ -112,6 +113,8 @@ export const PARSE_RESULT_FIELDS_ACCOUNTED_FOR: AssertNoUnaccountedParseResultFi
  * @param absolutePaths - Paths to parse; unreadable ones are skipped, not fatal
  * @param options - Corpus root (for relativizing) and label
  * @returns The snapshot, rows ordered by content key
+ * @throws Whatever loading a parser throws — a broken install must fail loudly
+ *   rather than produce a snapshot of a measurement that did not run
  */
 export async function captureParseFactSnapshot(
   absolutePaths: readonly string[],
@@ -122,6 +125,14 @@ export async function captureParseFactSnapshot(
   const firstPathByKey = new Map<string, string>();
   const pathsByKey = new Map<string, string[]>();
   const keyDisagreements: KeyDisagreement[] = [];
+
+  // Above the loop, and therefore above `parseOrNull`'s catch. The parser
+  // arrives by `import()`, so an unreadable or half-extracted module throws from
+  // the same place a genuinely unparseable document does — and `parseOrNull`
+  // answers `null` to both. Swallowed there, a broken install yielded an
+  // empty-but-well-formed snapshot: a measurement that did not run, reported as
+  // a measurement whose result was nothing.
+  await loadParsersFor(absolutePaths);
 
   for (const absolutePath of absolutePaths) {
     const keyed = await readKeyedOrSkip(absolutePath);
@@ -201,6 +212,24 @@ export function diffParseFactRows(first: ParseFactRow, other: ParseFactRow): str
     }
   }
   return differing.toSorted((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Load exactly the parsers this corpus will route to, before any of it is
+ * parsed.
+ *
+ * Both kinds are possible here — `parseOrNull` branches on the kind — so the set
+ * is derived from the paths rather than assumed. `parserKindForPath` is the same
+ * discriminator `readKeyedOrSkip` feeds to `readContentWithKey`, so the kinds
+ * loaded here are exactly the ones the loop asks for; an all-markdown corpus
+ * still never evaluates parse5, and an empty list loads nothing.
+ *
+ * @param absolutePaths - The corpus about to be parsed
+ * @throws Whatever the module loader throws
+ */
+async function loadParsersFor(absolutePaths: readonly string[]): Promise<void> {
+  const kinds = new Set(absolutePaths.map((absolutePath) => parserKindForPath(absolutePath)));
+  await Promise.all([...kinds].map((kind) => loadParser(kind)));
 }
 
 /** Read+key a path, or report null when it cannot be read. */

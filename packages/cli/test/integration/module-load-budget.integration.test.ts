@@ -57,6 +57,27 @@ const repoRoot = safePath.resolve(__dirname, '../../../..');
 const PARSER_NEEDLES = ['remark-parse', 'resources/dist/link-parser.js'] as const;
 
 /**
+ * One module per command, reachable ONLY through that command's loader.
+ *
+ * These are what makes the per-command dispatch observable: nothing else in the
+ * CLI imports them, so "did `commands/audit.js` load?" answers "did the loader
+ * table get walked, or was one entry called?" and nothing else. Each is a file
+ * that exists on disk today — `commands/audit.js` is a sibling of the
+ * `commands/audit/` DIRECTORY, and the `.js` in the needle is what keeps the two
+ * apart.
+ *
+ * A wrong needle here would make every "is absent" assertion below pass
+ * vacuously, which is why the root-`--help` case asserts these same strings are
+ * PRESENT. Get one wrong and that case goes red rather than the others going
+ * quietly green.
+ */
+const COMMAND_NEEDLES = {
+  audit: 'cli/dist/commands/audit.js',
+  inventory: 'cli/dist/commands/inventory.js',
+  rag: 'cli/dist/commands/rag/index.js',
+} as const;
+
+/**
  * Run the CLI and report every script URL Node loaded.
  *
  * @param args - Arguments to pass to the CLI
@@ -91,6 +112,22 @@ function loadedScripts(
   }
 }
 
+/**
+ * Assert the markdown toolchain was NOT loaded.
+ *
+ * Shared by every case that pins an absence, so the needle list is applied one
+ * way in one place. It deliberately asserts nothing about what WAS loaded:
+ * every caller states its own positive control first, because an empty `urls`
+ * would satisfy this function completely.
+ *
+ * @param urls - Every script URL the invocation loaded
+ */
+function expectParserAbsent(urls: readonly string[]): void {
+  for (const needle of PARSER_NEEDLES) {
+    expect(urls.filter(url => url.includes(needle))).toEqual([]);
+  }
+}
+
 describe('module load budget (integration)', () => {
   it('`--version` loads neither the resources package nor the markdown parser', () => {
     const { urls, status } = loadedScripts(['--version']);
@@ -102,9 +139,7 @@ describe('module load budget (integration)', () => {
     expect(urls.some(url => url.includes('cli/dist/bin.js'))).toBe(true);
     expect(status).toBe(0);
 
-    for (const needle of PARSER_NEEDLES) {
-      expect(urls.filter(url => url.includes(needle))).toEqual([]);
-    }
+    expectParserAbsent(urls);
     expect(urls.filter(url => url.includes('resources/dist/index.js'))).toEqual([]);
   });
 
@@ -120,6 +155,67 @@ describe('module load budget (integration)', () => {
 
     expect(urls.length).toBeGreaterThan(0);
     for (const needle of PARSER_NEEDLES) {
+      expect(urls.some(url => url.includes(needle))).toBe(true);
+    }
+  });
+
+  it('a command that DOES load the resources barrel still does not load the parser', () => {
+    // The property `resources/src/index.ts` is actually about, pinned here for
+    // the first time. Its ⚠️ block names THIS FILE as what fails if
+    // `parseMarkdown` goes back to a plain value re-export — and that was false:
+    // the `--version` cases never load `resources/dist/index.js` at all, so what
+    // the barrel statically imports cannot affect them either way. Only an
+    // invocation that loads the barrel can see the difference.
+    //
+    // `resources --help` is the cheapest such invocation. Commander renders the
+    // subcommand list and parses no document, so unlike the case above no
+    // `VAT_CACHE` setting is needed — there is no cache state that could decide
+    // whether the parser loads.
+    const { urls, status } = loadedScripts(['resources', '--help']);
+
+    // Positive control FIRST, and here it carries the whole case: assert the
+    // barrel WAS loaded before asserting the parser behind it was not.
+    expect(urls.length).toBeGreaterThan(0);
+    expect(urls.some(url => url.includes('resources/dist/index.js'))).toBe(true);
+    expect(status).toBe(0);
+
+    expectParserAbsent(urls);
+  });
+
+  it('a known verb loads ONLY its own command module', () => {
+    // The headline claim of the per-command dispatch, and nothing pinned it
+    // before this case: both `--version` cases short-circuit at `versionOnly`
+    // BEFORE reaching the `Object.hasOwn(COMMAND_LOADERS, ...)` branch, so
+    // replacing that whole branch with the load-everything loop left every other
+    // case in this file green while the saving silently reverted.
+    //
+    // `inventory` is the subject because it is an ordinary table entry — not the
+    // `doctor` special case — and `--help` exercises the dispatch without
+    // running a scan.
+    const { urls, status } = loadedScripts(['inventory', '--help']);
+
+    expect(urls.length).toBeGreaterThan(0);
+    expect(urls.some(url => url.includes(COMMAND_NEEDLES.inventory))).toBe(true);
+    expect(status).toBe(0);
+
+    // The other thirteen table entries must not have loaded. Two stand in for
+    // the rest: one plain module, one whose loader pulls in a whole subtree.
+    expect(urls.filter(url => url.includes(COMMAND_NEEDLES.audit))).toEqual([]);
+    expect(urls.filter(url => url.includes(COMMAND_NEEDLES.rag))).toEqual([]);
+  });
+
+  it('root `--help` DOES load the whole tree, so the case above can distinguish', () => {
+    // The negative control for the case above, and the guard on the needles
+    // themselves. Root help has to list every command, so it registers all of
+    // them; if `COMMAND_NEEDLES` ever names a path that no longer exists — a
+    // renamed module, a command moved into a directory of its own — this case
+    // goes red, rather than the absence assertions above passing because nothing
+    // could ever have matched them.
+    const { urls, status } = loadedScripts(['--help']);
+
+    expect(urls.length).toBeGreaterThan(0);
+    expect(status).toBe(0);
+    for (const needle of Object.values(COMMAND_NEEDLES)) {
       expect(urls.some(url => url.includes(needle))).toBe(true);
     }
   });

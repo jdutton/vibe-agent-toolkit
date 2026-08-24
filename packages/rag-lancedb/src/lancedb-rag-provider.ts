@@ -28,6 +28,7 @@ import {
   OnnxEmbeddingProvider,
 } from '@vibe-agent-toolkit/rag';
 import {
+  loadParser,
   parseFileCached,
   transformContent,
   type ContentTransformOptions,
@@ -378,6 +379,9 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
 
   /**
    * Index resources into the RAG database
+   *
+   * @throws Whatever loading the markdown parser throws — a broken install fails
+   *   the whole batch rather than becoming one error entry per resource
    */
   async indexResources(
     resources: ResourceMetadata[],
@@ -401,6 +405,17 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       durationMs: 0,
       errors: [],
     };
+
+    // Above the loop, and therefore above the catch below — `indexResource`'s
+    // own parse carries no local try, so this catch is the one that would have
+    // swallowed a loader failure. The parser arrives by `import()`, and Node's
+    // ESM loader reads the module through `fs`, so an unreadable or
+    // half-extracted parser throws the same `EACCES` an unreadable document
+    // does: inside the loop that turned a broken INSTALL into one error entry
+    // per resource, with `resourcesIndexed: 0` and no exception to act on.
+    // 'markdown' matches what `indexResource` actually parses with — this lane
+    // parses every resource as markdown, including the .html ones (see there).
+    await loadParser('markdown');
 
     let processedCount = 0;
     for (const resource of resources) {

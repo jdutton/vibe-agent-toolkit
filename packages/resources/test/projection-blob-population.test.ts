@@ -24,9 +24,13 @@ import {
   type Projection,
 } from '../src/projection/projection.js';
 import { collectRealization } from '../src/projection/realizations.js';
-import type { ResourceRealizationRow } from '../src/schemas/projection-resources.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
+import {
+  IN_CRAWL_ORDER,
+  baseBuilderForRoot,
+  type RealizationOrder,
+} from './blob-fixture-population.js';
 import { setupSubdirTestSuite } from './test-helpers.js';
 
 const SKILL_KIND = 'skill';
@@ -62,12 +66,6 @@ interface CorpusFile {
   path: string;
   content: string;
 }
-
-/** Reorders the realizations before they reach the builder. */
-type RealizationOrder = (rows: readonly ResourceRealizationRow[]) => readonly ResourceRealizationRow[];
-
-/** Enumeration order, as the crawl produced it. */
-const IN_CRAWL_ORDER: RealizationOrder = (rows) => rows;
 
 /**
  * The exact opposite of enumeration order.
@@ -108,27 +106,23 @@ async function rewriteCorpusFile(relativePath: string, content: string | null): 
 }
 
 /**
- * A builder holding only what the filesystem extent contributed.
+ * The shared base-stratum builder, bound to this suite's per-test root.
  *
- * The base stratum, run by hand so a test can disturb the corpus between
- * enumeration and derivation — which is exactly the race the stage has to
- * survive, and which `populate()` gives no seam to reproduce.
+ * The construction itself lives in `blob-fixture-population.ts` because a second
+ * suite drives `populateBlobs` the same way; two copies of a base-stratum driver
+ * drift, and one suite then quietly stops testing the pipeline the other does.
  *
- * `contentCache` is omitted by default on purpose: a builder with no cache is
- * the configuration in which the derivation-time read is genuinely a second
- * read, so it is the only one that can exercise the stage's disagreement
- * branches at all. The tests that pin the *cached* semantics pass one in.
+ * @param order - How to reorder the realizations before recording them
+ * @param contentCache - The run cache to share, for the tests that pin the
+ *   *cached* semantics; omitted elsewhere so the derivation-time read is a
+ *   genuine second read
+ * @returns A builder carrying the base stratum and nothing else
  */
 async function baseBuilderFor(
-  order: RealizationOrder = IN_CRAWL_ORDER,
+  order?: RealizationOrder,
   contentCache?: RunContentCache,
 ): Promise<ProjectionBuilder> {
-  const builder = new ProjectionBuilder(suite.tempDir, undefined, contentCache);
-  const contribution = await new FilesystemExtentContributor().contribute(builder.base(), null);
-  for (const row of contribution.contexts) builder.addContext(row);
-  for (const row of contribution.resources) builder.addResource(row);
-  for (const row of order(contribution.realizations)) builder.addRealization(row);
-  return builder;
+  return baseBuilderForRoot(suite.tempDir, order, contentCache);
 }
 
 /** The extent the demand fixtures below realize their files in. */

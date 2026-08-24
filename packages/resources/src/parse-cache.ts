@@ -478,6 +478,254 @@ export class ParseCache {
 }
 
 /**
+ * The one thing a parser module contributes: content of a known byte length in,
+ * parse facts out.
+ *
+ * Both parsers already have this shape (`parseMarkdownContent`,
+ * `parseHtmlContent`); naming it lets {@link loadParser} return one type for
+ * either kind, so no caller has to re-derive which export belongs to which kind.
+ */
+export interface LoadedParser {
+  /**
+   * @param content - The decoded document
+   * @param sizeBytes - The RAW byte count of what was read, never a length
+   *   derived from `content` — decoding is lossy on malformed UTF-8
+   * @returns The parse facts for those bytes
+   */
+  parseContent(content: string, sizeBytes: number): ParseResult;
+}
+
+/**
+ * In-flight or settled loads, one per kind. Memoizing the PROMISE (not the
+ * module) is what makes concurrent first callers share a single import.
+ */
+const parserLoads = new Map<ParserKind, Promise<LoadedParser>>();
+
+/**
+ * The module specifier {@link importParser} loads for each kind, for the error
+ * message only.
+ *
+ * Kept beside the `import()` calls rather than derived from them because the
+ * specifiers there MUST stay static literals — a computed specifier is invisible
+ * to a bundler and to the module-mocking these are tested through. Duplicating
+ * them here is the cost of naming the module in the message; both entries are
+ * exercised by the message tests, so a specifier changed on one side without the
+ * other shows up as a message naming a module the loader never touched.
+ */
+const PARSER_MODULE_SPECIFIERS: Record<ParserKind, string> = {
+  html: './html-link-parser.js',
+  markdown: './link-parser.js',
+};
+
+/**
+ * The `code` every {@link ParserUnavailableError} carries.
+ *
+ * ⚠️ It must NEVER be an errno, and the original errno must NEVER be passed
+ * through onto `.code`. Every outer error boundary in the toolkit classifies by
+ * allow-listing errno strings — `isFilesystemAccessError` in
+ * `packages/utils/src/fs-utils.ts` (whose `FILESYSTEM_ACCESS_ERRNOS` holds
+ * `EACCES`, `EPERM`, `EMFILE`, `ENOENT` and ~20 more) and `READ_FAILURE_CODES`
+ * in `resource-registry.ts`. An errno here means `vat audit` degrades a broken
+ * INSTALL into a `SCAN_PATH_UNREADABLE` warning and exits 0, which is the exact
+ * defect this type exists to close. Restoring the original code "so the errno
+ * isn't lost" reopens it; the errno is kept in the MESSAGE and on
+ * {@link ParserUnavailableError.loaderError} instead, where no allow-list reads it.
+ */
+const PARSER_UNAVAILABLE_CODE = 'VAT_PARSER_UNAVAILABLE';
+
+/**
+ * A parser module could not be loaded — the INSTALL is broken, not a document.
+ *
+ * ## Why a dedicated type rather than letting the loader's error through
+ *
+ * Node's ESM loader reads the module through `fs`, so an unloadable parser
+ * throws a raw filesystem errno: `EACCES` for a `chmod 000` or quarantined file,
+ * `EMFILE` under fd pressure, `ENOENT` for a half-extracted tarball. That is
+ * byte-for-byte the shape a genuinely unreadable *document* throws, and every
+ * outer boundary that has to survive a hostile tree allow-lists exactly those
+ * codes. Hoisting the load out of the per-document `try` (see {@link loadParser})
+ * stopped the failure being blamed on individual documents, but it did not stop
+ * the NEXT boundary out from degrading it: measured, `chmod 000` on the built
+ * `link-parser.js` still exited 0 with a `SCAN_PATH_UNREADABLE` warning.
+ *
+ * Hoisting further is an unbounded chase. Making the error structurally
+ * un-allow-listable at its origin is not: see {@link PARSER_UNAVAILABLE_CODE} for
+ * why `.code` is the load-bearing field and why it must never be an errno.
+ *
+ * ## Why the original hangs off `loaderError` and NOT off `cause`
+ *
+ * `isFilesystemAccessError` walks the `cause` chain — deliberately, because the
+ * CLI config loader re-wraps read failures and a `code`-only check answered "not
+ * a filesystem error" for a plain `EACCES`. So an original `EACCES` reachable via
+ * `cause` is found by that walk and the wrapper is degraded anyway: setting
+ * `cause` here silently cancels the entire fix. Verified — with `cause` set, the
+ * predicate returns `true` for this error.
+ *
+ * Nothing is lost by using a different property. `util.inspect` (which is what
+ * Node's uncaught-exception printer and every `console.error(err)` reach for)
+ * prints own enumerable non-standard properties of an Error, so the original
+ * still surfaces with its full stack; the message carries its text and code too.
+ */
+export class ParserUnavailableError extends Error {
+  /**
+   * Never an errno. See {@link PARSER_UNAVAILABLE_CODE} before changing this.
+   */
+  readonly code = PARSER_UNAVAILABLE_CODE;
+
+  /**
+   * The loader's own failure, verbatim. Deliberately NOT `cause` — see the class
+   * docstring; `cause` is walked by the very predicate this type must not match.
+   */
+  readonly loaderError: unknown;
+
+  /**
+   * @param kind - Which parser failed to load
+   * @param specifier - The module specifier that could not be imported
+   * @param loaderError - Whatever the module loader threw
+   */
+  constructor(kind: ParserKind, specifier: string, loaderError: unknown) {
+    super(
+      `Cannot load VAT's ${kind} parser module (${specifier}): ${describeLoaderError(loaderError)}. ` +
+        'This is a broken VAT installation — the parser itself could not be read or evaluated. ' +
+        'No document being scanned is at fault. Reinstall or rebuild VAT.',
+    );
+    this.name = 'ParserUnavailableError';
+    this.loaderError = loaderError;
+  }
+}
+
+/**
+ * The loader failure as text for {@link ParserUnavailableError}'s message.
+ *
+ * The errno is the actionable half of a broken install ("EACCES" tells an
+ * operator to look at permissions; "ENOENT" at an incomplete extraction), so it
+ * has to appear SOMEWHERE — and the message is the one place it can, because
+ * `.code` is read by the allow-lists this error must not match.
+ *
+ * @param error - Whatever the module loader threw
+ * @returns A one-line description, with the original code when there is one
+ */
+function describeLoaderError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const code: unknown = typeof error === 'object' && error !== null && 'code' in error
+    ? (error as { code: unknown }).code
+    : undefined;
+  return typeof code === 'string' ? `${message} (${code})` : message;
+}
+
+/**
+ * Load the parser for one kind, once per process.
+ *
+ * ## Why this is a public seam and not an inline `await import(...)`
+ *
+ * Loading the parser is an INSTALL-level operation; parsing is a
+ * DOCUMENT-level one. When the import sat inside {@link parseKeyed}, every
+ * caller that wrapped `parseKeyed` in a per-document `try` — and both of the
+ * ones in this package do, because a corpus contains documents that legitimately
+ * fail to parse — silently acquired the loader's failures too. A half-extracted
+ * tarball or an unreadable `link-parser.js` was then reported once per document,
+ * blaming every innocent file in the corpus while the command exited 0 (measured:
+ * 8 × `RESOURCE_UNREADABLE`, `filesScanned: 0`, on `chmod 000` of the built
+ * parser).
+ *
+ * The fix is structural rather than diagnostic. A caller awaits this OUTSIDE its
+ * `try`, so its catch can only ever see the parse. Nothing has to classify an
+ * error, which matters because the classes are not distinguishable by
+ * inspection: the ESM loader reads the module through `fs`, so an unreadable
+ * module throws `EACCES` — the same errno a genuinely unreadable *document*
+ * throws.
+ *
+ * ## Why hoisting alone was not enough
+ *
+ * The hoist fixed attribution and not the exit code. One boundary further out —
+ * `vat audit`'s per-entry scan catch — degrades ANY error carrying a filesystem
+ * errno into a `SCAN_PATH_UNREADABLE` warning, so a `chmod 000` parser still
+ * exited 0. Every such boundary allow-lists errnos, so there is no hoist high
+ * enough. What closes it is {@link ParserUnavailableError}, thrown at the import
+ * itself wearing a code no allow-list contains.
+ *
+ * ## Why the deferral survives
+ *
+ * The load still happens on demand, never at module scope: the remark stack
+ * behind `parseMarkdownContent` costs ~730 ms of module load on Windows, which a
+ * fully warm run — every document a hit, nothing ever parsed — must not pay. The
+ * memo makes every call after the first free, so hoisting it above a loop costs
+ * one map lookup per iteration.
+ *
+ * A rejected load is dropped from the memo rather than retained: a loader
+ * failure can be transient (`EMFILE` under fd pressure), and caching the
+ * rejection would turn one bad moment into a dead process.
+ *
+ * @param kind - Which parser to load
+ * @returns The parser for that kind
+ * @throws {ParserUnavailableError} If the parser module cannot be imported. The
+ *   loader's own error is carried on `loaderError`, never re-thrown bare — see
+ *   {@link PARSER_UNAVAILABLE_CODE}.
+ */
+export async function loadParser(kind: ParserKind): Promise<LoadedParser> {
+  const pending = parserLoads.get(kind);
+  if (pending !== undefined) return pending;
+
+  const loading = importParser(kind).catch((error: unknown) => {
+    parserLoads.delete(kind);
+    throw error;
+  });
+  parserLoads.set(kind, loading);
+  return loading;
+}
+
+/**
+ * The import, plus the wrapping that makes its failures un-allow-listable.
+ *
+ * The wrap lives HERE, at the single point where the loader's error originates,
+ * rather than at any of the six call sites: an outer boundary cannot tell a
+ * loader `EACCES` from a document `EACCES` by inspection, so a classification
+ * added further out is guesswork. Here there is nothing to classify — anything
+ * this `try` catches came from loading the module. See
+ * {@link ParserUnavailableError}.
+ *
+ * @param kind - Which parser to load
+ * @returns The parser for that kind
+ * @throws {ParserUnavailableError} If the module cannot be imported
+ */
+async function importParser(kind: ParserKind): Promise<LoadedParser> {
+  try {
+    return await importParserModule(kind);
+  } catch (error) {
+    throw new ParserUnavailableError(kind, PARSER_MODULE_SPECIFIERS[kind], error);
+  }
+}
+
+/**
+ * The only `import()` of a parser in this package.
+ *
+ * ⚠️ This only pays off while `index.ts` keeps `parseMarkdown` / `parseHtml` as
+ * LAZY WRAPPERS. They were plain value re-exports until this was measured: the
+ * package publishes only `"."`, so every consumer goes through the barrel, and
+ * the barrel evaluated both parser modules before this line ever ran. Verified
+ * then with NODE_V8_COVERAGE on a warm `vat resources scan` — remark-parse
+ * loaded, `parseMarkdownContent` called zero times. Restore either re-export and
+ * this deferral silently buys nothing again.
+ *
+ * Only the markdown half actually saves anything. parse5 (~38 ms) is loaded
+ * eagerly regardless, because `html-transform.ts` imports html-link-parser
+ * statically for the SYNCHRONOUS `rewriteHtmlLinks`; deferring that needs it to
+ * become async first.
+ *
+ * Kept separate from {@link importParser} so the `try` there wraps the import and
+ * nothing else — the specifiers below must remain static literals, so the two
+ * cannot be collapsed into one function that also computes which one to name.
+ */
+async function importParserModule(kind: ParserKind): Promise<LoadedParser> {
+  if (kind === 'html') {
+    const { parseHtmlContent } = await import('./html-link-parser.js');
+    return { parseContent: parseHtmlContent };
+  }
+  const { parseMarkdownContent } = await import('./link-parser.js');
+  return { parseContent: parseMarkdownContent };
+}
+
+/**
  * Produce the parse facts for an already-read document, from the cache when one
  * is filed under its content key and from the parser otherwise.
  *
@@ -513,33 +761,16 @@ export async function parseKeyed(keyed: KeyedContent, cache: ParseCache): Promis
   }
   recordParseCacheMiss();
 
+  // Past the hit-path return, so a fully warm run never loads a parser. The
+  // parser is chosen by `keyed.parserKind` — see {@link loadParser} for why the
+  // load is a separate, memoized seam rather than an inline `import()`.
+  const parser = await loadParser(keyed.parserKind);
+
   // The `sizeBytes` argument is `keyed.byteLength` — the raw byte count of what
   // was read — never a length derived from `keyed.content`, since decoding is
   // lossy on malformed UTF-8 and a re-encoded count diverges from what is on
   // disk (see link-parser.ts and content-key.ts).
-  // Imported here, past the hit-path return, rather than at module scope: the
-  // remark stack behind `parseMarkdownContent` costs ~730ms of module load on
-  // Windows, which a fully warm run — every document a hit, nothing ever
-  // parsed — would otherwise pay for a parser it never called. A miss loads
-  // exactly the one parser this document needs; the ESM cache makes every
-  // subsequent miss in the run free.
-  //
-  // Only the markdown half actually saves anything. parse5 (~38ms) is loaded
-  // eagerly regardless, because `html-transform.ts` imports html-link-parser
-  // statically for the SYNCHRONOUS `rewriteHtmlLinks`; deferring that needs it
-  // to become async first.
-  //
-  // ⚠️ This only pays off while `index.ts` keeps `parseMarkdown` / `parseHtml`
-  // as LAZY WRAPPERS. They were plain value re-exports until this was measured:
-  // the package publishes only `"."`, so every consumer goes through the
-  // barrel, and the barrel evaluated both parser modules before this line ever
-  // ran. Verified then with NODE_V8_COVERAGE on a warm `vat resources scan` —
-  // remark-parse loaded, parseMarkdownContent called zero times. Restore either
-  // re-export and this deferral silently buys nothing again.
-  const result =
-    keyed.parserKind === 'html'
-      ? (await import('./html-link-parser.js')).parseHtmlContent(keyed.content, keyed.byteLength)
-      : (await import('./link-parser.js')).parseMarkdownContent(keyed.content, keyed.byteLength);
+  const result = parser.parseContent(keyed.content, keyed.byteLength);
 
   await cache.set(keyed, result);
   return result;

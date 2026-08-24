@@ -1,12 +1,21 @@
 /**
- * Every top-level command, behind a loader.
+ * Every top-level command except `doctor`, behind a loader.
  *
  * ## Why the factories are not called at module scope
  *
  * Each one transitively pulls `@vibe-agent-toolkit/resources` (~1.6s of module
  * load on Windows, dominated by the markdown toolchain), so importing all
- * fifteen made every invocation — `vat --version` included — pay for the whole
+ * fourteen made every invocation — `vat --version` included — pay for the whole
  * CLI surface. Only the command named on the command line is loaded.
+ *
+ * ## Why `doctor` is not in the table
+ *
+ * It is the fifteenth top-level command and the only one outside this table, on
+ * purpose. `doctorCommand(program)` registers itself ONTO the program instead of
+ * returning a `Command`, so it does not fit the `() => Promise<Command>` shape —
+ * `bin.ts` special-cases it — and it is the command that READS this table, in
+ * `checkCommandModules`. Adding it here would have `doctor` check the one module
+ * that must already have loaded for the check to run at all.
  *
  * ## Why this is its own module and not part of `bin.ts`
  *

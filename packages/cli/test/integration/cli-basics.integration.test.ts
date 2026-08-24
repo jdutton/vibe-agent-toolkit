@@ -92,6 +92,51 @@ describe('lazy dispatch models the option grammar', () => {
     expect(result.stdout).toContain('Usage: vat audit');
   });
 
+  it('lists every command when erroring on an undeclared option before the verb', () => {
+    // `--verbose` is not a ROOT option. Commander's `parseOptions` switches its
+    // parse destination to `unknown` at the FIRST unrecognised option-shaped
+    // token and leaves it there, so the verb after it never reaches `operands`
+    // — the run ends in `unknownOption()` + `showHelpAfterError()`, i.e. ROOT
+    // help. Scanning argv for "the first token without a dash" still picked
+    // `audit`, so that help page was rendered from a program with exactly one
+    // command registered and told the user the CLI has one command.
+    const result = runVat('--verbose', 'audit');
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("unknown option '--verbose'");
+    // Two distinct non-audit verbs: a one-entry Commands section fails both.
+    expect(result.stderr).toMatch(/^ {2}inventory\b/m);
+    expect(result.stderr).toMatch(/^ {2}verify\b/m);
+  });
+
+  it('lists every command when erroring on a bare `-` operand', () => {
+    // Commander's `maybeOption` requires `arg.length > 1`, so a lone `-` is an
+    // OPERAND: it reaches the `command:*` handler as an unknown command and
+    // renders root help. A scan that skips every token starting with `-` moved
+    // past it and loaded whatever followed, so the help naming `-` unknown
+    // listed only that one command.
+    const result = runVat('-', 'audit');
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("unknown command '-'");
+    expect(result.stderr).toMatch(/^ {2}inventory\b/m);
+    expect(result.stderr).toMatch(/^ {2}verify\b/m);
+  });
+
+  it('still scopes help to the verb for a DECLARED option before the verb', () => {
+    // Positive control for the two cases above: it proves the fixture can tell
+    // "loaded one command" from "loaded everything", so their assertions are
+    // not vacuously true of every invocation. `--debug` IS declared on the
+    // root, so commander recognises it, the verb reaches `operands`, and the
+    // lazy path must survive intact — bailing out on every dashed token would
+    // pass the two tests above while silently deleting the startup saving.
+    const result = runVat('--debug', 'audit', '--help');
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('Usage: vat audit');
+    expect(result.stdout).not.toMatch(/^ {2}inventory\b/m);
+  });
+
   it('lists every command when erroring on the unregistered -V short flag', () => {
     // `-V` is intentionally not registered. Commander errors and renders help;
     // that help came from a program with zero commands loaded and so claimed

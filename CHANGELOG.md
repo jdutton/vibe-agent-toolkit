@@ -198,8 +198,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **A `vat` invocation no longer imports every command before running one.** The fifteen top-level
-  commands sit behind per-command loaders, so only the one named on the command line is loaded, and
+- **A `vat` invocation no longer imports every command before running one.** Fourteen of the fifteen
+  top-level commands sit behind per-command loaders — `doctor` is the exception, because it is the
+  command that checks the others load — so only the one named on the command line is loaded, and
   the root `--no-cache` registration — which happens on every invocation — no longer drags the
   resources package in behind it. On a 4-CPU Windows box `vat --version` goes from 2,477 ms to
   370 ms. Help, a bare `vat` and an unknown command still load the whole tree, because they have to
@@ -271,6 +272,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `@vibe-validate/utils` and `yaml` to the installed tree.
 
 ### Fixed
+
+- **A broken VAT installation is reported as a broken installation, not as broken documents.**
+  Deferring the markdown parser behind a dynamic import moved "the parser module could not be
+  loaded" into the per-document `catch` blocks that exist for "these bytes will not parse", at six
+  call sites. An unreadable or missing parser module made `vat audit` report
+  `LINK_INTEGRITY_BROKEN` against every file it scanned — including the skill's own `SKILL.md` —
+  never walk the link graph, and still **exit 0** as "passed with warnings"; `vat resources validate`
+  blamed every document with `RESOURCE_UNREADABLE`, and `vat rag index` recorded one error per
+  resource. The parser is now loaded outside those boundaries, and a load failure raises
+  `ParserUnavailableError` (`code: VAT_PARSER_UNAVAILABLE`) which names the module, says plainly
+  that no scanned document is at fault, and exits non-zero.
+
+- **`vat <undeclared-option> <command>` printed a help page listing only one command.** Because the
+  CLI now registers only the command named on the command line, and commander diverts every token
+  after an unrecognised option, `vat --verbose audit` rendered its error against a program holding a
+  single command — as did a bare `-` operand. The dispatcher now models the declared root options and
+  loads the whole tree whenever it sees a token it cannot account for.
+
+- **`vat doctor` named which command modules failed to load but never why.** A broken install
+  reported `The installation is incomplete or corrupt` with no specifier — strictly less than the
+  raw loader crash it was added to replace. It now reports the first failure's code and message.
 
 - **`vat skill test run --dry-run` destroyed the previous run's artifacts.** The free "what would
   this cost?" invocation — and any failure before the run proper, such as a bad `--env` token —

@@ -352,15 +352,32 @@ export {
 // `parseFileCached` IS exported, and is the one every caller outside
 // `ResourceRegistry` should reach for: `parseMarkdown`/`parseHtml` read the file
 // and hand the bytes straight to a parser, so they bypass the cache entirely.
+//
+// `loadParser` is exported for one narrow purpose: a caller that wraps a parse
+// in a per-document `try` must await it OUTSIDE that try, or its catch silently
+// starts reporting a broken INSTALL as a broken DOCUMENT — once per document.
+// See its docstring; it is the seam, not an optimisation hook.
+//
+// `ParserUnavailableError` is exported for the SAME reason, one layer out. The
+// hoist stops a loader failure being blamed on a document; it does not stop the
+// next boundary out — `vat audit`'s scan catch, `ResourceRegistry`'s read-failure
+// demotion — from degrading it, because both allow-list filesystem errnos and the
+// ESM loader throws exactly those. This type carries a `code` no allow-list holds,
+// so it propagates to the top-level handler and exits non-zero. Callers do not
+// need to catch it; it is exported so they CAN test for it, and so the identity is
+// a published contract rather than a private string.
 export {
   ParseCache,
+  ParserUnavailableError,
   defaultParseCache,
+  loadParser,
   parseCacheDirectory,
   parseFileCached,
   parseKeyed,
   vatCacheNamespace,
   vatCacheNamespaceRoot,
   vatCacheRoot,
+  type LoadedParser,
   type ParseCacheOptions,
   type ParseCacheStats,
 } from './parse-cache.js';

@@ -499,46 +499,92 @@ function isVatSourceTree(projectRoot: string | null): SourceTreeAnswer {
 }
 
 /**
- * Check that every top-level command's module can actually be loaded.
+ * One line saying WHY a command module would not load.
+ *
+ * The message is the load-bearing half: Node's `ERR_MODULE_NOT_FOUND` spells
+ * out the missing specifier and the file that imported it, which is exactly the
+ * fact the raw crash gave the user, and exactly what a bare `catch {}` here
+ * threw away. The code is prefixed when there is one because that is the part
+ * worth searching for.
+ *
+ * Whitespace is collapsed because some Node loader messages are multi-line, and
+ * this ends up on a single doctor result line.
+ *
+ * @param error - Whatever the loader threw
+ * @returns A single-line description of the failure
+ */
+function describeLoadFailure(error: unknown): string {
+  const raw = (error instanceof Error ? error.message : String(error))
+    .replaceAll(/\s+/gu, ' ')
+    .trim();
+  // Never return an empty string: a thrown `Error('')` would otherwise render as
+  // "First failure — rag:" and read like the reporting itself is broken.
+  const message = raw === '' ? 'threw with no message' : raw;
+  const code = error instanceof Error && 'code' in error ? error.code : undefined;
+  return typeof code === 'string' ? `${code}: ${message}` : message;
+}
+
+/**
+ * Check that every command module in `COMMAND_LOADERS` can actually be loaded.
  *
  * ## Why this check exists
  *
  * The CLI loads only the command named on the command line, so a `dist/` with
  * one command module missing is no longer detected at startup. It used to be:
- * every invocation imported all fifteen, so ANY of them missing crashed
+ * every invocation imported all fourteen, so ANY of them missing crashed
  * immediately, naming the file. After the change to lazy loading, `vat rag`
  * died with a raw `ERR_MODULE_NOT_FOUND` while `vat doctor` — which loads only
  * itself, and whose other checks compare version strings that a corrupt install
  * leaves intact — reported a healthy setup and exited 0. The one command a user
  * runs to diagnose a broken install was the one that could not see it.
  *
+ * ## What it does NOT cover
+ *
+ * `doctor` itself. It is the fifteenth top-level command and is deliberately
+ * outside `COMMAND_LOADERS`: it registers itself onto the program
+ * (`doctorCommand(program)`) rather than returning a `Command`, so it does not
+ * fit the table's shape, and `bin.ts` special-cases it. Checking it from here
+ * would prove nothing anyway — this code is running, so its own module loaded.
+ *
  * Loading the whole tree is the point here, so this check knowingly pays the
  * startup cost the rest of the CLI now avoids. `doctor` is a diagnostic, not a
  * hot path.
  *
- * Failures are reported by NAME, because "which command is broken" is the
- * question a user with a half-extracted tarball actually has.
+ * Failures are reported by NAME **and by reason**. The name answers "which
+ * command is broken", which is the question a user with a half-extracted
+ * tarball has; the reason answers "which file is missing", which is the only
+ * thing the raw crash this check replaced was ever good for. Reporting the
+ * former without the latter left doctor strictly less informative than the
+ * crash.
  *
  * @returns A failure listing every command whose module could not be loaded
  */
 export async function checkCommandModules(): Promise<DoctorCheckResult> {
-  const broken: string[] = [];
+  const broken: { name: string; reason: string }[] = [];
 
   for (const [name, load] of Object.entries(COMMAND_LOADERS)) {
     try {
       await load();
-    } catch {
-      broken.push(name);
+    } catch (error) {
+      broken.push({ name, reason: describeLoadFailure(error) });
     }
   }
 
   const total = Object.keys(COMMAND_LOADERS).length;
 
-  if (broken.length > 0) {
+  const [first] = broken;
+  if (first) {
+    const names = broken.map(({ name }) => name).join(', ');
+    // Only the first reason is shown: when a tree is half-extracted every
+    // command fails, and fourteen near-identical stack messages bury the one
+    // fact that matters. The rest stay reachable by running that command.
+    const others = broken.length - 1;
+    const plural = others === 1 ? '' : 's';
+    const rest = others > 0 ? ` (${others} further failure${plural} not shown)` : '';
     return {
       name: CHECK_NAME_COMMAND_MODULES,
       outcome: 'fail',
-      message: `${broken.length} of ${total} command modules failed to load: ${broken.join(', ')}`,
+      message: `${broken.length} of ${total} command modules failed to load: ${names}. First failure — ${first.name}: ${first.reason}${rest}`,
       suggestion: 'The installation is incomplete or corrupt. Reinstall vat, or re-run `bun run build` in a source tree.',
     };
   }

@@ -30,7 +30,7 @@ import {
 } from './frontmatter-validator.js';
 import { buildLinkAuthEngineConfig } from './link-auth-config-build.js';
 import { fillLinkFacts, fragmentIndex, judgeLink, resolveLinkEntries, type FragmentIndex, type JudgeLinkOptions, type LinkEntry, type ValidateLinkOptions } from './link-validator.js';
-import { ParseCache, type ParseCacheStats, parseKeyed, vatCacheRoot } from './parse-cache.js';
+import { ParseCache, type ParseCacheStats, loadParser, parseKeyed, vatCacheRoot } from './parse-cache.js';
 // Type-only, and that is what keeps it acyclic: the projection's population
 // builder is a CALLER of the registry's world, not a dependency of it, so the
 // import is erased before any module graph exists at runtime.
@@ -100,6 +100,26 @@ function isReadFailure(error: unknown): error is Error & { code: string } {
   }
   const { code } = error as { code?: unknown };
   return typeof code === 'string' && READ_FAILURE_CODES.has(code);
+}
+
+/**
+ * Load exactly the parsers a batch of paths will route to, before any of them
+ * is admitted.
+ *
+ * The kinds are derived from the paths rather than loaded unconditionally, so a
+ * markdown-only corpus — which is nearly all of them — still never evaluates
+ * parse5, and an empty batch loads nothing. `parserKindForPath` is
+ * path-independent (it reads the extension), so calling it here on the
+ * caller's path and again inside `admitResource` on the resolved path cannot
+ * disagree.
+ *
+ * @param filePaths - The batch about to be admitted
+ * @throws Whatever the module loader throws — a broken install fails the crawl
+ *   rather than being demoted to a per-file finding
+ */
+async function loadParsersFor(filePaths: readonly string[]): Promise<void> {
+  const kinds = new Set(filePaths.map((filePath) => parserKindForPath(filePath)));
+  await Promise.all([...kinds].map((kind) => loadParser(kind)));
 }
 
 /**
@@ -806,6 +826,16 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * ```
    */
   async addResources(filePaths: string[]): Promise<ResourceMetadata[]> {
+    // Above the loop, and therefore above the catch. The parser arrives by
+    // `import()`, and Node's ESM loader reads the module through `fs` — so an
+    // unreadable or half-extracted parser throws `EACCES`/`ENOENT`, which are
+    // members of READ_FAILURE_CODES. Inside the loop that made a broken INSTALL
+    // indistinguishable from an unreadable DOCUMENT: every enumerated file
+    // became its own RESOURCE_UNREADABLE finding (measured: 8 findings,
+    // `filesScanned: 0`, on a `chmod 000` parser). Loading here means the
+    // demotion below can only ever see a failure to read a corpus file.
+    await loadParsersFor(filePaths);
+
     const results: ResourceMetadata[] = [];
     for (const fp of filePaths) {
       try {
