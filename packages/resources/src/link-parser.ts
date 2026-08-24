@@ -447,12 +447,56 @@ function collectNode(
  *
  * `line` is spread conditionally so the key is ABSENT rather than
  * undefined-valued when a node carries no position. See
- * {@link cleanupEmptyChildren} for why that distinction is load-bearing. This
- * particular guard is **defensive and currently unreachable**: remark sets
- * `position` on every node it produces, and a measured sweep of 265 tracked
- * markdown documents found zero position-less nodes, so no test can turn it
- * red. It is here to make "no own key of a `ParseResult` is ever valued
- * `undefined`" true by construction rather than true by luck.
+ * {@link cleanupEmptyChildren} for why that distinction is load-bearing.
+ *
+ * ⛔ This guard used to be documented as **"defensive and currently
+ * unreachable … a measured sweep of 265 tracked markdown documents found zero
+ * position-less nodes, so no test can turn it red"**. Every clause of that is
+ * false, and the correction matters more than the code does: a guard believed
+ * inert is a guard the next reader deletes.
+ *
+ * It is REACHABLE, it FIRES, and it is measured firing — by this very package,
+ * three modules away. `blob-population.ts`'s `referencesSkippedForMissingLine`
+ * docstring records **77 position-less reference candidates over this
+ * repository's 4,425 blobs**, with the cause and a minimal repro. Two
+ * docstrings in one package disagreed, and the one asserting zero was the one
+ * that had not looked.
+ *
+ * The producer is `mdast-util-gfm-autolink-literal`. A GFM autolink literal the
+ * tokenizer does not see is reconstructed afterwards by its `findAndReplace`
+ * post-pass, which builds the `link` node with no `position` at all.
+ *
+ * ⚠️ It takes BOTH conditions, and the pair was measured rather than assumed:
+ * the literal must be the **protocol-less `www.` form**, AND it must not stand
+ * on its own text run. A glued `https://` literal keeps its position, and so
+ * does a glued email — the tokenizer handles both inline, so `findAndReplace`
+ * never has to rebuild them:
+ *
+ * ```text
+ * 'See www.anthropic.com for more.'          → line 1   (tokenized)
+ * 'See domain:www.anthropic.com for more.'   → NO `line` key   ← the only shape
+ * 'See domain:https://anthropic.com for…'    → line 1
+ * 'Mail domain:me@anthropic.com please.'     → line 1
+ * ```
+ *
+ * The one shape that reproduces is not contrived — it is how a
+ * `WebFetch(domain:…)` permission string reads wherever a document quotes one,
+ * and this repo's own `.claude/settings.json` is such a document.
+ *
+ * Pinned in `link-parser.test.ts` under *own-property discipline*, together
+ * with the positioned control that makes the pair a test of the GUARD rather
+ * than of the parser.
+ *
+ * ⚠️ Every literal this reaches is an http/www/email target, so none of them is
+ * a closure edge and nothing routable is lost today. That is a MEASURED
+ * property of GFM autolink literals, not a guarantee this function makes: a
+ * position-less node from some future producer could name a local file, and
+ * the row would then be absent rather than reported. The counter is what makes
+ * that visible; do not stop counting on the strength of the current sample.
+ *
+ * The conditional spread itself stays for its original reason: it makes "no own
+ * key of a `ParseResult` is ever valued `undefined`" true by construction
+ * rather than true by luck.
  */
 function toResourceLink(
   node: Definition | Link | LinkReference,

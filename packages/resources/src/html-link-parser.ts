@@ -172,23 +172,51 @@ function elementText(element: P5Element): string {
  *
  * parse5 records locations only when `sourceCodeLocationInfo` is set, and it is
  * set on the one shared parse ({@link parseHtmlDocument}). The spread is still
- * conditional, for a case that is REACHABLE rather than merely type-possible:
- * an element the tree builder **reconstructs** from the active-formatting-
- * elements list — the clone made when an open `<a>` is re-opened inside a block
- * — carries no `sourceCodeLocation` at all.
+ * conditional, for a shape the tree builder really produces: an element
+ * **reconstructed** from the active-formatting-elements list — the clone made
+ * when an open `<a>` is re-opened inside a block — can carry no
+ * `sourceCodeLocation` at all.
  *
- * ⛔ That last clause used to read "carries `sourceCodeLocation === null`
+ * ⛔ "Can", not "does". This paragraph used to say a reconstructed clone
+ * "carries no `sourceCodeLocation` at all" flatly, and the sentence below used
+ * to add that a clone "is line-less and offset-less **together**". Both were
+ * generalizations from the ONE fixture that had been tried
+ * (`RECONSTRUCTED_ANCHOR_HTML` in the test file). parse5 produces **two**
+ * distinct clone shapes, and the claim is true of only the first — measured in
+ * this repo, both `<a>` elements inspected directly:
+ *
+ * | source | `<a>` elements | the clone's location |
+ * |---|---|---|
+ * | `<a href="./x.md"><div><a href="./y.md">…` | 3 | **absent** (`undefined`) |
+ * | `<p><a href="./r.md">1</p>2</a>` | 2 | **full** — span `[6, 19]`, line 1 |
+ * | `<ul><li><a href="./l.md">a<li>b</a></ul>` | 2 | **full** — span `[11, 24]` |
+ *
+ * The second and third rows are the whole reason {@link pushLink} exists: the
+ * clone's span is not merely present, it is byte-for-byte the ORIGINAL
+ * attribute's span, so one authored `href` produced two `ResourceLink`s that
+ * no span-based filter could tell apart. See `pushLink` for the de-duplication
+ * and why identity is the only workable key.
+ *
+ * ⛔ The absent case also used to read "carries `sourceCodeLocation === null`
  * outright". Measured, it is `undefined` (`typeof === 'undefined'`), never
  * `null`: a mutation written straight off the old wording was a silent no-op,
  * because `?.` short-circuits on both alike and no assertion told them apart.
  *
- * A clone is line-less and offset-less **together**, never one without the
- * other, so no branch here has to invent half a position. Such a link is still
- * emitted: it is a real reference and dropping it would lose an edge; it
- * simply cannot be attributed to a byte range, and `astCandidates` declines to
- * give it a row on exactly that ground.
+ * Where a location IS absent it is absent for line and offsets **together**,
+ * so no branch here has to invent half a position.
  *
- * Pinned in `html-link-parser.test.ts` by asserting the emitted KEY SET.
+ * ⚠️ That branch is now DEFENSIVE ONLY, and this is stated rather than left
+ * for a reader to discover: the only elements parse5 leaves un-located are
+ * clones, and a clone always shares its original's attribute tokens (measured
+ * — identity holds for the located and un-located shapes alike), so
+ * {@link pushLink} drops every one of them before `makeLink` is reached. It is
+ * kept rather than deleted because nothing enumerates every parse5 shape, but
+ * no fixture exercises it any more and no test can pin it.
+ *
+ * The emitted KEY SET is still pinned in `html-link-parser.test.ts`. It now
+ * runs over links that all carry a span, so it guards the object's SHAPE — no
+ * stray key, no missing one — rather than the presence/absence branch it was
+ * written for.
  *
  * ⛔ The reason given for that used to be "`toEqual` cannot tell an absent key
  * from an `undefined` one, so a `0`/`0` fallback would pass any assertion on
@@ -201,6 +229,13 @@ function elementText(element: P5Element): string {
  * values waves through and which `.strict()` Zod parsing would then reject far
  * downstream. It is a SET, not a list: key order is specified by nothing, so
  * asserting insertion order would fail a spread reorder that changes no fact.
+ *
+ * ⚠️ And that mutant is now UNWITNESSED, which is a coverage loss worth
+ * naming: the fallback only differs from the correct code when `span` is
+ * `undefined`, which only happens on an un-located clone, which
+ * {@link pushLink} no longer lets through. The key-set assertion survives for
+ * the shape guard above; the mutant it was aimed at cannot be reached from any
+ * HTML this parser can be handed.
  *
  * `nodeType` is stated, not left to be inferred. Every one of these links is an
  * HTML attribute, and saying so is what lets `blob_references` label the row
@@ -217,11 +252,14 @@ function elementText(element: P5Element): string {
  * span that name different lines is a row no consumer can trust ("does this
  * blob's line 1 contain this row's span?" would be false). Falling back to
  * `element.sourceCodeLocation?.startLine` when there is no span is dead in
- * every case reached today — the location-less clone
- * ({@link RECONSTRUCTED_ANCHOR_HTML} in the test file) carries no
- * `sourceCodeLocation` at all, so neither side has a line to offer — but it is
- * kept rather than assumed, because nothing enumerates every parse5 shape that
- * could produce an element location without a matching attribute location.
+ * every case reached today, and dead in both clone shapes for OPPOSITE
+ * reasons: the un-located clone (`RECONSTRUCTED_ANCHOR_HTML` in the test file)
+ * has no `sourceCodeLocation` either, so neither side has a line to offer,
+ * while the located clone has a full one whose `attrs` entry is present — so
+ * the span is found and the fallback is never consulted. Both are moot now
+ * that {@link pushLink} drops every clone, but the fallback is kept rather
+ * than assumed away, because nothing enumerates every parse5 shape that could
+ * produce an element location without a matching attribute location.
  *
  * ⛔ This used to take `line` from the caller, computed once in `visitElement`
  * off `element.sourceCodeLocation?.startLine` and shared by the `<a>` and
@@ -266,30 +304,103 @@ function makeLink(element: P5Element, attr: P5Attribute): ResourceLink {
   };
 }
 
-function visitElement(
-  element: P5Element,
-  links: ResourceLink[],
-  anchors: Set<string>,
-): void {
+/** What one document's walk accumulates, threaded through {@link visitElement}. */
+interface LinkCollector {
+  links: ResourceLink[];
+  anchors: Set<string>;
+  /**
+   * The parse5 attribute tokens that have already produced a link.
+   *
+   * Per-document, created in {@link parseHtmlContent} and thrown away with it —
+   * NOT module state. Module state would make the second parse of a page emit
+   * nothing, an order-dependent silent zero that no single-document test could
+   * see. Pinned by the "de-duplicates within ONE document only" test.
+   */
+  seenAttributes: Set<P5Attribute>;
+}
+
+/**
+ * Emit a link for `attr` unless this exact authored attribute already did.
+ *
+ * ⛔ HTML's **adoption agency algorithm** means the number of `<a>` elements
+ * parse5 hands back is not the number of `<a href>` the author wrote. When a
+ * formatting element is still on the active-formatting-elements list as a block
+ * boundary closes out from under it, the tree builder RE-OPENS it, and the
+ * reconstructed element carries a **full** `sourceCodeLocation` pointing at the
+ * SAME source attribute (measured — see {@link makeLink}'s table). One authored
+ * `href` therefore produced two `ResourceLink`s with an identical span, which
+ * is a defect and not a cosmetic duplicate:
+ *
+ * - `blob_references` got two rows for one authored reference;
+ * - `hasReferenceSpan` could not filter the clone out — the clone HAS a span;
+ * - every ordering column was equal, so `edges.refOrdinal` was ambiguous
+ *   between the two.
+ *
+ * The key is parse5 **attribute-token identity** — `===` on the `P5Attribute`
+ * object — and nothing weaker will do:
+ *
+ * - **Not the value.** Two separate `<a href="./same.md">` on one page are two
+ *   legitimate references, and any key derived from `href` collapses them.
+ * - **Not the span.** The span is what the clone copies; keying on it is just
+ *   the value problem with extra steps, and it cannot express "same attribute"
+ *   for an un-located clone at all.
+ * - **Not the emitted object.** The two clone rows are NOT byte-identical
+ *   `ResourceLink`s: `text` differs, because each element wraps a different
+ *   slice of the misnested content (`elementText` gives `'1'` for the original
+ *   and `'2'` for the clone in the `<p>` case). A de-dupe on the emitted link
+ *   would see two distinct objects and keep both.
+ *
+ * Identity is exactly the "same authored attribute" predicate because of how
+ * parse5 builds the tree: each source attribute is tokenized into ONE object,
+ * an element's `attrs` array holds those objects, and a clone is created from
+ * the original's `attrs` — reusing the array and its members by reference. So
+ * two elements share an attribute object if and only if one was cloned from the
+ * other, while two genuinely authored attributes are always distinct objects
+ * even when they spell the same thing.
+ *
+ * Applied at the PUSH point rather than special-cased to `<a>`: `<img>` is a
+ * void element and cannot be re-opened this way, but the invariant being
+ * enforced ("one authored attribute, one link") is a property of link emission,
+ * not of the anchor branch, and a rule stated where it applies does not need
+ * re-deriving when a third link-bearing element is added.
+ *
+ * The FIRST occurrence wins. In every measured shape the original precedes its
+ * clone in document order, so keeping the first keeps the element the author
+ * actually wrote — and, for the un-located shape, keeps the one that has a
+ * position over the one that does not.
+ *
+ * @param element - The element carrying the attribute
+ * @param attr - The attribute token, which doubles as the de-duplication key
+ * @param collector - This document's links and already-seen attribute tokens
+ */
+function pushLink(element: P5Element, attr: P5Attribute, collector: LinkCollector): void {
+  if (collector.seenAttributes.has(attr)) {
+    return;
+  }
+  collector.seenAttributes.add(attr);
+  collector.links.push(makeLink(element, attr));
+}
+
+function visitElement(element: P5Element, collector: LinkCollector): void {
   if (element.tagName === 'a') {
     const href = findAttr(element, 'href');
     if (href !== undefined) {
-      links.push(makeLink(element, href));
+      pushLink(element, href, collector);
     }
     const name = getAttr(element, 'name');
     if (name !== undefined && name !== '') {
-      anchors.add(name);
+      collector.anchors.add(name);
     }
   } else if (element.tagName === 'img') {
     const src = findAttr(element, 'src');
     if (src !== undefined) {
-      links.push(makeLink(element, src));
+      pushLink(element, src, collector);
     }
   }
 
   const id = getAttr(element, 'id');
   if (id !== undefined && id !== '') {
-    anchors.add(id);
+    collector.anchors.add(id);
   }
 }
 
@@ -324,19 +435,25 @@ export function parseHtmlContent(content: string, sizeBytes: number): ParseResul
   const { document, parseErrors } = parseHtmlDocument(content);
   recordParsePass(ParsePass.HtmlParse, passStartedAt);
 
-  const links: ResourceLink[] = [];
-  const anchors = new Set<string>();
+  // Scoped to THIS call, so the de-duplication in `pushLink` can never reach
+  // across two documents — see `LinkCollector.seenAttributes`.
+  const collector: LinkCollector = {
+    links: [],
+    anchors: new Set<string>(),
+    seenAttributes: new Set<P5Attribute>(),
+  };
 
   // ONE walk: the generator and the per-element visit are inseparable in the
   // cost sense, so they are bracketed together rather than pretending the
   // traversal and the extraction are separable passes.
   passStartedAt = parseTimingStart();
   for (const element of walkElements(document)) {
-    visitElement(element, links, anchors);
+    visitElement(element, collector);
   }
   recordParsePass(ParsePass.HtmlElementWalk, passStartedAt);
 
-  const anchorList = [...anchors];
+  const { links } = collector;
+  const anchorList = [...collector.anchors];
 
   // Hoisted out of the object literal below purely so they can be bracketed;
   // both are pure, so the order they run in is not observable.

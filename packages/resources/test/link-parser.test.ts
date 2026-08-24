@@ -1279,6 +1279,48 @@ description: "use [a][nope-fm]"
       expect(leaves).toEqual(['C', 'D']);
     });
 
+    // ⛔ `toResourceLink`'s conditional `line` spread used to be documented as
+    // "defensive and currently unreachable … no test can turn it red". Both
+    // halves are false, and this is the test that says so.
+    //
+    // A GFM autolink literal that remark's tokenizer does not see is
+    // reconstructed afterwards by `mdast-util-gfm-autolink-literal`'s
+    // `findAndReplace` post-pass, which builds the `link` node WITHOUT a
+    // `position`. The trigger is the literal not standing on its own text run:
+    // `www.example.com` after a space carries a position; the same literal
+    // glued to a preceding word does not.
+    //
+    // 🔑 The pair is the point. The negative control is what makes this a test
+    // of the GUARD rather than of the parser — without it, a fixture that never
+    // produces a positioned link would pass with the spread deleted.
+    it('omits `line` on a position-less autolink literal, and keeps it on a positioned one', () => {
+      const positionless = parseMarkdownContent('See domain:www.anthropic.com for more.\n', 39);
+      const positioned = parseMarkdownContent('See www.anthropic.com for more.\n', 32);
+
+      const [reconstructed] = positionless.links;
+      const [tokenized] = positioned.links;
+
+      // Same href from both, so the two differ ONLY in whether remark gave the
+      // node a position — the variable under test. Compared to each other and
+      // to a protocol-less suffix rather than to a spelled-out `http://…`
+      // literal: GFM forces the protocol on a bare `www.` autolink, so writing
+      // it here would trip `sonarjs/no-clear-text-protocols` over a string this
+      // repo does not choose, and the protocol is not what is being tested.
+      expect(reconstructed?.href).toBe(tokenized?.href);
+      expect(tokenized?.href.endsWith('//www.anthropic.com')).toBe(true);
+      expect(tokenized?.type).toBe('external');
+
+      // ABSENT, not undefined-valued: `toEqual` cannot tell the two apart, so
+      // the key set is what an unconditional `line: node.position.start.line`
+      // mutant fails on.
+      expect('line' in reconstructed!).toBe(false);
+      expect('startOffset' in reconstructed!).toBe(false);
+      expect('endOffset' in reconstructed!).toBe(false);
+
+      expect(tokenized?.line).toBe(1);
+      expect(tokenized?.startOffset).toBe(4);
+    });
+
     // The property the cache actually needs, stated directly: a JSON round trip
     // of the whole result must be strictly equal to the original. This fails on
     // ANY undefined-valued own key anywhere in the tree, which is why it is the

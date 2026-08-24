@@ -36,12 +36,47 @@ function parseAndSliceSpans(source: string): (string | undefined)[] {
   return sliceSpans(source, parseHtmlContent(source, source.length).links);
 }
 
+/** One emitted link, reduced to the facts a duplicate cannot hide behind. */
+interface LinkPosition {
+  href: string;
+  text: string;
+  line: number | undefined;
+  slice: string | undefined;
+  startOffset: number | undefined;
+  endOffset: number | undefined;
+}
+
+/**
+ * Every emitted link as a {@link LinkPosition}, in emission order.
+ *
+ * Asserting the WHOLE array against a literal is what makes a duplicate
+ * visible. `links.map(l => l.href)` would show `['./r.md', './r.md']` and could
+ * be waved through as "two references on the page"; the tuple form shows the
+ * two carrying the *same* offsets, which is the thing that cannot be true of
+ * two authored references. The slice rides along so a plausible-but-wrong
+ * offset pair fails here rather than passing (see {@link sliceSpans}), and
+ * `text` rides along because it is the ONE field the two clone rows differ in
+ * — the reason a de-dupe on the emitted object could never have worked.
+ */
+function parseLinkPositions(source: string): LinkPosition[] {
+  const { links } = parseHtmlContent(source, source.length);
+  const slices = sliceSpans(source, links);
+  return links.map((link, index) => ({
+    href: link.href,
+    text: link.text,
+    line: link.line,
+    slice: slices[index],
+    startOffset: link.startOffset,
+    endOffset: link.endOffset,
+  }));
+}
+
 /**
  * A page whose second `<a>` is *reconstructed* by the tree builder rather than
  * read from a start tag.
  *
  * The open `<a>` is still on the active-formatting-elements list when the inner
- * `<div>` forces a re-open, so parse5 clones it — and a clone carries no
+ * `<div>` forces a re-open, so parse5 clones it — and this clone carries no
  * `sourceCodeLocation` at all, not merely a missing `attrs` entry.
  *
  * ⛔ This said `sourceCodeLocation === null`. Measured: it is `undefined`
@@ -49,16 +84,32 @@ function parseAndSliceSpans(source: string): (string | undefined)[] {
  * written straight off the old wording (comparing against `null`) was a silent
  * no-op, so the old text made the guard look tested when nothing tested it.
  *
- * This is the one shape found (by brute-forcing malformed/misnested fixtures
- * through parse5) that reaches the location-less branch in `makeLink`;
- * `<template>` does not, because `walkElements` never descends into its
- * separate `content` fragment, and an unterminated quote does not, because the
- * element is dropped at EOF instead.
+ * ⛔ This also said it was "the one shape found (by brute-forcing
+ * malformed/misnested fixtures through parse5) that reaches the location-less
+ * branch in `makeLink`". Both halves have since been falsified:
  *
- * ⚠️ Twinned, deliberately, in `projection-blob-references.test.ts`: the row
- * builder needs the same real parser output to prove it drops a location-less
- * link. It is restated there rather than imported, because importing one test
- * file from another re-registers its whole suite inside the importer.
+ * 1. There is a SECOND clone shape — `<p><a href="./r.md">1</p>2</a>` and the
+ *    `<li>` twin in the A5 describe — and its clone carries a **full**
+ *    `sourceCodeLocation` over the same source attribute. "A clone has no
+ *    location" was a claim about this fixture generalized to a producer.
+ * 2. This shape no longer reaches the location-less branch at all, because the
+ *    clone here shares its original's parse5 attribute TOKEN by reference
+ *    (measured: `attrs` array identity AND `href` token identity both `true`,
+ *    exactly as in the located-clone shapes), so `pushLink` de-duplicates it
+ *    away before `makeLink` is ever called for it. The location-less branch in
+ *    `makeLink` is therefore defensive-only now — see its docstring.
+ *
+ * The remaining negatives still hold: `<template>` does not reach it, because
+ * `walkElements` never descends into its separate `content` fragment, and an
+ * unterminated quote does not, because the element is dropped at EOF instead.
+ *
+ * ⚠️ Twinned, deliberately, in `projection-blob-references.test.ts`, which
+ * still asserts THREE parsed links here (`[1, undefined, 1]` lines and
+ * `[3, undefined, 25]` offsets) to prove the row builder drops a location-less
+ * link. That twin is now stale and is that file's owner to update: the parser
+ * emits two links for this page, and neither lacks a position. Its other two
+ * tests are unaffected — `halfPositionedLink` subtracts a half-position from
+ * the FIRST link, which still carries one.
  */
 const RECONSTRUCTED_ANCHOR_HTML =
   '<a href="./x.md"><div><a href="./y.md"><div>d</div></a></div>';
@@ -270,22 +321,26 @@ describe('link source spans', () => {
     expect(parseAndSliceSpans(source)).toEqual(['xlink:href="./icon.md"']);
   });
 
-  it('states nodeType on every link, span or no span', () => {
+  it('states nodeType on every link', () => {
     // `htmlAttribute` is what keeps these rows out of the markdown forms that
     // `closure-extent` and `claude-context-discovery` follow. It is a fact
-    // about the producer, so it must not be conditional on parse5 having
-    // recorded a location — the reconstructed clone carries no span and is
-    // still an HTML attribute link.
+    // about the producer, not about whether parse5 managed to record a
+    // position, so a mutant that made it conditional on the span turns this
+    // red.
+    //
+    // ⛔ The title was 'states nodeType on every link, span or no span' and
+    // this asserted THREE entries, the middle one being the location-less
+    // clone. `pushLink` now de-duplicates that clone away — it shares the
+    // first anchor's parse5 attribute token — so this page yields two links
+    // and both carry spans. The "span or no span" half of the claim is no
+    // longer exercisable through this parser at all; see
+    // {@link RECONSTRUCTED_ANCHOR_HTML}.
     const { links } = parseHtmlContent(
       RECONSTRUCTED_ANCHOR_HTML,
       RECONSTRUCTED_ANCHOR_HTML.length,
     );
 
-    expect(links.map((link) => link.nodeType)).toEqual([
-      'htmlAttribute',
-      'htmlAttribute',
-      'htmlAttribute',
-    ]);
+    expect(links.map((link) => link.nodeType)).toEqual(['htmlAttribute', 'htmlAttribute']);
   });
 
   it('spans the whole attribute for single-quoted and unquoted values', () => {
@@ -308,19 +363,39 @@ describe('link source spans', () => {
     expect(sliceSpans(source, links)).toEqual(['href="./first.md"']);
   });
 
-  it('omits line and offsets entirely when parse5 recorded no location', () => {
+  it('drops the location-less clone, leaving one link per authored href', () => {
     const { links } = parseHtmlContent(
       RECONSTRUCTED_ANCHOR_HTML,
       RECONSTRUCTED_ANCHOR_HTML.length,
     );
 
-    expect(links.map((link) => link.href)).toEqual(['./x.md', './x.md', './y.md']);
+    // ⛔ This test was 'omits line and offsets entirely when parse5 recorded no
+    // location' and expected `['./x.md', './x.md', './y.md']` — the middle
+    // entry being the tree builder's clone of the first anchor, emitted with
+    // neither `line` nor offsets. It was justified as "the location-less link
+    // is still a LINK — dropping it would lose a real reference from the
+    // graph". That justification was FALSE: the clone is the same authored
+    // `href="./x.md"` attribute as the first link (measured — the two elements
+    // share one parse5 attribute-token object by reference), so dropping it
+    // loses nothing; `./x.md` is still in the graph, once. The page authors two
+    // references and now yields two links.
+    //
+    // ⚠️ COVERAGE LOST, recorded rather than hidden: the location-less branch
+    // in `makeLink` had exactly one real-parser witness, this clone, and
+    // de-duplicating clones is precisely what removes it — an element with no
+    // `sourceCodeLocation` is only ever a clone, and a clone always shares its
+    // original's attribute tokens. The branch is kept as defensive code (see
+    // its docstring) but is no longer reachable end to end, so the
+    // `undefined`-VALUED fallback mutant (`{ startOffset: span?.startOffset, …
+    // }`) that the key-set assertion below was written to catch now has no
+    // fixture that can expose it through this parser.
+    expect(links.map((link) => link.href)).toEqual(['./x.md', './y.md']);
 
-    // Asserting WHICH KEYS EXIST, not their values, is what makes this test
-    // able to fail against the one mutant no value assertion can see: an
-    // `undefined`-VALUED fallback (`{ startOffset: span?.startOffset, … }`),
-    // which Vitest's `toEqual` treats as identical to the absent key while
-    // `.strict()` Zod parsing downstream would reject it.
+    // Asserting WHICH KEYS EXIST, not their values, still guards the shape:
+    // Vitest's `toEqual` cannot tell an absent key from an `undefined`-valued
+    // one (measured: `toEqual({a: 1}, {a: 1, b: undefined})` passes,
+    // `toStrictEqual` fails), so a value-only assertion would wave through a
+    // link carrying `startOffset: undefined`.
     //
     // ⛔ The reason recorded here used to be "a `{ startOffset: 0, endOffset: 0
     // }` fallback would satisfy any `toEqual` on the link object". Measured
@@ -331,21 +406,16 @@ describe('link source spans', () => {
     // reordering the two conditional spreads in `makeLink` yields an object
     // with the same keys, the same values and the same JSON — a mutant that
     // changes no fact must not turn this red, or the next refactor does.
-    // `nodeType` is UNCONDITIONAL — it appears on all three, including the
-    // location-less clone. That is the point: it is a fact about the producer,
-    // not about whether parse5 managed to record a position, so a mutant that
-    // made it conditional on the span turns this red.
     expect(links.map((link) => Object.keys(link).sort((a, b) => a.localeCompare(b)))).toEqual([
       ['endOffset', 'href', 'line', 'nodeType', 'startOffset', 'text', 'type'],
-      ['href', 'nodeType', 'text', 'type'],
       ['endOffset', 'href', 'line', 'nodeType', 'startOffset', 'text', 'type'],
     ]);
 
-    // The location-less link is still a LINK — dropping it would lose a real
-    // reference from the graph; it just cannot be attributed to a byte range.
+    // Sliced, so the surviving pair cannot be a plausible-but-wrong offset
+    // pair: keeping the FIRST occurrence is what makes `./x.md` land on the
+    // authored attribute at offset 3 rather than on nothing.
     expect(sliceSpans(RECONSTRUCTED_ANCHOR_HTML, links)).toEqual([
       'href="./x.md"',
-      undefined,
       'href="./y.md"',
     ]);
   });
@@ -516,5 +586,87 @@ describe('A4 — protocol-relative and query-string/fragment hrefs', () => {
     const rows = blobReferencesFor(`html.${'f'.repeat(64)}`, parsed);
 
     expect(rows.map((row) => row.hasExtension)).toEqual([true]);
+  });
+});
+
+/**
+ * A5 — one authored `href`, one `ResourceLink`, however many elements the tree
+ * builder ends up with.
+ *
+ * HTML's **adoption agency algorithm** re-opens a formatting element that is
+ * still on the active-formatting-elements list when a block boundary closes
+ * out from under it. parse5 therefore produces MORE `<a>` elements than the
+ * source authored, and — in the shape below — gives the extra one a **full**
+ * `sourceCodeLocation` pointing back at the same source attribute. One
+ * authored `href` then became two `ResourceLink`s carrying a byte-identical
+ * span, which is not a cosmetic duplicate:
+ *
+ * - `blob_references` gets two rows for one authored reference;
+ * - `hasReferenceSpan` cannot filter the clone out — the clone HAS a span;
+ * - every ordering column is equal, so `edges.refOrdinal` is ambiguous between
+ *   them.
+ *
+ * The fix de-duplicates on parse5 **attribute-token identity** (`===` on the
+ * `P5Attribute` object), which is exactly the "same authored attribute"
+ * predicate: parse5 builds one attribute object per source attribute, and a
+ * clone reuses the original array and objects by reference. No value-based key
+ * could work — see the negative control, where two separately authored
+ * `<a href="./same.md">` are two legitimate references.
+ */
+describe('A5 — an adoption-agency clone does not double-emit its authored href', () => {
+  it('emits ONE link when a still-open <a> is re-opened across a </p>', () => {
+    // `</p>` closes the paragraph while `<a>` is still open, so the trailing
+    // `2</a>` forces parse5 to re-open the anchor. Both elements report the
+    // span of the ONE `href` at offset 6.
+    expect(parseLinkPositions('<p><a href="./r.md">1</p>2</a>')).toEqual([
+      { href: './r.md', text: '1', line: 1, slice: 'href="./r.md"', startOffset: 6, endOffset: 19 },
+    ]);
+  });
+
+  it('emits ONE link when an <a> is re-opened across an implied </li>', () => {
+    // A second `<li>` implicitly closes the first; same mechanism, different
+    // block element, so this fails independently of any `<p>`-specific fix.
+    expect(parseLinkPositions('<ul><li><a href="./l.md">a<li>b</a></ul>')).toEqual([
+      { href: './l.md', text: 'a', line: 1, slice: 'href="./l.md"', startOffset: 11, endOffset: 24 },
+    ]);
+  });
+
+  it('keeps BOTH links when one page authors the same href twice', () => {
+    // ⭐ THE MUTATION GUARD. Every cheaper de-dupe key — the `href` string, the
+    // `(href, span)` pair, a JSON of the emitted object — passes the two tests
+    // above and turns this one red, because two separately authored anchors are
+    // two real references that happen to point at the same target. Only
+    // attribute-token identity separates "the parser cloned an element" from
+    // "the author wrote it twice": parse5 mints a fresh attribute object per
+    // source attribute, so the clone is the only case where two elements share
+    // one object.
+    const source = '<a href="./same.md">1</a><a href="./same.md">2</a>';
+
+    expect(parseLinkPositions(source)).toEqual([
+      { href: './same.md', text: '1', line: 1, slice: 'href="./same.md"', startOffset: 3, endOffset: 19 },
+      { href: './same.md', text: '2', line: 1, slice: 'href="./same.md"', startOffset: 28, endOffset: 44 },
+    ]);
+  });
+
+  it('leaves a well-nested <a> spanning a block element alone — no clone to drop', () => {
+    // The control for the two misnesting fixtures: the `<a>` here also wraps a
+    // block-level `<div>`, but it is properly closed, so no adoption agency
+    // runs and parse5 yields ONE element. Without this, a "fix" that dropped
+    // every `<a>` after the first would still pass the two tests above.
+    const source = '<div><a href="./d.md">x<div>y</div>z</a></div>';
+
+    expect(parseLinkPositions(source)).toEqual([
+      { href: './d.md', text: 'xyz', line: 1, slice: 'href="./d.md"', startOffset: 8, endOffset: 21 },
+    ]);
+  });
+
+  it('de-duplicates within ONE document only, never across two parses', () => {
+    // The seen-set is created per `parseHtmlContent` call. If it were module
+    // state, the second parse of an identical page would emit nothing — a
+    // corpus-order-dependent silent zero that no single-document test can see.
+    const source = '<p><a href="./r.md">1</p>2</a>';
+
+    expect(parseLinkPositions(source)).toEqual(parseLinkPositions(source));
+    expect(parseLinkPositions(source)).toHaveLength(1);
   });
 });

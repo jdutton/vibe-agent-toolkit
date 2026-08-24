@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { parseHtmlContent } from '../src/html-link-parser.js';
-import type { ParseResult } from '../src/link-parser.js';
+import { parseMarkdownContent, type ParseResult } from '../src/link-parser.js';
 import {
   AST_SYNTACTIC_FORMS,
   blobReferencesFor,
@@ -398,9 +398,19 @@ describe('blobReferencesFor over real HTML parser output', () => {
  * The same page as `html-link-parser.test.ts`'s `RECONSTRUCTED_ANCHOR_HTML`:
  * parse5 reconstructs the middle `<a>` from the active-formatting-elements
  * list, and a reconstructed element carries **no** `sourceCodeLocation`
- * (`undefined`, not `null`), so `makeLink` emits it with neither a line nor
- * offsets. That twin owns the full explanation of why this exact shape — and
- * no other malformed fixture tried — reaches the location-less branch.
+ * (`undefined`, not `null`).
+ *
+ * ⛔ This fixture no longer reaches `blobReferencesFor`'s location-less branch,
+ * and the reason is a FIX rather than a regression. `html-link-parser.ts` now
+ * de-duplicates on parse5 attribute-token identity, and the reconstructed clone
+ * shares the original's token object — so the clone is dropped one layer
+ * earlier, by the producer, and only two links arrive here. The page still has
+ * exactly the two authored `href`s it always had; what disappeared is a third
+ * link that named the SAME authored attribute as the first.
+ *
+ * ⇒ The HTML producer can no longer emit a position-less link at all. The
+ * MARKDOWN producer still can — see {@link POSITIONLESS_MARKDOWN} — so the
+ * end-to-end coverage this block exists for moved there rather than being lost.
  *
  * Restated rather than imported: importing one test file from another
  * re-registers the whole imported suite inside the importer.
@@ -451,26 +461,71 @@ function halfPositionedLink(drop: 'line' | 'offsets'): ResourceLink {
 }
 
 /**
+ * A GFM autolink literal remark's tokenizer does not see.
+ *
+ * `mdast-util-gfm-autolink-literal` reconstructs it in a `findAndReplace`
+ * post-pass that builds the `link` node with **no `position`** — so
+ * `toResourceLink` emits it with neither a line nor offsets. The discriminator
+ * is whether the literal stands on its own text run: the bare form on line 3
+ * carries a position, the glued form on line 1 does not.
+ *
+ * ⭐ This is the ONE producer left that can hand `blobReferencesFor` a
+ * position-less link. `link-parser.ts`'s own docstring carries the measurement
+ * and the minimal repro; this fixture is what makes the guard reachable from a
+ * real parse rather than only from a hand-built shape.
+ */
+const POSITIONLESS_MARKDOWN =
+  'See domain:www.anthropic.com for more.\n\nAnd [the handbook](./handbook.md) too.\n';
+
+const POSITIONLESS_KEY = `markdown.${'f'.repeat(64)}`;
+
+/**
  * The location-less branch, end to end through both real units.
  *
  * ⭐ Every OTHER fixture in this file hands `blobReferencesFor` a hand-built
  * link that carries a full position, so nothing here could see a link that
  * does not — which is the same structural blindness that shipped the original
- * under-report. These tests are the antidote: the input is what parse5 really
- * returns for a page that reconstructs an element.
+ * under-report. These tests are the antidote: the input is what a real parser
+ * returns for a document it cannot fully locate.
  */
-describe('blobReferencesFor over a location-less real HTML link', () => {
-  it('drops the link parse5 located nowhere and keeps the two it did', () => {
+describe('blobReferencesFor over a location-less real markdown link', () => {
+  it('drops the autolink remark located nowhere and keeps the one it did', () => {
+    const parsed = parseMarkdownContent(POSITIONLESS_MARKDOWN, POSITIONLESS_MARKDOWN.length);
+
+    // Guard the guard: if remark ever starts locating the reconstructed
+    // autolink, the fixture has lost its power and the assertion below goes
+    // vacuous. Asserted as a KEY SET, because `toEqual` cannot tell an absent
+    // key from an `undefined`-valued one.
+    expect(parsed.links.map((l) => 'line' in l)).toEqual([false, true]);
+    // Suffix, not the whole href: GFM forces `http://` onto a bare `www.`
+    // autolink, and spelling that out here would trip
+    // `sonarjs/no-clear-text-protocols` over a string this repo does not choose.
+    expect(parsed.links[0]?.href.endsWith('//www.anthropic.com')).toBe(true);
+    expect(parsed.links[1]?.href).toBe('./handbook.md');
+
+    // Two links in, one row out — and the survivor is sliced back out of the
+    // source, so a plausible-but-wrong offset pair cannot pass.
+    const rows = blobReferencesFor(POSITIONLESS_KEY, parsed);
+
+    expect(rows.map((row) => row.rawRef)).toEqual(['./handbook.md']);
+    expect(rows.map((row) => POSITIONLESS_MARKDOWN.slice(row.startOffset, row.endOffset)))
+      .toEqual(['[the handbook](./handbook.md)']);
+  });
+});
+
+describe('blobReferencesFor over the reconstructed-anchor HTML page', () => {
+  it('sees two links, because the parser de-duplicated the clone upstream', () => {
     const parsed = reconstructedParse();
 
-    // Guard the guard: if parse5 ever starts locating the clone, the fixture
-    // has lost its power and every assertion below goes vacuous.
-    expect(parsed.links.map((l) => l.line)).toEqual([1, undefined, 1]);
-    expect(parsed.links.map((l) => l.startOffset)).toEqual([3, undefined, 25]);
+    // ⛔ This assertion is the record of a BEHAVIOUR CHANGE, not a weakening.
+    // It used to read `[1, undefined, 1]` — three links, the middle one
+    // position-less. `html-link-parser.ts` now drops the clone on attribute-
+    // token identity, so the position-less link never leaves the producer.
+    expect(parsed.links.map((l) => l.line)).toEqual([1, 1]);
+    expect(parsed.links.map((l) => l.startOffset)).toEqual([3, 25]);
 
-    // Three links in, two rows out — and the survivors are the two that carry
-    // positions, sliced back out of the source so a plausible-but-wrong offset
-    // pair cannot pass.
+    // Two links in, two rows out — no reference was lost by the de-dupe: the
+    // dropped clone named the SAME authored attribute as the first row.
     const rows = blobReferencesFor(RECONSTRUCTED_KEY, parsed);
 
     expect(rows.map((row) => row.rawRef)).toEqual(['./x.md', './y.md']);

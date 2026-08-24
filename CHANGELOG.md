@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- **`vat rag index` now exits 1 when a resource fails to index, and reports `status: partial`.** It
+  used to hardcode `status: success` and `process.exit(0)` whatever happened, so a run that lost
+  documents was indistinguishable from a clean one and no CI job could catch it — the `errors` list
+  was already in the output and nothing acted on it. **A pipeline that runs `vat rag index` can now
+  fail where it previously passed, and that failure is real: the named resources are absent from the
+  index and unsearchable.** Exit 2 remains the system-error code.
+
 - **`vat skill test run --baseline`'s control arm is now genuinely denied the skill** — it used to
   reach the skill through the prompt, the environment and its own working directory. The delta now
   measures the skill's *instructions*, not its capability. **Re-run any `--baseline` numbers taken
@@ -136,9 +143,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`vat claude budget [paths...]` — checks the always-loaded context a working location pays.**
   Reports `ALWAYS_LOADED_CONTEXT_BUDGET`, at `info`, for any instruction chain over a token budget.
-  The measured chain is the repo-root `CLAUDE.md`/`AGENTS.md`, every one on the directory path down
-  to the location, and **one level** of `@` imports. Rules files are excluded — they are `selected`,
-  not `always`. Naming paths narrows which chains are reported; no paths checks the whole tree.
+  The measured chain is the repo-root `CLAUDE.md`, every one on the directory path down to the
+  location, and **one level** of `@` imports. An `AGENTS.md` is measured only where a `CLAUDE.md`
+  imports it — Claude Code reads `CLAUDE.md`, not `AGENTS.md`, so an unimported one costs nothing
+  and is charged nothing. Path-scoped rules files are excluded, because they load when the agent
+  touches a matching file rather than at launch; an **unscoped rule in the root `.claude/rules/`**
+  is charged, because it does load at launch. Naming paths narrows which chains are reported; no
+  paths checks the whole tree. The command publishes the bounds of its own answer alongside it, the
+  way `vat claude context` does.
 
   **It is its own command, not part of `vat resources validate`.** Neither validate nor `vat
   validate` reports the budget or takes a flag for it in either direction. Its query sibling
@@ -191,12 +203,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **(library) `resource_tags` is now populated.** `AgenticConventionContributor`, `classifyPath()`
   and `pluginRootsFrom()` are exported from `@vibe-agent-toolkit/resources`; each resource is tagged
   with the harness convention its path carries (`claude-md`, `skill-md`, `subagent`, …) plus a
-  `loading` row valued `always` or `selected`. No CLI command reads these rows yet.
+  `loading` row valued `always` or `selected`. `vat claude budget` reads them to decide which files
+  are always-loaded, so the tag vocabulary and the budget share one definition rather than two.
 
 - **(library) HTML files now contribute `blob_references` rows.** `<a href>` and `<img src>` are
   projected with a source span, under a `html-link` syntactic form of their own. `html-link` is not
   in any closure's `follow` default, so HTML references are reported but never traversed — projected
   membership still matches what `vat build` bundles.
+
+  Each authored attribute yields exactly ONE row. HTML's adoption-agency algorithm makes the tree
+  builder re-open a still-open `<a>`, and the reconstructed clone points at the same source
+  attribute — `<p><a href="./r.md">1</p>2</a>` used to produce two rows with an identical span, which
+  no span filter could tell apart and which left `edges.refOrdinal` ambiguous. The parser now
+  de-duplicates on the parse5 attribute token's own identity, so two separately authored copies of
+  the same href are still two rows.
 
 - **(library) `removeScratchDir()` on `@vibe-agent-toolkit/utils`** — best-effort temp-directory
   teardown that warns and returns instead of failing. `setupAsyncTempDirSuite` and
@@ -310,9 +330,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **`vat rag index` embedded only the first 256 tokens of each chunk, silently discarding ~43% of
-  every corpus.** Chunks are now sized to the embedding model's real limit, and dropped tokens are
-  reported instead of ignored. **Re-index existing databases** — stored vectors are incomplete.
+- **`vat rag index` embedded only the first part of each chunk, silently discarding the rest.**
+  The chunk budget was a hardcoded pair (512-token target, 8191-token "model limit") describing
+  OpenAI ada-002 and applied to every provider — including the default local
+  `Xenova/all-MiniLM-L6-v2`, which reads **256**. Everything past the model's real limit was cut at
+  inference time with nothing said. The budget is now derived from
+  `embeddingProvider.maxInputTokens`, so a provider that publishes its limit gets chunks that fit
+  it.
+
+  **Re-index existing databases, and CLEAR them first: `vat rag clear && vat rag index`.** Running
+  `vat rag index` alone is not enough — change detection is a content hash of the source document,
+  so every unchanged file is skipped and its stale, truncated vectors survive. There is no
+  `--force`.
+
+- **The chunker rejected a whole document rather than splitting its longest line.** Once the limit
+  became the provider's real 256, a single line over it threw, `chunkResource` propagated, and the
+  indexer's per-resource catch turned that into **zero chunks for the entire file** — so the fix
+  above, on its own, lost documents outright where it had previously lost only their tails. Wide
+  markdown table rows and unwrapped prose bullets were enough to trigger it. The chunker now never
+  throws: it descends paragraphs → lines → sentences → words → a character window, and every
+  emitted chunk fits the budget with no content dropped.
+
+- **`splitBySentences` discarded sentence-terminating punctuation.** Its regex matched the text
+  *between* `.`/`!`/`?` and threw the delimiters away. Harmless while nothing called it; it is now
+  a rung of the chunking ladder, so it splits on a zero-width boundary and keeps them.
+  `splitByLines` and `splitByWords` join it on the public API.
+
+- **A protocol-relative URL was classified as a local file.** `classifyLink('//cdn.example.com/x.js')`
+  returned `local_file`, so `vat resources validate` reported a broken link for a reference that
+  resolves over the network. It now returns `external`, in both the markdown and the HTML parser —
+  they share one classifier, so the two lanes can no longer disagree about the same href.
 
 - **`vat skill test run --dry-run` destroyed the previous run's artifacts.** The free "what would
   this cost?" invocation — and any failure before the run proper, such as a bad `--env` token —
