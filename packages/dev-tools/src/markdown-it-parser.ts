@@ -40,6 +40,13 @@
  * without wrapping would have been the adapter's failure, reported as the
  * rival's.
  *
+ * ⚠️ Both wrappers replace their rule with {@link MarkdownIt.block}`.ruler.at`,
+ * which resets a rule's `alt` chain to empty when called without options — that
+ * would change which blocks may terminate a paragraph. It is harmless only
+ * because `reference` and `link` are the two rules in `markdown-it`'s own tables
+ * that declare no `alt`. Wrapping any other rule this way needs the original's
+ * `alt` passed back in.
+ *
  * ## What remains genuinely out of reach, and why
  *
  * Every remaining gap traces to one fact: **`markdown-it` gives a position to
@@ -54,13 +61,17 @@
  *   a conformance finding into a silently wrong mask, and a mask at the wrong
  *   offset suppresses real findings.
  * - **No `line` or offsets on a link.** Same cause, same refusal.
- * - **Block spans are line-aligned**, which is exact for a construct that
- *   begins a line and is why only block tokens are converted here. See
- *   {@link blockSpanFromMap} for the one place it is not free.
  * - **A duplicated `[label]: url` reports the FIRST definition's href.**
  *   `env.references` is first-write-wins with no record of the later ones, and
  *   parsing a destination out of the source would mean reimplementing
  *   `markdown-it`'s destination parser. The span and the label are still exact.
+ *
+ * A block token's `map`, by contrast, is not out of reach — it is merely a
+ * *line* range where a character extent was asked for, and both of its ends need
+ * work before it is one. {@link blockSpanFromMap} is that work, and the shape of
+ * it generalises: a line range flatters an implementation on any document whose
+ * constructs all begin at column zero and end on an LF, which is most probe
+ * documents and no real corpus.
  */
 
 import type {
@@ -81,12 +92,23 @@ import type StateInline from 'markdown-it/lib/rules_inline/state_inline.mjs';
 import type Token from 'markdown-it/lib/token.mjs';
 import frontMatter from 'markdown-it-front-matter';
 
-/** Block token types that become a span, and the kind each becomes. */
-const BLOCK_SPAN_KINDS: Readonly<Record<string, SourceSpan['kind'] | undefined>> = {
-  fence: 'code-block',
-  code_block: 'code-block',
-  html_block: 'raw-html',
-  front_matter: 'frontmatter',
+/**
+ * What one block token contributes: the span kind, and the characters its
+ * construct may begin with.
+ *
+ * `openers` is how a line range becomes a construct extent inside a container.
+ * `map` addresses whole lines, but a fence in a list item or a blockquote does
+ * not begin its line — remark anchors such a node at its own marker and lets the
+ * container prefixes fall inside the extent, so scanning the start line for the
+ * first opener reproduces it exactly. An indented code block is the one kind
+ * with no marker to anchor on: its opener *is* the indentation, so it takes the
+ * line start and gets no `openers`.
+ */
+const BLOCK_SPANS: Readonly<Record<string, { kind: SourceSpan['kind']; openers?: string } | undefined>> = {
+  fence: { kind: 'code-block', openers: '`~' },
+  code_block: { kind: 'code-block' },
+  html_block: { kind: 'raw-html', openers: '<' },
+  front_matter: { kind: 'frontmatter', openers: '-' },
 };
 
 /** `id="…"` / `name="…"` attribute, single- or double-quoted. */
@@ -158,9 +180,10 @@ function capturePositions(md: MarkdownIt): void {
 
   md.inline.ruler.at('link', (state: StateInline, silent: boolean) => {
     const start = state.pos;
+    const appendFrom = state.tokens.length;
     const parsed = linkRule(state, silent);
     if (parsed && !silent) {
-      tagLinkOrigin(state.tokens, { inline: state.src.slice(start, state.pos).endsWith(')') });
+      tagLinkOrigin(state.tokens, appendFrom, { inline: state.src.slice(start, state.pos).endsWith(')') });
     }
     return parsed;
   });
@@ -169,16 +192,24 @@ function capturePositions(md: MarkdownIt): void {
 /**
  * Tag the `link_open` the inline `link` rule just pushed.
  *
- * The rule pushes `link_open`, tokenizes the label into the same array, then
- * pushes `link_close` — so the token to tag is the last `link_open` in the
- * array. Markdown forbids a link inside a link's text, so no nested
- * `link_open` can be in between.
+ * The rule pushes `link_open` **first**, then tokenizes the label into the same
+ * array, then pushes `link_close` — so the token to tag is the FIRST
+ * `link_open` at or after where the array stood when the rule was entered.
+ *
+ * 🪤 Neither of the two shorter spellings works. Taking the last `link_open` in
+ * the array tags a nested one instead: `parseLinkLabel`'s `disableNested` only
+ * rejects nesting a `[` opens, so an **autolink** inside a link's text parses
+ * and pushes its own `link_open` — and then a reference link reads as inline
+ * while the autolink inside it reads as a reference. And taking
+ * `tokens[appendFrom]` directly misses, because `state.push` flushes
+ * `state.pending` first and the flushed text token takes that slot.
  *
  * @param tokens - The inline token array the rule appended to
+ * @param appendFrom - Length of that array before the rule ran
  * @param origin - What the wrapper observed about the construct
  */
-function tagLinkOrigin(tokens: readonly Token[], origin: LinkOrigin): void {
-  for (let index = tokens.length - 1; index >= 0; index--) {
+function tagLinkOrigin(tokens: readonly Token[], appendFrom: number, origin: LinkOrigin): void {
+  for (let index = appendFrom; index < tokens.length; index++) {
     const token = tokens[index];
     if (token?.type === 'link_open') {
       token.meta = origin;
@@ -248,29 +279,103 @@ interface BlockExtent {
  * Convert a `markdown-it` `[startLine, endLine)` line range to a character
  * extent.
  *
- * ⚠️ The terminating newline is **not** part of the construct. A line range's
- * exclusive end is the *start of the following line*, so taking it verbatim
- * swallows the newline that ended the last line — and that one code unit is
- * enough to make `contentMeasures.codeBlockCodeUnits` disagree with remark for
- * every fenced block in a document. Trimming it is exact rather than a
- * correction: the character being dropped is the line terminator the range's
- * own end marker implies.
+ * ⚠️ **Neither end of a line range is an end of the construct**, and the two
+ * failures look nothing alike:
+ *
+ * - The exclusive end is the *start of the following line*, so taking it
+ *   verbatim swallows the terminator that ended the last line. One code unit is
+ *   enough to make `contentMeasures.codeBlockCodeUnits` disagree with remark for
+ *   every fenced block in a document — and on CRLF source it is two, which is
+ *   why both are dropped rather than just `\n`. Trimming is exact rather than a
+ *   correction: the characters dropped are the terminator the range's own end
+ *   marker implies.
+ * - The start is the line's first character, which is the construct's own first
+ *   character only outside a container. `openers` is what closes that gap: the
+ *   marker is on the start line by definition, so scanning to it reproduces
+ *   remark's anchor exactly, for a blockquote, a list item, and a fence indented
+ *   up to three spaces at top level alike.
  *
  * @param map - The token's line range
  * @param lineStarts - Line-start offsets for the same document
  * @param content - The same source those offsets index into
+ * @param openers - Characters the construct may begin with; the line start is
+ *   taken as-is when omitted
  * @returns The extent, or `undefined` when the range does not resolve
  */
 function blockSpanFromMap(
   map: readonly [number, number],
   lineStarts: readonly number[],
   content: string,
+  openers?: string,
 ): BlockExtent | undefined {
-  const startOffset = lineStarts[map[0]];
+  const lineStart = lineStarts[map[0]];
   const lineAfter = lineStarts[map[1]];
-  if (startOffset === undefined || lineAfter === undefined) return undefined;
-  const endOffset = content[lineAfter - 1] === '\n' ? lineAfter - 1 : lineAfter;
+  if (lineStart === undefined || lineAfter === undefined) return undefined;
+
+  let endOffset = lineAfter;
+  if (content[endOffset - 1] === '\n') endOffset--;
+  if (content[endOffset - 1] === '\r') endOffset--;
+
+  const startOffset = openers === undefined ? lineStart : findOpener(content, lineStart, openers);
+  if (startOffset === undefined) return undefined;
   return startOffset < endOffset ? { startOffset, endOffset } : undefined;
+}
+
+/**
+ * Offset of the first `openers` character on the line beginning at `lineStart`.
+ *
+ * Bounded to the one line, so a construct whose marker is not where the token
+ * says it is yields no span rather than a span reaching into the next line. A
+ * container prefix — `>` and spaces, or a list marker — holds none of the
+ * opener characters any kind here declares, so the scan cannot stop short.
+ *
+ * @param content - The document
+ * @param lineStart - Offset the construct's first line begins at
+ * @param openers - Characters the construct may begin with
+ * @returns The offset, or `undefined` when the line holds no opener
+ */
+function findOpener(content: string, lineStart: number, openers: string): number | undefined {
+  for (let offset = lineStart; offset < content.length; offset++) {
+    const character = content[offset];
+    if (character === undefined || character === '\n') return undefined;
+    if (openers.includes(character)) return offset;
+  }
+  return undefined;
+}
+
+/** Leaf inline token types whose content is part of the flattened text. */
+const FLATTENED_INLINE_TYPES = new Set(['text', 'code_inline', 'html_inline']);
+
+/**
+ * The frontmatter block's body, read from the source between its delimiters.
+ *
+ * 🪤 Read from the source rather than from `front_matter`'s own `token.meta`,
+ * which is the body as `markdown-it` holds it — and `markdown-it`'s `normalize`
+ * core rule rewrites every `\r\n` to `\n` before any rule sees the document. VAT
+ * asks for the frontmatter *source*, and a CRLF file round-tripped through the
+ * normalized copy comes back with different bytes. This is the same principle
+ * that makes {@link collectDefinitions} read a label out of the source instead
+ * of out of the `normalizeReference`d `env.references` key: where the two
+ * disagree, the parser's copy is the derived one.
+ *
+ * @param openLine - 0-based line of the opening delimiter
+ * @param afterLine - 0-based line after the closing delimiter
+ * @param lineStarts - Line-start offsets for the document
+ * @param content - The document
+ * @returns The body, delimiters and their terminators excluded
+ */
+function frontmatterBody(
+  openLine: number,
+  afterLine: number,
+  lineStarts: readonly number[],
+  content: string,
+): string | undefined {
+  const bodyStart = lineStarts[openLine + 1];
+  let bodyEnd = lineStarts[afterLine - 1];
+  if (bodyStart === undefined || bodyEnd === undefined || bodyEnd < bodyStart) return undefined;
+  if (content[bodyEnd - 1] === '\n') bodyEnd--;
+  if (content[bodyEnd - 1] === '\r') bodyEnd--;
+  return bodyStart <= bodyEnd ? content.slice(bodyStart, bodyEnd) : '';
 }
 
 /**
@@ -278,8 +383,16 @@ function blockSpanFromMap(
  *
  * The counterpart to `mdast-util-to-string`: `token.content` on an `inline`
  * token is the RAW markdown of the run, so a `**bold**` heading would yield its
- * asterisks and therefore a different slug. Concatenating the leaf `text` and
- * `code_inline` children is what reproduces VAT's extracted text.
+ * asterisks and therefore a different slug. Concatenating the leaf children is
+ * what reproduces VAT's extracted text.
+ *
+ * 🪤 `html_inline` belongs in that set precisely **because** this adapter sets
+ * `html: true`. Under the default preset `<text>` in `### vat rag query <text>`
+ * is an ordinary `text` token and lands here for free; enabling raw HTML —
+ * required for `anchors` — turns it into an `html_inline` token, and omitting it
+ * would silently truncate the heading. `mdast-util-to-string` returns an `html`
+ * node's value for the same reason. A heading feeds the stateful slugger, so
+ * this is an anchor and a navigation entry, not one string.
  *
  * @param children - An inline token's children, or null
  * @returns The visible text
@@ -288,7 +401,7 @@ function flattenInline(children: readonly Token[] | null): string {
   if (children === null) return '';
   let text = '';
   for (const child of children) {
-    if (child.type === 'text' || child.type === 'code_inline') text += child.content;
+    if (FLATTENED_INLINE_TYPES.has(child.type)) text += child.content;
   }
   return text;
 }
@@ -347,7 +460,7 @@ function linkText(children: readonly Token[], index: number): string {
     else if (following.type === 'link_close') {
       depth--;
       if (depth === 0) break;
-    } else if (following.type === 'text' || following.type === 'code_inline') {
+    } else if (FLATTENED_INLINE_TYPES.has(following.type)) {
       text += following.content;
     }
   }
@@ -362,6 +475,13 @@ function linkText(children: readonly Token[], index: number): string {
  * — and the source spelling is what an author wrote. VAT normalizes whatever it
  * is given (`referenceLabelKeys`), so handing it the raw spelling is both
  * faithful and sufficient.
+ *
+ * ⚠️ A definition inside a blockquote or a list item is the case this owes its
+ * `[` opener to. Without it the extent starts at the container prefix, the label
+ * pattern does not match, and the definition is dropped — which is not merely a
+ * lost span: a `link-definition` span carrying a label is the only thing
+ * `findUnresolvedReferences` collects defined labels from, so dropping one turns
+ * a resolvable reference into a reported dangling link.
  *
  * @param env - The parse env the block-rule wrapper wrote into
  * @param normalize - `markdown-it`'s own label normalization, for the href lookup
@@ -379,7 +499,7 @@ function collectDefinitions(
 ): SourceSpan[] {
   const spans: SourceSpan[] = [];
   for (const definition of env.vatDefinitions ?? []) {
-    const extent = blockSpanFromMap([definition.startLine, definition.endLine], lineStarts, content);
+    const extent = blockSpanFromMap([definition.startLine, definition.endLine], lineStarts, content, '[');
     if (extent === undefined) continue;
     const label = DEFINITION_LABEL.exec(content.slice(extent.startOffset, extent.endOffset))?.[1];
     if (label === undefined) continue;
@@ -454,13 +574,16 @@ function collectBlockToken(
   lineStarts: readonly number[],
   content: string,
 ): void {
-  if (token.type === 'front_matter') state.frontmatterSource = token.meta as string;
+  if (token.type === 'front_matter' && token.map !== null) {
+    const body = frontmatterBody(token.map[0], token.map[1], lineStarts, content);
+    if (body !== undefined) state.frontmatterSource = body;
+  }
   if (token.type === 'html_block') collectHtmlAnchors(state.anchors, token.content);
 
-  const kind = BLOCK_SPAN_KINDS[token.type];
-  if (kind === undefined || token.map === null) return;
-  const extent = blockSpanFromMap([token.map[0], token.map[1]], lineStarts, content);
-  if (extent !== undefined) state.spans.push({ kind, ...extent });
+  const span = BLOCK_SPANS[token.type];
+  if (span === undefined || token.map === null) return;
+  const extent = blockSpanFromMap([token.map[0], token.map[1]], lineStarts, content, span.openers);
+  if (extent !== undefined) state.spans.push({ kind: span.kind, ...extent });
 }
 
 /**

@@ -57,6 +57,13 @@ const CORPUS = [
       '',
       'Also @docs/note.md as a lexical candidate.',
       '',
+      // A GFM autolink literal, which is an `inline-link` span with no opening
+      // delimiter at all. It is here to hold `SPAN_OPENERS` honest: an opener
+      // list of `[` and `<` makes the REFERENCE implementation fail this suite
+      // on ordinary prose, which the reference-against-itself case below is what
+      // catches.
+      'Bare https://example.com/ in prose.',
+      '',
     ].join('\n'),
   },
   {
@@ -183,6 +190,46 @@ describe('runParseConformance — span fidelity', () => {
 
     const findings = spanFindings(straddling);
     expect(findings.some((finding) => finding.reason === 'partial-overlap')).toBe(true);
+  });
+
+  it('catches a straddle across a CONTAINED span, which is not its sorted neighbour', () => {
+    // 🪤 The reason the check tracks the furthest end seen rather than the
+    // previous span. Sorted by start, these are A, B, C — and C straddles A
+    // while its neighbour is B, which C neither straddles nor contains. Comparing
+    // neighbours alone reports nothing at all here.
+    const nested = stub('nested-straddle', (session) => ({
+      ...session,
+      spansAndKinds: () => ({
+        ...session.spansAndKinds(),
+        spans: [
+          { kind: 'code-block', startOffset: 0, endOffset: 10 },
+          { kind: 'code-span', startOffset: 2, endOffset: 4 },
+          { kind: 'code-block', startOffset: 5, endOffset: 15 },
+        ] satisfies SourceSpan[],
+      }),
+    }));
+
+    const findings = spanFindings(nested);
+    expect(findings.some((finding) => finding.reason === 'partial-overlap')).toBe(true);
+  });
+
+  it('catches an extent that runs one terminator long', () => {
+    // 🪤 The failure a line range ALWAYS has and an opener check never sees: its
+    // exclusive end is the start of the following line. This is the defect
+    // `markdown-it-parser.ts` shipped and had to be found by eye, because every
+    // span still began with the right character. `contentMeasures` moved; the
+    // span checks said nothing.
+    const swallowed = stub('swallowed-terminator', (session) => ({
+      ...session,
+      spansAndKinds: () => {
+        const facts = session.spansAndKinds();
+        const spans = facts.spans.map((span) => ({ ...span, endOffset: span.endOffset + 1 }));
+        return { ...facts, spans };
+      },
+    }));
+
+    const findings = spanFindings(swallowed);
+    expect(findings.some((finding) => finding.reason === 'trailing-terminator')).toBe(true);
   });
 });
 

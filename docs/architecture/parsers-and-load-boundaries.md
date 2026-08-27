@@ -86,10 +86,11 @@ answered per implementation, and the obvious candidate does not.
 > inline ones — `inline-link`, `reference-link`, `code-span`, `raw-html` — because inline tokens
 > carry `map: null`.
 
-⚠️ **The block/inline line is the whole finding, and it took a fairness review to see it.** A
-first-pass adapter reported *seven* divergent fields and only one span; five of those seven were the
-adapter's own configuration and are catalogued in §3. What survived is one irreducible fact and its
-two consequences:
+⚠️ **The block/inline line is the whole finding, and it took two reviews to see it.** A first-pass
+adapter reported *seven* divergent fields and only one span; a fairness review closed five, and an
+independent corpus review then closed four more that a one-document probe could not express. All
+nine were the adapter's own, and all nine are catalogued in §3. What survived is one irreducible
+fact and its three consequences:
 
 - **No inline offsets at all.** The offsets an inline rule *can* see index the inline content string
   — a paragraph's lines joined, trimmed and stripped of block indentation — which does not map back
@@ -97,9 +98,13 @@ two consequences:
   at a guessed offset suppresses real findings instead of failing loudly.
 - **`links` loses `line`, `startOffset` and `endOffset`** on every inline entry. Text, href,
   classification, `nodeType` and the by-kind bucketing all agree; only position is missing.
-- **`lexicalReferences` over-reports.** `codeContextRangesFrom` builds the lexer's exclusion set out
-  of spans, so an inline link with no span is a destination the lexer is never told to skip. 🔑 A
-  missing span does not merely lose a fact — it changes what VAT's own derivations conclude.
+- **`lexicalReferences` over-reports, and `unresolvedReferences` reports a link that is not
+  broken.** `codeContextRangesFrom` builds the lexer's exclusion set out of spans, so an inline link
+  with no span is a destination the lexer is never told to skip — and `maskFactsFrom` builds the
+  dangling-reference mask the same way, so a full reference form written inside a code span has no
+  `code-span` extent to hide behind and is reported as a broken link. Six of this repository's
+  documents produce one. 🔑 A missing span does not merely lose a fact — it changes what VAT's own
+  derivations conclude, and the last thing it changes is what a user is told.
 
 That is a conformance finding, not a disqualification — see §3 for why it enters as a test
 implementation anyway. It is recorded here because "a flat token stream satisfies all three" was an
@@ -161,7 +166,7 @@ when you only wanted spans"* saves 24–26% × 64% = **15.4–16.6% of cold wall
 ceiling** — and less on Windows. That is the identical dead end that killed driving micromark
 directly.
 
-The measured `markdown-it` ratio — 12.6× on parse, 10.1–10.3× on the whole composer (§3) — is a
+The measured `markdown-it` ratio — 13.7–13.8× on parse, 9.0–9.3× on the whole composer (§3) — is a
 **different tokenizer**, not a skipped tree.
 
 > The split does not make VAT fast. It makes VAT **swappable**, and swappable is what puts a faster
@@ -199,10 +204,11 @@ the whole promotion decision, and it is a no. `packages/rag/src` contains no ref
 mdast or `parseMarkdown` at all — it reads `ResourceMetadata` that `resources` already built, so
 chunking gets headings as a by-product of a link-integrity parse it has no use for.
 
-⚠️ The failure mode is what decides it, not the size of the gap. A missing inline span does not
-merely lose a fact — `lexicalReferences` **over-reports**, because a link with no span is a
-destination the lexer is never told to skip. For a tool whose job is link integrity, being
-differently wrong about a user's links is worse than being slow.
+⚠️ The failure mode is what decides it, not the size of the gap, and it is now measured rather than
+predicted: on this repository's own markdown a `markdown-it` run reports **broken links that are not
+broken** — a full reference form inside a code span, unmasked because there is no `code-span` span to
+mask it with, in six documents. For a tool whose job is link integrity, being differently wrong
+about a user's links is worse than being slow.
 
 🔑 And the gap is not small. Closing it means building a **content→source mapping layer**: inline
 rules see the inline content string (a block's lines joined, block-indentation stripped, outer
@@ -221,11 +227,11 @@ statements about two different parsers.
 `ParseFacts` over the corpus?" is the same code as "is this parser change faster or just
 differently wrong", and building it once serves both permanently.
 
-### 🚩 The adapter is the first suspect, and it was guilty five times out of seven
+### 🚩 The adapter is the first suspect, and it was guilty nine times out of twelve
 
 The first `markdown-it-parser.ts` reported **seven** divergent `ParseFacts` fields. Reviewing it for
-fairness rather than for correctness left **two**, and the five that closed were the adapter's, not
-the parser's:
+fairness rather than for correctness left two, and the five that closed were the adapter's, not the
+parser's:
 
 | Reported as | Actually |
 |---|---|
@@ -240,40 +246,73 @@ the result, and a rival denied its configuration is a rival condemned by its rev
 the same error and only one of them is warned about in the usual places. Every "X cannot" in a
 conformance write-up owes an answer to "did the adapter try?".
 
-⛔ The two that survived are one gap, not two: **`markdown-it` gives a position to block tokens
-only.** Inline tokens carry `map: null`, and the offsets an inline rule sees index the *inline
-content string* — a paragraph's lines joined, trimmed, and stripped of block indentation — which
-cannot be mapped back to source offsets inside a list or a blockquote. So four of the eight span
-kinds are unreachable, `links` loses `line`/`startOffset`/`endOffset` on every inline entry, and
-`lexicalReferences` over-reports because a link with no span is a destination the lexer is never
-told to skip. That last one is the shape to remember: **a missing span does not merely lose a fact,
-it changes what VAT's own derivations conclude.**
+#### 🪤 And the review that found five was itself run against one document
+
+The five above were found by reading the adapter. An independent review then ran the *fixed*
+adapter over this repository's **293 tracked markdown files** — the same suite, the same code, a
+corpus instead of a probe — and found **four more adapter faults**, none of which the probe could
+express:
+
+| Found only on a corpus | The adapter's mistake |
+|---|---|
+| `contentMeasures` off on **17 documents** | a block token's `map` is a LINE range, and a fence inside a list item does not begin its line; remark anchors such a node at its own marker, so the span must scan to the opener |
+| a definition in a blockquote **dropped entirely** | same cause, worse effect — the label pattern does not match `> [ref]`, so the definition never reaches `findUnresolvedReferences` and a resolvable reference reads as dangling |
+| `headings` truncated on **6 documents** | `html: true` — fix #1 above — turns `<kbd>` in a heading into an `html_inline` token, and the text flattener only read `text` and `code_inline`. Headings feed the stateful slugger, so this moved **slugs** |
+| every block span one code unit long on CRLF, and `frontmatterSource` LF-normalized | the terminator trim dropped `\n` and not `\r\n`, and the frontmatter body was read from `markdown-it`'s own copy — its `normalize` core rule rewrites `\r\n` before any rule runs |
+
+🔑 **The lesson is about the probe, not the parser.** Four of these are the *same* mistake — a line
+range is not a character extent, at either end — and the fixture could not show it because every
+construct in it began at column zero and ended on an LF. A one-document probe systematically
+flatters a line-oriented implementation, which is precisely the implementation under test.
+
+⛔ **Three fields survive, and they are one gap seen from three distances:** `markdown-it` gives a
+position to block tokens only. Inline tokens carry `map: null`, and the offsets an inline rule sees
+index the *inline content string* — a paragraph's lines joined, trimmed, and stripped of block
+indentation — which cannot be mapped back to source offsets inside a list or a blockquote. So four
+of the eight span kinds are unreachable; `links` loses `line`/`startOffset`/`endOffset` on every
+inline entry; `lexicalReferences` over-reports, because a link with no span is a destination the
+lexer is never told to skip; and `unresolvedReferences` **reports a link that is not broken**,
+because a full reference form inside a code span has no `code-span` extent to be masked by. Six of
+this repository's documents produce one.
+
+That last step is the shape to remember: **a missing span does not merely lose a fact, it changes
+what VAT's own derivations conclude — and the last thing it changes is what a user is told.**
 
 ### The speed number, at the stage that decides
 
-`parser-bakeoff.ts` takes two stages. Both on this repository, 188 documents / 2.73 MB, minimum of
-six passes across two processes per arm:
+`parser-bakeoff.ts` takes two stages. Both on this repository, 188 documents / 2.72 MB, minimum of
+six passes across two processes per arm, **both stages measured in the same session** — see the
+warning below for why that qualifier is load-bearing:
 
 | Stage | What it includes | remark / markdown-it |
 |---|---|---|
-| `parse` | the parser's own output — mdast tree vs token array | **12.6×** |
-| `facts` | the whole composer: capability adapter and VAT's derivations | **10.1–10.3×** |
+| `parse` | the parser's own output — mdast tree vs token array | **13.7–13.8×** |
+| `facts` | the whole composer: capability adapter and VAT's derivations | **9.0–9.3×** |
 
-Two things follow. **The capability adapter is real and it is asymmetric** — it costs remark 16% of
-its parse time and `markdown-it` 42% of its, because mdast tree walking is the expensive half of
-remark's total and a flat token walk is cheap. Quoting a parse-stage ratio therefore overstates what
-a swap buys by about a fifth. **And the fairness fixes above cost `markdown-it` 6.5%** of its own
-parse time — raw HTML, the frontmatter rule and the two wrappers together — which moved the
-parse-stage ratio from 12.7× to 12.6×, inside run-to-run noise. The rival was flattered on fidelity,
-barely at all on time.
+**The capability adapter is real and it is asymmetric.** It costs remark 8–11% of its parse time and
+`markdown-it` **64–67%** of its, because mdast tree walking is the expensive half of remark's total
+and a flat token walk is cheap — so the work of turning a parse into `ParseFacts` lands almost
+entirely on the cheaper arm. Quoting a parse-stage ratio therefore overstates what a swap buys by
+**about a third**.
+
+🔑 That gap widened as fidelity was fixed, and the causation is the point. The adapter's share of
+`markdown-it`'s time was 42% when it was getting four things wrong — the fence in a container, the
+CRLF terminator, the frontmatter source, the heading flattener. Anchoring a span at its opener and
+reading the frontmatter out of the source are per-construct scans the earlier adapter simply did not
+do. **A rival's speed advantage is measured against the fidelity it is actually delivering, and the
+cheapest way to look fast is to answer a slightly different question.**
+
+⚠️ Compare stages only within one session. The parse-stage ratio measured 12.6× in an earlier
+session and 13.7–13.8× here with **no change to the parser or its configuration** — a ~9% swing that
+is entirely the host. The stage-to-stage *difference* is the finding; neither absolute number is.
 
 ⛔ Neither number is a reason to swap. §1 is: the offsets are the contract, and this rival does not
 have them.
 
-### 🪤 What the suite does NOT catch, learned by building it
+### 🪤 What the suite did NOT catch, learned by building it and then by attacking it
 
-`parse-conformance.ts` checks span fidelity by asserting the character at `startOffset` is one the
-kind can begin with — the cheapest check that catches an implementation reporting **line ranges**
+`parse-conformance.ts` originally checked span fidelity one way: the character at `startOffset` must
+be one the kind can begin with — the cheapest check for an implementation reporting **line ranges**
 where character offsets were asked for.
 
 > ⚠️ It reported **nothing** against `markdown-it`, which does exactly that. Every span it emits is
@@ -281,14 +320,33 @@ where character offsets were asked for.
 > character and the check passes.
 
 The unit mismatch surfaced one layer down instead: a line-aligned fence span ran to the start of the
-following line, swallowing the trailing newline, so `contentMeasures.codeBlockCodeUnits` came out
-**one higher** than remark's. A suite that only checked spans would have called that clean.
+following line, so `contentMeasures.codeBlockCodeUnits` came out **one higher** than remark's. That
+was found by eye. Attacking the suite afterwards found four reasons it could not have found it:
 
-⚠️ It still reports nothing, now that the adapter emits three spans rather than one and the
-terminator is trimmed — and that is the more uncomfortable version of the finding. The span checks
-were silent both when the adapter was wrong and after it was fixed; **the whole-`ParseFacts` diff is
-what moved from seven fields to two.** The fact diff is the instrument that discriminates, and the
-span checks are a faster path to a subset of what it finds, never a substitute for it.
+1. **It never looked at `endOffset`.** Injecting a candidate that adds one to *every* `endOffset` —
+   literally the shipped defect — produced **zero** span findings. `spanDefect` now checks that a
+   span does not end on a line terminator, which no construct's last character ever is, and which
+   is also the only check that sees a `\r` left behind on CRLF source.
+2. **A span never emitted produces no finding at all.** The suite inspects what came back; the
+   dropped blockquote definition was invisible to every span check and visible only in the facts
+   diff.
+3. **`code-block` admits a leading space**, because an indented code block opens with indentation —
+   so a fenced block whose extent wrongly swallowed its list indentation passed. Kept, because the
+   alternative is wrong, and named here as the reason check (1) matters more than it looks.
+4. **The overlap check compared neighbours.** Its stated argument — a straddle is always visible
+   between two spans adjacent once sorted — is false: with `[0,10)`, `[2,4)` and `[5,15)` the third
+   straddles the first and neighbours the second. It now tracks the furthest end seen.
+
+🚨 And the suite was **failing its own reference implementation 24 times** on this repository, in
+silence: `SPAN_OPENERS` expected `inline-link` to begin with `[` or `<`, and a GFM autolink literal
+is a bare `https://…` run with no delimiter. Nobody saw it because nothing had ever run the suite
+over a corpus.
+
+🔑 The generalisation survives all of it, strengthened: **the whole-`ParseFacts` diff is the
+instrument that discriminates**, and the span checks are a faster path to a subset of what it finds,
+never a substitute for it. What changed is the second half — *a check that has never been run over a
+corpus is not a check, it is a claim*, and every one of the holes above was found by pointing an
+existing function at 293 real documents rather than at one written to be parsed.
 
 ## 4. Load boundaries: nothing heavy loads unless it is used
 

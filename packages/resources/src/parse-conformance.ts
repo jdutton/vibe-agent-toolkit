@@ -66,16 +66,18 @@ export interface MissingCapabilityFinding {
 /**
  * A span whose offsets cannot be spliced at — the `faithful-edit` failure.
  *
- * `reason` separates the two ways it goes wrong, because they have different
- * causes: `opener-mismatch` is an implementation reporting the wrong *unit*
- * (line numbers where character offsets were asked for, most often), while
+ * `reason` separates the ways it goes wrong, because they have different causes:
+ * `opener-mismatch` is an implementation reporting the wrong *unit* at the start
+ * (line numbers where character offsets were asked for, most often);
+ * `trailing-terminator` is the same mistake showing up at the **end**, where an
+ * exclusive line-range end runs to the start of the following line;
  * `partial-overlap` is one reporting extents that straddle each other, which
  * breaks the containment test every mask in this package relies on.
  */
 export interface SpanFidelityFinding {
   kind: 'span-fidelity';
   document: string;
-  reason: 'out-of-range' | 'opener-mismatch' | 'partial-overlap';
+  reason: 'out-of-range' | 'opener-mismatch' | 'trailing-terminator' | 'partial-overlap';
   span: SourceSpan;
   /** What the source actually holds at those offsets, clipped for legibility. */
   found: string;
@@ -138,7 +140,7 @@ export interface ConformanceReport {
 }
 
 /**
- * The first character a span of each kind must begin with in the source.
+ * What the first character of a span of each kind may be in the source.
  *
  * The discriminating check, and the cheapest one that catches the failure mode
  * an implementation is most likely to have while looking complete: reporting
@@ -146,18 +148,30 @@ export interface ConformanceReport {
  * happens to start at a line boundary lands on whatever the line begins with,
  * so it fails this for every kind that does not start a line.
  *
- * An indented code block is the reason `code-block` admits a space: it opens
- * with indentation rather than a fence.
+ * ⚠️ The two permissive entries are permissive because the construct genuinely
+ * has no marker, and each buys its correctness by giving up teeth:
+ *
+ * - `code-block` admits whitespace, because an **indented** code block opens
+ *   with indentation rather than a fence. That is also why a fenced block whose
+ *   extent wrongly includes its list indentation passes this check.
+ * - `inline-link` admits a letter, because a GFM **autolink literal** is a bare
+ *   `https://…` or `www.…` run with no delimiter at all. Without it the
+ *   reference implementation fails its own harness on ordinary prose — 24 spans
+ *   over this repository's markdown, every one a correct bare URL.
+ *
+ * Both are why {@link spanDefect} also checks the span's **end**, which no kind
+ * gets to be permissive about, and why a whole-`ParseFacts` diff is the
+ * instrument these checks are a fast subset of rather than a substitute for.
  */
-const SPAN_OPENERS: Readonly<Record<SpanKind, readonly string[]>> = {
-  'code-block': ['`', '~', ' ', '\t'],
-  'code-span': ['`'],
-  'raw-html': ['<'],
-  frontmatter: ['-'],
-  'inline-link': ['[', '<'],
-  image: ['!'],
-  'reference-link': ['['],
-  'link-definition': ['['],
+const SPAN_OPENERS: Readonly<Record<SpanKind, RegExp>> = {
+  'code-block': /[`~ \t]/,
+  'code-span': /`/,
+  'raw-html': /</,
+  frontmatter: /-/,
+  'inline-link': /[[<a-zA-Z]/,
+  image: /!/,
+  'reference-link': /\[/,
+  'link-definition': /\[/,
 };
 
 /** How much of a mismatching slice a finding carries. */
@@ -345,6 +359,15 @@ function collectSpanFindings(
 /**
  * How one span fails on its own, if it does.
  *
+ * Both ends are checked, because an implementation reporting line ranges gets
+ * the start right whenever the construct begins a line and gets the **end**
+ * wrong every time: a line range's exclusive end is the start of the following
+ * line, so the extent runs one terminator long. No markdown construct's last
+ * character is the terminator that ended its line, which makes
+ * `trailing-terminator` a total test rather than a heuristic — and it is the one
+ * that catches a `\r` left behind on CRLF source, where the opener still lands
+ * on the right character.
+ *
  * @returns The defect, or `undefined` when the span is well-formed
  */
 function spanDefect(span: SourceSpan, content: string): SpanFidelityFinding['reason'] | undefined {
@@ -352,7 +375,9 @@ function spanDefect(span: SourceSpan, content: string): SpanFidelityFinding['rea
     return 'out-of-range';
   }
   const opener = content[span.startOffset] ?? '';
-  return SPAN_OPENERS[span.kind].includes(opener) ? undefined : 'opener-mismatch';
+  if (!SPAN_OPENERS[span.kind].test(opener)) return 'opener-mismatch';
+  const last = content[span.endOffset - 1] ?? '';
+  return last === '\n' || last === '\r' ? 'trailing-terminator' : undefined;
 }
 
 /**
@@ -363,10 +388,11 @@ function spanDefect(span: SourceSpan, content: string): SpanFidelityFinding['rea
  * is the load-bearing one — so a straddling pair silently changes which
  * candidates get suppressed rather than producing an obvious failure.
  *
- * Compares each span against the previous one in start order, which is
- * sufficient: a straddle is always visible between two spans that are adjacent
- * once sorted, because a span straddling a non-adjacent one also straddles or
- * contains everything between.
+ * In start order, each span is compared against the **furthest end seen so far**
+ * rather than against its immediate predecessor. Comparing neighbours alone
+ * misses a straddle across a contained span: with `[0,10)`, `[2,4)` and
+ * `[5,15)`, the third straddles the first, but its neighbour once sorted is the
+ * second — which it neither straddles nor contains.
  *
  * @param spans - The candidate's spans for one document
  * @param document - The document being compared
@@ -378,18 +404,21 @@ function collectOverlapFindings(
   findings: ConformanceFinding[],
 ): void {
   const sorted = [...spans].sort((a, b) => a.startOffset - b.startOffset || b.endOffset - a.endOffset);
-  for (const [index, span] of sorted.entries()) {
-    const previous = sorted[index - 1];
-    if (previous === undefined) continue;
-    const straddles = span.startOffset < previous.endOffset && span.endOffset > previous.endOffset;
-    if (straddles) {
+  let openStart = -1;
+  let openEnd = -1;
+  for (const span of sorted) {
+    if (span.startOffset < openEnd && span.endOffset > openEnd) {
       findings.push({
         kind: 'span-fidelity',
         document: document.name,
         reason: 'partial-overlap',
         span,
-        found: clip(document.content.slice(previous.startOffset, span.endOffset)),
+        found: clip(document.content.slice(openStart, span.endOffset)),
       });
+    }
+    if (span.endOffset > openEnd) {
+      openStart = span.startOffset;
+      openEnd = span.endOffset;
     }
   }
 }
