@@ -51,7 +51,7 @@
     "@vibe-agent-toolkit/runtime-claude-agent-sdk": "workspace:*",
     "@vibe-agent-toolkit/runtime-langchain": "workspace:*",
     "@vibe-agent-toolkit/runtime-openai": "workspace:*",
-    "@vitest/coverage-v8": "^3.2.4",
+    "@vitest/coverage-v8": "^4.1.11",
     "ai": "^6.0.48",
     "openai": "^4.77.3",
     "typescript": "^5.7.3",
