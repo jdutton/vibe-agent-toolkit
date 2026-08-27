@@ -175,6 +175,7 @@
         "@types/node": "^22.0.0",
         "@types/semver": "^7.5.0",
         "@types/which": "^3.0.4",
+        "markdown-it-front-matter": "^0.2.4",
         "rimraf": "^6.0.1",
         "sharp": "^0.35.3",
         "typescript": "^5.9.3",
@@ -1812,6 +1813,8 @@
     "make-dir": ["make-dir@4.0.0", "", { "dependencies": { "semver": "^7.5.3" } }, "sha512-hXdUTZYIVOt1Ex//jAQi+wTZZpUpwBj/0QsOzqegb3rGMMeJiSEu5xLHnYfBrRV4RH2+OCSOO95Is/7x1WJ4bw=="],
 
     "markdown-it": ["markdown-it@14.3.0", "", { "dependencies": { "argparse": "^2.0.1", "entities": "^4.5.0", "linkify-it": "^5.0.2", "mdurl": "^2.0.0", "punycode.js": "^2.3.1", "uc.micro": "^2.1.0" }, "bin": { "markdown-it": "bin/markdown-it.mjs" } }, "sha512-RCEsPjR+sr0x+AuYp601tKTkgFG4YEPLCzHST3cQ/fhlJkqAkz1L2/Qbp1j9qw5SBwQHFBoW8+hoN5xssOF0Tw=="],
+
+    "markdown-it-front-matter": ["markdown-it-front-matter@0.2.4", "", {}, "sha512-25GUs0yjS2hLl8zAemVndeEzThB1p42yxuDEKbd4JlL3jiz+jsm6e56Ya8B0VREOkNxLYB4TTwaoPJ3ElMmW+w=="],
 
     "markdown-link-check": ["markdown-link-check@3.15.0", "", { "dependencies": { "async": "^3.2.6", "chalk": "^6.0.0", "commander": "^15.0.0", "link-check": "^5.6.0", "markdown-link-extractor": "^4.0.4", "needle": "^3.5.0", "progress": "^2.0.3", "proxy-agent": "^8.0.2", "xmlbuilder2": "^4.0.3" }, "bin": { "markdown-link-check": "markdown-link-check" } }, "sha512-EorpVYNu1Jpldk3OLrRrH7Hx/ofp1dCSAJeYuvb8MhKR/rIt6S0tgwbQYw66EZgRPu9lPvORfT6SkIe0dwn2Ow=="],
 

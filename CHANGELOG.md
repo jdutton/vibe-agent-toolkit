@@ -232,14 +232,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   schema moves, with nobody remembering to bump anything.
 
   `markdown-it` enters as a **test-only implementation** in `dev-tools`, built from the same
-  `createMarkdownItProcessor()` the bake-off times so the fidelity verdict and the 10.62× speed
-  verdict are about one parser. It is not a proposal to switch: a single-implementation interface is
-  a claim nobody has tested, and this is what falsifies it. 🔑 The measured result — it places
-  **one** span in a document holding seven span-bearing constructs, because only block tokens carry
-  a position — and seven `ParseFacts` fields diverge, including frontmatter parsed as a setext
-  heading. 🪤 Also recorded: the suite's span checks found *nothing*, because every span
-  `markdown-it` emits begins a line; the unit mismatch surfaced as a one-code-unit
-  `contentMeasures` drift instead. The fact diff is the instrument that discriminates.
+  `createMarkdownItProcessor()` the bake-off times so the fidelity verdict and the speed verdict are
+  about one parser. It is not a proposal to switch: a single-implementation interface is a claim
+  nobody has tested, and this is what falsifies it. 🔑 The measured result — it places spans on
+  **block constructs only**, three of the seven span-bearing constructs in the probe, and **two**
+  `ParseFacts` fields diverge (`links`, `lexicalReferences`), both of them the same missing inline
+  position. 🪤 Also recorded: the suite's span checks find *nothing*, because every span
+  `markdown-it` emits begins a line — they were silent when the adapter was wrong and stayed silent
+  after it was fixed. The fact diff is the instrument that discriminates.
+
+  🚩 **Five of the seven fields that first diverged were the ADAPTER's, not the parser's**, and the
+  review that found them is the reusable part. `html: true` was never enabled, no frontmatter plugin
+  was installed (so `---` around a line parsed as a *setext heading* and invented a section),
+  `env.references` was never read, reference links were reported as indistinguishable from inline
+  ones when wrapping the rule tells them apart, and a line range was converted to a character extent
+  with the line terminator left on. **A rival handed less work to do is a rival flattered by the
+  result; a rival denied its configuration is a rival condemned by its reviewer.** The conformance
+  test now guards each fix — revert any one and exactly one case goes red, naming what was reverted.
+
+- **`parser-bakeoff.ts` takes a `--stage parse|facts` flag** (default `parse`, so an existing
+  invocation is unchanged), and `@vibe-agent-toolkit/resources` gains a `./link-parser` subpath so
+  it can reach `parseMarkdownContent`. `parse` times the parser's own output; `facts` times the
+  whole composer, capability adapter and VAT's derivations included — which is what a swap would
+  actually buy, and had never been measured. On this repository (188 documents, 2.73 MB) the ratio
+  is **12.6× on parse and 10.1–10.3× on facts**: the adapter costs remark 16% of its parse time and
+  `markdown-it` 42% of its, so quoting a parse-stage ratio overstates the win by about a fifth. A
+  bare `--stage` with no value is refused rather than silently defaulted.
 
 - **`docs/architecture/parsers-and-load-boundaries.md`** — the intended architecture for VAT's parse
   layer and for what any package barrel is allowed to load. Two halves of one idea: VAT needs three
