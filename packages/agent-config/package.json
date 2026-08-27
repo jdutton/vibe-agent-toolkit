@@ -28,7 +28,7 @@
   "dependencies": {
     "@vibe-agent-toolkit/schema": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
-    "yaml": "^2.3.4"
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

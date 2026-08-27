@@ -45,7 +45,7 @@
   },
   "//dependencies-note": "DO NOT add example agent packages or adopter packages here. Adopter packages (like vat-development-agents) depend on the CLI binary at build time — declaring them as deps creates a circular build dependency. They are built in a second turbo pass via package#task overrides in turbo.json.",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.71.2",
+    "@anthropic-ai/sdk": "^0.120.0",
     "@vibe-agent-toolkit/agent-config": "workspace:*",
     "@vibe-agent-toolkit/schema": "workspace:*",
     "@vibe-agent-toolkit/agent-skills": "workspace:*",
@@ -59,7 +59,7 @@
     "picomatch": "^4.0.3",
     "semver": "^7.7.3",
     "tar": "^7.5.7",
-    "yaml": "^2.6.1",
+    "yaml": "^2.9.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {
