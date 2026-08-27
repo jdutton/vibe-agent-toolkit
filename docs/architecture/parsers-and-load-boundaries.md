@@ -185,10 +185,31 @@ This is a starting position, not a commitment against shipping. If the conforman
 `markdown-it` is better for a particular capability, promoting it for that capability is a decision
 the architecture should permit, not one it should have foreclosed.
 
-⚠️ Do not assume that capability is spans-and-kinds. It is the intuitive guess — a flat token stream
-looks like a natural fit — and it is the one the three-way failure in §1 lands hardest on: no
-character offsets, no positioned link definitions. The capability where a rival is most likely to win
-is an output of the conformance suite, not an input to it.
+✅ **That question has now been answered, and the answer is `structure`.** It was worth asking as an
+output of the suite rather than an input, because the intuitive guess was wrong in both directions:
+
+| Capability | `markdown-it`'s verdict | Who consumes it |
+|---|---|---|
+| `spans-and-kinds` | ❌ fails, and fails hardest — see §1 | **every `resources` user**: `codeContextRangesFrom` → `findLexicalReferences`, `maskFactsFrom` → `findUnresolvedReferences`, the `links` inventory, `anchors` |
+| `structure` | ✅ conforms | **only `rag/chunking/chunk-resource.ts`**, which flattens `headings` and splits on `heading.line` |
+| `faithful-edit` | ❌ not claimed, cannot be | `html-transform.ts` — which is **parse5**, so this one was never the markdown parser's anyway |
+
+⛔ **So a rival wins the capability with no users and loses the one every user depends on.** That is
+the whole promotion decision, and it is a no. `packages/rag/src` contains no reference to remark,
+mdast or `parseMarkdown` at all — it reads `ResourceMetadata` that `resources` already built, so
+chunking gets headings as a by-product of a link-integrity parse it has no use for.
+
+⚠️ The failure mode is what decides it, not the size of the gap. A missing inline span does not
+merely lose a fact — `lexicalReferences` **over-reports**, because a link with no span is a
+destination the lexer is never told to skip. For a tool whose job is link integrity, being
+differently wrong about a user's links is worse than being slow.
+
+🔑 And the gap is not small. Closing it means building a **content→source mapping layer**: inline
+rules see the inline content string (a block's lines joined, block-indentation stripped, outer
+whitespace trimmed), so every inline construct needs its rule wrapped plus a per-token line
+alignment — with no clean answer at all for the core `linkify` post-pass, which splits already-built
+text tokens and offers no rule invocation to observe. Roughly 150–200 lines of position tracking
+bolted onto a parser that deliberately does not provide it, revalidated on every upgrade.
 
 ⚠️ **It is already in the tree, and that constrains how it enters.** `markdown-it` is a `dependency`
 of `@vibe-agent-toolkit/dev-tools` — in `src/`, not `test/` — and one `createMarkdownItProcessor()`
