@@ -39,7 +39,7 @@
     "@vibe-agent-toolkit/utils": "workspace:*",
     "gpt-tokenizer": "^2.6.0",
     "onnxruntime-web": "^1.27.0",
-    "zod": "^3.22.0",
+    "zod": "^4.4.3",
     "zod-to-json-schema": "^3.22.0"
   },
   "devDependencies": {
